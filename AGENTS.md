@@ -1229,6 +1229,42 @@ interpreter/import setup"). Review cost is not predicted by diff size --
 #2117 (+2813) took 3 rounds, #2181 (+2569) took 20 -- it is predicted by whether
 the slice hand-rolled an open surface.
 
+### 3k.5. Boundary-change enumeration
+
+Boundary-change enumeration: a diff changing a guard, validator, normalizer,
+resolver, router/classifier, or admission boundary must ship a plan-doc
+enumeration before code: replaced-path behaviors, guard-relevant fields, and
+every caller x input shape, each dispositioned.
+
+This applies when the diff changes the decision seam that admits, rejects,
+normalizes, resolves identity for, or routes an input. The plan's enumeration is
+the baton that survives compaction: list the old behavior being replaced, the
+fields that influence the guard or resolver verdict, and each caller/input shape
+that can reach each changed boundary; name each changed boundary path or seam and
+give that exact boundary entry its own complete disposition group. Mark every row
+preserved, intentionally changed, rejected, deferred, or not applicable. Do this
+before implementation, not as a post-review inventory.
+
+This rule does not weaken 3k.3. For open-input recognizers, enumerate the
+boundary surface and dispositions, then close the recognizer with the
+evidence-gated/defaulted mechanism 3k.3 requires rather than trying to enumerate
+the whole open category.
+
+### 3k.6. Deployed-config probing
+
+Deployed-config probing: guard PRs must state deployed/default config values and
+probe explicit, absent, and default-session shapes; no side effect before all
+admissions pass.
+
+This applies to guard, validator, resolver, and admission-boundary PRs, and to
+any diff that adds or changes an environment/config fallback. The plan names the
+runtime value the deployed system actually uses when that value is knowable from
+repo-owned deployment config; otherwise it says could-not-determine and names
+the source that would settle it. Verification includes the explicit value path,
+the absent-value path, and the default-session/default-context path. Any state
+claim, write, enqueue, mutation, or external side effect must sit after the
+admission decision that can still reject the request.
+
 ### 3l. PR fix mode (constrain the fix loop)
 
 A **fix loop** -- iterating on red CI or review comments on an already-open PR

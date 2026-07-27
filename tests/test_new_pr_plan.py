@@ -91,6 +91,23 @@ def test_new_pr_plan_creates_agents_plan_skeleton(tmp_path: Path) -> None:
     assert "3k.4 execution model and property-level invariant" in compact_text
     assert "sampled concurrent test alone is not enough" in compact_text
     assert "not\n  dispositioned by the review matrix" in text
+    assert "### Boundary-change enumeration" in text
+    assert (
+        "Required when this diff changes a guard, validator, normalizer, resolver,"
+        in text
+    )
+    assert "router/classifier, or admission boundary" in text
+    assert "Name each changed boundary path or\nseam in the enumeration" in text
+    assert "- Boundary path/seam: TODO/N/A." in text
+    assert "- Replaced-path behaviors: TODO/N/A." in text
+    assert "- Guard-relevant fields: TODO/N/A." in text
+    assert "- Caller x input shape: TODO/N/A." in text
+    assert "### Deployed-config probing" in text
+    assert "- Deployed/default config values: TODO/N/A." in text
+    assert "- Explicit value probe: TODO/N/A." in text
+    assert "- Absent value probe: TODO/N/A." in text
+    assert "- Default-session/default-context probe: TODO/N/A." in text
+    assert "- Side-effect ordering: TODO/N/A." in text
     assert "### Files touched" in text
     assert "| **Total** | **0** |" in text
 
