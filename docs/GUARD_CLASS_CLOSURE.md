@@ -79,25 +79,40 @@ slice per round. Two compounding symptoms:
 
 Every triggering PR declares each set-valued dependency exactly once before
 implementation: in the plan, or in the PR body for a Markdown-only change
-explicitly admitted by `AGENTS.md` section 1's `Docs-only: true` path. Use one of
-these dispositions:
+explicitly admitted by `AGENTS.md` section 1's `Docs-only: true` path. A
+declaration answers **two independent questions**.
 
-- **CLOSED** -- the set is genuinely finite and repo-owned. Cite the canonical
+**1. Is the set closed or open?**
+
+- **CLOSED** -- membership is finite and fully enumerable. Cite the canonical
   source of truth and explain why unlisted members are impossible or out of
   scope. Do not duplicate the canonical list unless the duplicate is generated
   from it.
-- **DERIVED** -- membership is computed from a source of truth at runtime or test
-  time, so it cannot drift. Cite the source and the derivation point (for
-  example: parse the workflow, inspect the settings schema, derive the old-code
-  inventory before refactor).
 - **DEFAULTED** -- the set is open or heuristic. State the default direction for
   unlisted members, make incompleteness flow to the cheap/safe side, and name
   why that side is cheaper or safer. Enumerating an open set with no declared
   default is a defect even when every currently listed member passes.
 
+**2. Where does membership come from?**
+
+- **ENUMERATED** -- written out in this change.
+- **DERIVED** -- membership is computed from a source of truth at runtime or test
+  time, so it cannot drift. Cite the source and the derivation point (for
+  example: parse the workflow, inspect the settings schema, derive the old-code
+  inventory before refactor). Prefer this wherever a source of truth exists: it
+  is the only sourcing that stays correct without maintenance.
+
+**The two questions are independent, and answering the second never discharges
+the first.** A DERIVED set can still be open: derivation says where membership
+comes from, not what happens to an input outside it -- a set derived from a
+settings schema still needs a stated behavior for a key that schema does not
+carry. `DERIVED` alone is therefore not a complete declaration, and treating it
+as one is how an implicit unsafe fallback passes review under a rule written to
+prevent exactly that.
+
 "Here are the members I noticed" is not a closure declaration. A plan that lists
-members without CLOSED / DERIVED / DEFAULTED is still open and should be treated
-as a round generator. A Markdown-only body has the same bar when it is the
+members without answering both questions is still open and should be treated as
+a round generator. A Markdown-only body has the same bar when it is the
 admission artifact.
 
 ## The three requirements (all mandatory before merge)
@@ -233,7 +248,7 @@ because the evidence signals are finite even when the category is not.
 
 For a trigger-B PR, the reviewer states before LGTM: each set-valued dependency
 the change adds or edits, the reviewable surface that bounds the inventory, and
-its declared disposition. An enumerated open set with no declared default is
+both of its declared answers. An open set with no declared default is
 "needs the closure declaration," even when every listed member behaves correctly
 -- that is the round-generating state this document exists to stop, and it is
 invisible per-round by construction.
