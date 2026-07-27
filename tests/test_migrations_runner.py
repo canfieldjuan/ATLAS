@@ -145,6 +145,27 @@ def test_contact_lead_pipeline_migration_is_additive_and_indexed():
     assert "DROP " not in migration.upper()
 
 
+def test_eom_lead_review_queue_index_matches_keyset_order():
+    migration = (
+        Path(__file__).resolve().parent.parent
+        / "atlas_brain"
+        / "storage"
+        / "migrations"
+        / "355_eom_lead_review_queue_index.sql"
+    ).read_text()
+
+    assert (
+        "CREATE INDEX CONCURRENTLY IF NOT EXISTS "
+        "idx_contacts_eom_lead_review_queue"
+    ) in migration
+    assert "ON contacts (created_at DESC, id DESC)" in migration
+    assert "business_context_id = 'effingham_maids'" in migration
+    assert "status = 'active'" in migration
+    assert "contact_type = 'lead'" in migration
+    assert "lead_stage = 'new'" in migration
+    assert "DROP " not in migration.upper()
+
+
 def test_customer_service_ticket_migration_is_additive_tenant_scoped_and_indexed():
     migration = (
         Path(__file__).resolve().parent.parent

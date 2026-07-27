@@ -91,12 +91,11 @@ Slice phase: Vertical slice
 3. Archive the already-merged `PR-EOM-Office-Conversion-Handoff` plan as the
    required Atlas merged-PR housekeeping. It is a documented teardown action,
    not a product behavior change.
-4. Repair the unit-gate selector seam exposed by the required baseline ratchet:
-   a baseline shrink is gate metadata, not a runtime/global config change, and
-   removed baseline node IDs must select their owning test files so the shrink
-   is proved without forcing a contradictory FULL-suite path.
+4. Add the safe contacts index required by the keyset queue order so the new
+   `lead/new` review route does not rely on an unindexed scan/sort as the
+   active EOM lead cohort grows.
 
-Max files: 10
+Max files: 9
 
 ### Review Contract
 
@@ -121,11 +120,10 @@ Max files: 10
 5. The previously merged plan is moved only to `plans/archive/` and the plans
    index is regenerated; the product diff contains no unrelated calendar,
    receivables, or generic CRM change.
-6. The unit-gate selector does not treat `tests/unit_gate_baseline.txt` as a
-   global runtime change. Instead, node IDs removed from that baseline add
-   their owning test files to the selected scope. A selector test proves a
-   baseline shrink selects the removed node's test file rather than returning
-   `FULL`.
+6. A standalone `CREATE INDEX CONCURRENTLY IF NOT EXISTS` migration adds the
+   EOM `lead/new` queue index matching the fixed cohort predicate and
+   `(created_at DESC, id DESC)` keyset order; a migration-runner test pins the
+   index name, predicate, concurrent build, and no-drop behavior.
 - Reachability proof: `tests/test_eom_lead_conversion.py` calls the real FastAPI
   route with its real dependencies overridden only at the database provider;
   `tests/test_eom_lead_conversion_integration.py` runs the provider projection
@@ -133,8 +131,8 @@ Max files: 10
   cursor result, and unchanged table counts.
 - Affected surfaces: `atlas_brain/eom_api/funnel.py`,
   `atlas_brain/services/crm_provider.py`, the existing funnel-auth dependency,
-  its focused route/integration tests, Atlas plan archival, and the unit-gate
-  selector/baseline files required by CI ratchet evidence.
+  its focused route/integration tests, Atlas plan archival, and the contacts
+  index migration required by the keyset queue.
 - Risk areas: service-token/actor admission; EOM tenant and lifecycle filtering;
   customer/lead PII projection; accidental lifecycle write; caller compatibility;
   full-app route enrollment; and deployment ordering with the tracker proxy.
@@ -188,14 +186,13 @@ Any row or field not admitted by those definitions is excluded by default.
 
 - `atlas_brain/eom_api/funnel.py`
 - `atlas_brain/services/crm_provider.py`
+- `atlas_brain/storage/migrations/355_eom_lead_review_queue_index.sql`
 - `plans/INDEX.md`
 - `plans/PR-EOM-Office-Lead-Review.md`
 - `plans/archive/PR-EOM-Office-Conversion-Handoff.md`
-- `scripts/select_impacted_tests.py`
 - `tests/test_eom_lead_conversion.py`
 - `tests/test_eom_lead_conversion_integration.py`
-- `tests/test_select_impacted_tests.py`
-- `tests/unit_gate_baseline.txt`
+- `tests/test_migrations_runner.py`
 
 ## Mechanism
 
@@ -252,17 +249,27 @@ Parked hardening: none.
 - Before implementation: exact route/provider, tracker proxy/retry, portal
   form/controller, and default-tab code paths were read from all three
   repositories; no code was written until this contract was complete.
-- Atlas focused tests: pytest for the lead-review/funnel selection passed with
-  `8 passed, 1 skipped, 46 deselected`.
-- Atlas syntax/checks: py_compile for the changed Python modules and focused
-  tests passed; `git diff --check` passed.
-- Atlas plan gates: plan shape, files-touched, and diff-size audits passed for
-  `plans/PR-EOM-Office-Lead-Review.md` against `origin/main`.
-- Unit-gate ratchet: GitHub scoped unit-gate reported nine stale baseline
-  entries in `tests/test_b2b_reviews_import.py` and
-  `tests/test_reasoning_graph_routing.py`; this PR removes those entries and
-  updates the selector so removed baseline node IDs select their owning test
-  files instead of forcing `FULL`.
+- Command: pytest -q tests/test_eom_lead_conversion.py
+  tests/test_eom_lead_conversion_integration.py -k 'lead_review or
+  eom_funnel; result: 8 passed, 1 skipped, 46 deselected.
+- Command: pytest -q tests/test_migrations_runner.py -k
+  'eom_lead_review_queue_index or contact_lead_pipeline'; result: 2 passed,
+  15 deselected.
+- Command: python scripts/audit_plan_doc.py
+  plans/PR-EOM-Office-Lead-Review.md; result: passed.
+- Command: python scripts/audit_plan_doc_files_touched.py
+  plans/PR-EOM-Office-Lead-Review.md origin/main; result: passed.
+- Command: python scripts/audit_plan_doc_diff_size.py
+  plans/PR-EOM-Office-Lead-Review.md origin/main; result: passed with 0.0%
+  drift.
+- Command: python scripts/sync_pr_plan.py
+  plans/PR-EOM-Office-Lead-Review.md origin/main --check; result: passed.
+- Command: python -m py_compile atlas_brain/eom_api/funnel.py
+  atlas_brain/services/crm_provider.py
+  tests/test_eom_lead_conversion.py
+  tests/test_eom_lead_conversion_integration.py
+  tests/test_migrations_runner.py; result: passed.
+- Command: git diff --check; result: passed.
 - Tracker companion verification is recorded in its own PR: backend FastAPI
   tests against the PostgreSQL fixture cover authenticated proxy, non-approver,
   and retry cases.
@@ -276,12 +283,11 @@ Parked hardening: none.
 |---|---:|
 | `atlas_brain/eom_api/funnel.py` | 109 |
 | `atlas_brain/services/crm_provider.py` | 45 |
+| `atlas_brain/storage/migrations/355_eom_lead_review_queue_index.sql` | 13 |
 | `plans/INDEX.md` | 3 |
-| `plans/PR-EOM-Office-Lead-Review.md` | 287 |
+| `plans/PR-EOM-Office-Lead-Review.md` | 293 |
 | `plans/archive/PR-EOM-Office-Conversion-Handoff.md` | 0 |
-| `scripts/select_impacted_tests.py` | 34 |
 | `tests/test_eom_lead_conversion.py` | 210 |
 | `tests/test_eom_lead_conversion_integration.py` | 127 |
-| `tests/test_select_impacted_tests.py` | 34 |
-| `tests/unit_gate_baseline.txt` | 9 |
-| **Total** | **858** |
+| `tests/test_migrations_runner.py` | 21 |
+| **Total** | **821** |

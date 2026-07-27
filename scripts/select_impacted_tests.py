@@ -51,12 +51,12 @@ GLOBAL_FILES = {
     "pyproject.toml",
     "setup.cfg",
     "tox.ini",
+    "unit_gate_baseline.txt",
     "check_unit_gate.py",
     "select_impacted_tests.py",
     "unit_gate.yml",
 }
 GLOBAL_PREFIXES = ("requirements",)
-UNIT_GATE_BASELINE = "tests/unit_gate_baseline.txt"
 
 FULL = "FULL"
 TEST_FREE_SUFFIXES = {".md"}
@@ -72,35 +72,7 @@ def changed_files_from_git(base: str) -> list[str]:
         ["git", "diff", "--name-only", f"{merge_base}..HEAD"],
         capture_output=True, text=True, check=True,
     ).stdout
-    changed = [line for line in out.splitlines() if line.strip()]
-    return sorted(set(changed + removed_baseline_node_files(merge_base)))
-
-
-def removed_baseline_node_files(merge_base: str) -> list[str]:
-    """Test files for node ids removed from the unit-gate baseline.
-
-    Shrinking ``tests/unit_gate_baseline.txt`` must prove those specific nodes
-    now pass, but the baseline file itself is only gate metadata: treating it as
-    a global runtime change forces a FULL run and can contradict the scoped
-    ratchet. Add the owning test files for removed node ids to the selected
-    scope instead.
-    """
-    diff = subprocess.run(
-        [
-            "git", "diff", "--unified=0", f"{merge_base}..HEAD", "--",
-            UNIT_GATE_BASELINE,
-        ],
-        capture_output=True, text=True, check=True,
-    ).stdout
-    files: set[str] = set()
-    for raw in diff.splitlines():
-        if not raw.startswith("-") or raw.startswith("---"):
-            continue
-        node = raw[1:].strip()
-        if not node or node.startswith("#"):
-            continue
-        files.add(node.split("::", 1)[0])
-    return sorted(files)
+    return [line for line in out.splitlines() if line.strip()]
 
 
 def is_global_change(path: str) -> bool:
@@ -251,8 +223,6 @@ def select(changed: list[str], repo: Path) -> list[str] | str:
         return FULL
 
     for path in changed:
-        if path == UNIT_GATE_BASELINE:
-            continue
         p = Path(path)
         if p.suffix != ".py" and is_provably_test_free_path(p):
             continue

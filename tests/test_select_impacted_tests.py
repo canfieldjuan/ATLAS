@@ -8,7 +8,6 @@ that the run escalates to FULL.
 from __future__ import annotations
 
 import importlib.util
-import subprocess
 from pathlib import Path
 
 import pytest
@@ -130,6 +129,7 @@ def test_unrelated_module_is_not_selected(tmp_path):
     "requirements.content_ops_ci.txt",
     "pytest.ini",
     "pyproject.toml",
+    "tests/unit_gate_baseline.txt",
     "scripts/check_unit_gate.py",
     "scripts/select_impacted_tests.py",
     ".github/workflows/unit_gate.yml",
@@ -137,38 +137,6 @@ def test_unrelated_module_is_not_selected(tmp_path):
 def test_global_files_escalate_to_full(tmp_path, path):
     repo = _mkrepo(tmp_path, {"atlas_brain/__init__.py": ""})
     assert sel.select([path], repo) == sel.FULL
-
-
-def _git(repo: Path, *args: str) -> None:
-    subprocess.run(["git", "-C", str(repo), *args], check=True,
-                   capture_output=True, text=True)
-
-
-def test_baseline_shrink_selects_removed_node_test_files(tmp_path, monkeypatch):
-    """Baseline metadata should not force FULL when it names the proof scope."""
-    repo = _mkrepo(tmp_path, {
-        "atlas_brain/__init__.py": "",
-        "tests/test_old.py": "def test_now_passing():\n    assert True\n",
-        "tests/unit_gate_baseline.txt": (
-            "tests/test_old.py::test_now_passing\n"
-        ),
-    })
-    _git(repo, "init", "-q", "-b", "main")
-    _git(repo, "config", "user.email", "t@t")
-    _git(repo, "config", "user.name", "t")
-    _git(repo, "add", "-A")
-    _git(repo, "commit", "-q", "-m", "seed")
-    _git(repo, "checkout", "-q", "-b", "feature")
-    (repo / "tests/unit_gate_baseline.txt").write_text("", encoding="utf-8")
-    _git(repo, "add", "-A")
-    _git(repo, "commit", "-q", "-m", "shrink baseline")
-
-    monkeypatch.chdir(repo)
-
-    changed = sel.changed_files_from_git("main")
-    assert "tests/unit_gate_baseline.txt" in changed
-    assert "tests/test_old.py" in changed
-    assert sel.select(changed, repo) == ["tests/test_old.py"]
 
 
 def test_unparseable_module_escalates_to_full(tmp_path):
