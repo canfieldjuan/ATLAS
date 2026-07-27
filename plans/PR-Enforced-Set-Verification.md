@@ -142,7 +142,7 @@ Parked hardening: none.
 
 | File | LOC |
 |---|---:|
-| `.github/workflows/atlas_eom_lead_pipeline_checks.yml` | 20 |
+| `.github/workflows/atlas_eom_lead_pipeline_checks.yml` | 22 |
 | `.github/workflows/enforced_set_verification.yml` | 46 |
 | `AGENTS.md` | 12 |
 | `REVIEW_MISSES.md` | 1 |
@@ -151,6 +151,6 @@ Parked hardening: none.
 | `scripts/new_pr_plan.sh` | 4 |
 | `scripts/run_eom_lead_pipeline_checks.sh` | 60 |
 | `tests/eom_lead_pipeline_files.txt` | 20 |
-| `tests/test_check_enforced_set_verification.py` | 230 |
+| `tests/test_check_enforced_set_verification.py` | 245 |
 | `tests/test_new_pr_plan.py` | 4 |
-| **Total** | **757** |
+| **Total** | **774** |

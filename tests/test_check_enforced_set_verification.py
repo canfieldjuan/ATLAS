@@ -228,3 +228,18 @@ def test_mirror_script_does_not_relist_the_test_set() -> None:
 
 def test_mirror_script_parses() -> None:
     subprocess.run(["bash", "-n", str(MIRROR_SCRIPT)], check=True)
+
+
+def test_manifest_change_triggers_the_gate() -> None:
+    """The manifest decides what the gate runs, so editing it must run the
+    gate. Without this the set could change and the enforcing workflow would
+    never fire on the change that altered it."""
+    import yaml
+
+    config = yaml.safe_load(GATE_WORKFLOW.read_text(encoding="utf-8"))
+    triggers = config[True] if True in config else config["on"]
+    for event in ("pull_request", "push"):
+        paths = triggers[event]["paths"]
+        assert "tests/eom_lead_pipeline_files.txt" in paths, (
+            f"manifest missing from the {event} path filter"
+        )
