@@ -85,15 +85,17 @@ N/A - this PR does not change a product guard/config boundary.
 
 ### Files touched
 
-- `AGENTS.md`
-- `scripts/new_pr_plan.sh`
-- `scripts/check_enforced_set_verification.py`
-- `tests/test_check_enforced_set_verification.py`
-- `tests/test_new_pr_plan.py`
-- `scripts/run_eom_lead_pipeline_checks.sh`
+- `.github/workflows/atlas_eom_lead_pipeline_checks.yml`
 - `.github/workflows/enforced_set_verification.yml`
+- `AGENTS.md`
 - `REVIEW_MISSES.md`
 - `plans/PR-Enforced-Set-Verification.md`
+- `scripts/check_enforced_set_verification.py`
+- `scripts/new_pr_plan.sh`
+- `scripts/run_eom_lead_pipeline_checks.sh`
+- `tests/eom_lead_pipeline_files.txt`
+- `tests/test_check_enforced_set_verification.py`
+- `tests/test_new_pr_plan.py`
 
 ## Mechanism
 
@@ -140,13 +142,15 @@ Parked hardening: none.
 
 | File | LOC |
 |---|---:|
-| `AGENTS.md` | +12 |
-| `scripts/new_pr_plan.sh` | +4 |
-| `.github/workflows/enforced_set_verification.yml` | +46 |
-| `REVIEW_MISSES.md` | +1 |
-| `plans/PR-Enforced-Set-Verification.md` | +152 |
-| `scripts/check_enforced_set_verification.py` | +204 |
-| `tests/test_check_enforced_set_verification.py` | +165 |
-| `tests/test_new_pr_plan.py` | +4 |
-| `scripts/run_eom_lead_pipeline_checks.sh` | +62 |
-| **Total** | **~650** |
+| `.github/workflows/atlas_eom_lead_pipeline_checks.yml` | 20 |
+| `.github/workflows/enforced_set_verification.yml` | 46 |
+| `AGENTS.md` | 12 |
+| `REVIEW_MISSES.md` | 1 |
+| `plans/PR-Enforced-Set-Verification.md` | 156 |
+| `scripts/check_enforced_set_verification.py` | 204 |
+| `scripts/new_pr_plan.sh` | 4 |
+| `scripts/run_eom_lead_pipeline_checks.sh` | 60 |
+| `tests/eom_lead_pipeline_files.txt` | 20 |
+| `tests/test_check_enforced_set_verification.py` | 230 |
+| `tests/test_new_pr_plan.py` | 4 |
+| **Total** | **757** |
