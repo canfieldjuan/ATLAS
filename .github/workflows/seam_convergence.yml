@@ -37,7 +37,10 @@ permissions:
 
 on:
   pull_request:
-    types: [opened, synchronize, reopened, ready_for_review]
+    # `edited` matters: recording the Decision-Seam Analysis in the PR body is
+    # how an author answers a trip, and without it the annotation would persist
+    # until the next push even though the trip was already resolved.
+    types: [opened, synchronize, reopened, ready_for_review, edited]
   pull_request_review:
     types: [submitted]
   pull_request_review_comment:

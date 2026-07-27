@@ -59,8 +59,12 @@ _DEFAULT_BOTS = ("copilot", "codex")
 # judging whether a paragraph "really" analyses a seam is itself an open
 # category, and parsing it would repeat the mistake this tool exists to catch.
 # Mirrors the WAIVER_MARKER convention in scripts/check_guard_class_closure.py.
+# The marker names the seam it resolves. An unbound marker suppressed every
+# future trip, including a different seam in the same PR -- and, because plan
+# docs live on main after merge, every trip in every later PR. Binding it to a
+# path makes suppression as specific as the finding it answers.
 SEAM_MARKER_RE = re.compile(
-    r"^\s*decision-seam-analysis:\s*(fix|waive|rescope)\s*$",
+    r"^\s*decision-seam-analysis:\s*(fix|waive|rescope)\s+(\S+)\s*$",
     re.IGNORECASE | re.MULTILINE,
 )
 
@@ -208,16 +212,19 @@ def find_trip(rounds: Sequence[ReviewRound]) -> tuple[int, str, list[int]] | Non
     return None
 
 
-def recorded_seam_analysis(*texts: str) -> str | None:
-    """The disposition from a recorded Decision-Seam Analysis marker, if any.
+def recorded_seam_analysis(seam: str, *texts: str) -> str | None:
+    """Disposition of a Decision-Seam Analysis recorded for THIS seam.
 
-    Accepts the marker from any supplied source -- the PR body or the plan doc --
-    because 3k.2 asks for the analysis "in the plan / PR body".
+    Accepts the marker from any supplied source -- the PR body or this PR's plan
+    doc -- because 3k.2 asks for the analysis "in the plan / PR body". It must
+    name the tripped path: a marker answering one seam is not an answer for a
+    different one, and an unbound marker on a merged plan would suppress every
+    later PR's trip.
     """
     for text in texts:
-        match = SEAM_MARKER_RE.search(text or "")
-        if match is not None:
-            return match.group(1).lower()
+        for match in SEAM_MARKER_RE.finditer(text or ""):
+            if match.group(2).strip() == seam:
+                return match.group(1).lower()
     return None
 
 
@@ -243,7 +250,7 @@ def evaluate(
         return False, None, messages
     trip_index, seam, counts = trip
     shown = ", ".join(str(c) for c in counts)
-    disposition = recorded_seam_analysis(*texts)
+    disposition = recorded_seam_analysis(seam, *texts)
     if disposition is not None:
         messages.append(
             "SATISFIED: non-convergence on %s at round %d (%s), and a "
@@ -364,12 +371,26 @@ def _pr_body(pr: int, repo: str, gh: str) -> str:
         return ""
 
 
-def _plan_texts(root: Path) -> list[str]:
-    """Plan docs touched by this branch, so a marker there is honoured too."""
-    plans = root / "plans"
-    if not plans.is_dir():
+_PLAN_LINE_RE = re.compile(r"^\s*Plan:\s*(plans/PR-[^\s]+\.md)\s*$", re.MULTILINE)
+
+
+def _plan_texts(root: Path, pr_body: str) -> list[str]:
+    """The one plan doc this PR declares, never the whole plans directory.
+
+    Globbing every plans/PR-*.md meant any marker anywhere in the repository
+    suppressed the trip. Plan docs live on main after merge, so the first
+    merged marker would have disabled the breaker for every later PR -- this
+    slice's own plan included, which would have made merging it turn it off.
+    """
+    match = _PLAN_LINE_RE.search(pr_body or "")
+    if match is None:
         return []
-    return [_read_text(p) for p in sorted(plans.glob("PR-*.md"))]
+    candidate = (root / match.group(1)).resolve()
+    plans_root = (root / "plans").resolve()
+    # A PR body is untrusted text; keep the read inside plans/.
+    if plans_root not in candidate.parents or not candidate.is_file():
+        return []
+    return [_read_text(candidate)]
 
 
 def main(argv: Sequence[str] | None = None) -> int:
@@ -408,7 +429,8 @@ def main(argv: Sequence[str] | None = None) -> int:
 
     rounds = bot_review_rounds(reviews, bots)
     root = Path(__file__).resolve().parent.parent
-    texts = [_pr_body(args.pr, args.repo, args.gh), *_plan_texts(root)]
+    body = _pr_body(args.pr, args.repo, args.gh)
+    texts = [body, *_plan_texts(root, body)]
     tripped, seam, messages = evaluate(rounds, *texts)
 
     print("seam-convergence breaker (advisory) -- AGENTS 3k.2")

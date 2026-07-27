@@ -150,15 +150,19 @@ def test_leading_path_returns_none_when_empty() -> None:
 
 def test_marker_accepts_each_disposition() -> None:
     for word in ("fix", "waive", "rescope"):
-        assert mod.recorded_seam_analysis(f"decision-seam-analysis: {word}") == word
+        assert mod.recorded_seam_analysis(
+            "svc/classifier.py", f"decision-seam-analysis: {word} svc/classifier.py"
+        ) == word
 
 
 def test_marker_is_case_insensitive() -> None:
-    assert mod.recorded_seam_analysis("Decision-Seam-Analysis: FIX") == "fix"
+    assert mod.recorded_seam_analysis(
+        "svc/classifier.py", "Decision-Seam-Analysis: FIX svc/classifier.py"
+    ) == "fix"
 
 
 def test_marker_absent_returns_none() -> None:
-    assert mod.recorded_seam_analysis("no marker here") is None
+    assert mod.recorded_seam_analysis("svc/classifier.py", "no marker here") is None
 
 
 def test_prose_alone_does_not_satisfy_the_marker() -> None:
@@ -177,8 +181,10 @@ def test_marker_requires_a_known_disposition() -> None:
 
 def test_marker_is_read_from_any_supplied_text() -> None:
     """3k.2 asks for the analysis in the plan OR the PR body."""
-    plan = "## Deferred\n\ndecision-seam-analysis: waive\n"
-    assert mod.recorded_seam_analysis("pr body with no marker", plan) == "waive"
+    plan = "## Deferred\n\ndecision-seam-analysis: waive svc/classifier.py\n"
+    assert mod.recorded_seam_analysis(
+        "svc/classifier.py", "pr body with no marker", plan
+    ) == "waive"
 
 
 def test_marker_must_be_line_anchored() -> None:
@@ -187,7 +193,9 @@ def test_marker_must_be_line_anchored() -> None:
 
 
 def test_recorded_marker_suppresses_the_trip() -> None:
-    tripped, _seam, messages = mod.evaluate(rounds_from([5, 5, 5]), "decision-seam-analysis: fix")
+    tripped, _seam, messages = mod.evaluate(
+        rounds_from([5, 5, 5]), "decision-seam-analysis: fix svc/classifier.py"
+    )
     assert tripped is False
     assert any("SATISFIED" in m for m in messages)
 
@@ -337,3 +345,52 @@ def test_atlas_2181_replay_trips_well_before_the_end() -> None:
     trip_index, trip_seam, _counts = trip
     assert trip_index == 6
     assert trip_seam == seam
+
+
+# --- suppression is bound, in both directions --------------------------------
+#
+# An unbound marker was the breaker's own off switch: plan docs live on main
+# after merge, so the first merged marker suppressed every later PR's trip --
+# and this slice's plan carries one, which would have made merging the breaker
+# turn it off.
+
+
+def test_marker_for_another_seam_does_not_suppress() -> None:
+    """A disposition answering one seam is not an answer for a different one."""
+    tripped, _seam, _messages = mod.evaluate(
+        rounds_from([5, 5, 5]), "decision-seam-analysis: fix some/other/file.py"
+    )
+    assert tripped is True
+
+
+def test_unbound_marker_does_not_suppress() -> None:
+    """The pathless form is no longer a marker at all."""
+    assert mod.recorded_seam_analysis("svc/classifier.py", "decision-seam-analysis: fix") is None
+    tripped, _seam, _messages = mod.evaluate(
+        rounds_from([5, 5, 5]), "decision-seam-analysis: fix"
+    )
+    assert tripped is True
+
+
+def test_plan_texts_reads_only_the_declared_plan(tmp_path) -> None:
+    """Globbing plans/ let any marker in the repository suppress the trip."""
+    plans = tmp_path / "plans"
+    plans.mkdir()
+    (plans / "PR-Mine.md").write_text("decision-seam-analysis: fix svc/classifier.py\n", encoding="utf-8")
+    (plans / "PR-Unrelated.md").write_text("decision-seam-analysis: waive svc/classifier.py\n", encoding="utf-8")
+
+    texts = mod._plan_texts(tmp_path, "Plan: plans/PR-Mine.md\n")
+    assert len(texts) == 1
+    assert "fix" in texts[0]
+
+    # a body naming no plan reads nothing, rather than falling back to the glob
+    assert mod._plan_texts(tmp_path, "no plan line here") == []
+
+
+def test_plan_texts_rejects_paths_outside_plans(tmp_path) -> None:
+    """The PR body is untrusted text; a traversal must not read arbitrary files."""
+    plans = tmp_path / "plans"
+    plans.mkdir()
+    (tmp_path / "secret.md").write_text("decision-seam-analysis: fix svc/classifier.py\n", encoding="utf-8")
+    assert mod._plan_texts(tmp_path, "Plan: plans/../secret.md\n") == []
+    assert mod._plan_texts(tmp_path, "Plan: plans/PR-Missing.md\n") == []

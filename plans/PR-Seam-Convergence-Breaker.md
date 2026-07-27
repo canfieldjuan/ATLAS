@@ -46,6 +46,12 @@ workflow `pull-requests: write` and posts no comments; and the merge gate -- thi
 must never block, because capping or blocking counts the symptom and, on surfaces
 where the findings are real, would ship defects.
 
+Diff-budget override: the detector is ~350 lines and the remainder is the
+both-direction test suite the R13 boundary bar requires, plus this plan.
+Splitting the tests from the detector they prove would produce a PR that cannot
+be reviewed on its own, and splitting the plan from either would leave the
+trip's contract unstated.
+
 ## Scope (this PR)
 
 Ownership lane: process-guardrails
@@ -71,13 +77,20 @@ Max files: 4
 
 Acceptance criteria, checked one by one:
 
-1. The detector trips on ATLAS #2181 at round 3 and names
-   `atlas_brain/services/content_factory_copy_verification.py`.
+1. The detector trips on ATLAS #2181 and names
+   `atlas_brain/services/content_factory_copy_verification.py`. It fires at
+   round 6 of 18, not round 3: removing the tuned thresholds traded earliness
+   for having no knobs, and Verification below records that cost rather than
+   restating the pre-rewrite number.
 2. It does not trip on #2174, #2175, or #2133 -- the last proving it keys on
    non-convergence rather than diff size.
 3. It trips on #2158 (round 6) and #2161 (round 3), the two other known spirals.
 4. It exits 0 on a trip. `--strict` exists but is not wired into CI.
-5. A Decision-Seam Analysis in the PR body suppresses the trip.
+5. A Decision-Seam Analysis suppresses the trip only when it names the tripped
+   seam and appears in this PR's own declared plan or body. A marker for
+   another seam, an unbound marker, or a marker in an unrelated plan does not
+   suppress -- plan docs live on main after merge, so an unbound marker would
+   have disabled the breaker for every later PR.
 6. A strictly declining run never trips; two rounds never trip; findings scattered
    across files never trip; a window whose last round moved to another file never
    trips; a body that only mentions the phrase never suppresses.
@@ -180,7 +193,7 @@ is 12, 11 and 7 rounds of warning respectively, against loops that ran 18, 19 an
 rounds. Trading three rounds of earliness for the removal of every knob is the
 intended direction, not a regression.
 
-decision-seam-analysis: fix
+decision-seam-analysis: fix scripts/check_seam_convergence.py
 
 ## Intentional
 
@@ -255,13 +268,8 @@ Commands run locally, with results:
 
 | File | LOC |
 |---|---:|
-| `.github/workflows/seam_convergence.yml` | 88 |
-| `plans/PR-Seam-Convergence-Breaker.md` | 268 |
-| `scripts/check_seam_convergence.py` | 426 |
-| `tests/test_check_seam_convergence.py` | 340 |
-| **Total** | **1122** |
-
-Over the 400 LOC soft cap and carrying a diff-budget override in the PR body: the
-detector is ~350 lines and the remainder is the both-direction test suite the R13
-boundary bar requires, plus this plan. Splitting the tests from the detector they
-prove would produce a PR that cannot be reviewed on its own.
+| `.github/workflows/seam_convergence.yml` | 90 |
+| `plans/PR-Seam-Convergence-Breaker.md` | 275 |
+| `scripts/check_seam_convergence.py` | 447 |
+| `tests/test_check_seam_convergence.py` | 396 |
+| **Total** | **1208** |
