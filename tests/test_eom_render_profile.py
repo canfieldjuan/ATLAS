@@ -245,7 +245,7 @@ def test_eom_render_blueprint_maps_database_and_receivables_auth():
     }
     assert env_vars["ATLAS_INVOICING_RECEIVABLES_API_ENABLED"] == {
         "key": "ATLAS_INVOICING_RECEIVABLES_API_ENABLED",
-        "value": "true",
+        "value": "false",
     }
     assert env_vars["ATLAS_INVOICING_RECEIVABLES_SERVICE_TOKEN_SHA256"] == {
         "key": "ATLAS_INVOICING_RECEIVABLES_SERVICE_TOKEN_SHA256",
@@ -561,6 +561,36 @@ def test_eom_receivables_startup_accepts_generated_service_token():
 
     auth.validate_receivables_api_config(config)
     assert auth.receivables_service_token_sha256(generated.token) == generated.sha256
+
+
+def test_eom_receivables_request_auth_does_not_rescan_settings_sources(
+    monkeypatch,
+):
+    from atlas_brain.eom_api import auth
+    from atlas_brain.eom_api import config as eom_config
+    from atlas_brain.eom_api.config import EOMInvoicingConfig
+
+    generated = auth.generate_receivables_service_token()
+    runtime_config = EOMInvoicingConfig(
+        receivables_api_enabled=True,
+        receivables_service_token_sha256=generated.sha256,
+    )
+
+    def fail_settings_rescan(*args, **kwargs):
+        raise AssertionError("request auth must not rescan dotenv settings sources")
+
+    monkeypatch.setattr(
+        eom_config,
+        "raw_receivables_service_token_configured",
+        fail_settings_rescan,
+    )
+
+    asyncio.run(
+        auth.require_receivables_api(
+            f"Bearer {generated.token}",
+            config=runtime_config,
+        )
+    )
 
 
 def test_all_eom_receivables_routes_require_service_auth():

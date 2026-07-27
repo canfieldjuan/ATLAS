@@ -5,13 +5,23 @@
 The operator asked to continue the EOM Render hosting arc after #2220 merged.
 #2217 created the slim EOM API profile, and #2220 wired the candidate Render
 Postgres connection string. The remaining blocker before the already-Render-
-hosted EOM time tracker can call Atlas is service-to-service auth: the API
-still refuses to start when `ATLAS_INVOICING_RECEIVABLES_API_ENABLED=true`.
+hosted EOM time tracker can call Atlas is service-to-service auth: the slim API
+needs a digest-only trust anchor that can be enabled safely after the receivables
+database schema is provisioned.
 
 This slice narrows the old "Slice C" into the Atlas-side trust anchor first:
 allow the slim API to start only with digest-only bearer-token configuration,
 keep raw bearer material out of the Atlas API service, and prove the real EOM
-route accepts generated-token callers while rejecting non-generated bearers.
+route accepts generated-token callers while rejecting non-generated bearers. The
+candidate Blueprint deliberately keeps the API disabled because the fresh Render
+database still has migrations disabled and this slice does not provision the
+receivables tables.
+
+Diff-budget rationale: this PR exceeds the 400-added-line soft cap because the
+reviewer-blocker repairs are indivisible from this trust-anchor slice. The
+production code, Render candidate posture, plan contract, and held-out
+regressions must move together to avoid either a red PR or a deployable candidate
+that is knowingly unsafe.
 
 ### Problem-derived contract
 
@@ -31,11 +41,11 @@ route accepts generated-token callers while rejecting non-generated bearers.
   across process env and env-file settings sources before model projection can
   hide it; update request validation to require the presented bearer token to
   match the exact generated `eomrx_v1_...` payload length before hashing and
-  comparing it; update the Render candidate to prompt for the digest and enable
-  the receivables API; and add route/startup tests that prove valid runtime
-  digest config authorizes the real EOM route while missing, malformed,
-  placeholder, raw-token-bearing, non-generated matching-digest, and max+1
-  generated-format paths fail closed.
+  comparing it; update the Render candidate to prompt for the digest while
+  keeping the receivables API disabled until schema provisioning is wired; and
+  add route/startup tests that prove valid runtime digest config authorizes the
+  real EOM route while missing, malformed, placeholder, raw-token-bearing,
+  non-generated matching-digest, and max+1 generated-format paths fail closed.
 - Must not change: Do not store raw bearer tokens on the Atlas API service,
   modify the full Atlas app, enable migrations, change database schema, touch
   the EOM time tracker repository/deployment, change customer/onboarding or
@@ -48,8 +58,9 @@ Slice phase: vertical slice
 
 1. Allow the slim EOM API profile to run the receivables routes with a
    digest-only service-token runtime config.
-2. Update the reviewable Render candidate so the API is enabled only with a
-   prompted SHA-256 digest secret and no raw token value.
+2. Update the reviewable Render candidate so the SHA-256 digest secret is
+   prompted but the API remains disabled until the receivables schema is
+   provisioned.
 3. Prove the real EOM app route accepts the generated token and rejects bad or
    missing auth through the runtime config object.
 
@@ -57,7 +68,7 @@ Slice phase: vertical slice
 
 - Acceptance criteria:
   - `tests/test_eom_render_profile.py::test_eom_render_blueprint_maps_database_and_receivables_auth`
-    proves `render.eom.yaml` enables the receivables API, prompts for
+    proves `render.eom.yaml` keeps the receivables API disabled, prompts for
     `ATLAS_INVOICING_RECEIVABLES_SERVICE_TOKEN_SHA256` with `sync: false`,
     keeps migrations disabled, preserves the Render Postgres connection-string
     mapping, and does not define any raw receivables token env var.
@@ -75,12 +86,18 @@ Slice phase: vertical slice
     proves enabled config fails closed for missing digest, malformed digest,
     placeholder-derived digest, and any object carrying raw bearer-token
     material.
+  - `tests/test_eom_render_profile.py::test_eom_receivables_request_auth_does_not_rescan_settings_sources`
+    proves request-time bearer validation uses the in-memory runtime config and
+    does not synchronously re-read dotenv settings sources on the async request
+    path.
   - `tests/test_eom_render_profile.py::test_eom_receivables_ready_route_is_fail_closed`
-    proves the route boundary returns 401 for missing/invalid bearer tokens,
-    401 for malformed non-ASCII bearer bytes, 401 for a non-generated bearer
-    whose digest matches config, 401 for a generated-prefix bearer with a max+1
-    payload whose digest matches config, 200 for the configured generated bearer
-    token, and 503 when the API is disabled.
+    proves `require_receivables_api()` has one bearer-admission choke point:
+    `_validate_generated_token()` must accept only the bounded
+    `eomrx_v1_` prefix, exact payload length, and allowed-character recognizer
+    before digest comparison. Every missing, unrecognized, malformed,
+    non-ASCII, non-generated matching-digest, and max+1 generated-prefix bearer
+    defaults to 401; the configured generated bearer returns 200; and disabled
+    runtime config returns 503.
   - `tests/test_eom_render_profile.py::test_eom_profile_reaches_receivables_ready_through_real_app`
     proves the real `atlas_brain.main_eom:app` route transport reaches
     `/api/v1/receivables/ready` using the runtime digest config, not the
@@ -112,17 +129,16 @@ Slice phase: vertical slice
 `ATLAS_INVOICING_RECEIVABLES_SERVICE_TOKEN` key from process env and admitted
 dotenv settings sources when the API is enabled, so `extra="ignore"` cannot hide
 forbidden bearer material before validation. `validate_receivables_api_config()`
-still returns early when the API is disabled. When enabled, it repeats the raw
-settings-source guard, rejects any config object that carries raw bearer-token
-material, then validates the digest shape and rejects placeholder-derived
-digests. `require_receivables_api()` validates the presented bearer token
+still returns early when the API is disabled. When enabled, it rejects any config
+object that carries raw bearer-token material, then validates the digest shape
+and rejects placeholder-derived digests. `require_receivables_api()` validates the presented bearer token
 against the exact generated-token prefix and payload length before hashing it
 and comparing digests with `hmac.compare_digest()`.
 
-`render.eom.yaml` turns on `ATLAS_INVOICING_RECEIVABLES_API_ENABLED` and adds
-`ATLAS_INVOICING_RECEIVABLES_SERVICE_TOKEN_SHA256` as `sync: false`, so Render
-prompts the operator for the digest without hardcoding it in the candidate
-Blueprint. The raw generated token remains caller-side material for the later
+`render.eom.yaml` keeps `ATLAS_INVOICING_RECEIVABLES_API_ENABLED=false` and adds
+`ATLAS_INVOICING_RECEIVABLES_SERVICE_TOKEN_SHA256` as `sync: false`, so the
+candidate can collect the digest without exposing the API before schema
+provisioning. The raw generated token remains caller-side material for the later
 EOM time tracker slice.
 
 ## Intentional
@@ -132,8 +148,8 @@ EOM time tracker slice.
 - This PR keeps the candidate file named `render.eom.yaml`, not render dot yaml,
   so it remains reviewable infrastructure shape instead of auto-applied live
   Render configuration.
-- This PR enables only the auth gate for the receivables API candidate; database
-  migrations remain disabled.
+- This PR keeps the receivables API disabled in the Render candidate because
+  database migrations remain disabled.
 - The in-process trusted config helper remains available for narrow tests, but
   the real app reachability proof uses `EOMInvoicingConfig`.
 
@@ -151,19 +167,19 @@ Parked hardening: none.
 ## Verification
 
 - Passed locally:
-  - Command: python -m pytest tests/test_eom_render_profile.py
-  - Command: python -m py_compile atlas_brain/eom_api/auth.py atlas_brain/eom_api/config.py atlas_brain/main_eom.py tests/test_eom_render_profile.py
-  - Command: git diff --check
-  - Command: python scripts/sync_pr_plan.py plans/PR-EOM-Render-Receivables-Auth.md
-  - Command: python scripts/audit_plan_code_consistency.py plans/PR-EOM-Render-Receivables-Auth.md
+  - Command: python -m pytest tests/test_eom_render_profile.py -- 23 passed, 1 warning
+  - Command: python -m py_compile atlas_brain/eom_api/auth.py atlas_brain/eom_api/config.py atlas_brain/main_eom.py tests/test_eom_render_profile.py -- passed
+  - Command: git diff --check -- passed
+  - Command: python scripts/sync_pr_plan.py plans/PR-EOM-Render-Receivables-Auth.md -- passed
+  - Command: python scripts/audit_plan_code_consistency.py plans/PR-EOM-Render-Receivables-Auth.md -- passed
 
 ## Estimated diff size
 
 | File | LOC |
 |---|---:|
-| `atlas_brain/eom_api/auth.py` | 42 |
+| `atlas_brain/eom_api/auth.py` | 28 |
 | `atlas_brain/eom_api/config.py` | 53 |
-| `plans/PR-EOM-Render-Receivables-Auth.md` | 169 |
-| `render.eom.yaml` | 4 |
-| `tests/test_eom_render_profile.py` | 210 |
-| **Total** | **478** |
+| `plans/PR-EOM-Render-Receivables-Auth.md` | 185 |
+| `render.eom.yaml` | 2 |
+| `tests/test_eom_render_profile.py` | 238 |
+| **Total** | **506** |
