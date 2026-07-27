@@ -88,6 +88,9 @@ Slice phase: Vertical slice
 3. Archive the already-merged `PR-EOM-Office-Conversion-Handoff` plan as the
    required Atlas merged-PR housekeeping. It is a documented teardown action,
    not a product behavior change.
+4. Shrink the unit-gate known-failures baseline only for stale entries proven
+   by current-head CI to pass. This is ratchet housekeeping required by the
+   gate; it does not change product behavior or add new baseline entries.
 
 Max files: 8
 
@@ -111,6 +114,8 @@ Max files: 8
 5. The previously merged plan is moved only to `plans/archive/` and the plans
    index is regenerated; the product diff contains no unrelated calendar,
    receivables, or generic CRM change.
+6. The unit-gate baseline only shrinks: no baseline growth is allowed, and only
+   the nine CI-reported stale node IDs are removed.
 - Reachability proof: `tests/test_eom_lead_conversion.py` calls the real FastAPI
   route with its real dependencies overridden only at the database provider;
   `tests/test_eom_lead_conversion_integration.py` runs the provider projection
@@ -174,6 +179,7 @@ admitted by those definitions is excluded by default.
 - `plans/INDEX.md`
 - `plans/PR-EOM-Office-Lead-Review.md`
 - `plans/archive/PR-EOM-Office-Conversion-Handoff.md`
+- `tests/unit_gate_baseline.txt`
 - `tests/test_eom_lead_conversion.py`
 - `tests/test_eom_lead_conversion_integration.py`
 
@@ -234,7 +240,8 @@ Parked hardening: none.
   no code written until this contract is complete.
 - Before push (Atlas): focused route and disposable-PostgreSQL tests; the EOM
   pipeline test selection; plan synchronization; local review; and the
-  current-head PR/body audit.
+  current-head PR/body audit. If unit-gate reports stale baseline entries,
+  remove only the CI-proven stale entries and rerun the focused ratchet check.
 - Before push (tracker): backend FastAPI tests against its PostgreSQL fixture,
   including authenticated proxy, non-approver, and retry cases.
 - Before push (website): Node/JSDOM controller tests, `npm test`,
@@ -249,8 +256,9 @@ Parked hardening: none.
 | `atlas_brain/eom_api/funnel.py` | 52 |
 | `atlas_brain/services/crm_provider.py` | 35 |
 | `plans/INDEX.md` | 3 |
-| `plans/PR-EOM-Office-Lead-Review.md` | 249 |
+| `plans/PR-EOM-Office-Lead-Review.md` | 255 |
 | `plans/archive/PR-EOM-Office-Conversion-Handoff.md` | 0 |
+| `tests/unit_gate_baseline.txt` | 9 |
 | `tests/test_eom_lead_conversion.py` | 120 |
 | `tests/test_eom_lead_conversion_integration.py` | 111 |
-| **Total** | **570** |
+| **Total** | **585** |
