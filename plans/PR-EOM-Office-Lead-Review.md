@@ -37,9 +37,10 @@ Customer/Site onboarding surface nor the merged customer-handoff transaction.
   1. Atlas must add one authenticated, read-only route below the existing
      `/eom-funnel` service boundary. It must derive its candidate set directly
      from `contacts`: active, `effingham_maids`, `lead`, `new`; project an
-     explicit bounded identity/readiness field set; include offset pagination
-     with continuation metadata so the limit is not a hard truncation; require
-     the existing tracker bearer and actor headers; and perform no lifecycle,
+     explicit bounded identity/readiness field set; include keyset cursor
+     pagination with continuation metadata so the limit is neither a hard
+     truncation nor unstable while staff approve leads; require the existing
+     tracker bearer and actor headers; and perform no lifecycle,
      interaction, appointment, or Customer/Site write. The provider already has
      the needed scoped lead filters
      (`atlas_brain/services/crm_provider.py:1064-1139`) and the existing
@@ -101,7 +102,7 @@ Max files: 8
 1. With the enabled generated funnel credential plus both actor headers,
    `GET /api/v1/eom-funnel/leads` returns only the explicit public projection
    for active EOM `lead/new` contacts and exposes continuation metadata
-   (`limit`, `offset`, `hasMore`, `nextOffset`) for bounded offset pagination.
+   (`limit`, `cursor`, `hasMore`, `nextCursor`) for bounded keyset pagination.
    HTTP route tests and a real-PostgreSQL provider test settle both the
    boundary and the query outcome.
 2. The projection is closed and explicit: `contactId`, `fullName`, `email`,
@@ -111,7 +112,7 @@ Max files: 8
 3. EOM customers, inactive/archived contacts, non-EOM contacts, and leads at a
    different stage are absent from the query result; a route request with an
    absent/malformed actor, invalid/disabled bearer, out-of-range limit, or
-   negative offset fails before the provider list call. Focused route tests
+   malformed cursor fails before the provider list call. Focused route tests
    settle those outcomes.
 4. The new read route performs no writes: the real-PostgreSQL test observes
    unchanged contacts, lifecycle-event count, and handoff count after a
@@ -124,8 +125,8 @@ Max files: 8
 - Reachability proof: `tests/test_eom_lead_conversion.py` calls the real FastAPI
   route with its real dependencies overridden only at the database provider;
   `tests/test_eom_lead_conversion_integration.py` runs the provider projection
-  against disposable PostgreSQL and observes the returned rows, paged offset
-  result, and unchanged table counts.
+  against disposable PostgreSQL and observes the returned rows, paged keyset
+  cursor result, and unchanged table counts.
 - Affected surfaces: `atlas_brain/eom_api/funnel.py`,
   `atlas_brain/services/crm_provider.py`, the existing funnel-auth dependency,
   its focused route/integration tests, and Atlas plan archival.
@@ -146,8 +147,8 @@ The existing private service route gains a read admission path.
   which holds the bearer server-side. The existing POST handoff route and
   public intake route are preserved.
 - Guard-relevant fields: bearer digest; `X-EOM-Actor`; `X-EOM-Actor-ID`; bounded
-  optional limit; nonnegative offset; and database `business_context_id`, `status`,
-  `contact_type`, and `lead_stage`.
+  optional limit; optional opaque cursor over `(created_at, id)`; and database
+  `business_context_id`, `status`, `contact_type`, and `lead_stage`.
 - Caller x input shape:
   - tracker proxy + valid bearer/positive actor ID → explicit candidate page
     with continuation metadata;

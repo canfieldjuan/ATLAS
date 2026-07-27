@@ -21,7 +21,7 @@ import re
 from contextlib import asynccontextmanager
 from datetime import datetime, timezone
 from typing import Any, Optional
-from uuid import uuid4
+from uuid import UUID, uuid4
 
 logger = logging.getLogger("atlas.services.crm_provider")
 
@@ -1142,7 +1142,8 @@ class DatabaseCRMProvider:
         self,
         *,
         limit: int = 100,
-        offset: int = 0,
+        cursor_created_at: datetime | None = None,
+        cursor_contact_id: UUID | None = None,
     ) -> list[dict[str, Any]]:
         """Return the closed office-review projection for active EOM new leads.
 
@@ -1151,9 +1152,14 @@ class DatabaseCRMProvider:
         expose only the small identity/readiness projection required to start
         the existing customer-handoff command.
         """
+        cursor_clause = ""
+        params: list[Any] = [limit]
+        if cursor_created_at is not None and cursor_contact_id is not None:
+            cursor_clause = "AND (created_at, id) < ($2::timestamptz, $3::uuid)"
+            params.extend([cursor_created_at, cursor_contact_id])
         pool = self._get_pool()
         rows = await pool.fetch(
-            """
+            f"""
             SELECT
                 id AS contact_id,
                 full_name,
@@ -1167,11 +1173,11 @@ class DatabaseCRMProvider:
               AND status = 'active'
               AND contact_type = 'lead'
               AND lead_stage = 'new'
+              {cursor_clause}
             ORDER BY created_at DESC, id DESC
-            LIMIT $1 OFFSET $2
+            LIMIT $1
             """,
-            limit,
-            offset,
+            *params,
         )
         return [dict(row) for row in rows]
 

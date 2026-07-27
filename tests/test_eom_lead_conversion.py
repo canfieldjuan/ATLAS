@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from datetime import datetime
 from types import SimpleNamespace
 from uuid import uuid4
 
@@ -23,11 +24,23 @@ _SERVICE_TOKEN_SHA256 = _GENERATED_SERVICE_TOKEN.sha256
 class _CRM:
     def __init__(self, *, review_leads: list[dict[str, object]] | None = None) -> None:
         self.calls: list[dict[str, object]] = []
-        self.review_calls: list[dict[str, int]] = []
+        self.review_calls: list[dict[str, object]] = []
         self.review_leads = review_leads or []
 
-    async def list_eom_new_lead_review_items(self, *, limit: int, offset: int):
-        self.review_calls.append({"limit": limit, "offset": offset})
+    async def list_eom_new_lead_review_items(
+        self,
+        *,
+        limit: int,
+        cursor_created_at=None,
+        cursor_contact_id=None,
+    ):
+        self.review_calls.append(
+            {
+                "limit": limit,
+                "cursor_created_at": cursor_created_at,
+                "cursor_contact_id": cursor_contact_id,
+            }
+        )
         return self.review_leads
 
     async def finalize_eom_customer_handoff(self, **kwargs):
@@ -135,11 +148,13 @@ async def test_full_atlas_app_serves_public_intake_and_private_handoff_together(
             }
         ],
         "limit": 100,
-        "offset": 0,
+        "cursor": None,
         "hasMore": False,
-        "nextOffset": None,
+        "nextCursor": None,
     }
-    assert crm.review_calls == [{"limit": 101, "offset": 0}]
+    assert crm.review_calls == [
+        {"limit": 101, "cursor_created_at": None, "cursor_contact_id": None}
+    ]
     assert response.status_code == 201
     assert crm.calls
 
@@ -170,6 +185,10 @@ async def test_private_lead_review_returns_only_the_closed_projection():
             }
         ]
     )
+    expected_cursor = funnel_mod._encode_lead_review_cursor(
+        created_at=datetime.fromisoformat("2026-07-27T12:00:00+00:00"),
+        contact_id=first_contact_id,
+    )
     app = _app(crm, _enabled_config())
     async with httpx.AsyncClient(
         transport=httpx.ASGITransport(app=app), base_url="http://test"
@@ -190,22 +209,30 @@ async def test_private_lead_review_returns_only_the_closed_projection():
             }
         ],
         "limit": 1,
-        "offset": 0,
+        "cursor": None,
         "hasMore": True,
-        "nextOffset": 1,
+        "nextCursor": expected_cursor,
     }
-    assert crm.review_calls == [{"limit": 2, "offset": 0}]
+    assert crm.review_calls == [
+        {"limit": 2, "cursor_created_at": None, "cursor_contact_id": None}
+    ]
 
 
 @pytest.mark.asyncio
-async def test_private_lead_review_forwards_offset_for_continuation():
+async def test_private_lead_review_forwards_keyset_cursor_for_continuation():
+    cursor_created_at = datetime.fromisoformat("2026-07-27T12:00:00+00:00")
+    cursor_contact_id = uuid4()
+    cursor = funnel_mod._encode_lead_review_cursor(
+        created_at=cursor_created_at,
+        contact_id=cursor_contact_id,
+    )
     crm = _CRM()
     app = _app(crm, _enabled_config())
     async with httpx.AsyncClient(
         transport=httpx.ASGITransport(app=app), base_url="http://test"
     ) as client:
         response = await client.get(
-            "/eom-funnel/leads?limit=50&offset=150",
+            f"/eom-funnel/leads?limit=50&cursor={cursor}",
             headers=_headers(),
         )
 
@@ -213,11 +240,17 @@ async def test_private_lead_review_forwards_offset_for_continuation():
     assert response.json() == {
         "leads": [],
         "limit": 50,
-        "offset": 150,
+        "cursor": cursor,
         "hasMore": False,
-        "nextOffset": None,
+        "nextCursor": None,
     }
-    assert crm.review_calls == [{"limit": 51, "offset": 150}]
+    assert crm.review_calls == [
+        {
+            "limit": 51,
+            "cursor_created_at": cursor_created_at,
+            "cursor_contact_id": cursor_contact_id,
+        }
+    ]
 
 
 @pytest.mark.asyncio
@@ -260,13 +293,16 @@ async def test_private_lead_review_rejects_out_of_range_limit_before_crm_call():
 
 
 @pytest.mark.asyncio
-async def test_private_lead_review_rejects_negative_offset_before_crm_call():
+async def test_private_lead_review_rejects_malformed_cursor_before_crm_call():
     crm = _CRM()
     app = _app(crm, _enabled_config())
     async with httpx.AsyncClient(
         transport=httpx.ASGITransport(app=app), base_url="http://test"
     ) as client:
-        response = await client.get("/eom-funnel/leads?offset=-1", headers=_headers())
+        response = await client.get(
+            "/eom-funnel/leads?cursor=not-a-real-cursor",
+            headers=_headers(),
+        )
 
     assert response.status_code == 422
     assert crm.review_calls == []
