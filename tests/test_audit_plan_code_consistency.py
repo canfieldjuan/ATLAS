@@ -72,6 +72,10 @@ def test_parse_claims_ignores_backticked_commands_with_paths(auditor):
 
         `python scripts/audit_plan_doc.py plans/PR-Example.md`
         `uv run scripts/audit_plan_doc.py plans/PR-Example.md`
+        `.venv/bin/python -m pytest tests/example.py`
+        `.venv/bin/python tests/example.py`
+        `tools/bin/pytest tests/example.py`
+        `./tools/run tests/example.py`
         `scripts/local_pr_review.sh --current-pr-body-file /tmp/body.md`
         `scripts/local_pr_review.sh plans/Example.md`
     """)
@@ -90,11 +94,20 @@ def test_parse_claims_preserves_literal_paths_with_spaces(auditor):
 
         `docs/path with spaces.md`
         `docs/foo - bar.md`
+        `./docs/path with spaces.md`
+        `ATLAS Distributed System.txt`
+        `node_distributions/ATLAS Distributed System.txt`
     """)
 
     paths, funcs = auditor.parse_claims(plan)
 
-    assert paths == {"docs/foo - bar.md", "docs/path with spaces.md"}
+    assert paths == {
+        "./docs/path with spaces.md",
+        "ATLAS Distributed System.txt",
+        "docs/foo - bar.md",
+        "docs/path with spaces.md",
+        "node_distributions/ATLAS Distributed System.txt",
+    }
     assert funcs == set()
 
 
@@ -143,8 +156,10 @@ def test_audit_claims_accepts_deleted_branch_path_and_basename(
     scripts.mkdir()
     deleted = scripts / "deleted[magic].py"
     non_ascii_deleted = scripts / "résumé.py"
+    renamed = scripts / "renamed-source.py"
     deleted.write_text("print('bye')\n", encoding="utf-8")
     non_ascii_deleted.write_text("print('bye')\n", encoding="utf-8")
+    renamed.write_text("print('move me')\n", encoding="utf-8")
     subprocess.run(["git", "add", "."], cwd=repo, check=True)
     subprocess.run(["git", "commit", "-m", "base"], cwd=repo, check=True, stdout=subprocess.DEVNULL)
     subprocess.run(["git", "branch", "-M", "main"], cwd=repo, check=True)
@@ -152,8 +167,9 @@ def test_audit_claims_accepts_deleted_branch_path_and_basename(
     subprocess.run(["git", "checkout", "-b", "feature"], cwd=repo, check=True, stdout=subprocess.DEVNULL)
     deleted.unlink()
     non_ascii_deleted.unlink()
+    renamed.rename(scripts / "renamed-destination.py")
     subprocess.run(["git", "add", "-A"], cwd=repo, check=True)
-    subprocess.run(["git", "commit", "-m", "delete file"], cwd=repo, check=True, stdout=subprocess.DEVNULL)
+    subprocess.run(["git", "commit", "-m", "delete and rename files"], cwd=repo, check=True, stdout=subprocess.DEVNULL)
     subprocess.run(["git", "branch", "origin/feature"], cwd=repo, check=True)
 
     plan = textwrap.dedent("""\
@@ -162,8 +178,11 @@ def test_audit_claims_accepts_deleted_branch_path_and_basename(
         ## Scope (this PR)
 
         `scripts/deleted[magic].py`
+        `./scripts/deleted[magic].py`
         `deleted[magic].py`
         `résumé.py`
+        `scripts/renamed-source.py`
+        `renamed-source.py`
     """)
 
     monkeypatch.setattr(auditor, "REPO_ROOT", repo)
@@ -176,9 +195,12 @@ def test_audit_claims_accepts_deleted_branch_path_and_basename(
     missing_paths, missing_functions = auditor.audit_claims(plan, "origin/feature")
 
     assert set(missing_paths) == {
+        "./scripts/deleted[magic].py",
         "deleted[magic].py",
         "scripts/deleted[magic].py",
         "résumé.py",
+        "scripts/renamed-source.py",
+        "renamed-source.py",
     }
     assert missing_functions == []
 
@@ -210,6 +232,28 @@ def test_audit_claims_accepts_existing_root_path_and_function(auditor):
 
         Calls `parse_claims()`.
     """)
+
+    missing_paths, missing_functions = auditor.audit_claims(plan)
+
+    assert missing_paths == []
+    assert missing_functions == []
+
+
+def test_audit_claims_accepts_existing_basename_with_spaces(auditor, monkeypatch, tmp_path):
+    repo = tmp_path / "repo"
+    distribution = repo / "node_distributions"
+    distribution.mkdir(parents=True)
+    (distribution / "ATLAS Distributed System.txt").write_text("ok\n", encoding="utf-8")
+
+    plan = textwrap.dedent("""\
+        # Example
+
+        ## Scope (this PR)
+
+        `ATLAS Distributed System.txt`
+    """)
+
+    monkeypatch.setattr(auditor, "REPO_ROOT", repo)
 
     missing_paths, missing_functions = auditor.audit_claims(plan)
 

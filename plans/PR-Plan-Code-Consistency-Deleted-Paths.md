@@ -2,26 +2,35 @@
 
 ## Why this slice exists
 
-PR #2240 intentionally hard-deletes retired review-gate files. GitHub
-`pre-push-audit` runs trusted `origin/main` scripts against the PR checkout, so
-it uses the base version of `scripts/audit_plan_code_consistency.py`. That base
-checker treats deleted files listed in the plan as missing path claims and also
-treats full backticked commands as path claims when the command ends in `.md` or
-`.py`. This precursor lands the checker fix first so the broader Codex review
-scope reset can be judged by the corrected trusted-base gate.
+The EOM lead-review queue vertical (#2242) archives prior plan docs as part of
+normal slice hygiene, and the follow-on review-scope cleanup (#2240) hard-deletes
+retired review-gate files. Trusted-base GitHub `pre-push-audit` still runs
+`origin/main`'s plan/code checker, so a checker that misreads branch-deleted or
+renamed path claims and command-shaped backticks can block operator-visible EOM
+funnel PRs before their own fixed checker is trusted. This precursor fixes that
+trusted gate before #2240 and later EOM funnel slices depend on it.
+
+Diff-budget overage rationale: this slice is genuinely indivisible because the
+checker mechanism, selected-base forwarding, CI enrollment, regression coverage,
+and plan contract must move together; splitting any one of those parts leaves
+the trusted plan/code gate either unable to run the new coverage or still
+false-red/false-green for EOM funnel PRs.
 
 ### Problem-derived contract
 
-- Root cause: `scripts/audit_plan_code_consistency.py` assumes every
-  enforceable backticked path claim must exist on disk. That is wrong for a PR
-  whose plan truthfully lists a file being deleted by the branch. The same token
-  parser also mistakes command strings containing spaces for path claims.
+- Root cause: `scripts/audit_plan_code_consistency.py` requires every
+  enforceable path claim to exist on disk and mistakes command strings for path
+  claims.
+- Root-cause disposition: this change fixes that root cause for the declared
+  command/path and branch-deleted/renamed claim classes; it is not merely a
+  symptom waiver or PR-body exception.
 - Correct fix must touch/change: update
   `scripts/audit_plan_code_consistency.py` so command strings are not path
-  tokens, branch-deleted paths resolve as valid plan claims against the selected
-  review base, and local review passes that selected base into the checker; add
-  focused tests in `tests/test_audit_plan_code_consistency.py` and
-  `tests/test_local_pr_review.py`.
+  tokens, branch-deleted and branch-renamed source paths resolve as valid plan
+  claims against the selected review base, and local review passes that selected
+  base into the checker; add focused tests in
+  `tests/test_audit_plan_code_consistency.py` and `tests/test_local_pr_review.py`;
+  enroll the checker tests in `.github/workflows/pre_push_audit.yml`.
 - Must not change: product behavior, customer-visible surfaces, plan admission,
   diff-budget, `live-reconciliation`, PR ownership checks, or the broader Codex
   review-scope reset in #2240.
@@ -31,7 +40,7 @@ scope reset can be judged by the corrected trusted-base gate.
 Ownership lane: workflow/plan-code-consistency
 Slice phase: Workflow/process
 
-Max files: 5
+Max files: 6
 
 1. Narrow plan/code consistency to stop false positives on branch-deleted path
    claims and command-string tokens.
@@ -42,11 +51,15 @@ Max files: 5
 
 - Acceptance criteria:
   - `parse_claims` does not classify a backticked command containing spaces as
-    a path claim, including path-headed executable commands with no flags.
-  - `parse_claims` still preserves literal path claims that contain spaces.
-  - `audit_claims` accepts a path claim when the path is deleted in the current
-    branch diff, including names with pathspec metacharacters and non-ASCII
-    basenames.
+    a path claim, including extensionless path-headed executables and
+    path-headed executable commands with no flags such as "./tools/run
+    tests/example.py".
+  - `parse_claims` still preserves literal path claims that contain spaces,
+    including basename shorthand such as "ATLAS Distributed System.txt".
+  - `audit_claims` accepts a path claim when the path is deleted or renamed away
+    in the current branch diff, including names with pathspec metacharacters,
+    non-ASCII basenames, basename shorthand, and repository-relative spellings
+    with a leading `./`.
   - Deleted-path resolution uses the caller-selected base ref rather than a
     hard-coded `origin/main`.
   - Local review passes its selected base ref into plan/code consistency.
@@ -54,7 +67,8 @@ Max files: 5
     checker tests.
 - Reachability proof: N/A - this is a local/CI workflow checker with pytest
   fixture coverage, not a runtime product surface.
-- Affected surfaces: `scripts/audit_plan_code_consistency.py`,
+- Affected surfaces: `.github/workflows/pre_push_audit.yml`,
+  `scripts/audit_plan_code_consistency.py`,
   `scripts/local_pr_review.sh`, `tests/test_audit_plan_code_consistency.py`,
   and `tests/test_local_pr_review.py`.
 - Risk areas: checker false negatives, command-token parsing, deleted-file diff
@@ -64,24 +78,19 @@ Max files: 5
 
 ### Boundary-change enumeration
 
-Required when this diff changes a guard, validator, normalizer, resolver,
-router/classifier, or admission boundary. Name each changed boundary path or
-seam in the enumeration; otherwise write "N/A - no boundary change."
-
 - Boundary path/seam: `scripts/audit_plan_code_consistency.py` validates
-  backticked path/function claims in plan docs.
+  backticked path/function claims in plan docs; `.github/workflows/pre_push_audit.yml`
+  enrolls the checker regression tests in trusted-base CI.
 - Replaced-path behaviors: missing path claims still fail unless the path exists,
   is gitignored session state, or is deleted by the current branch diff.
 - Guard-relevant fields: backticked tokens, shell-split executable shape,
   whitespace inside tokens, path suffixes, basename-only claims, and
-  NUL-terminated `git diff --diff-filter=D` deleted-path entries.
+  normalized repository-relative claims from NUL-terminated `git diff
+  --diff-filter=DR --find-renames` deleted-path and renamed-source entries.
 - Caller x input shape: local review and CI pass a plan doc path plus selected
   base ref; pytest calls `parse_claims` and `audit_claims` directly.
 
 ### Deployed-config probing
-
-Required for guard, validator, resolver, admission-boundary, or env/config
-fallback changes; otherwise write "N/A - no guard/config boundary change."
 
 - Deployed/default config values: N/A - no deployed config or fallback behavior.
 - Explicit value probe: N/A.
@@ -91,6 +100,7 @@ fallback changes; otherwise write "N/A - no guard/config boundary change."
 
 ### Files touched
 
+- `.github/workflows/pre_push_audit.yml`
 - `plans/PR-Plan-Code-Consistency-Deleted-Paths.md`
 - `scripts/audit_plan_code_consistency.py`
 - `scripts/local_pr_review.sh`
@@ -99,25 +109,27 @@ fallback changes; otherwise write "N/A - no guard/config boundary change."
 
 ## Mechanism
 
-The checker keeps its existing path/function claim audit. The token predicate
-now excludes command-shaped backticked strings by shell-splitting the token,
-skipping environment assignments, and classifying the executable shape instead
-of matching command-name or marker allowlists; literal path claims with spaces
-still remain path claims. Path resolution now has a second successful case after
-an on-disk lookup: deleted-path discovery reads `git diff --name-only -z
---diff-filter=D` and compares full path claims exactly or basename-only claims
-by basename. In both cases the plan claim is valid even though the file no
-longer exists in the checkout. Local review forwards its selected base ref to
-the checker so PRs targeting a non-`main` base compare deletions against the
-same base used by the rest of the review bundle.
+The checker still audits path/function claims, but shell-splits backticked tokens
+to classify only the declared command set: known command heads, executable
+script suffixes, and path-headed executable invocations. Unknown whitespace
+tokens that look like repository path claims remain path claims, which preserves
+literal paths and basename shorthand with spaces. Deleted-path discovery reads
+`git diff --name-status -z
+--diff-filter=DR --find-renames`, normalizes repository-relative `./` spellings,
+and accepts exact full-path or basename-only deleted and renamed-source claims.
+Local review forwards its base ref so non-`main` PR targets compare deletions
+against the same base as the rest of the review bundle. The trusted-base
+pre-push workflow runs the checker regression tests alongside the rest of the
+PR-review tooling tests.
 
 ## Intentional
 
 - Keep this as a precursor rather than burying it in #2240; GitHub's trusted-base
   CI cannot use a checker fix that only exists inside the PR being checked.
 - Do not broaden the checker into a full Markdown command parser; whitespace is
-  not enough by itself because literal repo paths can contain spaces, so this
-  only filters command-shaped tokens.
+  not enough by itself because literal repo paths can contain spaces. The
+  default is therefore path-claim preserving unless the token matches the
+  declared command set.
 
 ## Deferred
 
@@ -132,7 +144,8 @@ Parked hardening: none.
 
 ## Verification
 
-- python -m pytest tests/test_audit_plan_code_consistency.py tests/test_local_pr_review.py -q - 29 passed.
+- python -m pytest tests/test_audit_plan_code_consistency.py tests/test_local_pr_review.py tests/test_pre_push_audit_workflow.py -q - 45 passed.
+- python -m py_compile scripts/audit_plan_code_consistency.py tests/test_audit_plan_code_consistency.py - passed.
 - python scripts/audit_plan_code_consistency.py --base-ref origin/main plans/PR-Plan-Code-Consistency-Deleted-Paths.md - passed.
 - python scripts/maturity_sweep.py scripts --tests-root tests --baseline tests/maturity_sweep/baseline_scripts.json --min-score 8 --sensitive-glob 'scripts/**' - passed; ratchet gate reported no new brittleness above baseline.
 
@@ -140,9 +153,10 @@ Parked hardening: none.
 
 | File | LOC |
 |---|---:|
-| `plans/PR-Plan-Code-Consistency-Deleted-Paths.md` | 148 |
-| `scripts/audit_plan_code_consistency.py` | 103 |
+| `.github/workflows/pre_push_audit.yml` | 4 |
+| `plans/PR-Plan-Code-Consistency-Deleted-Paths.md` | 162 |
+| `scripts/audit_plan_code_consistency.py` | 192 |
 | `scripts/local_pr_review.sh` | 4 |
-| `tests/test_audit_plan_code_consistency.py` | 110 |
+| `tests/test_audit_plan_code_consistency.py` | 154 |
 | `tests/test_local_pr_review.py` | 23 |
-| **Total** | **388** |
+| **Total** | **539** |

@@ -18,9 +18,28 @@ REPO_ROOT = audit_repo_root(__file__)
 BACKTICK_TOKEN = re.compile(r"`([^`]+)`")
 BACKTICK_FUNC = re.compile(r"^([a-z_][a-z0-9_]{3,})\(\)$")
 PATH_EXTENSIONS = (".md", ".py", ".sh", ".json", ".yaml", ".yml", ".toml", ".txt")
-PATH_SEARCH_ROOTS = ("scripts", "plans", "docs", "tests", "atlas_brain")
+PATH_SEARCH_ROOTS = (
+    "scripts",
+    "plans",
+    "docs",
+    "tests",
+    "atlas_brain",
+    "node_distributions",
+)
+PATH_CLAIM_ROOTS = set(PATH_SEARCH_ROOTS)
 EXECUTABLE_EXTENSIONS = (".py", ".sh")
 SHELL_CONTROL_TOKENS = {"&&", "||", "|", ";", ">", "<"}
+PATH_HEAD_EXECUTABLE_NAMES = {
+    "bash",
+    "node",
+    "npm",
+    "npx",
+    "python",
+    "python3",
+    "pytest",
+    "sh",
+    "uv",
+}
 
 
 def _slice_sections(plan_text: str, section_titles: tuple[str, ...]) -> str:
@@ -69,13 +88,25 @@ def _looks_like_command_token(token: str) -> bool:
     executable = parts[executable_index]
     if executable in SHELL_CONTROL_TOKENS or executable.startswith("-"):
         return False
+    if Path(executable).name in PATH_HEAD_EXECUTABLE_NAMES:
+        return True
     if executable.endswith(EXECUTABLE_EXTENSIONS):
         return True
     if "/" in executable:
-        return any(part in SHELL_CONTROL_TOKENS for part in parts[executable_index + 1 :])
+        if _looks_like_repository_path_claim(token):
+            return False
+        return _looks_like_path_headed_executable(executable) or any(
+            _looks_like_command_argument(part)
+            for part in parts[executable_index + 1 :]
+        )
+    if _looks_like_repository_path_claim(token):
+        return False
     if executable.endswith(PATH_EXTENSIONS):
         return False
-    return True
+    return any(
+        _looks_like_command_argument(part)
+        for part in parts[executable_index + 1 :]
+    )
 
 
 def _looks_like_env_assignment(part: str) -> bool:
@@ -83,6 +114,29 @@ def _looks_like_env_assignment(part: str) -> bool:
         return False
     name, _value = part.split("=", 1)
     return bool(re.match(r"^[A-Za-z_][A-Za-z0-9_]*$", name))
+
+
+def _looks_like_command_argument(part: str) -> bool:
+    return part in SHELL_CONTROL_TOKENS or (part.startswith("-") and part != "-")
+
+
+def _looks_like_path_headed_executable(executable: str) -> bool:
+    path = Path(executable)
+    if path.name in PATH_HEAD_EXECUTABLE_NAMES:
+        return True
+    if executable.startswith(("./", "../", "/")) and "." not in path.name:
+        return True
+    return path.parent.name == "bin" and "." not in path.name
+
+
+def _looks_like_repository_path_claim(token: str) -> bool:
+    if not token.endswith(PATH_EXTENSIONS):
+        return False
+    normalized = token.removeprefix("./")
+    if "/" not in normalized:
+        return True
+    root = normalized.split("/", 1)[0]
+    return root in PATH_CLAIM_ROOTS or root.startswith("extracted_")
 
 
 def parse_claims(plan_text: str) -> tuple[set[str], set[str]]:
@@ -128,11 +182,23 @@ def _path_resolves(claim: str, base_ref: str = "origin/main") -> bool:
 
 
 def _path_deleted_in_branch_diff(claim: str, base_ref: str = "origin/main") -> bool:
-    if "/" not in claim:
+    normalized_claim = _normalize_repo_relative_path(claim)
+    if "/" not in normalized_claim:
         return any(
-            Path(path).name == claim for path in _deleted_paths_in_branch_diff(base_ref)
+            Path(path).name == normalized_claim
+            for path in _deleted_paths_in_branch_diff(base_ref)
         )
-    return claim in _deleted_paths_in_branch_diff(base_ref)
+    return normalized_claim in {
+        _normalize_repo_relative_path(path)
+        for path in _deleted_paths_in_branch_diff(base_ref)
+    }
+
+
+def _normalize_repo_relative_path(path: str) -> str:
+    normalized = path.replace("\\", "/")
+    while normalized.startswith("./"):
+        normalized = normalized[2:]
+    return normalized
 
 
 def _deleted_paths_in_branch_diff(base_ref: str = "origin/main") -> list[str]:
@@ -140,9 +206,10 @@ def _deleted_paths_in_branch_diff(base_ref: str = "origin/main") -> list[str]:
         [
             "git",
             "diff",
-            "--name-only",
+            "--name-status",
             "-z",
-            "--diff-filter=D",
+            "--find-renames",
+            "--diff-filter=DR",
             f"{base_ref}...HEAD",
         ],
         cwd=REPO_ROOT,
@@ -152,11 +219,31 @@ def _deleted_paths_in_branch_diff(base_ref: str = "origin/main") -> list[str]:
     )
     if result.returncode != 0:
         return []
-    return [
+    deleted: list[str] = []
+    parts = [
         item.decode("utf-8", "surrogateescape")
         for item in result.stdout.split(b"\0")
         if item
     ]
+    i = 0
+    while i < len(parts):
+        status = parts[i]
+        i += 1
+        if status == "D":
+            if i < len(parts):
+                deleted.append(parts[i])
+                i += 1
+            continue
+        if status.startswith("R"):
+            if i < len(parts):
+                deleted.append(parts[i])
+                i += 1
+            if i < len(parts):
+                i += 1
+            continue
+        if i < len(parts):
+            i += 1
+    return deleted
 
 
 def _path_is_gitignored(claim: str) -> bool:
