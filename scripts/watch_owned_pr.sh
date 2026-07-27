@@ -55,13 +55,13 @@ for i in $(seq 0 "$CYCLES"); do
   [ "$i" -gt 0 ] && sleep 1740
   CUR=$(GH_TOKEN="$TOK" gh api "repos/$REPO/pulls/$PR" --jq '.head.sha' 2>/dev/null) || { echo "cycle $i: API error, retrying"; continue; }
   if [ "$CUR" != "$SHA" ]; then echo "HEAD-MOVED: ${SHA:0:9} -> ${CUR:0:9} (new push; reconcile + re-arm on new head)"; exit 0; fi
-  ST=$(GH_TOKEN="$TOK" gh api graphql -f query="{ repository(owner:\"$OWNER\",name:\"$NAME\"){ pullRequest(number:$PR){ state merged mergeable mergeStateStatus reviewDecision reviews(first:100){ nodes{ author{ login } commit{ oid } state } } reviewThreads(first:100){ pageInfo{ hasNextPage } nodes{ isResolved } } } } }" 2>/dev/null)
+  ST=$(GH_TOKEN="$TOK" gh api graphql -f query="{ repository(owner:\"$OWNER\",name:\"$NAME\"){ pullRequest(number:$PR){ state merged mergeable mergeStateStatus reviewDecision reviews(first:100){ nodes{ author{ login } commit{ oid } state } } reviewThreads(first:100){ pageInfo{ hasNextPage } nodes{ isResolved isOutdated comments(first:1){ nodes{ author{ login } } } } } } } }" 2>/dev/null)
   STATE=$(echo "$ST" | jq -r '.data.repository.pullRequest | .state + (if .merged then "/merged" else "" end)')
   MERGEABLE=$(echo "$ST" | jq -r '.data.repository.pullRequest.mergeable')
   MSTATE=$(echo "$ST" | jq -r '.data.repository.pullRequest.mergeStateStatus // "UNKNOWN"')
   DECISION=$(echo "$ST" | jq -r '.data.repository.pullRequest.reviewDecision // "NONE"')
   CODEX_HEAD_REVIEWS=$(echo "$ST" | jq --arg sha "$SHA" '[.data.repository.pullRequest.reviews.nodes[]? | select(((.author.login // "") | ascii_downcase | contains("codex")) and ((.commit.oid // "") == $sha) and ((.state // "") | IN("COMMENTED","APPROVED","CHANGES_REQUESTED")))] | length')
-  UNRES=$(echo "$ST" | jq '[.data.repository.pullRequest.reviewThreads.nodes[]|select(.isResolved==false)]|length')
+  UNRES=$(echo "$ST" | jq '[.data.repository.pullRequest.reviewThreads.nodes[]? | select((.isResolved==false) and (.isOutdated!=true) and (((.comments.nodes[0].author.login // "") | ascii_downcase | contains("codex"))))] | length')
   MORE=$(echo "$ST" | jq -r '.data.repository.pullRequest.reviewThreads.pageInfo.hasNextPage')
   # Fail closed when more thread pages exist than we fetched.
   [ "$MORE" = "true" ] && UNRES="${UNRES}+unfetched-pages"

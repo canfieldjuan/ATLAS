@@ -124,22 +124,24 @@ def evaluate(nodes: Sequence[dict], body: str, bot_logins: Sequence[str]) -> tup
     """Core decision (pure). Returns (exit_code, messages)."""
     open_threads = open_bot_threads(nodes, bot_logins)
     if not open_threads:
-        return 0, ["OK: no open automated-review (bot) threads on this PR."]
+        return 0, ["OK: no open scoped Codex review threads on this PR."]
 
     body_class = classify_body(body)
-    if body_class in ("acknowledges_open", "unmarked"):
-        # The body does not claim all-clear; the local audit owns blocking an
-        # unresolved/unmarked record. No contradiction to flag here.
-        return 0, [
-            f"OK: {len(open_threads)} open bot thread(s), and the reconciliation "
-            f"record does not claim all-clear ({body_class})."
-        ]
-
     if body_class == "claims_clear":
         lead = (
             "reconciliation contradicts reality: the PR body records the "
             "automated-review findings as all fixed/waived, but these bot threads "
             "are still open:"
+        )
+    elif body_class == "acknowledges_open":
+        lead = (
+            "AI reconciliation acknowledges open findings, and these scoped Codex "
+            "threads are still open:"
+        )
+    elif body_class == "unmarked":
+        lead = (
+            "AI reconciliation record is present but does not mark findings fixed "
+            "or waived, and these scoped Codex threads are still open:"
         )
     else:  # absent
         lead = (

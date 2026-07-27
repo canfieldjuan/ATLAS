@@ -86,14 +86,16 @@ def test_open_thread_plus_absent_body_fails():
     assert any("no AI reconciliation record" in m for m in msgs)
 
 
-# --- evaluate: the pass branches ------------------------------------------
+# --- evaluate: the remaining failure branches ------------------------------
 
-def test_open_thread_but_body_acknowledges_open_passes():
-    # The body is honest about open findings; the local audit owns blocking it,
-    # so the live check does not double-flag.
+def test_open_thread_plus_acknowledges_open_still_fails():
     c = load_check()
-    code, _ = c.evaluate([thread()], BODY_OPEN, BOTS)
-    assert code == 0
+    code, msgs = c.evaluate([thread()], BODY_OPEN, BOTS)
+    assert code == 1
+    assert any("acknowledges open findings" in m for m in msgs)
+
+
+# --- evaluate: the pass branches ------------------------------------------
 
 
 def test_no_open_threads_passes_even_with_clear_body():
