@@ -1,10 +1,11 @@
 # Guard Class-Closure Discipline
 
 The specific form of the root-cause gate (`AGENTS.md` section 3k) for guards over an
-**open input space**. It exists because "fix the reported input" is a symptom
-fix on these surfaces, and the symptom fix is invisible per-round: every listed
-input passes, so the diff looks correct, while the *class* the input belongs to
-stays open and the next input in that class is reported next round.
+**open input space**, and the closure-declaration bar for set-valued dependencies
+in decision paths. It exists because "fix the reported input" is a symptom fix on
+these surfaces, and the symptom fix is invisible per-round: every listed input
+passes, so the diff looks correct, while the *class* the input belongs to stays
+open and the next input in that class is reported next round.
 
 **This document is the single source** for the guard-closure bar (the three
 requirements below), the open-category evidence-gated exception, and the
@@ -18,12 +19,43 @@ this file.
 
 ## When this applies (trigger)
 
-Any change to a guard / validator / sanitizer / classifier / gate / denylist /
-parser-admission rule / privacy or safety checker whose input space is **open**:
-free text, nested or recursive structures, producer-supplied keys and values,
-user data, or anything where the set of possible inputs is not a small closed
-enum. If the input space is genuinely a closed enum (a fixed set of statuses,
-say), this does not apply -- enumerate it and move on.
+**A. Guards over an open input space.** Any change to a guard / validator /
+sanitizer / classifier / gate / denylist / parser-admission rule / privacy or
+safety checker whose input space is **open**: free text, nested or recursive
+structures, producer-supplied keys and values, user data, or anything where the
+set of possible inputs is not a small closed enum. If the input space is
+genuinely a closed enum (a fixed set of statuses, say), declare it **CLOSED**,
+cite the canonical enum, and move on.
+
+**B. Set-valued dependencies (any change, guard-shaped or not).** Any change that
+adds or edits a **set whose membership a decision depends on**: a literal
+collection used in a branch, a pattern family (regex alternation, prefix list),
+a list duplicating one that already exists elsewhere in the repo, or the bounded
+set of behaviors / callers / fields / input shapes a named source surface says a
+change must cover.
+
+Trigger B exists because the same failure arrives constantly in code that nobody
+reads as "a guard." A mirror script's test-file list, a detector's grep patterns,
+a refactor's replaced-path behaviors, and a browser snapshot predicate are all
+one behavior -- **the set was enumerated at authoring time instead of bound to a
+source of truth or given a stated default for its unlisted members** -- and each
+member discovered later is a real, correct review finding, so the loop cannot be
+blamed on the reviewer and does not converge until someone writes down what
+*generates* membership rather than what is currently in the set.
+
+Implicit inventories trigger when the plan or code enumerates the behaviors,
+callers, fields, or input shapes a change must cover. The closure declaration
+must bind that inventory to a reviewable surface -- old code path, workflow job,
+schema, canonical vocabulary, affected decision, or another named source -- so
+the reviewer is not asked to prove that no invisible set was missed. Missing
+source binding is itself the closure failure, not an exemption from this trigger.
+
+Trigger B requires the closure declaration below. It requires the three
+requirements only when the change is also a trigger-A guard.
+
+The mechanical tell is a new or edited literal collection of string literals, a
+`re.compile(...)` alternation, a copied list, or plan language that enumerates
+covered behaviors/callers/fields without saying what generates the set.
 
 ## The failure mode this prevents
 
@@ -43,7 +75,35 @@ slice per round. Two compounding symptoms:
    handling), and each new branch's *fall-through* is the next round's hole.
    Complexity and edge-count grow every round while the guarantee does not.
 
+## Closure declaration (mandatory before code)
+
+Every triggering PR declares each set-valued dependency exactly once before
+implementation: in the plan, or in the PR body for a Markdown-only change
+explicitly admitted by `AGENTS.md` section 1's `Docs-only: true` path. Use one of
+these dispositions:
+
+- **CLOSED** -- the set is genuinely finite and repo-owned. Cite the canonical
+  source of truth and explain why unlisted members are impossible or out of
+  scope. Do not duplicate the canonical list unless the duplicate is generated
+  from it.
+- **DERIVED** -- membership is computed from a source of truth at runtime or test
+  time, so it cannot drift. Cite the source and the derivation point (for
+  example: parse the workflow, inspect the settings schema, derive the old-code
+  inventory before refactor).
+- **DEFAULTED** -- the set is open or heuristic. State the default direction for
+  unlisted members, make incompleteness flow to the cheap/safe side, and name
+  why that side is cheaper or safer. Enumerating an open set with no declared
+  default is a defect even when every currently listed member passes.
+
+"Here are the members I noticed" is not a closure declaration. A plan that lists
+members without CLOSED / DERIVED / DEFAULTED is still open and should be treated
+as a round generator. A Markdown-only body has the same bar when it is the
+admission artifact.
+
 ## The three requirements (all mandatory before merge)
+
+These apply to trigger-A guards. A trigger-B change that is not also a trigger-A
+guard satisfies this document with the closure declaration above.
 
 ### 1. Fail-closed choke point (allowlist-shaped, one decision)
 
@@ -171,7 +231,14 @@ because the evidence signals are finite even when the category is not.
 
 ## Reviewer bar (enforced)
 
-For a triggering PR, the reviewer **blocks** until all three hold, and states
+For a trigger-B PR, the reviewer states before LGTM: each set-valued dependency
+the change adds or edits, the reviewable surface that bounds the inventory, and
+its declared disposition. An enumerated open set with no declared default is
+"needs the closure declaration," even when every listed member behaves correctly
+-- that is the round-generating state this document exists to stop, and it is
+invisible per-round by construction.
+
+For a trigger-A PR, the reviewer **blocks** until all three hold, and states
 before LGTM: the choke-point location, the class and invariant it enforces, and
 that the acceptance test is grammar-derived (not a fixture list). For an
 **open-category** guard (see the section above), the three requirements hold in
@@ -189,12 +256,22 @@ both error directions) and `AGENTS.md` section 3k (root cause, not symptom): her
 root cause is the open default, and closing it is the choke point.
 
 An **advisory CI lint** (`scripts/check_guard_class_closure.py`, workflow
-`Guard Class-Closure Lint`) surfaces a warning when a PR changes a Python guard-shaped
-file over open input without a co-changed property/generative test. It is
-heuristic and advisory-first (warns, never blocks); it does not replace the
+`Guard Class-Closure Lint`) surfaces a warning when a PR changes a Python
+guard-shaped file over open input without a co-changed property/generative test.
+It is heuristic and advisory-first (warns, never blocks); it does not replace the
 reviewer bar above, it makes the omission visible on every PR. Opt a
-false-positive path out in `scripts/guard_class_closure_config.json` (optional -- absent means no ignores; create it only when an opt-out is needed) or waive
+false-positive path out in `scripts/guard_class_closure_config.json` (optional --
+absent means no ignores; create it only when an opt-out is needed) or waive
 inline with a `guard-class-closure: waived` marker in the PR body.
+
+For the widened set-valued-dependency trigger, the advisory signal is the same
+shape and priority: a diff that adds a literal collection of strings, a regex
+alternation, or a copied list in a decision path should warn when the active
+admission artifact -- the plan, or the permitted PR body for a planless
+Markdown-only change -- lacks a Closure Declaration for that set. Keep this
+advisory-first (warn, exit 0) until operator promotion; the warning exists to put
+the set-disposition question back into a compacted builder context, not to block
+before the detector has earned trust.
 
 ## Relationship to the review-round cap
 
