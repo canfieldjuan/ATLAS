@@ -625,7 +625,10 @@ class EomExecutionReceipt:
             self.in_progress_path.unlink()
             staged_path.unlink()
             self._fsync_directory()
-        except OSError:
+        except BaseException:
+            # The final link has already been published and directory-synced.
+            # Post-publication cleanup must not let an interrupt rewrite the
+            # observed process status away from the committed receipt outcome.
             return final_path
         return final_path
 

@@ -101,7 +101,7 @@ if __name__ == "__main__":
     _direct_receipt_dir = (
         _direct_policy.receipt_dir[0] if _direct_policy.receipt_dir else None
     )
-    if _direct_policy.help_requested:
+    if _direct_policy.help_requested and not _direct_receipt_dir:
         _direct_parser.parse_args(_direct_argv)
     if not _direct_policy.dry_run and not _direct_receipt_dir:
         _direct_parser.error("live writes require --receipt-dir")

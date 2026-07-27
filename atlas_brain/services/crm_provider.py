@@ -474,7 +474,7 @@ class DatabaseCRMProvider:
                     )
                 if channel == "phone":
                     return await conn.fetchrow(
-                        f"""
+                        """
                         SELECT * FROM contacts
                         WHERE business_context_id = $1
                           AND status != 'archived'
@@ -488,7 +488,7 @@ class DatabaseCRMProvider:
                         value,
                     )
                 return await conn.fetchrow(
-                    f"""
+                    """
                     SELECT * FROM contacts
                     WHERE business_context_id = $1
                       AND status != 'archived'

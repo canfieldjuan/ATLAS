@@ -96,6 +96,30 @@ def test_receipt_is_private_source_bound_and_allowlisted(tmp_path):
     assert payload["exit_code"] == 0
 
 
+def test_cleanup_interrupt_after_final_publication_preserves_committed_receipt(
+    tmp_path, monkeypatch
+):
+    receipt = _receipt(tmp_path)
+    original_unlink = Path.unlink
+    interrupted = False
+
+    def interrupt_in_progress_cleanup(path, *args, **kwargs):
+        nonlocal interrupted
+        if path == receipt.in_progress_path and not interrupted:
+            interrupted = True
+            raise KeyboardInterrupt()
+        return original_unlink(path, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "unlink", interrupt_in_progress_cleanup)
+
+    final_path = receipt.finalize(0)
+
+    assert interrupted is True
+    assert final_path.exists()
+    payload = json.loads(final_path.read_text())
+    assert payload["exit_code"] == 0
+
+
 def test_payload_api_rejects_unknown_counts_and_non_uuid_identifiers(tmp_path):
     receipt = _receipt(tmp_path)
     with pytest.raises(ValueError, match="unsupported outcome"):
@@ -816,6 +840,27 @@ def test_receipted_invalid_arguments_finalize_exit_2_before_runtime(
     final_path, payload = _load_only_final(receipt_dir)
     assert final_path.name.endswith(".exit-2.json")
     assert payload["exit_code"] == 2
+
+
+def test_receipted_help_finalizes_exit_0_before_runtime(tmp_path):
+    repo, scripts, receipt_dir = _calendar_process_fixture(
+        tmp_path, ".cache/neutral"
+    )
+
+    result = _run_receipted_calendar(
+        repo,
+        scripts,
+        receipt_dir,
+        dry_run=False,
+        extra_args=("--help",),
+    )
+
+    assert result.returncode == 0, result.stderr
+    assert "Import EOM customers from the live booking calendars" in result.stdout
+    final_path, payload = _load_only_final(receipt_dir)
+    assert final_path.name.endswith(".exit-0.json")
+    assert payload["mode"] == "write"
+    assert payload["exit_code"] == 0
 
 
 def test_receipt_policy_rejects_abbreviated_protected_options_before_import(

@@ -270,7 +270,7 @@ Parked hardening: none.
 - python -m pytest tests/test_eom_execution_receipts.py
   tests/test_eom_live_calendar_import.py tests/test_sync_eom_portal_customers.py
   tests/test_crm_read_scoping.py
-  tests/test_mcp_servers.py::TestDatabaseCRMProvider -q — 241 passed.
+  tests/test_mcp_servers.py::TestDatabaseCRMProvider -q — 245 passed.
 - python -m ruff check scripts/eom_execution_receipt.py
   scripts/import_eom_customers_live.py atlas_brain/services/crm_provider.py
   tests/test_eom_execution_receipts.py tests/test_eom_live_calendar_import.py
@@ -314,6 +314,12 @@ Parked hardening: none.
 - Receipted invalid arguments now publish exit-2 receipts; failed publication
   removes and syncs the new final link; cleanup failures are reported without
   overriding an already-finalized exit-0 receipt.
+- Receipted help now constructs the receipt before argparse handles `--help`, so
+  the successful `SystemExit(0)` path publishes an exit-0 receipt before any
+  runtime work.
+- Post-publication recovery cleanup is shielded after the final link is
+  directory-synced; an interrupt while removing in-progress/staged artifacts
+  cannot make the observed process status contradict the committed receipt.
 - Mutation recording now treats provider race merges and interaction inserts as
   explicit mutation-boundary signals rather than inferred intent.
 - The targeted residential/window usage example is explicitly an unreceipted
@@ -325,10 +331,10 @@ Parked hardening: none.
 | File | LOC |
 |---|---:|
 | `docs/EOM_RECONCILIATION_RECEIPTS.md` | 73 |
-| `plans/PR-EOM-Execution-Receipts.md` | 305 |
-| `scripts/eom_execution_receipt.py` | 702 |
+| `plans/PR-EOM-Execution-Receipts.md` | 340 |
+| `scripts/eom_execution_receipt.py` | 705 |
 | `scripts/import_eom_customers_live.py` | 228 |
-| `atlas_brain/services/crm_provider.py` | 10 |
-| `tests/test_eom_execution_receipts.py` | 1723 |
+| `atlas_brain/services/crm_provider.py` | 14 |
+| `tests/test_eom_execution_receipts.py` | 1768 |
 | `tests/test_eom_live_calendar_import.py` | 5 |
-| **Total** | **3046** |
+| **Total** | **3133** |
