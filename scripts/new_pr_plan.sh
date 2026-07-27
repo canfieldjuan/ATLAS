@@ -179,6 +179,17 @@ Slice phase: $phase
   dispositioned by the review matrix.
 - Reviewer rules triggered: TODO: List the applicable R1-R14 rule IDs.
 
+### Boundary-change enumeration
+
+Required when this diff changes a guard, validator, normalizer, resolver,
+router/classifier, or admission boundary. Name each changed boundary path or
+seam in the enumeration; otherwise write "N/A - no boundary change."
+
+- Boundary path/seam: TODO/N/A.
+- Replaced-path behaviors: TODO/N/A.
+- Guard-relevant fields: TODO/N/A.
+- Caller x input shape: TODO/N/A.
+
 ### Files touched
 
 - TODO: run \`python scripts/sync_pr_plan.py $plan_rel\` after implementation.
