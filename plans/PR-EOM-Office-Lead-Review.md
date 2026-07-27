@@ -91,9 +91,6 @@ Slice phase: Vertical slice
 3. Archive the already-merged `PR-EOM-Office-Conversion-Handoff` plan as the
    required Atlas merged-PR housekeeping. It is a documented teardown action,
    not a product behavior change.
-4. Shrink the unit-gate known-failures baseline only for stale entries proven
-   by current-head CI to pass. This is ratchet housekeeping required by the
-   gate; it does not change product behavior or add new baseline entries.
 
 Max files: 8
 
@@ -120,8 +117,6 @@ Max files: 8
 5. The previously merged plan is moved only to `plans/archive/` and the plans
    index is regenerated; the product diff contains no unrelated calendar,
    receivables, or generic CRM change.
-6. The unit-gate baseline only shrinks: no baseline growth is allowed, and only
-   the nine CI-reported stale node IDs are removed.
 - Reachability proof: `tests/test_eom_lead_conversion.py` calls the real FastAPI
   route with its real dependencies overridden only at the database provider;
   `tests/test_eom_lead_conversion_integration.py` runs the provider projection
@@ -188,7 +183,6 @@ Any row or field not admitted by those definitions is excluded by default.
 - `plans/archive/PR-EOM-Office-Conversion-Handoff.md`
 - `tests/test_eom_lead_conversion.py`
 - `tests/test_eom_lead_conversion_integration.py`
-- `tests/unit_gate_baseline.txt`
 
 ## Mechanism
 
@@ -251,9 +245,9 @@ Parked hardening: none.
   tests passed; `git diff --check` passed.
 - Atlas plan gates: plan shape, files-touched, and diff-size audits passed for
   `plans/PR-EOM-Office-Lead-Review.md` against `origin/main`.
-- Unit-gate ratchet: current-head CI reported nine stale baseline entries and
-  no regressions; only those nine node IDs were removed. The local growth guard
-  passed against the `origin/main` baseline.
+- Unit-gate ratchet: GitHub full-suite unit-gate proved the nine suspected
+  stale baseline nodes still fail in the real gate, so this PR leaves
+  `tests/unit_gate_baseline.txt` unchanged.
 - Tracker companion verification is recorded in its own PR: backend FastAPI
   tests against the PostgreSQL fixture cover authenticated proxy, non-approver,
   and retry cases.
@@ -268,9 +262,8 @@ Parked hardening: none.
 | `atlas_brain/eom_api/funnel.py` | 109 |
 | `atlas_brain/services/crm_provider.py` | 45 |
 | `plans/INDEX.md` | 3 |
-| `plans/PR-EOM-Office-Lead-Review.md` | 276 |
+| `plans/PR-EOM-Office-Lead-Review.md` | 269 |
 | `plans/archive/PR-EOM-Office-Conversion-Handoff.md` | 0 |
 | `tests/test_eom_lead_conversion.py` | 210 |
 | `tests/test_eom_lead_conversion_integration.py` | 127 |
-| `tests/unit_gate_baseline.txt` | 9 |
-| **Total** | **779** |
+| **Total** | **763** |
