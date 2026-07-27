@@ -307,7 +307,7 @@ def _reject_git_replacement_refs(repo_root: Path) -> None:
 def _cleanup_reviewed_python(snapshot_root: Path) -> None:
     try:
         _remove_reviewed_python(snapshot_root)
-    except Exception as exc:  # noqa: BLE001 -- cleanup must not rewrite outcome
+    except BaseException as exc:
         print(
             f"warning: could not remove reviewed Python snapshot: {exc}",
             file=sys.stderr,

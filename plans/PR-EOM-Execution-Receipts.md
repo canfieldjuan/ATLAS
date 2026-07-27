@@ -198,9 +198,9 @@ Max files: 7
 
 ### Files touched
 
+- `atlas_brain/services/crm_provider.py`
 - `docs/EOM_RECONCILIATION_RECEIPTS.md`
 - `plans/PR-EOM-Execution-Receipts.md`
-- `atlas_brain/services/crm_provider.py`
 - `scripts/eom_execution_receipt.py`
 - `scripts/import_eom_customers_live.py`
 - `tests/test_eom_execution_receipts.py`
@@ -270,7 +270,7 @@ Parked hardening: none.
 - python -m pytest tests/test_eom_execution_receipts.py
   tests/test_eom_live_calendar_import.py tests/test_sync_eom_portal_customers.py
   tests/test_crm_read_scoping.py
-  tests/test_mcp_servers.py::TestDatabaseCRMProvider -q — 245 passed.
+  tests/test_mcp_servers.py::TestDatabaseCRMProvider -q — 246 passed.
 - python -m ruff check scripts/eom_execution_receipt.py
   scripts/import_eom_customers_live.py atlas_brain/services/crm_provider.py
   tests/test_eom_execution_receipts.py tests/test_eom_live_calendar_import.py
@@ -313,7 +313,8 @@ Parked hardening: none.
   concurrent post-preflight CRM dependency rewrite that never executes.
 - Receipted invalid arguments now publish exit-2 receipts; failed publication
   removes and syncs the new final link; cleanup failures are reported without
-  overriding an already-finalized exit-0 receipt.
+  overriding an already-finalized exit-0 receipt, including snapshot-removal
+  interrupts after reviewed execution has already committed success.
 - Receipted help now constructs the receipt before argparse handles `--help`, so
   the successful `SystemExit(0)` path publishes an exit-0 receipt before any
   runtime work.
@@ -330,11 +331,11 @@ Parked hardening: none.
 
 | File | LOC |
 |---|---:|
+| `atlas_brain/services/crm_provider.py` | 14 |
 | `docs/EOM_RECONCILIATION_RECEIPTS.md` | 73 |
-| `plans/PR-EOM-Execution-Receipts.md` | 340 |
+| `plans/PR-EOM-Execution-Receipts.md` | 341 |
 | `scripts/eom_execution_receipt.py` | 705 |
 | `scripts/import_eom_customers_live.py` | 228 |
-| `atlas_brain/services/crm_provider.py` | 14 |
-| `tests/test_eom_execution_receipts.py` | 1768 |
+| `tests/test_eom_execution_receipts.py` | 1811 |
 | `tests/test_eom_live_calendar_import.py` | 5 |
-| **Total** | **3133** |
+| **Total** | **3177** |

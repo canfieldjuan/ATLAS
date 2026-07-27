@@ -986,6 +986,49 @@ def test_reviewed_launcher_cleanup_failure_preserves_finalized_receipt(
         receipt_module._remove_reviewed_python(snapshot)
 
 
+def test_reviewed_launcher_cleanup_interrupt_preserves_finalized_receipt(
+    tmp_path
+):
+    extra_files, _mutation_marker, _ready, _release = (
+        _write_process_fixture_files(tmp_path)
+    )
+    launcher_source = (SCRIPTS / "eom_execution_receipt.py").read_text()
+    extra_files["scripts/eom_execution_receipt.py"] = launcher_source.replace(
+        "def _remove_reviewed_python(snapshot_root: Path) -> None:\n"
+        "    \"\"\"Restore owner permissions only long enough to remove the snapshot.\"\"\"\n",
+        "def _remove_reviewed_python(snapshot_root: Path) -> None:\n"
+        "    \"\"\"Restore owner permissions only long enough to remove the snapshot.\"\"\"\n"
+        "    raise KeyboardInterrupt()\n",
+        1,
+    )
+    repo, scripts, receipt_dir = _calendar_process_fixture(
+        tmp_path, ".cache/neutral", extra_files=extra_files
+    )
+    process_tmp = tmp_path / "process-tmp"
+    process_tmp.mkdir()
+    env = {
+        **os.environ,
+        "EOM_CALENDAR_RESIDENTIAL": "residential-fixture",
+        "TMPDIR": str(process_tmp),
+    }
+
+    result = _run_receipted_calendar(
+        repo,
+        scripts,
+        receipt_dir,
+        extra_args=("--calendar", "residential"),
+        env=env,
+    )
+
+    assert result.returncode == 0, result.stderr
+    assert "could not remove reviewed Python snapshot" in result.stderr
+    final_path, payload = _load_only_final(receipt_dir)
+    assert final_path.name.endswith(".exit-0.json")
+    assert payload["exit_code"] == 0
+    for snapshot in process_tmp.glob("atlas-eom-reviewed-python-*"):
+        receipt_module._remove_reviewed_python(snapshot)
+
+
 def test_reviewed_launcher_write_ignores_concurrent_worktree_rewrite(
     tmp_path
 ):
