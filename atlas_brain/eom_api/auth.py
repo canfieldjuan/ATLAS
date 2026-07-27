@@ -59,23 +59,57 @@ _PLACEHOLDER_TOKEN_DIGESTS = {
 _PLACEHOLDER_TOKEN_DIGESTS.add("0" * 64)
 
 
-def _validate_generated_token(token: str) -> None:
-    if not token.startswith(_GENERATED_TOKEN_PREFIX):
+def validate_generated_service_token(
+    token: str,
+    *,
+    token_prefix: str,
+    service_name: str,
+    generator_reference: str,
+    minimum_unique_characters: int | None = None,
+    exact_random_length: bool = False,
+) -> None:
+    """Validate the generated format shared by private EOM service tokens."""
+    if not token.startswith(token_prefix):
         raise RuntimeError(
-            "Receivables service token must be generated with the eomrx_v1_ prefix; "
-            "use atlas_brain.eom_api.auth.generate_receivables_service_token()"
+            f"{service_name} service token must be generated with the "
+            f"{token_prefix} prefix; use {generator_reference}"
         )
-    random_part = token.removeprefix(_GENERATED_TOKEN_PREFIX)
-    if len(random_part) != _GENERATED_TOKEN_RANDOM_LENGTH:
+    random_part = token.removeprefix(token_prefix)
+    length_is_invalid = (
+        len(random_part) != _GENERATED_TOKEN_RANDOM_LENGTH
+        if exact_random_length
+        else len(random_part) < _GENERATED_TOKEN_RANDOM_LENGTH
+    )
+    if length_is_invalid:
         raise RuntimeError(
-            "Receivables service token random payload has the wrong length; generate a "
-            "new token with atlas_brain.eom_api.auth.generate_receivables_service_token()"
+            f"{service_name} service token random payload has the wrong length; generate "
+            f"a new token with {generator_reference}"
         )
     if fullmatch(_TOKEN_RANDOM_PATTERN, random_part) is None:
         raise RuntimeError(
-            "Receivables service token contains invalid characters; generate a "
-            "new token with atlas_brain.eom_api.auth.generate_receivables_service_token()"
+            f"{service_name} service token contains invalid characters; generate "
+            f"a new token with {generator_reference}"
         )
+    if (
+        minimum_unique_characters is not None
+        and len(set(random_part)) < minimum_unique_characters
+    ):
+        raise RuntimeError(
+            f"{service_name} service token random payload is too weak; generate "
+            f"a new token with {generator_reference}"
+        )
+
+
+def _validate_generated_token(token: str) -> None:
+    validate_generated_service_token(
+        token,
+        token_prefix=_GENERATED_TOKEN_PREFIX,
+        service_name="Receivables",
+        generator_reference=(
+            "atlas_brain.eom_api.auth.generate_receivables_service_token()"
+        ),
+        exact_random_length=True,
+    )
 
 
 def receivables_service_token_sha256(token: str) -> str:
@@ -94,21 +128,33 @@ def generate_receivables_service_token() -> GeneratedReceivablesServiceToken:
     )
 
 
-def _validate_generated_token_digest(token_digest: str) -> None:
+def validate_generated_service_token_digest(
+    token_digest: str,
+    *,
+    service_name: str,
+) -> None:
+    """Require a non-placeholder digest emitted by service-token provisioning."""
     if not token_digest:
         raise RuntimeError(
-            "Receivables service token digest is required for trusted "
-            "receivables API config"
+            f"{service_name} service token digest is required for trusted API config"
         )
     if fullmatch(_TOKEN_SHA256_PATTERN, token_digest) is None:
         raise RuntimeError(
-            "Receivables service token digest must be a lowercase SHA-256 hex "
-            "digest produced from a generated token"
+            f"{service_name} service token digest must be a lowercase SHA-256 "
+            "hex digest produced by the service-token provisioning helper"
         )
     if token_digest in _PLACEHOLDER_TOKEN_DIGESTS:
         raise RuntimeError(
-            "Receivables service token digest must not come from a placeholder"
+            f"{service_name} service token digest must not come from a placeholder"
         )
+
+
+def _validate_generated_token_digest(token_digest: str) -> None:
+    """Backward-compatible receivables-specific digest validation."""
+    validate_generated_service_token_digest(
+        token_digest,
+        service_name="Receivables",
+    )
 
 
 def validate_receivables_api_config(

@@ -13,7 +13,10 @@ services:
     volumes:
       - atlas_nocodb_data:/usr/app/data
     environment:
-      NC_DB: "pg://host.docker.internal:5433?u=${ATLAS_DB_USER:-atlas}&p=${ATLAS_DB_PASSWORD:-atlas_dev_password}&d=${ATLAS_DB_DATABASE:-atlas}"
+      # Never fall back to the Atlas service login. A database administrator
+      # must provision this unprivileged LOGIN NOINHERIT role with the matching
+      # secret before migration 354; it has only documented CRM-table access.
+      NC_DB: "pg://host.docker.internal:5433?u=atlas_nocodb&p=${ATLAS_NOCODB_DB_PASSWORD:?Set ATLAS_NOCODB_DB_PASSWORD before starting NocoDB}&d=${ATLAS_DB_DATABASE:-atlas}"
 
   brain:
     build: .
