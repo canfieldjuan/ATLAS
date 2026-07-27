@@ -89,14 +89,14 @@ a product guard/config boundary.
 
 ### Files touched
 
-- `AGENTS.md`
-- `scripts/new_pr_plan.sh`
-- `scripts/check_deployed_config_probing.py`
-- `tests/test_check_deployed_config_probing.py`
-- `tests/test_new_pr_plan.py`
 - `.github/workflows/deployed_config_probing.yml`
+- `AGENTS.md`
 - `REVIEW_MISSES.md`
 - `plans/PR-Deployed-Config-Probing.md`
+- `scripts/check_deployed_config_probing.py`
+- `scripts/new_pr_plan.sh`
+- `tests/test_check_deployed_config_probing.py`
+- `tests/test_new_pr_plan.py`
 
 ## Mechanism
 
@@ -143,12 +143,12 @@ Parked hardening: none.
 
 | File | LOC |
 |---|---:|
-| `AGENTS.md` | +15 |
-| `scripts/new_pr_plan.sh` | +11 |
-| `scripts/check_deployed_config_probing.py` | +279 |
-| `tests/test_check_deployed_config_probing.py` | +235 |
-| `tests/test_new_pr_plan.py` | +6 |
-| `.github/workflows/deployed_config_probing.yml` | +46 |
-| `REVIEW_MISSES.md` | +6 |
-| `plans/PR-Deployed-Config-Probing.md` | +154 |
-| **Total** | **~752** |
+| `.github/workflows/deployed_config_probing.yml` | 46 |
+| `AGENTS.md` | 15 |
+| `REVIEW_MISSES.md` | 6 |
+| `plans/PR-Deployed-Config-Probing.md` | 154 |
+| `scripts/check_deployed_config_probing.py` | 317 |
+| `scripts/new_pr_plan.sh` | 11 |
+| `tests/test_check_deployed_config_probing.py` | 342 |
+| `tests/test_new_pr_plan.py` | 6 |
+| **Total** | **897** |

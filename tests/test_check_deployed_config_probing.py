@@ -311,3 +311,32 @@ def test_guard_touching_settings_fallback_requires_the_plan_section() -> None:
 - Side-effect ordering: no write occurs before the crm_default_business_context admission passes.
 """
     assert mod.scan_diff(diff, [plan]) == []
+
+
+def test_wrapped_probe_disposition_is_read_whole() -> None:
+    """A disposition that wraps onto an indented continuation line is one
+    value. Reading only the first physical line reported a complete probe as
+    missing evidence -- a false warning on correct input, which is the
+    expensive direction for an advisory check."""
+    section = (
+        "- Explicit value probe: an explicit business_context_id\n"
+        "  passes and crm_default_business_context is unused.\n"
+        "- Absent value probe: unset crm_default_business_context passes.\n"
+    )
+    value = mod._marker_value(section, "explicit value probe")
+    assert value is not None
+    assert "crm_default_business_context is unused" in value
+    assert mod._is_dispositioned_value(value, marker="explicit value probe")
+
+
+def test_continuation_folding_does_not_swallow_the_next_marker() -> None:
+    """The other side: a following list item ends the value, so one probe
+    cannot absorb the next one and mask a missing disposition."""
+    section = (
+        "- Explicit value probe: explicit id passes.\n"
+        "- Absent value probe: TODO.\n"
+    )
+    assert mod._marker_value(section, "explicit value probe") == "explicit id passes"
+    assert not mod._is_dispositioned_value(
+        mod._marker_value(section, "absent value probe"), marker="absent value probe"
+    )

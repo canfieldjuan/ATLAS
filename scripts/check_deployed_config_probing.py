@@ -163,15 +163,34 @@ def deployed_config_section(text: str) -> str:
 
 
 def _marker_value(section: str, marker: str) -> str | None:
+    """Return one marker's disposition, including wrapped continuation lines.
+
+    A disposition that wraps onto an indented Markdown continuation line is one
+    value, not a truncated one. Reading only the first physical line dropped the
+    remainder, so a complete probe could be reported as missing evidence -- a
+    false warning on correct input, which is the expensive direction for an
+    advisory check.
+    """
     marker_lower = marker.lower()
-    for line in section.splitlines():
+    lines = section.splitlines()
+    for index, line in enumerate(lines):
         if ":" not in line:
             continue
         label, value = line.split(":", 1)
         label = label.strip().lstrip("-*0123456789. ").strip().lower()
         if label != marker_lower:
             continue
-        return value.strip().rstrip(".").lower()
+        parts = [value.strip()]
+        for continuation in lines[index + 1:]:
+            if not continuation.strip():
+                break
+            # A new list item or heading ends this value; anything else that is
+            # indented is a wrap of it.
+            stripped = continuation.lstrip()
+            if stripped.startswith(("-", "*", "#")) or not continuation[:1].isspace():
+                break
+            parts.append(stripped)
+        return " ".join(parts).strip().rstrip(".").lower()
     return None
 
 
