@@ -24,8 +24,10 @@ sanitizer / classifier / gate / denylist / parser-admission rule / privacy or
 safety checker whose input space is **open**: free text, nested or recursive
 structures, producer-supplied keys and values, user data, or anything where the
 set of possible inputs is not a small closed enum. If the input space is
-genuinely a closed enum (a fixed set of statuses, say), declare it **CLOSED**,
-cite the canonical enum, and move on.
+genuinely a closed enum (a fixed set of statuses, say), give it the same
+declaration as any other set-valued dependency -- **CLOSED**, its sourcing, and
+its out-of-set behavior -- citing the canonical enum, and move on. Being closed
+shortens the declaration; it does not remove it.
 
 **B. Set-valued dependencies (any change, guard-shaped or not).** Any change that
 adds or edits a **set whose membership a decision depends on**: a literal
@@ -80,35 +82,48 @@ slice per round. Two compounding symptoms:
 Every triggering PR declares each set-valued dependency exactly once before
 implementation: in the plan, or in the PR body for a Markdown-only change
 explicitly admitted by `AGENTS.md` section 1's `Docs-only: true` path. A
-declaration answers **two independent questions**.
+declaration answers **three questions**. They are about different things, and
+answering one never discharges another.
 
-**1. Is the set closed or open?**
+**1. Is the set closed or open?** -- a fact about *membership*.
 
 - **CLOSED** -- membership is finite and fully enumerable. Cite the canonical
   source of truth and explain why unlisted members are impossible or out of
   scope. Do not duplicate the canonical list unless the duplicate is generated
   from it.
-- **DEFAULTED** -- the set is open or heuristic. State the default direction for
-  unlisted members, make incompleteness flow to the cheap/safe side, and name
-  why that side is cheaper or safer. Enumerating an open set with no declared
-  default is a defect even when every currently listed member passes.
+- **OPEN** -- membership cannot be fully enumerated, so any list is a sample of
+  it. Say so plainly; the third answer then carries the weight.
 
-**2. Where does membership come from?**
+**2. Where does membership come from?** -- a fact about *drift*.
 
-- **ENUMERATED** -- written out in this change.
-- **DERIVED** -- membership is computed from a source of truth at runtime or test
-  time, so it cannot drift. Cite the source and the derivation point (for
-  example: parse the workflow, inspect the settings schema, derive the old-code
-  inventory before refactor). Prefer this wherever a source of truth exists: it
-  is the only sourcing that stays correct without maintenance.
+- **ENUMERATED** -- the members are fixed text in this change. Reading a source
+  of truth once while writing them down is still ENUMERATED: the text cannot
+  notice when that source changes. Say where you read it from.
+- **DERIVED** -- the members are recomputed from the source of truth every time
+  the set is used, so the two cannot diverge. Cite the source and the point of
+  computation. Prefer this wherever a source of truth exists: it is the only
+  sourcing that stays correct without maintenance.
 
-**The two questions are independent, and answering the second never discharges
-the first.** A DERIVED set can still be open: derivation says where membership
-comes from, not what happens to an input outside it -- a set derived from a
-settings schema still needs a stated behavior for a key that schema does not
-carry. `DERIVED` alone is therefore not a complete declaration, and treating it
-as one is how an implicit unsafe fallback passes review under a rule written to
-prevent exactly that.
+**3. What happens to an input outside the set?** -- a fact about the *decision*,
+required whether the set is closed or open.
+
+State the direction explicitly, make incompleteness flow to the cheap or safe
+side, and name why that side is cheaper. "The set is closed, so there is no
+outside" is only an answer when the input space is the set -- a guard reading a
+finite settings schema still receives keys that schema does not carry, and that
+is an input outside the set, not an unlisted member of it. Confusing the two
+lets two authors reach opposite answers to question 1 for the same dependency.
+
+A set that is closed and derived still needs question 3 answered. Treating any
+one answer as covering the others is how an implicit unsafe fallback passes
+review under a rule written to prevent exactly that.
+
+An earlier form of this bar offered `CLOSED` / `DERIVED` / `DEFAULTED` as one
+choice of three, and the EOM repositories' `AUDIT_PROTOCOL.md` still carries
+that wording. It maps onto the questions above rather than contradicting them:
+`DEFAULTED` is an OPEN answer to question 1 plus the direction required by
+question 3. The three-question form exists because the single-choice form let
+`DERIVED` stand in for an answer it does not give.
 
 "Here are the members I noticed" is not a closure declaration. A plan that lists
 members without answering both questions is still open and should be treated as
@@ -248,8 +263,9 @@ because the evidence signals are finite even when the category is not.
 
 For a trigger-B PR, the reviewer states before LGTM: each set-valued dependency
 the change adds or edits, the reviewable surface that bounds the inventory, and
-both of its declared answers. An open set with no declared default is
-"needs the closure declaration," even when every listed member behaves correctly
+all three of its declared answers. A set whose out-of-set behavior is
+undeclared is "needs the closure declaration," even when every listed member
+behaves correctly
 -- that is the round-generating state this document exists to stop, and it is
 invisible per-round by construction.
 
