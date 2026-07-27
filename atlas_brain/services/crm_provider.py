@@ -1732,25 +1732,6 @@ class DatabaseCRMProvider:
             if contact["lead_stage"] != "new":
                 raise EOMLeadConversionError(409, "EOM lead is not ready for approval")
 
-            await conn.execute(
-                "SELECT set_config('atlas.eom_customer_handoff_finalization', 'true', true)"
-            )
-            handoff = await conn.fetchrow(
-                """
-                INSERT INTO eom_customer_handoffs (
-                    contact_id, approval_key, tracker_customer_id, tracker_site_id,
-                    approved_by_employee_id, approved_by_name
-                )
-                VALUES ($1, $2, $3, $4, $5, $6)
-                RETURNING id, contact_id, approval_key, tracker_customer_id, tracker_site_id
-                """,
-                contact_id,
-                approval_key,
-                tracker_customer_id,
-                tracker_site_id,
-                actor_id,
-                actor_name,
-            )
             updated = await conn.fetchrow(
                 """
                 UPDATE contacts
@@ -1786,6 +1767,22 @@ class DatabaseCRMProvider:
                 tracker_customer_id,
                 tracker_site_id,
                 actor_id,
+            )
+            handoff = await conn.fetchrow(
+                """
+                INSERT INTO eom_customer_handoffs (
+                    contact_id, approval_key, tracker_customer_id, tracker_site_id,
+                    approved_by_employee_id, approved_by_name
+                )
+                VALUES ($1, $2, $3, $4, $5, $6)
+                RETURNING id, contact_id, approval_key, tracker_customer_id, tracker_site_id
+                """,
+                contact_id,
+                approval_key,
+                tracker_customer_id,
+                tracker_site_id,
+                actor_id,
+                actor_name,
             )
             return _result(handoff, idempotent=False)
 

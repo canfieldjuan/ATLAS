@@ -3,11 +3,16 @@
 from __future__ import annotations
 
 import hmac
+import hashlib
 import secrets
+from dataclasses import dataclass
 
 from fastapi import Depends, Header, HTTPException
 
-from .auth import validate_generated_service_token
+from .auth import (
+    validate_generated_service_token,
+    validate_generated_service_token_digest,
+)
 from .config import EOMFunnelConfig, funnel_settings
 
 _MAX_SIGNED_BIGINT = 2**63 - 1
@@ -34,11 +39,31 @@ def _validate_generated_funnel_token(token: str) -> None:
     )
 
 
-def generate_eom_funnel_service_token() -> str:
-    """Generate the server-only credential for the EOM tracker-to-Atlas route."""
-    token = f"{_GENERATED_TOKEN_PREFIX}{secrets.token_urlsafe(32)}"
+@dataclass(frozen=True)
+class GeneratedEOMFunnelServiceToken:
+    """Generated tracker bearer plus the Atlas-only trust anchor."""
+
+    token: str
+    sha256: str
+
+
+def _token_sha256(token: str) -> str:
+    return hashlib.sha256(token.encode("ascii")).hexdigest()
+
+
+def eom_funnel_service_token_sha256(token: str) -> str:
+    """Return the Atlas trust anchor for a freshly generated tracker bearer."""
     _validate_generated_funnel_token(token)
-    return token
+    return _token_sha256(token)
+
+
+def generate_eom_funnel_service_token() -> GeneratedEOMFunnelServiceToken:
+    """Generate the tracker bearer and its Atlas-only SHA-256 trust anchor."""
+    token = f"{_GENERATED_TOKEN_PREFIX}{secrets.token_urlsafe(32)}"
+    return GeneratedEOMFunnelServiceToken(
+        token=token,
+        sha256=eom_funnel_service_token_sha256(token),
+    )
 
 
 def validate_eom_funnel_api_config(config: EOMFunnelConfig | None = None) -> None:
@@ -46,13 +71,16 @@ def validate_eom_funnel_api_config(config: EOMFunnelConfig | None = None) -> Non
     resolved = config or funnel_settings
     if not resolved.api_enabled:
         return
-    token = resolved.service_token.strip()
-    if not token:
+    token_digest = resolved.service_token_sha256.strip()
+    if not token_digest:
         raise RuntimeError(
-            "ATLAS_EOM_FUNNEL_SERVICE_TOKEN is required when "
+            "ATLAS_EOM_FUNNEL_SERVICE_TOKEN_SHA256 is required when "
             "ATLAS_EOM_FUNNEL_API_ENABLED=true"
         )
-    _validate_generated_funnel_token(token)
+    validate_generated_service_token_digest(
+        token_digest,
+        service_name="EOM funnel",
+    )
 
 
 def get_eom_funnel_api_config() -> EOMFunnelConfig:
@@ -69,15 +97,14 @@ async def require_eom_funnel_api(
         raise HTTPException(status_code=503, detail="EOM funnel API is disabled")
     validate_eom_funnel_api_config(config)
     scheme, separator, provided = authorization.partition(" ")
-    expected = config.service_token.strip()
+    expected_digest = config.service_token_sha256.strip()
     if separator != " " or scheme.lower() != "bearer" or not provided.strip():
         raise HTTPException(status_code=401, detail="Bearer token required")
     try:
-        provided_bytes = provided.strip().encode("ascii")
-        expected_bytes = expected.encode("ascii")
+        provided_digest = _token_sha256(provided.strip())
     except UnicodeEncodeError as exc:
         raise HTTPException(status_code=401, detail="Invalid bearer token") from exc
-    if not hmac.compare_digest(provided_bytes, expected_bytes):
+    if not hmac.compare_digest(provided_digest, expected_digest):
         raise HTTPException(status_code=401, detail="Invalid bearer token")
 
 

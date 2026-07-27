@@ -21,8 +21,30 @@ RETURNS TRIGGER
 LANGUAGE plpgsql
 AS $$
 BEGIN
-    IF current_setting('atlas.eom_customer_handoff_finalization', true) IS DISTINCT FROM 'true' THEN
-        RAISE EXCEPTION 'eom_customer_handoffs must be inserted by the finalization transaction';
+    IF NOT EXISTS (
+        SELECT 1
+        FROM contacts AS contact
+        JOIN eom_lead_lifecycle_events AS lifecycle
+          ON lifecycle.contact_id = contact.id
+        WHERE contact.id = NEW.contact_id
+          AND contact.business_context_id = 'effingham_maids'
+          AND contact.contact_type = 'customer'
+          AND contact.lead_stage IS NULL
+          AND contact.status = 'active'
+          AND lifecycle.event_type = 'customer_approved'
+          AND lifecycle.source = 'eom_office'
+          AND lifecycle.operation_key = NEW.approval_key
+          AND lifecycle.actor = (
+              'employee:' || NEW.approved_by_employee_id::text || ':' || NEW.approved_by_name
+          )
+          AND lifecycle.metadata @> jsonb_build_object(
+              'tracker_customer_id', NEW.tracker_customer_id,
+              'tracker_site_id', NEW.tracker_site_id,
+              'approved_by_employee_id', NEW.approved_by_employee_id
+          )
+    ) THEN
+        RAISE EXCEPTION
+            'eom_customer_handoffs requires the matching customer transition and lifecycle evidence';
     END IF;
     RETURN NEW;
 END;

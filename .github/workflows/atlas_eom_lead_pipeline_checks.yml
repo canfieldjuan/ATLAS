@@ -7,6 +7,7 @@ on:
   pull_request:
     paths:
       - ".github/workflows/atlas_eom_lead_pipeline_checks.yml"
+      - "docker-compose.yml"
       - "atlas_brain/autonomous/tasks/gmail_digest.py"
       - "atlas_brain/config.py"
       - "atlas_brain/main.py"
@@ -41,6 +42,7 @@ on:
       - "atlas_brain/storage/migrations/351_eom_lead_lifecycle_events.sql"
       - "atlas_brain/storage/migrations/352_eom_inbound_delivery_receipts.sql"
       - "atlas_brain/storage/migrations/353_eom_customer_handoffs.sql"
+      - "atlas_brain/storage/migrations/354_eom_customer_handoff_privileges.sql"
       - "atlas_brain/tools/scheduling.py"
       - "tests/test_crm_read_scoping.py"
       - "tests/test_eom_complaints_integration.py"
@@ -62,6 +64,7 @@ on:
       - main
     paths:
       - ".github/workflows/atlas_eom_lead_pipeline_checks.yml"
+      - "docker-compose.yml"
       - "atlas_brain/autonomous/tasks/gmail_digest.py"
       - "atlas_brain/config.py"
       - "atlas_brain/main.py"
@@ -96,6 +99,7 @@ on:
       - "atlas_brain/storage/migrations/351_eom_lead_lifecycle_events.sql"
       - "atlas_brain/storage/migrations/352_eom_inbound_delivery_receipts.sql"
       - "atlas_brain/storage/migrations/353_eom_customer_handoffs.sql"
+      - "atlas_brain/storage/migrations/354_eom_customer_handoff_privileges.sql"
       - "atlas_brain/tools/scheduling.py"
       - "tests/test_crm_read_scoping.py"
       - "tests/test_eom_complaints_integration.py"

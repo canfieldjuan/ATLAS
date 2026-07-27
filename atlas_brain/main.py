@@ -125,12 +125,51 @@ async def _require_eom_funnel_data_store(
         SELECT to_regclass('contacts') IS NOT NULL
            AND to_regclass('eom_lead_lifecycle_events') IS NOT NULL
            AND to_regclass('eom_customer_handoffs') IS NOT NULL
+           AND EXISTS (
+               SELECT 1
+               FROM pg_class AS handoff_table
+               JOIN pg_roles AS owner_role ON owner_role.oid = handoff_table.relowner
+               WHERE handoff_table.oid = 'eom_customer_handoffs'::regclass
+                 AND owner_role.rolname = 'atlas_eom_handoff_owner'
+           )
+           AND NOT EXISTS (
+               SELECT 1
+               FROM pg_auth_members AS membership
+               JOIN pg_roles AS member_role ON member_role.oid = membership.member
+               JOIN pg_roles AS guard_role ON guard_role.oid = membership.roleid
+               WHERE member_role.rolname = current_user
+                 AND guard_role.rolname = 'atlas_eom_handoff_owner'
+           )
+           AND COALESCE((
+               SELECT NOT has_schema_privilege(nocodb_role.oid, current_schema(), 'CREATE')
+                  AND NOT has_table_privilege(nocodb_role.oid, 'eom_customer_handoffs', 'INSERT')
+                  AND NOT has_table_privilege(nocodb_role.oid, 'eom_customer_handoffs', 'UPDATE')
+                  AND NOT has_table_privilege(nocodb_role.oid, 'eom_customer_handoffs', 'DELETE')
+                  AND NOT has_table_privilege(nocodb_role.oid, 'eom_customer_handoffs', 'TRUNCATE')
+                  AND NOT has_table_privilege(nocodb_role.oid, 'eom_lead_lifecycle_events', 'INSERT')
+                  AND NOT has_table_privilege(nocodb_role.oid, 'eom_lead_lifecycle_events', 'UPDATE')
+                  AND NOT has_table_privilege(nocodb_role.oid, 'eom_lead_lifecycle_events', 'DELETE')
+               FROM pg_roles AS nocodb_role
+               WHERE nocodb_role.rolname = 'atlas_nocodb'
+           ), FALSE)
         """
     )
     if not ready:
         raise RuntimeError(
             "EOM funnel requires the authoritative CRM lifecycle and handoff schema"
         )
+
+
+async def _validate_eom_funnel_startup() -> None:
+    """Run the enabled full-app funnel preflight after primary DB initialization."""
+    from .eom_api.config import funnel_settings
+    from .eom_api.funnel_auth import validate_eom_funnel_api_config
+
+    validate_eom_funnel_api_config(funnel_settings)
+    await _require_eom_funnel_data_store(
+        funnel_settings,
+        database_enabled=db_settings.enabled,
+    )
 
 
 def _is_absolute_http_url(value: str) -> bool:
@@ -315,11 +354,8 @@ async def lifespan(app: FastAPI):
     logger.info("Atlas Brain starting up...")
     _enforce_paid_funnel_alert_channel(settings)
     from .api.invoicing.auth import validate_receivables_api_config
-    from .eom_api.config import funnel_settings
-    from .eom_api.funnel_auth import validate_eom_funnel_api_config
 
     validate_receivables_api_config(settings.invoicing)
-    validate_eom_funnel_api_config()
 
     # Initialize database connection pool
     if db_settings.enabled:
@@ -340,10 +376,7 @@ async def lifespan(app: FastAPI):
             # Continue without database - service can still function
             # but conversation persistence will be unavailable
 
-    await _require_eom_funnel_data_store(
-        funnel_settings,
-        database_enabled=db_settings.enabled,
-    )
+    await _validate_eom_funnel_startup()
 
     # Note: STT/TTS registries not implemented - voice uses Piper TTS directly
     # via voice/pipeline.py. These can be added later if centralized

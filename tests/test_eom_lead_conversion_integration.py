@@ -38,6 +38,7 @@ async def _prepare_schema(conn, schema: str) -> None:
         "351_eom_lead_lifecycle_events.sql",
         "352_eom_inbound_delivery_receipts.sql",
         "353_eom_customer_handoffs.sql",
+        "354_eom_customer_handoff_privileges.sql",
     ):
         await conn.execute((MIGRATIONS / name).read_text())
 
@@ -254,19 +255,23 @@ async def test_office_handoff_is_atomic_idempotent_and_keeps_rate_schedule_out_o
         await _insert_contact(conn, contact_id=direct_contact_id)
         with pytest.raises(
             asyncpg.exceptions.RaiseError,
-            match="must be inserted by the finalization transaction",
+            match="matching customer transition and lifecycle evidence",
         ):
-            await conn.execute(
-                """
-                INSERT INTO eom_customer_handoffs (
-                    contact_id, approval_key, tracker_customer_id, tracker_site_id,
-                    approved_by_employee_id, approved_by_name
+            async with conn.transaction():
+                await conn.execute(
+                    "SELECT set_config('atlas.eom_customer_handoff_finalization', 'true', true)"
                 )
-                VALUES ($1, $2, 303, 404, 1, 'Juan Canfield')
-                """,
-                direct_contact_id,
-                _approval_key(),
-            )
+                await conn.execute(
+                    """
+                    INSERT INTO eom_customer_handoffs (
+                        contact_id, approval_key, tracker_customer_id, tracker_site_id,
+                        approved_by_employee_id, approved_by_name
+                    )
+                    VALUES ($1, $2, 303, 404, 1, 'Juan Canfield')
+                    """,
+                    direct_contact_id,
+                    _approval_key(),
+                )
         assert await _contact_state(conn, direct_contact_id) == (
             {
                 "business_context_id": "effingham_maids",
@@ -304,10 +309,14 @@ async def test_office_handoff_rejects_an_incomplete_preexisting_replay_row():
         contact_id = uuid.uuid4()
         approval_key = _approval_key()
         await _insert_contact(conn, contact_id=contact_id)
-        async with conn.transaction():
-            await conn.execute(
-                "SELECT set_config('atlas.eom_customer_handoff_finalization', 'true', true)"
-            )
+        # Only the guard-object owner can model malformed legacy data. The
+        # runtime and NocoDB roles cannot disable this trigger.
+        await conn.execute("SET ROLE atlas_eom_handoff_owner")
+        await conn.execute(
+            "ALTER TABLE eom_customer_handoffs "
+            "DISABLE TRIGGER trg_require_eom_customer_handoff_finalization"
+        )
+        try:
             await conn.execute(
                 """
                 INSERT INTO eom_customer_handoffs (
@@ -319,6 +328,12 @@ async def test_office_handoff_rejects_an_incomplete_preexisting_replay_row():
                 contact_id,
                 approval_key,
             )
+        finally:
+            await conn.execute(
+                "ALTER TABLE eom_customer_handoffs "
+                "ENABLE TRIGGER trg_require_eom_customer_handoff_finalization"
+            )
+            await conn.execute("RESET ROLE")
 
         with pytest.raises(EOMLeadConversionError, match="not a completed finalization"):
             await provider.finalize_eom_customer_handoff(
@@ -339,6 +354,65 @@ async def test_office_handoff_rejects_an_incomplete_preexisting_replay_row():
             },
             0,
             1,
+        )
+    finally:
+        await conn.execute(f'DROP SCHEMA IF EXISTS "{schema}" CASCADE')
+        await conn.close()
+
+
+@pytest.mark.asyncio
+async def test_nocodb_role_cannot_bypass_handoff_or_lifecycle_guards():
+    """The ordinary office UI role has no protected-table or DDL privilege."""
+    database_url = _database_url_or_skip()
+    schema = f"atlas_eom_conversion_nocodb_{uuid.uuid4().hex}"
+    conn = await asyncpg.connect(database_url)
+    try:
+        await _prepare_schema(conn, schema)
+        assert not await conn.fetchval(
+            "SELECT pg_has_role('atlas_nocodb', 'atlas_eom_handoff_owner', 'MEMBER')"
+        )
+
+        await conn.execute("SET ROLE atlas_nocodb")
+        try:
+            blocked_statements = (
+                "CREATE TABLE nocodb_bypass (id INTEGER)",
+                "ALTER TABLE eom_customer_handoffs DISABLE TRIGGER ALL",
+                "INSERT INTO eom_customer_handoffs DEFAULT VALUES",
+                "UPDATE eom_customer_handoffs SET approved_by_name = 'Tampered'",
+                "DELETE FROM eom_customer_handoffs",
+                "INSERT INTO eom_lead_lifecycle_events DEFAULT VALUES",
+            )
+            for statement in blocked_statements:
+                with pytest.raises(asyncpg.exceptions.InsufficientPrivilegeError):
+                    await conn.execute(statement)
+        finally:
+            await conn.execute("RESET ROLE")
+    finally:
+        await conn.execute(f'DROP SCHEMA IF EXISTS "{schema}" CASCADE')
+        await conn.close()
+
+
+@pytest.mark.asyncio
+async def test_privilege_migration_satisfies_the_enabled_full_app_startup_guard(monkeypatch):
+    """The live preflight query accepts only the protected role arrangement."""
+    from atlas_brain import main
+
+    database_url = _database_url_or_skip()
+    schema = f"atlas_eom_conversion_preflight_{uuid.uuid4().hex}"
+    conn = await asyncpg.connect(database_url)
+    try:
+        await _prepare_schema(conn, schema)
+
+        class _Pool:
+            is_initialized = True
+
+            async def fetchval(self, query: str) -> bool:
+                return bool(await conn.fetchval(query))
+
+        monkeypatch.setattr(main, "get_db_pool", lambda: _Pool())
+        await main._require_eom_funnel_data_store(
+            type("Config", (), {"api_enabled": True})(),
+            database_enabled=True,
         )
     finally:
         await conn.execute(f'DROP SCHEMA IF EXISTS "{schema}" CASCADE')

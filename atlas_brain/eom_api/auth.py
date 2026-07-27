@@ -128,21 +128,33 @@ def generate_receivables_service_token() -> GeneratedReceivablesServiceToken:
     )
 
 
-def _validate_generated_token_digest(token_digest: str) -> None:
+def validate_generated_service_token_digest(
+    token_digest: str,
+    *,
+    service_name: str,
+) -> None:
+    """Require a non-placeholder digest emitted by service-token provisioning."""
     if not token_digest:
         raise RuntimeError(
-            "Receivables service token digest is required for trusted "
-            "receivables API config"
+            f"{service_name} service token digest is required for trusted API config"
         )
     if fullmatch(_TOKEN_SHA256_PATTERN, token_digest) is None:
         raise RuntimeError(
-            "Receivables service token digest must be a lowercase SHA-256 hex "
-            "digest produced from a generated token"
+            f"{service_name} service token digest must be a lowercase SHA-256 "
+            "hex digest produced by the service-token provisioning helper"
         )
     if token_digest in _PLACEHOLDER_TOKEN_DIGESTS:
         raise RuntimeError(
-            "Receivables service token digest must not come from a placeholder"
+            f"{service_name} service token digest must not come from a placeholder"
         )
+
+
+def _validate_generated_token_digest(token_digest: str) -> None:
+    """Backward-compatible receivables-specific digest validation."""
+    validate_generated_service_token_digest(
+        token_digest,
+        service_name="Receivables",
+    )
 
 
 def validate_receivables_api_config(

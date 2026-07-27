@@ -1035,6 +1035,7 @@ def test_eom_profile_ping_is_database_independent(monkeypatch):
 
 def test_eom_profile_reaches_receivables_ready_through_real_app(tmp_path):
     from atlas_brain.eom_api import auth
+
     generated = auth.generate_receivables_service_token()
     probe = """
 import json

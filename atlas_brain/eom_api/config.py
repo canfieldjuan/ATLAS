@@ -121,9 +121,12 @@ class EOMFunnelConfig(BaseSettings):
         default=False,
         description="Enable the service-authenticated EOM office conversion API",
     )
-    service_token: str = Field(
+    service_token_sha256: str = Field(
         default="",
-        description="Bearer token accepted from the EOM time tracker only",
+        description=(
+            "SHA-256 digest of the generated bearer accepted from the EOM time "
+            "tracker only; the raw bearer is never stored in Atlas"
+        ),
     )
 
 
