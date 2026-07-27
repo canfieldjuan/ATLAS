@@ -352,7 +352,7 @@ file:line on any Fail. Not-Verified ends the search but blocks LGTM.)
 before LGTM on guards, validators, caps, classifiers, gates, sanitizers,
 denylists, parser admission rules, or safety checkers.>
 
-**Codex reconciliation:** Codex findings reviewed: Y/N. All fixed or waived:
+**AI reconciliation:** Codex findings reviewed: Y/N. All fixed or waived:
 Y/N. Waivers justified in PR body: Y/N.
 
 **Defensible trade-offs (no action needed):**
@@ -1341,7 +1341,8 @@ Before LGTM or merge readiness:
 - [ ] R14 is satisfied: verdict claims are backed by checked-out code,
       caller/test/artifact spot-checks, CI, or explicit not-verified notes.
 - [ ] Codex threads are resolved or waived with a reason in the PR body, and
-      `live-reconciliation` is green.
+      `live-reconciliation` is green for the current PR head after a Codex
+      connector review on that exact head SHA.
 - [ ] No drift from the plan's stated scope.
 
 ---

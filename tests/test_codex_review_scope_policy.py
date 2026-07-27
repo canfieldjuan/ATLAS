@@ -28,6 +28,7 @@ def test_fixture_scenarios_cover_operator_requested_review_shapes():
         "out_of_scope_hardening",
         "missing_regression_test",
         "concrete_security_data_failure",
+        "low_blast_radius_correctness",
         "speculative_risk_no_failure_path",
         "nit_suppression",
         "material_one_line_nit",
@@ -44,7 +45,7 @@ def test_cli_self_test_reports_pass_count():
         stderr=subprocess.PIPE,
     )
     assert proc.returncode == 0, proc.stderr
-    assert "OK: 9 Codex review scope fixtures passed" in proc.stdout
+    assert "OK: 10 Codex review scope fixtures passed" in proc.stdout
 
 
 def test_cli_requires_self_test(monkeypatch):

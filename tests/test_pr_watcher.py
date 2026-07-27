@@ -248,6 +248,26 @@ def test_valid_snapshot_is_ready_and_accepted_by_consumer(tmp_path: Path, monkey
     assert watcher.TRUSTED_RECONCILIATION_CHECKER.parent.name == watcher.RECONCILIATION_LIB_DIR
 
 
+def test_post_review_metadata_controls_readiness_decision(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    fake = FakeRun(
+        pr_responses=[
+            _response(_pr()),
+            _response(_pr()),
+            _response(_pr(decision="CHANGES_REQUESTED")),
+        ]
+    )
+
+    status = _produce(tmp_path, monkeypatch, fake)
+
+    assert status["state"] == "attention"
+    assert status["pr"]["reviewDecision"] == "CHANGES_REQUESTED"
+    assert status["readiness"]["review_decision"] == "CHANGES_REQUESTED"
+    assert "review decision has changes requested" in wake_bridge.readiness_blockers(status)
+
+
 def test_thread_snapshot_is_collected_after_codex_review_pagination(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -433,7 +453,7 @@ def test_optional_skipped_check_does_not_block_green_state(
     assert status["check_failures"] == []
 
 
-def test_paginates_threads_and_filters_to_non_outdated_codex_threads(
+def test_paginates_threads_and_keeps_outdated_unresolved_codex_threads(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -457,8 +477,37 @@ def test_paginates_threads_and_filters_to_non_outdated_codex_threads(
     assert status["readiness"]["review_threads_complete"] is True
     assert status["readiness"]["review_thread_pages_fetched"] == 2
     assert status["readiness"]["unresolved_review_threads"] == [
-        {"id": "open-codex", "is_outdated": False, "path": "scripts/pr_watcher.py", "line": 12}
+        {"id": "outdated-codex", "is_outdated": True, "path": "scripts/pr_watcher.py", "line": 12},
+        {"id": "open-codex", "is_outdated": False, "path": "scripts/pr_watcher.py", "line": 12},
     ]
+
+
+def test_changes_requested_codex_review_does_not_satisfy_head_review_count(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    status = _produce(
+        tmp_path,
+        monkeypatch,
+        FakeRun(
+            review_pages=[
+                _response(
+                    _review_page(
+                        [
+                            {
+                                "author": {"login": "chatgpt-codex-connector"},
+                                "commit": {"oid": "head-a"},
+                                "state": "CHANGES_REQUESTED",
+                            }
+                        ]
+                    )
+                )
+            ],
+        ),
+    )
+
+    assert status["state"] == "attention"
+    assert status["readiness"]["codex_head_review_count"] == 0
 
 
 def test_unresolved_non_codex_thread_does_not_block_ready_state(
@@ -969,7 +1018,7 @@ def test_installed_entrypoint_writes_consumer_accepted_snapshot(tmp_path: Path) 
             elif args[:2] == ["api", "graphql"]:
                 query = " ".join(args)
                 if "reviews(first:100" in query:
-                    payload = {"data": {"repository": {"pullRequest": {"reviews": {"nodes": [{"author": {"login": "chatgpt-codex-connector"}, "commit": {"oid": "head-a"}, "state": "COMMENTED"}], "pageInfo": {"hasNextPage": False, "endCursor": None}}}}}}
+                    payload = {"data": {"repository": {"pullRequest": {"headRefOid": "head-a", "reviews": {"nodes": [{"author": {"login": "chatgpt-codex-connector"}, "commit": {"oid": "head-a"}, "state": "COMMENTED"}], "pageInfo": {"hasNextPage": False, "endCursor": None}}}}}}
                 elif "comments(first:1)" in query:
                     payload = {"data": {"repository": {"pullRequest": {"reviewThreads": {"nodes": [], "pageInfo": {"hasNextPage": False, "endCursor": None}}}}}}
                 else:

@@ -100,8 +100,20 @@ FIXTURES: tuple[Fixture, ...] = (
             "in_scope": True,
             "impact": "security",
             "concrete_failure_path": True,
+            "material": True,
         },
         BLOCKER,
+    ),
+    Fixture(
+        "low_blast_radius_correctness",
+        {
+            "in_scope": True,
+            "impact": "correctness",
+            "concrete_failure_path": True,
+            "material": False,
+            "blast_radius": "one_recoverable_record",
+        },
+        MAJOR,
     ),
     Fixture(
         "speculative_risk_no_failure_path",
@@ -163,7 +175,11 @@ def classify_finding(finding: Mapping[str, object]) -> str:
         return BLOCKER
 
     impact = str(finding.get("impact", ""))
-    if finding.get("concrete_failure_path") and impact in MATERIAL_IMPACTS:
+    if (
+        finding.get("concrete_failure_path")
+        and impact in MATERIAL_IMPACTS
+        and finding.get("material") is not False
+    ):
         return BLOCKER
     if finding.get("speculative") and not finding.get("concrete_failure_path"):
         return WAIVE_SPECULATIVE

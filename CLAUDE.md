@@ -1148,11 +1148,13 @@ definition of done.
 
 ---
 
-## Multi-Session PR Workflow (AGENTS.md)
+## PR Workflow (AGENTS.md)
 
-Atlas uses **two coordinated Claude Code sessions** for non-trivial work: a
-**builder** (writes the plan, the code, the PR) and a **reviewer** (audits the
-PR independently). The full contract lives in `AGENTS.md`; the highlights:
+Atlas uses one builder lane plus the GitHub Codex connector review gate for
+non-trivial work. The builder writes the plan, code, and PR; Codex connector
+review threads plus `live-reconciliation` are the review gate. Do not recreate
+the retired second local Claude reviewer/status flow. The full contract lives
+in `AGENTS.md`; the highlights:
 
 - **Plan first.** Every non-trivial PR ships a plan doc at
   `plans/PR-<Slice-Name>.md` with these 7 required top-level sections, in order:
@@ -1177,8 +1179,9 @@ PR independently). The full contract lives in `AGENTS.md`; the highlights:
   GitHub every 30 minutes for checks/reviews/reconciliation, resumes that
   watcher after compaction, and continues the approved slice arc instead of
   halting until the operator notices green. See `AGENTS.md` §3c.1.
-- **Reviewer verdicts:** `BLOCKER` / `MAJOR` / `NIT` / `LGTM`. Reviewer
-  reproduces the builder's verification commands; doesn't trust claims.
+- **Codex review reconciliation:** fix confirmed in-scope Codex findings, group
+  duplicates, waive out-of-scope/speculative/NIT-only findings in the PR body,
+  and resolve GitHub threads only after code/body evidence addresses them.
 - **Code for reconstruction review.** While building, follow
   `docs/CODING_FOR_RECONSTRUCTION_REVIEW.md`: start from the correct-fix shape,
   keep the diff self-explaining, test real behavior, and make the PR body a

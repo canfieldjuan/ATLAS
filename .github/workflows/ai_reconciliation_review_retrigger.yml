@@ -7,7 +7,8 @@ name: AI Reconciliation (review retrigger)
 # AI Reconciliation workflow completes for a review event (the advisory
 # job), this follow-up re-runs the latest `pull_request_target` run for the
 # same head SHA, so the required context is re-evaluated by trusted base
-# code whenever a bot comment lands after the last push/body edit.
+# code whenever a bot comment lands or a review thread is resolved/unresolved
+# after the last push/body edit.
 #
 # Loop-safe: the rerun completes with event == pull_request_target, which
 # this job's `if` ignores. No checkout and no repo scripts: the inline
@@ -25,7 +26,8 @@ jobs:
   retrigger-required-context:
     if: >-
       github.event.workflow_run.event == 'pull_request_review' ||
-      github.event.workflow_run.event == 'pull_request_review_comment'
+      github.event.workflow_run.event == 'pull_request_review_comment' ||
+      github.event.workflow_run.event == 'pull_request_review_thread'
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:

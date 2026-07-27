@@ -285,6 +285,12 @@ than executing scripts from the watched PR worktree. One systemd template can
 safely serve multiple sessions without baking one worktree path into every
 timer.
 
+For any already-enabled local watcher, rerun the installer after pulling a
+watcher or reconciliation change and before trusting a new
+`ready_for_human_merge` snapshot. Merging repository source does not upgrade the
+copies under `~/.local/bin`; the active systemd wrapper continues to execute the
+previous installed producer until this reinstall/check step succeeds.
+
 ```bash
 python scripts/install_codex_wake_bridge.py --reload-systemd
 python scripts/install_codex_wake_bridge.py --check
@@ -373,6 +379,11 @@ New rules to follow:
   script. Event wakes are always attention-only; scheduled-ready wakes still
   require live AGENTS guards.
 - A local watcher must poll every 30 minutes and must use AUTO_MERGE="0".
+- After any watcher, bridge, or reconciliation checker source change, rerun
+  `python scripts/install_codex_wake_bridge.py --reload-systemd` and
+  `python scripts/install_codex_wake_bridge.py --check` before relying on the
+  installed watcher state. Existing timers execute installed copies from
+  `~/.local/bin`, not the repository files.
 - Codex/local sessions must run `scripts/report_pr_watcher_state.py` on resume before starting the next slice in a long-running arc.
 - No auto-merge in the watcher. When the watcher reports ready_for_human_merge, the active builder reports readiness and waits for the operator unless this specific arc has explicit active-builder merge authorization.
 - With standing merge authorization recorded in this session's state file, the active builder merges only after a scheduled Claude poll or Codex/local wake bridge reports ready_for_human_merge and the current AGENTS pre-merge guards pass, including review-thread status and merge-conflict/mergeability state.

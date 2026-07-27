@@ -347,7 +347,7 @@ def _fetch_threads(pr: int, repo: str, *, cwd: Path) -> tuple[list[dict[str, Any
                 return unresolved, pages, False, f"review thread {index} has malformed path"
             if line is not None and (not isinstance(line, int) or isinstance(line, bool)):
                 return unresolved, pages, False, f"review thread {index} has malformed line"
-            if is_resolved or is_outdated:
+            if is_resolved:
                 continue
             author_login, author_error = _first_thread_author_login(node, index=index)
             if author_error:
@@ -446,7 +446,7 @@ def _fetch_codex_head_reviews(
             if (
                 _is_codex_login(login)
                 and oid == head_sha
-                and state in {"COMMENTED", "APPROVED", "CHANGES_REQUESTED"}
+                and state in {"COMMENTED", "APPROVED"}
             ):
                 matches += 1
         has_next = page_info.get("hasNextPage")
@@ -707,6 +707,7 @@ def produce(watcher_id: str, *, config_dir: Path, state_dir: Path) -> tuple[int,
     initial_base = str(pr_initial.get("baseRefName") or "")
     final_base = str(pr.get("baseRefName") or "")
     post_review_base = str(pr_after_reviews.get("baseRefName") or "")
+    observed_pr = pr_after_reviews if pr_after_reviews and post_review_head == final_head else pr
     head_mismatch = (
         not expected_head
         or not initial_head
@@ -746,7 +747,7 @@ def produce(watcher_id: str, *, config_dir: Path, state_dir: Path) -> tuple[int,
         if item
     ]
     state = _classify(
-        pr=pr,
+        pr=observed_pr,
         errors=errors,
         unsafe_auto_merge=unsafe_auto_merge,
         head_mismatch=head_mismatch,
@@ -779,7 +780,7 @@ def produce(watcher_id: str, *, config_dir: Path, state_dir: Path) -> tuple[int,
         "observed_at": now.isoformat(timespec="seconds"),
         "next_poll_at": next_poll.isoformat(timespec="seconds"),
         "state": state,
-        "pr": pr,
+        "pr": observed_pr,
         "check_failures": failures,
         "check_pending": pending,
         "comment_count": comment_count,
@@ -831,8 +832,8 @@ def produce(watcher_id: str, *, config_dir: Path, state_dir: Path) -> tuple[int,
             "codex_reviews_complete": reviews_complete,
             "codex_review_pages_fetched": review_pages,
             "codex_head_review_count": codex_head_review_count,
-            "review_decision": pr.get("reviewDecision"),
-            "merge_state_status": pr.get("mergeStateStatus"),
+            "review_decision": observed_pr.get("reviewDecision"),
+            "merge_state_status": observed_pr.get("mergeStateStatus"),
         },
     }
     _atomic_write(status_path, json.dumps(status, indent=2, sort_keys=True) + "\n")
@@ -844,12 +845,12 @@ def produce(watcher_id: str, *, config_dir: Path, state_dir: Path) -> tuple[int,
             f"Observed: {now.strftime('%Y-%m-%d %H:%M %Z')}",
             f"Next poll: {next_poll.strftime('%Y-%m-%d %H:%M %Z')}",
             f"State: {state}",
-            f"PR: #{_one_line(pr.get('number', pr_text))} {_one_line(pr.get('title', ''))}",
-            f"URL: {_one_line(pr.get('url', ''))}",
-            f"Head: {_one_line(pr.get('headRefName', ''))} @ {_one_line(final_head)}",
+            f"PR: #{_one_line(observed_pr.get('number', pr_text))} {_one_line(observed_pr.get('title', ''))}",
+            f"URL: {_one_line(observed_pr.get('url', ''))}",
+            f"Head: {_one_line(observed_pr.get('headRefName', ''))} @ {_one_line(post_review_head or final_head)}",
             f"Expected head: {_one_line(expected_head or 'missing')}",
-            f"Merge state: {_one_line(pr.get('mergeStateStatus', ''))}",
-            f"Review decision: {_one_line(pr.get('reviewDecision') or 'none')}",
+            f"Merge state: {_one_line(observed_pr.get('mergeStateStatus', ''))}",
+            f"Review decision: {_one_line(observed_pr.get('reviewDecision') or 'none')}",
             f"Worktree dirty: {'yes' if worktree_dirty else 'no'}",
             f"Failing checks: {_one_line(', '.join(failures) or 'none')}",
             f"Pending checks: {_one_line(', '.join(pending) or 'none')}",

@@ -8,15 +8,17 @@ name: AI Reconciliation (live)
 # Runs on `pull_request_target` as well as the review events so that, as a
 # *required* status check, it always runs and reports (a quiet PR with no bot
 # threads reports green instead of wedging the merge as "missing required
-# check"), and re-runs when a bot comment lands after the PR opens.
+# check"), and re-runs when a bot comment lands or a review thread is
+# resolved/unresolved after the PR opens.
 #
 # Trusted-base execution (#1944 waiver 18): `pull_request_target` resolves
 # this workflow from the BASE branch and both jobs pin their checkout to the
 # base SHA, so a PR editing this gate is still judged by main's version. The
 # required `live-reconciliation` context comes from the target-only job
 # (audited guard shape in scripts/audit_workflow_security_posture.py); the
-# review-events job re-runs the same base-ref script when bot comments land
-# and reports under its own advisory context. Neither job may ever gain a
+# review-events job re-runs the same base-ref script when bot comments land or
+# review threads are resolved/unresolved and reports under its own advisory
+# context. Neither job may ever gain a
 # step that executes PR-ref content.
 
 on:
@@ -27,6 +29,8 @@ on:
     types: [opened, synchronize, reopened, ready_for_review, edited]
   pull_request_review:
   pull_request_review_comment:
+  pull_request_review_thread:
+    types: [resolved, unresolved]
 
 permissions:
   contents: read

@@ -34,7 +34,7 @@ threads block only until each in-scope finding is fixed or explicitly waived.
 Ownership lane: workflow/codex-review-scope-reset
 Slice phase: Workflow/process
 
-Max files: 32
+Max files: 37
 
 1. Make Codex connector the only reviewer gate in active workflow docs and
    readiness tooling.
@@ -43,8 +43,9 @@ Max files: 32
 ### Review Contract
 
 - Acceptance criteria:
-  - Active docs no longer require a Claude reviewer session or `claude-review`
-    status before merge.
+  - Active docs, including the fresh-session bootstrap path through
+    `CLAUDE.md`, no longer require a Claude reviewer session or
+    `claude-review` status before merge.
   - `scripts/watch_owned_pr.sh` reports readiness from required contexts, zero
     unresolved threads, no `CHANGES_REQUESTED`, and mergeability; it no longer
     reads commit status context `claude-review`.
@@ -56,8 +57,20 @@ Max files: 32
   - Synthetic fixtures prove the intended dispositions for docs noise,
     duplicate instances, out-of-scope hardening, missing tests, concrete
     security/data failure, speculative risk, and NIT suppression.
-- Reachability proof: N/A - this is workflow/process documentation, script
-  readiness logic, and test tooling; no runtime product surface is introduced.
+  - Seam-convergence advisory review rounds use the same exact Codex connector
+    identities as live reconciliation, not substring matches or retired reviewer
+    identities.
+  - The canonical live reconciliation gate requires a Codex connector review on
+    the exact current PR head SHA before merge readiness.
+  - Review-event retrigger wiring is present for review submissions, review
+    comments, and best-effort review-thread resolved/unresolved events, but the
+    review-thread event is not treated as a proven merge-readiness dependency in
+    this PR.
+- Reachability proof: local tests prove the workflow files contain the intended
+  `pull_request_review_thread` and `workflow_run` event wiring. Live
+  reachability for `pull_request_review_thread` is deferred because this PR's
+  workflow changes cannot prove default-branch Actions behavior until after the
+  workflow exists on the default branch.
 - Affected surfaces: `AGENTS.md`, reviewer-rule docs, watcher/runbook docs,
   pre-push tooling test enrollment, removed Claude-review helper files, and the
   new synthetic fixture checker/tests.
@@ -75,6 +88,8 @@ seam in the enumeration; otherwise write "N/A - no boundary change."
 - Boundary path/seam: `scripts/codex_review_scope_policy.py` classifies
   synthetic Codex review scenarios into blocker/major/waiver/no-finding
   dispositions.
+- Boundary path/seam: `scripts/check_seam_convergence.py` filters review rounds
+  to exact Codex connector identities before advisory convergence detection.
 - Replaced-path behaviors: N/A - this is a new test oracle, not a replacement
   for live Codex connector behavior.
 - Guard-relevant fields: `duplicate_of`, `category`, `in_scope`,
@@ -88,16 +103,57 @@ seam in the enumeration; otherwise write "N/A - no boundary change."
 Required for guard, validator, resolver, admission-boundary, or env/config
 fallback changes; otherwise write "N/A - no guard/config boundary change."
 
-- Deployed/default config values: N/A - no deployed config or fallback behavior.
-- Explicit value probe: N/A.
-- Absent value probe: N/A.
-- Default-session/default-context probe: N/A.
-- Side-effect ordering: N/A.
+- Deployed/default config values: the code-owned default review-bot identities
+  are exact GitHub logins `chatgpt-codex-connector` and
+  `chatgpt-codex-connector[bot]`; live deployed `ATLAS_REVIEW_BOTS` values are
+  could-not-determine from this repository.
+- Explicit value probe: unit tests cover parsing exact configured/default
+  identities and rejecting legacy aliases such as `codex` for both live
+  reconciliation and seam-convergence checks.
+- Absent value probe: the argparse fallback remains the exact default identity
+  tuple when `ATLAS_REVIEW_BOTS` is absent; parser tests exercise that default
+  string rather than a wildcard/substring fallback.
+- Default-session/default-context probe: local default CLI context is probed by
+  the parser/unit tests; production session values remain outside repository
+  evidence.
+- Side-effect ordering: bot identity config is parsed and rejected before any
+  thread/review evaluation can treat a broad alias as a matching author.
+
+### Closure declarations
+
+Required by `docs/GUARD_CLASS_CLOSURE.md` because this PR edits
+decision-driving sets.
+
+- `scripts/codex_review_scope_policy.py` `MATERIAL_IMPACTS`: **OPEN /
+  ENUMERATED**. Membership is authored here as this PR's current review-policy
+  vocabulary for impacts that may become BLOCKER when a concrete failure path
+  is material. New impact families are possible. Out-of-set impacts fall through
+  to MAJOR unless another explicit rule classifies them, which is the cheaper
+  side for this workflow reset because it avoids over-blocking new vocabulary
+  while still surfacing the finding for human review.
+- `scripts/check_ai_reconciliation_live.py` and
+  `scripts/check_seam_convergence.py` `_DEFAULT_BOTS`: **CLOSED /
+  ENUMERATED**. The default scoped reviewer identities are exactly the GitHub
+  Codex connector login forms this repo uses:
+  `chatgpt-codex-connector` and `chatgpt-codex-connector[bot]`. Out-of-set
+  review authors are ignored by the Codex-specific gate, which is the safe side
+  because non-Codex humans/tools must not satisfy or block the Codex gate.
+- `scripts/check_ai_reconciliation_live.py` and
+  `scripts/check_seam_convergence.py` `_LEGACY_BOT_ALIASES`: **OPEN /
+  ENUMERATED**. Membership is authored here from retired broad aliases and
+  substring-style reviewer labels seen in this workflow lane. New broad aliases
+  are possible. Out-of-set configured bot values are treated as exact GitHub
+  logins, while listed aliases/patterns are rejected before evaluation; this is
+  the safe side because it prevents known broad matches from silently matching
+  too much or nothing.
 
 ### Files touched
 
+- `.github/workflows/ai_reconciliation_live.yml`
+- `.github/workflows/ai_reconciliation_review_retrigger.yml`
 - `.github/workflows/pre_push_audit.yml`
 - `AGENTS.md`
+- `CLAUDE.md`
 - `docs/CURRENT_PRODUCT_DISCIPLINE.md`
 - `docs/OVERNIGHT_ARC_WORKFLOW.md`
 - `docs/PR_RECONSTRUCTION_PROTOCOL.md`
@@ -112,6 +168,7 @@ fallback changes; otherwise write "N/A - no guard/config boundary change."
 - `scripts/audit_ai_reconciliation.py`
 - `scripts/check_ai_reconciliation_live.py`
 - `scripts/check_review_body_r14.py`
+- `scripts/check_seam_convergence.py`
 - `scripts/codex_review_scope_policy.py`
 - `scripts/codex_wake_bridge.py`
 - `scripts/local_pr_review.sh`
@@ -121,10 +178,11 @@ fallback changes; otherwise write "N/A - no guard/config boundary change."
 - `tests/maturity_sweep/baseline_scripts.json`
 - `tests/test_check_ai_reconciliation_live.py`
 - `tests/test_check_review_body_r14.py`
+- `tests/test_check_seam_convergence.py`
 - `tests/test_codex_review_scope_policy.py`
 - `tests/test_codex_wake_bridge.py`
-- `tests/test_local_pr_review.py`
 - `tests/test_pr_watcher.py`
+- `tests/test_pre_push_audit_workflow.py`
 - `tests/test_report_pr_watcher_state.py`
 - `tests/test_set_claude_review_status.py`
 - `tests/test_watch_owned_pr.py`
@@ -142,9 +200,10 @@ The change removes the second reviewer gate instead of soft-deprecating it:
    classifier is not an adapter to Codex; it is a local test oracle for the
    intended policy outcomes.
 4. Keep the portable and installed PR watchers on the same execution model:
-   non-outdated unresolved Codex threads block readiness, non-Codex threads do
-   not, and a current-head Codex review must be proven through paginated review
-   data before any ready-for-human-merge handoff.
+   unresolved Codex threads block readiness even when GitHub marks them
+   outdated, non-Codex threads do not, and a current-head Codex review must be
+   proven through paginated review data before any ready-for-human-merge
+   handoff.
 
 ## Intentional
 
@@ -153,12 +212,18 @@ The change removes the second reviewer gate instead of soft-deprecating it:
 - Keep `live-reconciliation` because the Codex connector is still the reviewer
   gate; the change is scoped waiver/finding discipline, not "ignore Codex."
 - Do not create live canary PRs in this slice.
+- Do not claim live GitHub review-thread event proof from static workflow
+  inspection; that proof is deferred to a named canary slice.
 
 ## Deferred
 
 - Optional later canary: after the text and synthetic fixtures are stable, run
   one real low-risk PR through Codex connector and measure thread count/finding
   quality against the synthetic expectations.
+- `PR-Codex-Review-Thread-Event-Canary`: prove live
+  `pull_request_review_thread` reachability after the workflow changes land on
+  the default branch. Until that canary exists, the thread-event workflow wiring
+  remains best-effort and advisory rather than a proven required gate.
 
 Slice parking predicate: waive duplicate instances, out-of-scope hardening,
 NIT-only polish, and speculative risks with no concrete failure path from this
@@ -169,23 +234,28 @@ Parked hardening: none under that predicate.
 
 ## Verification
 
-- `python scripts/codex_review_scope_policy.py --self-test` - passed, 9 fixtures.
-- `python -m pytest tests/test_codex_wake_bridge.py tests/test_codex_review_scope_policy.py tests/test_check_ai_reconciliation_live.py tests/test_local_pr_review.py tests/test_pre_push_audit_workflow.py tests/test_audit_ai_reconciliation.py tests/test_audit_plan_code_consistency.py tests/test_pr_watcher.py tests/test_watch_owned_pr.py tests/test_report_pr_watcher_state.py -q` - 214 passed.
+- `python scripts/codex_review_scope_policy.py --self-test` - passed, 10 fixtures.
+- `python -m pytest tests/test_check_ai_reconciliation_live.py tests/test_pr_watcher.py tests/test_watch_owned_pr.py tests/test_report_pr_watcher_state.py tests/test_codex_wake_bridge.py -q` - 169 passed.
+- `python -m pytest tests/test_watch_owned_pr.py tests/test_check_ai_reconciliation_live.py tests/test_pr_watcher.py tests/test_codex_review_scope_policy.py tests/test_check_seam_convergence.py -q` - 182 passed.
+- `python -m pytest tests/test_codex_wake_bridge.py tests/test_codex_review_scope_policy.py tests/test_check_ai_reconciliation_live.py tests/test_local_pr_review.py tests/test_pre_push_audit_workflow.py tests/test_audit_ai_reconciliation.py tests/test_audit_plan_code_consistency.py tests/test_pr_watcher.py tests/test_watch_owned_pr.py tests/test_report_pr_watcher_state.py tests/test_check_seam_convergence.py -q` - 309 passed.
 - `bash -n scripts/watch_owned_pr.sh scripts/local_pr_review.sh` - passed.
-- `python -m py_compile scripts/check_ai_reconciliation_live.py scripts/codex_review_scope_policy.py scripts/audit_ai_reconciliation.py scripts/pr_watcher.py scripts/codex_wake_bridge.py` - passed.
+- `python -m py_compile scripts/check_ai_reconciliation_live.py scripts/check_seam_convergence.py scripts/codex_review_scope_policy.py scripts/pr_watcher.py scripts/codex_wake_bridge.py scripts/audit_ai_reconciliation.py` - passed.
 - `python scripts/audit_plan_code_consistency.py --base-ref origin/main plans/PR-Codex-Review-Scope-Reset.md` - passed.
 - `python scripts/sync_pr_plan.py plans/PR-Codex-Review-Scope-Reset.md origin/main --check` - passed.
 - `python scripts/audit_plan_doc.py plans/PR-Codex-Review-Scope-Reset.md` - passed.
 - `python scripts/audit_plan_doc_files_touched.py plans/PR-Codex-Review-Scope-Reset.md origin/main` - passed.
-- `python scripts/audit_plan_doc_diff_size.py plans/PR-Codex-Review-Scope-Reset.md origin/main` - passed, estimate 2996 actual 2951.
+- `python scripts/audit_plan_doc_diff_size.py plans/PR-Codex-Review-Scope-Reset.md origin/main` - passed, estimate 3827 actual 3827.
 - `git diff --check -- . ':!node_modules'` - passed.
 
 ## Estimated diff size
 
 | File | LOC |
 |---|---:|
+| `.github/workflows/ai_reconciliation_live.yml` | 10 |
+| `.github/workflows/ai_reconciliation_review_retrigger.yml` | 6 |
 | `.github/workflows/pre_push_audit.yml` | 4 |
-| `AGENTS.md` | 461 |
+| `AGENTS.md` | 462 |
+| `CLAUDE.md` | 15 |
 | `docs/CURRENT_PRODUCT_DISCIPLINE.md` | 2 |
 | `docs/OVERNIGHT_ARC_WORKFLOW.md` | 32 |
 | `docs/PR_RECONSTRUCTION_PROTOCOL.md` | 16 |
@@ -195,25 +265,27 @@ Parked hardening: none under that predicate.
 | `docs/ai_dev_operating_model.svg` | 12 |
 | `docs/ci_cd_autonomous_coding_map.md` | 4 |
 | `docs/long_running_agent_monitoring_spec.md` | 2 |
-| `docs/long_running_session_watcher_handoff.md` | 32 |
-| `plans/PR-Codex-Review-Scope-Reset.md` | 219 |
+| `docs/long_running_session_watcher_handoff.md` | 43 |
+| `plans/PR-Codex-Review-Scope-Reset.md` | 289 |
 | `scripts/audit_ai_reconciliation.py` | 6 |
-| `scripts/check_ai_reconciliation_live.py` | 80 |
+| `scripts/check_ai_reconciliation_live.py` | 387 |
 | `scripts/check_review_body_r14.py` | 202 |
-| `scripts/codex_review_scope_policy.py` | 206 |
+| `scripts/check_seam_convergence.py` | 49 |
+| `scripts/codex_review_scope_policy.py` | 222 |
 | `scripts/codex_wake_bridge.py` | 17 |
-| `scripts/local_pr_review.sh` | 17 |
-| `scripts/pr_watcher.py` | 207 |
+| `scripts/local_pr_review.sh` | 3 |
+| `scripts/pr_watcher.py` | 224 |
 | `scripts/set_claude_review_status.py` | 150 |
-| `scripts/watch_owned_pr.sh` | 49 |
+| `scripts/watch_owned_pr.sh` | 144 |
 | `tests/maturity_sweep/baseline_scripts.json` | 7 |
-| `tests/test_check_ai_reconciliation_live.py` | 83 |
+| `tests/test_check_ai_reconciliation_live.py` | 352 |
 | `tests/test_check_review_body_r14.py` | 195 |
-| `tests/test_codex_review_scope_policy.py` | 73 |
+| `tests/test_check_seam_convergence.py` | 84 |
+| `tests/test_codex_review_scope_policy.py` | 74 |
 | `tests/test_codex_wake_bridge.py` | 6 |
-| `tests/test_local_pr_review.py` | 28 |
-| `tests/test_pr_watcher.py` | 276 |
+| `tests/test_pr_watcher.py` | 325 |
+| `tests/test_pre_push_audit_workflow.py` | 6 |
 | `tests/test_report_pr_watcher_state.py` | 3 |
 | `tests/test_set_claude_review_status.py` | 175 |
-| `tests/test_watch_owned_pr.py` | 190 |
-| **Total** | **2996** |
+| `tests/test_watch_owned_pr.py` | 362 |
+| **Total** | **4132** |

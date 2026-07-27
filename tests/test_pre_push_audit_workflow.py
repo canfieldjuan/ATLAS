@@ -113,3 +113,9 @@ def test_pre_push_audit_workflow_enrolls_deflection_report_ttl_workflow_tests() 
     text = WORKFLOW.read_text(encoding="utf-8")
 
     assert "tests/test_deflection_report_ttl_workflow.py" in text
+
+
+def test_pre_push_audit_workflow_enrolls_portable_watcher_tests() -> None:
+    text = WORKFLOW.read_text(encoding="utf-8")
+
+    assert text.count("tests/test_watch_owned_pr.py") == 2

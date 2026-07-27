@@ -5,6 +5,9 @@ import json
 from pathlib import Path
 
 SCRIPT = Path(__file__).resolve().parents[1] / "scripts" / "check_ai_reconciliation_live.py"
+ROOT = Path(__file__).resolve().parents[1]
+LIVE_WORKFLOW = ROOT / ".github" / "workflows" / "ai_reconciliation_live.yml"
+RETRIGGER_WORKFLOW = ROOT / ".github" / "workflows" / "ai_reconciliation_review_retrigger.yml"
 
 
 def load_check():
@@ -26,10 +29,33 @@ def thread(*, resolved=False, outdated=False, author="chatgpt-codex-connector[bo
     }
 
 
+def review(*, author="chatgpt-codex-connector", commit="head-a", state="COMMENTED"):
+    return {
+        "author": {"login": author},
+        "commit": {"oid": commit},
+        "state": state,
+    }
+
+
 BODY_CLEAR = "## AI reconciliation\n- All fixed or waived: Yes\n"
 BODY_OPEN = "## AI reconciliation\n- fixed or waived: No\n"
 BODY_ABSENT = "## Summary\njust a normal PR body\n"
 BOTS = ["chatgpt-codex-connector", "chatgpt-codex-connector[bot]"]
+
+
+def test_live_reconciliation_runs_on_review_thread_resolution_events():
+    text = LIVE_WORKFLOW.read_text(encoding="utf-8")
+
+    assert "pull_request_review_thread:" in text
+    assert "types: [resolved, unresolved]" in text
+    assert "github.event.pull_request.base.sha" in text
+
+
+def test_review_thread_event_retriggers_required_live_context():
+    text = RETRIGGER_WORKFLOW.read_text(encoding="utf-8")
+
+    assert "github.event.workflow_run.event == 'pull_request_review_thread'" in text
+    assert "actions/runs/${run_id}/rerun" in text
 
 
 # --- open_bot_threads filtering -------------------------------------------
@@ -39,14 +65,21 @@ def test_unresolved_bot_thread_counts():
     assert len(c.open_bot_threads([thread()], BOTS)) == 1
 
 
-def test_resolved_outdated_and_nonbot_excluded():
+def test_resolved_and_nonbot_excluded_but_outdated_unresolved_blocks():
     c = load_check()
     nodes = [
         thread(resolved=True),
         thread(outdated=True),
         thread(author="alice"),  # human reviewer, not a bot
     ]
-    assert c.open_bot_threads(nodes, BOTS) == []
+    assert c.open_bot_threads(nodes, BOTS) == [
+        {
+            "path": "atlas_brain/x.py",
+            "line": 12,
+            "author": "chatgpt-codex-connector[bot]",
+            "snippet": "use the typed config field",
+        }
+    ]
 
 
 def test_exact_codex_connector_login_matches():
@@ -63,6 +96,42 @@ def test_copilot_thread_is_not_a_codex_gate_by_default():
     c = load_check()
     nodes = [thread(author="copilot-pull-request-reviewer[bot]")]
     assert c.open_bot_threads(nodes, BOTS) == []
+
+
+def test_current_head_bot_review_requires_exact_author_and_head():
+    c = load_check()
+    reviews = [
+        review(author="codex-helper", commit="head-a"),
+        review(author="chatgpt-codex-connector", commit="old-head"),
+        review(author="chatgpt-codex-connector", commit="head-a"),
+    ]
+
+    assert c.current_head_bot_reviews(reviews, head_sha="head-a", bot_logins=BOTS) == [reviews[2]]
+
+
+def test_current_head_changes_requested_review_is_not_satisfactory_attestation():
+    c = load_check()
+    reviews = [
+        review(author="chatgpt-codex-connector", commit="head-a", state="CHANGES_REQUESTED"),
+    ]
+
+    assert c.current_head_bot_reviews(reviews, head_sha="head-a", bot_logins=BOTS) == []
+    assert c.current_head_change_requests(reviews, head_sha="head-a", bot_logins=BOTS) == reviews
+
+
+def test_parse_bot_logins_accepts_exact_defaults():
+    c = load_check()
+    assert c.parse_bot_logins("chatgpt-codex-connector,chatgpt-codex-connector[bot]") == BOTS
+
+
+def test_parse_bot_logins_rejects_legacy_codex_alias():
+    c = load_check()
+    try:
+        c.parse_bot_logins("codex")
+    except ValueError as exc:
+        assert "exact GitHub logins" in str(exc)
+    else:  # pragma: no cover - assertion clarity
+        raise AssertionError("legacy codex alias must fail instead of matching nothing")
 
 
 # --- body classification (reuses Phase-2 parser) --------------------------
@@ -109,6 +178,49 @@ def test_no_open_threads_passes_even_with_clear_body():
     assert code == 0
 
 
+def test_missing_current_head_codex_review_fails_even_without_open_threads():
+    c = load_check()
+    code, msgs = c.evaluate(
+        [thread(resolved=True)],
+        BODY_CLEAR,
+        BOTS,
+        reviews=[review(commit="old-head")],
+        head_sha="head-a",
+    )
+
+    assert code == 1
+    assert any("missing current-head Codex connector review" in msg for msg in msgs)
+
+
+def test_current_head_changes_requested_review_fails_even_without_open_threads():
+    c = load_check()
+    code, msgs = c.evaluate(
+        [thread(resolved=True)],
+        BODY_CLEAR,
+        BOTS,
+        reviews=[review(commit="head-a", state="CHANGES_REQUESTED")],
+        head_sha="head-a",
+    )
+
+    assert code == 1
+    assert any("requested changes" in msg for msg in msgs)
+    assert not any("missing current-head Codex connector review" in msg for msg in msgs)
+
+
+def test_current_head_codex_review_plus_no_open_threads_passes():
+    c = load_check()
+    code, msgs = c.evaluate(
+        [thread(resolved=True)],
+        BODY_CLEAR,
+        BOTS,
+        reviews=[review(commit="head-a")],
+        head_sha="head-a",
+    )
+
+    assert code == 0
+    assert any("current-head Codex review is present" in msg for msg in msgs)
+
+
 # --- main() via injection (no live GitHub) --------------------------------
 
 def test_main_contradiction_exit_1(tmp_path):
@@ -129,6 +241,52 @@ def test_main_clean_exit_0(tmp_path):
     assert c.main(["--threads-file", str(tf), "--body-file", str(bf)]) == 0
 
 
+def test_main_requires_current_head_review_when_head_sha_supplied(tmp_path):
+    c = load_check()
+    tf = tmp_path / "threads.json"
+    tf.write_text(json.dumps([thread(resolved=True)]), encoding="utf-8")
+    bf = tmp_path / "body.md"
+    bf.write_text(BODY_CLEAR, encoding="utf-8")
+    rf = tmp_path / "reviews.json"
+    rf.write_text(json.dumps([review(commit="old-head")]), encoding="utf-8")
+
+    assert c.main(
+        [
+            "--threads-file",
+            str(tf),
+            "--body-file",
+            str(bf),
+            "--reviews-file",
+            str(rf),
+            "--head-sha",
+            "head-a",
+        ]
+    ) == 1
+
+
+def test_main_live_fetch_fails_when_review_generation_changes(monkeypatch, tmp_path):
+    c = load_check()
+    bf = tmp_path / "body.md"
+    bf.write_text(BODY_CLEAR, encoding="utf-8")
+    calls = {"reviews": 0}
+
+    def fake_gh(args, gh):
+        query = " ".join(args)
+        if "reviews(first:100" in query:
+            calls["reviews"] += 1
+            if calls["reviews"] == 1:
+                return _review_page([], has_next=False)
+            return _review_page([review()], has_next=False)
+        if "reviewThreads" in query:
+            return _page([], has_next=False)
+        raise AssertionError(f"unexpected gh call: {args}")
+
+    monkeypatch.setattr(c, "_gh", fake_gh)
+
+    assert c.main(["--pr", "1431", "--repo", "owner/name", "--body-file", str(bf), "--gh", "gh"]) == 2
+    assert calls["reviews"] == 3
+
+
 def test_main_missing_pr_repo_exit_2():
     c = load_check()
     # No --threads-file and no --pr/--repo -> usage error, never a silent pass.
@@ -142,6 +300,13 @@ def test_main_empty_bots_exit_2(tmp_path):
     assert c.main(["--threads-file", str(tf), "--bots", "  "]) == 2
 
 
+def test_main_legacy_bot_alias_exit_2(tmp_path):
+    c = load_check()
+    tf = tmp_path / "threads.json"
+    tf.write_text("[]", encoding="utf-8")
+    assert c.main(["--threads-file", str(tf), "--bots", "codex"]) == 2
+
+
 # --- pagination: a thread past the first page must not be missed -----------
 
 def _page(nodes, *, has_next, cursor=None):
@@ -150,6 +315,18 @@ def _page(nodes, *, has_next, cursor=None):
             "pageInfo": {"hasNextPage": has_next, "endCursor": cursor},
             "nodes": nodes,
         }}}}}
+    )
+
+
+def _review_page(nodes, *, head="head-a", has_next=False, cursor=None):
+    return json.dumps(
+        {"data": {"repository": {"pullRequest": {
+            "headRefOid": head,
+            "reviews": {
+                "pageInfo": {"hasNextPage": has_next, "endCursor": cursor},
+                "nodes": nodes,
+            },
+        }}}}
     )
 
 
@@ -224,3 +401,91 @@ def test_fetch_threads_page_cap_exhaustion_fails_closed(monkeypatch):
         assert "pagination exceeded 1 pages" in str(exc)
     else:  # pragma: no cover - assertion clarity
         raise AssertionError("pagination cap exhaustion must fail closed")
+
+
+def test_fetch_review_attestation_paginates(monkeypatch):
+    c = load_check()
+    pages = [
+        _review_page([review(author="human")], has_next=True, cursor="C1"),
+        _review_page([review()], has_next=False),
+    ]
+    seen = {"n": 0}
+
+    def fake_gh(args, gh):
+        out = pages[seen["n"]]
+        seen["n"] += 1
+        return out
+
+    monkeypatch.setattr(c, "_gh", fake_gh)
+    head, reviews = c.fetch_review_attestation(1431, "owner", "name", "gh")
+
+    assert head == "head-a"
+    assert len(reviews) == 2
+    assert seen["n"] == 2
+
+
+def test_fetch_review_attestation_head_change_fails_closed(monkeypatch):
+    c = load_check()
+    pages = [
+        _review_page([], head="head-a", has_next=True, cursor="C1"),
+        _review_page([], head="head-b", has_next=False),
+    ]
+    seen = {"n": 0}
+
+    def fake_gh(args, gh):
+        out = pages[seen["n"]]
+        seen["n"] += 1
+        return out
+
+    monkeypatch.setattr(c, "_gh", fake_gh)
+
+    try:
+        c.fetch_review_attestation(1431, "owner", "name", "gh")
+    except RuntimeError as exc:
+        assert "changed PR head" in str(exc)
+    else:  # pragma: no cover - assertion clarity
+        raise AssertionError("head changes during review pagination must fail closed")
+
+
+def test_consistent_snapshot_refetches_threads_after_attestation(monkeypatch):
+    c = load_check()
+    calls = {"reviews": 0, "threads": 0}
+
+    def fake_fetch_reviews(pr, owner, name, gh):
+        calls["reviews"] += 1
+        return "head-a", [review(commit="head-a")]
+
+    def fake_fetch_threads(pr, owner, name, gh):
+        calls["threads"] += 1
+        return [thread(path=f"snapshot-{calls['threads']}.py")]
+
+    monkeypatch.setattr(c, "fetch_review_attestation", fake_fetch_reviews)
+    monkeypatch.setattr(c, "fetch_threads", fake_fetch_threads)
+
+    try:
+        c.fetch_consistent_review_thread_snapshot(1431, "owner", "name", "gh", BOTS)
+    except RuntimeError as exc:
+        assert "review thread generation changed" in str(exc)
+    else:  # pragma: no cover - assertion clarity
+        raise AssertionError("thread movement during snapshot fetch must fail closed")
+    assert calls == {"reviews": 3, "threads": 2}
+
+
+def test_consistent_snapshot_fails_when_review_generation_changes(monkeypatch):
+    c = load_check()
+    seen = {"reviews": 0}
+
+    def fake_fetch_reviews(pr, owner, name, gh):
+        seen["reviews"] += 1
+        state = "COMMENTED" if seen["reviews"] == 1 else "CHANGES_REQUESTED"
+        return "head-a", [review(commit="head-a", state=state)]
+
+    monkeypatch.setattr(c, "fetch_review_attestation", fake_fetch_reviews)
+    monkeypatch.setattr(c, "fetch_threads", lambda pr, owner, name, gh: [thread()])
+
+    try:
+        c.fetch_consistent_review_thread_snapshot(1431, "owner", "name", "gh", BOTS)
+    except RuntimeError as exc:
+        assert "Codex review generation changed" in str(exc)
+    else:  # pragma: no cover - assertion clarity
+        raise AssertionError("review movement during snapshot fetch must fail closed")
