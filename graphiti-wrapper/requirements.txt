@@ -2,8 +2,8 @@
 # FastAPI wrapper for graphiti-core with Neo4j graph database
 
 # API Server
-fastapi>=0.104.0,<0.137
-uvicorn>=0.24.0
+fastapi>=0.140.1,<0.141
+uvicorn>=0.51.0
 pydantic>=2.0.0
 pydantic-settings>=2.0.0
 
@@ -15,9 +15,9 @@ httpx>=0.25.0
 aiofiles>=25.1.0
 
 # Embeddings (optional - for local embeddings)
-sentence-transformers>=2.2.0
-numpy>=1.24.0
-torch>=2.0.0
+sentence-transformers>=5.6.1
+numpy>=2.5.1
+torch>=2.13.0
 
 # Neo4j Driver (usually bundled with graphiti-core)
 neo4j>=6.2.0
