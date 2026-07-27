@@ -453,6 +453,7 @@ class EomExecutionReceipt:
         self.receipt_dir = directory
         self._receipt_dir_device = directory_stat.st_dev
         self._receipt_dir_inode = directory_stat.st_ino
+        self._receipt_dir_owner = directory_stat.st_uid
         self._verify_hard_link_support()
         self.in_progress_path = directory / f"{stem}.in-progress.json"
         self._final_stem = stem
@@ -511,6 +512,8 @@ class EomExecutionReceipt:
             or stat.S_ISLNK(current.st_mode)
             or current.st_dev != self._receipt_dir_device
             or current.st_ino != self._receipt_dir_inode
+            or current.st_uid != self._receipt_dir_owner
+            or current.st_mode & (stat.S_IWGRP | stat.S_IWOTH)
         ):
             raise RuntimeError("receipt directory changed after validation")
 

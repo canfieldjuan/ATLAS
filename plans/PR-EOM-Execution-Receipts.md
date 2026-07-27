@@ -97,16 +97,16 @@ Max files: 7
   single private JSON artifact, so it is not a smaller established component for
   this slice.
 - Isolated receipt-persistence invariant: `EomExecutionReceipt` captures the
-  receipt directory's device/inode once, revalidates that identity before every
-  pathname mutation, writes each payload through a mode-0600 exclusive staged
-  file, publishes in-progress recovery with `os.replace`, publishes final
-  outcomes by hard-linking the complete staged payload to an exclusive
-  exit-specific name, fsyncs the receipt directory after each publication, and
-  removes any newly created final link plus fsyncs the directory when final-link
-  publication fails after linking. Evidence-update failures are latched and block
-  the next mutation boundary; final cleanup failure cannot change an already
-  committed exit outcome. There is no shared lock, lease, retry loop, or
-  multi-process coordination surface.
+  receipt directory's device/inode/owner once, revalidates that identity and
+  owner-private write permissions before every pathname mutation, writes each
+  payload through a mode-0600 exclusive staged file, publishes in-progress
+  recovery with `os.replace`, publishes final outcomes by hard-linking the
+  complete staged payload to an exclusive exit-specific name, fsyncs the receipt
+  directory after each publication, and removes any newly created final link plus
+  fsyncs the directory when final-link publication fails after linking.
+  Evidence-update failures are latched and block the next mutation boundary;
+  final cleanup failure cannot change an already committed exit outcome. There
+  is no shared lock, lease, retry loop, or multi-process coordination surface.
 - Admitted execution: the launcher rejects replacement refs, resolves one SHA
   before tracked-source validation, disables replacement-object processing,
   repository-selection/config env, and executable fsmonitor for
@@ -270,7 +270,7 @@ Parked hardening: none.
 - python -m pytest tests/test_eom_execution_receipts.py
   tests/test_eom_live_calendar_import.py tests/test_sync_eom_portal_customers.py
   tests/test_crm_read_scoping.py
-  tests/test_mcp_servers.py::TestDatabaseCRMProvider -q — 246 passed.
+  tests/test_mcp_servers.py::TestDatabaseCRMProvider -q — 248 passed.
 - python -m ruff check scripts/eom_execution_receipt.py
   scripts/import_eom_customers_live.py atlas_brain/services/crm_provider.py
   tests/test_eom_execution_receipts.py tests/test_eom_live_calendar_import.py
@@ -301,8 +301,9 @@ Parked hardening: none.
   fail closed.
 - Receipt persistence health is asserted before CRM construction, before every
   record, and after each completed record; evidence writes and publication
-  revalidate the original receipt directory inode; an in-flight contact may
-  finish, but no later contact starts after evidence storage fails.
+  revalidate the original receipt directory inode, owner, and owner-private
+  write permissions; an in-flight contact may finish, but no later contact
+  starts after evidence storage fails.
 - The mid-contact health regression uses an explicit dependency seam instead
   of mocking the first-party database singleton, preserving the maturity
   baseline.
@@ -333,9 +334,9 @@ Parked hardening: none.
 |---|---:|
 | `atlas_brain/services/crm_provider.py` | 14 |
 | `docs/EOM_RECONCILIATION_RECEIPTS.md` | 73 |
-| `plans/PR-EOM-Execution-Receipts.md` | 341 |
-| `scripts/eom_execution_receipt.py` | 705 |
+| `plans/PR-EOM-Execution-Receipts.md` | 342 |
+| `scripts/eom_execution_receipt.py` | 708 |
 | `scripts/import_eom_customers_live.py` | 228 |
-| `tests/test_eom_execution_receipts.py` | 1811 |
+| `tests/test_eom_execution_receipts.py` | 1846 |
 | `tests/test_eom_live_calendar_import.py` | 5 |
-| **Total** | **3177** |
+| **Total** | **3216** |

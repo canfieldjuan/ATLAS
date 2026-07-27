@@ -235,6 +235,41 @@ def test_receipt_directory_swap_cannot_receive_later_writes(tmp_path):
     assert "receipt directory changed" in str(raised.value.__cause__)
 
 
+def test_receipt_directory_permission_widening_blocks_later_evidence(
+    tmp_path,
+):
+    receipt_dir = tmp_path / "receipts"
+    receipt_dir.mkdir()
+    receipt_dir.chmod(0o700)
+    receipt = _receipt(receipt_dir)
+    original_in_progress = receipt.in_progress_path.read_text()
+
+    receipt_dir.chmod(0o777)
+    receipt.record_changed_contact_id(CONTACT_A)
+
+    with pytest.raises(
+        RuntimeError, match="could not durably record reconciliation evidence"
+    ) as raised:
+        receipt.assert_healthy()
+    assert "receipt directory changed" in str(raised.value.__cause__)
+    assert receipt.in_progress_path.read_text() == original_in_progress
+
+
+def test_receipt_directory_permission_widening_blocks_final_publication(
+    tmp_path,
+):
+    receipt_dir = tmp_path / "receipts"
+    receipt_dir.mkdir()
+    receipt_dir.chmod(0o700)
+    receipt = _receipt(receipt_dir)
+
+    receipt_dir.chmod(0o777)
+
+    with pytest.raises(RuntimeError, match="receipt directory changed"):
+        receipt.finalize(0)
+    assert list(receipt_dir.glob("*.exit-*.json")) == []
+
+
 def test_receipt_mode_is_independent_of_restrictive_umask(tmp_path):
     previous_umask = os.umask(0o777)
     try:
