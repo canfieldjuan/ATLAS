@@ -51,6 +51,14 @@ CONFIG_FALLBACK_RE = re.compile(
     r"|process\.env\[[^\]\n]+\]\s*(?:\|\||\?\?)\s*[^;\n]+"
     r"|Deno\.env\.get\([^)\n]+\)\s*(?:\|\||\?\?)\s*[^;\n]+"
     r"|\$\{[A-Za-z_][A-Za-z0-9_]*:(?:-|=)[^}\n]+\}"
+    # Atlas reads configuration through Pydantic Settings, not os.environ
+    # (CLAUDE.md: "Never read `os.environ` directly"). A detector that only
+    # knows os.getenv cannot fire on this repository's own guards -- including
+    # `_default_context()`, the deployed-default read behind the #2216
+    # claim-before-reject finding this rule exists to prevent.
+    r"|settings(?:\.[A-Za-z_][A-Za-z0-9_]*)+\s+or\s+[^)\n]+"
+    r"|[A-Za-z_][A-Za-z0-9_]*_settings(?:\.[A-Za-z_][A-Za-z0-9_]*)+\s+or\s+[^)\n]+"
+    r"|getattr\(\s*settings[^,\n]*,[^,\n]+,\s*[^)\n]+\)"
 )
 CONFIG_KEY_RE = re.compile(
     r"os\.(?:getenv|environ\.get)\(\s*['\"]([A-Za-z_][A-Za-z0-9_]*)['\"]"
@@ -59,6 +67,9 @@ CONFIG_KEY_RE = re.compile(
     r"|process\.env\[\s*['\"]([A-Za-z_][A-Za-z0-9_]*)['\"]\s*\]"
     r"|Deno\.env\.get\(\s*['\"]([A-Za-z_][A-Za-z0-9_]*)['\"]\s*\)"
     r"|\$\{([A-Za-z_][A-Za-z0-9_]*):(?:-|=)[^}\n]+\}"
+    # Pydantic Settings attribute path; the leaf name is the config key.
+    r"|(?:[A-Za-z_][A-Za-z0-9_]*_)?settings(?:\.[A-Za-z_][A-Za-z0-9_]*)*"
+    r"\.([A-Za-z_][A-Za-z0-9_]*)\s+or\s+"
 )
 REQUIRED_PLAN_MARKERS = (
     "deployed-config probing",
@@ -193,7 +204,15 @@ def section_covers_config_keys(plan_texts: Sequence[str], keys: set[str]) -> boo
         return True
     sections = "\n".join(deployed_config_section(text) for text in plan_texts)
     for key in keys:
-        key_re = re.compile(rf"(?<![A-Za-z0-9_]){re.escape(key)}(?![A-Za-z0-9_])")
+        # A Pydantic-Settings key is the attribute name
+        # (crm_default_business_context) while the plan naturally names the
+        # env var (ATLAS_MCP_CRM_DEFAULT_BUSINESS_CONTEXT), which carries the
+        # attribute as a trailing segment. Allow that, case-insensitively: for
+        # an advisory check the cheap error is staying silent, so a generous
+        # mention test beats a false warning that burns trust in the check.
+        key_re = re.compile(
+            rf"{re.escape(key)}(?![A-Za-z0-9_])", re.IGNORECASE
+        )
         for marker in PROBE_MARKERS:
             value = _marker_value(sections, marker) or ""
             if marker == "side-effect ordering" and "no write" in value:

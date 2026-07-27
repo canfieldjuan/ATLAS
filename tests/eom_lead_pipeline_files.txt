@@ -9,6 +9,7 @@
 tests/test_crm_read_scoping.py
 tests/test_eom_complaints_integration.py
 tests/test_eom_contacts_api_tenant_scope.py
+tests/test_eom_lead_ingress.py
 tests/test_eom_lead_pipeline_integration.py
 tests/test_eom_mailbox_context_binding.py
 tests/test_eom_recurring_appointments_integration.py

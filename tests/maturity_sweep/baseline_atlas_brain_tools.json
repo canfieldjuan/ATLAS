@@ -56,10 +56,10 @@
   },
   "atlas_brain/tools/scheduling.py": {
     "counts": {
-      "INTERNAL_MOCK": 1,
+      "INTERNAL_MOCK": 6,
       "UNGUARDED_INDEX": 6
     },
-    "score": 10
+    "score": 30
   },
   "atlas_brain/tools/security.py": {
     "counts": {

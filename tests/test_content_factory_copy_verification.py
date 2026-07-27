@@ -1556,3 +1556,218 @@ def test_invisible_span_between_sentences_does_not_undercount():
         }
     )
     assert audit.advisory_warnings
+
+
+# --- #2189 findings 2 and 3: routing-coverage scope ----------------------
+
+_ROUTING = "owner-routing-coverage"
+
+
+def _routing_warns(text):
+    from atlas_brain.services.content_factory_copy_verification import advisory_warnings
+
+    return any(w.startswith(_ROUTING) for w in advisory_warnings(text))
+
+
+# F2: polarity binds to the predicate, not to every negation later in the clause.
+_TRAILING_ADJUNCTS = [
+    "without delay",
+    "without extra cost",
+    "with no delay",
+    "before the review",
+    "after the sync",
+    "for each release",
+]
+
+
+@pytest.mark.parametrize("adjunct", _TRAILING_ADJUNCTS)
+def test_trailing_adjunct_does_not_deny_the_report_surface(adjunct):
+    """#2189: the polarity range ran to the CLAUSE end, so a bounded negation
+    in an unrelated trailing adjunct denied the report surface -- `The
+    Resolution Audit is provided without delay.` affirmatively provides the
+    report with no routing, and must still warn."""
+    assert _routing_warns(f"The Resolution Audit is provided {adjunct}.")
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        "The Resolution Audit is not provided.",
+        "The Resolution Audit is never provided.",
+        "The Resolution Audit cannot be provided.",
+    ],
+)
+def test_genuine_predicate_negation_still_denies_the_surface(text):
+    """The other direction: a negation that DOES govern the product term still
+    denies it, or the fix would just make everything warn."""
+    assert not _routing_warns(text)
+
+
+# F3: a quantified subject must carry a report item, not any noun.
+_QUANTIFIERS = ["Each", "Every", "All"]
+_NON_REPORT_NOUNS = ["invoice", "invoices", "customer", "customers", "vendor"]
+_REPORT_NOUNS = ["issue", "issues", "ticket", "tickets", "finding", "findings"]
+
+
+@pytest.mark.parametrize("quantifier", _QUANTIFIERS)
+@pytest.mark.parametrize("noun", _NON_REPORT_NOUNS)
+def test_quantified_non_report_subject_does_not_cover(quantifier, noun):
+    """`every` alone satisfied the anaphor test, so a statement about invoices
+    covered a report about issues."""
+    assert _routing_warns(
+        f"The report ranks issues. {quantifier} {noun} is assigned to Billing."
+    )
+
+
+@pytest.mark.parametrize("quantifier", _QUANTIFIERS)
+@pytest.mark.parametrize("noun", _REPORT_NOUNS)
+def test_quantified_report_item_subject_still_covers(quantifier, noun):
+    assert not _routing_warns(
+        f"The report ranks issues. {quantifier} {noun} is assigned to Billing."
+    )
+
+
+@pytest.mark.parametrize("quantifier", _QUANTIFIERS)
+@pytest.mark.parametrize(
+    "tail", ["is assigned to Billing", "of them is routed to Billing",
+             "one is routed to Billing"]
+)
+def test_bare_and_pro_form_subjects_still_cover(quantifier, tail):
+    """Genuinely bare anaphors and pro-forms keep binding: `Each is assigned`,
+    `Each of them is routed`, `Each one is routed`. A pro-form carries no
+    lexical content, so it continues the reference rather than renaming it."""
+    assert not _routing_warns(f"The report ranks issues. {quantifier} {tail}.")
+
+
+@pytest.mark.parametrize("quantifier", _QUANTIFIERS)
+@pytest.mark.parametrize("noun", _NON_REPORT_NOUNS)
+def test_partitive_does_not_smuggle_a_non_report_subject(quantifier, noun):
+    """Closing the class rather than the example: admitting `of` wholesale
+    would reproduce the same hole one token further out, since `each of the
+    invoices` is about invoices exactly as `each invoice` is."""
+    assert _routing_warns(
+        f"The report ranks issues. {quantifier} of the {noun} is routed to Billing."
+    )
+
+
+@pytest.mark.parametrize("quantifier", _QUANTIFIERS)
+@pytest.mark.parametrize("noun", _REPORT_NOUNS)
+def test_partitive_report_items_still_cover(quantifier, noun):
+    assert not _routing_warns(
+        f"The report ranks issues. {quantifier} of the {noun} is routed to Billing."
+    )
+
+
+# --- #2189 round 2: emphatic polarity + grammatical subject head ---------
+
+
+@pytest.mark.parametrize(
+    "emphatic",
+    ["is not only provided but current",
+     "is not just provided but current",
+     "not only ranks issues but drafts answers"],
+)
+def test_emphatic_not_is_not_a_denial(emphatic):
+    """The scope model already treats `not only/just` as affirmative. A second
+    verbal-negation matcher disagreed with it and dropped the warning, which
+    is the two-definitions failure this module keeps paying for (#2189)."""
+    assert _routing_warns(f"The Resolution Audit {emphatic}.")
+
+
+@pytest.mark.parametrize("noun", ["ticket", "tickets", "issue", "findings"])
+@pytest.mark.parametrize("modifier", ["in the report", "for this month", "from Support"])
+def test_pp_modified_report_subject_still_covers(noun, modifier):
+    """The head is the noun the quantifier BINDS, before any post-modifier.
+    Taking the last pre-predicate token read `each ticket in the REPORT` as
+    being about reports and regressed valid routing."""
+    assert not _routing_warns(
+        f"The report ranks issues. Each {noun} {modifier} is assigned to Billing."
+    )
+
+
+@pytest.mark.parametrize("noun", ["invoice", "invoices", "customer"])
+@pytest.mark.parametrize("modifier", ["for a ticket", "in the issue log", "for each finding"])
+def test_pp_modifier_cannot_smuggle_a_report_item(noun, modifier):
+    """The other side: a report-item noun sitting inside a MODIFIER must not
+    rescue a non-report subject -- `each invoice for a TICKET` is about
+    invoices."""
+    assert _routing_warns(
+        f"The report ranks issues. Each {noun} {modifier} is assigned to Billing."
+    )
+
+
+def test_routing_scope_pass_stays_linear():
+    """Regression guard with a number, not a description: the polarity check
+    was quadratic mid-review (7.1s reported, 4.6s measured) on a clause with
+    many product terms."""
+    import time
+
+    body = "The Resolution Audit " * 3200
+    start = time.perf_counter()
+    from atlas_brain.services.content_factory_copy_verification import advisory_warnings
+
+    advisory_warnings(body)
+    assert time.perf_counter() - start < 1.0
+
+
+# --- #2189 round 3: existence-bound denial, open modifiers, linear scopes ---
+
+
+@pytest.mark.parametrize(
+    "predicate",
+    ["does not include owner assignments", "does not list the owning team",
+     "does not name an owner", "does not contain routing"],
+)
+def test_property_negation_does_not_deny_the_report(predicate):
+    """A verbal negation denies the report SURFACE only when it denies the
+    report's existence. "does not include owner assignments" says the report
+    EXISTS and lacks routing -- suppressing there silenced the checklist
+    exactly when routing was absent (#2189 round 3)."""
+    assert _routing_warns(f"The Resolution Audit {predicate}.")
+
+
+@pytest.mark.parametrize(
+    "predicate",
+    ["is not provided", "is never provided", "cannot be provided",
+     "is not available", "was not delivered"],
+)
+def test_existence_negation_still_denies_the_report(predicate):
+    assert not _routing_warns(f"The Resolution Audit {predicate}.")
+
+
+@pytest.mark.parametrize("modifiers", [
+    "open",
+    "still open",
+    "still currently open high priority",
+    "still currently open high priority unresolved support",
+    "still currently open high priority unresolved escalated customer support",
+])
+def test_subject_head_survives_variable_length_modifiers(modifiers):
+    """Modifier length is open, so a fixed token window is the wrong shape:
+    `tickets` fell outside an eight-token slice and the warning fired on a
+    correctly routed draft."""
+    assert not _routing_warns(
+        f"The report ranks issues. Each of the {modifiers} tickets is assigned to Billing."
+    )
+
+
+def test_scope_lookup_scales_with_negation_scopes_present():
+    """The earlier linearity guard used a body that creates NO negation
+    scopes, so it could not fail -- it measured the one path already fixed.
+    This one generates a scope per repetition."""
+    import time
+
+    from atlas_brain.services.content_factory_copy_verification import (
+        advisory_warnings,
+    )
+
+    def elapsed(reps):
+        body = "Resolution Audit with no delay " * reps
+        start = time.perf_counter()
+        advisory_warnings(body)
+        return time.perf_counter() - start
+
+    # 4x the input at the pre-fix quadratic rate took 1.55s; linear is ~0.13s.
+    # A generous absolute ceiling keeps this stable on shared CI runners while
+    # still failing outright if the scan returns.
+    assert elapsed(12800) < 1.0

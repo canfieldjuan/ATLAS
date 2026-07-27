@@ -236,13 +236,14 @@ async def test_update_lead_pipeline_is_scoped_and_requires_lead(
 ):
     provider = _provider_mock(
         monkeypatch,
-        get={**SAME, "contact_type": "lead"},
+        get={**SAME, "business_context_id": "churnsignals", "contact_type": "lead"},
     )
     out = json.loads(await crm_srv.update_contact(
         UUID,
         lead_stage=" qualified ",
         lead_owner=" Juan ",
         next_follow_up_at="2026-07-24T10:00:00-05:00",
+        business_context_id="churnsignals",
     ))
 
     assert out["success"] is True
@@ -276,13 +277,47 @@ async def test_update_lead_pipeline_rejects_non_lead_and_foreign(
 
 
 @pytest.mark.asyncio
+async def test_default_eom_stage_rejection_precedes_legacy_claim(default_ctx, monkeypatch):
+    provider = _provider_mock(
+        monkeypatch,
+        get={**LEGACY_NULL, "contact_type": "lead", "lead_stage": "new"},
+    )
+
+    out = json.loads(await crm_srv.update_contact(UUID, lead_stage="qualified"))
+
+    assert out == {
+        "success": False,
+        "error": "EOM lead stages can only change through the funnel transition service",
+    }
+    provider.claim_contact.assert_not_awaited()
+    provider.update_contact.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_default_eom_non_stage_edit_keeps_legacy_claim_on_write(default_ctx, monkeypatch):
+    provider = _provider_mock(
+        monkeypatch,
+        get={**LEGACY_NULL, "contact_type": "lead", "lead_stage": "new"},
+    )
+
+    out = json.loads(await crm_srv.update_contact(UUID, full_name="Updated Legacy"))
+
+    assert out["success"] is True
+    provider.claim_contact.assert_awaited_once_with(UUID, EOM)
+    provider.update_contact.assert_awaited_once_with(
+        UUID, {"full_name": "Updated Legacy"}
+    )
+
+
+@pytest.mark.asyncio
 async def test_update_lead_pipeline_clear_and_validation(default_ctx, monkeypatch):
     provider = _provider_mock(
         monkeypatch,
-        get={**SAME, "contact_type": "lead"},
+        get={**SAME, "business_context_id": "churnsignals", "contact_type": "lead"},
     )
     cleared = json.loads(await crm_srv.update_contact(
-        UUID, clear_lead_owner=True, clear_next_follow_up=True
+        UUID, clear_lead_owner=True, clear_next_follow_up=True,
+        business_context_id="churnsignals",
     ))
     assert cleared["success"] is True
     assert provider.update_contact.await_args.args[1] == {

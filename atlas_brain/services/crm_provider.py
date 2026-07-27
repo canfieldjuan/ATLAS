@@ -17,6 +17,8 @@ Usage:
 import json
 import logging
 import hashlib
+import re
+from contextlib import asynccontextmanager
 from datetime import datetime, timezone
 from typing import Any, Optional
 from uuid import uuid4
@@ -35,6 +37,38 @@ _INTERACTION_DEDUPE_ANCHOR_KEYS = (
     "invoice_id",
     "external_id",
 )
+
+
+@asynccontextmanager
+async def _transaction_connection(pool: Any):
+    """Yield a transaction from Atlas' wrapper, asyncpg connection, or pool.
+
+    Production uses ``DatabasePool.transaction``.  Supporting a raw asyncpg
+    connection/pool keeps the migration integration proof on the real SQL path.
+    """
+    transaction = getattr(pool, "transaction", None)
+    if callable(transaction):
+        # ``asyncpg.Connection.transaction()`` enters as ``None``; the raw
+        # connection itself remains the query object. Atlas' DatabasePool and
+        # test adapters instead enter as a connection.
+        if hasattr(pool, "fetchrow") and not hasattr(pool, "acquire"):
+            async with transaction():
+                yield pool
+            return
+        async with transaction() as connection:
+            yield connection
+        return
+    # Lightweight repository test adapters expose query methods directly but
+    # deliberately do not model transaction/acquire.  They are not a runtime
+    # database implementation; preserving their direct query boundary keeps
+    # intake's injectable test surface intact while real pools take one of the
+    # transaction branches above.
+    if hasattr(pool, "fetchrow") and not hasattr(pool, "acquire"):
+        yield pool
+        return
+    async with pool.acquire() as connection:
+        async with connection.transaction():
+            yield connection
 
 
 def _normalize_interaction_text(value: Any) -> str:
@@ -62,6 +96,30 @@ def _interaction_anchor(metadata: dict[str, Any]) -> str:
     return ""
 
 
+def _interaction_attribution_identity(metadata: dict[str, Any]) -> str:
+    """Return a stable identity for a non-empty lead-attribution snapshot.
+
+    The dedupe key is stored as a digest, not this value.  Retaining a distinct
+    interaction when attribution changes avoids silently discarding the only
+    click-level evidence that a repeat form submission carries.
+    """
+
+    attribution = metadata.get("attribution")
+    if not isinstance(attribution, dict):
+        return ""
+    normalized = sorted(
+        (
+            _normalize_interaction_text(key),
+            str(value) if value is not None else "",
+        )
+        for key, value in attribution.items()
+        if _normalize_interaction_text(key)
+        and value is not None
+        and str(value).strip()
+    )
+    return json.dumps(normalized, separators=(",", ":"))
+
+
 def _interaction_dedupe_key(
     *,
     interaction_type: str,
@@ -76,8 +134,11 @@ def _interaction_dedupe_key(
     normalized_intent = _normalize_interaction_text(intent)
     metadata_dict = metadata if isinstance(metadata, dict) else {}
     anchor = _interaction_anchor(metadata_dict)
+    attribution_identity = _interaction_attribution_identity(metadata_dict)
     if anchor:
         basis = f"anchor|{normalized_type}|{anchor}"
+        if attribution_identity:
+            basis = f"{basis}|attribution|{attribution_identity}"
         return hashlib.md5(basis.encode("utf-8")).hexdigest()
     normalized_summary = _normalize_interaction_text(summary)
     if not normalized_summary:
@@ -92,7 +153,72 @@ def _interaction_dedupe_key(
             normalized_summary[:_INTERACTION_DEDUPE_SUMMARY_MAX_CHARS],
         ]
     )
+    if attribution_identity:
+        basis = f"{basis}|attribution|{attribution_identity}"
     return hashlib.md5(basis.encode("utf-8")).hexdigest()
+
+
+async def _write_contact_interaction(
+    executor: Any,
+    *,
+    contact_id: str,
+    interaction_type: str,
+    summary: str,
+    occurred_at: Optional[str] = None,
+    intent: Optional[str] = None,
+    metadata: Optional[dict[str, Any]] = None,
+) -> dict[str, Any]:
+    """Insert or return one deduplicated interaction through ``executor``.
+
+    ``executor`` is either the normal pool or a connection that already owns an
+    inbound-delivery transaction.  Keeping the SQL here lets the combined EOM
+    command use exactly the public interaction dedupe contract before it
+    releases the selected contact row.
+    """
+    interaction_id = str(uuid4())
+    occ = _coerce_occurrence(occurred_at)
+    metadata_dict = metadata or {}
+    metadata_json = json.dumps(metadata_dict)
+    dedupe_key = _interaction_dedupe_key(
+        interaction_type=interaction_type,
+        summary=summary,
+        occurred_at=occ,
+        intent=intent,
+        metadata=metadata_dict,
+    )
+    row = await executor.fetchrow(
+        """
+        WITH inserted AS (
+            INSERT INTO contact_interactions
+                (id, contact_id, interaction_type, summary, occurred_at, intent, metadata, interaction_dedupe_key)
+            VALUES ($1, $2, $3, $4, $5, $6, $7::jsonb, $8)
+            ON CONFLICT (contact_id, interaction_type, interaction_dedupe_key)
+                WHERE interaction_dedupe_key IS NOT NULL
+                DO NOTHING
+            RETURNING contact_interactions.*, true AS _inserted
+        )
+        SELECT * FROM inserted
+        UNION ALL
+        SELECT ci.*, false AS _inserted
+        FROM contact_interactions ci
+        WHERE ci.contact_id = $2
+          AND ci.interaction_type = $3
+          AND ci.interaction_dedupe_key = $8
+          AND NOT EXISTS (SELECT 1 FROM inserted)
+        LIMIT 1
+        """,
+        interaction_id,
+        contact_id,
+        interaction_type,
+        summary,
+        occ,
+        intent,
+        metadata_json,
+        dedupe_key,
+    )
+    result = dict(row) if row else {}
+    result["inserted"] = bool(result.pop("_inserted", False))
+    return result
 
 
 # ---------------------------------------------------------------------------
@@ -110,11 +236,376 @@ class DatabaseCRMProvider:
         except Exception:
             return False
 
+    async def _emit_contact_created(
+        self,
+        result: dict[str, Any],
+        *,
+        full_name: str,
+        email: Optional[str],
+        phone: Optional[str],
+    ) -> None:
+        """Emit the existing reasoning event after a committed contact insert."""
+        from ..reasoning.producers import emit_if_enabled
+
+        await emit_if_enabled(
+            "crm.contact_created",
+            "crm_provider",
+            {
+                "contact_id": result.get("id", ""),
+                "full_name": full_name,
+                "email": email,
+                "phone": phone,
+            },
+            entity_type="contact",
+            entity_id=result.get("id"),
+        )
+
+    async def _emit_interaction_logged(
+        self,
+        *,
+        contact_id: str,
+        interaction: dict[str, Any],
+        interaction_type: str,
+        intent: Optional[str],
+        summary: str,
+    ) -> None:
+        """Emit the established reasoning event after an interaction commit."""
+        from ..reasoning.producers import emit_if_enabled
+
+        await emit_if_enabled(
+            "crm.interaction_logged",
+            "crm_provider",
+            {
+                "contact_id": contact_id,
+                "interaction_id": interaction.get("id"),
+                "interaction_type": interaction_type,
+                "intent": intent,
+                "summary_preview": summary[:200],
+            },
+            entity_type="contact",
+            entity_id=contact_id,
+        )
+
+    async def resolve_or_create_eom_inbound_lead_atomic(
+        self,
+        *,
+        full_name: str,
+        phone: Optional[str],
+        email: Optional[str],
+        address: Optional[str],
+        source: str,
+        source_ref: Optional[str],
+        relay_event_id: Optional[str] = None,
+        tags: Optional[list[str]] = None,
+        interaction: Optional[dict[str, Any]] = None,
+    ) -> dict[str, Any]:
+        """Resolve EOM inbound identity under transaction-scoped advisory locks.
+
+        There is intentionally no global phone/email uniqueness migration: old
+        tenant data may contain legitimate historical duplicates.  Instead all
+        current EOM inbound writers share a stable lock for each asserted
+        identity, then perform the exact scoped lookup and insert in one
+        transaction.  A legacy row is returned untouched, never claimed or
+        merged from extracted/web-form data.
+        """
+        from .eom_lead_ingress import EOM_BUSINESS_CONTEXT_ID
+        from ..storage.database import get_db_pool
+
+        normalized_email = str(email or "").strip().lower()
+        phone_digits = re.sub(r"\D", "", str(phone or ""))
+        if len(phone_digits) < 10:
+            phone_digits = ""
+        normalized_source = str(source or "").strip()
+        normalized_source_ref = str(source_ref or "").strip()
+        normalized_relay_event_id = str(relay_event_id or "").strip()
+        identityless_relay = not phone_digits and not normalized_email
+        if identityless_relay and not (
+            normalized_source and normalized_relay_event_id
+        ):
+            raise ValueError(
+                "EOM inbound lead requires phone, email, or a stable relay event identity"
+            )
+        lock_keys = []
+        if phone_digits:
+            lock_keys.append(f"eom-inbound:phone:{phone_digits[-10:]}")
+        if normalized_email:
+            lock_keys.append(f"eom-inbound:email:{normalized_email}")
+        if normalized_relay_event_id:
+            lock_keys.append(
+                f"eom-inbound:relay:{normalized_source}:{normalized_relay_event_id}"
+            )
+
+        pool = get_db_pool()
+        result: dict[str, Any] = {}
+        interaction_result: Optional[dict[str, Any]] = None
+        async with _transaction_connection(pool) as conn:
+            lifecycle_ready = await conn.fetchval(
+                """
+                SELECT to_regclass('eom_lead_lifecycle_events') IS NOT NULL
+                   AND to_regclass('eom_inbound_delivery_receipts') IS NOT NULL
+                   AND EXISTS (
+                       SELECT 1
+                       FROM pg_trigger
+                       WHERE tgrelid = 'contacts'::regclass
+                         AND tgname = 'trg_record_eom_lead_created'
+                         AND NOT tgisinternal
+                         AND tgenabled IN ('O', 'A')
+                   )
+                """
+            )
+            if not lifecycle_ready:
+                raise RuntimeError(
+                    "EOM inbound lead ingress unavailable: lifecycle ledger or delivery receipts are not ready"
+                )
+            for lock_key in sorted(set(lock_keys)):
+                await conn.execute(
+                    "SELECT pg_advisory_xact_lock(hashtextextended($1, 0))",
+                    lock_key,
+                )
+
+            delivery_receipt_exists = False
+            if normalized_relay_event_id:
+                # A trusted delivery receipt is an idempotency anchor, not a
+                # mutable contact identity. Unlike contacts.source_ref, this
+                # ledger can retain every later delivery for one known contact.
+                existing = await conn.fetchrow(
+                    """
+                    SELECT c.*, receipt.interaction_id AS _receipt_interaction_id
+                    FROM eom_inbound_delivery_receipts AS receipt
+                    JOIN contacts AS c ON c.id = receipt.contact_id
+                    WHERE receipt.source = $1
+                      AND receipt.delivery_id = $2
+                    FOR UPDATE OF receipt, c
+                    """,
+                    normalized_source,
+                    normalized_relay_event_id,
+                )
+                if existing is not None:
+                    result = dict(existing)
+                    receipt_interaction_id = result.pop("_receipt_interaction_id", None)
+                    result["_was_created"] = False
+                    delivery_receipt_exists = True
+                    if interaction is not None:
+                        if receipt_interaction_id is not None:
+                            prior_interaction = await conn.fetchrow(
+                                "SELECT * FROM contact_interactions WHERE id = $1",
+                                receipt_interaction_id,
+                            )
+                            if prior_interaction is None:
+                                raise RuntimeError(
+                                    "EOM inbound delivery receipt references a missing interaction"
+                                )
+                            interaction_result = dict(prior_interaction)
+                            interaction_result["inserted"] = False
+                        elif result.get("status") != "archived":
+                            interaction_result = await _write_contact_interaction(
+                                conn,
+                                contact_id=str(result["id"]),
+                                **interaction,
+                            )
+                            if not interaction_result.get("id"):
+                                raise RuntimeError(
+                                    "EOM inbound interaction insert returned no receipt ID"
+                                )
+                            await conn.execute(
+                                """
+                                UPDATE eom_inbound_delivery_receipts
+                                   SET interaction_id = $3
+                                 WHERE source = $1 AND delivery_id = $2
+                                """,
+                                normalized_source,
+                                normalized_relay_event_id,
+                                interaction_result["id"],
+                            )
+                        else:
+                            # A committed delivery mapping may outlive the
+                            # contact. Replaying it must not attach a fresh
+                            # inbound event to that archived original.
+                            interaction_result = {"inserted": False}
+                if not result:
+                    # Compatibility for rows created before the dedicated
+                    # receipt table. New traffic never relies on this mutable
+                    # contact provenance as its replay ledger.
+                    existing = await conn.fetchrow(
+                        """
+                        SELECT * FROM contacts
+                        WHERE business_context_id = $1
+                          AND source = $2
+                          AND source_ref = $3
+                        ORDER BY id ASC
+                        LIMIT 1
+                        FOR UPDATE
+                        """,
+                        EOM_BUSINESS_CONTEXT_ID,
+                        normalized_source,
+                        normalized_relay_event_id,
+                    )
+                    if existing is not None:
+                        result = dict(existing)
+                        result["_was_created"] = False
+
+            async def _find(context: Optional[str], *, channel: str, value: str):
+                if context is None:
+                    if channel == "phone":
+                        return await conn.fetchrow(
+                            """
+                            SELECT * FROM contacts
+                            WHERE business_context_id IS NULL
+                              AND status != 'archived'
+                              AND RIGHT(REGEXP_REPLACE(COALESCE(phone, ''), '[^0-9]', '', 'g'), 10)
+                                  = RIGHT($1, 10)
+                            ORDER BY updated_at DESC, id ASC
+                            LIMIT 1
+                            FOR UPDATE
+                            """,
+                            value,
+                        )
+                    return await conn.fetchrow(
+                        """
+                        SELECT * FROM contacts
+                        WHERE business_context_id IS NULL
+                          AND status != 'archived'
+                          AND LOWER(email) = $1
+                        ORDER BY updated_at DESC, id ASC
+                        LIMIT 1
+                        FOR UPDATE
+                        """,
+                        value,
+                    )
+                if channel == "phone":
+                    return await conn.fetchrow(
+                        f"""
+                        SELECT * FROM contacts
+                        WHERE business_context_id = $1
+                          AND status != 'archived'
+                          AND RIGHT(REGEXP_REPLACE(COALESCE(phone, ''), '[^0-9]', '', 'g'), 10)
+                              = RIGHT($2, 10)
+                        ORDER BY updated_at DESC, id ASC
+                        LIMIT 1
+                        FOR UPDATE
+                        """,
+                        context,
+                        value,
+                    )
+                return await conn.fetchrow(
+                    f"""
+                    SELECT * FROM contacts
+                    WHERE business_context_id = $1
+                      AND status != 'archived'
+                      AND LOWER(email) = $2
+                    ORDER BY updated_at DESC, id ASC
+                    LIMIT 1
+                    FOR UPDATE
+                    """,
+                    context,
+                    value,
+                )
+
+            if not result:
+                existing = None
+                for channel, value in (("phone", phone_digits), ("email", normalized_email)):
+                    if not value:
+                        continue
+                    for context in (EOM_BUSINESS_CONTEXT_ID, None):
+                        existing = await _find(context, channel=channel, value=value)
+                        if existing is not None:
+                            result = dict(existing)
+                            result["_was_created"] = False
+                            break
+                    if result:
+                        break
+
+            if not result:
+                contact_id = str(uuid4())
+                now = datetime.now(timezone.utc)
+                row = await conn.fetchrow(
+                    """
+                    INSERT INTO contacts (
+                        id, full_name, email, phone, address, business_context_id,
+                        contact_type, status, tags, source, source_ref, lead_stage,
+                        created_at, updated_at, metadata
+                    ) VALUES (
+                        $1, $2, $3, $4, $5, $6, 'lead', 'active', $7, $8, $9, 'new',
+                        $10, $10, '{}'::jsonb
+                    ) RETURNING *
+                    """,
+                    contact_id,
+                    full_name.strip() or phone_digits or normalized_email or "Unknown",
+                    normalized_email or None,
+                    phone_digits or None,
+                    address or None,
+                    EOM_BUSINESS_CONTEXT_ID,
+                    tags or [],
+                    normalized_source or source,
+                    (
+                        normalized_relay_event_id
+                        if identityless_relay
+                        else normalized_source_ref or None
+                    ),
+                    now,
+                )
+                result = dict(row) if row else {}
+                result["_was_created"] = True
+
+            if interaction is not None and interaction_result is None:
+                interaction_result = await _write_contact_interaction(
+                    conn,
+                    contact_id=str(result["id"]),
+                    **interaction,
+                )
+                if not interaction_result.get("id"):
+                    raise RuntimeError(
+                        "EOM inbound interaction insert returned no receipt ID"
+                    )
+
+            if normalized_relay_event_id and not delivery_receipt_exists:
+                await conn.execute(
+                    """
+                    INSERT INTO eom_inbound_delivery_receipts (
+                        source, delivery_id, contact_id, interaction_id
+                    ) VALUES ($1, $2, $3, $4)
+                    """,
+                    normalized_source,
+                    normalized_relay_event_id,
+                    result["id"],
+                    interaction_result.get("id") if interaction_result else None,
+                )
+
+        # The prior find-or-create path emits contact-created reasoning events.
+        # This happens only after the transaction commits, and its secondary
+        # delivery must not turn a committed inbound lead into a failed intake.
+        if result.get("_was_created"):
+            try:
+                await self._emit_contact_created(
+                    result,
+                    full_name=full_name,
+                    email=email,
+                    phone=phone,
+                )
+            except Exception:
+                logger.warning(
+                    "EOM inbound contact-created event failed after contact %s committed",
+                    result.get("id", ""),
+                    exc_info=True,
+                )
+        if interaction_result is not None:
+            result["_inbound_interaction"] = interaction_result
+            if interaction_result.get("inserted"):
+                await self._emit_interaction_logged(
+                    contact_id=str(result["id"]),
+                    interaction=interaction_result,
+                    interaction_type=str(interaction["interaction_type"]),
+                    intent=interaction.get("intent"),
+                    summary=str(interaction["summary"]),
+                )
+        return result
+
     async def create_contact(
         self,
         data: dict[str, Any],
         *,
         merge_existing: bool = True,
+        preserve_existing: bool = False,
     ) -> dict[str, Any]:
         """
         Create a contact, returning an existing one if phone or email already matches.
@@ -213,6 +704,25 @@ class DatabaseCRMProvider:
             return result
 
         if existing is not None:
+            from .eom_lead_ingress import EOM_BUSINESS_CONTEXT_ID
+
+            existing_type = str(existing.get("contact_type") or "")
+            incoming_type = str(data.get("contact_type") or "")
+            # An EOM lead/customer type is a lifecycle decision, not inbound
+            # enrichment.  Keep a matching EOM contact unchanged when a generic
+            # creator asks for a different type; the later funnel transition
+            # service is the sole promotion path.
+            protected_eom_type = (
+                ctx == EOM_BUSINESS_CONTEXT_ID
+                and existing.get("business_context_id") == EOM_BUSINESS_CONTEXT_ID
+                and existing_type
+                and incoming_type
+                and existing_type != incoming_type
+            )
+            if preserve_existing or protected_eom_type:
+                result = dict(existing)
+                result["_was_created"] = False
+                return result
             # Merge any new non-null fields into the existing record
             _MERGEABLE = {
                 "full_name", "first_name", "last_name", "email", "phone",
@@ -286,6 +796,7 @@ class DatabaseCRMProvider:
         full_name: str,
         phone: Optional[str] = None,
         email: Optional[str] = None,
+        preserve_existing: bool = False,
         **extra: Any,
     ) -> dict[str, Any]:
         """
@@ -302,7 +813,7 @@ class DatabaseCRMProvider:
         if email:
             data["email"] = email
         data.update(extra)
-        result = await self.create_contact(data)
+        result = await self.create_contact(data, preserve_existing=preserve_existing)
 
         # Emit event for reasoning agent
         from ..reasoning.producers import emit_if_enabled
@@ -406,6 +917,8 @@ class DatabaseCRMProvider:
             "metadata", "lead_stage", "lead_owner", "next_follow_up_at",
         }
         updates = {k: v for k, v in data.items() if k in allowed}
+        lifecycle_requested = bool({"contact_type", "lead_stage"} & updates.keys())
+        ownership_requested = "business_context_id" in updates
         pipeline_requested = any(
             key in updates
             for key in ("lead_stage", "lead_owner", "next_follow_up_at")
@@ -430,6 +943,38 @@ class DatabaseCRMProvider:
         if not updates:
             return await self.get_contact(contact_id)
 
+        def _validate_eom_transition(existing: Any) -> None:
+            if existing is None:
+                return
+            from .eom_lead_ingress import EOM_BUSINESS_CONTEXT_ID
+
+            lifecycle_transition = any(
+                field in updates and updates[field] != existing[field]
+                for field in ("contact_type", "lead_stage")
+            )
+            eom_ownership_transition = (
+                ownership_requested
+                and updates["business_context_id"] != existing["business_context_id"]
+                and (
+                    existing["business_context_id"] == EOM_BUSINESS_CONTEXT_ID
+                    or updates["business_context_id"] == EOM_BUSINESS_CONTEXT_ID
+                )
+            )
+            if eom_ownership_transition:
+                raise ValueError(
+                    "EOM contact ownership changes require the funnel transition service"
+                )
+            if (
+                lifecycle_transition
+                and (
+                    existing["business_context_id"] in (None, EOM_BUSINESS_CONTEXT_ID)
+                    or updates.get("business_context_id") == EOM_BUSINESS_CONTEXT_ID
+                )
+            ):
+                raise ValueError(
+                    "EOM lead type and stage changes require the funnel transition service"
+                )
+
         updates["updated_at"] = datetime.now(timezone.utc)
         set_parts: list[str] = []
         params: list[Any] = [contact_id]
@@ -443,11 +988,34 @@ class DatabaseCRMProvider:
             params.append(require_contact_type)
             where += f" AND contact_type = ${len(params)}"
 
-        row = await pool.fetchrow(
-            f"UPDATE contacts SET {', '.join(set_parts)} WHERE {where} RETURNING *",
-            *params,
-        )
-        return dict(row) if row else None
+        async def _write(executor: Any) -> Optional[dict[str, Any]]:
+            row = await executor.fetchrow(
+                f"UPDATE contacts SET {', '.join(set_parts)} WHERE {where} RETURNING *",
+                *params,
+            )
+            return dict(row) if row else None
+
+        if lifecycle_requested or ownership_requested:
+            # This row lock is the ownership decision's linearization point:
+            # validation and the permitted write share one transaction with
+            # `claim_contact`'s compare-and-set UPDATE.
+            async with _transaction_connection(pool) as conn:
+                existing = await conn.fetchrow(
+                    """
+                    SELECT business_context_id, contact_type, lead_stage
+                    FROM contacts
+                    WHERE id = $1
+                    FOR UPDATE
+                    """,
+                    contact_id,
+                )
+                if existing is None:
+                    return None
+                _validate_eom_transition(existing)
+                return await _write(conn)
+
+        row = await _write(pool)
+        return row
 
     async def claim_contact(
         self, contact_id: str, business_context_id: str
