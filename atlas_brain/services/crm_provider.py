@@ -1562,6 +1562,146 @@ class DatabaseCRMProvider:
             )
         return [dict(r) for r in rows]
 
+    async def finalize_eom_customer_handoff(
+        self,
+        *,
+        contact_id: str,
+        tracker_customer_id: int,
+        tracker_site_id: int,
+        approval_key: str,
+        actor_id: int,
+        actor_name: str,
+    ) -> dict[str, Any]:
+        """Atomically link a tracker Customer/Site and promote one EOM lead.
+
+        The tracker commits its operational Customer and initial Site before
+        calling this method.  Atlas only stores their opaque identifiers, so it
+        cannot become a second owner for the estimate's rate or schedule.
+        """
+        from ..storage.database import get_db_pool
+        from .eom_lead_conversion import EOMLeadConversionError
+        from .eom_lead_ingress import EOM_BUSINESS_CONTEXT_ID
+
+        def _result(row: Any, *, idempotent: bool) -> dict[str, Any]:
+            return {
+                "handoff_id": str(row["id"]),
+                "contact_id": str(row["contact_id"]),
+                "tracker_customer_id": int(row["tracker_customer_id"]),
+                "tracker_site_id": int(row["tracker_site_id"]),
+                "approval_key": str(row["approval_key"]),
+                "idempotent": idempotent,
+            }
+
+        pool = get_db_pool()
+        async with _transaction_connection(pool) as conn:
+            existing_key = await conn.fetchrow(
+                """
+                SELECT id, contact_id, approval_key, tracker_customer_id, tracker_site_id
+                FROM eom_customer_handoffs
+                WHERE approval_key = $1
+                FOR UPDATE
+                """,
+                approval_key,
+            )
+            if existing_key is not None:
+                if (
+                    str(existing_key["contact_id"]) != str(contact_id)
+                    or int(existing_key["tracker_customer_id"]) != tracker_customer_id
+                    or int(existing_key["tracker_site_id"]) != tracker_site_id
+                ):
+                    raise EOMLeadConversionError(
+                        409,
+                        "Approval key already belongs to a different customer handoff",
+                    )
+                return _result(existing_key, idempotent=True)
+
+            contact = await conn.fetchrow(
+                """
+                SELECT id, business_context_id, contact_type, lead_stage, status
+                FROM contacts
+                WHERE id = $1
+                FOR UPDATE
+                """,
+                contact_id,
+            )
+            if contact is None or contact["business_context_id"] != EOM_BUSINESS_CONTEXT_ID:
+                raise EOMLeadConversionError(404, "EOM lead was not found")
+
+            existing_contact = await conn.fetchrow(
+                """
+                SELECT id, contact_id, approval_key, tracker_customer_id, tracker_site_id
+                FROM eom_customer_handoffs
+                WHERE contact_id = $1
+                FOR UPDATE
+                """,
+                contact_id,
+            )
+            if existing_contact is not None:
+                raise EOMLeadConversionError(
+                    409,
+                    "EOM lead already has a different customer handoff",
+                )
+            if contact["status"] != "active":
+                raise EOMLeadConversionError(409, "EOM lead must be active before approval")
+            if contact["contact_type"] != "lead":
+                raise EOMLeadConversionError(409, "EOM contact is not a lead")
+            if contact["lead_stage"] != "new":
+                raise EOMLeadConversionError(409, "EOM lead is not ready for approval")
+
+            handoff = await conn.fetchrow(
+                """
+                INSERT INTO eom_customer_handoffs (
+                    contact_id, approval_key, tracker_customer_id, tracker_site_id,
+                    approved_by_employee_id, approved_by_name
+                )
+                VALUES ($1, $2, $3, $4, $5, $6)
+                RETURNING id, contact_id, approval_key, tracker_customer_id, tracker_site_id
+                """,
+                contact_id,
+                approval_key,
+                tracker_customer_id,
+                tracker_site_id,
+                actor_id,
+                actor_name,
+            )
+            updated = await conn.fetchrow(
+                """
+                UPDATE contacts
+                SET contact_type = 'customer', lead_stage = NULL, updated_at = NOW()
+                WHERE id = $1
+                  AND business_context_id = $2
+                  AND contact_type = 'lead'
+                  AND lead_stage = 'new'
+                  AND status = 'active'
+                RETURNING id
+                """,
+                contact_id,
+                EOM_BUSINESS_CONTEXT_ID,
+            )
+            if updated is None:
+                raise RuntimeError("EOM lead changed during customer handoff finalization")
+            await conn.execute(
+                """
+                INSERT INTO eom_lead_lifecycle_events (
+                    contact_id, event_type, from_stage, to_stage, actor,
+                    source, operation_key, metadata
+                )
+                VALUES ($1, 'customer_approved', 'new', NULL, $2, 'eom_office', $3,
+                        jsonb_build_object(
+                            'tracker_customer_id', $4::bigint,
+                            'tracker_site_id', $5::bigint,
+                            'approved_by_employee_id', $6::bigint
+                        ))
+                """,
+                contact_id,
+                f"employee:{actor_id}:{actor_name}",
+                approval_key,
+                tracker_customer_id,
+                tracker_site_id,
+                actor_id,
+            )
+            return _result(handoff, idempotent=False)
+
 
 # ---------------------------------------------------------------------------
 # Factory

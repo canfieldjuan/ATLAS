@@ -2447,6 +2447,22 @@ class InvoicingConfig(BaseSettings):
     auto_invoice_save_path: str = Field(default="~/Desktop/Atlas-Invoices", description="Base path for saving invoice PDFs")
 
 
+class EOMFunnelConfig(BaseSettings):
+    """Private service boundary for EOM office lead conversion."""
+
+    model_config = SettingsConfigDict(
+        env_prefix="ATLAS_EOM_FUNNEL_", env_file=ENV_FILES, extra="ignore"
+    )
+    api_enabled: bool = Field(
+        default=False,
+        description="Enable the service-authenticated EOM office conversion API",
+    )
+    service_token: str = Field(
+        default="",
+        description="Bearer token accepted from the EOM time tracker only",
+    )
+
+
 class ExternalDataConfig(BaseSettings):
     """External data producers: news feeds and financial markets."""
 
@@ -6000,6 +6016,7 @@ class Settings(BaseSettings):
     call_intelligence: CallIntelligenceConfig = Field(default_factory=CallIntelligenceConfig)
     sms_intelligence: SMSIntelligenceConfig = Field(default_factory=SMSIntelligenceConfig)
     invoicing: InvoicingConfig = Field(default_factory=InvoicingConfig)
+    eom_funnel: EOMFunnelConfig = Field(default_factory=EOMFunnelConfig)
     external_data: ExternalDataConfig = Field(default_factory=ExternalDataConfig)
     b2b_churn: B2BChurnConfig = Field(default_factory=B2BChurnConfig)
     b2b_alert: B2BAlertConfig = Field(default_factory=B2BAlertConfig)
