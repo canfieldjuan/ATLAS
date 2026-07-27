@@ -42,10 +42,11 @@ Max files: 5
 
 - Acceptance criteria:
   - `parse_claims` does not classify a backticked command containing spaces as
-    a path claim.
+    a path claim, including path-headed executable commands with no flags.
   - `parse_claims` still preserves literal path claims that contain spaces.
   - `audit_claims` accepts a path claim when the path is deleted in the current
-    branch diff, including names with pathspec metacharacters.
+    branch diff, including names with pathspec metacharacters and non-ASCII
+    basenames.
   - Deleted-path resolution uses the caller-selected base ref rather than a
     hard-coded `origin/main`.
   - Local review passes its selected base ref into plan/code consistency.
@@ -71,9 +72,9 @@ seam in the enumeration; otherwise write "N/A - no boundary change."
   backticked path/function claims in plan docs.
 - Replaced-path behaviors: missing path claims still fail unless the path exists,
   is gitignored session state, or is deleted by the current branch diff.
-- Guard-relevant fields: backticked tokens, command syntax markers, whitespace
-  inside tokens, path suffixes, literal pathspecs, basename-only claims, and
-  `git diff --diff-filter=D` deleted-path entries.
+- Guard-relevant fields: backticked tokens, shell-split executable shape,
+  whitespace inside tokens, path suffixes, basename-only claims, and
+  NUL-terminated `git diff --diff-filter=D` deleted-path entries.
 - Caller x input shape: local review and CI pass a plan doc path plus selected
   base ref; pytest calls `parse_claims` and `audit_claims` directly.
 
@@ -99,13 +100,13 @@ fallback changes; otherwise write "N/A - no guard/config boundary change."
 ## Mechanism
 
 The checker keeps its existing path/function claim audit. The token predicate
-now excludes command-shaped backticked strings using shell syntax markers and
-multi-word command shape instead of a fixed command-name allowlist, while
-preserving literal path claims that contain spaces. Path resolution now has a
-second successful case after an on-disk lookup: full path claims use a
-literal-pathspec `git diff --name-status --diff-filter=D origin/main...HEAD --
-<claim>`, and basename-only claims scan the branch-deleted path list for a
-matching basename. In both cases the plan claim is valid even though the file no
+now excludes command-shaped backticked strings by shell-splitting the token,
+skipping environment assignments, and classifying the executable shape instead
+of matching command-name or marker allowlists; literal path claims with spaces
+still remain path claims. Path resolution now has a second successful case after
+an on-disk lookup: deleted-path discovery reads `git diff --name-only -z
+--diff-filter=D` and compares full path claims exactly or basename-only claims
+by basename. In both cases the plan claim is valid even though the file no
 longer exists in the checkout. Local review forwards its selected base ref to
 the checker so PRs targeting a non-`main` base compare deletions against the
 same base used by the rest of the review bundle.
@@ -139,9 +140,9 @@ Parked hardening: none.
 
 | File | LOC |
 |---|---:|
-| `plans/PR-Plan-Code-Consistency-Deleted-Paths.md` | 147 |
-| `scripts/audit_plan_code_consistency.py` | 88 |
+| `plans/PR-Plan-Code-Consistency-Deleted-Paths.md` | 148 |
+| `scripts/audit_plan_code_consistency.py` | 103 |
 | `scripts/local_pr_review.sh` | 4 |
-| `tests/test_audit_plan_code_consistency.py` | 100 |
+| `tests/test_audit_plan_code_consistency.py` | 110 |
 | `tests/test_local_pr_review.py` | 23 |
-| **Total** | **362** |
+| **Total** | **388** |

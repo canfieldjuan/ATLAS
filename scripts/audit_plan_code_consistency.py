@@ -5,6 +5,7 @@ from __future__ import annotations
 import ast
 import argparse
 import re
+import shlex
 import subprocess
 import sys
 from pathlib import Path
@@ -18,7 +19,8 @@ BACKTICK_TOKEN = re.compile(r"`([^`]+)`")
 BACKTICK_FUNC = re.compile(r"^([a-z_][a-z0-9_]{3,})\(\)$")
 PATH_EXTENSIONS = (".md", ".py", ".sh", ".json", ".yaml", ".yml", ".toml", ".txt")
 PATH_SEARCH_ROOTS = ("scripts", "plans", "docs", "tests", "atlas_brain")
-COMMAND_SYNTAX_MARKERS = (" --", " -", " && ", " || ", " | ", ";", " > ", " < ")
+EXECUTABLE_EXTENSIONS = (".py", ".sh")
+SHELL_CONTROL_TOKENS = {"&&", "||", "|", ";", ">", "<"}
 
 
 def _slice_sections(plan_text: str, section_titles: tuple[str, ...]) -> str:
@@ -48,13 +50,39 @@ def _is_path_token(token: str) -> bool:
 def _looks_like_command_token(token: str) -> bool:
     if not any(char.isspace() for char in token):
         return False
-    head = next(iter(token.split(None, 1)), "")
-    syntax_shaped = any(marker in token for marker in COMMAND_SYNTAX_MARKERS)
-    if head.endswith((".py", ".sh")) or "/" in head:
-        return syntax_shaped
-    if head.endswith(PATH_EXTENSIONS):
+
+    try:
+        parts = shlex.split(token)
+    except ValueError:
+        parts = token.split()
+    if len(parts) < 2:
         return False
-    return syntax_shaped or len(token.split()) > 1
+
+    executable_index = 0
+    while executable_index < len(parts) and _looks_like_env_assignment(
+        parts[executable_index]
+    ):
+        executable_index += 1
+    if executable_index >= len(parts) - 1:
+        return False
+
+    executable = parts[executable_index]
+    if executable in SHELL_CONTROL_TOKENS or executable.startswith("-"):
+        return False
+    if executable.endswith(EXECUTABLE_EXTENSIONS):
+        return True
+    if "/" in executable:
+        return any(part in SHELL_CONTROL_TOKENS for part in parts[executable_index + 1 :])
+    if executable.endswith(PATH_EXTENSIONS):
+        return False
+    return True
+
+
+def _looks_like_env_assignment(part: str) -> bool:
+    if "=" not in part:
+        return False
+    name, _value = part.split("=", 1)
+    return bool(re.match(r"^[A-Za-z_][A-Za-z0-9_]*$", name))
 
 
 def parse_claims(plan_text: str) -> tuple[set[str], set[str]]:
@@ -104,24 +132,7 @@ def _path_deleted_in_branch_diff(claim: str, base_ref: str = "origin/main") -> b
         return any(
             Path(path).name == claim for path in _deleted_paths_in_branch_diff(base_ref)
         )
-    result = subprocess.run(
-        [
-            "git",
-            "--literal-pathspecs",
-            "diff",
-            "--name-status",
-            "--diff-filter=D",
-            f"{base_ref}...HEAD",
-            "--",
-            claim,
-        ],
-        cwd=REPO_ROOT,
-        check=False,
-        text=True,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.DEVNULL,
-    )
-    return result.returncode == 0 and bool(result.stdout.strip())
+    return claim in _deleted_paths_in_branch_diff(base_ref)
 
 
 def _deleted_paths_in_branch_diff(base_ref: str = "origin/main") -> list[str]:
@@ -130,18 +141,22 @@ def _deleted_paths_in_branch_diff(base_ref: str = "origin/main") -> list[str]:
             "git",
             "diff",
             "--name-only",
+            "-z",
             "--diff-filter=D",
             f"{base_ref}...HEAD",
         ],
         cwd=REPO_ROOT,
         check=False,
-        text=True,
         stdout=subprocess.PIPE,
         stderr=subprocess.DEVNULL,
     )
     if result.returncode != 0:
         return []
-    return [line.strip() for line in result.stdout.splitlines() if line.strip()]
+    return [
+        item.decode("utf-8", "surrogateescape")
+        for item in result.stdout.split(b"\0")
+        if item
+    ]
 
 
 def _path_is_gitignored(claim: str) -> bool:
