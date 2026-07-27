@@ -378,3 +378,44 @@ def test_multi_operand_fallback_requires_evidence_for_each_key() -> None:
 - Side-effect ordering: no write occurs before the embedder_api_key admission passes.
 """
     assert mod.scan_diff(diff, [partial]) != []
+
+
+@pytest.mark.parametrize(
+    "value",
+    [
+        "no write before admission",
+        "no side effect before admission",
+        "never writes before admission",
+    ],
+)
+def test_negated_ordering_statements_are_accepted(value: str) -> None:
+    """The required safe ordering stated directly contains the unsafe phrase.
+    Rejecting on the substring warned on compliant plans -- a false warning on
+    correct input."""
+    assert mod._is_dispositioned_value(value, marker="side-effect ordering")
+
+
+@pytest.mark.parametrize(
+    "value",
+    [
+        "write before admission",
+        "the enqueue is a side effect before admission",
+        "the default-session probe fails",
+        "never passes",
+    ],
+)
+def test_unnegated_negative_outcomes_are_still_rejected(value: str) -> None:
+    """The other side: a genuinely failing or unsafe-ordering disposition must
+    not be accepted just because negation handling was added."""
+    assert not mod._is_dispositioned_value(value, marker="side-effect ordering")
+
+
+def test_compliant_plan_with_negated_ordering_passes_end_to_end() -> None:
+    plan = """### Deployed-config probing
+- Deployed/default config values: ATLAS_MCP_CRM_DEFAULT_BUSINESS_CONTEXT observed as effingham_maids, source render.eom.yaml.
+- Explicit value probe: an explicit crm_default_business_context passes.
+- Absent value probe: absent crm_default_business_context passes to the legacy read.
+- Default-session/default-context probe: a default session using crm_default_business_context rejects the stage change.
+- Side-effect ordering: no write before admission for crm_default_business_context.
+"""
+    assert mod.plan_has_deployed_config_probing(plan)

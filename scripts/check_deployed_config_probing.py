@@ -85,6 +85,7 @@ UNRESOLVED_VALUES_RE = re.compile(
     r"\b(?:pending|skipped|not verified|not run|tbd|unknown)\b",
     re.IGNORECASE,
 )
+_OUTCOME_NEGATORS = frozenset({"no", "never", "without", "not"})
 NEGATIVE_PROBE_RE = re.compile(
     r"\b(?:never passes?|does not pass|did not pass|fails?|failed|write before admission|"
     r"writes? before admission|side effect before admission)\b",
@@ -221,6 +222,23 @@ def _marker_value(section: str, marker: str) -> str | None:
     return None
 
 
+def _states_a_negative_outcome(normalized: str) -> bool:
+    """Whether the value reports a failing outcome, ignoring negated phrases.
+
+    `no write before admission` is the required safe ordering stated directly,
+    but it contains `write before admission`. Rejecting on the substring warned
+    on compliant plans -- a false warning on correct input, which is the
+    expensive direction here and the fastest way to teach an author that the
+    check is noise.
+    """
+    for match in NEGATIVE_PROBE_RE.finditer(normalized):
+        preceding = normalized[:match.start()].split()
+        if preceding and preceding[-1] in _OUTCOME_NEGATORS:
+            continue
+        return True
+    return False
+
+
 def _is_dispositioned_value(value: str | None, *, marker: str) -> bool:
     if value is None:
         return False
@@ -229,7 +247,7 @@ def _is_dispositioned_value(value: str | None, *, marker: str) -> bool:
         return False
     if normalized in PLACEHOLDER_VALUES or UNRESOLVED_VALUES_RE.search(normalized):
         return False
-    if NEGATIVE_PROBE_RE.search(normalized):
+    if _states_a_negative_outcome(normalized):
         return False
     if "could-not-determine" in normalized:
         if marker != "deployed/default config values":

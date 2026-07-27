@@ -147,8 +147,8 @@ Parked hardening: none.
 | `AGENTS.md` | 15 |
 | `REVIEW_MISSES.md` | 6 |
 | `plans/PR-Deployed-Config-Probing.md` | 154 |
-| `scripts/check_deployed_config_probing.py` | 344 |
+| `scripts/check_deployed_config_probing.py` | 362 |
 | `scripts/new_pr_plan.sh` | 11 |
-| `tests/test_check_deployed_config_probing.py` | 380 |
+| `tests/test_check_deployed_config_probing.py` | 421 |
 | `tests/test_new_pr_plan.py` | 6 |
-| **Total** | **962** |
+| **Total** | **1021** |
