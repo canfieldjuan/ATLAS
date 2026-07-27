@@ -426,3 +426,64 @@ def test_malformed_graphql_envelope_raises(monkeypatch, payload) -> None:
     monkeypatch.setattr(mod, "_gh", lambda *_a, **_k: json.dumps(payload))
     with pytest.raises(RuntimeError):
         mod.fetch_reviews(1, "owner", "name", "gh")
+
+
+# --- a round is a push, not a submission ------------------------------------
+#
+# 3k.2 counts pushes. Two enrolled bots review the same push, so counting
+# submissions reached the three-round window after two pushes and tripped early.
+
+
+def _review(when: str, bot: str, commit: str, findings: int, path: str = "svc/classifier.py") -> dict:
+    return {
+        "submittedAt": when,
+        "author": {"login": bot},
+        "commit": {"oid": commit},
+        "comments": {"pageInfo": {}, "nodes": [{"path": path} for _ in range(findings)]},
+    }
+
+
+def test_two_bots_on_one_push_are_one_round() -> None:
+    nodes = [
+        _review("2026-07-27T01:00:00Z", "codex", "aaa", 2),
+        _review("2026-07-27T01:05:00Z", "copilot", "aaa", 2),
+        _review("2026-07-27T02:00:00Z", "codex", "bbb", 2),
+        _review("2026-07-27T02:05:00Z", "copilot", "bbb", 2),
+    ]
+    rounds = mod.bot_review_rounds(nodes, ("codex", "copilot"))
+    assert [r.index for r in rounds] == [1, 2]
+    # findings merge: the rule asks what the round argued about, not who said it
+    assert [r.count for r in rounds] == [4, 4]
+
+
+def test_two_bots_cannot_trip_the_window_in_two_pushes() -> None:
+    """The early-trip this fixes: four submissions over two pushes."""
+    nodes = [
+        _review("2026-07-27T01:00:00Z", "codex", "aaa", 3),
+        _review("2026-07-27T01:05:00Z", "copilot", "aaa", 3),
+        _review("2026-07-27T02:00:00Z", "codex", "bbb", 3),
+        _review("2026-07-27T02:05:00Z", "copilot", "bbb", 3),
+    ]
+    assert mod.find_trip(mod.bot_review_rounds(nodes, ("codex", "copilot"))) is None
+
+
+def test_three_pushes_still_trip_with_two_bots() -> None:
+    """The other direction: grouping must not make a real loop undetectable."""
+    nodes = []
+    for index, commit in enumerate(("aaa", "bbb", "ccc")):
+        nodes.append(_review(f"2026-07-27T0{index}:00:00Z", "codex", commit, 2))
+        nodes.append(_review(f"2026-07-27T0{index}:05:00Z", "copilot", commit, 2))
+    assert mod.find_trip(mod.bot_review_rounds(nodes, ("codex", "copilot"))) is not None
+
+
+def test_reviews_without_a_commit_field_do_not_collapse() -> None:
+    """An absent oid must not merge unrelated rounds into one."""
+    nodes = [
+        {
+            "submittedAt": f"2026-07-27T0{i}:00:00Z",
+            "author": {"login": "codex"},
+            "comments": {"pageInfo": {}, "nodes": [{"path": "svc/classifier.py"}] * 3},
+        }
+        for i in range(3)
+    ]
+    assert [r.index for r in mod.bot_review_rounds(nodes, ("codex",))] == [1, 2, 3]

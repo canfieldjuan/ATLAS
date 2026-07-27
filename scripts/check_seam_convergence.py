@@ -82,6 +82,7 @@ query($owner:String!,$name:String!,$pr:Int!,$cursor:String){
         nodes{
           submittedAt
           author{ login }
+          commit{ oid }
           comments(first:100){ pageInfo{ hasNextPage } nodes{ path } }
         }
       }
@@ -101,6 +102,7 @@ class _Submission:
 
     submitted_at: str
     paths: list[str]
+    commit: str = ""
 
 
 @dataclass
@@ -149,13 +151,32 @@ def bot_review_rounds(
             for c in comments
             if isinstance(c, dict) and c.get("path")
         ]
-        dated.append(_Submission(submitted_at=submitted, paths=paths))
+        commit = str(((node.get("commit") or {}).get("oid")) or "")
+        dated.append(
+            _Submission(submitted_at=submitted, paths=paths, commit=commit)
+        )
     # ISO-8601 UTC from the GitHub API sorts lexicographically, so this is exact
     # and needs no parsing dependency.
     dated.sort(key=lambda item: item.submitted_at)
+
+    # 3k.2 counts PUSHES. Two enrolled bots review the same push, so counting
+    # submissions would reach the three-round window after two pushes and trip
+    # early. Reviews of one commit are one round; their findings merge, because
+    # the rule asks what the round argued about, not which bot said it.
+    merged: list[_Submission] = []
+    for item in dated:
+        previous = merged[-1] if merged else None
+        if previous is not None and item.commit and previous.commit == item.commit:
+            merged[-1] = _Submission(
+                submitted_at=previous.submitted_at,
+                paths=[*previous.paths, *item.paths],
+                commit=previous.commit,
+            )
+            continue
+        merged.append(item)
     return [
         ReviewRound(index=i + 1, submitted_at=item.submitted_at, paths=list(item.paths))
-        for i, item in enumerate(dated)
+        for i, item in enumerate(merged)
     ]
 
 

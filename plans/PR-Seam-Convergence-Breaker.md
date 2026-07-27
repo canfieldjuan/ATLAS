@@ -123,10 +123,13 @@ dependency).
 
 ## Mechanism
 
-`bot_review_rounds` turns each bot review submission into one round carrying the
-paths it raised findings on. **A review, not a commit, is the unit**: a review is
-the bot's response to a push, whereas one push can contain several commits, which
-would split a single round into synthetic empty ones. A bot review that raises
+`bot_review_rounds` turns bot review submissions into one round per reviewed
+commit, carrying the paths they raised findings on. **The reviewed push is the
+unit**, which is what 3k.2 counts. Keying on commits directly would split one
+push into synthetic empty rounds; keying on submissions overcounts the other
+way, because two enrolled bots review the same push and three submissions would
+reach the window after only two pushes. Reviews of one commit merge, since the
+rule asks what a round argued about rather than which bot said it. A bot review that raises
 nothing is kept as an empty round rather than dropped -- it is evidence the loop
 converged, and dropping it would splice two non-adjacent rounds together.
 
@@ -269,7 +272,7 @@ Commands run locally, with results:
 | File | LOC |
 |---|---:|
 | `.github/workflows/seam_convergence.yml` | 90 |
-| `plans/PR-Seam-Convergence-Breaker.md` | 275 |
-| `scripts/check_seam_convergence.py` | 464 |
-| `tests/test_check_seam_convergence.py` | 428 |
-| **Total** | **1257** |
+| `plans/PR-Seam-Convergence-Breaker.md` | 278 |
+| `scripts/check_seam_convergence.py` | 485 |
+| `tests/test_check_seam_convergence.py` | 489 |
+| **Total** | **1342** |
