@@ -212,7 +212,9 @@ if [ -n "$committed_plan_docs" ]; then
         [ -z "$doc" ] && continue
         if [ -f "$script_root/scripts/audit_plan_code_consistency.py" ]; then
             run_check "Plan/code consistency: $doc" \
-                python "$script_root/scripts/audit_plan_code_consistency.py" "$doc"
+                python "$script_root/scripts/audit_plan_code_consistency.py" \
+                    --base-ref "$base_ref" \
+                    "$doc"
         fi
         if [ -f "$script_root/scripts/audit_review_rules_triggered.py" ]; then
             run_check "Reviewer rules triggered: $doc" \

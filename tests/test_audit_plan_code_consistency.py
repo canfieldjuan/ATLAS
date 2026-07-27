@@ -1,6 +1,7 @@
 """Fixture tests for scripts/audit_plan_code_consistency.py."""
 from __future__ import annotations
 
+import subprocess
 import textwrap
 
 import pytest
@@ -70,11 +71,28 @@ def test_parse_claims_ignores_backticked_commands_with_paths(auditor):
         ## Verification
 
         `python scripts/audit_plan_doc.py plans/PR-Example.md`
+        `uv run scripts/audit_plan_doc.py plans/PR-Example.md`
+        `scripts/local_pr_review.sh --current-pr-body-file /tmp/body.md`
     """)
 
     paths, funcs = auditor.parse_claims(plan)
 
     assert paths == set()
+    assert funcs == set()
+
+
+def test_parse_claims_preserves_literal_paths_with_spaces(auditor):
+    plan = textwrap.dedent("""\
+        # Example
+
+        ## Scope (this PR)
+
+        `docs/path with spaces.md`
+    """)
+
+    paths, funcs = auditor.parse_claims(plan)
+
+    assert paths == {"docs/path with spaces.md"}
     assert funcs == set()
 
 
@@ -111,24 +129,47 @@ def test_audit_claims_reports_missing_path_and_function(auditor):
     assert missing_functions == ["function_that_does_not_exist"]
 
 
-def test_audit_claims_accepts_deleted_branch_path(auditor, monkeypatch):
+def test_audit_claims_accepts_deleted_branch_path_and_basename(
+    auditor, monkeypatch, tmp_path
+):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    subprocess.run(["git", "init"], cwd=repo, check=True, stdout=subprocess.DEVNULL)
+    subprocess.run(["git", "config", "user.email", "test@example.invalid"], cwd=repo, check=True)
+    subprocess.run(["git", "config", "user.name", "Test User"], cwd=repo, check=True)
+    scripts = repo / "scripts"
+    scripts.mkdir()
+    deleted = scripts / "deleted[magic].py"
+    deleted.write_text("print('bye')\n", encoding="utf-8")
+    subprocess.run(["git", "add", "."], cwd=repo, check=True)
+    subprocess.run(["git", "commit", "-m", "base"], cwd=repo, check=True, stdout=subprocess.DEVNULL)
+    subprocess.run(["git", "branch", "-M", "main"], cwd=repo, check=True)
+    subprocess.run(["git", "branch", "origin/main"], cwd=repo, check=True)
+    subprocess.run(["git", "checkout", "-b", "feature"], cwd=repo, check=True, stdout=subprocess.DEVNULL)
+    deleted.unlink()
+    subprocess.run(["git", "add", "-A"], cwd=repo, check=True)
+    subprocess.run(["git", "commit", "-m", "delete file"], cwd=repo, check=True, stdout=subprocess.DEVNULL)
+    subprocess.run(["git", "branch", "origin/feature"], cwd=repo, check=True)
+
     plan = textwrap.dedent("""\
         # Example
 
         ## Scope (this PR)
 
-        `scripts/deleted_in_this_branch.py`
+        `scripts/deleted[magic].py`
+        `deleted[magic].py`
     """)
 
-    monkeypatch.setattr(
-        auditor,
-        "_path_deleted_in_branch_diff",
-        lambda claim: claim == "scripts/deleted_in_this_branch.py",
-    )
+    monkeypatch.setattr(auditor, "REPO_ROOT", repo)
 
     missing_paths, missing_functions = auditor.audit_claims(plan)
 
     assert missing_paths == []
+    assert missing_functions == []
+
+    missing_paths, missing_functions = auditor.audit_claims(plan, "origin/feature")
+
+    assert missing_paths == ["deleted[magic].py", "scripts/deleted[magic].py"]
     assert missing_functions == []
 
 
@@ -164,3 +205,26 @@ def test_audit_claims_accepts_existing_root_path_and_function(auditor):
 
     assert missing_paths == []
     assert missing_functions == []
+
+
+def test_main_success_message_does_not_claim_every_path_exists_on_disk(
+    auditor, capsys, monkeypatch, tmp_path
+):
+    plan = tmp_path / "plan.md"
+    plan.write_text(
+        textwrap.dedent("""\
+            # Example
+
+            ## Scope (this PR)
+
+            `AGENTS.md`
+        """),
+        encoding="utf-8",
+    )
+
+    monkeypatch.setattr(auditor.sys, "argv", ["audit_plan_code_consistency.py", str(plan)])
+
+    assert auditor.main() == 0
+    out = capsys.readouterr().out
+    assert "path claims resolve" in out
+    assert "path claims exist on disk" not in out

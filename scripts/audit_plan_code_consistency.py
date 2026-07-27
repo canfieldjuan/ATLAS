@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import ast
+import argparse
 import re
 import subprocess
 import sys
@@ -17,6 +18,7 @@ BACKTICK_TOKEN = re.compile(r"`([^`]+)`")
 BACKTICK_FUNC = re.compile(r"^([a-z_][a-z0-9_]{3,})\(\)$")
 PATH_EXTENSIONS = (".md", ".py", ".sh", ".json", ".yaml", ".yml", ".toml", ".txt")
 PATH_SEARCH_ROOTS = ("scripts", "plans", "docs", "tests", "atlas_brain")
+COMMAND_SYNTAX_MARKERS = (" --", " -", " && ", " || ", " | ", ";", " > ", " < ")
 
 
 def _slice_sections(plan_text: str, section_titles: tuple[str, ...]) -> str:
@@ -38,7 +40,21 @@ def _slice_sections(plan_text: str, section_titles: tuple[str, ...]) -> str:
 
 
 def _is_path_token(token: str) -> bool:
-    return token.endswith(PATH_EXTENSIONS) and not token.startswith("-") and " " not in token
+    if token.startswith("-") or not token.endswith(PATH_EXTENSIONS):
+        return False
+    return not _looks_like_command_token(token)
+
+
+def _looks_like_command_token(token: str) -> bool:
+    if not any(char.isspace() for char in token):
+        return False
+    head = next(iter(token.split(None, 1)), "")
+    syntax_shaped = any(marker in token for marker in COMMAND_SYNTAX_MARKERS)
+    if head.endswith((".py", ".sh")) or "/" in head:
+        return syntax_shaped
+    if head.endswith(PATH_EXTENSIONS):
+        return False
+    return syntax_shaped or len(token.split()) > 1
 
 
 def parse_claims(plan_text: str) -> tuple[set[str], set[str]]:
@@ -66,11 +82,11 @@ def _candidate_roots() -> list[Path]:
     return roots
 
 
-def _path_resolves(claim: str) -> bool:
+def _path_resolves(claim: str, base_ref: str = "origin/main") -> bool:
     direct = REPO_ROOT / claim
     if direct.exists():
         return True
-    if _path_deleted_in_branch_diff(claim):
+    if _path_deleted_in_branch_diff(claim, base_ref):
         return True
     if "/" in claim:
         return False
@@ -83,9 +99,22 @@ def _path_resolves(claim: str) -> bool:
     return False
 
 
-def _path_deleted_in_branch_diff(claim: str) -> bool:
+def _path_deleted_in_branch_diff(claim: str, base_ref: str = "origin/main") -> bool:
+    if "/" not in claim:
+        return any(
+            Path(path).name == claim for path in _deleted_paths_in_branch_diff(base_ref)
+        )
     result = subprocess.run(
-        ["git", "diff", "--name-status", "--diff-filter=D", "origin/main...HEAD", "--", claim],
+        [
+            "git",
+            "--literal-pathspecs",
+            "diff",
+            "--name-status",
+            "--diff-filter=D",
+            f"{base_ref}...HEAD",
+            "--",
+            claim,
+        ],
         cwd=REPO_ROOT,
         check=False,
         text=True,
@@ -93,6 +122,26 @@ def _path_deleted_in_branch_diff(claim: str) -> bool:
         stderr=subprocess.DEVNULL,
     )
     return result.returncode == 0 and bool(result.stdout.strip())
+
+
+def _deleted_paths_in_branch_diff(base_ref: str = "origin/main") -> list[str]:
+    result = subprocess.run(
+        [
+            "git",
+            "diff",
+            "--name-only",
+            "--diff-filter=D",
+            f"{base_ref}...HEAD",
+        ],
+        cwd=REPO_ROOT,
+        check=False,
+        text=True,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.DEVNULL,
+    )
+    if result.returncode != 0:
+        return []
+    return [line.strip() for line in result.stdout.splitlines() if line.strip()]
 
 
 def _path_is_gitignored(claim: str) -> bool:
@@ -126,12 +175,14 @@ def collect_def_names() -> set[str]:
     return names
 
 
-def audit_claims(plan_text: str) -> tuple[list[str], list[str]]:
+def audit_claims(
+    plan_text: str, base_ref: str = "origin/main"
+) -> tuple[list[str], list[str]]:
     path_claims, function_claims = parse_claims(plan_text)
     missing_paths = sorted(
         claim
         for claim in path_claims
-        if not _path_is_gitignored(claim) and not _path_resolves(claim)
+        if not _path_is_gitignored(claim) and not _path_resolves(claim, base_ref)
     )
     defs = collect_def_names() if function_claims else set()
     missing_functions = sorted(function_claims - defs)
@@ -139,18 +190,21 @@ def audit_claims(plan_text: str) -> tuple[list[str], list[str]]:
 
 
 def main() -> int:
-    if len(sys.argv) != 2:
-        print("usage: audit_plan_code_consistency.py PLAN_PATH", file=sys.stderr)
-        return 2
+    parser = argparse.ArgumentParser(
+        description="Verify a plan doc's backticked code/path claims match shipped code."
+    )
+    parser.add_argument("--base-ref", default="origin/main")
+    parser.add_argument("plan_path")
+    args = parser.parse_args()
 
-    plan_path = Path(sys.argv[1])
+    plan_path = Path(args.plan_path)
     if not plan_path.exists():
         print(f"plan doc not found: {plan_path}", file=sys.stderr)
         return 2
 
     plan_text = plan_path.read_text(encoding="utf-8")
     claimed_paths, claimed_functions = parse_claims(plan_text)
-    missing_paths, missing_functions = audit_claims(plan_text)
+    missing_paths, missing_functions = audit_claims(plan_text, args.base_ref)
 
     print(f"plan doc: {plan_path}")
     print(f"path claims:     {len(claimed_paths)}")
@@ -164,7 +218,7 @@ def main() -> int:
         for claim in missing_paths:
             print(f"  - {claim}")
     else:
-        print(f"OK: all {len(claimed_paths)} path claims exist on disk.")
+        print(f"OK: all {len(claimed_paths)} path claims resolve.")
 
     if missing_functions:
         drift = True

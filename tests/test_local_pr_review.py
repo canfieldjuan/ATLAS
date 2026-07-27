@@ -98,6 +98,29 @@ def test_local_pr_review_runs_cross_session_drift_audit_when_present(tmp_path: P
     assert "drift guard ran" in result.stdout
 
 
+def test_local_pr_review_passes_base_ref_to_plan_code_consistency(tmp_path: Path) -> None:
+    repo = tmp_path / "repo"
+    _write_fixture_repo(repo)
+    plan = repo / "plans" / "PR-BaseRef.md"
+    plan.parent.mkdir(parents=True)
+    plan.write_text("# PR-BaseRef\n", encoding="utf-8")
+    _write_executable(
+        repo / "scripts" / "audit_plan_code_consistency.py",
+        "#!/usr/bin/env python3\n"
+        "import sys\n"
+        "print('plan-code args=' + ' '.join(sys.argv[1:]))\n",
+    )
+    _git(repo, "add", "plans/PR-BaseRef.md", "scripts/audit_plan_code_consistency.py")
+    _git(repo, "commit", "-m", "add plan and capture plan-code args")
+    _git(repo, "update-ref", "refs/remotes/origin/release", "HEAD^")
+
+    result = _run(repo, ["bash", "scripts/local_pr_review.sh", "origin/release"])
+
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert "Plan/code consistency: plans/PR-BaseRef.md" in result.stdout
+    assert "--base-ref origin/release plans/PR-BaseRef.md" in result.stdout
+
+
 def test_local_pr_review_runs_pr_body_contract_when_body_supplied(tmp_path: Path) -> None:
     repo = tmp_path / "repo"
     _write_fixture_repo(repo)
