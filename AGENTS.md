@@ -51,7 +51,9 @@ contract risks that are actually reachable from this PR.
   earlier X finding", it belongs merged into X, not filed separately.
 - Suppress NITs by default. Only file a NIT when it is a one-line, changed-line
   fix that materially improves readability or prevents confusion; otherwise
-  omit it or waive it as NIT-only.
+  omit it or waive it as NIT-only. In executable policy fixtures, use
+  `FILE_NIT` for the one-line exception and `WAIVE_NIT` for suppressed NIT-only
+  polish.
 - Waive out-of-scope hardening, duplicate instances, speculative risks without
   a concrete failure path, and style-only issues. A waiver must state why it is
   safe to leave out of this PR.

@@ -34,7 +34,7 @@ threads block only until each in-scope finding is fixed or explicitly waived.
 Ownership lane: workflow/codex-review-scope-reset
 Slice phase: Workflow/process
 
-Max files: 25
+Max files: 31
 
 1. Make Codex connector the only reviewer gate in active workflow docs and
    readiness tooling.
@@ -112,15 +112,21 @@ fallback changes; otherwise write "N/A - no guard/config boundary change."
 - `scripts/check_ai_reconciliation_live.py`
 - `scripts/check_review_body_r14.py`
 - `scripts/codex_review_scope_policy.py`
+- `scripts/codex_wake_bridge.py`
 - `scripts/local_pr_review.sh`
+- `scripts/pr_watcher.py`
 - `scripts/set_claude_review_status.py`
 - `scripts/watch_owned_pr.sh`
 - `tests/maturity_sweep/baseline_scripts.json`
 - `tests/test_check_ai_reconciliation_live.py`
 - `tests/test_check_review_body_r14.py`
 - `tests/test_codex_review_scope_policy.py`
+- `tests/test_codex_wake_bridge.py`
 - `tests/test_local_pr_review.py`
+- `tests/test_pr_watcher.py`
+- `tests/test_report_pr_watcher_state.py`
 - `tests/test_set_claude_review_status.py`
+- `tests/test_watch_owned_pr.py`
 
 ## Mechanism
 
@@ -134,6 +140,10 @@ The change removes the second reviewer gate instead of soft-deprecating it:
 3. Add a small deterministic classifier over synthetic review fixtures. The
    classifier is not an adapter to Codex; it is a local test oracle for the
    intended policy outcomes.
+4. Keep the portable and installed PR watchers on the same execution model:
+   non-outdated unresolved Codex threads block readiness, non-Codex threads do
+   not, and a current-head Codex review must be proven through paginated review
+   data before any ready-for-human-merge handoff.
 
 ## Intentional
 
@@ -158,13 +168,15 @@ Parked hardening: none under that predicate.
 
 ## Verification
 
-- `python scripts/codex_review_scope_policy.py --self-test` - passed, 8 fixtures.
-- `python -m pytest tests/test_codex_review_scope_policy.py tests/test_check_ai_reconciliation_live.py tests/test_local_pr_review.py tests/test_pre_push_audit_workflow.py tests/test_audit_ai_reconciliation.py tests/test_audit_plan_code_consistency.py -q` - 85 passed.
+- `python scripts/codex_review_scope_policy.py --self-test` - passed, 9 fixtures.
+- `python -m pytest tests/test_codex_wake_bridge.py tests/test_codex_review_scope_policy.py tests/test_check_ai_reconciliation_live.py tests/test_local_pr_review.py tests/test_pre_push_audit_workflow.py tests/test_audit_ai_reconciliation.py tests/test_audit_plan_code_consistency.py tests/test_pr_watcher.py tests/test_watch_owned_pr.py tests/test_report_pr_watcher_state.py -q` - 209 passed.
+- `bash -n scripts/watch_owned_pr.sh scripts/local_pr_review.sh` - passed.
+- `python -m py_compile scripts/check_ai_reconciliation_live.py scripts/codex_review_scope_policy.py scripts/audit_ai_reconciliation.py scripts/pr_watcher.py scripts/codex_wake_bridge.py` - passed.
 - `python scripts/audit_plan_code_consistency.py --base-ref origin/main plans/PR-Codex-Review-Scope-Reset.md` - passed.
 - `python scripts/sync_pr_plan.py plans/PR-Codex-Review-Scope-Reset.md origin/main --check` - passed.
 - `python scripts/audit_plan_doc.py plans/PR-Codex-Review-Scope-Reset.md` - passed.
 - `python scripts/audit_plan_doc_files_touched.py plans/PR-Codex-Review-Scope-Reset.md origin/main` - passed.
-- `python scripts/audit_plan_doc_diff_size.py plans/PR-Codex-Review-Scope-Reset.md origin/main` - passed, estimate 1966 actual 1966.
+- `python scripts/audit_plan_doc_diff_size.py plans/PR-Codex-Review-Scope-Reset.md origin/main` - passed, estimate 2769 actual 2769.
 - `git diff --check -- . ':!node_modules'` - passed.
 
 ## Estimated diff size
@@ -172,9 +184,9 @@ Parked hardening: none under that predicate.
 | File | LOC |
 |---|---:|
 | `.github/workflows/pre_push_audit.yml` | 4 |
-| `AGENTS.md` | 459 |
+| `AGENTS.md` | 461 |
 | `docs/CURRENT_PRODUCT_DISCIPLINE.md` | 2 |
-| `docs/OVERNIGHT_ARC_WORKFLOW.md` | 27 |
+| `docs/OVERNIGHT_ARC_WORKFLOW.md` | 32 |
 | `docs/PR_RECONSTRUCTION_PROTOCOL.md` | 16 |
 | `docs/REVIEWER_MERGE_GATE.md` | 84 |
 | `docs/REVIEWER_RULES.md` | 98 |
@@ -182,18 +194,24 @@ Parked hardening: none under that predicate.
 | `docs/ai_dev_operating_model.svg` | 12 |
 | `docs/ci_cd_autonomous_coding_map.md` | 4 |
 | `docs/long_running_agent_monitoring_spec.md` | 2 |
-| `plans/PR-Codex-Review-Scope-Reset.md` | 199 |
+| `plans/PR-Codex-Review-Scope-Reset.md` | 217 |
 | `scripts/audit_ai_reconciliation.py` | 6 |
-| `scripts/check_ai_reconciliation_live.py` | 32 |
+| `scripts/check_ai_reconciliation_live.py` | 36 |
 | `scripts/check_review_body_r14.py` | 202 |
-| `scripts/codex_review_scope_policy.py` | 195 |
+| `scripts/codex_review_scope_policy.py` | 206 |
+| `scripts/codex_wake_bridge.py` | 17 |
 | `scripts/local_pr_review.sh` | 17 |
+| `scripts/pr_watcher.py` | 175 |
 | `scripts/set_claude_review_status.py` | 150 |
-| `scripts/watch_owned_pr.sh` | 30 |
+| `scripts/watch_owned_pr.sh` | 49 |
 | `tests/maturity_sweep/baseline_scripts.json` | 7 |
-| `tests/test_check_ai_reconciliation_live.py` | 24 |
+| `tests/test_check_ai_reconciliation_live.py` | 31 |
 | `tests/test_check_review_body_r14.py` | 195 |
-| `tests/test_codex_review_scope_policy.py` | 71 |
+| `tests/test_codex_review_scope_policy.py` | 73 |
+| `tests/test_codex_wake_bridge.py` | 6 |
 | `tests/test_local_pr_review.py` | 28 |
+| `tests/test_pr_watcher.py` | 211 |
+| `tests/test_report_pr_watcher_state.py` | 3 |
 | `tests/test_set_claude_review_status.py` | 175 |
-| **Total** | **2099** |
+| `tests/test_watch_owned_pr.py` | 190 |
+| **Total** | **2769** |

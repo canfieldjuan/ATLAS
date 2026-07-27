@@ -36,7 +36,7 @@ import sys
 from collections.abc import Sequence
 from pathlib import Path
 
-_DEFAULT_BOTS = ("codex",)
+_DEFAULT_BOTS = ("chatgpt-codex-connector", "chatgpt-codex-connector[bot]")
 
 _THREADS_QUERY = """
 query($owner:String!,$name:String!,$pr:Int!,$cursor:String){
@@ -96,7 +96,7 @@ def open_bot_threads(nodes: Sequence[dict], bot_logins: Sequence[str]) -> list[d
     `nodes` is the GraphQL reviewThreads node list; pure so it is unit-testable
     without touching GitHub.
     """
-    wanted = tuple(b.lower() for b in bot_logins)
+    wanted = frozenset(b.lower() for b in bot_logins)
     found: list[dict] = []
     for node in nodes or []:
         if node.get("isResolved") or node.get("isOutdated"):
@@ -107,7 +107,7 @@ def open_bot_threads(nodes: Sequence[dict], bot_logins: Sequence[str]) -> list[d
         if comments:
             author = (((comments[0] or {}).get("author") or {}).get("login")) or ""
             snippet = ((comments[0] or {}).get("bodyText") or "").strip().replace("\n", " ")
-        if not any(w in author.lower() for w in wanted):
+        if author.lower() not in wanted:
             continue
         found.append(
             {
@@ -214,7 +214,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     parser.add_argument(
         "--bots",
         default=os.environ.get("ATLAS_REVIEW_BOTS", ",".join(_DEFAULT_BOTS)),
-        help="comma-separated bot login substrings (default: codex)",
+        help="comma-separated exact bot logins (default: Codex connector)",
     )
     parser.add_argument("--gh", default="gh", help="path to the gh CLI")
     parser.add_argument(

@@ -16,6 +16,7 @@ BLOCKER = "BLOCKER"
 MAJOR = "MAJOR"
 WAIVE_OUT_OF_SCOPE = "WAIVE_OUT_OF_SCOPE"
 WAIVE_NIT = "WAIVE_NIT"
+FILE_NIT = "FILE_NIT"
 WAIVE_DUPLICATE = "WAIVE_DUPLICATE"
 WAIVE_SPECULATIVE = "WAIVE_SPECULATIVE"
 NO_FINDING = "NO_FINDING"
@@ -26,6 +27,7 @@ DISPOSITIONS = frozenset(
         MAJOR,
         WAIVE_OUT_OF_SCOPE,
         WAIVE_NIT,
+        FILE_NIT,
         WAIVE_DUPLICATE,
         WAIVE_SPECULATIVE,
         NO_FINDING,
@@ -128,6 +130,15 @@ FIXTURES: tuple[Fixture, ...] = (
             "one_line_changed_code_fix": True,
             "materially_clarifies_changed_code": True,
         },
+        FILE_NIT,
+    ),
+    Fixture(
+        "in_scope_pattern_concern",
+        {
+            "in_scope": True,
+            "impact": "maintainability",
+            "concrete_failure_path": True,
+        },
         MAJOR,
     ),
 )
@@ -144,7 +155,7 @@ def classify_finding(finding: Mapping[str, object]) -> str:
         if finding.get("one_line_changed_code_fix") and finding.get(
             "materially_clarifies_changed_code"
         ):
-            return MAJOR
+            return FILE_NIT
         return WAIVE_NIT
     if finding.get("in_scope") is False:
         return WAIVE_OUT_OF_SCOPE

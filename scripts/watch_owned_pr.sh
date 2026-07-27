@@ -44,6 +44,7 @@ if [ "${#REQ_CONTEXTS[@]}" -eq 0 ]; then
 fi
 REQ_JSON=$(printf '%s\n' "${REQ_CONTEXTS[@]}" | jq -R . | jq -cs .)
 REQ_TOTAL=${#REQ_CONTEXTS[@]}
+CODEX_LOGINS_JSON='["chatgpt-codex-connector","chatgpt-codex-connector[bot]"]'
 # Required contexts are pinned to the GitHub Actions app (same pin as
 # check_required_status_checks.py) so a same-named check published by any
 # other app can neither green nor red the required gate.
@@ -55,16 +56,34 @@ for i in $(seq 0 "$CYCLES"); do
   [ "$i" -gt 0 ] && sleep 1740
   CUR=$(GH_TOKEN="$TOK" gh api "repos/$REPO/pulls/$PR" --jq '.head.sha' 2>/dev/null) || { echo "cycle $i: API error, retrying"; continue; }
   if [ "$CUR" != "$SHA" ]; then echo "HEAD-MOVED: ${SHA:0:9} -> ${CUR:0:9} (new push; reconcile + re-arm on new head)"; exit 0; fi
-  ST=$(GH_TOKEN="$TOK" gh api graphql -f query="{ repository(owner:\"$OWNER\",name:\"$NAME\"){ pullRequest(number:$PR){ state merged mergeable mergeStateStatus reviewDecision reviews(first:100){ nodes{ author{ login } commit{ oid } state } } reviewThreads(first:100){ pageInfo{ hasNextPage } nodes{ isResolved isOutdated comments(first:1){ nodes{ author{ login } } } } } } } }" 2>/dev/null)
+  THREAD_QUERY='query($owner:String!,$name:String!,$pr:Int!){ repository(owner:$owner,name:$name){ pullRequest(number:$pr){ state merged mergeable mergeStateStatus reviewDecision reviewThreads(first:100){ pageInfo{ hasNextPage } nodes{ isResolved isOutdated comments(first:1){ nodes{ author{ login } } } } } } } }'
+  ST=$(GH_TOKEN="$TOK" gh api graphql -f query="$THREAD_QUERY" -f owner="$OWNER" -f name="$NAME" -F pr="$PR" 2>/dev/null)
   STATE=$(echo "$ST" | jq -r '.data.repository.pullRequest | .state + (if .merged then "/merged" else "" end)')
   MERGEABLE=$(echo "$ST" | jq -r '.data.repository.pullRequest.mergeable')
   MSTATE=$(echo "$ST" | jq -r '.data.repository.pullRequest.mergeStateStatus // "UNKNOWN"')
   DECISION=$(echo "$ST" | jq -r '.data.repository.pullRequest.reviewDecision // "NONE"')
-  CODEX_HEAD_REVIEWS=$(echo "$ST" | jq --arg sha "$SHA" '[.data.repository.pullRequest.reviews.nodes[]? | select(((.author.login // "") | ascii_downcase | contains("codex")) and ((.commit.oid // "") == $sha) and ((.state // "") | IN("COMMENTED","APPROVED","CHANGES_REQUESTED")))] | length')
-  UNRES=$(echo "$ST" | jq '[.data.repository.pullRequest.reviewThreads.nodes[]? | select((.isResolved==false) and (.isOutdated!=true) and (((.comments.nodes[0].author.login // "") | ascii_downcase | contains("codex"))))] | length')
+  UNRES=$(echo "$ST" | jq --argjson codex "$CODEX_LOGINS_JSON" '[.data.repository.pullRequest.reviewThreads.nodes[]? | select((.isResolved==false) and (.isOutdated!=true) and ((((.comments.nodes[0].author.login // "") | ascii_downcase) as $login | $codex | index($login)) != null))] | length')
   MORE=$(echo "$ST" | jq -r '.data.repository.pullRequest.reviewThreads.pageInfo.hasNextPage')
   # Fail closed when more thread pages exist than we fetched.
   [ "$MORE" = "true" ] && UNRES="${UNRES}+unfetched-pages"
+  REVIEW_QUERY='query($owner:String!,$name:String!,$pr:Int!,$cursor:String){ repository(owner:$owner,name:$name){ pullRequest(number:$pr){ reviews(first:100, after:$cursor){ pageInfo{ hasNextPage endCursor } nodes{ author{ login } commit{ oid } state } } } } }'
+  REVIEW_NODES='[]'
+  REVIEW_CURSOR=''
+  REVIEW_PAGES=0
+  REVIEWS_COMPLETE=true
+  while :; do
+    REVIEW_ARGS=(gh api graphql -f query="$REVIEW_QUERY" -f owner="$OWNER" -f name="$NAME" -F pr="$PR")
+    [ -n "$REVIEW_CURSOR" ] && REVIEW_ARGS+=(-f cursor="$REVIEW_CURSOR")
+    REVIEW_PAGE=$(GH_TOKEN="$TOK" "${REVIEW_ARGS[@]}" 2>/dev/null) || { REVIEWS_COMPLETE=false; break; }
+    PAGE_NODES=$(echo "$REVIEW_PAGE" | jq -c '.data.repository.pullRequest.reviews.nodes // []') || { REVIEWS_COMPLETE=false; break; }
+    REVIEW_NODES=$(jq -n -c --argjson existing "$REVIEW_NODES" --argjson new "$PAGE_NODES" '$existing + $new') || { REVIEWS_COMPLETE=false; break; }
+    REVIEW_PAGES=$((REVIEW_PAGES + 1))
+    HAS_NEXT=$(echo "$REVIEW_PAGE" | jq -r '.data.repository.pullRequest.reviews.pageInfo.hasNextPage')
+    [ "$HAS_NEXT" = "true" ] || break
+    REVIEW_CURSOR=$(echo "$REVIEW_PAGE" | jq -r '.data.repository.pullRequest.reviews.pageInfo.endCursor // empty')
+    [ -n "$REVIEW_CURSOR" ] || { REVIEWS_COMPLETE=false; break; }
+  done
+  CODEX_HEAD_REVIEWS=$(echo "$REVIEW_NODES" | jq --arg sha "$SHA" --argjson codex "$CODEX_LOGINS_JSON" '[.[]? | select(((((.author.login // "") | ascii_downcase) as $login | $codex | index($login)) != null) and ((.commit.oid // "") == $sha) and ((.state // "") | IN("COMMENTED","APPROVED","CHANGES_REQUESTED")))] | length')
   # --paginate + re-wrap: required contexts beyond the first 100 runs stay visible
   CR=$(GH_TOKEN="$TOK" gh api --paginate "repos/$REPO/commits/$SHA/check-runs?per_page=100" 2>/dev/null | jq -s '{check_runs:[.[].check_runs[]]}')
   PEND=$(echo "$CR" | jq '[.check_runs[]|select(.status!="completed")]|length')
@@ -79,10 +98,10 @@ for i in $(seq 0 "$CYCLES"); do
   # completed one; ANY not-completed run of a required name (across all runs,
   # not just the latest-pick) blocks readiness until it settles.
   REQUNSETTLED=$(echo "$CR" | jq --argjson app "$REQ_APP_ID" --argjson req "$REQ_JSON" '[.check_runs[]|select(.app.id==$app)|select(.name as $n|$req|index($n))|select(.status!="completed")]|length')
-  echo "cycle $i $(date +%H:%M): state=$STATE req-green=$REQGREEN/$REQ_TOTAL req-red=$REQRED req-unsettled=$REQUNSETTLED pending=$PEND codex-head-reviews=$CODEX_HEAD_REVIEWS threads=$UNRES decision=$DECISION mergeable=$MERGEABLE merge-state=$MSTATE"
+  echo "cycle $i $(date +%H:%M): state=$STATE req-green=$REQGREEN/$REQ_TOTAL req-red=$REQRED req-unsettled=$REQUNSETTLED pending=$PEND codex-head-reviews=$CODEX_HEAD_REVIEWS review-pages=$REVIEW_PAGES reviews-complete=$REVIEWS_COMPLETE threads=$UNRES decision=$DECISION mergeable=$MERGEABLE merge-state=$MSTATE"
   case "$STATE" in MERGED/merged|CLOSED) echo "TERMINAL: PR $STATE"; exit 0;; esac
   # Definite negatives are actionable on ANY cycle, including the first.
-  if [ "$REQRED" -gt 0 ] || [ "$UNRES" != "0" ] || [ "$DECISION" = "CHANGES_REQUESTED" ] || [ "$CODEX_HEAD_REVIEWS" -eq 0 ]; then
+  if [ "$REQRED" -gt 0 ] || [ "$UNRES" != "0" ] || [ "$DECISION" = "CHANGES_REQUESTED" ] || [ "$REVIEWS_COMPLETE" != "true" ]; then
     echo "ACTIONABLE: req-red=$REQRED codex-head-reviews=$CODEX_HEAD_REVIEWS threads=$UNRES decision=$DECISION -> reconcile/fix, push, re-arm"; exit 0
   fi
   # Readiness is presence-based: every required context must be reporting

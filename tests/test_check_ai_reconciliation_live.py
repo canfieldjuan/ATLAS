@@ -29,7 +29,7 @@ def thread(*, resolved=False, outdated=False, author="chatgpt-codex-connector[bo
 BODY_CLEAR = "## AI reconciliation\n- All fixed or waived: Yes\n"
 BODY_OPEN = "## AI reconciliation\n- fixed or waived: No\n"
 BODY_ABSENT = "## Summary\njust a normal PR body\n"
-BOTS = ["codex"]
+BOTS = ["chatgpt-codex-connector", "chatgpt-codex-connector[bot]"]
 
 
 # --- open_bot_threads filtering -------------------------------------------
@@ -49,9 +49,14 @@ def test_resolved_outdated_and_nonbot_excluded():
     assert c.open_bot_threads(nodes, BOTS) == []
 
 
-def test_bot_login_substring_match():
+def test_exact_codex_connector_login_matches():
     c = load_check()
     assert c.open_bot_threads([thread(author="chatgpt-codex-connector[bot]")], BOTS)
+
+
+def test_codex_substring_helper_account_does_not_match():
+    c = load_check()
+    assert c.open_bot_threads([thread(author="codex-helper")], BOTS) == []
 
 
 def test_copilot_thread_is_not_a_codex_gate_by_default():

@@ -79,7 +79,9 @@ overnight deltas:
   reviewer boundary probe BEFORE pushing -- both error directions (fail-open
   AND over-reject), boundary values, at least one negative test. Cheaper than
   a review round.
-- **Merge:** required checks green + 0 unresolved Codex threads + no
+- **Merge:** required checks green + a current-head review by the exact Codex
+  connector identity (`chatgpt-codex-connector` or
+  `chatgpt-codex-connector[bot]`) + 0 unresolved Codex connector threads + no
   CHANGES_REQUESTED + clean tree + local==remote -> merge, teardown, next
   slice. Log for the report; do not ping the operator per merge. Exception:
   documentation-only PRs hold for bot review before merging (doc PRs that
@@ -138,9 +140,12 @@ there is something to act on:
   required branch-protection context (read at runtime from
   `scripts/check_required_status_checks.py`, so the gate cannot drift from
   the canonical list) must be present and reporting success, plus
-  0 unresolved Codex threads, no CHANGES_REQUESTED, and mergeable. A context
-  that has not started yet keeps readiness false. Run the pre-merge checklist
-  (clean tree, local==remote, threads still 0), merge, alert.
+  a current-head review by the exact Codex connector identity, 0 unresolved
+  Codex connector threads, no CHANGES_REQUESTED, and mergeable. A context that
+  has not started yet keeps readiness false; a missing current-head Codex
+  connector review keeps the watcher polling instead of reporting builder
+  action. Run the pre-merge checklist (clean tree, local==remote, threads still
+  0 and current-head connector review still present), merge, alert.
 
 The watcher itself never merges and never holds merge authority (AGENTS
 3c.1.1); it only reports states.
