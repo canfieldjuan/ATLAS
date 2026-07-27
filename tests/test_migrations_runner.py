@@ -145,6 +145,27 @@ def test_contact_lead_pipeline_migration_is_additive_and_indexed():
     assert "DROP " not in migration.upper()
 
 
+def test_eom_lead_review_queue_index_matches_keyset_order():
+    migration = (
+        Path(__file__).resolve().parent.parent
+        / "atlas_brain"
+        / "storage"
+        / "migrations"
+        / "355_eom_lead_review_queue_index.sql"
+    ).read_text()
+
+    assert (
+        "DROP INDEX CONCURRENTLY IF EXISTS idx_contacts_eom_lead_review_queue"
+        in migration
+    )
+    assert "CREATE INDEX CONCURRENTLY idx_contacts_eom_lead_review_queue" in migration
+    assert "ON contacts (created_at DESC, id DESC)" in migration
+    assert "business_context_id = 'effingham_maids'" in migration
+    assert "status = 'active'" in migration
+    assert "contact_type = 'lead'" in migration
+    assert "lead_stage = 'new'" in migration
+
+
 def test_customer_service_ticket_migration_is_additive_tenant_scoped_and_indexed():
     migration = (
         Path(__file__).resolve().parent.parent
@@ -501,6 +522,24 @@ async def test_marked_migration_rejects_concurrently_ddl_before_a_transaction(tm
 
 
 @pytest.mark.asyncio
+async def test_marked_migration_ignores_concurrently_mentions_in_comments(tmp_path):
+    """The atomic guard keys off executable SQL, not rollback notes."""
+    from atlas_brain.storage.migrations import run_migrations
+
+    (tmp_path / "900_atomic_comment.sql").write_text(
+        "-- atlas: atomic-bookkeeping\n"
+        "CREATE TABLE atomic_probe (id int);\n"
+        "-- Rollback with CREATE INDEX CONCURRENTLY in a later migration if needed.\n"
+    )
+    pool = _SingleConnectionPool(tmp_path)
+
+    await run_migrations(pool, migrations_dir=tmp_path)
+
+    assert pool.atomic_transactions == 1
+    assert any("CREATE TABLE atomic_probe" in sql for sql in pool.applied_sql)
+
+
+@pytest.mark.asyncio
 async def test_migration_sql_does_not_run_inside_a_transaction(tmp_path):
     """F3 second side: five packaged migrations use CREATE INDEX
     CONCURRENTLY, which Postgres refuses inside a transaction block. The run
@@ -535,6 +574,109 @@ async def test_migration_sql_does_not_run_inside_a_transaction(tmp_path):
 
     assert not started, f"migration run opened a transaction: {started}"
     assert any("CONCURRENTLY" in sql for sql in pool.applied_sql)
+
+
+@pytest.mark.asyncio
+async def test_non_atomic_migration_batches_run_statement_by_statement(tmp_path):
+    """Concurrent index repair needs separate autocommit statements.
+
+    PostgreSQL rejects ``DROP/CREATE INDEX CONCURRENTLY`` if the runner batches
+    them into one query string. The single acquired connection is preserved; only
+    the SQL execution granularity changes.
+    """
+    from atlas_brain.storage.migrations import run_migrations
+
+    (tmp_path / "001_concurrent_repair.sql").write_text(
+        "DROP INDEX CONCURRENTLY IF EXISTS idx_x;\n"
+        "CREATE INDEX CONCURRENTLY idx_x ON t (c);\n"
+    )
+    pool = _SingleConnectionPool(tmp_path)
+
+    await run_migrations(pool, migrations_dir=tmp_path)
+
+    migration_sql = [
+        " ".join(sql.split())
+        for sql in pool.applied_sql
+        if "CONCURRENTLY" in sql
+    ]
+    assert migration_sql == [
+        "DROP INDEX CONCURRENTLY IF EXISTS idx_x;",
+        "CREATE INDEX CONCURRENTLY idx_x ON t (c);",
+    ]
+
+
+@pytest.mark.asyncio
+async def test_non_concurrent_unmarked_migration_still_runs_as_one_batch(tmp_path):
+    """Ordinary migrations keep their previous implicit all-or-nothing batch."""
+    from atlas_brain.storage.migrations import run_migrations
+
+    (tmp_path / "001_constraints.sql").write_text(
+        "ALTER TABLE tasks ADD CONSTRAINT chk_task_type CHECK (task_type <> '');\n"
+        "ALTER TABLE tasks ADD CONSTRAINT chk_task_status CHECK (status <> '');\n"
+    )
+    pool = _SingleConnectionPool(tmp_path)
+
+    await run_migrations(pool, migrations_dir=tmp_path)
+
+    migration_sql = [
+        " ".join(sql.split())
+        for sql in pool.applied_sql
+        if "ALTER TABLE tasks ADD CONSTRAINT" in sql
+    ]
+    assert migration_sql == [
+        "ALTER TABLE tasks ADD CONSTRAINT chk_task_type CHECK (task_type <> ''); "
+        "ALTER TABLE tasks ADD CONSTRAINT chk_task_status CHECK (status <> '');"
+    ]
+
+
+@pytest.mark.asyncio
+async def test_non_concurrent_unmarked_migration_ignores_concurrently_comments(tmp_path):
+    """Comments must not opt ordinary migrations into autocommit splitting."""
+    from atlas_brain.storage.migrations import run_migrations
+
+    (tmp_path / "001_comment_only_concurrent.sql").write_text(
+        "ALTER TABLE llm_usage ADD CONSTRAINT chk_usage CHECK (tokens >= 0);\n"
+        "DO $$\n"
+        "BEGIN\n"
+        "    RAISE NOTICE 'no concurrent DDL here';\n"
+        "END $$;\n"
+        "-- Later replacement can use CREATE INDEX CONCURRENTLY.\n"
+        "/* CREATE INDEX CONCURRENTLY cannot run in this migration. */\n"
+    )
+    pool = _SingleConnectionPool(tmp_path)
+
+    await run_migrations(pool, migrations_dir=tmp_path)
+
+    migration_sql = [
+        " ".join(sql.split())
+        for sql in pool.applied_sql
+        if "ALTER TABLE llm_usage ADD CONSTRAINT" in sql
+    ]
+    assert migration_sql == [
+        "ALTER TABLE llm_usage ADD CONSTRAINT chk_usage CHECK (tokens >= 0); "
+        "DO $$ BEGIN RAISE NOTICE 'no concurrent DDL here'; END $$; "
+        "-- Later replacement can use CREATE INDEX CONCURRENTLY. "
+        "/* CREATE INDEX CONCURRENTLY cannot run in this migration. */"
+    ]
+
+
+def test_sql_statement_splitter_preserves_plpgsql_and_comments():
+    from atlas_brain.storage.migrations import _split_sql_statements
+
+    sql = """
+    -- leading comment; not a split
+    DO $$
+    BEGIN
+        RAISE NOTICE 'inside; body';
+    END $$;
+    CREATE INDEX CONCURRENTLY idx_x ON t ("semi;colon");
+    """
+
+    statements = _split_sql_statements(sql)
+
+    assert len(statements) == 2
+    assert "RAISE NOTICE 'inside; body';" in statements[0]
+    assert statements[1] == 'CREATE INDEX CONCURRENTLY idx_x ON t ("semi;colon");'
 
 
 async def _acquire_banning(pool, conn_cls):

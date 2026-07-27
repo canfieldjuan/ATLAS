@@ -2,11 +2,14 @@
 
 from __future__ import annotations
 
+import base64
+import binascii
 import re
+from datetime import datetime
 from typing import Annotated, Any
 from uuid import UUID
 
-from fastapi import APIRouter, Depends, Header, HTTPException, status
+from fastapi import APIRouter, Depends, Header, HTTPException, Query, status
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, ConfigDict, Field
 
@@ -21,7 +24,10 @@ from .funnel_auth import require_eom_funnel_actor, require_eom_funnel_api
 router = APIRouter(prefix="/eom-funnel", tags=["eom-funnel"])
 
 _APPROVAL_KEY_PATTERN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:-]{15,127}$")
+_LEAD_REVIEW_CURSOR_PATTERN = re.compile(r"^[A-Za-z0-9_-]{16,512}$")
 _MAX_SIGNED_BIGINT = 2**63 - 1
+_DEFAULT_LEAD_REVIEW_LIMIT = 100
+_MAX_LEAD_REVIEW_LIMIT = 200
 
 
 class EOMCustomerHandoffRequest(BaseModel):
@@ -37,8 +43,61 @@ class EOMCustomerHandoffRequest(BaseModel):
     ]
 
 
+class EOMLeadReviewItem(BaseModel):
+    """The only CRM identity data the office-review queue may expose."""
+
+    model_config = ConfigDict(extra="forbid", populate_by_name=True)
+
+    contact_id: UUID = Field(serialization_alias="contactId")
+    full_name: str = Field(serialization_alias="fullName")
+    email: str | None = None
+    phone: str | None = None
+    address: str | None = None
+    source: str | None = None
+    created_at: datetime = Field(serialization_alias="createdAt")
+
+
+class EOMLeadReviewResponse(BaseModel):
+    """Closed response envelope for the tracker-owned office queue."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    leads: list[EOMLeadReviewItem]
+    limit: Annotated[int, Field(ge=1, le=_MAX_LEAD_REVIEW_LIMIT)]
+    cursor: str | None = None
+    has_more: bool = Field(serialization_alias="hasMore")
+    next_cursor: str | None = Field(
+        default=None,
+        serialization_alias="nextCursor",
+    )
+
+
 def _crm_dependency() -> Any:
     return get_crm_provider()
+
+
+def _encode_lead_review_cursor(*, created_at: datetime, contact_id: UUID) -> str:
+    payload = f"{created_at.isoformat()}|{contact_id}"
+    return base64.urlsafe_b64encode(payload.encode("utf-8")).decode("ascii").rstrip("=")
+
+
+def _decode_lead_review_cursor(cursor: str | None) -> dict[str, object] | None:
+    if cursor is None:
+        return None
+    token = cursor.strip()
+    if not _LEAD_REVIEW_CURSOR_PATTERN.fullmatch(token):
+        raise HTTPException(status_code=422, detail="Invalid lead review cursor")
+    padding = "=" * (-len(token) % 4)
+    try:
+        raw = base64.urlsafe_b64decode((token + padding).encode("ascii"))
+        created_at_text, contact_id_text = raw.decode("utf-8").split("|", 1)
+        created_at = datetime.fromisoformat(created_at_text)
+        contact_id = UUID(contact_id_text)
+    except (ValueError, UnicodeDecodeError, binascii.Error):
+        raise HTTPException(status_code=422, detail="Invalid lead review cursor") from None
+    if created_at.tzinfo is None:
+        raise HTTPException(status_code=422, detail="Invalid lead review cursor")
+    return {"created_at": created_at, "contact_id": contact_id}
 
 
 def _approval_key_dependency(
@@ -54,6 +113,54 @@ def _approval_key_dependency(
             ),
         )
     return key
+
+
+@router.get(
+    "/leads",
+    response_model=EOMLeadReviewResponse,
+    dependencies=[Depends(require_eom_funnel_api)],
+)
+async def list_eom_lead_review_items(
+    limit: Annotated[
+        int,
+        Query(ge=1, le=_MAX_LEAD_REVIEW_LIMIT),
+    ] = _DEFAULT_LEAD_REVIEW_LIMIT,
+    cursor: Annotated[str | None, Query(min_length=16, max_length=512)] = None,
+    _actor: dict[str, object] = Depends(require_eom_funnel_actor),
+    crm: Any = Depends(_crm_dependency),
+) -> EOMLeadReviewResponse:
+    """List only active EOM ``lead/new`` records for office review.
+
+    The tracker keeps the service bearer and the browser never calls this
+    route directly. Reading this projection does not alter CRM lifecycle,
+    interactions, or customer-handoff state.
+    """
+    decoded_cursor = _decode_lead_review_cursor(cursor)
+    rows = await crm.list_eom_new_lead_review_items(
+        limit=limit + 1,
+        cursor_created_at=(
+            decoded_cursor["created_at"] if decoded_cursor is not None else None
+        ),
+        cursor_contact_id=(
+            decoded_cursor["contact_id"] if decoded_cursor is not None else None
+        ),
+    )
+    page_rows = rows[:limit]
+    has_more = len(rows) > limit
+    next_cursor = None
+    if has_more and page_rows:
+        last_row = EOMLeadReviewItem.model_validate(page_rows[-1])
+        next_cursor = _encode_lead_review_cursor(
+            created_at=last_row.created_at,
+            contact_id=last_row.contact_id,
+        )
+    return EOMLeadReviewResponse(
+        leads=[EOMLeadReviewItem.model_validate(row) for row in page_rows],
+        limit=limit,
+        cursor=cursor,
+        has_more=has_more,
+        next_cursor=next_cursor,
+    )
 
 
 @router.post(

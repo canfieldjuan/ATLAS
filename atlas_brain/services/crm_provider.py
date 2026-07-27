@@ -21,7 +21,7 @@ import re
 from contextlib import asynccontextmanager
 from datetime import datetime, timezone
 from typing import Any, Optional
-from uuid import uuid4
+from uuid import UUID, uuid4
 
 logger = logging.getLogger("atlas.services.crm_provider")
 
@@ -1137,6 +1137,64 @@ class DatabaseCRMProvider:
             *params,
         )
         return [dict(r) for r in rows]
+
+    async def list_eom_new_lead_review_items(
+        self,
+        *,
+        limit: int = 100,
+        cursor_created_at: datetime | None = None,
+        cursor_contact_id: UUID | None = None,
+    ) -> list[dict[str, Any]]:
+        """Return the closed office-review projection for active EOM new leads.
+
+        This is intentionally separate from ``list_contacts``: the generic
+        method returns complete CRM rows, while the office funnel boundary may
+        expose only the small identity/readiness projection required to start
+        the existing customer-handoff command.
+        """
+        cursor_clause = ""
+        params: list[Any] = [limit]
+        if cursor_created_at is not None and cursor_contact_id is not None:
+            cursor_clause = "AND (c.created_at, c.id) < ($2::timestamptz, $3::uuid)"
+            params.extend([cursor_created_at, cursor_contact_id])
+        pool = self._get_pool()
+        rows = await pool.fetch(
+            f"""
+            SELECT
+                c.id AS contact_id,
+                c.full_name,
+                COALESCE(latest_intake.submitted_email, c.email) AS email,
+                COALESCE(latest_intake.submitted_phone, c.phone) AS phone,
+                c.address,
+                c.source,
+                c.created_at
+            FROM contacts AS c
+            LEFT JOIN LATERAL (
+                SELECT
+                    NULLIF(ci.metadata->>'submitted_email', '') AS submitted_email,
+                    NULLIF(ci.metadata->>'submitted_phone', '') AS submitted_phone
+                FROM contact_interactions AS ci
+                WHERE ci.contact_id = c.id
+                  AND ci.interaction_type = 'web_form'
+                  AND ci.intent = 'estimate_request'
+                  AND (
+                      NULLIF(ci.metadata->>'submitted_email', '') IS NOT NULL
+                      OR NULLIF(ci.metadata->>'submitted_phone', '') IS NOT NULL
+                  )
+                ORDER BY ci.occurred_at DESC, ci.created_at DESC, ci.id DESC
+                LIMIT 1
+            ) AS latest_intake ON TRUE
+            WHERE c.business_context_id = 'effingham_maids'
+              AND c.status = 'active'
+              AND c.contact_type = 'lead'
+              AND c.lead_stage = 'new'
+              {cursor_clause}
+            ORDER BY c.created_at DESC, c.id DESC
+            LIMIT $1
+            """,
+            *params,
+        )
+        return [dict(row) for row in rows]
 
     async def open_customer_service_ticket(
         self,

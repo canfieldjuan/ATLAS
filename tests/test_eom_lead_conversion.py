@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from datetime import datetime
 from types import SimpleNamespace
 from uuid import uuid4
 
@@ -21,8 +22,26 @@ _SERVICE_TOKEN_SHA256 = _GENERATED_SERVICE_TOKEN.sha256
 
 
 class _CRM:
-    def __init__(self) -> None:
+    def __init__(self, *, review_leads: list[dict[str, object]] | None = None) -> None:
         self.calls: list[dict[str, object]] = []
+        self.review_calls: list[dict[str, object]] = []
+        self.review_leads = review_leads or []
+
+    async def list_eom_new_lead_review_items(
+        self,
+        *,
+        limit: int,
+        cursor_created_at=None,
+        cursor_contact_id=None,
+    ):
+        self.review_calls.append(
+            {
+                "limit": limit,
+                "cursor_created_at": cursor_created_at,
+                "cursor_contact_id": cursor_contact_id,
+            }
+        )
+        return self.review_leads
 
     async def finalize_eom_customer_handoff(self, **kwargs):
         self.calls.append(kwargs)
@@ -75,7 +94,20 @@ async def test_full_atlas_app_serves_public_intake_and_private_handoff_together(
     """The actual full aggregate serves the tracker callback beside lead intake."""
     from atlas_brain.main import app
 
-    crm = _CRM()
+    contact_id = uuid4()
+    crm = _CRM(
+        review_leads=[
+            {
+                "contact_id": contact_id,
+                "full_name": "Review Queue Lead",
+                "email": "review@example.com",
+                "phone": "2175550100",
+                "address": "100 Main St",
+                "source": "web",
+                "created_at": "2026-07-27T12:00:00+00:00",
+            }
+        ]
+    )
     original_overrides = dict(app.dependency_overrides)
     app.dependency_overrides[funnel_mod._crm_dependency] = lambda: crm
     app.dependency_overrides[auth_mod.get_eom_funnel_api_config] = _enabled_config
@@ -84,6 +116,10 @@ async def test_full_atlas_app_serves_public_intake_and_private_handoff_together(
             transport=httpx.ASGITransport(app=app), base_url="http://test"
         ) as client:
             public_response = await client.get("/api/v1/leads/intake")
+            review_response = await client.get(
+                "/api/v1/eom-funnel/leads",
+                headers=_headers(),
+            )
             response = await client.post(
                 "/api/v1/eom-funnel/customer-handoffs",
                 headers=_headers(),
@@ -98,8 +134,178 @@ async def test_full_atlas_app_serves_public_intake_and_private_handoff_together(
         app.dependency_overrides.update(original_overrides)
 
     assert public_response.status_code == 405
+    assert review_response.status_code == 200
+    assert review_response.json() == {
+        "leads": [
+            {
+                "contactId": str(contact_id),
+                "fullName": "Review Queue Lead",
+                "email": "review@example.com",
+                "phone": "2175550100",
+                "address": "100 Main St",
+                "source": "web",
+                "createdAt": "2026-07-27T12:00:00Z",
+            }
+        ],
+        "limit": 100,
+        "cursor": None,
+        "hasMore": False,
+        "nextCursor": None,
+    }
+    assert crm.review_calls == [
+        {"limit": 101, "cursor_created_at": None, "cursor_contact_id": None}
+    ]
     assert response.status_code == 201
     assert crm.calls
+
+
+@pytest.mark.asyncio
+async def test_private_lead_review_returns_only_the_closed_projection():
+    first_contact_id = uuid4()
+    second_contact_id = uuid4()
+    crm = _CRM(
+        review_leads=[
+            {
+                "contact_id": first_contact_id,
+                "full_name": "Review Queue Lead 1",
+                "email": "review1@example.com",
+                "phone": "2175550100",
+                "address": "100 Main St",
+                "source": "web",
+                "created_at": "2026-07-27T12:00:00+00:00",
+            },
+            {
+                "contact_id": second_contact_id,
+                "full_name": "Review Queue Lead 2",
+                "email": "review2@example.com",
+                "phone": "2175550101",
+                "address": "101 Main St",
+                "source": "web",
+                "created_at": "2026-07-27T11:00:00+00:00",
+            }
+        ]
+    )
+    expected_cursor = funnel_mod._encode_lead_review_cursor(
+        created_at=datetime.fromisoformat("2026-07-27T12:00:00+00:00"),
+        contact_id=first_contact_id,
+    )
+    app = _app(crm, _enabled_config())
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=app), base_url="http://test"
+    ) as client:
+        response = await client.get("/eom-funnel/leads?limit=1", headers=_headers())
+
+    assert response.status_code == 200
+    assert response.json() == {
+        "leads": [
+            {
+                "contactId": str(first_contact_id),
+                "fullName": "Review Queue Lead 1",
+                "email": "review1@example.com",
+                "phone": "2175550100",
+                "address": "100 Main St",
+                "source": "web",
+                "createdAt": "2026-07-27T12:00:00Z",
+            }
+        ],
+        "limit": 1,
+        "cursor": None,
+        "hasMore": True,
+        "nextCursor": expected_cursor,
+    }
+    assert crm.review_calls == [
+        {"limit": 2, "cursor_created_at": None, "cursor_contact_id": None}
+    ]
+
+
+@pytest.mark.asyncio
+async def test_private_lead_review_forwards_keyset_cursor_for_continuation():
+    cursor_created_at = datetime.fromisoformat("2026-07-27T12:00:00+00:00")
+    cursor_contact_id = uuid4()
+    cursor = funnel_mod._encode_lead_review_cursor(
+        created_at=cursor_created_at,
+        contact_id=cursor_contact_id,
+    )
+    crm = _CRM()
+    app = _app(crm, _enabled_config())
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=app), base_url="http://test"
+    ) as client:
+        response = await client.get(
+            f"/eom-funnel/leads?limit=50&cursor={cursor}",
+            headers=_headers(),
+        )
+
+    assert response.status_code == 200
+    assert response.json() == {
+        "leads": [],
+        "limit": 50,
+        "cursor": cursor,
+        "hasMore": False,
+        "nextCursor": None,
+    }
+    assert crm.review_calls == [
+        {
+            "limit": 51,
+            "cursor_created_at": cursor_created_at,
+            "cursor_contact_id": cursor_contact_id,
+        }
+    ]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("config", "headers", "expected_status"),
+    (
+        (EOMFunnelConfig(api_enabled=False), _headers(), 503),
+        (_enabled_config(), {**_headers(), "Authorization": ""}, 401),
+        (_enabled_config(), {**_headers(actor=" ")}, 422),
+        (_enabled_config(), {**_headers(actor_id="0")}, 422),
+    ),
+)
+async def test_private_lead_review_rejects_boundary_failures_before_crm_call(
+    config: EOMFunnelConfig,
+    headers: dict[str, str],
+    expected_status: int,
+):
+    crm = _CRM()
+    app = _app(crm, config)
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=app), base_url="http://test"
+    ) as client:
+        response = await client.get("/eom-funnel/leads", headers=headers)
+
+    assert response.status_code == expected_status
+    assert crm.review_calls == []
+
+
+@pytest.mark.asyncio
+async def test_private_lead_review_rejects_out_of_range_limit_before_crm_call():
+    crm = _CRM()
+    app = _app(crm, _enabled_config())
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=app), base_url="http://test"
+    ) as client:
+        response = await client.get("/eom-funnel/leads?limit=201", headers=_headers())
+
+    assert response.status_code == 422
+    assert crm.review_calls == []
+
+
+@pytest.mark.asyncio
+async def test_private_lead_review_rejects_malformed_cursor_before_crm_call():
+    crm = _CRM()
+    app = _app(crm, _enabled_config())
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=app), base_url="http://test"
+    ) as client:
+        response = await client.get(
+            "/eom-funnel/leads?cursor=not-a-real-cursor",
+            headers=_headers(),
+        )
+
+    assert response.status_code == 422
+    assert crm.review_calls == []
 
 
 @pytest.mark.asyncio
