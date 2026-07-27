@@ -127,6 +127,29 @@ handoff row without a proven finalization transition.
   Customer/Site ownership, generic CRM behavior, and optional runtime startup
   services. This slice changes the protected-table privilege boundary and the
   NocoDB connection identity only.
+- Review-repair extension 3: the distinct NocoDB login was still granted
+  table-wide `UPDATE` on `contacts`, although the EOM ownership/type/stage
+  transition restriction exists only in `DatabaseCRMProvider`. A direct NocoDB
+  edit could therefore bypass the finalization evidence. Separately, the
+  migration runner executes a migration and records it in `schema_migrations`
+  as separate autocommit operations. Migration 354 revokes the non-superuser
+  executor's temporary guard-role membership in its SQL, so a process failure
+  in that interval leaves an applied privilege state that the same executor
+  cannot rerun or record.
+- Correct repair: make the migration runner support an explicit,
+  migration-authored atomic-bookkeeping marker. Only 354 opts in; its privilege
+  changes and migration-ledger insert run in one PostgreSQL transaction, so an
+  interruption rolls both back and a commit leaves the migration recorded.
+  Keep NocoDB's ordinary `contacts` visibility and safe CRM edits, but grant
+  `INSERT`/`UPDATE` only for an explicit non-lifecycle column set that excludes
+  `business_context_id`, `contact_type`, and `lead_stage`. Prove the role is
+  denied each protected direct mutation while ordinary contact editing remains
+  available, and prove a forced bookkeeping failure rolls back the ownership
+  and membership changes.
+- Must still not change: migration execution for every unmarked migration,
+  including `CREATE INDEX CONCURRENTLY` migrations; the handoff/lifecycle
+  table guards; the full Atlas startup/data-store guard; tracker retry and
+  Customer/Site behavior; or permitted non-lifecycle NocoDB CRM operations.
 
 ## Scope (this PR)
 
@@ -173,6 +196,12 @@ Slice phase: Vertical slice
    prove that login cannot mutate the protected handoff/lifecycle records or
    alter trigger state. Run an authenticated callback inside the actual app
    lifespan after the enabled authoritative-store preflight completes.
+10. Close the remaining privilege and crash-consistency gaps: restrict the
+    NocoDB role to explicit non-lifecycle contact columns, and execute only
+    migration 354 plus its `schema_migrations` record in one rollback-safe
+    database transaction. Prove both the protected-column denials and the
+    forced bookkeeping-failure rollback on PostgreSQL without changing the
+    execution model for unmarked migrations.
 
 ### Review Contract
 
@@ -204,7 +233,11 @@ Slice phase: Vertical slice
 4. Atlas moves `contact_type` from `lead` to `customer` and clears the lead
    stage only in the finalization transaction after storing the tracker link.
    Generic provider/MCP paths remain unable to make that lifecycle change;
-   integration tests settle the transition and blocked bypasses.
+   integration tests settle the transition and blocked bypasses. The distinct
+   NocoDB role has only explicit safe-column `INSERT`/`UPDATE` grants on
+   `contacts`, so it cannot directly write `business_context_id`,
+   `contact_type`, or `lead_stage`; real PostgreSQL tests settle the three
+   direct denials and a permitted non-lifecycle edit.
 5. If the tracker has committed its Customer/Site but the Atlas call fails, its
    persisted approval operation retries the same request/key. Atlas recovers
    exactly one finalization; no second Customer/Site or lifecycle event is
@@ -235,6 +268,14 @@ Slice phase: Vertical slice
   tracker-to-Atlas smoke after setting the full application's secret is a
   post-provisioning deployment verification, not a claim made by this source
   slice.
+- The migration runner executes only a migration declaring the
+  `atlas: atomic-bookkeeping` marker and its `schema_migrations` bookkeeping
+  in one PostgreSQL transaction. Migration 354 declares that marker; a forced
+  ledger-insert failure leaves neither guard-object ownership nor temporary
+  role-membership revocation committed, while a successful run records 354
+  before the executor loses that membership. Existing unmarked migrations,
+  including concurrent-index migrations, retain their autocommit execution
+  model. Real PostgreSQL and runner tests settle the distinction.
 - Affected surfaces: full Atlas API aggregation/startup validation, EOM funnel
   router and service auth, CRM lifecycle transition, handoff migration, EOM
   pipeline CI, and the companion time-tracker admin API/customer-onboarding
@@ -293,10 +334,12 @@ Slice phase: Vertical slice
 - `atlas_brain/services/eom_lead_conversion.py`
 - `atlas_brain/storage/migrations/353_eom_customer_handoffs.sql`
 - `atlas_brain/storage/migrations/354_eom_customer_handoff_privileges.sql`
+- `atlas_brain/storage/migrations/__init__.py`
 - `docker-compose.yml`
 - `plans/PR-EOM-Office-Conversion-Handoff.md`
 - `tests/test_eom_lead_conversion.py`
 - `tests/test_eom_lead_conversion_integration.py`
+- `tests/test_migrations_runner.py`
 
 ## Mechanism
 
@@ -436,13 +479,15 @@ Parked hardening: none against that predicate.
 | `atlas_brain/eom_api/config.py` | 23 |
 | `atlas_brain/eom_api/funnel.py` | 90 |
 | `atlas_brain/eom_api/funnel_auth.py` | 127 |
-| `atlas_brain/main.py` | 68 |
+| `atlas_brain/main.py` | 86 |
 | `atlas_brain/services/crm_provider.py` | 234 |
 | `atlas_brain/services/eom_lead_conversion.py` | 44 |
 | `atlas_brain/storage/migrations/353_eom_customer_handoffs.sql` | 84 |
-| `atlas_brain/storage/migrations/354_eom_customer_handoff_privileges.sql` | 123 |
+| `atlas_brain/storage/migrations/354_eom_customer_handoff_privileges.sql` | 152 |
+| `atlas_brain/storage/migrations/__init__.py` | 30 |
 | `docker-compose.yml` | 5 |
-| `plans/PR-EOM-Office-Conversion-Handoff.md` | 448 |
-| `tests/test_eom_lead_conversion.py` | 498 |
-| `tests/test_eom_lead_conversion_integration.py` | 645 |
-| **Total** | **2503** |
+| `plans/PR-EOM-Office-Conversion-Handoff.md` | 493 |
+| `tests/test_eom_lead_conversion.py` | 499 |
+| `tests/test_eom_lead_conversion_integration.py` | 838 |
+| `tests/test_migrations_runner.py` | 56 |
+| **Total** | **2875** |

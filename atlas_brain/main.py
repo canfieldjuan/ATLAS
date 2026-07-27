@@ -149,6 +149,24 @@ async def _require_eom_funnel_data_store(
                   AND NOT has_table_privilege(nocodb_role.oid, 'eom_lead_lifecycle_events', 'INSERT')
                   AND NOT has_table_privilege(nocodb_role.oid, 'eom_lead_lifecycle_events', 'UPDATE')
                   AND NOT has_table_privilege(nocodb_role.oid, 'eom_lead_lifecycle_events', 'DELETE')
+                  AND NOT has_column_privilege(
+                      nocodb_role.oid, 'contacts', 'business_context_id', 'INSERT'
+                  )
+                  AND NOT has_column_privilege(
+                      nocodb_role.oid, 'contacts', 'business_context_id', 'UPDATE'
+                  )
+                  AND NOT has_column_privilege(
+                      nocodb_role.oid, 'contacts', 'contact_type', 'INSERT'
+                  )
+                  AND NOT has_column_privilege(
+                      nocodb_role.oid, 'contacts', 'contact_type', 'UPDATE'
+                  )
+                  AND NOT has_column_privilege(
+                      nocodb_role.oid, 'contacts', 'lead_stage', 'INSERT'
+                  )
+                  AND NOT has_column_privilege(
+                      nocodb_role.oid, 'contacts', 'lead_stage', 'UPDATE'
+                  )
                FROM pg_roles AS nocodb_role
                WHERE nocodb_role.rolname = 'atlas_nocodb'
            ), FALSE)

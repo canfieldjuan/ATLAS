@@ -425,6 +425,26 @@ class _SingleConn:
             return True
         return None
 
+    def transaction(self):
+        return _RecordingTransaction(self.pool)
+
+
+class _RecordingTransaction:
+    """Small asyncpg transaction stand-in for the marked-migration proof."""
+
+    def __init__(self, pool):
+        self.pool = pool
+
+    async def __aenter__(self):
+        self.pool.atomic_transactions = getattr(self.pool, "atomic_transactions", 0) + 1
+        return self
+
+    async def __aexit__(self, exc_type, exc, traceback):
+        self.pool.atomic_transaction_errors = getattr(
+            self.pool, "atomic_transaction_errors", 0
+        ) + int(exc_type is not None)
+        return False
+
 
 @pytest.mark.asyncio
 async def test_migrations_run_on_a_single_connection_pool(tmp_path):
@@ -442,6 +462,42 @@ async def test_migrations_run_on_a_single_connection_pool(tmp_path):
     assert any("CREATE TABLE a" in sql for sql in pool.applied_sql)
     assert any("CREATE TABLE b" in sql for sql in pool.applied_sql)
     assert pool.in_use is False, "the connection must be released"
+
+
+@pytest.mark.asyncio
+async def test_marked_migration_records_its_ledger_entry_in_one_transaction(tmp_path):
+    """An atomic-bookkeeping migration has no SQL-to-ledger crash window."""
+    from atlas_brain.storage.migrations import run_migrations
+
+    (tmp_path / "900_atomic.sql").write_text(
+        "-- atlas: atomic-bookkeeping\nCREATE TABLE atomic_probe (id int);\n"
+    )
+    pool = _SingleConnectionPool(tmp_path)
+
+    await run_migrations(pool, migrations_dir=tmp_path)
+
+    assert pool.atomic_transactions == 1
+    assert pool.atomic_transaction_errors == 0
+    assert any("CREATE TABLE atomic_probe" in sql for sql in pool.applied_sql)
+
+
+@pytest.mark.asyncio
+async def test_marked_migration_rejects_concurrently_ddl_before_a_transaction(tmp_path):
+    """The opt-in cannot silently break concurrent-index migration safety."""
+    from atlas_brain.storage.migrations import run_migrations
+
+    (tmp_path / "900_atomic_concurrent.sql").write_text(
+        "-- atlas: atomic-bookkeeping\n"
+        "CREATE INDEX CONCURRENTLY idx_atomic_probe ON atomic_probe (id);\n"
+    )
+    pool = _SingleConnectionPool(tmp_path)
+
+    with pytest.raises(
+        RuntimeError, match="atomic-bookkeeping migration cannot use CONCURRENTLY"
+    ):
+        await run_migrations(pool, migrations_dir=tmp_path)
+
+    assert getattr(pool, "atomic_transactions", 0) == 0
 
 
 @pytest.mark.asyncio

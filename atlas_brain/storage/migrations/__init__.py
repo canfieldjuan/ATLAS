@@ -107,6 +107,19 @@ async def _record_migration(executor, filename: str) -> None:
 # _record_migration against the unique schema_migrations.version constraint.
 _MIGRATIONS_ADVISORY_LOCK_KEY = 0x41544C41  # "ATLA"
 _MIGRATIONS_LOCK_POLL_SECONDS = 0.25
+_ATOMIC_BOOKKEEPING_MARKER = "-- atlas: atomic-bookkeeping"
+
+
+def _requires_atomic_bookkeeping(sql: str) -> bool:
+    """Return whether this migration opts into atomic SQL + ledger recording.
+
+    Most Atlas migrations remain deliberately autocommit: several use ``CREATE
+    INDEX CONCURRENTLY``. A migration whose safety depends on its privilege or
+    ownership changes committing with its ``schema_migrations`` record may opt
+    into this narrow execution mode with the first non-empty SQL line.
+    """
+    first_line = next((line.strip() for line in sql.splitlines() if line.strip()), "")
+    return first_line == _ATOMIC_BOOKKEEPING_MARKER
 
 
 async def run_migrations(
@@ -209,8 +222,21 @@ async def run_migrations(
                 sql = migration_file.read_text()
 
                 try:
-                    await conn.execute(sql)
-                    await _record_migration(conn, migration_file.name)
+                    if _requires_atomic_bookkeeping(sql):
+                        # A marked migration may not contain concurrently-run
+                        # DDL. Its database effects and ledger row are one
+                        # rollback-safe unit, closing the otherwise possible
+                        # crash window between migration SQL and bookkeeping.
+                        if re.search(r"\bCONCURRENTLY\b", sql, re.IGNORECASE):
+                            raise RuntimeError(
+                                "atomic-bookkeeping migration cannot use CONCURRENTLY"
+                            )
+                        async with conn.transaction():
+                            await conn.execute(sql)
+                            await _record_migration(conn, migration_file.name)
+                    else:
+                        await conn.execute(sql)
+                        await _record_migration(conn, migration_file.name)
                     logger.info("Migration %s completed successfully", migration_file.name)
                 except Exception as e:
                     logger.error("Migration %s failed: %s", migration_file.name, e)

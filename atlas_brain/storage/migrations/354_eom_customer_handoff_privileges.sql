@@ -1,3 +1,4 @@
+-- atlas: atomic-bookkeeping
 -- Keep the EOM handoff guards outside the Atlas/NocoDB runtime login.
 --
 -- This migration must run through a database administrator or a role with
@@ -84,11 +85,39 @@ BEGIN
               'eom_lead_lifecycle_events'
           )
     LOOP
-        EXECUTE format(
-            'GRANT SELECT, INSERT, UPDATE, DELETE ON TABLE %I.%I TO atlas_nocodb',
-            schema_name,
-            table_row.tablename
-        );
+        IF table_row.tablename = 'contacts' THEN
+            -- EOM ownership/type/stage are lifecycle authority, not ordinary
+            -- CRM-edit fields. NocoDB can still create and edit generic CRM
+            -- data, but cannot write those columns directly.
+            EXECUTE format(
+                'REVOKE INSERT, UPDATE ON TABLE %I.contacts FROM atlas_nocodb',
+                schema_name
+            );
+            EXECUTE format(
+                'GRANT SELECT, DELETE ON TABLE %I.contacts TO atlas_nocodb',
+                schema_name
+            );
+            EXECUTE format(
+                'GRANT INSERT (id, full_name, first_name, last_name, email, phone, '
+                || 'address, city, state, zip, status, tags, notes, source, source_ref, '
+                || 'lead_owner, next_follow_up_at, created_at, updated_at, metadata) '
+                || 'ON TABLE %I.contacts TO atlas_nocodb',
+                schema_name
+            );
+            EXECUTE format(
+                'GRANT UPDATE (full_name, first_name, last_name, email, phone, '
+                || 'address, city, state, zip, status, tags, notes, source, source_ref, '
+                || 'lead_owner, next_follow_up_at, updated_at, metadata) '
+                || 'ON TABLE %I.contacts TO atlas_nocodb',
+                schema_name
+            );
+        ELSE
+            EXECUTE format(
+                'GRANT SELECT, INSERT, UPDATE, DELETE ON TABLE %I.%I TO atlas_nocodb',
+                schema_name,
+                table_row.tablename
+            );
+        END IF;
     END LOOP;
     FOR sequence_row IN
         SELECT relname

@@ -27,19 +27,35 @@ def _database_url_or_skip() -> str:
     return database_url
 
 
-async def _prepare_schema(conn, schema: str) -> None:
+async def _prepare_schema(
+    conn,
+    schema: str,
+    *,
+    apply_privilege_migration: bool = True,
+) -> None:
     await conn.execute(f'CREATE SCHEMA "{schema}"')
     await conn.execute(f'SET search_path TO "{schema}", public')
+    await conn.execute(
+        """
+        CREATE TABLE schema_migrations (
+            version INTEGER PRIMARY KEY,
+            name VARCHAR(255) NOT NULL,
+            applied_at TIMESTAMPTZ DEFAULT NOW()
+        )
+        """
+    )
     await conn.execute("CREATE TABLE appointments (id UUID PRIMARY KEY)")
-    for name in (
+    migration_names = (
         "035_contacts.sql",
         "256_contact_interaction_dedupe.sql",
         "346_contact_lead_pipeline.sql",
         "351_eom_lead_lifecycle_events.sql",
         "352_eom_inbound_delivery_receipts.sql",
         "353_eom_customer_handoffs.sql",
-        "354_eom_customer_handoff_privileges.sql",
-    ):
+    )
+    if apply_privilege_migration:
+        migration_names += ("354_eom_customer_handoff_privileges.sql",)
+    for name in migration_names:
         await conn.execute((MIGRATIONS / name).read_text())
 
 
@@ -385,8 +401,185 @@ async def test_nocodb_role_cannot_bypass_handoff_or_lifecycle_guards():
             for statement in blocked_statements:
                 with pytest.raises(asyncpg.exceptions.InsufficientPrivilegeError):
                     await conn.execute(statement)
+
+            protected_contact_mutations = (
+                "UPDATE contacts SET contact_type = 'customer'",
+                "UPDATE contacts SET contact_type = 'lead'",
+                "UPDATE contacts SET lead_stage = 'qualified'",
+                "UPDATE contacts SET lead_stage = NULL",
+                "UPDATE contacts SET business_context_id = 'effingham_maids'",
+                "UPDATE contacts SET business_context_id = NULL",
+                "UPDATE contacts SET contact_type = 'customer', lead_stage = NULL",
+                "INSERT INTO contacts (id, full_name, contact_type) "
+                "VALUES (gen_random_uuid(), 'Direct customer', 'customer')",
+                "INSERT INTO contacts (id, full_name, lead_stage) "
+                "VALUES (gen_random_uuid(), 'Direct lead', 'new')",
+                "INSERT INTO contacts (id, full_name, business_context_id) "
+                "VALUES (gen_random_uuid(), 'Direct EOM', 'effingham_maids')",
+            )
+            for statement in protected_contact_mutations:
+                with pytest.raises(asyncpg.exceptions.InsufficientPrivilegeError):
+                    await conn.execute(statement)
+
+            contact_id = uuid.uuid4()
+            await conn.execute(
+                "INSERT INTO contacts (id, full_name, notes) VALUES ($1, 'NocoDB CRM', 'before')",
+                contact_id,
+            )
+            await conn.execute(
+                "UPDATE contacts SET notes = 'ordinary edit' WHERE id = $1",
+                contact_id,
+            )
+            assert await conn.fetchval(
+                "SELECT notes FROM contacts WHERE id = $1", contact_id
+            ) == "ordinary edit"
         finally:
             await conn.execute("RESET ROLE")
+    finally:
+        await conn.execute(f'DROP SCHEMA IF EXISTS "{schema}" CASCADE')
+        await conn.close()
+
+
+@pytest.mark.asyncio
+async def test_privilege_migration_rolls_back_if_ledger_recording_fails():
+    """354 cannot revoke its executor's recovery path before it is recorded."""
+    from atlas_brain.storage.migrations import run_migrations
+
+    database_url = _database_url_or_skip()
+    schema = f"atlas_eom_conversion_privilege_rollback_{uuid.uuid4().hex}"
+    conn = await asyncpg.connect(database_url)
+    try:
+        can_administer_roles = await conn.fetchval(
+            """
+            SELECT rolsuper OR rolcreaterole
+            FROM pg_roles
+            WHERE rolname = current_user
+            """
+        )
+        if not can_administer_roles:
+            pytest.skip("privilege migration proof requires disposable role administration")
+
+        await _prepare_schema(conn, schema, apply_privilege_migration=False)
+        runtime_role = await conn.fetchval("SELECT current_user")
+        runtime_ident = '"' + runtime_role.replace('"', '""') + '"'
+        await conn.execute(
+            """
+            DO $$
+            BEGIN
+                IF NOT EXISTS (
+                    SELECT 1 FROM pg_roles WHERE rolname = 'atlas_eom_handoff_owner'
+                ) THEN
+                    CREATE ROLE atlas_eom_handoff_owner NOLOGIN NOINHERIT;
+                END IF;
+                IF NOT EXISTS (
+                    SELECT 1 FROM pg_roles WHERE rolname = 'atlas_nocodb'
+                ) THEN
+                    CREATE ROLE atlas_nocodb NOLOGIN NOINHERIT;
+                END IF;
+            END;
+            $$;
+            """
+        )
+        await conn.execute(
+            f"GRANT atlas_eom_handoff_owner TO {runtime_ident} WITH ADMIN OPTION"
+        )
+        await conn.execute(
+            """
+            CREATE FUNCTION fail_eom_privilege_bookkeeping()
+            RETURNS TRIGGER
+            LANGUAGE plpgsql
+            AS $$
+            BEGIN
+                IF NEW.name = '354_eom_customer_handoff_privileges' THEN
+                    RAISE EXCEPTION 'injected privilege ledger failure';
+                END IF;
+                RETURN NEW;
+            END;
+            $$;
+            CREATE TRIGGER trg_fail_eom_privilege_bookkeeping
+            BEFORE INSERT ON schema_migrations
+            FOR EACH ROW
+            EXECUTE FUNCTION fail_eom_privilege_bookkeeping();
+            """
+        )
+
+        class _SchemaPool:
+            async def acquire(self):
+                return conn
+
+            async def release(self, released):
+                assert released is conn
+
+        with pytest.raises(asyncpg.exceptions.RaiseError, match="injected privilege ledger failure"):
+            await run_migrations(
+                _SchemaPool(),
+                migrations_dir=MIGRATIONS,
+                only={"354_eom_customer_handoff_privileges"},
+            )
+
+        assert await conn.fetchval(
+            """
+            SELECT pg_get_userbyid(relowner) = current_user
+            FROM pg_class
+            WHERE oid = 'eom_customer_handoffs'::regclass
+            """
+        )
+        assert await conn.fetchval(
+            """
+            SELECT EXISTS (
+                SELECT 1
+                FROM pg_auth_members AS membership
+                JOIN pg_roles AS member_role ON member_role.oid = membership.member
+                JOIN pg_roles AS guard_role ON guard_role.oid = membership.roleid
+                WHERE member_role.rolname = current_user
+                  AND guard_role.rolname = 'atlas_eom_handoff_owner'
+            )
+            """
+        )
+        assert not await conn.fetchval(
+            """
+            SELECT EXISTS (
+                SELECT 1 FROM schema_migrations
+                WHERE name = '354_eom_customer_handoff_privileges'
+            )
+            """
+        )
+
+        await conn.execute("DROP TRIGGER trg_fail_eom_privilege_bookkeeping ON schema_migrations")
+        await conn.execute("DROP FUNCTION fail_eom_privilege_bookkeeping()")
+        await run_migrations(
+            _SchemaPool(),
+            migrations_dir=MIGRATIONS,
+            only={"354_eom_customer_handoff_privileges"},
+        )
+
+        assert await conn.fetchval(
+            """
+            SELECT pg_get_userbyid(relowner) = 'atlas_eom_handoff_owner'
+            FROM pg_class
+            WHERE oid = 'eom_customer_handoffs'::regclass
+            """
+        )
+        assert not await conn.fetchval(
+            """
+            SELECT EXISTS (
+                SELECT 1
+                FROM pg_auth_members AS membership
+                JOIN pg_roles AS member_role ON member_role.oid = membership.member
+                JOIN pg_roles AS guard_role ON guard_role.oid = membership.roleid
+                WHERE member_role.rolname = current_user
+                  AND guard_role.rolname = 'atlas_eom_handoff_owner'
+            )
+            """
+        )
+        assert await conn.fetchval(
+            """
+            SELECT EXISTS (
+                SELECT 1 FROM schema_migrations
+                WHERE name = '354_eom_customer_handoff_privileges'
+            )
+            """
+        )
     finally:
         await conn.execute(f'DROP SCHEMA IF EXISTS "{schema}" CASCADE')
         await conn.close()
