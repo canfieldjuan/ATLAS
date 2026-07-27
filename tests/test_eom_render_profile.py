@@ -17,7 +17,7 @@ from fastapi.testclient import TestClient
 def _isolated_eom_subprocess_env() -> dict[str, str]:
     env = os.environ.copy()
     for key in list(env):
-        if key.startswith("ATLAS_INVOICING_"):
+        if key.upper().startswith("ATLAS_INVOICING_"):
             env.pop(key, None)
     env["ATLAS_DB_ENABLED"] = "false"
     return env
@@ -406,8 +406,19 @@ def test_eom_receivables_runtime_config_accepts_generated_digest_only():
     assert "receivables_service_token" not in EOMInvoicingConfig.model_fields
 
 
+@pytest.mark.parametrize(
+    ("raw_token_key", "api_enabled"),
+    (
+        ("ATLAS_INVOICING_RECEIVABLES_SERVICE_TOKEN", "true"),
+        ("atlas_invoicing_receivables_service_token", "true"),
+        ("ATLAS_INVOICING_RECEIVABLES_SERVICE_TOKEN", "false"),
+        ("atlas_invoicing_receivables_service_token", "false"),
+    ),
+)
 def test_eom_receivables_runtime_config_rejects_raw_token_env_before_projection(
     monkeypatch,
+    raw_token_key,
+    api_enabled,
 ):
     from pydantic import ValidationError
 
@@ -418,12 +429,12 @@ def test_eom_receivables_runtime_config_rejects_raw_token_env_before_projection(
     )
 
     generated = auth.generate_receivables_service_token()
-    monkeypatch.setenv("ATLAS_INVOICING_RECEIVABLES_API_ENABLED", "true")
+    monkeypatch.setenv("ATLAS_INVOICING_RECEIVABLES_API_ENABLED", api_enabled)
     monkeypatch.setenv(
         "ATLAS_INVOICING_RECEIVABLES_SERVICE_TOKEN_SHA256",
         generated.sha256,
     )
-    monkeypatch.setenv(RAW_RECEIVABLES_SERVICE_TOKEN_ENV, generated.token)
+    monkeypatch.setenv(raw_token_key, generated.token)
 
     with pytest.raises(
         ValidationError,
@@ -433,8 +444,19 @@ def test_eom_receivables_runtime_config_rejects_raw_token_env_before_projection(
     assert "receivables_service_token" not in EOMInvoicingConfig.model_fields
 
 
+@pytest.mark.parametrize(
+    ("raw_token_key", "api_enabled"),
+    (
+        ("ATLAS_INVOICING_RECEIVABLES_SERVICE_TOKEN", "true"),
+        ("atlas_invoicing_receivables_service_token", "true"),
+        ("ATLAS_INVOICING_RECEIVABLES_SERVICE_TOKEN", "false"),
+        ("atlas_invoicing_receivables_service_token", "false"),
+    ),
+)
 def test_eom_profile_rejects_raw_receivables_token_from_dotenv_before_projection(
     tmp_path,
+    raw_token_key,
+    api_enabled,
 ):
     from atlas_brain.eom_api import auth
     from atlas_brain.eom_api.config import RAW_RECEIVABLES_SERVICE_TOKEN_ENV
@@ -443,9 +465,9 @@ def test_eom_profile_rejects_raw_receivables_token_from_dotenv_before_projection
     (tmp_path / ".env").write_text(
         "\n".join(
             [
-                "ATLAS_INVOICING_RECEIVABLES_API_ENABLED=true",
+                f"ATLAS_INVOICING_RECEIVABLES_API_ENABLED={api_enabled}",
                 f"ATLAS_INVOICING_RECEIVABLES_SERVICE_TOKEN_SHA256={generated.sha256}",
-                f"{RAW_RECEIVABLES_SERVICE_TOKEN_ENV}={generated.token}",
+                f"{raw_token_key}={generated.token}",
             ]
         ),
         encoding="utf-8",

@@ -33,13 +33,17 @@ that is knowingly unsafe.
   and digest shape alone cannot prove that the bearer preimage came from the
   generated-token helper. Follow-up review found the raw-token guard still
   missed env-file settings sources, and request validation still admitted
-  generated-prefix bearers with the wrong payload length. As a result the Render
-  candidate cannot safely enable the receivables API without fail-closed checks
-  on both settings-source admission and request admission.
+  generated-prefix bearers with the wrong payload length. Latest review also
+  showed that the raw-token settings-source guard was case-sensitive and gated
+  by the API enable flag, leaving lowercase aliases and disabled raw-token config
+  admitted before projection. As a result the Render candidate cannot safely
+  carry the receivables API settings without fail-closed checks on both
+  settings-source admission and request admission.
 - Correct fix must touch/change: Add a typed digest-only runtime setting for
   the EOM receivables service token; reject the legacy/raw bearer-token key
-  across process env and env-file settings sources before model projection can
-  hide it; update request validation to require the presented bearer token to
+  across process env and env-file settings sources case-insensitively and
+  regardless of enable state before model projection can hide it; update request
+  validation to require the presented bearer token to
   match the exact generated `eomrx_v1_...` payload length before hashing and
   comparing it; update the Render candidate to prompt for the digest while
   keeping the receivables API disabled until schema provisioning is wired; and
@@ -76,12 +80,14 @@ Slice phase: vertical slice
     proves `EOMInvoicingConfig` can enable the API with only a generated token
     digest, and that the config model exposes no raw-token field.
   - `tests/test_eom_render_profile.py::test_eom_receivables_runtime_config_rejects_raw_token_env_before_projection`
-    proves a real environment-projected `EOMInvoicingConfig` rejects
-    `ATLAS_INVOICING_RECEIVABLES_SERVICE_TOKEN` even when a valid digest is
+    proves a real environment-projected `EOMInvoicingConfig` rejects uppercase
+    and lowercase `ATLAS_INVOICING_RECEIVABLES_SERVICE_TOKEN` aliases whether
+    the receivables API flag is enabled or disabled, even when a valid digest is
     also configured.
   - `tests/test_eom_render_profile.py::test_eom_profile_rejects_raw_receivables_token_from_dotenv_before_projection`
-    proves the real EOM entrypoint rejects a forbidden raw token supplied from
-    an admitted dotenv settings source before `extra="ignore"` can hide it.
+    proves the real EOM entrypoint rejects uppercase and lowercase forbidden raw
+    token aliases supplied from admitted dotenv settings sources whether the API
+    flag is enabled or disabled, before `extra="ignore"` can hide them.
   - `tests/test_eom_render_profile.py::test_eom_receivables_startup_rejects_unsafe_enabled_runtime_config`
     proves enabled config fails closed for missing digest, malformed digest,
     placeholder-derived digest, and any object carrying raw bearer-token
@@ -127,8 +133,9 @@ Slice phase: vertical slice
 `receivables_service_token_sha256` setting loaded through the existing
 `ATLAS_INVOICING_` prefix. Its settings model rejects the legacy/raw
 `ATLAS_INVOICING_RECEIVABLES_SERVICE_TOKEN` key from process env and admitted
-dotenv settings sources when the API is enabled, so `extra="ignore"` cannot hide
-forbidden bearer material before validation. `validate_receivables_api_config()`
+dotenv settings sources with case-insensitive key matching and regardless of
+the API enable flag, so `extra="ignore"` cannot hide forbidden bearer material
+before validation. `validate_receivables_api_config()`
 still returns early when the API is disabled. When enabled, it rejects any config
 object that carries raw bearer-token material, then validates the digest shape
 and rejects placeholder-derived digests. `require_receivables_api()` validates the presented bearer token
@@ -167,7 +174,7 @@ Parked hardening: none.
 ## Verification
 
 - Passed locally:
-  - Command: python -m pytest tests/test_eom_render_profile.py -- 23 passed, 1 warning
+  - Command: python -m pytest tests/test_eom_render_profile.py -- 29 passed, 1 warning
   - Command: python -m py_compile atlas_brain/eom_api/auth.py atlas_brain/eom_api/config.py atlas_brain/main_eom.py tests/test_eom_render_profile.py -- passed
   - Command: git diff --check -- passed
   - Command: python scripts/sync_pr_plan.py plans/PR-EOM-Render-Receivables-Auth.md -- passed
@@ -178,8 +185,8 @@ Parked hardening: none.
 | File | LOC |
 |---|---:|
 | `atlas_brain/eom_api/auth.py` | 28 |
-| `atlas_brain/eom_api/config.py` | 53 |
-| `plans/PR-EOM-Render-Receivables-Auth.md` | 185 |
+| `atlas_brain/eom_api/config.py` | 57 |
+| `plans/PR-EOM-Render-Receivables-Auth.md` | 192 |
 | `render.eom.yaml` | 2 |
-| `tests/test_eom_render_profile.py` | 238 |
-| **Total** | **506** |
+| `tests/test_eom_render_profile.py` | 262 |
+| **Total** | **541** |
