@@ -151,6 +151,7 @@ print(json.dumps({
     paths = set(observed["paths"])
     assert "/api/v1/ping" in paths
     assert "/api/v1/receivables/ready" in paths
+    assert "/api/v1/eom-funnel/customer-handoffs" in paths
     assert "/openapi.json" not in paths
     assert "/docs" not in paths
     assert "/docs/oauth2-redirect" not in paths
@@ -955,6 +956,7 @@ def test_eom_receivables_ready_route_is_fail_closed(monkeypatch):
 
 def test_eom_lifespan_closes_database_when_migration_startup_fails(monkeypatch):
     from atlas_brain import main_eom
+    from atlas_brain.eom_api.config import EOMFunnelConfig
 
     events: list[str] = []
 
@@ -978,6 +980,7 @@ def test_eom_lifespan_closes_database_when_migration_startup_fails(monkeypatch):
     monkeypatch.setattr(main_eom, "close_database", close_database)
     monkeypatch.setattr(main_eom.eom_profile_settings, "run_migrations", True)
     monkeypatch.setattr(main_eom.invoicing_settings, "receivables_api_enabled", False)
+    monkeypatch.setattr(main_eom, "funnel_settings", EOMFunnelConfig())
 
     with pytest.raises(RuntimeError, match="migration failed"):
         asyncio.run(drive_lifespan())
@@ -985,8 +988,69 @@ def test_eom_lifespan_closes_database_when_migration_startup_fails(monkeypatch):
     assert events == ["init", "migrations", "close"]
 
 
+def test_eom_lifespan_runs_scoped_handoff_migrations_before_serving(monkeypatch):
+    from atlas_brain import main_eom
+    from atlas_brain.eom_api import funnel_auth
+    from atlas_brain.eom_api.config import EOMFunnelConfig
+
+    events: list[object] = []
+    pool = SimpleNamespace(is_initialized=True)
+
+    async def init_database():
+        events.append("init")
+
+    async def apply_migrations(received_pool, *, only):
+        events.append(("migrations", received_pool, only))
+
+    async def close_database():
+        events.append("close")
+
+    async def drive_lifespan():
+        async with main_eom.lifespan(FastAPI()):
+            events.append("inside")
+
+    monkeypatch.setattr(main_eom, "db_settings", SimpleNamespace(enabled=True))
+    monkeypatch.setattr(main_eom, "init_database", init_database)
+    monkeypatch.setattr(main_eom, "_get_eom_migration_pool", lambda: pool)
+    monkeypatch.setattr(main_eom, "run_migrations", apply_migrations)
+    monkeypatch.setattr(main_eom, "close_database", close_database)
+    monkeypatch.setattr(main_eom.eom_profile_settings, "run_migrations", True)
+    monkeypatch.setattr(main_eom.invoicing_settings, "receivables_api_enabled", False)
+    monkeypatch.setattr(
+        main_eom,
+        "funnel_settings",
+        EOMFunnelConfig(
+            api_enabled=True,
+            service_token=funnel_auth.generate_eom_funnel_service_token(),
+        ),
+    )
+
+    asyncio.run(drive_lifespan())
+
+    assert events == [
+        "init",
+        ("migrations", pool, main_eom.EOM_PROFILE_MIGRATIONS),
+        "inside",
+        "close",
+    ]
+
+
+def test_eom_startup_migrations_fail_closed_without_an_initialized_pool(monkeypatch):
+    from atlas_brain import main_eom
+
+    monkeypatch.setattr(
+        main_eom,
+        "_get_eom_migration_pool",
+        lambda: SimpleNamespace(is_initialized=False),
+    )
+
+    with pytest.raises(RuntimeError, match="require an initialized database pool"):
+        asyncio.run(main_eom._run_startup_migrations())
+
+
 def test_eom_lifespan_initializes_database_without_running_migrations(monkeypatch):
     from atlas_brain import main_eom
+    from atlas_brain.eom_api.config import EOMFunnelConfig
 
     events: list[str] = []
 
@@ -1009,6 +1073,7 @@ def test_eom_lifespan_initializes_database_without_running_migrations(monkeypatc
     monkeypatch.setattr(main_eom, "close_database", close_database)
     monkeypatch.setattr(main_eom.eom_profile_settings, "run_migrations", False)
     monkeypatch.setattr(main_eom.invoicing_settings, "receivables_api_enabled", False)
+    monkeypatch.setattr(main_eom, "funnel_settings", EOMFunnelConfig())
 
     asyncio.run(drive_lifespan())
 
@@ -1035,7 +1100,6 @@ def test_eom_profile_ping_is_database_independent(monkeypatch):
 
 def test_eom_profile_reaches_receivables_ready_through_real_app(tmp_path):
     from atlas_brain.eom_api import auth
-
     generated = auth.generate_receivables_service_token()
     probe = """
 import json

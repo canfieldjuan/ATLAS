@@ -16,11 +16,12 @@ from ..services.eom_lead_conversion import (
     EOMLeadConversionError,
     finalize_eom_customer_handoff,
 )
-from .eom_lead_funnel_auth import require_eom_funnel_actor, require_eom_funnel_api
+from .funnel_auth import require_eom_funnel_actor, require_eom_funnel_api
 
 router = APIRouter(prefix="/eom-funnel", tags=["eom-funnel"])
 
 _APPROVAL_KEY_PATTERN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:-]{15,127}$")
+_MAX_SIGNED_BIGINT = 2**63 - 1
 
 
 class EOMCustomerHandoffRequest(BaseModel):
@@ -28,8 +29,12 @@ class EOMCustomerHandoffRequest(BaseModel):
 
     model_config = ConfigDict(extra="forbid")
     contact_id: UUID
-    tracker_customer_id: Annotated[int, Field(strict=True, gt=0)]
-    tracker_site_id: Annotated[int, Field(strict=True, gt=0)]
+    tracker_customer_id: Annotated[
+        int, Field(strict=True, gt=0, le=_MAX_SIGNED_BIGINT)
+    ]
+    tracker_site_id: Annotated[
+        int, Field(strict=True, gt=0, le=_MAX_SIGNED_BIGINT)
+    ]
 
 
 def _crm_dependency() -> Any:

@@ -108,6 +108,26 @@ class EOMInvoicingConfig(BaseSettings):
         return self
 
 
+class EOMFunnelConfig(BaseSettings):
+    """Private service boundary for EOM office lead conversion."""
+
+    model_config = SettingsConfigDict(
+        env_prefix="ATLAS_EOM_FUNNEL_",
+        env_file=ENV_FILES,
+        extra="ignore",
+    )
+
+    api_enabled: bool = Field(
+        default=False,
+        description="Enable the service-authenticated EOM office conversion API",
+    )
+    service_token: str = Field(
+        default="",
+        description="Bearer token accepted from the EOM time tracker only",
+    )
+
+
 eom_settings = EOMRuntimeConfig()
 eom_profile_settings = EOMProfileConfig()
 invoicing_settings = EOMInvoicingConfig()
+funnel_settings = EOMFunnelConfig()

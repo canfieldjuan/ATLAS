@@ -8,10 +8,13 @@ import httpx
 import pytest
 from fastapi import FastAPI
 
-from atlas_brain.api import eom_lead_funnel as funnel_mod
-from atlas_brain.api import eom_lead_funnel_auth as auth_mod
-from atlas_brain.config import EOMFunnelConfig
+from atlas_brain.eom_api import funnel as funnel_mod
+from atlas_brain.eom_api import funnel_auth as auth_mod
+from atlas_brain.eom_api.config import EOMFunnelConfig
 from atlas_brain.services.eom_lead_conversion import EOMLeadConversionError
+
+
+_SERVICE_TOKEN = auth_mod.generate_eom_funnel_service_token()
 
 
 class _CRM:
@@ -42,11 +45,17 @@ def _approval_key() -> str:
     return f"office-handoff-{uuid4().hex}"
 
 
-def _headers(token: str = "x" * 24, approval_key: str | None = None) -> dict[str, str]:
+def _headers(
+    token: str = _SERVICE_TOKEN,
+    approval_key: str | None = None,
+    *,
+    actor: str = "Juan Canfield",
+    actor_id: str = "1",
+) -> dict[str, str]:
     return {
         "Authorization": f"Bearer {token}",
-        "X-EOM-Actor": "Juan Canfield",
-        "X-EOM-Actor-ID": "1",
+        "X-EOM-Actor": actor,
+        "X-EOM-Actor-ID": actor_id,
         "Idempotency-Key": approval_key or _approval_key(),
     }
 
@@ -54,7 +63,7 @@ def _headers(token: str = "x" * 24, approval_key: str | None = None) -> dict[str
 @pytest.mark.asyncio
 async def test_private_handoff_accepts_only_ids_and_actor_evidence():
     crm = _CRM()
-    app = _app(crm, EOMFunnelConfig(api_enabled=True, service_token="x" * 24))
+    app = _app(crm, EOMFunnelConfig(api_enabled=True, service_token=_SERVICE_TOKEN))
     approval_key = _approval_key()
     async with httpx.AsyncClient(
         transport=httpx.ASGITransport(app=app), base_url="http://test"
@@ -86,7 +95,7 @@ async def test_private_handoff_accepts_only_ids_and_actor_evidence():
 @pytest.mark.asyncio
 async def test_private_handoff_rejects_operational_estimate_fields_before_crm_call():
     crm = _CRM()
-    app = _app(crm, EOMFunnelConfig(api_enabled=True, service_token="x" * 24))
+    app = _app(crm, EOMFunnelConfig(api_enabled=True, service_token=_SERVICE_TOKEN))
     async with httpx.AsyncClient(
         transport=httpx.ASGITransport(app=app), base_url="http://test"
     ) as client:
@@ -108,7 +117,7 @@ async def test_private_handoff_rejects_operational_estimate_fields_before_crm_ca
 @pytest.mark.asyncio
 async def test_private_handoff_rejects_bad_service_token_before_crm_call():
     crm = _CRM()
-    app = _app(crm, EOMFunnelConfig(api_enabled=True, service_token="x" * 24))
+    app = _app(crm, EOMFunnelConfig(api_enabled=True, service_token=_SERVICE_TOKEN))
     async with httpx.AsyncClient(
         transport=httpx.ASGITransport(app=app), base_url="http://test"
     ) as client:
@@ -126,6 +135,91 @@ async def test_private_handoff_rejects_bad_service_token_before_crm_call():
     assert crm.calls == []
 
 
+@pytest.mark.parametrize(
+    "token",
+    (
+        "x" * 24,
+        "eomf_v1_" + ("x" * 43),
+        "eomf_v1_" + ("a" * 42),
+        "eomf_v1_" + ("*" * 43),
+        "eomrx_v1_" + "AbCdEfGhIjKlMnOpQrStUvWxYz0123456789_-ABC",
+        "eomf_v1_" + (("abc123" * 8)[:43]),
+        "\u00e9" * 43,
+    ),
+)
+def test_enabled_funnel_rejects_weak_or_non_generated_service_tokens_at_startup(
+    token: str,
+):
+    with pytest.raises(RuntimeError, match="generated|too short|invalid|too weak"):
+        auth_mod.validate_eom_funnel_api_config(
+            EOMFunnelConfig(api_enabled=True, service_token=token)
+        )
+
+
+def test_enabled_funnel_accepts_a_fresh_generated_service_token_at_startup():
+    auth_mod.validate_eom_funnel_api_config(
+        EOMFunnelConfig(
+            api_enabled=True,
+            service_token=auth_mod.generate_eom_funnel_service_token(),
+        )
+    )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("field", ("tracker_customer_id", "tracker_site_id"))
+async def test_private_handoff_rejects_storage_overflow_before_crm_call(field: str):
+    crm = _CRM()
+    app = _app(crm, EOMFunnelConfig(api_enabled=True, service_token=_SERVICE_TOKEN))
+    body = {
+        "contact_id": "11111111-1111-1111-1111-111111111111",
+        "tracker_customer_id": 12,
+        "tracker_site_id": 24,
+    }
+    body[field] = 2**63
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=app), base_url="http://test"
+    ) as client:
+        response = await client.post(
+            "/eom-funnel/customer-handoffs",
+            headers=_headers(),
+            json=body,
+        )
+
+    assert response.status_code == 422
+    assert crm.calls == []
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "headers",
+    (
+        _headers(actor=" "),
+        _headers(actor="x" * 100),
+        _headers(actor_id=str(2**63)),
+    ),
+)
+async def test_private_handoff_rejects_invalid_actor_evidence_before_crm_call(
+    headers: dict[str, str],
+):
+    crm = _CRM()
+    app = _app(crm, EOMFunnelConfig(api_enabled=True, service_token=_SERVICE_TOKEN))
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=app), base_url="http://test"
+    ) as client:
+        response = await client.post(
+            "/eom-funnel/customer-handoffs",
+            headers=headers,
+            json={
+                "contact_id": "11111111-1111-1111-1111-111111111111",
+                "tracker_customer_id": 12,
+                "tracker_site_id": 24,
+            },
+        )
+
+    assert response.status_code == 422
+    assert crm.calls == []
+
+
 @pytest.mark.asyncio
 async def test_private_handoff_preserves_provider_rejection_without_side_effect_claim():
     class _RejectingCRM(_CRM):
@@ -134,7 +228,7 @@ async def test_private_handoff_preserves_provider_rejection_without_side_effect_
             raise EOMLeadConversionError(409, "EOM lead is not ready for approval")
 
     crm = _RejectingCRM()
-    app = _app(crm, EOMFunnelConfig(api_enabled=True, service_token="x" * 24))
+    app = _app(crm, EOMFunnelConfig(api_enabled=True, service_token=_SERVICE_TOKEN))
     async with httpx.AsyncClient(
         transport=httpx.ASGITransport(app=app), base_url="http://test"
     ) as client:

@@ -64,24 +64,43 @@ from .eom_api.auth import validate_receivables_api_config
 from .eom_api.config import (
     eom_profile_settings,
     eom_settings,
+    funnel_settings,
     invoicing_settings,
 )
+from .eom_api.funnel import router as funnel_router
+from .eom_api.funnel_auth import validate_eom_funnel_api_config
 from .eom_api.receivables import router as receivables_router
 from .logging_config import configure_logging
 from .storage.config import db_settings
 from .storage.database import close_database, get_db_pool, init_database
+from .storage.migrations import run_migrations
 
 configure_logging(level=eom_settings.log_level, log_format=eom_settings.log_format)
 logger = logging.getLogger("atlas.eom")
 
+# This profile owns only the EOM CRM/lead-handoff schema.  035 links contacts
+# to appointments, so 012 is its required predecessor.  Do not replace this
+# list with the full Atlas migration chain: that chain is not fresh-applicable.
+EOM_PROFILE_MIGRATIONS = (
+    "012_appointments",
+    "035_contacts",
+    "346_contact_lead_pipeline",
+    "351_eom_lead_lifecycle_events",
+    "353_eom_customer_handoffs",
+)
+
+
+def _get_eom_migration_pool():
+    """Resolve the EOM startup pool through a narrow entrypoint seam."""
+    return get_db_pool()
+
 
 async def _run_startup_migrations() -> None:
-    from .storage.migrations import run_migrations
-
-    pool = get_db_pool()
-    if pool.is_initialized:
-        await run_migrations(pool)
-        logger.info("Database migrations checked")
+    pool = _get_eom_migration_pool()
+    if not pool.is_initialized:
+        raise RuntimeError("EOM startup migrations require an initialized database pool")
+    await run_migrations(pool, only=EOM_PROFILE_MIGRATIONS)
+    logger.info("EOM profile migrations checked")
 
 
 @asynccontextmanager
@@ -89,6 +108,7 @@ async def lifespan(app: FastAPI):
     """Initialize only the dependencies required by the EOM API profile."""
     logger.info("Atlas EOM API starting up")
     validate_receivables_api_config(invoicing_settings)
+    validate_eom_funnel_api_config(funnel_settings)
 
     try:
         if db_settings.enabled:
@@ -128,3 +148,4 @@ async def ping() -> dict[str, str]:
 
 
 app.include_router(receivables_router, prefix="/api/v1")
+app.include_router(funnel_router, prefix="/api/v1")

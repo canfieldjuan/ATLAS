@@ -287,11 +287,9 @@ async def lifespan(app: FastAPI):
     # --- Startup ---
     logger.info("Atlas Brain starting up...")
     _enforce_paid_funnel_alert_channel(settings)
-    from .api.eom_lead_funnel_auth import validate_eom_funnel_api_config
     from .api.invoicing.auth import validate_receivables_api_config
 
     validate_receivables_api_config(settings.invoicing)
-    validate_eom_funnel_api_config(settings.eom_funnel)
 
     # Initialize database connection pool
     if db_settings.enabled:

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import os
 import uuid
 from pathlib import Path
@@ -19,43 +20,141 @@ MIGRATIONS = ROOT / "atlas_brain" / "storage" / "migrations"
 DATABASE_URL_ENV = "ATLAS_MIGRATION_TEST_DATABASE_URL"
 
 
-@pytest.mark.asyncio
-async def test_office_handoff_is_atomic_idempotent_and_keeps_rate_schedule_out_of_atlas(
-    monkeypatch,
-):
+def _database_url_or_skip() -> str:
     database_url = os.environ.get(DATABASE_URL_ENV)
     if not database_url:
         pytest.skip(f"{DATABASE_URL_ENV} is not configured")
+    return database_url
 
+
+async def _prepare_schema(conn, schema: str) -> None:
+    await conn.execute(f'CREATE SCHEMA "{schema}"')
+    await conn.execute(f'SET search_path TO "{schema}", public')
+    await conn.execute("CREATE TABLE appointments (id UUID PRIMARY KEY)")
+    for name in (
+        "035_contacts.sql",
+        "346_contact_lead_pipeline.sql",
+        "351_eom_lead_lifecycle_events.sql",
+        "353_eom_customer_handoffs.sql",
+    ):
+        await conn.execute((MIGRATIONS / name).read_text())
+
+
+async def _insert_contact(
+    conn,
+    *,
+    contact_id: uuid.UUID,
+    business_context_id: str = "effingham_maids",
+    contact_type: str = "lead",
+    lead_stage: str | None = "new",
+    status: str = "active",
+) -> None:
+    await conn.execute(
+        """
+        INSERT INTO contacts (
+            id, full_name, business_context_id, contact_type, lead_stage, status
+        ) VALUES ($1, 'Approved Estimate', $2, $3, $4, $5)
+        """,
+        contact_id,
+        business_context_id,
+        contact_type,
+        lead_stage,
+        status,
+    )
+
+
+async def _contact_state(conn, contact_id: uuid.UUID) -> tuple[dict[str, object], int, int]:
+    contact = await conn.fetchrow(
+        """
+        SELECT business_context_id, contact_type, lead_stage, status
+        FROM contacts WHERE id = $1
+        """,
+        contact_id,
+    )
+    assert contact is not None
+    customer_approval_count = await conn.fetchval(
+        """
+        SELECT COUNT(*) FROM eom_lead_lifecycle_events
+        WHERE contact_id = $1 AND event_type = 'customer_approved'
+        """,
+        contact_id,
+    )
+    handoff_count = await conn.fetchval(
+        "SELECT COUNT(*) FROM eom_customer_handoffs WHERE contact_id = $1",
+        contact_id,
+    )
+    return dict(contact), int(customer_approval_count), int(handoff_count)
+
+
+def _approval_key() -> str:
+    return f"office-handoff-{uuid.uuid4().hex}"
+
+
+@pytest.mark.asyncio
+async def test_eom_profile_migration_set_bootstraps_handoff_schema_on_a_fresh_database():
+    """R4/R12: the deployed EOM profile gets its exact schema before serving."""
+    database_url = _database_url_or_skip()
+    schema = f"atlas_eom_profile_bootstrap_{uuid.uuid4().hex}"
+    admin = await asyncpg.connect(database_url)
+    pool = None
+    try:
+        await admin.execute(f'CREATE SCHEMA "{schema}"')
+        from atlas_brain.main_eom import EOM_PROFILE_MIGRATIONS
+        from atlas_brain.storage.migrations import run_migrations
+
+        pool = await asyncpg.create_pool(
+            database_url,
+            min_size=1,
+            max_size=1,
+            server_settings={"search_path": f'"{schema}", public'},
+        )
+        await run_migrations(pool, only=EOM_PROFILE_MIGRATIONS)
+
+        async with pool.acquire() as conn:
+            applied = {
+                row["name"]
+                for row in await conn.fetch("SELECT name FROM schema_migrations")
+            }
+            relations = {
+                relation: await conn.fetchval("SELECT to_regclass($1)", relation)
+                for relation in (
+                    "appointments",
+                    "contacts",
+                    "contact_interactions",
+                    "eom_lead_lifecycle_events",
+                    "eom_customer_handoffs",
+                )
+            }
+
+        assert EOM_PROFILE_MIGRATIONS == (
+            "012_appointments",
+            "035_contacts",
+            "346_contact_lead_pipeline",
+            "351_eom_lead_lifecycle_events",
+            "353_eom_customer_handoffs",
+        )
+        assert applied == set(EOM_PROFILE_MIGRATIONS)
+        assert all(relations.values())
+    finally:
+        if pool is not None:
+            await pool.close()
+        await admin.execute(f'DROP SCHEMA IF EXISTS "{schema}" CASCADE')
+        await admin.close()
+
+
+@pytest.mark.asyncio
+async def test_office_handoff_is_atomic_idempotent_and_keeps_rate_schedule_out_of_atlas():
+    database_url = _database_url_or_skip()
     schema = f"atlas_eom_conversion_{uuid.uuid4().hex}"
     conn = await asyncpg.connect(database_url)
     try:
-        await conn.execute(f'CREATE SCHEMA "{schema}"')
-        await conn.execute(f'SET search_path TO "{schema}", public')
-        await conn.execute("CREATE TABLE appointments (id UUID PRIMARY KEY)")
-        for name in (
-            "035_contacts.sql",
-            "346_contact_lead_pipeline.sql",
-            "351_eom_lead_lifecycle_events.sql",
-            "353_eom_customer_handoffs.sql",
-        ):
-            await conn.execute((MIGRATIONS / name).read_text())
+        await _prepare_schema(conn, schema)
 
-        import atlas_brain.storage.database as db_mod
-
-        monkeypatch.setattr(db_mod, "get_db_pool", lambda: conn)
-        provider = DatabaseCRMProvider()
+        provider = DatabaseCRMProvider(pool=conn)
         contact_id = uuid.uuid4()
-        approval_key = f"office-handoff-{uuid.uuid4().hex}"
-        different_approval_key = f"office-handoff-{uuid.uuid4().hex}"
-        await conn.execute(
-            """
-            INSERT INTO contacts (
-                id, full_name, business_context_id, contact_type, lead_stage, status
-            ) VALUES ($1, 'Approved Estimate', 'effingham_maids', 'lead', 'new', 'active')
-            """,
-            contact_id,
-        )
+        approval_key = _approval_key()
+        different_approval_key = _approval_key()
+        await _insert_contact(conn, contact_id=contact_id)
 
         first = await provider.finalize_eom_customer_handoff(
             contact_id=str(contact_id),
@@ -91,6 +190,48 @@ async def test_office_handoff_is_atomic_idempotent_and_keeps_rate_schedule_out_o
             contact_id,
         ) == 1
 
+        with pytest.raises(asyncpg.exceptions.RaiseError, match="immutable"):
+            await conn.execute(
+                """
+                UPDATE eom_customer_handoffs
+                SET tracker_site_id = 999
+                WHERE contact_id = $1
+                """,
+                contact_id,
+            )
+        assert await conn.fetchval(
+            "SELECT tracker_site_id FROM eom_customer_handoffs WHERE contact_id = $1",
+            contact_id,
+        ) == 202
+
+        direct_contact_id = uuid.uuid4()
+        await _insert_contact(conn, contact_id=direct_contact_id)
+        with pytest.raises(
+            asyncpg.exceptions.RaiseError,
+            match="must be inserted by the finalization transaction",
+        ):
+            await conn.execute(
+                """
+                INSERT INTO eom_customer_handoffs (
+                    contact_id, approval_key, tracker_customer_id, tracker_site_id,
+                    approved_by_employee_id, approved_by_name
+                )
+                VALUES ($1, $2, 303, 404, 1, 'Juan Canfield')
+                """,
+                direct_contact_id,
+                _approval_key(),
+            )
+        assert await _contact_state(conn, direct_contact_id) == (
+            {
+                "business_context_id": "effingham_maids",
+                "contact_type": "lead",
+                "lead_stage": "new",
+                "status": "active",
+            },
+            0,
+            0,
+        )
+
         with pytest.raises(EOMLeadConversionError, match="different customer handoff"):
             await provider.finalize_eom_customer_handoff(
                 contact_id=str(contact_id),
@@ -101,5 +242,284 @@ async def test_office_handoff_is_atomic_idempotent_and_keeps_rate_schedule_out_o
                 actor_name="Juan Canfield",
             )
     finally:
+        await conn.execute(f'DROP SCHEMA IF EXISTS "{schema}" CASCADE')
+        await conn.close()
+
+
+@pytest.mark.asyncio
+async def test_office_handoff_rejects_an_incomplete_preexisting_replay_row():
+    database_url = _database_url_or_skip()
+    schema = f"atlas_eom_conversion_incomplete_{uuid.uuid4().hex}"
+    conn = await asyncpg.connect(database_url)
+    try:
+        await _prepare_schema(conn, schema)
+
+        provider = DatabaseCRMProvider(pool=conn)
+        contact_id = uuid.uuid4()
+        approval_key = _approval_key()
+        await _insert_contact(conn, contact_id=contact_id)
+        async with conn.transaction():
+            await conn.execute(
+                "SELECT set_config('atlas.eom_customer_handoff_finalization', 'true', true)"
+            )
+            await conn.execute(
+                """
+                INSERT INTO eom_customer_handoffs (
+                    contact_id, approval_key, tracker_customer_id, tracker_site_id,
+                    approved_by_employee_id, approved_by_name
+                )
+                VALUES ($1, $2, 101, 202, 1, 'Juan Canfield')
+                """,
+                contact_id,
+                approval_key,
+            )
+
+        with pytest.raises(EOMLeadConversionError, match="not a completed finalization"):
+            await provider.finalize_eom_customer_handoff(
+                contact_id=str(contact_id),
+                tracker_customer_id=101,
+                tracker_site_id=202,
+                approval_key=approval_key,
+                actor_id=1,
+                actor_name="Juan Canfield",
+            )
+
+        assert await _contact_state(conn, contact_id) == (
+            {
+                "business_context_id": "effingham_maids",
+                "contact_type": "lead",
+                "lead_stage": "new",
+                "status": "active",
+            },
+            0,
+            1,
+        )
+    finally:
+        await conn.execute(f'DROP SCHEMA IF EXISTS "{schema}" CASCADE')
+        await conn.close()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("business_context_id", "contact_type", "lead_stage", "status", "expected_status"),
+    (
+        ("other_business", "lead", "new", "active", 404),
+        ("effingham_maids", "lead", "new", "inactive", 409),
+        ("effingham_maids", "customer", None, "active", 409),
+        ("effingham_maids", "lead", "qualified", "active", 409),
+    ),
+)
+async def test_office_handoff_rejects_ineligible_contact_before_any_handoff_write(
+    business_context_id: str,
+    contact_type: str,
+    lead_stage: str | None,
+    status: str,
+    expected_status: int,
+):
+    database_url = _database_url_or_skip()
+    schema = f"atlas_eom_conversion_reject_{uuid.uuid4().hex}"
+    conn = await asyncpg.connect(database_url)
+    try:
+        await _prepare_schema(conn, schema)
+
+        provider = DatabaseCRMProvider(pool=conn)
+        contact_id = uuid.uuid4()
+        await _insert_contact(
+            conn,
+            contact_id=contact_id,
+            business_context_id=business_context_id,
+            contact_type=contact_type,
+            lead_stage=lead_stage,
+            status=status,
+        )
+        before = await _contact_state(conn, contact_id)
+
+        with pytest.raises(EOMLeadConversionError) as exc_info:
+            await provider.finalize_eom_customer_handoff(
+                contact_id=str(contact_id),
+                tracker_customer_id=101,
+                tracker_site_id=202,
+                approval_key=_approval_key(),
+                actor_id=1,
+                actor_name="Juan Canfield",
+            )
+
+        assert exc_info.value.status_code == expected_status
+        assert await _contact_state(conn, contact_id) == before
+    finally:
+        await conn.execute(f'DROP SCHEMA IF EXISTS "{schema}" CASCADE')
+        await conn.close()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("later_status", ("inactive", "archived"))
+async def test_completed_office_handoff_replays_after_later_customer_status_change(
+    later_status: str,
+):
+    database_url = _database_url_or_skip()
+    schema = f"atlas_eom_conversion_replay_status_{uuid.uuid4().hex}"
+    conn = await asyncpg.connect(database_url)
+    try:
+        await _prepare_schema(conn, schema)
+        provider = DatabaseCRMProvider(pool=conn)
+        contact_id = uuid.uuid4()
+        approval_key = _approval_key()
+        await _insert_contact(conn, contact_id=contact_id)
+
+        first = await provider.finalize_eom_customer_handoff(
+            contact_id=str(contact_id),
+            tracker_customer_id=101,
+            tracker_site_id=202,
+            approval_key=approval_key,
+            actor_id=1,
+            actor_name="Juan Canfield",
+        )
+        updated = await provider.update_contact(
+            str(contact_id),
+            {"status": later_status},
+        )
+        assert updated is not None
+        assert updated["status"] == later_status
+
+        replay = await provider.finalize_eom_customer_handoff(
+            contact_id=str(contact_id),
+            tracker_customer_id=101,
+            tracker_site_id=202,
+            approval_key=approval_key,
+            actor_id=1,
+            actor_name="Juan Canfield",
+        )
+
+        assert replay == {**first, "idempotent": True}
+        assert await _contact_state(conn, contact_id) == (
+            {
+                "business_context_id": "effingham_maids",
+                "contact_type": "customer",
+                "lead_stage": None,
+                "status": later_status,
+            },
+            1,
+            1,
+        )
+    finally:
+        await conn.execute(f'DROP SCHEMA IF EXISTS "{schema}" CASCADE')
+        await conn.close()
+
+
+@pytest.mark.asyncio
+async def test_office_handoff_serializes_overlapping_key_and_contact_callbacks():
+    database_url = _database_url_or_skip()
+    schema = f"atlas_eom_conversion_concurrent_{uuid.uuid4().hex}"
+    conn = await asyncpg.connect(database_url)
+    pool = None
+    try:
+        await _prepare_schema(conn, schema)
+        await conn.execute(
+            """
+            CREATE OR REPLACE FUNCTION delay_eom_customer_handoff_insert()
+            RETURNS TRIGGER LANGUAGE plpgsql AS $$
+            BEGIN
+                PERFORM pg_sleep(0.05);
+                RETURN NEW;
+            END;
+            $$;
+            CREATE TRIGGER trg_delay_eom_customer_handoff_insert
+            BEFORE INSERT ON eom_customer_handoffs
+            FOR EACH ROW EXECUTE FUNCTION delay_eom_customer_handoff_insert();
+            """
+        )
+        pool = await asyncpg.create_pool(
+            database_url,
+            min_size=2,
+            max_size=2,
+            server_settings={"search_path": f"{schema}, public"},
+        )
+
+        provider = DatabaseCRMProvider(pool=pool)
+        first_contact_id = uuid.uuid4()
+        second_contact_id = uuid.uuid4()
+        third_contact_id = uuid.uuid4()
+        fourth_contact_id = uuid.uuid4()
+        fifth_contact_id = uuid.uuid4()
+        await _insert_contact(conn, contact_id=first_contact_id)
+        await _insert_contact(conn, contact_id=second_contact_id)
+        await _insert_contact(conn, contact_id=third_contact_id)
+        await _insert_contact(conn, contact_id=fourth_contact_id)
+        await _insert_contact(conn, contact_id=fifth_contact_id)
+
+        same_key = _approval_key()
+
+        async def finalize(
+            contact_id: uuid.UUID,
+            key: str,
+            tracker_customer_id: int = 101,
+            tracker_site_id: int = 202,
+        ):
+            return await provider.finalize_eom_customer_handoff(
+                contact_id=str(contact_id),
+                tracker_customer_id=tracker_customer_id,
+                tracker_site_id=tracker_site_id,
+                approval_key=key,
+                actor_id=1,
+                actor_name="Juan Canfield",
+            )
+
+        first, retry = await asyncio.gather(
+            finalize(first_contact_id, same_key),
+            finalize(first_contact_id, same_key),
+        )
+        assert {first["idempotent"], retry["idempotent"]} == {False, True}
+        assert first["handoff_id"] == retry["handoff_id"]
+
+        cross_contact_key = _approval_key()
+        cross_results = await asyncio.gather(
+            finalize(second_contact_id, cross_contact_key, 303, 404),
+            finalize(third_contact_id, cross_contact_key, 303, 404),
+            return_exceptions=True,
+        )
+        successes = [result for result in cross_results if isinstance(result, dict)]
+        rejections = [
+            result for result in cross_results if isinstance(result, EOMLeadConversionError)
+        ]
+        assert len(successes) == 1
+        assert len(rejections) == 1
+        assert rejections[0].status_code == 409
+        assert await conn.fetchval(
+            "SELECT COUNT(*) FROM eom_customer_handoffs WHERE approval_key = $1",
+            cross_contact_key,
+        ) == 1
+
+        tracker_collision_results = await asyncio.gather(
+            finalize(fourth_contact_id, _approval_key(), 505, 606),
+            finalize(fifth_contact_id, _approval_key(), 505, 606),
+            return_exceptions=True,
+        )
+        tracker_successes = [
+            result for result in tracker_collision_results if isinstance(result, dict)
+        ]
+        tracker_rejections = [
+            result
+            for result in tracker_collision_results
+            if isinstance(result, EOMLeadConversionError)
+        ]
+        assert len(tracker_successes) == 1
+        assert len(tracker_rejections) == 1
+        assert tracker_rejections[0].status_code == 409
+        assert await conn.fetchval(
+            """
+            SELECT COUNT(*) FROM eom_customer_handoffs
+            WHERE tracker_customer_id = 505 AND tracker_site_id = 606
+            """
+        ) == 1
+        assert await conn.fetchval(
+            """
+            SELECT COUNT(*) FROM contacts
+            WHERE id = ANY($1::uuid[]) AND contact_type = 'customer'
+            """,
+            [second_contact_id, third_contact_id],
+        ) == 1
+    finally:
+        if pool is not None:
+            await pool.close()
         await conn.execute(f'DROP SCHEMA IF EXISTS "{schema}" CASCADE')
         await conn.close()
