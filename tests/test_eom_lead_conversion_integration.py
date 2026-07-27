@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import os
 import uuid
+from datetime import datetime, timezone
 from pathlib import Path
 
 import pytest
@@ -128,14 +129,27 @@ async def _insert_contact(
     contact_type: str = "lead",
     lead_stage: str | None = "new",
     status: str = "active",
+    full_name: str = "Approved Estimate",
+    email: str | None = None,
+    phone: str | None = None,
+    address: str | None = None,
+    source: str | None = "web",
+    created_at: datetime | None = None,
 ) -> None:
     await conn.execute(
         """
         INSERT INTO contacts (
-            id, full_name, business_context_id, contact_type, lead_stage, status
-        ) VALUES ($1, 'Approved Estimate', $2, $3, $4, $5)
+            id, full_name, email, phone, address, source, created_at,
+            business_context_id, contact_type, lead_stage, status
+        ) VALUES ($1, $2, $3, $4, $5, $6, COALESCE($7, NOW()), $8, $9, $10, $11)
         """,
         contact_id,
+        full_name,
+        email,
+        phone,
+        address,
+        source,
+        created_at,
         business_context_id,
         contact_type,
         lead_stage,
@@ -168,6 +182,99 @@ async def _contact_state(conn, contact_id: uuid.UUID) -> tuple[dict[str, object]
 
 def _approval_key() -> str:
     return f"office-handoff-{uuid.uuid4().hex}"
+
+
+@pytest.mark.asyncio
+async def test_eom_lead_review_projection_is_closed_filtered_and_read_only():
+    database_url = _database_url_or_skip()
+    schema = f"atlas_eom_lead_review_{uuid.uuid4().hex}"
+    conn = await asyncpg.connect(database_url)
+    try:
+        await _prepare_schema(conn, schema)
+        provider = DatabaseCRMProvider(pool=conn)
+        eligible_id = uuid.uuid4()
+        newer_eligible_id = uuid.uuid4()
+        created_at = datetime(2026, 7, 27, 12, 0, tzinfo=timezone.utc)
+        newer_created_at = datetime(2026, 7, 27, 13, 0, tzinfo=timezone.utc)
+        await _insert_contact(
+            conn,
+            contact_id=eligible_id,
+            full_name="Eligible Earlier",
+            email="earlier@example.com",
+            phone="2175550100",
+            address="100 Main St",
+            source="web",
+            created_at=created_at,
+        )
+        await _insert_contact(
+            conn,
+            contact_id=newer_eligible_id,
+            full_name="Eligible Newer",
+            email="newer@example.com",
+            phone="2175550101",
+            address="101 Main St",
+            source="web",
+            created_at=newer_created_at,
+        )
+        for business_context_id, contact_type, lead_stage, status in (
+            ("other_business", "lead", "new", "active"),
+            ("effingham_maids", "customer", None, "active"),
+            ("effingham_maids", "lead", "qualified", "active"),
+            ("effingham_maids", "lead", "new", "inactive"),
+        ):
+            await _insert_contact(
+                conn,
+                contact_id=uuid.uuid4(),
+                business_context_id=business_context_id,
+                contact_type=contact_type,
+                lead_stage=lead_stage,
+                status=status,
+            )
+
+        before_counts = {
+            "contacts": await conn.fetchval("SELECT COUNT(*) FROM contacts"),
+            "events": await conn.fetchval("SELECT COUNT(*) FROM eom_lead_lifecycle_events"),
+            "handoffs": await conn.fetchval("SELECT COUNT(*) FROM eom_customer_handoffs"),
+        }
+        rows = await provider.list_eom_new_lead_review_items(limit=10)
+
+        assert rows == [
+            {
+                "contact_id": newer_eligible_id,
+                "full_name": "Eligible Newer",
+                "email": "newer@example.com",
+                "phone": "2175550101",
+                "address": "101 Main St",
+                "source": "web",
+                "created_at": newer_created_at,
+            },
+            {
+                "contact_id": eligible_id,
+                "full_name": "Eligible Earlier",
+                "email": "earlier@example.com",
+                "phone": "2175550100",
+                "address": "100 Main St",
+                "source": "web",
+                "created_at": created_at,
+            },
+        ]
+        assert set(rows[0]) == {
+            "contact_id",
+            "full_name",
+            "email",
+            "phone",
+            "address",
+            "source",
+            "created_at",
+        }
+        assert {
+            "contacts": await conn.fetchval("SELECT COUNT(*) FROM contacts"),
+            "events": await conn.fetchval("SELECT COUNT(*) FROM eom_lead_lifecycle_events"),
+            "handoffs": await conn.fetchval("SELECT COUNT(*) FROM eom_customer_handoffs"),
+        } == before_counts
+    finally:
+        await conn.execute(f'DROP SCHEMA IF EXISTS "{schema}" CASCADE')
+        await conn.close()
 
 
 @pytest.mark.asyncio

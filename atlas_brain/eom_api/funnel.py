@@ -3,10 +3,11 @@
 from __future__ import annotations
 
 import re
+from datetime import datetime
 from typing import Annotated, Any
 from uuid import UUID
 
-from fastapi import APIRouter, Depends, Header, HTTPException, status
+from fastapi import APIRouter, Depends, Header, HTTPException, Query, status
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, ConfigDict, Field
 
@@ -22,6 +23,8 @@ router = APIRouter(prefix="/eom-funnel", tags=["eom-funnel"])
 
 _APPROVAL_KEY_PATTERN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:-]{15,127}$")
 _MAX_SIGNED_BIGINT = 2**63 - 1
+_DEFAULT_LEAD_REVIEW_LIMIT = 100
+_MAX_LEAD_REVIEW_LIMIT = 200
 
 
 class EOMCustomerHandoffRequest(BaseModel):
@@ -35,6 +38,28 @@ class EOMCustomerHandoffRequest(BaseModel):
     tracker_site_id: Annotated[
         int, Field(strict=True, gt=0, le=_MAX_SIGNED_BIGINT)
     ]
+
+
+class EOMLeadReviewItem(BaseModel):
+    """The only CRM identity data the office-review queue may expose."""
+
+    model_config = ConfigDict(extra="forbid", populate_by_name=True)
+
+    contact_id: UUID = Field(serialization_alias="contactId")
+    full_name: str = Field(serialization_alias="fullName")
+    email: str | None = None
+    phone: str | None = None
+    address: str | None = None
+    source: str | None = None
+    created_at: datetime = Field(serialization_alias="createdAt")
+
+
+class EOMLeadReviewResponse(BaseModel):
+    """Closed response envelope for the tracker-owned office queue."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    leads: list[EOMLeadReviewItem]
 
 
 def _crm_dependency() -> Any:
@@ -54,6 +79,31 @@ def _approval_key_dependency(
             ),
         )
     return key
+
+
+@router.get(
+    "/leads",
+    response_model=EOMLeadReviewResponse,
+    dependencies=[Depends(require_eom_funnel_api)],
+)
+async def list_eom_lead_review_items(
+    limit: Annotated[
+        int,
+        Query(ge=1, le=_MAX_LEAD_REVIEW_LIMIT),
+    ] = _DEFAULT_LEAD_REVIEW_LIMIT,
+    _actor: dict[str, object] = Depends(require_eom_funnel_actor),
+    crm: Any = Depends(_crm_dependency),
+) -> EOMLeadReviewResponse:
+    """List only active EOM ``lead/new`` records for office review.
+
+    The tracker keeps the service bearer and the browser never calls this
+    route directly. Reading this projection does not alter CRM lifecycle,
+    interactions, or customer-handoff state.
+    """
+    rows = await crm.list_eom_new_lead_review_items(limit=limit)
+    return EOMLeadReviewResponse(
+        leads=[EOMLeadReviewItem.model_validate(row) for row in rows]
+    )
 
 
 @router.post(

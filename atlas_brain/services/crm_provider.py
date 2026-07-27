@@ -1138,6 +1138,41 @@ class DatabaseCRMProvider:
         )
         return [dict(r) for r in rows]
 
+    async def list_eom_new_lead_review_items(
+        self,
+        *,
+        limit: int = 100,
+    ) -> list[dict[str, Any]]:
+        """Return the closed office-review projection for active EOM new leads.
+
+        This is intentionally separate from ``list_contacts``: the generic
+        method returns complete CRM rows, while the office funnel boundary may
+        expose only the small identity/readiness projection required to start
+        the existing customer-handoff command.
+        """
+        pool = self._get_pool()
+        rows = await pool.fetch(
+            """
+            SELECT
+                id AS contact_id,
+                full_name,
+                email,
+                phone,
+                address,
+                source,
+                created_at
+            FROM contacts
+            WHERE business_context_id = 'effingham_maids'
+              AND status = 'active'
+              AND contact_type = 'lead'
+              AND lead_stage = 'new'
+            ORDER BY created_at DESC, id DESC
+            LIMIT $1
+            """,
+            limit,
+        )
+        return [dict(row) for row in rows]
+
     async def open_customer_service_ticket(
         self,
         *,
