@@ -106,9 +106,11 @@ Slice phase: vertical slice
     path.
   - `tests/test_eom_render_profile.py::test_eom_receivables_bearer_admission_matches_generated_token_grammar`
     proves the free-form `Authorization` bearer token admission matches an
-    independent prefix × payload-length × payload-character grammar oracle, with
-    matching digests supplied for every generated ASCII token candidate so bad
-    grammar cannot be hidden as a digest mismatch.
+    independent prefix × payload grammar oracle across homogeneous payloads,
+    mixed allowed payloads, and invalid characters inserted at first, middle,
+    and last payload positions, with matching digests supplied for every
+    generated ASCII token candidate so bad grammar cannot be hidden as a digest
+    mismatch.
   - `tests/test_eom_render_profile.py::test_eom_receivables_ready_route_is_fail_closed`
     proves `require_receivables_api()` has one bearer-admission choke point:
     `_validate_generated_token()` must accept only the bounded
@@ -132,7 +134,7 @@ Slice phase: vertical slice
 - Risk areas: raw secret placement, auth fail-open behavior, startup failure
   behavior, Render env drift, accidental migration/API coupling, and EOM route
   reachability.
-- Reviewer rules triggered: R1, R2, R3, R5, R6, R10, R11, R12, R14.
+- Reviewer rules triggered: R1, R2, R3, R5, R6, R8, R10, R11, R12, R13, R14.
 
 ### Files touched
 
@@ -202,7 +204,7 @@ Parked hardening: none.
 |---|---:|
 | `atlas_brain/eom_api/auth.py` | 28 |
 | `atlas_brain/eom_api/config.py` | 57 |
-| `plans/PR-EOM-Render-Receivables-Auth.md` | 208 |
+| `plans/PR-EOM-Render-Receivables-Auth.md` | 210 |
 | `render.eom.yaml` | 2 |
-| `tests/test_eom_render_profile.py` | 510 |
-| **Total** | **805** |
+| `tests/test_eom_render_profile.py` | 578 |
+| **Total** | **875** |

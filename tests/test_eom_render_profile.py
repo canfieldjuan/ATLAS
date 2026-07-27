@@ -63,6 +63,26 @@ def _generated_receivables_token_oracle(token: str) -> bool:
     )
 
 
+def _mixed_generated_payload(length: int) -> str:
+    return "".join(
+        _GENERATED_RECEIVABLES_TOKEN_PAYLOAD_CHARS[
+            (index * 7 + 3) % len(_GENERATED_RECEIVABLES_TOKEN_PAYLOAD_CHARS)
+        ]
+        for index in range(length)
+    )
+
+
+def _generated_payload_with_replacement(
+    *,
+    length: int,
+    replacement: str,
+    position: int,
+) -> str:
+    payload = list(_mixed_generated_payload(length))
+    payload[position] = replacement
+    return "".join(payload)
+
+
 def _sha256_ascii(value: str) -> str:
     return hashlib.sha256(value.encode("ascii")).hexdigest()
 
@@ -745,15 +765,46 @@ def test_eom_receivables_bearer_admission_matches_generated_token_grammar(
     )
     payload_lengths = (0, 1, 42, 43, 44)
     payload_chars = ("A", "z", "0", "_", "-", "*", ".", "=")
+    invalid_payload_positions = (
+        0,
+        _GENERATED_RECEIVABLES_TOKEN_PAYLOAD_LENGTH // 2,
+        _GENERATED_RECEIVABLES_TOKEN_PAYLOAD_LENGTH - 1,
+    )
+    homogeneous_payloads = tuple(
+        payload_char * payload_length
+        for payload_length, payload_char in product(payload_lengths, payload_chars)
+    )
+    mixed_allowed_payloads = tuple(
+        _mixed_generated_payload(payload_length) for payload_length in payload_lengths
+    )
+    mixed_invalid_payloads = tuple(
+        _generated_payload_with_replacement(
+            length=_GENERATED_RECEIVABLES_TOKEN_PAYLOAD_LENGTH,
+            replacement=invalid_char,
+            position=position,
+        )
+        for invalid_char, position in product(
+            ("*", ".", "="),
+            invalid_payload_positions,
+        )
+    )
+    payloads = tuple(
+        dict.fromkeys(
+            (
+                *homogeneous_payloads,
+                *mixed_allowed_payloads,
+                *mixed_invalid_payloads,
+            )
+        )
+    )
     accepted_cases = 0
 
     with TestClient(app) as client:
-        for token_prefix, payload_length, payload_char in product(
+        for token_prefix, payload in product(
             token_prefixes,
-            payload_lengths,
-            payload_chars,
+            payloads,
         ):
-            token = f"{token_prefix}{payload_char * payload_length}"
+            token = f"{token_prefix}{payload}"
             should_accept = _generated_receivables_token_oracle(token)
             runtime_config["value"] = auth.TrustedReceivablesApiConfig(
                 receivables_api_enabled=True,
@@ -767,17 +818,34 @@ def test_eom_receivables_bearer_admission_matches_generated_token_grammar(
 
             assert response.status_code == (200 if should_accept else 401), (
                 token_prefix,
-                payload_length,
-                payload_char,
+                len(payload),
+                payload,
             )
             accepted_cases += int(should_accept)
 
-    assert accepted_cases == len(
-        [
-            char
-            for char in payload_chars
-            if char in _GENERATED_RECEIVABLES_TOKEN_PAYLOAD_CHARS
-        ]
+    expected_accepted_cases = sum(
+        1
+        for token_prefix, payload in product(token_prefixes, payloads)
+        if _generated_receivables_token_oracle(f"{token_prefix}{payload}")
+    )
+    assert accepted_cases == expected_accepted_cases
+    assert any(
+        _generated_receivables_token_oracle(
+            f"{_GENERATED_RECEIVABLES_TOKEN_PREFIX}{payload}"
+        )
+        and len(set(payload)) > 1
+        for payload in payloads
+    )
+    assert any(
+        len(payload) == _GENERATED_RECEIVABLES_TOKEN_PAYLOAD_LENGTH
+        and any(
+            char not in _GENERATED_RECEIVABLES_TOKEN_PAYLOAD_CHARS
+            for char in payload
+        )
+        and not _generated_receivables_token_oracle(
+            f"{_GENERATED_RECEIVABLES_TOKEN_PREFIX}{payload}"
+        )
+        for payload in payloads
     )
 
 
