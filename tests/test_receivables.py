@@ -693,6 +693,21 @@ class _SingleConnectionPool:
             return await self.conn.fetchval(query, *args)
 
 
+class _MigrationConnectionPool:
+    is_initialized = True
+
+    def __init__(self, conn, schema: str) -> None:
+        self.conn = conn
+        self.schema = schema
+
+    async def acquire(self):
+        await self.conn.execute(f'SET search_path TO "{self.schema}"')
+        return self.conn
+
+    async def release(self, released) -> None:
+        assert released is self.conn
+
+
 async def _create_pre_receivables_schema(conn, schema: str) -> None:
     await conn.execute(f'CREATE SCHEMA "{schema}"')
     await conn.execute(f'SET search_path TO "{schema}"')
@@ -712,6 +727,194 @@ def _receivables_migration_sql() -> str:
             "345_receivables_event_key_lookup.sql",
         )
     )
+
+
+def _packaged_migration_sql(migration_stem: str) -> str:
+    return (
+        Path(__file__).parents[1]
+        / "atlas_brain/storage/migrations"
+        / f"{migration_stem}.sql"
+    ).read_text(encoding="utf-8")
+
+
+async def _schema_foreign_key_relationships(conn, schema: str) -> set[tuple]:
+    rows = await conn.fetch(
+        """
+        SELECT
+            source_table.relname AS source_table,
+            ARRAY_AGG(source_column.attname ORDER BY source_key.position)
+                AS source_columns,
+            target_table.relname AS target_table,
+            ARRAY_AGG(target_column.attname ORDER BY target_key.position)
+                AS target_columns,
+            constraint_state.confdeltype::text AS delete_action
+        FROM pg_constraint AS constraint_state
+        JOIN pg_class AS source_table
+          ON source_table.oid = constraint_state.conrelid
+        JOIN pg_namespace AS source_namespace
+          ON source_namespace.oid = source_table.relnamespace
+        JOIN pg_class AS target_table
+          ON target_table.oid = constraint_state.confrelid
+        JOIN UNNEST(constraint_state.conkey) WITH ORDINALITY
+            AS source_key(attnum, position)
+          ON TRUE
+        JOIN pg_attribute AS source_column
+          ON source_column.attrelid = source_table.oid
+         AND source_column.attnum = source_key.attnum
+        JOIN UNNEST(constraint_state.confkey) WITH ORDINALITY
+            AS target_key(attnum, position)
+          ON target_key.position = source_key.position
+        JOIN pg_attribute AS target_column
+          ON target_column.attrelid = target_table.oid
+         AND target_column.attnum = target_key.attnum
+        WHERE source_namespace.nspname = $1
+          AND constraint_state.contype = 'f'
+        GROUP BY
+            constraint_state.oid,
+            source_table.relname,
+            target_table.relname,
+            constraint_state.confdeltype
+        """,
+        schema,
+    )
+    return {
+        (
+            row["source_table"],
+            tuple(row["source_columns"]),
+            row["target_table"],
+            tuple(row["target_columns"]),
+            row["delete_action"],
+        )
+        for row in rows
+    }
+
+
+def test_eom_readiness_migration_set_is_closed_over_receivables_dependencies():
+    from atlas_brain import main_eom
+
+    positions = {
+        migration: index
+        for index, migration in enumerate(main_eom.EOM_RECEIVABLES_READINESS_MIGRATIONS)
+    }
+    combined_sql = "\n".join(
+        _packaged_migration_sql(migration)
+        for migration in main_eom.EOM_RECEIVABLES_READINESS_MIGRATIONS
+    )
+    created_tables = set(
+        re.findall(r"CREATE TABLE IF NOT EXISTS ([a-z_]+)", combined_sql)
+    )
+
+    assert set(_RECEIVABLES_REQUIRED_COLUMNS) <= created_tables
+    assert positions["012_appointments"] < positions["035_contacts"]
+    assert positions["035_contacts"] < positions["045_invoices"]
+    assert positions["045_invoices"] < positions["344_receivables_payments"]
+    assert (
+        positions["344_receivables_payments"]
+        < positions["345_receivables_event_key_lookup"]
+    )
+    assert "ALTER TABLE appointments" in _packaged_migration_sql("035_contacts")
+    assert "REFERENCES contacts(id)" in _packaged_migration_sql("045_invoices")
+    assert "ALTER TABLE invoice_payments" in _packaged_migration_sql(
+        "344_receivables_payments"
+    )
+    assert "ON payment_events(idempotency_key)" in _packaged_migration_sql(
+        "345_receivables_event_key_lookup"
+    )
+
+
+@pytest.mark.asyncio
+async def test_eom_receivables_readiness_migration_set_builds_ready_schema():
+    asyncpg = pytest.importorskip("asyncpg")
+    database_url = os.environ.get("ATLAS_RECEIVABLES_TEST_DATABASE_URL")
+    if not database_url:
+        pytest.skip("ATLAS_RECEIVABLES_TEST_DATABASE_URL not set")
+
+    from atlas_brain import main_eom
+    from atlas_brain.storage.migrations import run_migrations
+
+    schema = f"eom_receivables_readiness_{uuid4().hex}"
+    conn = await asyncpg.connect(database_url)
+    migrations_dir = Path(__file__).parents[1] / "atlas_brain/storage/migrations"
+    try:
+        await conn.execute(f'CREATE SCHEMA "{schema}"')
+        pool = _MigrationConnectionPool(conn, schema)
+
+        await run_migrations(
+            pool,
+            migrations_dir=migrations_dir,
+            only=main_eom.EOM_RECEIVABLES_READINESS_MIGRATIONS,
+        )
+
+        applied_names = {
+            row["name"]
+            for row in await conn.fetch(
+                """
+                SELECT name
+                FROM schema_migrations
+                ORDER BY name
+                """
+            )
+        }
+        assert applied_names == set(main_eom.EOM_RECEIVABLES_READINESS_MIGRATIONS)
+        assert not any(
+            name.startswith(("066_", "068_", "074_", "076_", "083_", "095_"))
+            for name in applied_names
+        )
+        service = ReceivablesService(_SingleConnectionPool(conn, schema))
+        assert await service.is_ready() is True
+        expected_foreign_keys = {
+            ("appointments", ("contact_id",), "contacts", ("id",), "n"),
+            ("contact_interactions", ("contact_id",), "contacts", ("id",), "c"),
+            ("invoices", ("contact_id",), "contacts", ("id",), "n"),
+            ("invoice_payments", ("invoice_id",), "invoices", ("id",), "c"),
+            ("customer_payments", ("contact_id",), "contacts", ("id",), "n"),
+            (
+                "invoice_payments",
+                ("payment_id",),
+                "customer_payments",
+                ("id",),
+                "r",
+            ),
+            (
+                "payment_deposit_items",
+                ("batch_id",),
+                "payment_deposit_batches",
+                ("id",),
+                "r",
+            ),
+            (
+                "payment_deposit_items",
+                ("payment_id",),
+                "customer_payments",
+                ("id",),
+                "r",
+            ),
+            ("payment_events", ("payment_id",), "customer_payments", ("id",), "r"),
+        }
+        assert expected_foreign_keys <= await _schema_foreign_key_relationships(
+            conn,
+            schema,
+        )
+
+        await run_migrations(
+            pool,
+            migrations_dir=migrations_dir,
+            only=main_eom.EOM_RECEIVABLES_READINESS_MIGRATIONS,
+        )
+        assert {
+            row["name"]
+            for row in await conn.fetch(
+                """
+                SELECT name
+                FROM schema_migrations
+                ORDER BY name
+                """
+            )
+        } == applied_names
+        assert await service.is_ready() is True
+    finally:
+        await conn.execute(f'DROP SCHEMA IF EXISTS "{schema}" CASCADE')
+        await conn.close()
 
 
 @pytest.mark.asyncio

@@ -56,7 +56,9 @@ _env_root = Path(__file__).parent.parent
 _load_local_env_files(_env_root)
 
 import logging
+from collections.abc import Awaitable, Callable
 from contextlib import asynccontextmanager
+from typing import Any
 
 from fastapi import FastAPI
 
@@ -74,14 +76,44 @@ from .storage.database import close_database, get_db_pool, init_database
 configure_logging(level=eom_settings.log_level, log_format=eom_settings.log_format)
 logger = logging.getLogger("atlas.eom")
 
+MigrationRunner = Callable[..., Awaitable[None]]
+
+# Closure for the EOM startup migration set: CLOSED and ENUMERATED from the
+# current receivables readiness contract plus its SQL prerequisite chain.
+# Migrations outside this set are intentionally not run by the EOM profile; a
+# new receivables readiness table/index or SQL prerequisite must update this
+# tuple and the live readiness migration test in the same slice.
+EOM_RECEIVABLES_READINESS_MIGRATIONS: tuple[str, ...] = (
+    "012_appointments",
+    "035_contacts",
+    "045_invoices",
+    "344_receivables_payments",
+    "345_receivables_event_key_lookup",
+)
+
+
+async def _apply_eom_receivables_migrations(
+    pool: Any,
+    run_migrations_fn: MigrationRunner | None = None,
+) -> None:
+    if run_migrations_fn is None:
+        from .storage.migrations import run_migrations
+
+        runner = run_migrations
+    else:
+        runner = run_migrations_fn
+
+    await runner(pool, only=EOM_RECEIVABLES_READINESS_MIGRATIONS)
+
 
 async def _run_startup_migrations() -> None:
-    from .storage.migrations import run_migrations
-
     pool = get_db_pool()
     if pool.is_initialized:
-        await run_migrations(pool)
-        logger.info("Database migrations checked")
+        await _apply_eom_receivables_migrations(pool)
+        logger.info(
+            "EOM receivables readiness migrations checked: %s",
+            ", ".join(EOM_RECEIVABLES_READINESS_MIGRATIONS),
+        )
 
 
 @asynccontextmanager

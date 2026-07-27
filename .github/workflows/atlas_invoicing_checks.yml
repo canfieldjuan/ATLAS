@@ -18,6 +18,7 @@ on:
       - "atlas_brain/api/invoicing/**"
       - "atlas_brain/config.py"
       - "atlas_brain/config_defaults.py"
+      - "atlas_brain/main_eom.py"
       - "atlas_brain/services/__init__.py"
       - "atlas_brain/services/receivables.py"
       - "atlas_brain/storage/migrations/344_receivables_payments.sql"
@@ -31,6 +32,8 @@ on:
       - "tests/test_invoicing_readonly_oauth.py"
       - "tests/test_invoicing_draft_writer_mcp.py"
       - "tests/test_invoicing_draft_writer_oauth.py"
+      - "tests/test_eom_render_profile.py"
+      - "render.eom.yaml"
   push:
     branches:
       - main
@@ -47,6 +50,7 @@ on:
       - "atlas_brain/api/invoicing/**"
       - "atlas_brain/config.py"
       - "atlas_brain/config_defaults.py"
+      - "atlas_brain/main_eom.py"
       - "atlas_brain/services/__init__.py"
       - "atlas_brain/services/receivables.py"
       - "atlas_brain/storage/migrations/344_receivables_payments.sql"
@@ -60,6 +64,8 @@ on:
       - "tests/test_invoicing_readonly_oauth.py"
       - "tests/test_invoicing_draft_writer_mcp.py"
       - "tests/test_invoicing_draft_writer_oauth.py"
+      - "tests/test_eom_render_profile.py"
+      - "render.eom.yaml"
 
 jobs:
   atlas-invoicing-checks:
@@ -106,6 +112,7 @@ jobs:
       - name: Run receivables ledger and repository tests
         run: |
           python -m pytest \
+            tests/test_eom_render_profile.py \
             tests/test_receivables.py \
             tests/test_invoice_repository.py \
             -q
