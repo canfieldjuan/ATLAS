@@ -92,11 +92,13 @@ an Atlas product guard, validator, resolver, or admission boundary.
 matching optional subsection so the requirement appears while the plan is being
 written. `check_boundary_change_enumeration.py` scans changed Python,
 JavaScript, TypeScript-family, and shell files for added or removed
-boundary-shaped path/function/method/class signals and warns unless the `### Boundary-change
-enumeration` section carries non-placeholder rows for replaced-path behaviors,
-guard-relevant fields, and caller x input shape. The self-bootstrap exemption is
-limited to this detector; other checker/admission files still scan. The workflow
-runs the detector on PRs and emits warnings only.
+boundary-shaped path/function/method/class signals, including normalizing and
+routing seams, and warns unless the `### Boundary-change enumeration` section
+carries non-placeholder rows for replaced-path behaviors, guard-relevant fields,
+and caller x input shape. Every duplicate enumeration row must be independently
+dispositioned so a later TODO cannot hide behind an earlier valid row. The
+self-bootstrap exemption is limited to this detector; other checker/admission
+files still scan. The workflow runs the detector on PRs and emits warnings only.
 
 ## Intentional
 
@@ -118,9 +120,10 @@ Parked hardening: none.
 
 ## Verification
 
-- python -m pytest tests/test_check_boundary_change_enumeration.py -q --noconftest - 19 passed.
+- python -m pytest tests/test_check_boundary_change_enumeration.py -q --noconftest - 22 passed.
 - python -m pytest tests/test_new_pr_plan.py -q --noconftest - 16 passed.
 - python scripts/check_boundary_change_enumeration.py --base origin/main - OK.
+- python scripts/check_boundary_change_enumeration.py --base origin/main --strict - OK.
 - python scripts/audit_plan_doc.py plans/PR-Boundary-Change-Enumeration.md - OK.
 - python scripts/audit_plan_doc_files_touched.py plans/PR-Boundary-Change-Enumeration.md origin/main - OK.
 - python scripts/audit_plan_doc_diff_size.py plans/PR-Boundary-Change-Enumeration.md origin/main - OK.
@@ -136,4 +139,4 @@ Parked hardening: none.
 | `tests/test_new_pr_plan.py` | +5 |
 | `.github/workflows/boundary_change_enumeration.yml` | +46 |
 | `plans/PR-Boundary-Change-Enumeration.md` | +139 |
-| **Total** | **~604** |
+| **Total** | **~650** |

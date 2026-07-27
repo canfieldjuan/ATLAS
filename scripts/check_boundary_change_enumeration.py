@@ -21,7 +21,7 @@ CODE_SUFFIXES = {".py", ".js", ".jsx", ".ts", ".tsx", ".mjs", ".cjs", ".sh"}
 BOUNDARY_PATH_PART_RE = re.compile(
     r"(^|[-_./])"
     r"(guard|validat(?:e|or|ion)?|normaliz(?:e|er|ation|ing)?|resolver|resolution|admission|intake|"
-    r"dedupe|scope|tenant|auth(?:entication|orization)?)"
+    r"route|router|routing|dedupe|scope|tenant|auth(?:entication|orization)?)"
     r"($|[-_./])",
     re.IGNORECASE,
 )
@@ -37,7 +37,8 @@ BOUNDARY_CODE_RE = re.compile(
     r"|(?:const|let|var)\s+"
     r"[a-zA-Z0-9_$]*(?:Guard|Validat|Normaliz|Resolve|Admit|Reject|Dedupe|Scope|Auth)"
     r"[a-zA-Z0-9_$]*\s*="
-    r"|class\s+[a-zA-Z0-9_$]*(?:Guard|Validator|Resolver|Admission|Auth)"
+    r"|class\s+[a-zA-Z0-9_$]*(?:Guard|Validator|Resolver|Admission|Authenticator|"
+    r"Authentication|Authorization|AuthGate|AuthProvider|AuthValidator|AuthResolver)"
     r"[a-zA-Z0-9_$]*"
     r"|(?:async\s+)?[a-zA-Z0-9_$]*(?:guard|validat|normaliz|resolve|admit|reject|dedupe|scope|auth)"
     r"[a-zA-Z0-9_$]*\s*\([^)]*\)\s*\{"
@@ -104,17 +105,18 @@ def boundary_enumeration_section(text: str) -> str:
     return "\n".join(lines)
 
 
-def _marker_value(section: str, marker: str) -> str | None:
+def _marker_values(section: str, marker: str) -> list[str]:
     marker_lower = marker.lower()
+    values: list[str] = []
     for line in section.splitlines():
         if ":" not in line:
             continue
         label, value = line.split(":", 1)
         label = label.strip().lstrip("-*0123456789. ").strip().lower()
-        if label != marker_lower:
+        if label != marker_lower and not label.startswith(f"{marker_lower} "):
             continue
-        return value.strip().rstrip(".").lower()
-    return None
+        values.append(value.strip().rstrip(".").lower())
+    return values
 
 
 def _is_dispositioned_value(value: str | None) -> bool:
@@ -132,7 +134,13 @@ def plan_has_boundary_enumeration(plan_text: str) -> bool:
     if "boundary-change enumeration" not in plan_text.lower():
         return False
     section = boundary_enumeration_section(plan_text)
-    return all(_is_dispositioned_value(_marker_value(section, marker)) for marker in DISPOSITION_MARKERS)
+    for marker in DISPOSITION_MARKERS:
+        values = _marker_values(section, marker)
+        if not values:
+            return False
+        if not all(_is_dispositioned_value(value) for value in values):
+            return False
+    return True
 
 
 def scan_diff(added_by_file: Mapping[str, str], plan_texts: Sequence[str]) -> list[Finding]:

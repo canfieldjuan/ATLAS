@@ -30,8 +30,10 @@ CLASS_BOUNDARY_CHANGE = "+class TenantResolver {\n+  resolve(input) { return inp
 SHELL_BOUNDARY_CHANGE = "+validate_scope() {\n+  test -n \"$ATLAS_SCOPE\"\n+}\n"
 TS_METHOD_BOUNDARY_CHANGE = "+  validateFileType(buffer, expectedType) {\n+    return true\n+  }\n"
 TS_NORMALIZER_CHANGE = "+function normalizeLandingPageRepairAttemptValue(value) {\n+  return Number(value)\n+}\n"
+ROUTING_TABLE_CHANGE = "+ROUTE_TO_ACTION = {\n+    'book': 'schedule_visit',\n+}\n"
 REMOVED_BOUNDARY_CHANGE = "-def resolve_contact(row):\n-    return row.email\n"
 CLAIM_SERIALIZER_CHANGE = "+def _serialize_claim(row):\n+    return {'claim': row.claim}\n"
+AUTH_ERROR_CHANGE = "+class RedditAuthError(RuntimeError):\n+    pass\n"
 PLAN_WITH_ENUMERATION = """
 ### Boundary-change enumeration
 
@@ -91,6 +93,11 @@ def test_normalizing_decision_seam_without_plan_enumeration_is_flagged() -> None
     assert len(findings) == 1
 
 
+def test_routing_decision_seam_without_plan_enumeration_is_flagged() -> None:
+    findings = mod.scan_diff({"atlas_brain/services/intent_router.py": ROUTING_TABLE_CHANGE}, [])
+    assert len(findings) == 1
+
+
 def test_removed_boundary_declaration_without_plan_enumeration_is_flagged() -> None:
     findings = mod.scan_diff({"scripts/sync_eom_portal_customers.py": REMOVED_BOUNDARY_CHANGE}, [])
     assert len(findings) == 1
@@ -111,6 +118,11 @@ def test_non_boundary_change_is_clean() -> None:
 
 def test_claim_serializer_lexical_lookalike_is_clean() -> None:
     findings = mod.scan_diff({"atlas_brain/api/b2b_vendor_claims.py": CLAIM_SERIALIZER_CHANGE}, [])
+    assert findings == []
+
+
+def test_auth_exception_lexical_lookalike_is_clean() -> None:
+    findings = mod.scan_diff({"atlas_reddit/reddit_client.py": AUTH_ERROR_CHANGE}, [])
     assert findings == []
 
 
@@ -152,6 +164,18 @@ def test_reasoned_not_applicable_dispositions_are_clean() -> None:
 - Caller x input shape: N/A - no caller can reach a boundary.
 """
     assert mod.plan_has_boundary_enumeration(not_applicable)
+
+
+def test_duplicate_enumeration_rows_must_all_be_dispositioned() -> None:
+    duplicate_todo = """
+### Boundary-change enumeration
+
+- Replaced-path behaviors: preserved legacy lookup.
+- Replaced-path behaviors: TODO disposition replacement fallback.
+- Guard-relevant fields: email, phone.
+- Caller x input shape: intake x email-only -> preserved.
+"""
+    assert not mod.plan_has_boundary_enumeration(duplicate_todo)
 
 
 def test_cli_entrypoint_warns_advisory_and_fails_strict(monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]) -> None:
