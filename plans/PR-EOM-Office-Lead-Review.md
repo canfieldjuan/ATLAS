@@ -91,8 +91,12 @@ Slice phase: Vertical slice
 3. Archive the already-merged `PR-EOM-Office-Conversion-Handoff` plan as the
    required Atlas merged-PR housekeeping. It is a documented teardown action,
    not a product behavior change.
+4. Repair the unit-gate selector seam exposed by the required baseline ratchet:
+   a baseline shrink is gate metadata, not a runtime/global config change, and
+   removed baseline node IDs must select their owning test files so the shrink
+   is proved without forcing a contradictory FULL-suite path.
 
-Max files: 8
+Max files: 10
 
 ### Review Contract
 
@@ -117,6 +121,11 @@ Max files: 8
 5. The previously merged plan is moved only to `plans/archive/` and the plans
    index is regenerated; the product diff contains no unrelated calendar,
    receivables, or generic CRM change.
+6. The unit-gate selector does not treat `tests/unit_gate_baseline.txt` as a
+   global runtime change. Instead, node IDs removed from that baseline add
+   their owning test files to the selected scope. A selector test proves a
+   baseline shrink selects the removed node's test file rather than returning
+   `FULL`.
 - Reachability proof: `tests/test_eom_lead_conversion.py` calls the real FastAPI
   route with its real dependencies overridden only at the database provider;
   `tests/test_eom_lead_conversion_integration.py` runs the provider projection
@@ -124,7 +133,8 @@ Max files: 8
   cursor result, and unchanged table counts.
 - Affected surfaces: `atlas_brain/eom_api/funnel.py`,
   `atlas_brain/services/crm_provider.py`, the existing funnel-auth dependency,
-  its focused route/integration tests, and Atlas plan archival.
+  its focused route/integration tests, Atlas plan archival, and the unit-gate
+  selector/baseline files required by CI ratchet evidence.
 - Risk areas: service-token/actor admission; EOM tenant and lifecycle filtering;
   customer/lead PII projection; accidental lifecycle write; caller compatibility;
   full-app route enrollment; and deployment ordering with the tracker proxy.
@@ -181,8 +191,11 @@ Any row or field not admitted by those definitions is excluded by default.
 - `plans/INDEX.md`
 - `plans/PR-EOM-Office-Lead-Review.md`
 - `plans/archive/PR-EOM-Office-Conversion-Handoff.md`
+- `scripts/select_impacted_tests.py`
 - `tests/test_eom_lead_conversion.py`
 - `tests/test_eom_lead_conversion_integration.py`
+- `tests/test_select_impacted_tests.py`
+- `tests/unit_gate_baseline.txt`
 
 ## Mechanism
 
@@ -245,9 +258,11 @@ Parked hardening: none.
   tests passed; `git diff --check` passed.
 - Atlas plan gates: plan shape, files-touched, and diff-size audits passed for
   `plans/PR-EOM-Office-Lead-Review.md` against `origin/main`.
-- Unit-gate ratchet: GitHub full-suite unit-gate proved the nine suspected
-  stale baseline nodes still fail in the real gate, so this PR leaves
-  `tests/unit_gate_baseline.txt` unchanged.
+- Unit-gate ratchet: GitHub scoped unit-gate reported nine stale baseline
+  entries in `tests/test_b2b_reviews_import.py` and
+  `tests/test_reasoning_graph_routing.py`; this PR removes those entries and
+  updates the selector so removed baseline node IDs select their owning test
+  files instead of forcing `FULL`.
 - Tracker companion verification is recorded in its own PR: backend FastAPI
   tests against the PostgreSQL fixture cover authenticated proxy, non-approver,
   and retry cases.
@@ -262,8 +277,11 @@ Parked hardening: none.
 | `atlas_brain/eom_api/funnel.py` | 109 |
 | `atlas_brain/services/crm_provider.py` | 45 |
 | `plans/INDEX.md` | 3 |
-| `plans/PR-EOM-Office-Lead-Review.md` | 269 |
+| `plans/PR-EOM-Office-Lead-Review.md` | 287 |
 | `plans/archive/PR-EOM-Office-Conversion-Handoff.md` | 0 |
+| `scripts/select_impacted_tests.py` | 34 |
 | `tests/test_eom_lead_conversion.py` | 210 |
 | `tests/test_eom_lead_conversion_integration.py` | 127 |
-| **Total** | **763** |
+| `tests/test_select_impacted_tests.py` | 34 |
+| `tests/unit_gate_baseline.txt` | 9 |
+| **Total** | **858** |
