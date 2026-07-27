@@ -7,6 +7,7 @@
 #   ACTIONABLE    - red required context / unresolved review threads /
 #                   CHANGES_REQUESTED review decision
 #   MERGE-READY   - EVERY required context present and success +
+#                   Codex review exists on this exact head SHA +
 #                   0 unresolved threads (no unfetched pages) +
 #                   review decision not CHANGES_REQUESTED + mergeable
 # Required contexts + app pin are read from origin/main's
@@ -54,11 +55,12 @@ for i in $(seq 0 "$CYCLES"); do
   [ "$i" -gt 0 ] && sleep 1740
   CUR=$(GH_TOKEN="$TOK" gh api "repos/$REPO/pulls/$PR" --jq '.head.sha' 2>/dev/null) || { echo "cycle $i: API error, retrying"; continue; }
   if [ "$CUR" != "$SHA" ]; then echo "HEAD-MOVED: ${SHA:0:9} -> ${CUR:0:9} (new push; reconcile + re-arm on new head)"; exit 0; fi
-  ST=$(GH_TOKEN="$TOK" gh api graphql -f query="{ repository(owner:\"$OWNER\",name:\"$NAME\"){ pullRequest(number:$PR){ state merged mergeable mergeStateStatus reviewDecision reviewThreads(first:100){ pageInfo{ hasNextPage } nodes{ isResolved } } } } }" 2>/dev/null)
+  ST=$(GH_TOKEN="$TOK" gh api graphql -f query="{ repository(owner:\"$OWNER\",name:\"$NAME\"){ pullRequest(number:$PR){ state merged mergeable mergeStateStatus reviewDecision reviews(first:100){ nodes{ author{ login } commit{ oid } state } } reviewThreads(first:100){ pageInfo{ hasNextPage } nodes{ isResolved } } } } }" 2>/dev/null)
   STATE=$(echo "$ST" | jq -r '.data.repository.pullRequest | .state + (if .merged then "/merged" else "" end)')
   MERGEABLE=$(echo "$ST" | jq -r '.data.repository.pullRequest.mergeable')
   MSTATE=$(echo "$ST" | jq -r '.data.repository.pullRequest.mergeStateStatus // "UNKNOWN"')
   DECISION=$(echo "$ST" | jq -r '.data.repository.pullRequest.reviewDecision // "NONE"')
+  CODEX_HEAD_REVIEWS=$(echo "$ST" | jq --arg sha "$SHA" '[.data.repository.pullRequest.reviews.nodes[]? | select(((.author.login // "") | ascii_downcase | contains("codex")) and ((.commit.oid // "") == $sha) and ((.state // "") | IN("COMMENTED","APPROVED","CHANGES_REQUESTED")))] | length')
   UNRES=$(echo "$ST" | jq '[.data.repository.pullRequest.reviewThreads.nodes[]|select(.isResolved==false)]|length')
   MORE=$(echo "$ST" | jq -r '.data.repository.pullRequest.reviewThreads.pageInfo.hasNextPage')
   # Fail closed when more thread pages exist than we fetched.
@@ -77,17 +79,17 @@ for i in $(seq 0 "$CYCLES"); do
   # completed one; ANY not-completed run of a required name (across all runs,
   # not just the latest-pick) blocks readiness until it settles.
   REQUNSETTLED=$(echo "$CR" | jq --argjson app "$REQ_APP_ID" --argjson req "$REQ_JSON" '[.check_runs[]|select(.app.id==$app)|select(.name as $n|$req|index($n))|select(.status!="completed")]|length')
-  echo "cycle $i $(date +%H:%M): state=$STATE req-green=$REQGREEN/$REQ_TOTAL req-red=$REQRED req-unsettled=$REQUNSETTLED pending=$PEND threads=$UNRES decision=$DECISION mergeable=$MERGEABLE merge-state=$MSTATE"
+  echo "cycle $i $(date +%H:%M): state=$STATE req-green=$REQGREEN/$REQ_TOTAL req-red=$REQRED req-unsettled=$REQUNSETTLED pending=$PEND codex-head-reviews=$CODEX_HEAD_REVIEWS threads=$UNRES decision=$DECISION mergeable=$MERGEABLE merge-state=$MSTATE"
   case "$STATE" in MERGED/merged|CLOSED) echo "TERMINAL: PR $STATE"; exit 0;; esac
   # Definite negatives are actionable on ANY cycle, including the first.
-  if [ "$REQRED" -gt 0 ] || [ "$UNRES" != "0" ] || [ "$DECISION" = "CHANGES_REQUESTED" ]; then
-    echo "ACTIONABLE: req-red=$REQRED threads=$UNRES decision=$DECISION -> reconcile/fix, push, re-arm"; exit 0
+  if [ "$REQRED" -gt 0 ] || [ "$UNRES" != "0" ] || [ "$DECISION" = "CHANGES_REQUESTED" ] || [ "$CODEX_HEAD_REVIEWS" -eq 0 ]; then
+    echo "ACTIONABLE: req-red=$REQRED codex-head-reviews=$CODEX_HEAD_REVIEWS threads=$UNRES decision=$DECISION -> reconcile/fix, push, re-arm"; exit 0
   fi
   # Readiness is presence-based: every required context must be reporting
   # success (a not-yet-started context keeps this false, so no early race).
-  if [ "$REQGREEN" -eq "$REQ_TOTAL" ] && [ "$REQUNSETTLED" -eq 0 ] && [ "$MERGEABLE" = "MERGEABLE" ] \
+  if [ "$REQGREEN" -eq "$REQ_TOTAL" ] && [ "$REQUNSETTLED" -eq 0 ] && [ "$CODEX_HEAD_REVIEWS" -gt 0 ] && [ "$MERGEABLE" = "MERGEABLE" ] \
      && { [ "$MSTATE" = "CLEAN" ] || [ "$MSTATE" = "UNSTABLE" ]; }; then
-    echo "MERGE-READY: all $REQ_TOTAL required contexts green + threads clear + merge-state $MSTATE."
+    echo "MERGE-READY: all $REQ_TOTAL required contexts green + current-head Codex review + threads clear + merge-state $MSTATE."
     echo "-> pre-merge checklist first (clean tree, local==remote, re-verify threads=0), then merge + alert."
     exit 0
   fi

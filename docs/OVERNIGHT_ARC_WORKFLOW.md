@@ -117,8 +117,7 @@ Post it in chat; email it too if the arc ended BLOCKED.
 ## 5. Owned-PR watcher
 
 `scripts/watch_owned_pr.sh` -- portable single-PR watcher for the builder
-side (companion to the reviewer lane's inbox watcher, which is session
-tooling). Usage:
+side. Usage:
 
 ```bash
 PR=<number> SHA=<full 40-char head sha> bash scripts/watch_owned_pr.sh

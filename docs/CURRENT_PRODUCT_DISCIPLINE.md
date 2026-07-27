@@ -1,6 +1,6 @@
 # Current Product Discipline
 
-**Status:** Active operating discipline for Atlas builder/reviewer sessions.
+**Status:** Active operating discipline for Atlas builder sessions and Codex connector review.
 **Last updated:** 2026-07-04
 
 This file prevents workflow drift. It is not the ordered product roadmap,

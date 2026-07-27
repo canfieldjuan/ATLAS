@@ -17,6 +17,7 @@ MAJOR = "MAJOR"
 WAIVE_OUT_OF_SCOPE = "WAIVE_OUT_OF_SCOPE"
 WAIVE_NIT = "WAIVE_NIT"
 WAIVE_DUPLICATE = "WAIVE_DUPLICATE"
+WAIVE_SPECULATIVE = "WAIVE_SPECULATIVE"
 NO_FINDING = "NO_FINDING"
 
 DISPOSITIONS = frozenset(
@@ -26,6 +27,7 @@ DISPOSITIONS = frozenset(
         WAIVE_OUT_OF_SCOPE,
         WAIVE_NIT,
         WAIVE_DUPLICATE,
+        WAIVE_SPECULATIVE,
         NO_FINDING,
     }
 )
@@ -107,7 +109,7 @@ FIXTURES: tuple[Fixture, ...] = (
             "speculative": True,
             "concrete_failure_path": False,
         },
-        MAJOR,
+        WAIVE_SPECULATIVE,
     ),
     Fixture(
         "nit_suppression",
@@ -117,6 +119,16 @@ FIXTURES: tuple[Fixture, ...] = (
             "one_line_changed_code_fix": False,
         },
         WAIVE_NIT,
+    ),
+    Fixture(
+        "material_one_line_nit",
+        {
+            "category": "nit",
+            "in_scope": True,
+            "one_line_changed_code_fix": True,
+            "materially_clarifies_changed_code": True,
+        },
+        MAJOR,
     ),
 )
 
@@ -128,9 +140,11 @@ def classify_finding(finding: Mapping[str, object]) -> str:
         return NO_FINDING
     if finding.get("duplicate_of"):
         return WAIVE_DUPLICATE
-    if finding.get("category") == "nit" and not finding.get(
-        "one_line_changed_code_fix", False
-    ):
+    if finding.get("category") == "nit":
+        if finding.get("one_line_changed_code_fix") and finding.get(
+            "materially_clarifies_changed_code"
+        ):
+            return MAJOR
         return WAIVE_NIT
     if finding.get("in_scope") is False:
         return WAIVE_OUT_OF_SCOPE
@@ -141,9 +155,7 @@ def classify_finding(finding: Mapping[str, object]) -> str:
     if finding.get("concrete_failure_path") and impact in MATERIAL_IMPACTS:
         return BLOCKER
     if finding.get("speculative") and not finding.get("concrete_failure_path"):
-        return MAJOR
-    if finding.get("one_line_changed_code_fix") and finding.get("category") == "nit":
-        return WAIVE_NIT
+        return WAIVE_SPECULATIVE
     return MAJOR
 
 

@@ -4,7 +4,7 @@
 The local audit (scripts/audit_ai_reconciliation.py) can only check that the PR
 body's reconciliation record is internally well-formed; it cannot see the live
 GitHub bot threads. This check closes that half: it fetches the real
-Codex/Copilot review threads and fails when the recorded reconciliation
+Codex connector review threads and fails when the recorded reconciliation
 *omits a genuinely open finding* -- i.e. the body claims all-clear (or carries
 no reconciliation record at all) while unresolved bot threads still exist.
 
@@ -15,7 +15,7 @@ exactly the deferred spec from plans/archive/PR-Reviewer-Reconciliation-Audit.md
 
 Codex findings are review-gate inputs, not auto-applied commands: nothing here
 auto-resolves or auto-applies. It only enforces that the PR body accounts for
-what Codex/Copilot raised.
+what Codex raised.
 
 Exit codes: 0 = clean (no open bot threads, or the body honestly acknowledges
 open findings); 1 = contradiction (open bot threads + an all-clear/absent
@@ -36,7 +36,7 @@ import sys
 from collections.abc import Sequence
 from pathlib import Path
 
-_DEFAULT_BOTS = ("copilot", "codex")
+_DEFAULT_BOTS = ("codex",)
 
 _THREADS_QUERY = """
 query($owner:String!,$name:String!,$pr:Int!,$cursor:String){
@@ -212,7 +212,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     parser.add_argument(
         "--bots",
         default=os.environ.get("ATLAS_REVIEW_BOTS", ",".join(_DEFAULT_BOTS)),
-        help="comma-separated bot login substrings (default: copilot,codex)",
+        help="comma-separated bot login substrings (default: codex)",
     )
     parser.add_argument("--gh", default="gh", help="path to the gh CLI")
     parser.add_argument(

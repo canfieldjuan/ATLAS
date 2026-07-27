@@ -2,8 +2,8 @@
 """Validate the AI-finding reconciliation record in a PR body.
 
 Mechanizes the AGENTS.md section 4a.1 / docs/REVIEWER_RULES.md rule that a PR
-may not be LGTM'd until every automated-review (Codex/Copilot) finding is either
-fixed or explicitly waived with a reason.
+may not be LGTM'd until every Codex connector finding is either fixed or
+explicitly waived with a reason.
 
 Local tooling cannot read live GitHub bot threads (gh is not present in the
 local/CI bundle, see local_pr_review.sh), so this audit enforces the half that
@@ -13,7 +13,7 @@ finding left unresolved, every waiver carrying a reason. Fail closed on a
 contradictory or empty reconciliation block so a recorded reconciliation can be
 trusted. With --require, also fail when the section is absent.
 
-Cross-checking the recorded reconciliation against the live bot threads is done
+Cross-checking the recorded reconciliation against the live Codex threads is done
 by the CI-side companion `scripts/check_ai_reconciliation_live.py` (needs
 gh/API), which fails when this recorded reconciliation omits a still-open bot
 finding. This local audit owns the body-shape half; that one owns reality.

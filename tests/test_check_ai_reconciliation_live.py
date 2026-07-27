@@ -15,7 +15,7 @@ def load_check():
     return module
 
 
-def thread(*, resolved=False, outdated=False, author="copilot-pull-request-reviewer[bot]",
+def thread(*, resolved=False, outdated=False, author="chatgpt-codex-connector[bot]",
            path="atlas_brain/x.py", line=12, body="use the typed config field"):
     return {
         "isResolved": resolved,
@@ -29,7 +29,7 @@ def thread(*, resolved=False, outdated=False, author="copilot-pull-request-revie
 BODY_CLEAR = "## AI reconciliation\n- All fixed or waived: Yes\n"
 BODY_OPEN = "## AI reconciliation\n- fixed or waived: No\n"
 BODY_ABSENT = "## Summary\njust a normal PR body\n"
-BOTS = ["copilot", "codex"]
+BOTS = ["codex"]
 
 
 # --- open_bot_threads filtering -------------------------------------------
@@ -52,6 +52,12 @@ def test_resolved_outdated_and_nonbot_excluded():
 def test_bot_login_substring_match():
     c = load_check()
     assert c.open_bot_threads([thread(author="chatgpt-codex-connector[bot]")], BOTS)
+
+
+def test_copilot_thread_is_not_a_codex_gate_by_default():
+    c = load_check()
+    nodes = [thread(author="copilot-pull-request-reviewer[bot]")]
+    assert c.open_bot_threads(nodes, BOTS) == []
 
 
 # --- body classification (reuses Phase-2 parser) --------------------------

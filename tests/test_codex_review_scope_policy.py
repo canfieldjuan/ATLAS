@@ -30,6 +30,7 @@ def test_fixture_scenarios_cover_operator_requested_review_shapes():
         "concrete_security_data_failure",
         "speculative_risk_no_failure_path",
         "nit_suppression",
+        "material_one_line_nit",
     }
 
 
@@ -42,7 +43,7 @@ def test_cli_self_test_reports_pass_count():
         stderr=subprocess.PIPE,
     )
     assert proc.returncode == 0, proc.stderr
-    assert "OK: 7 Codex review scope fixtures passed" in proc.stdout
+    assert "OK: 8 Codex review scope fixtures passed" in proc.stdout
 
 
 def test_cli_requires_self_test(monkeypatch):
@@ -67,3 +68,4 @@ def test_active_docs_remove_second_reviewer_gate():
     assert "Suppress NITs by default" in agents
     assert "WAIVE_DUPLICATE" in agents
     assert "WAIVE_OUT_OF_SCOPE" in agents
+    assert "WAIVE_SPECULATIVE" in agents

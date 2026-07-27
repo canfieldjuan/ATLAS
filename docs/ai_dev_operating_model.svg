@@ -27,15 +27,15 @@
 
   <rect width="1400" height="1080" fill="#f8fafc"/>
   <text x="40" y="50" class="title">The Atlas AI Dev Operating Model</text>
-  <text x="40" y="75" class="sub">2 builder + 2 reviewer sessions in parallel — kept safe by mechanical gates, not human vigilance. Every repeated mistake becomes a gate.</text>
+  <text x="40" y="75" class="sub">Parallel builder lanes — kept safe by mechanical gates and scoped Codex connector review. Every repeated mistake becomes a gate.</text>
 
   <!-- ================= LANES ================= -->
   <!-- Lane A -->
   <rect x="40" y="100" width="1320" height="250" rx="12" fill="#eff6ff" stroke="#bfdbfe"/>
-  <text x="60" y="125" class="lane">LANE A — e.g. "content generation"  (builder + reviewer pair)</text>
+  <text x="60" y="125" class="lane">LANE A — e.g. "content generation"  (builder lane + Codex connector review)</text>
   <!-- Lane B -->
   <rect x="40" y="100" width="1320" height="250" rx="12" fill="none"/>
-  <text x="60" y="332" class="lane">LANE B — e.g. "deflection / monetization"  (independent builder + reviewer pair, separate ownership lane)</text>
+  <text x="60" y="332" class="lane">LANE B — e.g. "deflection / monetization"  (independent builder lane, separate ownership lane)</text>
   <line x1="40" y1="300" x2="1360" y2="300" stroke="#cbd5e1" stroke-dasharray="4 4"/>
 
   <!-- ===== Builder pipeline (Lane A) ===== -->
@@ -108,7 +108,7 @@
 
   <!-- Lane B mini pipeline (compact mirror) -->
   <rect x="60" y="316" width="1100" height="26" rx="6" fill="#dbeafe" stroke="#bfdbfe"/>
-  <text x="75" y="334" class="k">Plan → Build → Local gate → Independent reviewer → CI → Merge   ·   same contract, different ownership lane (lanes cannot collide — enforced)</text>
+  <text x="75" y="334" class="k">Plan → Build → Local gate → Codex connector review → CI → Merge   ·   same contract, different ownership lane (lanes cannot collide — enforced)</text>
 
   <!-- ================= DRIFT DEFENSE ================= -->
   <rect x="40" y="370" width="650" height="250" rx="12" fill="#fef2f2" stroke="#fecaca"/>

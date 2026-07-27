@@ -368,8 +368,8 @@ example. Before LGTM on an R13-triggering finding, verify one of:
 
 ## Review completion (the stopping rule)
 
-A review is **complete** when its matrix is dispositioned, and the review states
-that matrix:
+A review is **complete** when its scoped matrix is dispositioned, and the review
+states that matrix:
 
 1. **Each acceptance criterion** in the Review Contract: met / not met /
    could-not-determine, with checkable evidence -- `file:line` for a
@@ -379,11 +379,11 @@ that matrix:
    (`AGENTS.md` 4a step 4); demanding `file:line` for a CI-status or
    command-output criterion would either stall the matrix or buy a green tick
    with an irrelevant citation.
-2. **Every rule, R1-R14**: pass / fail / not-verified / n-a-with-reason. The
-   path-trigger table sets how deeply each is probed, **not which appear**. A
-   behavior change under a path the table does not list still owes an R2
-   verdict; deriving matrix membership from the table would let exactly that
-   PR reach LGTM without anyone asking whether the new behavior has tests.
+2. **Every triggered rule plus R14**: pass / fail / not-verified /
+   n-a-with-reason. Triggered means the PR's changed path, direct caller/test,
+   acceptance criterion, CI/deployment/config hook, or concrete security/data/
+   migration/customer-output path brings the rule into scope. The path-trigger
+   table sets the automatic floor, not an exhaustive whole-repo matrix.
 3. **What was not verified**, listed with the reason.
 
 That is the whole standard for *stopping*. Completeness is never "no further

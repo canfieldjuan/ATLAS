@@ -1308,6 +1308,8 @@ Use these dispositions when reconciling Codex threads:
 - **WAIVE_DUPLICATE** - another thread already names the same root decision.
 - **WAIVE_OUT_OF_SCOPE** - valid hardening or design work that is outside this
   PR's Review Contract.
+- **WAIVE_SPECULATIVE** - risk with no concrete failure path from this PR's
+  diff.
 - **WAIVE_NIT** - style, naming, copy, or polish that is not required for the
   slice.
 - **NO_FINDING** - the PR satisfies the contract for this scenario.
@@ -1347,8 +1349,8 @@ Before LGTM or merge readiness:
 **Reasoning stays in main; retrieval goes to a subagent. Synthesis
 stays with whoever has to act on the answer (almost always main).**
 
-Applies to both builder and reviewer sessions. The point: stretch
-the weekly token budget without pushing judgment work to a model
+Applies to builder sessions and any explicitly assigned review helper. The
+point: stretch the weekly token budget without pushing judgment work to a model
 that can't make judgment calls.
 
 ### 5a. The decision
