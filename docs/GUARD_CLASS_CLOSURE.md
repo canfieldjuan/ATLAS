@@ -92,13 +92,22 @@ answering one never discharges another.
   scope. Do not duplicate the canonical list unless the duplicate is generated
   from it.
 - **OPEN** -- membership cannot be fully enumerated, so any list is a sample of
-  it. Say so plainly; the third answer then carries the weight.
+  it. Say so plainly; the third answer then carries the weight -- and for OPEN
+  that answer must cover inputs the implemented dependency does not recognize,
+  which includes unlisted members of the class, not only true non-members.
+  Those unlisted members are the drift the OPEN declaration exists to surface,
+  so an answer scoped to non-members leaves exactly the round-generating case
+  undeclared.
 
 **2. Where does membership come from?** -- a fact about *drift*.
 
 - **ENUMERATED** -- the members are fixed text in this change. Reading a source
   of truth once while writing them down is still ENUMERATED: the text cannot
-  notice when that source changes. Say where you read it from.
+  notice when that source changes. Say where the members came from: the source
+  you read them out of, or -- when the change introduces a new policy set whose
+  canonical definition is this list -- that they are authored here. "Authored
+  here" is a real answer, not a missing one; what it forfeits is the ability to
+  detect upstream drift, because there is no upstream.
 - **DERIVED** -- the members are recomputed from the source of truth every time
   the set is used, so the two cannot diverge. Cite the source and the point of
   computation. Prefer this wherever a source of truth exists: it is the only
@@ -108,7 +117,11 @@ answering one never discharges another.
 required whether the set is closed or open.
 
 State the direction explicitly, make incompleteness flow to the cheap or safe
-side, and name why that side is cheaper. "The set is closed, so there is no
+side, and name why that side is the cheaper or the safer one. A privacy or
+authorization allowlist that rejects unrecognized input is answering "safer",
+and that is the mandated default even when it costs more to operate; requiring
+a cost rationale there would leave the asymmetric-safe choice with no truthful
+answer. "The set is closed, so there is no
 outside" is only an answer when the input space is the set -- a guard reading a
 finite settings schema still receives keys that schema does not carry, and that
 is an input outside the set, not an unlisted member of it. Confusing the two
@@ -126,8 +139,8 @@ question 3. The three-question form exists because the single-choice form let
 `DERIVED` stand in for an answer it does not give.
 
 "Here are the members I noticed" is not a closure declaration. A plan that lists
-members without answering both questions is still open and should be treated as
-a round generator. A Markdown-only body has the same bar when it is the
+members without answering all three questions is still open and should be
+treated as a round generator. A Markdown-only body has the same bar when it is the
 admission artifact.
 
 ## The three requirements (all mandatory before merge)
