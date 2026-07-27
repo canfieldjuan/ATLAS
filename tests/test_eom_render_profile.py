@@ -5,9 +5,11 @@ import subprocess
 import sys
 import threading
 from concurrent.futures import ThreadPoolExecutor
+from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
+import yaml
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
@@ -210,6 +212,173 @@ def test_eom_env_loader_preserves_process_env_and_local_precedence(
     assert os.environ[process_interpolated_key] == "process-secret"
 
 
+def test_eom_render_blueprint_maps_database_connection_string():
+    blueprint = yaml.safe_load(Path("render.eom.yaml").read_text(encoding="utf-8"))
+
+    assert blueprint["databases"] == [
+        {
+            "name": "atlas-eom-postgres",
+            "databaseName": "atlas_eom",
+            "user": "atlas_eom",
+            "ipAllowList": [],
+        }
+    ]
+
+    [service] = blueprint["services"]
+    assert service["type"] == "pserv"
+    assert service["name"] == "atlas-eom-api"
+    assert service["startCommand"] == (
+        "uvicorn atlas_brain.main_eom:app --host 0.0.0.0 --port $PORT"
+    )
+
+    env_vars = {item["key"]: item for item in service["envVars"]}
+    assert env_vars["ATLAS_DB_ENABLED"] == {
+        "key": "ATLAS_DB_ENABLED",
+        "value": "true",
+    }
+    assert env_vars["ATLAS_DB_CONNECTION_STRING"] == {
+        "key": "ATLAS_DB_CONNECTION_STRING",
+        "fromDatabase": {
+            "name": "atlas-eom-postgres",
+            "property": "connectionString",
+        },
+    }
+    assert env_vars["ATLAS_INVOICING_RECEIVABLES_API_ENABLED"] == {
+        "key": "ATLAS_INVOICING_RECEIVABLES_API_ENABLED",
+        "value": "false",
+    }
+    assert env_vars["ATLAS_EOM_RUN_MIGRATIONS"] == {
+        "key": "ATLAS_EOM_RUN_MIGRATIONS",
+        "value": "false",
+    }
+    for split_key in (
+        "ATLAS_DB_HOST",
+        "ATLAS_DB_PORT",
+        "ATLAS_DB_DATABASE",
+        "ATLAS_DB_USER",
+        "ATLAS_DB_PASSWORD",
+    ):
+        assert split_key not in env_vars
+
+
+def test_database_config_prefers_connection_string_for_asyncpg_kwargs():
+    from atlas_brain.storage.config import DatabaseConfig
+
+    dsn = "postgresql://atlas_eom:secret@atlas-eom-postgres:5432/atlas_eom"
+    config = DatabaseConfig(
+        connection_string=f" {dsn} ",
+        host="localhost",
+        port=5433,
+        database="atlas",
+        user="atlas",
+        password="split-secret",
+        connect_timeout=7.0,
+        command_timeout=11.0,
+    )
+
+    assert config.dsn == dsn
+    assert config.connection_kwargs() == {
+        "dsn": dsn,
+        "timeout": 7.0,
+        "command_timeout": 11.0,
+    }
+    assert config.connection_kwargs(command_timeout=60) == {
+        "dsn": dsn,
+        "timeout": 7.0,
+        "command_timeout": 60,
+    }
+    assert "secret" not in config.target_label
+    assert config.target_label == "dsn=atlas-eom-postgres:5432/atlas_eom"
+
+
+def test_database_config_preserves_split_host_port_kwargs_without_connection_string():
+    from atlas_brain.storage.config import DatabaseConfig
+
+    config = DatabaseConfig(
+        connection_string=" ",
+        host="postgres.internal",
+        port=6543,
+        database="atlas_prod",
+        user="atlas_user",
+        password="atlas_pass",
+        connect_timeout=5.0,
+        command_timeout=17.0,
+    )
+
+    assert (
+        config.dsn
+        == "postgresql://atlas_user:atlas_pass@postgres.internal:6543/atlas_prod"
+    )
+    assert config.connection_kwargs() == {
+        "host": "postgres.internal",
+        "port": 6543,
+        "database": "atlas_prod",
+        "user": "atlas_user",
+        "password": "atlas_pass",
+        "timeout": 5.0,
+        "command_timeout": 17.0,
+    }
+    assert config.connection_kwargs(command_timeout=60)["command_timeout"] == 60
+
+
+def test_database_pool_uses_configured_connection_kwargs(monkeypatch):
+    from atlas_brain.storage.config import DatabaseConfig
+    from atlas_brain.storage import database
+
+    dsn = "postgresql://atlas_eom:secret@atlas-eom-postgres:5432/atlas_eom"
+    calls: dict[str, dict[str, object]] = {}
+
+    class _FakePool:
+        async def close(self):
+            calls["closed"] = {}
+
+    async def create_pool(**kwargs):
+        calls["create_pool"] = kwargs
+        return _FakePool()
+
+    async def connect(**kwargs):
+        calls["connect"] = kwargs
+        return object()
+
+    config = DatabaseConfig(
+        enabled=True,
+        connection_string=dsn,
+        min_pool_size=1,
+        max_pool_size=3,
+        connect_timeout=4.0,
+        command_timeout=9.0,
+    )
+    monkeypatch.setattr(database.asyncpg, "create_pool", create_pool)
+    monkeypatch.setattr(database.asyncpg, "connect", connect)
+
+    async def drive_pool():
+        pool = database.DatabasePool()
+        await pool.initialize()
+        await pool.acquire_raw()
+        await pool.close()
+
+    original_settings = database.db_settings
+    database.db_settings = config
+    try:
+        asyncio.run(drive_pool())
+    finally:
+        database.db_settings = original_settings
+
+    assert calls["create_pool"] == {
+        "dsn": dsn,
+        "timeout": 4.0,
+        "command_timeout": 9.0,
+        "min_size": 1,
+        "max_size": 3,
+    }
+    assert calls["connect"] == {
+        "dsn": dsn,
+        "timeout": 4.0,
+        "command_timeout": 60,
+    }
+    assert calls["closed"] == {}
+
+
 def test_eom_receivables_startup_rejects_operator_enabled_config():
     from atlas_brain.eom_api import auth
     from atlas_brain.eom_api.config import EOMInvoicingConfig
@@ -368,6 +537,36 @@ def test_eom_lifespan_closes_database_when_migration_startup_fails(monkeypatch):
         asyncio.run(drive_lifespan())
 
     assert events == ["init", "migrations", "close"]
+
+
+def test_eom_lifespan_initializes_database_without_running_migrations(monkeypatch):
+    from atlas_brain import main_eom
+
+    events: list[str] = []
+
+    async def init_database():
+        events.append("init")
+
+    async def fail_migrations():
+        raise AssertionError("migrations should stay disabled")
+
+    async def close_database():
+        events.append("close")
+
+    async def drive_lifespan():
+        async with main_eom.lifespan(FastAPI()):
+            events.append("inside")
+
+    monkeypatch.setattr(main_eom, "db_settings", SimpleNamespace(enabled=True))
+    monkeypatch.setattr(main_eom, "init_database", init_database)
+    monkeypatch.setattr(main_eom, "_run_startup_migrations", fail_migrations)
+    monkeypatch.setattr(main_eom, "close_database", close_database)
+    monkeypatch.setattr(main_eom.eom_profile_settings, "run_migrations", False)
+    monkeypatch.setattr(main_eom.invoicing_settings, "receivables_api_enabled", False)
+
+    asyncio.run(drive_lifespan())
+
+    assert events == ["init", "inside", "close"]
 
 
 def test_eom_profile_ping_is_database_independent(monkeypatch):

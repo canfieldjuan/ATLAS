@@ -332,6 +332,9 @@ async def _process_lead_emails(emails: list[dict[str, Any]]) -> None:
     Fail-open: CRM errors never block the digest.
     """
     from ...services.crm_provider import get_crm_provider
+    from ...services.eom_lead_ingress import (
+        resolve_or_create_eom_inbound_lead_and_log_interaction,
+    )
 
     lead_emails = [e for e in emails if e.get("category") == "lead"]
     if not lead_emails:
@@ -349,23 +352,47 @@ async def _process_lead_emails(emails: list[dict[str, Any]]) -> None:
             submitter_email = reply_to_email or fields.get("email", "")
             submitter_name = fields.get("name", "")
             submitter_phone = fields.get("phone")
+            relay_message_id = str(e.get("id") or "").strip()
 
             if not submitter_email and not submitter_name:
                 logger.debug("Lead email %s: no submitter info found, skipping CRM", e.get("id"))
+                continue
+            if not submitter_email and not submitter_phone and not relay_message_id:
+                logger.debug(
+                    "Lead email %s: name-only relay has no stable message identity, skipping CRM",
+                    e.get("id"),
+                )
                 continue
 
             # Stash lead info for ntfy enrichment
             e["_lead_name"] = submitter_name
             e["_lead_email"] = submitter_email
 
-            contact = await crm.find_or_create_contact(
+            # Web3Forms is the public form's parallel email relay.  It must
+            # share the same EOM lead-safe resolver as the direct Atlas POST:
+            # a relay-only delivery creates lead/new, and a matching contact
+            # is evidence-only rather than mutable enrichment.
+            subject = e.get("subject", "")
+            message_preview = fields.get("message", "")[:200]
+            contact, _interaction = await resolve_or_create_eom_inbound_lead_and_log_interaction(
+                crm,
                 full_name=submitter_name or submitter_email,
                 email=submitter_email or None,
                 phone=submitter_phone,
+                address=None,
                 source="web",
-                business_context_id="effingham_maids",
-                contact_type="lead",
+                source_ref=(f"web3forms:{relay_message_id}" if relay_message_id else None),
+                relay_event_id=(
+                    f"web3forms:{relay_message_id}" if relay_message_id else None
+                ),
                 tags=["web3forms"],
+                interaction_type="email",
+                summary=f"Web form submission: {subject}. {message_preview}".strip(),
+                metadata=(
+                    {"gmail_message_id": relay_message_id}
+                    if relay_message_id
+                    else None
+                ),
             )
             if not contact.get("id"):
                 logger.warning("Lead CRM contact has no ID for email %s", e.get("id"))
@@ -374,14 +401,6 @@ async def _process_lead_emails(emails: list[dict[str, Any]]) -> None:
             contact_id = str(contact["id"])
             e["_contact_id"] = contact_id
 
-            # Log the form submission as an interaction
-            subject = e.get("subject", "")
-            message_preview = fields.get("message", "")[:200]
-            await crm.log_interaction(
-                contact_id=contact_id,
-                interaction_type="email",
-                summary=f"Web form submission: {subject}. {message_preview}".strip(),
-            )
             logger.info("Lead CRM: contact %s linked to email %s", contact_id, e.get("id"))
 
         except Exception as exc:

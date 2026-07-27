@@ -332,6 +332,19 @@ _SHAPE_VERBS = frozenset(
      "names", "name", "delivers", "deliver", "contains", "contain",
      "identifies", "identify", "surfaces", "surface", "highlights", "highlight"}
 )
+# A verbal negation denies the report SURFACE only when it denies the report's
+# existence/provision. "The Resolution Audit does not include owner
+# assignments" says the report EXISTS and lacks routing -- suppressing there
+# silenced the checklist exactly when routing was absent (#2189 round 3).
+# PARTICIPLE/adjective forms only. The form carries the voice, and the voice
+# carries the meaning: "is not INCLUDED" is passive -- the report itself is
+# absent -- while "does not INCLUDE owner assignments" is active and says the
+# report exists without routing. Listing the base form would collapse the two.
+_EXISTENCE_PREDICATES = frozenset(
+    {"provided", "included", "available", "delivered", "produced", "published",
+     "issued", "exist", "exists", "existed", "ready", "prepared", "sent",
+     "shared", "generated", "created"}
+)
 _PRODUCT_TERM_RE = re.compile(
     r"\b(?:resolution\s+audit|resolution\s+snapshot|action\s+queue)\b", re.I
 )
@@ -349,9 +362,33 @@ _COPULAR_ABSENCE_RE = re.compile(
 
 # Anaphoric subjects that bind a later sentence back to the report
 # proposition ("Each is assigned to ...").
-_ANAPHORIC_SUBJECTS = frozenset(
-    {"each", "every", "all", "it", "they", "these", "those", "everything", "both"}
+# Subjects that are anaphoric ON THEIR OWN -- they take no noun, so their
+# reference is necessarily back to the report's items.
+_BARE_ANAPHORS = frozenset({"it", "they", "everything"})
+# Quantifiers/determiners that MAY carry a noun. `every` alone used to satisfy
+# the anaphor test, so "Every invoice is assigned to Billing" covered a report
+# about issues (#2189). These bind only when used bare, or when the noun they
+# carry is itself a report item.
+_QUANTIFIER_SUBJECTS = frozenset(
+    {"each", "every", "all", "both", "these", "those"}
 )
+# What follows a BARE quantifier: a predicate, not a noun. Closed function-word
+# class (copulas, auxiliaries, modals).
+_PREDICATE_FOLLOWERS = frozenset(
+    {"is", "are", "was", "were", "be", "been", "being", "gets", "get", "got",
+     "goes", "go", "has", "have", "had", "will", "would", "can", "could",
+     "must", "should", "may", "might", "does", "do", "did"}
+)
+# Pro-forms carry no lexical content: "each ONE is routed" still refers back to
+# the report's items, so they continue the anaphor rather than renaming the
+# subject the way "each INVOICE" does.
+_SUBJECT_PRO_FORMS = frozenset({"one", "ones", "them", "those", "these"})
+# A PP after the subject MODIFIES it; the head is what precedes the preposition.
+_SUBJECT_MODIFIER_PREPOSITIONS = frozenset(
+    {"in", "for", "on", "at", "from", "with", "about", "under", "within", "by"}
+)
+_ANAPHORIC_SUBJECTS = _BARE_ANAPHORS | _QUANTIFIER_SUBJECTS
+
 _VERB_INITIAL_ROUTING = frozenset(
     {"routes", "routed", "route", "assigned", "owned", "needs", "who"}
 )
@@ -361,6 +398,46 @@ _REPORT_ITEM_NOUNS = frozenset(
 )
 
 _CTA_REMINDER = ADVISORY_CTA_REMINDER
+
+
+def _subject_binds_to_report(words: "list[str]") -> bool:
+    """Whether a clause subject refers back to the report's items.
+
+    ONE definition, used by both the same-sentence and later-sentence paths --
+    they previously carried the same test written twice, which is how the
+    quantifier hole survived in both (#2189).
+
+    A noun-bearing quantifier is classified by its actual SUBJECT HEAD: the
+    last token before the predicate. That handles modifiers and partitives
+    uniformly ("each of the open tickets" -> tickets) instead of special-casing
+    a fixed token window, which rejected valid modified heads.
+    """
+    first = words[0] if words else ""
+    if first in _BARE_ANAPHORS:
+        return True
+    if first not in _QUANTIFIER_SUBJECTS:
+        return first == "the" and len(words) > 1 and words[1] in _REPORT_ITEM_NOUNS
+
+    # The grammatical head is the noun the quantifier binds, BEFORE any
+    # post-modifier. Taking the last pre-predicate token instead read "each
+    # ticket in the REPORT" as being about reports and "each invoice for a
+    # TICKET" as being about tickets -- one regressed valid routing, the other
+    # preserved the original false negative (#2189 round 2).
+    # No token cap: modifier length is open, so parse to the predicate
+    # boundary instead of imposing another window (#2189 round 3).
+    rest = words[1:]
+    if rest and rest[0] == "of":
+        rest = rest[1:]  # partitive: the head sits inside the of-phrase
+    head = ""
+    for word in rest:
+        if word in _PREDICATE_FOLLOWERS or word in _SUBJECT_MODIFIER_PREPOSITIONS:
+            break
+        head = word
+    if not head:
+        # Bare use: the predicate follows the quantifier directly ("Each IS
+        # assigned..."), so the reference is necessarily anaphoric.
+        return True
+    return head in _REPORT_ITEM_NOUNS or head in _SUBJECT_PRO_FORMS
 
 
 _FOCUS_MODIFIERS = frozenset({"only", "even", "just", "especially", "particularly"})
@@ -424,6 +501,13 @@ def _clause_tokens(text: str, span: "tuple[int, int]") -> "list[re.Match]":
 
 
 def _negation_scopes(text: str, span: "tuple[int, int]") -> "list[tuple[int, int]]":
+    """Scopes only; see `_clause_negations` for the verbal classification."""
+    return _clause_negations(text, span)[0]
+
+
+def _clause_negations(
+    text: str, span: "tuple[int, int]"
+) -> "tuple[list[tuple[int, int]], bool]":
     """Negation scopes inside one clause as (start, end) character ranges.
 
     Determiner negation covers itself plus at most two following tokens;
@@ -432,6 +516,7 @@ def _negation_scopes(text: str, span: "tuple[int, int]") -> "list[tuple[int, int
     """
     tokens = _clause_tokens(text, span)
     scopes: list[tuple[int, int]] = []
+    has_verbal = False
     for position, token in enumerate(tokens):
         lower = token.group(0).lower()
         if lower == "without":
@@ -464,8 +549,16 @@ def _negation_scopes(text: str, span: "tuple[int, int]") -> "list[tuple[int, int
                 and tokens[position + 1].group(0).lower() in ("only", "just")
             ):
                 continue
+            # Denies the report surface only if an existence/provision
+            # predicate falls inside the scope; otherwise the report exists
+            # and the negation is about one of its properties.
+            if any(
+                later.group(0).lower() in _EXISTENCE_PREDICATES
+                for later in tokens[position + 1 :]
+            ):
+                has_verbal = True
             scopes.append((token.start(), span[1]))
-    return scopes
+    return scopes, has_verbal
 
 
 def _position_negated(
@@ -661,6 +754,62 @@ def _routing_relation_affirmative(
     return True
 
 
+def _assertion_negated(
+    text: str,
+    clause_bounds: "tuple[list[int], list[tuple[int, int]]]",
+    start: int,
+    end: int,
+    cache: "dict[int, list[tuple[int, int]]]",
+    verbal_cache: "dict[int, bool]",
+    index_cache: "dict[int, tuple[list[int], list[int]]]",
+) -> bool:
+    """Whether a negation actually denies the assertion about [start, end).
+
+    Intersecting a range that runs to the CLAUSE END swept in trailing
+    adjuncts, so "The Resolution Audit is provided without delay" read as a
+    denial (#2189). Polarity is decided by the negation's KIND instead, which
+    the scope model already encodes:
+
+      * a scope covering the term itself denies it ("NO Resolution Audit is
+        provided");
+      * a VERBAL negation governs the predicate wherever the term sits, so it
+        denies too ("The Resolution Audit for this month is NOT provided") --
+        verbal scopes are exactly those the model extends to the clause end;
+      * a bounded scope elsewhere in the clause is an adjunct's own complement
+        ("without delay", "with no delay") and denies nothing.
+
+    Also O(1) per term rather than a fresh suffix scan, so a clause with many
+    product terms stays linear.
+    """
+    index, span = _span_for(clause_bounds, start)
+    if index not in cache:
+        # Computed once per clause -- rescanning per product term is what made
+        # a clause with many terms quadratic.
+        scopes, has_verbal = _clause_negations(text, span)
+        cache[index] = scopes
+        verbal_cache[index] = has_verbal
+        # Index once per clause: sorted starts plus a running max of ends, so
+        # "does any scope cover this term" is a bisect rather than a scan over
+        # every scope for every product term (#2189 round 3).
+        ordered = sorted(scopes)
+        running = []
+        highest = -1
+        for _s, _e in ordered:
+            highest = max(highest, _e)
+            running.append(highest)
+        index_cache[index] = ([s0 for s0, _e in ordered], running)
+    starts, max_ends = index_cache[index]
+    position = bisect.bisect_left(starts, end)
+    if position and max_ends[position - 1] > start:
+        return True
+    # The scope model's OWN verbal classification, not a second matcher: it
+    # already treats emphatic "not only/just" as affirmative, and an
+    # independent regex over every `not` disagreed with it (#2189 round 2).
+    if index not in verbal_cache:
+        verbal_cache[index] = _clause_negations(text, span)[1]
+    return verbal_cache[index]
+
+
 def _report_shape_sentences(
     text: str,
     sentence_bounds: "tuple[list[int], list[tuple[int, int]]]",
@@ -671,12 +820,20 @@ def _report_shape_sentences(
     product term, or a report noun with a shape verb at most three tokens
     later in the same clause, outside any negation scope."""
     sentences: set[int] = set()
+    verbal_cache: dict[int, bool] = {}
+    scope_index: dict[int, tuple[list[int], list[int]]] = {}
     for match in _PRODUCT_TERM_RE.finditer(text):
         _index, span = _span_for(clause_bounds, match.start())
         # Polarity spans the whole assertion: "The Resolution Audit is not
         # provided." denies the surface, so it is not report-shaped.
-        if not _range_negated(
-            text, clause_bounds, match.start(), span[1], negation_cache
+        if not _assertion_negated(
+            text,
+            clause_bounds,
+            match.start(),
+            match.end(),
+            negation_cache,
+            verbal_cache,
+            scope_index,
         ):
             sentences.add(_sentence_of(sentence_bounds, match.start()))
     _starts, clause_spans = clause_bounds
@@ -770,37 +927,24 @@ def _routing_covers_report(
                 if not routed_non_item:
                     return True
             if has_before:
-                first = clause_tokens[0].group(0).lower()
-                second = (
-                    clause_tokens[1].group(0).lower()
-                    if len(clause_tokens) > 1
-                    else ""
-                )
+                subject_words = [t.group(0).lower() for t in clause_tokens]
             else:
-                first = match_first
-                second = match_words[1].lower() if len(match_words) > 1 else ""
-            if first in _ANAPHORIC_SUBJECTS or (
-                first in ("the", "these", "those")
-                and second in _REPORT_ITEM_NOUNS
-            ):
+                subject_words = [w.lower() for w in match_words]
+            if _subject_binds_to_report(subject_words):
                 return True
             continue
         if any(sentence > report for report in report_sentences):
             index, span = _span_for(clause_bounds, match.start())
             if index not in subject_cache:
                 tokens = _clause_tokens(text, span)
-                first = tokens[0].group(0).lower() if tokens else ""
-                second = tokens[1].group(0).lower() if len(tokens) > 1 else ""
+                subject_words = [t.group(0).lower() for t in tokens]
                 # Subject position only (round 13): the clause must be ABOUT
                 # the report's items -- an anaphoric subject ("Each is
                 # assigned...") or a determiner + report-item noun ("These
                 # issues are routed..."). An anaphoric token buried in an
                 # unrelated object ("owns invoices for each customer") does
                 # not bind.
-                subject_cache[index] = first in _ANAPHORIC_SUBJECTS or (
-                    first in ("the", "these", "those")
-                    and second in _REPORT_ITEM_NOUNS
-                )
+                subject_cache[index] = _subject_binds_to_report(subject_words)
             if subject_cache[index]:
                 return True
     return False
