@@ -332,6 +332,19 @@ _SHAPE_VERBS = frozenset(
      "names", "name", "delivers", "deliver", "contains", "contain",
      "identifies", "identify", "surfaces", "surface", "highlights", "highlight"}
 )
+# A verbal negation denies the report SURFACE only when it denies the report's
+# existence/provision. "The Resolution Audit does not include owner
+# assignments" says the report EXISTS and lacks routing -- suppressing there
+# silenced the checklist exactly when routing was absent (#2189 round 3).
+# PARTICIPLE/adjective forms only. The form carries the voice, and the voice
+# carries the meaning: "is not INCLUDED" is passive -- the report itself is
+# absent -- while "does not INCLUDE owner assignments" is active and says the
+# report exists without routing. Listing the base form would collapse the two.
+_EXISTENCE_PREDICATES = frozenset(
+    {"provided", "included", "available", "delivered", "produced", "published",
+     "issued", "exist", "exists", "existed", "ready", "prepared", "sent",
+     "shared", "generated", "created"}
+)
 _PRODUCT_TERM_RE = re.compile(
     r"\b(?:resolution\s+audit|resolution\s+snapshot|action\s+queue)\b", re.I
 )
@@ -410,7 +423,9 @@ def _subject_binds_to_report(words: "list[str]") -> bool:
     # ticket in the REPORT" as being about reports and "each invoice for a
     # TICKET" as being about tickets -- one regressed valid routing, the other
     # preserved the original false negative (#2189 round 2).
-    rest = words[1:9]
+    # No token cap: modifier length is open, so parse to the predicate
+    # boundary instead of imposing another window (#2189 round 3).
+    rest = words[1:]
     if rest and rest[0] == "of":
         rest = rest[1:]  # partitive: the head sits inside the of-phrase
     head = ""
@@ -534,7 +549,14 @@ def _clause_negations(
                 and tokens[position + 1].group(0).lower() in ("only", "just")
             ):
                 continue
-            has_verbal = True
+            # Denies the report surface only if an existence/provision
+            # predicate falls inside the scope; otherwise the report exists
+            # and the negation is about one of its properties.
+            if any(
+                later.group(0).lower() in _EXISTENCE_PREDICATES
+                for later in tokens[position + 1 :]
+            ):
+                has_verbal = True
             scopes.append((token.start(), span[1]))
     return scopes, has_verbal
 
@@ -739,6 +761,7 @@ def _assertion_negated(
     end: int,
     cache: "dict[int, list[tuple[int, int]]]",
     verbal_cache: "dict[int, bool]",
+    index_cache: "dict[int, tuple[list[int], list[int]]]",
 ) -> bool:
     """Whether a negation actually denies the assertion about [start, end).
 
@@ -765,9 +788,20 @@ def _assertion_negated(
         scopes, has_verbal = _clause_negations(text, span)
         cache[index] = scopes
         verbal_cache[index] = has_verbal
-    for scope_start, scope_end in cache[index]:
-        if scope_start < end and start < scope_end:
-            return True
+        # Index once per clause: sorted starts plus a running max of ends, so
+        # "does any scope cover this term" is a bisect rather than a scan over
+        # every scope for every product term (#2189 round 3).
+        ordered = sorted(scopes)
+        running = []
+        highest = -1
+        for _s, _e in ordered:
+            highest = max(highest, _e)
+            running.append(highest)
+        index_cache[index] = ([s0 for s0, _e in ordered], running)
+    starts, max_ends = index_cache[index]
+    position = bisect.bisect_left(starts, end)
+    if position and max_ends[position - 1] > start:
+        return True
     # The scope model's OWN verbal classification, not a second matcher: it
     # already treats emphatic "not only/just" as affirmative, and an
     # independent regex over every `not` disagreed with it (#2189 round 2).
@@ -787,6 +821,7 @@ def _report_shape_sentences(
     later in the same clause, outside any negation scope."""
     sentences: set[int] = set()
     verbal_cache: dict[int, bool] = {}
+    scope_index: dict[int, tuple[list[int], list[int]]] = {}
     for match in _PRODUCT_TERM_RE.finditer(text):
         _index, span = _span_for(clause_bounds, match.start())
         # Polarity spans the whole assertion: "The Resolution Audit is not
@@ -798,6 +833,7 @@ def _report_shape_sentences(
             match.end(),
             negation_cache,
             verbal_cache,
+            scope_index,
         ):
             sentences.add(_sentence_of(sentence_bounds, match.start()))
     _starts, clause_spans = clause_bounds
@@ -891,9 +927,9 @@ def _routing_covers_report(
                 if not routed_non_item:
                     return True
             if has_before:
-                subject_words = [t.group(0).lower() for t in clause_tokens[:9]]
+                subject_words = [t.group(0).lower() for t in clause_tokens]
             else:
-                subject_words = [w.lower() for w in match_words[:9]]
+                subject_words = [w.lower() for w in match_words]
             if _subject_binds_to_report(subject_words):
                 return True
             continue
@@ -901,7 +937,7 @@ def _routing_covers_report(
             index, span = _span_for(clause_bounds, match.start())
             if index not in subject_cache:
                 tokens = _clause_tokens(text, span)
-                subject_words = [t.group(0).lower() for t in tokens[:9]]
+                subject_words = [t.group(0).lower() for t in tokens]
                 # Subject position only (round 13): the clause must be ABOUT
                 # the report's items -- an anaphoric subject ("Each is
                 # assigned...") or a determiner + report-item noun ("These

@@ -102,7 +102,16 @@ Max files: 3
   12. A PP-modified subject is classified by the noun the quantifier binds:
       `Each ticket in the report is assigned` covers, `Each invoice for a
       ticket is assigned` does not.
-  13. The standing 18-round regression corpus stays green.
+  13. A verbal negation denies the report only when it denies its EXISTENCE:
+      `is not provided` / `is not included` deny, while `does not include
+      owner assignments` still warns -- the checklist must speak precisely
+      when routing is absent.
+  14. Subject-head parsing has no token cap: `Each of the still currently open
+      high priority unresolved escalated customer support tickets is assigned`
+      covers.
+  15. Scope lookup is indexed, not scanned: 12,800 negation-bearing terms run
+      in ~0.13s against 1.55s before indexing.
+  16. The standing 18-round regression corpus stays green.
 - Reachability proof: both fixes sit inside `advisory_warnings`, the same entry
   point the runner calls for every audit and channel variant.
 - Affected surfaces: routing-coverage scope only. No change to the verdict,
@@ -179,7 +188,7 @@ Parked hardening: none.
         tests/test_content_factory_store.py \
         tests/test_content_factory_schemas.py \
         tests/test_content_factory_copy_verification.py -q
-    # -> 1384 passed before the new tests; 1468 with them
+    # -> 1508 passed (rerun at this head, after the round-2 and round-3 tests)
 
 Detection proven by injection, per AGENTS.md 3i. Reverting both fixes -- the
 polarity range back to the clause end, and quantifiers binding unconditionally:
@@ -191,7 +200,7 @@ polarity range back to the clause end, and quantifiers binding unconditionally:
 
 | File | LOC |
 |---|---:|
-| `atlas_brain/services/content_factory_copy_verification.py` | 154 |
-| `plans/PR-CF-Routing-Coverage-Scope.md` | 197 |
-| `tests/test_content_factory_copy_verification.py` | 152 |
-| **Total** | **503** |
+| `atlas_brain/services/content_factory_copy_verification.py` | 190 |
+| `plans/PR-CF-Routing-Coverage-Scope.md` | 206 |
+| `tests/test_content_factory_copy_verification.py` | 215 |
+| **Total** | **611** |

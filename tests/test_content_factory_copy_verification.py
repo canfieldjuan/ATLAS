@@ -1708,3 +1708,66 @@ def test_routing_scope_pass_stays_linear():
 
     advisory_warnings(body)
     assert time.perf_counter() - start < 1.0
+
+
+# --- #2189 round 3: existence-bound denial, open modifiers, linear scopes ---
+
+
+@pytest.mark.parametrize(
+    "predicate",
+    ["does not include owner assignments", "does not list the owning team",
+     "does not name an owner", "does not contain routing"],
+)
+def test_property_negation_does_not_deny_the_report(predicate):
+    """A verbal negation denies the report SURFACE only when it denies the
+    report's existence. "does not include owner assignments" says the report
+    EXISTS and lacks routing -- suppressing there silenced the checklist
+    exactly when routing was absent (#2189 round 3)."""
+    assert _routing_warns(f"The Resolution Audit {predicate}.")
+
+
+@pytest.mark.parametrize(
+    "predicate",
+    ["is not provided", "is never provided", "cannot be provided",
+     "is not available", "was not delivered"],
+)
+def test_existence_negation_still_denies_the_report(predicate):
+    assert not _routing_warns(f"The Resolution Audit {predicate}.")
+
+
+@pytest.mark.parametrize("modifiers", [
+    "open",
+    "still open",
+    "still currently open high priority",
+    "still currently open high priority unresolved support",
+    "still currently open high priority unresolved escalated customer support",
+])
+def test_subject_head_survives_variable_length_modifiers(modifiers):
+    """Modifier length is open, so a fixed token window is the wrong shape:
+    `tickets` fell outside an eight-token slice and the warning fired on a
+    correctly routed draft."""
+    assert not _routing_warns(
+        f"The report ranks issues. Each of the {modifiers} tickets is assigned to Billing."
+    )
+
+
+def test_scope_lookup_scales_with_negation_scopes_present():
+    """The earlier linearity guard used a body that creates NO negation
+    scopes, so it could not fail -- it measured the one path already fixed.
+    This one generates a scope per repetition."""
+    import time
+
+    from atlas_brain.services.content_factory_copy_verification import (
+        advisory_warnings,
+    )
+
+    def elapsed(reps):
+        body = "Resolution Audit with no delay " * reps
+        start = time.perf_counter()
+        advisory_warnings(body)
+        return time.perf_counter() - start
+
+    # 4x the input at the pre-fix quadratic rate took 1.55s; linear is ~0.13s.
+    # A generous absolute ceiling keeps this stable on shared CI runners while
+    # still failing outright if the scan returns.
+    assert elapsed(12800) < 1.0
