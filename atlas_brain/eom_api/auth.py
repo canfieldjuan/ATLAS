@@ -56,6 +56,7 @@ def _token_sha256(token: str) -> str:
 _PLACEHOLDER_TOKEN_DIGESTS = {
     _token_sha256(token) for token in _PLACEHOLDER_TOKENS
 }
+_PLACEHOLDER_TOKEN_DIGESTS.add("0" * 64)
 
 
 def _validate_generated_token(token: str) -> None:
@@ -65,9 +66,9 @@ def _validate_generated_token(token: str) -> None:
             "use atlas_brain.eom_api.auth.generate_receivables_service_token()"
         )
     random_part = token.removeprefix(_GENERATED_TOKEN_PREFIX)
-    if len(random_part) < _GENERATED_TOKEN_RANDOM_LENGTH:
+    if len(random_part) != _GENERATED_TOKEN_RANDOM_LENGTH:
         raise RuntimeError(
-            "Receivables service token random payload is too short; generate a "
+            "Receivables service token random payload has the wrong length; generate a "
             "new token with atlas_brain.eom_api.auth.generate_receivables_service_token()"
         )
     if fullmatch(_TOKEN_RANDOM_PATTERN, random_part) is None:
@@ -113,18 +114,20 @@ def _validate_generated_token_digest(token_digest: str) -> None:
 def validate_receivables_api_config(
     config: ReceivablesApiAuthConfig | EOMInvoicingConfig | None = None,
 ) -> None:
-    """Fail startup unless enabled auth comes from a trusted in-process source."""
+    """Fail startup unless enabled auth has digest-only generated-token config."""
     resolved = config or invoicing_settings
     if not resolved.receivables_api_enabled:
         return
-    if not isinstance(resolved, TrustedReceivablesApiConfig):
+    raw_token = getattr(resolved, "receivables_service_token", "")
+    if raw_token is not None and str(raw_token).strip():
         raise RuntimeError(
-            "The EOM receivables API cannot be enabled from operator-supplied "
-            "configuration in this Render profile slice; keep "
-            "ATLAS_INVOICING_RECEIVABLES_API_ENABLED=false until the Slice C "
-            "provisioning trust anchor lands."
+            "Raw EOM receivables bearer token material must not be configured "
+            "on the Atlas API service; provision only "
+            "ATLAS_INVOICING_RECEIVABLES_SERVICE_TOKEN_SHA256 here and keep "
+            "the raw token on the caller side."
         )
-    token_digest = resolved.receivables_service_token_sha256.strip()
+    token_digest = getattr(resolved, "receivables_service_token_sha256", "")
+    token_digest = token_digest.strip() if isinstance(token_digest, str) else ""
     _validate_generated_token_digest(token_digest)
 
 
@@ -154,8 +157,13 @@ async def require_receivables_api(
     scheme, separator, provided = authorization.partition(" ")
     if separator != " " or scheme.lower() != "bearer" or not provided.strip():
         raise HTTPException(status_code=401, detail="Bearer token required")
+    provided_token = provided.strip()
     try:
-        provided_digest = _token_sha256(provided.strip())
+        _validate_generated_token(provided_token)
+    except RuntimeError as exc:
+        raise HTTPException(status_code=401, detail="Invalid bearer token") from exc
+    try:
+        provided_digest = _token_sha256(provided_token)
     except UnicodeEncodeError as exc:
         raise HTTPException(status_code=401, detail="Invalid bearer token") from exc
     expected_digest = config.receivables_service_token_sha256.strip()

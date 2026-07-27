@@ -1,10 +1,13 @@
 import asyncio
+import hashlib
 import json
 import os
+import string
 import subprocess
 import sys
 import threading
 from concurrent.futures import ThreadPoolExecutor
+from itertools import product
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -13,11 +16,81 @@ import yaml
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
+_RAW_RECEIVABLES_SERVICE_TOKEN_ENV = "ATLAS_INVOICING_RECEIVABLES_SERVICE_TOKEN"
+_GENERATED_RECEIVABLES_TOKEN_PREFIX = "eomrx_v1_"
+_GENERATED_RECEIVABLES_TOKEN_PAYLOAD_LENGTH = 43
+_GENERATED_RECEIVABLES_TOKEN_PAYLOAD_CHARS = (
+    string.ascii_letters + string.digits + "_-"
+)
+
+
+def _alternating_case(value: str, *, starts_upper: bool) -> str:
+    uppercase = starts_upper
+    chars: list[str] = []
+    for char in value:
+        if char.isalpha():
+            chars.append(char.upper() if uppercase else char.lower())
+            uppercase = not uppercase
+        else:
+            chars.append(char)
+    return "".join(chars)
+
+
+_RAW_RECEIVABLES_SERVICE_TOKEN_KEY_CASES = tuple(
+    dict.fromkeys(
+        (
+            _RAW_RECEIVABLES_SERVICE_TOKEN_ENV,
+            _RAW_RECEIVABLES_SERVICE_TOKEN_ENV.lower(),
+            _alternating_case(
+                _RAW_RECEIVABLES_SERVICE_TOKEN_ENV,
+                starts_upper=True,
+            ),
+            _alternating_case(
+                _RAW_RECEIVABLES_SERVICE_TOKEN_ENV,
+                starts_upper=False,
+            ),
+        )
+    )
+)
+
+
+def _generated_receivables_token_oracle(token: str) -> bool:
+    if not token.startswith(_GENERATED_RECEIVABLES_TOKEN_PREFIX):
+        return False
+    payload = token.removeprefix(_GENERATED_RECEIVABLES_TOKEN_PREFIX)
+    return len(payload) == _GENERATED_RECEIVABLES_TOKEN_PAYLOAD_LENGTH and all(
+        char in _GENERATED_RECEIVABLES_TOKEN_PAYLOAD_CHARS for char in payload
+    )
+
+
+def _mixed_generated_payload(length: int) -> str:
+    return "".join(
+        _GENERATED_RECEIVABLES_TOKEN_PAYLOAD_CHARS[
+            (index * 7 + 3) % len(_GENERATED_RECEIVABLES_TOKEN_PAYLOAD_CHARS)
+        ]
+        for index in range(length)
+    )
+
+
+def _generated_payload_with_replacement(
+    *,
+    length: int,
+    replacement: str,
+    position: int,
+) -> str:
+    payload = list(_mixed_generated_payload(length))
+    payload[position] = replacement
+    return "".join(payload)
+
+
+def _sha256_ascii(value: str) -> str:
+    return hashlib.sha256(value.encode("ascii")).hexdigest()
+
 
 def _isolated_eom_subprocess_env() -> dict[str, str]:
     env = os.environ.copy()
     for key in list(env):
-        if key.startswith("ATLAS_INVOICING_"):
+        if key.upper().startswith("ATLAS_INVOICING_"):
             env.pop(key, None)
     env["ATLAS_DB_ENABLED"] = "false"
     return env
@@ -212,7 +285,7 @@ def test_eom_env_loader_preserves_process_env_and_local_precedence(
     assert os.environ[process_interpolated_key] == "process-secret"
 
 
-def test_eom_render_blueprint_maps_database_connection_string():
+def test_eom_render_blueprint_maps_database_and_receivables_auth():
     blueprint = yaml.safe_load(Path("render.eom.yaml").read_text(encoding="utf-8"))
 
     assert blueprint["databases"] == [
@@ -247,10 +320,19 @@ def test_eom_render_blueprint_maps_database_connection_string():
         "key": "ATLAS_INVOICING_RECEIVABLES_API_ENABLED",
         "value": "false",
     }
+    assert env_vars["ATLAS_INVOICING_RECEIVABLES_SERVICE_TOKEN_SHA256"] == {
+        "key": "ATLAS_INVOICING_RECEIVABLES_SERVICE_TOKEN_SHA256",
+        "sync": False,
+    }
     assert env_vars["ATLAS_EOM_RUN_MIGRATIONS"] == {
         "key": "ATLAS_EOM_RUN_MIGRATIONS",
         "value": "false",
     }
+    assert [
+        key
+        for key in env_vars
+        if key.startswith("ATLAS_INVOICING_") and "TOKEN" in key
+    ] == ["ATLAS_INVOICING_RECEIVABLES_SERVICE_TOKEN_SHA256"]
     for split_key in (
         "ATLAS_DB_HOST",
         "ATLAS_DB_PORT",
@@ -379,21 +461,193 @@ def test_database_pool_uses_configured_connection_kwargs(monkeypatch):
     assert calls["closed"] == {}
 
 
-def test_eom_receivables_startup_rejects_operator_enabled_config():
+def test_eom_receivables_runtime_config_accepts_generated_digest_only():
     from atlas_brain.eom_api import auth
     from atlas_brain.eom_api.config import EOMInvoicingConfig
 
-    for config in (
-        SimpleNamespace(
-            receivables_api_enabled=True,
-            receivables_service_token="eomrx_abcdefghijklmnopqrstuvwxyzabcdefghijklmnopq",
-            receivables_service_token_sha256=auth._token_sha256("password123"),
-        ),
-        EOMInvoicingConfig(
-            receivables_api_enabled=True,
-        ),
+    generated = auth.generate_receivables_service_token()
+    config = EOMInvoicingConfig(
+        receivables_api_enabled=True,
+        receivables_service_token_sha256=generated.sha256,
+    )
+
+    auth.validate_receivables_api_config(config)
+    assert (
+        auth.receivables_service_token_sha256(generated.token)
+        == config.receivables_service_token_sha256
+    )
+    assert "receivables_service_token" not in EOMInvoicingConfig.model_fields
+
+
+def test_eom_receivables_raw_token_source_admission_matches_casefold_oracle(
+    tmp_path,
+):
+    from atlas_brain.eom_api import config as eom_config
+
+    raw_values = ("", "   ", "caller-side-raw-token")
+    unrelated_keys = (
+        "ATLAS_INVOICING_RECEIVABLES_SERVICE_TOKEN_SHA256",
+        "ATLAS_EOM_RECEIVABLES_SERVICE_TOKEN",
+    )
+
+    case_index = 0
+    for source, key, value in product(
+        ("process-env", "dotenv"),
+        (*_RAW_RECEIVABLES_SERVICE_TOKEN_KEY_CASES, *unrelated_keys),
+        raw_values,
     ):
-        with pytest.raises(RuntimeError, match="cannot be enabled"):
+        expected = (
+            key.casefold() == _RAW_RECEIVABLES_SERVICE_TOKEN_ENV.casefold()
+            and bool(value.strip())
+        )
+        if source == "process-env":
+            observed = eom_config.raw_receivables_service_token_configured(
+                environ={key: value},
+                env_files=(),
+            )
+        else:
+            case_index += 1
+            env_file = tmp_path / f"raw-token-source-{case_index}.env"
+            env_file.write_text(f"{key}={value}\n", encoding="utf-8")
+            observed = eom_config.raw_receivables_service_token_configured(
+                environ={},
+                env_files=(env_file,),
+            )
+
+        assert observed is expected, (source, key, repr(value))
+
+
+@pytest.mark.parametrize(
+    ("raw_token_key", "api_enabled"),
+    (
+        ("ATLAS_INVOICING_RECEIVABLES_SERVICE_TOKEN", "true"),
+        ("atlas_invoicing_receivables_service_token", "true"),
+        ("ATLAS_INVOICING_RECEIVABLES_SERVICE_TOKEN", "false"),
+        (_RAW_RECEIVABLES_SERVICE_TOKEN_KEY_CASES[-1], "false"),
+    ),
+)
+def test_eom_receivables_runtime_config_rejects_raw_token_env_before_projection(
+    monkeypatch,
+    raw_token_key,
+    api_enabled,
+):
+    from pydantic import ValidationError
+
+    from atlas_brain.eom_api import auth
+    from atlas_brain.eom_api.config import (
+        EOMInvoicingConfig,
+        RAW_RECEIVABLES_SERVICE_TOKEN_ENV,
+    )
+
+    generated = auth.generate_receivables_service_token()
+    monkeypatch.setenv("ATLAS_INVOICING_RECEIVABLES_API_ENABLED", api_enabled)
+    monkeypatch.setenv(
+        "ATLAS_INVOICING_RECEIVABLES_SERVICE_TOKEN_SHA256",
+        generated.sha256,
+    )
+    monkeypatch.setenv(raw_token_key, generated.token)
+
+    with pytest.raises(
+        ValidationError,
+        match="Raw EOM receivables bearer token",
+    ):
+        EOMInvoicingConfig()
+    assert "receivables_service_token" not in EOMInvoicingConfig.model_fields
+
+
+@pytest.mark.parametrize(
+    ("raw_token_key", "api_enabled"),
+    (
+        ("ATLAS_INVOICING_RECEIVABLES_SERVICE_TOKEN", "true"),
+        ("atlas_invoicing_receivables_service_token", "true"),
+        ("ATLAS_INVOICING_RECEIVABLES_SERVICE_TOKEN", "false"),
+        (_RAW_RECEIVABLES_SERVICE_TOKEN_KEY_CASES[-1], "false"),
+    ),
+)
+def test_eom_profile_rejects_raw_receivables_token_from_dotenv_before_projection(
+    tmp_path,
+    raw_token_key,
+    api_enabled,
+):
+    from atlas_brain.eom_api import auth
+    from atlas_brain.eom_api.config import RAW_RECEIVABLES_SERVICE_TOKEN_ENV
+
+    generated = auth.generate_receivables_service_token()
+    (tmp_path / ".env").write_text(
+        "\n".join(
+            [
+                f"ATLAS_INVOICING_RECEIVABLES_API_ENABLED={api_enabled}",
+                f"ATLAS_INVOICING_RECEIVABLES_SERVICE_TOKEN_SHA256={generated.sha256}",
+                f"{raw_token_key}={generated.token}",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    env = _isolated_eom_subprocess_env()
+    repo_root = Path(__file__).resolve().parents[1]
+    existing_pythonpath = env.get("PYTHONPATH", "")
+    env["PYTHONPATH"] = (
+        str(repo_root)
+        if not existing_pythonpath
+        else f"{repo_root}{os.pathsep}{existing_pythonpath}"
+    )
+
+    result = subprocess.run(
+        [sys.executable, "-c", "import atlas_brain.main_eom"],
+        check=False,
+        capture_output=True,
+        cwd=tmp_path,
+        env=env,
+        text=True,
+    )
+
+    assert result.returncode != 0
+    assert "Raw EOM receivables bearer token material" in result.stderr
+    assert RAW_RECEIVABLES_SERVICE_TOKEN_ENV in result.stderr
+
+
+def test_eom_receivables_startup_rejects_unsafe_enabled_runtime_config():
+    from atlas_brain.eom_api import auth
+    from atlas_brain.eom_api.config import EOMInvoicingConfig
+
+    generated = auth.generate_receivables_service_token()
+    cases = (
+        (
+            SimpleNamespace(
+                receivables_api_enabled=True,
+                receivables_service_token=generated.token,
+                receivables_service_token_sha256=generated.sha256,
+            ),
+            "Raw EOM receivables bearer token",
+        ),
+        (
+            EOMInvoicingConfig(receivables_api_enabled=True),
+            "digest is required",
+        ),
+        (
+            EOMInvoicingConfig(
+                receivables_api_enabled=True,
+                receivables_service_token_sha256="0" * 63,
+            ),
+            "lowercase SHA-256",
+        ),
+        (
+            EOMInvoicingConfig(
+                receivables_api_enabled=True,
+                receivables_service_token_sha256="0" * 64,
+            ),
+            "placeholder",
+        ),
+        (
+            EOMInvoicingConfig(
+                receivables_api_enabled=True,
+                receivables_service_token_sha256=auth._token_sha256("change-me"),
+            ),
+            "placeholder",
+        ),
+    )
+    for config, message in cases:
+        with pytest.raises(RuntimeError, match=message):
             auth.validate_receivables_api_config(config)
 
 
@@ -403,6 +657,7 @@ def test_eom_receivables_trusted_config_rejects_bad_token_digests():
     for token_digest, message in (
         ("", "digest is required"),
         ("0" * 63, "lowercase SHA-256"),
+        ("0" * 64, "placeholder"),
         ("F" * 64, "lowercase SHA-256"),
         ("z" * 64, "lowercase SHA-256"),
         (auth._token_sha256("change-me"), "placeholder"),
@@ -424,9 +679,10 @@ def test_eom_receivables_token_digest_helper_rejects_legacy_or_short_tokens():
         "a" * 24,
         "eomrx_abcdefghijklmnopqrstuvwxyzabcdefghijklmnopq",
         "eomrx_v1_" + ("a" * 42),
+        "eomrx_v1_" + ("a" * 44),
         "eomrx_v1_" + ("*" * 43),
     ):
-        with pytest.raises(RuntimeError, match="generated|too short|invalid"):
+        with pytest.raises(RuntimeError, match="generated|wrong length|invalid"):
             auth.receivables_service_token_sha256(token)
 
 
@@ -438,6 +694,159 @@ def test_eom_receivables_startup_accepts_generated_service_token():
 
     auth.validate_receivables_api_config(config)
     assert auth.receivables_service_token_sha256(generated.token) == generated.sha256
+
+
+def test_eom_receivables_request_auth_does_not_rescan_settings_sources(
+    monkeypatch,
+):
+    from atlas_brain.eom_api import auth
+    from atlas_brain.eom_api import config as eom_config
+    from atlas_brain.eom_api.config import EOMInvoicingConfig
+
+    generated = auth.generate_receivables_service_token()
+    runtime_config = EOMInvoicingConfig(
+        receivables_api_enabled=True,
+        receivables_service_token_sha256=generated.sha256,
+    )
+
+    def fail_settings_rescan(*args, **kwargs):
+        raise AssertionError("request auth must not rescan dotenv settings sources")
+
+    monkeypatch.setattr(
+        eom_config,
+        "raw_receivables_service_token_configured",
+        fail_settings_rescan,
+    )
+
+    asyncio.run(
+        auth.require_receivables_api(
+            f"Bearer {generated.token}",
+            config=runtime_config,
+        )
+    )
+
+
+def test_eom_receivables_bearer_admission_matches_generated_token_grammar(
+    monkeypatch,
+):
+    from atlas_brain.eom_api import auth
+    from atlas_brain.eom_api import receivables
+
+    class _ReadyService:
+        async def is_ready(self):
+            return True
+
+    app = FastAPI()
+    app.include_router(receivables.router)
+    runtime_config = {
+        "value": auth.TrustedReceivablesApiConfig(
+            receivables_api_enabled=True,
+            receivables_service_token_sha256=_sha256_ascii(
+                f"{_GENERATED_RECEIVABLES_TOKEN_PREFIX}"
+                f"{'a' * _GENERATED_RECEIVABLES_TOKEN_PAYLOAD_LENGTH}"
+            ),
+        )
+    }
+    app.dependency_overrides[auth.get_receivables_api_config] = (
+        lambda: runtime_config["value"]
+    )
+    monkeypatch.setattr(
+        receivables,
+        "get_receivables_service",
+        lambda: _ReadyService(),
+    )
+
+    token_prefixes = (
+        _GENERATED_RECEIVABLES_TOKEN_PREFIX,
+        _GENERATED_RECEIVABLES_TOKEN_PREFIX.upper(),
+        "eomrx_v1x",
+        "eomrx_v2_",
+        "",
+    )
+    payload_lengths = (0, 1, 42, 43, 44)
+    payload_chars = ("A", "z", "0", "_", "-", "*", ".", "=")
+    invalid_payload_positions = (
+        0,
+        _GENERATED_RECEIVABLES_TOKEN_PAYLOAD_LENGTH // 2,
+        _GENERATED_RECEIVABLES_TOKEN_PAYLOAD_LENGTH - 1,
+    )
+    homogeneous_payloads = tuple(
+        payload_char * payload_length
+        for payload_length, payload_char in product(payload_lengths, payload_chars)
+    )
+    mixed_allowed_payloads = tuple(
+        _mixed_generated_payload(payload_length) for payload_length in payload_lengths
+    )
+    mixed_invalid_payloads = tuple(
+        _generated_payload_with_replacement(
+            length=_GENERATED_RECEIVABLES_TOKEN_PAYLOAD_LENGTH,
+            replacement=invalid_char,
+            position=position,
+        )
+        for invalid_char, position in product(
+            ("*", ".", "="),
+            invalid_payload_positions,
+        )
+    )
+    payloads = tuple(
+        dict.fromkeys(
+            (
+                *homogeneous_payloads,
+                *mixed_allowed_payloads,
+                *mixed_invalid_payloads,
+            )
+        )
+    )
+    accepted_cases = 0
+
+    with TestClient(app) as client:
+        for token_prefix, payload in product(
+            token_prefixes,
+            payloads,
+        ):
+            token = f"{token_prefix}{payload}"
+            should_accept = _generated_receivables_token_oracle(token)
+            runtime_config["value"] = auth.TrustedReceivablesApiConfig(
+                receivables_api_enabled=True,
+                receivables_service_token_sha256=_sha256_ascii(token),
+            )
+
+            response = client.get(
+                "/receivables/ready",
+                headers={"Authorization": f"Bearer {token}"},
+            )
+
+            assert response.status_code == (200 if should_accept else 401), (
+                token_prefix,
+                len(payload),
+                payload,
+            )
+            accepted_cases += int(should_accept)
+
+    expected_accepted_cases = sum(
+        1
+        for token_prefix, payload in product(token_prefixes, payloads)
+        if _generated_receivables_token_oracle(f"{token_prefix}{payload}")
+    )
+    assert accepted_cases == expected_accepted_cases
+    assert any(
+        _generated_receivables_token_oracle(
+            f"{_GENERATED_RECEIVABLES_TOKEN_PREFIX}{payload}"
+        )
+        and len(set(payload)) > 1
+        for payload in payloads
+    )
+    assert any(
+        len(payload) == _GENERATED_RECEIVABLES_TOKEN_PAYLOAD_LENGTH
+        and any(
+            char not in _GENERATED_RECEIVABLES_TOKEN_PAYLOAD_CHARS
+            for char in payload
+        )
+        and not _generated_receivables_token_oracle(
+            f"{_GENERATED_RECEIVABLES_TOKEN_PREFIX}{payload}"
+        )
+        for payload in payloads
+    )
 
 
 def test_all_eom_receivables_routes_require_service_auth():
@@ -454,6 +863,7 @@ def test_all_eom_receivables_routes_require_service_auth():
 def test_eom_receivables_ready_route_is_fail_closed(monkeypatch):
     from atlas_brain.eom_api import auth
     from atlas_brain.eom_api import receivables
+    from atlas_brain.eom_api.config import EOMInvoicingConfig
 
     class _ReadyService:
         async def is_ready(self):
@@ -462,7 +872,10 @@ def test_eom_receivables_ready_route_is_fail_closed(monkeypatch):
     app = FastAPI()
     app.include_router(receivables.router)
     generated = auth.generate_receivables_service_token()
-    config = auth.trusted_receivables_api_config(generated)
+    config = EOMInvoicingConfig(
+        receivables_api_enabled=True,
+        receivables_service_token_sha256=generated.sha256,
+    )
     valid_token = generated.token
     app.dependency_overrides[auth.get_receivables_api_config] = lambda: config
     monkeypatch.setattr(
@@ -487,6 +900,39 @@ def test_eom_receivables_ready_route_is_fail_closed(monkeypatch):
         ).status_code
         == 401
     )
+    nongenerated_token = "operator-supplied-low-entropy-secret"
+    app.dependency_overrides[auth.get_receivables_api_config] = (
+        lambda: EOMInvoicingConfig(
+            receivables_api_enabled=True,
+            receivables_service_token_sha256=auth._token_sha256(nongenerated_token),
+        )
+    )
+    assert (
+        client.get(
+            "/receivables/ready",
+            headers={"Authorization": f"Bearer {nongenerated_token}"},
+        ).status_code
+        == 401
+    )
+    too_long_generated_format_token = "eomrx_v1_" + ("a" * 44)
+    app.dependency_overrides[auth.get_receivables_api_config] = (
+        lambda: EOMInvoicingConfig(
+            receivables_api_enabled=True,
+            receivables_service_token_sha256=auth._token_sha256(
+                too_long_generated_format_token
+            ),
+        )
+    )
+    assert (
+        client.get(
+            "/receivables/ready",
+            headers={
+                "Authorization": f"Bearer {too_long_generated_format_token}"
+            },
+        ).status_code
+        == 401
+    )
+    app.dependency_overrides[auth.get_receivables_api_config] = lambda: config
     assert (
         client.get(
             "/receivables/ready",
@@ -572,50 +1018,90 @@ def test_eom_lifespan_initializes_database_without_running_migrations(monkeypatc
 def test_eom_profile_ping_is_database_independent(monkeypatch):
     from atlas_brain import main_eom
     from atlas_brain.main_eom import app
-    from atlas_brain.eom_api.config import invoicing_settings
 
     monkeypatch.setattr(main_eom, "db_settings", SimpleNamespace(enabled=False))
-    monkeypatch.setattr(invoicing_settings, "receivables_api_enabled", False)
+    original_enabled = main_eom.invoicing_settings.receivables_api_enabled
+    main_eom.invoicing_settings.receivables_api_enabled = False
 
-    with TestClient(app) as client:
-        response = client.get("/api/v1/ping")
+    try:
+        with TestClient(app) as client:
+            response = client.get("/api/v1/ping")
+    finally:
+        main_eom.invoicing_settings.receivables_api_enabled = original_enabled
 
     assert response.status_code == 200
     assert response.json() == {"status": "ok", "profile": "eom"}
 
 
-def test_eom_profile_reaches_receivables_ready_through_real_app(monkeypatch):
+def test_eom_profile_reaches_receivables_ready_through_real_app(tmp_path):
     from atlas_brain.eom_api import auth
-    from atlas_brain import main_eom
-    from atlas_brain.main_eom import app
-    from atlas_brain.eom_api import receivables
-    from atlas_brain.eom_api.config import invoicing_settings
 
-    class _ReadyService:
-        async def is_ready(self):
-            return True
-
-    monkeypatch.setattr(main_eom, "db_settings", SimpleNamespace(enabled=False))
-    monkeypatch.setattr(invoicing_settings, "receivables_api_enabled", False)
     generated = auth.generate_receivables_service_token()
-    valid_token = generated.token
-    monkeypatch.setattr(
-        receivables,
-        "get_receivables_service",
-        lambda: _ReadyService(),
-    )
-    app.dependency_overrides[auth.get_receivables_api_config] = (
-        lambda: auth.trusted_receivables_api_config(generated)
+    probe = """
+import json
+import os
+
+from fastapi.testclient import TestClient
+
+from atlas_brain import main_eom
+from atlas_brain.eom_api import receivables
+
+
+class _ReadyService:
+    async def is_ready(self):
+        return True
+
+
+receivables.get_receivables_service = lambda: _ReadyService()
+if main_eom.app.dependency_overrides:
+    raise AssertionError("auth dependency must not be overridden")
+
+with TestClient(main_eom.app) as client:
+    response = client.get(
+        "/api/v1/receivables/ready",
+        headers={
+            "Authorization": f"Bearer {os.environ['EOM_TEST_CALLER_TOKEN']}"
+        },
     )
 
-    try:
-        with TestClient(app) as client:
-            response = client.get(
-                "/api/v1/receivables/ready",
-                headers={"Authorization": f"Bearer {valid_token}"},
-            )
-    finally:
-        app.dependency_overrides.pop(auth.get_receivables_api_config, None)
+print(json.dumps({
+    "status_code": response.status_code,
+    "body": response.json(),
+    "env_projected_enabled": main_eom.invoicing_settings.receivables_api_enabled,
+    "env_projected_digest": (
+        main_eom.invoicing_settings.receivables_service_token_sha256
+        == os.environ["ATLAS_INVOICING_RECEIVABLES_SERVICE_TOKEN_SHA256"]
+    ),
+    "dependency_overrides": len(main_eom.app.dependency_overrides),
+}))
+"""
+    env = _isolated_eom_subprocess_env()
+    repo_root = Path(__file__).resolve().parents[1]
+    existing_pythonpath = env.get("PYTHONPATH", "")
+    env["PYTHONPATH"] = (
+        str(repo_root)
+        if not existing_pythonpath
+        else f"{repo_root}{os.pathsep}{existing_pythonpath}"
+    )
+    env["ATLAS_INVOICING_RECEIVABLES_API_ENABLED"] = "true"
+    env["ATLAS_INVOICING_RECEIVABLES_SERVICE_TOKEN_SHA256"] = generated.sha256
+    env["EOM_TEST_CALLER_TOKEN"] = generated.token
 
-    assert response.status_code == 200
-    assert response.json() == {"status": "ready"}
+    result = subprocess.run(
+        [sys.executable, "-c", probe],
+        check=False,
+        capture_output=True,
+        cwd=tmp_path,
+        env=env,
+        text=True,
+    )
+
+    assert result.returncode == 0, result.stderr
+    observed = json.loads(result.stdout.strip().splitlines()[-1])
+    assert observed == {
+        "status_code": 200,
+        "body": {"status": "ready"},
+        "env_projected_enabled": True,
+        "env_projected_digest": True,
+        "dependency_overrides": 0,
+    }
