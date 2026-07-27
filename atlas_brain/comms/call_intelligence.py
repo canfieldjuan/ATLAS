@@ -551,24 +551,53 @@ async def _link_to_crm(
         logger.warning("CRM link skipped for call %s: DB pool not initialized", call_sid)
         return None, False
 
-    phone = extracted_data.get("customer_phone") or from_number
     email_addr = extracted_data.get("customer_email")
     name = extracted_data.get("customer_name")
+    crm = get_crm_provider()
+    from ..services.eom_lead_ingress import (
+        EOM_BUSINESS_CONTEXT_ID,
+        preferred_eom_inbound_phone,
+        resolve_or_create_eom_inbound_lead_and_log_interaction,
+    )
+
+    if context_id == EOM_BUSINESS_CONTEXT_ID:
+        phone = preferred_eom_inbound_phone(
+            extracted_data.get("customer_phone"), from_number
+        )
+    else:
+        phone = extracted_data.get("customer_phone") or from_number
 
     if not phone and not email_addr:
         return None, False
 
-    crm = get_crm_provider()
-    contact = await crm.find_or_create_contact(
-        full_name=name or phone or "Unknown Caller",
-        phone=phone,
-        email=email_addr,
-        address=extracted_data.get("address"),
-        business_context_id=context_id,
-        contact_type="customer",
-        source="phone_call",
-        source_ref=str(transcript_id),
-    )
+    raw_intent = extracted_data.get("intent", "")
+    business_intent = _CALL_INTENT_MAP.get(raw_intent)
+    if context_id == EOM_BUSINESS_CONTEXT_ID:
+        contact, _interaction = await resolve_or_create_eom_inbound_lead_and_log_interaction(
+            crm,
+            full_name=name or phone or "Unknown Caller",
+            phone=phone,
+            email=email_addr,
+            address=extracted_data.get("address"),
+            source="phone_call",
+            source_ref=str(transcript_id),
+            relay_event_id=(f"call:{call_sid}" if call_sid else None),
+            interaction_type="call",
+            summary=summary or f"Inbound call from {from_number}",
+            intent=business_intent,
+            metadata={"crm_event_id": f"call:{call_sid}"} if call_sid else None,
+        )
+    else:
+        contact = await crm.find_or_create_contact(
+            full_name=name or phone or "Unknown Caller",
+            phone=phone,
+            email=email_addr,
+            address=extracted_data.get("address"),
+            business_context_id=context_id,
+            contact_type="customer",
+            source="phone_call",
+            source_ref=str(transcript_id),
+        )
     if not contact.get("id"):
         logger.warning("CRM contact created but has no ID: %s", contact)
         return None, False
@@ -578,15 +607,14 @@ async def _link_to_crm(
     # Link the call transcript to the contact
     await repo.link_contact(transcript_id, contact_id)
 
-    # Log the interaction with normalized business intent
-    raw_intent = extracted_data.get("intent", "")
-    business_intent = _CALL_INTENT_MAP.get(raw_intent)
-    await crm.log_interaction(
-        contact_id=contact_id,
-        interaction_type="call",
-        summary=summary or f"Inbound call from {from_number}",
-        intent=business_intent,
-    )
+    if context_id != EOM_BUSINESS_CONTEXT_ID:
+        await crm.log_interaction(
+            contact_id=contact_id,
+            interaction_type="call",
+            summary=summary or f"Inbound call from {from_number}",
+            intent=business_intent,
+            metadata={"crm_event_id": f"call:{call_sid}"} if call_sid else None,
+        )
 
     return contact_id, is_new_lead
 

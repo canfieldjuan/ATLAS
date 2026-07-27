@@ -163,3 +163,68 @@ def test_cli_entrypoint_warns_advisory_and_fails_strict(monkeypatch: pytest.Monk
 def test_git_failure_raises_system_exit() -> None:
     with pytest.raises(SystemExit, match="git .* failed"):
         mod._git(["rev-parse", "--verify", "definitely-not-a-ref-xyz"])
+
+
+# ---------------------------------------------------------------------------
+# Single-source manifest: this rule applied to its own mechanism.
+#
+# The mirror script used to carry its own copy of the workflow's pytest list,
+# so "run what CI runs" was a claim maintained by hand -- the exact drift this
+# rule exists to prevent, one level down. Both consumers now read
+# tests/eom_lead_pipeline_files.txt and neither keeps a copy.
+# ---------------------------------------------------------------------------
+
+import subprocess  # noqa: E402
+
+_REPO_ROOT = Path(__file__).resolve().parent.parent
+MANIFEST = _REPO_ROOT / "tests" / "eom_lead_pipeline_files.txt"
+MIRROR_SCRIPT = _REPO_ROOT / "scripts" / "run_eom_lead_pipeline_checks.sh"
+GATE_WORKFLOW = (
+    _REPO_ROOT / ".github" / "workflows" / "atlas_eom_lead_pipeline_checks.yml"
+)
+
+
+def _manifest_entries() -> list[str]:
+    return [
+        line.strip()
+        for line in MANIFEST.read_text(encoding="utf-8").splitlines()
+        if line.strip() and not line.strip().startswith("#")
+    ]
+
+
+def test_manifest_lists_real_test_files() -> None:
+    entries = _manifest_entries()
+    assert entries, "manifest must not be empty"
+    missing = [path for path in entries if not (_REPO_ROOT / path).is_file()]
+    assert missing == [], f"manifest names files that do not exist: {missing}"
+
+
+def test_manifest_is_shell_safe() -> None:
+    """Both consumers pipe the manifest through xargs, so an entry containing
+    whitespace or a quote would split into bogus pytest arguments."""
+    for entry in _manifest_entries():
+        assert not any(ch in entry for ch in " \t'\"\\"), f"unsafe entry: {entry!r}"
+
+
+def test_both_consumers_read_the_manifest() -> None:
+    """Drift is structurally impossible only while both consumers read the
+    manifest instead of listing files themselves."""
+    for consumer in (MIRROR_SCRIPT, GATE_WORKFLOW):
+        text = consumer.read_text(encoding="utf-8")
+        assert "eom_lead_pipeline_files.txt" in text, (
+            f"{consumer.name} does not read the manifest"
+        )
+
+
+def test_mirror_script_does_not_relist_the_test_set() -> None:
+    """A second copy of the set inside the mirror is the original defect."""
+    text = MIRROR_SCRIPT.read_text(encoding="utf-8")
+    relisted = [
+        line for line in text.splitlines()
+        if "tests/test_" in line and "eom_lead_pipeline_files" not in line
+    ]
+    assert relisted == [], f"mirror re-lists test files: {relisted}"
+
+
+def test_mirror_script_parses() -> None:
+    subprocess.run(["bash", "-n", str(MIRROR_SCRIPT)], check=True)
