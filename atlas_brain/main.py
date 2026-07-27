@@ -132,6 +132,12 @@ async def _require_eom_funnel_data_store(
                WHERE handoff_table.oid = 'eom_customer_handoffs'::regclass
                  AND owner_role.rolname = 'atlas_eom_handoff_owner'
            )
+           AND EXISTS (
+               SELECT 1
+               FROM pg_roles AS guard_role
+               WHERE guard_role.rolname = 'atlas_eom_handoff_owner'
+                 AND has_schema_privilege(guard_role.oid, current_schema(), 'CREATE')
+           )
            AND NOT EXISTS (
                SELECT 1
                FROM pg_auth_members AS membership
@@ -141,7 +147,22 @@ async def _require_eom_funnel_data_store(
                  AND guard_role.rolname = 'atlas_eom_handoff_owner'
            )
            AND COALESCE((
-               SELECT NOT has_schema_privilege(nocodb_role.oid, current_schema(), 'CREATE')
+               SELECT nocodb_role.rolcanlogin
+                  AND NOT nocodb_role.rolsuper
+                  AND NOT nocodb_role.rolcreaterole
+                  AND NOT nocodb_role.rolcreatedb
+                  AND NOT nocodb_role.rolreplication
+                  AND NOT nocodb_role.rolbypassrls
+                  AND NOT nocodb_role.rolinherit
+                  AND has_database_privilege(
+                      nocodb_role.oid, current_database(), 'CONNECT'
+                  )
+                  AND NOT EXISTS (
+                      SELECT 1
+                      FROM pg_auth_members AS nocodb_membership
+                      WHERE nocodb_membership.member = nocodb_role.oid
+                  )
+                  AND NOT has_schema_privilege(nocodb_role.oid, current_schema(), 'CREATE')
                   AND NOT has_table_privilege(nocodb_role.oid, 'eom_customer_handoffs', 'INSERT')
                   AND NOT has_table_privilege(nocodb_role.oid, 'eom_customer_handoffs', 'UPDATE')
                   AND NOT has_table_privilege(nocodb_role.oid, 'eom_customer_handoffs', 'DELETE')
@@ -166,6 +187,61 @@ async def _require_eom_funnel_data_store(
                   )
                   AND NOT has_column_privilege(
                       nocodb_role.oid, 'contacts', 'lead_stage', 'UPDATE'
+                  )
+                  AND NOT EXISTS (
+                      SELECT 1
+                      FROM pg_tables AS non_crm_table
+                      WHERE non_crm_table.schemaname = current_schema()
+                        AND non_crm_table.tablename NOT IN (
+                            'contacts', 'contact_interactions', 'appointments'
+                        )
+                        AND (
+                            has_table_privilege(
+                                nocodb_role.oid,
+                                format(
+                                    '%I.%I',
+                                    non_crm_table.schemaname,
+                                    non_crm_table.tablename
+                                ),
+                                'SELECT'
+                            )
+                            OR has_table_privilege(
+                                nocodb_role.oid,
+                                format(
+                                    '%I.%I',
+                                    non_crm_table.schemaname,
+                                    non_crm_table.tablename
+                                ),
+                                'INSERT'
+                            )
+                            OR has_table_privilege(
+                                nocodb_role.oid,
+                                format(
+                                    '%I.%I',
+                                    non_crm_table.schemaname,
+                                    non_crm_table.tablename
+                                ),
+                                'UPDATE'
+                            )
+                            OR has_table_privilege(
+                                nocodb_role.oid,
+                                format(
+                                    '%I.%I',
+                                    non_crm_table.schemaname,
+                                    non_crm_table.tablename
+                                ),
+                                'DELETE'
+                            )
+                            OR has_table_privilege(
+                                nocodb_role.oid,
+                                format(
+                                    '%I.%I',
+                                    non_crm_table.schemaname,
+                                    non_crm_table.tablename
+                                ),
+                                'TRUNCATE'
+                            )
+                        )
                   )
                FROM pg_roles AS nocodb_role
                WHERE nocodb_role.rolname = 'atlas_nocodb'

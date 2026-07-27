@@ -13,9 +13,9 @@ services:
     volumes:
       - atlas_nocodb_data:/usr/app/data
     environment:
-      # Never fall back to the Atlas service login: migration 354 grants this
-      # dedicated NocoDB role ordinary CRM access but no EOM handoff/lifecycle
-      # evidence mutation or trigger-control privilege.
+      # Never fall back to the Atlas service login. A database administrator
+      # must provision this unprivileged LOGIN NOINHERIT role with the matching
+      # secret before migration 354; it has only documented CRM-table access.
       NC_DB: "pg://host.docker.internal:5433?u=atlas_nocodb&p=${ATLAS_NOCODB_DB_PASSWORD:?Set ATLAS_NOCODB_DB_PASSWORD before starting NocoDB}&d=${ATLAS_DB_DATABASE:-atlas}"
 
   brain:

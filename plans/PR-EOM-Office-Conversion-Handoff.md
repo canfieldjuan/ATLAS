@@ -145,11 +145,40 @@ handoff row without a proven finalization transition.
   `business_context_id`, `contact_type`, and `lead_stage`. Prove the role is
   denied each protected direct mutation while ordinary contact editing remains
   available, and prove a forced bookkeeping failure rolls back the ownership
-  and membership changes.
+  changes while preserving the pre-existing administrator membership grant.
 - Must still not change: migration execution for every unmarked migration,
   including `CREATE INDEX CONCURRENTLY` migrations; the handoff/lifecycle
   table guards; the full Atlas startup/data-store guard; tracker retry and
   Customer/Site behavior; or permitted non-lifecycle NocoDB CRM operations.
+- Review-repair extension 4: migration 354 still treated NocoDB as a generic
+  database operator. It auto-created a `NOLOGIN` role even though Compose must
+  authenticate with that role, discovered every current table and granted DML,
+  and omitted the guard owner's required `CREATE` schema privilege for a
+  non-superuser ownership transfer. The enabled startup guard did not prove the
+  role can log in or has no access outside operator-facing CRM tables, and the
+  EOM workflow did not rerun for the database-pool module used by finalization
+  and startup.
+- Correct repair: require a database administrator to provision
+  `atlas_nocodb` as an unprivileged, membership-free `LOGIN NOINHERIT` role
+  with its password before migration 354; the migration fails closed instead
+  of creating a role that Compose cannot use or can switch into broader access.
+  Grant NocoDB only `contacts`, `contact_interactions`, and `appointments`,
+  retaining the protected contact-column restriction, and revoke any privilege
+  on every other current table. Grant the non-login guard owner the schema
+  `CREATE` privilege required solely to receive its protected objects. Extend
+  the full-app preflight and both EOM CI path inventories accordingly. Prove a
+  real non-superuser executor that owns the schema, its current tables, and
+  the protected functions completes the migration, an actual NocoDB login can
+  connect, and that role cannot read or mutate migration/credential tables.
+  PostgreSQL records an external role grant's grantor, so the database
+  administrator—not the non-superuser executor—must revoke its temporary guard
+  membership after the atomic migration commits; startup remains fail-closed
+  until that separately authorized revocation occurs.
+- Must still not change: the NocoDB UI's documented CRM tables or ordinary
+  safe-column contact edits; protected evidence-table denial; the tracker or
+  public API; the migration runner's unmarked execution model; or production
+  secret values. Role-password provisioning remains a database-administrator
+  deployment action and is never placed in source control.
 
 ## Scope (this PR)
 
@@ -202,6 +231,13 @@ Slice phase: Vertical slice
     database transaction. Prove both the protected-column denials and the
     forced bookkeeping-failure rollback on PostgreSQL without changing the
     execution model for unmarked migrations.
+11. Bind the NocoDB browser login to its three documented CRM tables rather
+    than discovered database tables, fail closed unless its database role is a
+    pre-provisioned login, fail fast unless a non-superuser executor owns the
+    schema/current tables/protected functions needed for the ownership and
+    privilege changes, and prove the ownership transfer plus connection-level
+    least privilege. Enroll the primary database-pool module in both EOM
+    workflow path filters.
 
 ### Review Contract
 
@@ -271,11 +307,25 @@ Slice phase: Vertical slice
 - The migration runner executes only a migration declaring the
   `atlas: atomic-bookkeeping` marker and its `schema_migrations` bookkeeping
   in one PostgreSQL transaction. Migration 354 declares that marker; a forced
-  ledger-insert failure leaves neither guard-object ownership nor temporary
-  role-membership revocation committed, while a successful run records 354
-  before the executor loses that membership. Existing unmarked migrations,
-  including concurrent-index migrations, retain their autocommit execution
-  model. Real PostgreSQL and runner tests settle the distinction.
+  ledger-insert failure leaves no guard-object ownership committed and preserves
+  the administrator's pre-existing temporary membership grant. A successful
+  run records 354 before that grant is externally revoked. Existing unmarked
+  migrations, including concurrent-index migrations, retain their autocommit
+  execution model. Real PostgreSQL and runner tests settle the distinction.
+- Migration 354 requires a pre-provisioned `atlas_nocodb` `LOGIN NOINHERIT`
+  role with no elevated role attributes or selectable memberships. It grants
+  only the documented CRM tables: `contacts`, `contact_interactions`, and
+  `appointments`; it receives no grant on migration bookkeeping or credential
+  tables. A non-superuser migration executor must own the schema, every current
+  table, and the protected functions; the guard role has schema `CREATE` only
+  because PostgreSQL requires that capability to accept protected-object
+  ownership. The enabled startup
+  query verifies those role/schema/table/column/membership facts before serving;
+  after a non-superuser migration, the database administrator that granted the
+  temporary guard membership must revoke it, because PostgreSQL does not permit
+  the executor to revoke an externally granted membership. PostgreSQL tests
+  settle that execution/revocation sequence, an actual NocoDB login connection,
+  allowed CRM access, and forbidden migration/credential access.
 - Affected surfaces: full Atlas API aggregation/startup validation, EOM funnel
   router and service auth, CRM lifecycle transition, handoff migration, EOM
   pipeline CI, and the companion time-tracker admin API/customer-onboarding
@@ -381,9 +431,10 @@ CRM-table access but has no grant on the handoff or lifecycle evidence tables,
 so it cannot manufacture a finalization or disable its guards. The deployment
 must first have a database administrator provision both roles, the NocoDB
 login password, and a temporary admin membership for the non-superuser Atlas
-migration executor. Migration 354 transfers ownership and revokes that
-temporary membership before the application serves. The Compose profile never
-falls back to the Atlas service login.
+migration executor. Migration 354 transfers ownership atomically with its
+ledger row; the administrator that granted the membership then revokes it.
+The enabled startup guard blocks service until that last revocation succeeds.
+The Compose profile never falls back to the Atlas service login.
 
 The finalization provider defaults to the configured Atlas database pool, but
 accepts a transaction-capable pool only through its constructor. That keeps the
@@ -465,7 +516,7 @@ Parked hardening: none against that predicate.
   the retry finalizes that same operation.
 - The exact EOM pipeline command in
   `.github/workflows/atlas_eom_lead_pipeline_checks.yml` ran against the local
-  PostgreSQL test URL — 278 passed.
+  PostgreSQL test URL after the privilege repair — 282 passed.
 - The exact Atlas API maturity ratchet with its CI sensitive-glob set passed
   with no new brittleness above baseline.
 
@@ -473,21 +524,21 @@ Parked hardening: none against that predicate.
 
 | File | LOC |
 |---|---:|
-| `.github/workflows/atlas_eom_lead_pipeline_checks.yml` | 34 |
+| `.github/workflows/atlas_eom_lead_pipeline_checks.yml` | 36 |
 | `atlas_brain/api/__init__.py` | 2 |
 | `atlas_brain/eom_api/auth.py` | 78 |
 | `atlas_brain/eom_api/config.py` | 23 |
 | `atlas_brain/eom_api/funnel.py` | 90 |
 | `atlas_brain/eom_api/funnel_auth.py` | 127 |
-| `atlas_brain/main.py` | 86 |
+| `atlas_brain/main.py` | 162 |
 | `atlas_brain/services/crm_provider.py` | 234 |
 | `atlas_brain/services/eom_lead_conversion.py` | 44 |
 | `atlas_brain/storage/migrations/353_eom_customer_handoffs.sql` | 84 |
-| `atlas_brain/storage/migrations/354_eom_customer_handoff_privileges.sql` | 152 |
+| `atlas_brain/storage/migrations/354_eom_customer_handoff_privileges.sql` | 217 |
 | `atlas_brain/storage/migrations/__init__.py` | 30 |
 | `docker-compose.yml` | 5 |
-| `plans/PR-EOM-Office-Conversion-Handoff.md` | 493 |
-| `tests/test_eom_lead_conversion.py` | 499 |
-| `tests/test_eom_lead_conversion_integration.py` | 838 |
+| `plans/PR-EOM-Office-Conversion-Handoff.md` | 544 |
+| `tests/test_eom_lead_conversion.py` | 504 |
+| `tests/test_eom_lead_conversion_integration.py` | 1119 |
 | `tests/test_migrations_runner.py` | 56 |
-| **Total** | **2875** |
+| **Total** | **3355** |

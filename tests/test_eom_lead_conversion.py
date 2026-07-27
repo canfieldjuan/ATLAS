@@ -132,9 +132,14 @@ async def test_enabled_full_atlas_funnel_requires_authoritative_data_store(monke
     assert "atlas_eom_handoff_owner" in ready_pool.queries[0]
     assert "atlas_nocodb" in ready_pool.queries[0]
     assert "pg_auth_members" in ready_pool.queries[0]
+    assert "rolcanlogin" in ready_pool.queries[0]
+    assert "rolinherit" in ready_pool.queries[0]
+    assert "rolsuper" in ready_pool.queries[0]
+    assert "has_database_privilege" in ready_pool.queries[0]
     assert "has_schema_privilege" in ready_pool.queries[0]
     assert "has_table_privilege" in ready_pool.queries[0]
     assert "has_column_privilege" in ready_pool.queries[0]
+    assert "pg_tables" in ready_pool.queries[0]
 
     with pytest.raises(RuntimeError, match="authoritative Atlas database"):
         await main._require_eom_funnel_data_store(enabled, database_enabled=False)
