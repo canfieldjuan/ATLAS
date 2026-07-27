@@ -1,0 +1,19 @@
+# Canonical test set for the EOM lead-pipeline gate.
+#
+# Single source of truth, read by BOTH:
+#   - .github/workflows/atlas_eom_lead_pipeline_checks.yml (the enforcing gate)
+#   - scripts/run_eom_lead_pipeline_checks.sh (the local mirror)
+#
+# Neither keeps its own copy, so "I ran what CI runs" cannot quietly stop being
+# true. Add a file here and both consumers pick it up.
+tests/test_crm_read_scoping.py
+tests/test_eom_complaints_integration.py
+tests/test_eom_contacts_api_tenant_scope.py
+tests/test_eom_lead_pipeline_integration.py
+tests/test_eom_mailbox_context_binding.py
+tests/test_eom_recurring_appointments_integration.py
+tests/test_eom_scoped_gmail_credentials.py
+tests/test_eom_scoped_gmail_hardening.py
+tests/test_eom_sent_email_tenant_scope.py
+tests/test_leads_intake.py
+tests/test_migrations_runner.py

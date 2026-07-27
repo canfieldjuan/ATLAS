@@ -108,16 +108,9 @@ jobs:
 
       - name: Run EOM lead pipeline checks
         run: |
-          python -m pytest \
-            tests/test_crm_read_scoping.py \
-            tests/test_eom_complaints_integration.py \
-            tests/test_eom_contacts_api_tenant_scope.py \
-            tests/test_eom_lead_pipeline_integration.py \
-            tests/test_eom_mailbox_context_binding.py \
-            tests/test_eom_recurring_appointments_integration.py \
-            tests/test_eom_scoped_gmail_credentials.py \
-            tests/test_eom_scoped_gmail_hardening.py \
-            tests/test_eom_sent_email_tenant_scope.py \
-            tests/test_leads_intake.py \
-            tests/test_migrations_runner.py \
-            -q
+          # The test set lives in tests/eom_lead_pipeline_files.txt, which the
+          # local mirror script reads too. Neither side keeps its own copy, so
+          # "I ran what CI runs" cannot quietly stop being true.
+          grep -v '^[[:space:]]*#' tests/eom_lead_pipeline_files.txt \
+            | grep -v '^[[:space:]]*$' \
+            | xargs python -m pytest -q
