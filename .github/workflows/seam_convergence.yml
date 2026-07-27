@@ -1,0 +1,90 @@
+name: Seam Convergence Breaker
+
+# Advisory breaker for AGENTS.md 3k.2: surfaces a warning when a PR's bot review
+# findings are not trending to zero across three consecutive pushes and one file
+# dominates them -- the signature of instance-patching a shared decision rather
+# than fixing it. 3k.2 already mandates a Decision-Seam Analysis in that case;
+# this only makes the rule fire, because it otherwise needs a human to notice and
+# count rounds. Advisory-first (never blocks, exits 0, emits ::warning
+# annotations), exactly like guard_class_closure.yml -- promote to --strict only
+# after an advisory-proving period.
+#
+# This is NOT a round cap: it never fails and never stops a PR. Capping counts
+# the symptom, and on surfaces where the findings are real it would ship defects.
+#
+# Deliberately runs on `pull_request`, not `pull_request_target`: no PR-ref
+# content is executed with elevated rights, the token stays read-only, and no
+# entry is needed in ALLOWED_PULL_REQUEST_TARGET_JOBS. A PR can edit the
+# detector in its own checkout -- acceptable ONLY while advisory (gaming it
+# silences a warning, gates nothing); trusted-base execution is a named
+# precondition for any --strict/required promotion (see the plan's Deferred).
+#
+# Review events are enrolled alongside the push events for the ordering reason
+# ai_reconciliation_live.yml documents at its own `on:` block: the third round of
+# bot findings lands AFTER that push's run has finished, so a push-only trigger
+# would stay silent until a fourth push had already submitted the example-scoped
+# patch the breaker exists to prevent -- and would never fire at all if the
+# builder stopped after the third review.
+#
+# On the review events GitHub resolves both this workflow and the default
+# checkout from the default branch, so those runs execute main's detector
+# against the PR -- trusted-base by construction, and inert until this file is
+# itself on main.
+
+permissions:
+  contents: read
+  pull-requests: read
+
+on:
+  pull_request:
+    # `edited` matters: recording the Decision-Seam Analysis in the PR body is
+    # how an author answers a trip, and without it the annotation would persist
+    # until the next push even though the trip was already resolved.
+    types: [opened, synchronize, reopened, ready_for_review, edited]
+  pull_request_review:
+    types: [submitted]
+  pull_request_review_comment:
+    types: [created]
+  push:
+    branches:
+      - main
+    paths:
+      - ".github/workflows/seam_convergence.yml"
+      - "scripts/check_seam_convergence.py"
+      - "tests/test_check_seam_convergence.py"
+
+jobs:
+  seam-convergence:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Checkout
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+
+      - name: Setup Python
+        uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6.3.0
+        with:
+          python-version: "3.11"
+
+      # The runner image ships no pytest; the tests are self-contained stdlib
+      # by design (--noconftest skips the repo conftest's app dependencies).
+      - name: Install test runner
+        run: python -m pip install --quiet pytest
+
+      - name: Test the detector
+        run: python -m pytest tests/test_check_seam_convergence.py -q --noconftest
+
+      # The PR body is written to a file (not interpolated into the script) so a
+      # crafted body cannot inject shell; the file feeds the Decision-Seam
+      # Analysis marker check.
+      - name: Seam-convergence breaker (advisory)
+        if: github.event_name != 'push'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PR_BODY: ${{ github.event.pull_request.body }}
+          ATLAS_CURRENT_PR_BODY_FILE: /tmp/pr_body_for_seam_analysis.md
+        run: |
+          printf '%s' "$PR_BODY" > "$ATLAS_CURRENT_PR_BODY_FILE"
+          python scripts/check_seam_convergence.py \
+            --pr "${{ github.event.pull_request.number }}" \
+            --repo "${{ github.repository }}"
