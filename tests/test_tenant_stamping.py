@@ -134,7 +134,10 @@ def test_every_stamped_writer_passes_business_context_id():
 
 def test_eom_inbound_writers_delegate_to_the_lead_safe_resolver():
     for path in EOM_INBOUND_DELEGATES:
-        calls = list(_calls_named(path, "resolve_or_create_eom_inbound_lead"))
+        calls = [
+            *list(_calls_named(path, "resolve_or_create_eom_inbound_lead")),
+            *list(_calls_named(path, "resolve_or_create_eom_inbound_lead_and_log_interaction")),
+        ]
         assert calls, f"{path}: no EOM inbound resolver call found"
         for call in calls:
             kwargs = {keyword.arg: keyword for keyword in call.keywords}

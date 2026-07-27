@@ -1547,11 +1547,11 @@ async def _sms_fallback_crm_and_notify(
         crm = get_crm_provider()
         from ...services.eom_lead_ingress import (
             EOM_BUSINESS_CONTEXT_ID,
-            resolve_or_create_eom_inbound_lead,
+            resolve_or_create_eom_inbound_lead_and_log_interaction,
         )
 
         if context.id == EOM_BUSINESS_CONTEXT_ID:
-            contact = await resolve_or_create_eom_inbound_lead(
+            contact, _interaction = await resolve_or_create_eom_inbound_lead_and_log_interaction(
                 crm,
                 full_name=from_number,
                 phone=from_number,
@@ -1559,23 +1559,7 @@ async def _sms_fallback_crm_and_notify(
                 address=None,
                 source="sms",
                 source_ref=inbound_message_id,
-            )
-        else:
-            contact = await crm.find_or_create_contact(
-                full_name=from_number,
-                phone=from_number,
-                contact_type="customer",
-                source="sms",
-                business_context_id=context.id,
-            )
-        if contact.get("id"):
-            contact_id = str(contact["id"])
-            contact_name = contact.get("full_name") or from_number
-            is_new_lead = contact.get("_was_created", False)
-            if sms_id:
-                await sms_repo.link_contact(sms_id, contact_id)
-            await crm.log_interaction(
-                contact_id=contact_id,
+                relay_event_id=inbound_message_id,
                 interaction_type="sms",
                 summary=f"Inbound SMS: {body[:100]}",
                 metadata=(
@@ -1584,6 +1568,32 @@ async def _sms_fallback_crm_and_notify(
                     else None
                 ),
             )
+        else:
+            contact = await crm.find_or_create_contact(
+                full_name=from_number,
+                phone=from_number,
+                contact_type="customer",
+                source="sms",
+                business_context_id=context.id,
+                source_ref=(str(sms_id) if sms_id else inbound_message_id),
+            )
+        if contact.get("id"):
+            contact_id = str(contact["id"])
+            contact_name = contact.get("full_name") or from_number
+            is_new_lead = contact.get("_was_created", False)
+            if sms_id:
+                await sms_repo.link_contact(sms_id, contact_id)
+            if context.id != EOM_BUSINESS_CONTEXT_ID:
+                await crm.log_interaction(
+                    contact_id=contact_id,
+                    interaction_type="sms",
+                    summary=f"Inbound SMS: {body[:100]}",
+                    metadata=(
+                        {"crm_event_id": f"sms:{inbound_message_id}"}
+                        if inbound_message_id
+                        else None
+                    ),
+                )
     except Exception as e:
         logger.warning("Fallback CRM link failed: %s", e)
 

@@ -332,7 +332,9 @@ async def _process_lead_emails(emails: list[dict[str, Any]]) -> None:
     Fail-open: CRM errors never block the digest.
     """
     from ...services.crm_provider import get_crm_provider
-    from ...services.eom_lead_ingress import resolve_or_create_eom_inbound_lead
+    from ...services.eom_lead_ingress import (
+        resolve_or_create_eom_inbound_lead_and_log_interaction,
+    )
 
     lead_emails = [e for e in emails if e.get("category") == "lead"]
     if not lead_emails:
@@ -370,7 +372,9 @@ async def _process_lead_emails(emails: list[dict[str, Any]]) -> None:
             # share the same EOM lead-safe resolver as the direct Atlas POST:
             # a relay-only delivery creates lead/new, and a matching contact
             # is evidence-only rather than mutable enrichment.
-            contact = await resolve_or_create_eom_inbound_lead(
+            subject = e.get("subject", "")
+            message_preview = fields.get("message", "")[:200]
+            contact, _interaction = await resolve_or_create_eom_inbound_lead_and_log_interaction(
                 crm,
                 full_name=submitter_name or submitter_email,
                 email=submitter_email or None,
@@ -382,19 +386,6 @@ async def _process_lead_emails(emails: list[dict[str, Any]]) -> None:
                     f"web3forms:{relay_message_id}" if relay_message_id else None
                 ),
                 tags=["web3forms"],
-            )
-            if not contact.get("id"):
-                logger.warning("Lead CRM contact has no ID for email %s", e.get("id"))
-                continue
-
-            contact_id = str(contact["id"])
-            e["_contact_id"] = contact_id
-
-            # Log the form submission as an interaction
-            subject = e.get("subject", "")
-            message_preview = fields.get("message", "")[:200]
-            await crm.log_interaction(
-                contact_id=contact_id,
                 interaction_type="email",
                 summary=f"Web form submission: {subject}. {message_preview}".strip(),
                 metadata=(
@@ -403,6 +394,13 @@ async def _process_lead_emails(emails: list[dict[str, Any]]) -> None:
                     else None
                 ),
             )
+            if not contact.get("id"):
+                logger.warning("Lead CRM contact has no ID for email %s", e.get("id"))
+                continue
+
+            contact_id = str(contact["id"])
+            e["_contact_id"] = contact_id
+
             logger.info("Lead CRM: contact %s linked to email %s", contact_id, e.get("id"))
 
         except Exception as exc:

@@ -407,7 +407,7 @@ async def _link_to_crm(
     from ..services.eom_lead_ingress import (
         EOM_BUSINESS_CONTEXT_ID,
         preferred_eom_inbound_phone,
-        resolve_or_create_eom_inbound_lead,
+        resolve_or_create_eom_inbound_lead_and_log_interaction,
     )
 
     if context_id == EOM_BUSINESS_CONTEXT_ID:
@@ -420,8 +420,10 @@ async def _link_to_crm(
     if not phone and not email_addr:
         return None, False
 
+    raw_intent = extracted_data.get("intent", "")
+    business_intent = _SMS_INTENT_MAP.get(raw_intent)
     if context_id == EOM_BUSINESS_CONTEXT_ID:
-        contact = await resolve_or_create_eom_inbound_lead(
+        contact, _interaction = await resolve_or_create_eom_inbound_lead_and_log_interaction(
             crm,
             full_name=name or phone or "Unknown",
             phone=phone,
@@ -429,6 +431,15 @@ async def _link_to_crm(
             address=extracted_data.get("address"),
             source="sms",
             source_ref=inbound_message_id,
+            relay_event_id=inbound_message_id,
+            interaction_type="sms",
+            summary=summary or f"Inbound SMS from {from_number}",
+            intent=business_intent,
+            metadata=(
+                {"crm_event_id": f"sms:{inbound_message_id}"}
+                if inbound_message_id
+                else None
+            ),
         )
     else:
         contact = await crm.find_or_create_contact(
@@ -439,7 +450,7 @@ async def _link_to_crm(
             business_context_id=context_id,
             contact_type="customer",
             source="sms",
-            source_ref=inbound_message_id,
+            source_ref=(str(sms_id) if sms_id else inbound_message_id),
         )
     if not contact.get("id"):
         return None, False
@@ -451,20 +462,18 @@ async def _link_to_crm(
     if sms_id:
         await repo.link_contact(sms_id, contact_id)
 
-    # Log the interaction with normalized business intent
-    raw_intent = extracted_data.get("intent", "")
-    business_intent = _SMS_INTENT_MAP.get(raw_intent)
-    await crm.log_interaction(
-        contact_id=contact_id,
-        interaction_type="sms",
-        summary=summary or f"Inbound SMS from {from_number}",
-        intent=business_intent,
-        metadata=(
-            {"crm_event_id": f"sms:{inbound_message_id}"}
-            if inbound_message_id
-            else None
-        ),
-    )
+    if context_id != EOM_BUSINESS_CONTEXT_ID:
+        await crm.log_interaction(
+            contact_id=contact_id,
+            interaction_type="sms",
+            summary=summary or f"Inbound SMS from {from_number}",
+            intent=business_intent,
+            metadata=(
+                {"crm_event_id": f"sms:{inbound_message_id}"}
+                if inbound_message_id
+                else None
+            ),
+        )
 
     return contact_id, is_new_lead
 

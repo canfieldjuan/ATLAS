@@ -46,6 +46,7 @@ async def resolve_or_create_eom_inbound_lead(
     source_ref: Optional[str],
     relay_event_id: Optional[str] = None,
     tags: Optional[list[str]] = None,
+    interaction: Optional[dict[str, Any]] = None,
 ) -> dict[str, Any]:
     """Return a matching EOM contact unchanged or create one as ``lead/new``.
 
@@ -91,6 +92,7 @@ async def resolve_or_create_eom_inbound_lead(
             ),
             relay_event_id=normalized_relay_event_id or None,
             tags=tags,
+            interaction=interaction,
         )
 
     async def _resolve_readonly(**channel: Any) -> Optional[dict[str, Any]]:
@@ -112,26 +114,67 @@ async def resolve_or_create_eom_inbound_lead(
     if existing is not None:
         result = dict(existing)
         result["_was_created"] = False
-        return result
+    else:
+        create_kwargs: dict[str, Any] = {
+            "full_name": full_name.strip() or phone_digits or "Unknown",
+            "phone": phone_digits if len(phone_digits) >= _MIN_MATCH_PHONE_DIGITS else None,
+            "email": normalized_email or None,
+            "address": address or None,
+            "business_context_id": EOM_BUSINESS_CONTEXT_ID,
+            "contact_type": "lead",
+            "lead_stage": "new",
+            "source": normalized_source or source,
+            "source_ref": (
+                normalized_relay_event_id
+                if identityless
+                else normalized_source_ref or None
+            ),
+            "preserve_existing": True,
+        }
+        if tags:
+            create_kwargs["tags"] = tags
+        result = await crm.find_or_create_contact(
+            **create_kwargs,
+        )
 
-    create_kwargs: dict[str, Any] = {
-        "full_name": full_name.strip() or phone_digits or "Unknown",
-        "phone": phone_digits if len(phone_digits) >= _MIN_MATCH_PHONE_DIGITS else None,
-        "email": normalized_email or None,
-        "address": address or None,
-        "business_context_id": EOM_BUSINESS_CONTEXT_ID,
-        "contact_type": "lead",
-        "lead_stage": "new",
-        "source": normalized_source or source,
-        "source_ref": (
-            normalized_relay_event_id
-            if identityless
-            else normalized_source_ref or None
-        ),
-        "preserve_existing": True,
-    }
-    if tags:
-        create_kwargs["tags"] = tags
-    return await crm.find_or_create_contact(
-        **create_kwargs,
+    if interaction is not None and result.get("id"):
+        result = dict(result)
+        result["_inbound_interaction"] = await crm.log_interaction(
+            contact_id=str(result["id"]),
+            **interaction,
+        )
+    return result
+
+
+async def resolve_or_create_eom_inbound_lead_and_log_interaction(
+    crm: Any,
+    *,
+    interaction_type: str,
+    summary: str,
+    occurred_at: Optional[str] = None,
+    intent: Optional[str] = None,
+    metadata: Optional[dict[str, Any]] = None,
+    **lead: Any,
+) -> tuple[dict[str, Any], dict[str, Any]]:
+    """Run an EOM inbound contact decision and its interaction as one command.
+
+    The database provider owns the transactional path. Lightweight protocol
+    fakes retain the same observable call shape through the read-only fallback,
+    but production EOM ingress must expose the atomic provider method.
+    """
+    contact = await resolve_or_create_eom_inbound_lead(
+        crm,
+        **lead,
+        interaction={
+            "interaction_type": interaction_type,
+            "summary": summary,
+            "occurred_at": occurred_at,
+            "intent": intent,
+            "metadata": metadata,
+        },
     )
+    result = dict(contact)
+    interaction = result.pop("_inbound_interaction", None)
+    if interaction is None:
+        raise RuntimeError("EOM inbound interaction command returned no interaction")
+    return result, interaction

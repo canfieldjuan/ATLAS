@@ -557,7 +557,7 @@ async def _link_to_crm(
     from ..services.eom_lead_ingress import (
         EOM_BUSINESS_CONTEXT_ID,
         preferred_eom_inbound_phone,
-        resolve_or_create_eom_inbound_lead,
+        resolve_or_create_eom_inbound_lead_and_log_interaction,
     )
 
     if context_id == EOM_BUSINESS_CONTEXT_ID:
@@ -570,8 +570,10 @@ async def _link_to_crm(
     if not phone and not email_addr:
         return None, False
 
+    raw_intent = extracted_data.get("intent", "")
+    business_intent = _CALL_INTENT_MAP.get(raw_intent)
     if context_id == EOM_BUSINESS_CONTEXT_ID:
-        contact = await resolve_or_create_eom_inbound_lead(
+        contact, _interaction = await resolve_or_create_eom_inbound_lead_and_log_interaction(
             crm,
             full_name=name or phone or "Unknown Caller",
             phone=phone,
@@ -579,6 +581,11 @@ async def _link_to_crm(
             address=extracted_data.get("address"),
             source="phone_call",
             source_ref=str(transcript_id),
+            relay_event_id=(f"call:{call_sid}" if call_sid else None),
+            interaction_type="call",
+            summary=summary or f"Inbound call from {from_number}",
+            intent=business_intent,
+            metadata={"crm_event_id": f"call:{call_sid}"} if call_sid else None,
         )
     else:
         contact = await crm.find_or_create_contact(
@@ -600,16 +607,14 @@ async def _link_to_crm(
     # Link the call transcript to the contact
     await repo.link_contact(transcript_id, contact_id)
 
-    # Log the interaction with normalized business intent
-    raw_intent = extracted_data.get("intent", "")
-    business_intent = _CALL_INTENT_MAP.get(raw_intent)
-    await crm.log_interaction(
-        contact_id=contact_id,
-        interaction_type="call",
-        summary=summary or f"Inbound call from {from_number}",
-        intent=business_intent,
-        metadata={"crm_event_id": f"call:{call_sid}"} if call_sid else None,
-    )
+    if context_id != EOM_BUSINESS_CONTEXT_ID:
+        await crm.log_interaction(
+            contact_id=contact_id,
+            interaction_type="call",
+            summary=summary or f"Inbound call from {from_number}",
+            intent=business_intent,
+            metadata={"crm_event_id": f"call:{call_sid}"} if call_sid else None,
+        )
 
     return contact_id, is_new_lead
 

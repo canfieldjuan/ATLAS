@@ -271,11 +271,12 @@ async def test_real_sms_link_uses_eom_lead_resolver(monkeypatch):
         "another_context",
         {"customer_phone": "555-0100"},
         "SMS summary",
+        provider_message_id="SM-non-eom-provider-1",
     )
     assert crm.find_or_create_contact.await_args.kwargs["phone"] == "555-0100"
     assert crm.find_or_create_contact.await_args.kwargs["source_ref"] == str(fallback_sms_id)
     assert crm.log_interaction.await_args.kwargs["metadata"] == {
-        "crm_event_id": f"sms:{fallback_sms_id}"
+        "crm_event_id": "sms:SM-non-eom-provider-1"
     }
 
 
@@ -348,6 +349,17 @@ async def test_sms_fallback_uses_eom_lead_resolver(monkeypatch):
     assert crm.log_interaction.await_args.kwargs["metadata"] == {
         "crm_event_id": "sms:SM-fallback-1"
     }
+
+    local_sms_id = uuid4()
+    await webhooks._sms_fallback_crm_and_notify(
+        local_sms_id,
+        sms_repo,
+        "217-555-0199",
+        "Other tenant message",
+        SimpleNamespace(id="another_context", name="Another Context"),
+        provider_message_id="SM-fallback-non-eom-1",
+    )
+    assert crm.find_or_create_contact.await_args.kwargs["source_ref"] == str(local_sms_id)
 
 
 @pytest.mark.asyncio

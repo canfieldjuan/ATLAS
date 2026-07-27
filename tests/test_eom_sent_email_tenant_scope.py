@@ -148,6 +148,7 @@ async def test_intake_history_and_scoped_context_are_tenant_exact(
             "256_contact_interaction_dedupe.sql",
             "346_contact_lead_pipeline.sql",
             "351_eom_lead_lifecycle_events.sql",
+            "352_eom_inbound_delivery_receipts.sql",
         ):
             await admin_conn.execute((MIGRATIONS / name).read_text())
 

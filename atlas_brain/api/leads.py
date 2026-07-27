@@ -17,7 +17,7 @@ from pydantic import BaseModel, Field
 
 from ..services.eom_lead_ingress import (
     EOM_BUSINESS_CONTEXT_ID,
-    resolve_or_create_eom_inbound_lead,
+    resolve_or_create_eom_inbound_lead_and_log_interaction,
 )
 
 logger = logging.getLogger(__name__)
@@ -245,23 +245,6 @@ async def _process_lead_intake(
         if recent >= MAX_DAILY_SUBMISSIONS:
             raise LeadRateLimitedError("Daily submission limit reached")
 
-    # This is the one shared EOM inbound boundary.  The real database provider
-    # serializes identity claims with advisory locks; fake/in-memory providers
-    # retain the read-only fallback for unit coverage.
-    contact = await resolve_or_create_eom_inbound_lead(
-        crm,
-        full_name=payload.name.strip(),
-        email=email or None,
-        phone=phone_digits if len(phone_digits) >= 10 else None,
-        address=None,
-        source="web",
-        source_ref="website_estimate_form",
-        tags=["website", "estimate_request"],
-    )
-    contact_id = contact.get("id")
-    if not contact_id:
-        raise RuntimeError("CRM returned contact without id")
-
     attribution = {
         key: value.strip()
         for key, value in {
@@ -292,13 +275,26 @@ async def _process_lead_intake(
     if attribution:
         metadata["attribution"] = attribution
 
-    interaction = await crm.log_interaction(
-        contact_id=str(contact_id),
+    # This is the one shared EOM inbound boundary. The database provider keeps
+    # contact resolution and this interaction in one transaction; lightweight
+    # protocol fakes preserve the same observable fallback for unit coverage.
+    contact, interaction = await resolve_or_create_eom_inbound_lead_and_log_interaction(
+        crm,
+        full_name=payload.name.strip(),
+        email=email or None,
+        phone=phone_digits if len(phone_digits) >= 10 else None,
+        address=None,
+        source="web",
+        source_ref="website_estimate_form",
+        tags=["website", "estimate_request"],
         interaction_type="web_form",
         summary=_summary_with_channels(payload, email, phone_digits),
         intent="estimate_request",
         metadata=metadata,
     )
+    contact_id = contact.get("id")
+    if not contact_id:
+        raise RuntimeError("CRM returned contact without id")
     # log_interaction dedupes identical same-day rows and reports it via the
     # public "inserted" flag; a double-submit must not double-email the lead.
     freshly_logged = bool((interaction or {}).get("inserted", True))
