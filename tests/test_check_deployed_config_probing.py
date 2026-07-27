@@ -149,43 +149,10 @@ def test_plan_rejects_unresolved_probe_dispositions() -> None:
     assert not mod.plan_has_deployed_config_probing(unresolved)
 
 
-def test_plan_rejects_negative_probe_outcomes() -> None:
-    negative = """
-### Deployed-config probing
-
-- Deployed/default config values: ATLAS_TIMEOUT_SECONDS=30 from render.yaml.
-- Explicit value probe: ATLAS_TIMEOUT_SECONDS never passes.
-- Absent value probe: ATLAS_TIMEOUT_SECONDS failed.
-- Default-session/default-context probe: ATLAS_TIMEOUT_SECONDS does not pass.
-- Side-effect ordering: write before admission.
-"""
-    assert not mod.plan_has_deployed_config_probing(negative)
 
 
-def test_could_not_determine_requires_settling_source() -> None:
-    missing_source = PLAN_WITH_PROBES.replace(
-        "ATLAS_TIMEOUT_SECONDS=30 from render.yaml",
-        "could-not-determine",
-    )
-    with_source = PLAN_WITH_PROBES.replace(
-        "ATLAS_TIMEOUT_SECONDS=30 from render.yaml",
-        "could-not-determine; deployment provider source would settle it",
-    )
-    assert not mod.plan_has_deployed_config_probing(missing_source)
-    assert mod.plan_has_deployed_config_probing(with_source)
 
 
-def test_could_not_determine_is_only_allowed_for_deployed_values() -> None:
-    all_indeterminate = """
-### Deployed-config probing
-
-- Deployed/default config values: could-not-determine; deployment provider source would settle it.
-- Explicit value probe: could-not-determine; deployment provider source would settle it.
-- Absent value probe: could-not-determine; deployment provider source would settle it.
-- Default-session/default-context probe: could-not-determine; deployment provider source would settle it.
-- Side-effect ordering: could-not-determine; deployment provider source would settle it.
-"""
-    assert not mod.plan_has_deployed_config_probing(all_indeterminate)
 
 
 def test_plan_must_cover_every_changed_config_key() -> None:
@@ -380,34 +347,6 @@ def test_multi_operand_fallback_requires_evidence_for_each_key() -> None:
     assert mod.scan_diff(diff, [partial]) != []
 
 
-@pytest.mark.parametrize(
-    "value",
-    [
-        "no write before admission",
-        "no side effect before admission",
-        "never writes before admission",
-    ],
-)
-def test_negated_ordering_statements_are_accepted(value: str) -> None:
-    """The required safe ordering stated directly contains the unsafe phrase.
-    Rejecting on the substring warned on compliant plans -- a false warning on
-    correct input."""
-    assert mod._is_dispositioned_value(value, marker="side-effect ordering")
-
-
-@pytest.mark.parametrize(
-    "value",
-    [
-        "write before admission",
-        "the enqueue is a side effect before admission",
-        "the default-session probe fails",
-        "never passes",
-    ],
-)
-def test_unnegated_negative_outcomes_are_still_rejected(value: str) -> None:
-    """The other side: a genuinely failing or unsafe-ordering disposition must
-    not be accepted just because negation handling was added."""
-    assert not mod._is_dispositioned_value(value, marker="side-effect ordering")
 
 
 def test_compliant_plan_with_negated_ordering_passes_end_to_end() -> None:
@@ -419,3 +358,61 @@ def test_compliant_plan_with_negated_ordering_passes_end_to_end() -> None:
 - Side-effect ordering: no write before admission for crm_default_business_context.
 """
     assert mod.plan_has_deployed_config_probing(plan)
+
+
+# ---------------------------------------------------------------------------
+# Structural disposition contract.
+#
+# The check no longer judges whether a sentence "states evidence." That is an
+# open category, and recognizing it with word lists failed in the expensive
+# direction four times (`is deployed as X`, a wrapped continuation line,
+# `no write before admission`, and a multi-operand fallback) -- each a correct
+# disposition the recognizer rejected. The bounded facts below are what the
+# check now gates on; judging the writing is the reviewer's job.
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    "value",
+    [
+        "is deployed as effingham_maids",
+        "no write before admission",
+        "the absent probe passes to the legacy read",
+        "the default-session probe failed and is tracked in #2234",
+        "could-not-determine; the value lives only in the Render dashboard",
+    ],
+)
+def test_any_real_disposition_is_accepted(value: str) -> None:
+    """Every one of these is a genuine disposition. Several were rejected by
+    the removed word lists, warning on compliant plans."""
+    assert mod._is_dispositioned_value(value, marker="absent value probe")
+
+
+@pytest.mark.parametrize(
+    "value",
+    ["", "todo", "n/a", "none", "could-not-determine", "pending", "not verified"],
+)
+def test_exact_non_answers_are_rejected(value: str) -> None:
+    """The other direction: the closed denylist of explicit not-filled-in
+    markers still rejects. It is a denylist by design -- an unlisted phrasing
+    is accepted, which is silence, the cheap error for an advisory check."""
+    assert not mod._is_dispositioned_value(value, marker="absent value probe")
+
+
+def test_elaborated_non_answer_is_a_disposition() -> None:
+    """A bare placeholder is a non-answer; the same word plus a real statement
+    is an answer. Exact match rather than substring keeps that distinction
+    without judging the prose."""
+    assert not mod._is_dispositioned_value("could-not-determine", marker="deployed/default config values")
+    assert mod._is_dispositioned_value(
+        "could-not-determine; only the Render dashboard holds the deployed value",
+        marker="deployed/default config values",
+    )
+
+
+def test_no_wording_allowlist_remains() -> None:
+    """Regression guard on the design itself: reintroducing an approved-wording
+    pattern is what generated four false-positive rounds."""
+    source = (Path(__file__).resolve().parent.parent / "scripts" / "check_deployed_config_probing.py").read_text(encoding="utf-8")
+    assert "EVIDENCE_RE" not in source
+    assert "NEGATIVE_PROBE_RE" not in source

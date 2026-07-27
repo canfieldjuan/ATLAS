@@ -80,19 +80,19 @@ REQUIRED_PLAN_MARKERS = (
     "side-effect ordering",
 )
 PROBE_MARKERS = REQUIRED_PLAN_MARKERS[1:]
-PLACEHOLDER_VALUES = {"", "n/a", "na", "todo", "todo/n/a", "none"}
+# Exact non-answers. This is a DENYLIST, and that is the whole design rule
+# here: a denylist of explicit "I have not filled this in" markers fails toward
+# ACCEPTING an unlisted phrasing, which is silence -- the cheap error for an
+# advisory check. The removed evidence/negative-outcome patterns were the
+# opposite shape, an allowlist of approved wordings that failed toward WARNING
+# on correct input. Only add exact non-answers here; never a word that tries to
+# judge whether a real sentence is good enough.
+PLACEHOLDER_VALUES = {
+    "", "n/a", "na", "todo", "todo/n/a", "none", "could-not-determine",
+    "could not determine", "unknown",
+}
 UNRESOLVED_VALUES_RE = re.compile(
     r"\b(?:pending|skipped|not verified|not run|tbd|unknown)\b",
-    re.IGNORECASE,
-)
-_OUTCOME_NEGATORS = frozenset({"no", "never", "without", "not"})
-NEGATIVE_PROBE_RE = re.compile(
-    r"\b(?:never passes?|does not pass|did not pass|fails?|failed|write before admission|"
-    r"writes? before admission|side effect before admission)\b",
-    re.IGNORECASE,
-)
-EVIDENCE_RE = re.compile(
-    r"\b(?:pass(?:es|ed)?|rejects?|uses?|verified|observed|source|from|before|after|no write|no side effect)\b",
     re.IGNORECASE,
 )
 
@@ -222,38 +222,36 @@ def _marker_value(section: str, marker: str) -> str | None:
     return None
 
 
-def _states_a_negative_outcome(normalized: str) -> bool:
-    """Whether the value reports a failing outcome, ignoring negated phrases.
-
-    `no write before admission` is the required safe ordering stated directly,
-    but it contains `write before admission`. Rejecting on the substring warned
-    on compliant plans -- a false warning on correct input, which is the
-    expensive direction here and the fastest way to teach an author that the
-    check is noise.
-    """
-    for match in NEGATIVE_PROBE_RE.finditer(normalized):
-        preceding = normalized[:match.start()].split()
-        if preceding and preceding[-1] in _OUTCOME_NEGATORS:
-            continue
-        return True
-    return False
-
-
 def _is_dispositioned_value(value: str | None, *, marker: str) -> bool:
+    """Whether a marker carries a disposition, decided on structure alone.
+
+    This deliberately does NOT judge whether the sentence "states evidence."
+    That is an open category, and the earlier attempt to recognize it with word
+    lists (evidence verbs, negative-outcome phrases) failed in the expensive
+    direction four separate times: `is deployed as X`, a value wrapped onto a
+    continuation line, and `no write before admission` are all correct
+    dispositions that the recognizer rejected, warning on compliant plans.
+
+    Per `docs/GUARD_CLASS_CLOSURE.md`, an open category is gated on bounded
+    mechanical evidence with the ambiguous case defaulting to the cheap side.
+    Here the bounded facts are: the marker exists, its value is non-empty and
+    not a placeholder, and (checked by the caller) it names the config key the
+    diff actually changed. Everything else is the reviewer's judgement, which
+    is where judging prose belongs -- this check exists to make an OMISSION
+    visible, not to grade writing.
+    """
     if value is None:
         return False
     normalized = value.strip().lower()
-    if "todo" in normalized:
+    if not normalized:
         return False
-    if normalized in PLACEHOLDER_VALUES or UNRESOLVED_VALUES_RE.search(normalized):
+    if normalized in PLACEHOLDER_VALUES:
         return False
-    if _states_a_negative_outcome(normalized):
+    # Placeholder/unresolved words are a closed, repo-owned denylist: they mark
+    # a row the author has explicitly not filled in yet.
+    if "todo" in normalized or UNRESOLVED_VALUES_RE.search(normalized):
         return False
-    if "could-not-determine" in normalized:
-        if marker != "deployed/default config values":
-            return False
-        return bool(re.search(r"\b(?:source|settle|owner|operator|deployment|provider)\b", normalized))
-    return bool(EVIDENCE_RE.search(normalized))
+    return True
 
 
 def plan_has_deployed_config_probing(plan_text: str) -> bool:

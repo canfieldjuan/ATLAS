@@ -105,10 +105,27 @@ matching subsection so builders see the probe checklist while writing the plan.
 `check_deployed_config_probing.py` scans changed Python, JavaScript,
 TypeScript, shell, YAML, workflow, and Dockerfile surfaces for env/config fallbacks and boundary-shaped
 guard/resolver/admission signals, including removed fallback lines and hunk
-context, then warns unless a changed plan contains evidence-bearing
+context, then warns unless a changed plan carries a
 deployed/default, explicit, absent, default-session/default-context, and
-side-effect-ordering dispositions that cover every detected config key by exact
-reference in each applicable deployed-config row. The
+side-effect-ordering row, each filled in and each naming every detected config
+key.
+
+**The checker does not judge whether a disposition "states evidence."** That is
+an open category, and recognizing it with word lists (approved evidence verbs,
+negative-outcome phrases) failed in the expensive direction four times during
+this PR's own review: `is deployed as X`, a value wrapped onto a continuation
+line, `no write before admission`, and a multi-operand settings fallback were
+all correct dispositions the recognizer rejected, warning on compliant plans.
+An advisory check that warns on correct input teaches authors to write to the
+pattern rather than to the truth, which is worse than no check.
+
+Per `docs/GUARD_CLASS_CLOSURE.md` the recognizer is now gated on bounded
+mechanical facts with the ambiguous case defaulting to the cheap side: the row
+exists, its value is not an exact non-answer, and it names the config key the
+diff changed. Whether the sentence is *good* is the reviewer's call. The
+placeholder set stays a denylist of exact non-answers -- unlisted phrasing is
+accepted, so incompleteness there produces silence rather than a false
+warning. The
 workflow runs the detector as advisory-only. The recognizer deliberately favors
 warning on bounded boundary/config signals instead of claiming a complete parser
 for every language. `tests/test_new_pr_plan.py` proves the generated scaffold
@@ -146,9 +163,9 @@ Parked hardening: none.
 | `.github/workflows/deployed_config_probing.yml` | 46 |
 | `AGENTS.md` | 15 |
 | `REVIEW_MISSES.md` | 6 |
-| `plans/PR-Deployed-Config-Probing.md` | 154 |
-| `scripts/check_deployed_config_probing.py` | 362 |
+| `plans/PR-Deployed-Config-Probing.md` | 171 |
+| `scripts/check_deployed_config_probing.py` | 360 |
 | `scripts/new_pr_plan.sh` | 11 |
-| `tests/test_check_deployed_config_probing.py` | 421 |
+| `tests/test_check_deployed_config_probing.py` | 418 |
 | `tests/test_new_pr_plan.py` | 6 |
-| **Total** | **1021** |
+| **Total** | **1033** |
