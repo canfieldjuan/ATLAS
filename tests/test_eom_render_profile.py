@@ -326,7 +326,7 @@ def test_eom_render_blueprint_maps_database_and_receivables_auth():
     }
     assert env_vars["ATLAS_EOM_RUN_MIGRATIONS"] == {
         "key": "ATLAS_EOM_RUN_MIGRATIONS",
-        "value": "false",
+        "value": "true",
     }
     assert [
         key
@@ -341,6 +341,61 @@ def test_eom_render_blueprint_maps_database_and_receivables_auth():
         "ATLAS_DB_PASSWORD",
     ):
         assert split_key not in env_vars
+
+
+def test_eom_startup_migrations_are_curated_for_receivables_readiness():
+    from atlas_brain import main_eom
+
+    assert main_eom.EOM_RECEIVABLES_READINESS_MIGRATIONS == (
+        "012_appointments",
+        "035_contacts",
+        "045_invoices",
+        "344_receivables_payments",
+        "345_receivables_event_key_lookup",
+    )
+    assert not any(
+        migration.startswith(("066_", "068_", "074_", "076_", "083_", "095_"))
+        for migration in main_eom.EOM_RECEIVABLES_READINESS_MIGRATIONS
+    )
+
+
+def test_eom_migration_helper_uses_curated_set():
+    from atlas_brain import main_eom
+
+    pool = SimpleNamespace(is_initialized=True)
+    calls = []
+
+    async def run_migrations(observed_pool, *, only=None):
+        calls.append((observed_pool, tuple(only or ())))
+
+    asyncio.run(
+        main_eom._apply_eom_receivables_migrations(
+            pool,
+            run_migrations_fn=run_migrations,
+        )
+    )
+
+    assert calls == [(pool, main_eom.EOM_RECEIVABLES_READINESS_MIGRATIONS)]
+
+
+def test_eom_startup_migration_runner_skips_uninitialized_pool(monkeypatch):
+    from atlas_brain import main_eom
+
+    async def fail_migrations(*_args, **_kwargs):
+        raise AssertionError("uninitialized EOM DB pool must not run migrations")
+
+    monkeypatch.setattr(
+        main_eom,
+        "get_db_pool",
+        lambda: SimpleNamespace(is_initialized=False),
+    )
+    monkeypatch.setattr(
+        main_eom,
+        "_apply_eom_receivables_migrations",
+        fail_migrations,
+    )
+
+    asyncio.run(main_eom._run_startup_migrations())
 
 
 def test_database_config_prefers_connection_string_for_asyncpg_kwargs():
