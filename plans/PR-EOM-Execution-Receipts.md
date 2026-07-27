@@ -82,12 +82,31 @@ Max files: 7
 
 ### Execution model
 
-- Selected closed-surface components: Git's content-addressed object database
-  supplies the exact immutable blobs for one resolved commit; the operating
-  system supplies a private temporary directory and owner-only read/execute
-  permissions. This slice composes those established primitives and introduces
-  no lock, lease, retry protocol, shared state machine, or cross-process
-  coordination component.
+- Selected closed-surface components for source attestation: Git's
+  content-addressed object database supplies the exact immutable blobs for one
+  resolved commit; the operating system supplies a private temporary directory
+  and owner-only read/execute permissions.
+- Receipt persistence is an isolated custom protocol, not an implicit property
+  of the source-attestation surface. The established Atlas database/audit-table
+  component is rejected for this operator receipt because the in-progress
+  artifact must exist before full argparse, async runtime startup, CRM provider
+  construction, credentials, or a database connection, and it must also finalize
+  startup/import/argument failures that never reach application storage. A local
+  SQLite store would add a new schema, retention surface, and migration/reader
+  contract while still needing a filesystem crash/cleanup boundary for this
+  single private JSON artifact, so it is not a smaller established component for
+  this slice.
+- Isolated receipt-persistence invariant: `EomExecutionReceipt` captures the
+  receipt directory's device/inode once, revalidates that identity before every
+  pathname mutation, writes each payload through a mode-0600 exclusive staged
+  file, publishes in-progress recovery with `os.replace`, publishes final
+  outcomes by hard-linking the complete staged payload to an exclusive
+  exit-specific name, fsyncs the receipt directory after each publication, and
+  removes any newly created final link plus fsyncs the directory when final-link
+  publication fails after linking. Evidence-update failures are latched and block
+  the next mutation boundary; final cleanup failure cannot change an already
+  committed exit outcome. There is no shared lock, lease, retry loop, or
+  multi-process coordination surface.
 - Admitted execution: the launcher rejects replacement refs, resolves one SHA
   before tracked-source validation, disables replacement-object processing,
   repository-selection/config env, and executable fsmonitor for
@@ -123,8 +142,11 @@ Max files: 7
   source-attestation model. Operator configuration, credentials, and
   cwd-relative data remain intentionally external inputs rather than reviewed
   code.
-- Surface bound: this is the receipt launcher's single source-identity execution
-  surface. It does not add a second durability/concurrency subsystem.
+- Surface bound: the source-identity launcher/snapshot surface and the
+  receipt-persistence protocol are reviewed as two named, isolated halves of the
+  same Calendar evidence boundary. The PR does not add any additional durability
+  or concurrency subsystem beyond the bounded `EomExecutionReceipt` protocol
+  described above.
 
 ### Review Contract
 
@@ -229,10 +251,17 @@ be cancelled.
 
 ## Deferred
 
+Parking predicate: this slice parks only product-surface or operations follow-up
+work that requires a separate entrypoint, production activation decision, or
+real artifact-volume evidence after the Calendar receipt primitive exists. It
+does not park source-attestation, receipt-durability, mutation-evidence, or
+hardening findings for the admitted Calendar receipt execution surface.
+
 - Portal sync receipt wiring and portal-specific totals move to a follow-up
-  vertical slice.
+  vertical slice because they belong to a separate entrypoint.
 - Production execution remains operator-gated until all apply blockers merge.
-- Retention and rotation wait for real artifact-volume evidence.
+- Retention and rotation wait for real artifact-volume evidence rather than
+  speculative policy.
 
 Parked hardening: none.
 
