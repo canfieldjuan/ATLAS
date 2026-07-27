@@ -325,6 +325,6 @@ Parked hardening: none.
 | `plans/PR-EOM-Office-Conversion-Handoff.md` | 330 |
 | `render.eom.yaml` | 9 |
 | `tests/test_eom_lead_conversion.py` | 247 |
-| `tests/test_eom_lead_conversion_integration.py` | 525 |
+| `tests/test_eom_lead_conversion_integration.py` | 539 |
 | `tests/test_eom_render_profile.py` | 136 |
-| **Total** | **1904** |
+| **Total** | **1918** |

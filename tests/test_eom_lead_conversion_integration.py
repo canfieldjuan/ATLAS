@@ -204,6 +204,20 @@ async def test_office_handoff_is_atomic_idempotent_and_keeps_rate_schedule_out_o
             contact_id,
         ) == 202
 
+        with pytest.raises(asyncpg.exceptions.RaiseError, match="immutable"):
+            await conn.execute(
+                "DELETE FROM eom_customer_handoffs WHERE contact_id = $1",
+                contact_id,
+            )
+        assert await conn.fetchval(
+            "SELECT COUNT(*) FROM eom_customer_handoffs WHERE contact_id = $1",
+            contact_id,
+        ) == 1
+
+        with pytest.raises(asyncpg.exceptions.RaiseError, match="immutable"):
+            await conn.execute("TRUNCATE TABLE eom_customer_handoffs")
+        assert await conn.fetchval("SELECT COUNT(*) FROM eom_customer_handoffs") == 1
+
         direct_contact_id = uuid.uuid4()
         await _insert_contact(conn, contact_id=direct_contact_id)
         with pytest.raises(
