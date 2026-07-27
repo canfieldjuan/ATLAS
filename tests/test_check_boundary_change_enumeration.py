@@ -24,6 +24,14 @@ TS_BOUNDARY_CHANGE = (
     "+  return Boolean(input.accountId)\n"
     "+}\n"
 )
+TS_ALLOWED_BOUNDARY_CHANGE = (
+    "@@ -25,6 +25,7 @@ function isProductClaimAllowed(product, account) {\n"
+    "+  return Boolean(account?.id && product.claimable)\n"
+)
+PY_CLASSIFY_ROUTE_CHANGE = (
+    "@@ -199,6 +199,7 @@ def classify_and_route(state):\n"
+    "+    return 'booking' if state.get('intent') == 'book' else 'fallback'\n"
+)
 PATH_ONLY_BOUNDARY_CHANGE = "+VALUE = 1\n"
 CONST_BOUNDARY_CHANGE = "+const resolveClaimGate = (input) => Boolean(input.accountId)\n"
 CLASS_BOUNDARY_CHANGE = "+class TenantResolver {\n+  resolve(input) { return input.tenantId }\n+}\n"
@@ -37,6 +45,7 @@ AUTH_ERROR_CHANGE = "+class RedditAuthError(RuntimeError):\n+    pass\n"
 PLAN_WITH_ENUMERATION = """
 ### Boundary-change enumeration
 
+- Boundary path: atlas_brain/services/crm_provider.py.
 - Replaced-path behaviors: preserved existing email-first lookup.
 - Guard-relevant fields: email, phone, source_ref.
 - Caller x input shape: intake x email-only -> preserved.
@@ -61,6 +70,22 @@ def test_typescript_boundary_change_without_plan_enumeration_is_flagged() -> Non
     findings = mod.scan_diff({"atlas-churn-ui/src/components/ProductClaimGate.tsx": TS_BOUNDARY_CHANGE}, [])
     assert len(findings) == 1
     assert findings[0].path == "atlas-churn-ui/src/components/ProductClaimGate.tsx"
+
+
+def test_allowed_product_gate_without_plan_enumeration_is_flagged() -> None:
+    findings = mod.scan_diff(
+        {"atlas-churn-ui/src/components/ProductClaimGate.tsx": TS_ALLOWED_BOUNDARY_CHANGE},
+        [],
+    )
+    assert len(findings) == 1
+
+
+def test_classify_and_route_without_plan_enumeration_is_flagged() -> None:
+    findings = mod.scan_diff(
+        {"atlas_brain/agents/graphs/atlas.py": PY_CLASSIFY_ROUTE_CHANGE},
+        [],
+    )
+    assert len(findings) == 1
 
 
 def test_boundary_path_signal_without_plan_enumeration_is_flagged() -> None:
@@ -162,8 +187,28 @@ def test_reasoned_not_applicable_dispositions_are_clean() -> None:
 - Replaced-path behaviors: N/A - no boundary behavior is replaced.
 - Guard-relevant fields: not applicable - no guard verdict fields.
 - Caller x input shape: N/A - no caller can reach a boundary.
+    """
+    assert mod.plan_has_boundary_enumeration(not_applicable)
+
+
+def test_section_level_not_applicable_reason_covers_bare_na_rows() -> None:
+    not_applicable = """
+### Boundary-change enumeration
+
+N/A - no boundary change; detector path matched a process-only helper.
+
+- Replaced-path behaviors: N/A.
+- Guard-relevant fields: N/A.
+- Caller x input shape: N/A.
 """
     assert mod.plan_has_boundary_enumeration(not_applicable)
+    assert (
+        mod.scan_diff(
+            {"atlas_brain/services/admission_gate.py": PATH_ONLY_BOUNDARY_CHANGE},
+            [not_applicable],
+        )
+        == []
+    )
 
 
 def test_duplicate_enumeration_rows_must_all_be_dispositioned() -> None:
@@ -174,8 +219,27 @@ def test_duplicate_enumeration_rows_must_all_be_dispositioned() -> None:
 - Replaced-path behaviors: TODO disposition replacement fallback.
 - Guard-relevant fields: email, phone.
 - Caller x input shape: intake x email-only -> preserved.
-"""
+    """
     assert not mod.plan_has_boundary_enumeration(duplicate_todo)
+
+
+def test_each_changed_boundary_requires_its_own_path_enumeration() -> None:
+    crm_only_plan = """
+### Boundary-change enumeration
+
+- Boundary path: atlas_brain/services/crm_resolver.py.
+- Replaced-path behaviors: crm_resolver.py preserves existing CRM lookup.
+- Guard-relevant fields: crm_resolver.py email.
+- Caller x input shape: crm_resolver.py intake x email-only -> preserved.
+"""
+    findings = mod.scan_diff(
+        {
+            "atlas_brain/services/crm_resolver.py": BOUNDARY_CHANGE,
+            "atlas_brain/services/tenant_resolver.py": BOUNDARY_CHANGE,
+        },
+        [crm_only_plan],
+    )
+    assert [finding.path for finding in findings] == ["atlas_brain/services/tenant_resolver.py"]
 
 
 def test_cli_entrypoint_warns_advisory_and_fails_strict(monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]) -> None:

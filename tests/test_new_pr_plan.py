@@ -93,6 +93,8 @@ def test_new_pr_plan_creates_agents_plan_skeleton(tmp_path: Path) -> None:
     assert "not\n  dispositioned by the review matrix" in text
     assert "### Boundary-change enumeration" in text
     assert "Required when this diff changes a guard, validator, resolver, or admission" in text
+    assert "Name each changed boundary path or seam in the enumeration" in text
+    assert "- Boundary path/seam: TODO/N/A." in text
     assert "- Replaced-path behaviors: TODO/N/A." in text
     assert "- Guard-relevant fields: TODO/N/A." in text
     assert "- Caller x input shape: TODO/N/A." in text

@@ -20,29 +20,32 @@ RULE = (
 CODE_SUFFIXES = {".py", ".js", ".jsx", ".ts", ".tsx", ".mjs", ".cjs", ".sh"}
 BOUNDARY_PATH_PART_RE = re.compile(
     r"(^|[-_./])"
-    r"(guard|validat(?:e|or|ion)?|normaliz(?:e|er|ation|ing)?|resolver|resolution|admission|intake|"
-    r"route|router|routing|dedupe|scope|tenant|auth(?:entication|orization)?)"
+    r"(guard|gate|validat(?:e|or|ion)?|normaliz(?:e|er|ation|ing)?|resolver|resolution|admission|intake|"
+    r"route|router|routing|classif(?:y|ier|ication)?|dedupe|scope|tenant|auth(?:entication|orization)?)"
     r"($|[-_./])",
     re.IGNORECASE,
+)
+BOUNDARY_NAME_TOKEN = (
+    r"guard|gate|validat|normaliz|resolve|admit|reject|allow|allowed|route|classif|dedupe|scope|auth"
 )
 BOUNDARY_CODE_RE = re.compile(
     r"^(?:[+-]\s*|@@[^@\n]*@@\s*.*?)"
     r"(?:"
     r"(?:export\s+)?(?:async\s+)?function\s+"
-    r"[a-zA-Z0-9_$]*(?:guard|validat|normaliz|resolve|admit|reject|dedupe|scope|auth)"
+    r"[a-zA-Z0-9_$]*(?:" + BOUNDARY_NAME_TOKEN + r")"
     r"[a-zA-Z0-9_$]*\s*\("
     r"|(?:async\s+)?def\s+"
-    r"[a-zA-Z0-9_]*(?:guard|validat|normaliz|resolve|admit|reject|dedupe|scope|auth)"
+    r"[a-zA-Z0-9_]*(?:" + BOUNDARY_NAME_TOKEN + r")"
     r"[a-zA-Z0-9_]*\s*\("
     r"|(?:const|let|var)\s+"
-    r"[a-zA-Z0-9_$]*(?:Guard|Validat|Normaliz|Resolve|Admit|Reject|Dedupe|Scope|Auth)"
+    r"[a-zA-Z0-9_$]*(?:Guard|Gate|Validat|Normaliz|Resolve|Admit|Reject|Allow|Allowed|Route|Classif|Dedupe|Scope|Auth)"
     r"[a-zA-Z0-9_$]*\s*="
     r"|class\s+[a-zA-Z0-9_$]*(?:Guard|Validator|Resolver|Admission|Authenticator|"
     r"Authentication|Authorization|AuthGate|AuthProvider|AuthValidator|AuthResolver)"
     r"[a-zA-Z0-9_$]*"
-    r"|(?:async\s+)?[a-zA-Z0-9_$]*(?:guard|validat|normaliz|resolve|admit|reject|dedupe|scope|auth)"
+    r"|(?:async\s+)?[a-zA-Z0-9_$]*(?:" + BOUNDARY_NAME_TOKEN + r")"
     r"[a-zA-Z0-9_$]*\s*\([^)]*\)\s*\{"
-    r"|(?:function\s+)?[a-zA-Z0-9_]*(?:guard|validat|normaliz|resolve|admit|reject|dedupe|scope|auth)"
+    r"|(?:function\s+)?[a-zA-Z0-9_]*(?:" + BOUNDARY_NAME_TOKEN + r")"
     r"[a-zA-Z0-9_]*\s*\(\)\s*\{"
     r")",
     re.MULTILINE | re.IGNORECASE,
@@ -119,12 +122,24 @@ def _marker_values(section: str, marker: str) -> list[str]:
     return values
 
 
-def _is_dispositioned_value(value: str | None) -> bool:
+def _has_section_level_not_applicable(section: str) -> bool:
+    for line in section.splitlines():
+        stripped = line.strip().lower().rstrip(".")
+        if stripped.startswith(("-", "*")):
+            continue
+        if stripped.startswith(("n/a -", "na -", "not applicable -")):
+            return True
+    return False
+
+
+def _is_dispositioned_value(value: str | None, *, section_not_applicable: bool = False) -> bool:
     if value is None:
         return False
     normalized = value.strip().lower()
     if "todo" in normalized:
         return False
+    if section_not_applicable and normalized in {"n/a", "na", "not applicable"}:
+        return True
     if normalized.startswith(("n/a -", "na -", "not applicable -")):
         return True
     return normalized not in PLACEHOLDER_VALUES
@@ -134,22 +149,49 @@ def plan_has_boundary_enumeration(plan_text: str) -> bool:
     if "boundary-change enumeration" not in plan_text.lower():
         return False
     section = boundary_enumeration_section(plan_text)
+    section_not_applicable = _has_section_level_not_applicable(section)
     for marker in DISPOSITION_MARKERS:
         values = _marker_values(section, marker)
         if not values:
             return False
-        if not all(_is_dispositioned_value(value) for value in values):
+        if not all(
+            _is_dispositioned_value(value, section_not_applicable=section_not_applicable)
+            for value in values
+        ):
             return False
     return True
 
 
+def _path_mentions(path: str, section: str) -> bool:
+    section_lower = section.lower()
+    p = PurePosixPath(path)
+    candidates = {
+        path.lower(),
+        p.name.lower(),
+        p.stem.lower(),
+        p.stem.lower().replace("_", "-"),
+        p.stem.lower().replace("-", "_"),
+        p.stem.lower().replace("_", " "),
+        p.stem.lower().replace("-", " "),
+    }
+    return any(candidate and candidate in section_lower for candidate in candidates)
+
+
+def plan_covers_boundary_path(plan_text: str, path: str) -> bool:
+    if not plan_has_boundary_enumeration(plan_text):
+        return False
+    section = boundary_enumeration_section(plan_text)
+    if _has_section_level_not_applicable(section):
+        return True
+    return _path_mentions(path, section)
+
+
 def scan_diff(added_by_file: Mapping[str, str], plan_texts: Sequence[str]) -> list[Finding]:
-    has_plan_enumeration = any(plan_has_boundary_enumeration(text) for text in plan_texts)
     findings: list[Finding] = []
     for path, added in sorted(added_by_file.items()):
         if not file_is_boundary_shaped(path, added):
             continue
-        if has_plan_enumeration:
+        if any(plan_covers_boundary_path(text, path) for text in plan_texts):
             continue
         findings.append(Finding(path=path, reason=RULE))
     return findings

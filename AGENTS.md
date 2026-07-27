@@ -1240,9 +1240,9 @@ This applies when the diff changes the decision seam that admits, rejects,
 normalizes, resolves identity for, or routes an input. The plan's enumeration is
 the baton that survives compaction: list the old behavior being replaced, the
 fields that influence the guard or resolver verdict, and each caller/input shape
-that can reach the boundary; mark every row preserved, intentionally changed,
-rejected, deferred, or not applicable. Do this before implementation, not as a
-post-review inventory.
+that can reach each changed boundary; name each changed boundary path or seam and
+mark every row preserved, intentionally changed, rejected, deferred, or not
+applicable. Do this before implementation, not as a post-review inventory.
 
 This rule does not weaken 3k.3. For open-input recognizers, enumerate the
 boundary surface and dispositions, then close the recognizer with the

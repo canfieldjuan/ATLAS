@@ -51,8 +51,8 @@ Slice phase: Workflow/process
   - `AGENTS.md` contains the verbatim boundary-change rule and states that it
     does not weaken the existing open-input evidence-gate.
   - `scripts/new_pr_plan.sh` scaffolds a `### Boundary-change enumeration`
-    subsection with replaced-path behavior, guard-relevant field, and caller x
-    input-shape prompts.
+    subsection with changed boundary path/seam, replaced-path behavior,
+    guard-relevant field, and caller x input-shape prompts.
   - `.github/workflows/boundary_change_enumeration.yml` runs on
     `pull_request`, has read-only permissions, and runs the detector advisory.
   - `tests/test_check_boundary_change_enumeration.py` proves a violating
@@ -65,7 +65,7 @@ Slice phase: Workflow/process
   detector tests, and scaffold regression.
 - Risk areas: false positives, silent false negatives, contradiction with
   open-input 3k.3, accidental required/blocking gate.
-- Reviewer rules triggered: R1, R2, R10, R12.
+- Reviewer rules triggered: R1, R2, R10, R12, R13.
 
 ### Boundary-change enumeration
 
@@ -92,20 +92,26 @@ an Atlas product guard, validator, resolver, or admission boundary.
 matching optional subsection so the requirement appears while the plan is being
 written. `check_boundary_change_enumeration.py` scans changed Python,
 JavaScript, TypeScript-family, and shell files for added or removed
-boundary-shaped path/function/method/class signals, including normalizing and
-routing seams, and warns unless the `### Boundary-change enumeration` section
-carries non-placeholder rows for replaced-path behaviors, guard-relevant fields,
-and caller x input shape. Every duplicate enumeration row must be independently
-dispositioned so a later TODO cannot hide behind an earlier valid row. The
-self-bootstrap exemption is limited to this detector; other checker/admission
-files still scan. The workflow runs the detector on PRs and emits warnings only.
+boundary-shaped path/function/method/class signals, including normalizing,
+routing, allowed/allow, and classify seams, and warns unless the
+`### Boundary-change enumeration` section carries non-placeholder rows for
+replaced-path behaviors, guard-relevant fields, and caller x input shape. A
+reasoned section-level not-applicable statement covers bare `N/A` rows so the
+generated scaffold's own instruction is accepted. Otherwise each changed
+boundary path or seam must be named in the section, so one valid inventory cannot
+hide an unrelated second boundary. Every duplicate enumeration row must be
+independently dispositioned so a later TODO cannot hide behind an earlier valid
+row. The self-bootstrap exemption is limited to this detector; other
+checker/admission files still scan. The workflow runs the detector on PRs and
+emits warnings only.
 
 ## Intentional
 
 - The detector is heuristic and advisory-first; it exits 0 unless `--strict` is
   supplied.
-- The detector requires section-scoped, non-placeholder rows rather than
-  attempting to verify the semantic quality of each enumeration row.
+- The detector requires section-scoped, non-placeholder rows and changed-boundary
+  path/seam association rather than attempting to verify the semantic quality of
+  each enumeration row.
 - The rule explicitly preserves 3k.3 so open-input work still needs an
   evidence-gated/defaulted mechanism.
 
@@ -120,23 +126,25 @@ Parked hardening: none.
 
 ## Verification
 
-- python -m pytest tests/test_check_boundary_change_enumeration.py -q --noconftest - 22 passed.
-- python -m pytest tests/test_new_pr_plan.py -q --noconftest - 16 passed.
+- python -m pytest tests/test_check_boundary_change_enumeration.py tests/test_new_pr_plan.py -q --noconftest - 42 passed.
 - python scripts/check_boundary_change_enumeration.py --base origin/main - OK.
 - python scripts/check_boundary_change_enumeration.py --base origin/main --strict - OK.
+- git diff --check - OK.
 - python scripts/audit_plan_doc.py plans/PR-Boundary-Change-Enumeration.md - OK.
 - python scripts/audit_plan_doc_files_touched.py plans/PR-Boundary-Change-Enumeration.md origin/main - OK.
 - python scripts/audit_plan_doc_diff_size.py plans/PR-Boundary-Change-Enumeration.md origin/main - OK.
+- python scripts/audit_plan_code_consistency.py plans/PR-Boundary-Change-Enumeration.md - OK.
+- python scripts/audit_review_rules_triggered.py origin/main --plan plans/PR-Boundary-Change-Enumeration.md - OK.
 
 ## Estimated diff size
 
 | File | LOC |
 |---|---:|
 | `AGENTS.md` | +20 |
-| `scripts/new_pr_plan.sh` | +9 |
-| `scripts/check_boundary_change_enumeration.py` | +210 |
-| `tests/test_check_boundary_change_enumeration.py` | +175 |
-| `tests/test_new_pr_plan.py` | +5 |
+| `scripts/new_pr_plan.sh` | +11 |
+| `scripts/check_boundary_change_enumeration.py` | +260 |
+| `tests/test_check_boundary_change_enumeration.py` | +263 |
+| `tests/test_new_pr_plan.py` | +7 |
 | `.github/workflows/boundary_change_enumeration.yml` | +46 |
-| `plans/PR-Boundary-Change-Enumeration.md` | +139 |
-| **Total** | **~650** |
+| `plans/PR-Boundary-Change-Enumeration.md` | +150 |
+| **Total** | **~760** |
