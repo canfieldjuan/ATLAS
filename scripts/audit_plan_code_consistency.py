@@ -38,7 +38,7 @@ def _slice_sections(plan_text: str, section_titles: tuple[str, ...]) -> str:
 
 
 def _is_path_token(token: str) -> bool:
-    return token.endswith(PATH_EXTENSIONS) and not token.startswith("-")
+    return token.endswith(PATH_EXTENSIONS) and not token.startswith("-") and " " not in token
 
 
 def parse_claims(plan_text: str) -> tuple[set[str], set[str]]:
@@ -70,6 +70,8 @@ def _path_resolves(claim: str) -> bool:
     direct = REPO_ROOT / claim
     if direct.exists():
         return True
+    if _path_deleted_in_branch_diff(claim):
+        return True
     if "/" in claim:
         return False
     for root in _candidate_roots():
@@ -79,6 +81,18 @@ def _path_resolves(claim: str) -> bool:
             if match.is_file():
                 return True
     return False
+
+
+def _path_deleted_in_branch_diff(claim: str) -> bool:
+    result = subprocess.run(
+        ["git", "diff", "--name-status", "--diff-filter=D", "origin/main...HEAD", "--", claim],
+        cwd=REPO_ROOT,
+        check=False,
+        text=True,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.DEVNULL,
+    )
+    return result.returncode == 0 and bool(result.stdout.strip())
 
 
 def _path_is_gitignored(claim: str) -> bool:

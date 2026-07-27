@@ -63,6 +63,21 @@ def test_parse_claims_reads_only_backticked_paths(auditor):
     assert paths == {"scripts/audit_plan_code_consistency.py"}
 
 
+def test_parse_claims_ignores_backticked_commands_with_paths(auditor):
+    plan = textwrap.dedent("""\
+        # Example
+
+        ## Verification
+
+        `python scripts/audit_plan_doc.py plans/PR-Example.md`
+    """)
+
+    paths, funcs = auditor.parse_claims(plan)
+
+    assert paths == set()
+    assert funcs == set()
+
+
 def test_parse_claims_reads_backticked_function_calls(auditor):
     plan = textwrap.dedent("""\
         # Example
@@ -94,6 +109,27 @@ def test_audit_claims_reports_missing_path_and_function(auditor):
 
     assert missing_paths == ["scripts/does_not_exist.py"]
     assert missing_functions == ["function_that_does_not_exist"]
+
+
+def test_audit_claims_accepts_deleted_branch_path(auditor, monkeypatch):
+    plan = textwrap.dedent("""\
+        # Example
+
+        ## Scope (this PR)
+
+        `scripts/deleted_in_this_branch.py`
+    """)
+
+    monkeypatch.setattr(
+        auditor,
+        "_path_deleted_in_branch_diff",
+        lambda claim: claim == "scripts/deleted_in_this_branch.py",
+    )
+
+    missing_paths, missing_functions = auditor.audit_claims(plan)
+
+    assert missing_paths == []
+    assert missing_functions == []
 
 
 def test_audit_claims_ignores_gitignored_local_session_state(auditor):
