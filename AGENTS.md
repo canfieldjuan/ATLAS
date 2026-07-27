@@ -121,6 +121,10 @@ Contract` subsection): acceptance criteria the reviewer checks one-by-one,
 affected surfaces, risk areas, and the reviewer rule IDs the changed paths
 trigger. The builder codes against it; the reviewer reviews against it. See
 `docs/REVIEWER_RULES.md` for the rule pack and the path-to-rule trigger table.
+If the plan or docs-only PR body adds or edits a decision-driving member set, or
+enumerates the behaviors / callers / fields / input shapes a change must cover,
+it carries the closure declaration defined canonically in
+`docs/GUARD_CLASS_CLOSURE.md`.
 For any new runtime, workflow, UI, report, billing, delivery, or public
 contract surface, the Review Contract must also name the reachability proof:
 the real entrypoint exercised and the observable output/state/artifact/job/gate
