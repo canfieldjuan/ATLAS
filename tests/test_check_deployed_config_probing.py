@@ -233,3 +233,81 @@ def test_cli_entrypoint_warns_advisory_and_fails_strict(monkeypatch: pytest.Monk
 def test_git_failure_raises_system_exit() -> None:
     with pytest.raises(SystemExit, match="git .* failed"):
         mod._git(["rev-parse", "--verify", "definitely-not-a-ref-xyz"])
+
+
+# ---------------------------------------------------------------------------
+# Pydantic-Settings idiom (the repository's own config boundary)
+#
+# Atlas law forbids reading os.environ directly (CLAUDE.md: "Never read
+# `os.environ` directly -- add a typed field on the relevant BaseSettings
+# subclass"). A detector that recognized only os.getenv could not fire on a
+# single compliant Atlas guard, including the one behind the incident that
+# motivated this rule, so these cases pin the repository idiom.
+# ---------------------------------------------------------------------------
+
+SETTINGS_FALLBACK_INCIDENT = '''
+def _default_context() -> "str | None":
+    """Deployment-default tenant for read scoping."""
+    from ..config import settings
+
+    return settings.mcp.crm_default_business_context or None
+'''
+
+ALIASED_SETTINGS_FALLBACK = '''
+def resolve_token() -> str:
+    return funnel_settings.service_token or ""
+'''
+
+
+def test_settings_fallback_from_the_motivating_incident_is_detected() -> None:
+    """#2216: the deployed-default read whose explicit-vs-default divergence
+    claimed a legacy row on a rejected operation. Verbatim shape from
+    atlas_brain/mcp/crm_server.py."""
+    assert mod.CONFIG_FALLBACK_RE.search(SETTINGS_FALLBACK_INCIDENT)
+    assert mod.config_keys(SETTINGS_FALLBACK_INCIDENT) == {
+        "crm_default_business_context"
+    }
+
+
+def test_aliased_settings_module_fallback_is_detected() -> None:
+    """Per-profile settings objects (funnel_settings, invoicing_settings, ...)
+    are the same boundary under a different name."""
+    assert mod.CONFIG_FALLBACK_RE.search(ALIASED_SETTINGS_FALLBACK)
+    assert mod.config_keys(ALIASED_SETTINGS_FALLBACK) == {"service_token"}
+
+
+def test_getattr_settings_default_is_detected() -> None:
+    source = 'value = getattr(settings.mcp, "crm_default_business_context", None)'
+    assert mod.CONFIG_FALLBACK_RE.search(source)
+
+
+def test_non_config_or_default_stays_silent() -> None:
+    """The other direction: `or` on an ordinary local is not a config fallback,
+    so the detector must not fire on every default-valued expression."""
+    source = "def resolve(candidate):\n    return candidate.strip() or fallback\n"
+    assert not mod.CONFIG_FALLBACK_RE.search(source)
+    assert mod.config_keys(source) == set()
+
+
+def test_settings_read_without_a_fallback_stays_silent() -> None:
+    """A plain settings read decides nothing about unlisted values; only a
+    fallback expresses the deployed-vs-default divergence this rule probes."""
+    source = "def resolve():\n    return settings.mcp.crm_default_business_context\n"
+    assert not mod.CONFIG_FALLBACK_RE.search(source)
+
+
+def test_guard_touching_settings_fallback_requires_the_plan_section() -> None:
+    """End-to-end both directions on the repository idiom: a guard-shaped file
+    with a settings fallback and no deployed-config section warns; the same
+    diff with a complete section does not."""
+    diff = {"atlas_brain/mcp/crm_server.py": SETTINGS_FALLBACK_INCIDENT}
+    assert mod.scan_diff(diff, []) != []
+
+    plan = """### Deployed-config probing
+- Deployed/default config values: ATLAS_MCP_CRM_DEFAULT_BUSINESS_CONTEXT observed as effingham_maids from the deployed profile, source render.eom.yaml.
+- Explicit value probe: an explicit business_context_id passes and crm_default_business_context is unused.
+- Absent value probe: with crm_default_business_context unset the legacy unscoped read passes.
+- Default-session/default-context probe: a session carrying only crm_default_business_context rejects the EOM stage change.
+- Side-effect ordering: no write occurs before the crm_default_business_context admission passes.
+"""
+    assert mod.scan_diff(diff, [plan]) == []
