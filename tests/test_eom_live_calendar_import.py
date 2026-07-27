@@ -206,7 +206,9 @@ class StubCRM:
             return {"id": contact_id, **self.claim_result}
         return None
 
-    async def create_contact(self, data, *, merge_existing=True):
+    async def create_contact(
+        self, data, *, merge_existing=True, include_update_flag=False
+    ):
         self.created.append(data)
         return {
             "id": "new-id",
@@ -359,7 +361,7 @@ def test_race_merged_create_reconciles_like_a_match():
     crm = StubCRM(was_created=False)
     # create_contact stub returns status from data; emulate a race-merged
     # intake lead by giving the stub result provenance-rich fields
-    async def race_create(data, _self=crm):
+    async def race_create(data, _self=crm, **_kwargs):
         _self.created.append(data)
         return {"id": "lead-id", "_was_created": False, "source": "web",
                 "status": "active", "tags": ["website", "estimate_request"]}

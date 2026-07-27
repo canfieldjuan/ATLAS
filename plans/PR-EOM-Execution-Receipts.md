@@ -233,9 +233,10 @@ after the final link exists, rollback removes that link and syncs the directory
 before reraising. Persistence failures remain deferred through an already-started
 contact, but an explicit health check blocks the first mutation and every
 subsequent contact boundary. Race-merged contacts use the provider's
-`_was_updated` signal before recording provider-side updates, and interaction
-inserts record after the DB insert callback before downstream event emission can
-be cancelled.
+importer-private `_was_updated` signal before recording provider-side updates,
+and generic provider callers do not receive that new field. Interaction inserts
+record after the DB insert callback before downstream event emission can be
+cancelled.
 
 ## Intentional
 
@@ -270,7 +271,7 @@ Parked hardening: none.
 - python -m pytest tests/test_eom_execution_receipts.py
   tests/test_eom_live_calendar_import.py tests/test_sync_eom_portal_customers.py
   tests/test_crm_read_scoping.py
-  tests/test_mcp_servers.py::TestDatabaseCRMProvider -q — 248 passed.
+  tests/test_mcp_servers.py::TestDatabaseCRMProvider -q — 249 passed.
 - python -m ruff check scripts/eom_execution_receipt.py
   scripts/import_eom_customers_live.py atlas_brain/services/crm_provider.py
   tests/test_eom_execution_receipts.py tests/test_eom_live_calendar_import.py
@@ -323,7 +324,9 @@ Parked hardening: none.
   directory-synced; an interrupt while removing in-progress/staged artifacts
   cannot make the observed process status contradict the committed receipt.
 - Mutation recording now treats provider race merges and interaction inserts as
-  explicit mutation-boundary signals rather than inferred intent.
+  explicit mutation-boundary signals rather than inferred intent; the new
+  `_was_updated` race-merge signal is importer-private opt-in and does not widen
+  generic CRM provider responses.
 - The targeted residential/window usage example is explicitly an unreceipted
   dry run; production targeting continues to use the documented reviewed
   launcher pipeline.
@@ -332,11 +335,11 @@ Parked hardening: none.
 
 | File | LOC |
 |---|---:|
-| `atlas_brain/services/crm_provider.py` | 14 |
+| `atlas_brain/services/crm_provider.py` | 20 |
 | `docs/EOM_RECONCILIATION_RECEIPTS.md` | 73 |
-| `plans/PR-EOM-Execution-Receipts.md` | 342 |
+| `plans/PR-EOM-Execution-Receipts.md` | 345 |
 | `scripts/eom_execution_receipt.py` | 708 |
-| `scripts/import_eom_customers_live.py` | 228 |
-| `tests/test_eom_execution_receipts.py` | 1846 |
-| `tests/test_eom_live_calendar_import.py` | 5 |
-| **Total** | **3216** |
+| `scripts/import_eom_customers_live.py` | 230 |
+| `tests/test_eom_execution_receipts.py` | 1886 |
+| `tests/test_eom_live_calendar_import.py` | 11 |
+| **Total** | **3273** |

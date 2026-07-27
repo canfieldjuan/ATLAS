@@ -655,7 +655,7 @@ def _write_process_fixture_files(tmp_path, *, wait_for_rewrite=False):
             "CONTACT_ID = '11111111-1111-1111-1111-111111111111'\n"
             "class CRM:\n"
             "    async def search_contacts(self, **_kwargs): return []\n"
-            "    async def create_contact(self, _payload):\n"
+            "    async def create_contact(self, _payload, **_kwargs):\n"
             f"        Path({str(mutation_marker)!r}).write_text(CONTACT_ID)\n"
             "        return {'id': CONTACT_ID, '_was_created': True}\n"
             "    async def log_interaction(self, **_kwargs):\n"
@@ -1761,7 +1761,7 @@ def test_calendar_race_merge_records_contact_even_when_followup_is_unchanged(
     monkeypatch,
 ):
     class RaceCRM(StubCRM):
-        async def create_contact(self, data):
+        async def create_contact(self, data, **_kwargs):
             self.created.append(data)
             return {
                 "id": CONTACT_A,
@@ -1788,11 +1788,51 @@ def test_calendar_race_merge_records_contact_even_when_followup_is_unchanged(
     assert recorder.contact_ids == [CONTACT_A]
 
 
+def test_create_contact_update_flag_is_importer_private_opt_in():
+    from atlas_brain.services.crm_provider import DatabaseCRMProvider
+
+    class _Provider(DatabaseCRMProvider):
+        async def search_contacts(self, **kwargs):
+            if kwargs.get("business_context_id") == "effingham_office_maids":
+                return [{
+                    "id": CONTACT_A,
+                    "business_context_id": "effingham_office_maids",
+                    "email": "jane@example.com",
+                }]
+            return []
+
+        async def update_contact(self, contact_id, data):
+            return {"id": contact_id, **data}
+
+    async def exercise():
+        provider = _Provider()
+        default_result = await provider.create_contact({
+            "email": "jane@example.com",
+            "full_name": "Jane",
+            "business_context_id": "effingham_office_maids",
+        })
+        opt_in_result = await provider.create_contact(
+            {
+                "email": "jane@example.com",
+                "full_name": "Jane",
+                "business_context_id": "effingham_office_maids",
+            },
+            include_update_flag=True,
+        )
+        return default_result, opt_in_result
+
+    default_result, opt_in_result = asyncio.run(exercise())
+
+    assert default_result["_was_created"] is False
+    assert "_was_updated" not in default_result
+    assert opt_in_result["_was_updated"] is True
+
+
 def test_calendar_race_merge_does_not_record_unconfirmed_provider_update(
     monkeypatch,
 ):
     class RaceCRM(StubCRM):
-        async def create_contact(self, data):
+        async def create_contact(self, data, **_kwargs):
             self.created.append(data)
             return {
                 "id": CONTACT_A,

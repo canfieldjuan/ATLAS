@@ -606,6 +606,7 @@ class DatabaseCRMProvider:
         *,
         merge_existing: bool = True,
         preserve_existing: bool = False,
+        include_update_flag: bool = False,
     ) -> dict[str, Any]:
         """
         Create a contact, returning an existing one if phone or email already matches.
@@ -701,7 +702,8 @@ class DatabaseCRMProvider:
         if existing is not None and not merge_existing:
             result = dict(existing)
             result["_was_created"] = False
-            result["_was_updated"] = False
+            if include_update_flag:
+                result["_was_updated"] = False
             return result
 
         if existing is not None:
@@ -723,6 +725,8 @@ class DatabaseCRMProvider:
             if preserve_existing or protected_eom_type:
                 result = dict(existing)
                 result["_was_created"] = False
+                if include_update_flag:
+                    result["_was_updated"] = False
                 return result
             # Merge any new non-null fields into the existing record
             _MERGEABLE = {
@@ -743,7 +747,8 @@ class DatabaseCRMProvider:
             else:
                 result = existing
             result["_was_created"] = False
-            result["_was_updated"] = was_updated
+            if include_update_flag:
+                result["_was_updated"] = was_updated
             return result
 
         # --- no existing contact -- insert ---
@@ -793,7 +798,8 @@ class DatabaseCRMProvider:
         )
         result = dict(row) if row else {}
         result["_was_created"] = True
-        result["_was_updated"] = False
+        if include_update_flag:
+            result["_was_updated"] = False
         return result
 
     async def find_or_create_contact(

@@ -696,7 +696,7 @@ async def import_one(rec, crm, pool, receipt=None) -> str:
         # so both ride the controlled paths only (Codex rounds 6-7, R1/R8).
         create_data.pop("source", None)
         create_data.pop("tags", None)
-        result = await crm.create_contact(create_data)
+        result = await crm.create_contact(create_data, include_update_flag=True)
         if result.get("_was_created"):
             contact_id = str(result.get("id", ""))
             outcome = "created"
