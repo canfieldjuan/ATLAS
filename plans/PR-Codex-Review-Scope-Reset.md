@@ -22,9 +22,8 @@ threads block only until each in-scope finding is fixed or explicitly waived.
   would leave contradictory review instructions live between PRs.
 - Correct fix must touch/change: rewrite the active workflow docs around
   Codex-only review, remove/de-enroll `claude-review` helper surfaces, update
-  watcher/readiness logic, add a deterministic synthetic fixture suite that
-  locks the intended Codex finding dispositions, and keep local plan/code
-  consistency checks compatible with intentional hard-deleted files.
+  watcher/readiness logic, and add a deterministic synthetic fixture suite that
+  locks the intended Codex finding dispositions.
 - Must not change: product behavior, customer-visible surfaces, required
   branch-protection contexts other than removing `claude-review` from local
   readiness logic, `live-reconciliation`, diff-budget/gitleaks gates, plan/body
@@ -57,8 +56,6 @@ Max files: 21
   - Synthetic fixtures prove the intended dispositions for docs noise,
     duplicate instances, out-of-scope hardening, missing tests, concrete
     security/data failure, speculative risk, and NIT suppression.
-  - Plan/code consistency accepts files intentionally deleted by the current
-    branch and does not treat a full backticked command as a missing path.
 - Reachability proof: N/A - this is workflow/process documentation, script
   readiness logic, and test tooling; no runtime product surface is introduced.
 - Affected surfaces: `AGENTS.md`, reviewer-rule docs, watcher/runbook docs,
@@ -78,15 +75,11 @@ seam in the enumeration; otherwise write "N/A - no boundary change."
 - Boundary path/seam: `scripts/codex_review_scope_policy.py` classifies
   synthetic Codex review scenarios into blocker/major/waiver/no-finding
   dispositions.
-- Boundary path/seam: `scripts/audit_plan_code_consistency.py` validates
-  backticked path/function claims in plan docs; this slice narrows false
-  positives for hard-deleted files and command strings.
 - Replaced-path behaviors: N/A - this is a new test oracle, not a replacement
   for live Codex connector behavior.
 - Guard-relevant fields: `duplicate_of`, `category`, `in_scope`,
   `missing_mandatory_proof`, `impact`, `concrete_failure_path`,
-  `speculative`, `one_line_changed_code_fix`, path tokens, and git deleted-path
-  diff entries.
+  `speculative`, and `one_line_changed_code_fix`.
 - Caller x input shape: pytest imports the policy module; CLI self-test invokes
   the built-in fixture set.
 
@@ -112,7 +105,6 @@ fallback changes; otherwise write "N/A - no guard/config boundary change."
 - `docs/ai_dev_operating_model.md`
 - `docs/ai_dev_operating_model.svg`
 - `plans/PR-Codex-Review-Scope-Reset.md`
-- `scripts/audit_plan_code_consistency.py`
 - `scripts/check_ai_reconciliation_live.py`
 - `scripts/check_review_body_r14.py`
 - `scripts/codex_review_scope_policy.py`
@@ -120,9 +112,9 @@ fallback changes; otherwise write "N/A - no guard/config boundary change."
 - `scripts/set_claude_review_status.py`
 - `scripts/watch_owned_pr.sh`
 - `tests/maturity_sweep/baseline_scripts.json`
-- `tests/test_audit_plan_code_consistency.py`
 - `tests/test_check_review_body_r14.py`
 - `tests/test_codex_review_scope_policy.py`
+- `tests/test_local_pr_review.py`
 - `tests/test_set_claude_review_status.py`
 
 ## Mechanism
@@ -158,11 +150,13 @@ Parked hardening: none.
 
 - `python scripts/codex_review_scope_policy.py --self-test` - passed, 7 fixtures.
 - `python -m pytest tests/test_codex_review_scope_policy.py tests/test_check_ai_reconciliation_live.py -q` - 17 passed.
-- `python -m pytest tests/test_audit_plan_code_consistency.py tests/test_codex_review_scope_policy.py tests/test_local_pr_review.py tests/test_audit_ai_reconciliation.py tests/test_check_ai_reconciliation_live.py tests/test_audit_review_rules_triggered.py tests/test_pre_push_audit_workflow.py -q` - 89 passed.
-- `python scripts/audit_plan_code_consistency.py plans/PR-Codex-Review-Scope-Reset.md` - passed.
-- `python scripts/sync_pr_plan.py plans/PR-Codex-Review-Scope-Reset.md --check` - passed.
+- `python -m pytest tests/test_local_pr_review.py tests/test_codex_review_scope_policy.py tests/test_audit_plan_code_consistency.py tests/test_pre_push_audit_workflow.py -q` - 54 passed.
+- `python scripts/audit_plan_code_consistency.py --base-ref origin/main plans/PR-Codex-Review-Scope-Reset.md` - passed.
+- `python scripts/sync_pr_plan.py plans/PR-Codex-Review-Scope-Reset.md origin/main --check` - passed.
 - `python scripts/audit_plan_doc.py plans/PR-Codex-Review-Scope-Reset.md` - passed.
-- `bash scripts/local_pr_review.sh --allow-dirty` - passed as advisory dirty-tree review; strict mode correctly refused uncommitted changes.
+- `python scripts/audit_plan_doc_files_touched.py plans/PR-Codex-Review-Scope-Reset.md origin/main` - passed.
+- `python scripts/audit_plan_doc_diff_size.py plans/PR-Codex-Review-Scope-Reset.md origin/main` - passed, estimate 1966 actual 1966.
+- `git diff --check -- . ':!node_modules'` - passed.
 
 ## Estimated diff size
 
@@ -176,17 +170,16 @@ Parked hardening: none.
 | `docs/REVIEWER_RULES.md` | 84 |
 | `docs/ai_dev_operating_model.md` | 60 |
 | `docs/ai_dev_operating_model.svg` | 4 |
-| `plans/PR-Codex-Review-Scope-Reset.md` | 192 |
-| `scripts/audit_plan_code_consistency.py` | 19 |
+| `plans/PR-Codex-Review-Scope-Reset.md` | 185 |
 | `scripts/check_ai_reconciliation_live.py` | 6 |
 | `scripts/check_review_body_r14.py` | 202 |
 | `scripts/codex_review_scope_policy.py` | 183 |
-| `scripts/local_pr_review.sh` | 2 |
+| `scripts/local_pr_review.sh` | 17 |
 | `scripts/set_claude_review_status.py` | 150 |
 | `scripts/watch_owned_pr.sh` | 22 |
 | `tests/maturity_sweep/baseline_scripts.json` | 7 |
-| `tests/test_audit_plan_code_consistency.py` | 36 |
 | `tests/test_check_review_body_r14.py` | 195 |
-| `tests/test_codex_review_scope_policy.py` | 58 |
+| `tests/test_codex_review_scope_policy.py` | 69 |
+| `tests/test_local_pr_review.py` | 28 |
 | `tests/test_set_claude_review_status.py` | 175 |
-| **Total** | **1976** |
+| **Total** | **1968** |

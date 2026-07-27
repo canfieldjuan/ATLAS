@@ -152,6 +152,21 @@ if [ -n "$current_pr_body_file" ]; then
         echo "==> PR body contract"
         echo "    SKIP (scripts/audit_pr_body.py not found)"
     fi
+
+    if [ -f "$script_root/scripts/check_diff_budget.py" ]; then
+        additions=$(
+            git diff --numstat "$base"...HEAD |
+                awk '$1 != "-" { sum += $1 } END { print sum + 0 }'
+        )
+        run_check "Diff budget" \
+            python "$script_root/scripts/check_diff_budget.py" \
+                --additions "$additions" \
+                --body-file "$current_pr_body_file"
+    else
+        echo
+        echo "==> Diff budget"
+        echo "    SKIP (scripts/check_diff_budget.py not found)"
+    fi
 fi
 
 pre_push_args=("$script_root/scripts/pre_push_audit.sh" --repo-root "$repo_root" --script-root "$script_root")

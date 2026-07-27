@@ -145,6 +145,34 @@ def test_local_pr_review_runs_pr_body_contract_when_body_supplied(tmp_path: Path
     assert "local PR review passed" in result.stdout
 
 
+def test_local_pr_review_runs_diff_budget_against_supplied_body(tmp_path: Path) -> None:
+    repo = tmp_path / "repo"
+    _write_fixture_repo(repo)
+    _write_executable(
+        repo / "scripts" / "check_diff_budget.py",
+        (REPO_ROOT / "scripts" / "check_diff_budget.py").read_text(encoding="utf-8"),
+    )
+    (repo / "large.txt").write_text(
+        "\n".join(f"line {idx}" for idx in range(401)) + "\n",
+        encoding="utf-8",
+    )
+    _git(repo, "add", "large.txt", "scripts/check_diff_budget.py")
+    _git(repo, "commit", "-m", "add over-budget slice")
+
+    body = tmp_path / "body.md"
+    body.write_text("PR body without override\n", encoding="utf-8")
+
+    result = _run(
+        repo,
+        ["bash", "scripts/local_pr_review.sh", "--current-pr-body-file", str(body)],
+    )
+
+    assert result.returncode == 1
+    assert "Diff budget" in result.stdout
+    assert "added lines exceeds the 400 LOC soft cap" in result.stdout
+    assert "1 local review check(s) failed" in result.stdout
+
+
 def test_local_pr_review_forwards_pr_author_to_body_contract(tmp_path: Path) -> None:
     repo = tmp_path / "repo"
     _write_fixture_repo(repo)

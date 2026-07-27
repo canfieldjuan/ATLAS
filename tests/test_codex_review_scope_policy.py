@@ -3,6 +3,8 @@ import subprocess
 import sys
 from pathlib import Path
 
+import pytest
+
 
 ROOT = Path(__file__).resolve().parents[1]
 SCRIPT = ROOT / "scripts" / "codex_review_scope_policy.py"
@@ -41,6 +43,15 @@ def test_cli_self_test_reports_pass_count():
     )
     assert proc.returncode == 0, proc.stderr
     assert "OK: 7 Codex review scope fixtures passed" in proc.stdout
+
+
+def test_cli_requires_self_test(monkeypatch):
+    monkeypatch.setattr(sys, "argv", [str(SCRIPT)])
+
+    with pytest.raises(SystemExit) as excinfo:
+        policy.main()
+
+    assert excinfo.value.code == 2
 
 
 def test_active_docs_remove_second_reviewer_gate():
