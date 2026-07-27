@@ -186,9 +186,9 @@ Any row or field not admitted by those definitions is excluded by default.
 - `plans/INDEX.md`
 - `plans/PR-EOM-Office-Lead-Review.md`
 - `plans/archive/PR-EOM-Office-Conversion-Handoff.md`
-- `tests/unit_gate_baseline.txt`
 - `tests/test_eom_lead_conversion.py`
 - `tests/test_eom_lead_conversion_integration.py`
+- `tests/unit_gate_baseline.txt`
 
 ## Mechanism
 
@@ -265,12 +265,12 @@ Parked hardening: none.
 
 | File | LOC |
 |---|---:|
-| `atlas_brain/eom_api/funnel.py` | 69 |
-| `atlas_brain/services/crm_provider.py` | 37 |
+| `atlas_brain/eom_api/funnel.py` | 109 |
+| `atlas_brain/services/crm_provider.py` | 45 |
 | `plans/INDEX.md` | 3 |
-| `plans/PR-EOM-Office-Lead-Review.md` | 285 |
+| `plans/PR-EOM-Office-Lead-Review.md` | 276 |
 | `plans/archive/PR-EOM-Office-Conversion-Handoff.md` | 0 |
+| `tests/test_eom_lead_conversion.py` | 210 |
+| `tests/test_eom_lead_conversion_integration.py` | 127 |
 | `tests/unit_gate_baseline.txt` | 9 |
-| `tests/test_eom_lead_conversion.py` | 174 |
-| `tests/test_eom_lead_conversion_integration.py` | 123 |
-| **Total** | **700** |
+| **Total** | **779** |
