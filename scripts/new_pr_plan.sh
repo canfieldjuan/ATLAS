@@ -181,9 +181,9 @@ Slice phase: $phase
 
 ### Boundary-change enumeration
 
-Required when this diff changes a guard, validator, resolver, or admission
-boundary. Name each changed boundary path or seam in the enumeration; otherwise
-write "N/A - no boundary change."
+Required when this diff changes a guard, validator, normalizer, resolver,
+router/classifier, or admission boundary. Name each changed boundary path or
+seam in the enumeration; otherwise write "N/A - no boundary change."
 
 - Boundary path/seam: TODO/N/A.
 - Replaced-path behaviors: TODO/N/A.

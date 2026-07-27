@@ -11,8 +11,9 @@ from typing import Mapping, Sequence
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 RULE = (
-    "Boundary-change enumeration: a diff changing a guard, validator, resolver, "
-    "or admission boundary must ship a plan-doc enumeration before code: "
+    "Boundary-change enumeration: a diff changing a guard, validator, normalizer, "
+    "resolver, router/classifier, or admission boundary must ship a plan-doc "
+    "enumeration before code: "
     "replaced-path behaviors, guard-relevant fields, and every caller x input "
     "shape, each dispositioned."
 )
@@ -21,13 +22,14 @@ CODE_SUFFIXES = {".py", ".js", ".jsx", ".ts", ".tsx", ".mjs", ".cjs", ".sh"}
 BOUNDARY_PATH_PART_RE = re.compile(
     r"(^|[-_./])"
     r"(guard|gate|validat(?:e|or|ion)?|normaliz(?:e|er|ation|ing)?|resolver|resolution|admission|intake|"
-    r"route|router|routing|classif(?:y|ier|ication)?|dedupe|scope|tenant|auth(?:entication|orization)?)"
+    r"route|router|routing|classif(?:y|ier|ication)?|eligib(?:le|ility)?|dedupe|scope|tenant|auth(?:entication|orization)?)"
     r"($|[-_./])",
     re.IGNORECASE,
 )
 BOUNDARY_NAME_TOKEN = (
-    r"guard|gate|validat|normaliz|resolve|admit|reject|allow|allowed|route|classif|dedupe|scope|auth"
+    r"guard|gate|validat|normaliz|resolve|admit|reject|allow|allowed|route|classif|eligib|should_scrape|dedupe|scope|auth"
 )
+BOUNDARY_NAME_RE = re.compile(BOUNDARY_NAME_TOKEN, re.IGNORECASE)
 BOUNDARY_CODE_RE = re.compile(
     r"^(?:[+-]\s*|@@[^@\n]*@@\s*.*?)"
     r"(?:"
@@ -38,15 +40,29 @@ BOUNDARY_CODE_RE = re.compile(
     r"[a-zA-Z0-9_]*(?:" + BOUNDARY_NAME_TOKEN + r")"
     r"[a-zA-Z0-9_]*\s*\("
     r"|(?:const|let|var)\s+"
-    r"[a-zA-Z0-9_$]*(?:Guard|Gate|Validat|Normaliz|Resolve|Admit|Reject|Allow|Allowed|Route|Classif|Dedupe|Scope|Auth)"
-    r"[a-zA-Z0-9_$]*\s*="
+    r"[a-zA-Z0-9_$]*(?:Guard|Gate|Validat|Normaliz|Resolve|Admit|Reject|Allow|Allowed|Route|Classif|Eligib|Dedupe|Scope|Auth)"
+    r"[a-zA-Z0-9_$]*\s*=\s*(?:(?:async\s+)?(?:\([^)]*\)|[a-zA-Z_$][a-zA-Z0-9_$]*)\s*=>|function\b)"
     r"|class\s+[a-zA-Z0-9_$]*(?:Guard|Validator|Resolver|Admission|Authenticator|"
     r"Authentication|Authorization|AuthGate|AuthProvider|AuthValidator|AuthResolver)"
     r"[a-zA-Z0-9_$]*"
-    r"|(?:async\s+)?[a-zA-Z0-9_$]*(?:" + BOUNDARY_NAME_TOKEN + r")"
-    r"[a-zA-Z0-9_$]*\s*\([^)]*\)\s*\{"
+    r"|(?:(?:public|private|protected|static|override|readonly)\s+)*(?:async\s+)?"
+    r"[a-zA-Z0-9_$]*(?:" + BOUNDARY_NAME_TOKEN + r")"
+    r"[a-zA-Z0-9_$]*\s*\([^)]*\)\s*(?::\s*[^={;]+)?\{"
     r"|(?:function\s+)?[a-zA-Z0-9_]*(?:" + BOUNDARY_NAME_TOKEN + r")"
     r"[a-zA-Z0-9_]*\s*\(\)\s*\{"
+    r")",
+    re.MULTILINE | re.IGNORECASE,
+)
+BOUNDARY_SEAM_RE = re.compile(
+    r"^(?:[+-]\s*|@@[^@\n]*@@\s*.*?)\s*"
+    r"(?:"
+    r"(?:export\s+)?(?:async\s+)?function\s+(?P<js_func>[a-zA-Z_$][a-zA-Z0-9_$]*)\s*\("
+    r"|(?:async\s+)?def\s+(?P<py_func>[a-zA-Z_][a-zA-Z0-9_]*)\s*\("
+    r"|(?:const|let|var)\s+(?P<var>[a-zA-Z_$][a-zA-Z0-9_$]*)"
+    r"\s*=\s*(?:(?:async\s+)?(?:\([^)]*\)|[a-zA-Z_$][a-zA-Z0-9_$]*)\s*=>|function\b)"
+    r"|class\s+(?P<class_name>[a-zA-Z_$][a-zA-Z0-9_$]*)"
+    r"|(?:(?:public|private|protected|static|override|readonly)\s+)*(?:async\s+)?"
+    r"(?P<method>[a-zA-Z_$][a-zA-Z0-9_$]*)\s*\([^)]*\)\s*(?::\s*[^={;]+)?\{"
     r")",
     re.MULTILINE | re.IGNORECASE,
 )
@@ -58,6 +74,7 @@ REQUIRED_PLAN_MARKERS = (
 )
 DISPOSITION_MARKERS = REQUIRED_PLAN_MARKERS[1:]
 PLACEHOLDER_VALUES = {"", "n/a", "na", "todo", "todo/n/a", "none"}
+UNRESOLVED_VALUE_RE = re.compile(r"\b(?:tbd|unknown|pending|unresolved)\b", re.IGNORECASE)
 
 
 @dataclass(frozen=True)
@@ -66,13 +83,34 @@ class Finding:
     reason: str
 
 
+@dataclass(frozen=True)
+class BoundarySeam:
+    name: str
+    bare_name: str
+
+
 def _is_test_path(path: str) -> bool:
     p = PurePosixPath(path)
     return (
         p.name.startswith("test_")
         or "tests/" in path
-        or p.name.endswith(("_test.py", ".test.js", ".test.jsx", ".test.ts", ".test.tsx"))
-        or p.name.endswith((".spec.js", ".spec.jsx", ".spec.ts", ".spec.tsx"))
+        or p.name.endswith((
+            "_test.py",
+            ".test.js",
+            ".test.jsx",
+            ".test.ts",
+            ".test.tsx",
+            ".test.mjs",
+            ".test.cjs",
+        ))
+        or p.name.endswith((
+            ".spec.js",
+            ".spec.jsx",
+            ".spec.ts",
+            ".spec.tsx",
+            ".spec.mjs",
+            ".spec.cjs",
+        ))
     )
 
 
@@ -83,6 +121,41 @@ def _is_process_path(path: str) -> bool:
         or p.name in {"AGENTS.md", "new_pr_plan.sh"}
         or path == "scripts/check_boundary_change_enumeration.py"
     )
+
+
+def _diff_line_body(line: str) -> str:
+    if line.startswith(("+", "-")) and not line.startswith(("+++", "---")):
+        return line[1:].strip()
+    if line.startswith("@@"):
+        match = re.match(r"@@[^@\n]*@@\s*(.*)", line)
+        if match:
+            return match.group(1).strip()
+    return line.strip()
+
+
+def boundary_seams(added: str) -> list[BoundarySeam]:
+    seams: list[BoundarySeam] = []
+    current_class: str | None = None
+    occurrence_counts: dict[str, int] = {}
+    for line in added.splitlines():
+        body = _diff_line_body(line)
+        class_match = re.search(r"\bclass\s+([a-zA-Z_$][a-zA-Z0-9_$]*)", body)
+        if class_match:
+            current_class = class_match.group(1)
+        match = BOUNDARY_SEAM_RE.match(line)
+        if not match:
+            continue
+        name = next(value for value in match.groupdict().values() if value)
+        if not BOUNDARY_NAME_RE.search(name):
+            continue
+        if match.group("method") and current_class:
+            qualified_name = f"{current_class}.{name}"
+        else:
+            occurrence_counts[name] = occurrence_counts.get(name, 0) + 1
+            occurrence = occurrence_counts[name]
+            qualified_name = name if occurrence == 1 else f"{name}#{occurrence}"
+        seams.append(BoundarySeam(name=qualified_name, bare_name=name))
+    return seams
 
 
 def file_is_boundary_shaped(path: str, added: str) -> bool:
@@ -122,6 +195,42 @@ def _marker_values(section: str, marker: str) -> list[str]:
     return values
 
 
+def _normalized_marker_label(line: str) -> tuple[str, str] | None:
+    if ":" not in line:
+        return None
+    label, value = line.split(":", 1)
+    normalized_label = label.strip().lstrip("-*0123456789. ").strip().lower()
+    return normalized_label, value.strip()
+
+
+def _boundary_blocks(section: str) -> list[tuple[str, str]]:
+    """Return (boundary-name, block-text) for each exact boundary entry.
+
+    Each `Boundary path/seam:` row owns only the disposition rows that follow it
+    until the next boundary row. This keeps one complete inventory from hiding a
+    second changed boundary merely because both paths were mentioned somewhere
+    in the section.
+    """
+    blocks: list[tuple[str, list[str]]] = []
+    current_name: str | None = None
+    current_lines: list[str] = []
+    for line in section.splitlines():
+        parsed = _normalized_marker_label(line)
+        if parsed is not None:
+            label, value = parsed
+            if label in {"boundary path", "boundary path/seam", "boundary seam"}:
+                if current_name is not None:
+                    blocks.append((current_name, current_lines))
+                current_name = value.strip().rstrip(".")
+                current_lines = []
+                continue
+        if current_name is not None:
+            current_lines.append(line)
+    if current_name is not None:
+        blocks.append((current_name, current_lines))
+    return [(name, "\n".join(lines)) for name, lines in blocks]
+
+
 def _has_section_level_not_applicable(section: str) -> bool:
     for line in section.splitlines():
         stripped = line.strip().lower().rstrip(".")
@@ -137,6 +246,8 @@ def _is_dispositioned_value(value: str | None, *, section_not_applicable: bool =
         return False
     normalized = value.strip().lower()
     if "todo" in normalized:
+        return False
+    if UNRESOLVED_VALUE_RE.search(normalized):
         return False
     if section_not_applicable and normalized in {"n/a", "na", "not applicable"}:
         return True
@@ -162,28 +273,66 @@ def plan_has_boundary_enumeration(plan_text: str) -> bool:
     return True
 
 
-def _path_mentions(path: str, section: str) -> bool:
-    section_lower = section.lower()
-    p = PurePosixPath(path)
-    candidates = {
-        path.lower(),
-        p.name.lower(),
-        p.stem.lower(),
-        p.stem.lower().replace("_", "-"),
-        p.stem.lower().replace("-", "_"),
-        p.stem.lower().replace("_", " "),
-        p.stem.lower().replace("-", " "),
-    }
-    return any(candidate and candidate in section_lower for candidate in candidates)
+def _block_has_complete_dispositions(block: str, *, section_not_applicable: bool = False) -> bool:
+    for marker in DISPOSITION_MARKERS:
+        values = _marker_values(block, marker)
+        if not values:
+            return False
+        if not all(
+            _is_dispositioned_value(value, section_not_applicable=section_not_applicable)
+            for value in values
+        ):
+            return False
+    return True
 
 
-def plan_covers_boundary_path(plan_text: str, path: str) -> bool:
+def _boundary_name_matches_target(name: str, targets: set[str]) -> bool:
+    normalized = name.strip().rstrip(".").lower()
+    return normalized in {target.lower() for target in targets}
+
+
+def plan_covers_boundary_target(plan_text: str, targets: set[str]) -> bool:
     if not plan_has_boundary_enumeration(plan_text):
         return False
     section = boundary_enumeration_section(plan_text)
-    if _has_section_level_not_applicable(section):
-        return True
-    return _path_mentions(path, section)
+    section_not_applicable = _has_section_level_not_applicable(section)
+    return any(
+        _boundary_name_matches_target(name, targets)
+        and _block_has_complete_dispositions(
+            block,
+            section_not_applicable=section_not_applicable,
+        )
+        for name, block in _boundary_blocks(section)
+    )
+
+
+def boundary_coverage_targets(path: str, added: str) -> list[set[str]]:
+    seams = boundary_seams(added)
+    qualified_classes = {
+        seam.name.split(".", 1)[0]
+        for seam in seams
+        if "." in seam.name
+    }
+    seams = [
+        seam
+        for seam in seams
+        if not (seam.name == seam.bare_name and seam.name in qualified_classes)
+    ]
+    if len(seams) > 1:
+        bare_counts: dict[str, int] = {}
+        for seam in seams:
+            bare_counts[seam.bare_name] = bare_counts.get(seam.bare_name, 0) + 1
+        targets: list[set[str]] = []
+        for seam in seams:
+            target = {seam.name}
+            if bare_counts[seam.bare_name] == 1:
+                target.add(seam.bare_name)
+            targets.append(target)
+        return targets
+    if len(seams) == 1:
+        seam = seams[0]
+        return [{path, seam.name, seam.bare_name}]
+    return [{path}]
 
 
 def scan_diff(added_by_file: Mapping[str, str], plan_texts: Sequence[str]) -> list[Finding]:
@@ -191,9 +340,14 @@ def scan_diff(added_by_file: Mapping[str, str], plan_texts: Sequence[str]) -> li
     for path, added in sorted(added_by_file.items()):
         if not file_is_boundary_shaped(path, added):
             continue
-        if any(plan_covers_boundary_path(text, path) for text in plan_texts):
-            continue
-        findings.append(Finding(path=path, reason=RULE))
+        missing_target = False
+        for targets in boundary_coverage_targets(path, added):
+            if any(plan_covers_boundary_target(text, targets) for text in plan_texts):
+                continue
+            missing_target = True
+            break
+        if missing_target:
+            findings.append(Finding(path=path, reason=RULE))
     return findings
 
 
@@ -235,7 +389,11 @@ def changed_plan_texts(base: str) -> list[str]:
         ).splitlines()
         if n
     ]
-    return [Path(name).read_text(encoding="utf-8") for name in names if Path(name).exists()]
+    return [
+        (REPO_ROOT / name).read_text(encoding="utf-8")
+        for name in names
+        if (REPO_ROOT / name).exists()
+    ]
 
 
 def main(argv: Sequence[str] | None = None) -> int:
