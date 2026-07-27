@@ -3,8 +3,10 @@
 from __future__ import annotations
 
 import os
-from collections.abc import Mapping
+from collections.abc import Iterable, Mapping
+from pathlib import Path
 
+from dotenv import dotenv_values
 from pydantic import Field
 from pydantic import model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
@@ -13,12 +15,29 @@ ENV_FILES = (".env", ".env.local")
 RAW_RECEIVABLES_SERVICE_TOKEN_ENV = "ATLAS_INVOICING_RECEIVABLES_SERVICE_TOKEN"
 
 
-def raw_receivables_service_token_env_value(
+def _has_raw_receivables_service_token(value: object) -> bool:
+    return isinstance(value, str) and bool(value.strip())
+
+
+def raw_receivables_service_token_configured(
     environ: Mapping[str, str] | None = None,
-) -> str:
-    """Return raw receivables token material from process env, if configured."""
-    value = (environ or os.environ).get(RAW_RECEIVABLES_SERVICE_TOKEN_ENV, "")
-    return value.strip()
+    env_files: Iterable[str | Path] = ENV_FILES,
+) -> bool:
+    """Return true when any admitted settings source carries raw token material."""
+    if _has_raw_receivables_service_token(
+        (environ or os.environ).get(RAW_RECEIVABLES_SERVICE_TOKEN_ENV, "")
+    ):
+        return True
+    for env_file in env_files:
+        try:
+            values = dotenv_values(env_file)
+        except OSError:
+            continue
+        if _has_raw_receivables_service_token(
+            values.get(RAW_RECEIVABLES_SERVICE_TOKEN_ENV)
+        ):
+            return True
+    return False
 
 
 class EOMRuntimeConfig(BaseSettings):
@@ -74,7 +93,7 @@ class EOMInvoicingConfig(BaseSettings):
     def reject_raw_receivables_service_token_env(self) -> "EOMInvoicingConfig":
         if (
             self.receivables_api_enabled
-            and raw_receivables_service_token_env_value()
+            and raw_receivables_service_token_configured()
         ):
             raise ValueError(
                 "Raw EOM receivables bearer token material must not be configured "

@@ -15,7 +15,7 @@ from .config import (
     EOMInvoicingConfig,
     RAW_RECEIVABLES_SERVICE_TOKEN_ENV,
     invoicing_settings,
-    raw_receivables_service_token_env_value,
+    raw_receivables_service_token_configured,
 )
 
 _GENERATED_TOKEN_PREFIX = "eomrx_v1_"
@@ -71,9 +71,9 @@ def _validate_generated_token(token: str) -> None:
             "use atlas_brain.eom_api.auth.generate_receivables_service_token()"
         )
     random_part = token.removeprefix(_GENERATED_TOKEN_PREFIX)
-    if len(random_part) < _GENERATED_TOKEN_RANDOM_LENGTH:
+    if len(random_part) != _GENERATED_TOKEN_RANDOM_LENGTH:
         raise RuntimeError(
-            "Receivables service token random payload is too short; generate a "
+            "Receivables service token random payload has the wrong length; generate a "
             "new token with atlas_brain.eom_api.auth.generate_receivables_service_token()"
         )
     if fullmatch(_TOKEN_RANDOM_PATTERN, random_part) is None:
@@ -123,7 +123,7 @@ def validate_receivables_api_config(
     resolved = config or invoicing_settings
     if not resolved.receivables_api_enabled:
         return
-    if raw_receivables_service_token_env_value():
+    if raw_receivables_service_token_configured():
         raise RuntimeError(
             "Raw EOM receivables bearer token material must not be configured "
             f"in {RAW_RECEIVABLES_SERVICE_TOKEN_ENV}; provision only "

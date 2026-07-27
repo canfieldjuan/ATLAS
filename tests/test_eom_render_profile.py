@@ -433,6 +433,46 @@ def test_eom_receivables_runtime_config_rejects_raw_token_env_before_projection(
     assert "receivables_service_token" not in EOMInvoicingConfig.model_fields
 
 
+def test_eom_profile_rejects_raw_receivables_token_from_dotenv_before_projection(
+    tmp_path,
+):
+    from atlas_brain.eom_api import auth
+    from atlas_brain.eom_api.config import RAW_RECEIVABLES_SERVICE_TOKEN_ENV
+
+    generated = auth.generate_receivables_service_token()
+    (tmp_path / ".env").write_text(
+        "\n".join(
+            [
+                "ATLAS_INVOICING_RECEIVABLES_API_ENABLED=true",
+                f"ATLAS_INVOICING_RECEIVABLES_SERVICE_TOKEN_SHA256={generated.sha256}",
+                f"{RAW_RECEIVABLES_SERVICE_TOKEN_ENV}={generated.token}",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    env = _isolated_eom_subprocess_env()
+    repo_root = Path(__file__).resolve().parents[1]
+    existing_pythonpath = env.get("PYTHONPATH", "")
+    env["PYTHONPATH"] = (
+        str(repo_root)
+        if not existing_pythonpath
+        else f"{repo_root}{os.pathsep}{existing_pythonpath}"
+    )
+
+    result = subprocess.run(
+        [sys.executable, "-c", "import atlas_brain.main_eom"],
+        check=False,
+        capture_output=True,
+        cwd=tmp_path,
+        env=env,
+        text=True,
+    )
+
+    assert result.returncode != 0
+    assert "Raw EOM receivables bearer token material" in result.stderr
+    assert RAW_RECEIVABLES_SERVICE_TOKEN_ENV in result.stderr
+
+
 def test_eom_receivables_startup_rejects_unsafe_enabled_runtime_config():
     from atlas_brain.eom_api import auth
     from atlas_brain.eom_api.config import EOMInvoicingConfig
@@ -506,9 +546,10 @@ def test_eom_receivables_token_digest_helper_rejects_legacy_or_short_tokens():
         "a" * 24,
         "eomrx_abcdefghijklmnopqrstuvwxyzabcdefghijklmnopq",
         "eomrx_v1_" + ("a" * 42),
+        "eomrx_v1_" + ("a" * 44),
         "eomrx_v1_" + ("*" * 43),
     ):
-        with pytest.raises(RuntimeError, match="generated|too short|invalid"):
+        with pytest.raises(RuntimeError, match="generated|wrong length|invalid"):
             auth.receivables_service_token_sha256(token)
 
 
@@ -584,6 +625,24 @@ def test_eom_receivables_ready_route_is_fail_closed(monkeypatch):
         client.get(
             "/receivables/ready",
             headers={"Authorization": f"Bearer {nongenerated_token}"},
+        ).status_code
+        == 401
+    )
+    too_long_generated_format_token = "eomrx_v1_" + ("a" * 44)
+    app.dependency_overrides[auth.get_receivables_api_config] = (
+        lambda: EOMInvoicingConfig(
+            receivables_api_enabled=True,
+            receivables_service_token_sha256=auth._token_sha256(
+                too_long_generated_format_token
+            ),
+        )
+    )
+    assert (
+        client.get(
+            "/receivables/ready",
+            headers={
+                "Authorization": f"Bearer {too_long_generated_format_token}"
+            },
         ).status_code
         == 401
     )
