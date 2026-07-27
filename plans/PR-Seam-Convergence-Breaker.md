@@ -86,11 +86,12 @@ Acceptance criteria, checked one by one:
    non-convergence rather than diff size.
 3. It trips on #2158 (round 6) and #2161 (round 3), the two other known spirals.
 4. It exits 0 on a trip. `--strict` exists but is not wired into CI.
-5. A Decision-Seam Analysis suppresses the trip only when it names the tripped
-   seam and appears in this PR's own declared plan or body. A marker for
-   another seam, an unbound marker, or a marker in an unrelated plan does not
-   suppress -- plan docs live on main after merge, so an unbound marker would
-   have disabled the breaker for every later PR.
+5. A Decision-Seam Analysis suppresses a trip only when it names that seam and
+   that loop (`<path> round<N>`) and appears in this PR's own declared plan or
+   body. A marker for another seam, an unbound one, one in an unrelated plan,
+   or one answering a different loop does not suppress -- plan docs live on
+   main after merge, so an unbound marker would have disabled the breaker for
+   every later PR, and a relapse on an answered seam must trip again.
 6. A strictly declining run never trips; two rounds never trip; findings scattered
    across files never trip; a window whose last round moved to another file never
    trips; a body that only mentions the phrase never suppresses.
@@ -141,9 +142,18 @@ the seam, so unrelated findings that happen to share a round cannot hold a
 declining seam up.
 
 `recorded_seam_analysis` looks for a line-anchored machine token,
-`decision-seam-analysis: fix|waive|rescope`, in the PR body or any plan doc. It
-deliberately does not parse prose: deciding whether a paragraph "really" analyses a
-seam is itself an open category.
+`decision-seam-analysis: fix|waive|rescope <path> round<N>`, in the PR body or
+this PR's declared plan doc. It deliberately does not parse prose: deciding
+whether a paragraph "really" analyses a seam is itself an open category.
+
+The token names both the seam and the loop it answers, because an unbound
+disposition is an off switch. Plan docs live on `main` after merge, so a
+pathless marker in any merged plan -- this slice's own included -- would have
+suppressed every later PR's trip; and a marker that answered the first loop hid
+every relapse, which is the case 3k.2 exists for. A disposition covers its own
+window and the windows sharing a round with it, and nothing else. `find_trips`
+enumerates every window, so the first unanswered one is reported rather than
+only the earliest.
 
 `fetch_reviews` paginates reviews and **raises** if any single review carries more
 than one page of inline comments, rather than judging convergence from a truncated
@@ -196,7 +206,7 @@ is 12, 11 and 7 rounds of warning respectively, against loops that ran 18, 19 an
 rounds. Trading three rounds of earliness for the removal of every knob is the
 intended direction, not a regression.
 
-decision-seam-analysis: fix scripts/check_seam_convergence.py
+decision-seam-analysis: fix scripts/check_seam_convergence.py round2
 
 ## Intentional
 
@@ -272,7 +282,7 @@ Commands run locally, with results:
 | File | LOC |
 |---|---:|
 | `.github/workflows/seam_convergence.yml` | 90 |
-| `plans/PR-Seam-Convergence-Breaker.md` | 278 |
-| `scripts/check_seam_convergence.py` | 485 |
-| `tests/test_check_seam_convergence.py` | 489 |
-| **Total** | **1342** |
+| `plans/PR-Seam-Convergence-Breaker.md` | 288 |
+| `scripts/check_seam_convergence.py` | 516 |
+| `tests/test_check_seam_convergence.py` | 539 |
+| **Total** | **1433** |

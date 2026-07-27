@@ -64,7 +64,7 @@ _DEFAULT_BOTS = ("copilot", "codex")
 # docs live on main after merge, every trip in every later PR. Binding it to a
 # path makes suppression as specific as the finding it answers.
 SEAM_MARKER_RE = re.compile(
-    r"^\s*decision-seam-analysis:\s*(fix|waive|rescope)\s+(\S+)\s*$",
+    r"^\s*decision-seam-analysis:\s*(fix|waive|rescope)\s+(\S+)\s+round(\d+)\s*$",
     re.IGNORECASE | re.MULTILINE,
 )
 
@@ -211,6 +211,18 @@ def find_trip(rounds: Sequence[ReviewRound]) -> tuple[int, str, list[int]] | Non
       last -- 3k.2's "flat or rising", read literally, and measured on the seam
       rather than on unrelated findings that happen to share the round.
     """
+    found = find_trips(rounds)
+    return next(iter(found), None)
+
+
+def find_trips(rounds: Sequence[ReviewRound]) -> list[tuple[int, str, list[int]]]:
+    """Every window that shows non-convergence, earliest first.
+
+    Reporting only the first meant a dispositioned early loop hid every later
+    one: the breaker exists to catch a seam being re-litigated, so a relapse
+    after an answered trip is precisely the case it must still see.
+    """
+    trips: list[tuple[int, str, list[int]]] = []
     for i in range(len(rounds) - WINDOW + 1):
         window = list(rounds[i : i + WINDOW])
         if any(r.count == 0 for r in window):
@@ -229,11 +241,11 @@ def find_trip(rounds: Sequence[ReviewRound]) -> tuple[int, str, list[int]] | Non
         last_round = next(iter(reversed(window)), None)
         if last_round is None:
             continue
-        return last_round.index, seam, counts
-    return None
+        trips.append((last_round.index, seam, counts))
+    return trips
 
 
-def recorded_seam_analysis(seam: str, *texts: str) -> str | None:
+def recorded_seam_analysis(seam: str, trip_round: int, *texts: str) -> str | None:
     """Disposition of a Decision-Seam Analysis recorded for THIS seam.
 
     Accepts the marker from any supplied source -- the PR body or this PR's plan
@@ -244,7 +256,15 @@ def recorded_seam_analysis(seam: str, *texts: str) -> str | None:
     """
     for text in texts:
         for match in SEAM_MARKER_RE.finditer(text or ""):
-            if match.group(2).strip() == seam:
+            if match.group(2).strip() != seam:
+                continue
+            answered = int(match.group(3))
+            # The analysis covers the loop it answered and the windows that
+            # share a round with it -- overlap is symmetric, so a marker for a
+            # later round cannot retroactively answer an earlier trip either.
+            # A window sharing no round with it is a new loop, and a relapse
+            # deserves a fresh analysis rather than inheriting one.
+            if abs(trip_round - answered) <= WINDOW - 1:
                 return match.group(1).lower()
     return None
 
@@ -262,23 +282,30 @@ def evaluate(
                 "  round %d (%s)  %d  %s"
                 % (r.index, r.submitted_at[:16], r.count, "#" * r.count)
             )
-    trip = find_trip(rounds)
-    if trip is None:
+    trips = find_trips(rounds)
+    if not trips:
         messages.append(
             "OK: no window of %d consecutive rounds led by one file whose finding "
             "count does not decrease." % WINDOW
         )
         return False, None, messages
-    trip_index, seam, counts = trip
-    shown = ", ".join(str(c) for c in counts)
-    disposition = recorded_seam_analysis(seam, *texts)
-    if disposition is not None:
+    answered: list[tuple[int, str, str]] = []
+    pending = None
+    for trip_index, seam, counts in trips:
+        disposition = recorded_seam_analysis(seam, trip_index, *texts)
+        if disposition is None:
+            pending = (trip_index, seam, counts)
+            break
+        answered.append((trip_index, seam, disposition))
+    for trip_index, seam, disposition in answered:
         messages.append(
-            "SATISFIED: non-convergence on %s at round %d (%s), and a "
-            "Decision-Seam Analysis is recorded with disposition '%s'."
-            % (seam, trip_index, shown, disposition)
+            "SATISFIED: non-convergence on %s at round %d is answered by a "
+            "recorded Decision-Seam Analysis ('%s')." % (seam, trip_index, disposition)
         )
-        return False, seam, messages
+    if pending is None:
+        return False, next(iter(reversed(answered)), (0, None, ""))[1], messages
+    trip_index, seam, counts = pending
+    shown = ", ".join(str(c) for c in counts)
     messages.append(
         "AGENTS 3k.2 tripped at round %d: findings on %s across rounds %s are not "
         "decreasing." % (trip_index, seam, shown)
@@ -286,12 +313,16 @@ def evaluate(
     return True, seam, messages
 
 
-def annotation(seam: str, rounds: Sequence[ReviewRound]) -> str:
-    trip = find_trip(rounds)
+def annotation(seam: str, rounds: Sequence[ReviewRound], trip_round: int = 0) -> str:
     shown = "?"
-    if trip is not None:
-        _index, _seam, counts = trip
+    for index, trip_seam, counts in find_trips(rounds):
+        if trip_seam != seam:
+            continue
+        if trip_round and index != trip_round:
+            continue
         shown = ", ".join(str(c) for c in counts)
+        trip_round = trip_round or index
+        break
     return (
         "::warning file=%s::AGENTS 3k.2 convergence circuit-breaker: this file led "
         "three consecutive bot review rounds and its finding count did not decrease "
@@ -302,11 +333,11 @@ def annotation(seam: str, rounds: Sequence[ReviewRound]) -> str:
         "category it cannot enumerate), then do exactly one of: fix the seam "
         "structurally with a stated default direction, waive the bounded residual "
         "in Deferred, or re-scope the slice -- then record the outcome as a line "
-        "reading exactly: decision-seam-analysis: fix %s   (or waive, or "
-        "rescope, in place of fix). The path is required: a disposition answers "
-        "one seam, not every future trip. "
+        "reading exactly: decision-seam-analysis: fix %s round%d   (or waive, "
+        "or rescope, in place of fix). The path and round are required: a "
+        "disposition answers one loop on one seam, not every future trip. "
         "See AGENTS.md 3k.2 and docs/GUARD_CLASS_CLOSURE.md."
-        % (seam, shown, seam)
+        % (seam, shown, seam, trip_round)
     )
 
 
