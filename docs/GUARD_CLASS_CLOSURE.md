@@ -18,12 +18,31 @@ this file.
 
 ## When this applies (trigger)
 
-Any change to a guard / validator / sanitizer / classifier / gate / denylist /
-parser-admission rule / privacy or safety checker whose input space is **open**:
-free text, nested or recursive structures, producer-supplied keys and values,
-user data, or anything where the set of possible inputs is not a small closed
-enum. If the input space is genuinely a closed enum (a fixed set of statuses,
-say), this does not apply -- enumerate it and move on.
+**A. Guards over an open input space.** Any change to a guard / validator /
+sanitizer / classifier / gate / denylist / parser-admission rule / privacy or
+safety checker whose input space is **open**: free text, nested or recursive
+structures, producer-supplied keys and values, user data, or anything where the
+set of possible inputs is not a small closed enum. If the input space is
+genuinely a closed enum (a fixed set of statuses, say), this does not apply --
+enumerate it and move on.
+
+**B. Set-valued dependencies (any change, guard-shaped or not).** Any change that
+adds or edits a **set whose membership a decision depends on**: a literal
+collection used in a branch, a pattern family (regex alternation, prefix list),
+a list duplicating one that already exists elsewhere in the repo, or the set of
+behaviors / callers / fields a change must cover to be complete.
+
+Trigger B exists because the same failure arrives constantly in code that nobody
+reads as "a guard." A mirror script's test-file list, a detector's grep patterns,
+a refactor's replaced-path behaviors, and a browser snapshot predicate are all
+one behavior -- **the set was enumerated at authoring time instead of bound to a
+source of truth or given a stated default for its unlisted members** -- and each
+member discovered later is a real, correct review finding, so the loop cannot be
+blamed on the reviewer and does not converge until someone writes down what
+*generates* membership rather than what is currently in the set.
+
+Trigger B requires the closure declaration below. It requires the three
+requirements only when the change is also a trigger-A guard.
 
 ## The failure mode this prevents
 
@@ -43,7 +62,52 @@ slice per round. Two compounding symptoms:
    handling), and each new branch's *fall-through* is the next round's hole.
    Complexity and edge-count grow every round while the guarantee does not.
 
+## Closure declaration (trigger B; also required of trigger-A guards)
+
+Every set-valued dependency the change introduces or edits declares, in the plan,
+**exactly one** disposition. Naming the set is the point: an undeclared set is
+one whose unlisted members have no defined behavior, which is precisely the state
+that generates a finding per round.
+
+- **CLOSED** -- the set is genuinely finite and repo-owned. Cite where the
+  canonical list lives. A fixed status enum, or a controlled vocabulary the
+  system already owns, is legitimately closed; enumerate it and move on.
+- **DERIVED** -- the set is computed at runtime from a source of truth, so it
+  cannot drift. Parse the workflow rather than copying its file list; read the
+  settings schema rather than grepping for one accessor idiom. Prefer this
+  whenever a source of truth exists: it is the only disposition that stays
+  correct without maintenance.
+- **DEFAULTED** -- the set is open and any enumeration is a heuristic. State the
+  default direction for members not in the list, make incompleteness err to the
+  cheap-error side (see the asymmetric-cost section below), and say which side
+  that is and why.
+
+**Enumerating an open set with no declared default is the defect.** A list that
+looks complete today is indistinguishable, in review, from one that is
+deliberately partial with a safe default -- the declaration is what makes the
+difference visible.
+
+Duplication is a closure failure of its own: a list copied from somewhere else in
+the repo is CLOSED only if something enforces the copy: otherwise it is a DERIVED
+candidate that was not derived, and it will drift silently. Prefer inverting
+ownership (have the one consumer call the canonical definition) over adding a
+drift check on two copies.
+
+Observed 2026-07-26, five instances in one day across the EOM funnel and
+content-factory lanes: a browser attribution snapshot keyed on "has ad params"
+rather than "is an acquisition entry"; an atomic resolver that shed the replaced
+path's behaviors because they were never inventoried; a config-probing detector
+matching `os.getenv` in a repo whose own law mandates Pydantic settings, so it
+could not fire on the incident that motivated it; a CI mirror script hardcoding
+the pytest list it was written to keep in sync; and a copy-verification predicate
+enumerating 25 copulas, so `every issue requires review` failed to bind even
+though `issue` is in the repo's own report-item vocabulary. Each was a real
+finding; each cost at least one round; none required new information to prevent.
+
 ## The three requirements (all mandatory before merge)
+
+These apply to trigger-A guards. A trigger-B change that is not a safety guard
+satisfies this document with the closure declaration above.
 
 ### 1. Fail-closed choke point (allowlist-shaped, one decision)
 
@@ -171,7 +235,13 @@ because the evidence signals are finite even when the category is not.
 
 ## Reviewer bar (enforced)
 
-For a triggering PR, the reviewer **blocks** until all three hold, and states
+For a trigger-B PR, the reviewer states before LGTM: each set-valued dependency
+the change adds or edits, and its declared disposition. An enumerated open set
+with no declared default is "needs the closure declaration," even when every
+listed member behaves correctly -- that is the round-generating state this
+document exists to stop, and it is invisible per-round by construction.
+
+For a trigger-A PR, the reviewer **blocks** until all three hold, and states
 before LGTM: the choke-point location, the class and invariant it enforces, and
 that the acceptance test is grammar-derived (not a fixture list). For an
 **open-category** guard (see the section above), the three requirements hold in
@@ -192,7 +262,10 @@ An **advisory CI lint** (`scripts/check_guard_class_closure.py`, workflow
 `Guard Class-Closure Lint`) surfaces a warning when a PR changes a Python guard-shaped
 file over open input without a co-changed property/generative test. It is
 heuristic and advisory-first (warns, never blocks); it does not replace the
-reviewer bar above, it makes the omission visible on every PR. Opt a
+reviewer bar above, it makes the omission visible on every PR. It covers
+trigger A only: the closure declaration for trigger B is reviewer-enforced today,
+with a mechanical trigger (a diff adding a literal collection or pattern
+alternation inside a decision path) proposed in issue #2226. Opt a
 false-positive path out in `scripts/guard_class_closure_config.json` (optional -- absent means no ignores; create it only when an opt-out is needed) or waive
 inline with a `guard-class-closure: waived` marker in the PR body.
 
