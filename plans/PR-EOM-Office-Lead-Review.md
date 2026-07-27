@@ -95,7 +95,7 @@ Slice phase: Vertical slice
    `lead/new` review route does not rely on an unindexed scan/sort as the
    active EOM lead cohort grows.
 
-Max files: 9
+Max files: 10
 
 ### Review Contract
 
@@ -120,10 +120,12 @@ Max files: 9
 5. The previously merged plan is moved only to `plans/archive/` and the plans
    index is regenerated; the product diff contains no unrelated calendar,
    receivables, or generic CRM change.
-6. A standalone `CREATE INDEX CONCURRENTLY IF NOT EXISTS` migration adds the
-   EOM `lead/new` queue index matching the fixed cohort predicate and
-   `(created_at DESC, id DESC)` keyset order; a migration-runner test pins the
-   index name, predicate, concurrent build, and no-drop behavior.
+6. A standalone concurrent index migration adds the EOM `lead/new` queue index
+   matching the fixed cohort predicate and `(created_at DESC, id DESC)` keyset
+   order. It first drops any same-named index concurrently so a canceled prior
+   build cannot leave an invalid catalog entry that would be recorded as
+   applied, and migration-runner tests pin both the concurrent-only
+   statement-by-statement autocommit execution and the index predicate.
 - Reachability proof: `tests/test_eom_lead_conversion.py` calls the real FastAPI
   route with its real dependencies overridden only at the database provider;
   `tests/test_eom_lead_conversion_integration.py` runs the provider projection
@@ -187,6 +189,7 @@ Any row or field not admitted by those definitions is excluded by default.
 - `atlas_brain/eom_api/funnel.py`
 - `atlas_brain/services/crm_provider.py`
 - `atlas_brain/storage/migrations/355_eom_lead_review_queue_index.sql`
+- `atlas_brain/storage/migrations/__init__.py`
 - `plans/INDEX.md`
 - `plans/PR-EOM-Office-Lead-Review.md`
 - `plans/archive/PR-EOM-Office-Conversion-Handoff.md`
@@ -235,6 +238,22 @@ finalization.
   customer email; attribution reporting; historical Customer linking; and
   multi-site initial approval stay separate commands.
 
+## Rollback
+
+- Route rollback: deploy a forward change that removes or disables
+  `GET /api/v1/eom-funnel/leads`; no lead/customer data cleanup is required
+  because this route is read-only and records no lifecycle event.
+- Index rollback: leave `idx_contacts_eom_lead_review_queue` in place during an
+  ordinary application rollback because it is additive and only supports the
+  closed EOM `lead/new` query. If operators must remove it, ship a separate
+  forward migration that runs
+  `DROP INDEX CONCURRENTLY IF EXISTS idx_contacts_eom_lead_review_queue;` after
+  the route has been disabled so request latency cannot regress mid-traffic.
+- Migration retry: if migration 355 is interrupted before its ledger row is
+  recorded, rerunning startup is safe; the migration first removes the
+  same-named index concurrently and then rebuilds it concurrently before
+  recording completion.
+
 Parking predicate: this slice parks product stages and workflow automation that
 do not block an authenticated office worker from reviewing a current `lead/new`
 record, creating exactly one Customer/Site through the existing approval
@@ -251,16 +270,24 @@ Parked hardening: none.
   repositories; no code was written until this contract was complete.
 - Command: pytest -q tests/test_eom_lead_conversion.py
   tests/test_eom_lead_conversion_integration.py -k 'lead_review or
-  eom_funnel; result: 8 passed, 1 skipped, 46 deselected.
+  eom_funnel'; result: 8 passed, 1 skipped, 46 deselected.
 - Command: pytest -q tests/test_migrations_runner.py -k
-  'eom_lead_review_queue_index or contact_lead_pipeline'; result: 2 passed,
-  15 deselected.
+  'concurrently_comments or concurrently_mentions or
+  non_atomic_migration_batches or non_concurrent_unmarked_migration or
+  sql_statement_splitter or migration_sql_does_not_run_inside_a_transaction';
+  result: 6 passed, 16 deselected.
+- Command: pytest -q tests/test_eom_lead_conversion_integration.py -k
+  'lead_review_projection'; result: 1 skipped, 14 deselected because
+  ATLAS_MIGRATION_TEST_DATABASE_URL is not configured locally.
+- Command: python -m py_compile atlas_brain/storage/migrations/__init__.py
+  atlas_brain/services/crm_provider.py tests/test_migrations_runner.py
+  tests/test_eom_lead_conversion_integration.py; result: passed.
 - Command: python scripts/audit_plan_doc.py
   plans/PR-EOM-Office-Lead-Review.md; result: passed.
 - Command: python scripts/audit_plan_doc_files_touched.py
   plans/PR-EOM-Office-Lead-Review.md origin/main; result: passed.
 - Command: python scripts/audit_plan_doc_diff_size.py
-  plans/PR-EOM-Office-Lead-Review.md origin/main; result: passed with 0.0%
+  plans/PR-EOM-Office-Lead-Review.md origin/main; result: passed with 16.2%
   drift.
 - Command: python scripts/sync_pr_plan.py
   plans/PR-EOM-Office-Lead-Review.md origin/main --check; result: passed.
@@ -282,12 +309,13 @@ Parked hardening: none.
 | File | LOC |
 |---|---:|
 | `atlas_brain/eom_api/funnel.py` | 109 |
-| `atlas_brain/services/crm_provider.py` | 45 |
-| `atlas_brain/storage/migrations/355_eom_lead_review_queue_index.sql` | 13 |
+| `atlas_brain/services/crm_provider.py` | 60 |
+| `atlas_brain/storage/migrations/355_eom_lead_review_queue_index.sql` | 18 |
+| `atlas_brain/storage/migrations/__init__.py` | 227 |
 | `plans/INDEX.md` | 3 |
-| `plans/PR-EOM-Office-Lead-Review.md` | 293 |
+| `plans/PR-EOM-Office-Lead-Review.md` | 321 |
 | `plans/archive/PR-EOM-Office-Conversion-Handoff.md` | 0 |
 | `tests/test_eom_lead_conversion.py` | 210 |
-| `tests/test_eom_lead_conversion_integration.py` | 127 |
-| `tests/test_migrations_runner.py` | 21 |
-| **Total** | **821** |
+| `tests/test_eom_lead_conversion_integration.py` | 153 |
+| `tests/test_migrations_runner.py` | 142 |
+| **Total** | **1243** |

@@ -216,6 +216,32 @@ async def test_eom_lead_review_projection_is_closed_filtered_and_read_only():
             source="web",
             created_at=newer_created_at,
         )
+        await conn.execute(
+            """
+            INSERT INTO contact_interactions (
+                id, contact_id, interaction_type, summary, intent, occurred_at, metadata
+            ) VALUES (
+                $1, $2, 'web_form', 'older callback', 'estimate_request', $3,
+                '{"submitted_email":"old-callback@example.com","submitted_phone":"2175550102"}'::jsonb
+            )
+            """,
+            uuid.uuid4(),
+            newer_eligible_id,
+            datetime(2026, 7, 27, 12, 30, tzinfo=timezone.utc),
+        )
+        await conn.execute(
+            """
+            INSERT INTO contact_interactions (
+                id, contact_id, interaction_type, summary, intent, occurred_at, metadata
+            ) VALUES (
+                $1, $2, 'web_form', 'latest callback', 'estimate_request', $3,
+                '{"submitted_email":"latest-callback@example.com","submitted_phone":"2175550199"}'::jsonb
+            )
+            """,
+            uuid.uuid4(),
+            newer_eligible_id,
+            datetime(2026, 7, 27, 13, 30, tzinfo=timezone.utc),
+        )
         for business_context_id, contact_type, lead_stage, status in (
             ("other_business", "lead", "new", "active"),
             ("effingham_maids", "customer", None, "active"),
@@ -247,8 +273,8 @@ async def test_eom_lead_review_projection_is_closed_filtered_and_read_only():
             {
                 "contact_id": newer_eligible_id,
                 "full_name": "Eligible Newer",
-                "email": "newer@example.com",
-                "phone": "2175550101",
+                "email": "latest-callback@example.com",
+                "phone": "2175550199",
                 "address": "101 Main St",
                 "source": "web",
                 "created_at": newer_created_at,

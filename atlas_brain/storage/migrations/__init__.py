@@ -122,6 +122,227 @@ def _requires_atomic_bookkeeping(sql: str) -> bool:
     return first_line == _ATOMIC_BOOKKEEPING_MARKER
 
 
+def _contains_executable_concurrently(sql: str) -> bool:
+    """Return whether SQL uses CONCURRENTLY outside comments and literals."""
+    code: list[str] = []
+    i = 0
+    single_quote = False
+    double_quote = False
+    line_comment = False
+    block_comment = False
+    dollar_quote: str | None = None
+
+    while i < len(sql):
+        ch = sql[i]
+        nxt = sql[i + 1] if i + 1 < len(sql) else ""
+
+        if line_comment:
+            if ch == "\n":
+                line_comment = False
+                code.append(ch)
+            else:
+                code.append(" ")
+            i += 1
+            continue
+
+        if block_comment:
+            code.append(" ")
+            if ch == "*" and nxt == "/":
+                code.append(" ")
+                block_comment = False
+                i += 2
+            else:
+                i += 1
+            continue
+
+        if dollar_quote is not None:
+            if sql.startswith(dollar_quote, i):
+                code.extend(" " * len(dollar_quote))
+                i += len(dollar_quote)
+                dollar_quote = None
+            else:
+                code.append("\n" if ch == "\n" else " ")
+                i += 1
+            continue
+
+        if single_quote:
+            code.append("\n" if ch == "\n" else " ")
+            if ch == "'" and nxt == "'":
+                code.append(" ")
+                i += 2
+                continue
+            if ch == "'":
+                single_quote = False
+            i += 1
+            continue
+
+        if double_quote:
+            code.append("\n" if ch == "\n" else " ")
+            if ch == '"' and nxt == '"':
+                code.append(" ")
+                i += 2
+                continue
+            if ch == '"':
+                double_quote = False
+            i += 1
+            continue
+
+        if ch == "-" and nxt == "-":
+            code.extend((" ", " "))
+            line_comment = True
+            i += 2
+            continue
+
+        if ch == "/" and nxt == "*":
+            code.extend((" ", " "))
+            block_comment = True
+            i += 2
+            continue
+
+        if ch == "'":
+            code.append(" ")
+            single_quote = True
+            i += 1
+            continue
+
+        if ch == '"':
+            code.append(" ")
+            double_quote = True
+            i += 1
+            continue
+
+        if ch == "$":
+            match = re.match(r"\$[A-Za-z_][A-Za-z0-9_]*\$|\$\$", sql[i:])
+            if match:
+                dollar_quote = match.group(0)
+                code.extend(" " * len(dollar_quote))
+                i += len(dollar_quote)
+                continue
+
+        code.append(ch)
+        i += 1
+
+    return bool(re.search(r"\bCONCURRENTLY\b", "".join(code), re.IGNORECASE))
+
+
+def _split_sql_statements(sql: str) -> list[str]:
+    """Split migration SQL into statements without entering a transaction.
+
+    asyncpg sends one ``execute()`` string as one extended-query unit. PostgreSQL
+    rejects ``CREATE/DROP INDEX CONCURRENTLY`` when those statements are batched
+    with other SQL, so non-atomic migrations run statement-by-statement on the
+    already-acquired autocommit connection. The splitter is intentionally small
+    but respects the constructs used by packaged migrations: single/double
+    quotes, line/block comments, and dollar-quoted PL/pgSQL bodies.
+    """
+    statements: list[str] = []
+    current: list[str] = []
+    i = 0
+    single_quote = False
+    double_quote = False
+    line_comment = False
+    block_comment = False
+    dollar_quote: str | None = None
+
+    while i < len(sql):
+        ch = sql[i]
+        nxt = sql[i + 1] if i + 1 < len(sql) else ""
+
+        if line_comment:
+            current.append(ch)
+            if ch == "\n":
+                line_comment = False
+            i += 1
+            continue
+
+        if block_comment:
+            current.append(ch)
+            if ch == "*" and nxt == "/":
+                current.append(nxt)
+                block_comment = False
+                i += 2
+            else:
+                i += 1
+            continue
+
+        if dollar_quote is not None:
+            if sql.startswith(dollar_quote, i):
+                current.append(dollar_quote)
+                i += len(dollar_quote)
+                dollar_quote = None
+            else:
+                current.append(ch)
+                i += 1
+            continue
+
+        if single_quote:
+            current.append(ch)
+            if ch == "'" and nxt == "'":
+                current.append(nxt)
+                i += 2
+                continue
+            if ch == "'":
+                single_quote = False
+            i += 1
+            continue
+
+        if double_quote:
+            current.append(ch)
+            if ch == '"' and nxt == '"':
+                current.append(nxt)
+                i += 2
+                continue
+            if ch == '"':
+                double_quote = False
+            i += 1
+            continue
+
+        if ch == "-" and nxt == "-":
+            current.extend((ch, nxt))
+            line_comment = True
+            i += 2
+            continue
+
+        if ch == "/" and nxt == "*":
+            current.extend((ch, nxt))
+            block_comment = True
+            i += 2
+            continue
+
+        if ch == "'":
+            current.append(ch)
+            single_quote = True
+            i += 1
+            continue
+
+        if ch == '"':
+            current.append(ch)
+            double_quote = True
+            i += 1
+            continue
+
+        if ch == "$":
+            match = re.match(r"\$[A-Za-z_][A-Za-z0-9_]*\$|\$\$", sql[i:])
+            if match:
+                dollar_quote = match.group(0)
+                current.append(dollar_quote)
+                i += len(dollar_quote)
+                continue
+
+        current.append(ch)
+        if ch == ";":
+            statement = "".join(current).strip()
+            if statement:
+                statements.append(statement)
+            current = []
+        i += 1
+
+    statement = "".join(current).strip()
+    if statement:
+        statements.append(statement)
+    return statements
+
+
 async def run_migrations(
     pool,
     *,
@@ -227,13 +448,17 @@ async def run_migrations(
                         # DDL. Its database effects and ledger row are one
                         # rollback-safe unit, closing the otherwise possible
                         # crash window between migration SQL and bookkeeping.
-                        if re.search(r"\bCONCURRENTLY\b", sql, re.IGNORECASE):
+                        if _contains_executable_concurrently(sql):
                             raise RuntimeError(
                                 "atomic-bookkeeping migration cannot use CONCURRENTLY"
                             )
                         async with conn.transaction():
                             await conn.execute(sql)
                             await _record_migration(conn, migration_file.name)
+                    elif _contains_executable_concurrently(sql):
+                        for statement in _split_sql_statements(sql):
+                            await conn.execute(statement)
+                        await _record_migration(conn, migration_file.name)
                     else:
                         await conn.execute(sql)
                         await _record_migration(conn, migration_file.name)
