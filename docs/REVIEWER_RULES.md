@@ -1,23 +1,80 @@
 # Reviewer Rules Pack v1
 
-> The reviewer's job is **not** to "review the code." It is to **prove whether
-> the PR satisfies its Review Contract and violates none of the rules below.**
+> The reviewer's job is **not** to "review the code." It is to **disposition the
+> review matrix: every acceptance criterion in the PR's Review Contract, and
+> every rule below.** Every rule is in the matrix -- the path-trigger table sets
+> how DEEPLY a rule is probed, never whether it appears -- so a rule reaches a
+> verdict of pass / fail / not-verified / n-a, and `n-a` carries a reason.
 > Every review finding cites a rule ID (R1-R14). This pack is the checklist the
-> reviewer runs; the recurring-lapse list in `docs/SESSION_BOOTSTRAP.md` is the
-> same checklist front-loaded into the builder so the repeats stop.
+> reviewer runs; the
+> recurring-lapse list in `docs/SESSION_BOOTSTRAP.md` is the same checklist
+> front-loaded into the builder so the repeats stop.
+>
+> The standard is *the matrix is dispositioned*, not *the code violates no rule*.
+> "Violates none of the rules" is a universal negative -- undischargeable on any
+> non-trivial diff, so it defines no point at which a review is done. See
+> **Review completion** below, which is what makes a review finishable.
 
 This pack sits **under** the existing verdict ladder, it does not replace it:
 
 | Verdict | Meaning |
 |---|---|
 | **BLOCKER** | A rule below is failed in a way that breaks correctness, security, a contract, or CI. Must fix before merge. |
-| **MAJOR** | A rule is at risk: architectural / scope / pattern concern. Fix if small; else discuss. |
+| **MAJOR** | A rule is at risk: architectural / scope / pattern concern; **or** a proven defect whose blast radius does not warrant blocking. Fix if small; else discuss. |
 | **NIT** | Style / naming / polish. Apply only if 1-line; reviewer marks skip-worthy. |
-| **LGTM** | All triggered rules pass, R14 is satisfied, and all AI findings are fixed-or-waived. |
+| **LGTM** | Every rule R1-R14 is Pass or a reasoned N-A (no Not-Verified outstanding), R14 is satisfied, and all AI findings are fixed-or-waived. |
 
 A finding is written as `Rxx (LEVEL) file:line - issue - required fix`.
 **Blockers must cite `file:line`.** A bare "LGTM" with no rule matrix and no
 independent verification is worse than no comment.
+
+**BLOCKER requires a concrete failure path**: the specific input, sequence, or
+state that produces the harm, established by the reviewer. "This could break" is
+not one. Without a failure path the finding is MAJOR at most -- downgrade it, do
+not drop it, and the level can be raised later once the path is shown.
+
+Three carve-outs, because a missing-evidence finding is not a speculative one:
+
+- **Absent mandatory proof is itself the failure path.** Wherever a rule's own
+  **Block if** clause names missing evidence as the defect, the absence IS the
+  blocker and no input sequence is owed. That is general, not a short list: R2's
+  untested new logic and missing regression test, R5's changed contract without
+  contract tests, R4's absent rollback plan, the guard boundary-probe on
+  security / billing / data-deletion / customer-output / CI-release surfaces,
+  a Not-Verified rule, **and a `could-not-determine` acceptance criterion** all
+  qualify. A guard with only happy-path tests blocks on those surfaces whether
+  or not anyone has yet found the bypass -- "no one has exploited it" is not
+  evidence it is safe. The unifying test is simple: if what is missing is the
+  *evidence*, the absence is the failure path; only a speculative claim about
+  code you have read needs an input sequence.
+- **Established, not necessarily published.** For **any category
+  `SECURITY.md` routes privately** -- it names exploitable vulnerabilities,
+  exposed credentials, authentication bypasses, payment or billing issues, data
+  deletion gaps, and report-access bugs, and that policy governs, not this list
+  -- the public finding states the rule, the surface, and the impact and points
+  at the private report; the failure path is recorded there. Routing it
+  privately never downgrades it.
+- **A failure path is necessary, not sufficient.** Severity is blast radius, so
+  a proven but immaterial defect is MAJOR or NIT on the strength of its impact.
+  The ladder above is amended to say so: BLOCKER's "breaks correctness" reads as
+  *material* breakage, and MAJOR now explicitly admits a proven low-impact
+  defect rather than being reserved for architectural concerns. Without that
+  amendment the two would contradict and every proven defect would land at
+  BLOCKER by elimination.
+
+**The escape valve from "do not manufacture NITs" is not filing the finding, not
+promoting it.** That instruction bars padding a review with polish; it is not a
+reason to enter a marginal finding at BLOCKER so it clears the bar. If a finding
+is real but minor, MAJOR and NIT exist for it -- **use them**. A defect you have
+identified is never silently dispositioned: the matrix offers Pass, Fail,
+Not-Verified and reasoned N-A, and none of those honestly represents "I found
+something and said nothing". Report nothing only when you found nothing.
+
+**Why:** across #2195 and #2184 all **68** filed findings are P1/P2 and none is
+lower. Real severity is not distributed that way, and a ladder where everything
+is a blocker carries no information -- the reviewer cannot lead with blockers
+(above) when every finding is one, and the builder cannot tell an exploitable
+gap from an ordering nit.
 
 R14 is universal: it applies to every review verdict, even when no changed path
 specifically triggers it. A reviewer who has not inspected the checked-out PR
@@ -33,10 +90,11 @@ reviewer reviews against it. No contract, nothing to check against.
 
 ```
 ### Review Contract
-- Acceptance criteria:
-  - [ ] Behavior A works
-  - [ ] Edge case B handled
-  - [ ] Existing behavior C unchanged
+- Acceptance criteria (each a code claim, or a hazard plus the evidence that
+  settles it; a BARE risk category with no referent is the defect -- AGENTS.md 1a):
+  - [ ] <entrypoint> returns <observable result> for <input>
+  - [ ] <named boundary input> is rejected with <observable result>
+  - [ ] <existing behavior C> unchanged: <command / CI job that shows it>
 - Reachability proof: real entrypoint + observable output/state, or N/A with reason
 - Affected surfaces: API / DB / auth / frontend / jobs / config / observability / third-party
 - Risk areas: data-loss / security / backcompat / performance / concurrency / migration
@@ -45,6 +103,45 @@ reviewer reviews against it. No contract, nothing to check against.
 
 The contract is optional for one-off scratch, mandatory for non-trivial PRs
 (same threshold as the plan doc itself, per `AGENTS.md`).
+
+**For contracts authored or materially revised after this rule lands, a
+criterion that names a *bare* risk category is a defect in the contract, and the
+reviewer says so.** "No TOCTOU", "no race conditions", "handles every malformed
+input" name a hazard with no referent, so there is nothing to look at.
+
+Naming the evidence rescues it: *"No unmasked email addresses in the audit
+export -- settled by `tests/test_audit_export.py::test_masks_email_addresses`"*
+is valid and the reviewer dispositions it from that evidence. The defect is the
+missing referent, never the hazard framing. For concurrency or open-execution
+criteria, a sampled concurrent test is not settling evidence by itself; require
+the 3k.4 execution model and the property-level invariant that holds across
+every admitted interleaving. For open-input criteria, a sampled fixture list is
+not settling evidence by itself; require the 3k.3 evidence-gated mechanism:
+single choke-point decision, safe default for ambiguous/unrecognized/malformed
+input, and bounded recognizer evidence.
+
+Legacy contracts are different. This rule does not automatically
+re-disposition legacy criteria and does not forbid investigating them. For a
+contract authored before this lands, review against the contract as authored:
+inspect the diff and evidence it points to, disposition normally when that
+evidence settles it, and record `could-not-determine` only if the criterion
+still has no claim or evidence to settle after that review. The legacy phrasing
+is an advisory NIT, not a blocking R1 authoring finding, unless the contract is
+materially revised.
+
+Two things follow, and they are separate:
+
+- **New or materially revised contracts fail authoring review on a bare hazard.**
+  Ask for the code claim the hazard translates into, or the evidence that settles
+  it. Do not silently work around a newly authored bare hazard by hunting the
+  category.
+- **Legacy contracts keep their existing matrix behavior.** Do not mark a legacy
+  criterion `could-not-determine` solely because this authoring rule now exists;
+  use `could-not-determine` only when the actual legacy review still cannot find
+  a claim or evidence to settle.
+
+Risk areas are exempt: they name hazards by design and the matrix does not
+disposition them (`AGENTS.md` 1a).
 
 ---
 
@@ -172,6 +269,11 @@ fixture) while the thread history shows the class is open and not converging --
 that is the `AGENTS.md` 3k.2 convergence circuit-breaker, and the next push owes
 a Decision-Seam Analysis, not another example.
 
+**Set-valued dependencies.** When a diff adds or edits a member set that drives a
+decision, or enumerates the behaviors/callers/fields/input shapes a change must
+cover, require the closure declaration defined canonically in
+`docs/GUARD_CLASS_CLOSURE.md`. This is a pointer, not a restatement of that bar.
+
 ### R14 - Verify against the codebase, not the PR story
 Review verdicts must be based on the checked-out PR head and the current
 codebase, not the PR description, issue summary, builder claims, or prior
@@ -247,6 +349,7 @@ these for the paths it touches:
 | `scripts/audit_*.py`, `scripts/check_*.py`, evaluators / gate predicates | R2 (failure-branch fixtures per `AGENTS.md` 3h/3i), R10 |
 | `extracted_*/` synced files | R1, R10 (manifest sync discipline) |
 | Guard, validator, cap, classifier, gate, sanitizer, denylist, parser admission rule, or safety checker changes | R2, R14 (boundary-probe before LGTM) |
+| Concurrency, durability, lock/lease, cache-coherence, rotation or retry state-machine, or crash-safe replacement changes | R8, R2 (`AGENTS.md` 3k.4: every such plan names the selected component and which of its guarantees close which part of the seam, states the execution model with the invariants holding for every interleaving it admits and anything uncovered as an explicit assumption, and keeps one execution surface per slice; **only if it hand-rolls** it also names the component it rejected and why) |
 | Review comments that name a defect class ("all X", "class of Y", "same failure mode") | R13 (held-out/propertied proof that the class, not only the example, is fixed) |
 | All reviewer verdicts | R14 (checked-out PR-head and codebase-backed verification) |
 
@@ -275,6 +378,96 @@ example. Before LGTM on an R13-triggering finding, verify one of:
 
 ---
 
+## Review completion (the stopping rule)
+
+A review is **complete** when its matrix is dispositioned, and the review states
+that matrix:
+
+1. **Each acceptance criterion** in the Review Contract: met / not met /
+   could-not-determine, with checkable evidence -- `file:line` for a
+   code/content claim, or a named non-file artifact (command + output, CI
+   run/job, generated artifact, PR metadata) where the criterion is not about
+   source. Same evidence forms the binding reviewer workflow already accepts
+   (`AGENTS.md` 4a step 4); demanding `file:line` for a CI-status or
+   command-output criterion would either stall the matrix or buy a green tick
+   with an irrelevant citation.
+2. **Every rule, R1-R14**: pass / fail / not-verified / n-a-with-reason. The
+   path-trigger table sets how deeply each is probed, **not which appear**. A
+   behavior change under a path the table does not list still owes an R2
+   verdict; deriving matrix membership from the table would let exactly that
+   PR reach LGTM without anyone asking whether the new behavior has tests.
+3. **What was not verified**, listed with the reason.
+
+That is the whole standard for *stopping*. Completeness is never "no further
+case can be found" -- on an open surface no such point exists, so a reviewer
+holding that standard reports forever.
+
+**Complete is not the same as approved.** A matrix with honest `not-verified`
+or `could-not-determine` entries is a complete review -- the reviewer may stop
+-- but it is **not** an LGTM. LGTM requires every rule to be `pass` or a
+reasoned `n-a` (see the ladder above); an unresolved entry is an open question,
+so the verdict is *needs verification*. Conflating the two would let a review
+that verified almost nothing produce a green merge gate, which is the opposite of
+what a stopping rule is for.
+
+**Discharge is per head SHA.** A rule marked *pass* is discharged for **that
+head only**. A new head is new code: every rule re-opens on it freely, with no
+argument owed, because a defect the builder just introduced was not missed
+earlier -- it did not exist earlier. Requiring the reviewer to disown a
+previously-correct pass before reporting it would suppress exactly the
+regressions a re-review is for.
+
+The argument requirement applies only to re-opening a rule **on the same head**
+-- the reviewer revisiting their own verdict on unchanged code. There, state
+why the earlier discharge was wrong: the condition that was never actually met,
+not one more instance of a decision already reported. A discharge repeatedly
+overturned on unchanged code is evidence the rule was never dischargeable as
+scoped, which is a finding in itself.
+
+**Recording the gate: an unresolved entry is a BLOCKER-level finding.** The
+`claude-review` status has three states and "complete but not approved" is not a
+fourth one -- it maps onto the existing `failure`. A `not-verified` rule or a
+`could-not-determine` criterion is filed as a BLOCKER (`Rxx (BLOCKER) - not
+verified: <what, and why not>`), so `scripts/set_claude_review_status.py` takes
+`failure` and `success` is unreachable while anything is unresolved. This does
+**not** narrow `success` to LGTM: it keeps its established meaning of "no open
+BLOCKER", so a complete review carrying only non-blocking MAJOR/NIT notes is
+still `success`, exactly as `docs/REVIEWER_MERGE_GATE.md` and
+`scripts/set_claude_review_status.py` already define it. `pending` keeps its
+meaning -- a review still in progress -- and is not a parking space for a
+finished review with open questions.
+
+This is deliberately fail-closed. Unverified evidence is exactly what a merge
+gate exists to stop, so the burden is on resolving the entry or waiving it as a
+reasoned `n-a`, never on the gate to guess. The reviewer is still *done*: the
+matrix bounds the search, the verdict reports what it found, and neither forces
+the other.
+
+**Report the class, not the instance.** R13 obliges the *builder* to fix the
+class rather than the cited example. The same duty binds the *reviewer*: when
+two or more findings share one underlying decision, file **one** finding that
+names the decision, carrying the instances as illustrations. A finding whose own
+text opens "fresh evidence beyond the earlier `<X>` finding" is by its own words
+another instance of a decision already reported -- merge it into that finding
+instead of filing it separately. Where the decision keeps producing instances,
+the `AGENTS.md` 3k.2 breaker applies to the reviewer too: file the seam once and
+say so, rather than the next adjacent case.
+
+Nothing here licenses withholding a real defect. It changes how defects are
+*reported* -- once, at the level the fix has to happen anyway -- not whether.
+
+**Why:** measured on two PRs. #2195 drew 35 findings over 13 rounds; **18 of the
+35 (51%) explicitly declared themselves adjacent to an earlier finding**, and 27
+collapse into three decisions (source attestation 12, receipt lifecycle 12,
+preflight ordering 3). #2184 drew 33 over 14 rounds, collapsing into four
+decisions plus four distinct findings. Reported class-first, the same defects
+surface in roughly three rounds instead of thirteen, with none lost. Round 6 of
+#2195 is the cost of the alternative: it reverses round 5 ("reject ignored
+bytecode" became "stop rejecting bytecode created by the CLI itself"), which is
+what instance-by-instance boundary-shifting produces.
+
+---
+
 ## AI-finding reconciliation (mandatory before LGTM)
 
 External review bots (Codex, Copilot) post raw comments outside the
@@ -298,3 +491,64 @@ recur: a new `scripts/audit_*.py`, a new rule ID here, a new path trigger above,
 a line in the recurring-lapse checklist, or a Review Contract template change.
 **No escaped defect is fixed only once.** This is the reviewer-side mirror of
 the builder's `HARDENING.md` + recurring-lapse flywheel.
+
+**The ratchet releases too.** As written this section only ever adds, and the
+reviewer's mandate grows with it -- every added rule is another category to
+disposition on every future PR, forever, which is a cost paid by every
+subsequent review.
+
+**When retirement is considered:** on each addition. Adding a durable mechanism
+is the trigger to examine one existing candidate for removal, so the ratchet
+self-balances and there is no separate cadence, owner, or audit to maintain.
+**Record which candidate you examined** in `REVIEW_MISSES.md` with the outcome.
+The ledger's columns record the original miss, not the retirement pass, so this
+needs its own row shape -- add a **Retirement reviews** table beside the ledger
+with `Date | Mechanism | Last fired | Outcome (kept / removed) | Replacement
+coverage`. **The replacement is itself recorded as a tracked mechanism** in that table: a
+required-check test, its CI enrollment, or a structural or type invariant
+becomes the sole protection for that defect the moment the old gate goes, so it
+inherits the same retirement lifecycle instead of sitting outside the five kinds
+and rotting unreviewed. Retiring a gate onto untracked coverage only moves the
+unreviewed mechanism. Without a durable `Date` and `Mechanism` per pass, the
+least-recently-examined ordering below cannot be computed from repository state
+and the rotation degrades to whatever the current reviewer remembers.
+and take the least-recently-examined mechanism -- when every mechanism has been
+examined once the rotation simply starts again, so a retained one is re-checked
+against fresh evidence rather than becoming permanently ineligible. Keying
+eligibility off "has not fired since it was examined" would exempt exactly the
+quiet mechanisms this section is about, and after one full pass only newly added
+ones would ever be inspected. An unrecorded pick has the opposite failure: every
+addition re-examines the same load-bearing mechanism, re-states why it stays,
+and retires nothing while the pack keeps growing. All
+**five** mechanism kinds this section creates are in scope -- `scripts/audit_*`
+checks, rule IDs, path triggers, recurring-lapse lines, and Review Contract
+template additions -- not only the ones that are cheapest to delete.
+
+Retirement terms:
+
+- **Silence is not evidence of absence.** A mechanism that has not fired may be
+  the reason the failure stopped. So not-firing is a prompt to examine, never a
+  licence to delete: a mechanism that is the sole protection for a defect logged
+  in `REVIEW_MISSES.md` may be removed **only** by naming what now covers that
+  defect, and the replacement has to be able to **stop the escape** -- a broader
+  rule in this pack, a type or structural change that makes the defect
+  unrepresentable, or a test that runs in a **required** check. A test that no
+  required check executes cannot prevent anything, so it is not a replacement.
+  No enforcing replacement named, no removal; state why it stays.
+- **Consistently waived** is the stronger signal, because it means the mechanism
+  fires and reviewers keep judging it wrong. Re-scope it to what actually
+  blocks, or remove it.
+- **Removals are atomic across mirrors.** A rule ID, checklist line, or template
+  entry is referenced from more than one place -- `AGENTS.md` review guidelines,
+  the §2a verification template, the 4d audit checklist, and the completion
+  matrix all enumerate rules. A removal updates every mirror in the same change,
+  or it leaves the matrix demanding a verdict on a rule that no longer exists.
+- **Removals are recorded** in `REVIEW_MISSES.md` beside the defect that
+  prompted the addition, with the replacement coverage named, so a removal is a
+  decision with a paper trail and not an erosion.
+
+Nothing here weakens the "no escaped defect is fixed only once" rule -- an
+escaped defect still converts into mechanism. This governs what happens to that
+mechanism afterwards, so the pack stays the size a reviewer can actually apply.
+A checklist nobody can finish is the failure mode Review completion exists to
+prevent, and an unbounded ratchet recreates it one rule at a time.

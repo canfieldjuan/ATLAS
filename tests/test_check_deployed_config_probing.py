@@ -1,0 +1,418 @@
+from __future__ import annotations
+
+import importlib.util
+import sys
+from pathlib import Path
+
+import pytest
+
+_SPEC = importlib.util.spec_from_file_location(
+    "check_deployed_config_probing",
+    Path(__file__).resolve().parent.parent / "scripts" / "check_deployed_config_probing.py",
+)
+mod = importlib.util.module_from_spec(_SPEC)
+assert _SPEC and _SPEC.loader
+sys.modules[_SPEC.name] = mod
+_SPEC.loader.exec_module(mod)
+
+ENV_FALLBACK = "+timeout = os.getenv('ATLAS_TIMEOUT_SECONDS', '30')\n"
+PYTHON_OR_FALLBACK = '+workload = os.getenv("EXTRACTED_CAMPAIGN_LLM_WORKLOAD") or "draft"\n'
+REMOVED_ENV_FALLBACK = "-timeout = os.getenv('ATLAS_TIMEOUT_SECONDS', '30')\n+timeout = settings.timeout\n"
+TS_ENV_FALLBACK = "+const timeout = process.env.ATLAS_TIMEOUT_SECONDS || '30'\n"
+SHELL_ENV_FALLBACK = "+: ${ATLAS_TIMEOUT_SECONDS:=30}\n+echo \"$ATLAS_TIMEOUT_SECONDS\"\n"
+YAML_ENV_FALLBACK = "+      POSTGRES_USER: ${ATLAS_DB_USER:-atlas}\n"
+DOCKERFILE_ENV_FALLBACK = "+CMD exec uvicorn app:app --port ${PORT:-8000}\n"
+GUARD_CHANGE = "+def validate_context(payload):\n+    return payload.get('business_context_id') is not None\n"
+CLASS_CONTEXT_BOUNDARY_CHANGE = "@@ -4,3 +4,3 @@ class AdmissionGate:\n+        return bool(value)\n"
+BILLING_VALIDATOR_CHANGE = "+def _deflection_checkout_amount_is_valid(amount):\n+    return amount > 0\n"
+TWO_ENV_FALLBACKS = (
+    "+only_a = os.getenv('ONLY_A', 'one')\n"
+    "+unmentioned_b = os.getenv('UNMENTIONED_B', 'two')\n"
+)
+PLAN_WITH_PROBES = """
+### Deployed-config probing
+
+- Deployed/default config values: ATLAS_TIMEOUT_SECONDS=30 from render.yaml.
+- Explicit value probe: ATLAS_TIMEOUT_SECONDS=10 passes.
+- Absent value probe: ATLAS_TIMEOUT_SECONDS unset uses documented default.
+- Default-session/default-context probe: ATLAS_TIMEOUT_SECONDS default session rejects.
+- Side-effect ordering: no write occurs before ATLAS_TIMEOUT_SECONDS admission passes.
+"""
+SCAFFOLD_PLACEHOLDER = """
+### Deployed-config probing
+
+- Deployed/default config values: TODO/N/A.
+- Explicit value probe: TODO/N/A.
+- Absent value probe: TODO/N/A.
+- Default-session/default-context probe: TODO/N/A.
+- Side-effect ordering: TODO/N/A.
+"""
+
+
+def test_env_fallback_without_plan_probe_is_flagged() -> None:
+    findings = mod.scan_diff({"atlas_brain/config.py": ENV_FALLBACK}, [])
+    assert len(findings) == 1
+    assert mod.RULE in findings[0].reason
+
+
+def test_python_or_env_fallback_without_plan_probe_is_flagged() -> None:
+    findings = mod.scan_diff({"atlas_brain/runtime_config.py": PYTHON_OR_FALLBACK}, [])
+    assert len(findings) == 1
+
+
+def test_removed_env_fallback_without_plan_probe_is_flagged() -> None:
+    findings = mod.scan_diff({"atlas_brain/config.py": REMOVED_ENV_FALLBACK}, [])
+    assert len(findings) == 1
+
+
+def test_typescript_env_fallback_without_plan_probe_is_flagged() -> None:
+    findings = mod.scan_diff({"atlas-churn-ui/src/runtime.ts": TS_ENV_FALLBACK}, [])
+    assert len(findings) == 1
+
+
+def test_shell_env_fallback_without_plan_probe_is_flagged() -> None:
+    findings = mod.scan_diff({"scripts/render_env.sh": SHELL_ENV_FALLBACK}, [])
+    assert len(findings) == 1
+
+
+def test_yaml_env_fallback_without_plan_probe_is_flagged() -> None:
+    findings = mod.scan_diff({"docker-compose.yml": YAML_ENV_FALLBACK}, [])
+    assert len(findings) == 1
+
+
+def test_workflow_env_fallback_without_plan_probe_is_flagged() -> None:
+    findings = mod.scan_diff({".github/workflows/content_ops_deflection_report_ttl_purge.yml": YAML_ENV_FALLBACK}, [])
+    assert len(findings) == 1
+
+
+def test_dockerfile_env_fallback_without_plan_probe_is_flagged() -> None:
+    findings = mod.scan_diff({"Dockerfile.graphiti": DOCKERFILE_ENV_FALLBACK}, [])
+    assert len(findings) == 1
+
+
+def test_guard_change_without_plan_probe_is_flagged() -> None:
+    findings = mod.scan_diff({"atlas_brain/mcp/crm_server.py": GUARD_CHANGE}, [])
+    assert len(findings) == 1
+    assert findings[0].path == "atlas_brain/mcp/crm_server.py"
+
+
+def test_boundary_class_context_without_function_name_is_flagged() -> None:
+    findings = mod.scan_diff({"atlas_brain/services/admission.py": CLASS_CONTEXT_BOUNDARY_CHANGE}, [])
+    assert len(findings) == 1
+
+
+def test_is_valid_boundary_change_without_plan_probe_is_flagged() -> None:
+    findings = mod.scan_diff({"atlas_brain/api/billing.py": BILLING_VALIDATOR_CHANGE}, [])
+    assert len(findings) == 1
+
+
+def test_guard_change_with_plan_probe_is_clean() -> None:
+    findings = mod.scan_diff(
+        {"atlas_brain/mcp/crm_server.py": GUARD_CHANGE},
+        [PLAN_WITH_PROBES],
+    )
+    assert findings == []
+
+
+def test_non_guard_non_config_change_is_clean() -> None:
+    findings = mod.scan_diff({"atlas_brain/api/health.py": "+def ping():\n+    return {'ok': True}\n"}, [])
+    assert findings == []
+
+
+def test_substring_collision_path_is_clean() -> None:
+    findings = mod.scan_diff({"atlas_brain/services/b2b/enrichment_buyer_authority.py": "+VALUE = 1\n"}, [])
+    assert findings == []
+
+
+def test_process_detector_change_is_clean() -> None:
+    findings = mod.scan_diff({"scripts/check_deployed_config_probing.py": GUARD_CHANGE}, [])
+    assert findings == []
+
+
+def test_plan_requires_all_probe_markers() -> None:
+    incomplete = "### Deployed-config probing\n- Explicit value probe: done."
+    assert not mod.plan_has_deployed_config_probing(incomplete)
+    assert not mod.plan_has_deployed_config_probing(SCAFFOLD_PLACEHOLDER)
+    assert mod.plan_has_deployed_config_probing(PLAN_WITH_PROBES)
+
+
+def test_plan_rejects_unresolved_probe_dispositions() -> None:
+    unresolved = """
+### Deployed-config probing
+
+- Deployed/default config values: unknown.
+- Explicit value probe: pending before push.
+- Absent value probe: skipped.
+- Default-session/default-context probe: not verified.
+- Side-effect ordering: TBD.
+"""
+    assert not mod.plan_has_deployed_config_probing(unresolved)
+
+
+
+
+
+
+
+
+def test_plan_must_cover_every_changed_config_key() -> None:
+    findings = mod.scan_diff({"atlas_brain/config.py": TWO_ENV_FALLBACKS}, [PLAN_WITH_PROBES])
+    assert len(findings) == 1
+
+
+def test_config_key_coverage_uses_exact_deployed_config_section() -> None:
+    plan = PLAN_WITH_PROBES.replace("ATLAS_TIMEOUT_SECONDS", "ONLY_A")
+    plan += "\n## Deferred\n- FOOBAR coverage is unrelated.\n"
+    findings = mod.scan_diff({"atlas_brain/config.py": "+foo = os.getenv('FOO', 'x')\n"}, [plan])
+    assert len(findings) == 1
+
+
+def test_each_config_key_must_appear_in_each_probe_row() -> None:
+    plan = """
+### Deployed-config probing
+
+- Deployed/default config values: ONLY_A=1 from render.yaml; UNMENTIONED_B=2 from render.yaml.
+- Explicit value probe: ONLY_A=override passes.
+- Absent value probe: ONLY_A unset uses default.
+- Default-session/default-context probe: ONLY_A default session rejects.
+- Side-effect ordering: no write occurs before ONLY_A admission passes; UNMENTIONED_B stray mention.
+"""
+    findings = mod.scan_diff({"atlas_brain/config.py": TWO_ENV_FALLBACKS}, [plan])
+    assert len(findings) == 1
+
+
+def test_cli_entrypoint_warns_advisory_and_fails_strict(monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]) -> None:
+    monkeypatch.setattr(
+        mod,
+        "changed_lines",
+        lambda base: {"atlas_brain/config.py": ENV_FALLBACK},
+    )
+    monkeypatch.setattr(mod, "changed_plan_texts", lambda base: [])
+
+    assert mod.main(["--base", "ignored"]) == 0
+    out = capsys.readouterr().out
+    assert "::warning file=atlas_brain/config.py::" in out
+    assert mod.RULE in out
+
+    assert mod.main(["--base", "ignored", "--strict"]) == 1
+
+
+def test_git_failure_raises_system_exit() -> None:
+    with pytest.raises(SystemExit, match="git .* failed"):
+        mod._git(["rev-parse", "--verify", "definitely-not-a-ref-xyz"])
+
+
+# ---------------------------------------------------------------------------
+# Pydantic-Settings idiom (the repository's own config boundary)
+#
+# Atlas law forbids reading os.environ directly (CLAUDE.md: "Never read
+# `os.environ` directly -- add a typed field on the relevant BaseSettings
+# subclass"). A detector that recognized only os.getenv could not fire on a
+# single compliant Atlas guard, including the one behind the incident that
+# motivated this rule, so these cases pin the repository idiom.
+# ---------------------------------------------------------------------------
+
+SETTINGS_FALLBACK_INCIDENT = '''
+def _default_context() -> "str | None":
+    """Deployment-default tenant for read scoping."""
+    from ..config import settings
+
+    return settings.mcp.crm_default_business_context or None
+'''
+
+ALIASED_SETTINGS_FALLBACK = '''
+def resolve_token() -> str:
+    return funnel_settings.service_token or ""
+'''
+
+
+def test_settings_fallback_from_the_motivating_incident_is_detected() -> None:
+    """#2216: the deployed-default read whose explicit-vs-default divergence
+    claimed a legacy row on a rejected operation. Verbatim shape from
+    atlas_brain/mcp/crm_server.py."""
+    assert mod.CONFIG_FALLBACK_RE.search(SETTINGS_FALLBACK_INCIDENT)
+    assert mod.config_keys(SETTINGS_FALLBACK_INCIDENT) == {
+        "crm_default_business_context"
+    }
+
+
+def test_aliased_settings_module_fallback_is_detected() -> None:
+    """Per-profile settings objects (funnel_settings, invoicing_settings, ...)
+    are the same boundary under a different name."""
+    assert mod.CONFIG_FALLBACK_RE.search(ALIASED_SETTINGS_FALLBACK)
+    assert mod.config_keys(ALIASED_SETTINGS_FALLBACK) == {"service_token"}
+
+
+def test_getattr_settings_default_is_detected() -> None:
+    source = 'value = getattr(settings.mcp, "crm_default_business_context", None)'
+    assert mod.CONFIG_FALLBACK_RE.search(source)
+
+
+def test_non_config_or_default_stays_silent() -> None:
+    """The other direction: `or` on an ordinary local is not a config fallback,
+    so the detector must not fire on every default-valued expression."""
+    source = "def resolve(candidate):\n    return candidate.strip() or fallback\n"
+    assert not mod.CONFIG_FALLBACK_RE.search(source)
+    assert mod.config_keys(source) == set()
+
+
+def test_settings_read_without_a_fallback_stays_silent() -> None:
+    """A plain settings read decides nothing about unlisted values; only a
+    fallback expresses the deployed-vs-default divergence this rule probes."""
+    source = "def resolve():\n    return settings.mcp.crm_default_business_context\n"
+    assert not mod.CONFIG_FALLBACK_RE.search(source)
+
+
+def test_guard_touching_settings_fallback_requires_the_plan_section() -> None:
+    """End-to-end both directions on the repository idiom: a guard-shaped file
+    with a settings fallback and no deployed-config section warns; the same
+    diff with a complete section does not."""
+    diff = {"atlas_brain/mcp/crm_server.py": SETTINGS_FALLBACK_INCIDENT}
+    assert mod.scan_diff(diff, []) != []
+
+    plan = """### Deployed-config probing
+- Deployed/default config values: ATLAS_MCP_CRM_DEFAULT_BUSINESS_CONTEXT observed as effingham_maids from the deployed profile, source render.eom.yaml.
+- Explicit value probe: an explicit business_context_id passes and crm_default_business_context is unused.
+- Absent value probe: with crm_default_business_context unset the legacy unscoped read passes.
+- Default-session/default-context probe: a session carrying only crm_default_business_context rejects the EOM stage change.
+- Side-effect ordering: no write occurs before the crm_default_business_context admission passes.
+"""
+    assert mod.scan_diff(diff, [plan]) == []
+
+
+def test_wrapped_probe_disposition_is_read_whole() -> None:
+    """A disposition that wraps onto an indented continuation line is one
+    value. Reading only the first physical line reported a complete probe as
+    missing evidence -- a false warning on correct input, which is the
+    expensive direction for an advisory check."""
+    section = (
+        "- Explicit value probe: an explicit business_context_id\n"
+        "  passes and crm_default_business_context is unused.\n"
+        "- Absent value probe: unset crm_default_business_context passes.\n"
+    )
+    value = mod._marker_value(section, "explicit value probe")
+    assert value is not None
+    assert "crm_default_business_context is unused" in value
+    assert mod._is_dispositioned_value(value, marker="explicit value probe")
+
+
+def test_continuation_folding_does_not_swallow_the_next_marker() -> None:
+    """The other side: a following list item ends the value, so one probe
+    cannot absorb the next one and mask a missing disposition."""
+    section = (
+        "- Explicit value probe: explicit id passes.\n"
+        "- Absent value probe: TODO.\n"
+    )
+    assert mod._marker_value(section, "explicit value probe") == "explicit id passes"
+    assert not mod._is_dispositioned_value(
+        mod._marker_value(section, "absent value probe"), marker="absent value probe"
+    )
+
+
+def test_every_operand_of_a_multi_settings_fallback_is_extracted() -> None:
+    """An incomplete key set lets section_covers_config_keys() accept evidence
+    for one key while the other fallback goes unprobed."""
+    source = "value = settings.embedder_api_key or settings.openai_api_key\n"
+    assert mod.config_keys(source) == {"embedder_api_key", "openai_api_key"}
+
+
+def test_getattr_fallback_yields_its_literal_key_only() -> None:
+    """getattr names the key as a literal; the settings expression before it is
+    the container. Extracting no key at all made coverage vacuously true, and
+    extracting the container would demand evidence for a non-key."""
+    source = 'key = getattr(settings.provider_cost, "openrouter_api_key", "")\n'
+    assert mod.config_keys(source) == {"openrouter_api_key"}
+
+
+def test_plain_settings_read_contributes_no_keys() -> None:
+    """Keys are scoped to fallback spans, so an ordinary settings read nearby
+    cannot manufacture a key the plan is then required to probe."""
+    assert mod.config_keys("x = settings.mcp.unrelated_read\n") == set()
+
+
+def test_multi_operand_fallback_requires_evidence_for_each_key() -> None:
+    """End-to-end: a plan probing only the first operand no longer silences
+    the advisory."""
+    diff = {
+        "atlas_brain/services/guard.py":
+            "value = settings.embedder_api_key or settings.openai_api_key\n"
+    }
+    partial = """### Deployed-config probing
+- Deployed/default config values: embedder_api_key observed as unset from the deployed profile, source render.yaml.
+- Explicit value probe: an explicit embedder_api_key passes.
+- Absent value probe: absent embedder_api_key passes to the next operand.
+- Default-session/default-context probe: default session uses embedder_api_key and passes.
+- Side-effect ordering: no write occurs before the embedder_api_key admission passes.
+"""
+    assert mod.scan_diff(diff, [partial]) != []
+
+
+
+
+def test_compliant_plan_with_negated_ordering_passes_end_to_end() -> None:
+    plan = """### Deployed-config probing
+- Deployed/default config values: ATLAS_MCP_CRM_DEFAULT_BUSINESS_CONTEXT observed as effingham_maids, source render.eom.yaml.
+- Explicit value probe: an explicit crm_default_business_context passes.
+- Absent value probe: absent crm_default_business_context passes to the legacy read.
+- Default-session/default-context probe: a default session using crm_default_business_context rejects the stage change.
+- Side-effect ordering: no write before admission for crm_default_business_context.
+"""
+    assert mod.plan_has_deployed_config_probing(plan)
+
+
+# ---------------------------------------------------------------------------
+# Structural disposition contract.
+#
+# The check no longer judges whether a sentence "states evidence." That is an
+# open category, and recognizing it with word lists failed in the expensive
+# direction four times (`is deployed as X`, a wrapped continuation line,
+# `no write before admission`, and a multi-operand fallback) -- each a correct
+# disposition the recognizer rejected. The bounded facts below are what the
+# check now gates on; judging the writing is the reviewer's job.
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    "value",
+    [
+        "is deployed as effingham_maids",
+        "no write before admission",
+        "the absent probe passes to the legacy read",
+        "the default-session probe failed and is tracked in #2234",
+        "could-not-determine; the value lives only in the Render dashboard",
+    ],
+)
+def test_any_real_disposition_is_accepted(value: str) -> None:
+    """Every one of these is a genuine disposition. Several were rejected by
+    the removed word lists, warning on compliant plans."""
+    assert mod._is_dispositioned_value(value, marker="absent value probe")
+
+
+@pytest.mark.parametrize(
+    "value",
+    ["", "todo", "n/a", "none", "could-not-determine", "pending", "not verified"],
+)
+def test_exact_non_answers_are_rejected(value: str) -> None:
+    """The other direction: the closed denylist of explicit not-filled-in
+    markers still rejects. It is a denylist by design -- an unlisted phrasing
+    is accepted, which is silence, the cheap error for an advisory check."""
+    assert not mod._is_dispositioned_value(value, marker="absent value probe")
+
+
+def test_elaborated_non_answer_is_a_disposition() -> None:
+    """A bare placeholder is a non-answer; the same word plus a real statement
+    is an answer. Exact match rather than substring keeps that distinction
+    without judging the prose."""
+    assert not mod._is_dispositioned_value("could-not-determine", marker="deployed/default config values")
+    assert mod._is_dispositioned_value(
+        "could-not-determine; only the Render dashboard holds the deployed value",
+        marker="deployed/default config values",
+    )
+
+
+def test_no_wording_allowlist_remains() -> None:
+    """Regression guard on the design itself: reintroducing an approved-wording
+    pattern is what generated four false-positive rounds."""
+    source = (Path(__file__).resolve().parent.parent / "scripts" / "check_deployed_config_probing.py").read_text(encoding="utf-8")
+    assert "EVIDENCE_RE" not in source
+    assert "NEGATIVE_PROBE_RE" not in source

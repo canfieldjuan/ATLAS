@@ -1,10 +1,11 @@
 {
   "atlas_brain/tools/calendar.py": {
     "counts": {
+      "NO_RAISES_TESTS": 1,
       "SWALLOWED_EXCEPT": 2,
       "UNGUARDED_INDEX": 1
     },
-    "score": 12
+    "score": 15
   },
   "atlas_brain/tools/display.py": {
     "counts": {
@@ -14,10 +15,17 @@
   },
   "atlas_brain/tools/email.py": {
     "counts": {
+      "INTERNAL_MOCK": 1,
       "SWALLOWED_EXCEPT": 1,
       "UNGUARDED_INDEX": 2
     },
-    "score": 9
+    "score": 13
+  },
+  "atlas_brain/tools/gmail.py": {
+    "counts": {
+      "INTERNAL_MOCK": 1
+    },
+    "score": 4
   },
   "atlas_brain/tools/notify.py": {
     "counts": {
@@ -48,10 +56,10 @@
   },
   "atlas_brain/tools/scheduling.py": {
     "counts": {
-      "INTERNAL_MOCK": 1,
+      "INTERNAL_MOCK": 6,
       "UNGUARDED_INDEX": 6
     },
-    "score": 10
+    "score": 30
   },
   "atlas_brain/tools/security.py": {
     "counts": {

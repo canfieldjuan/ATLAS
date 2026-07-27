@@ -7,9 +7,12 @@ work:
 2. **Reviewer session** — audits each PR independently and posts a
    verdict (BLOCKER / MAJOR / NIT / LGTM). After the verdict, record it as the
    machine-readable `claude-review` gate for the reviewed head SHA with
-   `scripts/set_claude_review_status.py` (LGTM/no-blocker -> `success`, an open
-   BLOCKER -> `failure`); see `docs/REVIEWER_MERGE_GATE.md` for the two-gate
-   merge condition and its trust boundary.
+   `scripts/set_claude_review_status.py` (no open BLOCKER -> `success`, i.e. an
+   LGTM or only non-blocking MAJOR/NIT notes; an open BLOCKER -> `failure`).
+   Unresolved matrix entries are themselves filed as BLOCKERs, so a review with
+   open questions lands on `failure` without changing this mapping; see
+   `docs/REVIEWER_MERGE_GATE.md` for the two-gate merge condition and its trust
+   boundary.
 
 This file is the contract both sessions work from. The auditor
 (prompt at `AUDITOR_PROMPT.md`) handles cross-cutting integration /
@@ -36,15 +39,28 @@ R1–R14) and the PR's Review Contract. Review the same way the Reviewer session
   actually does from the code.
 - Every finding cites a rule ID (R1–R14) and `file:line`. Blockers must cite
   `file:line`. Classify each finding as **BLOCKER / MAJOR / NIT / LGTM** per the pack.
-- Check the PR's `### Review Contract`: does the diff meet its acceptance criteria,
-  and which rules do the changed paths trigger (the path-to-rule table in the pack)?
+- Check the PR's `### Review Contract`: does the diff meet its acceptance criteria?
+  Then disposition EVERY rule R1-R14 -- the path-to-rule table in the pack sets how
+  deeply each is probed, not which appear, so a rule the table does not trigger is
+  still recorded (Pass, or N-A with a reason).
 - Hunt the rule categories: requirements match (R1), test evidence (R2),
   security/authorization (R3), data & migration safety (R4), backward compatibility
   (R5), error handling & observability (R6), performance (R7), concurrency &
   idempotency (R8), frontend (R9), maintainability (R10), dependencies & config
   (R11), deployment safety & CI (R12). Fix the class, not the example (R13).
-- Lead with blockers. `LGTM` (all triggered rules pass, no open BLOCKER/MAJOR) is a
-  valid, complete result; do not manufacture NITs.
+- **Know when you are done** (Review completion, in the pack): a review is complete
+  when its matrix is dispositioned -- each acceptance criterion met / not met /
+  could-not-determine, EVERY rule R1-R14 pass / fail / not-verified / n-a-with-reason
+  (the path table sets probe depth, not which rules appear), and what you
+  did not verify listed with the reason. State that matrix. Completeness is never
+  "no further case can be found"; on an open surface that point does not exist.
+- **Report the class, not the instance.** R13 obliges the builder to fix the class
+  rather than the example; the same duty binds you. Findings that share one
+  underlying decision are **one** finding naming that decision, with the instances
+  as illustrations. If a finding of yours would open "fresh evidence beyond the
+  earlier X finding", it belongs merged into X, not filed separately.
+- Lead with blockers. `LGTM` (every rule R1-R14 Pass or reasoned N-A, no open
+  BLOCKER/MAJOR) is a valid, complete result; do not manufacture NITs.
 
 ---
 
@@ -96,7 +112,7 @@ Required sections, in this order:
 | **Scope (this PR)** | The narrow surface this PR touches. Start with an `Ownership lane: <lane>` line, then a `Slice phase: <phase>` line, then a numbered list of intent and a "Files touched" subsection. |
 | **Mechanism** | Short prose (and code stub if helpful) explaining *how* the change works -- enough that the reviewer doesn't have to reverse-engineer it from the diff. |
 | **Intentional** | Things that look wrong but aren't -- explicit trade-offs and rejected alternatives ("no `warnings.warn` shim because ..."). Saves reviewer cycles. |
-| **Deferred** | Things explicitly punted to a follow-up slice. Each item should name the future PR or describe what would unlock it. Include "Parked hardening: none" or list the `HARDENING.md` entries added by this slice. |
+| **Deferred** | Things explicitly punted to a follow-up slice. Each item should name the future PR or describe what would unlock it. State the slice's **parking predicate** -- which class of finding it parks by default -- then "Parked hardening: none" as a claim against that predicate, or list the `HARDENING.md` entries added by this slice. Bar and rationale: `docs/CURRENT_PRODUCT_DISCIPLINE.md`. |
 | **Verification** | The specific commands the builder ran locally + their pass counts. Reviewer reproduces. |
 | **Estimated diff size** | LOC budget; flag if approaching 400 LOC. |
 
@@ -105,10 +121,71 @@ Contract` subsection): acceptance criteria the reviewer checks one-by-one,
 affected surfaces, risk areas, and the reviewer rule IDs the changed paths
 trigger. The builder codes against it; the reviewer reviews against it. See
 `docs/REVIEWER_RULES.md` for the rule pack and the path-to-rule trigger table.
+If the plan or docs-only PR body adds or edits a decision-driving member set, or
+enumerates the behaviors / callers / fields / input shapes a change must cover,
+it carries the closure declaration defined canonically in
+`docs/GUARD_CLASS_CLOSURE.md`.
 For any new runtime, workflow, UI, report, billing, delivery, or public
 contract surface, the Review Contract must also name the reachability proof:
 the real entrypoint exercised and the observable output/state/artifact/job/gate
 result that proves the surface is wired.
+
+**An acceptance criterion names a claim about the code, or the evidence that
+settles it -- never a bare risk category.** The reviewer marks each criterion
+met / not met / could-not-determine, so a criterion has to point at something to
+look at: a `file:line`, a command and its output, a CI run/job, a generated
+artifact.
+
+Behavioral criteria are not merely allowed, they are **required** wherever this
+section asks for a reachability proof. "POST /api/v1/leads/intake returns 204 to
+a preflight" is a good criterion -- the command and its output settle it.
+
+A **bare risk category** is not a criterion. "No preflight-to-import TOCTOU",
+"no race conditions", "handles every malformed input" name a hazard with no
+referent -- there is nothing to look at. For a contract authored or materially
+revised after this rule lands, fail the contract authoring and ask for the code
+claim or settling evidence; do not hunt the category on the builder's behalf.
+
+Naming the evidence rescues it. *"No unmasked email addresses in the audit
+export -- settled by `tests/test_audit_export.py::test_masks_email_addresses`"*
+is a perfectly good criterion: it is risk-shaped, but it says where to look, and
+the reviewer marks it met or not from that evidence. The defect is the missing
+referent, not the word "no" and not the hazard framing.
+For concurrency or open-execution criteria, a sampled concurrent test is not
+settling evidence by itself: the criterion names the 3k.4 execution model and
+the property-level invariant that holds across every admitted interleaving, with
+tests used as evidence under that model.
+For open-input criteria, a sampled fixture list is not settling evidence by
+itself: the criterion names the 3k.3 evidence-gated mechanism -- the single
+choke-point decision, safe default for ambiguous/unrecognized/malformed input,
+and bounded recognizer evidence -- with tests used as evidence under that
+mechanism.
+For a hazard-labelled concern, name the code claim it translates into --
+*"the receipt is constructed before any fallible work"* -- and the reviewer has
+a place to look.
+
+This is deliberately the narrow rule. It does **not** require criteria to avoid
+universally-quantified claims: "no path after finalization changes the process
+outcome" quantifies over paths and is perfectly reviewable, because the paths
+are in the diff. The defect is naming a hazard with no referent, not breadth.
+
+**Risk areas are not criteria.** They name the hazards the reviewer probes and
+set probe depth; the completion matrix does not disposition them, so a risk area
+may name a category -- that is what the field is for. Where a slice is genuinely
+open-input or open-execution work, the *criterion* points at the mechanism that
+closes it (3k.3's evidence-gate, 3k.4's execution model) rather than at the
+hazard.
+
+**Legacy contracts.** This binds contracts authored or materially revised after
+it lands; a plan already open is not retroactively invalid, since root `plans/`
+holds other sessions' in-flight slices (3a.1). Do not retroactively
+re-disposition a legacy criterion merely because this new authoring rule would
+have asked for clearer wording. Review the legacy contract as authored: follow
+the evidence and diff it points to, disposition normally when that evidence
+settles it, and record `could-not-determine` only if the criterion still has no
+claim or evidence to settle after that review. What is grandfathered is the
+**authoring** finding -- on a pre-existing contract the reviewer records the
+phrasing as an advisory NIT rather than an R1 against the plan.
 
 ### 1b. PR body
 
@@ -232,7 +309,7 @@ levels:
 | Level | Meaning | Builder action |
 |---|---|---|
 | **BLOCKER** | Correctness, security, contract break, or CI red. Must fix before merge. | Fix or push back with rationale. |
-| **MAJOR** | Architectural / scope / pattern concern. Strong recommendation but not auto-block. | Fix in this PR if the fix is small; otherwise discuss before deferring. |
+| **MAJOR** | Architectural / scope / pattern concern, **or a proven defect whose blast radius does not warrant blocking**. Strong recommendation but not auto-block. | Fix in this PR if the fix is small; otherwise discuss before deferring. |
 | **NIT** | Style, naming, comment polish. Skip-worthy. | Apply if 1-line; skip otherwise. The reviewer should mark NITs as skip-worthy explicitly. |
 | **LGTM** | All gates green, R14 verified, no remaining concerns. | Merge. |
 
@@ -264,11 +341,14 @@ Intentional / Deferred / Verification -- matches AGENTS.md framework.
 Slice phase is named and matches the PR's scope. Parked hardening is
 named in Deferred or explicitly marked none.
 
-**Rule results (triggered rules plus R14, see docs/REVIEWER_RULES.md):**
-- R1 Requirements match: Pass/Fail/N-A
-- R2 Test evidence: Pass/Fail/N-A
-- R3 Security/auth ... R14 Codebase verification: Pass/Fail/N-A
-(List the rules the changed paths trigger, plus R14; cite file:line on any Fail.)
+**Rule results (EVERY rule R1-R14, see docs/REVIEWER_RULES.md):**
+- R1 Requirements match: Pass/Fail/Not-Verified/N-A
+- R2 Test evidence: Pass/Fail/Not-Verified/N-A
+- R3 Security/auth ... R14 Codebase verification: Pass/Fail/Not-Verified/N-A
+(List every rule R1-R14. The path-trigger table sets probe DEPTH, not which
+rules appear -- a rule the table does not trigger is still recorded, as Pass or
+as N-A with a reason. Cite file:line on any Fail. Not-Verified ends the search
+but blocks LGTM.)
 
 **boundary-probe:** <N-A, or what guard-shaped probe applied + result. Required
 before LGTM on guards, validators, caps, classifiers, gates, sanitizers,
@@ -992,6 +1072,14 @@ findings are formally-identical re-litigation of a green contract; here the
 findings are real, and each patch shifts the boundary and exposes the adjacent
 case.
 
+**Counting the trigger under squash-amend.** Builder branches are amended into a
+single commit (§1c), so "3 consecutive pushes" is not observable from the commit
+graph -- a branch showing one commit may have absorbed a dozen review cycles.
+Read the trigger as **3 consecutive review iterations** (a push and the review
+round it draws), not 3 commits. How to count those iterations mechanically is
+deliberately not specified here: it belongs in a `scripts/` checker with the
+fixture tests 3h/3i require, not as untested procedure in prose (see #2198).
+
 When this trips, the next push may NOT add another example-scoped patch (another
 token, regex, vocabulary row, or oracle fixture). It must carry a **Decision-Seam
 Analysis** in the plan / PR body:
@@ -1055,6 +1143,128 @@ slice for surface (secondary). The general form -- pick the structural solution
 over the enumerative one, which is also the smaller diff -- is why the
 evidence-gated rewrite shrank both the code and the thread count together.
 
+### 3k.4. Open-execution work: take the closed-surface component
+
+3k.1 and 3k.3 govern an open **input** space -- free text, producer-supplied
+structure. This section governs the other open space: **execution**. Here the
+unbounded axis is not the input but the schedule: thread and process
+interleavings, cancellation points, crash points, partial writes, descriptor and
+path races. A durability or concurrency protocol, a lock/lease, a cache with a
+coherence requirement, a rotation or retry state machine, and a crash-safe file
+replacement all live here. None of them is a guard, sanitizer, or classifier, so
+3k.1 and 3k.3 do not admit them by their own terms and an open-execution slice
+can reach review ungated. That is the gap this section closes.
+
+The failure signature is identical to the open-input one: each round reports a
+real, previously-unenumerated schedule; the only available fix is another
+special case; the PR body accretes those special cases as intent.
+
+1. **Prefer the component whose surface is already closed.** At the fork, take
+   the option whose failure cases someone else has already enumerated -- a
+   database transaction over a hand-rolled file lease, an existing lock service
+   over a bespoke `flock` protocol, an established library over a protocol
+   written for this slice. Durable, concurrent, per-tenant state is a row, not a
+   file. This is 3k.3's "pick the structural solution over the enumerative one"
+   applied to execution.
+2. **State the execution model, whichever option you took.** Selecting a
+   closed-surface component narrows the seam; it does not remove it. A component
+   supplies primitives, not your application invariant: a read-modify-write under
+   an insufficient isolation level still loses updates, and a lock service does
+   not define your crash or cancellation behavior. So every open-execution plan
+   states the model **its own surface** admits, and for a selected component
+   which of that component's guarantees close which part of the seam.
+
+   This section deliberately does **not** carry the list of failure modes to
+   cover. A fixed list is itself an enumeration, and the mode it omits is the one
+   that bites: interleaving, cancellation, crash, duplicate and out-of-order
+   delivery, and lease expiry with stale-holder fencing were each caught as a
+   real omission during this section's own review, one per round, and the next
+   one is on no list yet. Derive the modes from the surface instead. R8 in
+   `docs/REVIEWER_RULES.md` is the floor for anything that retries or redelivers;
+   a surface with leases, clocks, or partitions owes the modes those admit.
+
+   The invariants must hold for **every** interleaving the model admits; anything
+   not covered is stated as an explicit assumption, never just omitted. "Correct
+   under a bounded set of interleavings" is the enumerative answer in formal
+   dress -- the schedule left out of the set is the one that corrupts state. A
+   plan that instead lists schedules to handle -- "drain cancellation here",
+   "fsync there", "reject FIFOs" -- is the same enumeration without even the
+   model, and is rejected at the plan stage before it is written.
+3. **Name what you rejected -- only if you hand-rolled.** A slice that took the
+   closed-surface component has no rejected component to name and must not be
+   asked to invent one. A slice that hand-rolled states which component it
+   rejected and why it does not fit, on top of the model required by 2.
+4. **One execution surface per slice.** Do not land a concurrency/durability
+   subsystem inside a PR whose stated purpose is something else (a privacy
+   boundary, a feature, a migration). Split it: the feature ships against the
+   closed-surface component; the subsystem ships alone if it is genuinely needed.
+
+Reviewer enforcement lives in the open-execution row of the path-trigger table in
+`docs/REVIEWER_RULES.md` (R8 + R2). Like the guard row it is deliberately
+prose-only -- no path glob identifies a durability protocol, since the same
+module paths carry ordinary code -- so `scripts/audit_review_rules_triggered.py`
+surfaces it as an explicit advisory finding per 3g rather than deriving it. A
+plan whose slice is open-execution work and whose Review Contract omits R8 fails
+that surfacing. The reviewer checks 1, 2, and 4 for every such slice, and 3 only
+where the slice hand-rolled.
+
+**Why:** #2184 (scoped mailbox binding) is the case. Its stated purpose was an
+authorization boundary -- bind each CRM business context to one mailbox. It also
+grew `ScopedGmailTokenStore`, a 15-method cross-process durability protocol
+(`flock` lease, double fsync, `fstat`-verified no-follow descriptors,
+FIFO/socket/symlink rejection, monotonic generation ancestry with cycle
+detection, repeated-cancellation draining at three call sites) -- while
+the project already runs Postgres with a repository layer, where this state is a
+row and the ordering it hand-rolls is a transaction. (That alternative needs new
+schema: `atlas_brain/storage/repositories/business_context.py` writes a fixed
+business-profile column list with no token or binding field, and its `get` and
+`upsert` are separate pool operations, not one compare-and-swap. "Add a column
+and a transaction" is still a far smaller and better-tested surface than a
+bespoke cross-process lease -- but it is a build, not a drop-in.) Because none of
+this is a guard,
+3k.1/3k.3 never applied; it reached 12 bot rounds, and its *Intentional* section
+now records schedule patches as design intent ("the FIFO nonblocking regression
+starts its deadline only after the spawned reader has completed
+interpreter/import setup"). Review cost is not predicted by diff size --
+#2117 (+2813) took 3 rounds, #2181 (+2569) took 20 -- it is predicted by whether
+the slice hand-rolled an open surface.
+
+### 3k.5. Boundary-change enumeration
+
+Boundary-change enumeration: a diff changing a guard, validator, normalizer,
+resolver, router/classifier, or admission boundary must ship a plan-doc
+enumeration before code: replaced-path behaviors, guard-relevant fields, and
+every caller x input shape, each dispositioned.
+
+This applies when the diff changes the decision seam that admits, rejects,
+normalizes, resolves identity for, or routes an input. The plan's enumeration is
+the baton that survives compaction: list the old behavior being replaced, the
+fields that influence the guard or resolver verdict, and each caller/input shape
+that can reach each changed boundary; name each changed boundary path or seam and
+give that exact boundary entry its own complete disposition group. Mark every row
+preserved, intentionally changed, rejected, deferred, or not applicable. Do this
+before implementation, not as a post-review inventory.
+
+This rule does not weaken 3k.3. For open-input recognizers, enumerate the
+boundary surface and dispositions, then close the recognizer with the
+evidence-gated/defaulted mechanism 3k.3 requires rather than trying to enumerate
+the whole open category.
+
+### 3k.6. Deployed-config probing
+
+Deployed-config probing: guard PRs must state deployed/default config values and
+probe explicit, absent, and default-session shapes; no side effect before all
+admissions pass.
+
+This applies to guard, validator, resolver, and admission-boundary PRs, and to
+any diff that adds or changes an environment/config fallback. The plan names the
+runtime value the deployed system actually uses when that value is knowable from
+repo-owned deployment config; otherwise it says could-not-determine and names
+the source that would settle it. Verification includes the explicit value path,
+the absent-value path, and the default-session/default-context path. Any state
+claim, write, enqueue, mutation, or external side effect must sit after the
+admission decision that can still reject the request.
+
 ### 3l. PR fix mode (constrain the fix loop)
 
 A **fix loop** -- iterating on red CI or review comments on an already-open PR
@@ -1085,11 +1295,19 @@ the **allowed-files set**, and a **max-files budget**.
 
 ## 4. Reviewer workflow
 
-The reviewer's job is **not** "review the code" -- it is to **prove whether
-the PR satisfies its Review Contract and violates none of the rules in
-`docs/REVIEWER_RULES.md`.** Every finding cites a rule ID (R1-R14) and maps to
-a verdict level (BLOCKER / MAJOR / NIT). The rule matrix and AI reconciliation
-go in the §2a template.
+The reviewer's job is **not** "review the code" -- it is to **disposition the
+review matrix: every acceptance criterion in the PR's Review Contract, and every
+rule in `docs/REVIEWER_RULES.md`.** Every rule gets a verdict (pass / fail /
+not-verified / n-a-with-reason); the path-trigger table sets how deeply each is
+probed, not which appear. Every finding cites a rule ID (R1-R14) and maps to a
+verdict level (BLOCKER / MAJOR / NIT). The rule matrix and AI reconciliation go
+in the §2a template.
+
+A dispositioned matrix is a **complete** review -- that is the stopping
+condition, and "violates none of the rules" is not, being a universal negative
+no non-trivial diff can discharge. Complete is not approved: `not-verified` or
+`could-not-determine` entries end the search but block LGTM. See **Review
+completion** in the pack.
 
 ### 4a. Independent verification
 
@@ -1126,8 +1344,10 @@ reviewer should:
 4. Sweep for missed call sites with grep patterns more reliable than
    the PR's claim (multi-line constructions, kwargs split across
    lines, etc.).
-5. Walk the rules triggered by the changed paths (per the trigger table in
-   `docs/REVIEWER_RULES.md`) and record Pass/Fail/N-A for each.
+5. Walk EVERY rule R1-R14 and record Pass/Fail/Not-Verified/N-A for each. The
+   trigger table in `docs/REVIEWER_RULES.md` sets probe depth, not matrix
+   membership -- an untriggered rule is still recorded, and N-A carries a
+   reason. A Not-Verified entry ends the search but blocks LGTM.
 6. Apply R14: every claim used in the verdict must be backed by checked-out
    code, a caller/test/artifact spot-check, or a "not verified" note with the
    reason. **No LGTM from the PR story alone.**
@@ -1172,9 +1392,11 @@ Before LGTM, the reviewer confirms:
 - [ ] Plan doc has all 7 required sections, including the `### Review
       Contract` block in Scope (acceptance criteria, affected surfaces, risk
       areas, triggered rule IDs).
-- [ ] Every rule triggered by the changed paths (`docs/REVIEWER_RULES.md`)
-      is recorded Pass/Fail/N-A, and every Fail at BLOCKER level cites
-      file:line.
+- [ ] EVERY rule R1-R14 (`docs/REVIEWER_RULES.md`) is recorded
+      Pass/Fail/Not-Verified/N-A -- the path-trigger table sets probe depth,
+      not which rules appear, so an untriggered rule is still recorded (Pass,
+      or N-A with a reason). Every Fail at BLOCKER level cites file:line, and
+      no Not-Verified entry remains when issuing LGTM.
 - [ ] R14 is recorded Pass/Fail/N-A. The verdict names the reviewed head SHA,
       changed code inspected, caller/test/artifact spot-checks, and any claims
       not verified. No LGTM from PR/body/builder claims alone.
@@ -1347,7 +1569,8 @@ repository. A separate builder session opens PRs; you audit them
 and post one consolidated review per push with a verdict at:
 
 - BLOCKER: correctness, security, contract break, or CI red.
-- MAJOR: architectural / scope / pattern concern.
+- MAJOR: architectural / scope / pattern concern, or a proven defect
+  whose blast radius does not warrant blocking.
 - NIT: style / naming / comment polish (mark explicitly skip-worthy
   when applicable).
 - LGTM: all gates green, no remaining concerns.
@@ -1365,8 +1588,11 @@ defines:
 - Anti-patterns that should never appear in a builder PR.
 
 Read `docs/REVIEWER_RULES.md` before your first review. Your job is
-not "review the code" -- it is to prove the PR satisfies its Review
-Contract and violates none of R1-R14. Cite a rule ID on every finding.
+not "review the code" -- it is to disposition the review matrix: every
+acceptance criterion in the Review Contract, and every rule R1-R14, each
+pass / fail / not-verified / n-a-with-reason. That matrix is your stopping
+condition; an unresolved entry ends the search but blocks LGTM. Cite a
+rule ID on every finding.
 
 Read AUDITOR_PROMPT.md for the cross-cutting audit checks
 (canonical / integration / scope / debt). Apply both lenses.
@@ -1391,8 +1617,10 @@ For each PR you review:
 4. Sweep for missed call sites with grep patterns more reliable
    than the PR's claim (multi-line constructions, kwargs split
    across lines).
-5. Record Pass/Fail/N-A for each rule the changed paths trigger and for R14
-   (`docs/REVIEWER_RULES.md`); cite file:line on any Fail.
+5. Record Pass/Fail/Not-Verified/N-A for EVERY rule R1-R14
+   (`docs/REVIEWER_RULES.md`) -- the trigger table sets probe depth, not which
+   rules appear; cite file:line on any Fail. Do not LGTM with a Not-Verified
+   entry outstanding.
 6. Reconcile AI findings: do not LGTM until every Codex/Copilot
    finding is fixed or explicitly waived with a reason in the PR body.
 7. Confirm CI is green (extracted-checks x2 + Vercel) before

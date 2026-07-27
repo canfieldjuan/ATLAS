@@ -38,6 +38,8 @@ the same way a builder's repeated lapse gets front-loaded into the bootstrap.
 | _seed_ | _First real entry goes here. Until then this row documents the format._ | - | - | - | - |
 | 2026-06-09 | Repeated "fixed the cited example, not the class" pattern across blog-prose quality and raw-ticket clustering recall review rounds. | human/process | Review comments supplied concrete examples without making hardcoding unable to pass; builder did not self-probe with unseen same-class cases before claiming done. | R13 in `docs/REVIEWER_RULES.md` + AGENTS/bootstrap self-probe requirement for 5-10 unseen same-class cases. | reviewer + builder |
 | 2026-06-10 | Review conclusions accepted PR/story evidence instead of checked-out codebase evidence: a deep-dive issue set was pinned to a reviewer branch instead of `main`, and one repro used a transcribed function copy instead of the repository code. | human/process | Reviewer source of truth was implicit, so branch/head/codebase verification could be skipped without the verdict naming what was and was not verified. | Promoted -> R14 in `docs/REVIEWER_RULES.md` + AGENTS reviewer template/checklist/bootstrap requiring reviewed head, code/caller/test/artifact spot-checks, and "not verified" disclosure. | reviewer |
+| 2026-07-24 | The EOM Calendar demotion veto shipped without email parity even though its canonical importer already extracted and merged email identity. | human / AI / CI | Review followed the consumer's enumerated phone/address/name channels instead of reconciling every identity channel exposed by the canonical producer; source-shape tests could not reveal the omission. | `docs/SESSION_BOOTSTRAP.md` now requires producer/consumer field-parity enumeration and a real-producer behavioral test for identity guards. | reviewer + builder |
+| 2026-07-24 | EOM portal reconciliation was called fail-closed because a later portal-ID stamp rejected conflicts, even though the general provider could merge contact fields before that rejection. | human + AI review | Review followed the final guard and outcome label instead of tracing the first mutation across the provider boundary. | Builder recurring-lapse checklist now requires every rejection predicate to guard the first mutation; #2162 adds a zero-write race regression. | reviewer + builder |
 
 ## Lifecycle (so this stays a queue, not an archive)
 
@@ -45,3 +47,9 @@ Like `HARDENING.md`, this is a working queue. A row is "open" until its gate
 lands; once the gate is merged, mark the row resolved (or move resolved rows to
 a dated section). This file must inherit the same retirement discipline tracked
 in issue #1319 so it does not become write-only sediment.
+
+## Retirement reviews
+
+| Date | Mechanism | Last fired | Outcome (kept / removed) | Replacement coverage |
+|---|---|---|---|---|
+| 2026-07-26 | `docs/SESSION_BOOTSTRAP.md` producer/consumer field-parity enumeration for identity guards | 2026-07-24 EOM Calendar demotion veto miss | kept | No replacement: this remains the only durable reminder to trace canonical producer fields into consumer identity guards before review approval. |

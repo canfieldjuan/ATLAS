@@ -460,6 +460,7 @@ class SentEmail:
     resend_message_id: Optional[str] = None
     sent_at: datetime = field(default_factory=_utcnow)
     metadata: dict[str, Any] = field(default_factory=dict)
+    business_context_id: Optional[str] = None
 
     def to_dict(self) -> dict[str, Any]:
         return {

@@ -1934,5 +1934,21 @@
       "UNGUARDED_INDEX": 1
     },
     "score": 2
+  },
+  "scripts/sync_eom_portal_customers.py": {
+    "counts": {
+      "HEURISTIC_COMMENT": 1,
+      "NO_RAISES_TESTS": 1,
+      "SWALLOWED_EXCEPT": 1,
+      "UNGUARDED_INDEX": 3
+    },
+    "score": 15
+  },
+  "scripts/import_eom_customers_live.py": {
+    "counts": {
+      "UNGUARDED_INDEX": 7,
+      "WEAK_CONTRACT": 4
+    },
+    "score": 9
   }
 }

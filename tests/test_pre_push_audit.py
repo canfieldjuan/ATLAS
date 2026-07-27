@@ -217,7 +217,7 @@ ATLAS_MCP_CONTENT_OPS_MARKETER_VERIFY_PORT=8068
 ATLAS_MCP_INTELLIGENCE_PORT=8061
 ATLAS_MCP_B2B_CHURN_PORT=8062
 
-### CRM MCP Server (10 tools)
+### CRM MCP Server (15 tools)
 # SSE HTTP mode (port 8056)
 python -m atlas_brain.mcp.crm_server --sse
 {crm_tools}
@@ -266,7 +266,7 @@ python -m atlas_brain.mcp.scraper_server --sse
 python -m atlas_brain.mcp.memory_server --sse
 {memory_tools}
 """.format(
-        crm_tools=_tool_list(10),
+        crm_tools=_tool_list(15),
         email_tools=_tool_list(9),
         twilio_tools=_tool_list(10),
         calendar_tools=_tool_list(8),
@@ -308,7 +308,7 @@ class MCPConfig:
 def _write_mcp_servers(mcp_dir: Path) -> None:
     mcp_dir.mkdir(parents=True)
     counts = {
-        "crm_server.py": 10,
+        "crm_server.py": 15,
         "email_server.py": 9,
         "twilio_server.py": 10,
         "calendar_server.py": 8,

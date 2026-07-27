@@ -442,6 +442,7 @@ async def briefing_gate(body: GateRequest):
             contact_type="lead",
             source="briefing_gate",
             source_ref=vendor_name,
+            business_context_id="churnsignals",
         )
         contact_id = contact.get("id")
         if contact_id:

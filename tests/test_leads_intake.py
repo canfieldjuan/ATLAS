@@ -94,8 +94,16 @@ def _crm(inserted: bool = True, existing: list | None = None):
 
 def _email_provider(success: bool = True):
     provider = MagicMock()
-    provider.send = AsyncMock(return_value={"success": success})
+    provider.send = AsyncMock(
+        return_value={"success": success, "message_id": "provider-message-1"}
+    )
     return provider
+
+
+def _email_history():
+    history = MagicMock()
+    history.create = AsyncMock(return_value=MagicMock())
+    return history
 
 
 # ---------------------------------------------------------------------------
@@ -116,6 +124,8 @@ async def test_contact_stamped_with_eom_tenant_and_web_source():
     assert kwargs["source"] == "web"
     assert kwargs["source_ref"] == "website_estimate_form"
     assert kwargs["tags"] == ["website", "estimate_request"]
+    assert kwargs["lead_stage"] == "new"
+    assert kwargs["preserve_existing"] is True
     assert kwargs["email"] == "jane@example.com"
     assert kwargs["phone"] == "2175550100"  # digits-only normalization
 
@@ -141,6 +151,45 @@ async def test_interaction_summary_keeps_all_fields_untruncated():
     assert "2400" in summary
     assert LONG_MESSAGE in summary  # full message, no truncation
     assert kwargs["metadata"]["square_feet"] == "2400"
+
+
+@pytest.mark.asyncio
+async def test_intake_persists_attribution_as_interaction_evidence():
+    crm, provider = _crm(), _email_provider()
+    await _process_lead_intake(_payload(
+        utm_source="google",
+        utm_medium="cpc",
+        utm_campaign="spring-residential",
+        utm_term="house cleaning",
+        utm_content="ad-3",
+        gclid="gclid-1",
+        gbraid="gbraid-1",
+        wbraid="wbraid-1",
+        landing_path="/house-cleaning-services/?utm_source=google",
+        referrer="https://www.google.com/",
+    ), crm=crm, email_provider=provider)
+
+    assert crm.log_interaction.await_args.kwargs["metadata"]["attribution"] == {
+        "utm_source": "google",
+        "utm_medium": "cpc",
+        "utm_campaign": "spring-residential",
+        "utm_term": "house cleaning",
+        "utm_content": "ad-3",
+        "gclid": "gclid-1",
+        "gbraid": "gbraid-1",
+        "wbraid": "wbraid-1",
+        "landing_path": "/house-cleaning-services/?utm_source=google",
+        "referrer": "https://www.google.com/",
+    }
+
+
+@pytest.mark.asyncio
+async def test_intake_omits_empty_attribution_metadata():
+    crm, provider = _crm(), _email_provider()
+
+    await _process_lead_intake(_payload(), crm=crm, email_provider=provider)
+
+    assert "attribution" not in crm.log_interaction.await_args.kwargs["metadata"]
 
 
 # ---------------------------------------------------------------------------
@@ -223,6 +272,22 @@ async def test_missing_email_and_phone_rejected():
 
 
 @pytest.mark.asyncio
+async def test_partial_phone_without_email_rejected_before_crm_or_email_side_effects():
+    crm, provider = _crm(), _email_provider()
+
+    with pytest.raises(LeadValidationError, match="at least 10 digits"):
+        await _process_lead_intake(
+            _payload(email="", phone="5550100"),
+            crm=crm,
+            email_provider=provider,
+        )
+
+    crm.find_or_create_contact.assert_not_awaited()
+    crm.log_interaction.assert_not_awaited()
+    provider.send.assert_not_awaited()
+
+
+@pytest.mark.asyncio
 async def test_malformed_email_rejected():
     crm, provider = _crm(), _email_provider()
     with pytest.raises(LeadValidationError):
@@ -245,6 +310,88 @@ async def test_acknowledgement_send_wiring_reply_to_business_email():
     assert send_kwargs["to"] == ["jane@example.com"]
     assert send_kwargs["reply_to"] == "info@effinghamofficemaids.com"
     assert "estimate request" in send_kwargs["subject"].lower()
+    # Routed through Resend so it originates from the verified brand domain
+    # sender (info@...) rather than the Gmail account.
+    assert send_kwargs["provider"] == "resend"
+    assert send_kwargs["from_email"].startswith("Effingham Office Maids")
+    assert "info@effinghamofficemaids.com" in send_kwargs["from_email"]
+
+
+@pytest.mark.asyncio
+async def test_successful_acknowledgement_records_tenant_history():
+    crm, provider, history = _crm(), _email_provider(), _email_history()
+
+    result = await _process_lead_intake(
+        _payload(),
+        crm=crm,
+        email_provider=provider,
+        email_history=history,
+    )
+
+    assert result["email_sent"] is True
+    history.create.assert_awaited_once()
+    kwargs = history.create.await_args.kwargs
+    assert kwargs["to_addresses"] == ["jane@example.com"]
+    assert kwargs["business_context_id"] == EOM_BUSINESS_CONTEXT_ID
+    assert kwargs["template_type"] == "request_acknowledgement"
+    assert kwargs["resend_message_id"] == "provider-message-1"
+    assert kwargs["metadata"] == {
+        "source": "website_estimate_form",
+        "contact_id": "c-123",
+    }
+
+
+@pytest.mark.asyncio
+async def test_refused_acknowledgement_does_not_record_history():
+    crm, provider, history = _crm(), _email_provider(False), _email_history()
+
+    result = await _process_lead_intake(
+        _payload(),
+        crm=crm,
+        email_provider=provider,
+        email_history=history,
+    )
+
+    assert result["email_sent"] is False
+    history.create.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_history_failure_does_not_flip_successful_delivery():
+    crm, provider, history = _crm(), _email_provider(), _email_history()
+    history.create.side_effect = RuntimeError("history unavailable")
+
+    result = await _process_lead_intake(
+        _payload(),
+        crm=crm,
+        email_provider=provider,
+        email_history=history,
+    )
+
+    assert result == {"success": True, "email_sent": True}
+    provider.send.assert_awaited_once()
+    history.create.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("payload", "inserted"),
+    [
+        (_payload(website="spam"), True),
+        (_payload(), False),
+    ],
+)
+async def test_non_send_paths_do_not_record_history(payload, inserted):
+    crm, provider, history = _crm(inserted=inserted), _email_provider(), _email_history()
+
+    await _process_lead_intake(
+        payload,
+        crm=crm,
+        email_provider=provider,
+        email_history=history,
+    )
+
+    history.create.assert_not_awaited()
 
 
 def test_template_guardrails_no_prices_no_quotes_correct_phone():
@@ -275,15 +422,20 @@ def test_template_omits_request_line_when_fields_empty():
 
 @pytest.mark.asyncio
 async def test_daily_cap_blocks_before_any_side_effect():
-    crm, provider = _crm(), _email_provider()
+    crm, provider, history = _crm(), _email_provider(), _email_history()
     counter = AsyncMock(return_value=MAX_DAILY_SUBMISSIONS)
     with pytest.raises(LeadRateLimitedError):
         await _process_lead_intake(
-            _payload(), crm=crm, email_provider=provider, daily_count=counter
+            _payload(),
+            crm=crm,
+            email_provider=provider,
+            daily_count=counter,
+            email_history=history,
         )
     crm.find_or_create_contact.assert_not_awaited()
     crm.log_interaction.assert_not_awaited()
     provider.send.assert_not_awaited()
+    history.create.assert_not_awaited()
 
 
 @pytest.mark.asyncio
@@ -333,6 +485,8 @@ def _provider_with(matches):
     provider = DatabaseCRMProvider.__new__(DatabaseCRMProvider)
     provider.search_contacts = AsyncMock(side_effect=_search)
     provider.update_contact = AsyncMock(side_effect=lambda cid, u: {"id": cid, **u})
+    provider.claim_contact = AsyncMock(
+        side_effect=lambda cid, ctx: {"id": cid, "business_context_id": ctx})
     return provider
 
 
@@ -374,8 +528,8 @@ async def test_create_contact_dedupe_claims_null_context_contact():
          "business_context_id": "effingham_maids"}
     )
     assert result["id"] == "legacy-1"
-    merged = provider.update_contact.await_args.args[1]
-    assert merged["business_context_id"] == "effingham_maids"  # claimed
+    # Claimed via compare-and-set (round-5 of #2157), not a blind merge
+    provider.claim_contact.assert_awaited_once_with("legacy-1", "effingham_maids")
 
 
 @pytest.mark.asyncio
@@ -407,6 +561,7 @@ def test_route_smoke_mounted_path_statuses():
     app.include_router(leads_mod.router, prefix="/api/v1")
     app.dependency_overrides[leads_mod._crm_dependency] = lambda: _crm()
     app.dependency_overrides[leads_mod._email_dependency] = lambda: _email_provider()
+    app.dependency_overrides[leads_mod._email_history_dependency] = _email_history
     app.dependency_overrides[leads_mod._daily_count_dependency] = lambda: fake_count
 
     async def fake_volume():
@@ -456,6 +611,25 @@ async def test_existing_eom_contact_not_mutated_or_downgraded():
 
 
 @pytest.mark.asyncio
+async def test_repeat_intake_does_not_reset_existing_lead_pipeline():
+    existing = [{
+        "id": "lead-9",
+        "contact_type": "lead",
+        "business_context_id": EOM_BUSINESS_CONTEXT_ID,
+        "lead_stage": "qualified",
+        "lead_owner": "Juan",
+        "next_follow_up_at": "2026-07-24T15:00:00+00:00",
+    }]
+    crm, provider = _crm(existing=existing), _email_provider()
+
+    await _process_lead_intake(_payload(), crm=crm, email_provider=provider)
+
+    crm.find_or_create_contact.assert_not_awaited()
+    crm.update_contact.assert_not_called()
+    assert crm.log_interaction.call_args.kwargs["contact_id"] == "lead-9"
+
+
+@pytest.mark.asyncio
 async def test_throttle_receives_digit_normalized_phone():
     crm, provider = _crm(), _email_provider()
     counter = AsyncMock(return_value=0)
@@ -468,15 +642,39 @@ async def test_throttle_receives_digit_normalized_phone():
 
 @pytest.mark.asyncio
 async def test_global_ack_volume_cap_skips_email_but_captures_lead():
-    crm, provider = _crm(), _email_provider()
+    crm, provider, history = _crm(), _email_provider(), _email_history()
     volume = AsyncMock(return_value=1000)
     result = await _process_lead_intake(
-        _payload(), crm=crm, email_provider=provider, ack_volume=volume
+        _payload(),
+        crm=crm,
+        email_provider=provider,
+        ack_volume=volume,
+        email_history=history,
     )
     assert result["success"] is True
     assert result["email_sent"] is False
     provider.send.assert_not_awaited()
+    history.create.assert_not_awaited()
     crm.log_interaction.assert_awaited()  # lead capture unaffected
+
+
+@pytest.mark.asyncio
+async def test_disabled_acknowledgement_does_not_record_history(monkeypatch):
+    from atlas_brain.config import settings
+
+    monkeypatch.setattr(settings.email, "enabled", False)
+    crm, provider, history = _crm(), _email_provider(), _email_history()
+
+    result = await _process_lead_intake(
+        _payload(),
+        crm=crm,
+        email_provider=provider,
+        email_history=history,
+    )
+
+    assert result["email_sent"] is False
+    provider.send.assert_not_awaited()
+    history.create.assert_not_awaited()
 
 
 @pytest.mark.asyncio
@@ -686,3 +884,89 @@ async def test_callback_channels_prepended_within_dedupe_prefix():
     )
     summary = crm.log_interaction.call_args.kwargs["summary"]
     assert summary.startswith("Callback: jane@example.com, 2175550100")
+
+
+# ---------------------------------------------------------------------------
+# 8. Resend provider routing (send lead acknowledgement from info@ via Resend)
+# ---------------------------------------------------------------------------
+
+
+class _FakeResendResponse:
+    def raise_for_status(self):
+        return None
+
+    def json(self):
+        return {"id": "resend-msg-1"}
+
+
+class _FakeHTTPClient:
+    """Stand-in for httpx.AsyncClient -- the external Resend transport."""
+
+    posted: list = []
+
+    def __init__(self, *args, **kwargs):
+        pass
+
+    async def post(self, url, json=None, headers=None):
+        type(self).posted.append(json)
+        return _FakeResendResponse()
+
+    async def aclose(self):
+        return None
+
+
+@pytest.mark.asyncio
+async def test_forced_resend_routes_through_real_stack(monkeypatch):
+    """Integration through the REAL Composite -> ResendEmailProvider -> EmailTool
+    path, mocking ONLY the external Gmail and Resend transports (Codex R2). A
+    forced send must select the Resend transport from info@ -- and would fail if
+    ResendEmailProvider stopped stamping force_resend or EmailTool ignored it
+    (production would then route the acknowledgement back through Gmail). A
+    default send must still select Gmail (unchanged for every other caller)."""
+    from atlas_brain.services import google_oauth
+    from atlas_brain.services.email_provider import CompositeEmailProvider
+    from atlas_brain.tools import email as email_mod
+    from atlas_brain.tools import gmail as gmail_mod
+    from atlas_brain.tools.email import EmailTool
+
+    # External Resend transport: give a FRESH EmailTool a fake HTTP client so the
+    # Resend send never touches the network -- hermetic under any run order (the
+    # shared singleton can be left holding a real httpx client + real key by an
+    # earlier test, which is why patching httpx/_client on it is not enough).
+    # ResendEmailProvider.send re-imports email_tool from the module, so swapping
+    # the module attribute makes it use our controlled instance.
+    _FakeHTTPClient.posted = []
+    fresh_tool = EmailTool()
+    monkeypatch.setattr(fresh_tool, "_client", _FakeHTTPClient())
+    monkeypatch.setattr(fresh_tool._config, "enabled", True)
+    monkeypatch.setattr(fresh_tool._config, "api_key", "re_test_key")
+    monkeypatch.setattr(fresh_tool._config, "gmail_send_enabled", True)
+    monkeypatch.setattr(email_mod, "email_tool", fresh_tool)
+
+    # External Gmail transport: credentials present + a transport spy, so a
+    # dropped force_resend would visibly select Gmail here.
+    store = MagicMock()
+    store.get_credentials = MagicMock(return_value="cred")
+    monkeypatch.setattr(google_oauth, "get_google_token_store", lambda: store)
+    gmail_transport = MagicMock()
+    gmail_transport.send = AsyncMock(return_value={"id": "gmail-1", "threadId": "t"})
+    monkeypatch.setattr(gmail_mod, "get_gmail_transport", lambda: gmail_transport)
+
+    comp = CompositeEmailProvider()  # real GmailEmailProvider + ResendEmailProvider
+
+    forced = await comp.send(
+        to=["x@example.com"],
+        subject="s",
+        body="b",
+        from_email="info@effinghamofficemaids.com",
+        provider="resend",
+    )
+    assert forced["transport"] == "resend"
+    gmail_transport.send.assert_not_called()
+    assert len(_FakeHTTPClient.posted) == 1
+    assert _FakeHTTPClient.posted[0]["from"] == "info@effinghamofficemaids.com"
+
+    # Default send: real stack still prefers Gmail; Resend transport not touched.
+    await comp.send(to=["x@example.com"], subject="s", body="b")
+    gmail_transport.send.assert_awaited_once()
+    assert len(_FakeHTTPClient.posted) == 1

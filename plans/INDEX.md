@@ -1,6 +1,6 @@
 # Plan archive index
 
-1406 archived plan doc(s). Merged plan docs are moved under `archive/` and listed below; once the archive sweep has run, the `plans/` root holds only in-flight slices.
+1411 archived plan doc(s). Merged plan docs are moved under `archive/` and listed below; once the archive sweep has run, the `plans/` root holds only in-flight slices.
 
 - [PR-ASR-Pip-Audit-Egg-Fragment](archive/PR-ASR-Pip-Audit-Egg-Fragment.md) - lane: security/workflow | phase: Production hardening
 - [PR-ASR-Requirements-Audit-Pin](archive/PR-ASR-Requirements-Audit-Pin.md) - lane: security/workflow | phase: Production hardening
@@ -978,6 +978,11 @@
 - [PR-Diff-Budget-Required-Check](archive/PR-Diff-Budget-Required-Check.md) - lane: Workflow/process | phase: Vertical slice
 - [PR-Docker-Baseimage-Security-Bumps](archive/PR-Docker-Baseimage-Security-Bumps.md) - lane: infra/docker-base-images | phase: Production hardening
 - [PR-Docs-Preserve-Product-Audit-Notes](archive/PR-Docs-Preserve-Product-Audit-Notes.md) - lane: docs/product-history-preservation | phase: Workflow/process
+- [PR-EOM-API-Contacts-Auth](archive/PR-EOM-API-Contacts-Auth.md) - lane: eom-crm/api-auth | phase: Production hardening
+- [PR-EOM-Complaints-Tracking](archive/PR-EOM-Complaints-Tracking.md) - lane: eom-crm/complaints | phase: Vertical slice
+- [PR-EOM-Lead-Pipeline](archive/PR-EOM-Lead-Pipeline.md) - lane: eom-crm/lead-funnel | phase: Vertical slice
+- [PR-EOM-Mailbox-Context-Binding](archive/PR-EOM-Mailbox-Context-Binding.md) - lane: eom-crm/email-tenancy | phase: Production hardening
+- [PR-EOM-Recurring-Appointments](archive/PR-EOM-Recurring-Appointments.md) - lane: eom-crm/appointments | phase: Vertical slice
 - [PR-ESLint-10-Web-Batch](archive/PR-ESLint-10-Web-Batch.md) - lane: security/dependencies | phase: Production hardening
 - [PR-Evaluator-Pattern-Precision-Contract](archive/PR-Evaluator-Pattern-Precision-Contract.md) - lane: workflow/process | phase: Workflow/process
 - [PR-Extracted-CI-Enrollment-Checker-Evaluator-Patterns](archive/PR-Extracted-CI-Enrollment-Checker-Evaluator-Patterns.md) - lane: content-ops/faq-search | phase: Functional validation.
@@ -1401,6 +1406,7 @@
 - [PR-Trusted-Base-Pre-Push-Audit](archive/PR-Trusted-Base-Pre-Push-Audit.md) - lane: workflow/process | phase: Vertical slice
 - [PR-TypeScript-Major-Batch](archive/PR-TypeScript-Major-Batch.md) - lane: security/dependencies | phase: Production hardening
 - [PR-UI-Test-Enrollment-Audit](archive/PR-UI-Test-Enrollment-Audit.md) - lane: intel-ui/ci-enrollment | phase: Workflow/process
+- [PR-Unit-Gate-Impacted-Selection](archive/PR-Unit-Gate-Impacted-Selection.md) - lane: ci-gates | phase: vertical slice
 - [PR-Video-Stream-Processor-Python-3-13-Base-Image](archive/PR-Video-Stream-Processor-Python-3-13-Base-Image.md) - lane: video-processing/stream-worker-runtime | phase: Production hardening
 - [PR-Watcher-Safety-Handoff](archive/PR-Watcher-Safety-Handoff.md) - lane: workflow/autonomous-ci-cd-map | phase: Workflow/process
 - [PR-Workflow-Action-Pin-OIDC-Audit](archive/PR-Workflow-Action-Pin-OIDC-Audit.md) - lane: security/workflow | phase: Production hardening

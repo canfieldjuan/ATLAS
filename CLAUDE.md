@@ -378,6 +378,30 @@ ATLAS_EMAIL_IMAP_USERNAME=
 ATLAS_EMAIL_IMAP_PASSWORD=         # For Gmail: 16-char app password (myaccount.google.com/apppasswords)
 ATLAS_EMAIL_IMAP_SSL=true
 ATLAS_EMAIL_IMAP_MAILBOX=INBOX
+
+# Scoped CRM inbox reads require an explicit JSON binding per business context.
+# IMAP credentials live in the binding; Gmail bindings are secret-free and use
+# the encrypted scoped_mailbox_credentials row for that exact context.
+ATLAS_EMAIL_INBOX_CONTEXT_BINDINGS='{"effingham_maids":{"provider":"imap","imap_host":"imap.gmail.com","imap_username":"office@example.com","imap_password":"app-password"}}'
+# Gmail alternative (requires a KEK and a repository-provisioned credential row):
+# ATLAS_EMAIL_INBOX_CONTEXT_BINDINGS='{"effingham_maids":{"provider":"gmail"}}'
+# ATLAS_SAAS_BYOK_ENCRYPTION_KEK=<kid:fernet-key>
+# DEPLOYMENT ORDER (the gmail binding is NOT backward compatible):
+#   deploy  -> deploy this code FIRST, then set provider="gmail" in the binding.
+#   rollback-> REMOVE the gmail binding from the environment BEFORE rolling back.
+# Older builds declare the binding provider as Literal["imap"] and construct
+# Settings() at import time, so a gmail binding left in place makes the previous
+# binary fail configuration validation and refuse to start. An imap binding is
+# accepted by both, so it needs no ordering.
+#
+# The scoped_mailbox_credentials table (migration 350) is applied at startup:
+# the main app runs the migration chain, and the standalone CRM MCP server
+# (python -m atlas_brain.mcp.crm_server) applies exactly this one migration as
+# its prerequisite. It does NOT run the whole chain -- migrations from 076 on
+# reference an out-of-band product_metadata table that no migration creates, so
+# a fresh database cannot apply the full set. If that prerequisite fails, the
+# CRM server still starts and every other CRM tool works; scoped Gmail reads
+# stay fail-closed (omitted) until it is applied.
 ```
 
 ## NocoDB CRM Setup
@@ -413,7 +437,7 @@ read-only invoicing OAuth pattern, Tailscale well-known route shape, discovery
 and e2e smoke requirements, and operator launcher checklist for future MCP
 servers.
 
-### CRM MCP Server (10 tools)
+### CRM MCP Server (15 tools)
 ```bash
 # stdio mode (Claude Desktop / Cursor)
 python -m atlas_brain.mcp.crm_server
@@ -424,7 +448,22 @@ python -m atlas_brain.mcp.crm_server --sse
 
 Tools: `search_contacts`, `get_contact`, `create_contact`, `update_contact`,
 `delete_contact`, `list_contacts`, `log_interaction`, `get_interactions`,
-`get_contact_appointments`, `get_customer_context`
+`update_contact_appointment_operations`, `get_contact_appointments`,
+`get_customer_context`,
+`open_customer_service_ticket`, `list_customer_service_tickets`,
+`update_customer_service_ticket`, `close_customer_service_ticket`
+
+Scoped get_customer_context inbox history is fail-closed. Configure
+ATLAS_EMAIL_INBOX_CONTEXT_BINDINGS as a JSON object keyed by the exact CRM
+business_context_id; an unmapped context omits inbox_emails without opening
+the global IMAP/Gmail account. Provider "imap" uses the imap_* fields shown
+above. Provider "gmail" accepts no inline secret fields: provision its client
+ID, client secret, and refresh token through
+`ScopedMailboxCredentialRepository.bind_gmail` in a protected operator
+runtime. Atlas encrypts that exact-context row with
+`ATLAS_SAAS_BYOK_ENCRYPTION_KEK`, serializes refresh-token rotation in
+PostgreSQL, and treats a missing, undecryptable, or revoked row as omitted.
+The global Gmail/Calendar token file remains separate and unchanged.
 
 ### Email MCP Server (9 tools)
 ```bash
