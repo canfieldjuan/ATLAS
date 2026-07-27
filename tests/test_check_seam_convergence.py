@@ -12,6 +12,7 @@ and the replay test uses the seam-only counts observed on ATLAS #2181.
 """
 from __future__ import annotations
 
+import json
 import importlib.util
 import sys
 from pathlib import Path
@@ -394,3 +395,34 @@ def test_plan_texts_rejects_paths_outside_plans(tmp_path) -> None:
     (tmp_path / "secret.md").write_text("decision-seam-analysis: fix svc/classifier.py\n", encoding="utf-8")
     assert mod._plan_texts(tmp_path, "Plan: plans/../secret.md\n") == []
     assert mod._plan_texts(tmp_path, "Plan: plans/PR-Missing.md\n") == []
+
+
+def test_annotation_emits_a_marker_the_detector_accepts() -> None:
+    """The annotation is the only place an author learns the marker's shape, so
+    a round trip failure here means the instruction is unfollowable."""
+    import re as _re
+
+    rounds = rounds_from([3, 3, 3])
+    text = mod.annotation("svc/classifier.py", rounds)
+    found = _re.search(r"decision-seam-analysis: fix \S+", text)
+    assert found is not None, "annotation must show the exact marker line"
+    assert mod.recorded_seam_analysis("svc/classifier.py", found.group(0)) == "fix"
+
+
+@pytest.mark.parametrize(
+    "payload",
+    [
+        {},
+        {"data": None},
+        {"data": {"repository": None}},
+        {"data": {"repository": {"pullRequest": None}}},
+        {"data": {"repository": {"pullRequest": {"reviews": None}}}},
+        {"errors": [{"message": "rate limited"}]},
+    ],
+)
+def test_malformed_graphql_envelope_raises(monkeypatch, payload) -> None:
+    """A missing envelope is indistinguishable from 'no reviews', and no reviews
+    reads as convergence -- so a transport failure would silence the breaker."""
+    monkeypatch.setattr(mod, "_gh", lambda *_a, **_k: json.dumps(payload))
+    with pytest.raises(RuntimeError):
+        mod.fetch_reviews(1, "owner", "name", "gh")

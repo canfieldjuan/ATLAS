@@ -280,10 +280,12 @@ def annotation(seam: str, rounds: Sequence[ReviewRound]) -> str:
         "threads share, state why it is wrong (over-broad, under-broad, or an open "
         "category it cannot enumerate), then do exactly one of: fix the seam "
         "structurally with a stated default direction, waive the bounded residual "
-        "in Deferred, or re-scope the slice -- and record the outcome as a line "
-        "reading 'decision-seam-analysis: fix' (or waive, or rescope). "
+        "in Deferred, or re-scope the slice -- then record the outcome as a line "
+        "reading exactly: decision-seam-analysis: fix %s   (or waive, or "
+        "rescope, in place of fix). The path is required: a disposition answers "
+        "one seam, not every future trip. "
         "See AGENTS.md 3k.2 and docs/GUARD_CLASS_CLOSURE.md."
-        % (seam, shown)
+        % (seam, shown, seam)
     )
 
 
@@ -318,8 +320,23 @@ def fetch_reviews(pr: int, owner: str, name: str, gh: str) -> list[dict]:
             data = json.loads(_gh(args, gh))
         except json.JSONDecodeError as exc:
             raise RuntimeError(f"GitHub returned non-JSON: {exc}") from exc
-        pull = (((data.get("data") or {}).get("repository") or {}).get("pullRequest")) or {}
-        block = pull.get("reviews") or {}
+        if data.get("errors"):
+            raise RuntimeError(f"GitHub GraphQL returned errors: {data['errors']}")
+        envelope = data.get("data")
+        if not isinstance(envelope, dict):
+            raise RuntimeError("GitHub GraphQL response had no data envelope")
+        repository = envelope.get("repository")
+        if not isinstance(repository, dict):
+            raise RuntimeError(f"GitHub GraphQL returned no repository for {owner}/{name}")
+        pull = repository.get("pullRequest")
+        if not isinstance(pull, dict):
+            raise RuntimeError(f"GitHub GraphQL returned no pull request #{pr}")
+        block = pull.get("reviews")
+        if not isinstance(block, dict):
+            raise RuntimeError("GitHub GraphQL returned no reviews connection")
+        # An absent envelope is indistinguishable from "this PR has no reviews",
+        # and that reads as convergence -- the breaker would stay silent on a
+        # transport failure. Exit 2 is retryable; a false OK is not.
         page_nodes = block.get("nodes") or []
         for node in page_nodes:
             comment_page = ((node.get("comments") or {}).get("pageInfo")) or {}

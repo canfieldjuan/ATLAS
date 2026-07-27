@@ -270,6 +270,6 @@ Commands run locally, with results:
 |---|---:|
 | `.github/workflows/seam_convergence.yml` | 90 |
 | `plans/PR-Seam-Convergence-Breaker.md` | 275 |
-| `scripts/check_seam_convergence.py` | 447 |
-| `tests/test_check_seam_convergence.py` | 396 |
-| **Total** | **1208** |
+| `scripts/check_seam_convergence.py` | 464 |
+| `tests/test_check_seam_convergence.py` | 428 |
+| **Total** | **1257** |
