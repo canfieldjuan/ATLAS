@@ -1767,7 +1767,10 @@ def test_scope_lookup_scales_with_negation_scopes_present():
         advisory_warnings(body)
         return time.perf_counter() - start
 
+    small = elapsed(3200)
+    large = elapsed(12800)
+
     # 4x the input at the pre-fix quadratic rate took 1.55s; linear is ~0.13s.
-    # A generous absolute ceiling keeps this stable on shared CI runners while
-    # still failing outright if the scan returns.
-    assert elapsed(12800) < 1.0
+    # Use relative growth so shared-runner load does not decide the test while
+    # still failing if the per-scope scan returns.
+    assert large < max(small * 8, 0.5)

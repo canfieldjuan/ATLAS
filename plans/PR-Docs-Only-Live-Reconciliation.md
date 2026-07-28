@@ -20,8 +20,13 @@ non-doc PRs paying the docs-only file-proof cost, and installed watcher copies
 missing the canonical body-classifier dependency. The current Codex round found
 one more race in the same R8 class: the file proof recorded the head revision
 but not the base revision and changed-file count used to derive the merge-base
-tree proof, so a retargeted PR could mix an older docs-only file proof with a
-newer final PR snapshot.
+	tree proof, so a retargeted PR could mix an older docs-only file proof with a
+	newer final PR snapshot. The post-fix `unit-gate` run then exposed an
+	unrelated but merge-blocking full-suite timing flake in an existing
+	content-factory linearity guard: the guard already proved the code path alone,
+	but its hard one-second wall-clock ceiling failed under full-suite/shared-runner
+	load. Because CI red is a blocker for this slice, this PR also stabilizes that
+	test without changing content-factory runtime behavior.
 
 ### Problem-derived contract
 
@@ -35,13 +40,15 @@ newer final PR snapshot.
   attestation; prove the fetched file list is complete, revalidate review/thread
   state after file proof, read deleted/renamed sources from the merge-base tree,
   reuse the canonical docs-only body marker parser, validate changed-file
-  status/source fields, fetch file proof only when the docs-only exemption is the
-  live decision path, package canonical parser dependencies into installed
-  watchers, bind the docs-only file proof to the same base/head/changed-file
-  generation that is compared after proof collection, and test
-  docs-only/no-thread/Markdown-only pass plus non-Markdown, symlink/gitlink-shaped,
-  malformed status, docs-only/open-thread, docs-only/`CHANGES_REQUESTED`,
-  trailing body/base/count races, and non-doc/no-review fail.
+	  status/source fields, fetch file proof only when the docs-only exemption is the
+	  live decision path, package canonical parser dependencies into installed
+	  watchers, bind the docs-only file proof to the same base/head/changed-file
+	  generation that is compared after proof collection, and test
+	  docs-only/no-thread/Markdown-only pass plus non-Markdown, symlink/gitlink-shaped,
+	  malformed status, docs-only/open-thread, docs-only/`CHANGES_REQUESTED`,
+	  trailing body/base/count races, and non-doc/no-review fail. The CI repair must
+	  keep the existing content-factory linearity guard discriminating quadratic
+	  growth without relying on one absolute runner-speed ceiling.
 - Must not change: unresolved Codex threads must remain blocking, current-head
   `CHANGES_REQUESTED` must remain blocking, non-doc PRs must still require
   current-head Codex review or clean-review-comment attestation, and product
@@ -82,10 +89,13 @@ Slice phase: Workflow/process
     fail closed.
   - Non-doc PRs and PRs that already have current-head Codex attestation do not
     fetch docs-only tree/file proof.
-  - Installed PR watcher copies include the canonical docs-only body classifier
-    dependencies required by the live checker.
-  - A non-doc PR body with no current-head Codex review/clean-comment
-    attestation still fails.
+	  - Installed PR watcher copies include the canonical docs-only body classifier
+	    dependencies required by the live checker.
+	  - The existing content-factory negation-scope linearity test uses relative
+	    growth between input sizes so CI load does not create an unrelated red check
+	    while still failing if the per-scope scan returns.
+	  - A non-doc PR body with no current-head Codex review/clean-comment
+	    attestation still fails.
   - The archive cleanup moves only
     `PR-Codex-Review-Scope-Reset.md` and
     `PR-Codex-Review-Thread-Event-Canary.md` into `plans/archive/` and refreshes
@@ -96,8 +106,9 @@ Slice phase: Workflow/process
   and race cases.
 - Affected surfaces: `scripts/check_ai_reconciliation_live.py`,
   `scripts/install_codex_wake_bridge.py`,
-  `tests/test_check_ai_reconciliation_live.py`, `tests/test_pr_watcher.py`, and
-  merged plan archive bookkeeping under `plans/`.
+  `tests/test_check_ai_reconciliation_live.py`, `tests/test_pr_watcher.py`,
+  `tests/test_content_factory_copy_verification.py`, and merged plan archive
+  bookkeeping under `plans/`.
 - Risk areas: over-broad docs-only detection, trusting PR body text or filename
   suffixes without blob proof, accidentally clearing open Codex threads,
   accidentally clearing `CHANGES_REQUESTED`, and weakening non-doc PR review
@@ -151,6 +162,7 @@ fallback changes; otherwise write "N/A - no guard/config boundary change."
 - `scripts/check_ai_reconciliation_live.py`
 - `scripts/install_codex_wake_bridge.py`
 - `tests/test_check_ai_reconciliation_live.py`
+- `tests/test_content_factory_copy_verification.py`
 - `tests/test_pr_watcher.py`
 
 ## Mechanism
@@ -184,6 +196,8 @@ matches CI behavior.
   proof from an older base generation.
 - Do not make ordinary reviewed PRs depend on docs-only tree/file proof.
 - Do not let installed watcher packaging drift from the checker's imports.
+- Do not change content-factory runtime behavior for the unit-gate repair; the
+  failing check was an existing test's wall-clock assertion under full-suite load.
 - Keep the two plan archive moves in this PR because #2247 is the live docs-only
   failure that proves the need for this narrow gate change.
 
@@ -197,6 +211,8 @@ Parked hardening: none.
 
 - `python -m pytest tests/test_check_ai_reconciliation_live.py -q` - 63 passed.
 - `python -m pytest tests/test_pr_watcher.py::test_installed_entrypoint_writes_consumer_accepted_snapshot -q` - 1 passed.
+- `python -m pytest tests/test_content_factory_copy_verification.py::test_scope_lookup_scales_with_negation_scopes_present -q -p no:cacheprovider` - 1 passed.
+- `python -m pytest tests/test_content_factory_copy_verification.py -q` - 324 passed.
 - `python -m py_compile scripts/check_ai_reconciliation_live.py scripts/install_codex_wake_bridge.py` - passed.
 - `python scripts/sync_pr_plan.py plans/PR-Docs-Only-Live-Reconciliation.md origin/main` - passed.
 - `python scripts/sync_pr_plan.py plans/PR-Docs-Only-Live-Reconciliation.md origin/main --check` - passed.
@@ -211,11 +227,12 @@ Parked hardening: none.
 | File | LOC |
 |---|---:|
 | `plans/INDEX.md` | 4 |
-| `plans/PR-Docs-Only-Live-Reconciliation.md` | 221 |
+| `plans/PR-Docs-Only-Live-Reconciliation.md` | 238 |
 | `plans/archive/PR-Codex-Review-Scope-Reset.md` | 0 |
 | `plans/archive/PR-Codex-Review-Thread-Event-Canary.md` | 0 |
 | `scripts/check_ai_reconciliation_live.py` | 353 |
 | `scripts/install_codex_wake_bridge.py` | 22 |
 | `tests/test_check_ai_reconciliation_live.py` | 480 |
+| `tests/test_content_factory_copy_verification.py` | 9 |
 | `tests/test_pr_watcher.py` | 10 |
-| **Total** | **1090** |
+| **Total** | **1116** |
