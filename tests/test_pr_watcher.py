@@ -245,6 +245,7 @@ def test_valid_snapshot_is_ready_and_accepted_by_consumer(tmp_path: Path, monkey
         "codex_reviews_complete": True,
         "codex_review_pages_fetched": 2,
         "codex_head_review_count": 1,
+        "docs_only_reconciliation_exemption": False,
         "review_decision": "",
         "merge_state_status": "CLEAN",
     }
@@ -590,6 +591,34 @@ def test_current_head_codex_review_is_required_for_ready_state(
     assert status["readiness"]["codex_reviews_complete"] is True
     assert status["readiness"]["codex_head_review_count"] == 0
     assert "current-head Codex review attestation is missing" in wake_bridge.readiness_blockers(status)
+
+
+def test_docs_only_reconciliation_exemption_can_satisfy_review_readiness(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    status = _produce(
+        tmp_path,
+        monkeypatch,
+        FakeRun(
+            review_pages=[_response(_review_page([]))],
+            reconciliation=(
+                0,
+                "\n".join(
+                    [
+                        "live AI reconciliation check",
+                        "OK: docs-only PR diff has no open scoped Codex review threads; current-head Codex review attestation is not required.",
+                    ]
+                ),
+                "",
+            ),
+        ),
+    )
+
+    assert status["state"] == "ready_for_human_merge"
+    assert status["readiness"]["codex_head_review_count"] == 0
+    assert status["readiness"]["docs_only_reconciliation_exemption"] is True
+    assert wake_bridge.readiness_blockers(status) == []
 
 
 def test_current_head_review_requires_exact_codex_connector_identity(

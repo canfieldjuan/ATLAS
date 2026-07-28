@@ -131,6 +131,21 @@ class ChangedFileProof:
         self.files = files
 
 
+class PrRefSnapshot:
+    def __init__(
+        self,
+        *,
+        base_ref_name: str,
+        base_sha: str,
+        head_sha: str,
+        changed_files: int,
+    ) -> None:
+        self.base_ref_name = base_ref_name
+        self.base_sha = base_sha
+        self.head_sha = head_sha
+        self.changed_files = changed_files
+
+
 def _load_phase2():
     """Import the local reconciliation auditor so the body classifier matches."""
     path = Path(__file__).resolve().parent / "audit_ai_reconciliation.py"
@@ -543,6 +558,19 @@ def _gh(args: Sequence[str], gh: str) -> str:
     return proc.stdout
 
 
+def _git_stdout(args: Sequence[str]) -> str:
+    proc = subprocess.run(
+        ["git", *args],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    if proc.returncode != 0:
+        detail = proc.stderr.strip() or proc.stdout.strip() or "git command failed"
+        raise RuntimeError(detail)
+    return proc.stdout
+
+
 def _expect_mapping(value: object, label: str) -> dict:
     if not isinstance(value, dict):
         raise RuntimeError(f"GitHub GraphQL response malformed: {label} is missing or not an object")
@@ -710,19 +738,45 @@ def fetch_body(pr: int, repo: str, gh: str) -> str:
     return out
 
 
-def fetch_pr_refs(pr: int, repo: str, gh: str) -> tuple[str, str, int]:
-    out = _gh(["pr", "view", str(pr), "--repo", repo, "--json", "baseRefOid,changedFiles,headRefOid"], gh)
+def fetch_pr_ref_snapshot(pr: int, repo: str, gh: str) -> PrRefSnapshot:
+    out = _gh(
+        [
+            "pr",
+            "view",
+            str(pr),
+            "--repo",
+            repo,
+            "--json",
+            "baseRefName,baseRefOid,changedFiles,headRefOid",
+        ],
+        gh,
+    )
     data = json.loads(out)
+    base_ref_name = data.get("baseRefName")
     base_sha = data.get("baseRefOid")
     head_sha = data.get("headRefOid")
     changed_files = data.get("changedFiles")
+    if not isinstance(base_ref_name, str) or not base_ref_name:
+        raise RuntimeError("GitHub PR response malformed: baseRefName is missing")
+    if base_ref_name.startswith("-") or ".." in base_ref_name:
+        raise RuntimeError("GitHub PR response malformed: baseRefName is unsafe")
     if not isinstance(base_sha, str) or not base_sha:
         raise RuntimeError("GitHub PR response malformed: baseRefOid is missing")
     if not isinstance(head_sha, str) or not head_sha:
         raise RuntimeError("GitHub PR response malformed: headRefOid is missing")
     if not isinstance(changed_files, int) or changed_files < 0:
         raise RuntimeError("GitHub PR response malformed: changedFiles is missing")
-    return base_sha, head_sha, changed_files
+    return PrRefSnapshot(
+        base_ref_name=base_ref_name,
+        base_sha=base_sha,
+        head_sha=head_sha,
+        changed_files=changed_files,
+    )
+
+
+def fetch_pr_refs(pr: int, repo: str, gh: str) -> tuple[str, str, int]:
+    snapshot = fetch_pr_ref_snapshot(pr, repo, gh)
+    return snapshot.base_sha, snapshot.head_sha, snapshot.changed_files
 
 
 def fetch_merge_base(repo: str, base_sha: str, head_sha: str, gh: str) -> str:
@@ -751,12 +805,80 @@ def fetch_tree_entries(repo: str, ref: str, gh: str) -> dict[str, dict]:
     return entries
 
 
+def _fetch_pr_git_refs(pr: int, base_ref_name: str) -> None:
+    _git_stdout(
+        [
+            "fetch",
+            "--no-tags",
+            "origin",
+            f"+refs/heads/{base_ref_name}:refs/remotes/origin/{base_ref_name}",
+            f"pull/{pr}/head:refs/remotes/origin/pr-{pr}",
+        ]
+    )
+
+
+def _assert_commit_available(ref: str, label: str) -> None:
+    _git_stdout(["cat-file", "-e", f"{ref}^{{commit}}"])
+
+
+def _git_tree_entry(ref: str, path: str) -> dict[str, str]:
+    entry = _git_stdout(["ls-tree", ref, "--", path]).strip()
+    if not entry:
+        return {}
+    parts = entry.split(None, 3)
+    if len(parts) < 4:
+        raise RuntimeError(f"git ls-tree response malformed for {path} at {ref}")
+    return {"mode": parts[0], "type": parts[1]}
+
+
 def _attach_tree_entry(item: dict, *, prefix: str, path: str, entries: dict[str, dict]) -> None:
     entry = entries.get(path)
     if not isinstance(entry, dict):
         return
     item[f"{prefix}_mode"] = entry.get("mode")
     item[f"{prefix}_type"] = entry.get("type")
+
+
+def _attach_git_tree_entry(item: dict, *, prefix: str, path: str, ref: str) -> None:
+    entry = _git_tree_entry(ref, path)
+    if not entry:
+        return
+    item[f"{prefix}_mode"] = entry.get("mode")
+    item[f"{prefix}_type"] = entry.get("type")
+
+
+def _local_changed_files_from_refs(merge_base: str, head_sha: str) -> list[dict]:
+    payload = _git_stdout(
+        [
+            "diff",
+            "--name-status",
+            "--no-renames",
+            "-z",
+            f"{merge_base}...{head_sha}",
+        ]
+    )
+    parts = [part for part in payload.split("\0") if part]
+    if len(parts) % 2 != 0:
+        raise RuntimeError("git diff --name-status response malformed")
+    files: list[dict] = []
+    status_map = {
+        "A": "added",
+        "D": "removed",
+        "M": "modified",
+    }
+    for index in range(0, len(parts), 2):
+        raw_status = parts[index]
+        path = parts[index + 1]
+        status = status_map.get(raw_status)
+        if status is None:
+            status = f"unsupported:{raw_status}"
+        item = {"filename": path, "status": status, "previous_filename": None}
+        if status == "removed":
+            _attach_git_tree_entry(item, prefix="base", path=path, ref=merge_base)
+        elif status in _HEAD_SIDE_STATUSES:
+            _attach_git_tree_entry(item, prefix="head", path=path, ref=head_sha)
+        files.append(item)
+    return files
 
 
 def fetch_changed_file_proof(
@@ -767,56 +889,33 @@ def fetch_changed_file_proof(
     head_sha: str | None = None,
     base_sha: str | None = None,
 ) -> ChangedFileProof:
-    """Fetch PR changed files and the immutable refs used to prove them."""
+    """Derive PR changed files from immutable git refs, not the mutable PR files API."""
 
-    base_ref, observed_head, expected_count = fetch_pr_refs(pr, repo, gh)
-    if base_sha is not None and base_ref != base_sha:
+    snapshot = fetch_pr_ref_snapshot(pr, repo, gh)
+    if base_sha is not None and snapshot.base_sha != base_sha:
         raise RuntimeError("GitHub PR base changed before changed-file fetch")
-    if head_sha is not None and observed_head != head_sha:
+    if head_sha is not None and snapshot.head_sha != head_sha:
         raise RuntimeError("GitHub PR head changed before changed-file fetch")
-    merge_base = fetch_merge_base(repo, base_ref, observed_head, gh)
-    base_entries = fetch_tree_entries(repo, merge_base, gh)
-    head_entries = fetch_tree_entries(repo, observed_head, gh)
-    out = _gh(
-        [
-            "api",
-            "--paginate",
-            f"repos/{repo}/pulls/{pr}/files?per_page=100",
-            "--jq",
-            ".[] | {filename,status,previous_filename}",
-        ],
-        gh,
-    )
-    files: list[dict] = []
-    for line in out.splitlines():
-        if not line.strip():
-            continue
-        item = json.loads(line)
-        if not isinstance(item, dict):
-            raise RuntimeError("GitHub REST response malformed: changed file row is not an object")
-        if not changed_file_shape_is_valid(item):
-            raise RuntimeError("GitHub REST response malformed: changed file row has invalid status/path fields")
-        filename = item.get("filename")
-        status = item.get("status")
-        if isinstance(filename, str):
-            if status in _HEAD_SIDE_STATUSES:
-                _attach_tree_entry(item, prefix="head", path=filename, entries=head_entries)
-            elif status in _BASE_SIDE_STATUSES:
-                _attach_tree_entry(item, prefix="base", path=filename, entries=base_entries)
-        previous_filename = item.get("previous_filename")
-        if isinstance(previous_filename, str):
-            _attach_tree_entry(item, prefix="base", path=previous_filename, entries=base_entries)
-        files.append(item)
-    if len(files) != expected_count:
-        raise RuntimeError(
-            "GitHub changed-file response incomplete: "
-            f"fetched {len(files)} file(s), expected {expected_count}"
-        )
+    merge_base = fetch_merge_base(repo, snapshot.base_sha, snapshot.head_sha, gh)
+    _fetch_pr_git_refs(pr, snapshot.base_ref_name)
+    for ref, label in (
+        (snapshot.base_sha, "base"),
+        (snapshot.head_sha, "head"),
+        (merge_base, "merge base"),
+    ):
+        try:
+            _assert_commit_available(ref, label)
+        except RuntimeError as exc:
+            raise RuntimeError(f"{label} commit {ref} is unavailable after git fetch") from exc
+    fetched_head = _git_stdout(["rev-parse", "--verify", f"refs/remotes/origin/pr-{pr}^{{commit}}"]).strip()
+    if fetched_head != snapshot.head_sha:
+        raise RuntimeError("fetched PR ref does not match observed head SHA")
+    files = _local_changed_files_from_refs(merge_base, snapshot.head_sha)
     return ChangedFileProof(
-        base_sha=base_ref,
-        head_sha=observed_head,
+        base_sha=snapshot.base_sha,
+        head_sha=snapshot.head_sha,
         merge_base_sha=merge_base,
-        expected_count=expected_count,
+        expected_count=snapshot.changed_files,
         files=files,
     )
 

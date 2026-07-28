@@ -45,6 +45,7 @@ CODEX_CONNECTOR_LOGINS = frozenset(
 )
 RECONCILIATION_LIB_DIR = "atlas-pr-watch-lib"
 RECONCILIATION_CHECKER_NAME = "check_ai_reconciliation_live.py"
+DOCS_ONLY_RECONCILIATION_OK = "OK: docs-only PR diff has no open scoped Codex review threads"
 TRUSTED_RECONCILIATION_CHECKER = (
     Path(__file__).resolve().parent / RECONCILIATION_LIB_DIR / RECONCILIATION_CHECKER_NAME
 )
@@ -638,6 +639,7 @@ def _classify(
     unresolved_threads: list[dict[str, Any]],
     reviews_complete: bool,
     codex_head_review_count: int,
+    docs_only_reconciliation_exemption: bool,
     reconciliation_code: int,
     review_changed: bool,
 ) -> str:
@@ -655,7 +657,7 @@ def _classify(
         not threads_complete
         or unresolved_threads
         or not reviews_complete
-        or codex_head_review_count < 1
+        or (codex_head_review_count < 1 and not docs_only_reconciliation_exemption)
         or pr.get("isDraft") is not False
     ):
         return "attention"
@@ -794,6 +796,10 @@ def produce(watcher_id: str, *, config_dir: Path, state_dir: Path) -> tuple[int,
         int(pr_text), repo, cwd=repo_dir
     )
     reconciliation_code, reconciliation_out, reconciliation_err = _run(reconciliation_command, cwd=repo_dir)
+    docs_only_reconciliation_exemption = (
+        reconciliation_code == 0
+        and DOCS_ONLY_RECONCILIATION_OK in (reconciliation_out or reconciliation_err)
+    )
     pr_after_reviews, post_review_error = _run_json(
         _pr_view_command(pr_text, repo), cwd=repo_dir, allowed_codes={0}, expected_type=dict
     )
@@ -861,6 +867,7 @@ def produce(watcher_id: str, *, config_dir: Path, state_dir: Path) -> tuple[int,
         unresolved_threads=unresolved_threads,
         reviews_complete=reviews_complete,
         codex_head_review_count=codex_head_review_count,
+        docs_only_reconciliation_exemption=docs_only_reconciliation_exemption,
         reconciliation_code=reconciliation_code,
         review_changed=review_changed,
     )
@@ -932,6 +939,7 @@ def produce(watcher_id: str, *, config_dir: Path, state_dir: Path) -> tuple[int,
             "codex_reviews_complete": reviews_complete,
             "codex_review_pages_fetched": review_pages,
             "codex_head_review_count": codex_head_review_count,
+            "docs_only_reconciliation_exemption": docs_only_reconciliation_exemption,
             "review_decision": observed_pr.get("reviewDecision"),
             "merge_state_status": observed_pr.get("mergeStateStatus"),
         },

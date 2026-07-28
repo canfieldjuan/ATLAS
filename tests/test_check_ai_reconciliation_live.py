@@ -713,47 +713,37 @@ def test_fetch_changed_files_parses_paginated_rows(monkeypatch):
     def fake_gh(args, gh):
         query = " ".join(args)
         if "pr view" in query:
-            return json.dumps({"baseRefOid": "base-a", "changedFiles": 2, "headRefOid": "head-a"})
+            return json.dumps(
+                {
+                    "baseRefName": "main",
+                    "baseRefOid": "base-a",
+                    "changedFiles": 2,
+                    "headRefOid": "head-a",
+                }
+            )
         if "compare/base-a...head-a" in query:
             return "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\n"
-        if "git/trees/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa" in query:
-            return _tree(
-                [
-                    {"path": "docs/a.md", "mode": "100644", "type": "blob"},
-                    {"path": "plans/PR-Finished.md", "mode": "100644", "type": "blob"},
-                ]
-            )
-        if "git/trees/head-a" in query:
-            return _tree(
-                [
-                    {"path": "docs/a.md", "mode": "100644", "type": "blob"},
-                    {"path": "plans/archive/PR-Finished.md", "mode": "100644", "type": "blob"},
-                ]
-            )
-        if "/pulls/1431/files" in query:
-            return "\n".join(
-                [
-                    json.dumps({"filename": "docs/a.md", "status": "modified", "previous_filename": None}),
-                    json.dumps(
-                        {
-                            "filename": "plans/archive/PR-Finished.md",
-                            "status": "renamed",
-                            "previous_filename": "plans/PR-Finished.md",
-                        }
-                    ),
-                ]
-            )
         raise AssertionError(f"unexpected gh call: {args}")
 
+    def fake_git(args):
+        if args[:4] == ["fetch", "--no-tags", "origin", "+refs/heads/main:refs/remotes/origin/main"]:
+            return ""
+        if args[:2] == ["cat-file", "-e"]:
+            return ""
+        if args[:3] == ["rev-parse", "--verify", "refs/remotes/origin/pr-1431^{commit}"]:
+            return "head-a\n"
+        if args[:4] == ["diff", "--name-status", "--no-renames", "-z"]:
+            return "M\0docs/a.md\0A\0plans/archive/PR-Finished.md\0"
+        if args[:2] == ["ls-tree", "head-a"]:
+            return f"100644 blob {'b' * 40}\t{args[-1]}\n"
+        raise AssertionError(f"unexpected git call: {args}")
+
     monkeypatch.setattr(c, "_gh", fake_gh)
+    monkeypatch.setattr(c, "_git_stdout", fake_git)
 
     assert c.fetch_changed_files(1431, "owner/name", "gh") == [
         changed_file("docs/a.md"),
-        changed_file(
-            "plans/archive/PR-Finished.md",
-            status="renamed",
-            previous_filename="plans/PR-Finished.md",
-        ),
+        changed_file("plans/archive/PR-Finished.md", status="added"),
     ]
 
 
@@ -763,7 +753,14 @@ def test_fetch_changed_files_head_movement_fails_closed(monkeypatch):
     monkeypatch.setattr(
         c,
         "_gh",
-        lambda args, gh: json.dumps({"baseRefOid": "base-a", "changedFiles": 0, "headRefOid": "head-b"}),
+        lambda args, gh: json.dumps(
+            {
+                "baseRefName": "main",
+                "baseRefOid": "base-a",
+                "changedFiles": 0,
+                "headRefOid": "head-b",
+            }
+        ),
     )
 
     try:
@@ -774,54 +771,84 @@ def test_fetch_changed_files_head_movement_fails_closed(monkeypatch):
         raise AssertionError("head movement before file fetch must fail closed")
 
 
-def test_fetch_changed_files_tree_truncation_fails_closed(monkeypatch):
+def test_fetch_changed_files_fetched_head_mismatch_fails_closed(monkeypatch):
     c = load_check()
 
     def fake_gh(args, gh):
         query = " ".join(args)
         if "pr view" in query:
-            return json.dumps({"baseRefOid": "base-a", "changedFiles": 1, "headRefOid": "head-a"})
+            return json.dumps(
+                {
+                    "baseRefName": "main",
+                    "baseRefOid": "base-a",
+                    "changedFiles": 1,
+                    "headRefOid": "head-a",
+                }
+            )
         if "compare/base-a...head-a" in query:
             return "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\n"
-        if "git/trees/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa" in query:
-            return _tree([], truncated=True)
         raise AssertionError(f"unexpected gh call: {args}")
 
+    def fake_git(args):
+        if args[:4] == ["fetch", "--no-tags", "origin", "+refs/heads/main:refs/remotes/origin/main"]:
+            return ""
+        if args[:2] == ["cat-file", "-e"]:
+            return ""
+        if args[:3] == ["rev-parse", "--verify", "refs/remotes/origin/pr-1431^{commit}"]:
+            return "head-b\n"
+        raise AssertionError(f"unexpected git call: {args}")
+
     monkeypatch.setattr(c, "_gh", fake_gh)
+    monkeypatch.setattr(c, "_git_stdout", fake_git)
 
     try:
         c.fetch_changed_files(1431, "owner/name", "gh", head_sha="head-a")
     except RuntimeError as exc:
-        assert "tree response truncated" in str(exc)
+        assert "fetched PR ref does not match observed head SHA" in str(exc)
     else:  # pragma: no cover - assertion clarity
-        raise AssertionError("truncated tree must fail closed")
+        raise AssertionError("PR ref mismatch must fail closed")
 
 
-def test_fetch_changed_files_incomplete_pull_file_listing_fails_closed(monkeypatch):
+def test_fetch_changed_files_uses_git_diff_instead_of_pull_file_listing(monkeypatch):
     c = load_check()
+    seen_gh = []
 
     def fake_gh(args, gh):
+        seen_gh.append(args)
         query = " ".join(args)
         if "pr view" in query:
-            return json.dumps({"baseRefOid": "base-a", "changedFiles": 2, "headRefOid": "head-a"})
+            return json.dumps(
+                {
+                    "baseRefName": "main",
+                    "baseRefOid": "base-a",
+                    "changedFiles": 3001,
+                    "headRefOid": "head-a",
+                }
+            )
         if "compare/base-a...head-a" in query:
             return "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\n"
-        if "git/trees/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa" in query:
-            return _tree([])
-        if "git/trees/head-a" in query:
-            return _tree([{"path": "docs/a.md", "mode": "100644", "type": "blob"}])
-        if "/pulls/1431/files" in query:
-            return json.dumps({"filename": "docs/a.md", "status": "modified", "previous_filename": None})
         raise AssertionError(f"unexpected gh call: {args}")
 
-    monkeypatch.setattr(c, "_gh", fake_gh)
+    def fake_git(args):
+        if args[:4] == ["fetch", "--no-tags", "origin", "+refs/heads/main:refs/remotes/origin/main"]:
+            return ""
+        if args[:2] == ["cat-file", "-e"]:
+            return ""
+        if args[:3] == ["rev-parse", "--verify", "refs/remotes/origin/pr-1431^{commit}"]:
+            return "head-a\n"
+        if args[:4] == ["diff", "--name-status", "--no-renames", "-z"]:
+            return "M\0docs/a.md\0"
+        if args[:2] == ["ls-tree", "head-a"]:
+            return f"100644 blob {'b' * 40}\tdocs/a.md\n"
+        raise AssertionError(f"unexpected git call: {args}")
 
-    try:
-        c.fetch_changed_files(1431, "owner/name", "gh", head_sha="head-a")
-    except RuntimeError as exc:
-        assert "changed-file response incomplete" in str(exc)
-    else:  # pragma: no cover - assertion clarity
-        raise AssertionError("incomplete pull file listing must fail closed")
+    monkeypatch.setattr(c, "_gh", fake_gh)
+    monkeypatch.setattr(c, "_git_stdout", fake_git)
+
+    assert c.fetch_changed_files(1431, "owner/name", "gh", head_sha="head-a") == [
+        changed_file("docs/a.md")
+    ]
+    assert not any("/pulls/1431/files" in " ".join(args) for args in seen_gh)
 
 
 def test_fetch_changed_files_rejects_malformed_status_rows(monkeypatch):
@@ -830,25 +857,33 @@ def test_fetch_changed_files_rejects_malformed_status_rows(monkeypatch):
     def fake_gh(args, gh):
         query = " ".join(args)
         if "pr view" in query:
-            return json.dumps({"baseRefOid": "base-a", "changedFiles": 1, "headRefOid": "head-a"})
+            return json.dumps(
+                {
+                    "baseRefName": "main",
+                    "baseRefOid": "base-a",
+                    "changedFiles": 1,
+                    "headRefOid": "head-a",
+                }
+            )
         if "compare/base-a...head-a" in query:
             return "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\n"
-        if "git/trees/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa" in query:
-            return _tree([])
-        if "git/trees/head-a" in query:
-            return _tree([{"path": "docs/a.md", "mode": "100644", "type": "blob"}])
-        if "/pulls/1431/files" in query:
-            return json.dumps({"filename": "docs/a.md", "status": "mystery", "previous_filename": None})
         raise AssertionError(f"unexpected gh call: {args}")
 
-    monkeypatch.setattr(c, "_gh", fake_gh)
+    def fake_git(args):
+        if args[:4] == ["fetch", "--no-tags", "origin", "+refs/heads/main:refs/remotes/origin/main"]:
+            return ""
+        if args[:2] == ["cat-file", "-e"]:
+            return ""
+        if args[:3] == ["rev-parse", "--verify", "refs/remotes/origin/pr-1431^{commit}"]:
+            return "head-a\n"
+        if args[:4] == ["diff", "--name-status", "--no-renames", "-z"]:
+            return "T\0docs/a.md\0"
+        raise AssertionError(f"unexpected git call: {args}")
 
-    try:
-        c.fetch_changed_files(1431, "owner/name", "gh", head_sha="head-a")
-    except RuntimeError as exc:
-        assert "invalid status/path fields" in str(exc)
-    else:  # pragma: no cover - assertion clarity
-        raise AssertionError("malformed changed-file status must fail closed")
+    monkeypatch.setattr(c, "_gh", fake_gh)
+    monkeypatch.setattr(c, "_git_stdout", fake_git)
+
+    assert c.changed_files_are_docs_only(c.fetch_changed_files(1431, "owner/name", "gh", head_sha="head-a")) is False
 
 
 def test_fetch_changed_files_uses_merge_base_tree_for_removed_paths(monkeypatch):
@@ -858,24 +893,38 @@ def test_fetch_changed_files_uses_merge_base_tree_for_removed_paths(monkeypatch)
     def fake_gh(args, gh):
         query = " ".join(args)
         if "pr view" in query:
-            return json.dumps({"baseRefOid": "base-tip", "changedFiles": 1, "headRefOid": "head-a"})
+            return json.dumps(
+                {
+                    "baseRefName": "main",
+                    "baseRefOid": "base-tip",
+                    "changedFiles": 1,
+                    "headRefOid": "head-a",
+                }
+            )
         if "compare/base-tip...head-a" in query:
             return "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\n"
-        if "git/trees/" in query:
-            seen_tree_refs.append(args[1].split("/git/trees/", 1)[1].split("?", 1)[0])
-        if "git/trees/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa" in query:
-            return _tree([{"path": "docs/removed.md", "mode": "120000", "type": "blob"}])
-        if "git/trees/head-a" in query:
-            return _tree([])
-        if "/pulls/1431/files" in query:
-            return json.dumps({"filename": "docs/removed.md", "status": "removed", "previous_filename": None})
         raise AssertionError(f"unexpected gh call: {args}")
 
+    def fake_git(args):
+        if args[:4] == ["fetch", "--no-tags", "origin", "+refs/heads/main:refs/remotes/origin/main"]:
+            return ""
+        if args[:2] == ["cat-file", "-e"]:
+            return ""
+        if args[:3] == ["rev-parse", "--verify", "refs/remotes/origin/pr-1431^{commit}"]:
+            return "head-a\n"
+        if args[:4] == ["diff", "--name-status", "--no-renames", "-z"]:
+            return "D\0docs/removed.md\0"
+        if args[:2] == ["ls-tree", "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"]:
+            seen_tree_refs.append(args[1])
+            return f"120000 blob {'b' * 40}\tdocs/removed.md\n"
+        raise AssertionError(f"unexpected git call: {args}")
+
     monkeypatch.setattr(c, "_gh", fake_gh)
+    monkeypatch.setattr(c, "_git_stdout", fake_git)
 
     files = c.fetch_changed_files(1431, "owner/name", "gh", head_sha="head-a")
 
-    assert seen_tree_refs == ["aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", "head-a"]
+    assert seen_tree_refs == ["aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"]
     assert files[0]["base_mode"] == "120000"
 
 
