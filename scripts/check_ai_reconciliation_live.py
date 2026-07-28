@@ -159,6 +159,10 @@ def _is_markdown_only_path(path: str) -> bool:
     return PurePosixPath(path).suffixes == [".md"]
 
 
+def _is_non_executable_regular_blob(item: dict, prefix: str) -> bool:
+    return item.get(f"{prefix}_mode") == "100644" and item.get(f"{prefix}_type") == "blob"
+
+
 def changed_files_are_docs_only(files: Sequence[dict]) -> bool:
     """Return true only when the live changed-file list proves a docs-only diff."""
 
@@ -174,6 +178,15 @@ def changed_files_are_docs_only(files: Sequence[dict]) -> bool:
         if previous_filename is not None and (
             not isinstance(previous_filename, str) or not _is_markdown_only_path(previous_filename)
         ):
+            return False
+        status = item.get("status")
+        if status == "removed":
+            if not _is_non_executable_regular_blob(item, "base"):
+                return False
+        else:
+            if not _is_non_executable_regular_blob(item, "head"):
+                return False
+        if previous_filename is not None and not _is_non_executable_regular_blob(item, "base"):
             return False
     return True
 
@@ -628,9 +641,52 @@ def fetch_body(pr: int, repo: str, gh: str) -> str:
     return out
 
 
-def fetch_changed_files(pr: int, repo: str, gh: str) -> list[dict]:
+def fetch_pr_refs(pr: int, repo: str, gh: str) -> tuple[str, str]:
+    out = _gh(["pr", "view", str(pr), "--repo", repo, "--json", "baseRefOid,headRefOid"], gh)
+    data = json.loads(out)
+    base_sha = data.get("baseRefOid")
+    head_sha = data.get("headRefOid")
+    if not isinstance(base_sha, str) or not base_sha:
+        raise RuntimeError("GitHub PR response malformed: baseRefOid is missing")
+    if not isinstance(head_sha, str) or not head_sha:
+        raise RuntimeError("GitHub PR response malformed: headRefOid is missing")
+    return base_sha, head_sha
+
+
+def fetch_tree_entries(repo: str, ref: str, gh: str) -> dict[str, dict]:
+    out = _gh(["api", f"repos/{repo}/git/trees/{ref}?recursive=1"], gh)
+    data = json.loads(out)
+    if data.get("truncated"):
+        raise RuntimeError(f"GitHub tree response truncated for {ref}")
+    tree = data.get("tree")
+    if not isinstance(tree, list):
+        raise RuntimeError("GitHub tree response malformed: tree is missing or not a list")
+    entries: dict[str, dict] = {}
+    for entry in tree:
+        if not isinstance(entry, dict):
+            raise RuntimeError("GitHub tree response malformed: tree entry is not an object")
+        path = entry.get("path")
+        if isinstance(path, str):
+            entries[path] = entry
+    return entries
+
+
+def _attach_tree_entry(item: dict, *, prefix: str, path: str, entries: dict[str, dict]) -> None:
+    entry = entries.get(path)
+    if not isinstance(entry, dict):
+        return
+    item[f"{prefix}_mode"] = entry.get("mode")
+    item[f"{prefix}_type"] = entry.get("type")
+
+
+def fetch_changed_files(pr: int, repo: str, gh: str, head_sha: str | None = None) -> list[dict]:
     """Fetch PR changed files from GitHub's trusted PR file list."""
 
+    base_ref, observed_head = fetch_pr_refs(pr, repo, gh)
+    if head_sha is not None and observed_head != head_sha:
+        raise RuntimeError("GitHub PR head changed before changed-file fetch")
+    base_entries = fetch_tree_entries(repo, base_ref, gh)
+    head_entries = fetch_tree_entries(repo, observed_head, gh)
     out = _gh(
         [
             "api",
@@ -648,6 +704,16 @@ def fetch_changed_files(pr: int, repo: str, gh: str) -> list[dict]:
         item = json.loads(line)
         if not isinstance(item, dict):
             raise RuntimeError("GitHub REST response malformed: changed file row is not an object")
+        filename = item.get("filename")
+        status = item.get("status")
+        if isinstance(filename, str):
+            if status != "removed":
+                _attach_tree_entry(item, prefix="head", path=filename, entries=head_entries)
+            else:
+                _attach_tree_entry(item, prefix="base", path=filename, entries=base_entries)
+        previous_filename = item.get("previous_filename")
+        if isinstance(previous_filename, str):
+            _attach_tree_entry(item, prefix="base", path=previous_filename, entries=base_entries)
         files.append(item)
     return files
 
@@ -782,7 +848,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             body = ""
 
         if changed_files is None and args.pr is not None and args.repo:
-            changed_files = fetch_changed_files(args.pr, args.repo, args.gh)
+            changed_files = fetch_changed_files(args.pr, args.repo, args.gh, head_sha=head_sha)
     except (OSError, ValueError, RuntimeError) as exc:
         print(f"live reconciliation: GitHub API/read error: {exc}", file=sys.stderr)
         return 2
