@@ -1141,7 +1141,9 @@ def test_installed_entrypoint_writes_consumer_accepted_snapshot(tmp_path: Path) 
                 print(json.dumps(metadata))
             elif args[:2] == ["api", "repos/owner/repo/branches/main/protection/required_status_checks"]:
                 print(json.dumps({"contexts": ["required-a"], "checks": [{"context": "required-a", "app_id": 15368}]}))
-            elif args[:2] == ["api", "repos/owner/repo/git/trees/base-a?recursive=1"]:
+            elif args[:2] == ["api", "repos/owner/repo/compare/base-a...head-a"]:
+                print("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa")
+            elif args[:2] == ["api", "repos/owner/repo/git/trees/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa?recursive=1"]:
                 print(json.dumps({"truncated": False, "tree": []}))
             elif args[:2] == ["api", "repos/owner/repo/git/trees/head-a?recursive=1"]:
                 print(json.dumps({"truncated": False, "tree": []}))

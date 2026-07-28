@@ -125,6 +125,17 @@ def _load_phase2():
     return module
 
 
+def _load_pr_body_audit():
+    """Import the PR-body auditor so docs-only marker parsing is canonical."""
+    path = Path(__file__).resolve().parent / "audit_pr_body.py"
+    spec = importlib.util.spec_from_file_location("audit_pr_body", path)
+    if spec is None or spec.loader is None:  # pragma: no cover - defensive
+        raise RuntimeError(f"cannot load {path}")
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
 def classify_body(body: str) -> str:
     """Return 'absent' | 'acknowledges_open' | 'claims_clear' | 'unmarked'.
 
@@ -145,12 +156,7 @@ def classify_body(body: str) -> str:
 def is_docs_only_body(body: str) -> bool:
     """Return true when the PR body uses the explicit docs-only exemption."""
 
-    for line in body.splitlines():
-        stripped = line.strip()
-        if not stripped:
-            continue
-        return stripped == "Docs-only: true"
-    return False
+    return bool(_load_pr_body_audit().is_docs_only_body(body))
 
 
 def _is_markdown_only_path(path: str) -> bool:
@@ -163,6 +169,26 @@ def _is_non_executable_regular_blob(item: dict, prefix: str) -> bool:
     return item.get(f"{prefix}_mode") == "100644" and item.get(f"{prefix}_type") == "blob"
 
 
+_HEAD_SIDE_STATUSES = frozenset({"added", "changed", "copied", "modified", "renamed"})
+_BASE_SIDE_STATUSES = frozenset({"removed", "renamed"})
+_ALLOWED_CHANGED_FILE_STATUSES = _HEAD_SIDE_STATUSES | _BASE_SIDE_STATUSES
+
+
+def changed_file_shape_is_valid(item: dict) -> bool:
+    """Return true when a GitHub changed-file row has the fields its status needs."""
+
+    filename = item.get("filename")
+    status = item.get("status")
+    if not isinstance(filename, str) or not filename:
+        return False
+    if not isinstance(status, str) or status not in _ALLOWED_CHANGED_FILE_STATUSES:
+        return False
+    previous_filename = item.get("previous_filename")
+    if status == "renamed":
+        return isinstance(previous_filename, str) and bool(previous_filename)
+    return previous_filename is None or isinstance(previous_filename, str)
+
+
 def changed_files_are_docs_only(files: Sequence[dict]) -> bool:
     """Return true only when the live changed-file list proves a docs-only diff."""
 
@@ -170,6 +196,8 @@ def changed_files_are_docs_only(files: Sequence[dict]) -> bool:
         return False
     for item in files:
         if not isinstance(item, dict):
+            return False
+        if not changed_file_shape_is_valid(item):
             return False
         filename = item.get("filename")
         if not isinstance(filename, str) or not _is_markdown_only_path(filename):
@@ -183,7 +211,7 @@ def changed_files_are_docs_only(files: Sequence[dict]) -> bool:
         if status == "removed":
             if not _is_non_executable_regular_blob(item, "base"):
                 return False
-        else:
+        elif status in _HEAD_SIDE_STATUSES:
             if not _is_non_executable_regular_blob(item, "head"):
                 return False
         if previous_filename is not None and not _is_non_executable_regular_blob(item, "base"):
@@ -465,6 +493,30 @@ def evaluate(
     return 1, messages
 
 
+def docs_only_exemption_needs_file_proof(
+    nodes: Sequence[dict],
+    body: str,
+    bot_logins: Sequence[str],
+    *,
+    reviews: Sequence[dict] | None,
+    comments: Sequence[dict] | None,
+    head_sha: str | None,
+) -> bool:
+    """Return true only when file proof is needed to decide the docs-only bypass."""
+
+    if head_sha is None or not is_docs_only_body(body):
+        return False
+    if open_bot_threads(nodes, bot_logins):
+        return False
+    if current_head_change_requests(reviews or [], head_sha=head_sha, bot_logins=bot_logins):
+        return False
+    if current_head_bot_reviews(reviews or [], head_sha=head_sha, bot_logins=bot_logins):
+        return False
+    if current_head_clean_review_comments(comments or [], head_sha=head_sha, bot_logins=bot_logins):
+        return False
+    return True
+
+
 def _gh(args: Sequence[str], gh: str) -> str:
     proc = subprocess.run(
         [gh, *args], capture_output=True, text=True, check=False
@@ -656,6 +708,14 @@ def fetch_pr_refs(pr: int, repo: str, gh: str) -> tuple[str, str, int]:
     return base_sha, head_sha, changed_files
 
 
+def fetch_merge_base(repo: str, base_sha: str, head_sha: str, gh: str) -> str:
+    out = _gh(["api", f"repos/{repo}/compare/{base_sha}...{head_sha}", "--jq", ".merge_base_commit.sha"], gh)
+    merge_base = out.strip()
+    if not re.fullmatch(r"[0-9a-f]{40}", merge_base):
+        raise RuntimeError("GitHub compare response malformed: merge_base_commit.sha is missing")
+    return merge_base
+
+
 def fetch_tree_entries(repo: str, ref: str, gh: str) -> dict[str, dict]:
     out = _gh(["api", f"repos/{repo}/git/trees/{ref}?recursive=1"], gh)
     data = json.loads(out)
@@ -688,7 +748,8 @@ def fetch_changed_files(pr: int, repo: str, gh: str, head_sha: str | None = None
     base_ref, observed_head, expected_count = fetch_pr_refs(pr, repo, gh)
     if head_sha is not None and observed_head != head_sha:
         raise RuntimeError("GitHub PR head changed before changed-file fetch")
-    base_entries = fetch_tree_entries(repo, base_ref, gh)
+    merge_base = fetch_merge_base(repo, base_ref, observed_head, gh)
+    base_entries = fetch_tree_entries(repo, merge_base, gh)
     head_entries = fetch_tree_entries(repo, observed_head, gh)
     out = _gh(
         [
@@ -707,12 +768,14 @@ def fetch_changed_files(pr: int, repo: str, gh: str, head_sha: str | None = None
         item = json.loads(line)
         if not isinstance(item, dict):
             raise RuntimeError("GitHub REST response malformed: changed file row is not an object")
+        if not changed_file_shape_is_valid(item):
+            raise RuntimeError("GitHub REST response malformed: changed file row has invalid status/path fields")
         filename = item.get("filename")
         status = item.get("status")
         if isinstance(filename, str):
-            if status != "removed":
+            if status in _HEAD_SIDE_STATUSES:
                 _attach_tree_entry(item, prefix="head", path=filename, entries=head_entries)
-            else:
+            elif status in _BASE_SIDE_STATUSES:
                 _attach_tree_entry(item, prefix="base", path=filename, entries=base_entries)
         previous_filename = item.get("previous_filename")
         if isinstance(previous_filename, str):
@@ -884,9 +947,22 @@ def main(argv: Sequence[str] | None = None) -> int:
         else:
             body = ""
 
-        if changed_files is None and args.pr is not None and args.repo:
+        needs_live_changed_file_proof = (
+            changed_files is None
+            and args.pr is not None
+            and args.repo
+            and docs_only_exemption_needs_file_proof(
+                nodes,
+                body,
+                bots,
+                reviews=reviews,
+                comments=comments,
+                head_sha=head_sha,
+            )
+        )
+        if needs_live_changed_file_proof:
             changed_files = fetch_changed_files(args.pr, args.repo, args.gh, head_sha=head_sha)
-        if not args.threads_file and args.pr is not None and args.repo:
+        if needs_live_changed_file_proof and not args.threads_file and args.pr is not None and args.repo:
             body_after = fetch_body(args.pr, args.repo, args.gh)
             after_snapshot = fetch_consistent_review_thread_snapshot(
                 args.pr,
@@ -895,7 +971,8 @@ def main(argv: Sequence[str] | None = None) -> int:
                 args.gh,
                 bots,
             )
-            if body != body_after:
+            body_final = fetch_body(args.pr, args.repo, args.gh)
+            if body != body_after or body != body_final:
                 raise RuntimeError("GitHub PR body changed during body/file proof fetch")
             _assert_stable_review_thread_state(
                 before=before_snapshot,
