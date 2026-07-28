@@ -54,6 +54,7 @@ def pr_comment(
 BODY_CLEAR = "## AI reconciliation\n- All fixed or waived: Yes\n"
 BODY_OPEN = "## AI reconciliation\n- fixed or waived: No\n"
 BODY_ABSENT = "## Summary\njust a normal PR body\n"
+BODY_DOCS_ONLY = "Docs-only: true\n\nArchive merged plans.\n"
 BOTS = ["chatgpt-codex-connector", "chatgpt-codex-connector[bot]"]
 
 
@@ -205,6 +206,15 @@ def test_classify_body():
     assert c.classify_body(BODY_ABSENT) == "absent"
 
 
+def test_is_docs_only_body_requires_first_nonblank_marker():
+    c = load_check()
+
+    assert c.is_docs_only_body(BODY_DOCS_ONLY) is True
+    assert c.is_docs_only_body("\nDocs-only: true\n") is True
+    assert c.is_docs_only_body("Summary\n\nDocs-only: true\n") is False
+    assert c.is_docs_only_body("Docs-only: false\n") is False
+
+
 # --- evaluate: the failure branch (the lie) MUST fire ---------------------
 
 def test_open_thread_plus_clear_body_fails():
@@ -252,6 +262,37 @@ def test_missing_current_head_codex_review_fails_even_without_open_threads():
 
     assert code == 1
     assert any("missing current-head Codex connector review" in msg for msg in msgs)
+
+
+def test_docs_only_no_open_threads_passes_without_current_head_review():
+    c = load_check()
+    code, msgs = c.evaluate(
+        [thread(resolved=True)],
+        BODY_DOCS_ONLY,
+        BOTS,
+        reviews=[],
+        comments=[],
+        head_sha="head-a",
+    )
+
+    assert code == 0
+    assert any("docs-only PR has no open scoped Codex review threads" in msg for msg in msgs)
+
+
+def test_docs_only_open_codex_thread_still_fails_without_ai_record():
+    c = load_check()
+    code, msgs = c.evaluate(
+        [thread()],
+        BODY_DOCS_ONLY,
+        BOTS,
+        reviews=[],
+        comments=[],
+        head_sha="head-a",
+    )
+
+    assert code == 1
+    assert any("no AI reconciliation record" in msg for msg in msgs)
+    assert any("atlas_brain/x.py:12" in msg for msg in msgs)
 
 
 def test_current_head_changes_requested_review_fails_even_without_open_threads():
@@ -374,6 +415,25 @@ def test_main_accepts_current_head_clean_review_comment_when_head_sha_supplied(t
             str(cf),
             "--head-sha",
             "abc1234567890",
+        ]
+    ) == 0
+
+
+def test_main_accepts_docs_only_without_current_head_review_when_threads_clear(tmp_path):
+    c = load_check()
+    tf = tmp_path / "threads.json"
+    tf.write_text(json.dumps([thread(resolved=True)]), encoding="utf-8")
+    bf = tmp_path / "body.md"
+    bf.write_text(BODY_DOCS_ONLY, encoding="utf-8")
+
+    assert c.main(
+        [
+            "--threads-file",
+            str(tf),
+            "--body-file",
+            str(bf),
+            "--head-sha",
+            "head-a",
         ]
     ) == 0
 

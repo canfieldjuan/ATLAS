@@ -142,6 +142,17 @@ def classify_body(body: str) -> str:
     return "unmarked"
 
 
+def is_docs_only_body(body: str) -> bool:
+    """Return true when the PR body uses the explicit docs-only exemption."""
+
+    for line in body.splitlines():
+        stripped = line.strip()
+        if not stripped:
+            continue
+        return stripped == "Docs-only: true"
+    return False
+
+
 def open_bot_threads(nodes: Sequence[dict], bot_logins: Sequence[str]) -> list[dict]:
     """Return unresolved review threads authored by a known bot.
 
@@ -343,6 +354,7 @@ def evaluate(
 ) -> tuple[int, list[str]]:
     """Core decision (pure). Returns (exit_code, messages)."""
     messages: list[str] = []
+    open_threads = open_bot_threads(nodes, bot_logins)
     if head_sha is not None:
         change_requests = current_head_change_requests(
             reviews or [],
@@ -354,6 +366,11 @@ def evaluate(
                 "current-head Codex connector review requested changes: live "
                 f"reconciliation cannot pass PR head {head_sha} until the "
                 "changes-requested review is superseded or resolved."
+            )
+        elif not open_threads and is_docs_only_body(body):
+            messages.append(
+                "OK: docs-only PR has no open scoped Codex review threads; "
+                "current-head Codex review attestation is not required."
             )
         elif not current_head_bot_reviews(
             reviews or [],
@@ -369,9 +386,10 @@ def evaluate(
                 f"requires one scoped Codex review or clean review comment on PR head {head_sha} before merge."
             )
 
-    open_threads = open_bot_threads(nodes, bot_logins)
     if not open_threads:
         if messages:
+            if all(message.startswith("OK:") for message in messages):
+                return 0, messages
             return 1, messages
         return 0, ["OK: current-head Codex review attestation is present and no open scoped Codex review threads remain."]
 
