@@ -12,6 +12,7 @@ import re
 import time
 from typing import Optional
 from urllib.parse import quote
+from uuid import uuid4
 
 from fastapi import APIRouter, Form, Query, Request, WebSocket, WebSocketDisconnect
 from fastapi.responses import Response, JSONResponse
@@ -34,11 +35,12 @@ def swml_response(sections: dict) -> JSONResponse:
     )
 
 
-def laml_response(content: str) -> Response:
+def laml_response(content: str, status_code: int = 200) -> Response:
     """Return a LaML/TwiML XML response (legacy)."""
     return Response(
         content=content,
         media_type="application/xml",
+        status_code=status_code,
     )
 
 
@@ -83,6 +85,102 @@ def _fallback_outbound_caller_id() -> str:
     except Exception as e:
         logger.warning("Failed to resolve outbound caller ID: %s", e)
     return ""
+
+
+def _persisted_sms_value(existing: dict, key: str, fallback):
+    value = existing[key] if key in existing else None
+    return fallback if value is None else value
+
+
+_RESUMABLE_INBOUND_SMS_STATUSES = frozenset({"received", "processing", "retry_pending"})
+SMS_INBOUND_BEFORE_ACK_TIMEOUT_SECONDS = 8.0
+
+
+def _sms_ack_remaining_seconds(started_at: float) -> float:
+    return max(0.001, SMS_INBOUND_BEFORE_ACK_TIMEOUT_SECONDS - (time.monotonic() - started_at))
+
+
+async def _await_sms_before_ack(awaitable, *, started_at: float):
+    return await asyncio.wait_for(awaitable, timeout=_sms_ack_remaining_seconds(started_at))
+
+
+def _sms_needs_contact_processing(existing: dict) -> bool:
+    return existing.get("status") in _RESUMABLE_INBOUND_SMS_STATUSES
+
+
+def _context_for_persisted_sms(existing: dict, *, fallback_to: str, context_router):
+    context_id = existing.get("business_context_id")
+    if context_id:
+        context = context_router.get_context(context_id)
+        if context is not None:
+            return context
+        raise ValueError(f"Persisted SMS business context no longer resolves: {context_id}")
+
+    to_number = _persisted_sms_value(existing, "to_number", fallback_to)
+    return context_router.get_context_for_number(to_number)
+
+
+async def _resume_duplicate_inbound_sms_before_ack(
+    existing: dict,
+    *,
+    fallback_from: str,
+    fallback_to: str,
+    fallback_body: str,
+    fallback_media_urls: list,
+    context,
+    provider_message_id: str,
+    sms_repo,
+    started_at: float | None = None,
+) -> str:
+    """Run duplicate SMS resume work before acknowledging the provider retry."""
+    if not _sms_needs_contact_processing(existing):
+        return "complete"
+
+    sms_id = existing.get("id")
+    if sms_id is None:
+        logger.warning(
+            "Duplicate inbound SMS webhook for %s has no row id; skipping resume",
+            provider_message_id,
+        )
+        return "complete"
+
+    return await _run_inbound_sms_processing_before_ack(
+        sms_id,
+        _persisted_sms_value(existing, "from_number", fallback_from),
+        _persisted_sms_value(existing, "to_number", fallback_to),
+        _persisted_sms_value(existing, "body", fallback_body),
+        context,
+        _persisted_sms_value(existing, "media_urls", fallback_media_urls),
+        provider_message_id=provider_message_id,
+        claim_processing=True,
+        retry_pending_recorder="caller",
+        started_at=started_at,
+    )
+
+
+async def _run_inbound_sms_processing_before_ack(*args, **kwargs) -> str:
+    """Run provider-facing SMS processing under the webhook response deadline."""
+    started_at = kwargs.pop("started_at", None)
+    timeout = (
+        _sms_ack_remaining_seconds(started_at)
+        if started_at is not None
+        else SMS_INBOUND_BEFORE_ACK_TIMEOUT_SECONDS
+    )
+    try:
+        return await asyncio.wait_for(
+            _process_inbound_sms(*args, **kwargs),
+            timeout=timeout,
+        )
+    except asyncio.TimeoutError:
+        logger.warning(
+            "Inbound SMS processing exceeded %.1fs provider ack budget",
+            SMS_INBOUND_BEFORE_ACK_TIMEOUT_SECONDS,
+        )
+        return "retry_pending"
+
+
+def _sms_processing_outcome_requires_provider_retry(outcome: str) -> bool:
+    return outcome in {"retry_pending", "already_processing", "lost_ownership"}
 
 
 # Track which calls already have recording started (avoid duplicates).
@@ -1458,20 +1556,75 @@ async def _run_recording_processing(
 async def _process_inbound_sms(
     sms_id, from_number: str, to_number: str, body: str, context, media_urls: list,
     provider_message_id: str | None = None,
-) -> None:
+    claim_processing: bool = True,
+    sms_repo=None,
+    intelligence_runner=None,
+    retry_pending_recorder: str = "repo",
+) -> str:
     """Background task: CRM link, intelligence pipeline, ntfy, auto-reply.
 
     Each step is fail-open -- partial results are better than no results.
     Matches the pattern of _run_recording_processing for calls.
     """
-    from ...storage.repositories.sms_message import get_sms_message_repo
+    if sms_repo is None:
+        from ...storage.repositories.sms_message import get_sms_message_repo
 
-    sms_repo = get_sms_message_repo()
+        sms_repo = get_sms_message_repo()
+
+    processing_owner_token = f"sms-contact:{uuid4().hex}" if sms_id else None
+
+    if claim_processing and sms_id:
+        try:
+            claim_row = await sms_repo.claim_contact_processing(
+                sms_id,
+                owner_token=processing_owner_token,
+            )
+        except Exception as e:
+            logger.error("Failed to claim inbound SMS %s for processing: %s", sms_id, e)
+            if retry_pending_recorder == "repo":
+                try:
+                    await sms_repo.mark_contact_processing_retry_pending(
+                        sms_id,
+                        f"SMS processing claim failed: {e}",
+                    )
+                except Exception as e2:
+                    logger.error(
+                        "Failed to mark SMS %s retry_pending after claim failure: %s",
+                        sms_id,
+                        e2,
+                    )
+            return "retry_pending"
+        if claim_row is None:
+            logger.warning("Inbound SMS %s vanished before contact processing claim", sms_id)
+            return "retry_pending"
+        if not claim_row.get("_claim_acquired"):
+            if not _sms_needs_contact_processing(claim_row):
+                logger.info("Inbound SMS %s already reached terminal status", sms_id)
+                return "complete"
+            logger.info("Inbound SMS %s is already being processed; skipping", sms_id)
+            return "already_processing"
+    else:
+        claim_row = None
+
+    existing_contact_id = None
+    if claim_row and claim_row.get("contact_id"):
+        existing_contact_id = str(claim_row["contact_id"])
 
     # Step 1: Run SMS intelligence pipeline (classify + CRM + action plan + ntfy)
     try:
-        from ...comms.sms_intelligence import process_inbound_sms as run_intelligence
-        await run_intelligence(
+        if intelligence_runner is None:
+            from ...comms.sms_intelligence import process_inbound_sms as run_intelligence
+        else:
+            run_intelligence = intelligence_runner
+        if sms_id and processing_owner_token:
+            owner_ok = await sms_repo.touch_contact_processing_owner(
+                sms_id,
+                processing_owner_token,
+            )
+            if not owner_ok:
+                logger.info("Inbound SMS %s lost processing ownership before intelligence", sms_id)
+                return "lost_ownership"
+        processing_outcome = await run_intelligence(
             sms_id=sms_id,
             from_number=from_number,
             to_number=to_number,
@@ -1480,51 +1633,148 @@ async def _process_inbound_sms(
             business_context=context,
             media_urls=media_urls,
             provider_message_id=provider_message_id,
+            processing_owner_token=processing_owner_token,
+            existing_contact_id=existing_contact_id,
         )
+        if processing_outcome == "terminal_no_contact":
+            if sms_id:
+                await sms_repo.mark_contact_processing_complete(
+                    sms_id,
+                    owner_token=processing_owner_token,
+                )
+            return "complete"
+        if processing_outcome == "retry_pending":
+            if sms_id:
+                await sms_repo.mark_contact_processing_retry_pending(
+                    sms_id,
+                    "SMS CRM handoff failed",
+                    owner_token=processing_owner_token,
+                )
+            return "retry_pending"
     except Exception as e:
         logger.error("SMS intelligence pipeline failed for %s: %s", sms_id, e)
 
         # Fallback: basic CRM + ntfy if intelligence pipeline is unavailable
         try:
+            if sms_id and processing_owner_token:
+                owner_ok = await sms_repo.touch_contact_processing_owner(
+                    sms_id,
+                    processing_owner_token,
+                )
+                if not owner_ok:
+                    logger.info("Inbound SMS %s lost processing ownership before fallback", sms_id)
+                    return "lost_ownership"
             await _sms_fallback_crm_and_notify(
                 sms_id, sms_repo, from_number, body, context,
                 provider_message_id=provider_message_id,
             )
         except Exception as e2:
             logger.error("SMS fallback CRM+ntfy also failed: %s", e2)
-
+            if sms_id:
+                try:
+                    await sms_repo.mark_contact_processing_retry_pending(
+                        sms_id,
+                        f"SMS processing failed: {e2}",
+                        owner_token=processing_owner_token,
+                    )
+                except Exception as e3:
+                    logger.error(
+                        "Failed to mark SMS %s retry_pending after processing failure: %s",
+                        sms_id,
+                        e3,
+                    )
+            return "retry_pending"
     # Step 2: Auto-reply via LLM if enabled
     if context.sms_auto_reply and context.sms_enabled and body.strip():
         try:
+            if sms_id and processing_owner_token:
+                owner_ok = await sms_repo.touch_contact_processing_owner(
+                    sms_id,
+                    processing_owner_token,
+                )
+                if not owner_ok:
+                    logger.info("Inbound SMS %s lost processing ownership before auto-reply", sms_id)
+                    return "lost_ownership"
             reply = await _generate_sms_reply(body, context)
             if reply:
-                provider = get_comms_service().provider
-                msg = await provider.send_sms(
-                    to_number=from_number,
-                    from_number=to_number,
-                    body=reply,
-                    context_id=context.id,
-                )
-                logger.info("SMS auto-reply sent to %s", from_number)
-
-                # Persist outbound auto-reply
-                try:
-                    from uuid import uuid4 as _uuid4
-                    await sms_repo.create(
-                        message_sid=getattr(msg, "provider_message_id", "") or f"auto_reply_{_uuid4().hex[:12]}",
-                        from_number=to_number,
-                        to_number=from_number,
-                        direction="outbound",
-                        body=reply,
-                        business_context_id=context.id,
-                        status="sent",
-                        source="auto_reply",
-                        source_ref=str(sms_id) if sms_id else None,
+                skip_auto_reply_send = False
+                if sms_id and processing_owner_token:
+                    owner_ok = await sms_repo.owns_contact_processing(
+                        sms_id,
+                        processing_owner_token,
                     )
-                except Exception as e:
-                    logger.warning("Failed to persist auto-reply SMS: %s", e)
+                    if not owner_ok:
+                        logger.info("Inbound SMS %s lost processing ownership before send", sms_id)
+                        return "lost_ownership"
+                    has_auto_reply = getattr(sms_repo, "has_auto_reply_for_inbound", None)
+                    reserve_auto_reply = getattr(sms_repo, "reserve_auto_reply_for_inbound", None)
+                    if callable(has_auto_reply) and await has_auto_reply(sms_id):
+                        logger.info("SMS auto-reply already reserved for inbound %s; skipping duplicate send", sms_id)
+                        skip_auto_reply_send = True
+                    if callable(reserve_auto_reply):
+                        if skip_auto_reply_send:
+                            auto_reply_row = None
+                        else:
+                            auto_reply_row = await reserve_auto_reply(
+                                inbound_sms_id=sms_id,
+                                from_number=to_number,
+                                to_number=from_number,
+                                body=reply,
+                                business_context_id=context.id,
+                            )
+                            if auto_reply_row is None:
+                                logger.info("SMS auto-reply reservation already exists for inbound %s", sms_id)
+                                skip_auto_reply_send = True
+                    else:
+                        auto_reply_row = None
+                else:
+                    auto_reply_row = None
+                    skip_auto_reply_send = False
+                if not skip_auto_reply_send:
+                    provider = get_comms_service().provider
+                    msg = await provider.send_sms(
+                        to_number=from_number,
+                        from_number=to_number,
+                        body=reply,
+                        context_id=context.id,
+                    )
+                    logger.info("SMS auto-reply sent to %s", from_number)
+
+                    # Persist outbound auto-reply
+                    try:
+                        marker = getattr(sms_repo, "mark_auto_reply_sent", None)
+                        if auto_reply_row is not None and callable(marker):
+                            await marker(
+                                auto_reply_row["id"],
+                                provider_message_id=getattr(msg, "provider_message_id", None),
+                            )
+                        else:
+                            from uuid import uuid4 as _uuid4
+                            await sms_repo.create(
+                                message_sid=getattr(msg, "provider_message_id", "") or f"auto_reply_{_uuid4().hex[:12]}",
+                                from_number=to_number,
+                                to_number=from_number,
+                                direction="outbound",
+                                body=reply,
+                                business_context_id=context.id,
+                                status="sent",
+                                source="auto_reply",
+                                source_ref=str(sms_id) if sms_id else None,
+                            )
+                    except Exception as e:
+                        logger.warning("Failed to persist auto-reply SMS: %s", e)
         except Exception as e:
             logger.warning("SMS auto-reply failed: %s", e)
+
+    if sms_id:
+        try:
+            await sms_repo.mark_contact_processing_complete(
+                sms_id,
+                owner_token=processing_owner_token,
+            )
+        except Exception as e:
+            logger.warning("Failed to mark SMS %s processing complete: %s", sms_id, e)
+    return "complete"
 
 
 async def _sms_fallback_crm_and_notify(
@@ -1584,18 +1834,22 @@ async def _sms_fallback_crm_and_notify(
             if sms_id:
                 await sms_repo.link_contact(sms_id, contact_id)
             if context.id != EOM_BUSINESS_CONTEXT_ID:
-                await crm.log_interaction(
-                    contact_id=contact_id,
-                    interaction_type="sms",
-                    summary=f"Inbound SMS: {body[:100]}",
-                    metadata=(
-                        {"crm_event_id": f"sms:{inbound_message_id}"}
-                        if inbound_message_id
-                        else None
-                    ),
-                )
+                try:
+                    await crm.log_interaction(
+                        contact_id=contact_id,
+                        interaction_type="sms",
+                        summary=f"Inbound SMS: {body[:100]}",
+                        metadata=(
+                            {"crm_event_id": f"sms:{inbound_message_id}"}
+                            if inbound_message_id
+                            else None
+                        ),
+                    )
+                except Exception as e:
+                    logger.warning("Fallback CRM interaction logging failed after contact link: %s", e)
     except Exception as e:
         logger.warning("Fallback CRM link failed: %s", e)
+        raise
 
     # ntfy notification
     try:
@@ -1688,10 +1942,11 @@ async def handle_inbound_sms(
     """
     Handle incoming SMS webhook.
 
-    Persists to DB immediately, then spawns a background task for
-    CRM linking, intelligence pipeline, ntfy, and auto-reply.
-    Webhook returns TwiML in <1s.
+    Persists to DB immediately, then runs contact/intelligence processing
+    before acknowledging so transient CRM handoff failures can return 503 and
+    rely on provider retry.
     """
+    ack_started_at = time.monotonic()
     logger.info("Inbound SMS from %s to %s: %s", From, To, Body[:50])
 
     # Get business context
@@ -1701,7 +1956,15 @@ async def handle_inbound_sms(
     # Collect media URLs if any
     media_urls = []
     num_media = int(NumMedia)
-    form_data = await request.form()
+    try:
+        form_data = await _await_sms_before_ack(request.form(), started_at=ack_started_at)
+    except asyncio.TimeoutError:
+        logger.warning("Inbound SMS media parsing exceeded provider ack budget")
+        return laml_response(
+            """<?xml version="1.0" encoding="UTF-8"?>
+<Response></Response>""",
+            status_code=503,
+        )
     for i in range(num_media):
         url = form_data.get(f"MediaUrl{i}")
         if url:
@@ -1709,59 +1972,187 @@ async def handle_inbound_sms(
 
     try:
         provider = get_comms_service().provider
-        message = await provider.handle_incoming_sms(
-            message_sid=MessageSid,
-            from_number=From,
-            to_number=To,
-            body=Body,
-            media_urls=media_urls,
+        message = await _await_sms_before_ack(
+            provider.handle_incoming_sms(
+                message_sid=MessageSid,
+                from_number=From,
+                to_number=To,
+                body=Body,
+                media_urls=media_urls,
+            ),
+            started_at=ack_started_at,
         )
         message.context_id = context.id
+    except asyncio.TimeoutError:
+        logger.warning("Inbound SMS provider callback exceeded provider ack budget")
+        return laml_response(
+            """<?xml version="1.0" encoding="UTF-8"?>
+<Response></Response>""",
+            status_code=503,
+        )
     except Exception as e:
         logger.error("Error handling inbound SMS: %s", e)
 
     # Persist inbound SMS to DB (dedup on message_sid unique constraint)
     sms_id = None
+    sms_repo = None
     try:
         from ...storage.repositories.sms_message import get_sms_message_repo
         sms_repo = get_sms_message_repo()
 
         # Check for duplicate (webhook retry)
-        existing = await sms_repo.get_by_message_sid(MessageSid)
+        existing = await _await_sms_before_ack(
+            sms_repo.get_by_message_sid(MessageSid),
+            started_at=ack_started_at,
+        )
         if existing:
-            logger.info("Duplicate inbound SMS webhook for %s, skipping", MessageSid)
+            if not _sms_needs_contact_processing(existing):
+                logger.info("Duplicate inbound SMS webhook for %s, skipping", MessageSid)
+                return laml_response("""<?xml version="1.0" encoding="UTF-8"?>
+<Response></Response>""")
+
+            resume_outcome = await _await_sms_before_ack(
+                _resume_duplicate_inbound_sms_before_ack(
+                    existing,
+                    fallback_from=From,
+                    fallback_to=To,
+                    fallback_body=Body,
+                    fallback_media_urls=media_urls,
+                    context=_context_for_persisted_sms(
+                        existing,
+                        fallback_to=To,
+                        context_router=context_router,
+                    ),
+                    provider_message_id=MessageSid,
+                    sms_repo=sms_repo,
+                    started_at=ack_started_at,
+                ),
+                started_at=ack_started_at,
+            )
+            if _sms_processing_outcome_requires_provider_retry(resume_outcome):
+                return laml_response(
+                    """<?xml version="1.0" encoding="UTF-8"?>
+<Response></Response>""",
+                    status_code=503,
+                )
+            if resume_outcome != "already_processing":
+                logger.info(
+                    "Duplicate inbound SMS webhook for %s has no contact link; resumed processing",
+                    MessageSid,
+                )
             return laml_response("""<?xml version="1.0" encoding="UTF-8"?>
 <Response></Response>""")
 
-        record = await sms_repo.create(
-            message_sid=MessageSid,
-            from_number=From,
-            to_number=To,
-            direction="inbound",
-            body=Body,
-            media_urls=media_urls,
-            business_context_id=context.id,
-            source="webhook",
+        record = await _await_sms_before_ack(
+            sms_repo.create(
+                message_sid=MessageSid,
+                from_number=From,
+                to_number=To,
+                direction="inbound",
+                body=Body,
+                media_urls=media_urls,
+                business_context_id=context.id,
+                source="webhook",
+            ),
+            started_at=ack_started_at,
         )
         sms_id = record["id"]
         logger.info("Inbound SMS persisted: id=%s sid=%s", sms_id, MessageSid)
-    except Exception as e:
-        logger.warning("Failed to persist inbound SMS %s: %s", MessageSid, e)
 
-    # Spawn background task for CRM + intelligence + ntfy + auto-reply
-    asyncio.create_task(
-        _process_inbound_sms(
-            sms_id,
-            From,
-            To,
-            Body,
-            context,
-            media_urls,
-            provider_message_id=MessageSid,
+    except asyncio.TimeoutError:
+        logger.warning("Inbound SMS persistence/duplicate handling exceeded provider ack budget")
+        return laml_response(
+            """<?xml version="1.0" encoding="UTF-8"?>
+<Response></Response>""",
+            status_code=503,
         )
-    )
+    except Exception as e:
+        logger.warning("Failed to persist/claim inbound SMS %s: %s", MessageSid, e)
+        if sms_repo is None:
+            return laml_response(
+                """<?xml version="1.0" encoding="UTF-8"?>
+<Response></Response>""",
+                status_code=503,
+            )
+        try:
+            existing = await _await_sms_before_ack(
+                sms_repo.get_by_message_sid(MessageSid),
+                started_at=ack_started_at,
+            )
+        except Exception as lookup_e:
+            logger.warning("Failed to recover existing SMS %s after persistence error: %s", MessageSid, lookup_e)
+            return laml_response(
+                """<?xml version="1.0" encoding="UTF-8"?>
+<Response></Response>""",
+                status_code=503,
+            )
+        if not existing:
+            return laml_response(
+                """<?xml version="1.0" encoding="UTF-8"?>
+<Response></Response>""",
+                status_code=503,
+            )
+        try:
+            recovered_context = _context_for_persisted_sms(
+                existing,
+                fallback_to=To,
+                context_router=context_router,
+            )
+            resume_outcome = await _await_sms_before_ack(
+                _resume_duplicate_inbound_sms_before_ack(
+                    existing,
+                    fallback_from=From,
+                    fallback_to=To,
+                    fallback_body=Body,
+                    fallback_media_urls=media_urls,
+                    context=recovered_context,
+                    provider_message_id=MessageSid,
+                    sms_repo=sms_repo,
+                    started_at=ack_started_at,
+                ),
+                started_at=ack_started_at,
+            )
+        except Exception as resume_e:
+            logger.warning("Failed to resume inbound SMS %s after persistence error: %s", MessageSid, resume_e)
+            return laml_response(
+                """<?xml version="1.0" encoding="UTF-8"?>
+<Response></Response>""",
+                status_code=503,
+            )
+        if _sms_processing_outcome_requires_provider_retry(resume_outcome):
+            return laml_response(
+                """<?xml version="1.0" encoding="UTF-8"?>
+<Response></Response>""",
+                status_code=503,
+            )
+        if resume_outcome != "complete":
+            return laml_response(
+                """<?xml version="1.0" encoding="UTF-8"?>
+<Response></Response>""",
+                status_code=503,
+            )
+        return laml_response("""<?xml version="1.0" encoding="UTF-8"?>
+<Response></Response>""")
 
-    # Return empty TwiML immediately
+    processing_outcome = await _run_inbound_sms_processing_before_ack(
+        sms_id,
+        From,
+        To,
+        Body,
+        context,
+        media_urls,
+        provider_message_id=MessageSid,
+        claim_processing=True,
+        retry_pending_recorder="caller",
+        started_at=ack_started_at,
+    )
+    if _sms_processing_outcome_requires_provider_retry(processing_outcome):
+        return laml_response(
+            """<?xml version="1.0" encoding="UTF-8"?>
+<Response></Response>""",
+            status_code=503,
+        )
+
     return laml_response("""<?xml version="1.0" encoding="UTF-8"?>
 <Response></Response>""")
 

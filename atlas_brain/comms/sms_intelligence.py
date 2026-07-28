@@ -26,6 +26,10 @@ from ..storage.repositories.sms_message import get_sms_message_repo
 logger = logging.getLogger("atlas.comms.sms_intelligence")
 
 
+class SMSCRMRetryableError(RuntimeError):
+    """CRM infrastructure failed after the SMS row was claimed."""
+
+
 # ---------------------------------------------------------------------------
 # SMS intent -> business intent normalization
 # ---------------------------------------------------------------------------
@@ -92,7 +96,10 @@ async def process_inbound_sms(
     business_context=None,
     media_urls: Optional[list] = None,
     provider_message_id: Optional[str] = None,
-) -> None:
+    processing_owner_token: Optional[str] = None,
+    stop_after_crm: bool = False,
+    existing_contact_id: Optional[str] = None,
+) -> str:
     """
     Process an inbound SMS through the intelligence pipeline.
 
@@ -102,11 +109,11 @@ async def process_inbound_sms(
 
     if not cfg.enabled:
         logger.info("SMS intelligence disabled, skipping")
-        return
+        return "skipped_intelligence"
 
     if not body.strip():
         logger.info("Empty SMS body, skipping intelligence pipeline")
-        return
+        return "skipped_intelligence"
 
     repo = get_sms_message_repo()
 
@@ -115,7 +122,12 @@ async def process_inbound_sms(
     extracted_data = {}
     raw_intent = None
     try:
-        if sms_id:
+        if sms_id and processing_owner_token:
+            touch = getattr(repo, "touch_contact_processing_owner", None)
+            if callable(touch) and not await touch(sms_id, processing_owner_token):
+                logger.info("SMS %s lost processing ownership before extraction", sms_id)
+                return "lost_ownership"
+        elif sms_id:
             await repo.update_status(sms_id, "processing")
 
         summary, extracted_data, raw_intent = await _extract_sms_data(body, business_context)
@@ -153,26 +165,44 @@ async def process_inbound_sms(
         logger.info("SMS intent=%s, skipping CRM/plan/notify", raw_intent)
         if sms_id:
             try:
-                await repo.update_status(sms_id, "ready")
+                if processing_owner_token:
+                    updater = getattr(repo, "update_contact_processing_status", None)
+                    if callable(updater):
+                        await updater(
+                            sms_id,
+                            "ready",
+                            owner_token=processing_owner_token,
+                            clear_owner=True,
+                        )
+                else:
+                    await repo.update_status(sms_id, "ready")
             except Exception:
                 pass
-        return
+        return "terminal_no_contact"
 
     # Step 2: CRM link
-    contact_id = None
+    contact_id = str(existing_contact_id) if existing_contact_id else None
     is_new_lead = False
-    try:
-        contact_id, is_new_lead = await _link_to_crm(
-            repo, sms_id, from_number, business_context_id,
-            extracted_data, summary or f"Inbound SMS: {body[:100]}",
-            provider_message_id=provider_message_id,
-        )
-        if contact_id:
-            logger.info("Step 2/4 OK: Linked SMS to contact %s (new=%s)", contact_id, is_new_lead)
-        else:
-            logger.info("Step 2/4 OK: No CRM link created (insufficient data)")
-    except Exception as e:
-        logger.error("Step 2/4 FAIL: CRM link: %s", e)
+    if contact_id:
+        logger.info("Step 2/4 OK: Resuming SMS with existing contact %s", contact_id)
+    else:
+        try:
+            contact_id, is_new_lead = await _link_to_crm(
+                repo, sms_id, from_number, business_context_id,
+                extracted_data, summary or f"Inbound SMS: {body[:100]}",
+                provider_message_id=provider_message_id,
+                processing_owner_token=processing_owner_token,
+            )
+            if contact_id:
+                logger.info("Step 2/4 OK: Linked SMS to contact %s (new=%s)", contact_id, is_new_lead)
+            else:
+                logger.info("Step 2/4 OK: No CRM link created (insufficient data)")
+        except Exception as e:
+            logger.error("Step 2/4 FAIL: CRM link: %s", e)
+            return "retry_pending"
+
+    if contact_id and stop_after_crm:
+        return "crm_linked"
 
     # Step 3: Action plan
     action_plan = []
@@ -198,6 +228,7 @@ async def process_inbound_sms(
             summary, extracted_data, action_plan,
             business_context,
             is_new_lead=is_new_lead,
+            processing_owner_token=processing_owner_token,
         )
         notified = True
         logger.info("Step 4/4 OK: Notification sent")
@@ -210,6 +241,7 @@ async def process_inbound_sms(
             await repo.update_status(sms_id, "ready")
         except Exception:
             pass
+    return "complete"
 
 
 async def _extract_sms_data(
@@ -386,6 +418,7 @@ async def _link_to_crm(
     summary: str,
     *,
     provider_message_id: Optional[str] = None,
+    processing_owner_token: Optional[str] = None,
 ) -> tuple[Optional[str], bool]:
     """Look up or create a CRM contact from SMS extraction data.
 
@@ -396,7 +429,7 @@ async def _link_to_crm(
 
     pool = get_db_pool()
     if not pool.is_initialized:
-        return None, False
+        raise SMSCRMRetryableError("CRM database pool unavailable")
 
     email_addr = extracted_data.get("customer_email")
     name = extracted_data.get("customer_name")
@@ -419,6 +452,16 @@ async def _link_to_crm(
 
     if not phone and not email_addr:
         return None, False
+
+    if sms_id and processing_owner_token:
+        owns = getattr(repo, "owns_contact_processing", None)
+        if callable(owns) and not await owns(sms_id, processing_owner_token):
+            logger.info("SMS %s lost processing ownership before CRM link", sms_id)
+            raise SMSCRMRetryableError("lost SMS processing ownership before CRM link")
+        touch = getattr(repo, "touch_contact_processing_owner", None)
+        if callable(touch) and not await touch(sms_id, processing_owner_token):
+            logger.info("SMS %s lost processing ownership before CRM link heartbeat", sms_id)
+            raise SMSCRMRetryableError("lost SMS processing ownership before CRM link")
 
     raw_intent = extracted_data.get("intent", "")
     business_intent = _SMS_INTENT_MAP.get(raw_intent)
@@ -453,27 +496,39 @@ async def _link_to_crm(
             source_ref=(str(sms_id) if sms_id else inbound_message_id),
         )
     if not contact.get("id"):
-        return None, False
+        raise SMSCRMRetryableError("CRM contact command returned no contact id")
 
     contact_id = str(contact["id"])
     is_new_lead = contact.get("_was_created", False)
 
     # Link the SMS to the contact
     if sms_id:
+        if processing_owner_token:
+            owns = getattr(repo, "owns_contact_processing", None)
+            if callable(owns) and not await owns(sms_id, processing_owner_token):
+                logger.info("SMS %s lost processing ownership after CRM contact write", sms_id)
+                raise SMSCRMRetryableError("lost SMS processing ownership after CRM contact write")
         await repo.link_contact(sms_id, contact_id)
 
     if context_id != EOM_BUSINESS_CONTEXT_ID:
-        await crm.log_interaction(
-            contact_id=contact_id,
-            interaction_type="sms",
-            summary=summary or f"Inbound SMS from {from_number}",
-            intent=business_intent,
-            metadata=(
-                {"crm_event_id": f"sms:{inbound_message_id}"}
-                if inbound_message_id
-                else None
-            ),
-        )
+        try:
+            await crm.log_interaction(
+                contact_id=contact_id,
+                interaction_type="sms",
+                summary=summary or f"Inbound SMS from {from_number}",
+                intent=business_intent,
+                metadata=(
+                    {"crm_event_id": f"sms:{inbound_message_id}"}
+                    if inbound_message_id
+                    else None
+                ),
+            )
+        except Exception as e:
+            logger.warning(
+                "SMS interaction logging failed after contact link for %s: %s",
+                contact_id,
+                e,
+            )
 
     return contact_id, is_new_lead
 
@@ -517,6 +572,7 @@ async def _notify_sms_summary(
     proposed_actions: list,
     business_context=None,
     is_new_lead: bool = False,
+    processing_owner_token: Optional[str] = None,
 ) -> None:
     """Send ntfy notification with SMS summary and intent-aware buttons."""
     cfg = settings.sms_intelligence
@@ -610,7 +666,16 @@ async def _notify_sms_summary(
 
         if sms_id:
             await repo.mark_notified(sms_id)
-            await repo.update_status(sms_id, "notified")
+            if processing_owner_token:
+                updater = getattr(repo, "update_contact_processing_status", None)
+                if callable(updater):
+                    await updater(
+                        sms_id,
+                        "processing",
+                        owner_token=processing_owner_token,
+                    )
+            else:
+                await repo.update_status(sms_id, "notified")
         logger.info("SMS notification sent for %s", from_number)
     except Exception as e:
         logger.warning("Failed to send SMS notification: %s", e)
