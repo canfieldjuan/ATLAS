@@ -222,6 +222,14 @@ def review_attestation_generation(
     return tuple(sorted(generation))
 
 
+def _generation_value(value: object) -> tuple[int, str]:
+    """Return a consistently comparable representation for GraphQL nullable fields."""
+
+    if value is None:
+        return (0, "")
+    return (1, str(value))
+
+
 def review_thread_generation(nodes: Sequence[dict]) -> tuple[tuple[object, ...], ...]:
     """Return a comparable thread generation for consistency checks."""
 
@@ -235,12 +243,12 @@ def review_thread_generation(nodes: Sequence[dict]) -> tuple[tuple[object, ...],
             body = ((comments[0] or {}).get("bodyText")) or ""
         generation.append(
             (
-                node.get("isResolved"),
-                node.get("isOutdated"),
-                node.get("path"),
-                node.get("line"),
-                author,
-                body,
+                _generation_value(node.get("isResolved")),
+                _generation_value(node.get("isOutdated")),
+                _generation_value(node.get("path")),
+                _generation_value(node.get("line")),
+                _generation_value(author),
+                _generation_value(body),
             )
         )
     return tuple(sorted(generation))

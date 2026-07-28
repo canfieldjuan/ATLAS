@@ -119,6 +119,16 @@ def test_current_head_changes_requested_review_is_not_satisfactory_attestation()
     assert c.current_head_change_requests(reviews, head_sha="head-a", bot_logins=BOTS) == reviews
 
 
+def test_review_thread_generation_sorts_file_level_and_inline_threads():
+    c = load_check()
+    nodes = [
+        thread(path="atlas_brain/x.py", line=None),
+        thread(path="atlas_brain/x.py", line=12),
+    ]
+
+    assert len(c.review_thread_generation(nodes)) == 2
+
+
 def test_parse_bot_logins_accepts_exact_defaults():
     c = load_check()
     assert c.parse_bot_logins("chatgpt-codex-connector,chatgpt-codex-connector[bot]") == BOTS

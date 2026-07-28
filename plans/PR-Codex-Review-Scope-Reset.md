@@ -244,7 +244,7 @@ Parked hardening: none under that predicate.
 - `python scripts/sync_pr_plan.py plans/PR-Codex-Review-Scope-Reset.md origin/main --check` - passed.
 - `python scripts/audit_plan_doc.py plans/PR-Codex-Review-Scope-Reset.md` - passed.
 - `python scripts/audit_plan_doc_files_touched.py plans/PR-Codex-Review-Scope-Reset.md origin/main` - passed.
-- `python scripts/audit_plan_doc_diff_size.py plans/PR-Codex-Review-Scope-Reset.md origin/main` - passed, estimate 3827 actual 3827.
+- `python scripts/audit_plan_doc_diff_size.py plans/PR-Codex-Review-Scope-Reset.md origin/main` - passed, estimate 4134 actual 4134.
 - `git diff --check -- . ':!node_modules'` - passed.
 
 ## Estimated diff size
@@ -266,7 +266,7 @@ Parked hardening: none under that predicate.
 | `docs/ci_cd_autonomous_coding_map.md` | 4 |
 | `docs/long_running_agent_monitoring_spec.md` | 2 |
 | `docs/long_running_session_watcher_handoff.md` | 43 |
-| `plans/PR-Codex-Review-Scope-Reset.md` | 289 |
+| `plans/PR-Codex-Review-Scope-Reset.md` | 291 |
 | `scripts/audit_ai_reconciliation.py` | 6 |
 | `scripts/check_ai_reconciliation_live.py` | 387 |
 | `scripts/check_review_body_r14.py` | 202 |
@@ -288,4 +288,4 @@ Parked hardening: none under that predicate.
 | `tests/test_report_pr_watcher_state.py` | 3 |
 | `tests/test_set_claude_review_status.py` | 175 |
 | `tests/test_watch_owned_pr.py` | 362 |
-| **Total** | **4132** |
+| **Total** | **4134** |
