@@ -43,40 +43,62 @@ def review(hour: int, paths: list[str], login: str = "chatgpt-codex-connector[bo
 def rounds_from(counts: list[int], path: str = "svc/classifier.py") -> list:
     """One bot review per entry, each raising `counts[i]` findings on one path."""
     return mod.bot_review_rounds(
-        [review(i, [path] * n) for i, n in enumerate(counts)], ("codex",)
+        [review(i, [path] * n) for i, n in enumerate(counts)], mod._DEFAULT_BOTS
     )
 
 
 # --- bot_review_rounds -------------------------------------------------------
 
 
-def test_rounds_keep_codex_and_copilot() -> None:
-    nodes = [review(1, ["a.py"]), review(2, ["b.py"], login="copilot-pull-request-reviewer")]
-    assert len(mod.bot_review_rounds(nodes, ("copilot", "codex"))) == 2
+def test_rounds_keep_exact_codex_connector_identities() -> None:
+    nodes = [
+        review(1, ["a.py"], login="chatgpt-codex-connector"),
+        review(2, ["b.py"], login="chatgpt-codex-connector[bot]"),
+    ]
+    assert len(mod.bot_review_rounds(nodes, mod._DEFAULT_BOTS)) == 2
+
+
+def test_rounds_drop_codex_substring_impersonators() -> None:
+    nodes = [
+        review(1, ["a.py"], login="codex-helper"),
+        review(2, ["b.py"], login="not-chatgpt-codex-connector"),
+    ]
+    assert mod.bot_review_rounds(nodes, mod._DEFAULT_BOTS) == []
 
 
 def test_rounds_drop_human_reviews() -> None:
-    assert mod.bot_review_rounds([review(1, ["a.py"], login="canfieldjuan")], ("codex",)) == []
+    assert mod.bot_review_rounds([review(1, ["a.py"], login="canfieldjuan")], mod._DEFAULT_BOTS) == []
 
 
 def test_rounds_honour_bot_override() -> None:
-    assert mod.bot_review_rounds([review(1, ["a.py"], login="some-other-bot")], ("some-other",))
+    assert mod.bot_review_rounds([review(1, ["a.py"], login="some-other-bot")], ("some-other-bot",))
+
+
+def test_parse_bot_logins_accepts_exact_defaults() -> None:
+    assert mod.parse_bot_logins(
+        "chatgpt-codex-connector,chatgpt-codex-connector[bot]"
+    ) == list(mod._DEFAULT_BOTS)
+
+
+def test_parse_bot_logins_rejects_legacy_codex_alias() -> None:
+    with pytest.raises(ValueError, match="exact GitHub logins"):
+        mod.parse_bot_logins("codex")
 
 
 def test_empty_bot_review_is_kept_as_a_round() -> None:
     """A bot review raising nothing is convergence evidence, not a gap."""
-    rounds = mod.bot_review_rounds([review(1, [])], ("codex",))
+    rounds = mod.bot_review_rounds([review(1, [])], mod._DEFAULT_BOTS)
     assert len(rounds) == 1 and rounds[0].count == 0
 
 
 def test_review_without_timestamp_is_skipped() -> None:
     node = review(1, ["a.py"])
     node["submittedAt"] = ""
-    assert mod.bot_review_rounds([node], ("codex",)) == []
+    assert mod.bot_review_rounds([node], mod._DEFAULT_BOTS) == []
 
 
 def test_rounds_are_ordered_by_submission_time() -> None:
-    rounds = mod.bot_review_rounds([review(9, ["a.py"]), review(1, ["b.py"])], ("codex",))
+    rounds = mod.bot_review_rounds([review(9, ["a.py"]), review(1, ["b.py"])], mod._DEFAULT_BOTS)
     assert [r.submitted_at for r in rounds] == sorted(r.submitted_at for r in rounds)
     assert [r.index for r in rounds] == [1, 2]
 
@@ -121,12 +143,12 @@ def test_empty_round_breaks_the_streak() -> None:
 def test_scattered_findings_do_not_trip() -> None:
     """Same counts spread over many files: review breadth, not one seam."""
     nodes = [review(i, [f"file{j}.py" for j in range(5)]) for i in range(3)]
-    assert mod.find_trip(mod.bot_review_rounds(nodes, ("codex",))) is None
+    assert mod.find_trip(mod.bot_review_rounds(nodes, mod._DEFAULT_BOTS)) is None
 
 
 def test_trip_names_the_leading_seam() -> None:
     nodes = [review(i, ["seam.py"] * 4 + ["other.py"]) for i in range(3)]
-    trip = mod.find_trip(mod.bot_review_rounds(nodes, ("codex",)))
+    trip = mod.find_trip(mod.bot_review_rounds(nodes, mod._DEFAULT_BOTS))
     assert trip is not None and trip[1] == "seam.py"
 
 
@@ -281,7 +303,7 @@ def test_regression_multi_commit_push_still_trips() -> None:
     the synthetic zeros suppressed the trip entirely.
     """
     nodes = [review(h, ["seam.py"] * 5) for h in (1, 3, 5)]
-    assert mod.find_trip(mod.bot_review_rounds(nodes, ("codex",))) is not None
+    assert mod.find_trip(mod.bot_review_rounds(nodes, mod._DEFAULT_BOTS)) is not None
 
 
 def test_regression_negated_marker_does_not_fail_open() -> None:
@@ -299,7 +321,7 @@ def test_regression_seam_must_lead_the_last_round() -> None:
         review(1, ["a.py"] * 6),
         review(2, ["b.py"] * 5),
     ]
-    assert mod.find_trip(mod.bot_review_rounds(nodes, ("codex",))) is None
+    assert mod.find_trip(mod.bot_review_rounds(nodes, mod._DEFAULT_BOTS)) is None
 
 
 def test_regression_endpoint_ratio_no_longer_trips_a_decline() -> None:
@@ -319,13 +341,13 @@ def test_regression_trend_is_measured_on_the_seam_not_the_total() -> None:
         review(1, ["seam.py"] * 4 + ["other.py"] * 3),
         review(2, ["seam.py"] * 2 + ["other.py"] * 6),
     ]
-    assert mod.find_trip(mod.bot_review_rounds(nodes, ("codex",))) is None
+    assert mod.find_trip(mod.bot_review_rounds(nodes, mod._DEFAULT_BOTS)) is None
 
 
 def test_regression_empty_round_is_not_spliced_out() -> None:
     """Round 2: skipping a clean review made non-adjacent rounds look adjacent."""
     nodes = [review(0, ["s.py"] * 5), review(1, []), review(2, ["s.py"] * 5), review(3, ["s.py"] * 5)]
-    rounds = mod.bot_review_rounds(nodes, ("codex",))
+    rounds = mod.bot_review_rounds(nodes, mod._DEFAULT_BOTS)
     assert [r.count for r in rounds] == [5, 0, 5, 5]
     assert mod.find_trip(rounds) is None
 
@@ -445,37 +467,37 @@ def _review(when: str, bot: str, commit: str, findings: int, path: str = "svc/cl
     }
 
 
-def test_two_bots_on_one_push_are_one_round() -> None:
+def test_two_connector_identities_on_one_push_are_one_round() -> None:
     nodes = [
-        _review("2026-07-27T01:00:00Z", "codex", "aaa", 2),
-        _review("2026-07-27T01:05:00Z", "copilot", "aaa", 2),
-        _review("2026-07-27T02:00:00Z", "codex", "bbb", 2),
-        _review("2026-07-27T02:05:00Z", "copilot", "bbb", 2),
+        _review("2026-07-27T01:00:00Z", "chatgpt-codex-connector", "aaa", 2),
+        _review("2026-07-27T01:05:00Z", "chatgpt-codex-connector[bot]", "aaa", 2),
+        _review("2026-07-27T02:00:00Z", "chatgpt-codex-connector", "bbb", 2),
+        _review("2026-07-27T02:05:00Z", "chatgpt-codex-connector[bot]", "bbb", 2),
     ]
-    rounds = mod.bot_review_rounds(nodes, ("codex", "copilot"))
+    rounds = mod.bot_review_rounds(nodes, mod._DEFAULT_BOTS)
     assert [r.index for r in rounds] == [1, 2]
     # findings merge: the rule asks what the round argued about, not who said it
     assert [r.count for r in rounds] == [4, 4]
 
 
-def test_two_bots_cannot_trip_the_window_in_two_pushes() -> None:
+def test_two_connector_identities_cannot_trip_the_window_in_two_pushes() -> None:
     """The early-trip this fixes: four submissions over two pushes."""
     nodes = [
-        _review("2026-07-27T01:00:00Z", "codex", "aaa", 3),
-        _review("2026-07-27T01:05:00Z", "copilot", "aaa", 3),
-        _review("2026-07-27T02:00:00Z", "codex", "bbb", 3),
-        _review("2026-07-27T02:05:00Z", "copilot", "bbb", 3),
+        _review("2026-07-27T01:00:00Z", "chatgpt-codex-connector", "aaa", 3),
+        _review("2026-07-27T01:05:00Z", "chatgpt-codex-connector[bot]", "aaa", 3),
+        _review("2026-07-27T02:00:00Z", "chatgpt-codex-connector", "bbb", 3),
+        _review("2026-07-27T02:05:00Z", "chatgpt-codex-connector[bot]", "bbb", 3),
     ]
-    assert mod.find_trip(mod.bot_review_rounds(nodes, ("codex", "copilot"))) is None
+    assert mod.find_trip(mod.bot_review_rounds(nodes, mod._DEFAULT_BOTS)) is None
 
 
-def test_three_pushes_still_trip_with_two_bots() -> None:
+def test_three_pushes_still_trip_with_two_connector_identities() -> None:
     """The other direction: grouping must not make a real loop undetectable."""
     nodes = []
     for index, commit in enumerate(("aaa", "bbb", "ccc")):
-        nodes.append(_review(f"2026-07-27T0{index}:00:00Z", "codex", commit, 2))
-        nodes.append(_review(f"2026-07-27T0{index}:05:00Z", "copilot", commit, 2))
-    assert mod.find_trip(mod.bot_review_rounds(nodes, ("codex", "copilot"))) is not None
+        nodes.append(_review(f"2026-07-27T0{index}:00:00Z", "chatgpt-codex-connector", commit, 2))
+        nodes.append(_review(f"2026-07-27T0{index}:05:00Z", "chatgpt-codex-connector[bot]", commit, 2))
+    assert mod.find_trip(mod.bot_review_rounds(nodes, mod._DEFAULT_BOTS)) is not None
 
 
 def test_reviews_without_a_commit_field_do_not_collapse() -> None:

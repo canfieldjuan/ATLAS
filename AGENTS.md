@@ -1,23 +1,16 @@
 # AGENTS.md — Atlas multi-agent workflow
 
-Atlas uses **two coordinated Claude Code sessions** for non-trivial
-work:
+Atlas uses one builder session plus the GitHub Codex connector for
+non-trivial work:
 
-1. **Builder session** — drafts the plan, writes the code, opens the PR.
-2. **Reviewer session** — audits each PR independently and posts a
-   verdict (BLOCKER / MAJOR / NIT / LGTM). After the verdict, record it as the
-   machine-readable `claude-review` gate for the reviewed head SHA with
-   `scripts/set_claude_review_status.py` (no open BLOCKER -> `success`, i.e. an
-   LGTM or only non-blocking MAJOR/NIT notes; an open BLOCKER -> `failure`).
-   Unresolved matrix entries are themselves filed as BLOCKERs, so a review with
-   open questions lands on `failure` without changing this mapping; see
-   `docs/REVIEWER_MERGE_GATE.md` for the two-gate merge condition and its trust
-   boundary.
+1. **Builder session** - drafts the plan, writes the code, opens the PR.
+2. **Codex connector review** - reviews the opened PR in GitHub. Its review
+   threads are the reviewer gate and are enforced by `live-reconciliation`.
 
-This file is the contract both sessions work from. The auditor
+This file is the contract the builder and Codex connector work from. The auditor
 (prompt at `AUDITOR_PROMPT.md`) handles cross-cutting integration /
 canonical / scope checks; this file defines the **PR-shape contract**
-that lets the reviewer give the builder a clean LGTM.
+that lets Codex give the builder focused, code-grounded feedback.
 
 **New or restarted builder sessions: read `docs/SESSION_BOOTSTRAP.md`
 first.** It carries the get-up-to-speed checklist, the recurring-lapse
@@ -30,37 +23,43 @@ redirect prompt in that file.
 
 ## Review guidelines
 
-Automated reviewers — including the GitHub Codex connector, which reads this
-section — follow Atlas's Reviewer Rules Pack in `docs/REVIEWER_RULES.md` (rules
-R1–R14) and the PR's Review Contract. Review the same way the Reviewer session does.
+The GitHub Codex connector is Atlas's review gate. Follow
+`docs/REVIEWER_RULES.md` and the PR's Review Contract, but keep the review
+bounded to changed code, direct callers/tests/artifacts, required CI, and
+contract risks that are actually reachable from this PR.
 
 - Verify against the codebase, not the PR story (R14): treat the PR description,
   title, and commit messages as unverified claims; reconstruct what the diff
   actually does from the code.
-- Every finding cites a rule ID (R1–R14) and `file:line`. Blockers must cite
-  `file:line`. Classify each finding as **BLOCKER / MAJOR / NIT / LGTM** per the pack.
-- Check the PR's `### Review Contract`: does the diff meet its acceptance criteria?
-  Then disposition EVERY rule R1-R14 -- the path-to-rule table in the pack sets how
-  deeply each is probed, not which appear, so a rule the table does not trigger is
-  still recorded (Pass, or N-A with a reason).
+- Every finding cites a rule ID (R1-R14) and `file:line`. Blockers must cite
+  `file:line` and a concrete failure path, unless the rule itself makes missing
+  mandatory evidence the blocker.
+- Check the PR's `### Review Contract`: does the diff meet its acceptance
+  criteria, and which rules do the changed paths trigger? Do not run an
+  exhaustive R1-R14 matrix when a rule has no changed-path, direct-caller,
+  acceptance-criterion, CI, security, data, migration, or deployment hook in
+  this PR.
 - Hunt the rule categories: requirements match (R1), test evidence (R2),
   security/authorization (R3), data & migration safety (R4), backward compatibility
   (R5), error handling & observability (R6), performance (R7), concurrency &
   idempotency (R8), frontend (R9), maintainability (R10), dependencies & config
   (R11), deployment safety & CI (R12). Fix the class, not the example (R13).
-- **Know when you are done** (Review completion, in the pack): a review is complete
-  when its matrix is dispositioned -- each acceptance criterion met / not met /
-  could-not-determine, EVERY rule R1-R14 pass / fail / not-verified / n-a-with-reason
-  (the path table sets probe depth, not which rules appear), and what you
-  did not verify listed with the reason. State that matrix. Completeness is never
-  "no further case can be found"; on an open surface that point does not exist.
 - **Report the class, not the instance.** R13 obliges the builder to fix the class
   rather than the example; the same duty binds you. Findings that share one
   underlying decision are **one** finding naming that decision, with the instances
   as illustrations. If a finding of yours would open "fresh evidence beyond the
   earlier X finding", it belongs merged into X, not filed separately.
-- Lead with blockers. `LGTM` (every rule R1-R14 Pass or reasoned N-A, no open
-  BLOCKER/MAJOR) is a valid, complete result; do not manufacture NITs.
+- Suppress NITs by default. Only file a NIT when it is a one-line, changed-line
+  fix that materially improves readability or prevents confusion; otherwise
+  omit it or waive it as NIT-only. In executable policy fixtures, use
+  `FILE_NIT` for the one-line exception and `WAIVE_NIT` for suppressed NIT-only
+  polish.
+- Waive out-of-scope hardening, duplicate instances, speculative risks without
+  a concrete failure path, and style-only issues. A waiver must state why it is
+  safe to leave out of this PR.
+- Lead with blockers. `LGTM` is valid when all triggered rules pass, required CI
+  is green, all Codex threads are resolved or explicitly waived, and no open
+  BLOCKER/MAJOR remains. Do not manufacture findings.
 
 ---
 
@@ -341,21 +340,20 @@ Intentional / Deferred / Verification -- matches AGENTS.md framework.
 Slice phase is named and matches the PR's scope. Parked hardening is
 named in Deferred or explicitly marked none.
 
-**Rule results (EVERY rule R1-R14, see docs/REVIEWER_RULES.md):**
+**Rule results (triggered rules plus R14, see docs/REVIEWER_RULES.md):**
 - R1 Requirements match: Pass/Fail/Not-Verified/N-A
 - R2 Test evidence: Pass/Fail/Not-Verified/N-A
 - R3 Security/auth ... R14 Codebase verification: Pass/Fail/Not-Verified/N-A
-(List every rule R1-R14. The path-trigger table sets probe DEPTH, not which
-rules appear -- a rule the table does not trigger is still recorded, as Pass or
-as N-A with a reason. Cite file:line on any Fail. Not-Verified ends the search
-but blocks LGTM.)
+(List the rules triggered by changed paths, direct callers, acceptance
+criteria, CI, security, data, migration, or deployment risk, plus R14. Cite
+file:line on any Fail. Not-Verified ends the search but blocks LGTM.)
 
 **boundary-probe:** <N-A, or what guard-shaped probe applied + result. Required
 before LGTM on guards, validators, caps, classifiers, gates, sanitizers,
 denylists, parser admission rules, or safety checkers.>
 
-**AI reconciliation:** AI findings reviewed: Y/N. All fixed or waived: Y/N.
-Waivers justified in PR body: Y/N.
+**AI reconciliation:** Codex findings reviewed: Y/N. All fixed or waived:
+Y/N. Waivers justified in PR body: Y/N.
 
 **Defensible trade-offs (no action needed):**
 - <decision> -- <why it's the right call>
@@ -367,8 +365,8 @@ LGTM. (or: BLOCKER -- ...)
 ```
 
 A finding is written as `Rxx (LEVEL) file:line - issue - required fix`,
-mapping the rule to the verdict level above. A bare "LGTM" with no rule
-matrix and no independent verification is worse than no comment.
+mapping the rule to the verdict level above. A bare "LGTM" with no independent
+verification is worse than no comment.
 
 ### 2b. CI gate
 
@@ -550,10 +548,9 @@ When using `scripts/push_pr.sh`, that skip does not drop local review
 entirely: the wrapper runs the bundle before the push because the hook will
 skip.
 
-After the mechanical bundle passes, hand the branch to a separate local
-reviewer session for judgment review. The reviewer should read the plan
-doc and diff locally, run any focused tests needed to verify the claims,
-and return a verdict before the builder opens the GitHub PR.
+After the mechanical bundle passes, open or update the GitHub PR. The Codex
+connector review and `live-reconciliation` own reviewer feedback; do not add a
+second local reviewer gate unless the operator explicitly asks for one.
 
 For logic or shared-function PRs, the builder must read the cross-layer
 caller hints from local review and either add focused caller-layer tests
@@ -643,26 +640,12 @@ For long-running coding tasks, after each PR open or push:
    Claude poll or Codex/local wake-bridge confirmation before merging.
 8. If the scheduled poll/wake reports all required checks green, all
    review/reconciliation gates clean, and merge-conflict/mergeability state
-   clean, the active builder follows the merge rules for the current arc. The
-   review/reconciliation gates are **two, and both must be green** -- neither
-   one alone is sufficient: `live-reconciliation` for the Codex/bot review
-   (unaccounted bot threads red it) and `claude-review` for the Claude Code
-   reviewer (a per-SHA commit status; absent or `failure` is not clean). See
-   `docs/REVIEWER_MERGE_GATE.md`. A re-push resets `claude-review`, so a merge
-   waits for the reviewer to re-review the new head. In Codex/local watcher
-   mode, first surface that state with `scripts/report_pr_watcher_state.py`. If
-   the operator has not authorized the active builder to merge for this arc, or
-   has not made `claude-review` a required check, report readiness and wait.
-   **Trust boundary (do not skip):** `claude-review` is a plain commit status,
-   so any token with `status:write` on the repo can publish
-   `claude-review=success`, including the builder if it shares the reviewer's
-   GitHub identity. It is therefore a coordination-and-audit signal that keeps
-   an honest builder from merging before review, NOT a defense against a builder
-   that forges it. It becomes a real gate only when it is posted from a reviewer
-   identity the builder does not have (a distinct GitHub App or bot token with
-   `status:write` that the builder's token lacks). The operator MUST NOT grant a
-   forge-capable builder merge authority on the strength of `claude-review`;
-   provision the distinct reviewer identity first.
+   clean, the active builder follows the merge rules for the current arc.
+   `live-reconciliation` is the Codex review gate: unresolved Codex review
+   threads red it, and waived findings must be recorded in the PR body. In
+   Codex/local watcher mode, first surface that state with
+   `scripts/report_pr_watcher_state.py`. If the operator has not authorized the
+   active builder to merge for this arc, report readiness and wait.
 9. After merge, tear down only the owned worktree/branch, archive the plan as
    required, sync from `origin/main`, and continue to the next approved slice
    if the arc says to continue. The merge itself is the signal to pick up the
@@ -1283,9 +1266,9 @@ the **allowed-files set**, and a **max-files budget**.
   upstream file, name the upstream reason in the baton and the plan **before**
   editing it (this is the §3k trace, not a drive-by). Do not silently grow the
   diff.
-- **One judgment pass, no auto-loop.** Bot findings are advisory inputs you
+- **One judgment pass, no auto-loop.** Codex findings are gate inputs you
   disposition deliberately (resolve or waive with a reason); there is no
-  "address every comment" reflex (§4a.1).
+  "address every comment" reflex (§4c).
 - **The baton is the compaction handoff.** Keep the current failing
   check/comment, the last useful log finding, the next exact action, and
   do-not-redo notes current, so a post-compaction resume continues instead of
@@ -1293,141 +1276,74 @@ the **allowed-files set**, and a **max-files budget**.
 
 ---
 
-## 4. Reviewer workflow
+## 4. Codex connector review workflow
 
-The reviewer's job is **not** "review the code" -- it is to **disposition the
-review matrix: every acceptance criterion in the PR's Review Contract, and every
-rule in `docs/REVIEWER_RULES.md`.** Every rule gets a verdict (pass / fail /
-not-verified / n-a-with-reason); the path-trigger table sets how deeply each is
-probed, not which appear. Every finding cites a rule ID (R1-R14) and maps to a
-verdict level (BLOCKER / MAJOR / NIT). The rule matrix and AI reconciliation go
-in the §2a template.
+Codex is the reviewer gate. Its job is to find code-grounded risks introduced
+by the PR, not to run a second implementation session or produce a mechanical
+checklist. Local review and CI own plan shape, diff budget, whitespace,
+gitleaks, and other deterministic checks.
 
-A dispositioned matrix is a **complete** review -- that is the stopping
-condition, and "violates none of the rules" is not, being a universal negative
-no non-trivial diff can discharge. Complete is not approved: `not-verified` or
-`could-not-determine` entries end the search but block LGTM. See **Review
-completion** in the pack.
+### 4a. Scope of review
 
-### 4a. Independent verification
+Codex reviews:
 
-**Reconstruct the PR independently from the diff -- never review it against its
-description** (`docs/PR_RECONSTRUCTION_PROTOCOL.md`, mandatory for every review).
-Build two INDEPENDENT reconstructions, then compare them. They are independent,
-not sequential: derive (2) purely from the problem, never from the diff, so the
-diff cannot anchor it (the challenger pass -- easiest if you derive it before
-opening the diff, but the binding requirement is only that the diff never shapes
-it).
+1. The changed lines and nearby context needed to understand them.
+2. Direct callers/tests/artifacts needed to prove or contradict the PR's Review
+   Contract.
+3. Required CI failures and deployment/config changes introduced by the PR.
+4. Security, authorization, data-loss, billing, migration, or customer-output
+   risks that have a concrete failure path from the diff.
 
-1. **What the diff actually does** -- read the diff alone and state it change by
-   change, in your own words. The code is ground truth; the description, commit,
-   and title are unverified claims.
-2. **What a correct fix should do** -- from the problem and the Review Contract
-   alone (the challenger pass), derive which files *should* change and which
-   tests *should* exist, never letting the diff shape the answer.
-3. **Compare** those two against what the description claims and report every
-   gap: diff != description; diff != correct fix (wrong / incomplete / symptom
-   patch); diff changes unmentioned things.
-4. **Cite checkable evidence for every claim**: `file:line` for code/content
-   claims, or a named non-file artifact such as command output, CI run/job,
-   generated artifact, or PR metadata. Sort each into confirmed / contradicted /
-   could-not-determine (never confirmed without evidence), and lead with the
-   gaps (record them in the §2a template's Reconstruction block).
+Codex does not file findings for unrelated hardening, broad architecture wishes,
+style preferences, exhaustive whole-repo sweeps, or every possible future edge
+case. Park those as waivers or follow-up issues unless the PR's changed code
+creates the failure path.
 
-Don't trust the PR description's claims; reproduce them. The
-reviewer should:
+### 4b. Finding dispositions
 
-1. Record the exact reviewed head SHA from the checked-out PR head.
-2. Re-run the named verification commands.
-3. Spot-check the plan's invariants at the actual file:line pointed
-   to in the diff.
-4. Sweep for missed call sites with grep patterns more reliable than
-   the PR's claim (multi-line constructions, kwargs split across
-   lines, etc.).
-5. Walk EVERY rule R1-R14 and record Pass/Fail/Not-Verified/N-A for each. The
-   trigger table in `docs/REVIEWER_RULES.md` sets probe depth, not matrix
-   membership -- an untriggered rule is still recorded, and N-A carries a
-   reason. A Not-Verified entry ends the search but blocks LGTM.
-6. Apply R14: every claim used in the verdict must be backed by checked-out
-   code, a caller/test/artifact spot-check, or a "not verified" note with the
-   reason. **No LGTM from the PR story alone.**
+Use these dispositions when reconciling Codex threads:
 
-### 4a.1. AI-finding reconciliation (mandatory before LGTM)
+- **BLOCKER** - material correctness/security/data/contract/CI failure, or
+  missing mandatory proof where the rule itself makes the absence blocking.
+- **MAJOR** - real risk or pattern concern with no material failure path yet, or
+  a proven low-blast-radius defect.
+- **WAIVE_DUPLICATE** - another thread already names the same root decision.
+- **WAIVE_OUT_OF_SCOPE** - valid hardening or design work that is outside this
+  PR's Review Contract.
+- **WAIVE_SPECULATIVE** - risk with no concrete failure path from this PR's
+  diff.
+- **WAIVE_NIT** - style, naming, copy, or polish that is not required for the
+  slice.
+- **NO_FINDING** - the PR satisfies the contract for this scenario.
 
-External review bots (Codex, Copilot) post raw comments outside the
-BLOCKER/MAJOR/NIT taxonomy. They are **advisory inputs to a judgment session,
-never auto-applied** -- a bot false-positive applied blindly turns correct work
-into incorrect work, so there is no "auto-address all comments" loop. **A
-reviewer may not issue LGTM until every AI finding is either fixed or explicitly
-waived with a reason in the PR body.** The machine owns mechanical issues; the
-human owns intent mismatch, product logic, architecture, risky assumptions, and
-missing tests.
+`scripts/codex_review_scope_policy.py --self-test` and
+`tests/test_codex_review_scope_policy.py` are the deterministic fixture oracle
+for these dispositions. They are not Codex adapters; they are test data for the
+policy we expect Codex comments to follow.
 
-This rule is enforced from both sides. Locally,
-`scripts/audit_ai_reconciliation.py` checks the PR body's reconciliation record
-is internally resolved. In CI, the `AI Reconciliation (live)` workflow
-(`scripts/check_ai_reconciliation_live.py`) reads the live Codex/Copilot review
-threads and fails when the body records the findings as all fixed/waived (or
-carries no record) while bot threads are still open -- closing the
-"omitted a real open finding" loophole the local check cannot see.
+### 4c. Reconciliation
 
-### 4b. Verdict frugality
+Every open Codex thread is either fixed or waived with a reason in the PR body.
+`live-reconciliation` remains the machine gate for unresolved Codex threads and
+for stale "all fixed/waived" claims. Do not auto-apply every Codex comment: fix
+confirmed in-scope findings, group duplicates, waive out-of-scope hardening, and
+drop NIT-only noise.
 
-Post **one** review per push. Don't comment on the PR while CI is
-in-flight unless asked. Don't rubber-stamp -- a bare "LGTM" with no
-verification is worse than no comment.
+### 4d. Review checklist
 
-### 4c. NIT discipline
+Before LGTM or merge readiness:
 
-NITs should be marked skip-worthy explicitly when they are. The
-builder applies 1-line NITs; ignores style/naming/comment NITs that
-require a follow-up commit unless the reviewer specifically calls
-out "this should be fixed."
-
-### 4d. Audit checklist
-
-Before LGTM, the reviewer confirms:
-
-- [ ] CI green (extracted-checks ✅, Vercel ✅).
-- [ ] Plan doc has all 7 required sections, including the `### Review
-      Contract` block in Scope (acceptance criteria, affected surfaces, risk
-      areas, triggered rule IDs).
-- [ ] EVERY rule R1-R14 (`docs/REVIEWER_RULES.md`) is recorded
-      Pass/Fail/Not-Verified/N-A -- the path-trigger table sets probe depth,
-      not which rules appear, so an untriggered rule is still recorded (Pass,
-      or N-A with a reason). Every Fail at BLOCKER level cites file:line, and
-      no Not-Verified entry remains when issuing LGTM.
-- [ ] R14 is recorded Pass/Fail/N-A. The verdict names the reviewed head SHA,
-      changed code inspected, caller/test/artifact spot-checks, and any claims
-      not verified. No LGTM from PR/body/builder claims alone.
-- [ ] Every AI (Codex/Copilot) finding is fixed or explicitly waived with a
-      reason in the PR body (§4a.1). No unresolved bot comments at LGTM.
-- [ ] Plan and PR body name a `Slice phase`, and the diff matches that
-      phase. The squash commit message carries the phase from the PR body
-      at merge.
-- [ ] Diff size matches the plan's estimate (or the overage is
-      justified in **Why**).
-- [ ] No regressions in the named test sweep.
-- [ ] For shared-function PRs, cross-layer caller hints were inspected
-      and the verdict names any caller-layer tests or unaffected
-      references.
-- [ ] For checker/evaluator/validator/gate PRs, each detection branch
-      has a focused negative fixture, OR predicates have one-marker
-      fixtures, and false-positive surfaces are covered or explicitly
-      deferred with a named future slice. If the PR adds or changes
-      denylist/regex/phrase-matcher/pattern-list detection, the coverage
-      includes an allowed near-miss fixture or the plan names the future PR
-      that will add it.
-- [ ] For guard-shaped PRs (guards, validators, caps, classifiers, gates,
-      sanitizers, denylists, parser admission rules, or safety checkers), the
-      verdict includes `boundary-probe: <what applied + result>` before LGTM.
-      Missing proof is BLOCKER for security, billing, data deletion,
-      customer-visible output, or CI/release gates; otherwise it is at least
-      MAJOR.
-- [ ] No drift from the plan's stated scope (no scope creep, no
-      "while I was at it" cleanups beyond the slice's contract).
-- [ ] Defensible trade-offs are explained in **Intentional**.
-- [ ] Deferred items have a clear next-PR home.
+- [ ] Required CI/check contexts are green.
+- [ ] The PR has the required plan/body shape, or valid docs-only admission.
+- [ ] The Review Contract acceptance criteria are met or any gap is filed.
+- [ ] Triggered rules in `docs/REVIEWER_RULES.md` are checked at the depth the
+      changed paths require.
+- [ ] R14 is satisfied: verdict claims are backed by checked-out code,
+      caller/test/artifact spot-checks, CI, or explicit not-verified notes.
+- [ ] Codex threads are resolved or waived with a reason in the PR body, and
+      `live-reconciliation` is green for the current PR head after a Codex
+      connector review on that exact head SHA.
+- [ ] No drift from the plan's stated scope.
 
 ---
 
@@ -1436,8 +1352,8 @@ Before LGTM, the reviewer confirms:
 **Reasoning stays in main; retrieval goes to a subagent. Synthesis
 stays with whoever has to act on the answer (almost always main).**
 
-Applies to both builder and reviewer sessions. The point: stretch
-the weekly token budget without pushing judgment work to a model
+Applies to builder sessions and any explicitly assigned review helper. The
+point: stretch the weekly token budget without pushing judgment work to a model
 that can't make judgment calls.
 
 ### 5a. The decision
@@ -1555,126 +1471,18 @@ Things that should **never** appear in a PR or review:
 
 ---
 
-## 8. Bootstrapping a fresh reviewer session
+## 8. Codex connector bootstrap
 
-When the reviewer session is killed, expired, or otherwise needs to
-be re-seeded, paste the block below into a fresh Claude Code session
-(adjust the trailing PR list to match what's actually open). The
-session will arrive with everything it needs to start auditing
-immediately.
+There is no separate reviewer-session bootstrap. The GitHub Codex connector
+reads this file and `docs/REVIEWER_RULES.md` from the PR head. Keep the review
+instructions short enough that Codex can apply them without turning every PR
+into a whole-repo audit:
 
-```
-You are the reviewer Claude session for the canfieldjuan/atlas
-repository. A separate builder session opens PRs; you audit them
-and post one consolidated review per push with a verdict at:
-
-- BLOCKER: correctness, security, contract break, or CI red.
-- MAJOR: architectural / scope / pattern concern, or a proven defect
-  whose blast radius does not warrant blocking.
-- NIT: style / naming / comment polish (mark explicitly skip-worthy
-  when applicable).
-- LGTM: all gates green, no remaining concerns.
-
-Read AGENTS.md at the repo root before your first review. It
-defines:
-- The required plan-doc shape (Why / Scope / Mechanism / Files
-  touched / Intentional / Deferred / Verification) at
-  plans/PR-<Slice-Name>.md.
-- The PR body / commit message conventions that mirror the plan.
-- The thin-slice rule and `HARDENING.md` parking contract for
-  non-blocking discoveries.
-- The reviewer verification template (sections 2a + 4d).
-- The 400 LOC diff budget and how to handle overage.
-- Anti-patterns that should never appear in a builder PR.
-
-Read `docs/REVIEWER_RULES.md` before your first review. Your job is
-not "review the code" -- it is to disposition the review matrix: every
-acceptance criterion in the Review Contract, and every rule R1-R14, each
-pass / fail / not-verified / n-a-with-reason. That matrix is your stopping
-condition; an unresolved entry ends the search but blocks LGTM. Cite a
-rule ID on every finding.
-
-Read AUDITOR_PROMPT.md for the cross-cutting audit checks
-(canonical / integration / scope / debt). Apply both lenses.
-
-For each PR you review:
-
-1. Reconstruct independently (`docs/PR_RECONSTRUCTION_PROTOCOL.md`,
-   mandatory): build two independent reconstructions -- what a correct
-   fix should do (from the Review Contract and problem, never shaped by
-   the diff) and what the diff actually does (read the diff alone) --
-   then report every gap (diff != description; diff != correct fix; diff
-   changes unmentioned things), cited `file:line`, sorted confirmed /
-   contradicted / could-not-determine, gaps first. Do not anchor on the
-   builder's summary.
-2. Reproduce the named verification commands from the PR body.
-   Don't trust claims; re-run them. Spot-check the plan's
-   invariants at the actual file:line cited in the diff.
-3. Record the reviewed head SHA and apply R14: every claim in the verdict
-   must be backed by checked-out code, a caller/test/artifact spot-check, or a
-   "not verified" note with the reason. No LGTM from PR/body/builder claims
-   alone.
-4. Sweep for missed call sites with grep patterns more reliable
-   than the PR's claim (multi-line constructions, kwargs split
-   across lines).
-5. Record Pass/Fail/Not-Verified/N-A for EVERY rule R1-R14
-   (`docs/REVIEWER_RULES.md`) -- the trigger table sets probe depth, not which
-   rules appear; cite file:line on any Fail. Do not LGTM with a Not-Verified
-   entry outstanding.
-6. Reconcile AI findings: do not LGTM until every Codex/Copilot
-   finding is fixed or explicitly waived with a reason in the PR body.
-7. Confirm CI is green (extracted-checks x2 + Vercel) before
-   issuing LGTM.
-8. Mark NITs as skip-worthy explicitly when they are. The builder
-   applies 1-line / unambiguous NITs; ignores style/naming/comment
-   NITs unless you specifically call out "this should be fixed."
-9. Sign your review with: `_Generated by [Claude Code](
-   https://claude.ai/code)_`.
-
-The package under active iteration is `extracted_content_pipeline`.
-Its audit gauntlet is:
-
-```bash
-bash scripts/validate_extracted_content_pipeline.sh
-python extracted/_shared/scripts/forbid_atlas_reasoning_imports.py extracted_content_pipeline
-python scripts/audit_extracted_standalone.py --fail-on-debt
-bash scripts/check_ascii_python.sh
-bash scripts/run_extracted_pipeline_checks.sh   # full CI mirror
-```
-
-The package's manifest at
-`extracted_content_pipeline/manifest.json` distinguishes
-package-owned files (entries with only a `target`) from
-synced-from-`atlas_brain/` files (entries with both `source` and
-`target`). Synced files cannot be edited in
-`extracted_content_pipeline/` directly; the source lives in
-`atlas_brain/`. The sync script propagates.
-
-Recently merged context (so you're not starting cold):
-- PR #396 PR-Blog-Topic-Per-Call: per-call topic kwarg threads from
-  request.inputs through the dispatcher into the blog skill prompt.
-- PR #397 PR-Describe-Control-Surfaces-Cache: GET
-  /content-ops/control-surfaces hot path caches the static
-  catalog payload at import; only execution flags are computed
-  per request.
-- PR #398 PR-Campaign-Config-V2 (BREAKING): drops the legacy
-  `channel` field from CampaignGenerationConfig + the
-  `or (self._config.channel,)` fallback. 4 in-tree wrappers
-  normalize `channel` -> `channels` tuple before dataclass
-  construction.
-- PR #399 PR-Blog-Reasoning-Parity: brings
-  BlogPostGenerationService to constructor parity with the other
-  4 generators on the CampaignReasoningContextProvider port.
-- PR #400 PR-Agents-Md-Framework: this file.
-
-Open PRs as of this bootstrap: <fill in via the GitHub MCP tools or
-mcp__github__list_pull_requests at session start>.
-
-Standby for `<github-webhook-activity>` events; investigate each
-in turn.
-```
-
-If the user prefers to keep AGENTS.md leaner, the reviewer prompt can
-also live at `REVIEWER_BOOTSTRAP.md` and be invoked by a one-liner:
-*"Read REVIEWER_BOOTSTRAP.md, then standby."* Either shape works;
-pick one and keep it.
+1. Code is ground truth; PR prose is an unverified claim.
+2. Review changed code, direct callers/tests/artifacts, required CI, and the
+   PR's Review Contract.
+3. File one root-cause finding per underlying decision.
+4. Suppress NITs by default.
+5. Waive duplicate, out-of-scope, speculative, and NIT-only threads with an
+   explicit reason.
+6. Keep `live-reconciliation` green by resolving or waiving Codex threads.

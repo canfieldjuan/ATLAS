@@ -29,7 +29,14 @@ MARKER_END = "<!-- atlas-pr-watch:end -->"
 SAFE_WATCHER_ID_RE = re.compile(r"^[A-Za-z0-9._-]+$")
 VALID_CHECK_EXIT_CODES = {0, 1, 8}
 MAX_THREAD_PAGES = 50
+MAX_REVIEW_PAGES = 50
 COMMAND_TIMEOUT_SECONDS = 60
+CODEX_CONNECTOR_LOGINS = frozenset(
+    {
+        "chatgpt-codex-connector",
+        "chatgpt-codex-connector[bot]",
+    }
+)
 RECONCILIATION_LIB_DIR = "atlas-pr-watch-lib"
 RECONCILIATION_CHECKER_NAME = "check_ai_reconciliation_live.py"
 TRUSTED_RECONCILIATION_CHECKER = (
@@ -42,7 +49,27 @@ query($owner:String!,$name:String!,$pr:Int!,$cursor:String){
     pullRequest(number:$pr){
       reviewThreads(first:100, after:$cursor){
         pageInfo{ hasNextPage endCursor }
-        nodes{ id isResolved isOutdated path line }
+        nodes{
+          id
+          isResolved
+          isOutdated
+          path
+          line
+          comments(first:1){ nodes{ author{ login } } }
+        }
+      }
+    }
+  }
+}
+"""
+
+REVIEWS_QUERY = """
+query($owner:String!,$name:String!,$pr:Int!,$cursor:String){
+  repository(owner:$owner,name:$name){
+    pullRequest(number:$pr){
+      reviews(first:100, after:$cursor){
+        pageInfo{ hasNextPage endCursor }
+        nodes{ author{ login } commit{ oid } state }
       }
     }
   }
@@ -228,6 +255,35 @@ def _repo_parts(repo: str) -> tuple[str, str]:
     return owner, name
 
 
+def _is_codex_login(value: Any) -> bool:
+    return isinstance(value, str) and value.lower() in CODEX_CONNECTOR_LOGINS
+
+
+def _first_thread_author_login(node: dict[str, Any], *, index: int) -> tuple[str, str | None]:
+    comments = node.get("comments")
+    if not isinstance(comments, dict):
+        return "", f"review thread {index} comments envelope is missing"
+    comment_nodes = comments.get("nodes")
+    if not isinstance(comment_nodes, list):
+        return "", f"review thread {index} comments nodes are malformed"
+    if not comment_nodes:
+        return "", f"review thread {index} has no first comment"
+    first = comment_nodes[0]
+    if not isinstance(first, dict):
+        return "", f"review thread {index} first comment is not an object"
+    author = first.get("author")
+    if author is None:
+        return "", ""
+    if not isinstance(author, dict):
+        return "", f"review thread {index} author is malformed"
+    login = author.get("login")
+    if login is None:
+        return "", ""
+    if not isinstance(login, str):
+        return "", f"review thread {index} author login is malformed"
+    return login, None
+
+
 def _fetch_threads(pr: int, repo: str, *, cwd: Path) -> tuple[list[dict[str, Any]], int, bool, str | None]:
     owner, name = _repo_parts(repo)
     unresolved: list[dict[str, Any]] = []
@@ -293,6 +349,11 @@ def _fetch_threads(pr: int, repo: str, *, cwd: Path) -> tuple[list[dict[str, Any
                 return unresolved, pages, False, f"review thread {index} has malformed line"
             if is_resolved:
                 continue
+            author_login, author_error = _first_thread_author_login(node, index=index)
+            if author_error:
+                return unresolved, pages, False, author_error
+            if not _is_codex_login(author_login):
+                continue
             unresolved.append(
                 {
                     "id": thread_id,
@@ -311,6 +372,93 @@ def _fetch_threads(pr: int, repo: str, *, cwd: Path) -> tuple[list[dict[str, Any
             return unresolved, pages, False, "GraphQL pagination cursor is missing"
         cursor = next_cursor
     return unresolved, pages, False, f"review-thread pagination exceeded {MAX_THREAD_PAGES} pages"
+
+
+def _fetch_codex_head_reviews(
+    pr: int,
+    repo: str,
+    *,
+    head_sha: str,
+    cwd: Path,
+) -> tuple[int, int, bool, str | None]:
+    owner, name = _repo_parts(repo)
+    cursor: str | None = None
+    pages = 0
+    matches = 0
+    for _ in range(MAX_REVIEW_PAGES):
+        command = [
+            "gh",
+            "api",
+            "graphql",
+            "-f",
+            f"query={REVIEWS_QUERY}",
+            "-F",
+            f"owner={owner}",
+            "-F",
+            f"name={name}",
+            "-F",
+            f"pr={pr}",
+        ]
+        if cursor is not None:
+            command.extend(["-F", f"cursor={cursor}"])
+        payload, error = _run_json(
+            command,
+            cwd=cwd,
+            allowed_codes={0},
+            expected_type=dict,
+        )
+        if error:
+            return matches, pages, False, error
+        graphql_errors = payload.get("errors")
+        if graphql_errors:
+            return matches, pages, False, "GraphQL response contains errors"
+        data = payload.get("data")
+        repository = data.get("repository") if isinstance(data, dict) else None
+        pull_request = repository.get("pullRequest") if isinstance(repository, dict) else None
+        reviews = pull_request.get("reviews") if isinstance(pull_request, dict) else None
+        if reviews is None:
+            return matches, pages, False, "GraphQL reviews envelope is missing"
+        if not isinstance(reviews, dict):
+            return matches, pages, False, "GraphQL reviews must be an object"
+        nodes = reviews.get("nodes")
+        page_info = reviews.get("pageInfo")
+        if not isinstance(nodes, list) or not isinstance(page_info, dict):
+            return matches, pages, False, "GraphQL review nodes/pageInfo are malformed"
+        pages += 1
+        for index, node in enumerate(nodes):
+            if not isinstance(node, dict):
+                return matches, pages, False, f"review {index} is not an object"
+            author = node.get("author")
+            commit = node.get("commit")
+            state = node.get("state")
+            if author is None or commit is None:
+                continue
+            if not isinstance(author, dict) or not isinstance(commit, dict):
+                return matches, pages, False, f"review {index} author/commit is malformed"
+            login = author.get("login")
+            oid = commit.get("oid")
+            if login is not None and not isinstance(login, str):
+                return matches, pages, False, f"review {index} author login is malformed"
+            if oid is not None and not isinstance(oid, str):
+                return matches, pages, False, f"review {index} commit oid is malformed"
+            if state is not None and not isinstance(state, str):
+                return matches, pages, False, f"review {index} state is malformed"
+            if (
+                _is_codex_login(login)
+                and oid == head_sha
+                and state in {"COMMENTED", "APPROVED"}
+            ):
+                matches += 1
+        has_next = page_info.get("hasNextPage")
+        if not isinstance(has_next, bool):
+            return matches, pages, False, "GraphQL review hasNextPage must be boolean"
+        if not has_next:
+            return matches, pages, True, None
+        next_cursor = page_info.get("endCursor")
+        if not isinstance(next_cursor, str) or not next_cursor:
+            return matches, pages, False, "GraphQL review pagination cursor is missing"
+        cursor = next_cursor
+    return matches, pages, False, f"review pagination exceeded {MAX_REVIEW_PAGES} pages"
 
 
 def _read_previous(path: Path) -> tuple[dict[str, Any], str | None]:
@@ -388,6 +536,8 @@ def _classify(
     required_count: int,
     threads_complete: bool,
     unresolved_threads: list[dict[str, Any]],
+    reviews_complete: bool,
+    codex_head_review_count: int,
     reconciliation_code: int,
     review_changed: bool,
 ) -> str:
@@ -401,7 +551,13 @@ def _classify(
         return "attention"
     if failures or required_failures or required_count < 1 or reconciliation_code != 0:
         return "attention"
-    if not threads_complete or unresolved_threads or pr.get("isDraft") is not False:
+    if (
+        not threads_complete
+        or unresolved_threads
+        or not reviews_complete
+        or codex_head_review_count < 1
+        or pr.get("isDraft") is not False
+    ):
         return "attention"
     if str(pr.get("reviewDecision") or "").upper() == "CHANGES_REQUESTED":
         return "attention"
@@ -462,9 +618,6 @@ def produce(watcher_id: str, *, config_dir: Path, state_dir: Path) -> tuple[int,
         allowed_codes={0},
         expected_type=dict,
     )
-    unresolved_threads, thread_pages, threads_complete, threads_error = _fetch_threads(
-        int(pr_text), repo, cwd=repo_dir
-    )
     reconciliation_command = [
         sys.executable,
         str(TRUSTED_RECONCILIATION_CHECKER),
@@ -473,7 +626,6 @@ def produce(watcher_id: str, *, config_dir: Path, state_dir: Path) -> tuple[int,
         "--repo",
         repo,
     ]
-    reconciliation_code, reconciliation_out, reconciliation_err = _run(reconciliation_command, cwd=repo_dir)
     pr_final, final_error = _run_json(
         _pr_view_command(pr_text, repo), cwd=repo_dir, allowed_codes={0}, expected_type=dict
     )
@@ -533,17 +685,45 @@ def produce(watcher_id: str, *, config_dir: Path, state_dir: Path) -> tuple[int,
     expected_head = config.get("HEAD_SHA", "")
     initial_head = str(pr_initial.get("headRefOid") or "")
     final_head = str(pr.get("headRefOid") or "")
+    codex_head_review_count, review_pages, reviews_complete, codex_reviews_error = (
+        _fetch_codex_head_reviews(int(pr_text), repo, head_sha=final_head, cwd=repo_dir)
+        if final_head
+        else (0, 0, False, "PR head SHA missing before Codex review pagination")
+    )
+    unresolved_threads, thread_pages, threads_complete, threads_error = _fetch_threads(
+        int(pr_text), repo, cwd=repo_dir
+    )
+    reconciliation_code, reconciliation_out, reconciliation_err = _run(reconciliation_command, cwd=repo_dir)
+    pr_after_reviews, post_review_error = _run_json(
+        _pr_view_command(pr_text, repo), cwd=repo_dir, allowed_codes={0}, expected_type=dict
+    )
+    pr_after_reviews = pr_after_reviews if isinstance(pr_after_reviews, dict) else {}
+    post_review_shape_error = (
+        _validate_pr_metadata(pr_after_reviews, label="post-review")
+        if pr_after_reviews
+        else None
+    )
+    post_review_head = str(pr_after_reviews.get("headRefOid") or "")
     initial_base = str(pr_initial.get("baseRefName") or "")
     final_base = str(pr.get("baseRefName") or "")
+    post_review_base = str(pr_after_reviews.get("baseRefName") or "")
+    observed_pr = pr_after_reviews if pr_after_reviews and post_review_head == final_head else pr
     head_mismatch = (
         not expected_head
         or not initial_head
         or initial_head != expected_head
         or final_head != initial_head
+        or not post_review_head
+        or post_review_head != final_head
     )
     base_mismatch_error = (
         "base branch changed during watcher observation"
-        if not initial_base or final_base != initial_base
+        if (
+            not initial_base
+            or final_base != initial_base
+            or not post_review_base
+            or post_review_base != final_base
+        )
         else None
     )
     unsafe_auto_merge = config.get("AUTO_MERGE", "0").lower() not in {"0", "false", "no", "off", ""}
@@ -554,17 +734,20 @@ def produce(watcher_id: str, *, config_dir: Path, state_dir: Path) -> tuple[int,
             previous_error,
             initial_error,
             final_error,
+            post_review_error,
             initial_shape_error,
             final_shape_error,
+            post_review_shape_error,
             base_mismatch_error,
             checks_error,
             reviews_error,
             threads_error,
+            codex_reviews_error,
         )
         if item
     ]
     state = _classify(
-        pr=pr,
+        pr=observed_pr,
         errors=errors,
         unsafe_auto_merge=unsafe_auto_merge,
         head_mismatch=head_mismatch,
@@ -576,6 +759,8 @@ def produce(watcher_id: str, *, config_dir: Path, state_dir: Path) -> tuple[int,
         required_count=len(required_contexts),
         threads_complete=threads_complete,
         unresolved_threads=unresolved_threads,
+        reviews_complete=reviews_complete,
+        codex_head_review_count=codex_head_review_count,
         reconciliation_code=reconciliation_code,
         review_changed=review_changed,
     )
@@ -595,7 +780,7 @@ def produce(watcher_id: str, *, config_dir: Path, state_dir: Path) -> tuple[int,
         "observed_at": now.isoformat(timespec="seconds"),
         "next_poll_at": next_poll.isoformat(timespec="seconds"),
         "state": state,
-        "pr": pr,
+        "pr": observed_pr,
         "check_failures": failures,
         "check_pending": pending,
         "comment_count": comment_count,
@@ -612,8 +797,10 @@ def produce(watcher_id: str, *, config_dir: Path, state_dir: Path) -> tuple[int,
             for item in (
                 initial_error,
                 final_error,
+                post_review_error,
                 initial_shape_error,
                 final_shape_error,
+                post_review_shape_error,
                 base_mismatch_error,
             )
             if item
@@ -621,6 +808,7 @@ def produce(watcher_id: str, *, config_dir: Path, state_dir: Path) -> tuple[int,
         "checks_error": checks_error or "",
         "reviews_error": reviews_error or "",
         "review_threads_error": threads_error or "",
+        "codex_reviews_error": codex_reviews_error or "",
         "previous_state_error": previous_error or "",
         "worktree_status_error": dirty_err if dirty_code else "",
         "readiness": {
@@ -641,8 +829,11 @@ def produce(watcher_id: str, *, config_dir: Path, state_dir: Path) -> tuple[int,
             "review_threads_complete": threads_complete,
             "review_thread_pages_fetched": thread_pages,
             "unresolved_review_threads": unresolved_threads,
-            "review_decision": pr.get("reviewDecision"),
-            "merge_state_status": pr.get("mergeStateStatus"),
+            "codex_reviews_complete": reviews_complete,
+            "codex_review_pages_fetched": review_pages,
+            "codex_head_review_count": codex_head_review_count,
+            "review_decision": observed_pr.get("reviewDecision"),
+            "merge_state_status": observed_pr.get("mergeStateStatus"),
         },
     }
     _atomic_write(status_path, json.dumps(status, indent=2, sort_keys=True) + "\n")
@@ -654,12 +845,12 @@ def produce(watcher_id: str, *, config_dir: Path, state_dir: Path) -> tuple[int,
             f"Observed: {now.strftime('%Y-%m-%d %H:%M %Z')}",
             f"Next poll: {next_poll.strftime('%Y-%m-%d %H:%M %Z')}",
             f"State: {state}",
-            f"PR: #{_one_line(pr.get('number', pr_text))} {_one_line(pr.get('title', ''))}",
-            f"URL: {_one_line(pr.get('url', ''))}",
-            f"Head: {_one_line(pr.get('headRefName', ''))} @ {_one_line(final_head)}",
+            f"PR: #{_one_line(observed_pr.get('number', pr_text))} {_one_line(observed_pr.get('title', ''))}",
+            f"URL: {_one_line(observed_pr.get('url', ''))}",
+            f"Head: {_one_line(observed_pr.get('headRefName', ''))} @ {_one_line(post_review_head or final_head)}",
             f"Expected head: {_one_line(expected_head or 'missing')}",
-            f"Merge state: {_one_line(pr.get('mergeStateStatus', ''))}",
-            f"Review decision: {_one_line(pr.get('reviewDecision') or 'none')}",
+            f"Merge state: {_one_line(observed_pr.get('mergeStateStatus', ''))}",
+            f"Review decision: {_one_line(observed_pr.get('reviewDecision') or 'none')}",
             f"Worktree dirty: {'yes' if worktree_dirty else 'no'}",
             f"Failing checks: {_one_line(', '.join(failures) or 'none')}",
             f"Pending checks: {_one_line(', '.join(pending) or 'none')}",
@@ -668,6 +859,7 @@ def produce(watcher_id: str, *, config_dir: Path, state_dir: Path) -> tuple[int,
                 f"{len(required_failures)} failed, {len(required_pending)} pending"
             ),
             f"Unresolved review threads: {len(unresolved_threads)} across {thread_pages} fetched page(s)",
+            f"Current-head Codex reviews: {codex_head_review_count} across {review_pages} fetched page(s)",
             f"Reviews/comments: {review_count} reviews, {comment_count} comments",
             f"Review changed since last poll: {'yes' if review_changed else 'no'}",
             f"AI reconciliation: {'pass' if reconciliation_code == 0 else 'fail'}",

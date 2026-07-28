@@ -1,8 +1,8 @@
 # How Atlas Ships Production Code With AI — Fast and Reliable
 
-> A field description of the operating model behind the Atlas repo: **two builder
-> sessions and two reviewer sessions running in parallel, kept safe by mechanical
-> gates rather than human vigilance.** Written for anyone trying to improve the way
+> A field description of the operating model behind the Atlas repo: **builder
+> lanes reviewed by the GitHub Codex connector, kept safe by mechanical gates
+> rather than human vigilance.** Written for anyone trying to improve the way
 > they build real software with AI coding agents.
 
 The thesis in one sentence: **make the machine catch every failure mode that has
@@ -11,38 +11,35 @@ on things a script can't decide.** Everything below is in service of that.
 
 ---
 
-## 1. The crew model: 1 coder + 1 reviewer, run twice in parallel
+## 1. The crew model: builder lanes + Codex connector review
 
 Work is split into **two independent lanes** (e.g. "content generation" and
-"deflection/monetization"). Each lane is a pair:
+"deflection/monetization"). Each lane has:
 
 - **Builder session** — writes the plan, writes the code, opens the PR.
-- **Reviewer session** — audits that PR *independently* and posts a single
-  verdict: **BLOCKER / MAJOR / NIT / LGTM**.
+- **Codex connector review** — reviews the opened PR in GitHub. Its threads are
+  resolved or waived, and `live-reconciliation` enforces that state.
 
-So at full tilt the operator drives **4 sessions** (2 builders + 2 reviewers).
+So at full tilt the operator drives multiple builder lanes while Codex review
+and mechanical gates handle PR feedback.
 
 > **How this maps to the contract:** `AGENTS.md` (lines 3–8) defines the *unit* of
-> the workflow — **one builder + one reviewer per non-trivial PR**. The four-session
-> figure is that unit *scaled*: the operator runs one builder/reviewer pair per
-> parallel ownership lane. Two lanes = two pairs = four sessions. The per-pair
-> contract is unchanged; the lane model is just how many pairs run at once.
+> the workflow — **one builder + Codex connector review per non-trivial PR**. The
+> lane model is how many builders run at once; the reviewer gate remains Codex
+> connector threads plus `live-reconciliation`.
 
-The builder and reviewer are deliberately *different* sessions because a model
-reviewing its own work inherits its own blind spots — the reviewer re-derives
-claims from scratch instead of trusting them.
+The builder still self-reconstructs the diff before opening the PR. Codex then
+reviews from code and the Review Contract, not from the builder's prose.
 
-The reviewer doesn't rubber-stamp. The contract (`AGENTS.md §4a`) is **independent
-verification**: re-run the builder's commands, spot-check the plan's invariants at
-the actual `file:line` in the diff, and sweep for missed call sites with grep
-patterns *more* reliable than the PR's own claim. "A bare LGTM with no verification
-is worse than no comment."
+Codex does not rubber-stamp, and it also does not run a whole-repo audit. The
+contract (`AGENTS.md §4a`) is scoped verification: changed code, direct
+callers/tests/artifacts, required CI, and the PR's Review Contract.
 
 | Verdict | Meaning | Builder action |
 |---|---|---|
 | **BLOCKER** | Correctness, security, contract break, or CI red | Fix before merge |
 | **MAJOR** | Architectural / scope / pattern concern, or a proven defect whose blast radius does not warrant blocking | Fix if small; else discuss |
-| **NIT** | Style / naming / polish | Apply only if 1-line; reviewer marks skip-worthy |
+| **NIT** | Style / naming / polish | Suppressed by default; waive unless it is a one-line changed-code clarity fix |
 | **LGTM** | All gates green | Merge |
 
 ---
@@ -223,8 +220,9 @@ as early (and cheaply) as possible:
    caller-layer tests.
 2. **Pre-push git hook** (optional, installable) — runs the same bundle on `git
    push`. Bypass is explicit (`ATLAS_SKIP_LOCAL_PR_REVIEW=1`), never silent.
-3. **A separate local reviewer session** — judgment review of plan + diff *before*
-   the GitHub PR opens.
+3. **GitHub Codex connector + live reconciliation** — Codex reviews the opened
+   PR; findings are fixed or waived with reasons, and unresolved threads keep
+   `live-reconciliation` red.
 4. **GitHub Actions** — 20 workflows; the same wrapper plus per-product check
    suites, gated by path filters. CI is the *final* enforcement layer, not the
    first reviewer.
@@ -269,15 +267,13 @@ running that diff. The fix is mechanical and already exists in spirit — point 
 `package.json`. Until then this is patched with vigilance, the one anti-pattern the
 rest of the system is built to eliminate.
 
-**(b) Automated reviewers have no severity contract, and false-positives are the
-expensive direction.** The Claude reviewer speaks in BLOCKER / MAJOR / NIT / LGTM;
-the external bots (Codex, Copilot) post raw comments with no severity, outside that
-taxonomy. A bot false *negative* (missed nit) costs nothing; a bot false *positive
-applied blindly* turns correct work into incorrect work. There is **no mechanical
-fix** — the more automated reviewers you add, the more safety depends on a judgment
-session that can say "the reviewer is wrong." Rule: **external-bot findings are
-advisory inputs to a judgment session, never auto-applied.** A naive "auto-address
-all review comments" loop is strictly dangerous.
+**(b) Automated review needs a severity contract, because false-positives are the
+expensive direction.** Codex connector comments are the review gate, but they are
+reconciled by evidence rather than blindly applied. A bot false *negative* (missed
+nit) costs little; a bot false *positive applied blindly* turns correct work into
+incorrect work. Rule: **fix confirmed in-scope findings; waive duplicate,
+out-of-scope, speculative, and NIT-only threads with reasons.** A naive
+"auto-address all review comments" loop is strictly dangerous.
 
 **(c) Ownership rests partly on honor-system, git-ignored state.** Two checks guard
 lane ownership: `check_session_pr_ownership.py` reads the session-scoped state

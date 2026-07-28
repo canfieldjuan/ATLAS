@@ -79,7 +79,13 @@ def attention_blockers(status: dict[str, Any]) -> list[str]:
             blockers.append(key)
     if status.get("reconciliation_exit_code") not in {None, 0}:
         blockers.append("reconciliation_exit_code")
-    for key in ("view_error", "checks_error", "reviews_error", "review_threads_error"):
+    for key in (
+        "view_error",
+        "checks_error",
+        "reviews_error",
+        "review_threads_error",
+        "codex_reviews_error",
+    ):
         if _truthy(status.get(key)):
             blockers.append(key)
     return blockers
@@ -140,6 +146,15 @@ def readiness_blockers(status: dict[str, Any]) -> list[str]:
         blockers.append("unresolved review threads must be a list")
     elif unresolved:
         blockers.append(f"unresolved review threads remain: {len(unresolved)}")
+
+    if proof.get("codex_reviews_complete") is not True:
+        blockers.append("Codex review pagination is incomplete")
+    codex_pages = proof.get("codex_review_pages_fetched")
+    if not _non_negative_int(codex_pages) or codex_pages < 1:
+        blockers.append("Codex review pages fetched must be at least 1")
+    codex_head_reviews = proof.get("codex_head_review_count")
+    if not _non_negative_int(codex_head_reviews) or codex_head_reviews < 1:
+        blockers.append("current-head Codex review is missing")
 
     if "review_decision" not in proof or "reviewDecision" not in pr:
         blockers.append("review decision evidence is missing")

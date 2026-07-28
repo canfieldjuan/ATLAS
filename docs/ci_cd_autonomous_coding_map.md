@@ -31,7 +31,7 @@ issue / operator request
   -> local PR review / push wrapper
   -> PR body contract
   -> GitHub Actions checks
-  -> Codex/Copilot/human review
+  -> Codex connector review
   -> push/review-event attention wakes the builder only via external bridge/operator signal
      and never authorizes merge
   -> live AI reconciliation
@@ -73,7 +73,7 @@ trying to pass.
 
 | Workflow | Required job/context | Purpose |
 |---|---|---|
-| `ai_reconciliation_live.yml` | `live-reconciliation` | Fails when PR body claims AI findings are fixed/waived while Codex/Copilot threads remain open |
+| `ai_reconciliation_live.yml` | `live-reconciliation` | Fails when PR body claims AI findings are fixed/waived while Codex connector threads remain open |
 | `pr_body_contract.yml` | `pr-body-contract` | Ensures PR body names the plan and follows AGENTS.md body shape |
 | `pre_push_audit.yml` | `pre-push-audit` | Runs local PR review bundle from trusted base against PR worktree data |
 | `diff_budget.yml` | `diff-budget` | Enforces the 400 LOC soft cap or explicit diff-budget override |

@@ -784,13 +784,6 @@
     },
     "score": 11
   },
-  "scripts/check_review_body_r14.py": {
-    "counts": {
-      "HEURISTIC_COMMENT": 1,
-      "NO_RAISES_TESTS": 1
-    },
-    "score": 4
-  },
   "scripts/check_session_pr_ownership.py": {
     "counts": {
       "NO_RAISES_TESTS": 1,

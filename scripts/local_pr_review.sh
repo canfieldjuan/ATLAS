@@ -152,6 +152,7 @@ if [ -n "$current_pr_body_file" ]; then
         echo "==> PR body contract"
         echo "    SKIP (scripts/audit_pr_body.py not found)"
     fi
+
 fi
 
 pre_push_args=("$script_root/scripts/pre_push_audit.sh" --repo-root "$repo_root" --script-root "$script_root")
@@ -245,7 +246,7 @@ echo
 if [ "$failures" -eq 0 ]; then
     echo "local PR review passed"
     echo
-    echo "Next: hand this branch to the local reviewer session for judgment review."
+    echo "Next: open/update the PR; Codex connector review and live-reconciliation own reviewer feedback."
     exit 0
 fi
 

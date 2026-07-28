@@ -51,9 +51,21 @@ from collections.abc import Sequence
 from dataclasses import dataclass, field
 from pathlib import Path
 
-# Same bot set and env override as scripts/check_ai_reconciliation_live.py, so
-# the two checks cannot disagree about who a review bot is.
-_DEFAULT_BOTS = ("copilot", "codex")
+# Same exact Codex connector identities and env override as
+# scripts/check_ai_reconciliation_live.py, so the two checks cannot disagree
+# about who a review bot is.
+_DEFAULT_BOTS = ("chatgpt-codex-connector", "chatgpt-codex-connector[bot]")
+_LEGACY_BOT_ALIASES = frozenset(
+    {
+        "bot",
+        "chatgpt",
+        "chatgpt-codex",
+        "claude",
+        "codex",
+        "copilot",
+        "copilot-pull-request-reviewer",
+    }
+)
 
 # The recorded Decision-Seam Analysis marker. A machine token, not prose:
 # judging whether a paragraph "really" analyses a seam is itself an open
@@ -136,11 +148,11 @@ def bot_review_rounds(
     purpose: it is positive evidence that the loop converged, and dropping it
     would silently splice two non-adjacent rounds together.
     """
-    wanted = tuple(b.lower() for b in bot_logins)
+    wanted = frozenset(b.lower() for b in bot_logins)
     dated: list[_Submission] = []
     for node in nodes or []:
         author = ((node.get("author") or {}).get("login") or "").lower()
-        if not any(w in author for w in wanted):
+        if author not in wanted:
             continue
         submitted = str(node.get("submittedAt") or "")
         if not submitted:
@@ -178,6 +190,25 @@ def bot_review_rounds(
         ReviewRound(index=i + 1, submitted_at=item.submitted_at, paths=list(item.paths))
         for i, item in enumerate(merged)
     ]
+
+
+def parse_bot_logins(raw: str | None) -> list[str]:
+    """Parse exact GitHub bot logins and reject legacy substring aliases."""
+
+    bots = [b.strip() for b in (raw or "").split(",") if b.strip()]
+    if not bots:
+        raise ValueError("no bot logins configured")
+    invalid = [
+        bot
+        for bot in bots
+        if bot.lower() in _LEGACY_BOT_ALIASES or "*" in bot or any(ch.isspace() for ch in bot)
+    ]
+    if invalid:
+        raise ValueError(
+            "bot identities must be exact GitHub logins, not legacy aliases or patterns: "
+            + ", ".join(invalid)
+        )
+    return bots
 
 
 def leading_path(paths: Sequence[str]) -> str | None:
@@ -475,7 +506,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     parser.add_argument(
         "--bots",
         default=os.environ.get("ATLAS_REVIEW_BOTS", ",".join(_DEFAULT_BOTS)),
-        help="comma-separated review-bot login substrings",
+        help="comma-separated exact review-bot logins",
     )
     parser.add_argument(
         "--strict",
@@ -488,7 +519,11 @@ def main(argv: Sequence[str] | None = None) -> int:
         print("error: --repo must be owner/name", file=sys.stderr)
         return 2
     owner, name = args.repo.split("/", 1)
-    bots = [b.strip() for b in args.bots.split(",") if b.strip()]
+    try:
+        bots = parse_bot_logins(args.bots)
+    except ValueError as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return 2
 
     try:
         reviews = fetch_reviews(args.pr, owner, name, args.gh)
