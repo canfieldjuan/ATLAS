@@ -75,6 +75,17 @@ def changed_file(
     return item
 
 
+def changed_file_proof(c, files=None, *, base="base-a", head="head-a", merge_base=None, expected_count=None):
+    file_list = list(files if files is not None else [changed_file("docs/a.md")])
+    return c.ChangedFileProof(
+        base_sha=base,
+        head_sha=head,
+        merge_base_sha=merge_base or "a" * 40,
+        expected_count=len(file_list) if expected_count is None else expected_count,
+        files=file_list,
+    )
+
+
 BODY_CLEAR = "## AI reconciliation\n- All fixed or waived: Yes\n"
 BODY_OPEN = "## AI reconciliation\n- fixed or waived: No\n"
 BODY_ABSENT = "## Summary\njust a normal PR body\n"
@@ -612,7 +623,8 @@ def test_main_live_fetch_fails_when_review_generation_changes_after_file_proof(m
 
     monkeypatch.setattr(c, "fetch_consistent_review_thread_snapshot", fake_snapshot)
     monkeypatch.setattr(c, "fetch_body", lambda pr, repo, gh: BODY_DOCS_ONLY)
-    monkeypatch.setattr(c, "fetch_changed_files", lambda pr, repo, gh, head_sha=None: [changed_file("docs/a.md")])
+    monkeypatch.setattr(c, "fetch_changed_file_proof", lambda pr, repo, gh, head_sha=None: changed_file_proof(c))
+    monkeypatch.setattr(c, "fetch_pr_refs", lambda pr, repo, gh: ("base-a", "head-a", 1))
 
     assert c.main(["--pr", "1431", "--repo", "owner/name", "--gh", "gh"]) == 2
     assert calls["snapshots"] == 2
@@ -628,7 +640,8 @@ def test_main_live_fetch_fails_when_body_changes_after_file_proof(monkeypatch):
         lambda pr, owner, name, gh, bot_logins: ([thread(resolved=True)], "head-a", [], []),
     )
     monkeypatch.setattr(c, "fetch_body", lambda pr, repo, gh: bodies.pop(0))
-    monkeypatch.setattr(c, "fetch_changed_files", lambda pr, repo, gh, head_sha=None: [changed_file("docs/a.md")])
+    monkeypatch.setattr(c, "fetch_changed_file_proof", lambda pr, repo, gh, head_sha=None: changed_file_proof(c))
+    monkeypatch.setattr(c, "fetch_pr_refs", lambda pr, repo, gh: ("base-a", "head-a", 1))
 
     assert c.main(["--pr", "1431", "--repo", "owner/name", "--gh", "gh"]) == 2
 
@@ -643,7 +656,38 @@ def test_main_live_fetch_fails_when_body_changes_after_final_snapshot(monkeypatc
         lambda pr, owner, name, gh, bot_logins: ([thread(resolved=True)], "head-a", [], []),
     )
     monkeypatch.setattr(c, "fetch_body", lambda pr, repo, gh: bodies.pop(0))
-    monkeypatch.setattr(c, "fetch_changed_files", lambda pr, repo, gh, head_sha=None: [changed_file("docs/a.md")])
+    monkeypatch.setattr(c, "fetch_changed_file_proof", lambda pr, repo, gh, head_sha=None: changed_file_proof(c))
+    monkeypatch.setattr(c, "fetch_pr_refs", lambda pr, repo, gh: ("base-a", "head-a", 1))
+
+    assert c.main(["--pr", "1431", "--repo", "owner/name", "--gh", "gh"]) == 2
+
+
+def test_main_live_fetch_fails_when_base_changes_after_file_proof(monkeypatch):
+    c = load_check()
+
+    monkeypatch.setattr(
+        c,
+        "fetch_consistent_review_thread_snapshot",
+        lambda pr, owner, name, gh, bot_logins: ([thread(resolved=True)], "head-a", [], []),
+    )
+    monkeypatch.setattr(c, "fetch_body", lambda pr, repo, gh: BODY_DOCS_ONLY)
+    monkeypatch.setattr(c, "fetch_changed_file_proof", lambda pr, repo, gh, head_sha=None: changed_file_proof(c))
+    monkeypatch.setattr(c, "fetch_pr_refs", lambda pr, repo, gh: ("base-b", "head-a", 1))
+
+    assert c.main(["--pr", "1431", "--repo", "owner/name", "--gh", "gh"]) == 2
+
+
+def test_main_live_fetch_fails_when_changed_file_count_changes_after_file_proof(monkeypatch):
+    c = load_check()
+
+    monkeypatch.setattr(
+        c,
+        "fetch_consistent_review_thread_snapshot",
+        lambda pr, owner, name, gh, bot_logins: ([thread(resolved=True)], "head-a", [], []),
+    )
+    monkeypatch.setattr(c, "fetch_body", lambda pr, repo, gh: BODY_DOCS_ONLY)
+    monkeypatch.setattr(c, "fetch_changed_file_proof", lambda pr, repo, gh, head_sha=None: changed_file_proof(c))
+    monkeypatch.setattr(c, "fetch_pr_refs", lambda pr, repo, gh: ("base-a", "head-a", 2))
 
     assert c.main(["--pr", "1431", "--repo", "owner/name", "--gh", "gh"]) == 2
 
@@ -658,7 +702,7 @@ def test_main_does_not_fetch_file_proof_for_non_docs_body(monkeypatch, tmp_path)
         "fetch_consistent_review_thread_snapshot",
         lambda pr, owner, name, gh, bot_logins: ([thread(resolved=True)], "head-a", [review(commit="head-a")], []),
     )
-    monkeypatch.setattr(c, "fetch_changed_files", lambda *args, **kwargs: (_ for _ in ()).throw(AssertionError()))
+    monkeypatch.setattr(c, "fetch_changed_file_proof", lambda *args, **kwargs: (_ for _ in ()).throw(AssertionError()))
 
     assert c.main(["--pr", "1431", "--repo", "owner/name", "--body-file", str(bf), "--gh", "gh"]) == 0
 

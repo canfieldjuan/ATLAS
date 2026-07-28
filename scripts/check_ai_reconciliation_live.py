@@ -114,6 +114,23 @@ _MAX_REVIEW_PAGES = 50
 _MAX_COMMENT_PAGES = 50
 
 
+class ChangedFileProof:
+    def __init__(
+        self,
+        *,
+        base_sha: str,
+        head_sha: str,
+        merge_base_sha: str,
+        expected_count: int,
+        files: list[dict],
+    ) -> None:
+        self.base_sha = base_sha
+        self.head_sha = head_sha
+        self.merge_base_sha = merge_base_sha
+        self.expected_count = expected_count
+        self.files = files
+
+
 def _load_phase2():
     """Import the local reconciliation auditor so the body classifier matches."""
     path = Path(__file__).resolve().parent / "audit_ai_reconciliation.py"
@@ -742,10 +759,19 @@ def _attach_tree_entry(item: dict, *, prefix: str, path: str, entries: dict[str,
     item[f"{prefix}_type"] = entry.get("type")
 
 
-def fetch_changed_files(pr: int, repo: str, gh: str, head_sha: str | None = None) -> list[dict]:
-    """Fetch PR changed files from GitHub's trusted PR file list."""
+def fetch_changed_file_proof(
+    pr: int,
+    repo: str,
+    gh: str,
+    *,
+    head_sha: str | None = None,
+    base_sha: str | None = None,
+) -> ChangedFileProof:
+    """Fetch PR changed files and the immutable refs used to prove them."""
 
     base_ref, observed_head, expected_count = fetch_pr_refs(pr, repo, gh)
+    if base_sha is not None and base_ref != base_sha:
+        raise RuntimeError("GitHub PR base changed before changed-file fetch")
     if head_sha is not None and observed_head != head_sha:
         raise RuntimeError("GitHub PR head changed before changed-file fetch")
     merge_base = fetch_merge_base(repo, base_ref, observed_head, gh)
@@ -786,7 +812,34 @@ def fetch_changed_files(pr: int, repo: str, gh: str, head_sha: str | None = None
             "GitHub changed-file response incomplete: "
             f"fetched {len(files)} file(s), expected {expected_count}"
         )
-    return files
+    return ChangedFileProof(
+        base_sha=base_ref,
+        head_sha=observed_head,
+        merge_base_sha=merge_base,
+        expected_count=expected_count,
+        files=files,
+    )
+
+
+def fetch_changed_files(pr: int, repo: str, gh: str, head_sha: str | None = None) -> list[dict]:
+    """Fetch PR changed files from GitHub's trusted PR file list."""
+
+    proof = fetch_changed_file_proof(pr, repo, gh, head_sha=head_sha)
+    return proof.files
+
+
+def _assert_stable_changed_file_proof(
+    *,
+    proof: ChangedFileProof,
+    after_refs: tuple[str, str, int],
+) -> None:
+    after_base, after_head, after_count = after_refs
+    if proof.base_sha != after_base:
+        raise RuntimeError("GitHub PR base changed during body/file proof fetch")
+    if proof.head_sha != after_head:
+        raise RuntimeError("GitHub PR head changed during body/file proof fetch")
+    if proof.expected_count != after_count:
+        raise RuntimeError("GitHub PR changed-file count changed during body/file proof fetch")
 
 
 def fetch_consistent_review_thread_snapshot(
@@ -912,6 +965,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         reviews: Sequence[dict] | None = None
         comments: Sequence[dict] | None = None
         changed_files: Sequence[dict] | None = None
+        changed_file_proof: ChangedFileProof | None = None
 
         if args.threads_file:
             nodes = json.loads(Path(args.threads_file).read_text(encoding="utf-8"))
@@ -961,7 +1015,8 @@ def main(argv: Sequence[str] | None = None) -> int:
             )
         )
         if needs_live_changed_file_proof:
-            changed_files = fetch_changed_files(args.pr, args.repo, args.gh, head_sha=head_sha)
+            changed_file_proof = fetch_changed_file_proof(args.pr, args.repo, args.gh, head_sha=head_sha)
+            changed_files = changed_file_proof.files
         if needs_live_changed_file_proof and not args.threads_file and args.pr is not None and args.repo:
             body_after = fetch_body(args.pr, args.repo, args.gh)
             after_snapshot = fetch_consistent_review_thread_snapshot(
@@ -972,8 +1027,15 @@ def main(argv: Sequence[str] | None = None) -> int:
                 bots,
             )
             body_final = fetch_body(args.pr, args.repo, args.gh)
+            after_refs = fetch_pr_refs(args.pr, args.repo, args.gh)
             if body != body_after or body != body_final:
                 raise RuntimeError("GitHub PR body changed during body/file proof fetch")
+            if changed_file_proof is None:
+                raise RuntimeError("changed-file proof missing during body/file proof fetch")
+            _assert_stable_changed_file_proof(
+                proof=changed_file_proof,
+                after_refs=after_refs,
+            )
             _assert_stable_review_thread_state(
                 before=before_snapshot,
                 after=after_snapshot,
