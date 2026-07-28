@@ -12,6 +12,9 @@ The follow-up fix then proved filenames but not Git blob type, leaving the same
 class open for Markdown-named symlinks or gitlinks. The diff may exceed the 400
 LOC target because both bypasses live in the same required merge gate and must be
 fixed together before #2247 can safely merge.
+The current Codex round found three remaining proof gaps in that same gate:
+incomplete GitHub pull-file listings, an untested docs-only `CHANGES_REQUESTED`
+veto path, and review/thread races between the first snapshot and file proof.
 
 ### Problem-derived contract
 
@@ -22,8 +25,10 @@ fixed together before #2247 can safely merge.
 - Correct fix must touch/change: require both the `Docs-only: true` body marker
   and a non-empty Markdown-only GitHub changed-file list whose base/head entries
   are non-executable regular blobs before bypassing current-head review
-  attestation; test docs-only/no-thread/Markdown-only pass plus non-Markdown,
-  symlink/gitlink-shaped, docs-only/open-thread, and non-doc/no-review fail.
+  attestation; prove the fetched file list is complete, revalidate review/thread
+  state after file proof, and test docs-only/no-thread/Markdown-only pass plus
+  non-Markdown, symlink/gitlink-shaped, docs-only/open-thread,
+  docs-only/`CHANGES_REQUESTED`, and non-doc/no-review fail.
 - Must not change: unresolved Codex threads must remain blocking, current-head
   `CHANGES_REQUESTED` must remain blocking, non-doc PRs must still require
   current-head Codex review or clean-review-comment attestation, and product
@@ -52,6 +57,10 @@ Slice phase: Workflow/process
     is present.
   - The same docs-only body still fails when an unresolved Codex connector
     thread exists.
+  - The same docs-only body still fails when current-head Codex has requested
+    changes, even if the changed-file proof is otherwise valid.
+  - Incomplete GitHub pull-file listings and review/thread/body movement during
+    live proof collection fail closed instead of granting the bypass.
   - A non-doc PR body with no current-head Codex review/clean-comment
     attestation still fails.
   - The archive cleanup moves only
@@ -60,10 +69,11 @@ Slice phase: Workflow/process
     `plans/INDEX.md`.
 - Reachability proof: `python -m pytest tests/test_check_ai_reconciliation_live.py -q`
   exercises the real live-check evaluator entrypoint in dry-run mode and asserts
-  the observable exit-code/messages for docs-only and non-doc cases.
+  observable exit-code/messages for docs-only, non-doc, incomplete-file-listing,
+  and race cases.
 - Affected surfaces: `scripts/check_ai_reconciliation_live.py`,
-  `tests/test_check_ai_reconciliation_live.py`, and merged plan archive
-  bookkeeping under `plans/`.
+  `tests/test_check_ai_reconciliation_live.py`, `tests/test_pr_watcher.py`, and
+  merged plan archive bookkeeping under `plans/`.
 - Risk areas: over-broad docs-only detection, trusting PR body text or filename
   suffixes without blob proof, accidentally clearing open Codex threads,
   accidentally clearing `CHANGES_REQUESTED`, and weakening non-doc PR review
@@ -83,8 +93,9 @@ seam in the enumeration; otherwise write "N/A - no boundary change."
   body is explicitly docs-only, the PR changed-file list is Markdown-only
   regular blobs, and there are no open Codex threads."
 - Guard-relevant fields: PR body first nonblank line, GitHub PR changed-file
-  filenames/previous filenames, base/head tree `mode` and `type`, unresolved
-  Codex thread set, current-head Codex review states, and clean-review comments.
+  count/filenames/previous filenames, base/head tree `mode` and `type`,
+  unresolved Codex thread set, current-head Codex review states, and clean-review
+  comments.
 - Caller x input shape: GitHub Actions calls the script with live `--pr`;
   tests call `evaluate()` and `main()` with JSON fixture files, including
   changed-file fixtures.
@@ -104,7 +115,8 @@ fallback changes; otherwise write "N/A - no guard/config boundary change."
 - Default-session/default-context probe: local dry-run tests exercise the same
   default evaluator path as the workflow script after fetched inputs are loaded.
 - Side-effect ordering: unresolved threads and `CHANGES_REQUESTED` reviews are
-  evaluated before the docs-only changed-file attestation bypass can pass.
+  evaluated before the docs-only bypass can pass, and the review/thread snapshot
+  is compared again after body/file proof collection.
 
 ### Files touched
 
@@ -114,6 +126,7 @@ fallback changes; otherwise write "N/A - no guard/config boundary change."
 - `plans/archive/PR-Codex-Review-Thread-Event-Canary.md`
 - `scripts/check_ai_reconciliation_live.py`
 - `tests/test_check_ai_reconciliation_live.py`
+- `tests/test_pr_watcher.py`
 
 ## Mechanism
 
@@ -121,12 +134,13 @@ The evaluator parses the PR body for the existing docs-only marker using the
 same strict placement rule as the PR body contract. In live mode, the script also
 fetches the PR's changed-file list and base/head Git trees from GitHub. The
 exemption is valid only when every current filename and rename source has
-Markdown as its sole suffix and the relevant tree entry is `100644 blob`.
-`evaluate()` still computes current-head change requests and unresolved Codex
-threads first. If neither blocking condition exists and both docs-only proofs
-pass, it returns success without requiring a Codex review attestation. Otherwise
-the existing current-head review/clean-comment attestation requirement remains
-unchanged.
+Markdown as its sole suffix, the relevant tree entry is `100644 blob`, and the
+number of fetched file rows equals GitHub's PR changed-file count. `evaluate()`
+still computes current-head change requests and unresolved Codex threads first.
+Live mode sandwiches body/file proof between review/thread snapshots and fails
+closed if the body, head, review generation, or thread generation moves.
+Otherwise the existing current-head review/clean-comment attestation requirement
+remains unchanged.
 
 ## Intentional
 
@@ -134,6 +148,8 @@ unchanged.
   Markdown-only regular-blob proof must both be present.
 - Do not skip live reconciliation entirely for docs-only PRs; open Codex threads
   and current-head `CHANGES_REQUESTED` still fail.
+- Do not trust a partial GitHub file listing or stale pre-file-proof review
+  snapshot.
 - Keep the two plan archive moves in this PR because #2247 is the live docs-only
   failure that proves the need for this narrow gate change.
 
@@ -145,7 +161,8 @@ Parked hardening: none.
 
 ## Verification
 
-- `python -m pytest tests/test_check_ai_reconciliation_live.py -q` - 51 passed.
+- `python -m pytest tests/test_check_ai_reconciliation_live.py -q` - 55 passed.
+- `python -m pytest tests/test_pr_watcher.py::test_installed_entrypoint_writes_consumer_accepted_snapshot -q` - 1 passed.
 - `python -m py_compile scripts/check_ai_reconciliation_live.py` - passed.
 - `python scripts/sync_pr_plan.py plans/PR-Docs-Only-Live-Reconciliation.md origin/main` - passed.
 - `python scripts/sync_pr_plan.py plans/PR-Docs-Only-Live-Reconciliation.md origin/main --check` - passed.
@@ -160,9 +177,10 @@ Parked hardening: none.
 | File | LOC |
 |---|---:|
 | `plans/INDEX.md` | 4 |
-| `plans/PR-Docs-Only-Live-Reconciliation.md` | 168 |
+| `plans/PR-Docs-Only-Live-Reconciliation.md` | 186 |
 | `plans/archive/PR-Codex-Review-Scope-Reset.md` | 0 |
 | `plans/archive/PR-Codex-Review-Thread-Event-Canary.md` | 0 |
-| `scripts/check_ai_reconciliation_live.py` | 158 |
-| `tests/test_check_ai_reconciliation_live.py` | 227 |
-| **Total** | **557** |
+| `scripts/check_ai_reconciliation_live.py` | 214 |
+| `tests/test_check_ai_reconciliation_live.py` | 302 |
+| `tests/test_pr_watcher.py` | 8 |
+| **Total** | **714** |

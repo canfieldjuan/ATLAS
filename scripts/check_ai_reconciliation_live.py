@@ -641,16 +641,19 @@ def fetch_body(pr: int, repo: str, gh: str) -> str:
     return out
 
 
-def fetch_pr_refs(pr: int, repo: str, gh: str) -> tuple[str, str]:
-    out = _gh(["pr", "view", str(pr), "--repo", repo, "--json", "baseRefOid,headRefOid"], gh)
+def fetch_pr_refs(pr: int, repo: str, gh: str) -> tuple[str, str, int]:
+    out = _gh(["pr", "view", str(pr), "--repo", repo, "--json", "baseRefOid,changedFiles,headRefOid"], gh)
     data = json.loads(out)
     base_sha = data.get("baseRefOid")
     head_sha = data.get("headRefOid")
+    changed_files = data.get("changedFiles")
     if not isinstance(base_sha, str) or not base_sha:
         raise RuntimeError("GitHub PR response malformed: baseRefOid is missing")
     if not isinstance(head_sha, str) or not head_sha:
         raise RuntimeError("GitHub PR response malformed: headRefOid is missing")
-    return base_sha, head_sha
+    if not isinstance(changed_files, int) or changed_files < 0:
+        raise RuntimeError("GitHub PR response malformed: changedFiles is missing")
+    return base_sha, head_sha, changed_files
 
 
 def fetch_tree_entries(repo: str, ref: str, gh: str) -> dict[str, dict]:
@@ -682,7 +685,7 @@ def _attach_tree_entry(item: dict, *, prefix: str, path: str, entries: dict[str,
 def fetch_changed_files(pr: int, repo: str, gh: str, head_sha: str | None = None) -> list[dict]:
     """Fetch PR changed files from GitHub's trusted PR file list."""
 
-    base_ref, observed_head = fetch_pr_refs(pr, repo, gh)
+    base_ref, observed_head, expected_count = fetch_pr_refs(pr, repo, gh)
     if head_sha is not None and observed_head != head_sha:
         raise RuntimeError("GitHub PR head changed before changed-file fetch")
     base_entries = fetch_tree_entries(repo, base_ref, gh)
@@ -715,6 +718,11 @@ def fetch_changed_files(pr: int, repo: str, gh: str, head_sha: str | None = None
         if isinstance(previous_filename, str):
             _attach_tree_entry(item, prefix="base", path=previous_filename, entries=base_entries)
         files.append(item)
+    if len(files) != expected_count:
+        raise RuntimeError(
+            "GitHub changed-file response incomplete: "
+            f"fetched {len(files)} file(s), expected {expected_count}"
+        )
     return files
 
 
@@ -760,6 +768,34 @@ def fetch_consistent_review_thread_snapshot(
     if review_thread_generation(nodes_before) != review_thread_generation(nodes_after):
         raise RuntimeError("GitHub review thread generation changed during review/thread snapshot fetch")
     return nodes_after, head_after, reviews_after, comments_after
+
+
+def _assert_stable_review_thread_state(
+    *,
+    before: tuple[list[dict], str, list[dict], list[dict]],
+    after: tuple[list[dict], str, list[dict], list[dict]],
+    bot_logins: Sequence[str],
+) -> None:
+    before_nodes, before_head, before_reviews, before_comments = before
+    after_nodes, after_head, after_reviews, after_comments = after
+    if before_head != after_head:
+        raise RuntimeError("GitHub PR head changed during body/file proof fetch")
+    before_generation = review_attestation_generation(
+        before_reviews,
+        before_comments,
+        head_sha=before_head,
+        bot_logins=bot_logins,
+    )
+    after_generation = review_attestation_generation(
+        after_reviews,
+        after_comments,
+        head_sha=after_head,
+        bot_logins=bot_logins,
+    )
+    if before_generation != after_generation:
+        raise RuntimeError("GitHub Codex review generation changed during body/file proof fetch")
+    if review_thread_generation(before_nodes) != review_thread_generation(after_nodes):
+        raise RuntimeError("GitHub review thread generation changed during body/file proof fetch")
 
 
 def main(argv: Sequence[str] | None = None) -> int:
@@ -825,13 +861,14 @@ def main(argv: Sequence[str] | None = None) -> int:
                 )
                 return 2
             owner, _, name = args.repo.partition("/")
-            nodes, head_sha, reviews, comments = fetch_consistent_review_thread_snapshot(
+            before_snapshot = fetch_consistent_review_thread_snapshot(
                 args.pr,
                 owner,
                 name,
                 args.gh,
                 bots,
             )
+            nodes, head_sha, reviews, comments = before_snapshot
 
         if args.reviews_file:
             reviews = json.loads(Path(args.reviews_file).read_text(encoding="utf-8"))
@@ -849,6 +886,23 @@ def main(argv: Sequence[str] | None = None) -> int:
 
         if changed_files is None and args.pr is not None and args.repo:
             changed_files = fetch_changed_files(args.pr, args.repo, args.gh, head_sha=head_sha)
+        if not args.threads_file and args.pr is not None and args.repo:
+            body_after = fetch_body(args.pr, args.repo, args.gh)
+            after_snapshot = fetch_consistent_review_thread_snapshot(
+                args.pr,
+                owner,
+                name,
+                args.gh,
+                bots,
+            )
+            if body != body_after:
+                raise RuntimeError("GitHub PR body changed during body/file proof fetch")
+            _assert_stable_review_thread_state(
+                before=before_snapshot,
+                after=after_snapshot,
+                bot_logins=bots,
+            )
+            nodes, head_sha, reviews, comments = after_snapshot
     except (OSError, ValueError, RuntimeError) as exc:
         print(f"live reconciliation: GitHub API/read error: {exc}", file=sys.stderr)
         return 2

@@ -334,6 +334,23 @@ def test_docs_only_no_open_threads_passes_without_current_head_review():
     assert any("docs-only PR diff has no open scoped Codex review threads" in msg for msg in msgs)
 
 
+def test_docs_only_current_head_change_request_still_fails_with_valid_file_proof():
+    c = load_check()
+    code, msgs = c.evaluate(
+        [thread(resolved=True)],
+        BODY_DOCS_ONLY,
+        BOTS,
+        reviews=[review(commit="head-a", state="CHANGES_REQUESTED")],
+        comments=[],
+        changed_files=[changed_file("plans/archive/PR-Finished.md")],
+        head_sha="head-a",
+    )
+
+    assert code == 1
+    assert any("requested changes" in msg for msg in msgs)
+    assert not any("docs-only PR diff" in msg for msg in msgs)
+
+
 def test_docs_only_non_markdown_diff_still_requires_current_head_review():
     c = load_check()
     code, msgs = c.evaluate(
@@ -540,13 +557,46 @@ def test_main_live_fetch_fails_when_review_generation_changes(monkeypatch, tmp_p
     assert calls["reviews"] == 3
 
 
+def test_main_live_fetch_fails_when_review_generation_changes_after_file_proof(monkeypatch):
+    c = load_check()
+    calls = {"snapshots": 0}
+
+    def fake_snapshot(pr, owner, name, gh, bot_logins):
+        calls["snapshots"] += 1
+        if calls["snapshots"] == 1:
+            return [thread(resolved=True)], "head-a", [], []
+        return [thread(resolved=True)], "head-a", [review(commit="head-a", state="CHANGES_REQUESTED")], []
+
+    monkeypatch.setattr(c, "fetch_consistent_review_thread_snapshot", fake_snapshot)
+    monkeypatch.setattr(c, "fetch_body", lambda pr, repo, gh: BODY_DOCS_ONLY)
+    monkeypatch.setattr(c, "fetch_changed_files", lambda pr, repo, gh, head_sha=None: [changed_file("docs/a.md")])
+
+    assert c.main(["--pr", "1431", "--repo", "owner/name", "--gh", "gh"]) == 2
+    assert calls["snapshots"] == 2
+
+
+def test_main_live_fetch_fails_when_body_changes_after_file_proof(monkeypatch):
+    c = load_check()
+    bodies = [BODY_DOCS_ONLY, BODY_DOCS_ONLY + "\nchanged\n"]
+
+    monkeypatch.setattr(
+        c,
+        "fetch_consistent_review_thread_snapshot",
+        lambda pr, owner, name, gh, bot_logins: ([thread(resolved=True)], "head-a", [], []),
+    )
+    monkeypatch.setattr(c, "fetch_body", lambda pr, repo, gh: bodies.pop(0))
+    monkeypatch.setattr(c, "fetch_changed_files", lambda pr, repo, gh, head_sha=None: [changed_file("docs/a.md")])
+
+    assert c.main(["--pr", "1431", "--repo", "owner/name", "--gh", "gh"]) == 2
+
+
 def test_fetch_changed_files_parses_paginated_rows(monkeypatch):
     c = load_check()
 
     def fake_gh(args, gh):
         query = " ".join(args)
         if "pr view" in query:
-            return json.dumps({"baseRefOid": "base-a", "headRefOid": "head-a"})
+            return json.dumps({"baseRefOid": "base-a", "changedFiles": 2, "headRefOid": "head-a"})
         if "git/trees/base-a" in query:
             return _tree(
                 [
@@ -594,7 +644,7 @@ def test_fetch_changed_files_head_movement_fails_closed(monkeypatch):
     monkeypatch.setattr(
         c,
         "_gh",
-        lambda args, gh: json.dumps({"baseRefOid": "base-a", "headRefOid": "head-b"}),
+        lambda args, gh: json.dumps({"baseRefOid": "base-a", "changedFiles": 0, "headRefOid": "head-b"}),
     )
 
     try:
@@ -611,7 +661,7 @@ def test_fetch_changed_files_tree_truncation_fails_closed(monkeypatch):
     def fake_gh(args, gh):
         query = " ".join(args)
         if "pr view" in query:
-            return json.dumps({"baseRefOid": "base-a", "headRefOid": "head-a"})
+            return json.dumps({"baseRefOid": "base-a", "changedFiles": 1, "headRefOid": "head-a"})
         if "git/trees/base-a" in query:
             return _tree([], truncated=True)
         raise AssertionError(f"unexpected gh call: {args}")
@@ -624,6 +674,31 @@ def test_fetch_changed_files_tree_truncation_fails_closed(monkeypatch):
         assert "tree response truncated" in str(exc)
     else:  # pragma: no cover - assertion clarity
         raise AssertionError("truncated tree must fail closed")
+
+
+def test_fetch_changed_files_incomplete_pull_file_listing_fails_closed(monkeypatch):
+    c = load_check()
+
+    def fake_gh(args, gh):
+        query = " ".join(args)
+        if "pr view" in query:
+            return json.dumps({"baseRefOid": "base-a", "changedFiles": 2, "headRefOid": "head-a"})
+        if "git/trees/base-a" in query:
+            return _tree([])
+        if "git/trees/head-a" in query:
+            return _tree([{"path": "docs/a.md", "mode": "100644", "type": "blob"}])
+        if "/pulls/1431/files" in query:
+            return json.dumps({"filename": "docs/a.md", "status": "modified", "previous_filename": None})
+        raise AssertionError(f"unexpected gh call: {args}")
+
+    monkeypatch.setattr(c, "_gh", fake_gh)
+
+    try:
+        c.fetch_changed_files(1431, "owner/name", "gh", head_sha="head-a")
+    except RuntimeError as exc:
+        assert "changed-file response incomplete" in str(exc)
+    else:  # pragma: no cover - assertion clarity
+        raise AssertionError("incomplete pull file listing must fail closed")
 
 
 def test_main_missing_pr_repo_exit_2():
