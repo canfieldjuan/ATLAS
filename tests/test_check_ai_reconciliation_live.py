@@ -37,24 +37,50 @@ def review(*, author="chatgpt-codex-connector", commit="head-a", state="COMMENTE
     }
 
 
+def pr_comment(
+    *,
+    author="chatgpt-codex-connector",
+    commit="head-a",
+    body="Codex Review: Didn't find any major issues.",
+):
+    text = f"{body}\n\n**Reviewed commit:** `{commit}`"
+    return {
+        "author": {"login": author},
+        "body": text,
+        "bodyText": text,
+    }
+
+
 BODY_CLEAR = "## AI reconciliation\n- All fixed or waived: Yes\n"
 BODY_OPEN = "## AI reconciliation\n- fixed or waived: No\n"
 BODY_ABSENT = "## Summary\njust a normal PR body\n"
 BOTS = ["chatgpt-codex-connector", "chatgpt-codex-connector[bot]"]
 
 
-def test_live_reconciliation_runs_on_review_thread_resolution_events():
+def test_live_reconciliation_uses_supported_review_events_not_review_threads():
     text = LIVE_WORKFLOW.read_text(encoding="utf-8")
 
-    assert "pull_request_review_thread:" in text
-    assert "types: [resolved, unresolved]" in text
+    assert "pull_request_review:" in text
+    assert "pull_request_review_comment:" in text
+    assert "pull_request_review_thread:" not in text
+    assert "AI Reconciliation PR #" in text
     assert "github.event.pull_request.base.sha" in text
+    assert "github.event.repository.default_branch" not in text
+    assert "--pr \"${{ github.event.issue.number }}\"" not in text
 
 
-def test_review_thread_event_retriggers_required_live_context():
+def test_supported_review_events_retrigger_required_live_context():
     text = RETRIGGER_WORKFLOW.read_text(encoding="utf-8")
 
-    assert "github.event.workflow_run.event == 'pull_request_review_thread'" in text
+    assert "github.event.workflow_run.event == 'pull_request_review'" in text
+    assert "github.event.workflow_run.event == 'pull_request_review_comment'" in text
+    assert "github.event.workflow_run.event == 'issue_comment'" not in text
+    assert "github.event.workflow_run.event == 'pull_request_review_thread'" not in text
+    assert "pull-requests: read" in text
+    assert "WORKFLOW_RUN_TITLE" not in text
+    assert "pulls/${pr_number}" not in text
+    assert "head_sha=$(gh api" not in text
+    assert "head_sha=${head_sha}" in text
     assert "actions/runs/${run_id}/rerun" in text
 
 
@@ -117,6 +143,32 @@ def test_current_head_changes_requested_review_is_not_satisfactory_attestation()
 
     assert c.current_head_bot_reviews(reviews, head_sha="head-a", bot_logins=BOTS) == []
     assert c.current_head_change_requests(reviews, head_sha="head-a", bot_logins=BOTS) == reviews
+
+
+def test_current_head_clean_review_comment_requires_exact_author_and_head_prefix():
+    c = load_check()
+    comments = [
+        pr_comment(author="codex-helper", commit="head-a"),
+        pr_comment(commit="old-head"),
+        pr_comment(commit="abc1234567"),
+    ]
+
+    assert c.current_head_clean_review_comments(
+        comments,
+        head_sha="abc1234567890",
+        bot_logins=BOTS,
+    ) == [comments[2]]
+
+
+def test_clean_review_comment_without_clean_phrase_is_not_satisfactory_attestation():
+    c = load_check()
+    comments = [pr_comment(commit="abc1234567", body="Codex Review: found issues.")]
+
+    assert c.current_head_clean_review_comments(
+        comments,
+        head_sha="abc1234567890",
+        bot_logins=BOTS,
+    ) == []
 
 
 def test_review_thread_generation_sorts_file_level_and_inline_threads():
@@ -228,7 +280,36 @@ def test_current_head_codex_review_plus_no_open_threads_passes():
     )
 
     assert code == 0
-    assert any("current-head Codex review is present" in msg for msg in msgs)
+    assert any("current-head Codex review attestation is present" in msg for msg in msgs)
+
+
+def test_current_head_clean_review_comment_plus_no_open_threads_passes():
+    c = load_check()
+    code, msgs = c.evaluate(
+        [thread(resolved=True)],
+        BODY_CLEAR,
+        BOTS,
+        comments=[pr_comment(commit="abc1234567")],
+        head_sha="abc1234567890",
+    )
+
+    assert code == 0
+    assert any("current-head Codex review attestation is present" in msg for msg in msgs)
+
+
+def test_changes_requested_review_overrides_clean_review_comment():
+    c = load_check()
+    code, msgs = c.evaluate(
+        [thread(resolved=True)],
+        BODY_CLEAR,
+        BOTS,
+        reviews=[review(commit="abc1234567890", state="CHANGES_REQUESTED")],
+        comments=[pr_comment(commit="abc1234567")],
+        head_sha="abc1234567890",
+    )
+
+    assert code == 1
+    assert any("requested changes" in msg for msg in msgs)
 
 
 # --- main() via injection (no live GitHub) --------------------------------
@@ -274,6 +355,29 @@ def test_main_requires_current_head_review_when_head_sha_supplied(tmp_path):
     ) == 1
 
 
+def test_main_accepts_current_head_clean_review_comment_when_head_sha_supplied(tmp_path):
+    c = load_check()
+    tf = tmp_path / "threads.json"
+    tf.write_text(json.dumps([thread(resolved=True)]), encoding="utf-8")
+    bf = tmp_path / "body.md"
+    bf.write_text(BODY_CLEAR, encoding="utf-8")
+    cf = tmp_path / "comments.json"
+    cf.write_text(json.dumps([pr_comment(commit="abc1234567")]), encoding="utf-8")
+
+    assert c.main(
+        [
+            "--threads-file",
+            str(tf),
+            "--body-file",
+            str(bf),
+            "--comments-file",
+            str(cf),
+            "--head-sha",
+            "abc1234567890",
+        ]
+    ) == 0
+
+
 def test_main_live_fetch_fails_when_review_generation_changes(monkeypatch, tmp_path):
     c = load_check()
     bf = tmp_path / "body.md"
@@ -287,6 +391,8 @@ def test_main_live_fetch_fails_when_review_generation_changes(monkeypatch, tmp_p
             if calls["reviews"] == 1:
                 return _review_page([], has_next=False)
             return _review_page([review()], has_next=False)
+        if "comments(first:100" in query:
+            return _comment_page([], has_next=False)
         if "reviewThreads" in query:
             return _page([], has_next=False)
         raise AssertionError(f"unexpected gh call: {args}")
@@ -333,6 +439,18 @@ def _review_page(nodes, *, head="head-a", has_next=False, cursor=None):
         {"data": {"repository": {"pullRequest": {
             "headRefOid": head,
             "reviews": {
+                "pageInfo": {"hasNextPage": has_next, "endCursor": cursor},
+                "nodes": nodes,
+            },
+        }}}}
+    )
+
+
+def _comment_page(nodes, *, head="head-a", has_next=False, cursor=None):
+    return json.dumps(
+        {"data": {"repository": {"pullRequest": {
+            "headRefOid": head,
+            "comments": {
                 "pageInfo": {"hasNextPage": has_next, "endCursor": cursor},
                 "nodes": nodes,
             },
@@ -434,6 +552,28 @@ def test_fetch_review_attestation_paginates(monkeypatch):
     assert seen["n"] == 2
 
 
+def test_fetch_comment_attestation_paginates(monkeypatch):
+    c = load_check()
+    pages = [
+        _comment_page([pr_comment(commit="abc1234567")], has_next=True, cursor="C1"),
+        _comment_page([pr_comment(commit="def1234567")], has_next=False),
+    ]
+    seen = {"n": 0, "cursors": []}
+
+    def fake_gh(args, gh):
+        seen["cursors"].append("C1" in " ".join(args))
+        out = pages[seen["n"]]
+        seen["n"] += 1
+        return out
+
+    monkeypatch.setattr(c, "_gh", fake_gh)
+    head, fetched_comments = c.fetch_comment_attestation(1431, "owner", "name", "gh")
+
+    assert head == "head-a"
+    assert len(fetched_comments) == 2
+    assert seen == {"n": 2, "cursors": [False, True]}
+
+
 def test_fetch_review_attestation_head_change_fails_closed(monkeypatch):
     c = load_check()
     pages = [
@@ -465,11 +605,15 @@ def test_consistent_snapshot_refetches_threads_after_attestation(monkeypatch):
         calls["reviews"] += 1
         return "head-a", [review(commit="head-a")]
 
+    def fake_fetch_comments(pr, owner, name, gh):
+        return "head-a", []
+
     def fake_fetch_threads(pr, owner, name, gh):
         calls["threads"] += 1
         return [thread(path=f"snapshot-{calls['threads']}.py")]
 
     monkeypatch.setattr(c, "fetch_review_attestation", fake_fetch_reviews)
+    monkeypatch.setattr(c, "fetch_comment_attestation", fake_fetch_comments)
     monkeypatch.setattr(c, "fetch_threads", fake_fetch_threads)
 
     try:
@@ -491,6 +635,7 @@ def test_consistent_snapshot_fails_when_review_generation_changes(monkeypatch):
         return "head-a", [review(commit="head-a", state=state)]
 
     monkeypatch.setattr(c, "fetch_review_attestation", fake_fetch_reviews)
+    monkeypatch.setattr(c, "fetch_comment_attestation", lambda pr, owner, name, gh: ("head-a", []))
     monkeypatch.setattr(c, "fetch_threads", lambda pr, owner, name, gh: [thread()])
 
     try:
@@ -499,3 +644,24 @@ def test_consistent_snapshot_fails_when_review_generation_changes(monkeypatch):
         assert "Codex review generation changed" in str(exc)
     else:  # pragma: no cover - assertion clarity
         raise AssertionError("review movement during snapshot fetch must fail closed")
+
+
+def test_consistent_snapshot_fails_when_clean_comment_generation_changes(monkeypatch):
+    c = load_check()
+    seen = {"comments": 0}
+
+    def fake_fetch_comments(pr, owner, name, gh):
+        seen["comments"] += 1
+        comments = [] if seen["comments"] == 1 else [pr_comment(commit="abc1234567")]
+        return "abc1234567890", comments
+
+    monkeypatch.setattr(c, "fetch_review_attestation", lambda pr, owner, name, gh: ("abc1234567890", []))
+    monkeypatch.setattr(c, "fetch_comment_attestation", fake_fetch_comments)
+    monkeypatch.setattr(c, "fetch_threads", lambda pr, owner, name, gh: [thread()])
+
+    try:
+        c.fetch_consistent_review_thread_snapshot(1431, "owner", "name", "gh", BOTS)
+    except RuntimeError as exc:
+        assert "Codex review generation changed" in str(exc)
+    else:  # pragma: no cover - assertion clarity
+        raise AssertionError("comment movement during snapshot fetch must fail closed")

@@ -31,12 +31,15 @@ import argparse
 import importlib.util
 import json
 import os
+import re
 import subprocess
 import sys
 from collections.abc import Sequence
 from pathlib import Path
 
 _DEFAULT_BOTS = ("chatgpt-codex-connector", "chatgpt-codex-connector[bot]")
+_CLEAN_CODEX_REVIEW_TEXT = "didn't find any major issues"
+_REVIEWED_COMMIT_RE = re.compile(r"\*\*Reviewed commit:\*\*\s*`(?P<sha>[0-9a-f]{10,40})`", re.IGNORECASE)
 _LEGACY_BOT_ALIASES = frozenset(
     {
         "bot",
@@ -86,10 +89,29 @@ query($owner:String!,$name:String!,$pr:Int!,$cursor:String){
 }
 """
 
+_COMMENTS_QUERY = """
+query($owner:String!,$name:String!,$pr:Int!,$cursor:String){
+  repository(owner:$owner,name:$name){
+    pullRequest(number:$pr){
+      headRefOid
+      comments(first:100, after:$cursor){
+        pageInfo{ hasNextPage endCursor }
+        nodes{
+          author{ login }
+          body
+          bodyText
+        }
+      }
+    }
+  }
+}
+"""
+
 # Defensive cap on pagination (100 threads/page) so a pathological PR can never
 # loop unbounded; far above any real review.
 _MAX_THREAD_PAGES = 50
 _MAX_REVIEW_PAGES = 50
+_MAX_COMMENT_PAGES = 50
 
 
 def _load_phase2():
@@ -187,6 +209,31 @@ def current_head_bot_reviews(
     )
 
 
+def current_head_clean_review_comments(
+    comments: Sequence[dict],
+    *,
+    head_sha: str,
+    bot_logins: Sequence[str],
+) -> list[dict]:
+    """Return Codex clean-review PR comments that name the current PR head."""
+
+    wanted = frozenset(b.lower() for b in bot_logins)
+    found: list[dict] = []
+    for comment in comments or []:
+        author = (((comment.get("author") or {}).get("login")) or "").lower()
+        body = comment.get("body") or comment.get("bodyText") or ""
+        if author not in wanted or _CLEAN_CODEX_REVIEW_TEXT not in body.lower():
+            continue
+        match = _REVIEWED_COMMIT_RE.search(body)
+        if match is None:
+            continue
+        reviewed_sha = match.group("sha").lower()
+        if not head_sha.lower().startswith(reviewed_sha):
+            continue
+        found.append(comment)
+    return found
+
+
 def current_head_change_requests(
     reviews: Sequence[dict],
     *,
@@ -205,6 +252,7 @@ def current_head_change_requests(
 
 def review_attestation_generation(
     reviews: Sequence[dict],
+    comments: Sequence[dict] | None = None,
     *,
     head_sha: str,
     bot_logins: Sequence[str],
@@ -218,7 +266,18 @@ def review_attestation_generation(
         commit = ((review.get("commit") or {}).get("oid")) or ""
         state = review.get("state") or ""
         if author in wanted and commit == head_sha:
-            generation.append((author, commit, state))
+            generation.append(("review", author, commit, state))
+    for comment in comments or []:
+        author = (((comment.get("author") or {}).get("login")) or "").lower()
+        body = comment.get("body") or comment.get("bodyText") or ""
+        if author not in wanted:
+            continue
+        match = _REVIEWED_COMMIT_RE.search(body)
+        if match is None:
+            continue
+        reviewed_sha = match.group("sha").lower()
+        if head_sha.lower().startswith(reviewed_sha):
+            generation.append(("comment", author, reviewed_sha, body))
     return tuple(sorted(generation))
 
 
@@ -279,6 +338,7 @@ def evaluate(
     bot_logins: Sequence[str],
     *,
     reviews: Sequence[dict] | None = None,
+    comments: Sequence[dict] | None = None,
     head_sha: str | None = None,
 ) -> tuple[int, list[str]]:
     """Core decision (pure). Returns (exit_code, messages)."""
@@ -299,17 +359,21 @@ def evaluate(
             reviews or [],
             head_sha=head_sha,
             bot_logins=bot_logins,
+        ) and not current_head_clean_review_comments(
+            comments or [],
+            head_sha=head_sha,
+            bot_logins=bot_logins,
         ):
             messages.append(
                 "missing current-head Codex connector review: live reconciliation "
-                f"requires one scoped Codex review on PR head {head_sha} before merge."
+                f"requires one scoped Codex review or clean review comment on PR head {head_sha} before merge."
             )
 
     open_threads = open_bot_threads(nodes, bot_logins)
     if not open_threads:
         if messages:
             return 1, messages
-        return 0, ["OK: current-head Codex review is present and no open scoped Codex review threads remain."]
+        return 0, ["OK: current-head Codex review attestation is present and no open scoped Codex review threads remain."]
 
     body_class = classify_body(body)
     if body_class == "claims_clear":
@@ -462,6 +526,59 @@ def fetch_review_attestation(pr: int, owner: str, name: str, gh: str) -> tuple[s
     return head_sha, reviews
 
 
+def fetch_comment_attestation(pr: int, owner: str, name: str, gh: str) -> tuple[str, list[dict]]:
+    """Fetch PR head SHA and all PR comments for clean Codex attestation."""
+
+    comments: list[dict] = []
+    head_sha = ""
+    cursor: str | None = None
+    for page_number in range(1, _MAX_COMMENT_PAGES + 1):
+        args = [
+            "api", "graphql",
+            "-f", f"query={_COMMENTS_QUERY}",
+            "-F", f"owner={owner}",
+            "-F", f"name={name}",
+            "-F", f"pr={pr}",
+        ]
+        if cursor:
+            args += ["-F", f"cursor={cursor}"]
+        data = json.loads(_gh(args, gh))
+        if data.get("errors"):
+            raise RuntimeError(f"GitHub GraphQL returned errors on comments page {page_number}")
+
+        envelope = _expect_mapping(data.get("data"), "data")
+        repository = _expect_mapping(envelope.get("repository"), "repository")
+        pull_request = _expect_mapping(repository.get("pullRequest"), "pullRequest")
+        observed_head = pull_request.get("headRefOid")
+        if not isinstance(observed_head, str) or not observed_head:
+            raise RuntimeError("GitHub GraphQL response malformed: pullRequest.headRefOid is missing")
+        if head_sha and observed_head != head_sha:
+            raise RuntimeError("GitHub GraphQL response changed PR head during comment pagination")
+        head_sha = observed_head
+
+        comment_connection = _expect_mapping(pull_request.get("comments"), "comments")
+        page = _expect_mapping(comment_connection.get("pageInfo"), "comments.pageInfo")
+        page_nodes = comment_connection.get("nodes")
+        if not isinstance(page_nodes, list):
+            raise RuntimeError("GitHub GraphQL response malformed: comments.nodes is missing or not a list")
+        comments.extend(page_nodes)
+
+        has_next = page.get("hasNextPage")
+        if not isinstance(has_next, bool):
+            raise RuntimeError(
+                "GitHub GraphQL response malformed: comments.pageInfo.hasNextPage is missing or not a bool"
+            )
+        if not has_next:
+            break
+        next_cursor = page.get("endCursor")
+        if not isinstance(next_cursor, str) or not next_cursor:
+            raise RuntimeError("GitHub GraphQL response malformed: comments.pageInfo.endCursor is required")
+        cursor = next_cursor
+    else:
+        raise RuntimeError(f"comments pagination exceeded {_MAX_COMMENT_PAGES} pages")
+    return head_sha, comments
+
+
 def fetch_body(pr: int, repo: str, gh: str) -> str:
     out = _gh(["pr", "view", str(pr), "--repo", repo, "--json", "body", "-q", ".body"], gh)
     return out
@@ -473,28 +590,34 @@ def fetch_consistent_review_thread_snapshot(
     name: str,
     gh: str,
     bot_logins: Sequence[str],
-) -> tuple[list[dict], str, list[dict]]:
+) -> tuple[list[dict], str, list[dict], list[dict]]:
     """Fetch reviews/threads twice and fail closed if either generation moves."""
 
     head_before, reviews_before = fetch_review_attestation(pr, owner, name, gh)
+    comment_head_before, comments_before = fetch_comment_attestation(pr, owner, name, gh)
     nodes_before = fetch_threads(pr, owner, name, gh)
     head_middle, reviews_middle = fetch_review_attestation(pr, owner, name, gh)
+    comment_head_middle, comments_middle = fetch_comment_attestation(pr, owner, name, gh)
     nodes_after = fetch_threads(pr, owner, name, gh)
     head_after, reviews_after = fetch_review_attestation(pr, owner, name, gh)
-    if len({head_before, head_middle, head_after}) != 1:
+    comment_head_after, comments_after = fetch_comment_attestation(pr, owner, name, gh)
+    if len({head_before, head_middle, head_after, comment_head_before, comment_head_middle, comment_head_after}) != 1:
         raise RuntimeError("GitHub PR head changed during review/thread snapshot fetch")
     before_generation = review_attestation_generation(
         reviews_before,
+        comments_before,
         head_sha=head_before,
         bot_logins=bot_logins,
     )
     after_generation = review_attestation_generation(
         reviews_after,
+        comments_after,
         head_sha=head_after,
         bot_logins=bot_logins,
     )
     middle_generation = review_attestation_generation(
         reviews_middle,
+        comments_middle,
         head_sha=head_middle,
         bot_logins=bot_logins,
     )
@@ -502,7 +625,7 @@ def fetch_consistent_review_thread_snapshot(
         raise RuntimeError("GitHub Codex review generation changed during review/thread snapshot fetch")
     if review_thread_generation(nodes_before) != review_thread_generation(nodes_after):
         raise RuntimeError("GitHub review thread generation changed during review/thread snapshot fetch")
-    return nodes_after, head_after, reviews_after
+    return nodes_after, head_after, reviews_after, comments_after
 
 
 def main(argv: Sequence[str] | None = None) -> int:
@@ -532,6 +655,10 @@ def main(argv: Sequence[str] | None = None) -> int:
         help="JSON file of review nodes (test/dry-run; skips fetching live reviews)",
     )
     parser.add_argument(
+        "--comments-file",
+        help="JSON file of PR comment nodes (test/dry-run; skips fetching live review comments)",
+    )
+    parser.add_argument(
         "--head-sha",
         help="PR head SHA for current-head Codex review attestation in test/dry-run mode",
     )
@@ -546,6 +673,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     try:
         head_sha = args.head_sha
         reviews: Sequence[dict] | None = None
+        comments: Sequence[dict] | None = None
 
         if args.threads_file:
             nodes = json.loads(Path(args.threads_file).read_text(encoding="utf-8"))
@@ -558,7 +686,7 @@ def main(argv: Sequence[str] | None = None) -> int:
                 )
                 return 2
             owner, _, name = args.repo.partition("/")
-            nodes, head_sha, reviews = fetch_consistent_review_thread_snapshot(
+            nodes, head_sha, reviews, comments = fetch_consistent_review_thread_snapshot(
                 args.pr,
                 owner,
                 name,
@@ -568,6 +696,8 @@ def main(argv: Sequence[str] | None = None) -> int:
 
         if args.reviews_file:
             reviews = json.loads(Path(args.reviews_file).read_text(encoding="utf-8"))
+        if args.comments_file:
+            comments = json.loads(Path(args.comments_file).read_text(encoding="utf-8"))
 
         if args.body_file:
             body = Path(args.body_file).read_text(encoding="utf-8")
@@ -579,7 +709,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         print(f"live reconciliation: GitHub API/read error: {exc}", file=sys.stderr)
         return 2
 
-    code, messages = evaluate(nodes, body, bots, reviews=reviews, head_sha=head_sha)
+    code, messages = evaluate(nodes, body, bots, reviews=reviews, comments=comments, head_sha=head_sha)
     print("live AI reconciliation check")
     print("-" * 60)
     for line in messages:

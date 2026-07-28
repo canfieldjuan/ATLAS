@@ -7,7 +7,7 @@
 #   ACTIONABLE    - red required context / unresolved review threads /
 #                   CHANGES_REQUESTED review decision
 #   MERGE-READY   - EVERY required context present and success +
-#                   Codex review exists on this exact head SHA +
+#                   Codex review attestation exists on this exact head SHA +
 #                   0 unresolved threads (no unfetched pages) +
 #                   review decision not CHANGES_REQUESTED + mergeable
 # Required contexts + app pin are read from origin/main's
@@ -78,6 +78,7 @@ for i in $(seq 0 "$CYCLES"); do
   # Fail closed when more thread pages exist than we fetched.
   [ "$MORE" = "true" ] && UNRES="${UNRES}+unfetched-pages"
   REVIEW_QUERY='query($owner:String!,$name:String!,$pr:Int!,$cursor:String){ repository(owner:$owner,name:$name){ pullRequest(number:$pr){ reviews(first:100, after:$cursor){ pageInfo{ hasNextPage endCursor } nodes{ author{ login } commit{ oid } state } } } } }'
+  COMMENT_QUERY='query($owner:String!,$name:String!,$pr:Int!,$cursor:String){ repository(owner:$owner,name:$name){ pullRequest(number:$pr){ comments(first:100, after:$cursor){ pageInfo{ hasNextPage endCursor } nodes{ author{ login } body bodyText } } } } }'
   REVIEW_NODES='[]'
   REVIEW_CURSOR=''
   REVIEW_PAGES=0
@@ -112,7 +113,41 @@ for i in $(seq 0 "$CYCLES"); do
     REVIEW_CURSOR=$(echo "$REVIEW_PAGE" | jq -r '.data.repository.pullRequest.reviews.pageInfo.endCursor // empty')
     [ -n "$REVIEW_CURSOR" ] || { REVIEWS_COMPLETE=false; break; }
   done
-  CODEX_HEAD_REVIEWS=$(echo "$REVIEW_NODES" | jq --arg sha "$SHA" --argjson codex "$CODEX_LOGINS_JSON" '[.[]? | select(((((.author.login // "") | ascii_downcase) as $login | $codex | index($login)) != null) and ((.commit.oid // "") == $sha) and ((.state // "") | IN("COMMENTED","APPROVED")))] | length')
+  COMMENT_NODES='[]'
+  COMMENT_CURSOR=''
+  while [ "$REVIEWS_COMPLETE" = "true" ]; do
+    COMMENT_ARGS=(gh api graphql -f query="$COMMENT_QUERY" -f owner="$OWNER" -f name="$NAME" -F pr="$PR")
+    [ -n "$COMMENT_CURSOR" ] && COMMENT_ARGS+=(-f cursor="$COMMENT_CURSOR")
+    COMMENT_PAGE=$(GH_TOKEN="$TOK" "${COMMENT_ARGS[@]}" 2>/dev/null) || { REVIEWS_COMPLETE=false; break; }
+    if ! echo "$COMMENT_PAGE" | jq -e '
+        (((.errors // []) | length) == 0)
+        and ((.data.repository.pullRequest | type) == "object")
+        and ((.data.repository.pullRequest.comments | type) == "object")
+        and ((.data.repository.pullRequest.comments.nodes | type) == "array")
+        and ((.data.repository.pullRequest.comments.pageInfo | type) == "object")
+        and ((.data.repository.pullRequest.comments.pageInfo.hasNextPage | type) == "boolean")
+        and (
+          (.data.repository.pullRequest.comments.pageInfo.hasNextPage == false)
+          or (
+            ((.data.repository.pullRequest.comments.pageInfo.endCursor // "") | type) == "string"
+            and (((.data.repository.pullRequest.comments.pageInfo.endCursor // "") | length) > 0)
+          )
+        )
+      ' >/dev/null 2>&1; then
+      REVIEWS_COMPLETE=false
+      break
+    fi
+    PAGE_NODES=$(echo "$COMMENT_PAGE" | jq -c '.data.repository.pullRequest.comments.nodes // []') || { REVIEWS_COMPLETE=false; break; }
+    COMMENT_NODES=$(jq -n -c --argjson existing "$COMMENT_NODES" --argjson new "$PAGE_NODES" '$existing + $new') || { REVIEWS_COMPLETE=false; break; }
+    REVIEW_PAGES=$((REVIEW_PAGES + 1))
+    HAS_NEXT=$(echo "$COMMENT_PAGE" | jq -r '.data.repository.pullRequest.comments.pageInfo.hasNextPage')
+    [ "$HAS_NEXT" = "true" ] || break
+    COMMENT_CURSOR=$(echo "$COMMENT_PAGE" | jq -r '.data.repository.pullRequest.comments.pageInfo.endCursor // empty')
+    [ -n "$COMMENT_CURSOR" ] || { REVIEWS_COMPLETE=false; break; }
+  done
+  CODEX_FORMAL_REVIEWS=$(echo "$REVIEW_NODES" | jq --arg sha "$SHA" --argjson codex "$CODEX_LOGINS_JSON" '[.[]? | select(((((.author.login // "") | ascii_downcase) as $login | $codex | index($login)) != null) and ((.commit.oid // "") == $sha) and ((.state // "") | IN("COMMENTED","APPROVED")))] | length')
+  CODEX_CLEAN_COMMENTS=$(echo "$COMMENT_NODES" | jq --arg sha "$SHA" --argjson codex "$CODEX_LOGINS_JSON" '[.[]? | ((.body // .bodyText // "") as $body | ((.author.login // "") | ascii_downcase) as $login | select(($codex | index($login)) != null) | select(($body | ascii_downcase | contains("didn'\''t find any major issues"))) | ((try ($body | capture("\\*\\*Reviewed commit:\\*\\*\\s*`(?<reviewed>[0-9a-fA-F]{10,40})`").reviewed) catch "") | ascii_downcase) as $reviewed | select(($reviewed | length) > 0 and ($sha | startswith($reviewed))))] | length')
+  CODEX_HEAD_REVIEWS=$((CODEX_FORMAL_REVIEWS + CODEX_CLEAN_COMMENTS))
   # --paginate + re-wrap: required contexts beyond the first 100 runs stay visible
   CR=$(GH_TOKEN="$TOK" gh api --paginate "repos/$REPO/commits/$SHA/check-runs?per_page=100" 2>/dev/null | jq -s '{check_runs:[.[].check_runs[]]}')
   PEND=$(echo "$CR" | jq '[.check_runs[]|select(.status!="completed")]|length')
@@ -127,11 +162,11 @@ for i in $(seq 0 "$CYCLES"); do
   # completed one; ANY not-completed run of a required name (across all runs,
   # not just the latest-pick) blocks readiness until it settles.
   REQUNSETTLED=$(echo "$CR" | jq --argjson app "$REQ_APP_ID" --argjson req "$REQ_JSON" '[.check_runs[]|select(.app.id==$app)|select(.name as $n|$req|index($n))|select(.status!="completed")]|length')
-  echo "cycle $i $(date +%H:%M): state=$STATE req-green=$REQGREEN/$REQ_TOTAL req-red=$REQRED req-unsettled=$REQUNSETTLED pending=$PEND codex-head-reviews=$CODEX_HEAD_REVIEWS review-pages=$REVIEW_PAGES reviews-complete=$REVIEWS_COMPLETE threads=$UNRES decision=$DECISION mergeable=$MERGEABLE merge-state=$MSTATE"
+  echo "cycle $i $(date +%H:%M): state=$STATE req-green=$REQGREEN/$REQ_TOTAL req-red=$REQRED req-unsettled=$REQUNSETTLED pending=$PEND codex-head-attestations=$CODEX_HEAD_REVIEWS attestation-pages=$REVIEW_PAGES attestations-complete=$REVIEWS_COMPLETE threads=$UNRES decision=$DECISION mergeable=$MERGEABLE merge-state=$MSTATE"
   case "$STATE" in MERGED/merged|CLOSED) echo "TERMINAL: PR $STATE"; exit 0;; esac
   # Definite negatives are actionable on ANY cycle, including the first.
   if [ "$REQRED" -gt 0 ] || [ "$UNRES" != "0" ] || [ "$DECISION" = "CHANGES_REQUESTED" ] || [ "$REVIEWS_COMPLETE" != "true" ]; then
-    echo "ACTIONABLE: req-red=$REQRED codex-head-reviews=$CODEX_HEAD_REVIEWS threads=$UNRES decision=$DECISION -> reconcile/fix, push, re-arm"; exit 0
+    echo "ACTIONABLE: req-red=$REQRED codex-head-attestations=$CODEX_HEAD_REVIEWS threads=$UNRES decision=$DECISION -> reconcile/fix, push, re-arm"; exit 0
   fi
   # Readiness is presence-based: every required context must be reporting
   # success (a not-yet-started context keeps this false, so no early race).
@@ -191,7 +226,41 @@ for i in $(seq 0 "$CYCLES"); do
       FINAL_REVIEW_CURSOR=$(echo "$FINAL_REVIEW_PAGE" | jq -r '.data.repository.pullRequest.reviews.pageInfo.endCursor // empty')
       [ -n "$FINAL_REVIEW_CURSOR" ] || { FINAL_REVIEWS_COMPLETE=false; break; }
     done
-    FINAL_CODEX_HEAD_REVIEWS=$(echo "$FINAL_REVIEW_NODES" | jq --arg sha "$SHA" --argjson codex "$CODEX_LOGINS_JSON" '[.[]? | select(((((.author.login // "") | ascii_downcase) as $login | $codex | index($login)) != null) and ((.commit.oid // "") == $sha) and ((.state // "") | IN("COMMENTED","APPROVED")))] | length')
+    FINAL_COMMENT_NODES='[]'
+    FINAL_COMMENT_CURSOR=''
+    while [ "$FINAL_REVIEWS_COMPLETE" = "true" ]; do
+      FINAL_COMMENT_ARGS=(gh api graphql -f query="$COMMENT_QUERY" -f owner="$OWNER" -f name="$NAME" -F pr="$PR")
+      [ -n "$FINAL_COMMENT_CURSOR" ] && FINAL_COMMENT_ARGS+=(-f cursor="$FINAL_COMMENT_CURSOR")
+      FINAL_COMMENT_PAGE=$(GH_TOKEN="$TOK" "${FINAL_COMMENT_ARGS[@]}" 2>/dev/null) || { FINAL_REVIEWS_COMPLETE=false; break; }
+      if ! echo "$FINAL_COMMENT_PAGE" | jq -e '
+          (((.errors // []) | length) == 0)
+          and ((.data.repository.pullRequest | type) == "object")
+          and ((.data.repository.pullRequest.comments | type) == "object")
+          and ((.data.repository.pullRequest.comments.nodes | type) == "array")
+          and ((.data.repository.pullRequest.comments.pageInfo | type) == "object")
+          and ((.data.repository.pullRequest.comments.pageInfo.hasNextPage | type) == "boolean")
+          and (
+            (.data.repository.pullRequest.comments.pageInfo.hasNextPage == false)
+            or (
+              ((.data.repository.pullRequest.comments.pageInfo.endCursor // "") | type) == "string"
+              and (((.data.repository.pullRequest.comments.pageInfo.endCursor // "") | length) > 0)
+            )
+          )
+        ' >/dev/null 2>&1; then
+        FINAL_REVIEWS_COMPLETE=false
+        break
+      fi
+      FINAL_COMMENT_PAGE_NODES=$(echo "$FINAL_COMMENT_PAGE" | jq -c '.data.repository.pullRequest.comments.nodes // []') || { FINAL_REVIEWS_COMPLETE=false; break; }
+      FINAL_COMMENT_NODES=$(jq -n -c --argjson existing "$FINAL_COMMENT_NODES" --argjson new "$FINAL_COMMENT_PAGE_NODES" '$existing + $new') || { FINAL_REVIEWS_COMPLETE=false; break; }
+      FINAL_REVIEW_PAGES=$((FINAL_REVIEW_PAGES + 1))
+      FINAL_COMMENT_HAS_NEXT=$(echo "$FINAL_COMMENT_PAGE" | jq -r '.data.repository.pullRequest.comments.pageInfo.hasNextPage')
+      [ "$FINAL_COMMENT_HAS_NEXT" = "true" ] || break
+      FINAL_COMMENT_CURSOR=$(echo "$FINAL_COMMENT_PAGE" | jq -r '.data.repository.pullRequest.comments.pageInfo.endCursor // empty')
+      [ -n "$FINAL_COMMENT_CURSOR" ] || { FINAL_REVIEWS_COMPLETE=false; break; }
+    done
+    FINAL_CODEX_FORMAL_REVIEWS=$(echo "$FINAL_REVIEW_NODES" | jq --arg sha "$SHA" --argjson codex "$CODEX_LOGINS_JSON" '[.[]? | select(((((.author.login // "") | ascii_downcase) as $login | $codex | index($login)) != null) and ((.commit.oid // "") == $sha) and ((.state // "") | IN("COMMENTED","APPROVED")))] | length')
+    FINAL_CODEX_CLEAN_COMMENTS=$(echo "$FINAL_COMMENT_NODES" | jq --arg sha "$SHA" --argjson codex "$CODEX_LOGINS_JSON" '[.[]? | ((.body // .bodyText // "") as $body | ((.author.login // "") | ascii_downcase) as $login | select(($codex | index($login)) != null) | select(($body | ascii_downcase | contains("didn'\''t find any major issues"))) | ((try ($body | capture("\\*\\*Reviewed commit:\\*\\*\\s*`(?<reviewed>[0-9a-fA-F]{10,40})`").reviewed) catch "") | ascii_downcase) as $reviewed | select(($reviewed | length) > 0 and ($sha | startswith($reviewed))))] | length')
+    FINAL_CODEX_HEAD_REVIEWS=$((FINAL_CODEX_FORMAL_REVIEWS + FINAL_CODEX_CLEAN_COMMENTS))
     FINAL_CR=$(GH_TOKEN="$TOK" gh api --paginate "repos/$REPO/commits/$SHA/check-runs?per_page=100" 2>/dev/null | jq -s '{check_runs:[.[].check_runs[]]}')
     FINAL_REQLATEST=$(echo "$FINAL_CR" | jq --argjson app "$REQ_APP_ID" '[.check_runs[]|select(.app.id==$app)]|group_by(.name)|map(sort_by(.started_at)|last)')
     FINAL_REQRED=$(echo "$FINAL_REQLATEST" | jq --argjson req "$REQ_JSON" '[.[]|select(.name as $n|$req|index($n))|select(.status=="completed" and (.conclusion|IN("failure","cancelled","timed_out","action_required","stale","startup_failure")))]|length')
@@ -201,9 +270,9 @@ for i in $(seq 0 "$CYCLES"); do
        || { [ "$FINAL_MSTATE" != "CLEAN" ] && [ "$FINAL_MSTATE" != "UNSTABLE" ]; } \
        || [ "$FINAL_REVIEWS_COMPLETE" != "true" ] || [ "$FINAL_CODEX_HEAD_REVIEWS" -eq 0 ] \
        || [ "$FINAL_REQRED" -gt 0 ] || [ "$FINAL_REQGREEN" -ne "$REQ_TOTAL" ] || [ "$FINAL_REQUNSETTLED" -ne 0 ]; then
-      echo "ACTIONABLE: final-read req-green=$FINAL_REQGREEN/$REQ_TOTAL req-red=$FINAL_REQRED req-unsettled=$FINAL_REQUNSETTLED codex-head-reviews=$FINAL_CODEX_HEAD_REVIEWS review-pages=$FINAL_REVIEW_PAGES reviews-complete=$FINAL_REVIEWS_COMPLETE threads=$FINAL_UNRES decision=$FINAL_DECISION mergeable=$FINAL_MERGEABLE merge-state=$FINAL_MSTATE -> reconcile/fix, push, re-arm"; exit 0
+      echo "ACTIONABLE: final-read req-green=$FINAL_REQGREEN/$REQ_TOTAL req-red=$FINAL_REQRED req-unsettled=$FINAL_REQUNSETTLED codex-head-attestations=$FINAL_CODEX_HEAD_REVIEWS attestation-pages=$FINAL_REVIEW_PAGES attestations-complete=$FINAL_REVIEWS_COMPLETE threads=$FINAL_UNRES decision=$FINAL_DECISION mergeable=$FINAL_MERGEABLE merge-state=$FINAL_MSTATE -> reconcile/fix, push, re-arm"; exit 0
     fi
-    echo "MERGE-READY: all $REQ_TOTAL required contexts green + current-head Codex review + threads clear + merge-state $MSTATE."
+    echo "MERGE-READY: all $REQ_TOTAL required contexts green + current-head Codex review attestation + threads clear + merge-state $MSTATE."
     echo "-> pre-merge checklist first (clean tree, local==remote, re-verify threads=0), then merge + alert."
     exit 0
   fi

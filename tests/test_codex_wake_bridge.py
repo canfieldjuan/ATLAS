@@ -364,7 +364,7 @@ def test_malformed_readiness_objects_fail_closed(
         ("readiness", "review_decision", "review decision evidence is missing"),
         ("readiness", "codex_reviews_complete", "Codex review pagination is incomplete"),
         ("readiness", "codex_review_pages_fetched", "Codex review pages fetched must be at least 1"),
-        ("readiness", "codex_head_review_count", "current-head Codex review is missing"),
+        ("readiness", "codex_head_review_count", "current-head Codex review attestation is missing"),
         ("pr", "reviewDecision", "review decision evidence is missing"),
         ("readiness", "merge_state_status", "merge state must be CLEAN"),
     ],
