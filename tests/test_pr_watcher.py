@@ -88,6 +88,21 @@ def _review_page(nodes: list[dict[str, Any]] | None = None, *, has_next: bool = 
     }
 
 
+def _comment_page(nodes: list[dict[str, Any]] | None = None, *, has_next: bool = False, cursor: str | None = None) -> dict[str, Any]:
+    return {
+        "data": {
+            "repository": {
+                "pullRequest": {
+                    "comments": {
+                        "nodes": nodes or [],
+                        "pageInfo": {"hasNextPage": has_next, "endCursor": cursor},
+                    }
+                }
+            }
+        }
+    }
+
+
 def _thread(
     *,
     thread_id: str = "thread-1",
@@ -122,6 +137,7 @@ class FakeRun:
         reviews: tuple[int, str, str] | None = None,
         thread_pages: list[tuple[int, str, str]] | None = None,
         review_pages: list[tuple[int, str, str]] | None = None,
+        comment_pages: list[tuple[int, str, str]] | None = None,
         reconciliation: tuple[int, str, str] = (0, "clean", ""),
         git_status: tuple[int, str, str] = (0, "", ""),
     ) -> None:
@@ -138,6 +154,7 @@ class FakeRun:
         self.reviews = reviews or _response({"comments": [], "reviews": []})
         self.thread_pages = list(thread_pages or [_response(_thread_page())])
         self.review_pages = list(review_pages or [_response(_review_page())])
+        self.comment_pages = list(comment_pages or [_response(_comment_page())])
         self.reconciliation = reconciliation
         self.git_status = git_status
         self.commands: list[list[str]] = []
@@ -159,6 +176,8 @@ class FakeRun:
             query = " ".join(args)
             if "reviews(first:100" in query:
                 return self.review_pages.pop(0)
+            if "comments(first:100" in query:
+                return self.comment_pages.pop(0)
             return self.thread_pages.pop(0)
         if (
             len(args) > 1
@@ -224,7 +243,7 @@ def test_valid_snapshot_is_ready_and_accepted_by_consumer(tmp_path: Path, monkey
         "review_thread_pages_fetched": 1,
         "unresolved_review_threads": [],
         "codex_reviews_complete": True,
-        "codex_review_pages_fetched": 1,
+        "codex_review_pages_fetched": 2,
         "codex_head_review_count": 1,
         "review_decision": "",
         "merge_state_status": "CLEAN",
@@ -287,11 +306,17 @@ def test_thread_snapshot_is_collected_after_codex_review_pagination(
         }
     ]
     graphql_kinds = [
-        "reviews" if "reviews(first:100" in " ".join(command) else "threads"
+        (
+            "reviews"
+            if "reviews(first:100" in " ".join(command)
+            else "comments"
+            if "comments(first:100" in " ".join(command)
+            else "threads"
+        )
         for command in fake.commands
         if command[:3] == ["gh", "api", "graphql"]
     ]
-    assert graphql_kinds == ["reviews", "threads"]
+    assert graphql_kinds == ["reviews", "comments", "threads"]
     reconciliation_index = next(
         i
         for i, command in enumerate(fake.commands)
@@ -564,7 +589,7 @@ def test_current_head_codex_review_is_required_for_ready_state(
     assert status["state"] == "attention"
     assert status["readiness"]["codex_reviews_complete"] is True
     assert status["readiness"]["codex_head_review_count"] == 0
-    assert "current-head Codex review is missing" in wake_bridge.readiness_blockers(status)
+    assert "current-head Codex review attestation is missing" in wake_bridge.readiness_blockers(status)
 
 
 def test_current_head_review_requires_exact_codex_connector_identity(
@@ -623,7 +648,106 @@ def test_codex_review_pagination_reaches_later_current_head_review(
     )
 
     assert status["state"] == "ready_for_human_merge"
-    assert status["readiness"]["codex_review_pages_fetched"] == 2
+    assert status["readiness"]["codex_review_pages_fetched"] == 3
+    assert status["readiness"]["codex_head_review_count"] == 1
+
+
+def test_codex_clean_comment_attests_current_head(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    head = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+    status = _produce(
+        tmp_path,
+        monkeypatch,
+        FakeRun(
+            pr_responses=[_response(_pr(head=head)), _response(_pr(head=head)), _response(_pr(head=head))],
+            review_pages=[_response(_review_page(nodes=[]))],
+            comment_pages=[
+                _response(
+                    _comment_page(
+                        [
+                            {
+                                "author": {"login": "chatgpt-codex-connector"},
+                                "body": "Codex Review: Didn't find any major issues\n\n**Reviewed commit:** `aaaaaaaaaa`",
+                                "bodyText": "",
+                            }
+                        ]
+                    )
+                )
+            ],
+        ),
+        head=head,
+    )
+
+    assert status["state"] == "ready_for_human_merge"
+    assert status["readiness"]["codex_head_review_count"] == 1
+
+
+def test_authorless_comment_is_ignored_for_codex_attestation(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    head = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+    status = _produce(
+        tmp_path,
+        monkeypatch,
+        FakeRun(
+            pr_responses=[_response(_pr(head=head)), _response(_pr(head=head)), _response(_pr(head=head))],
+            review_pages=[_response(_review_page(nodes=[]))],
+            comment_pages=[
+                _response(
+                    _comment_page(
+                        [
+                            {
+                                "author": None,
+                                "body": "Codex Review: Didn't find any major issues\n\n**Reviewed commit:** `aaaaaaaaaa`",
+                                "bodyText": "",
+                            }
+                        ]
+                    )
+                )
+            ],
+        ),
+        head=head,
+    )
+
+    assert status["state"] == "attention"
+    assert status["readiness"]["codex_reviews_complete"] is True
+    assert status["readiness"]["codex_head_review_count"] == 0
+
+
+def test_codex_comment_pagination_reaches_later_current_head_attestation(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    head = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+    status = _produce(
+        tmp_path,
+        monkeypatch,
+        FakeRun(
+            pr_responses=[_response(_pr(head=head)), _response(_pr(head=head)), _response(_pr(head=head))],
+            review_pages=[_response(_review_page(nodes=[]))],
+            comment_pages=[
+                _response(_comment_page(has_next=True, cursor="comment-cursor")),
+                _response(
+                    _comment_page(
+                        [
+                            {
+                                "author": {"login": "chatgpt-codex-connector"},
+                                "body": "Codex Review: Didn't find any major issues\n\n**Reviewed commit:** `aaaaaaaaaa`",
+                                "bodyText": "",
+                            }
+                        ]
+                    )
+                ),
+            ],
+        ),
+        head=head,
+    )
+
+    assert status["state"] == "ready_for_human_merge"
+    assert status["readiness"]["codex_review_pages_fetched"] == 3
     assert status["readiness"]["codex_head_review_count"] == 1
 
 
@@ -1019,6 +1143,8 @@ def test_installed_entrypoint_writes_consumer_accepted_snapshot(tmp_path: Path) 
                 query = " ".join(args)
                 if "reviews(first:100" in query:
                     payload = {"data": {"repository": {"pullRequest": {"headRefOid": "head-a", "reviews": {"nodes": [{"author": {"login": "chatgpt-codex-connector"}, "commit": {"oid": "head-a"}, "state": "COMMENTED"}], "pageInfo": {"hasNextPage": False, "endCursor": None}}}}}}
+                elif "comments(first:100" in query:
+                    payload = {"data": {"repository": {"pullRequest": {"headRefOid": "head-a", "comments": {"nodes": [], "pageInfo": {"hasNextPage": False, "endCursor": None}}}}}}
                 elif "comments(first:1)" in query:
                     payload = {"data": {"repository": {"pullRequest": {"reviewThreads": {"nodes": [], "pageInfo": {"hasNextPage": False, "endCursor": None}}}}}}
                 else:

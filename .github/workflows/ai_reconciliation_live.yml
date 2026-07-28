@@ -1,4 +1,6 @@
 name: AI Reconciliation (live)
+run-name: >-
+  AI Reconciliation PR #${{ github.event.issue.number || github.event.pull_request.number }}
 
 # Phase 5 of the review-workflow redesign (#1328): the live, CI-side half of the
 # AI-finding reconciliation gate. Fails when the PR body records the bot findings
@@ -8,18 +10,20 @@ name: AI Reconciliation (live)
 # Runs on `pull_request_target` as well as the review events so that, as a
 # *required* status check, it always runs and reports (a quiet PR with no bot
 # threads reports green instead of wedging the merge as "missing required
-# check"), and re-runs when a bot comment lands or a review thread is
-# resolved/unresolved after the PR opens.
+# check"), and re-runs when a bot review or review comment lands after the PR
+# opens.
 #
 # Trusted-base execution (#1944 waiver 18): `pull_request_target` resolves
 # this workflow from the BASE branch and both jobs pin their checkout to the
 # base SHA, so a PR editing this gate is still judged by main's version. The
 # required `live-reconciliation` context comes from the target-only job
 # (audited guard shape in scripts/audit_workflow_security_posture.py); the
-# review-events job re-runs the same base-ref script when bot comments land or
-# review threads are resolved/unresolved and reports under its own advisory
-# context. Neither job may ever gain a
-# step that executes PR-ref content.
+# review-events jobs re-run the same trusted script when bot reviews or review
+# comments land and report under advisory contexts.
+# GitHub Actions does not expose `pull_request_review_thread` as a workflow
+# trigger, so resolving a review thread is observed by the next supported
+# PR/review/review-comment event rather than by a thread-resolution event.
+# Neither job may ever gain a step that executes PR-ref content.
 
 on:
   # `edited` is included so that when a reviewer fixes a failed check by editing
@@ -29,8 +33,6 @@ on:
     types: [opened, synchronize, reopened, ready_for_review, edited]
   pull_request_review:
   pull_request_review_comment:
-  pull_request_review_thread:
-    types: [resolved, unresolved]
 
 permissions:
   contents: read
@@ -60,7 +62,7 @@ jobs:
             --pr "${{ github.event.pull_request.number }}"
 
   live-reconciliation-review-events:
-    if: github.event_name != 'pull_request_target'
+    if: github.event_name == 'pull_request_review' || github.event_name == 'pull_request_review_comment'
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:

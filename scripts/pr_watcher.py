@@ -30,7 +30,13 @@ SAFE_WATCHER_ID_RE = re.compile(r"^[A-Za-z0-9._-]+$")
 VALID_CHECK_EXIT_CODES = {0, 1, 8}
 MAX_THREAD_PAGES = 50
 MAX_REVIEW_PAGES = 50
+MAX_COMMENT_PAGES = 50
 COMMAND_TIMEOUT_SECONDS = 60
+CODEX_CLEAN_REVIEW_TEXT = "didn't find any major issues"
+CODEX_REVIEWED_COMMIT_RE = re.compile(
+    r"\*\*Reviewed commit:\*\*\s*`(?P<sha>[0-9a-f]{10,40})`",
+    re.IGNORECASE,
+)
 CODEX_CONNECTOR_LOGINS = frozenset(
     {
         "chatgpt-codex-connector",
@@ -70,6 +76,19 @@ query($owner:String!,$name:String!,$pr:Int!,$cursor:String){
       reviews(first:100, after:$cursor){
         pageInfo{ hasNextPage endCursor }
         nodes{ author{ login } commit{ oid } state }
+      }
+    }
+  }
+}
+"""
+
+COMMENTS_QUERY = """
+query($owner:String!,$name:String!,$pr:Int!,$cursor:String){
+  repository(owner:$owner,name:$name){
+    pullRequest(number:$pr){
+      comments(first:100, after:$cursor){
+        pageInfo{ hasNextPage endCursor }
+        nodes{ author{ login } body bodyText }
       }
     }
   }
@@ -257,6 +276,26 @@ def _repo_parts(repo: str) -> tuple[str, str]:
 
 def _is_codex_login(value: Any) -> bool:
     return isinstance(value, str) and value.lower() in CODEX_CONNECTOR_LOGINS
+
+
+def _is_current_head_clean_codex_comment(node: dict[str, Any], *, head_sha: str) -> bool | str:
+    author = node.get("author")
+    if author is None:
+        return False
+    if not isinstance(author, dict):
+        return "comment author is malformed"
+    login = author.get("login")
+    if login is not None and not isinstance(login, str):
+        return "comment author login is malformed"
+    body = node.get("body") or node.get("bodyText") or ""
+    if body is not None and not isinstance(body, str):
+        return "comment body is malformed"
+    if not _is_codex_login(login) or CODEX_CLEAN_REVIEW_TEXT not in body.lower():
+        return False
+    match = CODEX_REVIEWED_COMMIT_RE.search(body)
+    if match is None:
+        return False
+    return head_sha.lower().startswith(match.group("sha").lower())
 
 
 def _first_thread_author_login(node: dict[str, Any], *, index: int) -> tuple[str, str | None]:
@@ -453,12 +492,73 @@ def _fetch_codex_head_reviews(
         if not isinstance(has_next, bool):
             return matches, pages, False, "GraphQL review hasNextPage must be boolean"
         if not has_next:
-            return matches, pages, True, None
+            break
         next_cursor = page_info.get("endCursor")
         if not isinstance(next_cursor, str) or not next_cursor:
             return matches, pages, False, "GraphQL review pagination cursor is missing"
         cursor = next_cursor
-    return matches, pages, False, f"review pagination exceeded {MAX_REVIEW_PAGES} pages"
+    else:
+        return matches, pages, False, f"review pagination exceeded {MAX_REVIEW_PAGES} pages"
+
+    cursor = None
+    for _ in range(MAX_COMMENT_PAGES):
+        command = [
+            "gh",
+            "api",
+            "graphql",
+            "-f",
+            f"query={COMMENTS_QUERY}",
+            "-F",
+            f"owner={owner}",
+            "-F",
+            f"name={name}",
+            "-F",
+            f"pr={pr}",
+        ]
+        if cursor is not None:
+            command.extend(["-F", f"cursor={cursor}"])
+        payload, error = _run_json(
+            command,
+            cwd=cwd,
+            allowed_codes={0},
+            expected_type=dict,
+        )
+        if error:
+            return matches, pages, False, error
+        graphql_errors = payload.get("errors")
+        if graphql_errors:
+            return matches, pages, False, "GraphQL response contains errors"
+        data = payload.get("data")
+        repository = data.get("repository") if isinstance(data, dict) else None
+        pull_request = repository.get("pullRequest") if isinstance(repository, dict) else None
+        comments = pull_request.get("comments") if isinstance(pull_request, dict) else None
+        if comments is None:
+            return matches, pages, False, "GraphQL comments envelope is missing"
+        if not isinstance(comments, dict):
+            return matches, pages, False, "GraphQL comments must be an object"
+        nodes = comments.get("nodes")
+        page_info = comments.get("pageInfo")
+        if not isinstance(nodes, list) or not isinstance(page_info, dict):
+            return matches, pages, False, "GraphQL comment nodes/pageInfo are malformed"
+        pages += 1
+        for index, node in enumerate(nodes):
+            if not isinstance(node, dict):
+                return matches, pages, False, f"comment {index} is not an object"
+            clean = _is_current_head_clean_codex_comment(node, head_sha=head_sha)
+            if isinstance(clean, str):
+                return matches, pages, False, clean
+            if clean:
+                matches += 1
+        has_next = page_info.get("hasNextPage")
+        if not isinstance(has_next, bool):
+            return matches, pages, False, "GraphQL comment hasNextPage must be boolean"
+        if not has_next:
+            return matches, pages, True, None
+        next_cursor = page_info.get("endCursor")
+        if not isinstance(next_cursor, str) or not next_cursor:
+            return matches, pages, False, "GraphQL comment pagination cursor is missing"
+        cursor = next_cursor
+    return matches, pages, False, f"comment pagination exceeded {MAX_COMMENT_PAGES} pages"
 
 
 def _read_previous(path: Path) -> tuple[dict[str, Any], str | None]:
@@ -859,7 +959,7 @@ def produce(watcher_id: str, *, config_dir: Path, state_dir: Path) -> tuple[int,
                 f"{len(required_failures)} failed, {len(required_pending)} pending"
             ),
             f"Unresolved review threads: {len(unresolved_threads)} across {thread_pages} fetched page(s)",
-            f"Current-head Codex reviews: {codex_head_review_count} across {review_pages} fetched page(s)",
+            f"Current-head Codex review attestations: {codex_head_review_count} across {review_pages} fetched page(s)",
             f"Reviews/comments: {review_count} reviews, {comment_count} comments",
             f"Review changed since last poll: {'yes' if review_changed else 'no'}",
             f"AI reconciliation: {'pass' if reconciliation_code == 0 else 'fail'}",

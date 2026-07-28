@@ -7,8 +7,11 @@ name: AI Reconciliation (review retrigger)
 # AI Reconciliation workflow completes for a review event (the advisory
 # job), this follow-up re-runs the latest `pull_request_target` run for the
 # same head SHA, so the required context is re-evaluated by trusted base
-# code whenever a bot comment lands or a review thread is resolved/unresolved
-# after the last push/body edit.
+# code whenever a bot review or review comment lands after the last
+# push/body edit. GitHub Actions does not expose
+# `pull_request_review_thread` as a workflow trigger, so thread-resolution-only
+# changes are refreshed by the next supported PR/review/review-comment event
+# instead of this retrigger path.
 #
 # Loop-safe: the rerun completes with event == pull_request_target, which
 # this job's `if` ignores. No checkout and no repo scripts: the inline
@@ -21,28 +24,30 @@ on:
 
 permissions:
   actions: write
+  pull-requests: read
 
 jobs:
   retrigger-required-context:
     if: >-
       github.event.workflow_run.event == 'pull_request_review' ||
-      github.event.workflow_run.event == 'pull_request_review_comment' ||
-      github.event.workflow_run.event == 'pull_request_review_thread'
+      github.event.workflow_run.event == 'pull_request_review_comment'
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
       - name: Rerun latest trusted target run for this head
         env:
           GH_TOKEN: ${{ github.token }}
-          HEAD_SHA: ${{ github.event.workflow_run.head_sha }}
+          WORKFLOW_RUN_EVENT: ${{ github.event.workflow_run.event }}
+          WORKFLOW_RUN_HEAD_SHA: ${{ github.event.workflow_run.head_sha }}
         run: |
           set -euo pipefail
+          head_sha="${WORKFLOW_RUN_HEAD_SHA}"
           run_id=$(gh api \
-            "repos/${GITHUB_REPOSITORY}/actions/workflows/ai_reconciliation_live.yml/runs?event=pull_request_target&head_sha=${HEAD_SHA}&per_page=1" \
+            "repos/${GITHUB_REPOSITORY}/actions/workflows/ai_reconciliation_live.yml/runs?event=pull_request_target&head_sha=${head_sha}&per_page=1" \
             --jq '.workflow_runs[0].id // empty')
           if [ -z "${run_id}" ]; then
-            echo "no pull_request_target run for ${HEAD_SHA}; nothing to refresh"
+            echo "no pull_request_target run for ${head_sha}; nothing to refresh"
             exit 0
           fi
-          echo "re-running trusted run ${run_id} for ${HEAD_SHA}"
+          echo "re-running trusted run ${run_id} for ${head_sha}"
           gh api -X POST "repos/${GITHUB_REPOSITORY}/actions/runs/${run_id}/rerun"

@@ -17,7 +17,7 @@ def _write_executable(path: Path, text: str) -> None:
     path.chmod(path.stat().st_mode | stat.S_IXUSR)
 
 
-def _run_watcher(tmp_path: Path, *, scenario: str) -> subprocess.CompletedProcess[str]:
+def _run_watcher(tmp_path: Path, *, scenario: str, sha: str = "head-a") -> subprocess.CompletedProcess[str]:
     fake_bin = tmp_path / "bin"
     fake_bin.mkdir()
     _write_executable(
@@ -44,6 +44,7 @@ def _run_watcher(tmp_path: Path, *, scenario: str) -> subprocess.CompletedProces
 
         args = sys.argv[1:]
         scenario = os.environ.get("WATCHER_SCENARIO", "ready")
+        expected_sha = os.environ.get("SHA", "head-a")
         state_file = os.environ.get("WATCHER_STATE_FILE", "")
         if args[:2] == ["api", "repos/owner/repo/pulls/7"]:
             if scenario == "head_moves_before_ready":
@@ -56,8 +57,8 @@ def _run_watcher(tmp_path: Path, *, scenario: str) -> subprocess.CompletedProces
                         handle.write(str(count + 1))
                 print("head-b" if count else "head-a")
                 raise SystemExit(0)
-            print("head-a")
-        elif args[:3] == ["api", "--paginate", "repos/owner/repo/commits/head-a/check-runs?per_page=100"]:
+            print(expected_sha)
+        elif args[:2] == ["api", "--paginate"] and args[2] == f"repos/owner/repo/commits/{expected_sha}/check-runs?per_page=100":
             check_state_file = state_file + ".checks" if state_file else ""
             check_count = 0
             if check_state_file and os.path.exists(check_state_file):
@@ -81,6 +82,8 @@ def _run_watcher(tmp_path: Path, *, scenario: str) -> subprocess.CompletedProces
             joined = " ".join(args)
             if "reviewThreads" in joined:
                 review_decision = ""
+                if scenario == "clean_comment_changes_requested":
+                    review_decision = "CHANGES_REQUESTED"
                 if scenario == "final_decision_changes":
                     thread_state_file = state_file + ".threads" if state_file else ""
                     count = 0
@@ -148,7 +151,7 @@ def _run_watcher(tmp_path: Path, *, scenario: str) -> subprocess.CompletedProces
                 if review_state_file:
                     with open(review_state_file, "w", encoding="utf-8") as handle:
                         handle.write(str(review_count + 1))
-                if scenario == "no_review":
+                if scenario in {"no_review", "clean_comment", "paginated_clean_comment", "wrong_author_clean_comment", "stale_clean_comment"}:
                     nodes = []
                     has_next = False
                     cursor = None
@@ -166,13 +169,13 @@ def _run_watcher(tmp_path: Path, *, scenario: str) -> subprocess.CompletedProces
                     }}}}}))
                     raise SystemExit(0)
                 elif scenario == "paginated_review" and "cursor=c2" not in joined:
-                    nodes = [{"author": {"login": "human"}, "commit": {"oid": "head-a"}, "state": "APPROVED"}]
+                    nodes = [{"author": {"login": "human"}, "commit": {"oid": expected_sha}, "state": "APPROVED"}]
                     has_next = True
                     cursor = "c2"
                 elif scenario == "helper_review":
                     nodes = [{
                         "author": {"login": "codex-helper"},
-                        "commit": {"oid": "head-a"},
+                        "commit": {"oid": expected_sha},
                         "state": "COMMENTED",
                     }]
                     has_next = False
@@ -180,7 +183,7 @@ def _run_watcher(tmp_path: Path, *, scenario: str) -> subprocess.CompletedProces
                 elif scenario == "changes_requested_review":
                     nodes = [{
                         "author": {"login": "chatgpt-codex-connector"},
-                        "commit": {"oid": "head-a"},
+                        "commit": {"oid": expected_sha},
                         "state": "CHANGES_REQUESTED",
                     }]
                     has_next = False
@@ -188,12 +191,78 @@ def _run_watcher(tmp_path: Path, *, scenario: str) -> subprocess.CompletedProces
                 else:
                     nodes = [{
                         "author": {"login": "chatgpt-codex-connector"},
-                        "commit": {"oid": "head-a"},
+                        "commit": {"oid": expected_sha},
                         "state": "COMMENTED",
                     }]
                     has_next = False
                     cursor = None
                 print(json.dumps({"data": {"repository": {"pullRequest": {"reviews": {
+                    "pageInfo": {"hasNextPage": has_next, "endCursor": cursor},
+                    "nodes": nodes,
+                }}}}}))
+            elif "comments(first:100" in joined:
+                comment_state_file = state_file + ".comments" if state_file else ""
+                comment_count = 0
+                if comment_state_file and os.path.exists(comment_state_file):
+                    with open(comment_state_file, "r", encoding="utf-8") as handle:
+                        comment_count = int(handle.read() or "0")
+                if comment_state_file:
+                    with open(comment_state_file, "w", encoding="utf-8") as handle:
+                        handle.write(str(comment_count + 1))
+                if scenario in {"clean_comment", "clean_comment_changes_requested"}:
+                    nodes = [{
+                        "author": {"login": "chatgpt-codex-connector"},
+                        "body": "Codex Review: Didn't find any major issues\\n\\n**Reviewed commit:** `" + expected_sha[:10] + "`",
+                        "bodyText": "",
+                    }]
+                    has_next = False
+                    cursor = None
+                elif scenario == "wrong_author_clean_comment":
+                    nodes = [{
+                        "author": {"login": "codex-helper"},
+                        "body": "Codex Review: Didn't find any major issues\\n\\n**Reviewed commit:** `" + expected_sha[:10] + "`",
+                        "bodyText": "",
+                    }]
+                    has_next = False
+                    cursor = None
+                elif scenario == "stale_clean_comment":
+                    nodes = [{
+                        "author": {"login": "chatgpt-codex-connector"},
+                        "body": "Codex Review: Didn't find any major issues\\n\\n**Reviewed commit:** `bbbbbbbbbb`",
+                        "bodyText": "",
+                    }]
+                    has_next = False
+                    cursor = None
+                elif scenario == "paginated_clean_comment" and "cursor=c2" not in joined:
+                    nodes = []
+                    has_next = True
+                    cursor = "c2"
+                elif scenario == "paginated_clean_comment":
+                    nodes = [{
+                        "author": {"login": "chatgpt-codex-connector"},
+                        "body": "Codex Review: Didn't find any major issues\\n\\n**Reviewed commit:** `" + expected_sha[:10] + "`",
+                        "bodyText": "",
+                    }]
+                    has_next = False
+                    cursor = None
+                elif scenario == "final_clean_comment_disappears" and comment_count > 0:
+                    nodes = []
+                    has_next = False
+                    cursor = None
+                elif scenario == "comment_graphql_errors":
+                    print(json.dumps({"errors": [{"message": "partial failure"}], "data": {"repository": {"pullRequest": {"comments": None}}}}))
+                    raise SystemExit(0)
+                elif scenario == "comment_malformed_page_info":
+                    print(json.dumps({"data": {"repository": {"pullRequest": {"comments": {
+                        "pageInfo": {},
+                        "nodes": [],
+                    }}}}}))
+                    raise SystemExit(0)
+                else:
+                    nodes = []
+                    has_next = False
+                    cursor = None
+                print(json.dumps({"data": {"repository": {"pullRequest": {"comments": {
                     "pageInfo": {"hasNextPage": has_next, "endCursor": cursor},
                     "nodes": nodes,
                 }}}}}))
@@ -211,7 +280,7 @@ def _run_watcher(tmp_path: Path, *, scenario: str) -> subprocess.CompletedProces
         "GH_TOKEN": "fake-token",
         "REPO": "owner/repo",
         "PR": "7",
-        "SHA": "head-a",
+        "SHA": sha,
         "CYCLES": "0",
         "WATCHER_SCENARIO": scenario,
         "WATCHER_STATE_FILE": str(tmp_path / "watcher-state.txt"),
@@ -231,7 +300,7 @@ def test_watcher_reports_ready_with_current_head_codex_review(tmp_path: Path) ->
 
     assert result.returncode == 0, result.stdout + result.stderr
     assert "MERGE-READY" in result.stdout
-    assert "codex-head-reviews=1" in result.stdout
+    assert "codex-head-attestations=1" in result.stdout
 
 
 def test_watcher_ignores_unresolved_non_codex_thread(tmp_path: Path) -> None:
@@ -248,7 +317,7 @@ def test_watcher_blocks_without_current_head_codex_review(tmp_path: Path) -> Non
     assert result.returncode == 0, result.stdout + result.stderr
     assert "ACTIONABLE" not in result.stdout
     assert "watch window elapsed" in result.stdout
-    assert "codex-head-reviews=0" in result.stdout
+    assert "codex-head-attestations=0" in result.stdout
 
 
 def test_watcher_requires_exact_codex_connector_review_identity(tmp_path: Path) -> None:
@@ -256,7 +325,7 @@ def test_watcher_requires_exact_codex_connector_review_identity(tmp_path: Path) 
 
     assert result.returncode == 0, result.stdout + result.stderr
     assert "MERGE-READY" not in result.stdout
-    assert "codex-head-reviews=0" in result.stdout
+    assert "codex-head-attestations=0" in result.stdout
 
 
 def test_watcher_blocks_on_unresolved_codex_thread(tmp_path: Path) -> None:
@@ -280,7 +349,48 @@ def test_watcher_does_not_count_changes_requested_as_head_review(tmp_path: Path)
 
     assert result.returncode == 0, result.stdout + result.stderr
     assert "MERGE-READY" not in result.stdout
-    assert "codex-head-reviews=0" in result.stdout
+    assert "codex-head-attestations=0" in result.stdout
+
+
+def test_watcher_accepts_current_head_codex_clean_comment(tmp_path: Path) -> None:
+    result = _run_watcher(tmp_path, scenario="clean_comment", sha="aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa")
+
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert "MERGE-READY" in result.stdout
+    assert "codex-head-attestations=1" in result.stdout
+
+
+def test_watcher_finds_clean_comment_after_pagination(tmp_path: Path) -> None:
+    result = _run_watcher(tmp_path, scenario="paginated_clean_comment", sha="aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa")
+
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert "MERGE-READY" in result.stdout
+    assert "attestation-pages=3" in result.stdout
+
+
+def test_watcher_rejects_wrong_author_clean_comment(tmp_path: Path) -> None:
+    result = _run_watcher(tmp_path, scenario="wrong_author_clean_comment", sha="aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa")
+
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert "MERGE-READY" not in result.stdout
+    assert "codex-head-attestations=0" in result.stdout
+
+
+def test_watcher_rejects_stale_clean_comment(tmp_path: Path) -> None:
+    result = _run_watcher(tmp_path, scenario="stale_clean_comment", sha="aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa")
+
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert "MERGE-READY" not in result.stdout
+    assert "codex-head-attestations=0" in result.stdout
+
+
+def test_watcher_changes_requested_overrides_clean_comment(tmp_path: Path) -> None:
+    result = _run_watcher(tmp_path, scenario="clean_comment_changes_requested", sha="aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa")
+
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert "MERGE-READY" not in result.stdout
+    assert "ACTIONABLE" in result.stdout
+    assert "decision=CHANGES_REQUESTED" in result.stdout
 
 
 def test_watcher_retries_malformed_thread_snapshot(tmp_path: Path) -> None:
@@ -306,7 +416,7 @@ def test_watcher_finds_current_head_codex_review_after_pagination(tmp_path: Path
 
     assert result.returncode == 0, result.stdout + result.stderr
     assert "MERGE-READY" in result.stdout
-    assert "review-pages=2" in result.stdout
+    assert "attestation-pages=3" in result.stdout
 
 
 def test_watcher_blocks_malformed_review_pagination(tmp_path: Path) -> None:
@@ -315,7 +425,7 @@ def test_watcher_blocks_malformed_review_pagination(tmp_path: Path) -> None:
     assert result.returncode == 0, result.stdout + result.stderr
     assert "MERGE-READY" not in result.stdout
     assert "ACTIONABLE" in result.stdout
-    assert "reviews-complete=false" in result.stdout
+    assert "attestations-complete=false" in result.stdout
 
 
 def test_watcher_blocks_malformed_review_page_info(tmp_path: Path) -> None:
@@ -324,7 +434,25 @@ def test_watcher_blocks_malformed_review_page_info(tmp_path: Path) -> None:
     assert result.returncode == 0, result.stdout + result.stderr
     assert "MERGE-READY" not in result.stdout
     assert "ACTIONABLE" in result.stdout
-    assert "reviews-complete=false" in result.stdout
+    assert "attestations-complete=false" in result.stdout
+
+
+def test_watcher_blocks_malformed_comment_pagination(tmp_path: Path) -> None:
+    result = _run_watcher(tmp_path, scenario="comment_graphql_errors")
+
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert "MERGE-READY" not in result.stdout
+    assert "ACTIONABLE" in result.stdout
+    assert "attestations-complete=false" in result.stdout
+
+
+def test_watcher_blocks_malformed_comment_page_info(tmp_path: Path) -> None:
+    result = _run_watcher(tmp_path, scenario="comment_malformed_page_info")
+
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert "MERGE-READY" not in result.stdout
+    assert "ACTIONABLE" in result.stdout
+    assert "attestations-complete=false" in result.stdout
 
 
 def test_watcher_revalidates_head_before_reporting_ready(tmp_path: Path) -> None:
@@ -350,7 +478,7 @@ def test_watcher_revalidates_reviews_before_reporting_ready(tmp_path: Path) -> N
     assert result.returncode == 0, result.stdout + result.stderr
     assert "MERGE-READY" not in result.stdout
     assert "ACTIONABLE: final-read" in result.stdout
-    assert "codex-head-reviews=0" in result.stdout
+    assert "codex-head-attestations=0" in result.stdout
 
 
 def test_watcher_revalidates_required_checks_before_reporting_ready(tmp_path: Path) -> None:
