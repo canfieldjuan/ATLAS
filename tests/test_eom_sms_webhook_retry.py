@@ -27,8 +27,12 @@ class _ClaimingSMSRepo:
         self.touched = []
         self.owner_status_updates = []
         self.rows = {}
-        self.auto_reply_reserved = set()
+        self.auto_reply_rows = {}
         self.auto_reply_sent = []
+        self.complete_exc = None
+        self.complete_result = True
+        self.mark_auto_reply_sent_exc = None
+        self.mark_auto_reply_sent_result = True
 
     async def claim_contact_processing(self, sms_id, *, owner_token=None):
         self.claimed_ids.append(sms_id)
@@ -71,13 +75,19 @@ class _ClaimingSMSRepo:
         self.retry_pending.append((sms_id, error_message, owner_token))
 
     async def mark_contact_processing_complete(self, sms_id, *, owner_token=None):
+        if self.complete_exc is not None:
+            raise self.complete_exc
         self.completed.append((sms_id, owner_token))
+        return self.complete_result
 
     async def get_by_id(self, sms_id):
         return self.rows.get(sms_id)
 
     async def has_auto_reply_for_inbound(self, inbound_sms_id):
-        return inbound_sms_id in self.auto_reply_reserved
+        return inbound_sms_id in self.auto_reply_rows
+
+    async def get_auto_reply_for_inbound(self, inbound_sms_id):
+        return self.auto_reply_rows.get(inbound_sms_id)
 
     async def reserve_auto_reply_for_inbound(
         self,
@@ -88,22 +98,31 @@ class _ClaimingSMSRepo:
         body,
         business_context_id,
     ):
-        if inbound_sms_id in self.auto_reply_reserved:
+        if inbound_sms_id in self.auto_reply_rows:
             return None
-        self.auto_reply_reserved.add(inbound_sms_id)
-        return {
+        row = {
             "id": uuid4(),
             "message_sid": f"auto_reply_{inbound_sms_id}",
             "from_number": from_number,
             "to_number": to_number,
             "body": body,
             "business_context_id": business_context_id,
+            "status": "pending",
             "source": "auto_reply",
             "source_ref": str(inbound_sms_id),
         }
+        self.auto_reply_rows[inbound_sms_id] = row
+        return row
 
     async def mark_auto_reply_sent(self, auto_reply_sms_id, *, provider_message_id=None):
+        if self.mark_auto_reply_sent_exc is not None:
+            raise self.mark_auto_reply_sent_exc
         self.auto_reply_sent.append((auto_reply_sms_id, provider_message_id))
+        for row in self.auto_reply_rows.values():
+            if row["id"] == auto_reply_sms_id:
+                row["status"] = "sent"
+                row["error_message"] = provider_message_id
+        return self.mark_auto_reply_sent_result
 
     async def update_contact_processing_status(
         self,
@@ -136,9 +155,10 @@ class _SlowFormRequest:
 
 
 class _Provider:
-    def __init__(self, *, send_delay: float = 0.0):
+    def __init__(self, *, send_delay: float = 0.0, send_exc: Exception | None = None):
         self.sent_sms = []
         self.send_delay = send_delay
+        self.send_exc = send_exc
 
     async def handle_incoming_sms(self, **kwargs):
         return SimpleNamespace(context_id=None)
@@ -146,6 +166,8 @@ class _Provider:
     async def send_sms(self, **kwargs):
         if self.send_delay:
             await asyncio.sleep(self.send_delay)
+        if self.send_exc is not None:
+            raise self.send_exc
         self.sent_sms.append(kwargs)
         return SimpleNamespace(provider_message_id=f"SM-out-{len(self.sent_sms)}")
 
@@ -642,6 +664,41 @@ async def test_inbound_sms_handler_returns_503_when_processing_exceeds_ack_budge
         replacements.restore()
 
     assert response.status_code == 503
+
+
+@pytest.mark.asyncio
+async def test_inbound_sms_handler_allows_slow_but_configured_processing_before_ack():
+    repo = _WebhookRepo()
+
+    replacements = _AttrReplacements()
+    replacements.replace(webhooks, "get_context_router", lambda: _Router())
+    replacements.replace(
+        webhooks,
+        "get_comms_service",
+        lambda: SimpleNamespace(provider=_Provider()),
+    )
+    replacements.replace(sms_message, "get_sms_message_repo", lambda: repo)
+    replacements.replace(webhooks, "SMS_INBOUND_BEFORE_ACK_TIMEOUT_SECONDS", 0.25)
+
+    async def processor(*args, **kwargs):
+        await asyncio.sleep(0.05)
+        return "complete"
+
+    replacements.replace(webhooks, "_process_inbound_sms", processor)
+
+    try:
+        response = await webhooks.handle_inbound_sms(
+            _FormRequest(),
+            MessageSid="SM-slow-valid",
+            From="+12175550101",
+            To="+12175550102",
+            Body="hello",
+            NumMedia="0",
+        )
+    finally:
+        replacements.restore()
+
+    assert response.status_code == 200
 
 
 @pytest.mark.asyncio
@@ -1335,16 +1392,27 @@ async def test_process_inbound_sms_skipped_intelligence_still_auto_replies_and_c
 
     assert outcome == "complete"
     assert len(provider.sent_sms) == 1
-    assert repo.auto_reply_reserved == {sms_id}
+    assert repo.auto_reply_rows[sms_id]["status"] == "sent"
     assert len(repo.auto_reply_sent) == 1
     assert repo.completed == [(sms_id, repo.owner_tokens[sms_id])]
 
 
 @pytest.mark.asyncio
-async def test_process_inbound_sms_reserved_auto_reply_skips_duplicate_send_and_completes():
+async def test_process_inbound_sms_pending_auto_reply_retries_send_and_completes():
     sms_id = uuid4()
     repo = _ClaimingSMSRepo(claim_result=True)
-    repo.auto_reply_reserved.add(sms_id)
+    pending_row = {
+        "id": uuid4(),
+        "message_sid": f"auto_reply_{sms_id}",
+        "from_number": "+12175550102",
+        "to_number": "+12175550101",
+        "body": "Thanks!",
+        "business_context_id": "effingham_maids",
+        "status": "pending",
+        "source": "auto_reply",
+        "source_ref": str(sms_id),
+    }
+    repo.auto_reply_rows[sms_id] = pending_row
     context = SimpleNamespace(
         id="effingham_maids",
         sms_auto_reply=True,
@@ -1382,8 +1450,179 @@ async def test_process_inbound_sms_reserved_auto_reply_skips_duplicate_send_and_
         replacements.restore()
 
     assert outcome == "complete"
+    assert len(provider.sent_sms) == 1
+    assert repo.auto_reply_sent == [(pending_row["id"], "SM-out-1")]
+    assert repo.auto_reply_rows[sms_id]["status"] == "sent"
+    assert repo.completed == [(sms_id, repo.owner_tokens[sms_id])]
+
+
+@pytest.mark.asyncio
+async def test_process_inbound_sms_sent_auto_reply_skips_duplicate_send_and_completes():
+    sms_id = uuid4()
+    repo = _ClaimingSMSRepo(claim_result=True)
+    repo.auto_reply_rows[sms_id] = {
+        "id": uuid4(),
+        "message_sid": f"auto_reply_{sms_id}",
+        "from_number": "+12175550102",
+        "to_number": "+12175550101",
+        "body": "Thanks!",
+        "business_context_id": "effingham_maids",
+        "status": "sent",
+        "source": "auto_reply",
+        "source_ref": str(sms_id),
+    }
+    context = SimpleNamespace(
+        id="effingham_maids",
+        sms_auto_reply=True,
+        sms_enabled=True,
+    )
+    provider = _Provider()
+    replacements = _AttrReplacements()
+    replacements.replace(
+        webhooks,
+        "get_comms_service",
+        lambda: SimpleNamespace(provider=provider),
+    )
+
+    async def generate_reply(body, ctx):
+        return "Thanks!"
+
+    replacements.replace(webhooks, "_generate_sms_reply", generate_reply)
+
+    async def intelligence_runner(**kwargs):
+        return "complete"
+
+    try:
+        outcome = await webhooks._process_inbound_sms(
+            sms_id,
+            "+12175550101",
+            "+12175550102",
+            "hello",
+            context,
+            [],
+            provider_message_id="SM-auto-retry-sent",
+            sms_repo=repo,
+            intelligence_runner=intelligence_runner,
+        )
+    finally:
+        replacements.restore()
+
+    assert outcome == "complete"
     assert provider.sent_sms == []
     assert repo.auto_reply_sent == []
+    assert repo.completed == [(sms_id, repo.owner_tokens[sms_id])]
+
+
+@pytest.mark.asyncio
+async def test_process_inbound_sms_auto_reply_send_failure_retries_without_completion():
+    sms_id = uuid4()
+    repo = _ClaimingSMSRepo(claim_result=True)
+    context = SimpleNamespace(
+        id="effingham_maids",
+        sms_auto_reply=True,
+        sms_enabled=True,
+    )
+    provider = _Provider(send_exc=RuntimeError("provider down"))
+    replacements = _AttrReplacements()
+    replacements.replace(
+        webhooks,
+        "get_comms_service",
+        lambda: SimpleNamespace(provider=provider),
+    )
+
+    async def generate_reply(body, ctx):
+        return "Thanks!"
+
+    replacements.replace(webhooks, "_generate_sms_reply", generate_reply)
+
+    async def intelligence_runner(**kwargs):
+        return "complete"
+
+    try:
+        outcome = await webhooks._process_inbound_sms(
+            sms_id,
+            "+12175550101",
+            "+12175550102",
+            "hello",
+            context,
+            [],
+            provider_message_id="SM-auto-send-fail",
+            sms_repo=repo,
+            intelligence_runner=intelligence_runner,
+        )
+    finally:
+        replacements.restore()
+
+    assert outcome == "retry_pending"
+    assert repo.auto_reply_rows[sms_id]["status"] == "pending"
+    assert repo.completed == []
+
+
+@pytest.mark.asyncio
+async def test_process_inbound_sms_final_completion_failure_retries():
+    sms_id = uuid4()
+    repo = _ClaimingSMSRepo(claim_result=True)
+    repo.complete_exc = RuntimeError("db down")
+    context = SimpleNamespace(
+        id="effingham_maids",
+        sms_auto_reply=False,
+        sms_enabled=True,
+    )
+
+    async def intelligence_runner(**kwargs):
+        return "complete"
+
+    outcome = await webhooks._process_inbound_sms(
+        sms_id,
+        "+12175550101",
+        "+12175550102",
+        "hello",
+        context,
+        [],
+        provider_message_id="SM-complete-fail",
+        sms_repo=repo,
+        intelligence_runner=intelligence_runner,
+    )
+
+    assert outcome == "retry_pending"
+    assert repo.completed == []
+
+
+@pytest.mark.asyncio
+async def test_process_inbound_sms_existing_notified_row_skips_duplicate_notification():
+    sms_id = uuid4()
+    repo = _ClaimingSMSRepo(claim_result=True)
+    repo.rows[sms_id] = {
+        "id": sms_id,
+        "status": "received",
+        "contact_id": uuid4(),
+        "notified": True,
+    }
+    context = SimpleNamespace(
+        id="effingham_maids",
+        sms_auto_reply=False,
+        sms_enabled=True,
+    )
+    intelligence_calls = []
+
+    async def intelligence_runner(**kwargs):
+        intelligence_calls.append(kwargs)
+        return "complete"
+
+    outcome = await webhooks._process_inbound_sms(
+        sms_id,
+        "+12175550101",
+        "+12175550102",
+        "hello",
+        context,
+        [],
+        provider_message_id="SM-notified-retry",
+        sms_repo=repo,
+        intelligence_runner=intelligence_runner,
+    )
+
+    assert outcome == "complete"
+    assert intelligence_calls[0]["notification_already_sent"] is True
     assert repo.completed == [(sms_id, repo.owner_tokens[sms_id])]
 
 

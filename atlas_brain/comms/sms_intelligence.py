@@ -99,6 +99,7 @@ async def process_inbound_sms(
     processing_owner_token: Optional[str] = None,
     stop_after_crm: bool = False,
     existing_contact_id: Optional[str] = None,
+    notification_already_sent: bool = False,
 ) -> str:
     """
     Process an inbound SMS through the intelligence pipeline.
@@ -221,19 +222,22 @@ async def process_inbound_sms(
         logger.error("Step 3/4 FAIL: Action plan: %s", e)
 
     # Step 4: ntfy notification
-    notified = False
-    try:
-        await _notify_sms_summary(
-            repo, sms_id, from_number, body,
-            summary, extracted_data, action_plan,
-            business_context,
-            is_new_lead=is_new_lead,
-            processing_owner_token=processing_owner_token,
-        )
-        notified = True
-        logger.info("Step 4/4 OK: Notification sent")
-    except Exception as e:
-        logger.error("Step 4/4 FAIL: Notification: %s", e)
+    notified = bool(notification_already_sent)
+    if notification_already_sent:
+        logger.info("Step 4/4 SKIP: Notification already sent for SMS %s", sms_id)
+    else:
+        try:
+            await _notify_sms_summary(
+                repo, sms_id, from_number, body,
+                summary, extracted_data, action_plan,
+                business_context,
+                is_new_lead=is_new_lead,
+                processing_owner_token=processing_owner_token,
+            )
+            notified = True
+            logger.info("Step 4/4 OK: Notification sent")
+        except Exception as e:
+            logger.error("Step 4/4 FAIL: Notification: %s", e)
 
     # Mark ready only if notification didn't already set "notified"
     if sms_id and not notified:

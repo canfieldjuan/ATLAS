@@ -401,8 +401,11 @@ class SMSMessageRepository:
         sms_id: UUID,
         *,
         owner_token: Optional[str] = None,
-    ) -> None:
-        """Mark a still-processing SMS row complete without changing linked/notify state."""
+    ) -> bool:
+        """Mark a still-processing SMS row complete without changing linked/notify state.
+
+        Returns True only when the terminal transition was durably written.
+        """
         pool = get_db_pool()
         if not pool.is_initialized:
             raise DatabaseUnavailableError("mark SMS contact processing complete")
@@ -410,7 +413,7 @@ class SMSMessageRepository:
         try:
             now = datetime.now(timezone.utc)
             if owner_token is not None:
-                await pool.execute(
+                row = await pool.fetchrow(
                     """
                     UPDATE sms_messages
                     SET status = 'ready',
@@ -419,13 +422,14 @@ class SMSMessageRepository:
                     WHERE id = $1
                       AND status = 'processing'
                       AND error_message = $3
+                    RETURNING id
                     """,
                     sms_id,
                     now,
                     owner_token,
                 )
             else:
-                await pool.execute(
+                row = await pool.fetchrow(
                     """
                     UPDATE sms_messages
                     SET status = 'ready',
@@ -433,10 +437,12 @@ class SMSMessageRepository:
                         error_message = NULL
                     WHERE id = $1
                       AND status = 'processing'
+                    RETURNING id
                     """,
                     sms_id,
                     now,
                 )
+            return row is not None
         except DatabaseUnavailableError:
             raise
         except Exception as e:
@@ -460,6 +466,10 @@ class SMSMessageRepository:
 
     async def has_auto_reply_for_inbound(self, inbound_sms_id: UUID) -> bool:
         """Return True when an auto-reply send decision already exists."""
+        return await self.get_auto_reply_for_inbound(inbound_sms_id) is not None
+
+    async def get_auto_reply_for_inbound(self, inbound_sms_id: UUID) -> Optional[dict]:
+        """Return the durable auto-reply outbox row for an inbound SMS, if any."""
         pool = get_db_pool()
         if not pool.is_initialized:
             raise DatabaseUnavailableError("check SMS auto-reply outbox")
@@ -467,7 +477,7 @@ class SMSMessageRepository:
         try:
             row = await pool.fetchrow(
                 """
-                SELECT id
+                SELECT *
                 FROM sms_messages
                 WHERE direction = 'outbound'
                   AND source = 'auto_reply'
@@ -476,7 +486,7 @@ class SMSMessageRepository:
                 """,
                 str(inbound_sms_id),
             )
-            return row is not None
+            return self._row_to_dict(row) if row else None
         except DatabaseUnavailableError:
             raise
         except Exception as e:
@@ -531,14 +541,17 @@ class SMSMessageRepository:
         auto_reply_sms_id: UUID,
         *,
         provider_message_id: Optional[str] = None,
-    ) -> None:
-        """Mark a reserved auto-reply as sent after provider acceptance."""
+    ) -> bool:
+        """Mark a reserved auto-reply as sent after provider acceptance.
+
+        Returns True only when the pending outbox row was durably finalized.
+        """
         pool = get_db_pool()
         if not pool.is_initialized:
             raise DatabaseUnavailableError("mark SMS auto-reply sent")
 
         try:
-            await pool.execute(
+            row = await pool.fetchrow(
                 """
                 UPDATE sms_messages
                 SET status = 'sent',
@@ -547,11 +560,13 @@ class SMSMessageRepository:
                 WHERE id = $1
                   AND direction = 'outbound'
                   AND source = 'auto_reply'
+                RETURNING id
                 """,
                 auto_reply_sms_id,
                 provider_message_id,
                 datetime.now(timezone.utc),
             )
+            return row is not None
         except DatabaseUnavailableError:
             raise
         except Exception as e:

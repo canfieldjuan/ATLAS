@@ -12,7 +12,7 @@ The remaining live gap is inbound SMS retry ownership: an SMS row can be
 persisted while CRM/contact processing is incomplete, and a duplicate provider
 delivery must neither skip that work nor duplicate side effects.
 
-This is 2767 LOC by the repo diff-size audit because the review repair has to
+This is approximately 2767 LOC by the repo diff-size audit because the review repair has to
 state and test the full SMS retry ownership model in one pass: claim
 eligibility, completed-unlinked rows, owner-token-fenced processing, persisted
 context rehydration, before-ack 503 retry surfacing, active-lease retry
@@ -21,8 +21,8 @@ post-link continuation. Review repair also covers linked-but-incomplete rows:
 they remain resumable until processing reaches a terminal state, but resume with
 the existing contact id so the CRM link/interaction side effect is not repeated.
 The current review round also folds in route-entry ack budgeting, authoritative
-claim row state, narrow inbound auto-reply outbox reservation, and real-Postgres
-proof for retry-pending/status fencing.
+claim row state, narrow inbound auto-reply outbox recovery, durable finalization,
+and real-Postgres proof for retry-pending/status fencing.
 It also includes one test-only unit-gate stabilization after CI proved an
 unrelated content-factory linearity guard was asserting runner speed instead of
 scaling behavior.
@@ -38,8 +38,9 @@ scaling behavior.
 - Correct fix must touch/change: SMS processing must atomically claim
   incomplete rows before CRM/intelligence work and receive authoritative row
   state from that claim, fence terminal updates and outbound sends with an owner
-  token, reserve an inbound auto-reply send decision before provider contact,
-  process first deliveries and resumable duplicates before provider
+  token, persist a recoverable inbound auto-reply send decision before provider
+  contact, require durable terminal finalization, process first deliveries and
+  resumable duplicates before provider
   acknowledgement, and return 503 for claim/CRM handoff failures or active
   incomplete leases so provider retry is the durable retry mechanism for this
   slice. Provider-facing work must have a bounded ack budget that begins at
@@ -74,14 +75,17 @@ Actual files: 7
    rehydration and fail closed for stored-but-unresolvable context IDs.
 6. Continue SMS action planning/notification/auto-reply after a contact is
    linked even if non-EOM interaction logging fails.
-7. Reserve inbound auto-reply decisions before provider send so provider retry
-   cannot duplicate the auto-reply after a crash/cancellation.
+7. Persist inbound auto-reply decisions before provider send, distinguish
+   pending from provider-accepted sends, retry pending sends, and skip only
+   already-sent replies.
 8. Enroll the live Postgres claim proof in the EOM workflow that already owns a
    Postgres service.
 9. Add focused tests for owner-token claim fencing, before-ack 503 behavior,
    active-lease 503 behavior, persisted context handling, completed-unlinked
    skip, CRM infra retry propagation, post-link continuation, route-entry ack
-   timeout, auto-reply idempotency, and real-Postgres retry fencing.
+   timeout, slow-but-admitted processing, auto-reply idempotency/recovery,
+   finalization failure retry, notification dedupe, and real-Postgres retry
+   fencing.
 10. Stabilize the unrelated content-factory linearity guard by checking scaling
    behavior rather than absolute wall-clock runner speed.
 
@@ -121,9 +125,16 @@ Acceptance criteria:
   action planning, notification, and auto-reply processing.
 - Claimed processing receives authoritative row/contact state from the claim
   operation, not a second racing reload.
-- Auto-reply sends are crash-idempotent for a given inbound SMS row: a retry
-  that sees an existing auto-reply reservation does not contact the provider
-  again, but still completes the inbound lease.
+- Auto-reply sends are recoverable for a given inbound SMS row: a retry that
+  sees a pending reservation retries the provider send, a retry that sees a sent
+  reservation skips duplicate provider contact, and provider/mark-sent failures
+  do not complete the inbound lease.
+- A retry whose inbound row already has `notified = TRUE` does not re-post the
+  manager notification.
+- The before-ack budget is not shorter than the configured SMS LLM/auto-reply
+  latency this path admits.
+- Final processing completion failures or owner-mismatch no-ops propagate a
+  retry/lost-ownership outcome instead of acknowledging success.
 - The EOM workflow sets `ATLAS_EOM_SMS_RETRY_POSTGRES_URL` and includes
   `tests/test_eom_sms_webhook_retry.py`, so the live claim proof runs against
   the workflow Postgres service instead of skipping.
@@ -189,14 +200,17 @@ and retry-fencing proof.
   `mark_contact_processing_complete` fence heartbeat, non-terminal progress,
   and terminal updates by owner token.
 - `SMSMessageRepository.reserve_auto_reply_for_inbound` persists a deterministic
-  outbound auto-reply reservation before provider contact, and
+  outbound auto-reply reservation before provider contact,
+  `get_auto_reply_for_inbound` returns its pending/sent state, and
   `mark_auto_reply_sent` records provider acceptance afterwards.
 - `_process_inbound_sms` claims before CRM/intelligence work, uses the claimed
   row to preserve an existing contact link, heartbeats/checks the owner token
   before side-effect boundaries, returns `retry_pending` to before-ack callers
   on claim/CRM failures, distinguishes skipped intelligence from terminal
   opt-out/spam, keeps the owner token alive across processing status/notification
-  writes, and only completes a row when its owner token still matches.
+  writes, skips already-sent notifications on retry, retries pending auto-reply
+  sends, skips sent auto-replies, and only returns success after the terminal
+  row transition is durably written by the active owner.
 - `handle_inbound_sms` persists the row before awaiting `_process_inbound_sms`;
   it starts the ack deadline at route entry and returns 503 for before-ack retry
   outcomes, active incomplete leases, and ack-budget timeouts so
@@ -229,9 +243,10 @@ and retry-fencing proof.
 - Normal successful duplicate retry responses remain empty TwiML; claim/CRM
   handoff failures, active incomplete leases, and provider-ack timeouts return
   503 before acknowledgement so the provider has a reason to retry.
-- The inbound auto-reply reservation is intentionally narrow: it prevents
-  duplicate provider sends for the same inbound SMS row without changing
-  customer-visible auto-reply copy or introducing a broader worker queue.
+- The inbound auto-reply outbox is intentionally narrow: it recovers pending
+  direct auto-reply sends and skips already-sent replies for the same inbound SMS
+  row without changing customer-visible auto-reply copy or introducing a broader
+  worker queue.
 - The workflow edit is limited to this SMS retry test enrollment. The migration
   352 path filters remain unchanged because they were already enrolled.
 - The content-factory test stabilization is test-only and does not change
@@ -257,11 +272,11 @@ reminder/outbound orchestration only.
 
 - `python scripts/audit_plan_doc.py plans/PR-EOM-SMS-Retry-Resume.md` — PASS; required plan sections present.
 - `python -m py_compile atlas_brain/api/comms/webhooks.py atlas_brain/comms/sms_intelligence.py atlas_brain/storage/repositories/sms_message.py tests/test_eom_sms_webhook_retry.py` — PASS.
-- `pytest -q tests/test_eom_sms_webhook_retry.py` — 30 passed, 1 skipped, 1 warning locally; the skipped live Postgres proof is CI-enrolled through `ATLAS_EOM_SMS_RETRY_POSTGRES_URL`.
+- `pytest -q tests/test_eom_sms_webhook_retry.py` — 35 passed, 1 skipped, 1 warning locally; the skipped live Postgres proof is CI-enrolled through `ATLAS_EOM_SMS_RETRY_POSTGRES_URL`.
 - `python -m pytest -q tests/test_eom_lead_ingress.py::test_real_sms_link_uses_eom_lead_resolver tests/test_eom_lead_ingress.py::test_sms_link_uses_provider_identity_without_a_local_sms_row tests/test_eom_lead_ingress.py::test_sms_fallback_uses_eom_lead_resolver tests/test_content_factory_copy_verification.py::test_scope_lookup_scales_with_negation_scopes_present` — 4 passed.
 - `python -m pytest -q tests/test_content_factory_copy_verification.py` — 324 passed.
 - `python scripts/audit_plan_doc_files_touched.py plans/PR-EOM-SMS-Retry-Resume.md origin/main` — PASS; plan files match git diff.
-- `python scripts/audit_plan_doc_diff_size.py plans/PR-EOM-SMS-Retry-Resume.md origin/main` — PASS; estimated and actual diff size are 2767 LOC.
+- `python scripts/audit_plan_doc_diff_size.py plans/PR-EOM-SMS-Retry-Resume.md origin/main` — PASS; diff-size drift remains inside the plan threshold.
 - `python scripts/audit_plan_code_consistency.py --base-ref origin/main plans/PR-EOM-SMS-Retry-Resume.md` — PASS; all path claims resolve.
 - `python scripts/audit_review_rules_triggered.py origin/main --plan plans/PR-EOM-SMS-Retry-Resume.md` — PASS; plan declares every rule the diff triggers.
 - `python scripts/audit_pr_body.py --repo-root . --base-ref origin/main /tmp/pr2246-body.md` — PASS.

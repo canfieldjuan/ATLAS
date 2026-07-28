@@ -93,11 +93,28 @@ def _persisted_sms_value(existing: dict, key: str, fallback):
 
 
 _RESUMABLE_INBOUND_SMS_STATUSES = frozenset({"received", "processing", "retry_pending"})
-SMS_INBOUND_BEFORE_ACK_TIMEOUT_SECONDS = 8.0
+_DEFAULT_SMS_INBOUND_BEFORE_ACK_TIMEOUT_SECONDS = 45.0
+SMS_INBOUND_BEFORE_ACK_TIMEOUT_SECONDS = _DEFAULT_SMS_INBOUND_BEFORE_ACK_TIMEOUT_SECONDS
+
+
+def _sms_before_ack_timeout_seconds() -> float:
+    """Return an end-to-end SMS ack budget consistent with admitted component latency."""
+    if SMS_INBOUND_BEFORE_ACK_TIMEOUT_SECONDS != _DEFAULT_SMS_INBOUND_BEFORE_ACK_TIMEOUT_SECONDS:
+        return SMS_INBOUND_BEFORE_ACK_TIMEOUT_SECONDS
+    try:
+        from ...config import settings
+
+        sms_cfg = settings.sms_intelligence
+        return max(
+            _DEFAULT_SMS_INBOUND_BEFORE_ACK_TIMEOUT_SECONDS,
+            float(sms_cfg.llm_timeout) + float(sms_cfg.auto_reply_timeout) + 15.0,
+        )
+    except Exception:
+        return _DEFAULT_SMS_INBOUND_BEFORE_ACK_TIMEOUT_SECONDS
 
 
 def _sms_ack_remaining_seconds(started_at: float) -> float:
-    return max(0.001, SMS_INBOUND_BEFORE_ACK_TIMEOUT_SECONDS - (time.monotonic() - started_at))
+    return max(0.001, _sms_before_ack_timeout_seconds() - (time.monotonic() - started_at))
 
 
 async def _await_sms_before_ack(awaitable, *, started_at: float):
@@ -174,7 +191,7 @@ async def _run_inbound_sms_processing_before_ack(*args, **kwargs) -> str:
     except asyncio.TimeoutError:
         logger.warning(
             "Inbound SMS processing exceeded %.1fs provider ack budget",
-            SMS_INBOUND_BEFORE_ACK_TIMEOUT_SECONDS,
+            _sms_before_ack_timeout_seconds(),
         )
         return "retry_pending"
 
@@ -1607,8 +1624,11 @@ async def _process_inbound_sms(
         claim_row = None
 
     existing_contact_id = None
+    notification_already_sent = False
     if claim_row and claim_row.get("contact_id"):
         existing_contact_id = str(claim_row["contact_id"])
+    if claim_row and claim_row.get("notified"):
+        notification_already_sent = True
 
     # Step 1: Run SMS intelligence pipeline (classify + CRM + action plan + ntfy)
     try:
@@ -1635,13 +1655,21 @@ async def _process_inbound_sms(
             provider_message_id=provider_message_id,
             processing_owner_token=processing_owner_token,
             existing_contact_id=existing_contact_id,
+            notification_already_sent=notification_already_sent,
         )
         if processing_outcome == "terminal_no_contact":
             if sms_id:
-                await sms_repo.mark_contact_processing_complete(
-                    sms_id,
-                    owner_token=processing_owner_token,
-                )
+                try:
+                    complete = await sms_repo.mark_contact_processing_complete(
+                        sms_id,
+                        owner_token=processing_owner_token,
+                    )
+                except Exception as e:
+                    logger.warning("Failed to finalize terminal SMS %s processing: %s", sms_id, e)
+                    return "retry_pending"
+                if not complete:
+                    logger.info("Inbound SMS %s lost processing ownership before terminal finalization", sms_id)
+                    return "lost_ownership"
             return "complete"
         if processing_outcome == "retry_pending":
             if sms_id:
@@ -1667,6 +1695,7 @@ async def _process_inbound_sms(
             await _sms_fallback_crm_and_notify(
                 sms_id, sms_repo, from_number, body, context,
                 provider_message_id=provider_message_id,
+                notification_already_sent=notification_already_sent,
             )
         except Exception as e2:
             logger.error("SMS fallback CRM+ntfy also failed: %s", e2)
@@ -1698,6 +1727,7 @@ async def _process_inbound_sms(
             reply = await _generate_sms_reply(body, context)
             if reply:
                 skip_auto_reply_send = False
+                auto_reply_row = None
                 if sms_id and processing_owner_token:
                     owner_ok = await sms_repo.owns_contact_processing(
                         sms_id,
@@ -1706,15 +1736,19 @@ async def _process_inbound_sms(
                     if not owner_ok:
                         logger.info("Inbound SMS %s lost processing ownership before send", sms_id)
                         return "lost_ownership"
-                    has_auto_reply = getattr(sms_repo, "has_auto_reply_for_inbound", None)
                     reserve_auto_reply = getattr(sms_repo, "reserve_auto_reply_for_inbound", None)
-                    if callable(has_auto_reply) and await has_auto_reply(sms_id):
-                        logger.info("SMS auto-reply already reserved for inbound %s; skipping duplicate send", sms_id)
-                        skip_auto_reply_send = True
+                    get_auto_reply = getattr(sms_repo, "get_auto_reply_for_inbound", None)
+                    if callable(get_auto_reply):
+                        auto_reply_row = await get_auto_reply(sms_id)
+                        if auto_reply_row and auto_reply_row.get("status") == "sent":
+                            logger.info("SMS auto-reply already sent for inbound %s; skipping duplicate send", sms_id)
+                            skip_auto_reply_send = True
+                        elif auto_reply_row:
+                            logger.info("SMS auto-reply pending for inbound %s; retrying provider send", sms_id)
                     if callable(reserve_auto_reply):
                         if skip_auto_reply_send:
                             auto_reply_row = None
-                        else:
+                        elif auto_reply_row is None:
                             auto_reply_row = await reserve_auto_reply(
                                 inbound_sms_id=sms_id,
                                 from_number=to_number,
@@ -1723,8 +1757,16 @@ async def _process_inbound_sms(
                                 business_context_id=context.id,
                             )
                             if auto_reply_row is None:
-                                logger.info("SMS auto-reply reservation already exists for inbound %s", sms_id)
-                                skip_auto_reply_send = True
+                                if callable(get_auto_reply):
+                                    auto_reply_row = await get_auto_reply(sms_id)
+                                if auto_reply_row and auto_reply_row.get("status") == "sent":
+                                    logger.info("SMS auto-reply already sent for inbound %s; skipping duplicate send", sms_id)
+                                    skip_auto_reply_send = True
+                                elif auto_reply_row:
+                                    logger.info("SMS auto-reply pending for inbound %s after reservation race; retrying send", sms_id)
+                                else:
+                                    logger.warning("SMS auto-reply reservation vanished for inbound %s", sms_id)
+                                    return "retry_pending"
                     else:
                         auto_reply_row = None
                 else:
@@ -1744,10 +1786,16 @@ async def _process_inbound_sms(
                     try:
                         marker = getattr(sms_repo, "mark_auto_reply_sent", None)
                         if auto_reply_row is not None and callable(marker):
-                            await marker(
+                            marked = await marker(
                                 auto_reply_row["id"],
                                 provider_message_id=getattr(msg, "provider_message_id", None),
                             )
+                            if not marked:
+                                logger.warning(
+                                    "Failed to mark reserved SMS auto-reply %s sent",
+                                    auto_reply_row["id"],
+                                )
+                                return "retry_pending"
                         else:
                             from uuid import uuid4 as _uuid4
                             await sms_repo.create(
@@ -1763,17 +1811,23 @@ async def _process_inbound_sms(
                             )
                     except Exception as e:
                         logger.warning("Failed to persist auto-reply SMS: %s", e)
+                        return "retry_pending"
         except Exception as e:
             logger.warning("SMS auto-reply failed: %s", e)
+            return "retry_pending"
 
     if sms_id:
         try:
-            await sms_repo.mark_contact_processing_complete(
+            complete = await sms_repo.mark_contact_processing_complete(
                 sms_id,
                 owner_token=processing_owner_token,
             )
         except Exception as e:
             logger.warning("Failed to mark SMS %s processing complete: %s", sms_id, e)
+            return "retry_pending"
+        if not complete:
+            logger.info("Inbound SMS %s lost processing ownership before finalization", sms_id)
+            return "lost_ownership"
     return "complete"
 
 
@@ -1781,6 +1835,7 @@ async def _sms_fallback_crm_and_notify(
     sms_id, sms_repo, from_number: str, body: str, context,
     *,
     provider_message_id: str | None = None,
+    notification_already_sent: bool = False,
 ) -> None:
     """Fallback CRM link + ntfy when full intelligence pipeline is unavailable."""
     from ...services.crm_provider import get_crm_provider
@@ -1853,6 +1908,9 @@ async def _sms_fallback_crm_and_notify(
 
     # ntfy notification
     try:
+        if notification_already_sent:
+            logger.info("Fallback SMS notification already sent for %s; skipping", sms_id)
+            return
         if not settings.alerts.ntfy_enabled or not settings.alerts.ntfy_url:
             return
 
