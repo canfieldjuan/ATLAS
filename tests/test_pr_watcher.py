@@ -31,7 +31,15 @@ watcher = _load("pr_watcher", SCRIPT)
 wake_bridge = _load("codex_wake_bridge_for_watcher_tests", ROOT / "scripts" / "codex_wake_bridge.py")
 
 
-def _pr(*, head: str = "head-a", state: str = "OPEN", draft: bool = False, decision: str = "", merge: str = "CLEAN") -> dict[str, Any]:
+def _pr(
+    *,
+    head: str = "head-a",
+    state: str = "OPEN",
+    draft: bool = False,
+    decision: str = "",
+    merge: str = "CLEAN",
+    body: str = "Plan: plans/PR-Watcher.md\n",
+) -> dict[str, Any]:
     return {
         "number": 7,
         "title": "Watcher producer",
@@ -43,6 +51,7 @@ def _pr(*, head: str = "head-a", state: str = "OPEN", draft: bool = False, decis
         "reviewDecision": decision,
         "isDraft": draft,
         "state": state,
+        "body": body,
     }
 
 
@@ -132,7 +141,9 @@ class FakeRun:
         *,
         pr_responses: list[tuple[int, str, str]] | None = None,
         all_checks: tuple[int, str, str] | None = None,
+        post_all_checks: tuple[int, str, str] | None = None,
         required_checks: tuple[int, str, str] | None = None,
+        post_required_checks: tuple[int, str, str] | None = None,
         required_policy: tuple[int, str, str] | None = None,
         reviews: tuple[int, str, str] | None = None,
         thread_pages: list[tuple[int, str, str]] | None = None,
@@ -143,8 +154,10 @@ class FakeRun:
     ) -> None:
         self.pr_responses = list(pr_responses or [_response(_pr()), _response(_pr()), _response(_pr())])
         self.last_pr_response = self.pr_responses[-1] if self.pr_responses else _response(_pr())
-        self.all_checks = all_checks or _response([_check("required-a"), _check("optional-a")])
-        self.required_checks = required_checks or _response([_check("required-a")])
+        initial_all_checks = all_checks or _response([_check("required-a"), _check("optional-a")])
+        initial_required_checks = required_checks or _response([_check("required-a")])
+        self.all_checks = [initial_all_checks, post_all_checks or initial_all_checks]
+        self.required_checks = [initial_required_checks, post_required_checks or initial_required_checks]
         self.required_policy = required_policy or _response(
             {
                 "contexts": ["required-a"],
@@ -167,7 +180,10 @@ class FakeRun:
                 self.last_pr_response = self.pr_responses.pop(0)
             return self.last_pr_response
         if args[:3] == ["gh", "pr", "checks"]:
-            return self.required_checks if "--required" in args else self.all_checks
+            responses = self.required_checks if "--required" in args else self.all_checks
+            if len(responses) > 1:
+                return responses.pop(0)
+            return responses[0]
         if args[:2] == ["gh", "api"] and args[2] != "graphql":
             return self.required_policy
         if args[:3] == ["gh", "pr", "view"] and "--comments" in args:
@@ -597,10 +613,16 @@ def test_docs_only_reconciliation_exemption_can_satisfy_review_readiness(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    body = "Docs-only: true\n\nArchive merged plans.\n"
     status = _produce(
         tmp_path,
         monkeypatch,
         FakeRun(
+            pr_responses=[
+                _response(_pr(body=body)),
+                _response(_pr(body=body)),
+                _response(_pr(body=body)),
+            ],
             review_pages=[_response(_review_page([]))],
             reconciliation=(
                 0,
@@ -619,6 +641,75 @@ def test_docs_only_reconciliation_exemption_can_satisfy_review_readiness(
     assert status["readiness"]["codex_head_review_count"] == 0
     assert status["readiness"]["docs_only_reconciliation_exemption"] is True
     assert wake_bridge.readiness_blockers(status) == []
+
+
+def test_docs_only_reconciliation_exemption_requires_final_body_marker(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    docs_body = "Docs-only: true\n\nArchive merged plans.\n"
+    status = _produce(
+        tmp_path,
+        monkeypatch,
+        FakeRun(
+            pr_responses=[
+                _response(_pr(body=docs_body)),
+                _response(_pr(body=docs_body)),
+                _response(_pr(body="Plan: plans/PR-Watcher.md\n")),
+            ],
+            review_pages=[_response(_review_page([]))],
+            reconciliation=(
+                0,
+                "\n".join(
+                    [
+                        "live AI reconciliation check",
+                        "OK: docs-only PR diff has no open scoped Codex review threads; current-head Codex review attestation is not required.",
+                    ]
+                ),
+                "",
+            ),
+        ),
+    )
+
+    assert status["state"] == "attention"
+    assert status["readiness"]["codex_head_review_count"] == 0
+    assert status["readiness"]["docs_only_reconciliation_exemption"] is False
+    assert "post-review PR body no longer carries Docs-only: true" in status["view_error"]
+
+
+def test_docs_only_reconciliation_exemption_uses_post_reconciliation_checks(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    body = "Docs-only: true\n\nArchive merged plans.\n"
+    status = _produce(
+        tmp_path,
+        monkeypatch,
+        FakeRun(
+            pr_responses=[
+                _response(_pr(body=body)),
+                _response(_pr(body=body)),
+                _response(_pr(body=body)),
+            ],
+            review_pages=[_response(_review_page([]))],
+            post_all_checks=_response([_check("required-a", "pending"), _check("optional-a")]),
+            post_required_checks=_response([_check("required-a", "pending")]),
+            reconciliation=(
+                0,
+                "\n".join(
+                    [
+                        "live AI reconciliation check",
+                        "OK: docs-only PR diff has no open scoped Codex review threads; current-head Codex review attestation is not required.",
+                    ]
+                ),
+                "",
+            ),
+        ),
+    )
+
+    assert status["state"] == "pending"
+    assert status["readiness"]["docs_only_reconciliation_exemption"] is True
+    assert status["readiness"]["required_check_pending"] == ["required-a"]
 
 
 def test_current_head_review_requires_exact_codex_connector_identity(

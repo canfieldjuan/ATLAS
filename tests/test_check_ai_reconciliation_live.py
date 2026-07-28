@@ -812,6 +812,7 @@ def test_fetch_changed_files_fetched_head_mismatch_fails_closed(monkeypatch):
 def test_fetch_changed_files_uses_git_diff_instead_of_pull_file_listing(monkeypatch):
     c = load_check()
     seen_gh = []
+    seen_fetch = []
 
     def fake_gh(args, gh):
         seen_gh.append(args)
@@ -831,6 +832,7 @@ def test_fetch_changed_files_uses_git_diff_instead_of_pull_file_listing(monkeypa
 
     def fake_git(args):
         if args[:4] == ["fetch", "--no-tags", "origin", "+refs/heads/main:refs/remotes/origin/main"]:
+            seen_fetch.append(args)
             return ""
         if args[:2] == ["cat-file", "-e"]:
             return ""
@@ -849,6 +851,15 @@ def test_fetch_changed_files_uses_git_diff_instead_of_pull_file_listing(monkeypa
         changed_file("docs/a.md")
     ]
     assert not any("/pulls/1431/files" in " ".join(args) for args in seen_gh)
+    assert seen_fetch == [
+        [
+            "fetch",
+            "--no-tags",
+            "origin",
+            "+refs/heads/main:refs/remotes/origin/main",
+            "+pull/1431/head:refs/remotes/origin/pr-1431",
+        ]
+    ]
 
 
 def test_fetch_changed_files_rejects_malformed_status_rows(monkeypatch):

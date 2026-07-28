@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import argparse
 import datetime as dt
+import importlib.util
 import json
 import os
 from pathlib import Path
@@ -49,6 +50,7 @@ DOCS_ONLY_RECONCILIATION_OK = "OK: docs-only PR diff has no open scoped Codex re
 TRUSTED_RECONCILIATION_CHECKER = (
     Path(__file__).resolve().parent / RECONCILIATION_LIB_DIR / RECONCILIATION_CHECKER_NAME
 )
+PR_BODY_AUDIT_NAME = "audit_pr_body.py"
 
 THREADS_QUERY = """
 query($owner:String!,$name:String!,$pr:Int!,$cursor:String){
@@ -159,6 +161,30 @@ def _run_json(
     return value, None
 
 
+def _load_pr_body_audit():
+    """Load the canonical PR-body parser from either the repo or installed lib."""
+
+    script_dir = Path(__file__).resolve().parent
+    candidates = [
+        script_dir / PR_BODY_AUDIT_NAME,
+        TRUSTED_RECONCILIATION_CHECKER.parent / PR_BODY_AUDIT_NAME,
+    ]
+    for path in candidates:
+        if not path.is_file():
+            continue
+        spec = importlib.util.spec_from_file_location("audit_pr_body_for_watcher", path)
+        if spec is None or spec.loader is None:
+            continue
+        module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(module)
+        return module
+    raise RuntimeError(f"cannot load canonical PR body parser: {PR_BODY_AUDIT_NAME}")
+
+
+def _is_docs_only_body(body: Any) -> bool:
+    return isinstance(body, str) and bool(_load_pr_body_audit().is_docs_only_body(body))
+
+
 def _pr_view_command(pr: str, repo: str) -> list[str]:
     return [
         "gh",
@@ -168,7 +194,7 @@ def _pr_view_command(pr: str, repo: str) -> list[str]:
         "--repo",
         repo,
         "--json",
-        "number,title,url,baseRefName,headRefName,headRefOid,mergeStateStatus,reviewDecision,isDraft,state",
+        "number,title,url,baseRefName,headRefName,headRefOid,mergeStateStatus,reviewDecision,isDraft,state,body",
     ]
 
 
@@ -736,33 +762,7 @@ def produce(watcher_id: str, *, config_dir: Path, state_dir: Path) -> tuple[int,
     pr = pr_final if isinstance(pr_final, dict) else pr_initial
     initial_shape_error = _validate_pr_metadata(pr_initial, label="initial") if pr_initial else None
     final_shape_error = _validate_pr_metadata(pr, label="final") if pr else None
-    all_checks = all_checks if isinstance(all_checks, list) else []
-    required_checks = required_checks if isinstance(required_checks, list) else []
     required_policy = required_policy if isinstance(required_policy, dict) else {}
-    failures, pending, all_shape_error = _check_summary(all_checks, required=False)
-    required_failures, required_pending, required_shape_error = _check_summary(required_checks, required=True)
-    expected_required, required_policy_shape_error = _required_contexts(required_policy)
-    reported_required = {
-        item.get("name")
-        for item in required_checks
-        if isinstance(item, dict) and isinstance(item.get("name"), str) and item.get("name")
-    }
-    missing_required = sorted(expected_required - reported_required)
-    required_pending.extend(f"{name} (not reported)" for name in missing_required)
-    required_contexts = expected_required | reported_required
-    checks_errors = [
-        item
-        for item in (
-            all_checks_error,
-            required_error,
-            required_policy_error,
-            all_shape_error,
-            required_shape_error,
-            required_policy_shape_error,
-        )
-        if item
-    ]
-    checks_error = "; ".join(checks_errors) if checks_errors else None
 
     comments = review_data.get("comments") if isinstance(review_data, dict) else None
     reviews = review_data.get("reviews") if isinstance(review_data, dict) else None
@@ -803,6 +803,18 @@ def produce(watcher_id: str, *, config_dir: Path, state_dir: Path) -> tuple[int,
     pr_after_reviews, post_review_error = _run_json(
         _pr_view_command(pr_text, repo), cwd=repo_dir, allowed_codes={0}, expected_type=dict
     )
+    post_all_checks, post_all_checks_error = _run_json(
+        _checks_command(pr_text, repo, required=False),
+        cwd=repo_dir,
+        allowed_codes=VALID_CHECK_EXIT_CODES,
+        expected_type=list,
+    )
+    post_required_checks, post_required_error = _run_json(
+        _checks_command(pr_text, repo, required=True),
+        cwd=repo_dir,
+        allowed_codes=VALID_CHECK_EXIT_CODES,
+        expected_type=list,
+    )
     pr_after_reviews = pr_after_reviews if isinstance(pr_after_reviews, dict) else {}
     post_review_shape_error = (
         _validate_pr_metadata(pr_after_reviews, label="post-review")
@@ -832,6 +844,52 @@ def produce(watcher_id: str, *, config_dir: Path, state_dir: Path) -> tuple[int,
         )
         else None
     )
+    all_checks = post_all_checks if isinstance(post_all_checks, list) else []
+    required_checks = post_required_checks if isinstance(post_required_checks, list) else []
+    failures, pending, all_shape_error = _check_summary(all_checks, required=False)
+    required_failures, required_pending, required_shape_error = _check_summary(required_checks, required=True)
+    expected_required, required_policy_shape_error = _required_contexts(required_policy)
+    reported_required = {
+        item.get("name")
+        for item in required_checks
+        if isinstance(item, dict) and isinstance(item.get("name"), str) and item.get("name")
+    }
+    missing_required = sorted(expected_required - reported_required)
+    required_pending.extend(f"{name} (not reported)" for name in missing_required)
+    required_contexts = expected_required | reported_required
+    docs_only_exemption_signal = (
+        reconciliation_code == 0
+        and DOCS_ONLY_RECONCILIATION_OK in (reconciliation_out or reconciliation_err)
+    )
+    docs_only_body_stable = _is_docs_only_body(pr_after_reviews.get("body"))
+    docs_only_reconciliation_exemption = (
+        docs_only_exemption_signal
+        and not head_mismatch
+        and base_mismatch_error is None
+        and docs_only_body_stable
+        and post_all_checks_error is None
+        and post_required_error is None
+    )
+    docs_only_body_error = (
+        "post-review PR body no longer carries Docs-only: true"
+        if docs_only_exemption_signal and not docs_only_body_stable
+        else None
+    )
+    checks_errors = [
+        item
+        for item in (
+            all_checks_error,
+            required_error,
+            post_all_checks_error,
+            post_required_error,
+            required_policy_error,
+            all_shape_error,
+            required_shape_error,
+            required_policy_shape_error,
+        )
+        if item
+    ]
+    checks_error = "; ".join(checks_errors) if checks_errors else None
     unsafe_auto_merge = config.get("AUTO_MERGE", "0").lower() not in {"0", "false", "no", "off", ""}
     merge_error = "unsafe auto-merge config ignored; watcher cannot merge" if unsafe_auto_merge else ""
     errors = [
@@ -845,6 +903,7 @@ def produce(watcher_id: str, *, config_dir: Path, state_dir: Path) -> tuple[int,
             final_shape_error,
             post_review_shape_error,
             base_mismatch_error,
+            docs_only_body_error,
             checks_error,
             reviews_error,
             threads_error,
@@ -909,6 +968,7 @@ def produce(watcher_id: str, *, config_dir: Path, state_dir: Path) -> tuple[int,
                 final_shape_error,
                 post_review_shape_error,
                 base_mismatch_error,
+                docs_only_body_error,
             )
             if item
         ),

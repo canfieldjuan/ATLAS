@@ -22,7 +22,11 @@ the remaining R8 class issue: changed rows were still sampled from mutable PR
 file-list state instead of being derived from immutable refs. It also found that
 the installed watcher consumed the checker exit code but not the docs-only
 exemption result, so a PR could pass live reconciliation yet never reach watcher
-readiness. The post-fix `unit-gate` run then exposed an unrelated but
+readiness. The current-head Codex review then found two final watcher/proof
+gaps: the cached `origin/pr-<n>` ref was not force-updated across PR rebases or
+force-pushes, and watcher readiness trusted the checker’s docs-only OK text
+without revalidating the final PR body and check snapshot. The post-fix
+`unit-gate` run then exposed an unrelated but
 merge-blocking full-suite timing flake in an existing content-factory linearity
 guard: the guard already proved the code path alone, but its hard one-second
 wall-clock ceiling failed under full-suite/shared-runner load. Because CI red is
@@ -47,8 +51,9 @@ content-factory runtime behavior.
   exemption into watcher readiness; and test docs-only/no-thread/Markdown-only
   pass plus non-Markdown, symlink/gitlink-shaped, malformed status,
   docs-only/open-thread, docs-only/`CHANGES_REQUESTED`, trailing body/base/count
-  races, watcher readiness, and non-doc/no-review fail. The CI repair must keep
-  the existing content-factory linearity guard discriminating quadratic growth
+  races, forced PR-head ref replacement, final watcher body/check revalidation,
+  watcher readiness, and non-doc/no-review fail. The CI repair must keep the
+  existing content-factory linearity guard discriminating quadratic growth
   without relying on one absolute runner-speed ceiling.
 - Must not change: unresolved Codex threads must remain blocking, current-head
   `CHANGES_REQUESTED` must remain blocking, non-doc PRs must still require
@@ -97,6 +102,11 @@ Slice phase: Workflow/process
     dependencies required by the live checker.
   - The installed PR watcher treats the proven docs-only reconciliation result
     as satisfying the current-head Codex review readiness slot.
+  - The git proof force-updates the cached PR-head ref so a rebase or force-push
+    cannot leave watcher readiness blocked behind a stale non-fast-forward ref.
+  - The installed PR watcher revalidates the final PR body and
+    post-reconciliation check snapshot before honoring the docs-only
+    reconciliation exemption.
   - The existing content-factory negation-scope linearity test uses warmed,
     repeated relative growth between input sizes so CI load does not create an
     unrelated red check while still failing if the per-scope scan returns.
@@ -133,7 +143,7 @@ seam in the enumeration; otherwise write "N/A - no boundary change."
   attestation gate.
 - Replaced-path behaviors: current behavior requires review attestation for all
   PRs; this slice replaces that with "review attestation required unless the PR
-  body is explicitly docs-only, the PR changed-file list is Markdown-only
+  body is explicitly docs-only, the git-derived changed-file proof is Markdown-only
   regular blobs, and there are no open Codex threads."
 - Guard-relevant fields: PR body first nonblank line, PR base/head refs,
   git-diff status/filenames, merge-base/head tree `mode` and `type`, proof base
@@ -188,15 +198,19 @@ rows with `git diff --name-status --no-renames -z <merge-base>...<head>`.
 Tree mode/type proof is read with `git ls-tree` at the same merge-base/head
 refs. The exemption is valid only when every current/deleted filename has
 Markdown as its sole suffix, every row has an admitted status, and the relevant
-tree entry is `100644 blob`. The file-proof object records the PR base SHA, head
-SHA, merge-base SHA, expected GitHub changed-file count, and enriched file rows.
+tree entry is `100644 blob`. The PR-head refspec is force-updated so rebased or
+force-pushed PR heads replace the cached `origin/pr-<n>` ref. The file-proof
+object records the PR base SHA, head SHA, merge-base SHA, expected GitHub
+changed-file count, and enriched file rows.
 Live mode sandwiches file proof between body reads and review/thread snapshots,
 including a final body read after the final snapshot, and fails closed if the
 body, base/head refs, changed-file count, review generation, or thread
 generation moves. Installed watchers copy the checker plus the canonical body
 parser and its changed-path helper so the packaged checker matches CI behavior,
 and watcher readiness treats the checker’s proven docs-only OK result as the
-review-attestation substitute for that narrow path.
+review-attestation substitute for that narrow path only after a final PR-body
+read still carries the docs-only marker and post-reconciliation check reads are
+clean enough for readiness.
 
 ## Intentional
 
@@ -212,6 +226,8 @@ review-attestation substitute for that narrow path.
 - Do not let installed watcher packaging drift from the checker's imports.
 - Do not let installed watcher readiness disagree with the live checker’s
   admitted docs-only result.
+- Do not let a stale cached PR ref, stale PR body, or stale check snapshot make
+  watcher readiness greener than the final observed PR state.
 - Do not change content-factory runtime behavior for the unit-gate repair; the
   failing check was an existing test's wall-clock assertion under full-suite load.
 - Keep the two plan archive moves in this PR because #2247 is the live docs-only
@@ -226,7 +242,8 @@ Parked hardening: none.
 ## Verification
 
 - `python -m pytest tests/test_check_ai_reconciliation_live.py -q` - 63 passed.
-- `python -m pytest tests/test_pr_watcher.py tests/test_codex_wake_bridge.py -q` - 113 passed.
+- `python -m pytest tests/test_pr_watcher.py tests/test_codex_wake_bridge.py -q` - 115 passed.
+- `python -m pytest tests/test_install_codex_wake_bridge.py -q` - 12 passed.
 - `python -m pytest tests/test_content_factory_copy_verification.py::test_scope_lookup_scales_with_negation_scopes_present -q -p no:cacheprovider` - 1 passed.
 - `python -m pytest tests/test_content_factory_copy_verification.py -q` - 324 passed.
 - `python -m py_compile scripts/check_ai_reconciliation_live.py scripts/pr_watcher.py scripts/codex_wake_bridge.py` - passed.
@@ -236,7 +253,7 @@ Parked hardening: none.
 - `python scripts/sync_pr_plan.py plans/PR-Docs-Only-Live-Reconciliation.md origin/main --check` - passed.
 - `python scripts/audit_plan_doc.py plans/PR-Docs-Only-Live-Reconciliation.md` - passed.
 - `python scripts/audit_plan_doc_files_touched.py plans/PR-Docs-Only-Live-Reconciliation.md origin/main` - passed.
-- `python scripts/audit_plan_doc_diff_size.py plans/PR-Docs-Only-Live-Reconciliation.md origin/main` - passed, estimate 1090 actual 971.
+- `python scripts/audit_plan_doc_diff_size.py plans/PR-Docs-Only-Live-Reconciliation.md origin/main` - passed, estimate 1595 actual 1354.
 - `python scripts/audit_plan_code_consistency.py --base-ref origin/main plans/PR-Docs-Only-Live-Reconciliation.md` - passed.
 - `bash scripts/local_pr_review.sh --current-pr-body-file /tmp/archive-review-workflow-plans-body.md` - passed.
 
@@ -245,15 +262,15 @@ Parked hardening: none.
 | File | LOC |
 |---|---:|
 | `plans/INDEX.md` | 4 |
-| `plans/PR-Docs-Only-Live-Reconciliation.md` | 259 |
+| `plans/PR-Docs-Only-Live-Reconciliation.md` | 276 |
 | `plans/archive/PR-Codex-Review-Scope-Reset.md` | 0 |
 | `plans/archive/PR-Codex-Review-Thread-Event-Canary.md` | 0 |
 | `scripts/check_ai_reconciliation_live.py` | 452 |
 | `scripts/codex_wake_bridge.py` | 6 |
 | `scripts/install_codex_wake_bridge.py` | 22 |
-| `scripts/pr_watcher.py` | 10 |
-| `tests/test_check_ai_reconciliation_live.py` | 529 |
+| `scripts/pr_watcher.py` | 124 |
+| `tests/test_check_ai_reconciliation_live.py` | 540 |
 | `tests/test_codex_wake_bridge.py` | 12 |
 | `tests/test_content_factory_copy_verification.py` | 21 |
-| `tests/test_pr_watcher.py` | 39 |
-| **Total** | **1354** |
+| `tests/test_pr_watcher.py` | 138 |
+| **Total** | **1595** |

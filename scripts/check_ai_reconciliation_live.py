@@ -812,7 +812,7 @@ def _fetch_pr_git_refs(pr: int, base_ref_name: str) -> None:
             "--no-tags",
             "origin",
             f"+refs/heads/{base_ref_name}:refs/remotes/origin/{base_ref_name}",
-            f"pull/{pr}/head:refs/remotes/origin/pr-{pr}",
+            f"+pull/{pr}/head:refs/remotes/origin/pr-{pr}",
         ]
     )
 
