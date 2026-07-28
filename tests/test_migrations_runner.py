@@ -1,5 +1,6 @@
 import asyncio
 import os
+import re
 import uuid
 from pathlib import Path
 
@@ -164,6 +165,121 @@ def test_eom_lead_review_queue_index_matches_keyset_order():
     assert "status = 'active'" in migration
     assert "contact_type = 'lead'" in migration
     assert "lead_stage = 'new'" in migration
+
+
+def test_eom_lead_review_queue_booked_index_matches_widened_predicate():
+    migration = (
+        Path(__file__).resolve().parent.parent
+        / "atlas_brain"
+        / "storage"
+        / "migrations"
+        / "357_eom_lead_review_queue_booked_index.sql"
+    ).read_text()
+
+    assert (
+        "DROP INDEX CONCURRENTLY IF EXISTS idx_contacts_eom_lead_review_queue"
+        in migration
+    )
+    assert "CREATE INDEX CONCURRENTLY idx_contacts_eom_lead_review_queue" in migration
+    assert "ON contacts (created_at DESC, id DESC)" in migration
+    assert "business_context_id = 'effingham_maids'" in migration
+    assert "status = 'active'" in migration
+    assert "contact_type = 'lead'" in migration
+    assert "lead_stage IN ('new', 'estimate_booked')" in migration
+
+
+def test_eom_estimate_booking_migration_removes_nocodb_operation_link_writes():
+    migration = (
+        Path(__file__).resolve().parent.parent
+        / "atlas_brain"
+        / "storage"
+        / "migrations"
+        / "356_eom_lead_estimate_booking_operations.sql"
+    ).read_text()
+
+    assert "REVOKE INSERT, UPDATE ON TABLE %I.appointments FROM atlas_nocodb" in migration
+    assert "GRANT INSERT (id, start_time" in migration
+    assert "GRANT UPDATE (start_time" in migration
+    nocodb_appointment_grants = re.findall(
+        r"GRANT (?:INSERT|UPDATE) \((.*?)\) ON TABLE %I\.appointments",
+        migration,
+        flags=re.DOTALL,
+    )
+    assert len(nocodb_appointment_grants) == 2
+    for grant_columns in nocodb_appointment_grants:
+        assert "eom_estimate_booking_operation_id" not in grant_columns
+    assert "calendar_rejected" in migration
+    assert "projection_token UUID" in migration
+    assert "uq_eom_lead_estimate_booking_contact_active" in migration
+    assert "ADD COLUMN IF NOT EXISTS eom_estimate_booking_operation_id" not in migration
+    assert "REFERENCES eom_lead_estimate_booking_operations(id)" not in migration
+    assert "uq_appointments_eom_estimate_booking_operation" not in migration
+    assert (
+        "prevent_eom_pending_estimate_booking_contact_state_mutation"
+        in migration
+    )
+    assert "SECURITY DEFINER" in migration
+    assert "SET search_path = pg_catalog, pg_temp" in migration
+    assert "SET search_path FROM CURRENT" not in migration
+    assert "%I.eom_lead_estimate_booking_operations AS operation" in migration
+    assert (
+        "BEFORE UPDATE OF business_context_id, contact_type, lead_stage, status"
+        in migration
+    )
+    assert "OR DELETE ON contacts" in migration
+    assert (
+        "operation.status IN (''pending'', ''projecting'', ''calendar_failed'')"
+        in migration
+    )
+    assert "OLD.lead_stage IS NOT DISTINCT FROM 'new'" in migration
+    assert "NEW.lead_stage IS NOT DISTINCT FROM 'estimate_booked'" in migration
+
+
+def test_eom_estimate_booking_appointment_link_index_is_concurrent():
+    migration = (
+        Path(__file__).resolve().parent.parent
+        / "atlas_brain"
+        / "storage"
+        / "migrations"
+        / "358_eom_estimate_booking_appointment_link_index.sql"
+    ).read_text()
+
+    assert "ADD COLUMN IF NOT EXISTS eom_estimate_booking_operation_id UUID" in migration
+    assert (
+        "ADD CONSTRAINT appointments_eom_estimate_booking_operation_id_fkey"
+        in migration
+    )
+    assert "FOREIGN KEY (eom_estimate_booking_operation_id)" in migration
+    assert "REFERENCES eom_lead_estimate_booking_operations(id)" in migration
+    assert "NOT VALID" in migration
+    assert (
+        "VALIDATE CONSTRAINT appointments_eom_estimate_booking_operation_id_fkey"
+        in migration
+    )
+    assert (
+        "DROP INDEX CONCURRENTLY IF EXISTS "
+        "uq_appointments_eom_estimate_booking_operation"
+        in migration
+    )
+    assert (
+        "CREATE UNIQUE INDEX CONCURRENTLY IF NOT EXISTS "
+        "uq_appointments_eom_estimate_booking_operation"
+        in migration
+    )
+    assert "ON appointments (eom_estimate_booking_operation_id)" in migration
+    assert "WHERE eom_estimate_booking_operation_id IS NOT NULL" in migration
+    assert "CREATE TABLE" not in migration.upper()
+    assert migration.index("ADD COLUMN IF NOT EXISTS") < migration.index(
+        "ADD CONSTRAINT appointments_eom_estimate_booking_operation_id_fkey"
+    )
+    assert migration.index("NOT VALID") < migration.index("VALIDATE CONSTRAINT")
+    assert migration.index("VALIDATE CONSTRAINT") < migration.index(
+        "DROP INDEX CONCURRENTLY"
+    )
+    assert migration.index("DROP INDEX CONCURRENTLY") < migration.index(
+        "CREATE UNIQUE INDEX CONCURRENTLY"
+    )
+    assert migration.upper().count("CREATE UNIQUE INDEX CONCURRENTLY") == 1
 
 
 def test_customer_service_ticket_migration_is_additive_tenant_scoped_and_indexed():
@@ -789,5 +905,139 @@ async def test_real_postgres_concurrent_runners_apply_each_migration_once(tmp_pa
         for p in (pool, other):
             if p is not None:
                 await p.close()
+        await admin.execute(f'DROP SCHEMA IF EXISTS "{schema}" CASCADE')
+        await admin.close()
+
+
+@pytest.mark.asyncio
+async def test_real_postgres_eom_appointment_link_index_retry_rebuilds_invalid_index(
+    tmp_path,
+):
+    """A failed concurrent UNIQUE build leaves an invalid relation behind.
+
+    Migration 358 must drop the named index before retrying; otherwise
+    ``IF NOT EXISTS`` would skip the invalid relation and the runner would
+    record a migration that startup readiness correctly rejects.
+    """
+    import asyncpg
+
+    from atlas_brain.storage.migrations import run_migrations
+
+    database_url = os.environ.get(DATABASE_URL_ENV)
+    if not database_url:
+        pytest.skip(f"{DATABASE_URL_ENV} is not configured")
+
+    schema = f"atlas_eom_invalid_index_{uuid.uuid4().hex}"
+    duplicate_operation_id = uuid.uuid4()
+    keep_appointment_id = uuid.uuid4()
+    delete_appointment_id = uuid.uuid4()
+    admin = await asyncpg.connect(database_url)
+    pool = None
+    try:
+        await admin.execute(f'CREATE SCHEMA "{schema}"')
+        await admin.execute(f'SET search_path TO "{schema}", public')
+        await admin.execute(
+            """
+            CREATE TABLE eom_lead_estimate_booking_operations (
+                id UUID PRIMARY KEY
+            )
+            """
+        )
+        await admin.execute(
+            """
+            CREATE TABLE appointments (
+                id UUID PRIMARY KEY,
+                eom_estimate_booking_operation_id UUID
+            )
+            """
+        )
+        await admin.execute(
+            "INSERT INTO eom_lead_estimate_booking_operations (id) VALUES ($1)",
+            duplicate_operation_id,
+        )
+        await admin.executemany(
+            """
+            INSERT INTO appointments (id, eom_estimate_booking_operation_id)
+            VALUES ($1, $2)
+            """,
+            [
+                (keep_appointment_id, duplicate_operation_id),
+                (delete_appointment_id, duplicate_operation_id),
+            ],
+        )
+
+        migration_sql = (
+            Path(__file__).resolve().parent.parent
+            / "atlas_brain"
+            / "storage"
+            / "migrations"
+            / "358_eom_estimate_booking_appointment_link_index.sql"
+        ).read_text()
+        (tmp_path / "001_retry_invalid_eom_link_index.sql").write_text(
+            migration_sql
+        )
+        pool = await asyncpg.create_pool(
+            database_url,
+            min_size=1,
+            max_size=1,
+            server_settings={"search_path": f"{schema},public"},
+        )
+
+        with pytest.raises(asyncpg.UniqueViolationError):
+            await run_migrations(pool, migrations_dir=tmp_path)
+
+        invalid = await admin.fetchrow(
+            """
+            SELECT index_state.indisvalid, index_state.indisready
+            FROM pg_index AS index_state
+            JOIN pg_class AS index_class
+              ON index_class.oid = index_state.indexrelid
+            JOIN pg_namespace AS index_namespace
+              ON index_namespace.oid = index_class.relnamespace
+            WHERE index_namespace.nspname = $1
+              AND index_class.relname = $2
+            """,
+            schema,
+            "uq_appointments_eom_estimate_booking_operation",
+        )
+        assert invalid is not None
+        assert invalid["indisvalid"] is False
+
+        await admin.execute(
+            "DELETE FROM appointments WHERE id = $1",
+            delete_appointment_id,
+        )
+
+        await run_migrations(pool, migrations_dir=tmp_path)
+
+        rebuilt = await admin.fetchrow(
+            """
+            SELECT index_state.indisunique,
+                   index_state.indisvalid,
+                   index_state.indisready
+            FROM pg_index AS index_state
+            JOIN pg_class AS index_class
+              ON index_class.oid = index_state.indexrelid
+            JOIN pg_namespace AS index_namespace
+              ON index_namespace.oid = index_class.relnamespace
+            WHERE index_namespace.nspname = $1
+              AND index_class.relname = $2
+            """,
+            schema,
+            "uq_appointments_eom_estimate_booking_operation",
+        )
+        applied = await admin.fetchval(
+            "SELECT EXISTS (SELECT 1 FROM schema_migrations WHERE name = $1)",
+            "001_retry_invalid_eom_link_index",
+        )
+        assert dict(rebuilt) == {
+            "indisunique": True,
+            "indisvalid": True,
+            "indisready": True,
+        }
+        assert applied is True
+    finally:
+        if pool is not None:
+            await pool.close()
         await admin.execute(f'DROP SCHEMA IF EXISTS "{schema}" CASCADE')
         await admin.close()

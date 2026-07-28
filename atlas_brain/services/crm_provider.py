@@ -1052,9 +1052,7 @@ class DatabaseCRMProvider:
         return dict(row) if row else None
 
     async def delete_contact(self, contact_id: str) -> bool:
-        from ..storage.database import get_db_pool
-
-        pool = get_db_pool()
+        pool = self._get_pool()
         result = await pool.execute(
             "UPDATE contacts SET status = 'archived', updated_at = NOW() WHERE id = $1",
             contact_id,
@@ -1145,7 +1143,7 @@ class DatabaseCRMProvider:
         cursor_created_at: datetime | None = None,
         cursor_contact_id: UUID | None = None,
     ) -> list[dict[str, Any]]:
-        """Return the closed office-review projection for active EOM new leads.
+        """Return the closed office-review projection for active EOM leads.
 
         This is intentionally separate from ``list_contacts``: the generic
         method returns complete CRM rows, while the office funnel boundary may
@@ -1187,7 +1185,7 @@ class DatabaseCRMProvider:
             WHERE c.business_context_id = 'effingham_maids'
               AND c.status = 'active'
               AND c.contact_type = 'lead'
-              AND c.lead_stage = 'new'
+              AND c.lead_stage IN ('new', 'estimate_booked')
               {cursor_clause}
             ORDER BY c.created_at DESC, c.id DESC
             LIMIT $1
@@ -1787,8 +1785,32 @@ class DatabaseCRMProvider:
                 raise EOMLeadConversionError(409, "EOM lead must be active before approval")
             if contact["contact_type"] != "lead":
                 raise EOMLeadConversionError(409, "EOM contact is not a lead")
-            if contact["lead_stage"] != "new":
+            if contact["lead_stage"] not in {"new", "estimate_booked"}:
                 raise EOMLeadConversionError(409, "EOM lead is not ready for approval")
+            approved_from_stage = str(contact["lead_stage"])
+
+            booking_schema_ready = await conn.fetchval(
+                "SELECT to_regclass('eom_lead_estimate_booking_operations') IS NOT NULL"
+            )
+            if booking_schema_ready:
+                booking_operation = await conn.fetchrow(
+                    """
+                    SELECT id, status, appointment_id
+                    FROM eom_lead_estimate_booking_operations
+                    WHERE contact_id = $1
+                      AND status <> 'calendar_rejected'
+                    FOR UPDATE
+                    """,
+                    contact_id,
+                )
+                if booking_operation is not None and (
+                    booking_operation["status"] != "completed"
+                    or booking_operation["appointment_id"] is None
+                ):
+                    raise EOMLeadConversionError(
+                        409,
+                        "EOM estimate booking must complete before customer approval",
+                    )
 
             updated = await conn.fetchrow(
                 """
@@ -1797,12 +1819,13 @@ class DatabaseCRMProvider:
                 WHERE id = $1
                   AND business_context_id = $2
                   AND contact_type = 'lead'
-                  AND lead_stage = 'new'
+                  AND lead_stage = ANY($3::text[])
                   AND status = 'active'
                 RETURNING id
                 """,
                 contact_id,
                 EOM_BUSINESS_CONTEXT_ID,
+                ["new", "estimate_booked"],
             )
             if updated is None:
                 raise RuntimeError("EOM lead changed during customer handoff finalization")
@@ -1812,14 +1835,15 @@ class DatabaseCRMProvider:
                     contact_id, event_type, from_stage, to_stage, actor,
                     source, operation_key, metadata
                 )
-                VALUES ($1, 'customer_approved', 'new', NULL, $2, 'eom_office', $3,
+                VALUES ($1, 'customer_approved', $2, NULL, $3, 'eom_office', $4,
                         jsonb_build_object(
-                            'tracker_customer_id', $4::bigint,
-                            'tracker_site_id', $5::bigint,
-                            'approved_by_employee_id', $6::bigint
+                            'tracker_customer_id', $5::bigint,
+                            'tracker_site_id', $6::bigint,
+                            'approved_by_employee_id', $7::bigint
                         ))
                 """,
                 contact_id,
+                approved_from_stage,
                 f"employee:{actor_id}:{actor_name}",
                 approval_key,
                 tracker_customer_id,

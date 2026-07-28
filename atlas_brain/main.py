@@ -123,8 +123,63 @@ async def _require_eom_funnel_data_store(
     ready = await pool.fetchval(
         """
         SELECT to_regclass('contacts') IS NOT NULL
+           AND to_regclass('appointments') IS NOT NULL
            AND to_regclass('eom_lead_lifecycle_events') IS NOT NULL
            AND to_regclass('eom_customer_handoffs') IS NOT NULL
+           AND to_regclass('eom_lead_estimate_booking_operations') IS NOT NULL
+           AND EXISTS (
+               SELECT 1
+               FROM pg_attribute AS appointment_link
+               WHERE appointment_link.attrelid = to_regclass('appointments')
+                 AND appointment_link.attname = 'eom_estimate_booking_operation_id'
+                 AND NOT appointment_link.attisdropped
+           )
+           AND EXISTS (
+               SELECT 1
+               FROM pg_constraint AS appointment_link_fk
+               JOIN pg_attribute AS appointment_link
+                 ON appointment_link.attrelid = appointment_link_fk.conrelid
+               WHERE appointment_link_fk.conrelid = to_regclass('appointments')
+                 AND appointment_link_fk.confrelid =
+                     to_regclass('eom_lead_estimate_booking_operations')
+                 AND appointment_link_fk.conname =
+                     'appointments_eom_estimate_booking_operation_id_fkey'
+                 AND appointment_link_fk.contype = 'f'
+                 AND appointment_link_fk.convalidated
+                 AND appointment_link.attname = 'eom_estimate_booking_operation_id'
+                 AND appointment_link.attnum =
+                     ANY(appointment_link_fk.conkey::smallint[])
+           )
+           AND EXISTS (
+               SELECT 1
+               FROM pg_index AS appointment_link_index
+               JOIN pg_class AS index_class
+                 ON index_class.oid = appointment_link_index.indexrelid
+               JOIN pg_attribute AS appointment_link
+                 ON appointment_link.attrelid = appointment_link_index.indrelid
+               WHERE appointment_link_index.indrelid = to_regclass('appointments')
+                 AND index_class.relname = 'uq_appointments_eom_estimate_booking_operation'
+                 AND appointment_link_index.indisunique
+                 AND appointment_link_index.indisvalid
+                 AND appointment_link_index.indisready
+                 AND appointment_link_index.indnatts = 1
+                 AND appointment_link_index.indnkeyatts = 1
+                 AND appointment_link.attname = 'eom_estimate_booking_operation_id'
+                 AND appointment_link.attnum = ANY(appointment_link_index.indkey::smallint[])
+                 AND pg_get_expr(
+                     appointment_link_index.indpred,
+                     appointment_link_index.indrelid
+                 ) = '(eom_estimate_booking_operation_id IS NOT NULL)'
+           )
+           AND EXISTS (
+               SELECT 1
+               FROM pg_trigger AS contact_state_trigger
+               WHERE contact_state_trigger.tgrelid = to_regclass('contacts')
+                 AND contact_state_trigger.tgname =
+                     'trg_prevent_eom_pending_estimate_booking_contact_state_mutation'
+                 AND NOT contact_state_trigger.tgisinternal
+                 AND contact_state_trigger.tgenabled IN ('O', 'A')
+           )
            AND EXISTS (
                SELECT 1
                FROM pg_class AS handoff_table
@@ -182,6 +237,30 @@ async def _require_eom_funnel_data_store(
                   AND NOT has_column_privilege(
                       nocodb_role.oid, 'contacts', 'contact_type', 'UPDATE'
                   )
+                  AND NOT COALESCE((
+                      SELECT has_column_privilege(
+                          nocodb_role.oid,
+                          appointment_link.attrelid,
+                          appointment_link.attname,
+                          'INSERT'
+                      )
+                      FROM pg_attribute AS appointment_link
+                      WHERE appointment_link.attrelid = to_regclass('appointments')
+                        AND appointment_link.attname = 'eom_estimate_booking_operation_id'
+                        AND NOT appointment_link.attisdropped
+                  ), TRUE)
+                  AND NOT COALESCE((
+                      SELECT has_column_privilege(
+                          nocodb_role.oid,
+                          appointment_link.attrelid,
+                          appointment_link.attname,
+                          'UPDATE'
+                      )
+                      FROM pg_attribute AS appointment_link
+                      WHERE appointment_link.attrelid = to_regclass('appointments')
+                        AND appointment_link.attname = 'eom_estimate_booking_operation_id'
+                        AND NOT appointment_link.attisdropped
+                  ), TRUE)
                   AND NOT has_column_privilege(
                       nocodb_role.oid, 'contacts', 'lead_stage', 'INSERT'
                   )
@@ -250,7 +329,7 @@ async def _require_eom_funnel_data_store(
     )
     if not ready:
         raise RuntimeError(
-            "EOM funnel requires the authoritative CRM lifecycle and handoff schema"
+            "EOM funnel requires the authoritative CRM lifecycle, handoff, and booking schema"
         )
 
 

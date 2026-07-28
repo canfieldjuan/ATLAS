@@ -14,6 +14,10 @@ asyncpg = pytest.importorskip("asyncpg")
 
 from atlas_brain.services.crm_provider import DatabaseCRMProvider  # noqa: E402
 from atlas_brain.services.eom_lead_conversion import EOMLeadConversionError  # noqa: E402
+from atlas_brain.storage.migrations import (  # noqa: E402
+    _contains_executable_concurrently,
+    _split_sql_statements,
+)
 
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -85,12 +89,22 @@ async def _provision_handoff_guard(conn) -> None:
     )
 
 
+async def _execute_migration_file(conn, name: str) -> None:
+    sql = (MIGRATIONS / name).read_text()
+    if _contains_executable_concurrently(sql):
+        for statement in _split_sql_statements(sql):
+            await conn.execute(statement)
+    else:
+        await conn.execute(sql)
+
+
 async def _prepare_schema(
     conn,
     schema: str,
     *,
     apply_privilege_migration: bool = True,
 ) -> None:
+    await conn.execute("CREATE EXTENSION IF NOT EXISTS pgcrypto")
     await conn.execute(f'CREATE SCHEMA "{schema}"')
     await conn.execute(f'SET search_path TO "{schema}", public')
     await conn.execute(
@@ -102,23 +116,30 @@ async def _prepare_schema(
         )
         """
     )
-    await conn.execute("CREATE TABLE appointments (id UUID PRIMARY KEY)")
     await conn.execute("CREATE TABLE api_keys (id UUID PRIMARY KEY)")
     await conn.execute("CREATE TABLE byok_keys (id UUID PRIMARY KEY)")
     await conn.execute("CREATE TABLE scoped_mailbox_credentials (id UUID PRIMARY KEY)")
-    migration_names = (
+    migration_names = [
+        "012_appointments.sql",
         "035_contacts.sql",
         "256_contact_interaction_dedupe.sql",
         "346_contact_lead_pipeline.sql",
+        "348_appointment_operating_fields.sql",
         "351_eom_lead_lifecycle_events.sql",
         "352_eom_inbound_delivery_receipts.sql",
         "353_eom_customer_handoffs.sql",
-    )
+    ]
     if apply_privilege_migration:
         await _provision_nocodb_login(conn)
-        migration_names += ("354_eom_customer_handoff_privileges.sql",)
+        migration_names.extend(
+            (
+                "354_eom_customer_handoff_privileges.sql",
+                "356_eom_lead_estimate_booking_operations.sql",
+                "358_eom_estimate_booking_appointment_link_index.sql",
+            )
+        )
     for name in migration_names:
-        await conn.execute((MIGRATIONS / name).read_text())
+        await _execute_migration_file(conn, name)
 
 
 async def _insert_contact(
@@ -677,8 +698,21 @@ async def test_nocodb_role_cannot_bypass_handoff_or_lifecycle_guards():
                 contact_id,
             )
             appointment_id = uuid.uuid4()
+            appointment_start = datetime(2026, 7, 29, 14, tzinfo=timezone.utc)
+            appointment_end = datetime(2026, 7, 29, 15, tzinfo=timezone.utc)
             await nocodb_conn.execute(
-                "INSERT INTO appointments (id) VALUES ($1)", appointment_id
+                """
+                INSERT INTO appointments (
+                    id, start_time, end_time, service_type, customer_name,
+                    customer_phone, business_context_id, contact_id
+                )
+                VALUES ($1, $2, $3, 'office_cleaning', 'NocoDB CRM',
+                        '217-555-0199', 'effingham_maids', $4)
+                """,
+                appointment_id,
+                appointment_start,
+                appointment_end,
+                contact_id,
             )
             assert await nocodb_conn.fetchval(
                 "SELECT id = $1 FROM appointments WHERE id = $1", appointment_id
@@ -924,11 +958,19 @@ async def test_privilege_migration_runs_from_a_real_non_superuser_login(monkeypa
             )
             """
         )
-        with pytest.raises(RuntimeError, match="CRM lifecycle and handoff schema"):
+        with pytest.raises(RuntimeError, match="CRM lifecycle, handoff, and booking schema"):
             await main._require_eom_funnel_data_store(
                 type("Config", (), {"api_enabled": True})(),
                 database_enabled=True,
             )
+        await run_migrations(
+            _SchemaPool(),
+            migrations_dir=MIGRATIONS,
+            only={
+                "356_eom_lead_estimate_booking_operations",
+                "358_eom_estimate_booking_appointment_link_index",
+            },
+        )
         await executor_conn.close()
         executor_conn = None
 
@@ -1020,14 +1062,14 @@ async def test_privilege_migration_satisfies_the_enabled_full_app_startup_guard(
         )
 
         await conn.execute("ALTER ROLE atlas_nocodb INHERIT")
-        with pytest.raises(RuntimeError, match="CRM lifecycle and handoff schema"):
+        with pytest.raises(RuntimeError, match="CRM lifecycle, handoff, and booking schema"):
             await main._require_eom_funnel_data_store(
                 type("Config", (), {"api_enabled": True})(),
                 database_enabled=True,
             )
         await conn.execute("ALTER ROLE atlas_nocodb NOINHERIT")
         await conn.execute("GRANT atlas_eom_handoff_owner TO atlas_nocodb")
-        with pytest.raises(RuntimeError, match="CRM lifecycle and handoff schema"):
+        with pytest.raises(RuntimeError, match="CRM lifecycle, handoff, and booking schema"):
             await main._require_eom_funnel_data_store(
                 type("Config", (), {"api_enabled": True})(),
                 database_enabled=True,
@@ -1037,6 +1079,14 @@ async def test_privilege_migration_satisfies_the_enabled_full_app_startup_guard(
             type("Config", (), {"api_enabled": True})(),
             database_enabled=True,
         )
+        await conn.execute(
+            "DROP INDEX uq_appointments_eom_estimate_booking_operation"
+        )
+        with pytest.raises(RuntimeError, match="CRM lifecycle, handoff, and booking schema"):
+            await main._require_eom_funnel_data_store(
+                type("Config", (), {"api_enabled": True})(),
+                database_enabled=True,
+            )
     finally:
         await conn.execute(f'DROP SCHEMA IF EXISTS "{schema}" CASCADE')
         await conn.close()

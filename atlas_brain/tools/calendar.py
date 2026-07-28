@@ -521,6 +521,7 @@ class CalendarTool:
         location: Optional[str] = None,
         description: Optional[str] = None,
         calendar_id: Optional[str] = None,
+        event_id: Optional[str] = None,
     ) -> ToolResult:
         """
         Create a new calendar event.
@@ -532,6 +533,9 @@ class CalendarTool:
             location: Optional location string
             description: Optional description
             calendar_id: Calendar to create in (default: primary)
+            event_id: Optional caller-owned Calendar event ID. Durable command
+                projections use this so a retry can recover a previously
+                created event rather than creating a duplicate.
 
         Returns:
             ToolResult with created event details
@@ -567,6 +571,8 @@ class CalendarTool:
                 event_body["location"] = location
             if description:
                 event_body["description"] = description
+            if event_id:
+                event_body["id"] = event_id
 
             url = f"{CALENDAR_API_BASE}/calendars/{cal_id}/events"
             response = await client.post(url, headers=headers, json=event_body)
@@ -578,6 +584,40 @@ class CalendarTool:
                 headers = await self._get_auth_header(force_refresh=True)
                 headers["Content-Type"] = "application/json"
                 response = await client.post(url, headers=headers, json=event_body)
+
+            # Google Calendar accepts caller-supplied event IDs. If an earlier
+            # request created this exact event but its response was lost, the
+            # repeat POST conflicts; fetch the known ID and treat a live event
+            # as the original successful projection.
+            if response.status_code == 409 and event_id:
+                recovered = await self.get_event(event_id, calendar_id=cal_id)
+                if recovered.success:
+                    self._cache.last_updated = 0.0
+                    return ToolResult(
+                        success=True,
+                        data={
+                            "event_id": event_id,
+                            "summary": summary,
+                            "start": start.isoformat(),
+                            "end": end.isoformat(),
+                            "location": location,
+                            "calendar_event_status": (
+                                (recovered.data or {}).get("calendar_event_status")
+                            ),
+                        },
+                        message=f"Created event: {summary}",
+                    )
+                if (recovered.data or {}).get("calendar_event_status") == "cancelled":
+                    return ToolResult(
+                        success=False,
+                        data={
+                            "status_code": response.status_code,
+                            "event_id": event_id,
+                            "calendar_event_status": "cancelled",
+                        },
+                        error="API_ERROR",
+                        message="Calendar event conflict is cancelled",
+                    )
 
             response.raise_for_status()
 
@@ -611,6 +651,7 @@ class CalendarTool:
             logger.error("Calendar create event HTTP error: %s", e)
             return ToolResult(
                 success=False,
+                data={"status_code": e.response.status_code},
                 error="API_ERROR",
                 message=f"Calendar API error: {e.response.status_code}",
             )
@@ -620,6 +661,97 @@ class CalendarTool:
                 success=False,
                 error="EXECUTION_ERROR",
                 message="Calendar event creation failed",
+            )
+
+    async def get_event(
+        self,
+        event_id: str,
+        calendar_id: Optional[str] = None,
+    ) -> ToolResult:
+        """Fetch one Calendar event by deterministic ID."""
+        if not self._config.calendar_enabled:
+            return ToolResult(
+                success=False,
+                error="TOOL_DISABLED",
+                message="Calendar tool is disabled",
+            )
+
+        if not self._config.calendar_refresh_token:
+            return ToolResult(
+                success=False,
+                error="NOT_CONFIGURED",
+                message="Calendar not configured. Run calendar setup first.",
+            )
+
+        try:
+            client = await self._ensure_client()
+            headers = await self._get_auth_header()
+            cal_id = calendar_id or "primary"
+            url = f"{CALENDAR_API_BASE}/calendars/{cal_id}/events/{event_id}"
+            response = await client.get(url, headers=headers)
+
+            if response.status_code == 401:
+                logger.warning("Calendar get event 401 -- forcing token refresh")
+                self._invalidate_access_token()
+                headers = await self._get_auth_header(force_refresh=True)
+                response = await client.get(url, headers=headers)
+
+            if response.status_code == 404:
+                return ToolResult(
+                    success=False,
+                    data={"status_code": 404, "event_id": event_id},
+                    error="API_ERROR",
+                    message="Calendar event not found",
+                )
+
+            response.raise_for_status()
+
+            event = response.json()
+            recovered_event_id = event.get("id") or event_id
+            event_status = event.get("status") or "confirmed"
+            if event_status == "cancelled":
+                return ToolResult(
+                    success=False,
+                    data={
+                        "status_code": response.status_code,
+                        "event_id": recovered_event_id,
+                        "calendar_event_status": "cancelled",
+                    },
+                    error="API_ERROR",
+                    message="Calendar event is cancelled",
+                )
+            return ToolResult(
+                success=True,
+                data={
+                    "event_id": recovered_event_id,
+                    "summary": event.get("summary"),
+                    "start": event.get("start"),
+                    "end": event.get("end"),
+                    "location": event.get("location"),
+                    "calendar_event_status": event_status,
+                },
+                message=f"Fetched event: {recovered_event_id}",
+            )
+        except CalendarAuthError:
+            return ToolResult(
+                success=False,
+                error="AUTH_ERROR",
+                message="Calendar authentication failed. Refresh token needs renewal.",
+            )
+        except httpx.HTTPStatusError as e:
+            logger.error("Calendar get event HTTP error: %s", e)
+            return ToolResult(
+                success=False,
+                data={"status_code": e.response.status_code, "event_id": event_id},
+                error="API_ERROR",
+                message=f"Calendar API error: {e.response.status_code}",
+            )
+        except Exception:
+            logger.exception("Calendar get event error")
+            return ToolResult(
+                success=False,
+                error="EXECUTION_ERROR",
+                message="Calendar event fetch failed",
             )
 
     async def verify_credentials(self) -> bool:

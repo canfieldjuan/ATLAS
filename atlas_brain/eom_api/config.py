@@ -14,6 +14,7 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 ENV_FILES = (".env", ".env.local")
 RAW_RECEIVABLES_SERVICE_TOKEN_ENV = "ATLAS_INVOICING_RECEIVABLES_SERVICE_TOKEN"
 _RAW_RECEIVABLES_SERVICE_TOKEN_ENV_KEY = RAW_RECEIVABLES_SERVICE_TOKEN_ENV.casefold()
+EOM_ESTIMATE_CALENDAR_ID_MAX_LENGTH = 512
 
 
 def _has_raw_receivables_service_token(value: object) -> bool:
@@ -126,6 +127,13 @@ class EOMFunnelConfig(BaseSettings):
         description=(
             "SHA-256 digest of the generated bearer accepted from the EOM time "
             "tracker only; the raw bearer is never stored in Atlas"
+        ),
+    )
+    estimate_calendar_id: str = Field(
+        default="primary",
+        max_length=EOM_ESTIMATE_CALENDAR_ID_MAX_LENGTH,
+        description=(
+            "Google Calendar ID used by the EOM funnel estimate-booking command"
         ),
     )
 

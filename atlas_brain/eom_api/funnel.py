@@ -5,15 +5,20 @@ from __future__ import annotations
 import base64
 import binascii
 import re
-from datetime import datetime
+from datetime import datetime, timedelta
 from typing import Annotated, Any
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, Header, HTTPException, Query, status
 from fastapi.responses import JSONResponse
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 from ..services.crm_provider import get_crm_provider
+from ..services.eom_lead_booking import (
+    EOMLeadBookingError,
+    EOMLeadBookingService,
+    EstimateBookingCommand,
+)
 from ..services.eom_lead_conversion import (
     EOMCustomerHandoff,
     EOMLeadConversionError,
@@ -72,8 +77,67 @@ class EOMLeadReviewResponse(BaseModel):
     )
 
 
+class EOMEstimateBookingRequest(BaseModel):
+    """One first-estimate booking command from the office proxy."""
+
+    model_config = ConfigDict(extra="forbid", populate_by_name=True)
+
+    start_time: datetime = Field(alias="startTime")
+    duration_minutes: int = Field(default=60, ge=15, le=240, alias="durationMinutes")
+    service_type: str = Field(
+        default="estimate",
+        min_length=1,
+        max_length=128,
+        alias="serviceType",
+    )
+    location: str | None = Field(default=None, max_length=1000)
+    notes: str = Field(default="", max_length=4000)
+
+    @field_validator("start_time")
+    @classmethod
+    def _require_timezone(cls, value: datetime) -> datetime:
+        if value.tzinfo is None or value.utcoffset() is None:
+            raise ValueError("startTime must include a timezone offset")
+        return value
+
+    @model_validator(mode="after")
+    def _require_representable_end_time(self) -> "EOMEstimateBookingRequest":
+        try:
+            self.start_time + timedelta(minutes=self.duration_minutes)
+        except OverflowError as exc:
+            raise ValueError(
+                "startTime plus durationMinutes must be representable"
+            ) from exc
+        return self
+
+    @field_validator("service_type", "location", "notes", mode="before")
+    @classmethod
+    def _strip_text(cls, value: Any) -> Any:
+        return value.strip() if isinstance(value, str) else value
+
+
+class EOMEstimateBookingResponse(BaseModel):
+    """Closed response envelope for one estimate booking operation."""
+
+    model_config = ConfigDict(extra="forbid", populate_by_name=True)
+
+    success: bool = True
+    operation_id: UUID = Field(serialization_alias="operationId")
+    appointment_id: UUID | None = Field(
+        default=None,
+        serialization_alias="appointmentId",
+    )
+    calendar_event_id: str = Field(serialization_alias="calendarEventId")
+    status: str
+    idempotent: bool
+
+
 def _crm_dependency() -> Any:
     return get_crm_provider()
+
+
+def _booking_service_dependency() -> EOMLeadBookingService:
+    return EOMLeadBookingService()
 
 
 def _encode_lead_review_cursor(*, created_at: datetime, contact_id: UUID) -> str:
@@ -115,6 +179,21 @@ def _approval_key_dependency(
     return key
 
 
+def _booking_key_dependency(
+    idempotency_key: str = Header(default="", alias="Idempotency-Key"),
+) -> str:
+    key = idempotency_key.strip()
+    if not _APPROVAL_KEY_PATTERN.fullmatch(key):
+        raise HTTPException(
+            status_code=422,
+            detail=(
+                "Idempotency-Key must be 16-128 characters and contain only "
+                "letters, numbers, dot, underscore, colon, or hyphen"
+            ),
+        )
+    return key
+
+
 @router.get(
     "/leads",
     response_model=EOMLeadReviewResponse,
@@ -129,7 +208,7 @@ async def list_eom_lead_review_items(
     _actor: dict[str, object] = Depends(require_eom_funnel_actor),
     crm: Any = Depends(_crm_dependency),
 ) -> EOMLeadReviewResponse:
-    """List only active EOM ``lead/new`` records for office review.
+    """List active EOM lead records that remain reachable for office review.
 
     The tracker keeps the service bearer and the browser never calls this
     route directly. Reading this projection does not alter CRM lifecycle,
@@ -160,6 +239,42 @@ async def list_eom_lead_review_items(
         cursor=cursor,
         has_more=has_more,
         next_cursor=next_cursor,
+    )
+
+
+@router.post(
+    "/leads/{contact_id}/estimate-bookings",
+    dependencies=[Depends(require_eom_funnel_api)],
+)
+async def create_estimate_booking(
+    contact_id: UUID,
+    payload: EOMEstimateBookingRequest,
+    booking_key: str = Depends(_booking_key_dependency),
+    actor: dict[str, object] = Depends(require_eom_funnel_actor),
+    service: EOMLeadBookingService = Depends(_booking_service_dependency),
+) -> JSONResponse:
+    """Create or replay exactly one first estimate booking for an EOM lead."""
+    command = EstimateBookingCommand(
+        contact_id=contact_id,
+        idempotency_key=booking_key,
+        actor_id=int(actor["id"]),
+        actor_name=str(actor["name"]),
+        start_time=payload.start_time,
+        duration_minutes=payload.duration_minutes,
+        service_type=payload.service_type,
+        location=payload.location or None,
+        notes=payload.notes,
+    )
+    try:
+        result = await service.book_estimate(command)
+    except EOMLeadBookingError as exc:
+        raise HTTPException(status_code=exc.status_code, detail=str(exc)) from exc
+    response = EOMEstimateBookingResponse.model_validate(
+        {"success": True, **result.to_dict()}
+    )
+    return JSONResponse(
+        status_code=status.HTTP_200_OK if result.idempotent else status.HTTP_201_CREATED,
+        content=response.model_dump(mode="json", by_alias=True),
     )
 
 

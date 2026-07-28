@@ -9,10 +9,14 @@ from uuid import uuid4
 import httpx
 import pytest
 from fastapi import FastAPI
+from pydantic import ValidationError
 
 from atlas_brain.eom_api import funnel as funnel_mod
 from atlas_brain.eom_api import funnel_auth as auth_mod
-from atlas_brain.eom_api.config import EOMFunnelConfig
+from atlas_brain.eom_api.config import (
+    EOM_ESTIMATE_CALENDAR_ID_MAX_LENGTH,
+    EOMFunnelConfig,
+)
 from atlas_brain.services.eom_lead_conversion import EOMLeadConversionError
 
 
@@ -335,6 +339,21 @@ async def test_enabled_full_atlas_funnel_requires_authoritative_data_store(monke
     monkeypatch.setattr(main, "get_db_pool", lambda: ready_pool)
 
     await main._require_eom_funnel_data_store(enabled, database_enabled=True)
+    assert "eom_lead_estimate_booking_operations" in ready_pool.queries[0]
+    assert "eom_estimate_booking_operation_id" in ready_pool.queries[0]
+    assert "appointments_eom_estimate_booking_operation_id_fkey" in ready_pool.queries[0]
+    assert "pg_constraint" in ready_pool.queries[0]
+    assert "convalidated" in ready_pool.queries[0]
+    assert "uq_appointments_eom_estimate_booking_operation" in ready_pool.queries[0]
+    assert "pg_index" in ready_pool.queries[0]
+    assert "indisunique" in ready_pool.queries[0]
+    assert "indisvalid" in ready_pool.queries[0]
+    assert "indisready" in ready_pool.queries[0]
+    assert (
+        "trg_prevent_eom_pending_estimate_booking_contact_state_mutation"
+        in ready_pool.queries[0]
+    )
+    assert "tgenabled IN ('O', 'A')" in ready_pool.queries[0]
     assert "atlas_eom_handoff_owner" in ready_pool.queries[0]
     assert "atlas_nocodb" in ready_pool.queries[0]
     assert "pg_auth_members" in ready_pool.queries[0]
@@ -366,7 +385,7 @@ async def test_enabled_full_atlas_funnel_requires_authoritative_data_store(monke
         "get_db_pool",
         lambda: _Pool(initialized=True, schema_ready=False),
     )
-    with pytest.raises(RuntimeError, match="CRM lifecycle and handoff schema"):
+    with pytest.raises(RuntimeError, match="CRM lifecycle, handoff, and booking schema"):
         await main._require_eom_funnel_data_store(
             enabled,
             database_enabled=True,
@@ -626,6 +645,24 @@ def test_enabled_funnel_accepts_a_fresh_generated_service_token_at_startup():
         )
     )
     assert auth_mod.eom_funnel_service_token_sha256(generated.token) == generated.sha256
+
+
+def test_enabled_funnel_rejects_estimate_calendar_id_over_storage_limit_at_startup():
+    generated = auth_mod.generate_eom_funnel_service_token()
+    valid_calendar_id = "c" * EOM_ESTIMATE_CALENDAR_ID_MAX_LENGTH
+    config = EOMFunnelConfig(
+        api_enabled=True,
+        service_token_sha256=generated.sha256,
+        estimate_calendar_id=valid_calendar_id,
+    )
+    assert config.estimate_calendar_id == valid_calendar_id
+
+    with pytest.raises(ValidationError, match="at most 512"):
+        EOMFunnelConfig(
+            api_enabled=True,
+            service_token_sha256=generated.sha256,
+            estimate_calendar_id="c" * (EOM_ESTIMATE_CALENDAR_ID_MAX_LENGTH + 1),
+        )
 
 
 @pytest.mark.asyncio

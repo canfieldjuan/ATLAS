@@ -22,6 +22,7 @@ on:
       - "atlas_brain/services/customer_context.py"
       - "atlas_brain/services/crm_provider.py"
       - "atlas_brain/services/email_provider.py"
+      - "atlas_brain/services/eom_lead_booking.py"
       - "atlas_brain/services/eom_lead_conversion.py"
       - "atlas_brain/services/eom_lead_ingress.py"
       - "atlas_brain/eom_api/config.py"
@@ -44,12 +45,18 @@ on:
       - "atlas_brain/storage/migrations/352_eom_inbound_delivery_receipts.sql"
       - "atlas_brain/storage/migrations/353_eom_customer_handoffs.sql"
       - "atlas_brain/storage/migrations/354_eom_customer_handoff_privileges.sql"
+      - "atlas_brain/storage/migrations/356_eom_lead_estimate_booking_operations.sql"
+      - "atlas_brain/storage/migrations/357_eom_lead_review_queue_booked_index.sql"
+      - "atlas_brain/storage/migrations/358_eom_estimate_booking_appointment_link_index.sql"
+      - "atlas_brain/tools/calendar.py"
       - "atlas_brain/tools/scheduling.py"
       - "tests/test_crm_read_scoping.py"
       - "tests/test_eom_complaints_integration.py"
       - "tests/test_eom_contacts_api_tenant_scope.py"
       - "tests/test_eom_lead_conversion.py"
       - "tests/test_eom_lead_conversion_integration.py"
+      - "tests/test_eom_estimate_booking.py"
+      - "tests/test_eom_estimate_booking_integration.py"
       - "tests/test_eom_lead_pipeline_integration.py"
       - "tests/test_eom_mailbox_context_binding.py"
       - "tests/test_eom_lead_ingress.py"
@@ -80,6 +87,7 @@ on:
       - "atlas_brain/services/customer_context.py"
       - "atlas_brain/services/crm_provider.py"
       - "atlas_brain/services/email_provider.py"
+      - "atlas_brain/services/eom_lead_booking.py"
       - "atlas_brain/services/eom_lead_conversion.py"
       - "atlas_brain/services/eom_lead_ingress.py"
       - "atlas_brain/eom_api/config.py"
@@ -102,12 +110,18 @@ on:
       - "atlas_brain/storage/migrations/352_eom_inbound_delivery_receipts.sql"
       - "atlas_brain/storage/migrations/353_eom_customer_handoffs.sql"
       - "atlas_brain/storage/migrations/354_eom_customer_handoff_privileges.sql"
+      - "atlas_brain/storage/migrations/356_eom_lead_estimate_booking_operations.sql"
+      - "atlas_brain/storage/migrations/357_eom_lead_review_queue_booked_index.sql"
+      - "atlas_brain/storage/migrations/358_eom_estimate_booking_appointment_link_index.sql"
+      - "atlas_brain/tools/calendar.py"
       - "atlas_brain/tools/scheduling.py"
       - "tests/test_crm_read_scoping.py"
       - "tests/test_eom_complaints_integration.py"
       - "tests/test_eom_contacts_api_tenant_scope.py"
       - "tests/test_eom_lead_conversion.py"
       - "tests/test_eom_lead_conversion_integration.py"
+      - "tests/test_eom_estimate_booking.py"
+      - "tests/test_eom_estimate_booking_integration.py"
       - "tests/test_eom_lead_pipeline_integration.py"
       - "tests/test_eom_mailbox_context_binding.py"
       - "tests/test_eom_lead_ingress.py"
@@ -160,6 +174,8 @@ jobs:
             tests/test_crm_read_scoping.py \
             tests/test_eom_complaints_integration.py \
             tests/test_eom_contacts_api_tenant_scope.py \
+            tests/test_eom_estimate_booking.py \
+            tests/test_eom_estimate_booking_integration.py \
             tests/test_eom_lead_conversion.py \
             tests/test_eom_lead_conversion_integration.py \
             tests/test_eom_lead_pipeline_integration.py \
