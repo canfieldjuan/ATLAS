@@ -51,6 +51,14 @@ def pr_comment(
     }
 
 
+def changed_file(filename, *, status="modified", previous_filename=None):
+    return {
+        "filename": filename,
+        "status": status,
+        "previous_filename": previous_filename,
+    }
+
+
 BODY_CLEAR = "## AI reconciliation\n- All fixed or waived: Yes\n"
 BODY_OPEN = "## AI reconciliation\n- fixed or waived: No\n"
 BODY_ABSENT = "## Summary\njust a normal PR body\n"
@@ -215,6 +223,27 @@ def test_is_docs_only_body_requires_first_nonblank_marker():
     assert c.is_docs_only_body("Docs-only: false\n") is False
 
 
+def test_changed_files_are_docs_only_requires_markdown_only_paths():
+    c = load_check()
+
+    assert c.changed_files_are_docs_only([changed_file("docs/guide.md")]) is True
+    assert c.changed_files_are_docs_only(
+        [
+            changed_file(
+                "plans/archive/PR-Finished.md",
+                status="renamed",
+                previous_filename="plans/PR-Finished.md",
+            )
+        ]
+    ) is True
+    assert c.changed_files_are_docs_only([]) is False
+    assert c.changed_files_are_docs_only([changed_file("scripts/check.py")]) is False
+    assert c.changed_files_are_docs_only([changed_file("docs/guide.sh.md")]) is False
+    assert c.changed_files_are_docs_only(
+        [changed_file("plans/archive/PR-Finished.md", previous_filename="scripts/old.py")]
+    ) is False
+
+
 # --- evaluate: the failure branch (the lie) MUST fire ---------------------
 
 def test_open_thread_plus_clear_body_fails():
@@ -272,11 +301,28 @@ def test_docs_only_no_open_threads_passes_without_current_head_review():
         BOTS,
         reviews=[],
         comments=[],
+        changed_files=[changed_file("plans/archive/PR-Finished.md")],
         head_sha="head-a",
     )
 
     assert code == 0
-    assert any("docs-only PR has no open scoped Codex review threads" in msg for msg in msgs)
+    assert any("docs-only PR diff has no open scoped Codex review threads" in msg for msg in msgs)
+
+
+def test_docs_only_non_markdown_diff_still_requires_current_head_review():
+    c = load_check()
+    code, msgs = c.evaluate(
+        [thread(resolved=True)],
+        BODY_DOCS_ONLY,
+        BOTS,
+        reviews=[],
+        comments=[],
+        changed_files=[changed_file("scripts/check_ai_reconciliation_live.py")],
+        head_sha="head-a",
+    )
+
+    assert code == 1
+    assert any("missing current-head Codex connector review" in msg for msg in msgs)
 
 
 def test_docs_only_open_codex_thread_still_fails_without_ai_record():
@@ -425,6 +471,8 @@ def test_main_accepts_docs_only_without_current_head_review_when_threads_clear(t
     tf.write_text(json.dumps([thread(resolved=True)]), encoding="utf-8")
     bf = tmp_path / "body.md"
     bf.write_text(BODY_DOCS_ONLY, encoding="utf-8")
+    ff = tmp_path / "changed-files.json"
+    ff.write_text(json.dumps([changed_file("plans/archive/PR-Finished.md")]), encoding="utf-8")
 
     assert c.main(
         [
@@ -432,6 +480,8 @@ def test_main_accepts_docs_only_without_current_head_review_when_threads_clear(t
             str(tf),
             "--body-file",
             str(bf),
+            "--changed-files-file",
+            str(ff),
             "--head-sha",
             "head-a",
         ]
@@ -455,12 +505,44 @@ def test_main_live_fetch_fails_when_review_generation_changes(monkeypatch, tmp_p
             return _comment_page([], has_next=False)
         if "reviewThreads" in query:
             return _page([], has_next=False)
+        if "/pulls/1431/files" in query:
+            return json.dumps(changed_file("atlas_brain/x.py"))
         raise AssertionError(f"unexpected gh call: {args}")
 
     monkeypatch.setattr(c, "_gh", fake_gh)
 
     assert c.main(["--pr", "1431", "--repo", "owner/name", "--body-file", str(bf), "--gh", "gh"]) == 2
     assert calls["reviews"] == 3
+
+
+def test_fetch_changed_files_parses_paginated_rows(monkeypatch):
+    c = load_check()
+
+    monkeypatch.setattr(
+        c,
+        "_gh",
+        lambda args, gh: "\n".join(
+            [
+                json.dumps(changed_file("docs/a.md")),
+                json.dumps(
+                    changed_file(
+                        "plans/archive/PR-Finished.md",
+                        status="renamed",
+                        previous_filename="plans/PR-Finished.md",
+                    )
+                ),
+            ]
+        ),
+    )
+
+    assert c.fetch_changed_files(1431, "owner/name", "gh") == [
+        changed_file("docs/a.md"),
+        changed_file(
+            "plans/archive/PR-Finished.md",
+            status="renamed",
+            previous_filename="plans/PR-Finished.md",
+        ),
+    ]
 
 
 def test_main_missing_pr_repo_exit_2():

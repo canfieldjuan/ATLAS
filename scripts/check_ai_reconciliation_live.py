@@ -35,7 +35,7 @@ import re
 import subprocess
 import sys
 from collections.abc import Sequence
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 
 _DEFAULT_BOTS = ("chatgpt-codex-connector", "chatgpt-codex-connector[bot]")
 _CLEAN_CODEX_REVIEW_TEXT = "didn't find any major issues"
@@ -151,6 +151,31 @@ def is_docs_only_body(body: str) -> bool:
             continue
         return stripped == "Docs-only: true"
     return False
+
+
+def _is_markdown_only_path(path: str) -> bool:
+    """Return true when a changed path has `.md` as its only suffix."""
+
+    return PurePosixPath(path).suffixes == [".md"]
+
+
+def changed_files_are_docs_only(files: Sequence[dict]) -> bool:
+    """Return true only when the live changed-file list proves a docs-only diff."""
+
+    if not files:
+        return False
+    for item in files:
+        if not isinstance(item, dict):
+            return False
+        filename = item.get("filename")
+        if not isinstance(filename, str) or not _is_markdown_only_path(filename):
+            return False
+        previous_filename = item.get("previous_filename")
+        if previous_filename is not None and (
+            not isinstance(previous_filename, str) or not _is_markdown_only_path(previous_filename)
+        ):
+            return False
+    return True
 
 
 def open_bot_threads(nodes: Sequence[dict], bot_logins: Sequence[str]) -> list[dict]:
@@ -350,6 +375,7 @@ def evaluate(
     *,
     reviews: Sequence[dict] | None = None,
     comments: Sequence[dict] | None = None,
+    changed_files: Sequence[dict] | None = None,
     head_sha: str | None = None,
 ) -> tuple[int, list[str]]:
     """Core decision (pure). Returns (exit_code, messages)."""
@@ -367,9 +393,9 @@ def evaluate(
                 f"reconciliation cannot pass PR head {head_sha} until the "
                 "changes-requested review is superseded or resolved."
             )
-        elif not open_threads and is_docs_only_body(body):
+        elif not open_threads and is_docs_only_body(body) and changed_files_are_docs_only(changed_files or []):
             messages.append(
-                "OK: docs-only PR has no open scoped Codex review threads; "
+                "OK: docs-only PR diff has no open scoped Codex review threads; "
                 "current-head Codex review attestation is not required."
             )
         elif not current_head_bot_reviews(
@@ -602,6 +628,30 @@ def fetch_body(pr: int, repo: str, gh: str) -> str:
     return out
 
 
+def fetch_changed_files(pr: int, repo: str, gh: str) -> list[dict]:
+    """Fetch PR changed files from GitHub's trusted PR file list."""
+
+    out = _gh(
+        [
+            "api",
+            "--paginate",
+            f"repos/{repo}/pulls/{pr}/files?per_page=100",
+            "--jq",
+            ".[] | {filename,status,previous_filename}",
+        ],
+        gh,
+    )
+    files: list[dict] = []
+    for line in out.splitlines():
+        if not line.strip():
+            continue
+        item = json.loads(line)
+        if not isinstance(item, dict):
+            raise RuntimeError("GitHub REST response malformed: changed file row is not an object")
+        files.append(item)
+    return files
+
+
 def fetch_consistent_review_thread_snapshot(
     pr: int,
     owner: str,
@@ -677,6 +727,10 @@ def main(argv: Sequence[str] | None = None) -> int:
         help="JSON file of PR comment nodes (test/dry-run; skips fetching live review comments)",
     )
     parser.add_argument(
+        "--changed-files-file",
+        help="JSON file of PR changed-file objects (test/dry-run; skips fetching live changed files)",
+    )
+    parser.add_argument(
         "--head-sha",
         help="PR head SHA for current-head Codex review attestation in test/dry-run mode",
     )
@@ -692,6 +746,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         head_sha = args.head_sha
         reviews: Sequence[dict] | None = None
         comments: Sequence[dict] | None = None
+        changed_files: Sequence[dict] | None = None
 
         if args.threads_file:
             nodes = json.loads(Path(args.threads_file).read_text(encoding="utf-8"))
@@ -716,6 +771,8 @@ def main(argv: Sequence[str] | None = None) -> int:
             reviews = json.loads(Path(args.reviews_file).read_text(encoding="utf-8"))
         if args.comments_file:
             comments = json.loads(Path(args.comments_file).read_text(encoding="utf-8"))
+        if args.changed_files_file:
+            changed_files = json.loads(Path(args.changed_files_file).read_text(encoding="utf-8"))
 
         if args.body_file:
             body = Path(args.body_file).read_text(encoding="utf-8")
@@ -723,11 +780,22 @@ def main(argv: Sequence[str] | None = None) -> int:
             body = fetch_body(args.pr, args.repo, args.gh)
         else:
             body = ""
+
+        if changed_files is None and args.pr is not None and args.repo:
+            changed_files = fetch_changed_files(args.pr, args.repo, args.gh)
     except (OSError, ValueError, RuntimeError) as exc:
         print(f"live reconciliation: GitHub API/read error: {exc}", file=sys.stderr)
         return 2
 
-    code, messages = evaluate(nodes, body, bots, reviews=reviews, comments=comments, head_sha=head_sha)
+    code, messages = evaluate(
+        nodes,
+        body,
+        bots,
+        reviews=reviews,
+        comments=comments,
+        changed_files=changed_files,
+        head_sha=head_sha,
+    )
     print("live AI reconciliation check")
     print("-" * 60)
     for line in messages:
