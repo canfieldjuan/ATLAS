@@ -21,6 +21,7 @@ from .eom_lead_ingress import EOM_BUSINESS_CONTEXT_ID
 _MAX_ERROR_LENGTH = 1000
 _PROJECTION_LEASE = timedelta(minutes=2)
 _TERMINAL_CALENDAR_FAILURE_STATUS = "calendar_rejected"
+_ROLLBACK_DRAIN_STATUSES = ("pending", "projecting", "calendar_failed")
 _PERMANENT_CALENDAR_RESULT_ERRORS = {"AUTH_ERROR", "NOT_CONFIGURED", "TOOL_DISABLED"}
 _PERMANENT_CALENDAR_HTTP_STATUSES = {400, 401, 403, 404, 410}
 
@@ -148,6 +149,151 @@ class EOMLeadBookingService:
             },
             sort_keys=True,
         )
+
+    @staticmethod
+    def _command_from_operation(operation: Any) -> EstimateBookingCommand:
+        actor = str(operation["actor"])
+        prefix = "employee:"
+        if not actor.startswith(prefix):
+            raise EOMLeadBookingConflictError(
+                "Booking operation actor cannot be replayed for rollback drain"
+            )
+        actor_id_text, separator, actor_name = actor[len(prefix):].partition(":")
+        if not separator or not actor_name:
+            raise EOMLeadBookingConflictError(
+                "Booking operation actor cannot be replayed for rollback drain"
+            )
+        try:
+            actor_id = int(actor_id_text)
+        except ValueError as exc:
+            raise EOMLeadBookingConflictError(
+                "Booking operation actor cannot be replayed for rollback drain"
+            ) from exc
+        duration_minutes = int(
+            (operation["end_time"] - operation["start_time"]).total_seconds() // 60
+        )
+        if actor_id <= 0 or duration_minutes <= 0:
+            raise EOMLeadBookingConflictError(
+                "Booking operation cannot be replayed for rollback drain"
+            )
+        return EstimateBookingCommand(
+            contact_id=operation["contact_id"],
+            idempotency_key=operation["idempotency_key"],
+            actor_id=actor_id,
+            actor_name=actor_name,
+            start_time=operation["start_time"],
+            duration_minutes=duration_minutes,
+            service_type=operation["service_type"],
+            location=operation["location"],
+            notes=operation["notes"] or "",
+        )
+
+    async def _load_unfinished_rollback_operations(self, *, limit: int) -> list[Any]:
+        return await self._pool.fetch(
+            """
+            SELECT *
+            FROM eom_lead_estimate_booking_operations
+            WHERE appointment_id IS NULL
+              AND status = ANY($1::text[])
+            ORDER BY created_at ASC, id ASC
+            LIMIT $2
+            """,
+            list(_ROLLBACK_DRAIN_STATUSES),
+            limit,
+        )
+
+    async def _load_operation_drain_state(self, operation_id: UUID) -> Any:
+        return await self._pool.fetchrow(
+            """
+            SELECT id, status, appointment_id
+            FROM eom_lead_estimate_booking_operations
+            WHERE id = $1
+            """,
+            operation_id,
+        )
+
+    async def _remaining_rollback_operation_count(self) -> int:
+        return int(
+            await self._pool.fetchval(
+                """
+                SELECT COUNT(*)
+                FROM eom_lead_estimate_booking_operations
+                WHERE appointment_id IS NULL
+                  AND status = ANY($1::text[])
+                """,
+                list(_ROLLBACK_DRAIN_STATUSES),
+            )
+            or 0
+        )
+
+    async def drain_unfinished_for_rollback(self, *, limit: int = 100) -> dict[str, Any]:
+        """Finish or terminalize unfinished bookings before application rollback.
+
+        The contact-state trigger intentionally fences unfinished booking rows.
+        Rolling back the application while those rows remain would leave older
+        code unable to reconcile the deterministic Calendar side effect.  This
+        drain uses the current booking service to replay each stored command and
+        refuses to report success while any unfinished row remains ambiguous or
+        in flight.
+        """
+        if limit < 1:
+            raise ValueError("limit must be positive")
+        operations = await self._load_unfinished_rollback_operations(limit=limit)
+        drained: list[dict[str, Any]] = []
+        failures: list[dict[str, str]] = []
+        for operation in operations:
+            operation_id = operation["id"]
+            try:
+                result = await self.book_estimate(self._command_from_operation(operation))
+                drained.append(
+                    {
+                        "operation_id": str(result.operation_id),
+                        "status": result.status,
+                        "appointment_id": (
+                            str(result.appointment_id)
+                            if result.appointment_id
+                            else None
+                        ),
+                    }
+                )
+            except EOMLeadBookingProjectionError as exc:
+                state = await self._load_operation_drain_state(operation_id)
+                if (
+                    state is not None
+                    and state["appointment_id"] is None
+                    and state["status"] == _TERMINAL_CALENDAR_FAILURE_STATUS
+                ):
+                    drained.append(
+                        {
+                            "operation_id": str(operation_id),
+                            "status": _TERMINAL_CALENDAR_FAILURE_STATUS,
+                            "appointment_id": None,
+                        }
+                    )
+                    continue
+                failures.append(
+                    {
+                        "operation_id": str(operation_id),
+                        "status": str(operation["status"]),
+                        "error": str(exc)[:_MAX_ERROR_LENGTH],
+                    }
+                )
+            except EOMLeadBookingError as exc:
+                failures.append(
+                    {
+                        "operation_id": str(operation_id),
+                        "status": str(operation["status"]),
+                        "error": str(exc)[:_MAX_ERROR_LENGTH],
+                    }
+                )
+        remaining = await self._remaining_rollback_operation_count()
+        return {
+            "attempted": len(operations),
+            "drained": drained,
+            "failures": failures,
+            "remaining": remaining,
+            "ok": not failures and remaining == 0,
+        }
 
     @staticmethod
     async def _load_same_key_operation(

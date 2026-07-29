@@ -18,6 +18,8 @@ from atlas_brain.services import eom_lead_booking as booking_mod
 from atlas_brain.services.eom_lead_booking import (
     EstimateBookingCommand,
     EstimateBookingResult,
+    EOMLeadBookingConflictError,
+    EOMLeadBookingProjectionError,
     EOMLeadBookingService,
 )
 from atlas_brain.tools import scheduling as scheduling_mod
@@ -374,6 +376,176 @@ def test_booking_event_id_and_fingerprint_are_payload_scoped():
     assert EOMLeadBookingService._event_id(uuid4()).startswith("eom")
     assert command.actor == "employee:7:Mayra"
     assert command.request_fingerprint != changed.request_fingerprint
+
+
+def _operation_row(**overrides):
+    base = {
+        "id": uuid4(),
+        "contact_id": uuid4(),
+        "idempotency_key": "estimate-booking-rollback",
+        "request_fingerprint": "1" * 64,
+        "actor": "employee:7:Mayra",
+        "start_time": datetime(2026, 8, 1, 15, tzinfo=timezone.utc),
+        "end_time": datetime(2026, 8, 1, 16, tzinfo=timezone.utc),
+        "service_type": "Cleaning estimate",
+        "location": "100 Main St",
+        "notes": "Use side door",
+        "status": "calendar_failed",
+        "appointment_id": None,
+        "calendar_event_id": "eom0123456789abcdef0123456789abcdef",
+        "calendar_id": "estimate-calendar",
+        "contact_snapshot": {
+            "full_name": "Estimate Lead",
+            "phone": "2175550101",
+            "email": "estimate@example.com",
+            "address": "100 Main St",
+        },
+    }
+    base.update(overrides)
+    return base
+
+
+def test_rollback_drain_command_reconstructs_original_booking_request():
+    operation = _operation_row(actor="employee:42:Mayra Ortiz")
+
+    command = EOMLeadBookingService._command_from_operation(operation)
+
+    assert command.contact_id == operation["contact_id"]
+    assert command.idempotency_key == operation["idempotency_key"]
+    assert command.actor_id == 42
+    assert command.actor_name == "Mayra Ortiz"
+    assert command.duration_minutes == 60
+    assert command.location == "100 Main St"
+    assert command.notes == "Use side door"
+
+
+@pytest.mark.parametrize(
+    "actor",
+    ["Mayra", "employee:not-int:Mayra", "employee:7:", "employee:0:Mayra"],
+)
+def test_rollback_drain_rejects_unreplayable_operation_actor(actor: str):
+    with pytest.raises(EOMLeadBookingConflictError):
+        EOMLeadBookingService._command_from_operation(_operation_row(actor=actor))
+
+
+@pytest.mark.asyncio
+async def test_rollback_drain_replays_unfinished_operations_before_reporting_safe():
+    operation = _operation_row()
+    appointment_id = uuid4()
+
+    class _Pool:
+        async def fetch(self, *args):
+            return [operation]
+
+        async def fetchval(self, *args):
+            return 0
+
+    service = EOMLeadBookingService(
+        pool=_Pool(),
+        calendar=object(),
+        config=EOMFunnelConfig(estimate_calendar_id="estimate-calendar"),
+    )
+    service.book_estimate = AsyncMock(
+        return_value=EstimateBookingResult(
+            operation_id=operation["id"],
+            appointment_id=appointment_id,
+            calendar_event_id=operation["calendar_event_id"],
+            status="completed",
+            idempotent=True,
+        )
+    )
+
+    summary = await service.drain_unfinished_for_rollback(limit=10)
+
+    assert summary == {
+        "attempted": 1,
+        "drained": [
+            {
+                "operation_id": str(operation["id"]),
+                "status": "completed",
+                "appointment_id": str(appointment_id),
+            }
+        ],
+        "failures": [],
+        "remaining": 0,
+        "ok": True,
+    }
+    replayed = service.book_estimate.await_args.args[0]
+    assert replayed.idempotency_key == operation["idempotency_key"]
+
+
+@pytest.mark.asyncio
+async def test_rollback_drain_treats_terminalized_absent_calendar_event_as_drained():
+    operation = _operation_row()
+
+    class _Pool:
+        async def fetch(self, *args):
+            return [operation]
+
+        async def fetchrow(self, *args):
+            return {
+                "id": operation["id"],
+                "status": "calendar_rejected",
+                "appointment_id": None,
+            }
+
+        async def fetchval(self, *args):
+            return 0
+
+    service = EOMLeadBookingService(
+        pool=_Pool(),
+        calendar=object(),
+        config=EOMFunnelConfig(estimate_calendar_id="estimate-calendar"),
+    )
+    service.book_estimate = AsyncMock(
+        side_effect=EOMLeadBookingProjectionError("Calendar API error: 404")
+    )
+
+    summary = await service.drain_unfinished_for_rollback(limit=10)
+
+    assert summary["ok"] is True
+    assert summary["drained"] == [
+        {
+            "operation_id": str(operation["id"]),
+            "status": "calendar_rejected",
+            "appointment_id": None,
+        }
+    ]
+
+
+@pytest.mark.asyncio
+async def test_rollback_drain_refuses_ambiguous_unfinished_operations():
+    operation = _operation_row(status="projecting")
+
+    class _Pool:
+        async def fetch(self, *args):
+            return [operation]
+
+        async def fetchval(self, *args):
+            return 1
+
+    service = EOMLeadBookingService(
+        pool=_Pool(),
+        calendar=object(),
+        config=EOMFunnelConfig(estimate_calendar_id="estimate-calendar"),
+    )
+    service.book_estimate = AsyncMock(
+        side_effect=EOMLeadBookingConflictError(
+            "Estimate calendar projection is already in progress"
+        )
+    )
+
+    summary = await service.drain_unfinished_for_rollback(limit=10)
+
+    assert summary["ok"] is False
+    assert summary["remaining"] == 1
+    assert summary["failures"] == [
+        {
+            "operation_id": str(operation["id"]),
+            "status": "projecting",
+            "error": "Estimate calendar projection is already in progress",
+        }
+    ]
 
 
 @pytest.mark.asyncio
