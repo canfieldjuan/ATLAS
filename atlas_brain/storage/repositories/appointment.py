@@ -7,7 +7,7 @@ Provides CRUD operations for appointments stored in PostgreSQL.
 import json
 import logging
 from datetime import datetime, timezone
-from typing import Any, Optional
+from typing import Any, Callable, Optional
 from uuid import UUID, uuid4
 
 from ..database import get_db_pool
@@ -42,6 +42,9 @@ class AppointmentRepository:
     for availability checking and customer lookup.
     """
 
+    def __init__(self, pool_provider: Callable[[], Any] = get_db_pool) -> None:
+        self._pool_provider = pool_provider
+
     async def create(
         self,
         start_time: datetime,
@@ -58,7 +61,7 @@ class AppointmentRepository:
         metadata: Optional[dict[str, Any]] = None,
     ) -> dict:
         """Create a new appointment. Returns the created appointment dict."""
-        pool = get_db_pool()
+        pool = self._pool_provider()
 
         if not pool.is_initialized:
             raise DatabaseUnavailableError("create appointment")
@@ -116,7 +119,7 @@ class AppointmentRepository:
 
     async def get_by_id(self, appointment_id: UUID) -> Optional[dict]:
         """Get an appointment by ID."""
-        pool = get_db_pool()
+        pool = self._pool_provider()
 
         if not pool.is_initialized:
             raise DatabaseUnavailableError("get appointment by id")
@@ -146,7 +149,7 @@ class AppointmentRepository:
 
         Used for reschedule/cancel flows where customer calls back.
         """
-        pool = get_db_pool()
+        pool = self._pool_provider()
 
         if not pool.is_initialized:
             raise DatabaseUnavailableError("get appointments by phone")
@@ -211,7 +214,7 @@ class AppointmentRepository:
         Returns:
             List of matching appointments, most recent first
         """
-        pool = get_db_pool()
+        pool = self._pool_provider()
 
         if not pool.is_initialized:
             raise DatabaseUnavailableError("search appointments by name")
@@ -264,7 +267,7 @@ class AppointmentRepository:
 
         Used for availability checking and calendar views.
         """
-        pool = get_db_pool()
+        pool = self._pool_provider()
 
         if not pool.is_initialized:
             raise DatabaseUnavailableError("get appointments in range")
@@ -316,7 +319,7 @@ class AppointmentRepository:
 
         Returns True if there ARE conflicts (slot is NOT available).
         """
-        pool = get_db_pool()
+        pool = self._pool_provider()
 
         if not pool.is_initialized:
             raise DatabaseUnavailableError("check appointment conflict")
@@ -357,7 +360,7 @@ class AppointmentRepository:
         reason: Optional[str] = None,
     ) -> bool:
         """Cancel an appointment."""
-        pool = get_db_pool()
+        pool = self._pool_provider()
 
         if not pool.is_initialized:
             raise DatabaseUnavailableError("cancel appointment")
@@ -403,7 +406,7 @@ class AppointmentRepository:
         customer_name, customer_phone, customer_email, customer_address,
         calendar_event_id, status
         """
-        pool = get_db_pool()
+        pool = self._pool_provider()
 
         if not pool.is_initialized:
             raise DatabaseUnavailableError("update appointment")
@@ -494,7 +497,7 @@ class AppointmentRepository:
         metadata: Optional[dict[str, Any]] = None,
     ) -> dict:
         """Create a voicemail/callback message."""
-        pool = get_db_pool()
+        pool = self._pool_provider()
 
         if not pool.is_initialized:
             raise DatabaseUnavailableError("create message")
@@ -539,7 +542,7 @@ class AppointmentRepository:
         limit: int = 50,
     ) -> list[dict]:
         """Get unread messages."""
-        pool = get_db_pool()
+        pool = self._pool_provider()
 
         if not pool.is_initialized:
             raise DatabaseUnavailableError("get unread messages")

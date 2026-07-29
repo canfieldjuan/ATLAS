@@ -14,7 +14,7 @@ from __future__ import annotations
 import argparse
 import asyncio
 import json
-from typing import Sequence
+from typing import Any, Callable, Sequence
 
 from atlas_brain.eom_api.config import funnel_settings
 from atlas_brain.services.eom_lead_booking import EOMLeadBookingService
@@ -37,13 +37,19 @@ def build_parser() -> argparse.ArgumentParser:
     return parser
 
 
-async def _run(args: argparse.Namespace) -> int:
+async def _run(
+    args: argparse.Namespace,
+    *,
+    pool_provider: Callable[[], Any] = get_db_pool,
+    service_factory: Callable[..., EOMLeadBookingService] = EOMLeadBookingService,
+    config: Any = funnel_settings,
+) -> int:
     if args.limit < 1:
         raise SystemExit("--limit must be positive")
-    pool = get_db_pool()
+    pool = pool_provider()
     await pool.initialize()
     try:
-        service = EOMLeadBookingService(pool=pool, config=funnel_settings)
+        service = service_factory(pool=pool, config=config)
         summary = await service.drain_unfinished_for_rollback(limit=args.limit)
     finally:
         await pool.close()

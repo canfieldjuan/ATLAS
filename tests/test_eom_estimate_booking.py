@@ -682,18 +682,12 @@ async def test_generic_cancel_rejects_eom_estimate_booking_appointments(monkeypa
 
     repo = _Repo()
     scheduling_service = SimpleNamespace(cancel_appointment=AsyncMock())
-    monkeypatch.setattr(
-        scheduling_mod,
-        "_get_default_context",
-        lambda: SimpleNamespace(
+    tool = scheduling_mod.CancelAppointmentTool(
+        context_provider=lambda: SimpleNamespace(
             scheduling=SimpleNamespace(calendar_id="estimate-calendar"),
         ),
-    )
-    monkeypatch.setattr(scheduling_mod, "get_appointment_repo", lambda: repo)
-    monkeypatch.setattr(
-        scheduling_mod,
-        "_get_scheduling_service",
-        lambda: scheduling_service,
+        appointment_repo_provider=lambda: repo,
+        scheduling_service_provider=lambda: scheduling_service,
     )
 
     for params in (
@@ -701,7 +695,7 @@ async def test_generic_cancel_rejects_eom_estimate_booking_appointments(monkeypa
         {"customer_phone": "217-555-0101"},
     ):
         scheduling_service.cancel_appointment.reset_mock()
-        result = await scheduling_mod.CancelAppointmentTool().execute(params)
+        result = await tool.execute(params)
 
         assert result.success is False
         assert result.error == "EOM_ESTIMATE_BOOKING_MANAGED"
@@ -739,25 +733,19 @@ async def test_generic_reschedule_rejects_eom_estimate_booking_appointments(monk
         book_appointment=AsyncMock(),
         cancel_appointment=AsyncMock(),
     )
-    monkeypatch.setattr(
-        scheduling_mod,
-        "_get_default_context",
-        lambda: SimpleNamespace(
+    tool = scheduling_mod.RescheduleAppointmentTool(
+        context_provider=lambda: SimpleNamespace(
             scheduling=SimpleNamespace(
                 calendar_id="estimate-calendar",
                 default_duration_minutes=60,
             ),
             hours=SimpleNamespace(timezone="UTC"),
         ),
-    )
-    monkeypatch.setattr(scheduling_mod, "get_appointment_repo", lambda: repo)
-    monkeypatch.setattr(
-        scheduling_mod,
-        "_get_scheduling_service",
-        lambda: scheduling_service,
+        appointment_repo_provider=lambda: repo,
+        scheduling_service_provider=lambda: scheduling_service,
     )
 
-    result = await scheduling_mod.RescheduleAppointmentTool().execute(
+    result = await tool.execute(
         {
             "customer_phone": "217-555-0101",
             "new_date": "tomorrow",
@@ -802,13 +790,14 @@ async def test_calendar_mcp_sync_rejects_eom_estimate_booking_before_calendar(mo
             side_effect=AssertionError("estimate booking sync must not update events")
         ),
     )
-    monkeypatch.setattr(
-        "atlas_brain.storage.database.get_db_pool",
-        lambda: _Pool(),
+    result = json.loads(
+        await calendar_mcp._sync_appointment_with_dependencies(
+            str(appointment_id),
+            None,
+            pool=_Pool(),
+            provider=provider,
+        )
     )
-    monkeypatch.setattr(calendar_mcp, "_provider", lambda: provider)
-
-    result = json.loads(await calendar_mcp.sync_appointment(str(appointment_id)))
 
     assert result["success"] is False
     assert result["error"] == "EOM_ESTIMATE_BOOKING_MANAGED"
@@ -838,8 +827,7 @@ async def test_appointment_repository_blocks_protected_eom_estimate_mutations(mo
             return None
 
     pool = _Pool()
-    monkeypatch.setattr(appointment_repo_mod, "get_db_pool", lambda: pool)
-    repo = appointment_repo_mod.AppointmentRepository()
+    repo = appointment_repo_mod.AppointmentRepository(pool_provider=lambda: pool)
 
     assert await repo.cancel(appointment_id, "caller cancelled") is False
     assert "eom_estimate_booking_operation_id IS NULL" in pool.cancel_query

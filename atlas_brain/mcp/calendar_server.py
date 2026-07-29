@@ -472,12 +472,30 @@ async def sync_appointment(
     if not _is_uuid(appointment_id):
         return json.dumps({"success": False, "error": "Invalid appointment_id (must be UUID)"})
 
-    from ..services.calendar_provider import CalendarEvent
-
     try:
         from ..storage.database import get_db_pool
 
-        pool = get_db_pool()
+        return await _sync_appointment_with_dependencies(
+            appointment_id,
+            calendar_id,
+            pool=get_db_pool(),
+            provider=_provider(),
+        )
+    except Exception as exc:
+        logger.exception("sync_appointment error")
+        return json.dumps({"success": False, "error": "Internal error"})
+
+
+async def _sync_appointment_with_dependencies(
+    appointment_id: str,
+    calendar_id: Optional[str],
+    *,
+    pool,
+    provider,
+) -> str:
+    from ..services.calendar_provider import CalendarEvent
+
+    try:
         row = await pool.fetchrow(
             """
             SELECT id, customer_name, customer_address, start_time, end_time,
@@ -524,10 +542,10 @@ async def sync_appointment(
         )
 
         if existing_event_id:
-            result = await _provider().update_event(event, calendar_id=calendar_id)
+            result = await provider.update_event(event, calendar_id=calendar_id)
             action = "updated"
         else:
-            result = await _provider().create_event(event, calendar_id=calendar_id)
+            result = await provider.create_event(event, calendar_id=calendar_id)
             action = "created"
 
         # Write calendar_event_id back to DB so appointments stay linked

@@ -7,7 +7,7 @@ Wraps existing SchedulingService and AppointmentRepository.
 
 import logging
 from datetime import datetime, timedelta
-from typing import Any, Optional
+from typing import Any, Callable, Optional
 from zoneinfo import ZoneInfo
 
 import dateparser
@@ -532,6 +532,17 @@ class BookAppointmentTool:
 class CancelAppointmentTool:
     """Cancel an existing appointment."""
 
+    def __init__(
+        self,
+        *,
+        context_provider: Callable[[], Optional[BusinessContext]] = _get_default_context,
+        appointment_repo_provider: Callable[[], Any] = get_appointment_repo,
+        scheduling_service_provider: Callable[[], Any] = _get_scheduling_service,
+    ) -> None:
+        self._context_provider = context_provider
+        self._appointment_repo_provider = appointment_repo_provider
+        self._scheduling_service_provider = scheduling_service_provider
+
     @property
     def name(self) -> str:
         return "cancel_appointment"
@@ -576,7 +587,7 @@ class CancelAppointmentTool:
 
     async def execute(self, params: dict[str, Any]) -> ToolResult:
         """Cancel an appointment."""
-        context = _get_default_context()
+        context = self._context_provider()
         if not context:
             return ToolResult(
                 success=False,
@@ -599,7 +610,7 @@ class CancelAppointmentTool:
                 message="Need either customer phone or appointment ID to cancel.",
             )
 
-        repo = get_appointment_repo()
+        repo = self._appointment_repo_provider()
 
         try:
             # Find appointment
@@ -639,7 +650,7 @@ class CancelAppointmentTool:
             # Cancel calendar event if exists
             if calendar_event_id and context.scheduling.calendar_id:
                 try:
-                    await _get_scheduling_service().cancel_appointment(
+                    await self._scheduling_service_provider().cancel_appointment(
                         context, calendar_event_id
                     )
                 except Exception as e:
@@ -679,6 +690,19 @@ class CancelAppointmentTool:
 
 class RescheduleAppointmentTool:
     """Reschedule an existing appointment."""
+
+    def __init__(
+        self,
+        *,
+        context_provider: Callable[[], Optional[BusinessContext]] = _get_default_context,
+        appointment_repo_provider: Callable[[], Any] = get_appointment_repo,
+        scheduling_service_provider: Callable[[], Any] = _get_scheduling_service,
+        time_slot_class_provider: Callable[[], Any] = _get_time_slot_class,
+    ) -> None:
+        self._context_provider = context_provider
+        self._appointment_repo_provider = appointment_repo_provider
+        self._scheduling_service_provider = scheduling_service_provider
+        self._time_slot_class_provider = time_slot_class_provider
 
     @property
     def name(self) -> str:
@@ -724,7 +748,7 @@ class RescheduleAppointmentTool:
 
     async def execute(self, params: dict[str, Any]) -> ToolResult:
         """Reschedule an appointment."""
-        context = _get_default_context()
+        context = self._context_provider()
         if not context:
             return ToolResult(
                 success=False,
@@ -750,7 +774,7 @@ class RescheduleAppointmentTool:
                 message="Need customer phone, new date, and new time to reschedule.",
             )
 
-        repo = get_appointment_repo()
+        repo = self._appointment_repo_provider()
 
         try:
             # Find existing appointment
@@ -787,10 +811,11 @@ class RescheduleAppointmentTool:
 
             duration = context.scheduling.default_duration_minutes
             new_end = new_start + timedelta(minutes=duration)
-            new_slot = _get_time_slot_class()(start=new_start, end=new_end)
+            new_slot = self._time_slot_class_provider()(start=new_start, end=new_end)
 
             # Book new slot FIRST (before cancelling old, for rollback safety)
-            new_appointment = await _get_scheduling_service().book_appointment(
+            scheduling_service = self._scheduling_service_provider()
+            new_appointment = await scheduling_service.book_appointment(
                 context=context,
                 slot=new_slot,
                 customer_name=customer_name,
@@ -811,7 +836,7 @@ class RescheduleAppointmentTool:
             # Cancel old calendar event only after new booking succeeded
             if old_calendar_id and context.scheduling.calendar_id:
                 try:
-                    await _get_scheduling_service().cancel_appointment(
+                    await scheduling_service.cancel_appointment(
                         context, old_calendar_id
                     )
                 except Exception as e:
