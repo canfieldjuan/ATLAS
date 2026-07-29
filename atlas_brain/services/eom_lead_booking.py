@@ -74,12 +74,18 @@ class EstimateBookingCommand:
     def end_time(self) -> datetime:
         return self.start_time + timedelta(minutes=self.duration_minutes)
 
+    @staticmethod
+    def _fingerprint_datetime(value: datetime) -> str:
+        if value.tzinfo is None or value.utcoffset() is None:
+            value = value.replace(tzinfo=timezone.utc)
+        return value.astimezone(timezone.utc).isoformat()
+
     @property
     def request_fingerprint(self) -> str:
         canonical = {
             "contact_id": str(self.contact_id),
-            "start_time": self.start_time.isoformat(),
-            "end_time": self.end_time.isoformat(),
+            "start_time": self._fingerprint_datetime(self.start_time),
+            "end_time": self._fingerprint_datetime(self.end_time),
             "service_type": self.service_type,
             "location": self.location or "",
             "notes": self.notes,

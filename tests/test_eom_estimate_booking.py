@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import json
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
 from uuid import uuid4
@@ -375,10 +375,37 @@ def test_booking_event_id_and_fingerprint_are_payload_scoped():
         service_type="estimate",
         location="100 Main St",
     )
+    local_time_command = EstimateBookingCommand(
+        contact_id=contact_id,
+        idempotency_key="estimate-booking-same",
+        actor_id=7,
+        actor_name="Mayra",
+        start_time=datetime(
+            2026,
+            8,
+            1,
+            10,
+            tzinfo=timezone(timedelta(hours=-5)),
+        ),
+        duration_minutes=60,
+        service_type="estimate",
+        location="100 Main St",
+    )
+    utc_command = EstimateBookingCommand(
+        contact_id=contact_id,
+        idempotency_key="estimate-booking-same",
+        actor_id=7,
+        actor_name="Mayra",
+        start_time=datetime(2026, 8, 1, 15, tzinfo=timezone.utc),
+        duration_minutes=60,
+        service_type="estimate",
+        location="100 Main St",
+    )
 
     assert EOMLeadBookingService._event_id(uuid4()).startswith("eom")
     assert command.actor == "employee:7:Mayra"
     assert command.request_fingerprint != changed.request_fingerprint
+    assert local_time_command.request_fingerprint == utc_command.request_fingerprint
 
 
 def _operation_row(**overrides):
@@ -409,7 +436,31 @@ def _operation_row(**overrides):
 
 
 def test_rollback_drain_command_reconstructs_original_booking_request():
-    operation = _operation_row(actor="employee:42:Mayra Ortiz")
+    contact_id = uuid4()
+    original_command = EstimateBookingCommand(
+        contact_id=contact_id,
+        idempotency_key="estimate-booking-rollback",
+        actor_id=42,
+        actor_name="Mayra Ortiz",
+        start_time=datetime(
+            2026,
+            8,
+            1,
+            10,
+            tzinfo=timezone(timedelta(hours=-5)),
+        ),
+        duration_minutes=60,
+        service_type="Cleaning estimate",
+        location="100 Main St",
+        notes="Use side door",
+    )
+    operation = _operation_row(
+        contact_id=contact_id,
+        actor="employee:42:Mayra Ortiz",
+        request_fingerprint=original_command.request_fingerprint,
+        start_time=datetime(2026, 8, 1, 15, tzinfo=timezone.utc),
+        end_time=datetime(2026, 8, 1, 16, tzinfo=timezone.utc),
+    )
 
     command = EOMLeadBookingService._command_from_operation(operation)
 
@@ -420,6 +471,7 @@ def test_rollback_drain_command_reconstructs_original_booking_request():
     assert command.duration_minutes == 60
     assert command.location == "100 Main St"
     assert command.notes == "Use side door"
+    assert command.request_fingerprint == operation["request_fingerprint"]
 
 
 @pytest.mark.parametrize(

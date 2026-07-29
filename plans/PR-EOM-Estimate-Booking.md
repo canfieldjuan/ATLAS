@@ -79,7 +79,9 @@ Slice phase: Vertical slice
   2. A same-key retry with the same booking payload returns the persisted
      operation/appointment/event without another calendar call; the same key
      with different booking details returns 409 before any second calendar
-     call.
+     call. Booking fingerprints canonicalize start/end instants to UTC so a
+     normal local-time request and a persisted `TIMESTAMPTZ` replay compare as
+     the same command.
   3. A different idempotency key for a lead that already has a non-terminal
      booking operation returns 409 before any calendar call. If Calendar
      permanently rejects the command before appointment projection, no prior
@@ -284,6 +286,9 @@ operation, locks the contact, rechecks the same idempotency key after the
 contact lock, and either returns the persisted same-fingerprint operation or
 creates a new operation row for an active EOM `lead/new` contact. The operation
 UUID derives a Google-safe event ID, so retries target the same external event.
+The request fingerprint hashes start/end instants after UTC canonicalization,
+which lets rollback drain replay PostgreSQL-normalized `TIMESTAMPTZ` rows
+without rejecting the original local-time request as different details.
 
 Calendar projection is leased with a fresh projection token so concurrent
 same-key retries do not both own the operation. A 409 for the deterministic
@@ -439,18 +444,18 @@ Parked hardening: none.
 | `atlas_brain/main.py` | 99 |
 | `atlas_brain/mcp/calendar_server.py` | 17 |
 | `atlas_brain/services/crm_provider.py` | 46 |
-| `atlas_brain/services/eom_lead_booking.py` | 838 |
+| `atlas_brain/services/eom_lead_booking.py` | 844 |
 | `atlas_brain/storage/migrations/356_eom_lead_estimate_booking_operations.sql` | 173 |
 | `atlas_brain/storage/migrations/357_eom_lead_review_queue_booked_index.sql` | 24 |
 | `atlas_brain/storage/migrations/358_eom_estimate_booking_appointment_link_index.sql` | 98 |
 | `atlas_brain/storage/repositories/appointment.py` | 34 |
 | `atlas_brain/tools/calendar.py` | 219 |
 | `atlas_brain/tools/scheduling.py` | 21 |
-| `plans/PR-EOM-Estimate-Booking.md` | 456 |
+| `plans/PR-EOM-Estimate-Booking.md` | 461 |
 | `scripts/drain_eom_estimate_bookings_for_rollback.py` | 66 |
-| `tests/test_eom_estimate_booking.py` | 996 |
+| `tests/test_eom_estimate_booking.py` | 1048 |
 | `tests/test_eom_estimate_booking_integration.py` | 1014 |
 | `tests/test_eom_lead_conversion.py` | 46 |
 | `tests/test_eom_lead_conversion_integration.py` | 68 |
 | `tests/test_migrations_runner.py` | 275 |
-| **Total** | **4637** |
+| **Total** | **4700** |
