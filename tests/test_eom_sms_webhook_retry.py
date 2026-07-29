@@ -28,6 +28,7 @@ class _ClaimingSMSRepo:
         self.owner_status_updates = []
         self.rows = {}
         self.auto_reply_rows = {}
+        self.auto_reply_sending = []
         self.auto_reply_sent = []
         self.complete_exc = None
         self.complete_result = True
@@ -114,15 +115,28 @@ class _ClaimingSMSRepo:
         self.auto_reply_rows[inbound_sms_id] = row
         return row
 
+    async def mark_auto_reply_sending(self, auto_reply_sms_id):
+        self.auto_reply_sending.append(auto_reply_sms_id)
+        for row in self.auto_reply_rows.values():
+            if row["id"] == auto_reply_sms_id and row["status"] == "pending":
+                row["status"] = "sending"
+                return True
+        return False
+
     async def mark_auto_reply_sent(self, auto_reply_sms_id, *, provider_message_id=None):
         if self.mark_auto_reply_sent_exc is not None:
             raise self.mark_auto_reply_sent_exc
         self.auto_reply_sent.append((auto_reply_sms_id, provider_message_id))
         for row in self.auto_reply_rows.values():
             if row["id"] == auto_reply_sms_id:
+                if row["status"] not in {"sending", "sent"}:
+                    return False
                 row["status"] = "sent"
-                row["error_message"] = provider_message_id
-        return self.mark_auto_reply_sent_result
+                if provider_message_id:
+                    row["message_sid"] = provider_message_id
+                row["error_message"] = None
+                return self.mark_auto_reply_sent_result
+        return False
 
     async def update_contact_processing_status(
         self,
@@ -276,10 +290,13 @@ async def test_real_repository_claim_uses_reclaimable_processing_predicate():
     sql, args = pool.calls[0]
     assert "status IN ('received', 'retry_pending')" in sql
     assert "status = 'processing'" in sql
-    assert "processed_at IS NULL OR processed_at < $3" in sql
-    assert "error_message = $4" in sql
+    assert "CURRENT_TIMESTAMP" in sql
+    assert "processed_at IS NULL" in sql
+    assert "CURRENT_TIMESTAMP - ($2 * INTERVAL '1 second')" in sql
+    assert "error_message = $3" in sql
     assert "contact_id IS NULL" not in sql
     assert args[0] == sms_id
+    assert args[1] == sms_message.SMS_CONTACT_PROCESSING_LEASE_SECONDS
 
 
 @pytest.mark.asyncio
@@ -322,10 +339,10 @@ async def test_owned_retry_pending_can_release_linked_processing_rows():
 
     sql, args = pool.calls[0]
     assert "AND status = 'processing'" in sql
-    assert "AND error_message = $4" in sql
+    assert "AND error_message = $3" in sql
     assert "contact_id IS NULL" not in sql
     assert args[0] == sms_id
-    assert args[3] == "owner-token"
+    assert args[2] == "owner-token"
 
 
 @pytest.mark.asyncio
@@ -506,10 +523,34 @@ async def test_live_postgres_sms_claim_fences_one_winner_and_stale_reclaim():
         owner_d_row = await repo.claim_contact_processing(sms_id, owner_token="owner-d")
         assert owner_d_row["_claim_acquired"] is False
         assert owner_d_row["status"] == "ready"
+
+        auto_reply = await repo.reserve_auto_reply_for_inbound(
+            inbound_sms_id=sms_id,
+            from_number="+12175550102",
+            to_number="+12175550101",
+            body="Persisted live reply",
+            business_context_id="effingham_maids",
+        )
+        assert auto_reply["status"] == "pending"
+        assert auto_reply["message_sid"] == f"auto_reply_{sms_id}"
+        assert await repo.mark_auto_reply_sending(auto_reply["id"]) is True
+        provider_sid = f"SM-live-auto-reply-{uuid4()}"
+        assert await repo.mark_auto_reply_sent(
+            auto_reply["id"],
+            provider_message_id=provider_sid,
+        ) is True
+        provider_row = await repo.get_by_message_sid(provider_sid)
+        assert provider_row is not None
+        assert provider_row["id"] == auto_reply["id"]
+        assert provider_row["source_ref"] == str(sms_id)
+        assert provider_row["body"] == "Persisted live reply"
+        assert provider_row["status"] == "sent"
+        assert provider_row["error_message"] is None
     finally:
         await pool.execute(
-            "DELETE FROM sms_messages WHERE message_sid = $1",
+            "DELETE FROM sms_messages WHERE message_sid = $1 OR source_ref = $2",
             message_sid,
+            str(sms_id) if "sms_id" in locals() else None,
         )
         replacements.restore()
         await pool.close()
@@ -720,6 +761,30 @@ async def test_inbound_sms_handler_applies_ack_budget_to_media_parsing():
         replacements.restore()
 
     assert response.status_code == 503
+
+
+def test_sms_before_ack_budget_covers_all_admitted_sequential_stages():
+    from atlas_brain.config import settings
+
+    replacements = _AttrReplacements()
+    replacements.replace(
+        webhooks,
+        "SMS_INBOUND_BEFORE_ACK_TIMEOUT_SECONDS",
+        webhooks._DEFAULT_SMS_INBOUND_BEFORE_ACK_TIMEOUT_SECONDS,
+    )
+    try:
+        budget = webhooks._sms_before_ack_timeout_seconds()
+    finally:
+        replacements.restore()
+
+    expected = (
+        float(settings.sms_intelligence.llm_timeout)
+        + float(settings.call_intelligence.llm_timeout)
+        + 10.0
+        + max(float(settings.sms_intelligence.auto_reply_timeout), 15.0)
+        + 15.0
+    )
+    assert budget >= expected
 
 
 @pytest.mark.asyncio
@@ -1133,6 +1198,45 @@ async def test_sms_intelligence_preserves_processing_owner_token_before_crm_link
 
 
 @pytest.mark.asyncio
+async def test_sms_intelligence_stop_intent_leaves_leased_terminal_transition_to_webhook():
+    class Pool:
+        is_initialized = True
+
+    sms_id = uuid4()
+    repo = _ClaimingSMSRepo(claim_result=True)
+    owner_token = "owner-token"
+    repo.owner_tokens[sms_id] = owner_token
+    replacements = _AttrReplacements()
+    replacements.replace(sms_intelligence, "get_sms_message_repo", lambda: repo)
+    replacements.replace(storage_database, "get_db_pool", lambda: Pool())
+
+    async def extract(body, business_context):
+        return (
+            "Customer asked to stop",
+            {"customer_phone": "+12175550101"},
+            "stop",
+        )
+
+    replacements.replace(sms_intelligence, "_extract_sms_data", extract)
+
+    try:
+        outcome = await sms_intelligence.process_inbound_sms(
+            sms_id=sms_id,
+            from_number="+12175550101",
+            to_number="+12175550102",
+            body="STOP",
+            business_context_id="non_eom_context",
+            processing_owner_token=owner_token,
+        )
+    finally:
+        replacements.restore()
+
+    assert outcome == "terminal_no_contact"
+    assert repo.owner_status_updates == []
+    assert repo.owner_tokens[sms_id] == owner_token
+
+
+@pytest.mark.asyncio
 async def test_sms_intelligence_existing_contact_id_skips_crm_link():
     class Pool:
         is_initialized = True
@@ -1398,7 +1502,7 @@ async def test_process_inbound_sms_skipped_intelligence_still_auto_replies_and_c
 
 
 @pytest.mark.asyncio
-async def test_process_inbound_sms_pending_auto_reply_retries_send_and_completes():
+async def test_process_inbound_sms_pending_auto_reply_sends_persisted_body_and_completes():
     sms_id = uuid4()
     repo = _ClaimingSMSRepo(claim_result=True)
     pending_row = {
@@ -1406,7 +1510,7 @@ async def test_process_inbound_sms_pending_auto_reply_retries_send_and_completes
         "message_sid": f"auto_reply_{sms_id}",
         "from_number": "+12175550102",
         "to_number": "+12175550101",
-        "body": "Thanks!",
+        "body": "Persisted thanks!",
         "business_context_id": "effingham_maids",
         "status": "pending",
         "source": "auto_reply",
@@ -1427,7 +1531,7 @@ async def test_process_inbound_sms_pending_auto_reply_retries_send_and_completes
     )
 
     async def generate_reply(body, ctx):
-        return "Thanks!"
+        return "Regenerated thanks!"
 
     replacements.replace(webhooks, "_generate_sms_reply", generate_reply)
 
@@ -1451,8 +1555,12 @@ async def test_process_inbound_sms_pending_auto_reply_retries_send_and_completes
 
     assert outcome == "complete"
     assert len(provider.sent_sms) == 1
+    assert provider.sent_sms[0]["body"] == "Persisted thanks!"
+    assert repo.auto_reply_sending == [pending_row["id"]]
     assert repo.auto_reply_sent == [(pending_row["id"], "SM-out-1")]
     assert repo.auto_reply_rows[sms_id]["status"] == "sent"
+    assert repo.auto_reply_rows[sms_id]["message_sid"] == "SM-out-1"
+    assert repo.auto_reply_rows[sms_id]["error_message"] is None
     assert repo.completed == [(sms_id, repo.owner_tokens[sms_id])]
 
 
@@ -1509,6 +1617,65 @@ async def test_process_inbound_sms_sent_auto_reply_skips_duplicate_send_and_comp
 
     assert outcome == "complete"
     assert provider.sent_sms == []
+    assert repo.auto_reply_sending == []
+    assert repo.auto_reply_sent == []
+    assert repo.completed == [(sms_id, repo.owner_tokens[sms_id])]
+
+
+@pytest.mark.asyncio
+async def test_process_inbound_sms_sending_auto_reply_skips_ambiguous_duplicate_and_completes():
+    sms_id = uuid4()
+    repo = _ClaimingSMSRepo(claim_result=True)
+    repo.auto_reply_rows[sms_id] = {
+        "id": uuid4(),
+        "message_sid": f"auto_reply_{sms_id}",
+        "from_number": "+12175550102",
+        "to_number": "+12175550101",
+        "body": "Thanks!",
+        "business_context_id": "effingham_maids",
+        "status": "sending",
+        "source": "auto_reply",
+        "source_ref": str(sms_id),
+    }
+    context = SimpleNamespace(
+        id="effingham_maids",
+        sms_auto_reply=True,
+        sms_enabled=True,
+    )
+    provider = _Provider()
+    replacements = _AttrReplacements()
+    replacements.replace(
+        webhooks,
+        "get_comms_service",
+        lambda: SimpleNamespace(provider=provider),
+    )
+
+    async def generate_reply(body, ctx):  # pragma: no cover
+        raise AssertionError("existing sending outbox rows must not regenerate replies")
+
+    replacements.replace(webhooks, "_generate_sms_reply", generate_reply)
+
+    async def intelligence_runner(**kwargs):
+        return "complete"
+
+    try:
+        outcome = await webhooks._process_inbound_sms(
+            sms_id,
+            "+12175550101",
+            "+12175550102",
+            "hello",
+            context,
+            [],
+            provider_message_id="SM-auto-retry-sending",
+            sms_repo=repo,
+            intelligence_runner=intelligence_runner,
+        )
+    finally:
+        replacements.restore()
+
+    assert outcome == "complete"
+    assert provider.sent_sms == []
+    assert repo.auto_reply_sending == []
     assert repo.auto_reply_sent == []
     assert repo.completed == [(sms_id, repo.owner_tokens[sms_id])]
 
@@ -1554,7 +1721,8 @@ async def test_process_inbound_sms_auto_reply_send_failure_retries_without_compl
         replacements.restore()
 
     assert outcome == "retry_pending"
-    assert repo.auto_reply_rows[sms_id]["status"] == "pending"
+    assert repo.auto_reply_rows[sms_id]["status"] == "sending"
+    assert repo.auto_reply_sending == [repo.auto_reply_rows[sms_id]["id"]]
     assert repo.completed == []
 
 

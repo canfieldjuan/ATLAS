@@ -167,14 +167,11 @@ async def process_inbound_sms(
         if sms_id:
             try:
                 if processing_owner_token:
-                    updater = getattr(repo, "update_contact_processing_status", None)
-                    if callable(updater):
-                        await updater(
-                            sms_id,
-                            "ready",
-                            owner_token=processing_owner_token,
-                            clear_owner=True,
-                        )
+                    # The webhook owns the leased terminal transition. Clearing
+                    # the owner here would make its owner-fenced finalization
+                    # look like lost ownership and force a spurious provider
+                    # retry for successful opt-out/spam handling.
+                    pass
                 else:
                     await repo.update_status(sms_id, "ready")
             except Exception:

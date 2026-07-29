@@ -239,20 +239,24 @@ class SMSMessageRepository:
         if not pool.is_initialized:
             raise DatabaseUnavailableError("claim SMS contact processing")
 
-        now = datetime.now(timezone.utc)
-        lease_cutoff = now - timedelta(seconds=SMS_CONTACT_PROCESSING_LEASE_SECONDS)
         try:
             row = await pool.fetchrow(
                 """
                 WITH attempted AS (
                     UPDATE sms_messages
                     SET status = 'processing',
-                        processed_at = $2,
-                        error_message = $4
+                        processed_at = CURRENT_TIMESTAMP,
+                        error_message = $3
                     WHERE id = $1
                       AND (
                         status IN ('received', 'retry_pending')
-                        OR (status = 'processing' AND (processed_at IS NULL OR processed_at < $3))
+                        OR (
+                            status = 'processing'
+                            AND (
+                                processed_at IS NULL
+                                OR processed_at < CURRENT_TIMESTAMP - ($2 * INTERVAL '1 second')
+                            )
+                        )
                       )
                     RETURNING sms_messages.*, TRUE AS claim_acquired
                 ),
@@ -268,8 +272,7 @@ class SMSMessageRepository:
                 LIMIT 1
                 """,
                 sms_id,
-                now,
-                lease_cutoff,
+                SMS_CONTACT_PROCESSING_LEASE_SECONDS,
                 owner_token,
             )
             if row is None:
@@ -330,7 +333,7 @@ class SMSMessageRepository:
             row = await pool.fetchrow(
                 """
                 UPDATE sms_messages
-                SET processed_at = $3
+                SET processed_at = CURRENT_TIMESTAMP
                 WHERE id = $1
                   AND status = 'processing'
                   AND error_message = $2
@@ -338,7 +341,6 @@ class SMSMessageRepository:
                 """,
                 sms_id,
                 owner_token,
-                datetime.now(timezone.utc),
             )
             return row is not None
         except DatabaseUnavailableError:
@@ -359,21 +361,19 @@ class SMSMessageRepository:
             raise DatabaseUnavailableError("mark SMS contact processing retry pending")
 
         try:
-            now = datetime.now(timezone.utc)
             if owner_token is not None:
                 await pool.execute(
                     """
                     UPDATE sms_messages
                     SET status = 'retry_pending',
                         error_message = $2,
-                        processed_at = $3
+                        processed_at = CURRENT_TIMESTAMP
                     WHERE id = $1
                       AND status = 'processing'
-                      AND error_message = $4
+                      AND error_message = $3
                     """,
                     sms_id,
                     error_message,
-                    now,
                     owner_token,
                 )
             else:
@@ -382,14 +382,13 @@ class SMSMessageRepository:
                     UPDATE sms_messages
                     SET status = 'retry_pending',
                         error_message = $2,
-                        processed_at = $3
+                        processed_at = CURRENT_TIMESTAMP
                     WHERE id = $1
                       AND contact_id IS NULL
                       AND status IN ('received', 'retry_pending')
                     """,
                     sms_id,
                     error_message,
-                    now,
                 )
         except DatabaseUnavailableError:
             raise
@@ -411,21 +410,19 @@ class SMSMessageRepository:
             raise DatabaseUnavailableError("mark SMS contact processing complete")
 
         try:
-            now = datetime.now(timezone.utc)
             if owner_token is not None:
                 row = await pool.fetchrow(
                     """
                     UPDATE sms_messages
                     SET status = 'ready',
-                        processed_at = $2,
+                        processed_at = CURRENT_TIMESTAMP,
                         error_message = NULL
                     WHERE id = $1
                       AND status = 'processing'
-                      AND error_message = $3
+                      AND error_message = $2
                     RETURNING id
                     """,
                     sms_id,
-                    now,
                     owner_token,
                 )
             else:
@@ -433,14 +430,13 @@ class SMSMessageRepository:
                     """
                     UPDATE sms_messages
                     SET status = 'ready',
-                        processed_at = $2,
+                        processed_at = CURRENT_TIMESTAMP,
                         error_message = NULL
                     WHERE id = $1
                       AND status = 'processing'
                     RETURNING id
                     """,
                     sms_id,
-                    now,
                 )
             return row is not None
         except DatabaseUnavailableError:
@@ -555,22 +551,49 @@ class SMSMessageRepository:
                 """
                 UPDATE sms_messages
                 SET status = 'sent',
-                    error_message = $2,
-                    processed_at = $3
+                    message_sid = COALESCE(NULLIF($2, ''), message_sid),
+                    error_message = NULL,
+                    processed_at = CURRENT_TIMESTAMP
                 WHERE id = $1
                   AND direction = 'outbound'
                   AND source = 'auto_reply'
-                RETURNING id
+                  AND status IN ('sending', 'sent')
+                RETURNING *
                 """,
                 auto_reply_sms_id,
                 provider_message_id,
-                datetime.now(timezone.utc),
             )
             return row is not None
         except DatabaseUnavailableError:
             raise
         except Exception as e:
             raise DatabaseOperationError("mark SMS auto-reply sent", e)
+
+    async def mark_auto_reply_sending(self, auto_reply_sms_id: UUID) -> bool:
+        """Mark a pending auto-reply as provider-send attempted before contact."""
+        pool = get_db_pool()
+        if not pool.is_initialized:
+            raise DatabaseUnavailableError("mark SMS auto-reply sending")
+
+        try:
+            row = await pool.fetchrow(
+                """
+                UPDATE sms_messages
+                SET status = 'sending',
+                    processed_at = CURRENT_TIMESTAMP
+                WHERE id = $1
+                  AND direction = 'outbound'
+                  AND source = 'auto_reply'
+                  AND status = 'pending'
+                RETURNING id
+                """,
+                auto_reply_sms_id,
+            )
+            return row is not None
+        except DatabaseUnavailableError:
+            raise
+        except Exception as e:
+            raise DatabaseOperationError("mark SMS auto-reply sending", e)
 
     async def get_by_message_sid(self, message_sid: str) -> Optional[dict]:
         """Get a message by provider message SID."""

@@ -105,9 +105,17 @@ def _sms_before_ack_timeout_seconds() -> float:
         from ...config import settings
 
         sms_cfg = settings.sms_intelligence
+        call_cfg = settings.call_intelligence
+        auto_reply_timeout = max(float(sms_cfg.auto_reply_timeout), 15.0)
+        notification_timeout = 10.0
+        crm_provider_margin = 15.0
         return max(
             _DEFAULT_SMS_INBOUND_BEFORE_ACK_TIMEOUT_SECONDS,
-            float(sms_cfg.llm_timeout) + float(sms_cfg.auto_reply_timeout) + 15.0,
+            float(sms_cfg.llm_timeout)
+            + float(call_cfg.llm_timeout)
+            + notification_timeout
+            + auto_reply_timeout
+            + crm_provider_margin,
         )
     except Exception:
         return _DEFAULT_SMS_INBOUND_BEFORE_ACK_TIMEOUT_SECONDS
@@ -1724,10 +1732,23 @@ async def _process_inbound_sms(
                 if not owner_ok:
                     logger.info("Inbound SMS %s lost processing ownership before auto-reply", sms_id)
                     return "lost_ownership"
-            reply = await _generate_sms_reply(body, context)
+            reply = None
+            if sms_id and processing_owner_token:
+                get_auto_reply = getattr(sms_repo, "get_auto_reply_for_inbound", None)
+                if callable(get_auto_reply):
+                    auto_reply_row = await get_auto_reply(sms_id)
+                else:
+                    auto_reply_row = None
+            else:
+                auto_reply_row = None
+
+            if auto_reply_row is None:
+                reply = await _generate_sms_reply(body, context)
+            else:
+                reply = auto_reply_row.get("body")
+
             if reply:
                 skip_auto_reply_send = False
-                auto_reply_row = None
                 if sms_id and processing_owner_token:
                     owner_ok = await sms_repo.owns_contact_processing(
                         sms_id,
@@ -1738,13 +1759,16 @@ async def _process_inbound_sms(
                         return "lost_ownership"
                     reserve_auto_reply = getattr(sms_repo, "reserve_auto_reply_for_inbound", None)
                     get_auto_reply = getattr(sms_repo, "get_auto_reply_for_inbound", None)
-                    if callable(get_auto_reply):
-                        auto_reply_row = await get_auto_reply(sms_id)
-                        if auto_reply_row and auto_reply_row.get("status") == "sent":
-                            logger.info("SMS auto-reply already sent for inbound %s; skipping duplicate send", sms_id)
-                            skip_auto_reply_send = True
-                        elif auto_reply_row:
-                            logger.info("SMS auto-reply pending for inbound %s; retrying provider send", sms_id)
+                    mark_auto_reply_sending = getattr(sms_repo, "mark_auto_reply_sending", None)
+                    if auto_reply_row and auto_reply_row.get("status") in {"sent", "sending"}:
+                        logger.info(
+                            "SMS auto-reply already %s for inbound %s; skipping duplicate send",
+                            auto_reply_row.get("status"),
+                            sms_id,
+                        )
+                        skip_auto_reply_send = True
+                    elif auto_reply_row:
+                        logger.info("SMS auto-reply pending for inbound %s; retrying persisted provider send", sms_id)
                     if callable(reserve_auto_reply):
                         if skip_auto_reply_send:
                             auto_reply_row = None
@@ -1759,11 +1783,18 @@ async def _process_inbound_sms(
                             if auto_reply_row is None:
                                 if callable(get_auto_reply):
                                     auto_reply_row = await get_auto_reply(sms_id)
-                                if auto_reply_row and auto_reply_row.get("status") == "sent":
-                                    logger.info("SMS auto-reply already sent for inbound %s; skipping duplicate send", sms_id)
+                                if auto_reply_row and auto_reply_row.get("status") in {"sent", "sending"}:
+                                    logger.info(
+                                        "SMS auto-reply already %s for inbound %s; skipping duplicate send",
+                                        auto_reply_row.get("status"),
+                                        sms_id,
+                                    )
                                     skip_auto_reply_send = True
                                 elif auto_reply_row:
-                                    logger.info("SMS auto-reply pending for inbound %s after reservation race; retrying send", sms_id)
+                                    logger.info(
+                                        "SMS auto-reply pending for inbound %s after reservation race; retrying persisted send",
+                                        sms_id,
+                                    )
                                 else:
                                     logger.warning("SMS auto-reply reservation vanished for inbound %s", sms_id)
                                     return "retry_pending"
@@ -1773,11 +1804,35 @@ async def _process_inbound_sms(
                     auto_reply_row = None
                     skip_auto_reply_send = False
                 if not skip_auto_reply_send:
+                    reply_body = auto_reply_row.get("body") if auto_reply_row is not None else reply
+                    if auto_reply_row is not None and callable(mark_auto_reply_sending):
+                        marked_sending = await mark_auto_reply_sending(auto_reply_row["id"])
+                        if not marked_sending:
+                            if callable(get_auto_reply):
+                                refreshed_row = await get_auto_reply(sms_id)
+                            else:
+                                refreshed_row = None
+                            if refreshed_row and refreshed_row.get("status") in {"sent", "sending"}:
+                                logger.info(
+                                    "SMS auto-reply became %s for inbound %s before provider send; skipping duplicate",
+                                    refreshed_row.get("status"),
+                                    sms_id,
+                                )
+                                skip_auto_reply_send = True
+                            else:
+                                logger.warning(
+                                    "Failed to mark reserved SMS auto-reply %s sending",
+                                    auto_reply_row["id"],
+                                )
+                                return "retry_pending"
+                    if skip_auto_reply_send:
+                        reply_body = None
+                if not skip_auto_reply_send:
                     provider = get_comms_service().provider
                     msg = await provider.send_sms(
                         to_number=from_number,
                         from_number=to_number,
-                        body=reply,
+                        body=reply_body,
                         context_id=context.id,
                     )
                     logger.info("SMS auto-reply sent to %s", from_number)
@@ -1803,7 +1858,7 @@ async def _process_inbound_sms(
                                 from_number=to_number,
                                 to_number=from_number,
                                 direction="outbound",
-                                body=reply,
+                                body=reply_body,
                                 business_context_id=context.id,
                                 status="sent",
                                 source="auto_reply",
