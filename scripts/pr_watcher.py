@@ -796,13 +796,6 @@ def produce(watcher_id: str, *, config_dir: Path, state_dir: Path) -> tuple[int,
         int(pr_text), repo, cwd=repo_dir
     )
     reconciliation_code, reconciliation_out, reconciliation_err = _run(reconciliation_command, cwd=repo_dir)
-    docs_only_reconciliation_exemption = (
-        reconciliation_code == 0
-        and DOCS_ONLY_RECONCILIATION_OK in (reconciliation_out or reconciliation_err)
-    )
-    pr_after_reviews, post_review_error = _run_json(
-        _pr_view_command(pr_text, repo), cwd=repo_dir, allowed_codes={0}, expected_type=dict
-    )
     post_all_checks, post_all_checks_error = _run_json(
         _checks_command(pr_text, repo, required=False),
         cwd=repo_dir,
@@ -814,6 +807,9 @@ def produce(watcher_id: str, *, config_dir: Path, state_dir: Path) -> tuple[int,
         cwd=repo_dir,
         allowed_codes=VALID_CHECK_EXIT_CODES,
         expected_type=list,
+    )
+    pr_after_reviews, post_review_error = _run_json(
+        _pr_view_command(pr_text, repo), cwd=repo_dir, allowed_codes={0}, expected_type=dict
     )
     pr_after_reviews = pr_after_reviews if isinstance(pr_after_reviews, dict) else {}
     post_review_shape_error = (

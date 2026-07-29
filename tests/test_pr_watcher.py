@@ -648,33 +648,51 @@ def test_docs_only_reconciliation_exemption_requires_final_body_marker(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     docs_body = "Docs-only: true\n\nArchive merged plans.\n"
+    fake = FakeRun(
+        pr_responses=[
+            _response(_pr(body=docs_body)),
+            _response(_pr(body=docs_body)),
+            _response(_pr(body="Plan: plans/PR-Watcher.md\n")),
+        ],
+        review_pages=[_response(_review_page([]))],
+        reconciliation=(
+            0,
+            "\n".join(
+                [
+                    "live AI reconciliation check",
+                    "OK: docs-only PR diff has no open scoped Codex review threads; current-head Codex review attestation is not required.",
+                ]
+            ),
+            "",
+        ),
+    )
     status = _produce(
         tmp_path,
         monkeypatch,
-        FakeRun(
-            pr_responses=[
-                _response(_pr(body=docs_body)),
-                _response(_pr(body=docs_body)),
-                _response(_pr(body="Plan: plans/PR-Watcher.md\n")),
-            ],
-            review_pages=[_response(_review_page([]))],
-            reconciliation=(
-                0,
-                "\n".join(
-                    [
-                        "live AI reconciliation check",
-                        "OK: docs-only PR diff has no open scoped Codex review threads; current-head Codex review attestation is not required.",
-                    ]
-                ),
-                "",
-            ),
-        ),
+        fake,
     )
 
     assert status["state"] == "attention"
     assert status["readiness"]["codex_head_review_count"] == 0
     assert status["readiness"]["docs_only_reconciliation_exemption"] is False
     assert "post-review PR body no longer carries Docs-only: true" in status["view_error"]
+    reconciliation_index = next(
+        i
+        for i, command in enumerate(fake.commands)
+        if len(command) > 1 and Path(command[1]).name == watcher.RECONCILIATION_CHECKER_NAME
+    )
+    post_check_indices = [
+        i
+        for i, command in enumerate(fake.commands)
+        if i > reconciliation_index and command[:3] == ["gh", "pr", "checks"]
+    ]
+    final_pr_metadata_index = max(
+        i
+        for i, command in enumerate(fake.commands)
+        if command[:3] == ["gh", "pr", "view"] and "--comments" not in command
+    )
+    assert post_check_indices
+    assert max(post_check_indices) < final_pr_metadata_index
 
 
 def test_docs_only_reconciliation_exemption_uses_post_reconciliation_checks(

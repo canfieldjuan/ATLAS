@@ -25,8 +25,11 @@ exemption result, so a PR could pass live reconciliation yet never reach watcher
 readiness. The current-head Codex review then found two final watcher/proof
 gaps: the cached `origin/pr-<n>` ref was not force-updated across PR rebases or
 force-pushes, and watcher readiness trusted the checker’s docs-only OK text
-without revalidating the final PR body and check snapshot. The post-fix
-`unit-gate` run then exposed an unrelated but
+without revalidating the final PR body and check snapshot. The next current-head
+review found that the final body/head snapshot still happened before the
+post-reconciliation check reads, so the metadata and check evidence could belong
+to different observations. The post-fix `unit-gate` run then exposed an
+unrelated but
 merge-blocking full-suite timing flake in an existing content-factory linearity
 guard: the guard already proved the code path alone, but its hard one-second
 wall-clock ceiling failed under full-suite/shared-runner load. Because CI red is
@@ -51,10 +54,11 @@ content-factory runtime behavior.
   exemption into watcher readiness; and test docs-only/no-thread/Markdown-only
   pass plus non-Markdown, symlink/gitlink-shaped, malformed status,
   docs-only/open-thread, docs-only/`CHANGES_REQUESTED`, trailing body/base/count
-  races, forced PR-head ref replacement, final watcher body/check revalidation,
-  watcher readiness, and non-doc/no-review fail. The CI repair must keep the
-  existing content-factory linearity guard discriminating quadratic growth
-  without relying on one absolute runner-speed ceiling.
+  races, forced PR-head ref replacement, final watcher body/check revalidation
+  with the final metadata read after the post-reconciliation checks, watcher
+  readiness, and non-doc/no-review fail. The CI repair must keep the existing
+  content-factory linearity guard discriminating quadratic growth without
+  relying on one absolute runner-speed ceiling.
 - Must not change: unresolved Codex threads must remain blocking, current-head
   `CHANGES_REQUESTED` must remain blocking, non-doc PRs must still require
   current-head Codex review or clean-review-comment attestation, and product
@@ -107,6 +111,9 @@ Slice phase: Workflow/process
   - The installed PR watcher revalidates the final PR body and
     post-reconciliation check snapshot before honoring the docs-only
     reconciliation exemption.
+  - The installed PR watcher reads final PR metadata after the
+    post-reconciliation check reads, so body/head/base evidence is not older
+    than the check evidence used for readiness.
   - The existing content-factory negation-scope linearity test uses warmed,
     repeated relative growth between input sizes so CI load does not create an
     unrelated red check while still failing if the per-scope scan returns.
@@ -209,8 +216,8 @@ generation moves. Installed watchers copy the checker plus the canonical body
 parser and its changed-path helper so the packaged checker matches CI behavior,
 and watcher readiness treats the checker’s proven docs-only OK result as the
 review-attestation substitute for that narrow path only after a final PR-body
-read still carries the docs-only marker and post-reconciliation check reads are
-clean enough for readiness.
+read after the post-reconciliation check reads still carries the docs-only
+marker and those check reads are clean enough for readiness.
 
 ## Intentional
 
@@ -228,6 +235,7 @@ clean enough for readiness.
   admitted docs-only result.
 - Do not let a stale cached PR ref, stale PR body, or stale check snapshot make
   watcher readiness greener than the final observed PR state.
+- Do not treat a pre-check PR metadata read as final watcher evidence.
 - Do not change content-factory runtime behavior for the unit-gate repair; the
   failing check was an existing test's wall-clock assertion under full-suite load.
 - Keep the two plan archive moves in this PR because #2247 is the live docs-only
@@ -253,7 +261,7 @@ Parked hardening: none.
 - `python scripts/sync_pr_plan.py plans/PR-Docs-Only-Live-Reconciliation.md origin/main --check` - passed.
 - `python scripts/audit_plan_doc.py plans/PR-Docs-Only-Live-Reconciliation.md` - passed.
 - `python scripts/audit_plan_doc_files_touched.py plans/PR-Docs-Only-Live-Reconciliation.md origin/main` - passed.
-- `python scripts/audit_plan_doc_diff_size.py plans/PR-Docs-Only-Live-Reconciliation.md origin/main` - passed, estimate 1595 actual 1354.
+- `python scripts/audit_plan_doc_diff_size.py plans/PR-Docs-Only-Live-Reconciliation.md origin/main` - passed, estimate 1615 actual 1595.
 - `python scripts/audit_plan_code_consistency.py --base-ref origin/main plans/PR-Docs-Only-Live-Reconciliation.md` - passed.
 - `bash scripts/local_pr_review.sh --current-pr-body-file /tmp/archive-review-workflow-plans-body.md` - passed.
 
@@ -262,15 +270,15 @@ Parked hardening: none.
 | File | LOC |
 |---|---:|
 | `plans/INDEX.md` | 4 |
-| `plans/PR-Docs-Only-Live-Reconciliation.md` | 276 |
+| `plans/PR-Docs-Only-Live-Reconciliation.md` | 284 |
 | `plans/archive/PR-Codex-Review-Scope-Reset.md` | 0 |
 | `plans/archive/PR-Codex-Review-Thread-Event-Canary.md` | 0 |
 | `scripts/check_ai_reconciliation_live.py` | 452 |
 | `scripts/codex_wake_bridge.py` | 6 |
 | `scripts/install_codex_wake_bridge.py` | 22 |
-| `scripts/pr_watcher.py` | 124 |
+| `scripts/pr_watcher.py` | 120 |
 | `tests/test_check_ai_reconciliation_live.py` | 540 |
 | `tests/test_codex_wake_bridge.py` | 12 |
 | `tests/test_content_factory_copy_verification.py` | 21 |
-| `tests/test_pr_watcher.py` | 138 |
-| **Total** | **1595** |
+| `tests/test_pr_watcher.py` | 154 |
+| **Total** | **1615** |
