@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 from datetime import datetime, timezone
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
@@ -13,6 +14,7 @@ from fastapi import FastAPI
 
 from atlas_brain.eom_api import funnel as funnel_mod
 from atlas_brain.eom_api import funnel_auth as auth_mod
+from atlas_brain.mcp import calendar_server as calendar_mcp
 from atlas_brain.eom_api.config import EOMFunnelConfig
 from atlas_brain.services import eom_lead_booking as booking_mod
 from atlas_brain.services.eom_lead_booking import (
@@ -22,6 +24,7 @@ from atlas_brain.services.eom_lead_booking import (
     EOMLeadBookingProjectionError,
     EOMLeadBookingService,
 )
+from atlas_brain.storage.repositories import appointment as appointment_repo_mod
 from atlas_brain.tools import scheduling as scheduling_mod
 from atlas_brain.tools.base import ToolResult
 from atlas_brain.tools.calendar import CalendarTool
@@ -715,6 +718,90 @@ async def test_generic_reschedule_rejects_eom_estimate_booking_appointments(monk
     assert repo.update_calls == 0
     scheduling_service.book_appointment.assert_not_awaited()
     scheduling_service.cancel_appointment.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_calendar_mcp_sync_rejects_eom_estimate_booking_before_calendar(monkeypatch):
+    appointment_id = uuid4()
+
+    class _Pool:
+        async def fetchrow(self, query: str, loaded_id: str):
+            assert loaded_id == str(appointment_id)
+            assert "eom_estimate_booking_operation_id" in query
+            return {
+                "id": appointment_id,
+                "customer_name": "Estimate Lead",
+                "customer_address": "100 Main St",
+                "start_time": datetime(2026, 8, 1, 15, tzinfo=timezone.utc),
+                "end_time": datetime(2026, 8, 1, 16, tzinfo=timezone.utc),
+                "notes": "Use side door",
+                "calendar_event_id": "eom0123456789abcdef0123456789abcdef",
+                "eom_estimate_booking_operation_id": uuid4(),
+            }
+
+        async def execute(self, *args, **kwargs):
+            raise AssertionError("estimate booking sync must not update appointments")
+
+    provider = SimpleNamespace(
+        create_event=AsyncMock(
+            side_effect=AssertionError("estimate booking sync must not create events")
+        ),
+        update_event=AsyncMock(
+            side_effect=AssertionError("estimate booking sync must not update events")
+        ),
+    )
+    monkeypatch.setattr(
+        "atlas_brain.storage.database.get_db_pool",
+        lambda: _Pool(),
+    )
+    monkeypatch.setattr(calendar_mcp, "_provider", lambda: provider)
+
+    result = json.loads(await calendar_mcp.sync_appointment(str(appointment_id)))
+
+    assert result["success"] is False
+    assert result["error"] == "EOM_ESTIMATE_BOOKING_MANAGED"
+    provider.create_event.assert_not_awaited()
+    provider.update_event.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_appointment_repository_blocks_protected_eom_estimate_mutations(monkeypatch):
+    appointment_id = uuid4()
+
+    class _Pool:
+        is_initialized = True
+
+        def __init__(self) -> None:
+            self.cancel_query = ""
+            self.update_query = ""
+            self.update_args: tuple[object, ...] = ()
+
+        async def execute(self, query: str, *args):
+            self.cancel_query = query
+            return "UPDATE 0"
+
+        async def fetchrow(self, query: str, *args):
+            self.update_query = query
+            self.update_args = args
+            return None
+
+    pool = _Pool()
+    monkeypatch.setattr(appointment_repo_mod, "get_db_pool", lambda: pool)
+    repo = appointment_repo_mod.AppointmentRepository()
+
+    assert await repo.cancel(appointment_id, "caller cancelled") is False
+    assert "eom_estimate_booking_operation_id IS NULL" in pool.cancel_query
+
+    updated = await repo.update(
+        appointment_id,
+        start_time=datetime(2026, 8, 1, 16, tzinfo=timezone.utc),
+        end_time=datetime(2026, 8, 1, 17, tzinfo=timezone.utc),
+    )
+
+    assert updated is None
+    assert "eom_estimate_booking_operation_id IS NULL" in pool.update_query
+    assert pool.update_args[0] == appointment_id
+    assert pool.update_args[1] is True
 
 
 @pytest.mark.asyncio

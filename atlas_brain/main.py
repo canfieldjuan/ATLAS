@@ -129,6 +129,14 @@ async def _require_eom_funnel_data_store(
            AND to_regclass('eom_lead_estimate_booking_operations') IS NOT NULL
            AND EXISTS (
                SELECT 1
+               FROM pg_attribute AS booking_reclaim
+               WHERE booking_reclaim.attrelid =
+                     to_regclass('eom_lead_estimate_booking_operations')
+                 AND booking_reclaim.attname = 'reclaimed_projection'
+                 AND NOT booking_reclaim.attisdropped
+           )
+           AND EXISTS (
+               SELECT 1
                FROM pg_attribute AS appointment_link
                WHERE appointment_link.attrelid = to_regclass('appointments')
                  AND appointment_link.attname = 'eom_estimate_booking_operation_id'
@@ -179,6 +187,16 @@ async def _require_eom_funnel_data_store(
                      'trg_prevent_eom_pending_estimate_booking_contact_state_mutation'
                  AND NOT contact_state_trigger.tgisinternal
                  AND contact_state_trigger.tgenabled IN ('O', 'A')
+           )
+           AND EXISTS (
+               SELECT 1
+               FROM pg_trigger AS appointment_mutation_trigger
+               WHERE appointment_mutation_trigger.tgrelid =
+                     to_regclass('appointments')
+                 AND appointment_mutation_trigger.tgname =
+                     'trg_prevent_eom_estimate_booking_appointment_mutation'
+                 AND NOT appointment_mutation_trigger.tgisinternal
+                 AND appointment_mutation_trigger.tgenabled IN ('O', 'A')
            )
            AND EXISTS (
                SELECT 1

@@ -481,7 +481,8 @@ async def sync_appointment(
         row = await pool.fetchrow(
             """
             SELECT id, customer_name, customer_address, start_time, end_time,
-                   notes, calendar_event_id
+                   notes, calendar_event_id,
+                   eom_estimate_booking_operation_id
             FROM appointments
             WHERE id = $1
             """,
@@ -490,6 +491,20 @@ async def sync_appointment(
 
         if not row:
             return json.dumps({"success": False, "error": "Appointment not found", "appointment_id": appointment_id})
+        if row["eom_estimate_booking_operation_id"]:
+            return json.dumps(
+                {
+                    "success": False,
+                    "error": "EOM_ESTIMATE_BOOKING_MANAGED",
+                    "message": (
+                        "EOM estimate bookings cannot be synced through the "
+                        "generic calendar MCP tool. Use the EOM lead funnel "
+                        "workflow so the lead, appointment, and Calendar event "
+                        "stay consistent."
+                    ),
+                    "appointment_id": appointment_id,
+                }
+            )
 
         summary = f"Cleaning - {row['customer_name']}"
         description = row["notes"] or ""

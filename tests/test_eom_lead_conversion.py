@@ -340,6 +340,7 @@ async def test_enabled_full_atlas_funnel_requires_authoritative_data_store(monke
 
     await main._require_eom_funnel_data_store(enabled, database_enabled=True)
     assert "eom_lead_estimate_booking_operations" in ready_pool.queries[0]
+    assert "reclaimed_projection" in ready_pool.queries[0]
     assert "eom_estimate_booking_operation_id" in ready_pool.queries[0]
     assert "appointments_eom_estimate_booking_operation_id_fkey" in ready_pool.queries[0]
     assert "pg_constraint" in ready_pool.queries[0]
@@ -351,6 +352,10 @@ async def test_enabled_full_atlas_funnel_requires_authoritative_data_store(monke
     assert "indisready" in ready_pool.queries[0]
     assert (
         "trg_prevent_eom_pending_estimate_booking_contact_state_mutation"
+        in ready_pool.queries[0]
+    )
+    assert (
+        "trg_prevent_eom_estimate_booking_appointment_mutation"
         in ready_pool.queries[0]
     )
     assert "tgenabled IN ('O', 'A')" in ready_pool.queries[0]

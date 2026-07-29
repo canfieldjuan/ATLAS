@@ -223,6 +223,7 @@ def test_eom_estimate_booking_migration_removes_nocodb_operation_link_writes():
         assert "eom_estimate_booking_operation_id" not in grant_columns
     assert "calendar_rejected" in migration
     assert "projection_token UUID" in migration
+    assert "reclaimed_projection BOOLEAN NOT NULL DEFAULT FALSE" in migration
     assert "uq_eom_lead_estimate_booking_contact_active" in migration
     assert "ADD COLUMN IF NOT EXISTS eom_estimate_booking_operation_id" not in migration
     assert "REFERENCES eom_lead_estimate_booking_operations(id)" not in migration
@@ -269,6 +270,11 @@ def test_eom_estimate_booking_appointment_link_index_is_concurrent():
         "VALIDATE CONSTRAINT appointments_eom_estimate_booking_operation_id_fkey"
         in migration
     )
+    assert "prevent_eom_estimate_booking_appointment_mutation" in migration
+    assert "trg_prevent_eom_estimate_booking_appointment_mutation" in migration
+    assert "BEFORE UPDATE OF eom_estimate_booking_operation_id" in migration
+    assert "OR DELETE ON appointments" in migration
+    assert "OLD.calendar_event_id IS DISTINCT FROM NEW.calendar_event_id" in migration
     assert (
         "DROP INDEX CONCURRENTLY IF EXISTS "
         "uq_appointments_eom_estimate_booking_operation"
@@ -286,6 +292,12 @@ def test_eom_estimate_booking_appointment_link_index_is_concurrent():
         "ADD CONSTRAINT appointments_eom_estimate_booking_operation_id_fkey"
     )
     assert migration.index("NOT VALID") < migration.index("VALIDATE CONSTRAINT")
+    assert migration.index("VALIDATE CONSTRAINT") < migration.index(
+        "CREATE OR REPLACE FUNCTION prevent_eom_estimate_booking_appointment_mutation"
+    )
+    assert migration.index(
+        "CREATE TRIGGER trg_prevent_eom_estimate_booking_appointment_mutation"
+    ) < migration.index("DROP INDEX CONCURRENTLY")
     assert migration.index("VALIDATE CONSTRAINT") < migration.index(
         "DROP INDEX CONCURRENTLY"
     )

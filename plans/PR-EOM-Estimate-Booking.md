@@ -62,8 +62,9 @@ Slice phase: Vertical slice
    `estimate_booked` leads in the review/approval path until a later
    companion UI can display the richer stage.
 3. Add focused HTTP/service/calendar tests plus migration/compile/plan proof.
-4. Close reviewer-found lifecycle, privilege, readiness, and index gaps without
-   widening into UI/onboarding/payment work.
+4. Close reviewer-found lifecycle, privilege, readiness, appointment-mutation,
+   rollback, projection-lease, and index gaps without widening into
+   UI/onboarding/payment work.
 
 ### Review Contract
 
@@ -81,11 +82,12 @@ Slice phase: Vertical slice
      call.
   3. A different idempotency key for a lead that already has a non-terminal
      booking operation returns 409 before any calendar call. If Calendar
-     permanently rejects the command before appointment projection and the
-     deterministic event is proven absent or cancelled, the operation becomes
-     terminal and a corrected command with a new key can proceed; unreconciled
-     Calendar auth/config failures stay retryable so a stale external success
-     cannot be released into a duplicate new-key booking.
+     permanently rejects the command before appointment projection, no prior
+     projection lease was reclaimed, and the deterministic event is proven
+     absent or cancelled, the operation becomes terminal and a corrected
+     command with a new key can proceed; unreconciled Calendar auth/config
+     failures and reclaimed-lease write uncertainty stay retryable so a stale
+     external success cannot be released into a duplicate new-key booking.
   4. Non-EOM, inactive, non-lead, and non-`new` contacts are rejected before the
      calendar adapter is called. The only replay exception is the persisted
      same-key operation.
@@ -94,9 +96,10 @@ Slice phase: Vertical slice
      failures mark the operation retryable and return a surfaced error.
      Permanent Calendar failures first fetch the deterministic event ID: a live
      recovered event completes the same operation, an absent/cancelled event
-     marks the operation terminal so the lead can be corrected with a new key,
-     and an unverifiable auth/config state remains retryable rather than
-     releasing the lead.
+     marks the operation terminal only when no projection lease was reclaimed,
+     reclaimed-lease uncertainty keeps the operation retryable/unsafe for
+     corrected keys, and an unverifiable auth/config state remains retryable
+     rather than releasing the lead.
   6. The lead review queue includes active EOM `lead/new` and
      `lead/estimate_booked` contacts, so a booked lead stays reachable to Juan.
      The serialized public projection remains backward compatible with the
@@ -108,15 +111,19 @@ Slice phase: Vertical slice
      other lead stage, and any contact with an incomplete non-terminal
      estimate-booking operation.
   8. The NocoDB/browser role cannot write the appointment booking-operation link;
-     the link remains Atlas-service-owned while ordinary appointment edit fields
-     stay writable. While an estimate-booking operation is unfinished,
-     runtime/NocoDB contact state mutations that would archive/delete/retype/
-     restage/move the lead are rejected, while ordinary CRM edits and the
-     booking service's own `new -> estimate_booked` completion transition
-     remain allowed.
+     the link remains Atlas-service-owned. Once an appointment is linked to an
+     estimate-booking operation, generic Calendar sync, repository cancel,
+     protected repository updates, direct browser updates to booking-owned
+     appointment identity/status/Calendar fields, and direct appointment deletes
+     are rejected before they can desynchronize the operation. While an
+     estimate-booking operation is unfinished, runtime/NocoDB contact state
+     mutations that would archive/delete/retype/restage/move the lead are
+     rejected, while ordinary CRM edits and the booking service's own
+     `new -> estimate_booked` completion transition remain allowed.
   9. Enabled full-app startup fails closed unless the estimate-booking operation
-     table, appointment link column, validated appointment-link foreign key,
-     valid appointment-link unique index, enabled contact-state trigger,
+     table, reclaimed-projection marker, appointment link column, validated
+     appointment-link foreign key, valid appointment-link unique index, enabled
+     contact-state trigger, enabled appointment-mutation trigger,
      handoff/lifecycle tables, owner roles, and browser-role privilege
      boundaries are present.
   10. The established-table appointment-link uniqueness index and lead-review
@@ -142,16 +149,17 @@ Slice phase: Vertical slice
   - Calendar is a side effect outside the SQL transaction, so projection
     linearizes at the operation-row lease update that writes a fresh
     `projection_token`. Only a current, unexpired token holder may issue the
-    Calendar write, mark projection failure, or complete the operation; expired
-    holders fail before external side effects after a later holder reclaims the
-    row. Every projection attempt uses the persisted Calendar ID/event ID; a
-    live recovered event completes the same operation, transient failures leave
-    the operation retryable without an appointment, and terminal-eligible
-    failures reconcile the deterministic event ID before releasing the lead. A
-    live recovered event completes the same operation, an absent/cancelled event
-    terminally releases the lead for a corrected key, and an unverifiable
-    auth/config state stays retryable rather than permitting a second live
-    Calendar event under a new key.
+    Calendar write, mark projection failure, or complete the operation. When a
+    later holder reclaims an expired projection lease, the operation records
+    that uncertainty and terminal Calendar rejection is deferred: same-key
+    retries may still reconcile/complete the deterministic event, but corrected
+    new keys remain blocked until the old operation is completed or manually
+    resolved. Every projection attempt uses the persisted Calendar ID/event ID;
+    a live recovered event completes the same operation, transient failures
+    leave the operation retryable without an appointment, terminal-eligible
+    failures reconcile the deterministic event ID before any safe release, and
+    unreconciled auth/config or reclaimed-lease uncertainty stays retryable
+    rather than permitting a second live Calendar event under a new key.
   - Completion linearizes inside one transaction that locks contact before
     operation, inserts/resumes the unique appointment link, performs the only
     allowed `new -> estimate_booked` contact transition, appends lifecycle
@@ -166,8 +174,9 @@ Slice phase: Vertical slice
     `tests/test_eom_estimate_booking_integration.py` proves the real PostgreSQL
     operation/calendar/appointment/lifecycle chain, corrected-key recovery,
     stale projection-token holder rejection, stale external-event reconciliation
-    before terminal release, stale-holder Calendar write rejection after lease
-    reclaim, unverifiable terminal failure downgrade to retryable, pending
+    before terminal release, reclaimed-lease terminal-release deferral,
+    generic scheduling/MCP/repository appointment mutation fences, unverifiable
+    terminal failure downgrade to retryable, pending
     approval fence, NocoDB operation-link denial, and the contact-state trigger
     fence including a browser-role temporary-table shadow attempt.
 - Reachability proof: FastAPI route tests call the real `eom-funnel` router,
@@ -250,11 +259,13 @@ fallback changes; otherwise write "N/A - no guard/config boundary change."
 - `atlas_brain/eom_api/config.py`
 - `atlas_brain/eom_api/funnel.py`
 - `atlas_brain/main.py`
+- `atlas_brain/mcp/calendar_server.py`
 - `atlas_brain/services/crm_provider.py`
 - `atlas_brain/services/eom_lead_booking.py`
 - `atlas_brain/storage/migrations/356_eom_lead_estimate_booking_operations.sql`
 - `atlas_brain/storage/migrations/357_eom_lead_review_queue_booked_index.sql`
 - `atlas_brain/storage/migrations/358_eom_estimate_booking_appointment_link_index.sql`
+- `atlas_brain/storage/repositories/appointment.py`
 - `atlas_brain/tools/calendar.py`
 - `atlas_brain/tools/scheduling.py`
 - `plans/PR-EOM-Estimate-Booking.md`
@@ -279,19 +290,23 @@ same-key retries do not both own the operation. A 409 for the deterministic
 event ID is recovered by fetching that same event and treating a non-cancelled
 event as the lost prior success; a cancelled recovered event is terminal rather
 than retryable. Immediately before the Calendar write, the service refreshes and
-proves an unexpired current-token lease; stale holders fail before the external
-side effect. Transient Calendar failures remain retryable. Before any terminal
-Calendar failure releases the lead for a new key, the service fetches the
-deterministic event ID: live recovery completes the original operation,
-absent/cancelled recovery permits `calendar_rejected`, and an unverifiable
-auth/config state stays `calendar_failed`. Failure marking and completion both
-require the current projection token, so an expired projection holder cannot
-clobber a reclaimed operation. Once projection succeeds, Atlas inserts or
-resumes one appointment linked by operation ID, transitions the contact to
-`estimate_booked`, records the lifecycle event, and marks the operation
-completed. The existing lead review and approval paths are widened only enough
-to keep booked leads visible and convertible, and approval ignores historical
-terminal attempts after a corrected booking completes.
+proves an unexpired current-token lease. If a later holder reclaims an expired
+projection lease, the operation records `reclaimed_projection`; same-key retries
+can still reconcile or complete the deterministic event, but terminal release
+for corrected new keys is deferred because an old holder may have paused after
+its final lease refresh and before the external write. Transient Calendar
+failures remain retryable. Before any safe terminal Calendar failure releases
+the lead for a new key, the service fetches the deterministic event ID: live
+recovery completes the original operation, absent/cancelled recovery permits
+`calendar_rejected` only without reclaimed-lease uncertainty, and an
+unverifiable auth/config state stays `calendar_failed`. Failure marking and
+completion both require the current projection token, so an expired projection
+holder cannot clobber a reclaimed operation. Once projection succeeds, Atlas
+inserts or resumes one appointment linked by operation ID, transitions the
+contact to `estimate_booked`, records the lifecycle event, and marks the
+operation completed. The existing lead review and approval paths are widened
+only enough to keep booked leads visible and convertible, and approval ignores
+historical terminal attempts after a corrected booking completes.
 
 Migration 356 also installs a contact trigger for EOM leads with unfinished
 booking operations. The security-definer trigger pins its search path to
@@ -308,11 +323,20 @@ left behind without the code that can reconcile the deterministic Calendar
 event.
 Migration 358 adds the nullable appointment operation-link column outside the
 larger operation-table batch, adds its foreign key as `NOT VALID`, validates it
-with PostgreSQL's low-lock validation path, then drops the named appointment
-operation-link index concurrently before rebuilding it concurrently on the
-established `appointments` table. A retry repairs any invalid relation left by
-an interrupted concurrent build. The enabled startup preflight requires the
-validated FK and valid/ready unique partial index before the funnel can serve.
+with PostgreSQL's low-lock validation path, installs the appointment mutation
+trigger that blocks protected updates/deletes on linked estimate appointments,
+then drops the named appointment operation-link index concurrently before
+rebuilding it concurrently on the established `appointments` table. A retry
+repairs any invalid relation left by an interrupted concurrent build. The
+enabled startup preflight requires the validated FK, enabled appointment
+trigger, and valid/ready unique partial index before the funnel can serve.
+
+Generic appointment mutation paths are fenced above and below the tool layer:
+generic scheduling cancel/reschedule rejects linked estimate appointments before
+Calendar or database side effects, `sync_appointment` rejects them before a
+Calendar create/update, `AppointmentRepository.cancel` and protected
+`AppointmentRepository.update` writes skip linked estimate rows, and the
+database trigger rejects protected browser/raw SQL updates and deletes.
 
 ## Intentional
 
@@ -343,6 +367,22 @@ Parked hardening: none.
 
 ## Verification
 
+- Latest repair command: `python -m compileall -q atlas_brain/main.py
+  atlas_brain/mcp/calendar_server.py atlas_brain/services/eom_lead_booking.py
+  atlas_brain/storage/repositories/appointment.py tests/test_eom_estimate_booking.py
+  tests/test_eom_estimate_booking_integration.py tests/test_eom_lead_conversion.py
+  tests/test_migrations_runner.py && python -m pytest
+  tests/test_eom_estimate_booking.py tests/test_eom_lead_conversion.py
+  tests/test_migrations_runner.py::test_eom_estimate_booking_migration_removes_nocodb_operation_link_writes
+  tests/test_migrations_runner.py::test_eom_estimate_booking_appointment_link_index_is_concurrent
+  tests/test_migrations_runner.py::test_eom_lead_review_queue_index_matches_keyset_order
+  tests/test_migrations_runner.py::test_eom_lead_review_queue_booked_index_matches_widened_predicate -q`;
+  result: 72 passed, 1 third-party `pynvml` deprecation warning.
+- Latest repair command: `python -m pytest
+  tests/test_eom_estimate_booking_integration.py
+  tests/test_eom_lead_conversion_integration.py tests/test_migrations_runner.py -q`;
+  result: 24 passed, 27 skipped because `ATLAS_MIGRATION_TEST_DATABASE_URL`
+  was not configured locally, 1 third-party `pynvml` deprecation warning.
 - Latest repair command: `python -m compileall -q
   atlas_brain/services/eom_lead_booking.py
   scripts/drain_eom_estimate_bookings_for_rollback.py
@@ -396,19 +436,21 @@ Parked hardening: none.
 | `.github/workflows/atlas_eom_lead_pipeline_checks.yml` | 16 |
 | `atlas_brain/eom_api/config.py` | 8 |
 | `atlas_brain/eom_api/funnel.py` | 123 |
-| `atlas_brain/main.py` | 81 |
+| `atlas_brain/main.py` | 99 |
+| `atlas_brain/mcp/calendar_server.py` | 17 |
 | `atlas_brain/services/crm_provider.py` | 46 |
-| `atlas_brain/services/eom_lead_booking.py` | 819 |
-| `atlas_brain/storage/migrations/356_eom_lead_estimate_booking_operations.sql` | 169 |
+| `atlas_brain/services/eom_lead_booking.py` | 838 |
+| `atlas_brain/storage/migrations/356_eom_lead_estimate_booking_operations.sql` | 173 |
 | `atlas_brain/storage/migrations/357_eom_lead_review_queue_booked_index.sql` | 24 |
-| `atlas_brain/storage/migrations/358_eom_estimate_booking_appointment_link_index.sql` | 39 |
+| `atlas_brain/storage/migrations/358_eom_estimate_booking_appointment_link_index.sql` | 98 |
+| `atlas_brain/storage/repositories/appointment.py` | 34 |
 | `atlas_brain/tools/calendar.py` | 219 |
 | `atlas_brain/tools/scheduling.py` | 21 |
-| `plans/PR-EOM-Estimate-Booking.md` | 414 |
+| `plans/PR-EOM-Estimate-Booking.md` | 456 |
 | `scripts/drain_eom_estimate_bookings_for_rollback.py` | 66 |
-| `tests/test_eom_estimate_booking.py` | 909 |
-| `tests/test_eom_estimate_booking_integration.py` | 939 |
-| `tests/test_eom_lead_conversion.py` | 41 |
+| `tests/test_eom_estimate_booking.py` | 996 |
+| `tests/test_eom_estimate_booking_integration.py` | 1014 |
+| `tests/test_eom_lead_conversion.py` | 46 |
 | `tests/test_eom_lead_conversion_integration.py` | 68 |
-| `tests/test_migrations_runner.py` | 263 |
-| **Total** | **4265** |
+| `tests/test_migrations_runner.py` | 275 |
+| **Total** | **4637** |

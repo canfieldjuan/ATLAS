@@ -501,7 +501,10 @@ async def test_expired_projection_holder_cannot_issue_calendar_write_after_recla
         )
         reclaimed = await reclaiming_service._claim_calendar_projection(operation_id)
         assert reclaimed["projection_token"] != stale_projection_token
-        with pytest.raises(EOMLeadBookingProjectionError, match="Calendar API error: 404"):
+        with pytest.raises(
+            EOMLeadBookingProjectionError,
+            match="reclaimed projection lease",
+        ):
             await reclaiming_service._project_calendar(reclaimed)
         assert len(rejecting_calendar.calls) == 1
 
@@ -516,15 +519,30 @@ async def test_expired_projection_holder_cannot_issue_calendar_write_after_recla
         assert stale_calendar.calls == []
         stored = await conn.fetchrow(
             """
-            SELECT status, projection_token, appointment_id
+            SELECT status, projection_token, appointment_id, reclaimed_projection
             FROM eom_lead_estimate_booking_operations
             WHERE id = $1
             """,
             operation_id,
         )
-        assert stored["status"] == "calendar_rejected"
+        assert stored["status"] == "calendar_failed"
         assert stored["projection_token"] is None
         assert stored["appointment_id"] is None
+        assert stored["reclaimed_projection"] is True
+
+        corrected = EstimateBookingCommand(
+            contact_id=contact_id,
+            idempotency_key="corrected-after-reclaimed-projection",
+            actor_id=7,
+            actor_name="Mayra",
+            start_time=datetime(2026, 8, 2, 15, tzinfo=timezone.utc),
+            duration_minutes=60,
+            service_type="Cleaning estimate",
+            location="100 Main St",
+            notes="Corrected key must not create a second event",
+        )
+        with pytest.raises(EOMLeadBookingConflictError, match="already exists"):
+            await reclaiming_service.book_estimate(corrected)
     finally:
         await conn.execute(f'DROP SCHEMA IF EXISTS "{schema}" CASCADE')
         await conn.close()
@@ -832,6 +850,59 @@ async def test_nocodb_cannot_write_estimate_booking_operation_link():
             """
         )
 
+        contact_id = await _insert_lead(conn)
+        operation_id = uuid.uuid4()
+        appointment_id = uuid.uuid4()
+        await conn.execute(
+            """
+            INSERT INTO eom_lead_estimate_booking_operations (
+                id, contact_id, idempotency_key, request_fingerprint, actor,
+                start_time, end_time, service_type, notes, contact_snapshot,
+                calendar_id, calendar_event_id, status
+            ) VALUES (
+                $1, $2, 'nocodb-appointment-fence', $3, 'employee:7:Mayra',
+                $4, $5, 'Cleaning estimate', 'Use side door', $6::jsonb,
+                'estimate-calendar', $7, 'completed'
+            )
+            """,
+            operation_id,
+            contact_id,
+            "5" * 64,
+            datetime(2026, 8, 1, 15, tzinfo=timezone.utc),
+            datetime(2026, 8, 1, 16, tzinfo=timezone.utc),
+            '{"full_name":"Estimate Lead","phone":"2175550101","email":"estimate@example.com","address":"100 Main St"}',
+            f"eom{operation_id.hex}",
+        )
+        await conn.execute(
+            """
+            INSERT INTO appointments (
+                id, start_time, end_time, duration_minutes, service_type, notes,
+                customer_name, customer_phone, customer_email, customer_address,
+                calendar_event_id, business_context_id, status, contact_id,
+                eom_estimate_booking_operation_id
+            ) VALUES (
+                $1, $2, $3, 60, 'Cleaning estimate', 'Use side door',
+                'Estimate Lead', '2175550101', 'estimate@example.com', '100 Main St',
+                $4, 'effingham_maids', 'confirmed', $5, $6
+            )
+            """,
+            appointment_id,
+            datetime(2026, 8, 1, 15, tzinfo=timezone.utc),
+            datetime(2026, 8, 1, 16, tzinfo=timezone.utc),
+            f"eom{operation_id.hex}",
+            contact_id,
+            operation_id,
+        )
+        await conn.execute(
+            """
+            UPDATE eom_lead_estimate_booking_operations
+            SET appointment_id = $2
+            WHERE id = $1
+            """,
+            operation_id,
+            appointment_id,
+        )
+
         nocodb_conn = await asyncpg.connect(
             database_url,
             user="atlas_nocodb",
@@ -839,6 +910,10 @@ async def test_nocodb_cannot_write_estimate_booking_operation_link():
         )
         await nocodb_conn.execute(f"SET search_path TO {_quote_ident(schema)}, public")
         await nocodb_conn.execute("UPDATE appointments SET notes = notes")
+        with pytest.raises(asyncpg.exceptions.CheckViolationError):
+            await nocodb_conn.execute(
+                "UPDATE appointments SET notes = 'changed by browser'"
+            )
         with pytest.raises(asyncpg.exceptions.InsufficientPrivilegeError):
             await nocodb_conn.execute(
                 "UPDATE appointments SET eom_estimate_booking_operation_id = NULL"

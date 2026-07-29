@@ -21,6 +21,7 @@ CREATE TABLE IF NOT EXISTS eom_lead_estimate_booking_operations (
     status VARCHAR(32) NOT NULL DEFAULT 'pending',
     projection_started_at TIMESTAMPTZ,
     projection_token UUID,
+    reclaimed_projection BOOLEAN NOT NULL DEFAULT FALSE,
     last_error TEXT,
     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
@@ -40,6 +41,9 @@ ALTER TABLE eom_lead_estimate_booking_operations
 
 ALTER TABLE eom_lead_estimate_booking_operations
     ADD COLUMN IF NOT EXISTS projection_token UUID;
+
+ALTER TABLE eom_lead_estimate_booking_operations
+    ADD COLUMN IF NOT EXISTS reclaimed_projection BOOLEAN NOT NULL DEFAULT FALSE;
 
 ALTER TABLE eom_lead_estimate_booking_operations
     ADD CONSTRAINT chk_eom_lead_estimate_booking_operation_status

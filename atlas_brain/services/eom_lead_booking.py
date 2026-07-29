@@ -151,6 +151,13 @@ class EOMLeadBookingService:
         )
 
     @staticmethod
+    def _operation_flag(operation: Any, field: str) -> bool:
+        try:
+            return bool(operation[field])
+        except (KeyError, TypeError):
+            return False
+
+    @staticmethod
     def _command_from_operation(operation: Any) -> EstimateBookingCommand:
         actor = str(operation["actor"])
         prefix = "employee:"
@@ -532,6 +539,10 @@ class EOMLeadBookingService:
                 raise EOMLeadBookingConflictError(
                     "Estimate calendar projection is already in progress; retry the same key shortly"
                 )
+            reclaimed_projection = (
+                operation["status"] == "projecting"
+                and operation["projection_started_at"] is not None
+            )
             projection_token = uuid4()
             return await conn.fetchrow(
                 """
@@ -539,6 +550,7 @@ class EOMLeadBookingService:
                 SET status = 'projecting',
                     projection_started_at = NOW(),
                     projection_token = $2,
+                    reclaimed_projection = reclaimed_projection OR $3,
                     last_error = NULL,
                     updated_at = NOW()
                 WHERE id = $1
@@ -546,6 +558,7 @@ class EOMLeadBookingService:
                 """,
                 operation_id,
                 projection_token,
+                reclaimed_projection,
             )
 
     async def _mark_projection_failed(
@@ -636,6 +649,12 @@ class EOMLeadBookingService:
                     terminal = False
                     error = (
                         f"{error}; deterministic Calendar event could not be reconciled"
+                    )
+                elif self._operation_flag(operation, "reclaimed_projection"):
+                    terminal = False
+                    error = (
+                        f"{error}; deterministic Calendar write remains uncertain "
+                        "after a reclaimed projection lease"
                     )
         await self._mark_projection_failed(operation, str(error), terminal=terminal)
         raise EOMLeadBookingProjectionError(str(error)[:_MAX_ERROR_LENGTH])

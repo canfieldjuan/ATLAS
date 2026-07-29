@@ -15,6 +15,24 @@ from ..exceptions import DatabaseUnavailableError, DatabaseOperationError
 
 logger = logging.getLogger("atlas.storage.appointment")
 
+_EOM_ESTIMATE_BOOKING_PROTECTED_UPDATE_FIELDS = {
+    "start_time",
+    "end_time",
+    "duration_minutes",
+    "service_type",
+    "notes",
+    "customer_name",
+    "customer_phone",
+    "customer_email",
+    "customer_address",
+    "calendar_event_id",
+    "status",
+    "cancelled_at",
+    "cancellation_reason",
+    "business_context_id",
+    "contact_id",
+}
+
 
 class AppointmentRepository:
     """
@@ -354,7 +372,9 @@ class AppointmentRepository:
                     cancelled_at = $2,
                     cancellation_reason = $3,
                     updated_at = $2
-                WHERE id = $1 AND status = 'confirmed'
+                WHERE id = $1
+                  AND status = 'confirmed'
+                  AND eom_estimate_booking_operation_id IS NULL
                 """,
                 appointment_id,
                 now,
@@ -400,19 +420,23 @@ class AppointmentRepository:
         updates = {k: v for k, v in updates.items() if k in allowed_fields}
         if not updates:
             return await self.get_by_id(appointment_id)
+        protects_eom_estimate_booking = bool(
+            _EOM_ESTIMATE_BOOKING_PROTECTED_UPDATE_FIELDS.intersection(updates)
+        )
 
         # Recalculate duration if times changed
         if "start_time" in updates and "end_time" in updates:
             updates["duration_minutes"] = int(
                 (updates["end_time"] - updates["start_time"]).total_seconds() / 60
             )
+            protects_eom_estimate_booking = True
 
         updates["updated_at"] = datetime.now(timezone.utc)
 
         try:
             set_clauses = []
-            params = [appointment_id]
-            for i, (field, value) in enumerate(updates.items(), start=2):
+            params = [appointment_id, protects_eom_estimate_booking]
+            for i, (field, value) in enumerate(updates.items(), start=3):
                 set_clauses.append(f"{field} = ${i}")
                 params.append(value)
 
@@ -421,6 +445,10 @@ class AppointmentRepository:
                 UPDATE appointments
                 SET {', '.join(set_clauses)}
                 WHERE id = $1
+                  AND (
+                      NOT $2::boolean
+                      OR eom_estimate_booking_operation_id IS NULL
+                  )
                 RETURNING *
                 """,
                 *params,
