@@ -237,7 +237,8 @@ echo
 echo "==> Plans archive backlog (advisory, non-blocking)"
 if [ -f "$script_root/scripts/archive_plans.py" ]; then
     python "$script_root/scripts/archive_plans.py" check || true
-    echo "    advisory only -- run 'python scripts/archive_plans.py archive' to archive merged plans"
+    echo "    advisory only -- after a PR merges, move only that plan by name:"
+    echo "    git mv plans/PR-<Slice>.md plans/archive/ && python scripts/archive_plans.py index"
 else
     echo "    SKIP (scripts/archive_plans.py not found)"
 fi
