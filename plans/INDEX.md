@@ -1,6 +1,6 @@
 # Plan archive index
 
-1496 archived plan doc(s). Merged plan docs are moved under `archive/` and listed below; once the archive sweep has run, the `plans/` root holds only in-flight slices.
+1497 archived plan doc(s). Merged plan docs are moved under `archive/` and listed below; once the archive sweep has run, the `plans/` root holds only in-flight slices.
 
 - [PR-ASR-Pip-Audit-Egg-Fragment](archive/PR-ASR-Pip-Audit-Egg-Fragment.md) - lane: security/workflow | phase: Production hardening
 - [PR-ASR-Requirements-Audit-Pin](archive/PR-ASR-Requirements-Audit-Pin.md) - lane: security/workflow | phase: Production hardening
@@ -11,6 +11,7 @@
 - [PR-Affiliate-Partner-Migrations](archive/PR-Affiliate-Partner-Migrations.md)
 - [PR-Agents-Md-Framework](archive/PR-Agents-Md-Framework.md)
 - [PR-Agents-Md-Routing-Section](archive/PR-Agents-Md-Routing-Section.md)
+- [PR-Agents-Mechanical-Enforcement-Audit](archive/PR-Agents-Mechanical-Enforcement-Audit.md) - lane: workflow/agents-enforcement-audit | phase: Workflow/process
 - [PR-Agents-No-Wait-After-Open](archive/PR-Agents-No-Wait-After-Open.md) - lane: workflow/agents-contract | phase: Workflow/process
 - [PR-Agents-Real-Adapters-Test-Contract](archive/PR-Agents-Real-Adapters-Test-Contract.md) - lane: workflow/process | phase: Workflow/process
 - [PR-Agents-Review-Guidelines](archive/PR-Agents-Review-Guidelines.md) - lane: workflow/pr-contract | phase: Workflow/process
