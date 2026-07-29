@@ -140,7 +140,10 @@ def test_check_command_is_non_blocking_even_over_threshold(tmp_path, capsys):
     rc = tool.main(["check", "--plans-dir", str(plans), "--threshold", "1"])
     out = capsys.readouterr().out
     assert rc == 0  # never fails a PR
-    assert "WARNING" in out and "archive_plans.py archive" in out
+    assert "WARNING" in out
+    assert "move only that plan by name" in out
+    assert "archive_plans.py index" in out
+    assert "archive_plans.py archive" not in out
 
 
 def test_plan_metadata_extracts_title_lane_phase():

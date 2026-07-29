@@ -14,8 +14,9 @@ This tool gives the directory a lifecycle:
                whose unmerged plan still lives in the root.
 - ``index``    regenerate ``plans/INDEX.md`` from the archive without moving anything.
 - ``check``    print a non-blocking warning when the root holds more than
-               ``--threshold`` plan docs (a nudge to run ``archive``). Always exits 0
-               so it never adds friction to a PR.
+               ``--threshold`` plan docs. The warning names the single-plan
+               teardown flow for active branches, not the bulk archive command.
+               Always exits 0 so it never adds friction to a PR.
 
 The moves are plain filesystem renames; commit with ``git add -A`` and git records
 them as renames, preserving history.
@@ -176,8 +177,12 @@ def main(argv: list[str] | None = None) -> int:
     if over:
         print(
             f"WARNING: {count} plan doc(s) in {plans_dir} root exceeds threshold "
-            f"{args.threshold}; run `python scripts/archive_plans.py archive` to "
-            "move merged plans into the archive."
+            f"{args.threshold}."
+        )
+        print(
+            "After a PR merges, move only that plan by name: "
+            "`git mv plans/PR-<Slice>.md plans/archive/ && "
+            "python scripts/archive_plans.py index`."
         )
     else:
         print(f"OK: {count} plan doc(s) in root (threshold {args.threshold}).")
