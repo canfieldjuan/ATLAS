@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import logging
 import re
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
@@ -22,6 +23,8 @@ _PROJECTION_LEASE = timedelta(minutes=2)
 _TERMINAL_CALENDAR_FAILURE_STATUS = "calendar_rejected"
 _PERMANENT_CALENDAR_RESULT_ERRORS = {"AUTH_ERROR", "NOT_CONFIGURED", "TOOL_DISABLED"}
 _PERMANENT_CALENDAR_HTTP_STATUSES = {400, 401, 403, 404, 410}
+
+logger = logging.getLogger("atlas.services.eom_lead_booking")
 
 
 class EOMLeadBookingError(ValueError):
@@ -203,6 +206,34 @@ class EOMLeadBookingService:
         status_code = cls._calendar_failure_status_code(result)
         return status_code in {404, 410}
 
+    @staticmethod
+    def _operation_contact_snapshot(operation: Any) -> dict[str, Any]:
+        snapshot = operation["contact_snapshot"]
+        if isinstance(snapshot, str):
+            snapshot = json.loads(snapshot)
+        return dict(snapshot)
+
+    @classmethod
+    def _calendar_payload_for_operation(cls, operation: Any) -> dict[str, Any]:
+        snapshot = cls._operation_contact_snapshot(operation)
+        description_lines = [
+            "EOM office estimate booking",
+            f"Lead: {snapshot['full_name']}",
+        ]
+        if snapshot.get("phone"):
+            description_lines.append(f"Phone: {snapshot['phone']}")
+        if snapshot.get("email"):
+            description_lines.append(f"Email: {snapshot['email']}")
+        if operation["notes"]:
+            description_lines.extend(("", operation["notes"]))
+        return {
+            "summary": f"Estimate: {snapshot['full_name']}"[:256],
+            "start": operation["start_time"],
+            "end": operation["end_time"],
+            "location": operation["location"] or snapshot.get("address") or None,
+            "description": "\n".join(description_lines)[:4000],
+        }
+
     async def _reconcile_existing_calendar_event(self, operation: Any) -> bool | None:
         """Return True when the deterministic event is live, False when absent.
 
@@ -224,6 +255,18 @@ class EOMLeadBookingService:
             result.success
             and (result.data or {}).get("event_id") == operation["calendar_event_id"]
         ):
+            mismatches = CalendarTool._calendar_event_mismatches(
+                result.data or {},
+                **self._calendar_payload_for_operation(operation),
+            )
+            if mismatches:
+                logger.warning(
+                    "Recovered Calendar event %s does not match booking operation %s: %s",
+                    operation["calendar_event_id"],
+                    operation["id"],
+                    ", ".join(mismatches),
+                )
+                return None
             return True
         if self._proves_calendar_event_settled(result):
             return False
@@ -423,26 +466,10 @@ class EOMLeadBookingService:
         operation = await self._refresh_projection_lease_before_calendar_write(
             operation
         )
-        snapshot = operation["contact_snapshot"]
-        if isinstance(snapshot, str):
-            snapshot = json.loads(snapshot)
-        description_lines = [
-            "EOM office estimate booking",
-            f"Lead: {snapshot['full_name']}",
-        ]
-        if snapshot.get("phone"):
-            description_lines.append(f"Phone: {snapshot['phone']}")
-        if snapshot.get("email"):
-            description_lines.append(f"Email: {snapshot['email']}")
-        if operation["notes"]:
-            description_lines.extend(("", operation["notes"]))
+        calendar_payload = self._calendar_payload_for_operation(operation)
 
         result: ToolResult = await self._calendar.create_event(
-            summary=f"Estimate: {snapshot['full_name']}"[:256],
-            start=operation["start_time"],
-            end=operation["end_time"],
-            location=operation["location"] or snapshot.get("address") or None,
-            description="\n".join(description_lines)[:4000],
+            **calendar_payload,
             calendar_id=operation["calendar_id"],
             event_id=operation["calendar_event_id"],
         )

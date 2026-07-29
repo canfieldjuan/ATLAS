@@ -20,6 +20,8 @@ from atlas_brain.services.eom_lead_booking import (
     EstimateBookingResult,
     EOMLeadBookingService,
 )
+from atlas_brain.tools import scheduling as scheduling_mod
+from atlas_brain.tools.base import ToolResult
 from atlas_brain.tools.calendar import CalendarTool
 
 _GENERATED_SERVICE_TOKEN = auth_mod.generate_eom_funnel_service_token()
@@ -142,6 +144,12 @@ async def test_private_route_requires_token_actor_key_and_timezone():
         assert (
             await client.post(path, headers=_headers(), json=overflow_time)
         ).status_code == 422
+        for field_name in ("serviceType", "location", "notes"):
+            nul_text = _payload()
+            nul_text[field_name] = "safe\x00unsafe"
+            assert (
+                await client.post(path, headers=_headers(), json=nul_text)
+            ).status_code == 422
 
         created = await client.post(path, headers=_headers(), json=_payload())
 
@@ -206,6 +214,11 @@ async def test_calendar_tool_recovers_exact_event_after_conflicting_retry():
                 200,
                 json={
                     "id": "eom0123456789abcdef0123456789abcdef",
+                    "summary": "Estimate: Retry-safe",
+                    "start": {"dateTime": "2026-08-01T15:00:00+00:00"},
+                    "end": {"dateTime": "2026-08-01T16:00:00+00:00"},
+                    "location": "100 Main St",
+                    "description": "Use side door",
                     "status": "confirmed",
                 },
                 request=httpx.Request("GET", url),
@@ -221,6 +234,8 @@ async def test_calendar_tool_recovers_exact_event_after_conflicting_retry():
         summary="Estimate: Retry-safe",
         start=datetime(2026, 8, 1, 15, tzinfo=timezone.utc),
         end=datetime(2026, 8, 1, 16, tzinfo=timezone.utc),
+        location="100 Main St",
+        description="Use side door",
         calendar_id="estimate-calendar",
         event_id="eom0123456789abcdef0123456789abcdef",
     )
@@ -228,6 +243,63 @@ async def test_calendar_tool_recovers_exact_event_after_conflicting_retry():
     assert result.success is True
     assert client.posts[0][1]["json"]["id"] == "eom0123456789abcdef0123456789abcdef"
     assert client.gets[0][0].endswith("/eom0123456789abcdef0123456789abcdef")
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("field_name", "override"),
+    [
+        ("summary", {"summary": "Estimate: Edited"}),
+        ("start", {"start": {"dateTime": "2026-08-01T16:00:00+00:00"}}),
+        ("end", {"end": {"dateTime": "2026-08-01T17:00:00+00:00"}}),
+        ("location", {"location": "200 Main St"}),
+        ("description", {"description": "Edited notes"}),
+    ],
+)
+async def test_calendar_tool_rejects_conflicting_retry_when_recovered_fields_differ(
+    field_name: str,
+    override: dict[str, object],
+):
+    class _Client:
+        async def post(self, url: str, **kwargs):
+            return httpx.Response(409, request=httpx.Request("POST", url))
+
+        async def get(self, url: str, **kwargs):
+            event = {
+                "id": "eom0123456789abcdef0123456789abcdef",
+                "summary": "Estimate: Retry-safe",
+                "start": {"dateTime": "2026-08-01T15:00:00+00:00"},
+                "end": {"dateTime": "2026-08-01T16:00:00+00:00"},
+                "location": "100 Main St",
+                "description": "Use side door",
+                "status": "confirmed",
+            }
+            event.update(override)
+            return httpx.Response(
+                200,
+                json=event,
+                request=httpx.Request("GET", url),
+            )
+
+    tool = CalendarTool()
+    tool._config = SimpleNamespace(calendar_enabled=True, calendar_refresh_token="refresh")
+    tool._ensure_client = AsyncMock(return_value=_Client())
+    tool._get_auth_header = AsyncMock(return_value={"Authorization": "Bearer token"})
+
+    result = await tool.create_event(
+        summary="Estimate: Retry-safe",
+        start=datetime(2026, 8, 1, 15, tzinfo=timezone.utc),
+        end=datetime(2026, 8, 1, 16, tzinfo=timezone.utc),
+        location="100 Main St",
+        description="Use side door",
+        calendar_id="estimate-calendar",
+        event_id="eom0123456789abcdef0123456789abcdef",
+    )
+
+    assert result.success is False
+    assert result.error == "API_ERROR"
+    assert result.data["event_id"] == "eom0123456789abcdef0123456789abcdef"
+    assert field_name in result.data["mismatched_fields"]
 
 
 @pytest.mark.asyncio
@@ -302,6 +374,175 @@ def test_booking_event_id_and_fingerprint_are_payload_scoped():
     assert EOMLeadBookingService._event_id(uuid4()).startswith("eom")
     assert command.actor == "employee:7:Mayra"
     assert command.request_fingerprint != changed.request_fingerprint
+
+
+@pytest.mark.asyncio
+async def test_booking_reconcile_rejects_mismatched_recovered_calendar_event():
+    operation = {
+        "id": uuid4(),
+        "calendar_event_id": "eom0123456789abcdef0123456789abcdef",
+        "calendar_id": "estimate-calendar",
+        "start_time": datetime(2026, 8, 1, 15, tzinfo=timezone.utc),
+        "end_time": datetime(2026, 8, 1, 16, tzinfo=timezone.utc),
+        "location": "100 Main St",
+        "notes": "Use side door",
+        "contact_snapshot": {
+            "full_name": "Estimate Lead",
+            "phone": "2175550101",
+            "email": "estimate@example.com",
+            "address": "100 Main St",
+        },
+    }
+
+    class _Calendar:
+        async def get_event(self, **kwargs):
+            return ToolResult(
+                success=True,
+                data={
+                    "event_id": kwargs["event_id"],
+                    "summary": "Estimate: Estimate Lead",
+                    "start": {"dateTime": "2026-08-01T16:00:00+00:00"},
+                    "end": {"dateTime": "2026-08-01T17:00:00+00:00"},
+                    "location": "100 Main St",
+                    "description": (
+                        "EOM office estimate booking\n"
+                        "Lead: Estimate Lead\n"
+                        "Phone: 2175550101\n"
+                        "Email: estimate@example.com\n"
+                        "\n"
+                        "Use side door"
+                    ),
+                    "calendar_event_status": "confirmed",
+                },
+                message="fetched",
+            )
+
+    service = EOMLeadBookingService(
+        pool=object(),
+        calendar=_Calendar(),
+        config=EOMFunnelConfig(estimate_calendar_id="estimate-calendar"),
+    )
+
+    assert await service._reconcile_existing_calendar_event(operation) is None
+
+
+@pytest.mark.asyncio
+async def test_generic_cancel_rejects_eom_estimate_booking_appointments(monkeypatch):
+    appointment_id = uuid4()
+    appointment = {
+        "id": appointment_id,
+        "calendar_event_id": "eom0123456789abcdef0123456789abcdef",
+        "customer_name": "Estimate Lead",
+        "customer_phone": "2175550101",
+        "start_time": datetime(2026, 8, 1, 15, tzinfo=timezone.utc),
+        "eom_estimate_booking_operation_id": uuid4(),
+    }
+
+    class _Repo:
+        def __init__(self) -> None:
+            self.cancel_calls = 0
+
+        async def get_by_id(self, loaded_id):
+            assert loaded_id == appointment_id
+            return appointment
+
+        async def get_by_phone(self, *args, **kwargs):
+            return [appointment]
+
+        async def cancel(self, *args, **kwargs):
+            self.cancel_calls += 1
+            raise AssertionError("estimate booking appointment must not be cancelled")
+
+    repo = _Repo()
+    scheduling_service = SimpleNamespace(cancel_appointment=AsyncMock())
+    monkeypatch.setattr(
+        scheduling_mod,
+        "_get_default_context",
+        lambda: SimpleNamespace(
+            scheduling=SimpleNamespace(calendar_id="estimate-calendar"),
+        ),
+    )
+    monkeypatch.setattr(scheduling_mod, "get_appointment_repo", lambda: repo)
+    monkeypatch.setattr(
+        scheduling_mod,
+        "_get_scheduling_service",
+        lambda: scheduling_service,
+    )
+
+    for params in (
+        {"appointment_id": str(appointment_id)},
+        {"customer_phone": "217-555-0101"},
+    ):
+        scheduling_service.cancel_appointment.reset_mock()
+        result = await scheduling_mod.CancelAppointmentTool().execute(params)
+
+        assert result.success is False
+        assert result.error == "EOM_ESTIMATE_BOOKING_MANAGED"
+        assert repo.cancel_calls == 0
+        scheduling_service.cancel_appointment.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_generic_reschedule_rejects_eom_estimate_booking_appointments(monkeypatch):
+    appointment = {
+        "id": uuid4(),
+        "calendar_event_id": "eom0123456789abcdef0123456789abcdef",
+        "customer_name": "Estimate Lead",
+        "customer_email": "estimate@example.com",
+        "customer_address": "100 Main St",
+        "customer_phone": "2175550101",
+        "service_type": "Cleaning estimate",
+        "notes": "Use side door",
+        "eom_estimate_booking_operation_id": uuid4(),
+    }
+
+    class _Repo:
+        def __init__(self) -> None:
+            self.update_calls = 0
+
+        async def get_by_phone(self, *args, **kwargs):
+            return [appointment]
+
+        async def update(self, *args, **kwargs):
+            self.update_calls += 1
+            raise AssertionError("estimate booking appointment must not be rescheduled")
+
+    repo = _Repo()
+    scheduling_service = SimpleNamespace(
+        book_appointment=AsyncMock(),
+        cancel_appointment=AsyncMock(),
+    )
+    monkeypatch.setattr(
+        scheduling_mod,
+        "_get_default_context",
+        lambda: SimpleNamespace(
+            scheduling=SimpleNamespace(
+                calendar_id="estimate-calendar",
+                default_duration_minutes=60,
+            ),
+            hours=SimpleNamespace(timezone="UTC"),
+        ),
+    )
+    monkeypatch.setattr(scheduling_mod, "get_appointment_repo", lambda: repo)
+    monkeypatch.setattr(
+        scheduling_mod,
+        "_get_scheduling_service",
+        lambda: scheduling_service,
+    )
+
+    result = await scheduling_mod.RescheduleAppointmentTool().execute(
+        {
+            "customer_phone": "217-555-0101",
+            "new_date": "tomorrow",
+            "new_time": "2pm",
+        }
+    )
+
+    assert result.success is False
+    assert result.error == "EOM_ESTIMATE_BOOKING_MANAGED"
+    assert repo.update_calls == 0
+    scheduling_service.book_appointment.assert_not_awaited()
+    scheduling_service.cancel_appointment.assert_not_awaited()
 
 
 @pytest.mark.asyncio

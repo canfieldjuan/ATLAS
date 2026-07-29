@@ -113,6 +113,8 @@ class EOMEstimateBookingRequest(BaseModel):
     @field_validator("service_type", "location", "notes", mode="before")
     @classmethod
     def _strip_text(cls, value: Any) -> Any:
+        if isinstance(value, str) and "\x00" in value:
+            raise ValueError("Text fields cannot contain NUL characters")
         return value.strip() if isinstance(value, str) else value
 
 

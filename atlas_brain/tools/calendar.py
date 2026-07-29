@@ -145,6 +145,67 @@ class CalendarTool:
     def category(self) -> str:
         return "utility"
 
+    @staticmethod
+    def _calendar_text(value: Any) -> str | None:
+        if value in (None, ""):
+            return None
+        return str(value)
+
+    @staticmethod
+    def _calendar_datetime_value(value: Any) -> str | None:
+        if isinstance(value, dict):
+            raw_value = value.get("dateTime") or value.get("date")
+            return str(raw_value) if raw_value is not None else None
+        if isinstance(value, str):
+            return value
+        return None
+
+    @classmethod
+    def _calendar_datetime_matches(cls, value: Any, expected: datetime) -> bool:
+        raw_value = cls._calendar_datetime_value(value)
+        if raw_value is None:
+            return False
+        normalized = (
+            f"{raw_value[:-1]}+00:00"
+            if raw_value.endswith("Z")
+            else raw_value
+        )
+        try:
+            recovered = datetime.fromisoformat(normalized)
+        except ValueError:
+            return raw_value == expected.isoformat()
+        if recovered.tzinfo is None or recovered.utcoffset() is None:
+            return raw_value == expected.isoformat()
+        return recovered == expected
+
+    @classmethod
+    def _calendar_event_mismatches(
+        cls,
+        recovered: dict[str, Any],
+        *,
+        summary: str,
+        start: datetime,
+        end: datetime,
+        location: Optional[str] = None,
+        description: Optional[str] = None,
+    ) -> list[str]:
+        """Return recovered Calendar fields that do not match the command."""
+        mismatches: list[str] = []
+        if recovered.get("summary") != summary:
+            mismatches.append("summary")
+        if not cls._calendar_datetime_matches(recovered.get("start"), start):
+            mismatches.append("start")
+        if not cls._calendar_datetime_matches(recovered.get("end"), end):
+            mismatches.append("end")
+        if cls._calendar_text(recovered.get("location")) != cls._calendar_text(location):
+            mismatches.append("location")
+        if (
+            cls._calendar_text(recovered.get("description"))
+            != cls._calendar_text(description)
+        ):
+            mismatches.append("description")
+        return mismatches
+
     async def _ensure_client(self) -> httpx.AsyncClient:
         """Get or create HTTP client with connection pooling."""
         if self._client is None:
@@ -592,6 +653,31 @@ class CalendarTool:
             if response.status_code == 409 and event_id:
                 recovered = await self.get_event(event_id, calendar_id=cal_id)
                 if recovered.success:
+                    mismatches = self._calendar_event_mismatches(
+                        recovered.data or {},
+                        summary=summary,
+                        start=start,
+                        end=end,
+                        location=location,
+                        description=description,
+                    )
+                    if mismatches:
+                        return ToolResult(
+                            success=False,
+                            data={
+                                "status_code": response.status_code,
+                                "event_id": event_id,
+                                "calendar_event_status": (
+                                    (recovered.data or {}).get("calendar_event_status")
+                                ),
+                                "mismatched_fields": mismatches,
+                            },
+                            error="API_ERROR",
+                            message=(
+                                "Calendar event conflict does not match "
+                                f"requested event fields: {', '.join(mismatches)}"
+                            ),
+                        )
                     self._cache.last_updated = 0.0
                     return ToolResult(
                         success=True,
@@ -728,6 +814,7 @@ class CalendarTool:
                     "start": event.get("start"),
                     "end": event.get("end"),
                     "location": event.get("location"),
+                    "description": event.get("description"),
                     "calendar_event_status": event_status,
                 },
                 message=f"Fetched event: {recovered_event_id}",

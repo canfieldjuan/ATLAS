@@ -67,6 +67,23 @@ def _parse_datetime(text: str, timezone: str = settings.reminder.default_timezon
     return result
 
 
+def _is_eom_estimate_booking_appointment(appointment: dict[str, Any]) -> bool:
+    """Return True when an appointment is owned by the EOM lead booking flow."""
+    return bool(appointment.get("eom_estimate_booking_operation_id"))
+
+
+def _reject_eom_estimate_booking_mutation(action: str) -> ToolResult:
+    return ToolResult(
+        success=False,
+        error="EOM_ESTIMATE_BOOKING_MANAGED",
+        message=(
+            f"EOM estimate bookings cannot be {action} through the generic "
+            "scheduling tools. Use the EOM lead funnel workflow so the lead, "
+            "appointment, and Calendar event stay consistent."
+        ),
+    )
+
+
 async def _send_confirmation_email(
     customer_email: str,
     customer_name: str,
@@ -612,6 +629,8 @@ class CancelAppointmentTool:
             appt_id = appt["id"]
             calendar_event_id = appt.get("calendar_event_id")
             customer_name = appt.get("customer_name", "Customer")
+            if _is_eom_estimate_booking_appointment(appt):
+                return _reject_eom_estimate_booking_mutation("cancelled")
 
             # Cancel in database
             from uuid import UUID
@@ -752,6 +771,8 @@ class RescheduleAppointmentTool:
             address = old_appt.get("customer_address")
             notes = old_appt.get("notes")
             old_calendar_id = old_appt.get("calendar_event_id")
+            if _is_eom_estimate_booking_appointment(old_appt):
+                return _reject_eom_estimate_booking_mutation("rescheduled")
 
             # Parse new datetime
             datetime_text = f"{new_date} at {new_time}"

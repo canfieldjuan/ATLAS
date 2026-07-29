@@ -256,6 +256,7 @@ fallback changes; otherwise write "N/A - no guard/config boundary change."
 - `atlas_brain/storage/migrations/357_eom_lead_review_queue_booked_index.sql`
 - `atlas_brain/storage/migrations/358_eom_estimate_booking_appointment_link_index.sql`
 - `atlas_brain/tools/calendar.py`
+- `atlas_brain/tools/scheduling.py`
 - `plans/PR-EOM-Estimate-Booking.md`
 - `tests/test_eom_estimate_booking.py`
 - `tests/test_eom_estimate_booking_integration.py`
@@ -336,6 +337,26 @@ Parked hardening: none.
 
 ## Verification
 
+- Latest repair command: `python -m compileall -q
+  atlas_brain/tools/calendar.py atlas_brain/services/eom_lead_booking.py
+  atlas_brain/eom_api/funnel.py atlas_brain/tools/scheduling.py
+  tests/test_eom_estimate_booking.py tests/test_eom_estimate_booking_integration.py
+  tests/test_migrations_runner.py && git diff --check`; result: passed.
+- Latest repair command: `python -m pytest tests/test_eom_estimate_booking.py
+  tests/test_migrations_runner.py::test_eom_lead_review_queue_index_matches_keyset_order
+  tests/test_migrations_runner.py::test_eom_lead_review_queue_booked_index_matches_widened_predicate`;
+  result: 19 passed, 1 third-party `pynvml` deprecation warning.
+- Latest repair command: `python -m pytest tests/test_crm_read_scoping.py
+  tests/test_eom_complaints_integration.py tests/test_eom_contacts_api_tenant_scope.py
+  tests/test_eom_estimate_booking.py tests/test_eom_estimate_booking_integration.py
+  tests/test_eom_lead_conversion.py tests/test_eom_lead_conversion_integration.py
+  tests/test_eom_lead_pipeline_integration.py tests/test_eom_mailbox_context_binding.py
+  tests/test_eom_lead_ingress.py tests/test_eom_recurring_appointments_integration.py
+  tests/test_eom_scoped_gmail_credentials.py tests/test_eom_scoped_gmail_hardening.py
+  tests/test_eom_sent_email_tenant_scope.py tests/test_leads_intake.py
+  tests/test_migrations_runner.py -q`; result: 281 passed, 48 skipped because
+  `ATLAS_MIGRATION_TEST_DATABASE_URL` was not configured locally, 1 third-party
+  `pynvml` deprecation warning.
 - Command: `python -m py_compile atlas_brain/eom_api/funnel.py
   atlas_brain/main.py atlas_brain/services/crm_provider.py
   atlas_brain/services/eom_lead_booking.py atlas_brain/tools/calendar.py
@@ -368,18 +389,19 @@ Parked hardening: none.
 |---|---:|
 | `.github/workflows/atlas_eom_lead_pipeline_checks.yml` | 16 |
 | `atlas_brain/eom_api/config.py` | 8 |
-| `atlas_brain/eom_api/funnel.py` | 121 |
+| `atlas_brain/eom_api/funnel.py` | 123 |
 | `atlas_brain/main.py` | 81 |
 | `atlas_brain/services/crm_provider.py` | 46 |
-| `atlas_brain/services/eom_lead_booking.py` | 646 |
+| `atlas_brain/services/eom_lead_booking.py` | 673 |
 | `atlas_brain/storage/migrations/356_eom_lead_estimate_booking_operations.sql` | 169 |
-| `atlas_brain/storage/migrations/357_eom_lead_review_queue_booked_index.sql` | 15 |
+| `atlas_brain/storage/migrations/357_eom_lead_review_queue_booked_index.sql` | 24 |
 | `atlas_brain/storage/migrations/358_eom_estimate_booking_appointment_link_index.sql` | 39 |
-| `atlas_brain/tools/calendar.py` | 132 |
-| `plans/PR-EOM-Estimate-Booking.md` | 385 |
-| `tests/test_eom_estimate_booking.py` | 496 |
-| `tests/test_eom_estimate_booking_integration.py` | 927 |
+| `atlas_brain/tools/calendar.py` | 219 |
+| `atlas_brain/tools/scheduling.py` | 21 |
+| `plans/PR-EOM-Estimate-Booking.md` | 407 |
+| `tests/test_eom_estimate_booking.py` | 737 |
+| `tests/test_eom_estimate_booking_integration.py` | 939 |
 | `tests/test_eom_lead_conversion.py` | 41 |
 | `tests/test_eom_lead_conversion_integration.py` | 68 |
-| `tests/test_migrations_runner.py` | 250 |
-| **Total** | **3440** |
+| `tests/test_migrations_runner.py` | 263 |
+| **Total** | **3874** |

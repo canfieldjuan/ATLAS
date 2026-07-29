@@ -192,6 +192,18 @@ class _RecoveringCalendar:
             success=True,
             data={
                 "event_id": kwargs["event_id"],
+                "summary": "Estimate: Estimate Lead",
+                "start": {"dateTime": "2026-08-01T15:00:00+00:00"},
+                "end": {"dateTime": "2026-08-01T16:00:00+00:00"},
+                "location": "100 Main St",
+                "description": (
+                    "EOM office estimate booking\n"
+                    "Lead: Estimate Lead\n"
+                    "Phone: 2175550101\n"
+                    "Email: estimate@example.com\n"
+                    "\n"
+                    "Use side door"
+                ),
                 "calendar_event_status": "confirmed",
             },
             message="fetched",

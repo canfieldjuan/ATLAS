@@ -176,11 +176,24 @@ def test_eom_lead_review_queue_booked_index_matches_widened_predicate():
         / "357_eom_lead_review_queue_booked_index.sql"
     ).read_text()
 
+    temp_drop = (
+        "DROP INDEX CONCURRENTLY IF EXISTS "
+        "idx_contacts_eom_lead_review_queue_booked"
+    )
+    live_drop = "DROP INDEX CONCURRENTLY IF EXISTS idx_contacts_eom_lead_review_queue;"
+    create = "CREATE INDEX CONCURRENTLY idx_contacts_eom_lead_review_queue_booked"
+    rename = "ALTER INDEX IF EXISTS idx_contacts_eom_lead_review_queue_booked"
+    assert temp_drop in migration
+    assert create in migration
     assert (
         "DROP INDEX CONCURRENTLY IF EXISTS idx_contacts_eom_lead_review_queue"
         in migration
     )
-    assert "CREATE INDEX CONCURRENTLY idx_contacts_eom_lead_review_queue" in migration
+    assert rename in migration
+    assert "RENAME TO idx_contacts_eom_lead_review_queue" in migration
+    assert migration.index(temp_drop) < migration.index(create)
+    assert migration.index(create) < migration.index(live_drop)
+    assert migration.index(live_drop) < migration.index(rename)
     assert "ON contacts (created_at DESC, id DESC)" in migration
     assert "business_context_id = 'effingham_maids'" in migration
     assert "status = 'active'" in migration
