@@ -1,6 +1,6 @@
 # Plan archive index
 
-1415 archived plan doc(s). Merged plan docs are moved under `archive/` and listed below; once the archive sweep has run, the `plans/` root holds only in-flight slices.
+1416 archived plan doc(s). Merged plan docs are moved under `archive/` and listed below; once the archive sweep has run, the `plans/` root holds only in-flight slices.
 
 - [PR-ASR-Pip-Audit-Egg-Fragment](archive/PR-ASR-Pip-Audit-Egg-Fragment.md) - lane: security/workflow | phase: Production hardening
 - [PR-ASR-Requirements-Audit-Pin](archive/PR-ASR-Requirements-Audit-Pin.md) - lane: security/workflow | phase: Production hardening
@@ -979,6 +979,7 @@
 - [PR-Diff-Budget-Gate](archive/PR-Diff-Budget-Gate.md) - lane: Workflow/process | phase: Vertical slice
 - [PR-Diff-Budget-Required-Check](archive/PR-Diff-Budget-Required-Check.md) - lane: Workflow/process | phase: Vertical slice
 - [PR-Docker-Baseimage-Security-Bumps](archive/PR-Docker-Baseimage-Security-Bumps.md) - lane: infra/docker-base-images | phase: Production hardening
+- [PR-Docs-Only-Live-Reconciliation](archive/PR-Docs-Only-Live-Reconciliation.md) - lane: workflow/docs-only-live-reconciliation | phase: Workflow/process
 - [PR-Docs-Preserve-Product-Audit-Notes](archive/PR-Docs-Preserve-Product-Audit-Notes.md) - lane: docs/product-history-preservation | phase: Workflow/process
 - [PR-EOM-API-Contacts-Auth](archive/PR-EOM-API-Contacts-Auth.md) - lane: eom-crm/api-auth | phase: Production hardening
 - [PR-EOM-Complaints-Tracking](archive/PR-EOM-Complaints-Tracking.md) - lane: eom-crm/complaints | phase: Vertical slice
