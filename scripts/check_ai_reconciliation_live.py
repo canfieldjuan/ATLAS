@@ -35,7 +35,7 @@ import re
 import subprocess
 import sys
 from collections.abc import Sequence
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 
 _DEFAULT_BOTS = ("chatgpt-codex-connector", "chatgpt-codex-connector[bot]")
 _CLEAN_CODEX_REVIEW_TEXT = "didn't find any major issues"
@@ -114,10 +114,53 @@ _MAX_REVIEW_PAGES = 50
 _MAX_COMMENT_PAGES = 50
 
 
+class ChangedFileProof:
+    def __init__(
+        self,
+        *,
+        base_sha: str,
+        head_sha: str,
+        merge_base_sha: str,
+        expected_count: int,
+        files: list[dict],
+    ) -> None:
+        self.base_sha = base_sha
+        self.head_sha = head_sha
+        self.merge_base_sha = merge_base_sha
+        self.expected_count = expected_count
+        self.files = files
+
+
+class PrRefSnapshot:
+    def __init__(
+        self,
+        *,
+        base_ref_name: str,
+        base_sha: str,
+        head_sha: str,
+        changed_files: int,
+    ) -> None:
+        self.base_ref_name = base_ref_name
+        self.base_sha = base_sha
+        self.head_sha = head_sha
+        self.changed_files = changed_files
+
+
 def _load_phase2():
     """Import the local reconciliation auditor so the body classifier matches."""
     path = Path(__file__).resolve().parent / "audit_ai_reconciliation.py"
     spec = importlib.util.spec_from_file_location("audit_ai_reconciliation", path)
+    if spec is None or spec.loader is None:  # pragma: no cover - defensive
+        raise RuntimeError(f"cannot load {path}")
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+def _load_pr_body_audit():
+    """Import the PR-body auditor so docs-only marker parsing is canonical."""
+    path = Path(__file__).resolve().parent / "audit_pr_body.py"
+    spec = importlib.util.spec_from_file_location("audit_pr_body", path)
     if spec is None or spec.loader is None:  # pragma: no cover - defensive
         raise RuntimeError(f"cannot load {path}")
     module = importlib.util.module_from_spec(spec)
@@ -140,6 +183,72 @@ def classify_body(body: str) -> str:
     if p2.RESOLVED_RE.search(section):
         return "claims_clear"
     return "unmarked"
+
+
+def is_docs_only_body(body: str) -> bool:
+    """Return true when the PR body uses the explicit docs-only exemption."""
+
+    return bool(_load_pr_body_audit().is_docs_only_body(body))
+
+
+def _is_markdown_only_path(path: str) -> bool:
+    """Return true when a changed path has `.md` as its only suffix."""
+
+    return PurePosixPath(path).suffixes == [".md"]
+
+
+def _is_non_executable_regular_blob(item: dict, prefix: str) -> bool:
+    return item.get(f"{prefix}_mode") == "100644" and item.get(f"{prefix}_type") == "blob"
+
+
+_HEAD_SIDE_STATUSES = frozenset({"added", "changed", "copied", "modified", "renamed"})
+_BASE_SIDE_STATUSES = frozenset({"removed", "renamed"})
+_ALLOWED_CHANGED_FILE_STATUSES = _HEAD_SIDE_STATUSES | _BASE_SIDE_STATUSES
+
+
+def changed_file_shape_is_valid(item: dict) -> bool:
+    """Return true when a GitHub changed-file row has the fields its status needs."""
+
+    filename = item.get("filename")
+    status = item.get("status")
+    if not isinstance(filename, str) or not filename:
+        return False
+    if not isinstance(status, str) or status not in _ALLOWED_CHANGED_FILE_STATUSES:
+        return False
+    previous_filename = item.get("previous_filename")
+    if status == "renamed":
+        return isinstance(previous_filename, str) and bool(previous_filename)
+    return previous_filename is None or isinstance(previous_filename, str)
+
+
+def changed_files_are_docs_only(files: Sequence[dict]) -> bool:
+    """Return true only when the live changed-file list proves a docs-only diff."""
+
+    if not files:
+        return False
+    for item in files:
+        if not isinstance(item, dict):
+            return False
+        if not changed_file_shape_is_valid(item):
+            return False
+        filename = item.get("filename")
+        if not isinstance(filename, str) or not _is_markdown_only_path(filename):
+            return False
+        previous_filename = item.get("previous_filename")
+        if previous_filename is not None and (
+            not isinstance(previous_filename, str) or not _is_markdown_only_path(previous_filename)
+        ):
+            return False
+        status = item.get("status")
+        if status == "removed":
+            if not _is_non_executable_regular_blob(item, "base"):
+                return False
+        elif status in _HEAD_SIDE_STATUSES:
+            if not _is_non_executable_regular_blob(item, "head"):
+                return False
+        if previous_filename is not None and not _is_non_executable_regular_blob(item, "base"):
+            return False
+    return True
 
 
 def open_bot_threads(nodes: Sequence[dict], bot_logins: Sequence[str]) -> list[dict]:
@@ -339,10 +448,12 @@ def evaluate(
     *,
     reviews: Sequence[dict] | None = None,
     comments: Sequence[dict] | None = None,
+    changed_files: Sequence[dict] | None = None,
     head_sha: str | None = None,
 ) -> tuple[int, list[str]]:
     """Core decision (pure). Returns (exit_code, messages)."""
     messages: list[str] = []
+    open_threads = open_bot_threads(nodes, bot_logins)
     if head_sha is not None:
         change_requests = current_head_change_requests(
             reviews or [],
@@ -354,6 +465,11 @@ def evaluate(
                 "current-head Codex connector review requested changes: live "
                 f"reconciliation cannot pass PR head {head_sha} until the "
                 "changes-requested review is superseded or resolved."
+            )
+        elif not open_threads and is_docs_only_body(body) and changed_files_are_docs_only(changed_files or []):
+            messages.append(
+                "OK: docs-only PR diff has no open scoped Codex review threads; "
+                "current-head Codex review attestation is not required."
             )
         elif not current_head_bot_reviews(
             reviews or [],
@@ -369,9 +485,10 @@ def evaluate(
                 f"requires one scoped Codex review or clean review comment on PR head {head_sha} before merge."
             )
 
-    open_threads = open_bot_threads(nodes, bot_logins)
     if not open_threads:
         if messages:
+            if all(message.startswith("OK:") for message in messages):
+                return 0, messages
             return 1, messages
         return 0, ["OK: current-head Codex review attestation is present and no open scoped Codex review threads remain."]
 
@@ -408,12 +525,49 @@ def evaluate(
     return 1, messages
 
 
+def docs_only_exemption_needs_file_proof(
+    nodes: Sequence[dict],
+    body: str,
+    bot_logins: Sequence[str],
+    *,
+    reviews: Sequence[dict] | None,
+    comments: Sequence[dict] | None,
+    head_sha: str | None,
+) -> bool:
+    """Return true only when file proof is needed to decide the docs-only bypass."""
+
+    if head_sha is None or not is_docs_only_body(body):
+        return False
+    if open_bot_threads(nodes, bot_logins):
+        return False
+    if current_head_change_requests(reviews or [], head_sha=head_sha, bot_logins=bot_logins):
+        return False
+    if current_head_bot_reviews(reviews or [], head_sha=head_sha, bot_logins=bot_logins):
+        return False
+    if current_head_clean_review_comments(comments or [], head_sha=head_sha, bot_logins=bot_logins):
+        return False
+    return True
+
+
 def _gh(args: Sequence[str], gh: str) -> str:
     proc = subprocess.run(
         [gh, *args], capture_output=True, text=True, check=False
     )
     if proc.returncode != 0:
         raise RuntimeError((proc.stderr or proc.stdout or "gh failed").strip())
+    return proc.stdout
+
+
+def _git_stdout(args: Sequence[str]) -> str:
+    proc = subprocess.run(
+        ["git", *args],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    if proc.returncode != 0:
+        detail = proc.stderr.strip() or proc.stdout.strip() or "git command failed"
+        raise RuntimeError(detail)
     return proc.stdout
 
 
@@ -584,6 +738,209 @@ def fetch_body(pr: int, repo: str, gh: str) -> str:
     return out
 
 
+def fetch_pr_ref_snapshot(pr: int, repo: str, gh: str) -> PrRefSnapshot:
+    out = _gh(
+        [
+            "pr",
+            "view",
+            str(pr),
+            "--repo",
+            repo,
+            "--json",
+            "baseRefName,baseRefOid,changedFiles,headRefOid",
+        ],
+        gh,
+    )
+    data = json.loads(out)
+    base_ref_name = data.get("baseRefName")
+    base_sha = data.get("baseRefOid")
+    head_sha = data.get("headRefOid")
+    changed_files = data.get("changedFiles")
+    if not isinstance(base_ref_name, str) or not base_ref_name:
+        raise RuntimeError("GitHub PR response malformed: baseRefName is missing")
+    if base_ref_name.startswith("-") or ".." in base_ref_name:
+        raise RuntimeError("GitHub PR response malformed: baseRefName is unsafe")
+    if not isinstance(base_sha, str) or not base_sha:
+        raise RuntimeError("GitHub PR response malformed: baseRefOid is missing")
+    if not isinstance(head_sha, str) or not head_sha:
+        raise RuntimeError("GitHub PR response malformed: headRefOid is missing")
+    if not isinstance(changed_files, int) or changed_files < 0:
+        raise RuntimeError("GitHub PR response malformed: changedFiles is missing")
+    return PrRefSnapshot(
+        base_ref_name=base_ref_name,
+        base_sha=base_sha,
+        head_sha=head_sha,
+        changed_files=changed_files,
+    )
+
+
+def fetch_pr_refs(pr: int, repo: str, gh: str) -> tuple[str, str, int]:
+    snapshot = fetch_pr_ref_snapshot(pr, repo, gh)
+    return snapshot.base_sha, snapshot.head_sha, snapshot.changed_files
+
+
+def fetch_merge_base(repo: str, base_sha: str, head_sha: str, gh: str) -> str:
+    out = _gh(["api", f"repos/{repo}/compare/{base_sha}...{head_sha}", "--jq", ".merge_base_commit.sha"], gh)
+    merge_base = out.strip()
+    if not re.fullmatch(r"[0-9a-f]{40}", merge_base):
+        raise RuntimeError("GitHub compare response malformed: merge_base_commit.sha is missing")
+    return merge_base
+
+
+def fetch_tree_entries(repo: str, ref: str, gh: str) -> dict[str, dict]:
+    out = _gh(["api", f"repos/{repo}/git/trees/{ref}?recursive=1"], gh)
+    data = json.loads(out)
+    if data.get("truncated"):
+        raise RuntimeError(f"GitHub tree response truncated for {ref}")
+    tree = data.get("tree")
+    if not isinstance(tree, list):
+        raise RuntimeError("GitHub tree response malformed: tree is missing or not a list")
+    entries: dict[str, dict] = {}
+    for entry in tree:
+        if not isinstance(entry, dict):
+            raise RuntimeError("GitHub tree response malformed: tree entry is not an object")
+        path = entry.get("path")
+        if isinstance(path, str):
+            entries[path] = entry
+    return entries
+
+
+def _fetch_pr_git_refs(pr: int, base_ref_name: str) -> None:
+    _git_stdout(
+        [
+            "fetch",
+            "--no-tags",
+            "origin",
+            f"+refs/heads/{base_ref_name}:refs/remotes/origin/{base_ref_name}",
+            f"+pull/{pr}/head:refs/remotes/origin/pr-{pr}",
+        ]
+    )
+
+
+def _assert_commit_available(ref: str, label: str) -> None:
+    _git_stdout(["cat-file", "-e", f"{ref}^{{commit}}"])
+
+
+def _git_tree_entry(ref: str, path: str) -> dict[str, str]:
+    entry = _git_stdout(["ls-tree", ref, "--", path]).strip()
+    if not entry:
+        return {}
+    parts = entry.split(None, 3)
+    if len(parts) < 4:
+        raise RuntimeError(f"git ls-tree response malformed for {path} at {ref}")
+    return {"mode": parts[0], "type": parts[1]}
+
+
+def _attach_tree_entry(item: dict, *, prefix: str, path: str, entries: dict[str, dict]) -> None:
+    entry = entries.get(path)
+    if not isinstance(entry, dict):
+        return
+    item[f"{prefix}_mode"] = entry.get("mode")
+    item[f"{prefix}_type"] = entry.get("type")
+
+
+def _attach_git_tree_entry(item: dict, *, prefix: str, path: str, ref: str) -> None:
+    entry = _git_tree_entry(ref, path)
+    if not entry:
+        return
+    item[f"{prefix}_mode"] = entry.get("mode")
+    item[f"{prefix}_type"] = entry.get("type")
+
+
+def _local_changed_files_from_refs(merge_base: str, head_sha: str) -> list[dict]:
+    payload = _git_stdout(
+        [
+            "diff",
+            "--name-status",
+            "--no-renames",
+            "-z",
+            f"{merge_base}...{head_sha}",
+        ]
+    )
+    parts = [part for part in payload.split("\0") if part]
+    if len(parts) % 2 != 0:
+        raise RuntimeError("git diff --name-status response malformed")
+    files: list[dict] = []
+    status_map = {
+        "A": "added",
+        "D": "removed",
+        "M": "modified",
+    }
+    for index in range(0, len(parts), 2):
+        raw_status = parts[index]
+        path = parts[index + 1]
+        status = status_map.get(raw_status)
+        if status is None:
+            status = f"unsupported:{raw_status}"
+        item = {"filename": path, "status": status, "previous_filename": None}
+        if status == "removed":
+            _attach_git_tree_entry(item, prefix="base", path=path, ref=merge_base)
+        elif status in _HEAD_SIDE_STATUSES:
+            _attach_git_tree_entry(item, prefix="head", path=path, ref=head_sha)
+        files.append(item)
+    return files
+
+
+def fetch_changed_file_proof(
+    pr: int,
+    repo: str,
+    gh: str,
+    *,
+    head_sha: str | None = None,
+    base_sha: str | None = None,
+) -> ChangedFileProof:
+    """Derive PR changed files from immutable git refs, not the mutable PR files API."""
+
+    snapshot = fetch_pr_ref_snapshot(pr, repo, gh)
+    if base_sha is not None and snapshot.base_sha != base_sha:
+        raise RuntimeError("GitHub PR base changed before changed-file fetch")
+    if head_sha is not None and snapshot.head_sha != head_sha:
+        raise RuntimeError("GitHub PR head changed before changed-file fetch")
+    merge_base = fetch_merge_base(repo, snapshot.base_sha, snapshot.head_sha, gh)
+    _fetch_pr_git_refs(pr, snapshot.base_ref_name)
+    for ref, label in (
+        (snapshot.base_sha, "base"),
+        (snapshot.head_sha, "head"),
+        (merge_base, "merge base"),
+    ):
+        try:
+            _assert_commit_available(ref, label)
+        except RuntimeError as exc:
+            raise RuntimeError(f"{label} commit {ref} is unavailable after git fetch") from exc
+    fetched_head = _git_stdout(["rev-parse", "--verify", f"refs/remotes/origin/pr-{pr}^{{commit}}"]).strip()
+    if fetched_head != snapshot.head_sha:
+        raise RuntimeError("fetched PR ref does not match observed head SHA")
+    files = _local_changed_files_from_refs(merge_base, snapshot.head_sha)
+    return ChangedFileProof(
+        base_sha=snapshot.base_sha,
+        head_sha=snapshot.head_sha,
+        merge_base_sha=merge_base,
+        expected_count=snapshot.changed_files,
+        files=files,
+    )
+
+
+def fetch_changed_files(pr: int, repo: str, gh: str, head_sha: str | None = None) -> list[dict]:
+    """Fetch PR changed files from GitHub's trusted PR file list."""
+
+    proof = fetch_changed_file_proof(pr, repo, gh, head_sha=head_sha)
+    return proof.files
+
+
+def _assert_stable_changed_file_proof(
+    *,
+    proof: ChangedFileProof,
+    after_refs: tuple[str, str, int],
+) -> None:
+    after_base, after_head, after_count = after_refs
+    if proof.base_sha != after_base:
+        raise RuntimeError("GitHub PR base changed during body/file proof fetch")
+    if proof.head_sha != after_head:
+        raise RuntimeError("GitHub PR head changed during body/file proof fetch")
+    if proof.expected_count != after_count:
+        raise RuntimeError("GitHub PR changed-file count changed during body/file proof fetch")
+
+
 def fetch_consistent_review_thread_snapshot(
     pr: int,
     owner: str,
@@ -628,6 +985,34 @@ def fetch_consistent_review_thread_snapshot(
     return nodes_after, head_after, reviews_after, comments_after
 
 
+def _assert_stable_review_thread_state(
+    *,
+    before: tuple[list[dict], str, list[dict], list[dict]],
+    after: tuple[list[dict], str, list[dict], list[dict]],
+    bot_logins: Sequence[str],
+) -> None:
+    before_nodes, before_head, before_reviews, before_comments = before
+    after_nodes, after_head, after_reviews, after_comments = after
+    if before_head != after_head:
+        raise RuntimeError("GitHub PR head changed during body/file proof fetch")
+    before_generation = review_attestation_generation(
+        before_reviews,
+        before_comments,
+        head_sha=before_head,
+        bot_logins=bot_logins,
+    )
+    after_generation = review_attestation_generation(
+        after_reviews,
+        after_comments,
+        head_sha=after_head,
+        bot_logins=bot_logins,
+    )
+    if before_generation != after_generation:
+        raise RuntimeError("GitHub Codex review generation changed during body/file proof fetch")
+    if review_thread_generation(before_nodes) != review_thread_generation(after_nodes):
+        raise RuntimeError("GitHub review thread generation changed during body/file proof fetch")
+
+
 def main(argv: Sequence[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     parser.add_argument("--pr", type=int, help="PR number")
@@ -659,6 +1044,10 @@ def main(argv: Sequence[str] | None = None) -> int:
         help="JSON file of PR comment nodes (test/dry-run; skips fetching live review comments)",
     )
     parser.add_argument(
+        "--changed-files-file",
+        help="JSON file of PR changed-file objects (test/dry-run; skips fetching live changed files)",
+    )
+    parser.add_argument(
         "--head-sha",
         help="PR head SHA for current-head Codex review attestation in test/dry-run mode",
     )
@@ -674,6 +1063,8 @@ def main(argv: Sequence[str] | None = None) -> int:
         head_sha = args.head_sha
         reviews: Sequence[dict] | None = None
         comments: Sequence[dict] | None = None
+        changed_files: Sequence[dict] | None = None
+        changed_file_proof: ChangedFileProof | None = None
 
         if args.threads_file:
             nodes = json.loads(Path(args.threads_file).read_text(encoding="utf-8"))
@@ -686,18 +1077,21 @@ def main(argv: Sequence[str] | None = None) -> int:
                 )
                 return 2
             owner, _, name = args.repo.partition("/")
-            nodes, head_sha, reviews, comments = fetch_consistent_review_thread_snapshot(
+            before_snapshot = fetch_consistent_review_thread_snapshot(
                 args.pr,
                 owner,
                 name,
                 args.gh,
                 bots,
             )
+            nodes, head_sha, reviews, comments = before_snapshot
 
         if args.reviews_file:
             reviews = json.loads(Path(args.reviews_file).read_text(encoding="utf-8"))
         if args.comments_file:
             comments = json.loads(Path(args.comments_file).read_text(encoding="utf-8"))
+        if args.changed_files_file:
+            changed_files = json.loads(Path(args.changed_files_file).read_text(encoding="utf-8"))
 
         if args.body_file:
             body = Path(args.body_file).read_text(encoding="utf-8")
@@ -705,11 +1099,61 @@ def main(argv: Sequence[str] | None = None) -> int:
             body = fetch_body(args.pr, args.repo, args.gh)
         else:
             body = ""
+
+        needs_live_changed_file_proof = (
+            changed_files is None
+            and args.pr is not None
+            and args.repo
+            and docs_only_exemption_needs_file_proof(
+                nodes,
+                body,
+                bots,
+                reviews=reviews,
+                comments=comments,
+                head_sha=head_sha,
+            )
+        )
+        if needs_live_changed_file_proof:
+            changed_file_proof = fetch_changed_file_proof(args.pr, args.repo, args.gh, head_sha=head_sha)
+            changed_files = changed_file_proof.files
+        if needs_live_changed_file_proof and not args.threads_file and args.pr is not None and args.repo:
+            body_after = fetch_body(args.pr, args.repo, args.gh)
+            after_snapshot = fetch_consistent_review_thread_snapshot(
+                args.pr,
+                owner,
+                name,
+                args.gh,
+                bots,
+            )
+            body_final = fetch_body(args.pr, args.repo, args.gh)
+            after_refs = fetch_pr_refs(args.pr, args.repo, args.gh)
+            if body != body_after or body != body_final:
+                raise RuntimeError("GitHub PR body changed during body/file proof fetch")
+            if changed_file_proof is None:
+                raise RuntimeError("changed-file proof missing during body/file proof fetch")
+            _assert_stable_changed_file_proof(
+                proof=changed_file_proof,
+                after_refs=after_refs,
+            )
+            _assert_stable_review_thread_state(
+                before=before_snapshot,
+                after=after_snapshot,
+                bot_logins=bots,
+            )
+            nodes, head_sha, reviews, comments = after_snapshot
     except (OSError, ValueError, RuntimeError) as exc:
         print(f"live reconciliation: GitHub API/read error: {exc}", file=sys.stderr)
         return 2
 
-    code, messages = evaluate(nodes, body, bots, reviews=reviews, comments=comments, head_sha=head_sha)
+    code, messages = evaluate(
+        nodes,
+        body,
+        bots,
+        reviews=reviews,
+        comments=comments,
+        changed_files=changed_files,
+        head_sha=head_sha,
+    )
     print("live AI reconciliation check")
     print("-" * 60)
     for line in messages:
