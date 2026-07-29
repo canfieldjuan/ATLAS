@@ -180,9 +180,9 @@ def main(argv: list[str] | None = None) -> int:
             f"{args.threshold}."
         )
         print(
-            "After a PR merges, move only that plan by name: "
-            "`git mv plans/PR-<Slice>.md plans/archive/ && "
-            "python scripts/archive_plans.py index`."
+            "After a PR merges, switch to a local main synced to origin/main, "
+            "then move only that plan by name: `git mv plans/PR-<Slice>.md "
+            "plans/archive/ && python scripts/archive_plans.py index`."
         )
     else:
         print(f"OK: {count} plan doc(s) in root (threshold {args.threshold}).")

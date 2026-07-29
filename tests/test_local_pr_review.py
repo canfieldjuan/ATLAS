@@ -299,6 +299,7 @@ def test_local_pr_review_runs_plans_archive_advisory_when_present(tmp_path: Path
     assert result.returncode == 0, result.stdout + result.stderr
     assert "Plans archive backlog (advisory, non-blocking)" in result.stdout
     assert "plans backlog advisory ran" in result.stdout
+    assert "local main synced to origin/main" in result.stdout
     assert "move only that plan by name" in result.stdout
     assert "python scripts/archive_plans.py archive" not in result.stdout
     assert "local PR review passed" in result.stdout

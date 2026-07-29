@@ -41,7 +41,7 @@ Slice phase: Workflow/process
 2. Keep this slice audit-only and name follow-up enforcement slices without
    implementing them.
 3. Repair the non-blocking plan-archive advisory output so it names the safe
-   single-plan teardown flow instead of the bulk archive command.
+   synced-main, single-plan teardown flow instead of the bulk archive command.
 
 ### Review Contract
 
@@ -103,7 +103,7 @@ the live `main` branch-protection required-status payload. It assigns one status
 per promise and records follow-up slices for any gap that is not enforced today.
 The only script behavior touched is advisory text for plan archiving;
 `archive_plans.py check` and the local review bundle remain non-blocking but now
-point builders at the single-plan teardown command AGENTS requires.
+point builders at the synced-main, single-plan teardown command AGENTS requires.
 
 ## Intentional
 
@@ -116,6 +116,8 @@ point builders at the single-plan teardown command AGENTS requires.
   cleanup evidence.
 - Workflow display names are not used as enrollment targets; the audit records
   the published job contexts that branch protection would actually require.
+- Manual/prose obligations are not folded into CI classifications; the audit
+  splits post-open CI visibility from pre-open local timing.
 
 ## Deferred
 
@@ -142,16 +144,17 @@ Parked hardening: none.
 - `python scripts/audit_plan_code_consistency.py --base-ref origin/main plans/PR-Agents-Mechanical-Enforcement-Audit.md` - passed.
 - `python scripts/sync_pr_plan.py plans/PR-Agents-Mechanical-Enforcement-Audit.md origin/main --check` - passed.
 - `python scripts/audit_pr_body.py --repo-root . --base-ref origin/main /tmp/atlas-pr-body-agents-mechanical-enforcement-audit.md` - passed.
+- `python - <<'PY' ...` audit-report citation sanity check - passed, 117 refs checked.
 - `bash scripts/local_pr_review.sh --current-pr-body-file /tmp/atlas-pr-body-agents-mechanical-enforcement-audit.md` - passed.
 
 ## Estimated diff size
 
 | File | LOC |
 |---|---:|
-| `docs/audits/agents-mechanical-enforcement-audit-2026-07-29.md` | 92 |
-| `plans/PR-Agents-Mechanical-Enforcement-Audit.md` | 157 |
+| `docs/audits/agents-mechanical-enforcement-audit-2026-07-29.md` | 114 |
+| `plans/PR-Agents-Mechanical-Enforcement-Audit.md` | 160 |
 | `scripts/archive_plans.py` | 13 |
-| `scripts/local_pr_review.sh` | 3 |
-| `tests/test_archive_plans.py` | 5 |
-| `tests/test_local_pr_review.py` | 2 |
-| **Total** | **272** |
+| `scripts/local_pr_review.sh` | 4 |
+| `tests/test_archive_plans.py` | 6 |
+| `tests/test_local_pr_review.py` | 3 |
+| **Total** | **300** |

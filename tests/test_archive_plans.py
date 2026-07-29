@@ -141,6 +141,7 @@ def test_check_command_is_non_blocking_even_over_threshold(tmp_path, capsys):
     out = capsys.readouterr().out
     assert rc == 0  # never fails a PR
     assert "WARNING" in out
+    assert "local main synced to origin/main" in out
     assert "move only that plan by name" in out
     assert "archive_plans.py index" in out
     assert "archive_plans.py archive" not in out
