@@ -96,6 +96,7 @@ def _write_fixture(
             "codex_reviews_complete": True,
             "codex_review_pages_fetched": 1,
             "codex_head_review_count": 1,
+            "docs_only_reconciliation_exemption": False,
             "review_decision": "",
             "merge_state_status": "CLEAN",
         },
@@ -380,6 +381,17 @@ def test_missing_readiness_evidence_fails_closed(
     status[section].pop(field)
 
     assert expected in bridge.readiness_blockers(status)
+
+
+def test_docs_only_reconciliation_exemption_satisfies_codex_review_attestation(
+    tmp_path: Path,
+) -> None:
+    _config_dir, state_dir, watcher_id = _write_fixture(tmp_path)
+    status = json.loads((state_dir / f"{watcher_id}.json").read_text(encoding="utf-8"))
+    status["readiness"]["codex_head_review_count"] = 0
+    status["readiness"]["docs_only_reconciliation_exemption"] = True
+
+    assert bridge.readiness_blockers(status) == []
 
 
 def test_malformed_status_fails_closed_to_attention_handoff(tmp_path: Path) -> None:

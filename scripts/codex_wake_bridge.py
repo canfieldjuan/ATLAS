@@ -153,7 +153,11 @@ def readiness_blockers(status: dict[str, Any]) -> list[str]:
     if not _non_negative_int(codex_pages) or codex_pages < 1:
         blockers.append("Codex review pages fetched must be at least 1")
     codex_head_reviews = proof.get("codex_head_review_count")
-    if not _non_negative_int(codex_head_reviews) or codex_head_reviews < 1:
+    docs_only_exemption = proof.get("docs_only_reconciliation_exemption") is True
+    if (
+        not _non_negative_int(codex_head_reviews)
+        or (codex_head_reviews < 1 and not docs_only_exemption)
+    ):
         blockers.append("current-head Codex review attestation is missing")
 
     if "review_decision" not in proof or "reviewDecision" not in pr:

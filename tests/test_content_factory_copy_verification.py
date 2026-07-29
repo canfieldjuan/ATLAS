@@ -1763,11 +1763,18 @@ def test_scope_lookup_scales_with_negation_scopes_present():
 
     def elapsed(reps):
         body = "Resolution Audit with no delay " * reps
-        start = time.perf_counter()
         advisory_warnings(body)
-        return time.perf_counter() - start
+        samples = []
+        for _ in range(3):
+            start = time.perf_counter()
+            advisory_warnings(body)
+            samples.append(time.perf_counter() - start)
+        return min(samples)
 
-    # 4x the input at the pre-fix quadratic rate took 1.55s; linear is ~0.13s.
-    # A generous absolute ceiling keeps this stable on shared CI runners while
-    # still failing outright if the scan returns.
-    assert elapsed(12800) < 1.0
+    small = elapsed(6400)
+    large = elapsed(25600)
+
+    # 4x the input at the pre-fix quadratic rate grows toward 16x. Use warmed,
+    # repeated samples and keep the assertion relative, so the guard still fails
+    # if the per-scope scan returns without giving fast machines an absolute pass.
+    assert large < small * 8

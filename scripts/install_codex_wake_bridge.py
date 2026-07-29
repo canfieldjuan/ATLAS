@@ -21,11 +21,15 @@ WATCHER_NAME = "atlas-pr-watch"
 RECONCILIATION_LIB_DIR = "atlas-pr-watch-lib"
 RECONCILIATION_CHECKER_NAME = "check_ai_reconciliation_live.py"
 RECONCILIATION_AUDIT_NAME = "audit_ai_reconciliation.py"
+PR_BODY_AUDIT_NAME = "audit_pr_body.py"
+PR_CHANGE_POLICY_NAME = "_pr_change_policy.py"
 DROPIN_REL = Path("atlas-pr-watch@.service.d") / "wake-bridge.conf"
 BRIDGE_SOURCE = Path(__file__).with_name("codex_wake_bridge.py")
 WATCHER_SOURCE = Path(__file__).with_name("pr_watcher.py")
 RECONCILIATION_CHECKER_SOURCE = Path(__file__).with_name(RECONCILIATION_CHECKER_NAME)
 RECONCILIATION_AUDIT_SOURCE = Path(__file__).with_name(RECONCILIATION_AUDIT_NAME)
+PR_BODY_AUDIT_SOURCE = Path(__file__).with_name(PR_BODY_AUDIT_NAME)
+PR_CHANGE_POLICY_SOURCE = Path(__file__).with_name(PR_CHANGE_POLICY_NAME)
 
 
 def _shell_token(path: Path) -> str:
@@ -81,6 +85,14 @@ def _reconciliation_audit_text() -> str:
     return RECONCILIATION_AUDIT_SOURCE.read_text(encoding="utf-8")
 
 
+def _pr_body_audit_text() -> str:
+    return PR_BODY_AUDIT_SOURCE.read_text(encoding="utf-8")
+
+
+def _pr_change_policy_text() -> str:
+    return PR_CHANGE_POLICY_SOURCE.read_text(encoding="utf-8")
+
+
 def _systemd_exec_token(path: Path) -> str:
     resolved = path.expanduser().resolve(strict=False)
     escaped = (
@@ -133,12 +145,16 @@ def check_install(bin_dir: Path, systemd_dir: Path) -> tuple[bool, list[str]]:
     reconciliation_dir = bin_dir / RECONCILIATION_LIB_DIR
     reconciliation_checker = reconciliation_dir / RECONCILIATION_CHECKER_NAME
     reconciliation_audit = reconciliation_dir / RECONCILIATION_AUDIT_NAME
+    pr_body_audit = reconciliation_dir / PR_BODY_AUDIT_NAME
+    pr_change_policy = reconciliation_dir / PR_CHANGE_POLICY_NAME
     checks = [
         _matches(wrapper, _wrapper_text(watcher, bridge), executable=True),
         _matches(bridge, _bridge_text(), executable=True),
         _matches(watcher, _watcher_text(), executable=True),
         _matches(reconciliation_checker, _reconciliation_checker_text()),
         _matches(reconciliation_audit, _reconciliation_audit_text()),
+        _matches(pr_body_audit, _pr_body_audit_text()),
+        _matches(pr_change_policy, _pr_change_policy_text()),
         _matches(systemd_dir / DROPIN_REL, _dropin_text(wrapper)),
     ]
     ok = all(passed for passed, _message in checks)
@@ -152,8 +168,12 @@ def install(bin_dir: Path, systemd_dir: Path, *, reload_systemd: bool) -> tuple[
     reconciliation_dir = bin_dir / RECONCILIATION_LIB_DIR
     reconciliation_checker = reconciliation_dir / RECONCILIATION_CHECKER_NAME
     reconciliation_audit = reconciliation_dir / RECONCILIATION_AUDIT_NAME
+    pr_body_audit = reconciliation_dir / PR_BODY_AUDIT_NAME
+    pr_change_policy = reconciliation_dir / PR_CHANGE_POLICY_NAME
     dropin = systemd_dir / DROPIN_REL
     _write(reconciliation_audit, _reconciliation_audit_text())
+    _write(pr_change_policy, _pr_change_policy_text())
+    _write(pr_body_audit, _pr_body_audit_text())
     _write(reconciliation_checker, _reconciliation_checker_text())
     _write(bridge, _bridge_text(), executable=True)
     _write(watcher, _watcher_text(), executable=True)
@@ -161,6 +181,8 @@ def install(bin_dir: Path, systemd_dir: Path, *, reload_systemd: bool) -> tuple[
     _write(dropin, _dropin_text(wrapper))
     messages = [
         f"wrote: {reconciliation_audit}",
+        f"wrote: {pr_change_policy}",
+        f"wrote: {pr_body_audit}",
         f"wrote: {reconciliation_checker}",
         f"wrote: {bridge}",
         f"wrote: {watcher}",

@@ -1,6 +1,6 @@
 # Plan archive index
 
-1413 archived plan doc(s). Merged plan docs are moved under `archive/` and listed below; once the archive sweep has run, the `plans/` root holds only in-flight slices.
+1415 archived plan doc(s). Merged plan docs are moved under `archive/` and listed below; once the archive sweep has run, the `plans/` root holds only in-flight slices.
 
 - [PR-ASR-Pip-Audit-Egg-Fragment](archive/PR-ASR-Pip-Audit-Egg-Fragment.md) - lane: security/workflow | phase: Production hardening
 - [PR-ASR-Requirements-Audit-Pin](archive/PR-ASR-Requirements-Audit-Pin.md) - lane: security/workflow | phase: Production hardening
@@ -204,6 +204,8 @@
 - [PR-CodeQL-Upload-SARIF-Action-Bump](archive/PR-CodeQL-Upload-SARIF-Action-Bump.md) - lane: security/workflow | phase: Production hardening
 - [PR-Codex-Autonomy-Wake-Foundation](archive/PR-Codex-Autonomy-Wake-Foundation.md) - lane: workflow/codex-autonomy | phase: Workflow/process
 - [PR-Codex-Max-Files-Budget](archive/PR-Codex-Max-Files-Budget.md) - lane: process/agent-guidance | phase: Production hardening
+- [PR-Codex-Review-Scope-Reset](archive/PR-Codex-Review-Scope-Reset.md) - lane: workflow/codex-review-scope-reset | phase: Workflow/process
+- [PR-Codex-Review-Thread-Event-Canary](archive/PR-Codex-Review-Thread-Event-Canary.md) - lane: workflow/codex-review-thread-event-canary | phase: workflow/process
 - [PR-Codex-Wake-Bridge](archive/PR-Codex-Wake-Bridge.md) - lane: ci-cd/autonomous-codex-wake-bridge | phase: Workflow/process
 - [PR-Content-Assets-Review-Row-Ids](archive/PR-Content-Assets-Review-Row-Ids.md)
 - [PR-Content-Marketing-Brand-Voice-Checks](archive/PR-Content-Marketing-Brand-Voice-Checks.md) - lane: content-marketing/brand-voice-checks | phase: Robust testing
