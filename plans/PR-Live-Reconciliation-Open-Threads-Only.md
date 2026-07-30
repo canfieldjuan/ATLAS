@@ -2,160 +2,140 @@
 
 ## Why this slice exists
 
-The operator reported that CI/CD is not converging because the live
-reconciliation gate can require a final Codex connector approval-style signal
-that sometimes never appears. The intended gate is simpler: if the Codex
-connector leaves unresolved scoped findings, live reconciliation goes red. A
-fresh PR head should not go green before the connector has had a chance to
-react, but after that bounded window, no scoped findings should be enough to
-merge without waiting for extra Codex consent.
+The operator reported that CI/CD is not converging because
+`live-reconciliation` can require a final Codex connector approval-style signal
+that sometimes never appears. The intended gate is simpler: unresolved scoped
+Codex findings make the check red; a quiet head should pass after a short window
+that gives the connector a chance to react.
+
+Diff budget overage is intentional: the reviewer-found root cause spans the
+required workflow context, checker CLI, checker tests, and watcher contract
+fixture. Splitting those would leave one of the red checks unfixed.
 
 ### Problem-derived contract
 
-- Root cause: `scripts/check_ai_reconciliation_live.py` mixes two different
-  responsibilities: enforcing real open Codex feedback and requiring a fresh
-  current-head clean review/attestation. The second requirement is not the
-  desired merge predicate and creates red CI when no open Codex findings exist.
-- Correct fix must touch/change: The live reconciliation evaluator must stop
-  failing solely because a current-head Codex review or clean-review comment is
-  absent; it must still fail for current-head `CHANGES_REQUESTED` reviews and
-  unresolved scoped bot threads. It must preserve the docs-only success signal
-  consumed by watcher readiness, and it must fail during a short fresh-head
-  window when no current-head Codex activity exists yet. The direct unit tests
-  must encode those pass and fail cases.
-- Must not change: Do not change branch protection, PR opening behavior, review
-  bot identities, watcher merge authority, comment-thread filtering, PR body
-  reconciliation parsing, product surfaces, or active PR #2251.
+- Root cause: `scripts/check_ai_reconciliation_live.py` mixes open-feedback
+  enforcement with a current-head clean-review attestation requirement.
+- Correct fix must touch/change: remove the missing-attestation failure, keep
+  current-head `CHANGES_REQUESTED` and unresolved scoped bot threads blocking,
+  keep the watcher-owned docs-only success signal, and keep fresh heads from
+  going green before the review window closes.
+- Must not change: branch protection, PR opening behavior, bot identities,
+  watcher merge authority, PR body reconciliation parsing, product surfaces, or
+  active PR #2251.
 
 ## Scope (this PR)
 
 Ownership lane: workflow/live-reconciliation-open-threads-only
 Slice phase: Workflow/process
 
-1. Change live reconciliation's quiet-path decision from "current-head Codex
-   attestation required" to "no open scoped Codex threads, no current-head
-   changes-requested review, and not inside the fresh-head Codex review window."
-2. Update the focused live reconciliation tests so the old missing-attestation
-   failure becomes a passing quiet-path case while existing open-thread and
-   changes-requested failures remain covered.
+1. Change the quiet-path predicate from "current-head Codex attestation exists"
+   to "no open scoped Codex threads, no current-head `CHANGES_REQUESTED`, and no
+   active fresh-head review window."
+2. In live CI mode, wait for the fresh-head window once and refetch before
+   returning a required-context result, so the check stays pending instead of
+   permanently red.
+3. Validate review-window inputs inside controlled error handling.
+4. Update focused checker and watcher contract tests for the changed policy.
 
 ### Review Contract
 
 - Acceptance criteria:
-  1. `evaluate()` returns success when all scoped bot review threads are closed
-     and there is no current-head Codex review/clean-comment attestation.
-  2. `evaluate()` still returns failure when a current-head Codex connector
-     review has state `CHANGES_REQUESTED`, even if threads are closed.
-  3. `evaluate()` still returns failure when unresolved scoped Codex review
-     threads exist, including when the PR body claims all findings are fixed.
-  4. `evaluate()` returns failure during the configured fresh-head review
-     window when no current-head Codex activity exists yet, then returns success
-     after that window if threads remain clear.
+  1. Clear scoped bot threads pass without a current-head Codex
+     review/clean-comment attestation after the review window.
+  2. Current-head Codex `CHANGES_REQUESTED` still fails.
+  3. Unresolved scoped Codex review threads still fail.
+  4. A quiet fresh head waits/refetches in live mode instead of leaving the
+     required context red indefinitely.
   5. Docs-only PRs with proven Markdown-only diffs still emit the watcher-owned
-     docs-only success text when threads are clear and no current-head Codex
-     review already satisfies watcher readiness.
-  6. The `main()` dry-run path with `--head-sha` and no review attestation
-     exits `0` when threads are clear.
-- Reachability proof: `python -m pytest tests/test_check_ai_reconciliation_live.py -q`
-  exercises the live reconciliation CLI/evaluator entrypoint with injected
-  review-thread, review, comment, body, and head-SHA data.
-- Affected surfaces: `scripts/check_ai_reconciliation_live.py`,
-  `tests/test_check_ai_reconciliation_live.py`, and this plan.
-- Risk areas: accidental weakening of open-thread failures, accidental
-  weakening of current-head changes-requested failures, stale docs-only-only
-  proof paths, and noisy success text that still implies Codex consent is
-  required.
-- Reviewer rules triggered: R1, R2, R6, R8, R10, R12, R13, R14.
+     docs-only success text.
+  6. Malformed `ATLAS_CODEX_REVIEW_GRACE_SECONDS` or `--pr-updated-at` exits `2`
+     with a diagnostic, not an argparse traceback.
+- Reachability proof: focused pytest covers the CLI/evaluator entrypoint with
+  injected thread, review, comment, body, head-SHA, and timing data.
+- Affected surfaces: `.github/workflows/ai_reconciliation_live.yml`,
+  `scripts/check_ai_reconciliation_live.py`,
+  `tests/test_check_ai_reconciliation_live.py`, `tests/test_pr_watcher.py`, and
+  this plan.
+- Risk areas: weakening open-thread failures, weakening current-head
+  changes-requested failures, stale docs-only watcher readiness, red required
+  contexts after the grace window, and malformed config handling.
+- Reviewer rules triggered: R1, R2, R6, R8, R10, R11, R12, R13, R14.
 
 ### Boundary-change enumeration
 
-Required when this diff changes a guard, validator, normalizer, resolver,
-router/classifier, or admission boundary. Name each changed boundary path or
-seam in the enumeration; otherwise write "N/A - no boundary change."
-
-- Boundary path/seam: `scripts/check_ai_reconciliation_live.py::evaluate`.
-- Replaced-path behaviors: The missing-current-head-attestation failure path is
-  replaced with a quiet success path when no scoped bot threads are open and no
-  current-head `CHANGES_REQUESTED` review exists, except during the configured
-  fresh-head Codex review window.
-- Guard-relevant fields: review-thread `isResolved`, first thread comment
-  author/path/line/body, review `author.login`, review `commit.oid`, review
-  `state`, PR body reconciliation section, and optional `head_sha`.
+- Boundary path/seam: `scripts/check_ai_reconciliation_live.py::evaluate` and
+  live-mode `main()` fetch/wait/refetch orchestration.
+- Replaced-path behaviors: missing-attestation failure becomes quiet success
+  after the review window; live mode waits/refetches once during the window.
+- Guard-relevant fields: review-thread resolution/author/path/line/body, review
+  author/commit/state, PR body, head SHA, PR `updatedAt`, and review-window
+  seconds.
 - Caller x input shape: CI invokes `main()` with live GitHub data; tests invoke
-  `evaluate()` and `main()` with injected JSON fixtures.
+  `evaluate()` and `main()` with injected fixtures.
 
 ### Deployed-config probing
 
-Required for guard, validator, resolver, admission-boundary, or env/config
-fallback changes; otherwise write "N/A - no guard/config boundary change."
-
-- Deployed/default config values: Default bot identities remain
-  `chatgpt-codex-connector,chatgpt-codex-connector[bot]`.
-- Explicit value probe: Focused tests pass explicit `BOTS` and current-head
-  review states into `evaluate()`.
-- Absent value probe: Focused tests cover no review/clean-comment attestation
-  with closed threads both inside and after the fresh-head review window.
-- Default-session/default-context probe: N/A - no session-state or environment
-  default changes.
-- Side-effect ordering: N/A - decision logic remains pure after fetches finish.
+- Deployed/default config values: default bots remain
+  `chatgpt-codex-connector,chatgpt-codex-connector[bot]`;
+  default review window remains 300 seconds.
+- Explicit value probe: tests pass review states, head SHA, `--pr-updated-at`,
+  and malformed review-window config.
+- Absent value probe: tests cover no current-head attestation with closed threads
+  inside and after the fresh-head window.
+- Default-session/default-context probe: N/A - no session-state default change.
+- Side-effect ordering: live mode waits/refetches before docs-only file proof and
+  final evaluation.
 
 ### Files touched
 
+- `.github/workflows/ai_reconciliation_live.yml`
 - `plans/PR-Live-Reconciliation-Open-Threads-Only.md`
 - `scripts/check_ai_reconciliation_live.py`
 - `tests/test_check_ai_reconciliation_live.py`
+- `tests/test_pr_watcher.py`
 
 ## Mechanism
 
-The evaluator still computes unresolved scoped bot review threads first. If a
-current-head Codex connector review requested changes, it records a failure
-message. If there are no open threads and no current-head Codex activity yet,
-the evaluator fails only while the PR's `updatedAt` timestamp is inside the
-configured review window. After the window, no open scoped threads returns
-success without requiring a clean Codex approval comment.
+The evaluator still checks unresolved scoped bot threads first. It still fails
+for current-head Codex `CHANGES_REQUESTED`. If there are no open threads and no
+current-head Codex activity yet, the fresh-head window blocks only until the
+configured duration expires.
 
-Docs-only PRs are not a policy bypass anymore, but their proven Markdown-only
-quiet path still emits the prior docs-only success text because
-`scripts/pr_watcher.py` consumes that string when calculating watcher readiness.
+The CLI validates timing inputs after parsing, inside the script's controlled
+error path. In live GitHub mode, when the quiet fresh-head race is present, the
+required job sleeps until the window closes, refetches threads/reviews/body, and
+then evaluates the refreshed state. The workflow timeout is raised to 10 minutes
+so the default 300-second wait can complete. Docs-only file proof remains only
+for the watcher-owned success signal.
 
 ## Intentional
 
-- No branch-protection edit in this PR. The required check can stay in place;
-  its internal pass/fail predicate changes to the desired one.
-- No watcher merge-policy edit in this PR. Watcher readiness still has separate
-  policy language around Codex attestations and should be handled as its own
-  bounded follow-up if the operator wants automated watcher merge readiness to
-  match this gate exactly.
-- No change to bot identity matching. The scope remains the exact Codex
-  connector logins configured for this check.
-- The fresh-head review window is a race guard, not Codex consent. It prevents
-  immediate green before the connector can react, then quiet no-thread heads
-  pass without a final LGTM signal.
+- No branch-protection edit; the existing required check stays in place.
+- No watcher merge-policy edit; only the watcher fixture is updated for the new
+  `updatedAt` read.
+- No bot identity change; the check still uses exact Codex connector logins.
+- The fresh-head window is a race guard, not Codex consent.
 
 ## Deferred
 
-- Align watcher/readiness wording and merge-ready predicates that still mention
-  Codex review attestations, if the operator wants the watcher layer to use the
-  same open-threads-only policy.
-- Update the mechanical-enforcement audit note that currently records the old
-  attestation requirement, after this policy lands.
+- Update the mechanical-enforcement audit note that records the old attestation
+  requirement after this policy lands.
 
 Parked hardening: none.
 
 ## Verification
 
-- `python -m pytest tests/test_check_ai_reconciliation_live.py -q` - 61 passed.
-- `python -m pytest tests/test_content_factory_copy_verification.py::test_scope_lookup_scales_with_negation_scopes_present -q --tb=short` - 1 passed locally after CI unit-gate reported this unrelated node as the only unbaselined failure.
-- `python scripts/audit_plan_doc.py plans/PR-Live-Reconciliation-Open-Threads-Only.md` - passed.
-- `python scripts/audit_plan_code_consistency.py --base-ref origin/main plans/PR-Live-Reconciliation-Open-Threads-Only.md` - passed.
-- `python scripts/sync_pr_plan.py plans/PR-Live-Reconciliation-Open-Threads-Only.md origin/main --check` - passed after syncing generated file/diff-size sections.
-- `ATLAS_SESSION_STATE_FILE=SESSION_STATE.codex-live-reconciliation-open-threads.local.md bash scripts/local_pr_review.sh --current-pr-body-file /tmp/atlas-pr-body-live-reconciliation-open-threads-only.md` - passed.
+- `python -m py_compile scripts/check_ai_reconciliation_live.py && python -m pytest tests/test_check_ai_reconciliation_live.py -q` - 64 passed.
+- `python -m pytest tests/test_pr_watcher.py::test_installed_entrypoint_writes_consumer_accepted_snapshot -q --tb=short` - 1 passed.
 
 ## Estimated diff size
 
 | File | LOC |
 |---|---:|
-| `plans/PR-Live-Reconciliation-Open-Threads-Only.md` | 161 |
-| `scripts/check_ai_reconciliation_live.py` | 78 |
-| `tests/test_check_ai_reconciliation_live.py` | 130 |
-| **Total** | **369** |
+| `.github/workflows/ai_reconciliation_live.yml` | 2 |
+| `plans/PR-Live-Reconciliation-Open-Threads-Only.md` | 141 |
+| `scripts/check_ai_reconciliation_live.py` | 178 |
+| `tests/test_check_ai_reconciliation_live.py` | 189 |
+| `tests/test_pr_watcher.py` | 2 |
+| **Total** | **512** |

@@ -1271,6 +1271,8 @@ def test_installed_entrypoint_writes_consumer_accepted_snapshot(tmp_path: Path) 
             }
             if args[:2] == ["pr", "checks"]:
                 print(json.dumps([{"name": "required-a", "bucket": "pass", "state": "SUCCESS"}]))
+            elif args[:2] == ["pr", "view"] and "--json" in args and "updatedAt" in args:
+                print("2026-07-30T18:00:00Z")
             elif args[:2] == ["pr", "view"] and "-q" in args:
                 print("")
             elif args[:2] == ["pr", "view"] and "--comments" in args:

@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import importlib.util
 import json
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 SCRIPT = Path(__file__).resolve().parents[1] / "scripts" / "check_ai_reconciliation_live.py"
@@ -616,6 +616,65 @@ def test_main_accepts_docs_only_without_current_head_review_when_threads_clear(t
             "head-a",
         ]
     ) == 0
+
+
+def test_main_malformed_review_window_config_exit_2(monkeypatch, tmp_path):
+    monkeypatch.setenv("ATLAS_CODEX_REVIEW_GRACE_SECONDS", "not-an-int")
+    c = load_check()
+    tf = tmp_path / "threads.json"
+    tf.write_text(json.dumps([thread(resolved=True)]), encoding="utf-8")
+    bf = tmp_path / "body.md"
+    bf.write_text(BODY_CLEAR, encoding="utf-8")
+
+    assert c.main(["--threads-file", str(tf), "--body-file", str(bf)]) == 2
+
+
+def test_main_malformed_pr_updated_at_exit_2(tmp_path):
+    c = load_check()
+    tf = tmp_path / "threads.json"
+    tf.write_text(json.dumps([thread(resolved=True)]), encoding="utf-8")
+    bf = tmp_path / "body.md"
+    bf.write_text(BODY_CLEAR, encoding="utf-8")
+
+    assert c.main(
+        [
+            "--threads-file",
+            str(tf),
+            "--body-file",
+            str(bf),
+            "--head-sha",
+            "head-a",
+            "--pr-updated-at",
+            "not-a-timestamp",
+        ]
+    ) == 2
+
+
+def test_main_live_waits_and_refetches_after_review_window(monkeypatch, tmp_path):
+    c = load_check()
+    fresh_updated_at = (datetime.now(UTC) - timedelta(seconds=299)).isoformat().replace("+00:00", "Z")
+    stale_updated_at = (datetime.now(UTC) - timedelta(seconds=301)).isoformat().replace("+00:00", "Z")
+    snapshots = [
+        ([thread(resolved=True)], "head-a", [], []),
+        ([thread(resolved=True)], "head-a", [], []),
+    ]
+    updated_at_values = [fresh_updated_at, stale_updated_at]
+    sleeps = []
+    bf = tmp_path / "body.md"
+    bf.write_text(BODY_CLEAR, encoding="utf-8")
+
+    def fake_snapshot(pr, owner, name, gh, bot_logins):
+        return snapshots.pop(0)
+
+    monkeypatch.setattr(c, "fetch_consistent_review_thread_snapshot", fake_snapshot)
+    monkeypatch.setattr(c, "fetch_body", lambda pr, repo, gh: BODY_CLEAR)
+    monkeypatch.setattr(c, "fetch_pr_updated_at", lambda pr, repo, gh: updated_at_values.pop(0))
+    monkeypatch.setattr(c.time, "sleep", lambda seconds: sleeps.append(seconds))
+
+    assert c.main(["--pr", "1431", "--repo", "owner/name", "--body-file", str(bf), "--gh", "gh"]) == 0
+    assert len(sleeps) == 1
+    assert not snapshots
+    assert not updated_at_values
 
 
 def test_main_live_fetch_fails_when_review_generation_changes(monkeypatch, tmp_path):
