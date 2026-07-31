@@ -1160,6 +1160,11 @@ def main(argv: Sequence[str] | None = None) -> int:
         default=os.environ.get("ATLAS_CODEX_REVIEW_GRACE_SECONDS", str(_DEFAULT_CODEX_REVIEW_GRACE_SECONDS)),
         help="seconds after a PR update to wait for Codex activity before allowing a quiet no-thread pass",
     )
+    parser.add_argument(
+        "--wait-for-review-window",
+        action="store_true",
+        help="wait/refetch once when a live PR is still inside the fresh-head review window",
+    )
     args = parser.parse_args(argv)
 
     try:
@@ -1217,7 +1222,8 @@ def main(argv: Sequence[str] | None = None) -> int:
             pr_updated_at = fetch_pr_updated_at(args.pr, args.repo, args.gh)
 
         if (
-            not args.threads_file
+            args.wait_for_review_window
+            and not args.threads_file
             and args.pr is not None
             and args.repo
             and missing_codex_activity_inside_review_grace(

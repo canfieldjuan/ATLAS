@@ -650,6 +650,30 @@ def test_main_malformed_pr_updated_at_exit_2(tmp_path):
     ) == 2
 
 
+def test_main_live_default_does_not_sleep_inside_review_window(monkeypatch, tmp_path):
+    c = load_check()
+    fresh_updated_at = (datetime.now(UTC) - timedelta(seconds=299)).isoformat().replace("+00:00", "Z")
+    snapshots = [
+        ([thread(resolved=True)], "head-a", [], []),
+        ([thread(resolved=True)], "head-a", [], []),
+    ]
+    sleeps = []
+    bf = tmp_path / "body.md"
+    bf.write_text(BODY_CLEAR, encoding="utf-8")
+
+    def fake_snapshot(pr, owner, name, gh, bot_logins):
+        return snapshots.pop(0)
+
+    monkeypatch.setattr(c, "fetch_consistent_review_thread_snapshot", fake_snapshot)
+    monkeypatch.setattr(c, "fetch_body", lambda pr, repo, gh: BODY_CLEAR)
+    monkeypatch.setattr(c, "fetch_pr_updated_at", lambda pr, repo, gh: fresh_updated_at)
+    monkeypatch.setattr(c.time, "sleep", lambda seconds: sleeps.append(seconds))
+
+    assert c.main(["--pr", "1431", "--repo", "owner/name", "--body-file", str(bf), "--gh", "gh"]) == 1
+    assert sleeps == []
+    assert len(snapshots) == 1
+
+
 def test_main_live_waits_and_refetches_after_review_window(monkeypatch, tmp_path):
     c = load_check()
     fresh_updated_at = (datetime.now(UTC) - timedelta(seconds=299)).isoformat().replace("+00:00", "Z")
@@ -671,7 +695,19 @@ def test_main_live_waits_and_refetches_after_review_window(monkeypatch, tmp_path
     monkeypatch.setattr(c, "fetch_pr_updated_at", lambda pr, repo, gh: updated_at_values.pop(0))
     monkeypatch.setattr(c.time, "sleep", lambda seconds: sleeps.append(seconds))
 
-    assert c.main(["--pr", "1431", "--repo", "owner/name", "--body-file", str(bf), "--gh", "gh"]) == 0
+    assert c.main(
+        [
+            "--pr",
+            "1431",
+            "--repo",
+            "owner/name",
+            "--body-file",
+            str(bf),
+            "--gh",
+            "gh",
+            "--wait-for-review-window",
+        ]
+    ) == 0
     assert len(sleeps) == 1
     assert not snapshots
     assert not updated_at_values
