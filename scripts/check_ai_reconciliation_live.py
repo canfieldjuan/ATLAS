@@ -30,15 +30,19 @@ from __future__ import annotations
 import argparse
 import importlib.util
 import json
+import math
 import os
 import re
 import subprocess
 import sys
+import time
 from collections.abc import Sequence
+from datetime import UTC, datetime, timedelta
 from pathlib import Path, PurePosixPath
 
 _DEFAULT_BOTS = ("chatgpt-codex-connector", "chatgpt-codex-connector[bot]")
 _CLEAN_CODEX_REVIEW_TEXT = "didn't find any major issues"
+_DEFAULT_CODEX_REVIEW_GRACE_SECONDS = 300
 _REVIEWED_COMMIT_RE = re.compile(r"\*\*Reviewed commit:\*\*\s*`(?P<sha>[0-9a-f]{10,40})`", re.IGNORECASE)
 _LEGACY_BOT_ALIASES = frozenset(
     {
@@ -359,6 +363,87 @@ def current_head_change_requests(
     )
 
 
+def _parse_github_timestamp(raw: str) -> datetime:
+    """Parse a GitHub API timestamp into an aware UTC datetime."""
+
+    return datetime.fromisoformat(raw.replace("Z", "+00:00")).astimezone(UTC)
+
+
+def updated_within_review_grace(
+    updated_at: str | None,
+    *,
+    review_grace_seconds: int,
+    now: datetime | None = None,
+) -> bool:
+    """Return true while a fresh PR update is still inside the Codex review window."""
+
+    return review_grace_remaining_seconds(
+        updated_at,
+        review_grace_seconds=review_grace_seconds,
+        now=now,
+    ) > 0
+
+
+def review_grace_remaining_seconds(
+    updated_at: str | None,
+    *,
+    review_grace_seconds: int,
+    now: datetime | None = None,
+) -> float:
+    """Return seconds left in the fresh-head Codex review window."""
+
+    if review_grace_seconds <= 0 or not updated_at:
+        return 0.0
+    reference_time = now or datetime.now(UTC)
+    if reference_time.tzinfo is None:
+        reference_time = reference_time.replace(tzinfo=UTC)
+    updated_time = _parse_github_timestamp(updated_at)
+    expires_at = updated_time + timedelta(seconds=review_grace_seconds)
+    return max(0.0, (expires_at - reference_time.astimezone(UTC)).total_seconds())
+
+
+def missing_codex_activity_inside_review_grace(
+    nodes: Sequence[dict],
+    bot_logins: Sequence[str],
+    *,
+    reviews: Sequence[dict] | None,
+    comments: Sequence[dict] | None,
+    head_sha: str | None,
+    pr_updated_at: str | None,
+    review_grace_seconds: int,
+    now: datetime | None = None,
+) -> bool:
+    """Return true only for the quiet fresh-head race the required job must wait out."""
+
+    if head_sha is None or open_bot_threads(nodes, bot_logins):
+        return False
+    if current_head_change_requests(reviews or [], head_sha=head_sha, bot_logins=bot_logins):
+        return False
+    if current_head_bot_reviews(reviews or [], head_sha=head_sha, bot_logins=bot_logins):
+        return False
+    if current_head_clean_review_comments(comments or [], head_sha=head_sha, bot_logins=bot_logins):
+        return False
+    return updated_within_review_grace(
+        pr_updated_at,
+        review_grace_seconds=review_grace_seconds,
+        now=now,
+    )
+
+
+def parse_review_grace_seconds(raw: str | int | None) -> int:
+    """Parse the review-window duration from CLI/env without argparse tracebacks."""
+
+    if raw is None:
+        return _DEFAULT_CODEX_REVIEW_GRACE_SECONDS
+    try:
+        value = int(raw)
+    except (TypeError, ValueError) as exc:
+        raise ValueError("review grace seconds must be an integer") from exc
+    if value < 0:
+        raise ValueError("review grace seconds must be non-negative")
+    return value
+
+
 def review_attestation_generation(
     reviews: Sequence[dict],
     comments: Sequence[dict] | None = None,
@@ -450,6 +535,9 @@ def evaluate(
     comments: Sequence[dict] | None = None,
     changed_files: Sequence[dict] | None = None,
     head_sha: str | None = None,
+    pr_updated_at: str | None = None,
+    review_grace_seconds: int = 0,
+    now: datetime | None = None,
 ) -> tuple[int, list[str]]:
     """Core decision (pure). Returns (exit_code, messages)."""
     messages: list[str] = []
@@ -466,12 +554,7 @@ def evaluate(
                 f"reconciliation cannot pass PR head {head_sha} until the "
                 "changes-requested review is superseded or resolved."
             )
-        elif not open_threads and is_docs_only_body(body) and changed_files_are_docs_only(changed_files or []):
-            messages.append(
-                "OK: docs-only PR diff has no open scoped Codex review threads; "
-                "current-head Codex review attestation is not required."
-            )
-        elif not current_head_bot_reviews(
+        elif not open_threads and not current_head_bot_reviews(
             reviews or [],
             head_sha=head_sha,
             bot_logins=bot_logins,
@@ -479,10 +562,20 @@ def evaluate(
             comments or [],
             head_sha=head_sha,
             bot_logins=bot_logins,
+        ) and updated_within_review_grace(
+            pr_updated_at,
+            review_grace_seconds=review_grace_seconds,
+            now=now,
         ):
             messages.append(
-                "missing current-head Codex connector review: live reconciliation "
-                f"requires one scoped Codex review or clean review comment on PR head {head_sha} before merge."
+                "waiting for Codex connector review window: no scoped Codex "
+                f"activity is recorded on PR head {head_sha} yet, and the PR "
+                f"was updated less than {review_grace_seconds} seconds ago."
+            )
+        elif not open_threads and is_docs_only_body(body) and changed_files_are_docs_only(changed_files or []):
+            messages.append(
+                "OK: docs-only PR diff has no open scoped Codex review threads; "
+                "current-head Codex review attestation is not required."
             )
 
     if not open_threads:
@@ -490,7 +583,7 @@ def evaluate(
             if all(message.startswith("OK:") for message in messages):
                 return 0, messages
             return 1, messages
-        return 0, ["OK: current-head Codex review attestation is present and no open scoped Codex review threads remain."]
+        return 0, ["OK: no open scoped Codex review threads remain."]
 
     body_class = classify_body(body)
     if body_class == "claims_clear":
@@ -534,7 +627,7 @@ def docs_only_exemption_needs_file_proof(
     comments: Sequence[dict] | None,
     head_sha: str | None,
 ) -> bool:
-    """Return true only when file proof is needed to decide the docs-only bypass."""
+    """Return true only when file proof is needed to emit the docs-only watcher signal."""
 
     if head_sha is None or not is_docs_only_body(body):
         return False
@@ -736,6 +829,13 @@ def fetch_comment_attestation(pr: int, owner: str, name: str, gh: str) -> tuple[
 def fetch_body(pr: int, repo: str, gh: str) -> str:
     out = _gh(["pr", "view", str(pr), "--repo", repo, "--json", "body", "-q", ".body"], gh)
     return out
+
+
+def fetch_pr_updated_at(pr: int, repo: str, gh: str) -> str:
+    out = _gh(["pr", "view", str(pr), "--repo", repo, "--json", "updatedAt", "-q", ".updatedAt"], gh)
+    updated_at = out.strip()
+    _parse_github_timestamp(updated_at)
+    return updated_at
 
 
 def fetch_pr_ref_snapshot(pr: int, repo: str, gh: str) -> PrRefSnapshot:
@@ -1049,12 +1149,27 @@ def main(argv: Sequence[str] | None = None) -> int:
     )
     parser.add_argument(
         "--head-sha",
-        help="PR head SHA for current-head Codex review attestation in test/dry-run mode",
+        help="PR head SHA for current-head Codex review state in test/dry-run mode",
+    )
+    parser.add_argument(
+        "--pr-updated-at",
+        help="GitHub PR updatedAt timestamp for fresh-head Codex review-window checks",
+    )
+    parser.add_argument(
+        "--review-grace-seconds",
+        default=os.environ.get("ATLAS_CODEX_REVIEW_GRACE_SECONDS", str(_DEFAULT_CODEX_REVIEW_GRACE_SECONDS)),
+        help="seconds after a PR update to wait for Codex activity before allowing a quiet no-thread pass",
+    )
+    parser.add_argument(
+        "--wait-for-review-window",
+        action="store_true",
+        help="wait/refetch once when a live PR is still inside the fresh-head review window",
     )
     args = parser.parse_args(argv)
 
     try:
         bots = parse_bot_logins(args.bots)
+        review_grace_seconds = parse_review_grace_seconds(args.review_grace_seconds)
     except ValueError as exc:
         print(f"live reconciliation: {exc}", file=sys.stderr)
         return 2
@@ -1065,6 +1180,9 @@ def main(argv: Sequence[str] | None = None) -> int:
         comments: Sequence[dict] | None = None
         changed_files: Sequence[dict] | None = None
         changed_file_proof: ChangedFileProof | None = None
+        pr_updated_at = args.pr_updated_at
+        if pr_updated_at is not None:
+            _parse_github_timestamp(pr_updated_at)
 
         if args.threads_file:
             nodes = json.loads(Path(args.threads_file).read_text(encoding="utf-8"))
@@ -1099,6 +1217,48 @@ def main(argv: Sequence[str] | None = None) -> int:
             body = fetch_body(args.pr, args.repo, args.gh)
         else:
             body = ""
+
+        if pr_updated_at is None and args.pr is not None and args.repo and not args.threads_file:
+            pr_updated_at = fetch_pr_updated_at(args.pr, args.repo, args.gh)
+
+        if (
+            args.wait_for_review_window
+            and not args.threads_file
+            and args.pr is not None
+            and args.repo
+            and missing_codex_activity_inside_review_grace(
+                nodes,
+                bots,
+                reviews=reviews,
+                comments=comments,
+                head_sha=head_sha,
+                pr_updated_at=pr_updated_at,
+                review_grace_seconds=review_grace_seconds,
+            )
+        ):
+            remaining = review_grace_remaining_seconds(
+                pr_updated_at,
+                review_grace_seconds=review_grace_seconds,
+            )
+            wait_seconds = max(1, math.ceil(remaining))
+            print(
+                "live reconciliation: waiting "
+                f"{wait_seconds} second(s) for the Codex review window to close",
+                file=sys.stderr,
+            )
+            time.sleep(wait_seconds)
+            before_snapshot = fetch_consistent_review_thread_snapshot(
+                args.pr,
+                owner,
+                name,
+                args.gh,
+                bots,
+            )
+            nodes, head_sha, reviews, comments = before_snapshot
+            body = fetch_body(args.pr, args.repo, args.gh)
+            pr_updated_at = fetch_pr_updated_at(args.pr, args.repo, args.gh)
+            changed_files = None
+            changed_file_proof = None
 
         needs_live_changed_file_proof = (
             changed_files is None
@@ -1153,6 +1313,8 @@ def main(argv: Sequence[str] | None = None) -> int:
         comments=comments,
         changed_files=changed_files,
         head_sha=head_sha,
+        pr_updated_at=pr_updated_at,
+        review_grace_seconds=review_grace_seconds,
     )
     print("live AI reconciliation check")
     print("-" * 60)

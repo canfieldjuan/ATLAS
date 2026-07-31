@@ -42,7 +42,7 @@ jobs:
   live-reconciliation:
     if: github.event_name == 'pull_request_target'
     runs-on: ubuntu-latest
-    timeout-minutes: 5
+    timeout-minutes: 10
     steps:
       - name: Checkout trusted base
         uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
@@ -59,7 +59,8 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           python scripts/check_ai_reconciliation_live.py \
-            --pr "${{ github.event.pull_request.number }}"
+            --pr "${{ github.event.pull_request.number }}" \
+            --wait-for-review-window
 
   live-reconciliation-review-events:
     if: github.event_name == 'pull_request_review' || github.event_name == 'pull_request_review_comment'
