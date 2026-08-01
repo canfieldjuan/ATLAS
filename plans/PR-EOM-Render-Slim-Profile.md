@@ -75,6 +75,9 @@ Slice phase: production hardening
   - The slim app requires an initialized database and the existing CRM lifecycle,
     handoff, `atlas_eom_handoff_owner`, and `atlas_nocodb` readiness predicate
     before enabling funnel writes.
+  - An env-gated real-Postgres integration test omits each required CRM/handoff
+    relation and proves the shared guard returns the controlled readiness error
+    rather than a PostgreSQL relation-lookup exception.
   - The disabled/default funnel route returns 503 rather than public access, and
     missing/invalid bearer or actor headers reject before any CRM dependency
     mutation.
@@ -218,6 +221,7 @@ fallback changes; otherwise write "N/A - no guard/config boundary change."
 - `atlas_brain/main_eom.py`
 - `plans/PR-EOM-Render-Slim-Profile.md`
 - `render.eom.yaml`
+- `tests/test_eom_lead_conversion_integration.py`
 - `tests/test_eom_render_profile.py`
 
 ## Mechanism
@@ -315,6 +319,19 @@ Parked hardening: none.
     — 90 passed, 1 warning from the existing `torch`/`pynvml` import path;
     `python -m py_compile atlas_brain/eom_api/config.py atlas_brain/eom_api/funnel_store.py tests/test_eom_render_profile.py`
     — passed.
+  - Review-fix local checks for the real-Postgres missing-relation guard
+    regression:
+    `python -m py_compile tests/test_eom_lead_conversion_integration.py`
+    — passed;
+    `python -m pytest tests/test_eom_lead_conversion_integration.py -k 'required_relation_is_absent' -q`
+    — 3 skipped, 15 deselected locally because
+    `ATLAS_MIGRATION_TEST_DATABASE_URL` is not configured; the same env-gated
+    cases run in the EOM lead-pipeline CI Postgres service;
+    `python -m pytest tests/test_eom_render_profile.py tests/test_eom_lead_conversion.py -q`
+    — 90 passed, 1 warning from the existing `torch`/`pynvml` import path;
+    `python -m pytest tests/test_eom_lead_conversion_integration.py -q`
+    — 18 skipped locally because `ATLAS_MIGRATION_TEST_DATABASE_URL` is not
+    configured.
 
 ## Estimated diff size
 
@@ -326,7 +343,8 @@ Parked hardening: none.
 | `atlas_brain/eom_api/funnel_store.py` | 217 |
 | `atlas_brain/main.py` | 146 |
 | `atlas_brain/main_eom.py` | 34 |
-| `plans/PR-EOM-Render-Slim-Profile.md` | 332 |
+| `plans/PR-EOM-Render-Slim-Profile.md` | 350 |
 | `render.eom.yaml` | 4 |
+| `tests/test_eom_lead_conversion_integration.py` | 41 |
 | `tests/test_eom_render_profile.py` | 560 |
-| **Total** | **1368** |
+| **Total** | **1427** |
