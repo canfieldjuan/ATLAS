@@ -10,11 +10,11 @@
 #                   Codex review attestation exists on this exact head SHA +
 #                   0 unresolved threads (no unfetched pages) +
 #                   review decision not CHANGES_REQUESTED + mergeable
-# Required contexts + app pin are read from origin/main's
-# scripts/check_required_status_checks.py (trusted ref -- the watched branch
-# cannot weaken its own gate); MERGE-READY requires their PRESENCE with
-# success and no unsettled (queued/rerunning) required run, so a context
-# that has not started or is rerunning fails closed.
+# Required contexts are read from origin/main's ci/gates.yml and the app pin is
+# read from origin/main's scripts/check_required_status_checks.py (trusted ref
+# -- the watched branch cannot weaken its own gate); MERGE-READY requires their
+# PRESENCE with success and no unsettled (queued/rerunning) required run, so a
+# context that has not started or is rerunning fails closed.
 # The watcher never merges and holds no merge authority (AGENTS.md 3c.1.1);
 # it reports state and exits fast so the builder session acts.
 #
@@ -33,12 +33,19 @@ TOK="$(grep -m1 '^GITHUB_ACCESS_TOKEN=' "$ROOT/.env" 2>/dev/null | cut -d= -f2-)
 [ -n "$TOK" ] || { echo "no GITHUB_ACCESS_TOKEN in $ROOT/.env and no GH_TOKEN set" >&2; exit 2; }
 # Canonical required contexts (branch protection), read from the TRUSTED ref
 # (origin/main), never from the watched branch's working tree -- a PR that
-# edits check_required_status_checks.py must not be able to weaken its own
-# gate. Falls back to the checkout copy, then the documented four.
+# edits ci/gates.yml or check_required_status_checks.py must not be able to
+# weaken its own gate. Falls back to the checkout copy, then the documented
+# legacy four.
+GATES_SRC="$(git -C "$ROOT" show origin/main:ci/gates.yml 2>/dev/null)"
+[ -n "$GATES_SRC" ] || GATES_SRC="$(cat "$ROOT/ci/gates.yml" 2>/dev/null)"
 CHECKER_SRC="$(git -C "$ROOT" show origin/main:scripts/check_required_status_checks.py 2>/dev/null)"
 [ -n "$CHECKER_SRC" ] || CHECKER_SRC="$(cat "$ROOT/scripts/check_required_status_checks.py" 2>/dev/null)"
-mapfile -t REQ_CONTEXTS < <(printf '%s\n' "$CHECKER_SRC" \
-  | sed -n '/^DEFAULT_REQUIRED_CONTEXTS = (/,/^)/p' | grep -oE '"[^"]+"' | tr -d '"')
+mapfile -t REQ_CONTEXTS < <(printf '%s\n' "$GATES_SRC" | awk '
+  /^[[:space:]]*-[[:space:]]/ { if (context != "" && enforcement == "branch_required") print context; context=""; enforcement="" }
+  /^[[:space:]]*context:[[:space:]]*/ { sub(/^[[:space:]]*context:[[:space:]]*/, ""); context=$0 }
+  /^[[:space:]]*enforcement:[[:space:]]*/ { sub(/^[[:space:]]*enforcement:[[:space:]]*/, ""); enforcement=$0 }
+  END { if (context != "" && enforcement == "branch_required") print context }
+' | sed 's/^"//; s/"$//; s/^'\''//; s/'\''$//' | grep -v '^null$')
 if [ "${#REQ_CONTEXTS[@]}" -eq 0 ]; then
   REQ_CONTEXTS=("live-reconciliation" "diff-budget" "Gitleaks PR secret scan" "Gitleaks baseline growth guard")
 fi

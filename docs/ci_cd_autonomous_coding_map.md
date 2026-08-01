@@ -77,11 +77,19 @@ trying to pass.
 | `pr_body_contract.yml` | `pr-body-contract` | Ensures PR body names the plan and follows AGENTS.md body shape |
 | `pre_push_audit.yml` | `pre-push-audit` | Runs local PR review bundle from trusted base against PR worktree data |
 | `diff_budget.yml` | `diff-budget` | Enforces the 400 LOC soft cap or explicit diff-budget override |
+| `plan_admission.yml` | `plan-admission` | Enforces plan/doc admission rules for non-docs-only PRs |
+| `session_lane.yml` | `session-lane` | Checks session lane/body drift against the PR |
+| `review_contract.yml` | `review-contract` | Checks plan Review Contract shape and triggered rules |
 | `gitleaks_baseline_growth_guard.yml` | `Gitleaks baseline growth guard` | Prevents PR-side poisoning of the historical secret baseline |
 
-`scripts/check_required_status_checks.py` currently audits branch protection for
-these high-risk required contexts: `live-reconciliation`, `diff-budget`,
-`Gitleaks PR secret scan`, and `Gitleaks baseline growth guard`.
+`ci/gates.yml` is the canonical registry for gate classification. Entries marked
+`branch_required` produce the default expected context set consumed by
+`scripts/check_required_status_checks.py`: `live-reconciliation`,
+`diff-budget`, `plan-admission`, `session-lane`, `review-contract`,
+`pr-body-contract`, `Gitleaks PR secret scan`, and
+`Gitleaks baseline growth guard`. Live branch protection can drift from that
+expected set; the audit workflow reports that drift when its read token is
+configured.
 
 ### PR secret and product gates
 

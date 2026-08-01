@@ -15,6 +15,7 @@ BRANCH_PROTECTION_WORKFLOW = Path(__file__).resolve().parents[1] / ".github" / "
 PRE_COMMIT_CONFIG = Path(__file__).resolve().parents[1] / ".pre-commit-config.yaml"
 SECURITY_GUARDRAILS_DOC = Path(__file__).resolve().parents[1] / "docs" / "SECURITY_GUARDRAILS.md"
 REQUIRED_STATUS_SCRIPT = Path(__file__).resolve().parents[1] / "scripts" / "check_required_status_checks.py"
+GATE_REGISTRY = Path(__file__).resolve().parents[1] / "ci" / "gates.yml"
 
 REQUIRED_STATUS_CONTEXTS = (
     "live-reconciliation",
@@ -36,6 +37,7 @@ REQUIRED_STATUS_WORKFLOW_PATHS = (
     ".github/workflows/session_lane.yml",
     ".github/workflows/gitleaks_baseline_growth_guard.yml",
     ".github/workflows/security_guardrails.yml",
+    "ci/gates.yml",
 )
 
 
@@ -173,6 +175,109 @@ def test_required_status_check_audit_accepts_contexts_and_checks_shapes() -> Non
     }
 
     assert checker.missing_required_contexts(payload) == []
+
+
+def test_required_status_check_defaults_are_registry_derived() -> None:
+    checker = _load_required_status_script()
+
+    assert checker.default_required_contexts(GATE_REGISTRY) == REQUIRED_STATUS_CONTEXTS
+    assert "DEFAULT_REQUIRED_CONTEXTS = (" not in REQUIRED_STATUS_SCRIPT.read_text(
+        encoding="utf-8"
+    )
+
+
+def test_gate_registry_excludes_advisory_from_required_contexts() -> None:
+    checker = _load_required_status_script()
+    gates = checker.load_gate_registry(GATE_REGISTRY)
+    advisory_contexts = {
+        gate["context"]
+        for gate in gates
+        if gate["enforcement"] == "advisory" and gate["context"]
+    }
+
+    assert "seam-convergence" in advisory_contexts
+    assert "guard-class-closure-lint" in advisory_contexts
+    assert advisory_contexts.isdisjoint(checker.default_required_contexts(GATE_REGISTRY))
+
+
+def test_gate_registry_workflow_paths_exist() -> None:
+    checker = _load_required_status_script()
+    root = GATE_REGISTRY.parents[1]
+
+    for gate in checker.load_gate_registry(GATE_REGISTRY):
+        workflow = gate["workflow"]
+        assert isinstance(workflow, str)
+        assert (root / workflow).is_file(), gate["id"]
+
+
+def test_gate_registry_fails_closed_for_malformed_branch_required_gate() -> None:
+    checker = _load_required_status_script()
+    malformed = """\
+gates:
+  - id: missing-context
+    name: Missing Context
+    context: null
+    enforcement: branch_required
+    trusted_base: true
+    workflow: .github/workflows/missing.yml
+    local_command: null
+"""
+
+    try:
+        checker.parse_gate_registry(malformed)
+    except ValueError as exc:
+        assert "branch_required needs context" in str(exc)
+    else:
+        raise AssertionError("malformed branch_required gate passed")
+
+
+def test_gate_registry_fails_closed_for_unknown_enforcement_class() -> None:
+    checker = _load_required_status_script()
+    malformed = """\
+gates:
+  - id: unknown-class
+    name: Unknown Class
+    context: unknown-class
+    enforcement: maybe_required
+    trusted_base: true
+    workflow: .github/workflows/unknown.yml
+    local_command: null
+"""
+
+    try:
+        checker.parse_gate_registry(malformed)
+    except ValueError as exc:
+        assert "invalid enforcement" in str(exc)
+    else:
+        raise AssertionError("unknown enforcement class passed")
+
+
+def test_required_status_cli_reports_registry_errors(tmp_path, capsys) -> None:
+    checker = _load_required_status_script()
+    registry = tmp_path / "gates.yml"
+    registry.write_text(
+        """\
+gates:
+  - id: missing-context
+    name: Missing Context
+    context: null
+    enforcement: branch_required
+    trusted_base: true
+    workflow: .github/workflows/missing.yml
+    local_command: null
+""",
+        encoding="utf-8",
+    )
+    payload = tmp_path / "payload.json"
+    payload.write_text("{}", encoding="utf-8")
+
+    code = checker.main(
+        ["--registry-file", str(registry), "--payload-file", str(payload)]
+    )
+    captured = capsys.readouterr()
+
+    assert code == 2
+    assert "branch_required needs context" in captured.err
 
 
 def test_required_status_check_audit_accepts_github_actions_source() -> None:

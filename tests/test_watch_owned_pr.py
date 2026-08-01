@@ -24,11 +24,26 @@ def _run_watcher(tmp_path: Path, *, scenario: str, sha: str = "head-a") -> subpr
         fake_bin / "git",
         """\
         #!/usr/bin/env sh
+        if [ "$4" = "origin/main:ci/gates.yml" ]; then
+          printf '%s\n' 'gates:'
+          printf '%s\n' '  - id: required-a'
+          printf '%s\n' '    name: Required A'
+          printf '%s\n' '    context: required-a'
+          printf '%s\n' '    enforcement: branch_required'
+          printf '%s\n' '    trusted_base: true'
+          printf '%s\n' '    workflow: .github/workflows/required_a.yml'
+          printf '%s\n' '    local_command: null'
+          printf '%s\n' '  - id: advisory-a'
+          printf '%s\n' '    name: Advisory A'
+          printf '%s\n' '    context: advisory-a'
+          printf '%s\n' '    enforcement: advisory'
+          printf '%s\n' '    trusted_base: false'
+          printf '%s\n' '    workflow: .github/workflows/advisory_a.yml'
+          printf '%s\n' '    local_command: null'
+          exit 0
+        fi
         if [ "$4" = "origin/main:scripts/check_required_status_checks.py" ]; then
           printf '%s\n' 'GITHUB_ACTIONS_APP_ID = 15368'
-          printf '%s\n' 'DEFAULT_REQUIRED_CONTEXTS = ('
-          printf '%s\n' '    "required-a",'
-          printf '%s\n' ')'
           exit 0
         fi
         exit 2

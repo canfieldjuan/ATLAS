@@ -1,0 +1,131 @@
+# Canonical Atlas CI/CD gate registry.
+#
+# This file is intentionally constrained to simple key/value YAML so the
+# branch-protection audit can parse it without adding PyYAML to CI.
+#
+# enforcement:
+#   branch_required          intended required branch-protection context
+#   ci_blocking_not_required blocking CI job that is not live branch-required
+#   local_blocking           local wrapper/mechanical gate
+#   advisory                 non-blocking signal
+#   scheduled                schedule/manual-only signal
+gates:
+  - id: live-reconciliation
+    name: AI reconciliation live
+    context: live-reconciliation
+    enforcement: branch_required
+    trusted_base: true
+    workflow: .github/workflows/ai_reconciliation_live.yml
+    local_command: null
+
+  - id: diff-budget
+    name: Diff budget
+    context: diff-budget
+    enforcement: branch_required
+    trusted_base: true
+    workflow: .github/workflows/diff_budget.yml
+    local_command: null
+
+  - id: plan-admission
+    name: Plan admission
+    context: plan-admission
+    enforcement: branch_required
+    trusted_base: true
+    workflow: .github/workflows/plan_admission.yml
+    local_command: bash scripts/pre_push_audit.sh
+
+  - id: session-lane
+    name: Session lane
+    context: session-lane
+    enforcement: branch_required
+    trusted_base: true
+    workflow: .github/workflows/session_lane.yml
+    local_command: bash scripts/local_pr_review.sh
+
+  - id: review-contract
+    name: Review contract
+    context: review-contract
+    enforcement: branch_required
+    trusted_base: true
+    workflow: .github/workflows/review_contract.yml
+    local_command: bash scripts/local_pr_review.sh
+
+  - id: pr-body-contract
+    name: PR body contract
+    context: pr-body-contract
+    enforcement: branch_required
+    trusted_base: true
+    workflow: .github/workflows/pr_body_contract.yml
+    local_command: bash scripts/local_pr_review.sh
+
+  - id: gitleaks-pr-secret-scan
+    name: Gitleaks PR secret scan
+    context: Gitleaks PR secret scan
+    enforcement: branch_required
+    trusted_base: false
+    workflow: .github/workflows/security_guardrails.yml
+    local_command: pre-commit run gitleaks-protect
+
+  - id: gitleaks-baseline-growth-guard
+    name: Gitleaks baseline growth guard
+    context: Gitleaks baseline growth guard
+    enforcement: branch_required
+    trusted_base: true
+    workflow: .github/workflows/gitleaks_baseline_growth_guard.yml
+    local_command: null
+
+  - id: pre-push-audit
+    name: Pre-push audit
+    context: pre-push-audit
+    enforcement: ci_blocking_not_required
+    trusted_base: true
+    workflow: .github/workflows/pre_push_audit.yml
+    local_command: bash scripts/local_pr_review.sh
+
+  - id: unit-gate
+    name: Unit Gate
+    context: unit-gate
+    enforcement: ci_blocking_not_required
+    trusted_base: false
+    workflow: .github/workflows/unit_gate.yml
+    local_command: null
+
+  - id: seam-convergence
+    name: Seam Convergence Breaker
+    context: seam-convergence
+    enforcement: advisory
+    trusted_base: false
+    workflow: .github/workflows/seam_convergence.yml
+    local_command: null
+
+  - id: guard-class-closure
+    name: Guard Class-Closure Lint
+    context: guard-class-closure-lint
+    enforcement: advisory
+    trusted_base: false
+    workflow: .github/workflows/guard_class_closure.yml
+    local_command: null
+
+  - id: boundary-change-enumeration
+    name: Boundary Change Enumeration
+    context: boundary-change-enumeration
+    enforcement: advisory
+    trusted_base: false
+    workflow: .github/workflows/boundary_change_enumeration.yml
+    local_command: null
+
+  - id: deployed-config-probing
+    name: Deployed Config Probing
+    context: deployed-config-probing
+    enforcement: advisory
+    trusted_base: false
+    workflow: .github/workflows/deployed_config_probing.yml
+    local_command: null
+
+  - id: security-full-sweep
+    name: Security Full Sweep
+    context: null
+    enforcement: scheduled
+    trusted_base: true
+    workflow: .github/workflows/security_full_sweep.yml
+    local_command: null
