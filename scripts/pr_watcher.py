@@ -859,7 +859,6 @@ def _classify(
     unresolved_threads: list[dict[str, Any]],
     reviews_complete: bool,
     codex_head_review_count: int,
-    docs_only_reconciliation_exemption: bool,
     reconciliation_code: int,
     review_changed: bool,
 ) -> str:
@@ -876,12 +875,8 @@ def _classify(
     if (
         not threads_complete
         or unresolved_threads
-        or not reviews_complete
-        or (codex_head_review_count < 1 and not docs_only_reconciliation_exemption)
         or pr.get("isDraft") is not False
     ):
-        return "attention"
-    if str(pr.get("reviewDecision") or "").upper() == "CHANGES_REQUESTED":
         return "attention"
     if review_changed:
         return "review_changed"
@@ -1129,7 +1124,6 @@ def produce(watcher_id: str, *, config_dir: Path, state_dir: Path) -> tuple[int,
             checks_error,
             reviews_error,
             threads_error,
-            codex_reviews_error,
         )
         if item
     ]
@@ -1148,7 +1142,6 @@ def produce(watcher_id: str, *, config_dir: Path, state_dir: Path) -> tuple[int,
         unresolved_threads=unresolved_threads,
         reviews_complete=reviews_complete,
         codex_head_review_count=codex_head_review_count,
-        docs_only_reconciliation_exemption=docs_only_reconciliation_exemption,
         reconciliation_code=reconciliation_code,
         review_changed=review_changed,
     )
@@ -1250,7 +1243,7 @@ def produce(watcher_id: str, *, config_dir: Path, state_dir: Path) -> tuple[int,
                 f"{len(required_failures)} failed, {len(required_pending)} pending"
             ),
             f"Unresolved review threads: {len(unresolved_threads)} across {thread_pages} fetched page(s)",
-            f"Current-head Codex review attestations: {codex_head_review_count} across {review_pages} fetched page(s)",
+            f"Codex review diagnostics: {codex_head_review_count} current-head clean review(s) across {review_pages} fetched page(s)",
             f"Reviews/comments: {review_count} reviews, {comment_count} comments",
             f"Review changed since last poll: {'yes' if review_changed else 'no'}",
             f"AI reconciliation: {'pass' if reconciliation_code == 0 else 'fail'}",

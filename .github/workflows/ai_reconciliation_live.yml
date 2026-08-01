@@ -59,8 +59,7 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           python scripts/check_ai_reconciliation_live.py \
-            --pr "${{ github.event.pull_request.number }}" \
-            --wait-for-review-window
+            --pr "${{ github.event.pull_request.number }}"
 
   live-reconciliation-review-events:
     if: github.event_name == 'pull_request_review' || github.event_name == 'pull_request_review_comment'

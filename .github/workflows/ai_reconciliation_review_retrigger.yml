@@ -32,7 +32,7 @@ jobs:
       github.event.workflow_run.event == 'pull_request_review' ||
       github.event.workflow_run.event == 'pull_request_review_comment'
     runs-on: ubuntu-latest
-    timeout-minutes: 5
+    timeout-minutes: 15
     steps:
       - name: Rerun latest trusted target run for this head
         env:
@@ -42,12 +42,38 @@ jobs:
         run: |
           set -euo pipefail
           head_sha="${WORKFLOW_RUN_HEAD_SHA}"
-          run_id=$(gh api \
-            "repos/${GITHUB_REPOSITORY}/actions/workflows/ai_reconciliation_live.yml/runs?event=pull_request_target&head_sha=${head_sha}&per_page=1" \
-            --jq '.workflow_runs[0].id // empty')
+          target_runs_path="repos/${GITHUB_REPOSITORY}/actions/workflows/ai_reconciliation_live.yml/runs?event=pull_request_target&head_sha=${head_sha}&per_page=1"
+          run_id=""
+          status=""
+          for attempt in $(seq 1 72); do
+            run_id=$(gh api "${target_runs_path}" --jq '.workflow_runs[0].id // empty')
+            if [ -z "${run_id}" ]; then
+              echo "target run for ${head_sha} is not visible yet; retry ${attempt}/72"
+              sleep 10
+              continue
+            fi
+            status=$(gh api "repos/${GITHUB_REPOSITORY}/actions/runs/${run_id}" --jq '.status // empty')
+            if [ "${status}" = "completed" ]; then
+              break
+            fi
+            echo "target run ${run_id} is ${status:-unknown}; retry ${attempt}/72"
+            sleep 10
+          done
           if [ -z "${run_id}" ]; then
             echo "no pull_request_target run for ${head_sha}; nothing to refresh"
             exit 0
           fi
+          if [ "${status}" != "completed" ]; then
+            echo "target run ${run_id} did not complete before retrigger timeout"
+            exit 1
+          fi
           echo "re-running trusted run ${run_id} for ${head_sha}"
-          gh api -X POST "repos/${GITHUB_REPOSITORY}/actions/runs/${run_id}/rerun"
+          for attempt in $(seq 1 6); do
+            if gh api -X POST "repos/${GITHUB_REPOSITORY}/actions/runs/${run_id}/rerun"; then
+              exit 0
+            fi
+            echo "rerun request for ${run_id} was rejected; retry ${attempt}/6"
+            sleep 10
+          done
+          echo "could not rerun trusted run ${run_id}"
+          exit 1

@@ -69,6 +69,13 @@ EXPLICIT_TEST_OWNERS: dict[str, tuple[str, ...]] = {
     ".github/workflows/branch_protection_required_checks.yml": (
         "tests/test_security_guardrails_workflow.py",
     ),
+    ".github/workflows/ai_reconciliation_live.yml": (
+        "tests/test_audit_workflow_security_posture.py",
+        "tests/test_check_ai_reconciliation_live.py",
+    ),
+    ".github/workflows/ai_reconciliation_review_retrigger.yml": (
+        "tests/test_check_ai_reconciliation_live.py",
+    ),
     ".github/workflows/unit_gate.yml": (
         "tests/test_check_unit_gate.py",
         "tests/test_select_impacted_tests.py",
@@ -79,6 +86,12 @@ EXPLICIT_TEST_OWNERS: dict[str, tuple[str, ...]] = {
     ),
     "scripts/check_required_status_checks.py": (
         "tests/test_security_guardrails_workflow.py",
+    ),
+    "scripts/check_ai_reconciliation_live.py": (
+        "tests/test_check_ai_reconciliation_live.py",
+    ),
+    "scripts/codex_wake_bridge.py": (
+        "tests/test_codex_wake_bridge.py",
     ),
     "scripts/check_unit_gate.py": (
         "tests/test_check_unit_gate.py",
