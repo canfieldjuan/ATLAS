@@ -1,6 +1,6 @@
 # Plan archive index
 
-1499 archived plan doc(s). Merged plan docs are moved under `archive/` and listed below; once the archive sweep has run, the `plans/` root holds only in-flight slices.
+1500 archived plan doc(s). Merged plan docs are moved under `archive/` and listed below; once the archive sweep has run, the `plans/` root holds only in-flight slices.
 
 - [PR-ASR-Pip-Audit-Egg-Fragment](archive/PR-ASR-Pip-Audit-Egg-Fragment.md) - lane: security/workflow | phase: Production hardening
 - [PR-ASR-Requirements-Audit-Pin](archive/PR-ASR-Requirements-Audit-Pin.md) - lane: security/workflow | phase: Production hardening
@@ -1357,6 +1357,7 @@
 - [PR-Reddit-Mint-Token-Script](archive/PR-Reddit-Mint-Token-Script.md) - lane: content-ops/reddit-listening/fit-eval | phase: Workflow/process
 - [PR-Refresh-CLAUDE-Md](archive/PR-Refresh-CLAUDE-Md.md)
 - [PR-Remove-Query-Token-Auth](archive/PR-Remove-Query-Token-Auth.md) - lane: security/hardening-1656 | phase: Production hardening
+- [PR-Required-Status-Truth-Reconciliation](archive/PR-Required-Status-Truth-Reconciliation.md) - lane: workflow/required-status-truth | phase: Workflow/process
 - [PR-Resolution-Audit-Artifact-Title](archive/PR-Resolution-Audit-Artifact-Title.md) - lane: deflection/report-artifact-naming | phase: Product polish
 - [PR-Resolution-Audit-Current-Code-Tracker](archive/PR-Resolution-Audit-Current-Code-Tracker.md) - lane: resolution-audit-csv | phase: Workflow/process
 - [PR-Resolution-Audit-E2E-Tracker](archive/PR-Resolution-Audit-E2E-Tracker.md) - lane: resolution-audit/tracking | phase: workflow/process

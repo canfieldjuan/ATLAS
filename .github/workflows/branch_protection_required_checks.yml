@@ -8,9 +8,15 @@ on:
     branches:
       - main
     paths:
+      - ".github/workflows/ai_reconciliation_live.yml"
       - ".github/workflows/branch_protection_required_checks.yml"
+      - ".github/workflows/diff_budget.yml"
       - ".github/workflows/gitleaks_baseline_growth_guard.yml"
+      - ".github/workflows/plan_admission.yml"
+      - ".github/workflows/pr_body_contract.yml"
+      - ".github/workflows/review_contract.yml"
       - ".github/workflows/security_guardrails.yml"
+      - ".github/workflows/session_lane.yml"
       - "docs/SECURITY_GUARDRAILS.md"
       - "scripts/check_required_status_checks.py"
       - "tests/test_security_guardrails_workflow.py"
