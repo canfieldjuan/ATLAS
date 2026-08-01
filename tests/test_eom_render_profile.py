@@ -1373,6 +1373,56 @@ def test_eom_lifespan_rejects_enabled_funnel_missing_digest_before_db_work(
     assert events == []
 
 
+def test_eom_lifespan_rejects_funnel_datastore_before_migrations(
+    monkeypatch,
+):
+    from atlas_brain import main_eom
+    from atlas_brain.eom_api import funnel_auth
+
+    events: list[str] = []
+    generated = funnel_auth.generate_eom_funnel_service_token()
+
+    class _Pool:
+        is_initialized = True
+
+        async def fetchval(self, query: str) -> bool:
+            events.append("datastore-check")
+            assert "eom_customer_handoffs" in query
+            assert "atlas_eom_handoff_owner" in query
+            return False
+
+    async def init_database():
+        events.append("init")
+
+    async def run_migrations():
+        events.append("migrations")
+
+    async def close_database():
+        events.append("close")
+
+    async def drive_lifespan():
+        async with main_eom.lifespan(FastAPI()):
+            raise AssertionError("enabled funnel without datastore must not serve")
+
+    monkeypatch.setattr(main_eom, "db_settings", SimpleNamespace(enabled=True))
+    monkeypatch.setattr(main_eom, "get_db_pool", lambda: _Pool())
+    monkeypatch.setattr(main_eom, "init_database", init_database)
+    monkeypatch.setattr(main_eom, "_run_startup_migrations", run_migrations)
+    monkeypatch.setattr(main_eom, "close_database", close_database)
+    monkeypatch.setattr(main_eom.eom_profile_settings, "run_migrations", True)
+    monkeypatch.setattr(main_eom.invoicing_settings, "receivables_api_enabled", False)
+    monkeypatch.setattr(main_eom.funnel_settings, "api_enabled", True)
+    monkeypatch.setattr(
+        main_eom.funnel_settings,
+        "service_token_sha256",
+        generated.sha256,
+    )
+
+    with pytest.raises(RuntimeError, match="CRM lifecycle and handoff schema"):
+        asyncio.run(drive_lifespan())
+    assert events == ["init", "datastore-check", "close"]
+
+
 def test_eom_profile_ping_is_database_independent(monkeypatch):
     from atlas_brain import main_eom
     from atlas_brain.main_eom import app

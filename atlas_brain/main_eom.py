@@ -136,7 +136,7 @@ async def _require_eom_funnel_data_store(
 
 
 async def _validate_eom_funnel_startup() -> None:
-    """Run the enabled slim-app funnel datastore preflight after DB initialization."""
+    """Run enabled funnel datastore preflight after DB init and before migrations."""
     await _require_eom_funnel_data_store(
         funnel_settings,
         database_enabled=db_settings.enabled,
@@ -154,11 +154,11 @@ async def lifespan(app: FastAPI):
         if db_settings.enabled:
             await init_database()
             logger.info("Database connection pool initialized")
-            if eom_profile_settings.run_migrations:
-                await _run_startup_migrations()
         else:
             logger.warning("Database persistence is disabled")
         await _validate_eom_funnel_startup()
+        if db_settings.enabled and eom_profile_settings.run_migrations:
+            await _run_startup_migrations()
         yield
     finally:
         if db_settings.enabled:

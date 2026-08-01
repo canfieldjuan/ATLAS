@@ -31,8 +31,8 @@ contract safe.
   funnel bearer material on the Atlas service side; add tests that prove route
   reachability, fail-closed startup/request behavior, shared datastore guard
   behavior, raw-token rejection, Render env coverage, and CI path-filter
-  enrollment for the newly mounted funnel router, auth, config, and shared guard
-  dependencies.
+  enrollment for the newly mounted funnel router, auth, config, shared guard, and
+  transitive service dependencies.
 - Must not change: Do not change customer-facing website/portal copy, time
   tracker UI, checkout/card policy, Google Ads integration, live Render
   resources, local systemd services, full Atlas router enrollment beyond sharing
@@ -66,6 +66,9 @@ Slice phase: production hardening
     `ATLAS_EOM_FUNNEL_API_ENABLED=true`, accepts a generated digest, and rejects
     missing/malformed/placeholder digests before request handling and before
     database initialization or startup migrations can mutate state.
+  - With a valid funnel digest but missing CRM/handoff datastore readiness, the
+    slim app rejects startup after DB pool initialization and before startup
+    migrations can mutate state.
   - The slim settings object rejects raw `ATLAS_EOM_FUNNEL_SERVICE_TOKEN`
     material before projecting runtime config, matching the digest-only Render
     boundary.
@@ -82,8 +85,11 @@ Slice phase: production hardening
     newly mounted funnel dependency set:
     `atlas_brain/eom_api/config.py`, `atlas_brain/eom_api/funnel.py`,
     `atlas_brain/eom_api/funnel_auth.py`, and
-    `atlas_brain/eom_api/funnel_store.py`, so later changes to the router,
-    auth/config admission, or shared guard trigger the focused EOM CI suites.
+    `atlas_brain/eom_api/funnel_store.py`, plus the router's service
+    dependencies `atlas_brain/services/crm_provider.py` and
+    `atlas_brain/services/eom_lead_conversion.py`, so later changes to the
+    router, auth/config admission, shared guard, or mounted route service layer
+    trigger the focused EOM CI suites.
 - Reachability proof: `tests/test_eom_render_profile.py` imports the real
   `atlas_brain.main_eom:app` in a subprocess and exercises real route
   transport through `/api/v1/eom-funnel/customer-handoffs` with env-projected
@@ -116,7 +122,8 @@ seam in the enumeration; otherwise write "N/A - no boundary change."
   - Replaced-path behaviors: previously the slim profile did not evaluate
     funnel startup readiness; intentionally changed so disabled remains a no-op,
     enabled validates token digest before DB work, and enabled validates
-    CRM/handoff datastore readiness after DB initialization.
+    CRM/handoff datastore readiness after DB initialization but before startup
+    migrations.
   - Guard-relevant fields: `ATLAS_EOM_FUNNEL_API_ENABLED`,
     `ATLAS_EOM_FUNNEL_SERVICE_TOKEN_SHA256`,
     `ATLAS_EOM_FUNNEL_SERVICE_TOKEN`, `ATLAS_DB_ENABLED`, initialized DB pool
@@ -126,7 +133,7 @@ seam in the enumeration; otherwise write "N/A - no boundary change."
   - Caller x input shape: Render/process startup with funnel disabled, enabled
     with generated digest and ready DB, enabled with missing digest, enabled
     with disabled DB, enabled with uninitialized DB, and enabled with schema or
-    privilege predicate false.
+    privilege predicate false before startup migrations.
 - Boundary path/seam: `EOMFunnelConfig` raw bearer settings-source admission.
   - Replaced-path behaviors: previously the slim EOM settings projection ignored
     raw `ATLAS_EOM_FUNNEL_SERVICE_TOKEN` material and could construct an Atlas
@@ -183,9 +190,10 @@ fallback changes; otherwise write "N/A - no guard/config boundary change."
   for import and ping probes to prove the slim profile still boots without
   database work when APIs are disabled.
 - Side-effect ordering: startup validates token config before database
-  initialization or migrations, then validates datastore readiness before
-  serving enabled funnel requests; request tests assert missing auth or disabled
-  API stops before the CRM dependency records any handoff call.
+  initialization or migrations, then validates datastore readiness after DB pool
+  initialization but before startup migrations or serving enabled funnel
+  requests; request tests assert missing auth or disabled API stops before the
+  CRM dependency records any handoff call.
 
 ### Files touched
 
@@ -205,7 +213,9 @@ fallback changes; otherwise write "N/A - no guard/config boundary change."
 validator from the slim-safe `atlas_brain.eom_api` package.  The app includes
 that router under `/api/v1`, then extends lifespan startup with a funnel
 preflight that is a no-op while the funnel API is disabled and fail-closed when
-enabled without safe config or datastore readiness.
+enabled without safe config or datastore readiness.  The enabled-funnel startup
+order is token config, DB pool initialization, datastore readiness, then optional
+startup migrations so a rejecting admission does not mutate schema first.
 
 The SQL readiness predicate is moved into an EOM API helper module.  The full
 app keeps the old private `_require_eom_funnel_data_store` function as a thin
@@ -248,8 +258,10 @@ Parked hardening: none.
 - Completed:
   - `python -m pytest tests/test_eom_render_profile.py -k 'funnel_raw_token or raw_funnel or eom_funnel_runtime_config_rejects_raw_token_env or eom_profile_rejects_raw_funnel_token'`
     — 9 passed, 38 deselected.
+  - `python -m pytest tests/test_eom_render_profile.py -k 'datastore_before_migrations or missing_digest_before_db_work'`
+    — 2 passed, 46 deselected.
   - `python -m pytest tests/test_eom_render_profile.py tests/test_eom_lead_conversion.py`
-    — 87 passed, 1 warning from the existing `torch`/`pynvml` import path.
+    — 88 passed, 1 warning from the existing `torch`/`pynvml` import path.
   - `python -m py_compile atlas_brain/main.py atlas_brain/main_eom.py atlas_brain/eom_api/config.py atlas_brain/eom_api/funnel.py atlas_brain/eom_api/funnel_auth.py atlas_brain/eom_api/funnel_store.py tests/test_eom_render_profile.py tests/test_eom_lead_conversion.py`
     — passed.
   - `python scripts/sync_pr_plan.py plans/PR-EOM-Render-Slim-Profile.md`
@@ -269,18 +281,24 @@ Parked hardening: none.
     `python scripts/audit_plan_doc_diff_size.py plans/PR-EOM-Render-Slim-Profile.md origin/main`;
     `python scripts/audit_review_rules_triggered.py origin/main --plan plans/PR-EOM-Render-Slim-Profile.md`
     — all passed.
+  - Review-fix local checks for the datastore-before-migrations and service
+    dependency CI-filter repair:
+    `python -m pytest tests/test_eom_render_profile.py -k 'datastore_before_migrations or missing_digest_before_db_work'`
+    — 2 passed, 46 deselected; workflow path sanity check for the mounted
+    funnel dependency set — passed; full EOM render/funnel pair — 88 passed,
+    1 warning; `python -m py_compile ...` — passed; plan audits — passed.
 
 ## Estimated diff size
 
 | File | LOC |
 |---|---:|
 | `.github/workflows/atlas_eom_lead_pipeline_checks.yml` | 2 |
-| `.github/workflows/atlas_invoicing_checks.yml` | 8 |
+| `.github/workflows/atlas_invoicing_checks.yml` | 12 |
 | `atlas_brain/eom_api/config.py` | 58 |
 | `atlas_brain/eom_api/funnel_store.py` | 155 |
 | `atlas_brain/main.py` | 146 |
-| `atlas_brain/main_eom.py` | 30 |
-| `plans/PR-EOM-Render-Slim-Profile.md` | 286 |
+| `atlas_brain/main_eom.py` | 34 |
+| `plans/PR-EOM-Render-Slim-Profile.md` | 304 |
 | `render.eom.yaml` | 4 |
-| `tests/test_eom_render_profile.py` | 454 |
-| **Total** | **1143** |
+| `tests/test_eom_render_profile.py` | 504 |
+| **Total** | **1219** |
