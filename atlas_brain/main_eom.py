@@ -136,8 +136,7 @@ async def _require_eom_funnel_data_store(
 
 
 async def _validate_eom_funnel_startup() -> None:
-    """Run the enabled slim-app funnel preflight after DB initialization."""
-    validate_eom_funnel_api_config(funnel_settings)
+    """Run the enabled slim-app funnel datastore preflight after DB initialization."""
     await _require_eom_funnel_data_store(
         funnel_settings,
         database_enabled=db_settings.enabled,
@@ -149,6 +148,7 @@ async def lifespan(app: FastAPI):
     """Initialize only the dependencies required by the EOM API profile."""
     logger.info("Atlas EOM API starting up")
     validate_receivables_api_config(invoicing_settings)
+    validate_eom_funnel_api_config(funnel_settings)
 
     try:
         if db_settings.enabled:
