@@ -13,6 +13,10 @@ GITHUB_ACTIONS_APP_ID = 15368
 DEFAULT_REQUIRED_CONTEXTS = (
     "live-reconciliation",
     "diff-budget",
+    "plan-admission",
+    "session-lane",
+    "review-contract",
+    "pr-body-contract",
     "Gitleaks PR secret scan",
     "Gitleaks baseline growth guard",
 )

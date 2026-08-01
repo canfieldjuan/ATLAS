@@ -66,16 +66,21 @@ workflow suppresses the follow-up chain entirely (no event model exists
 that delivers trusted code on review events); the fallback is a scheduled
 trusted sweep, parked in plans/PR-Trusted-Base-Gate-Execution.md.
 
-Branch protection for `main` requires `live-reconciliation`, `diff-budget`
-(the AGENTS.md diff-budget gate), `Gitleaks PR secret scan`, and
-`Gitleaks baseline growth guard`. The
-`Branch Protection Required Checks` workflow audits that live repository
-setting on a weekly/manual cadence and on trusted `main` updates touching the
-branch-protection checker, the security workflows, or security guardrail docs
-when `ATLAS_BRANCH_PROTECTION_READ_TOKEN` is configured with GitHub
-Administration read permission. The audit requires those contexts to be pinned
-to the GitHub Actions app source in branch protection, not only present as
-legacy bare context names.
+Target branch protection for `main` is `live-reconciliation`, `diff-budget`,
+`plan-admission`, `session-lane`, `review-contract`,
+`pr-body-contract`, `Gitleaks PR secret scan`, and
+`Gitleaks baseline growth guard`, all pinned to the GitHub Actions app source
+instead of legacy bare context names. At the time of this slice, live GitHub
+settings still require only `live-reconciliation`, `Gitleaks PR secret scan`,
+and `Gitleaks baseline growth guard`; the REST PATCH that preserves those and
+adds `diff-budget`, `plan-admission`, `session-lane`, `review-contract`, and
+`pr-body-contract` remains a separate repository-settings step.
+
+The `Branch Protection Required Checks` workflow audits that live repository
+setting against the target set on a weekly/manual cadence and on trusted `main`
+updates touching the branch-protection checker, any target check producer
+workflow, or security guardrail docs when `ATLAS_BRANCH_PROTECTION_READ_TOKEN`
+is configured with GitHub Administration read permission.
 
 The workflow security posture auditor admits
 `.github/workflows/session_lane.yml` / `session-lane` only when it has the same
