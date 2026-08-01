@@ -53,6 +53,22 @@ _RAW_RECEIVABLES_SERVICE_TOKEN_KEY_CASES = tuple(
         )
     )
 )
+_RAW_EOM_FUNNEL_SERVICE_TOKEN_KEY_CASES = tuple(
+    dict.fromkeys(
+        (
+            _RAW_EOM_FUNNEL_SERVICE_TOKEN_ENV,
+            _RAW_EOM_FUNNEL_SERVICE_TOKEN_ENV.lower(),
+            _alternating_case(
+                _RAW_EOM_FUNNEL_SERVICE_TOKEN_ENV,
+                starts_upper=True,
+            ),
+            _alternating_case(
+                _RAW_EOM_FUNNEL_SERVICE_TOKEN_ENV,
+                starts_upper=False,
+            ),
+        )
+    )
+)
 
 
 def _generated_receivables_token_oracle(token: str) -> bool:
@@ -831,8 +847,57 @@ def test_eom_receivables_startup_rejects_unsafe_enabled_runtime_config():
             auth.validate_receivables_api_config(config)
 
 
+def test_eom_funnel_raw_token_source_admission_matches_casefold_oracle(
+    tmp_path,
+):
+    from atlas_brain.eom_api import config as eom_config
+
+    raw_values = ("", "   ", "caller-side-funnel-token")
+    unrelated_keys = (
+        "ATLAS_EOM_FUNNEL_SERVICE_TOKEN_SHA256",
+        "ATLAS_INVOICING_RECEIVABLES_SERVICE_TOKEN",
+    )
+
+    case_index = 0
+    for source, key, value in product(
+        ("process-env", ".env", ".env.local"),
+        (*_RAW_EOM_FUNNEL_SERVICE_TOKEN_KEY_CASES, *unrelated_keys),
+        raw_values,
+    ):
+        expected = (
+            key.casefold() == _RAW_EOM_FUNNEL_SERVICE_TOKEN_ENV.casefold()
+            and bool(value.strip())
+        )
+        if source == "process-env":
+            observed = eom_config.raw_eom_funnel_service_token_configured(
+                environ={key: value},
+                env_files=(),
+            )
+        else:
+            case_index += 1
+            env_file = tmp_path / f"raw-funnel-token-source-{case_index}{source}"
+            env_file.write_text(f"{key}={value}\n", encoding="utf-8")
+            observed = eom_config.raw_eom_funnel_service_token_configured(
+                environ={},
+                env_files=(env_file,),
+            )
+
+        assert observed is expected, (source, key, repr(value))
+
+
+@pytest.mark.parametrize(
+    ("raw_token_key", "api_enabled"),
+    (
+        ("ATLAS_EOM_FUNNEL_SERVICE_TOKEN", "true"),
+        ("atlas_eom_funnel_service_token", "true"),
+        ("ATLAS_EOM_FUNNEL_SERVICE_TOKEN", "false"),
+        (_RAW_EOM_FUNNEL_SERVICE_TOKEN_KEY_CASES[-1], "false"),
+    ),
+)
 def test_eom_funnel_runtime_config_rejects_raw_token_env_before_projection(
     monkeypatch,
+    raw_token_key,
+    api_enabled,
 ):
     from pydantic import ValidationError
 
@@ -843,9 +908,9 @@ def test_eom_funnel_runtime_config_rejects_raw_token_env_before_projection(
     )
 
     generated = funnel_auth.generate_eom_funnel_service_token()
-    monkeypatch.setenv("ATLAS_EOM_FUNNEL_API_ENABLED", "true")
+    monkeypatch.setenv("ATLAS_EOM_FUNNEL_API_ENABLED", api_enabled)
     monkeypatch.setenv("ATLAS_EOM_FUNNEL_SERVICE_TOKEN_SHA256", generated.sha256)
-    monkeypatch.setenv(RAW_EOM_FUNNEL_SERVICE_TOKEN_ENV, generated.token)
+    monkeypatch.setenv(raw_token_key, generated.token)
 
     with pytest.raises(
         ValidationError,
@@ -853,6 +918,59 @@ def test_eom_funnel_runtime_config_rejects_raw_token_env_before_projection(
     ):
         EOMFunnelConfig()
     assert "service_token" not in EOMFunnelConfig.model_fields
+    assert RAW_EOM_FUNNEL_SERVICE_TOKEN_ENV not in EOMFunnelConfig.model_fields
+
+
+@pytest.mark.parametrize(
+    ("env_file_name", "raw_token_key", "api_enabled"),
+    (
+        (".env", "ATLAS_EOM_FUNNEL_SERVICE_TOKEN", "true"),
+        (".env.local", "atlas_eom_funnel_service_token", "true"),
+        (".env", "ATLAS_EOM_FUNNEL_SERVICE_TOKEN", "false"),
+        (".env.local", _RAW_EOM_FUNNEL_SERVICE_TOKEN_KEY_CASES[-1], "false"),
+    ),
+)
+def test_eom_profile_rejects_raw_funnel_token_from_dotenv_before_projection(
+    tmp_path,
+    env_file_name,
+    raw_token_key,
+    api_enabled,
+):
+    from atlas_brain.eom_api import funnel_auth
+    from atlas_brain.eom_api.config import RAW_EOM_FUNNEL_SERVICE_TOKEN_ENV
+
+    generated = funnel_auth.generate_eom_funnel_service_token()
+    (tmp_path / env_file_name).write_text(
+        "\n".join(
+            [
+                f"ATLAS_EOM_FUNNEL_API_ENABLED={api_enabled}",
+                f"ATLAS_EOM_FUNNEL_SERVICE_TOKEN_SHA256={generated.sha256}",
+                f"{raw_token_key}={generated.token}",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    env = _isolated_eom_subprocess_env()
+    repo_root = Path(__file__).resolve().parents[1]
+    existing_pythonpath = env.get("PYTHONPATH", "")
+    env["PYTHONPATH"] = (
+        str(repo_root)
+        if not existing_pythonpath
+        else f"{repo_root}{os.pathsep}{existing_pythonpath}"
+    )
+
+    result = subprocess.run(
+        [sys.executable, "-c", "import atlas_brain.main_eom"],
+        check=False,
+        capture_output=True,
+        cwd=tmp_path,
+        env=env,
+        text=True,
+    )
+
+    assert result.returncode != 0
+    assert "Raw EOM funnel bearer token material" in result.stderr
+    assert RAW_EOM_FUNNEL_SERVICE_TOKEN_ENV in result.stderr
 
 
 def test_eom_receivables_trusted_config_rejects_bad_token_digests():
