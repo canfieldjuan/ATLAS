@@ -83,13 +83,21 @@ Slice phase: production hardening
     token env vars.
   - The EOM lead-pipeline and invoicing GitHub Actions path filters include the
     newly mounted funnel dependency set:
-    `atlas_brain/eom_api/config.py`, `atlas_brain/eom_api/funnel.py`,
-    `atlas_brain/eom_api/funnel_auth.py`, and
+    `atlas_brain/eom_api/config.py`, `atlas_brain/eom_api/auth.py`,
+    `atlas_brain/eom_api/funnel.py`, `atlas_brain/eom_api/funnel_auth.py`, and
     `atlas_brain/eom_api/funnel_store.py`, plus the router's service
     dependencies `atlas_brain/services/crm_provider.py` and
     `atlas_brain/services/eom_lead_conversion.py`, so later changes to the
     router, auth/config admission, shared guard, or mounted route service layer
     trigger the focused EOM CI suites.
+  - Workflow dependency inventory closure: CLOSED and ENUMERATED from the
+    slim-app route mount/import closure (`atlas_brain.main_eom` importing
+    `atlas_brain.eom_api.funnel`), the funnel auth module's direct shared-auth
+    import (`atlas_brain.eom_api.auth`), and the router's current service
+    imports.  Inputs outside that set do not trigger these focused jobs from
+    this slice's path filter; a future new direct funnel dependency must update
+    this inventory in the same PR that changes the importer already listed
+    above.
 - Reachability proof: `tests/test_eom_render_profile.py` imports the real
   `atlas_brain.main_eom:app` in a subprocess and exercises real route
   transport through `/api/v1/eom-funnel/customer-handoffs` with env-projected
@@ -155,11 +163,16 @@ seam in the enumeration; otherwise write "N/A - no boundary change."
 - Boundary path/seam: shared funnel datastore guard helper.
   - Replaced-path behaviors: full-app behavior is preserved through a wrapper;
     slim app now calls the same helper through its own DB-pool import instead of
-    importing the full app.
+    importing the full app; a missing required CRM/handoff relation now remains
+    inside the false readiness verdict instead of escaping as a PostgreSQL
+    relation-lookup exception.
   - Guard-relevant fields: `config.api_enabled`, database-enabled flag,
-    `pool.is_initialized`, and the SQL readiness predicate result.
+    `pool.is_initialized`, the `to_regclass`-resolved required relation
+    OIDs/nulls, and the SQL readiness predicate result.
   - Caller x input shape: full app startup and slim app startup both pass their
-    own `get_db_pool` callable and receive the same accept/reject decisions.
+    own `get_db_pool` callable and receive the same accept/reject decisions,
+    including false readiness when `contacts`, `eom_lead_lifecycle_events`, or
+    `eom_customer_handoffs` is absent.
 
 ### Deployed-config probing
 
@@ -251,6 +264,12 @@ handling.
 - Deprecation/removal of old local/Tailscale Atlas EOM endpoints after the
   Render profile is live and verified.
 
+Parking predicate: this slice parks only external deployment/provisioning work
+that requires live Render resources, credentials, downstream service wiring, or
+post-live endpoint retirement.  Repo-owned slim-app startup, auth, datastore
+readiness, Render candidate config, workflow-filter, and test defects do not
+fall under this predicate.
+
 Parked hardening: none.
 
 ## Verification
@@ -287,18 +306,27 @@ Parked hardening: none.
     — 2 passed, 46 deselected; workflow path sanity check for the mounted
     funnel dependency set — passed; full EOM render/funnel pair — 88 passed,
     1 warning; `python -m py_compile ...` — passed; plan audits — passed.
+  - Review-fix local checks for the missing-relation readiness, explicit-empty
+    env isolation, shared-auth workflow filter, and Deferred parking-predicate
+    repair:
+    `python -m pytest tests/test_eom_render_profile.py -k 'shared_eom_funnel_datastore_guard or raw_token_source_admission_preserves_explicit_empty_environ or raw_token_source_admission_matches_casefold_oracle'`
+    — 5 passed, 45 deselected;
+    `python -m pytest tests/test_eom_render_profile.py tests/test_eom_lead_conversion.py`
+    — 90 passed, 1 warning from the existing `torch`/`pynvml` import path;
+    `python -m py_compile atlas_brain/eom_api/config.py atlas_brain/eom_api/funnel_store.py tests/test_eom_render_profile.py`
+    — passed.
 
 ## Estimated diff size
 
 | File | LOC |
 |---|---:|
 | `.github/workflows/atlas_eom_lead_pipeline_checks.yml` | 2 |
-| `.github/workflows/atlas_invoicing_checks.yml` | 12 |
-| `atlas_brain/eom_api/config.py` | 58 |
-| `atlas_brain/eom_api/funnel_store.py` | 155 |
+| `.github/workflows/atlas_invoicing_checks.yml` | 14 |
+| `atlas_brain/eom_api/config.py` | 59 |
+| `atlas_brain/eom_api/funnel_store.py` | 217 |
 | `atlas_brain/main.py` | 146 |
 | `atlas_brain/main_eom.py` | 34 |
-| `plans/PR-EOM-Render-Slim-Profile.md` | 304 |
+| `plans/PR-EOM-Render-Slim-Profile.md` | 332 |
 | `render.eom.yaml` | 4 |
-| `tests/test_eom_render_profile.py` | 504 |
-| **Total** | **1219** |
+| `tests/test_eom_render_profile.py` | 560 |
+| **Total** | **1368** |

@@ -539,6 +539,35 @@ def test_shared_eom_funnel_datastore_guard_accepts_injected_pool():
     assert "atlas_nocodb" in pool.queries[0]
 
 
+def test_shared_eom_funnel_datastore_guard_keeps_missing_relations_in_verdict():
+    from atlas_brain.eom_api.funnel_store import require_eom_funnel_data_store
+
+    class _Pool:
+        is_initialized = True
+
+        def __init__(self) -> None:
+            self.query = ""
+
+        async def fetchval(self, query: str) -> bool:
+            self.query = query
+            return False
+
+    pool = _Pool()
+    with pytest.raises(RuntimeError, match="CRM lifecycle and handoff schema"):
+        asyncio.run(
+            require_eom_funnel_data_store(
+                SimpleNamespace(api_enabled=True),
+                database_enabled=True,
+                get_db_pool_fn=lambda: pool,
+            )
+        )
+
+    assert "::regclass" not in pool.query
+    assert "WITH readiness_relations AS" in pool.query
+    assert "to_regclass('eom_customer_handoffs') AS handoff_rel" in pool.query
+    assert "WHEN readiness_relations.handoff_rel IS NULL THEN FALSE" in pool.query
+
+
 def test_database_config_prefers_connection_string_for_asyncpg_kwargs():
     from atlas_brain.storage.config import DatabaseConfig
 
@@ -711,6 +740,33 @@ def test_eom_receivables_raw_token_source_admission_matches_casefold_oracle(
             )
 
         assert observed is expected, (source, key, repr(value))
+
+
+def test_raw_token_source_admission_preserves_explicit_empty_environ(monkeypatch):
+    from atlas_brain.eom_api import config as eom_config
+
+    monkeypatch.setenv(
+        _RAW_RECEIVABLES_SERVICE_TOKEN_ENV,
+        "operator-receivables-token",
+    )
+    monkeypatch.setenv(_RAW_EOM_FUNNEL_SERVICE_TOKEN_ENV, "operator-funnel-token")
+
+    assert not eom_config.raw_receivables_service_token_configured(
+        environ={},
+        env_files=(),
+    )
+    assert not eom_config.raw_eom_funnel_service_token_configured(
+        environ={},
+        env_files=(),
+    )
+    assert eom_config.raw_receivables_service_token_configured(
+        environ=None,
+        env_files=(),
+    )
+    assert eom_config.raw_eom_funnel_service_token_configured(
+        environ=None,
+        env_files=(),
+    )
 
 
 @pytest.mark.parametrize(

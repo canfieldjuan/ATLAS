@@ -23,14 +23,20 @@ async def require_eom_funnel_data_store(
         raise RuntimeError("EOM funnel requires an initialized Atlas database pool")
     ready = await pool.fetchval(
         """
-        SELECT to_regclass('contacts') IS NOT NULL
-           AND to_regclass('eom_lead_lifecycle_events') IS NOT NULL
-           AND to_regclass('eom_customer_handoffs') IS NOT NULL
+        WITH readiness_relations AS (
+            SELECT
+                to_regclass('contacts') AS contacts_rel,
+                to_regclass('eom_lead_lifecycle_events') AS lifecycle_rel,
+                to_regclass('eom_customer_handoffs') AS handoff_rel
+        )
+        SELECT readiness_relations.contacts_rel IS NOT NULL
+           AND readiness_relations.lifecycle_rel IS NOT NULL
+           AND readiness_relations.handoff_rel IS NOT NULL
            AND EXISTS (
                SELECT 1
                FROM pg_class AS handoff_table
                JOIN pg_roles AS owner_role ON owner_role.oid = handoff_table.relowner
-               WHERE handoff_table.oid = 'eom_customer_handoffs'::regclass
+               WHERE handoff_table.oid = readiness_relations.handoff_rel
                  AND owner_role.rolname = 'atlas_eom_handoff_owner'
            )
            AND EXISTS (
@@ -64,31 +70,86 @@ async def require_eom_funnel_data_store(
                       WHERE nocodb_membership.member = nocodb_role.oid
                   )
                   AND NOT has_schema_privilege(nocodb_role.oid, current_schema(), 'CREATE')
-                  AND NOT has_table_privilege(nocodb_role.oid, 'eom_customer_handoffs', 'INSERT')
-                  AND NOT has_table_privilege(nocodb_role.oid, 'eom_customer_handoffs', 'UPDATE')
-                  AND NOT has_table_privilege(nocodb_role.oid, 'eom_customer_handoffs', 'DELETE')
-                  AND NOT has_table_privilege(nocodb_role.oid, 'eom_customer_handoffs', 'TRUNCATE')
-                  AND NOT has_table_privilege(nocodb_role.oid, 'eom_lead_lifecycle_events', 'INSERT')
-                  AND NOT has_table_privilege(nocodb_role.oid, 'eom_lead_lifecycle_events', 'UPDATE')
-                  AND NOT has_table_privilege(nocodb_role.oid, 'eom_lead_lifecycle_events', 'DELETE')
-                  AND NOT has_column_privilege(
-                      nocodb_role.oid, 'contacts', 'business_context_id', 'INSERT'
-                  )
-                  AND NOT has_column_privilege(
-                      nocodb_role.oid, 'contacts', 'business_context_id', 'UPDATE'
-                  )
-                  AND NOT has_column_privilege(
-                      nocodb_role.oid, 'contacts', 'contact_type', 'INSERT'
-                  )
-                  AND NOT has_column_privilege(
-                      nocodb_role.oid, 'contacts', 'contact_type', 'UPDATE'
-                  )
-                  AND NOT has_column_privilege(
-                      nocodb_role.oid, 'contacts', 'lead_stage', 'INSERT'
-                  )
-                  AND NOT has_column_privilege(
-                      nocodb_role.oid, 'contacts', 'lead_stage', 'UPDATE'
-                  )
+                  AND CASE
+                      WHEN readiness_relations.handoff_rel IS NULL THEN FALSE
+                      ELSE NOT has_table_privilege(
+                          nocodb_role.oid,
+                          readiness_relations.handoff_rel,
+                          'INSERT'
+                      )
+                      AND NOT has_table_privilege(
+                          nocodb_role.oid,
+                          readiness_relations.handoff_rel,
+                          'UPDATE'
+                      )
+                      AND NOT has_table_privilege(
+                          nocodb_role.oid,
+                          readiness_relations.handoff_rel,
+                          'DELETE'
+                      )
+                      AND NOT has_table_privilege(
+                          nocodb_role.oid,
+                          readiness_relations.handoff_rel,
+                          'TRUNCATE'
+                      )
+                  END
+                  AND CASE
+                      WHEN readiness_relations.lifecycle_rel IS NULL THEN FALSE
+                      ELSE NOT has_table_privilege(
+                          nocodb_role.oid,
+                          readiness_relations.lifecycle_rel,
+                          'INSERT'
+                      )
+                      AND NOT has_table_privilege(
+                          nocodb_role.oid,
+                          readiness_relations.lifecycle_rel,
+                          'UPDATE'
+                      )
+                      AND NOT has_table_privilege(
+                          nocodb_role.oid,
+                          readiness_relations.lifecycle_rel,
+                          'DELETE'
+                      )
+                  END
+                  AND CASE
+                      WHEN readiness_relations.contacts_rel IS NULL THEN FALSE
+                      ELSE NOT has_column_privilege(
+                          nocodb_role.oid,
+                          readiness_relations.contacts_rel,
+                          'business_context_id',
+                          'INSERT'
+                      )
+                      AND NOT has_column_privilege(
+                          nocodb_role.oid,
+                          readiness_relations.contacts_rel,
+                          'business_context_id',
+                          'UPDATE'
+                      )
+                      AND NOT has_column_privilege(
+                          nocodb_role.oid,
+                          readiness_relations.contacts_rel,
+                          'contact_type',
+                          'INSERT'
+                      )
+                      AND NOT has_column_privilege(
+                          nocodb_role.oid,
+                          readiness_relations.contacts_rel,
+                          'contact_type',
+                          'UPDATE'
+                      )
+                      AND NOT has_column_privilege(
+                          nocodb_role.oid,
+                          readiness_relations.contacts_rel,
+                          'lead_stage',
+                          'INSERT'
+                      )
+                      AND NOT has_column_privilege(
+                          nocodb_role.oid,
+                          readiness_relations.contacts_rel,
+                          'lead_stage',
+                          'UPDATE'
+                      )
+                  END
                   AND NOT EXISTS (
                       SELECT 1
                       FROM pg_tables AS non_crm_table
@@ -147,6 +208,7 @@ async def require_eom_funnel_data_store(
                FROM pg_roles AS nocodb_role
                WHERE nocodb_role.rolname = 'atlas_nocodb'
            ), FALSE)
+        FROM readiness_relations
         """
     )
     if not ready:

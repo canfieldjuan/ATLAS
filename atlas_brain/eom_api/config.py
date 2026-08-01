@@ -41,8 +41,9 @@ def _raw_service_token_configured(
     env_files: Iterable[str | Path] = ENV_FILES,
 ) -> bool:
     """Return true when any admitted settings source carries raw token material."""
+    source_environ = os.environ if environ is None else environ
     if _mapping_contains_raw_service_token(
-        environ or os.environ,
+        source_environ,
         raw_env_key=raw_env_key,
     ):
         return True
