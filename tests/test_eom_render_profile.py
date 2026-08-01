@@ -96,6 +96,18 @@ def _isolated_eom_subprocess_env() -> dict[str, str]:
     return env
 
 
+def _atlas_subprocess_env() -> dict[str, str]:
+    env = _isolated_eom_subprocess_env()
+    repo_root = Path(__file__).resolve().parents[1]
+    existing_pythonpath = env.get("PYTHONPATH", "")
+    env["PYTHONPATH"] = (
+        str(repo_root)
+        if not existing_pythonpath
+        else f"{repo_root}{os.pathsep}{existing_pythonpath}"
+    )
+    return env
+
+
 def test_eom_profile_import_does_not_load_full_api_package():
     probe = """
 import importlib
@@ -1160,3 +1172,106 @@ print(json.dumps({
         "env_projected_digest": True,
         "dependency_overrides": 0,
     }
+
+
+def test_full_app_starts_with_receivables_digest_only(tmp_path):
+    from atlas_brain.eom_api import auth
+
+    generated = auth.generate_receivables_service_token()
+    probe = """
+import json
+import os
+
+from fastapi.testclient import TestClient
+
+from atlas_brain import main
+
+
+with TestClient(main.app) as client:
+    response = client.get("/.well-known/security.txt")
+
+print(json.dumps({
+    "status_code": response.status_code,
+    "lead_intake_route_mounted": any(
+        getattr(route, "path", "") == "/api/v1/leads/intake"
+        for route in main.app.routes
+    ),
+    "env_projected_enabled": main.settings.invoicing.receivables_api_enabled,
+    "env_projected_digest": (
+        main.settings.invoicing.receivables_service_token_sha256
+        == os.environ["ATLAS_INVOICING_RECEIVABLES_SERVICE_TOKEN_SHA256"]
+    ),
+}))
+"""
+    env = _atlas_subprocess_env()
+    env["ATLAS_INVOICING_RECEIVABLES_API_ENABLED"] = "true"
+    env["ATLAS_INVOICING_RECEIVABLES_SERVICE_TOKEN_SHA256"] = generated.sha256
+
+    result = subprocess.run(
+        [sys.executable, "-c", probe],
+        check=False,
+        capture_output=True,
+        cwd=tmp_path,
+        env=env,
+        text=True,
+    )
+
+    assert result.returncode == 0, result.stderr
+    observed = json.loads(result.stdout.strip().splitlines()[-1])
+    assert observed == {
+        "status_code": 200,
+        "lead_intake_route_mounted": True,
+        "env_projected_enabled": True,
+        "env_projected_digest": True,
+    }
+
+
+def test_full_app_rejects_raw_receivables_token_with_single_digest_message(tmp_path):
+    from atlas_brain.eom_api import auth
+
+    generated = auth.generate_receivables_service_token()
+    env = _atlas_subprocess_env()
+    env["ATLAS_INVOICING_RECEIVABLES_API_ENABLED"] = "true"
+    env["ATLAS_INVOICING_RECEIVABLES_SERVICE_TOKEN_SHA256"] = generated.sha256
+    env["ATLAS_INVOICING_RECEIVABLES_SERVICE_TOKEN"] = generated.token
+
+    result = subprocess.run(
+        [sys.executable, "-c", "import atlas_brain.main"],
+        check=False,
+        capture_output=True,
+        cwd=tmp_path,
+        env=env,
+        text=True,
+    )
+
+    assert result.returncode != 0
+    assert "Raw EOM receivables bearer token material" in result.stderr
+    assert _RAW_RECEIVABLES_SERVICE_TOKEN_ENV in result.stderr
+    assert "ATLAS_INVOICING_RECEIVABLES_SERVICE_TOKEN is required" not in result.stderr
+
+
+def test_full_app_rejects_enabled_receivables_without_digest_once(tmp_path):
+    probe = """
+from fastapi.testclient import TestClient
+
+from atlas_brain import main
+
+
+with TestClient(main.app):
+    pass
+"""
+    env = _atlas_subprocess_env()
+    env["ATLAS_INVOICING_RECEIVABLES_API_ENABLED"] = "true"
+
+    result = subprocess.run(
+        [sys.executable, "-c", probe],
+        check=False,
+        capture_output=True,
+        cwd=tmp_path,
+        env=env,
+        text=True,
+    )
+
+    assert result.returncode != 0
+    assert "Receivables service token digest is required" in result.stderr
+    assert "ATLAS_INVOICING_RECEIVABLES_SERVICE_TOKEN is required" not in result.stderr
