@@ -26,5 +26,9 @@ services:
         value: "false"
       - key: ATLAS_INVOICING_RECEIVABLES_SERVICE_TOKEN_SHA256
         sync: false
+      - key: ATLAS_EOM_FUNNEL_API_ENABLED
+        value: "false"
+      - key: ATLAS_EOM_FUNNEL_SERVICE_TOKEN_SHA256
+        sync: false
       - key: ATLAS_EOM_RUN_MIGRATIONS
         value: "true"
