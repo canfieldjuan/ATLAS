@@ -19,7 +19,7 @@ import shutil
 import subprocess
 import sys
 import tempfile
-from typing import Any, Sequence
+from typing import Any, NamedTuple, Sequence
 from urllib.parse import quote
 
 
@@ -53,6 +53,43 @@ TRUSTED_RECONCILIATION_CHECKER = (
 )
 PR_BODY_AUDIT_NAME = "audit_pr_body.py"
 REQUIRED_STATUS_CHECKER_NAME = "check_required_status_checks.py"
+GITHUB_ACTIONS_APP_ID = 15368
+LEGACY_REQUIRED_CONTEXTS = (
+    "live-reconciliation",
+    "diff-budget",
+    "plan-admission",
+    "session-lane",
+    "review-contract",
+    "pr-body-contract",
+    "Gitleaks PR secret scan",
+    "Gitleaks baseline growth guard",
+)
+REGISTRY_BLOCKING_ENFORCEMENTS = frozenset(
+    {
+        "branch_required",
+        "ci_blocking_not_required",
+    }
+)
+REGISTRY_NON_BLOCKING_ENFORCEMENTS = frozenset(
+    {
+        "advisory",
+        "scheduled",
+    }
+)
+
+
+class RegistryPolicy(NamedTuple):
+    branch_required: set[str]
+    ci_blocking: set[str]
+    non_blocking: set[str]
+
+    @property
+    def blocking(self) -> set[str]:
+        return self.branch_required | self.ci_blocking
+
+    @property
+    def managed(self) -> set[str]:
+        return self.blocking | self.non_blocking
 
 THREADS_QUERY = """
 query($owner:String!,$name:String!,$pr:Int!,$cursor:String){
@@ -250,6 +287,14 @@ def _required_policy_command(repo: str, base_ref: str) -> list[str]:
     ]
 
 
+def _check_runs_command(repo: str, head_sha: str) -> list[str]:
+    return [
+        "gh",
+        "api",
+        f"repos/{repo}/commits/{head_sha}/check-runs?per_page=100",
+    ]
+
+
 def _required_contexts(payload: dict[str, Any]) -> tuple[set[str], str | None]:
     raw_contexts = payload.get("contexts")
     raw_checks = payload.get("checks")
@@ -272,13 +317,22 @@ def _required_contexts(payload: dict[str, Any]) -> tuple[set[str], str | None]:
     return contexts, None
 
 
-def _trusted_registry_required_contexts(repo_dir: Path) -> tuple[set[str], str | None]:
+def _trusted_registry_policy(repo_dir: Path) -> tuple[RegistryPolicy, str | None]:
+    fetch_code, _fetch_out, fetch_err = _run(
+        ["git", "fetch", "origin", "main:refs/remotes/origin/main", "--quiet"],
+        cwd=repo_dir,
+    )
+    if fetch_code != 0:
+        return RegistryPolicy(set(), set(), set()), (
+            f"trusted origin/main refresh failed: {fetch_err or 'git fetch failed'}"
+        )
+
     registry_code, registry_src, registry_err = _run(
         ["git", "show", "origin/main:ci/gates.yml"],
         cwd=repo_dir,
     )
     if registry_code != 0 or not registry_src.strip():
-        return set(), None
+        return RegistryPolicy(set(LEGACY_REQUIRED_CONTEXTS), set(), set()), None
 
     checker_code, checker_src, checker_err = _run(
         ["git", "show", f"origin/main:scripts/{REQUIRED_STATUS_CHECKER_NAME}"],
@@ -286,7 +340,9 @@ def _trusted_registry_required_contexts(repo_dir: Path) -> tuple[set[str], str |
     )
     if checker_code != 0 or not checker_src.strip():
         detail = checker_err or "trusted checker source is empty"
-        return set(), f"trusted required-status checker unavailable: {detail}"
+        return RegistryPolicy(set(), set(), set()), (
+            f"trusted required-status checker unavailable: {detail}"
+        )
 
     with tempfile.TemporaryDirectory(prefix="atlas-pr-watch-gates-") as tmp:
         tmp_path = Path(tmp)
@@ -299,23 +355,62 @@ def _trusted_registry_required_contexts(repo_dir: Path) -> tuple[set[str], str |
             checker_path,
         )
         if spec is None or spec.loader is None:
-            return set(), "could not load trusted required-status checker"
+            return RegistryPolicy(set(), set(), set()), (
+                "could not load trusted required-status checker"
+            )
         module = importlib.util.module_from_spec(spec)
         try:
             spec.loader.exec_module(module)
-            contexts = tuple(module.default_required_contexts(registry_path))
+            gates = tuple(
+                module.parse_gate_registry(registry_path.read_text(encoding="utf-8"))
+            )
         except Exception as exc:  # noqa: BLE001 - fail-closed diagnostic path.
-            return set(), f"trusted gate registry parse failed: {exc}"
+            return RegistryPolicy(set(), set(), set()), (
+                f"trusted gate registry parse failed: {exc}"
+            )
 
-    if not contexts:
-        return set(), "trusted gate registry produced no required contexts"
-    malformed = [context for context in contexts if not isinstance(context, str) or not context]
-    if malformed:
-        return set(), "trusted gate registry produced malformed required contexts"
-    return set(contexts), None
+    branch_required: set[str] = set()
+    ci_blocking: set[str] = set()
+    non_blocking: set[str] = set()
+    for gate in gates:
+        if not isinstance(gate, dict):
+            return RegistryPolicy(set(), set(), set()), (
+                "trusted gate registry produced malformed gate entries"
+            )
+        context = gate.get("context")
+        enforcement = gate.get("enforcement")
+        if context is None:
+            continue
+        if not isinstance(context, str) or not context:
+            return RegistryPolicy(set(), set(), set()), (
+                "trusted gate registry produced malformed contexts"
+            )
+        if enforcement == "branch_required":
+            branch_required.add(context)
+        elif enforcement == "ci_blocking_not_required":
+            ci_blocking.add(context)
+        elif enforcement in REGISTRY_NON_BLOCKING_ENFORCEMENTS:
+            non_blocking.add(context)
+        elif enforcement == "local_blocking":
+            continue
+        else:
+            return RegistryPolicy(set(), set(), set()), (
+                f"trusted gate registry produced unsupported enforcement {enforcement!r}"
+            )
+
+    if not branch_required:
+        return RegistryPolicy(set(), set(), set()), (
+            "trusted gate registry produced no branch_required contexts"
+        )
+    return RegistryPolicy(branch_required, ci_blocking, non_blocking), None
 
 
-def _check_summary(checks: list[Any], *, required: bool) -> tuple[list[str], list[str], str | None]:
+def _check_summary(
+    checks: list[Any],
+    *,
+    required: bool,
+    ignore_contexts: set[str] | frozenset[str] = frozenset(),
+) -> tuple[list[str], list[str], str | None]:
     failures: list[str] = []
     pending: list[str] = []
     for index, item in enumerate(checks):
@@ -330,12 +425,66 @@ def _check_summary(checks: list[Any], *, required: bool) -> tuple[list[str], lis
         normalized = bucket.lower()
         if normalized == "pass":
             continue
+        if name in ignore_contexts:
+            continue
         if normalized == "pending":
             pending.append(name)
             continue
         if not required and normalized == "skipping":
             continue
         failures.append(f"{name} ({normalized})")
+    return failures, pending, None
+
+
+def _latest_github_actions_check_runs(
+    payload: dict[str, Any],
+    *,
+    app_id: int = GITHUB_ACTIONS_APP_ID,
+) -> tuple[dict[str, dict[str, Any]], str | None]:
+    raw_runs = payload.get("check_runs")
+    if not isinstance(raw_runs, list):
+        return {}, "check-runs payload has no check_runs array"
+
+    latest: dict[str, dict[str, Any]] = {}
+    for index, run in enumerate(raw_runs):
+        if not isinstance(run, dict):
+            return {}, f"check-run {index} is not an object"
+        name = run.get("name")
+        if not isinstance(name, str) or not name:
+            return {}, f"check-run {index} has no name"
+        app = run.get("app")
+        if not isinstance(app, dict) or app.get("id") != app_id:
+            continue
+        previous = latest.get(name)
+        if previous is None or str(run.get("started_at") or "") >= str(previous.get("started_at") or ""):
+            latest[name] = run
+    return latest, None
+
+
+def _blocking_check_summary_from_runs(
+    contexts: set[str],
+    runs_by_name: dict[str, dict[str, Any]],
+) -> tuple[list[str], list[str], str | None]:
+    failures: list[str] = []
+    pending: list[str] = []
+    for context in sorted(contexts):
+        run = runs_by_name.get(context)
+        if run is None:
+            pending.append(f"{context} (not reported)")
+            continue
+        status = run.get("status")
+        conclusion = run.get("conclusion")
+        if not isinstance(status, str) or not status:
+            return [], [], f"check-run {context!r} has no status"
+        if status != "completed":
+            pending.append(context)
+            continue
+        if conclusion in {"success", "neutral", "skipped"}:
+            continue
+        if not isinstance(conclusion, str) or not conclusion:
+            failures.append(f"{context} (completed without conclusion)")
+            continue
+        failures.append(f"{context} ({conclusion})")
     return failures, pending, None
 
 
@@ -887,25 +1036,45 @@ def produce(watcher_id: str, *, config_dir: Path, state_dir: Path) -> tuple[int,
     )
     all_checks = post_all_checks if isinstance(post_all_checks, list) else []
     required_checks = post_required_checks if isinstance(post_required_checks, list) else []
-    failures, pending, all_shape_error = _check_summary(all_checks, required=False)
-    required_failures, required_pending, required_shape_error = _check_summary(required_checks, required=True)
     expected_required, required_policy_shape_error = _required_contexts(required_policy)
-    registry_required, registry_required_error = _trusted_registry_required_contexts(repo_dir)
-    if registry_required:
-        expected_required |= registry_required
+    registry_policy, registry_required_error = _trusted_registry_policy(repo_dir)
+    expected_required |= registry_policy.branch_required
+    expected_blocking = expected_required | registry_policy.ci_blocking
+    policy_managed_contexts = expected_blocking | registry_policy.non_blocking
+    failures, pending, all_shape_error = _check_summary(
+        all_checks,
+        required=False,
+        ignore_contexts=policy_managed_contexts,
+    )
+    _required_gh_failures, _required_gh_pending, required_shape_error = _check_summary(
+        required_checks,
+        required=True,
+    )
+    if final_head:
+        check_runs_payload, check_runs_error = _run_json(
+            _check_runs_command(repo, final_head),
+            cwd=repo_dir,
+            allowed_codes={0},
+            expected_type=dict,
+        )
+    else:
+        check_runs_payload = None
+        check_runs_error = "PR head SHA missing for check-run provenance lookup"
+    runs_by_name, check_runs_shape_error = (
+        _latest_github_actions_check_runs(check_runs_payload)
+        if isinstance(check_runs_payload, dict)
+        else ({}, None)
+    )
+    required_failures, required_pending, run_summary_error = _blocking_check_summary_from_runs(
+        expected_blocking,
+        runs_by_name,
+    )
     reported_required = {
         item.get("name")
         for item in required_checks
         if isinstance(item, dict) and isinstance(item.get("name"), str) and item.get("name")
     }
-    reported_all = {
-        item.get("name")
-        for item in all_checks
-        if isinstance(item, dict) and isinstance(item.get("name"), str) and item.get("name")
-    }
-    missing_required = sorted(expected_required - reported_all)
-    required_pending.extend(f"{name} (not reported)" for name in missing_required)
-    required_contexts = expected_required | reported_required
+    required_contexts = expected_blocking | reported_required
     docs_only_exemption_signal = (
         reconciliation_code == 0
         and DOCS_ONLY_RECONCILIATION_OK in (reconciliation_out or reconciliation_err)
@@ -929,11 +1098,14 @@ def produce(watcher_id: str, *, config_dir: Path, state_dir: Path) -> tuple[int,
         for item in (
             all_checks_error,
             required_error,
+            check_runs_error,
             post_all_checks_error,
             post_required_error,
             required_policy_error,
             all_shape_error,
             required_shape_error,
+            check_runs_shape_error,
+            run_summary_error,
             required_policy_shape_error,
             registry_required_error,
         )

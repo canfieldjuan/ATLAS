@@ -59,6 +59,57 @@ def _check(name: str, bucket: str = "pass") -> dict[str, Any]:
     return {"name": name, "bucket": bucket, "state": "SUCCESS"}
 
 
+def _check_run(
+    name: str,
+    *,
+    app_id: int = 15368,
+    status: str = "completed",
+    conclusion: str | None = "success",
+    started_at: str = "2026-07-27T00:00:00Z",
+) -> dict[str, Any]:
+    return {
+        "name": name,
+        "status": status,
+        "conclusion": conclusion,
+        "started_at": started_at,
+        "app": {"id": app_id},
+    }
+
+
+def _check_runs_from_checks(response: tuple[int, str, str]) -> tuple[int, str, str]:
+    code, stdout, stderr = response
+    if code != 0:
+        return code, stdout, stderr
+    checks = json.loads(stdout)
+    runs = []
+    for check in checks:
+        bucket = str(check.get("bucket") or "").lower()
+        if bucket == "pass":
+            runs.append(_check_run(check["name"]))
+        elif bucket == "pending":
+            runs.append(_check_run(check["name"], status="in_progress", conclusion=None))
+        else:
+            runs.append(_check_run(check["name"], conclusion=bucket or "failure"))
+    return _response({"check_runs": runs})
+
+
+def _registry_for(*entries: tuple[str, str]) -> str:
+    lines = ["gates:"]
+    for gate_id, enforcement in entries:
+        lines.extend(
+            [
+                f"  - id: {gate_id}",
+                f"    name: {gate_id.title()}",
+                f"    context: {gate_id}",
+                f"    enforcement: {enforcement}",
+                "    trusted_base: true",
+                f"    workflow: .github/workflows/{gate_id}.yml",
+                "    local_command: null",
+            ]
+        )
+    return "\n".join(lines) + "\n"
+
+
 def _thread_page(nodes: list[dict[str, Any]] | None = None, *, has_next: bool = False, cursor: str | None = None) -> dict[str, Any]:
     return {
         "data": {
@@ -153,6 +204,8 @@ class FakeRun:
         git_status: tuple[int, str, str] = (0, "", ""),
         gate_registry: tuple[int, str, str] | None = None,
         required_checker: tuple[int, str, str] | None = None,
+        check_runs: tuple[int, str, str] | None = None,
+        git_fetch: tuple[int, str, str] = (0, "", ""),
     ) -> None:
         self.pr_responses = list(pr_responses or [_response(_pr()), _response(_pr()), _response(_pr())])
         self.last_pr_response = self.pr_responses[-1] if self.pr_responses else _response(_pr())
@@ -172,7 +225,11 @@ class FakeRun:
         self.comment_pages = list(comment_pages or [_response(_comment_page())])
         self.reconciliation = reconciliation
         self.git_status = git_status
-        self.gate_registry = gate_registry or (1, "", "path does not exist")
+        self.gate_registry = gate_registry or (
+            0,
+            _registry_for(("required-a", "branch_required")),
+            "",
+        )
         self.required_checker = required_checker or (
             0,
             (ROOT / "scripts" / "check_required_status_checks.py").read_text(
@@ -180,6 +237,8 @@ class FakeRun:
             ),
             "",
         )
+        self.check_runs = check_runs or _check_runs_from_checks(self.all_checks[-1])
+        self.git_fetch = git_fetch
         self.commands: list[list[str]] = []
 
     def __call__(self, command, *, cwd: Path):
@@ -194,6 +253,8 @@ class FakeRun:
             if len(responses) > 1:
                 return responses.pop(0)
             return responses[0]
+        if args[:2] == ["gh", "api"] and len(args) > 2 and "/check-runs" in args[2]:
+            return self.check_runs
         if args[:2] == ["gh", "api"] and args[2] != "graphql":
             return self.required_policy
         if args[:3] == ["gh", "pr", "view"] and "--comments" in args:
@@ -211,6 +272,8 @@ class FakeRun:
             and Path(args[1]).name == watcher.RECONCILIATION_CHECKER_NAME
         ):
             return self.reconciliation
+        if args == ["git", "fetch", "origin", "main:refs/remotes/origin/main", "--quiet"]:
+            return self.git_fetch
         if args == ["git", "show", "origin/main:ci/gates.yml"]:
             return self.gate_registry
         if args == ["git", "show", "origin/main:scripts/check_required_status_checks.py"]:
@@ -486,6 +549,83 @@ gates:
     assert status["readiness"]["required_check_pending"] == []
 
 
+def test_registry_contexts_require_github_actions_app_provenance(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    registry = _registry_for(("required-a", "branch_required"))
+    status = _produce(
+        tmp_path,
+        monkeypatch,
+        FakeRun(
+            all_checks=_response([_check("required-a")]),
+            required_checks=_response([_check("required-a")]),
+            gate_registry=(0, registry, ""),
+            check_runs=_response({"check_runs": [_check_run("required-a", app_id=1)]}),
+        ),
+    )
+
+    assert status["state"] == "pending"
+    assert status["readiness"]["required_checks_complete"] is False
+    assert status["readiness"]["required_check_pending"] == ["required-a (not reported)"]
+
+
+def test_registry_ci_blocking_contexts_are_required_from_all_check_runs(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    registry = _registry_for(
+        ("required-a", "branch_required"),
+        ("unit-gate", "ci_blocking_not_required"),
+    )
+    status = _produce(
+        tmp_path,
+        monkeypatch,
+        FakeRun(
+            all_checks=_response([_check("required-a")]),
+            required_checks=_response([_check("required-a")]),
+            gate_registry=(0, registry, ""),
+            check_runs=_response({"check_runs": [_check_run("required-a")]}),
+        ),
+    )
+
+    assert status["state"] == "pending"
+    assert status["readiness"]["required_check_count"] == 2
+    assert status["readiness"]["required_checks_complete"] is False
+    assert status["readiness"]["required_check_pending"] == ["unit-gate (not reported)"]
+
+
+def test_registry_advisory_failure_does_not_block_readiness(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    registry = _registry_for(
+        ("required-a", "branch_required"),
+        ("seam-convergence", "advisory"),
+    )
+    status = _produce(
+        tmp_path,
+        monkeypatch,
+        FakeRun(
+            all_checks=_response([_check("required-a"), _check("seam-convergence", "fail")]),
+            required_checks=_response([_check("required-a")]),
+            gate_registry=(0, registry, ""),
+            check_runs=_response(
+                {
+                    "check_runs": [
+                        _check_run("required-a"),
+                        _check_run("seam-convergence", conclusion="failure"),
+                    ]
+                }
+            ),
+        ),
+    )
+
+    assert status["state"] == "ready_for_human_merge"
+    assert status["check_failures"] == []
+    assert status["readiness"]["required_checks_complete"] is True
+
+
 def test_registry_required_checks_preserve_live_policy_contexts(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -521,6 +661,21 @@ gates:
     assert status["readiness"]["required_check_pending"] == ["required-b (not reported)"]
 
 
+def test_trusted_registry_refresh_failure_blocks_readiness(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    status = _produce(
+        tmp_path,
+        monkeypatch,
+        FakeRun(git_fetch=(1, "", "network down")),
+    )
+
+    assert status["state"] == "attention"
+    assert "trusted origin/main refresh failed: network down" in status["checks_error"]
+    assert status["readiness"]["required_checks_complete"] is False
+
+
 def test_empty_required_policy_cannot_be_ready(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -532,8 +687,9 @@ def test_empty_required_policy_cannot_be_ready(
     )
 
     assert status["state"] == "attention"
-    assert status["readiness"]["required_check_count"] == 0
-    assert "required check count must be at least 1" in wake_bridge.readiness_blockers(status)
+    assert status["readiness"]["required_check_count"] == 1
+    assert "required-status policy has no contexts/checks" in status["checks_error"]
+    assert wake_bridge.readiness_blockers(status)
 
 
 def test_reported_required_row_cannot_mask_empty_policy_inventory(
@@ -550,8 +706,9 @@ def test_reported_required_row_cannot_mask_empty_policy_inventory(
     )
 
     assert status["state"] == "attention"
-    assert status["readiness"]["required_check_count"] == 1
+    assert status["readiness"]["required_check_count"] == 2
     assert status["readiness"]["required_checks_complete"] is False
+    assert status["readiness"]["required_check_pending"] == []
     assert "required-status policy has no contexts/checks" in status["checks_error"]
     assert wake_bridge.readiness_blockers(status)
 
@@ -571,7 +728,8 @@ def test_review_change_is_actionable_while_checks_are_pending(
     )
 
     assert status["review_changed"] is True
-    assert status["check_pending"] == ["required-a"]
+    assert status["check_pending"] == []
+    assert status["readiness"]["required_check_pending"] == ["required-a"]
     assert status["state"] == "review_changed"
 
 
@@ -1164,6 +1322,8 @@ def test_required_policy_transport_failure_reaches_attention_snapshot(
             return subprocess.CompletedProcess(args, 0, json.dumps(_thread_page()), "")
         if len(args) > 1 and args[0] == sys.executable:
             return subprocess.CompletedProcess(args, 0, "clean", "")
+        if args == ["git", "fetch", "origin", "main:refs/remotes/origin/main", "--quiet"]:
+            return subprocess.CompletedProcess(args, 0, "", "")
         if args == ["git", "show", "origin/main:ci/gates.yml"]:
             return subprocess.CompletedProcess(args, 1, "", "path does not exist")
         if args[:3] == ["git", "status", "--porcelain"]:
@@ -1415,6 +1575,8 @@ def test_installed_entrypoint_writes_consumer_accepted_snapshot(tmp_path: Path) 
                 print(json.dumps(metadata))
             elif args[:2] == ["api", "repos/owner/repo/branches/main/protection/required_status_checks"]:
                 print(json.dumps({"contexts": ["required-a"], "checks": [{"context": "required-a", "app_id": 15368}]}))
+            elif args[:2] == ["api", "repos/owner/repo/commits/head-a/check-runs?per_page=100"]:
+                print(json.dumps({"check_runs": [{"name": "required-a", "status": "completed", "conclusion": "success", "started_at": "2026-07-30T18:00:00Z", "app": {"id": 15368}}]}))
             elif args[:2] == ["api", "repos/owner/repo/compare/base-a...head-a"]:
                 print("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa")
             elif args[:2] == ["api", "repos/owner/repo/git/trees/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa?recursive=1"]:
@@ -1443,7 +1605,38 @@ def test_installed_entrypoint_writes_consumer_accepted_snapshot(tmp_path: Path) 
     )
     fake_gh.chmod(fake_gh.stat().st_mode | stat.S_IXUSR)
     fake_git = fake_bin / "git"
-    fake_git.write_text("#!/usr/bin/env sh\nexit 0\n", encoding="utf-8")
+    fake_git.write_text(
+        textwrap.dedent(
+            f"""\
+            #!/usr/bin/env sh
+            if [ "$1" = "fetch" ]; then
+              exit 0
+            fi
+            if [ "$1" = "show" ] && [ "$2" = "origin/main:ci/gates.yml" ]; then
+              cat <<'EOF'
+            gates:
+              - id: required-a
+                name: Required A
+                context: required-a
+                enforcement: branch_required
+                trusted_base: true
+                workflow: .github/workflows/required-a.yml
+                local_command: null
+            EOF
+              exit 0
+            fi
+            if [ "$1" = "show" ] && [ "$2" = "origin/main:scripts/check_required_status_checks.py" ]; then
+              cat "{ROOT / "scripts" / "check_required_status_checks.py"}"
+              exit 0
+            fi
+            if [ "$1" = "status" ]; then
+              exit 0
+            fi
+            exit 0
+            """
+        ),
+        encoding="utf-8",
+    )
     fake_git.chmod(fake_git.stat().st_mode | stat.S_IXUSR)
 
     config_dir = tmp_path / "config"

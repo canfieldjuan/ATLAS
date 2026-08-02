@@ -109,6 +109,7 @@ def _strip_inline_comment(raw_line: str, *, lineno: int) -> str:
     escaped = False
     index = 0
     length = len(raw_line)
+    colon_index = raw_line.find(":")
     while index < length:
         char = raw_line[index]
         if quote is not None:
@@ -128,10 +129,13 @@ def _strip_inline_comment(raw_line: str, *, lineno: int) -> str:
             index += 1
             continue
         if char in {"'", '"'}:
+            if colon_index < 0 or raw_line[colon_index + 1:index].strip():
+                index += 1
+                continue
             quote = char
             index += 1
             continue
-        if char == "#":
+        if char == "#" and (index == 0 or raw_line[index - 1].isspace()):
             return raw_line[:index].rstrip()
         index += 1
     if quote is not None:

@@ -289,6 +289,54 @@ gates:
     assert checker.parse_gate_registry(registry)[0]["context"] == "Gate # 1"
 
 
+def test_gate_registry_preserves_hash_inside_plain_scalar() -> None:
+    checker = _load_required_status_script()
+    registry = """\
+gates:
+  - id: plain-hash-context
+    name: Plain Hash Context
+    context: Gate#1
+    enforcement: branch_required
+    trusted_base: true
+    workflow: .github/workflows/plain.yml
+    local_command: null
+"""
+
+    assert checker.parse_gate_registry(registry)[0]["context"] == "Gate#1"
+
+
+def test_gate_registry_preserves_apostrophe_inside_plain_scalar() -> None:
+    checker = _load_required_status_script()
+    registry = """\
+gates:
+  - id: plain-apostrophe-name
+    name: Owner's Gate
+    context: owner-gate
+    enforcement: branch_required
+    trusted_base: true
+    workflow: .github/workflows/plain.yml
+    local_command: null
+"""
+
+    assert checker.parse_gate_registry(registry)[0]["name"] == "Owner's Gate"
+
+
+def test_gate_registry_strips_plain_scalar_comment_after_space_hash() -> None:
+    checker = _load_required_status_script()
+    registry = """\
+gates:
+  - id: plain-comment-context
+    name: Plain Comment Context
+    context: Gate # supported inline comment
+    enforcement: branch_required
+    trusted_base: true
+    workflow: .github/workflows/plain.yml
+    local_command: null
+"""
+
+    assert checker.parse_gate_registry(registry)[0]["context"] == "Gate"
+
+
 def test_gate_registry_preserves_escaped_quote_before_hash() -> None:
     checker = _load_required_status_script()
     registry = """\

@@ -24,6 +24,12 @@ def _run_watcher(tmp_path: Path, *, scenario: str, sha: str = "head-a") -> subpr
         fake_bin / "git",
         f"""\
         #!/usr/bin/env sh
+        if [ "$1" = "-C" ] && [ "$3" = "fetch" ]; then
+          if [ "$WATCHER_FETCH_FAILS" = "1" ]; then
+            exit 2
+          fi
+          exit 0
+        fi
         if [ "$4" = "origin/main:ci/gates.yml" ]; then
           if [ "$WATCHER_NO_TRUSTED_REGISTRY" = "1" ]; then
             exit 2
@@ -102,6 +108,10 @@ def _run_watcher(tmp_path: Path, *, scenario: str, sha: str = "head-a") -> subpr
                 [
                     "live-reconciliation",
                     "diff-budget",
+                    "plan-admission",
+                    "session-lane",
+                    "review-contract",
+                    "pr-body-contract",
                     "Gitleaks PR secret scan",
                     "Gitleaks baseline growth guard",
                 ]
@@ -329,6 +339,8 @@ def _run_watcher(tmp_path: Path, *, scenario: str, sha: str = "head-a") -> subpr
         env["WATCHER_NO_TRUSTED_REGISTRY"] = "1"
     if scenario == "empty_required_registry":
         env["WATCHER_EMPTY_REQUIRED_REGISTRY"] = "1"
+    if scenario == "fetch_fails":
+        env["WATCHER_FETCH_FAILS"] = "1"
     return subprocess.run(
         ["bash", str(SCRIPT)],
         cwd=ROOT,
@@ -354,9 +366,17 @@ def test_watcher_uses_fixed_legacy_contexts_without_trusted_registry(tmp_path: P
     assert "MERGE-READY" in result.stdout
     assert (
         "required contexts: live-reconciliation diff-budget "
+        "plan-admission session-lane review-contract pr-body-contract "
         "Gitleaks PR secret scan Gitleaks baseline growth guard"
     ) in result.stdout
     assert "required contexts: required-a" not in result.stdout
+
+
+def test_watcher_fails_closed_when_trusted_ref_refresh_fails(tmp_path: Path) -> None:
+    result = _run_watcher(tmp_path, scenario="fetch_fails")
+
+    assert result.returncode == 2
+    assert "failed to refresh trusted origin/main" in result.stderr
 
 
 def test_watcher_fails_closed_for_trusted_registry_without_required_contexts(

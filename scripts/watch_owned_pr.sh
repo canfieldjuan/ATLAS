@@ -31,6 +31,13 @@ CYCLES="${CYCLES:-32}"
 TOK="$(grep -m1 '^GITHUB_ACCESS_TOKEN=' "$ROOT/.env" 2>/dev/null | cut -d= -f2-)"
 [ -n "$TOK" ] || TOK="${GH_TOKEN:-}"
 [ -n "$TOK" ] || { echo "no GITHUB_ACCESS_TOKEN in $ROOT/.env and no GH_TOKEN set" >&2; exit 2; }
+# Refresh the trusted base before reading gate policy. A long-running installed
+# watcher must not use a stale origin/main that predates a registry addition.
+git -C "$ROOT" fetch origin main:refs/remotes/origin/main --quiet || {
+  echo "watch_owned_pr.sh: failed to refresh trusted origin/main" >&2
+  exit 2
+}
+
 # Canonical required contexts (branch protection), read only from the TRUSTED
 # ref (origin/main), never from the watched branch's working tree -- a PR that
 # edits ci/gates.yml or check_required_status_checks.py must not be able to
@@ -88,7 +95,16 @@ PY
   fi
 fi
 if [ "${#REQ_CONTEXTS[@]}" -eq 0 ]; then
-  REQ_CONTEXTS=("live-reconciliation" "diff-budget" "Gitleaks PR secret scan" "Gitleaks baseline growth guard")
+  REQ_CONTEXTS=(
+    "live-reconciliation"
+    "diff-budget"
+    "plan-admission"
+    "session-lane"
+    "review-contract"
+    "pr-body-contract"
+    "Gitleaks PR secret scan"
+    "Gitleaks baseline growth guard"
+  )
 fi
 REQ_JSON=$(printf '%s\n' "${REQ_CONTEXTS[@]}" | jq -R . | jq -cs .)
 REQ_TOTAL=${#REQ_CONTEXTS[@]}

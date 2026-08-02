@@ -274,6 +274,15 @@ def select(changed: list[str], repo: Path) -> list[str] | str:
     owned_tests: set[str] = set()
     graph_changed: list[str] = []
     for path in changed:
+        p = Path(path)
+        abs_path = repo / p
+        if not abs_path.exists():
+            print(
+                f"select_impacted_tests: {path} is absent in the PR head; "
+                "deleted/renamed dependencies require FULL",
+                file=sys.stderr,
+            )
+            return FULL
         owners = explicit_test_owners(path, repo)
         if owners == FULL:
             return FULL
@@ -283,17 +292,8 @@ def select(changed: list[str], repo: Path) -> list[str] | str:
         if is_global_change(path):
             return FULL
 
-        p = Path(path)
         if p.suffix != ".py" and is_provably_test_free_path(p):
             continue
-        abs_path = repo / p
-        if not abs_path.exists():
-            print(
-                f"select_impacted_tests: {path} is absent in the PR head; "
-                "deleted/renamed dependencies require FULL",
-                file=sys.stderr,
-            )
-            return FULL
         if p.suffix != ".py":
             print(
                 f"select_impacted_tests: {path} is a non-Python runtime/config "

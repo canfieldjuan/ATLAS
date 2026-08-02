@@ -179,6 +179,15 @@ def test_explicit_ci_surface_with_missing_owner_escalates_to_full(tmp_path):
     assert sel.select(["scripts/pr_watcher.py"], repo) == sel.FULL
 
 
+def test_explicit_ci_surface_deletion_escalates_to_full(tmp_path):
+    repo = _mkrepo(tmp_path, {
+        "atlas_brain/__init__.py": "",
+        "tests/test_pr_watcher.py": "def test_owner():\n    assert True\n",
+    })
+
+    assert sel.select(["scripts/pr_watcher.py"], repo) == sel.FULL
+
+
 def test_explicit_ci_surface_owners_union_with_import_graph(tmp_path):
     repo = _mkrepo(tmp_path, {
         "atlas_brain/__init__.py": "",
