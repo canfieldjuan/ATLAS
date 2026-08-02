@@ -14,10 +14,10 @@ Soundness rests on three properties, in order of how much they matter:
    drops exactly the indirect dependencies a refactor breaks.
 2. **Unresolvable input means FULL, never empty.** A file this script cannot
    prove scoped (a global config, an unparseable module, a deleted path, an
-   unknown Python root, a runtime asset, or a script that tests may load by
-   path) escalates to the full suite. The failure direction is "run too much",
-   never "run too little" -- a selector that silently returns nothing is worse
-   than no selector, because it reports green.
+   unknown Python root, an unowned runtime asset, or an unowned path-loaded
+   script) escalates to the full suite. The failure direction is "run too
+   much", never "run too little" -- a selector that silently returns nothing
+   is worse than no selector, because it reports green.
 3. **Empty is only for provably test-free changes.** An empty selection means
    every changed file was mapped and none of them is reachable from any test
    (documentation, plans). It is not the fallback for "I could not tell".
@@ -61,6 +61,40 @@ GLOBAL_PREFIXES = ("requirements",)
 FULL = "FULL"
 TEST_FREE_SUFFIXES = {".md"}
 
+# CI governance files are loaded by workflow/path instead of first-party Python
+# imports, so the import graph cannot discover their tests. Keep this list
+# deliberately small and auditable: unknown workflows, registries, and scripts
+# still escalate to FULL.
+EXPLICIT_TEST_OWNERS: dict[str, tuple[str, ...]] = {
+    ".github/workflows/branch_protection_required_checks.yml": (
+        "tests/test_security_guardrails_workflow.py",
+    ),
+    ".github/workflows/unit_gate.yml": (
+        "tests/test_check_unit_gate.py",
+        "tests/test_select_impacted_tests.py",
+        "tests/test_unit_gate_selector_fallback.py",
+    ),
+    "ci/gates.yml": (
+        "tests/test_security_guardrails_workflow.py",
+    ),
+    "scripts/check_required_status_checks.py": (
+        "tests/test_security_guardrails_workflow.py",
+    ),
+    "scripts/check_unit_gate.py": (
+        "tests/test_check_unit_gate.py",
+        "tests/test_select_impacted_tests.py",
+    ),
+    "scripts/pr_watcher.py": (
+        "tests/test_pr_watcher.py",
+    ),
+    "scripts/select_impacted_tests.py": (
+        "tests/test_select_impacted_tests.py",
+    ),
+    "scripts/watch_owned_pr.sh": (
+        "tests/test_watch_owned_pr.py",
+    ),
+}
+
 
 def changed_files_from_git(base: str) -> list[str]:
     """Changed paths vs the merge base with ``base``."""
@@ -103,6 +137,23 @@ def is_provably_test_free_path(path: Path) -> bool:
 def is_conftest_module(name: str) -> bool:
     """True for any ``tests/.../conftest.py`` module name."""
     return name == "tests.conftest" or name.endswith(".conftest")
+
+
+def explicit_test_owners(path: str, repo: Path) -> set[str] | None | str:
+    """Owning tests for non-import-graph CI surfaces, or FULL when stale."""
+    owners = EXPLICIT_TEST_OWNERS.get(path)
+    if owners is None:
+        return None
+
+    missing = [owner for owner in owners if not (repo / owner).is_file()]
+    if missing:
+        print(
+            f"select_impacted_tests: explicit test owner(s) missing for {path}: "
+            f"{', '.join(missing)}; escalating to FULL",
+            file=sys.stderr,
+        )
+        return FULL
+    return set(owners)
 
 
 def _imports_of(path: Path, rel: Path) -> set[str]:
@@ -219,10 +270,19 @@ def select(changed: list[str], repo: Path) -> list[str] | str:
         # No diff at all is not a provably test-free change; something is off
         # with the base ref. Escalate.
         return FULL
-    if any(is_global_change(p) for p in changed):
-        return FULL
 
+    owned_tests: set[str] = set()
+    graph_changed: list[str] = []
     for path in changed:
+        owners = explicit_test_owners(path, repo)
+        if owners == FULL:
+            return FULL
+        if owners is not None:
+            owned_tests.update(owners)
+            continue
+        if is_global_change(path):
+            return FULL
+
         p = Path(path)
         if p.suffix != ".py" and is_provably_test_free_path(p):
             continue
@@ -254,6 +314,10 @@ def select(changed: list[str], repo: Path) -> list[str] | str:
                 file=sys.stderr,
             )
             return FULL
+        graph_changed.append(path)
+
+    if not graph_changed:
+        return sorted(owned_tests)
 
     reverse, unparseable = build_reverse_graph(repo)
     if unparseable:
@@ -264,10 +328,10 @@ def select(changed: list[str], repo: Path) -> list[str] | str:
         )
         return FULL
 
-    result = impacted_tests(changed, reverse, repo)
+    result = impacted_tests(graph_changed, reverse, repo)
     if result == FULL:
         return FULL
-    return sorted(result)
+    return sorted(result | owned_tests)
 
 
 def main(argv: list[str] | None = None) -> int:

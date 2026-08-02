@@ -20,7 +20,9 @@ with another.
   easy to miss.
 - Correct fix must touch/change: add a machine-readable gate registry, load
   default required branch-protection contexts from it, add tests for registry
-  failure modes, and update docs that currently describe gate truth.
+  failure modes, update docs that currently describe gate truth, and keep
+  known CI-governance edits on explicit owner tests instead of the whole unit
+  suite.
 - Must not change: live GitHub branch-protection settings, runtime behavior of
   existing workflows, wrapper mutation behavior, or product/package test
   coverage.
@@ -36,6 +38,9 @@ Slice phase: workflow/process
    the registry.
 3. Correct docs so humans and agents treat the registry/code as truth.
 4. Add unit coverage for registry parsing and required-context derivation.
+5. Scope known CI-governance selector inputs to explicit owning tests while
+   keeping unknown workflows, registries, scripts, and unresolvable inputs
+   fail-closed to `FULL`.
 
 ### Review Contract
 
@@ -48,6 +53,9 @@ Slice phase: workflow/process
     advisory gates are not treated as branch-required.
   - [ ] AGENTS/docs no longer claim Intel UI test enrollment is manual-only;
     they identify the existing audit path.
+  - [ ] Unit-gate selection for this PR is a small explicit governance test
+    slice, not `FULL`, and unknown CI/runtime surfaces still escalate to
+    `FULL`.
   - [ ] Live branch-protection mutation is not part of this PR and remains
     documented as follow-up.
 - Reachability proof: `python scripts/check_required_status_checks.py
@@ -84,6 +92,15 @@ seam in the enumeration; otherwise write "N/A - no boundary change."
   `trusted_base` fields.
 - Caller x input shape: CLI default invocation with GitHub required-status JSON
   payload.
+- Boundary path/seam: `scripts/select_impacted_tests.py` explicit ownership
+  resolver for known CI-governance surfaces.
+- Replaced-path behaviors: known registry/workflow/watcher/unit-gate file
+  changes now select named contract tests instead of automatically selecting
+  `FULL`; unknown scripts, workflows, runtime assets, globals, deleted paths,
+  and missing owner tests still select `FULL`.
+- Guard-relevant fields: changed repo-relative path and
+  `EXPLICIT_TEST_OWNERS` owner-test entries.
+- Caller x input shape: unit-gate changed-file list from git merge-base.
 
 ### Deployed-config probing
 
@@ -113,9 +130,11 @@ fallback changes; otherwise write "N/A - no guard/config boundary change."
 - `plans/PR-CI-Gate-Registry.md`
 - `scripts/check_required_status_checks.py`
 - `scripts/pr_watcher.py`
+- `scripts/select_impacted_tests.py`
 - `scripts/watch_owned_pr.sh`
 - `tests/test_pr_watcher.py`
 - `tests/test_security_guardrails_workflow.py`
+- `tests/test_select_impacted_tests.py`
 - `tests/test_watch_owned_pr.py`
 
 ## Mechanism
@@ -126,12 +145,20 @@ free parser for the registry's constrained YAML shape and derives its default
 expected checks from entries marked `branch_required`. Existing CLI overrides
 still bypass the default list for targeted tests or future manual audits.
 
+The unit-gate selector keeps import-graph reachability for first-party Python
+code and adds a deliberately small explicit-owner table for CI-governance files
+that are loaded by workflow/path instead of Python imports. Unknown entries
+remain fail-closed to `FULL`; mapped entries fail closed if their owner test
+files are missing.
+
 ## Intentional
 
 - Do not add a PyYAML dependency to the branch-protection audit workflow.
 - Do not mutate live branch protection in this slice; this PR only makes drift
   auditable from repo state.
 - Do not promote advisory gates in this slice.
+- Do not broadly trust `scripts/**` or `.github/workflows/**`; only named
+  governance files with existing owner tests avoid `FULL`.
 
 ## Deferred
 
@@ -150,6 +177,9 @@ Parked hardening: none against that predicate.
 
 - Passed:
   - `/tmp/atlas-ci-gate-registry-venv/bin/python -m pytest tests/test_security_guardrails_workflow.py tests/test_watch_owned_pr.py tests/test_pr_watcher.py -q` — 126 passed.
+  - `/tmp/atlas-ci-gate-registry-venv/bin/python -m pytest tests/test_select_impacted_tests.py tests/test_check_unit_gate.py tests/test_unit_gate_selector_fallback.py tests/test_security_guardrails_workflow.py tests/test_pr_watcher.py tests/test_watch_owned_pr.py -q` — 188 passed.
+  - `/tmp/atlas-ci-gate-registry-venv/bin/python scripts/select_impacted_tests.py --base origin/main` — selected `tests/test_check_unit_gate.py`, `tests/test_pr_watcher.py`, `tests/test_security_guardrails_workflow.py`, `tests/test_select_impacted_tests.py`, `tests/test_unit_gate_selector_fallback.py`, and `tests/test_watch_owned_pr.py`; did not return `FULL`.
+  - Workflow-equivalent scoped unit gate for those six selected test files — `unit gate: 0 failing/errored node(s); baseline=0; regressions=0; newly-passing=0 [scoped: 6 test file(s); baseline 0/182]`.
   - `python3 -m py_compile scripts/check_required_status_checks.py scripts/pr_watcher.py` — exit 0.
   - `bash -n scripts/watch_owned_pr.sh` — exit 0.
   - `git diff --check` — exit 0.
@@ -184,11 +214,13 @@ Parked hardening: none against that predicate.
 | `docs/ci_cd_autonomous_coding_map.md` | 14 |
 | `docs/ci_cd_runtime_duplication_audit.md` | 10 |
 | `docs/long_running_session_watcher_handoff.md` | 5 |
-| `plans/PR-CI-Gate-Registry.md` | 194 |
+| `plans/PR-CI-Gate-Registry.md` | 222 |
 | `scripts/check_required_status_checks.py` | 305 |
 | `scripts/pr_watcher.py` | 57 |
+| `scripts/select_impacted_tests.py` | 80 |
 | `scripts/watch_owned_pr.sh` | 72 |
 | `tests/test_pr_watcher.py` | 134 |
 | `tests/test_security_guardrails_workflow.py` | 301 |
+| `tests/test_select_impacted_tests.py` | 61 |
 | `tests/test_watch_owned_pr.py` | 79 |
-| **Total** | **1404** |
+| **Total** | **1573** |
