@@ -273,6 +273,43 @@ gates:
         raise AssertionError("registry without branch_required gate passed")
 
 
+def test_gate_registry_preserves_hash_inside_quoted_scalar() -> None:
+    checker = _load_required_status_script()
+    registry = """\
+gates:
+  - id: quoted-context
+    name: Quoted Context
+    context: "Gate # 1"
+    enforcement: branch_required # supported inline comment
+    trusted_base: true
+    workflow: .github/workflows/quoted.yml
+    local_command: null
+"""
+
+    assert checker.parse_gate_registry(registry)[0]["context"] == "Gate # 1"
+
+
+def test_gate_registry_rejects_malformed_quoted_scalar() -> None:
+    checker = _load_required_status_script()
+    malformed = """\
+gates:
+  - id: malformed-quote
+    name: Malformed Quote
+    context: "Gate # 1
+    enforcement: branch_required
+    trusted_base: true
+    workflow: .github/workflows/malformed.yml
+    local_command: null
+"""
+
+    try:
+        checker.parse_gate_registry(malformed)
+    except ValueError as exc:
+        assert "malformed quoted scalar" in str(exc)
+    else:
+        raise AssertionError("malformed quoted scalar passed")
+
+
 def test_required_status_cli_reports_registry_errors(tmp_path, capsys) -> None:
     checker = _load_required_status_script()
     registry = tmp_path / "gates.yml"

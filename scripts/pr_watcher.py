@@ -18,6 +18,7 @@ import shlex
 import shutil
 import subprocess
 import sys
+import tempfile
 from typing import Any, Sequence
 from urllib.parse import quote
 
@@ -51,6 +52,7 @@ TRUSTED_RECONCILIATION_CHECKER = (
     Path(__file__).resolve().parent / RECONCILIATION_LIB_DIR / RECONCILIATION_CHECKER_NAME
 )
 PR_BODY_AUDIT_NAME = "audit_pr_body.py"
+REQUIRED_STATUS_CHECKER_NAME = "check_required_status_checks.py"
 
 THREADS_QUERY = """
 query($owner:String!,$name:String!,$pr:Int!,$cursor:String){
@@ -268,6 +270,49 @@ def _required_contexts(payload: dict[str, Any]) -> tuple[set[str], str | None]:
     if not contexts:
         return set(), "required-status policy has no contexts/checks"
     return contexts, None
+
+
+def _trusted_registry_required_contexts(repo_dir: Path) -> tuple[set[str], str | None]:
+    registry_code, registry_src, registry_err = _run(
+        ["git", "show", "origin/main:ci/gates.yml"],
+        cwd=repo_dir,
+    )
+    if registry_code != 0 or not registry_src.strip():
+        return set(), None
+
+    checker_code, checker_src, checker_err = _run(
+        ["git", "show", f"origin/main:scripts/{REQUIRED_STATUS_CHECKER_NAME}"],
+        cwd=repo_dir,
+    )
+    if checker_code != 0 or not checker_src.strip():
+        detail = checker_err or "trusted checker source is empty"
+        return set(), f"trusted required-status checker unavailable: {detail}"
+
+    with tempfile.TemporaryDirectory(prefix="atlas-pr-watch-gates-") as tmp:
+        tmp_path = Path(tmp)
+        checker_path = tmp_path / REQUIRED_STATUS_CHECKER_NAME
+        registry_path = tmp_path / "gates.yml"
+        checker_path.write_text(checker_src, encoding="utf-8")
+        registry_path.write_text(registry_src, encoding="utf-8")
+        spec = importlib.util.spec_from_file_location(
+            "trusted_check_required_status_checks_for_pr_watcher",
+            checker_path,
+        )
+        if spec is None or spec.loader is None:
+            return set(), "could not load trusted required-status checker"
+        module = importlib.util.module_from_spec(spec)
+        try:
+            spec.loader.exec_module(module)
+            contexts = tuple(module.default_required_contexts(registry_path))
+        except Exception as exc:  # noqa: BLE001 - fail-closed diagnostic path.
+            return set(), f"trusted gate registry parse failed: {exc}"
+
+    if not contexts:
+        return set(), "trusted gate registry produced no required contexts"
+    malformed = [context for context in contexts if not isinstance(context, str) or not context]
+    if malformed:
+        return set(), "trusted gate registry produced malformed required contexts"
+    return set(contexts), None
 
 
 def _check_summary(checks: list[Any], *, required: bool) -> tuple[list[str], list[str], str | None]:
@@ -845,6 +890,9 @@ def produce(watcher_id: str, *, config_dir: Path, state_dir: Path) -> tuple[int,
     failures, pending, all_shape_error = _check_summary(all_checks, required=False)
     required_failures, required_pending, required_shape_error = _check_summary(required_checks, required=True)
     expected_required, required_policy_shape_error = _required_contexts(required_policy)
+    registry_required, registry_required_error = _trusted_registry_required_contexts(repo_dir)
+    if registry_required:
+        expected_required = registry_required
     reported_required = {
         item.get("name")
         for item in required_checks
@@ -882,6 +930,7 @@ def produce(watcher_id: str, *, config_dir: Path, state_dir: Path) -> tuple[int,
             all_shape_error,
             required_shape_error,
             required_policy_shape_error,
+            registry_required_error,
         )
         if item
     ]
@@ -983,6 +1032,7 @@ def produce(watcher_id: str, *, config_dir: Path, state_dir: Path) -> tuple[int,
                 and not required_policy_error
                 and not required_shape_error
                 and not required_policy_shape_error
+                and not registry_required_error
                 and len(required_contexts) > 0
                 and not required_failures
                 and not required_pending

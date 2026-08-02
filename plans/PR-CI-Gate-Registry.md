@@ -112,7 +112,9 @@ fallback changes; otherwise write "N/A - no guard/config boundary change."
 - `docs/long_running_session_watcher_handoff.md`
 - `plans/PR-CI-Gate-Registry.md`
 - `scripts/check_required_status_checks.py`
+- `scripts/pr_watcher.py`
 - `scripts/watch_owned_pr.sh`
+- `tests/test_pr_watcher.py`
 - `tests/test_security_guardrails_workflow.py`
 - `tests/test_watch_owned_pr.py`
 
@@ -147,10 +149,25 @@ Parked hardening: none against that predicate.
 ## Verification
 
 - Passed:
-  - `/tmp/atlas-ci-gate-registry-venv/bin/python -m pytest tests/test_security_guardrails_workflow.py tests/test_watch_owned_pr.py -q`
-  - `python3 -m py_compile scripts/check_required_status_checks.py`
-  - `python3 - <<'PY' | python3 scripts/check_required_status_checks.py ...`
-  - `git diff --check`
+  - `/tmp/atlas-ci-gate-registry-venv/bin/python -m pytest tests/test_security_guardrails_workflow.py tests/test_watch_owned_pr.py tests/test_pr_watcher.py -q` — 117 passed.
+  - `python3 -m py_compile scripts/check_required_status_checks.py scripts/pr_watcher.py` — exit 0.
+  - `bash -n scripts/watch_owned_pr.sh` — exit 0.
+  - `git diff --check` — exit 0.
+  - `python3 scripts/audit_plan_doc.py plans/PR-CI-Gate-Registry.md` — OK for required sections and review contract.
+  - Required-status reachability audit — PASS with the eight registry-derived contexts:
+
+    ```bash
+    python3 - <<'PY' | python3 scripts/check_required_status_checks.py
+    from __future__ import annotations
+    import importlib.util, json
+    from pathlib import Path
+    spec = importlib.util.spec_from_file_location('checker', Path('scripts/check_required_status_checks.py'))
+    checker = importlib.util.module_from_spec(spec)
+    assert spec.loader is not None
+    spec.loader.exec_module(checker)
+    print(json.dumps({'checks': [{'context': context, 'app_id': checker.GITHUB_ACTIONS_APP_ID} for context in checker.default_required_contexts(Path('ci/gates.yml'))]}))
+    PY
+    ```
 
 ## Estimated diff size
 
@@ -167,9 +184,11 @@ Parked hardening: none against that predicate.
 | `docs/ci_cd_autonomous_coding_map.md` | 14 |
 | `docs/ci_cd_runtime_duplication_audit.md` | 10 |
 | `docs/long_running_session_watcher_handoff.md` | 5 |
-| `plans/PR-CI-Gate-Registry.md` | 175 |
-| `scripts/check_required_status_checks.py` | 211 |
+| `plans/PR-CI-Gate-Registry.md` | 194 |
+| `scripts/check_required_status_checks.py` | 235 |
+| `scripts/pr_watcher.py` | 50 |
 | `scripts/watch_owned_pr.sh` | 72 |
-| `tests/test_security_guardrails_workflow.py` | 126 |
+| `tests/test_pr_watcher.py` | 62 |
+| `tests/test_security_guardrails_workflow.py` | 163 |
 | `tests/test_watch_owned_pr.py` | 79 |
-| **Total** | **925** |
+| **Total** | **1117** |

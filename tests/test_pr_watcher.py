@@ -151,6 +151,8 @@ class FakeRun:
         comment_pages: list[tuple[int, str, str]] | None = None,
         reconciliation: tuple[int, str, str] = (0, "clean", ""),
         git_status: tuple[int, str, str] = (0, "", ""),
+        gate_registry: tuple[int, str, str] | None = None,
+        required_checker: tuple[int, str, str] | None = None,
     ) -> None:
         self.pr_responses = list(pr_responses or [_response(_pr()), _response(_pr()), _response(_pr())])
         self.last_pr_response = self.pr_responses[-1] if self.pr_responses else _response(_pr())
@@ -170,6 +172,14 @@ class FakeRun:
         self.comment_pages = list(comment_pages or [_response(_comment_page())])
         self.reconciliation = reconciliation
         self.git_status = git_status
+        self.gate_registry = gate_registry or (1, "", "path does not exist")
+        self.required_checker = required_checker or (
+            0,
+            (ROOT / "scripts" / "check_required_status_checks.py").read_text(
+                encoding="utf-8"
+            ),
+            "",
+        )
         self.commands: list[list[str]] = []
 
     def __call__(self, command, *, cwd: Path):
@@ -201,6 +211,10 @@ class FakeRun:
             and Path(args[1]).name == watcher.RECONCILIATION_CHECKER_NAME
         ):
             return self.reconciliation
+        if args == ["git", "show", "origin/main:ci/gates.yml"]:
+            return self.gate_registry
+        if args == ["git", "show", "origin/main:scripts/check_required_status_checks.py"]:
+            return self.required_checker
         if args[:3] == ["git", "status", "--porcelain"]:
             return self.git_status
         if args[:3] == ["systemctl", "--user", "disable"]:
@@ -387,6 +401,52 @@ def test_required_check_boundaries_fail_closed(
         combined = status["readiness"]["required_check_failures"] + status["readiness"]["required_check_pending"]
         assert expected_fragment in combined
     assert wake_bridge.readiness_blockers(status)
+
+
+def test_registry_required_checks_missing_from_live_policy_stay_pending(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    registry = """\
+gates:
+  - id: required-a
+    name: Required A
+    context: required-a
+    enforcement: branch_required
+    trusted_base: true
+    workflow: .github/workflows/required_a.yml
+    local_command: null
+  - id: required-b
+    name: Required B
+    context: required-b
+    enforcement: branch_required
+    trusted_base: true
+    workflow: .github/workflows/required_b.yml
+    local_command: null
+"""
+    fake = FakeRun(
+        required_policy=_response(
+            {
+                "contexts": [],
+                "checks": [{"context": "required-a", "app_id": 15368}],
+            }
+        ),
+        required_checks=_response([_check("required-a")]),
+        gate_registry=(0, registry, ""),
+    )
+
+    status = _produce(tmp_path, monkeypatch, fake)
+
+    assert status["state"] == "pending"
+    assert status["readiness"]["required_check_count"] == 2
+    assert status["readiness"]["required_checks_complete"] is False
+    assert status["readiness"]["required_check_pending"] == ["required-b (not reported)"]
+    assert ["git", "show", "origin/main:ci/gates.yml"] in fake.commands
+    assert [
+        "git",
+        "show",
+        "origin/main:scripts/check_required_status_checks.py",
+    ] in fake.commands
 
 
 def test_empty_required_policy_cannot_be_ready(
@@ -1032,6 +1092,8 @@ def test_required_policy_transport_failure_reaches_attention_snapshot(
             return subprocess.CompletedProcess(args, 0, json.dumps(_thread_page()), "")
         if len(args) > 1 and args[0] == sys.executable:
             return subprocess.CompletedProcess(args, 0, "clean", "")
+        if args == ["git", "show", "origin/main:ci/gates.yml"]:
+            return subprocess.CompletedProcess(args, 1, "", "path does not exist")
         if args[:3] == ["git", "status", "--porcelain"]:
             return subprocess.CompletedProcess(args, 0, "", "")
         raise AssertionError(f"unexpected transport command: {args}")

@@ -34,7 +34,7 @@ class RequiredCheckFailure(NamedTuple):
     reason: str
 
 
-def _parse_scalar(raw: str) -> str | bool | None:
+def _parse_scalar(raw: str, *, lineno: int) -> str | bool | None:
     value = raw.strip()
     if value == "null":
         return None
@@ -42,6 +42,13 @@ def _parse_scalar(raw: str) -> str | bool | None:
         return True
     if value == "false":
         return False
+    if value.startswith(("'", '"')) or value.endswith(("'", '"')):
+        if (
+            len(value) < 2
+            or value[0] != value[-1]
+            or not value.startswith(("'", '"'))
+        ):
+            raise ValueError(f"ci/gates.yml:{lineno}: malformed quoted scalar")
     if (
         len(value) >= 2
         and value[0] == value[-1]
@@ -55,7 +62,24 @@ def _parse_key_value(text: str, *, lineno: int) -> tuple[str, str | bool | None]
     key, separator, raw_value = text.partition(":")
     if not separator or not key.strip():
         raise ValueError(f"ci/gates.yml:{lineno}: expected key: value")
-    return key.strip(), _parse_scalar(raw_value)
+    return key.strip(), _parse_scalar(raw_value, lineno=lineno)
+
+
+def _strip_inline_comment(raw_line: str, *, lineno: int) -> str:
+    quote: str | None = None
+    for index, char in enumerate(raw_line):
+        if quote is not None:
+            if char == quote:
+                quote = None
+            continue
+        if char in {"'", '"'}:
+            quote = char
+            continue
+        if char == "#":
+            return raw_line[:index].rstrip()
+    if quote is not None:
+        raise ValueError(f"ci/gates.yml:{lineno}: malformed quoted scalar")
+    return raw_line.rstrip()
 
 
 def parse_gate_registry(text: str) -> list[dict[str, str | bool | None]]:
@@ -73,7 +97,7 @@ def parse_gate_registry(text: str) -> list[dict[str, str | bool | None]]:
     seen_contexts: set[str] = set()
 
     for lineno, raw_line in enumerate(text.splitlines(), start=1):
-        line = raw_line.split("#", 1)[0].rstrip()
+        line = _strip_inline_comment(raw_line, lineno=lineno)
         if not line.strip():
             continue
         if line == "gates:":

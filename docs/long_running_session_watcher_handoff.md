@@ -332,8 +332,10 @@ systemctl --user disable --now "atlas-pr-watch@${SESSION_ID}.timer"
 | `review_changed` | New review/comment activity since last poll, including while checks are pending | Inspect comments before any merge decision |
 | `ready_for_human_merge` | The snapshot label and version-1 proof agree: same open/non-draft head, required checks complete/green, all thread pages fetched, zero unresolved non-outdated Codex connector threads, complete Codex review pagination, at least one current-head Codex connector review, no changes requested, clean merge state | Run `scripts/report_pr_watcher_state.py`; missing/contradictory proof is reported as attention. Otherwise report readiness or perform the active-builder guarded merge only when explicitly authorized and after fresh live guards |
 
-The installed producer reads branch protection's required-context inventory and
-the repo's canonical gate registry, compares it with `gh pr checks --required`,
+The installed producer reads branch protection's required-context inventory,
+then replaces that expected set with `origin/main:ci/gates.yml` parsed through
+`origin/main:scripts/check_required_status_checks.py` when the trusted
+registry exists. It compares the expected set with `gh pr checks --required`,
 fetches every GraphQL
 `reviewThreads` page, fetches every current-head Codex connector review page,
 and reads PR metadata again after those calls. This prevents a required context
