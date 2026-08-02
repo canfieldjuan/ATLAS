@@ -113,8 +113,21 @@ startup modes in #2255.
 
 ### Deployed-config probing
 
-- Deployed/default config values: full app starts with receivables enabled only
-  when the digest env is present and raw token env is absent.
+- Deployed/default config values:
+  - Repo-owned slim EOM Render candidate (`render.eom.yaml`) declares
+    `ATLAS_INVOICING_RECEIVABLES_API_ENABLED="false"`,
+    declares `ATLAS_INVOICING_RECEIVABLES_SERVICE_TOKEN_SHA256` as
+    externally synced (`sync: false`), and does not declare
+    `ATLAS_INVOICING_RECEIVABLES_SERVICE_TOKEN`.
+  - Full-app production deployed values are could-not-determine from this
+    repository: no repo-owned full-app Render/systemd env declaration was found
+    for `ATLAS_INVOICING_RECEIVABLES_API_ENABLED`,
+    `ATLAS_INVOICING_RECEIVABLES_SERVICE_TOKEN`, or
+    `ATLAS_INVOICING_RECEIVABLES_SERVICE_TOKEN_SHA256`.
+  - Source that would settle full-app deployed values: the actual full-app
+    Render service environment or systemd/env file for the Atlas API process.
+    Operators must verify the starting enabled/raw/digest values there before
+    applying the maintenance-window migration.
 - Explicit value probe: subprocess full-app test sets a generated token digest
   and verifies startup plus route mounting.
 - Absent value probe: subprocess full-app test enables receivables without a
@@ -126,8 +139,10 @@ startup modes in #2255.
   app instance. For legacy raw-token deployments, the enforced rollout order is
   maintenance-window only: disable the receivables API, remove raw Atlas token
   material, deploy the digest-only code to all Atlas API processes, provision
-  `ATLAS_INVOICING_RECEIVABLES_SERVICE_TOKEN_SHA256`, then re-enable the API
-  after an authenticated readiness probe passes.
+  `ATLAS_INVOICING_RECEIVABLES_SERVICE_TOKEN_SHA256`, re-enable the API, then
+  run an authenticated readiness probe. If the probe fails, disable the API
+  again and roll back to the last known-good Atlas deployment/config before
+  reopening traffic to that surface.
 
 ### Files touched
 
@@ -266,8 +281,8 @@ isolation remains intentionally deferred.
 | `HARDENING.md` | 19 |
 | `atlas_brain/api/invoicing/auth.py` | 53 |
 | `atlas_brain/config.py` | 12 |
-| `plans/PR-EOM-Receivables-Digest-Deadlock.md` | 273 |
+| `plans/PR-EOM-Receivables-Digest-Deadlock.md` | 288 |
 | `tests/test_eom_render_profile.py` | 154 |
 | `tests/test_receivables.py` | 53 |
 | `tests/unit_gate_baseline.txt` | 3 |
-| **Total** | **589** |
+| **Total** | **604** |
