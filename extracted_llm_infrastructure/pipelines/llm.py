@@ -302,8 +302,6 @@ def get_pipeline_llm(
     When workload is None, falls back to legacy prefer_cloud chain.
     Returns the LLM instance or None.
     """
-    from ..services import llm_registry
-
     # --- Workload-based routing (preferred) ---
     if workload is not None:
         strict_reasoning = workload in ("synthesis", "reasoning") and _strict_openrouter_reasoning()
@@ -387,6 +385,8 @@ def get_pipeline_llm(
         )
         if llm is not None:
             return llm
+
+    from ..services import llm_registry
 
     llm = llm_registry.get_active()
     if llm is not None:

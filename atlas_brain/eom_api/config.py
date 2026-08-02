@@ -135,6 +135,13 @@ class EOMFunnelConfig(BaseSettings):
             "tracker only; the raw bearer is never stored in Atlas"
         ),
     )
+    db_connection_string: str = Field(
+        default="",
+        description=(
+            "Canonical Atlas CRM PostgreSQL connection string used only by the "
+            "slim EOM funnel routes"
+        ),
+    )
 
 
 eom_settings = EOMRuntimeConfig()

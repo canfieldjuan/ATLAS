@@ -67,6 +67,7 @@ def _enabled_config() -> EOMFunnelConfig:
     return EOMFunnelConfig(
         api_enabled=True,
         service_token_sha256=_SERVICE_TOKEN_SHA256,
+        db_connection_string="postgresql://crm.example/atlas",
     )
 
 
@@ -341,6 +342,8 @@ async def test_enabled_full_atlas_funnel_requires_authoritative_data_store(monke
     assert "rolcanlogin" in ready_pool.queries[0]
     assert "rolinherit" in ready_pool.queries[0]
     assert "rolsuper" in ready_pool.queries[0]
+    assert "runtime_role.rolname = current_user" not in ready_pool.queries[0]
+    assert "database_row.datdba = runtime_role.oid" not in ready_pool.queries[0]
     assert "has_database_privilege" in ready_pool.queries[0]
     assert "has_schema_privilege" in ready_pool.queries[0]
     assert "has_table_privilege" in ready_pool.queries[0]
@@ -613,7 +616,11 @@ def test_enabled_funnel_rejects_missing_or_malformed_token_digests_at_startup(
 ):
     with pytest.raises(RuntimeError, match="digest|required|hex|placeholder"):
         auth_mod.validate_eom_funnel_api_config(
-            EOMFunnelConfig(api_enabled=True, service_token_sha256=token_digest)
+            EOMFunnelConfig(
+                api_enabled=True,
+                service_token_sha256=token_digest,
+                db_connection_string="postgresql://crm.example/atlas",
+            )
         )
 
 
@@ -623,9 +630,20 @@ def test_enabled_funnel_accepts_a_fresh_generated_service_token_at_startup():
         EOMFunnelConfig(
             api_enabled=True,
             service_token_sha256=generated.sha256,
+            db_connection_string="postgresql://crm.example/atlas",
         )
     )
     assert auth_mod.eom_funnel_service_token_sha256(generated.token) == generated.sha256
+
+
+def test_shared_funnel_auth_validator_preserves_full_app_digest_only_contract():
+    generated = auth_mod.generate_eom_funnel_service_token()
+    auth_mod.validate_eom_funnel_api_config(
+        EOMFunnelConfig(
+            api_enabled=True,
+            service_token_sha256=generated.sha256,
+        )
+    )
 
 
 @pytest.mark.asyncio

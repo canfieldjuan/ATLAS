@@ -6,6 +6,7 @@ import string
 import subprocess
 import sys
 import threading
+from contextlib import asynccontextmanager
 from concurrent.futures import ThreadPoolExecutor
 from itertools import product
 from pathlib import Path
@@ -384,6 +385,10 @@ def test_eom_render_blueprint_maps_database_receivables_and_funnel_auth():
         "key": "ATLAS_EOM_FUNNEL_SERVICE_TOKEN_SHA256",
         "sync": False,
     }
+    assert env_vars["ATLAS_EOM_FUNNEL_DB_CONNECTION_STRING"] == {
+        "key": "ATLAS_EOM_FUNNEL_DB_CONNECTION_STRING",
+        "sync": False,
+    }
     assert env_vars["ATLAS_EOM_CANONICAL_CRM_DATABASE_CONFIRMED"] == {
         "key": "ATLAS_EOM_CANONICAL_CRM_DATABASE_CONFIRMED",
         "value": "false",
@@ -425,13 +430,40 @@ def test_eom_startup_migrations_are_curated_for_api_readiness():
         "346_contact_lead_pipeline",
         "351_eom_lead_lifecycle_events",
         "353_eom_customer_handoffs",
-        "354_eom_customer_handoff_privileges",
         "355_eom_lead_review_queue_index",
+    )
+    assert main_eom.EOM_FUNNEL_OUT_OF_BAND_BOOTSTRAP_MIGRATIONS == (
+        "354_eom_customer_handoff_privileges",
+        "356_eom_customer_handoff_runtime_grants",
     )
     assert not any(
         migration.startswith(("066_", "068_", "074_", "076_", "083_", "095_"))
         for migration in main_eom.EOM_API_READINESS_MIGRATIONS
     )
+
+
+def test_eom_runtime_grant_migration_requires_serving_login_target():
+    repo_root = Path(__file__).resolve().parents[1]
+    sql = (
+        repo_root
+        / "atlas_brain"
+        / "storage"
+        / "migrations"
+        / "356_eom_customer_handoff_runtime_grants.sql"
+    ).read_text()
+
+    assert "current_setting('atlas.eom_funnel_runtime_role', true)" in sql
+    assert "-- atlas: out-of-band-bootstrap" in sql
+    assert "runtime_role = 'atlas_eom_handoff_owner'" in sql
+    assert "rolcanlogin" in sql
+    assert "rolsuper" in sql
+    assert "rolcreaterole" in sql
+    assert "rolcreatedb" in sql
+    assert "rolbypassrls" in sql
+    assert "database_row.datdba = runtime_role_row.oid" in sql
+    assert "must be a LOGIN role" in sql
+    assert "must not be superuser, CREATEROLE, CREATEDB, or BYPASSRLS" in sql
+    assert "must not own the database" in sql
 
 
 def test_eom_migration_helper_uses_curated_set():
@@ -463,7 +495,11 @@ def test_eom_startup_migration_set_expands_only_when_funnel_enabled(monkeypatch)
         == main_eom.EOM_RECEIVABLES_READINESS_MIGRATIONS
     )
 
-    monkeypatch.setattr(main_eom, "funnel_settings", SimpleNamespace(api_enabled=True))
+    monkeypatch.setattr(
+        main_eom,
+        "funnel_settings",
+        SimpleNamespace(api_enabled=True, db_connection_string="postgresql://crm"),
+    )
     monkeypatch.setattr(
         main_eom,
         "eom_profile_settings",
@@ -471,7 +507,11 @@ def test_eom_startup_migration_set_expands_only_when_funnel_enabled(monkeypatch)
     )
     assert (
         main_eom._startup_migrations_for_enabled_apis()
-        == main_eom.EOM_API_READINESS_MIGRATIONS
+        == main_eom.EOM_RECEIVABLES_READINESS_MIGRATIONS
+    )
+    assert (
+        main_eom._funnel_startup_migrations_for_enabled_api()
+        == main_eom.EOM_FUNNEL_READINESS_MIGRATIONS
     )
 
 
@@ -480,7 +520,11 @@ def test_eom_startup_migration_selection_requires_canonical_crm_confirmation(
 ):
     from atlas_brain import main_eom
 
-    monkeypatch.setattr(main_eom, "funnel_settings", SimpleNamespace(api_enabled=True))
+    monkeypatch.setattr(
+        main_eom,
+        "funnel_settings",
+        SimpleNamespace(api_enabled=True, db_connection_string="postgresql://crm"),
+    )
     monkeypatch.setattr(
         main_eom,
         "eom_profile_settings",
@@ -488,29 +532,48 @@ def test_eom_startup_migration_selection_requires_canonical_crm_confirmation(
     )
 
     with pytest.raises(RuntimeError, match="canonical Atlas CRM database"):
-        main_eom._startup_migrations_for_enabled_apis()
+        main_eom._funnel_startup_migrations_for_enabled_api()
 
 
 def test_eom_startup_migration_runner_uses_enabled_api_set(monkeypatch):
     from atlas_brain import main_eom
 
     pool = SimpleNamespace(is_initialized=True)
+    startup_funnel_pool = SimpleNamespace(name="startup-funnel-pool")
+
+    class _FunnelPool:
+        is_initialized = True
+
+        @asynccontextmanager
+        async def migration_pool(self):
+            yield startup_funnel_pool
+
+    funnel_pool = _FunnelPool()
     calls = []
 
     async def apply_migrations(observed_pool, *, migrations):
         calls.append((observed_pool, migrations))
 
     monkeypatch.setattr(main_eom, "get_db_pool", lambda: pool)
+    monkeypatch.setattr(main_eom, "get_eom_funnel_db_pool", lambda: funnel_pool)
     monkeypatch.setattr(
         main_eom,
         "_startup_migrations_for_enabled_apis",
-        lambda: main_eom.EOM_API_READINESS_MIGRATIONS,
+        lambda: main_eom.EOM_RECEIVABLES_READINESS_MIGRATIONS,
+    )
+    monkeypatch.setattr(
+        main_eom,
+        "_funnel_startup_migrations_for_enabled_api",
+        lambda: main_eom.EOM_FUNNEL_READINESS_MIGRATIONS,
     )
     monkeypatch.setattr(main_eom, "_apply_eom_api_migrations", apply_migrations)
 
     asyncio.run(main_eom._run_startup_migrations())
 
-    assert calls == [(pool, main_eom.EOM_API_READINESS_MIGRATIONS)]
+    assert calls == [
+        (pool, main_eom.EOM_RECEIVABLES_READINESS_MIGRATIONS),
+        (startup_funnel_pool, main_eom.EOM_FUNNEL_READINESS_MIGRATIONS),
+    ]
 
 
 def test_eom_startup_migration_runner_skips_uninitialized_pool(monkeypatch):
@@ -521,7 +584,7 @@ def test_eom_startup_migration_runner_skips_uninitialized_pool(monkeypatch):
 
     monkeypatch.setattr(
         main_eom,
-        "get_db_pool",
+        "get_eom_funnel_db_pool",
         lambda: SimpleNamespace(is_initialized=False),
     )
     monkeypatch.setattr(
@@ -542,7 +605,11 @@ def test_eom_funnel_startup_preflight_requires_authoritative_database(monkeypatc
         "eom_profile_settings",
         SimpleNamespace(canonical_crm_database_confirmed=True),
     )
-    monkeypatch.setattr(main_eom, "funnel_settings", SimpleNamespace(api_enabled=True))
+    monkeypatch.setattr(
+        main_eom,
+        "funnel_settings",
+        SimpleNamespace(api_enabled=True, db_connection_string=""),
+    )
 
     with pytest.raises(RuntimeError, match="authoritative Atlas database"):
         asyncio.run(main_eom._validate_eom_funnel_startup())
@@ -553,18 +620,21 @@ def test_eom_funnel_startup_preflight_requires_canonical_crm_confirmation(
 ):
     from atlas_brain import main_eom
 
-    monkeypatch.setattr(main_eom, "db_settings", SimpleNamespace(enabled=True))
     monkeypatch.setattr(
         main_eom,
         "eom_profile_settings",
         SimpleNamespace(canonical_crm_database_confirmed=False),
     )
-    monkeypatch.setattr(main_eom, "funnel_settings", SimpleNamespace(api_enabled=True))
     monkeypatch.setattr(
         main_eom,
-        "get_db_pool",
+        "funnel_settings",
+        SimpleNamespace(api_enabled=True, db_connection_string="postgresql://crm"),
+    )
+    monkeypatch.setattr(
+        main_eom,
+        "get_eom_funnel_db_pool",
         lambda: (_ for _ in ()).throw(
-            AssertionError("unconfirmed funnel must not inspect the local DB pool")
+            AssertionError("unconfirmed funnel must not inspect the funnel DB pool")
         ),
     )
 
@@ -585,25 +655,95 @@ def test_eom_funnel_startup_preflight_checks_handoff_schema(monkeypatch):
             self.queries.append(query)
             return self._schema_ready
 
-    monkeypatch.setattr(main_eom, "db_settings", SimpleNamespace(enabled=True))
     monkeypatch.setattr(
         main_eom,
         "eom_profile_settings",
         SimpleNamespace(canonical_crm_database_confirmed=True),
     )
-    monkeypatch.setattr(main_eom, "funnel_settings", SimpleNamespace(api_enabled=True))
+    monkeypatch.setattr(
+        main_eom,
+        "funnel_settings",
+        SimpleNamespace(api_enabled=True, db_connection_string="postgresql://crm"),
+    )
 
     unready_pool = _Pool(schema_ready=False)
-    monkeypatch.setattr(main_eom, "get_db_pool", lambda: unready_pool)
+    monkeypatch.setattr(main_eom, "get_eom_funnel_db_pool", lambda: unready_pool)
     with pytest.raises(RuntimeError, match="CRM lifecycle and handoff schema"):
         asyncio.run(main_eom._validate_eom_funnel_startup())
     assert "atlas_eom_handoff_owner" in unready_pool.queries[0]
     assert "atlas_nocodb" in unready_pool.queries[0]
     assert "pg_auth_members" in unready_pool.queries[0]
+    assert "has_table_privilege(current_user, 'contacts', 'SELECT')" in unready_pool.queries[0]
+    assert "has_table_privilege(current_user, 'contacts', 'UPDATE')" in unready_pool.queries[0]
+    assert (
+        "has_table_privilege(current_user, 'contact_interactions', 'SELECT')"
+        in unready_pool.queries[0]
+    )
+    assert (
+        "has_table_privilege(current_user, 'eom_lead_lifecycle_events', 'INSERT')"
+        in unready_pool.queries[0]
+    )
+    assert (
+        "has_table_privilege(current_user, 'eom_customer_handoffs', 'INSERT')"
+        in unready_pool.queries[0]
+    )
+    assert (
+        "has_table_privilege(current_user, 'eom_customer_handoffs', 'UPDATE')"
+        in unready_pool.queries[0]
+    )
+    assert (
+        "has_column_privilege(current_user, 'contacts', 'contact_type', 'UPDATE')"
+        in unready_pool.queries[0]
+    )
+    assert "WHERE runtime_role.rolname = current_user" in unready_pool.queries[0]
+    assert "NOT runtime_role.rolsuper" in unready_pool.queries[0]
+    assert "NOT runtime_role.rolcreaterole" in unready_pool.queries[0]
+    assert "NOT runtime_role.rolcreatedb" in unready_pool.queries[0]
+    assert "NOT runtime_role.rolbypassrls" in unready_pool.queries[0]
+    assert "database_row.datdba = runtime_role.oid" in unready_pool.queries[0]
 
     ready_pool = _Pool(schema_ready=True)
-    monkeypatch.setattr(main_eom, "get_db_pool", lambda: ready_pool)
+    monkeypatch.setattr(main_eom, "get_eom_funnel_db_pool", lambda: ready_pool)
     asyncio.run(main_eom._validate_eom_funnel_startup())
+
+
+def test_eom_funnel_migration_pool_removes_command_timeout(monkeypatch):
+    from atlas_brain.eom_api import funnel_database
+
+    calls: list[dict[str, object]] = []
+    closed: list[bool] = []
+
+    class _Pool:
+        async def close(self):
+            closed.append(True)
+
+    async def create_pool(**kwargs):
+        calls.append(kwargs)
+        return _Pool()
+
+    pool = funnel_database.EOMFunnelDatabasePool()
+    pool._pool = object()
+    pool._dsn = "postgresql://crm.example/atlas"
+    pool._initialized = True
+
+    monkeypatch.setattr(funnel_database.asyncpg, "create_pool", create_pool)
+
+    async def drive():
+        async with pool.migration_pool() as migration_pool:
+            assert isinstance(migration_pool, _Pool)
+
+    asyncio.run(drive())
+
+    assert calls == [
+        {
+            "dsn": "postgresql://crm.example/atlas",
+            "min_size": 1,
+            "max_size": 1,
+            "timeout": 10.0,
+            "command_timeout": None,
+        }
+    ]
+    assert closed == [True]
 
 
 def test_database_config_prefers_connection_string_for_asyncpg_kwargs():
@@ -1319,9 +1459,62 @@ def test_eom_lifespan_rejects_unconfirmed_funnel_before_database_init(monkeypatc
             canonical_crm_database_confirmed=False,
         ),
     )
-    monkeypatch.setattr(main_eom, "funnel_settings", SimpleNamespace(api_enabled=True))
+    monkeypatch.setattr(
+        main_eom,
+        "funnel_settings",
+        SimpleNamespace(api_enabled=True, db_connection_string="postgresql://crm"),
+    )
 
     with pytest.raises(RuntimeError, match="canonical Atlas CRM database"):
+        asyncio.run(drive_lifespan())
+
+    assert events == []
+
+
+def test_eom_lifespan_rejects_enabled_funnel_without_slim_dsn_before_database_init(
+    monkeypatch,
+):
+    from atlas_brain import main_eom
+
+    events: list[str] = []
+
+    async def fail_init_database():
+        events.append("init")
+        raise AssertionError("missing funnel DSN must not initialize the database")
+
+    async def fail_migrations():
+        events.append("migrations")
+        raise AssertionError("missing funnel DSN must not run migrations")
+
+    async def fail_close_database():
+        events.append("close")
+        raise AssertionError("startup rejected before database init")
+
+    async def drive_lifespan():
+        async with main_eom.lifespan(FastAPI()):
+            pass
+
+    monkeypatch.setattr(main_eom, "db_settings", SimpleNamespace(enabled=True))
+    monkeypatch.setattr(main_eom, "init_database", fail_init_database)
+    monkeypatch.setattr(main_eom, "_run_startup_migrations", fail_migrations)
+    monkeypatch.setattr(main_eom, "close_database", fail_close_database)
+    monkeypatch.setattr(main_eom, "validate_receivables_api_config", lambda _config: None)
+    monkeypatch.setattr(main_eom, "validate_eom_funnel_api_config", lambda _config: None)
+    monkeypatch.setattr(
+        main_eom,
+        "eom_profile_settings",
+        SimpleNamespace(
+            run_migrations=True,
+            canonical_crm_database_confirmed=True,
+        ),
+    )
+    monkeypatch.setattr(
+        main_eom,
+        "funnel_settings",
+        SimpleNamespace(api_enabled=True, db_connection_string=""),
+    )
+
+    with pytest.raises(RuntimeError, match="ATLAS_EOM_FUNNEL_DB_CONNECTION_STRING"):
         asyncio.run(drive_lifespan())
 
     assert events == []
@@ -1359,6 +1552,69 @@ def test_eom_lifespan_initializes_database_without_running_migrations(monkeypatc
     asyncio.run(drive_lifespan())
 
     assert events == ["init", "preflight", "inside", "close"]
+
+
+def test_eom_lifespan_closes_receivables_pool_when_funnel_close_fails(monkeypatch):
+    from atlas_brain import main_eom
+
+    events: list[str] = []
+
+    async def init_database():
+        events.append("init-receivables")
+
+    async def init_funnel_database(_dsn: str):
+        events.append("init-funnel")
+
+    async def close_funnel_database():
+        events.append("close-funnel")
+        raise RuntimeError("funnel close failed")
+
+    async def close_database():
+        events.append("close-receivables")
+
+    async def validate_funnel():
+        events.append("preflight")
+
+    async def fail_migrations():
+        raise AssertionError("migrations should stay disabled")
+
+    async def drive_lifespan():
+        async with main_eom.lifespan(FastAPI()):
+            events.append("inside")
+
+    monkeypatch.setattr(main_eom, "db_settings", SimpleNamespace(enabled=True))
+    monkeypatch.setattr(
+        main_eom,
+        "funnel_settings",
+        SimpleNamespace(api_enabled=True, db_connection_string="postgresql://crm"),
+    )
+    monkeypatch.setattr(main_eom, "init_database", init_database)
+    monkeypatch.setattr(main_eom, "init_eom_funnel_database", init_funnel_database)
+    monkeypatch.setattr(main_eom, "close_eom_funnel_database", close_funnel_database)
+    monkeypatch.setattr(main_eom, "close_database", close_database)
+    monkeypatch.setattr(main_eom, "_validate_eom_funnel_startup", validate_funnel)
+    monkeypatch.setattr(main_eom, "_run_startup_migrations", fail_migrations)
+    monkeypatch.setattr(main_eom, "validate_receivables_api_config", lambda _config: None)
+    monkeypatch.setattr(main_eom, "validate_eom_funnel_api_config", lambda _config: None)
+    monkeypatch.setattr(main_eom, "_require_canonical_crm_database_for_funnel", lambda: None)
+    monkeypatch.setattr(
+        main_eom,
+        "_require_eom_funnel_db_connection_for_slim_profile",
+        lambda: None,
+    )
+    monkeypatch.setattr(main_eom.eom_profile_settings, "run_migrations", False)
+
+    with pytest.raises(RuntimeError, match="funnel close failed"):
+        asyncio.run(drive_lifespan())
+
+    assert events == [
+        "init-receivables",
+        "init-funnel",
+        "preflight",
+        "inside",
+        "close-funnel",
+        "close-receivables",
+    ]
 
 
 def test_eom_lifespan_runs_funnel_preflight_after_migrations(monkeypatch):
@@ -1424,7 +1680,7 @@ import os
 from fastapi.testclient import TestClient
 
 from atlas_brain import main_eom
-from atlas_brain.eom_api import receivables
+from atlas_brain.eom_api import funnel, receivables
 
 
 class _ReadyService:
@@ -1433,8 +1689,8 @@ class _ReadyService:
 
 
 receivables.get_receivables_service = lambda: _ReadyService()
-if main_eom.app.dependency_overrides:
-    raise AssertionError("auth dependency must not be overridden")
+if set(main_eom.app.dependency_overrides) != {funnel._crm_dependency}:
+    raise AssertionError("only the funnel CRM dependency may be overridden")
 
 with TestClient(main_eom.app) as client:
     response = client.get(
@@ -1452,7 +1708,10 @@ print(json.dumps({
         main_eom.invoicing_settings.receivables_service_token_sha256
         == os.environ["ATLAS_INVOICING_RECEIVABLES_SERVICE_TOKEN_SHA256"]
     ),
-    "dependency_overrides": len(main_eom.app.dependency_overrides),
+    "dependency_overrides": [
+        dependency.__name__
+        for dependency in main_eom.app.dependency_overrides
+    ],
 }))
 """
     env = _isolated_eom_subprocess_env()
@@ -1483,7 +1742,7 @@ print(json.dumps({
         "body": {"status": "ready"},
         "env_projected_enabled": True,
         "env_projected_digest": True,
-        "dependency_overrides": 0,
+        "dependency_overrides": ["_crm_dependency"],
     }
 
 
@@ -1514,6 +1773,14 @@ async def _close_database():
     return None
 
 
+async def _init_eom_funnel_database(_dsn):
+    return None
+
+
+async def _close_eom_funnel_database():
+    return None
+
+
 async def _run_startup_migrations():
     return None
 
@@ -1526,10 +1793,12 @@ main_eom.db_settings.enabled = True
 main_eom.eom_profile_settings.run_migrations = True
 main_eom.init_database = _init_database
 main_eom.close_database = _close_database
+main_eom.init_eom_funnel_database = _init_eom_funnel_database
+main_eom.close_eom_funnel_database = _close_eom_funnel_database
 main_eom._run_startup_migrations = _run_startup_migrations
 main_eom._validate_eom_funnel_startup = _validate_eom_funnel_startup
-if main_eom.app.dependency_overrides:
-    raise AssertionError("auth dependency must not be overridden")
+if set(main_eom.app.dependency_overrides) != {funnel._crm_dependency}:
+    raise AssertionError("only the funnel CRM dependency should be overridden")
 main_eom.app.dependency_overrides[funnel._crm_dependency] = lambda: _CRM()
 try:
     with TestClient(main_eom.app) as client:
@@ -1568,6 +1837,7 @@ print(json.dumps({
     )
     env["ATLAS_EOM_FUNNEL_API_ENABLED"] = "true"
     env["ATLAS_EOM_FUNNEL_SERVICE_TOKEN_SHA256"] = generated.sha256
+    env["ATLAS_EOM_FUNNEL_DB_CONNECTION_STRING"] = "postgresql://crm.example/atlas"
     env["ATLAS_EOM_CANONICAL_CRM_DATABASE_CONFIRMED"] = "true"
     env["EOM_TEST_CALLER_TOKEN"] = generated.token
 

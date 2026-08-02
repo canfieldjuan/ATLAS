@@ -21,6 +21,8 @@ MIGRATIONS = ROOT / "atlas_brain" / "storage" / "migrations"
 DATABASE_URL_ENV = "ATLAS_MIGRATION_TEST_DATABASE_URL"
 _NOCODB_TEST_PASSWORD = "test-only-nocodb-password"
 _NON_SUPERUSER_TEST_PASSWORD = "test-only-migrator-password"
+_RUNTIME_TEST_PASSWORD = "test-only-runtime-password"
+_DEFAULT_RUNTIME_TEST_ROLE = "atlas_eom_test_runtime"
 
 
 def _database_url_or_skip() -> str:
@@ -85,6 +87,37 @@ async def _provision_handoff_guard(conn) -> None:
     )
 
 
+async def _provision_runtime_login(conn, role_name: str = _DEFAULT_RUNTIME_TEST_ROLE) -> str:
+    """Provide a non-privileged serving login for migration 356 test targets."""
+    await _require_disposable_role_administration(conn)
+    role_ident = _quote_ident(role_name)
+    await conn.execute(
+        f"""
+        DO $$
+        BEGIN
+            IF NOT EXISTS (
+                SELECT 1 FROM pg_roles WHERE rolname = {role_name!r}
+            ) THEN
+                CREATE ROLE {role_ident} LOGIN NOINHERIT
+                    NOSUPERUSER NOCREATEDB NOCREATEROLE NOBYPASSRLS
+                    PASSWORD '{_RUNTIME_TEST_PASSWORD}';
+            END IF;
+        END;
+        $$;
+        """
+    )
+    await conn.execute(
+        f"ALTER ROLE {role_ident} LOGIN NOINHERIT "
+        f"NOSUPERUSER NOCREATEDB NOCREATEROLE NOBYPASSRLS "
+        f"PASSWORD '{_RUNTIME_TEST_PASSWORD}'"
+    )
+    database_name = await conn.fetchval("SELECT current_database()")
+    await conn.execute(
+        f"GRANT CONNECT ON DATABASE {_quote_ident(database_name)} TO {role_ident}"
+    )
+    return role_name
+
+
 async def _prepare_schema(
     conn,
     schema: str,
@@ -116,8 +149,17 @@ async def _prepare_schema(
     )
     if apply_privilege_migration:
         await _provision_nocodb_login(conn)
-        migration_names += ("354_eom_customer_handoff_privileges.sql",)
+        runtime_role = await _provision_runtime_login(conn)
+        migration_names += (
+            "354_eom_customer_handoff_privileges.sql",
+            "356_eom_customer_handoff_runtime_grants.sql",
+        )
     for name in migration_names:
+        if name == "356_eom_customer_handoff_runtime_grants.sql":
+            await conn.execute(
+                "SELECT set_config('atlas.eom_funnel_runtime_role', $1, false)",
+                runtime_role,
+            )
         await conn.execute((MIGRATIONS / name).read_text())
 
 
@@ -705,12 +747,13 @@ async def test_privilege_migration_rolls_back_if_ledger_recording_fails():
         await _require_disposable_role_administration(conn)
 
         await _prepare_schema(conn, schema, apply_privilege_migration=False)
-        runtime_role = await conn.fetchval("SELECT current_user")
-        runtime_ident = _quote_ident(runtime_role)
+        executor_role = await conn.fetchval("SELECT current_user")
+        executor_ident = _quote_ident(executor_role)
+        runtime_role = await _provision_runtime_login(conn)
         await _provision_handoff_guard(conn)
         await _provision_nocodb_login(conn)
         await conn.execute(
-            f"GRANT atlas_eom_handoff_owner TO {runtime_ident} WITH ADMIN OPTION"
+            f"GRANT atlas_eom_handoff_owner TO {executor_ident} WITH ADMIN OPTION"
         )
         await conn.execute(
             """
@@ -781,6 +824,40 @@ async def test_privilege_migration_rolls_back_if_ledger_recording_fails():
             migrations_dir=MIGRATIONS,
             only={"354_eom_customer_handoff_privileges"},
         )
+        assert await conn.fetchval(
+            """
+            SELECT EXISTS (
+                SELECT 1 FROM schema_migrations
+                WHERE name = '354_eom_customer_handoff_privileges'
+            )
+            """
+        )
+        with pytest.raises(
+            asyncpg.exceptions.RaiseError,
+            match="requires atlas.eom_funnel_runtime_role",
+        ):
+            await run_migrations(
+                _SchemaPool(),
+                migrations_dir=MIGRATIONS,
+                only={"356_eom_customer_handoff_runtime_grants"},
+            )
+        assert not await conn.fetchval(
+            """
+            SELECT EXISTS (
+                SELECT 1 FROM schema_migrations
+                WHERE name = '356_eom_customer_handoff_runtime_grants'
+            )
+            """
+        )
+        await conn.execute(
+            "SELECT set_config('atlas.eom_funnel_runtime_role', $1, false)",
+            runtime_role,
+        )
+        await run_migrations(
+            _SchemaPool(),
+            migrations_dir=MIGRATIONS,
+            only={"356_eom_customer_handoff_runtime_grants"},
+        )
 
         assert await conn.fetchval(
             """
@@ -802,7 +879,7 @@ async def test_privilege_migration_rolls_back_if_ledger_recording_fails():
             """
         )
         await conn.execute(
-            f"REVOKE atlas_eom_handoff_owner FROM {runtime_ident} CASCADE"
+            f"REVOKE atlas_eom_handoff_owner FROM {executor_ident} CASCADE"
         )
         assert not await conn.fetchval(
             """
@@ -832,21 +909,41 @@ async def test_privilege_migration_rolls_back_if_ledger_recording_fails():
 @pytest.mark.asyncio
 async def test_privilege_migration_runs_from_a_real_non_superuser_login(monkeypatch):
     """Ownership transfer works without relying on the administrator session."""
+    database_url = _database_url_or_skip()
     from atlas_brain import main
     from atlas_brain.storage.migrations import run_migrations
 
-    database_url = _database_url_or_skip()
     schema = f"atlas_eom_conversion_non_super_{uuid.uuid4().hex}"
     executor_role = f"atlas_eom_migrator_{uuid.uuid4().hex}"
+    runtime_role = f"atlas_eom_runtime_{uuid.uuid4().hex}"
     schema_ident = _quote_ident(schema)
     executor_ident = _quote_ident(executor_role)
+    runtime_ident = _quote_ident(runtime_role)
     conn = await asyncpg.connect(database_url)
     executor_conn = None
+    admin_role = None
+    admin_ident = None
+    admin_had_guard_membership = False
     try:
         await _require_disposable_role_administration(conn)
         await _prepare_schema(conn, schema, apply_privilege_migration=False)
         await _provision_handoff_guard(conn)
         await _provision_nocodb_login(conn)
+        admin_role = await conn.fetchval("SELECT current_user")
+        admin_ident = _quote_ident(admin_role)
+        admin_had_guard_membership = await conn.fetchval(
+            """
+            SELECT EXISTS (
+                SELECT 1
+                FROM pg_auth_members AS membership
+                JOIN pg_roles AS member_role ON member_role.oid = membership.member
+                JOIN pg_roles AS guard_role ON guard_role.oid = membership.roleid
+                WHERE member_role.rolname = current_user
+                  AND guard_role.rolname = 'atlas_eom_handoff_owner'
+                  AND membership.admin_option
+            )
+            """
+        )
 
         database_name = await conn.fetchval("SELECT current_database()")
         await conn.execute(
@@ -854,10 +951,20 @@ async def test_privilege_migration_runs_from_a_real_non_superuser_login(monkeypa
             f"PASSWORD '{_NON_SUPERUSER_TEST_PASSWORD}'"
         )
         await conn.execute(
+            f"CREATE ROLE {runtime_ident} LOGIN NOINHERIT "
+            f"PASSWORD '{_RUNTIME_TEST_PASSWORD}'"
+        )
+        await conn.execute(
             f"GRANT CONNECT ON DATABASE {_quote_ident(database_name)} TO {executor_ident}"
         )
         await conn.execute(
+            f"GRANT CONNECT ON DATABASE {_quote_ident(database_name)} TO {runtime_ident}"
+        )
+        await conn.execute(
             f"GRANT atlas_eom_handoff_owner TO {executor_ident} WITH ADMIN OPTION"
+        )
+        await conn.execute(
+            f"GRANT atlas_eom_handoff_owner TO {admin_ident} WITH ADMIN OPTION"
         )
         await conn.execute(f"ALTER SCHEMA {schema_ident} OWNER TO {executor_ident}")
         table_rows = await conn.fetch(
@@ -891,6 +998,18 @@ async def test_privilege_migration_runs_from_a_real_non_superuser_login(monkeypa
         assert await executor_conn.fetchval(
             "SELECT rolcreaterole FROM pg_roles WHERE rolname = current_user"
         )
+        assert await conn.fetchval(
+            """
+            SELECT rolcanlogin
+               AND NOT rolsuper
+               AND NOT rolcreaterole
+               AND NOT rolcreatedb
+               AND NOT rolbypassrls
+            FROM pg_roles
+            WHERE rolname = $1
+            """,
+            runtime_role,
+        )
 
         class _SchemaPool:
             async def acquire(self):
@@ -903,6 +1022,53 @@ async def test_privilege_migration_runs_from_a_real_non_superuser_login(monkeypa
             _SchemaPool(),
             migrations_dir=MIGRATIONS,
             only={"354_eom_customer_handoff_privileges"},
+        )
+        assert await executor_conn.fetchval(
+            """
+            SELECT EXISTS (
+                SELECT 1 FROM schema_migrations
+                WHERE name = '354_eom_customer_handoff_privileges'
+            )
+            """
+        )
+
+        class _AdminPool:
+            async def acquire(self):
+                return conn
+
+            async def release(self, released):
+                assert released is conn
+
+        await conn.execute(f"SET search_path TO {schema_ident}, public")
+        await conn.execute(f"GRANT USAGE ON SCHEMA {schema_ident} TO {runtime_ident}")
+        await conn.execute(
+            f"GRANT SELECT, UPDATE ON TABLE {schema_ident}.contacts TO {runtime_ident}"
+        )
+        await conn.execute(
+            f"GRANT SELECT ON TABLE {schema_ident}.contact_interactions TO {runtime_ident}"
+        )
+        await conn.execute(
+            "GRANT SELECT, INSERT ON TABLE "
+            f"{schema_ident}.eom_lead_lifecycle_events TO {runtime_ident}"
+        )
+        await conn.execute(
+            "SELECT set_config('atlas.eom_funnel_runtime_role', $1, false)",
+            executor_role,
+        )
+        with pytest.raises(Exception, match="must not be superuser, CREATEROLE"):
+            await run_migrations(
+                _AdminPool(),
+                migrations_dir=MIGRATIONS,
+                only={"356_eom_customer_handoff_runtime_grants"},
+            )
+        await conn.execute(
+            "SELECT set_config('atlas.eom_funnel_runtime_role', $1, false)",
+            runtime_role,
+        )
+        await run_migrations(
+            _AdminPool(),
+            migrations_dir=MIGRATIONS,
+            only={"356_eom_customer_handoff_runtime_grants"},
         )
 
         class _Pool:
@@ -955,8 +1121,8 @@ async def test_privilege_migration_runs_from_a_real_non_superuser_login(monkeypa
 
         verifier_conn = await asyncpg.connect(
             database_url,
-            user=executor_role,
-            password=_NON_SUPERUSER_TEST_PASSWORD,
+            user=runtime_role,
+            password=_RUNTIME_TEST_PASSWORD,
         )
         try:
             await verifier_conn.execute(f"SET search_path TO {schema_ident}, public")
@@ -983,6 +1149,15 @@ async def test_privilege_migration_runs_from_a_real_non_superuser_login(monkeypa
             """,
             f"{schema}.eom_customer_handoffs",
         )
+        assert await conn.fetchval(
+            """
+            SELECT has_table_privilege($1, $2, 'SELECT')
+               AND has_table_privilege($1, $2, 'INSERT')
+               AND has_table_privilege($1, $2, 'UPDATE')
+            """,
+            runtime_role,
+            f"{schema}.eom_customer_handoffs",
+        )
     finally:
         if executor_conn is not None:
             await executor_conn.close()
@@ -991,7 +1166,14 @@ async def test_privilege_migration_runs_from_a_real_non_superuser_login(monkeypa
         await conn.execute(
             f"REVOKE CONNECT ON DATABASE {_quote_ident(database_name)} FROM {executor_ident}"
         )
+        await conn.execute(
+            f"REVOKE CONNECT ON DATABASE {_quote_ident(database_name)} FROM {runtime_ident}"
+        )
         await conn.execute(f"REVOKE atlas_eom_handoff_owner FROM {executor_ident}")
+        await conn.execute(f"REVOKE atlas_eom_handoff_owner FROM {runtime_ident}")
+        if admin_ident is not None and not admin_had_guard_membership:
+            await conn.execute(f"REVOKE atlas_eom_handoff_owner FROM {admin_ident}")
+        await conn.execute(f"DROP ROLE IF EXISTS {runtime_ident}")
         await conn.execute(f"DROP ROLE IF EXISTS {executor_ident}")
         await conn.close()
 
@@ -999,9 +1181,9 @@ async def test_privilege_migration_runs_from_a_real_non_superuser_login(monkeypa
 @pytest.mark.asyncio
 async def test_privilege_migration_satisfies_the_enabled_full_app_startup_guard(monkeypatch):
     """The live preflight query accepts only the protected role arrangement."""
+    database_url = _database_url_or_skip()
     from atlas_brain import main
 
-    database_url = _database_url_or_skip()
     schema = f"atlas_eom_conversion_preflight_{uuid.uuid4().hex}"
     conn = await asyncpg.connect(database_url)
     try:

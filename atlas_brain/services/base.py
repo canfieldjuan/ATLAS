@@ -11,7 +11,38 @@ from abc import ABC
 from pathlib import Path
 from typing import Any, Optional
 
-import torch
+try:
+    import torch
+except ModuleNotFoundError:
+    class _UnavailableCuda:
+        @staticmethod
+        def is_available() -> bool:
+            return False
+
+        @staticmethod
+        def current_device() -> int:
+            raise RuntimeError("torch is not installed")
+
+        @staticmethod
+        def get_device_properties(_idx: int) -> Any:
+            raise RuntimeError("torch is not installed")
+
+        @staticmethod
+        def memory_allocated(_idx: int) -> int:
+            return 0
+
+        @staticmethod
+        def memory_reserved(_idx: int) -> int:
+            return 0
+
+        @staticmethod
+        def empty_cache() -> None:
+            return None
+
+    class _TorchUnavailable:
+        cuda = _UnavailableCuda()
+
+    torch = _TorchUnavailable()
 
 from .protocols import InferenceMetrics
 

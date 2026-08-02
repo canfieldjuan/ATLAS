@@ -13,6 +13,7 @@ async def require_eom_funnel_data_store(
     *,
     database_enabled: bool,
     pool_getter: Callable[[], Any] = get_db_pool,
+    require_slim_runtime_role: bool = False,
 ) -> None:
     """Fail closed if an enabled handoff cannot use the primary CRM store."""
     if not bool(getattr(config, "api_enabled", False)):
@@ -23,11 +24,42 @@ async def require_eom_funnel_data_store(
     pool = pool_getter()
     if not pool.is_initialized:
         raise RuntimeError("EOM funnel requires an initialized Atlas database pool")
-    ready = await pool.fetchval(
+    runtime_role_policy = ""
+    if require_slim_runtime_role:
+        runtime_role_policy = """
+           AND COALESCE((
+               SELECT runtime_role.rolcanlogin
+                  AND NOT runtime_role.rolsuper
+                  AND NOT runtime_role.rolcreaterole
+                  AND NOT runtime_role.rolcreatedb
+                  AND NOT runtime_role.rolbypassrls
+               FROM pg_roles AS runtime_role
+               WHERE runtime_role.rolname = current_user
+           ), FALSE)
+           AND NOT COALESCE((
+               SELECT database_row.datdba = runtime_role.oid
+               FROM pg_database AS database_row
+               JOIN pg_roles AS runtime_role ON runtime_role.rolname = current_user
+               WHERE database_row.datname = current_database()
+           ), FALSE)
         """
+    ready = await pool.fetchval(
+        f"""
         SELECT to_regclass('contacts') IS NOT NULL
            AND to_regclass('eom_lead_lifecycle_events') IS NOT NULL
            AND to_regclass('eom_customer_handoffs') IS NOT NULL
+           AND has_table_privilege(current_user, 'contacts', 'SELECT')
+           AND has_table_privilege(current_user, 'contacts', 'UPDATE')
+           AND has_table_privilege(current_user, 'contact_interactions', 'SELECT')
+           AND has_table_privilege(current_user, 'eom_lead_lifecycle_events', 'SELECT')
+           AND has_table_privilege(current_user, 'eom_lead_lifecycle_events', 'INSERT')
+           AND has_table_privilege(current_user, 'eom_customer_handoffs', 'SELECT')
+           AND has_table_privilege(current_user, 'eom_customer_handoffs', 'INSERT')
+           AND has_table_privilege(current_user, 'eom_customer_handoffs', 'UPDATE')
+           AND has_column_privilege(current_user, 'contacts', 'contact_type', 'UPDATE')
+           AND has_column_privilege(current_user, 'contacts', 'lead_stage', 'UPDATE')
+           AND has_column_privilege(current_user, 'contacts', 'updated_at', 'UPDATE')
+           {runtime_role_policy}
            AND EXISTS (
                SELECT 1
                FROM pg_class AS handoff_table

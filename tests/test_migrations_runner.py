@@ -503,6 +503,44 @@ async def test_marked_migration_records_its_ledger_entry_in_one_transaction(tmp_
 
 
 @pytest.mark.asyncio
+async def test_default_runner_skips_out_of_band_bootstrap_migrations(tmp_path):
+    """Default app startup must not auto-select operator-owned bootstrap SQL."""
+    from atlas_brain.storage.migrations import run_migrations
+
+    (tmp_path / "900_normal.sql").write_text("CREATE TABLE normal_probe (id int);")
+    (tmp_path / "901_bootstrap.sql").write_text(
+        "-- atlas: out-of-band-bootstrap\n"
+        "CREATE TABLE bootstrap_probe (id int);\n"
+    )
+    pool = _SingleConnectionPool(tmp_path)
+
+    await run_migrations(pool, migrations_dir=tmp_path)
+
+    assert any("CREATE TABLE normal_probe" in sql for sql in pool.applied_sql)
+    assert not any("CREATE TABLE bootstrap_probe" in sql for sql in pool.applied_sql)
+
+
+@pytest.mark.asyncio
+async def test_explicit_only_can_run_out_of_band_bootstrap_migrations(tmp_path):
+    """A DBA bootstrap runner can still apply a named out-of-band migration."""
+    from atlas_brain.storage.migrations import run_migrations
+
+    (tmp_path / "901_bootstrap.sql").write_text(
+        "-- atlas: out-of-band-bootstrap\n"
+        "CREATE TABLE bootstrap_probe (id int);\n"
+    )
+    pool = _SingleConnectionPool(tmp_path)
+
+    await run_migrations(
+        pool,
+        migrations_dir=tmp_path,
+        only={"901_bootstrap"},
+    )
+
+    assert any("CREATE TABLE bootstrap_probe" in sql for sql in pool.applied_sql)
+
+
+@pytest.mark.asyncio
 async def test_marked_migration_rejects_concurrently_ddl_before_a_transaction(tmp_path):
     """The opt-in cannot silently break concurrent-index migration safety."""
     from atlas_brain.storage.migrations import run_migrations

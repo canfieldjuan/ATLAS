@@ -108,6 +108,7 @@ async def _record_migration(executor, filename: str) -> None:
 _MIGRATIONS_ADVISORY_LOCK_KEY = 0x41544C41  # "ATLA"
 _MIGRATIONS_LOCK_POLL_SECONDS = 0.25
 _ATOMIC_BOOKKEEPING_MARKER = "-- atlas: atomic-bookkeeping"
+_OUT_OF_BAND_BOOTSTRAP_MARKER = "-- atlas: out-of-band-bootstrap"
 
 
 def _requires_atomic_bookkeeping(sql: str) -> bool:
@@ -120,6 +121,14 @@ def _requires_atomic_bookkeeping(sql: str) -> bool:
     """
     first_line = next((line.strip() for line in sql.splitlines() if line.strip()), "")
     return first_line == _ATOMIC_BOOKKEEPING_MARKER
+
+
+def _requires_out_of_band_bootstrap(sql: str) -> bool:
+    """Return whether default startup migration discovery must skip this file."""
+    return any(
+        line.strip() == _OUT_OF_BAND_BOOTSTRAP_MARKER
+        for line in sql.splitlines()
+    )
 
 
 def _contains_executable_concurrently(sql: str) -> bool:
@@ -429,7 +438,19 @@ async def run_migrations(
                 logger.info("No migration files found")
                 return
 
-            pending = [f for f in migration_files if f.stem not in applied]
+            pending = []
+            for migration_file in migration_files:
+                if migration_file.stem in applied:
+                    continue
+                if only is None and _requires_out_of_band_bootstrap(
+                    migration_file.read_text()
+                ):
+                    logger.info(
+                        "Skipping out-of-band bootstrap migration: %s",
+                        migration_file.name,
+                    )
+                    continue
+                pending.append(migration_file)
 
             if not pending:
                 logger.debug("All %d migrations already applied", len(migration_files))
