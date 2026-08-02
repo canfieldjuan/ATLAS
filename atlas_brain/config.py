@@ -2421,7 +2421,17 @@ class InvoicingConfig(BaseSettings):
     )
     receivables_service_token: str = Field(
         default="",
-        description="Bearer token accepted by the EOM receivables service API",
+        description=(
+            "Deprecated caller-side bearer token value; Atlas API services must "
+            "store only receivables_service_token_sha256"
+        ),
+    )
+    receivables_service_token_sha256: str = Field(
+        default="",
+        description=(
+            "SHA-256 digest of the generated EOM receivables bearer token; "
+            "the raw token must live only on the caller side"
+        ),
     )
     default_payment_terms_days: int = Field(default=30, ge=1, le=365, description="Default days until due")
     default_tax_rate: float = Field(default=0.0, ge=0.0, le=1.0, description="Default tax rate (0.0-1.0)")
