@@ -58,18 +58,22 @@ startup modes in #2255.
   material; raw `ATLAS_INVOICING_RECEIVABLES_SERVICE_TOKEN` fails with one
   operator-facing digest error; missing digest fails with one digest-required
   error; caller raw bearer authentication hashes the presented generated token
-  and compares it to the stored digest; `/api/v1/leads/intake` remains mounted
-  when receivables is enabled with digest-only config.
+  and compares it to the stored digest for both legacy invoice action routes
+  and receivables ledger routes; `/api/v1/leads/intake` remains mounted when
+  receivables is enabled with digest-only config; operator docs define the
+  maintenance-window migration from raw-token deployments.
 - Reachability proof: subprocess imports `atlas_brain.main`, starts
   `TestClient(main.app)`, probes the security metadata endpoint, and inspects
   the full-app route table for `/api/v1/leads/intake`.
 - Affected surfaces: full-app `InvoicingConfig`, legacy
-  `api.invoicing.auth` receivables service-token validation, receivables route
-  bearer authentication, and render/full-app regression tests.
+  `api.invoicing.auth` receivables service-token validation,
+  `api.invoicing.actions` invoice view/send/reminder routes,
+  `api.invoicing.receivables` receivables ledger routes, EOM operator setup
+  docs, and render/full-app regression tests.
 - Risk areas: startup env validation, secret material exposure, legacy/new EOM
   auth contract parity, full-app route mounting, and existing receivables API
   auth behavior.
-- Reviewer rules triggered: R1, R2, R5, R11, R12.
+- Reviewer rules triggered: R1, R2, R3, R5, R11, R12.
 
 ### Boundary-change enumeration
 
@@ -83,7 +87,21 @@ startup modes in #2255.
   `ATLAS_INVOICING_RECEIVABLES_API_ENABLED`.
 - Caller x input shape: generated raw bearer supplied in the HTTP
   `Authorization: Bearer ...` header hashes to the configured digest; raw token
-  material in Atlas env is rejected.
+  material in Atlas env is rejected; missing or malformed bearer receives
+  401/503 instead of an open route.
+- Boundary path/seam: `atlas_brain.api.invoicing.actions` router dependency
+  for invoice view/send/reminder routes.
+- Caller x input shape: callers reach `GET /api/v1/invoicing/{invoice_id}`,
+  `POST /api/v1/invoicing/{invoice_id}/send`, and
+  `POST /api/v1/invoicing/{invoice_id}/send-reminder` only with a generated
+  raw bearer whose digest matches
+  `ATLAS_INVOICING_RECEIVABLES_SERVICE_TOKEN_SHA256`.
+- Boundary path/seam: `atlas_brain.api.invoicing.receivables` router
+  dependency for receivables readiness, open-invoice, allocation, payment,
+  return/void, and deposit-batch routes.
+- Caller x input shape: callers reach `/api/v1/receivables/*` only with the
+  same generated raw bearer digest match plus route-specific actor headers
+  where required.
 
 ### Deployed-config probing
 
@@ -97,15 +115,21 @@ startup modes in #2255.
   `atlas_brain.main` from a clean env snapshot with only the test overrides.
 - Side-effect ordering: startup validation occurs before serving requests; the
   passing startup probe then proves lead-intake remains mounted in the same
-  app instance.
+  app instance. For legacy raw-token deployments, the enforced rollout order is
+  maintenance-window only: disable the receivables API, remove raw Atlas token
+  material, deploy the digest-only code to all Atlas API processes, provision
+  `ATLAS_INVOICING_RECEIVABLES_SERVICE_TOKEN_SHA256`, then re-enable the API
+  after an authenticated readiness probe passes.
 
 ### Files touched
 
+- `CLAUDE.md`
 - `atlas_brain/api/invoicing/auth.py`
 - `atlas_brain/config.py`
 - `plans/PR-EOM-Receivables-Digest-Deadlock.md`
 - `tests/test_eom_render_profile.py`
 - `tests/test_receivables.py`
+- `tests/unit_gate_baseline.txt`
 
 ## Mechanism
 
@@ -134,6 +158,9 @@ the EOM API stack and mounts public lead intake.
 - Full-app subprocess regression tests cover digest-only startup, raw-token
   rejection, missing-digest rejection, and the lead-intake route remaining
   mounted while receivables is enabled.
+- Operator docs cover digest provisioning and the maintenance-window sequence
+  required when old raw-token Atlas processes could overlap with digest-only
+  Atlas processes.
 
 ## Deferred
 
@@ -144,6 +171,16 @@ the EOM API stack and mounts public lead intake.
   subsystem isolation is a separate architectural slice.
 - Removing the deprecated raw token field from the broad `InvoicingConfig`
   settings model after all callers and docs have migrated.
+
+Parking predicate: this validator slice parks hardening outside the full-app
+receivables auth/config deadlock, generated-token digest admission,
+legacy-invoicing caller authentication parity, operator digest provisioning
+instructions, and regressions for those startup/request boundaries.
+
+Parked hardening:
+
+- Startup blast-radius isolation so a future receivables config error cannot
+  prevent unrelated public lead intake from serving.
 
 ## Cold diff reconstruction
 
@@ -159,6 +196,8 @@ the EOM API stack and mounts public lead intake.
 - Changed `tests/test_eom_render_profile.py` to add full-app subprocess probes
   for digest-only startup, raw-token failure, missing-digest failure, and
   lead-intake route reachability while receivables is enabled.
+- Changed `CLAUDE.md` to replace the stale raw-token Atlas setup with
+  generated-token digest provisioning and maintenance-window rollout steps.
 
 Contract match:
 
@@ -173,18 +212,42 @@ isolation remains intentionally deferred.
 
 ## Verification
 
-- `python -m py_compile atlas_brain/config.py atlas_brain/api/invoicing/auth.py tests/test_receivables.py tests/test_eom_render_profile.py`
-- `python -m pytest tests/test_receivables.py::test_enabled_receivables_api_rejects_raw_missing_placeholder_and_bad_digests tests/test_receivables.py::test_receivables_api_is_fail_closed tests/test_eom_render_profile.py::test_full_app_starts_with_receivables_digest_only tests/test_eom_render_profile.py::test_full_app_rejects_raw_receivables_token_with_single_digest_message tests/test_eom_render_profile.py::test_full_app_rejects_enabled_receivables_without_digest_once -q`
-- `python -m pytest tests/test_eom_render_profile.py tests/test_receivables.py -q` — 94 passed, 6 skipped, 1 warning from `torch`/`pynvml`.
+- Existing CI failure log before this follow-up showed one regression:
+  `tests/test_eom_render_profile.py::test_full_app_starts_with_receivables_digest_only`
+  reported `lead_intake_route_mounted=False` while startup, security metadata,
+  enabled projection, and digest projection all succeeded. The same log showed
+  three stale unit-gate baseline entries in
+  `tests/test_reasoning_graph_routing.py`; this follow-up removes those
+  entries from `tests/unit_gate_baseline.txt`.
+- `/tmp/atlas-pr2259-venv/bin/python -m py_compile atlas_brain/config.py atlas_brain/api/invoicing/auth.py tests/test_receivables.py tests/test_eom_render_profile.py`
+- `/tmp/atlas-pr2259-venv/bin/python -m pytest tests/test_eom_render_profile.py::test_route_path_probe_follows_included_router_context -q`
+  — 1 passed.
+- Office PC `/tmp/atlas-pr2259-test` worktree with this follow-up patch:
+  `~/Desktop/Atlas/.venv/bin/python -m pytest tests/test_eom_render_profile.py::test_full_app_starts_with_receivables_digest_only -q`
+  — 1 passed in 35.33s.
+- Office PC `/tmp/atlas-pr2259-test` worktree with this follow-up patch:
+  `~/Desktop/Atlas/.venv/bin/python -m pytest tests/test_receivables.py::test_enabled_receivables_api_rejects_raw_missing_placeholder_and_bad_digests tests/test_receivables.py::test_receivables_api_is_fail_closed tests/test_eom_render_profile.py::test_route_path_probe_follows_included_router_context -q`
+  — 3 passed in 2.69s.
+- Office PC `/tmp/atlas-pr2259-test` worktree with this follow-up patch:
+  `~/Desktop/Atlas/.venv/bin/python -m pytest tests/test_eom_render_profile.py tests/test_receivables.py -q`
+  — 95 passed, 6 skipped in 40.70s.
+- Office PC `/tmp/atlas-pr2259-test` worktree with this follow-up patch:
+  `git diff --check` and
+  `~/Desktop/Atlas/.venv/bin/python -m py_compile atlas_brain/config.py atlas_brain/api/invoicing/auth.py tests/test_receivables.py tests/test_eom_render_profile.py`
+  — exit 0.
+- `python3 scripts/audit_plan_doc.py plans/PR-EOM-Receivables-Digest-Deadlock.md`
+  — OK for required sections and review contract.
 - `git diff --check`
 
 ## Estimated diff size
 
 | File | LOC |
 |---|---:|
+| `CLAUDE.md` | 19 |
 | `atlas_brain/api/invoicing/auth.py` | 53 |
 | `atlas_brain/config.py` | 12 |
-| `plans/PR-EOM-Receivables-Digest-Deadlock.md` | 190 |
-| `tests/test_eom_render_profile.py` | 115 |
+| `plans/PR-EOM-Receivables-Digest-Deadlock.md` | 253 |
+| `tests/test_eom_render_profile.py` | 154 |
 | `tests/test_receivables.py` | 28 |
-| **Total** | **398** |
+| `tests/unit_gate_baseline.txt` | 3 |
+| **Total** | **522** |

@@ -87,6 +87,27 @@ def _sha256_ascii(value: str) -> str:
     return hashlib.sha256(value.encode("ascii")).hexdigest()
 
 
+def _route_paths_for_app_expr(app_expr: str) -> str:
+    return f"""
+def _route_paths(app):
+    paths = []
+
+    def visit(routes, prefix=""):
+        for route in routes:
+            route_path = getattr(route, "path", None)
+            if isinstance(route_path, str):
+                paths.append(f"{{prefix}}{{route_path}}")
+            original_router = getattr(route, "original_router", None)
+            include_context = getattr(route, "include_context", None)
+            route_prefix = getattr(include_context, "prefix", "")
+            if original_router is not None:
+                visit(original_router.routes, f"{{prefix}}{{route_prefix}}")
+
+    visit({app_expr}.routes)
+    return sorted(set(paths))
+"""
+
+
 def _isolated_eom_subprocess_env() -> dict[str, str]:
     env = os.environ.copy()
     for key in list(env):
@@ -106,6 +127,21 @@ def _atlas_subprocess_env() -> dict[str, str]:
         else f"{repo_root}{os.pathsep}{existing_pythonpath}"
     )
     return env
+
+
+def test_route_path_probe_follows_included_router_context():
+    nested_route = SimpleNamespace(path="/leads/intake")
+    included_router = SimpleNamespace(routes=[nested_route])
+    included_route = SimpleNamespace(
+        path=None,
+        original_router=included_router,
+        include_context=SimpleNamespace(prefix="/api/v1"),
+    )
+    namespace: dict[str, object] = {"app": SimpleNamespace(routes=[included_route])}
+
+    exec(_route_paths_for_app_expr("app"), namespace)
+
+    assert namespace["_route_paths"](namespace["app"]) == ["/api/v1/leads/intake"]
 
 
 def test_eom_profile_import_does_not_load_full_api_package():
@@ -1178,7 +1214,8 @@ def test_full_app_starts_with_receivables_digest_only(tmp_path):
     from atlas_brain.eom_api import auth
 
     generated = auth.generate_receivables_service_token()
-    probe = """
+    probe = (
+        """
 import json
 import os
 
@@ -1186,16 +1223,17 @@ from fastapi.testclient import TestClient
 
 from atlas_brain import main
 
+"""
+        + _route_paths_for_app_expr("main.app")
+        + """
+paths = _route_paths(main.app)
 
 with TestClient(main.app) as client:
     response = client.get("/.well-known/security.txt")
 
 print(json.dumps({
     "status_code": response.status_code,
-    "lead_intake_route_mounted": any(
-        getattr(route, "path", "") == "/api/v1/leads/intake"
-        for route in main.app.routes
-    ),
+    "lead_intake_route_mounted": "/api/v1/leads/intake" in paths,
     "env_projected_enabled": main.settings.invoicing.receivables_api_enabled,
     "env_projected_digest": (
         main.settings.invoicing.receivables_service_token_sha256
@@ -1203,6 +1241,7 @@ print(json.dumps({
     ),
 }))
 """
+    )
     env = _atlas_subprocess_env()
     env["ATLAS_INVOICING_RECEIVABLES_API_ENABLED"] = "true"
     env["ATLAS_INVOICING_RECEIVABLES_SERVICE_TOKEN_SHA256"] = generated.sha256
