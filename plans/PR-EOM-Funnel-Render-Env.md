@@ -99,6 +99,13 @@ Slice phase: production hardening
     before database initialization or migration execution.
   - [ ] `tests/test_eom_render_profile.py::test_eom_lifespan_runs_funnel_preflight_after_migrations`
     proves the slim startup preflight runs after migrations and before serving.
+  - [ ] Migration safety disposition: enabled slim startup selects funnel
+    readiness migrations 346/351/353/354/355 only after canonical CRM
+    confirmation; the default rollback path is disabling
+    `ATLAS_EOM_FUNNEL_API_ENABLED` or leaving
+    `ATLAS_EOM_CANONICAL_CRM_DATABASE_CONFIRMED=false`, which keeps the slim
+    profile on the receivables-only migration set and avoids migration 354's
+    privilege changes against the attached EOM database.
 - Reachability proof: `pytest tests/test_eom_render_profile.py::test_eom_profile_reaches_funnel_leads_through_real_app`
   calls the real `atlas_brain.main_eom.app` at `/api/v1/eom-funnel/leads`.
 - Affected surfaces: Render EOM blueprint config, shared EOM funnel readiness,
@@ -106,7 +113,7 @@ Slice phase: production hardening
   path filters, and EOM render profile tests.
 - Risk areas: deployment config, service-auth setup, live enablement drift,
   curated startup migration coverage, datastore privilege invariants.
-- Reviewer rules triggered: R1, R2, R3, R11, R12, R14.
+- Reviewer rules triggered: R1, R2, R3, R4, R11, R12, R14.
 
 ### Boundary-change enumeration
 
@@ -235,7 +242,7 @@ Parked hardening: none.
 | `atlas_brain/eom_api/funnel_readiness.py` | 157 |
 | `atlas_brain/main.py` | 145 |
 | `atlas_brain/main_eom.py` | 73 |
-| `plans/PR-EOM-Funnel-Render-Env.md` | 241 |
+| `plans/PR-EOM-Funnel-Render-Env.md` | 248 |
 | `render.eom.yaml` | 6 |
 | `tests/test_eom_render_profile.py` | 374 |
-| **Total** | **1025** |
+| **Total** | **1032** |
