@@ -11,6 +11,14 @@ material while the legacy invoicing stack still requires it. That deadlock made
 lead intake is mounted by the same app, took down public lead intake when the
 app failed to boot.
 
+Diff-budget override: this slice exceeds the 400 LOC target because the runtime
+auth/config change, operator rollout instructions, full-app startup regression,
+legacy HTTP-boundary auth regressions, plan contract evidence, and the known
+unit-gate baseline shrink must land atomically. Splitting any one of those
+pieces would either leave the production deadlock unfixed, leave operators with
+stale secret instructions, or leave CI/review without proof that the exact
+startup/request boundaries in #2255 are covered.
+
 ### Problem-derived contract
 
 Root cause: the full Atlas app still validates the EOM receivables service API
@@ -124,6 +132,7 @@ startup modes in #2255.
 ### Files touched
 
 - `CLAUDE.md`
+- `HARDENING.md`
 - `atlas_brain/api/invoicing/auth.py`
 - `atlas_brain/config.py`
 - `plans/PR-EOM-Receivables-Digest-Deadlock.md`
@@ -179,8 +188,9 @@ instructions, and regressions for those startup/request boundaries.
 
 Parked hardening:
 
-- Startup blast-radius isolation so a future receivables config error cannot
-  prevent unrelated public lead intake from serving.
+- `HARDENING.md` entry: "Isolate receivables config failures from unrelated
+  public routes" parks startup blast-radius isolation so a future receivables
+  config error cannot prevent unrelated public lead intake from serving.
 
 ## Cold diff reconstruction
 
@@ -198,6 +208,8 @@ Parked hardening:
   lead-intake route reachability while receivables is enabled.
 - Changed `CLAUDE.md` to replace the stale raw-token Atlas setup with
   generated-token digest provisioning and maintenance-window rollout steps.
+- Changed `HARDENING.md` to register the deferred startup blast-radius
+  isolation item named by this plan.
 
 Contract match:
 
@@ -219,35 +231,43 @@ isolation remains intentionally deferred.
   three stale unit-gate baseline entries in
   `tests/test_reasoning_graph_routing.py`; this follow-up removes those
   entries from `tests/unit_gate_baseline.txt`.
-- `/tmp/atlas-pr2259-venv/bin/python -m py_compile atlas_brain/config.py atlas_brain/api/invoicing/auth.py tests/test_receivables.py tests/test_eom_render_profile.py`
+- `python3 -m py_compile atlas_brain/config.py atlas_brain/api/invoicing/auth.py tests/test_receivables.py tests/test_eom_render_profile.py`
+  — exit 0.
 - `/tmp/atlas-pr2259-venv/bin/python -m pytest tests/test_eom_render_profile.py::test_route_path_probe_follows_included_router_context -q`
   — 1 passed.
+- Local `/tmp/atlas-pr2259-venv/bin/python -m pytest tests/test_receivables.py::test_receivables_api_is_fail_closed tests/test_receivables.py::test_legacy_invoicing_route_rejects_well_formed_mismatched_bearer -q`
+  — not runnable in that venv because collection imports `torch`, which is not
+  installed there; rerun on the Office PC worktree below.
 - Office PC `/tmp/atlas-pr2259-test` worktree with this follow-up patch:
+  `~/Desktop/Atlas/.venv/bin/python -m pytest tests/test_receivables.py::test_receivables_api_is_fail_closed tests/test_receivables.py::test_legacy_invoicing_route_rejects_well_formed_mismatched_bearer -q`
+  — 2 passed in 3.87s.
+- Office PC `/tmp/atlas-pr2259-test` worktree with the earlier follow-up patch:
   `~/Desktop/Atlas/.venv/bin/python -m pytest tests/test_eom_render_profile.py::test_full_app_starts_with_receivables_digest_only -q`
   — 1 passed in 35.33s.
-- Office PC `/tmp/atlas-pr2259-test` worktree with this follow-up patch:
+- Office PC `/tmp/atlas-pr2259-test` worktree with the earlier follow-up patch:
   `~/Desktop/Atlas/.venv/bin/python -m pytest tests/test_receivables.py::test_enabled_receivables_api_rejects_raw_missing_placeholder_and_bad_digests tests/test_receivables.py::test_receivables_api_is_fail_closed tests/test_eom_render_profile.py::test_route_path_probe_follows_included_router_context -q`
   — 3 passed in 2.69s.
 - Office PC `/tmp/atlas-pr2259-test` worktree with this follow-up patch:
   `~/Desktop/Atlas/.venv/bin/python -m pytest tests/test_eom_render_profile.py tests/test_receivables.py -q`
-  — 95 passed, 6 skipped in 40.70s.
+  — 96 passed, 6 skipped in 42.10s.
 - Office PC `/tmp/atlas-pr2259-test` worktree with this follow-up patch:
   `git diff --check` and
   `~/Desktop/Atlas/.venv/bin/python -m py_compile atlas_brain/config.py atlas_brain/api/invoicing/auth.py tests/test_receivables.py tests/test_eom_render_profile.py`
   — exit 0.
 - `python3 scripts/audit_plan_doc.py plans/PR-EOM-Receivables-Digest-Deadlock.md`
   — OK for required sections and review contract.
-- `git diff --check`
+- `git diff --check` — exit 0.
 
 ## Estimated diff size
 
 | File | LOC |
 |---|---:|
 | `CLAUDE.md` | 19 |
+| `HARDENING.md` | 19 |
 | `atlas_brain/api/invoicing/auth.py` | 53 |
 | `atlas_brain/config.py` | 12 |
-| `plans/PR-EOM-Receivables-Digest-Deadlock.md` | 253 |
+| `plans/PR-EOM-Receivables-Digest-Deadlock.md` | 273 |
 | `tests/test_eom_render_profile.py` | 154 |
-| `tests/test_receivables.py` | 28 |
+| `tests/test_receivables.py` | 53 |
 | `tests/unit_gate_baseline.txt` | 3 |
-| **Total** | **522** |
+| **Total** | **586** |

@@ -30,6 +30,25 @@ register under `docs/technical-debt/`.
 
 ## Parked Items
 
+## 2026-08-02
+
+### Isolate receivables config failures from unrelated public routes
+- File/location: `atlas_brain/main.py`, EOM/receivables route mounting and
+  startup configuration validation.
+- Description: A receivables API configuration error currently fails full-app
+  startup, which can also prevent unrelated routes such as public lead intake
+  from serving. PR #2259 fixes the immediate digest/raw-token deadlock and
+  proves lead intake stays mounted under valid digest-only config, but it does
+  not introduce subsystem-level startup isolation for future receivables config
+  failures.
+- Why it matters: Future optional-subsystem configuration mistakes should not
+  take down unrelated public entrypoints when the unsafe subsystem can be kept
+  unavailable instead.
+- Effort: M
+- Category: correctness
+- Owner/session: eom/receivables-auth
+- Found during: PR-EOM-Receivables-Digest-Deadlock review
+
 ## 2026-07-26
 
 ### job_lock depth map never deletes released entries

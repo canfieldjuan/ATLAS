@@ -1738,6 +1738,31 @@ async def test_receivables_api_is_fail_closed():
     assert disabled.value.status_code == 503
 
 
+def test_legacy_invoicing_route_rejects_well_formed_mismatched_bearer():
+    configured = eom_receivables_auth.generate_receivables_service_token()
+    presented = eom_receivables_auth.generate_receivables_service_token()
+    while presented.token == configured.token:
+        presented = eom_receivables_auth.generate_receivables_service_token()
+    config = SimpleNamespace(
+        receivables_api_enabled=True,
+        receivables_service_token="",
+        receivables_service_token_sha256=configured.sha256,
+    )
+    app = FastAPI()
+    app.include_router(actions.router)
+    app.dependency_overrides[receivables_auth.get_receivables_api_config] = (
+        lambda: config
+    )
+
+    response = TestClient(app).get(
+        "/invoicing/INV-1",
+        headers={"Authorization": f"Bearer {presented.token}"},
+    )
+
+    assert response.status_code == 401
+    assert response.json()["detail"] == "Invalid bearer token"
+
+
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
     "error_name",
