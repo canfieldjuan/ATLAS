@@ -75,10 +75,17 @@ Slice phase: Workflow/process
   review-thread history exists.
 - Live reconciliation fails when a full PR-body ledger claims clear but does
   not name every scoped Codex review-thread root decision.
+- Live reconciliation correlates resolved-thread dispositions against the same
+  canonical, top-level, unfenced `## AI reconciliation` section used by the
+  PR-body audit.
 - A mechanical verification section fails unless at least one `Command:` line
   includes `Result:` and `Environment:`.
 - Mechanical verification rejects placeholder commands/results and environments
   outside `local`, `Office PC`, or `CI`.
+- Mechanical verification parses `Command`, `Result`, and `Environment` as
+  explicit delimited fields and rejects missing or duplicate fields.
+- Unit-gate test ownership for `scripts/audit_ai_reconciliation.py` includes
+  the direct caller suites that import or load its parsing contract.
 - `Docs-only: true` and Dependabot body exemptions keep their existing behavior.
 - The wrappers run on hosts with `python3` but no `python`.
 
@@ -99,6 +106,13 @@ body file is supplied, except for the existing Dependabot body exemption.
 `scripts/check_ai_reconciliation_live.py` rejects stale `no-findings` when
 resolved Codex review-thread history proves findings existed, and it rejects a
 clear full-body ledger that omits any scoped Codex review-thread title.
+The live correlator now derives disposition roots from the canonical PR-body
+section parser so indented or fenced heading-like examples cannot satisfy a
+different ledger than the PR-body audit validates.
+
+`scripts/audit_pr_body.py` parses mechanical verification command bullets as
+delimited fields, so command text cannot satisfy a missing `Result:` field and
+duplicate labels fail closed.
 
 `scripts/local_pr_review.sh`, `scripts/open_pr.sh`, `scripts/push_pr.sh`,
 `scripts/pre_push_audit.sh`, and `extracted/_shared/scripts/check_ascii_python.sh`
@@ -106,6 +120,9 @@ use `${PYTHON:-python3}` so the mechanical path is not blocked on a missing
 `python` shim. `scripts/select_impacted_tests.py` keeps the shared ASCII checker
 owned by `tests/test_pre_push_audit.py`, avoiding an unrelated full-suite
 escalation for this local-gate wrapper change.
+The unit selector also keeps reconciliation parser changes enrolled with
+`tests/test_audit_pr_body.py` and `tests/test_check_ai_reconciliation_live.py`,
+not only the parser's direct test file.
 
 ## Intentional
 
@@ -123,7 +140,8 @@ escalation for this local-gate wrapper change.
 ## Verification
 
 - `python3 -m py_compile scripts/audit_ai_reconciliation.py scripts/audit_pr_body.py scripts/check_ai_reconciliation_live.py scripts/select_impacted_tests.py` -- passed locally.
-- `/tmp/atlas-pr2259-venv/bin/python -m pytest tests/test_audit_ai_reconciliation.py tests/test_audit_pr_body.py tests/test_local_pr_review.py tests/test_open_pr_wrapper.py tests/test_push_pr_wrapper.py tests/test_check_ai_reconciliation_live.py tests/test_pre_push_audit.py tests/test_select_impacted_tests.py -q` -- passed locally, 274 passed.
+- `/tmp/atlas-pr2259-venv/bin/python -m pytest tests/test_check_ai_reconciliation_live.py tests/test_audit_pr_body.py tests/test_select_impacted_tests.py -q` -- passed locally, 190 passed.
+- `/tmp/atlas-pr2259-venv/bin/python -m pytest tests/test_audit_ai_reconciliation.py tests/test_audit_pr_body.py tests/test_local_pr_review.py tests/test_open_pr_wrapper.py tests/test_push_pr_wrapper.py tests/test_check_ai_reconciliation_live.py tests/test_pre_push_audit.py tests/test_select_impacted_tests.py -q` -- passed locally, 277 passed.
 - `python3 scripts/maturity_sweep.py scripts --tests-root tests --baseline tests/maturity_sweep/baseline_scripts.json --min-score 8 --sensitive-glob 'scripts/**'` -- passed locally after reducing `scripts/audit_ai_reconciliation.py` back under its ratchet.
 - `bash scripts/local_pr_review.sh --current-pr-body-file <body>` -- passed locally.
 
@@ -131,4 +149,4 @@ escalation for this local-gate wrapper change.
 
 | Area | Estimated LOC |
 |---|---:|
-| Total | 1183 |
+| Total | 1305 |

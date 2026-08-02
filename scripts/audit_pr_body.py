@@ -58,15 +58,11 @@ REQUIRED_SECTIONS = (
 )
 DOCS_ONLY_RE = re.compile(r"^Docs-only:\s*true\s*$", re.IGNORECASE)
 COMMAND_PREFIX_RE = re.compile(r"^\s*[-*]\s+command\s*:\s*\S", re.IGNORECASE)
-COMMAND_FIELD_RE = re.compile(
-    r"^\s*[-*]\s+command\s*:\s*(?P<command>.*?)(?=\s+-\s+result\s*:|\s+-\s+(?:environment|env)\s*:|$)",
+MECHANICAL_FIELD_RE = re.compile(
+    r"(?P<prefix>^\s*[-*]\s+|\s+-\s+)"
+    r"(?P<label>command|result|environment|env)\s*:",
     re.IGNORECASE,
 )
-RESULT_FIELD_RE = re.compile(
-    r"\bresult\s*:\s*(?P<result>.+?)(?=\s+-\s+(?:environment|env)\s*:|$)",
-    re.IGNORECASE,
-)
-ENV_FIELD_RE = re.compile(r"\b(?:environment|env)\s*:\s*(?P<env>.+?)\s*$", re.IGNORECASE)
 FIELD_LABEL_RE = re.compile(r"^(?:result|environment|env)\s*:", re.IGNORECASE)
 SKIPPED_PREFIX_RE = re.compile(r"^\s*[-*]\s+skipped(?:\s+checks?)?\s*:\s*\S", re.IGNORECASE)
 REASON_FIELD_RE = re.compile(r"\breason\s*:\s*\S", re.IGNORECASE)
@@ -219,6 +215,25 @@ def section_body_lines(lines: list[str], title: str) -> list[str] | None:
     return lines[start:end]
 
 
+def mechanical_command_fields(raw_line: str) -> tuple[dict[str, str], set[str]]:
+    """Parse a mechanical-verification command bullet into delimited fields."""
+
+    matches = list(MECHANICAL_FIELD_RE.finditer(raw_line))
+    fields: dict[str, str] = {}
+    duplicates: set[str] = set()
+    for index, match in enumerate(matches):
+        label = match.group("label").lower()
+        if label == "env":
+            label = "environment"
+        next_start = matches[index + 1].start() if index + 1 < len(matches) else len(raw_line)
+        value = raw_line[match.end():next_start].strip()
+        if label in fields:
+            duplicates.add(label)
+        else:
+            fields[label] = value
+    return fields, duplicates
+
+
 def mechanical_verification_errors(lines: list[str]) -> list[str]:
     """Return failures in the PR body's Mechanical verification section."""
 
@@ -232,15 +247,18 @@ def mechanical_verification_errors(lines: list[str]) -> list[str]:
         if not line:
             continue
         if COMMAND_PREFIX_RE.match(raw_line):
-            command_match = COMMAND_FIELD_RE.search(raw_line)
-            result_match = RESULT_FIELD_RE.search(raw_line)
-            env_match = ENV_FIELD_RE.search(raw_line)
-            if command_match is None:
+            fields, duplicates = mechanical_command_fields(raw_line)
+            if duplicates:
+                errors.append(
+                    "mechanical verification command has duplicate fields; "
+                    "use each of Command, Result, and Environment once"
+                )
+            if "command" not in fields:
                 errors.append(
                     "mechanical verification command is missing 'Command: <actual command>'"
                 )
             else:
-                command = command_match.group("command").strip()
+                command = fields["command"].strip()
                 if (
                     not command
                     or PLACEHOLDER_VALUE_RE.fullmatch(command)
@@ -250,24 +268,24 @@ def mechanical_verification_errors(lines: list[str]) -> list[str]:
                         "mechanical verification command has invalid Command; "
                         "name the actual command that ran"
                     )
-            if result_match is None:
+            if "result" not in fields:
                 errors.append(
                     "mechanical verification command is missing 'Result: <outcome>'"
                 )
             else:
-                result = result_match.group("result").strip()
+                result = fields["result"].strip()
                 if PLACEHOLDER_VALUE_RE.fullmatch(result) or not VALID_RESULT_RE.fullmatch(result):
                     errors.append(
                         "mechanical verification command has invalid Result; "
                         "use pass/fail/skip wording or counts"
                     )
-            if env_match is None:
+            if "environment" not in fields:
                 errors.append(
                     "mechanical verification command is missing "
                     "'Environment: <local|Office PC|CI>'"
                 )
             else:
-                env = env_match.group("env").strip().lower()
+                env = fields["environment"].strip().lower()
                 if PLACEHOLDER_VALUE_RE.fullmatch(env) or env not in VALID_ENVIRONMENTS:
                     errors.append(
                         "mechanical verification command has invalid Environment; "

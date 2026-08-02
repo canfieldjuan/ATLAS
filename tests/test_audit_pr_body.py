@@ -474,6 +474,33 @@ def test_mechanical_verification_requires_result_and_environment(tmp_path: Path)
     assert any("missing 'Environment:" in failure for failure in failures)
 
 
+def test_mechanical_verification_requires_result_field_delimiter(tmp_path: Path) -> None:
+    root = _write_plan(tmp_path)
+    body = _valid_body().replace(
+        "- Command: pytest tests/test_audit_pr_body.py - Result: passed - Environment: local",
+        "- Command: echo result: passed - Environment: local",
+    )
+
+    failures = audit_pr_body(body, root=root)
+
+    assert any("missing 'Result:" in failure for failure in failures)
+
+
+def test_mechanical_verification_rejects_duplicate_fields(tmp_path: Path) -> None:
+    root = _write_plan(tmp_path)
+    body = _valid_body().replace(
+        "- Command: pytest tests/test_audit_pr_body.py - Result: passed - Environment: local",
+        (
+            "- Command: pytest tests/test_audit_pr_body.py "
+            "- Result: passed - Result: passed - Environment: local"
+        ),
+    )
+
+    failures = audit_pr_body(body, root=root)
+
+    assert any("duplicate fields" in failure for failure in failures)
+
+
 def test_mechanical_verification_rejects_placeholders(tmp_path: Path) -> None:
     root = _write_plan(tmp_path)
     body = _valid_body().replace(

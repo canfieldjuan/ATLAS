@@ -177,11 +177,12 @@ def _load_pr_body_audit():
 def classify_body(body: str) -> str:
     """Return 'absent' | 'acknowledges_open' | 'claims_clear' | 'unmarked'.
 
-    Uses the Phase-2 section extractor + markers, so "what counts as a resolved
-    record" stays defined in exactly one place.
+    Uses the canonical PR-body section selection plus Phase-2 markers, so
+    "what counts as a resolved record" stays defined by the same top-level,
+    unfenced section shape as the PR-body contract.
     """
     p2 = _load_phase2()
-    section = p2.extract_section(body)
+    section = canonical_reconciliation_section(body)
     if section is None:
         return "absent"
     if p2.UNRESOLVED_RE.search(section):
@@ -195,7 +196,7 @@ def body_uses_no_findings(body: str) -> bool:
     """Return true when the reconciliation record claims no findings existed."""
 
     p2 = _load_phase2()
-    section = p2.extract_section(body)
+    section = canonical_reconciliation_section(body)
     if section is None:
         return False
     return any(
@@ -215,11 +216,28 @@ def _thread_root_decision(thread_summary: dict) -> str:
     return title or snippet
 
 
+def canonical_reconciliation_section(body: str) -> str | None:
+    """Return the canonical top-level, unfenced AI reconciliation section.
+
+    The PR-body contract intentionally ignores fenced or indented heading-like
+    examples. The live history correlator must use that same section selection
+    or a non-canonical heading can satisfy live correlation while the body audit
+    validates a different record.
+    """
+
+    audit = _load_pr_body_audit()
+    lines = audit.unfenced_lines(body)
+    section_lines = audit.section_body_lines(lines, "AI reconciliation")
+    if section_lines is None:
+        return None
+    return "## AI reconciliation\n" + "\n".join(section_lines)
+
+
 def reconciliation_disposition_roots(body: str) -> list[str]:
     """Return normalized finding/root-decision names from structured dispositions."""
 
     p2 = _load_phase2()
-    section = p2.extract_section(body)
+    section = canonical_reconciliation_section(body)
     if section is None:
         return []
     roots: list[str] = []

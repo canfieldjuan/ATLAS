@@ -79,6 +79,8 @@ EXPLICIT_TEST_OWNERS: dict[str, tuple[str, ...]] = {
     ),
     "scripts/audit_ai_reconciliation.py": (
         "tests/test_audit_ai_reconciliation.py",
+        "tests/test_audit_pr_body.py",
+        "tests/test_check_ai_reconciliation_live.py",
     ),
     "scripts/audit_pr_body.py": (
         "tests/test_audit_pr_body.py",

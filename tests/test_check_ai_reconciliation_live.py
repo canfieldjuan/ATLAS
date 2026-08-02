@@ -383,6 +383,32 @@ def test_clear_body_passes_when_each_resolved_codex_thread_is_named():
     assert any("no open scoped Codex review threads remain" in msg for msg in msgs)
 
 
+def test_thread_dispositions_use_canonical_pr_body_section():
+    c = load_check()
+    body = "\n".join(
+        [
+            "    ## AI reconciliation",
+            "- Correlate only the canonical reconciliation ledger -- fixed-in: fake.py",
+            "## AI reconciliation",
+            "- AI findings reviewed: Yes",
+            "- All fixed or waived: Yes",
+            "- Some other finding -- fixed-in: tests/test_check_ai_reconciliation_live.py",
+        ]
+    )
+    nodes = [
+        thread(
+            resolved=True,
+            body="Correlate only the canonical reconciliation ledger R2/R13 (BLOCKER) details",
+        )
+    ]
+
+    code, msgs = c.evaluate(nodes, body, BOTS)
+
+    assert code == 1
+    assert any("missing dispositions" in msg for msg in msgs)
+    assert any("Correlate only the canonical reconciliation ledger" in msg for msg in msgs)
+
+
 def test_missing_current_head_codex_review_passes_when_threads_are_clear():
     c = load_check()
     code, msgs = c.evaluate(
