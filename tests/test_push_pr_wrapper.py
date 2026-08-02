@@ -9,6 +9,7 @@ from shutil import copy2, which
 REPO_ROOT = Path(__file__).resolve().parents[1]
 SCRIPT = REPO_ROOT / "scripts" / "push_pr.sh"
 AUDIT_SCRIPT = REPO_ROOT / "scripts" / "audit_pr_body.py"
+AI_RECONCILIATION_SCRIPT = REPO_ROOT / "scripts" / "audit_ai_reconciliation.py"
 CHANGE_POLICY_SCRIPT = REPO_ROOT / "scripts" / "_pr_change_policy.py"
 
 
@@ -319,6 +320,7 @@ def _write_fixture_repo(tmp_path: Path) -> Path:
     (repo / "scripts").mkdir(parents=True)
     copy2(SCRIPT, repo / "scripts" / "push_pr.sh")
     copy2(AUDIT_SCRIPT, repo / "scripts" / "audit_pr_body.py")
+    copy2(AI_RECONCILIATION_SCRIPT, repo / "scripts" / "audit_ai_reconciliation.py")
     copy2(CHANGE_POLICY_SCRIPT, repo / "scripts" / "_pr_change_policy.py")
     subprocess.run(["git", "init"], cwd=repo, check=True, capture_output=True, text=True)
     (repo / "README.md").write_text("base\n", encoding="utf-8")
@@ -384,6 +386,9 @@ def _valid_body() -> str:
         "## Intentional",
         "- a trade-off",
         "",
+        "## AI reconciliation",
+        "- no-findings",
+        "",
         "## Deferred",
         "- a follow-up",
         "",
@@ -397,6 +402,9 @@ def _valid_body() -> str:
         "",
         "## Verification",
         "- pytest passed",
+        "",
+        "## Mechanical verification",
+        "- Command: bash scripts/local_pr_review.sh --current-pr-body-file body.md - Result: passed - Environment: local",
         "",
         "## Diff size",
         "2 files, +10 / -2",

@@ -213,6 +213,15 @@ Ownership lane: <canonical-lowercase-lane>
 ## Intentional
 - ...
 
+## AI reconciliation
+- no-findings
+  (or: `- <finding/root decision> -- fixed-in: <commit/file/test>`)
+  (or: `- <finding/root decision> -- waived-duplicate: <canonical finding>`)
+  (or: `- <finding/root decision> -- waived-out-of-scope: <reason/tracking item>`)
+  (or: `- <finding/root decision> -- waived-speculative: <why no concrete failure path>`)
+  (or: `- <finding/root decision> -- waived-nit: <why skip-worthy>`)
+  (or: `- <finding/root decision> -- not-applicable: <code/doc citation>`)
+
 ## Deferred
 - ...
 
@@ -226,6 +235,10 @@ Ownership lane: <canonical-lowercase-lane>
 
 ## Verification
 - ...
+
+## Mechanical verification
+- Command: <exact command> - Result: <pass/fail/skip count> - Environment: <local|Office PC|CI>
+- Skipped: <check name> - Reason: <why skipped>
 
 ## Diff size
 N files, +X / -Y
@@ -1299,6 +1312,11 @@ style preferences, exhaustive whole-repo sweeps, or every possible future edge
 case. Park those as waivers or follow-up issues unless the PR's changed code
 creates the failure path.
 
+Codex files at most one finding per root defect class / root decision. If a
+later observation is another instance of the same decision, add it to the
+existing finding or mark it `WAIVE_DUPLICATE`; do not create a parallel thread
+that forces the builder to reconcile the same defect twice.
+
 ### 4b. Finding dispositions
 
 Use these dispositions when reconciling Codex threads:
@@ -1323,7 +1341,18 @@ policy we expect Codex comments to follow.
 
 ### 4c. Reconciliation
 
-Every open Codex thread is either fixed or waived with a reason in the PR body.
+Every open Codex thread is either fixed or waived with a structured disposition
+in the PR body's `## AI reconciliation` section. Use `no-findings` only when no
+automated-review findings exist. Otherwise each bullet names the finding/root
+decision and exactly one of:
+
+- `fixed-in: <commit/file/test>`
+- `waived-duplicate: <canonical finding/root decision>`
+- `waived-out-of-scope: <reason/tracking item>`
+- `waived-speculative: <why no concrete failure path>`
+- `waived-nit: <why skip-worthy>`
+- `not-applicable: <code/doc citation>`
+
 `live-reconciliation` remains the machine gate for unresolved Codex threads and
 for stale "all fixed/waived" claims. Do not auto-apply every Codex comment: fix
 confirmed in-scope findings, group duplicates, waive out-of-scope hardening, and

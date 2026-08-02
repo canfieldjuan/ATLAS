@@ -34,6 +34,9 @@ def _valid_body(plan: str = "plans/PR-Example.md") -> str:
         "## Intentional",
         "- a trade-off",
         "",
+        "## AI reconciliation",
+        "- no-findings",
+        "",
         "## Deferred",
         "- a follow-up",
         "",
@@ -47,6 +50,9 @@ def _valid_body(plan: str = "plans/PR-Example.md") -> str:
         "",
         "## Verification",
         "- pytest passed",
+        "",
+        "## Mechanical verification",
+        "- Command: pytest tests/test_audit_pr_body.py - Result: passed - Environment: local",
         "",
         "## Diff size",
         "2 files, +10 / -2",
@@ -117,6 +123,9 @@ def test_missing_one_paragraph_why_fails(tmp_path: Path) -> None:
         "## Intentional",
         "- a trade-off",
         "",
+        "## AI reconciliation",
+        "- no-findings",
+        "",
         "## Deferred",
         "- a follow-up",
         "",
@@ -128,6 +137,9 @@ def test_missing_one_paragraph_why_fails(tmp_path: Path) -> None:
         "",
         "## Verification",
         "- pytest passed",
+        "",
+        "## Mechanical verification",
+        "- Command: pytest tests/test_audit_pr_body.py - Result: passed - Environment: local",
         "",
         "## Diff size",
         "2 files, +10 / -2",
@@ -202,6 +214,24 @@ def test_fenced_example_cannot_supply_body_contract_structure(
 
     assert any("missing canonical 'Slice phase" in failure for failure in failures)
     assert "missing required section: ## Intentional" in failures
+
+
+def test_indented_ai_reconciliation_lookalike_cannot_supply_attestation(
+    tmp_path: Path,
+) -> None:
+    root = _write_plan(tmp_path)
+    body = _valid_body().replace(
+        "## AI reconciliation\n- no-findings",
+        "    ## AI reconciliation\n"
+        "    - no-findings\n"
+        "\n"
+        "## AI reconciliation\n"
+        "- bogus",
+    )
+
+    failures = audit_pr_body(body, root=root)
+
+    assert any("AI reconciliation" in failure and "exactly one" in failure for failure in failures)
 
 
 @pytest.mark.parametrize("fence", ("`", "~"))
@@ -381,6 +411,9 @@ def test_out_of_order_sections_fail(tmp_path: Path) -> None:
         "## Intentional",
         "- a trade-off",
         "",
+        "## AI reconciliation",
+        "- no-findings",
+        "",
         "## Parked hardening",
         "None.",
         "",
@@ -390,6 +423,9 @@ def test_out_of_order_sections_fail(tmp_path: Path) -> None:
         "## Verification",
         "- pytest passed",
         "",
+        "## Mechanical verification",
+        "- Command: pytest tests/test_audit_pr_body.py - Result: passed - Environment: local",
+        "",
         "## Diff size",
         "2 files, +10 / -2",
     ])
@@ -397,6 +433,120 @@ def test_out_of_order_sections_fail(tmp_path: Path) -> None:
     failures = audit_pr_body(body, root=root)
 
     assert any("out of order" in failure for failure in failures)
+
+
+def test_missing_mechanical_verification_section_fails(tmp_path: Path) -> None:
+    root = _write_plan(tmp_path)
+    body = _valid_body().replace(
+        "## Mechanical verification\n"
+        "- Command: pytest tests/test_audit_pr_body.py - Result: passed - Environment: local\n\n",
+        "",
+    )
+
+    failures = audit_pr_body(body, root=root)
+
+    assert "missing required section: ## Mechanical verification" in failures
+
+
+def test_ai_reconciliation_section_must_be_structured(tmp_path: Path) -> None:
+    root = _write_plan(tmp_path)
+    body = _valid_body().replace(
+        "## AI reconciliation\n- no-findings",
+        "## AI reconciliation\n- fixed review comments",
+    )
+
+    failures = audit_pr_body(body, root=root)
+
+    assert any("AI reconciliation:" in failure for failure in failures)
+    assert any("allowed disposition" in failure for failure in failures)
+
+
+def test_mechanical_verification_requires_result_and_environment(tmp_path: Path) -> None:
+    root = _write_plan(tmp_path)
+    body = _valid_body().replace(
+        "- Command: pytest tests/test_audit_pr_body.py - Result: passed - Environment: local",
+        "- Command: pytest tests/test_audit_pr_body.py",
+    )
+
+    failures = audit_pr_body(body, root=root)
+
+    assert any("missing 'Result:" in failure for failure in failures)
+    assert any("missing 'Environment:" in failure for failure in failures)
+
+
+def test_mechanical_verification_rejects_placeholders(tmp_path: Path) -> None:
+    root = _write_plan(tmp_path)
+    body = _valid_body().replace(
+        "- Command: pytest tests/test_audit_pr_body.py - Result: passed - Environment: local",
+        "- Command: echo did-not-run - Result: TBD - Environment: nowhere",
+    )
+
+    failures = audit_pr_body(body, root=root)
+
+    assert any("invalid Result" in failure for failure in failures)
+    assert any("invalid Environment" in failure for failure in failures)
+
+
+@pytest.mark.parametrize(
+    "replacement",
+    (
+        "- Command: TBD - Result: passed - Environment: local",
+        "- Command: Result: passed - Environment: local",
+    ),
+)
+def test_mechanical_verification_rejects_placeholder_command_value(
+    tmp_path: Path, replacement: str
+) -> None:
+    root = _write_plan(tmp_path)
+    body = _valid_body().replace(
+        "- Command: pytest tests/test_audit_pr_body.py - Result: passed - Environment: local",
+        replacement,
+    )
+
+    failures = audit_pr_body(body, root=root)
+
+    assert any("invalid Command" in failure for failure in failures)
+
+
+def test_mechanical_verification_accepts_documented_environments(tmp_path: Path) -> None:
+    root = _write_plan(tmp_path)
+    body = _valid_body().replace(
+        "- Command: pytest tests/test_audit_pr_body.py - Result: passed - Environment: local",
+        "\n".join([
+            "- Command: pytest tests/test_audit_pr_body.py - Result: 1 passed - Environment: local",
+            "- Command: pytest tests/test_audit_pr_body.py - Result: passed - Environment: Office PC",
+            "- Command: pytest tests/test_audit_pr_body.py - Result: skipped - Environment: CI",
+        ]),
+    )
+
+    assert audit_pr_body(body, root=root) == []
+
+
+def test_mechanical_verification_requires_executed_command(tmp_path: Path) -> None:
+    root = _write_plan(tmp_path)
+    body = _valid_body().replace(
+        "- Command: pytest tests/test_audit_pr_body.py - Result: passed - Environment: local",
+        "- Skipped: Office PC broad suite - Reason: not needed for docs-only process check",
+    )
+
+    failures = audit_pr_body(body, root=root)
+
+    assert any("must list at least one executed 'Command:'" in failure for failure in failures)
+
+
+def test_mechanical_verification_skipped_check_requires_reason(tmp_path: Path) -> None:
+    root = _write_plan(tmp_path)
+    body = _valid_body().replace(
+        "## Mechanical verification\n"
+        "- Command: pytest tests/test_audit_pr_body.py - Result: passed - Environment: local",
+        "## Mechanical verification\n"
+        "- Command: pytest tests/test_audit_pr_body.py - Result: passed - Environment: local\n"
+        "- Skipped: Office PC broad suite",
+    )
+
+    failures = audit_pr_body(body, root=root)
+
+    assert any("skipped check is missing 'Reason:" in failure for failure in failures)
 
 
 def test_extra_sections_between_required_ones_pass(tmp_path: Path) -> None:

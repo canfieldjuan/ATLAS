@@ -451,7 +451,11 @@ out-of-scope hardening, NIT-only, or speculative without a concrete failure
 path, and the PR body records that reason.
 
 The hard rule: **LGTM or merge readiness requires every Codex thread fixed or
-explicitly waived with a reason recorded in the PR body.** `live-reconciliation`
+explicitly waived with a structured disposition recorded in the PR body's
+`## AI reconciliation` section.** Use `no-findings` only when there are no
+automated-review findings. Otherwise every finding/root decision uses exactly
+one disposition: `fixed-in`, `waived-duplicate`, `waived-out-of-scope`,
+`waived-speculative`, `waived-nit`, or `not-applicable`. `live-reconciliation`
 is the machine check that prevents a stale "all fixed/waived" claim while
 threads remain open.
 

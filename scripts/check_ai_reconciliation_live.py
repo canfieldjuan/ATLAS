@@ -44,6 +44,8 @@ _DEFAULT_BOTS = ("chatgpt-codex-connector", "chatgpt-codex-connector[bot]")
 _CLEAN_CODEX_REVIEW_TEXT = "didn't find any major issues"
 _DEFAULT_CODEX_REVIEW_GRACE_SECONDS = 300
 _REVIEWED_COMMIT_RE = re.compile(r"\*\*Reviewed commit:\*\*\s*`(?P<sha>[0-9a-f]{10,40})`", re.IGNORECASE)
+_REVIEW_TITLE_STOP_RE = re.compile(r"\s+R\d+(?:/R\d+)*\s*\(")
+_NON_ALNUM_RE = re.compile(r"[^a-z0-9]+")
 _LEGACY_BOT_ALIASES = frozenset(
     {
         "bot",
@@ -189,6 +191,74 @@ def classify_body(body: str) -> str:
     return "unmarked"
 
 
+def body_uses_no_findings(body: str) -> bool:
+    """Return true when the reconciliation record claims no findings existed."""
+
+    p2 = _load_phase2()
+    section = p2.extract_section(body)
+    if section is None:
+        return False
+    return any(
+        p2.NO_FINDINGS_RE.fullmatch(line.strip())
+        for line in section.splitlines()
+        if line.strip()
+    )
+
+
+def _normalized_decision(text: str) -> str:
+    return " ".join(_NON_ALNUM_RE.sub(" ", text.lower()).split())
+
+
+def _thread_root_decision(thread_summary: dict) -> str:
+    snippet = str(thread_summary.get("snippet") or "").strip()
+    title = _REVIEW_TITLE_STOP_RE.split(snippet, 1)[0].strip()
+    return title or snippet
+
+
+def reconciliation_disposition_roots(body: str) -> list[str]:
+    """Return normalized finding/root-decision names from structured dispositions."""
+
+    p2 = _load_phase2()
+    section = p2.extract_section(body)
+    if section is None:
+        return []
+    roots: list[str] = []
+    for raw_line in section.splitlines():
+        bullet = p2.BULLET_RE.match(raw_line)
+        if bullet is None:
+            continue
+        item = bullet.group("body").strip()
+        tokens = list(p2.DISPOSITION_TOKEN_RE.finditer(item))
+        if len(tokens) != 1:
+            continue
+        root = item[: tokens[0].start()].strip()
+        root = p2.FINDING_SEPARATOR_RE.sub(" ", root).strip(" :-–—")
+        normalized = _normalized_decision(root)
+        if normalized:
+            roots.append(normalized)
+    return roots
+
+
+def missing_thread_dispositions(
+    thread_summaries: Sequence[dict],
+    body: str,
+) -> list[dict]:
+    """Return bot-thread summaries not named by any structured disposition."""
+
+    roots = reconciliation_disposition_roots(body)
+    missing: list[dict] = []
+    for summary in thread_summaries:
+        decision = _thread_root_decision(summary)
+        normalized = _normalized_decision(decision)
+        if not normalized:
+            continue
+        if not any(normalized in root or root in normalized for root in roots):
+            copy = dict(summary)
+            copy["decision"] = decision
+            missing.append(copy)
+    return missing
+
+
 def is_docs_only_body(body: str) -> bool:
     """Return true when the PR body uses the explicit docs-only exemption."""
 
@@ -266,23 +336,40 @@ def open_bot_threads(nodes: Sequence[dict], bot_logins: Sequence[str]) -> list[d
     for node in nodes or []:
         if node.get("isResolved"):
             continue
-        comments = ((node.get("comments") or {}).get("nodes")) or []
-        author = ""
-        snippet = ""
-        if comments:
-            author = (((comments[0] or {}).get("author") or {}).get("login")) or ""
-            snippet = ((comments[0] or {}).get("bodyText") or "").strip().replace("\n", " ")
-        if author.lower() not in wanted:
+        summary = _bot_thread_summary(node, wanted)
+        if summary is None:
             continue
-        found.append(
-            {
-                "path": node.get("path") or "?",
-                "line": node.get("line"),
-                "author": author or "?",
-                "snippet": (snippet[:120] + "...") if len(snippet) > 120 else snippet,
-            }
-        )
+        found.append(summary)
     return found
+
+
+def bot_review_threads(nodes: Sequence[dict], bot_logins: Sequence[str]) -> list[dict]:
+    """Return all review threads authored by a known bot, resolved or not."""
+
+    wanted = frozenset(b.lower() for b in bot_logins)
+    found: list[dict] = []
+    for node in nodes or []:
+        summary = _bot_thread_summary(node, wanted)
+        if summary is not None:
+            found.append(summary)
+    return found
+
+
+def _bot_thread_summary(node: dict, wanted: frozenset[str]) -> dict | None:
+    comments = ((node.get("comments") or {}).get("nodes")) or []
+    author = ""
+    snippet = ""
+    if comments:
+        author = (((comments[0] or {}).get("author") or {}).get("login")) or ""
+        snippet = ((comments[0] or {}).get("bodyText") or "").strip().replace("\n", " ")
+    if author.lower() not in wanted:
+        return None
+    return {
+        "path": node.get("path") or "?",
+        "line": node.get("line"),
+        "author": author or "?",
+        "snippet": (snippet[:120] + "...") if len(snippet) > 120 else snippet,
+    }
 
 
 def _current_head_bot_reviews_with_states(
@@ -579,6 +666,38 @@ def evaluate(
             )
 
     if not open_threads:
+        prior_threads = bot_review_threads(nodes, bot_logins)
+        body_class = classify_body(body)
+        if body_uses_no_findings(body):
+            if prior_threads:
+                messages.append(
+                    "AI reconciliation records no-findings, but scoped Codex "
+                    "review-thread history contains findings:"
+                )
+                for t in prior_threads:
+                    loc = t["path"] if t["line"] is None else f"{t['path']}:{t['line']}"
+                    messages.append(f"  - [{t['author']}] {loc}: {t['snippet']}")
+                messages.append(
+                    "Replace no-findings with fixed-in/waived/not-applicable "
+                    "dispositions for the resolved review findings."
+                )
+                return 1, messages
+        missing_dispositions = []
+        if prior_threads and body_class == "claims_clear":
+            missing_dispositions = missing_thread_dispositions(prior_threads, body)
+        if missing_dispositions:
+            messages.append(
+                "AI reconciliation ledger is missing dispositions for scoped "
+                "Codex review-thread history:"
+            )
+            for t in missing_dispositions:
+                loc = t["path"] if t["line"] is None else f"{t['path']}:{t['line']}"
+                messages.append(f"  - [{t['author']}] {loc}: {t['decision']}")
+            messages.append(
+                "Add one fixed-in/waived/not-applicable disposition naming each "
+                "review-thread root decision before merge."
+            )
+            return 1, messages
         if messages:
             if all(message.startswith("OK:") for message in messages):
                 return 0, messages

@@ -10,6 +10,7 @@ current_pr_body_file="${ATLAS_CURRENT_PR_BODY_FILE:-}"
 current_pr_author="${ATLAS_CURRENT_PR_AUTHOR:-}"
 repo_root=""
 script_root=""
+python_bin="${PYTHON:-python3}"
 
 while [ "$#" -gt 0 ]; do
     case "$1" in
@@ -115,6 +116,20 @@ run_check() {
     fi
 }
 
+body_uses_docs_only_marker() {
+    [ -n "$current_pr_body_file" ] || return 1
+    [ -f "$current_pr_body_file" ] || return 1
+    "$python_bin" - "$current_pr_body_file" <<'PY'
+import re
+import sys
+from pathlib import Path
+
+body = Path(sys.argv[1]).read_text(encoding="utf-8", errors="replace")
+first = next((line.strip() for line in body.splitlines() if line.strip()), "")
+raise SystemExit(0 if re.fullmatch(r"Docs-only:\s*true", first, re.IGNORECASE) else 1)
+PY
+}
+
 if ! git rev-parse --verify "$base_ref" >/dev/null 2>&1; then
     echo "local_pr_review.sh: base ref not found: $base_ref" >&2
     echo "fetch trunk first, or pass an explicit base ref" >&2
@@ -146,7 +161,7 @@ if [ -n "$current_pr_body_file" ]; then
             body_audit_args+=(--pr-author "$current_pr_author")
         fi
         body_audit_args+=("$current_pr_body_file")
-        run_check "PR body contract" python "${body_audit_args[@]}"
+        run_check "PR body contract" "$python_bin" "${body_audit_args[@]}"
     else
         echo
         echo "==> PR body contract"
@@ -163,7 +178,7 @@ run_check "Pre-push audit wrapper" bash "${pre_push_args[@]}"
 
 if [ -f "$script_root/scripts/audit_extracted_pipeline_ci_enrollment.py" ]; then
     run_check "Extracted pipeline CI enrollment" \
-        python "$script_root/scripts/audit_extracted_pipeline_ci_enrollment.py" --atlas-brain-tests-from "$base_ref"
+        "$python_bin" "$script_root/scripts/audit_extracted_pipeline_ci_enrollment.py" --atlas-brain-tests-from "$base_ref"
 else
     echo
     echo "==> Extracted pipeline CI enrollment"
@@ -175,7 +190,7 @@ if [ -f "$script_root/scripts/audit_pr_session_drift.py" ]; then
     if [ -n "$current_pr_body_file" ]; then
         drift_args+=(--current-pr-body-file "$current_pr_body_file")
     fi
-    run_check "Cross-session PR drift" python "${drift_args[@]}"
+    run_check "Cross-session PR drift" "$python_bin" "${drift_args[@]}"
 else
     echo
     echo "==> Cross-session PR drift"
@@ -183,7 +198,7 @@ else
 fi
 
 if [ -f "$script_root/scripts/audit_cross_layer_callers.py" ]; then
-    run_check "Cross-layer caller hints" python "$script_root/scripts/audit_cross_layer_callers.py" "$base_ref"
+    run_check "Cross-layer caller hints" "$python_bin" "$script_root/scripts/audit_cross_layer_callers.py" "$base_ref"
 else
     echo
     echo "==> Cross-layer caller hints"
@@ -194,8 +209,12 @@ if [ -f "$script_root/scripts/audit_ai_reconciliation.py" ]; then
     reconcile_args=("$script_root/scripts/audit_ai_reconciliation.py")
     if [ -n "$current_pr_body_file" ]; then
         reconcile_args+=(--current-pr-body-file "$current_pr_body_file")
+        current_pr_author_lc="${current_pr_author,,}"
+        if [[ "$current_pr_author_lc" != "dependabot[bot]" && "$current_pr_author_lc" != "app/dependabot" ]] && ! body_uses_docs_only_marker; then
+            reconcile_args+=(--require)
+        fi
     fi
-    run_check "AI reconciliation record" python "${reconcile_args[@]}"
+    run_check "AI reconciliation record" "$python_bin" "${reconcile_args[@]}"
 else
     echo
     echo "==> AI reconciliation record"
@@ -213,13 +232,13 @@ if [ -n "$committed_plan_docs" ]; then
         [ -z "$doc" ] && continue
         if [ -f "$script_root/scripts/audit_plan_code_consistency.py" ]; then
             run_check "Plan/code consistency: $doc" \
-                python "$script_root/scripts/audit_plan_code_consistency.py" \
+                "$python_bin" "$script_root/scripts/audit_plan_code_consistency.py" \
                     --base-ref "$base_ref" \
                     "$doc"
         fi
         if [ -f "$script_root/scripts/audit_review_rules_triggered.py" ]; then
             run_check "Reviewer rules triggered: $doc" \
-                python "$script_root/scripts/audit_review_rules_triggered.py" "$base_ref" --plan "$doc"
+                "$python_bin" "$script_root/scripts/audit_review_rules_triggered.py" "$base_ref" --plan "$doc"
         fi
     done <<< "$committed_plan_docs"
 else
@@ -236,10 +255,10 @@ run_check "git diff --check" git diff --check
 echo
 echo "==> Plans archive backlog (advisory, non-blocking)"
 if [ -f "$script_root/scripts/archive_plans.py" ]; then
-    python "$script_root/scripts/archive_plans.py" check || true
+    "$python_bin" "$script_root/scripts/archive_plans.py" check || true
     echo "    advisory only -- after a PR merges, switch to a local main synced to origin/main,"
     echo "    then move only that plan by name:"
-    echo "    git mv plans/PR-<Slice>.md plans/archive/ && python scripts/archive_plans.py index"
+    echo "    git mv plans/PR-<Slice>.md plans/archive/ && ${python_bin} scripts/archive_plans.py index"
 else
     echo "    SKIP (scripts/archive_plans.py not found)"
 fi

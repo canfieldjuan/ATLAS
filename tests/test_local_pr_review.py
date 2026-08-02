@@ -262,7 +262,17 @@ def test_local_pr_review_real_body_audit_honors_dependabot_exemption(
         repo / "scripts" / "_pr_change_policy.py",
         (REPO_ROOT / "scripts" / "_pr_change_policy.py").read_text(encoding="utf-8"),
     )
-    _git(repo, "add", "scripts/audit_pr_body.py", "scripts/_pr_change_policy.py")
+    _write_executable(
+        repo / "scripts" / "audit_ai_reconciliation.py",
+        (REPO_ROOT / "scripts" / "audit_ai_reconciliation.py").read_text(encoding="utf-8"),
+    )
+    _git(
+        repo,
+        "add",
+        "scripts/audit_pr_body.py",
+        "scripts/_pr_change_policy.py",
+        "scripts/audit_ai_reconciliation.py",
+    )
     _git(repo, "commit", "-m", "add real body audit")
 
     result = _run(
@@ -279,6 +289,50 @@ def test_local_pr_review_real_body_audit_honors_dependabot_exemption(
 
     assert result.returncode == 0, result.stdout + result.stderr
     assert "Dependabot PR body exempt" in result.stdout
+
+
+def test_local_pr_review_real_body_audit_honors_docs_only_exemption(
+    tmp_path: Path,
+) -> None:
+    repo = tmp_path / "repo"
+    _write_fixture_repo(repo)
+    body = tmp_path / "body.md"
+    body.write_text("Docs-only: true\n\nCorrect docs.\n", encoding="utf-8")
+    _write_executable(
+        repo / "scripts" / "audit_pr_body.py",
+        (REPO_ROOT / "scripts" / "audit_pr_body.py").read_text(encoding="utf-8"),
+    )
+    _write_executable(
+        repo / "scripts" / "_pr_change_policy.py",
+        (REPO_ROOT / "scripts" / "_pr_change_policy.py").read_text(encoding="utf-8"),
+    )
+    _write_executable(
+        repo / "scripts" / "audit_ai_reconciliation.py",
+        (REPO_ROOT / "scripts" / "audit_ai_reconciliation.py").read_text(encoding="utf-8"),
+    )
+    _git(
+        repo,
+        "add",
+        "scripts/audit_pr_body.py",
+        "scripts/_pr_change_policy.py",
+        "scripts/audit_ai_reconciliation.py",
+    )
+    _git(repo, "commit", "-m", "add docs-only audit fixture")
+    _git(repo, "update-ref", "refs/remotes/origin/main", "HEAD")
+    doc = repo / "docs" / "docs-only.md"
+    doc.parent.mkdir()
+    doc.write_text("# docs only\n", encoding="utf-8")
+    _git(repo, "add", "docs/docs-only.md")
+    _git(repo, "commit", "-m", "docs only")
+
+    result = _run(
+        repo,
+        ["bash", "scripts/local_pr_review.sh", "--current-pr-body-file", str(body)],
+    )
+
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert "explicit Markdown-only body exemption" in result.stdout
+    assert "no 'AI reconciliation' section" not in result.stdout
 
 
 def test_local_pr_review_runs_plans_archive_advisory_when_present(tmp_path: Path) -> None:
@@ -372,6 +426,10 @@ def test_local_pr_review_body_audit_inspects_repo_root_plan_with_trusted_scripts
         (REPO_ROOT / "scripts" / "_pr_change_policy.py").read_text(encoding="utf-8"),
     )
     _write_executable(
+        trusted / "scripts" / "audit_ai_reconciliation.py",
+        (REPO_ROOT / "scripts" / "audit_ai_reconciliation.py").read_text(encoding="utf-8"),
+    )
+    _write_executable(
         trusted / "scripts" / "pre_push_audit.sh",
         "#!/usr/bin/env bash\nset -euo pipefail\necho trusted pre-push ok\n",
     )
@@ -416,6 +474,9 @@ def _valid_pr_body(plan: str) -> str:
         "## Intentional",
         "- a trade-off",
         "",
+        "## AI reconciliation",
+        "- no-findings",
+        "",
         "## Deferred",
         "- a follow-up",
         "",
@@ -429,6 +490,9 @@ def _valid_pr_body(plan: str) -> str:
         "",
         "## Verification",
         "- pytest passed",
+        "",
+        "## Mechanical verification",
+        "- Command: pytest tests/test_local_pr_review.py - Result: passed - Environment: local",
         "",
         "## Diff size",
         "2 files, +10 / -2",

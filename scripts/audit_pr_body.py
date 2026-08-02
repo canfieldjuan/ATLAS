@@ -4,8 +4,9 @@
 Most human PR bodies must lead with ``Plan: plans/PR-<Slice-Name>.md``, a
 ``Slice phase: <phase>`` line, and an ``Ownership lane: <lane>`` line, then
 carry these ``##`` sections in order:
-Intentional, Deferred, Parked hardening, Cold diff reconstruction,
-Verification, Diff size. The referenced plan doc must exist in the checkout.
+Intentional, AI reconciliation, Deferred, Parked hardening, Cold diff
+reconstruction, Verification, Mechanical verification, Diff size. The
+referenced plan doc must exist in the checkout.
 A non-empty Markdown-only human diff may instead lead with ``Docs-only: true``
 when the caller supplies a base ref for changed-path validation. Dependabot
 keeps its explicit generated-body exemption.
@@ -35,6 +36,7 @@ from _pr_change_policy import (
     classify_changes,
     is_dependabot_author,
 )
+from audit_ai_reconciliation import reconciliation_errors
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -46,13 +48,42 @@ HEADING_RE = re.compile(r"^##\s+(?P<title>.+?)\s*$")
 FENCE_RE = re.compile(r"^ {0,3}(?P<delimiter>`{3,}|~{3,})(?P<tail>.*)$")
 REQUIRED_SECTIONS = (
     "Intentional",
+    "AI reconciliation",
     "Deferred",
     "Parked hardening",
     "Cold diff reconstruction",
     "Verification",
+    "Mechanical verification",
     "Diff size",
 )
 DOCS_ONLY_RE = re.compile(r"^Docs-only:\s*true\s*$", re.IGNORECASE)
+COMMAND_PREFIX_RE = re.compile(r"^\s*[-*]\s+command\s*:\s*\S", re.IGNORECASE)
+COMMAND_FIELD_RE = re.compile(
+    r"^\s*[-*]\s+command\s*:\s*(?P<command>.*?)(?=\s+-\s+result\s*:|\s+-\s+(?:environment|env)\s*:|$)",
+    re.IGNORECASE,
+)
+RESULT_FIELD_RE = re.compile(
+    r"\bresult\s*:\s*(?P<result>.+?)(?=\s+-\s+(?:environment|env)\s*:|$)",
+    re.IGNORECASE,
+)
+ENV_FIELD_RE = re.compile(r"\b(?:environment|env)\s*:\s*(?P<env>.+?)\s*$", re.IGNORECASE)
+FIELD_LABEL_RE = re.compile(r"^(?:result|environment|env)\s*:", re.IGNORECASE)
+SKIPPED_PREFIX_RE = re.compile(r"^\s*[-*]\s+skipped(?:\s+checks?)?\s*:\s*\S", re.IGNORECASE)
+REASON_FIELD_RE = re.compile(r"\breason\s*:\s*\S", re.IGNORECASE)
+BULLET_LINE_RE = re.compile(r"^\s*[-*]\s+\S")
+VALID_RESULT_RE = re.compile(
+    r"^(?:"
+    r"passed?|pass|"
+    r"failed?|fail|"
+    r"skipped?|skip|"
+    r"\d+\s+passed(?:[,\s]+(?:\d+\s+failed|failures?|\d+\s+skipped|skips?))*|"
+    r"\d+\s+failed(?:[,\s]+(?:\d+\s+passed|\d+\s+skipped))*|"
+    r"\d+\s+skipped"
+    r")(?:[\s.;].*)?$",
+    re.IGNORECASE,
+)
+PLACEHOLDER_VALUE_RE = re.compile(r"^(?:todo|tbd|n/?a|none|unknown|nowhere|\.*|-+)\s*\.?$", re.IGNORECASE)
+VALID_ENVIRONMENTS = {"local", "office pc", "ci"}
 
 
 class FenceMarker(NamedTuple):
@@ -169,6 +200,101 @@ def line_after(lines: list[str], index: int) -> str:
     return next(islice(lines, index + 1, index + 2), "")
 
 
+def section_body_lines(lines: list[str], title: str) -> list[str] | None:
+    """Return unfenced lines under a top-level PR-body ``##`` section."""
+
+    start: int | None = None
+    for index, line in enumerate(lines):
+        match = HEADING_RE.match(line)
+        if match and match.group("title") == title:
+            start = index + 1
+            break
+    if start is None:
+        return None
+    end = len(lines)
+    for index in range(start, len(lines)):
+        if HEADING_RE.match(lines[index]):
+            end = index
+            break
+    return lines[start:end]
+
+
+def mechanical_verification_errors(lines: list[str]) -> list[str]:
+    """Return failures in the PR body's Mechanical verification section."""
+
+    body_lines = section_body_lines(lines, "Mechanical verification")
+    if body_lines is None:
+        return []
+    errors: list[str] = []
+    command_count = 0
+    for raw_line in body_lines:
+        line = raw_line.strip()
+        if not line:
+            continue
+        if COMMAND_PREFIX_RE.match(raw_line):
+            command_match = COMMAND_FIELD_RE.search(raw_line)
+            result_match = RESULT_FIELD_RE.search(raw_line)
+            env_match = ENV_FIELD_RE.search(raw_line)
+            if command_match is None:
+                errors.append(
+                    "mechanical verification command is missing 'Command: <actual command>'"
+                )
+            else:
+                command = command_match.group("command").strip()
+                if (
+                    not command
+                    or PLACEHOLDER_VALUE_RE.fullmatch(command)
+                    or FIELD_LABEL_RE.match(command)
+                ):
+                    errors.append(
+                        "mechanical verification command has invalid Command; "
+                        "name the actual command that ran"
+                    )
+            if result_match is None:
+                errors.append(
+                    "mechanical verification command is missing 'Result: <outcome>'"
+                )
+            else:
+                result = result_match.group("result").strip()
+                if PLACEHOLDER_VALUE_RE.fullmatch(result) or not VALID_RESULT_RE.fullmatch(result):
+                    errors.append(
+                        "mechanical verification command has invalid Result; "
+                        "use pass/fail/skip wording or counts"
+                    )
+            if env_match is None:
+                errors.append(
+                    "mechanical verification command is missing "
+                    "'Environment: <local|Office PC|CI>'"
+                )
+            else:
+                env = env_match.group("env").strip().lower()
+                if PLACEHOLDER_VALUE_RE.fullmatch(env) or env not in VALID_ENVIRONMENTS:
+                    errors.append(
+                        "mechanical verification command has invalid Environment; "
+                        "use local, Office PC, or CI"
+                    )
+            command_count += 1
+            continue
+        if SKIPPED_PREFIX_RE.match(raw_line):
+            if not REASON_FIELD_RE.search(raw_line):
+                errors.append(
+                    "mechanical verification skipped check is missing "
+                    "'Reason: <why skipped>'"
+                )
+            continue
+        if BULLET_LINE_RE.match(raw_line):
+            errors.append(
+                "mechanical verification bullets must start with 'Command:' "
+                "or 'Skipped:'"
+            )
+    if command_count == 0:
+        errors.append(
+            "mechanical verification must list at least one executed "
+            "'Command:' with Result and Environment"
+        )
+    return errors
+
+
 def open_fence_marker(match: re.Match[str]) -> FenceMarker:
     """Return the opening fence character and minimum closing length."""
 
@@ -280,6 +406,21 @@ def audit_pr_body(
             "required sections are out of order; expected "
             + " -> ".join(f"## {title}" for title in REQUIRED_SECTIONS)
         )
+    ai_reconciliation_lines = section_body_lines(lines, "AI reconciliation")
+    if ai_reconciliation_lines is None:
+        failures.extend(
+            f"AI reconciliation: {error}"
+            for error in reconciliation_errors("", require=True)
+        )
+    else:
+        canonical_ai_reconciliation = (
+            "## AI reconciliation\n" + "\n".join(ai_reconciliation_lines)
+        )
+        failures.extend(
+            f"AI reconciliation: {error}"
+            for error in reconciliation_errors(canonical_ai_reconciliation, require=True)
+        )
+    failures.extend(mechanical_verification_errors(lines))
     return failures
 
 
