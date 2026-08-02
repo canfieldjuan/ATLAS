@@ -57,7 +57,13 @@ Slice phase: workflow/process
   CI/CD map docs, AGENTS bootstrap/procedure docs, security workflow tests.
 - Risk areas: CI contract drift, stale docs, parser failure mode, accidental
   promotion of advisory gates.
-- Reviewer rules triggered: R1, R2, R10, R12, R14.
+- Gate inventory closure declaration: the Phase 1 registry is a closed seed set
+  for the governance gates named by issue #2260 and the current CI/CD audits:
+  branch-protection meta gates, local/pre-push meta gates, and structural
+  advisory gates. Product/package workflows not listed in `ci/gates.yml` are
+  intentionally unclassified by Phase 1; adding them requires a later registry
+  edit with tests rather than implicit membership.
+- Reviewer rules triggered: R1, R2, R10, R12, R13, R14.
 
 ### Boundary-change enumeration
 
@@ -128,7 +134,10 @@ still bypass the default list for targeted tests or future manual audits.
 - Future slices: local-review attestation artifacts, wrapper ownership/draft
   hardening, reviewer thread disposition, Python coding standards ratchet.
 
-Parked hardening: none.
+Parking predicate: this workflow/process slice parks hardening outside the
+canonical gate-registry seed set, required-status checker default derivation,
+watcher required-context parity, stale CI/CD docs, and tests for those paths.
+Parked hardening: none against that predicate.
 
 ## Verification
 
@@ -153,9 +162,9 @@ Parked hardening: none.
 | `docs/ci_cd_autonomous_coding_map.md` | 14 |
 | `docs/ci_cd_runtime_duplication_audit.md` | 10 |
 | `docs/long_running_session_watcher_handoff.md` | 5 |
-| `plans/PR-CI-Gate-Registry.md` | 161 |
+| `plans/PR-CI-Gate-Registry.md` | 170 |
 | `scripts/check_required_status_checks.py` | 209 |
-| `scripts/watch_owned_pr.sh` | 25 |
+| `scripts/watch_owned_pr.sh` | 59 |
 | `tests/test_security_guardrails_workflow.py` | 105 |
-| `tests/test_watch_owned_pr.py` | 21 |
-| **Total** | **783** |
+| `tests/test_watch_owned_pr.py` | 25 |
+| **Total** | **830** |
