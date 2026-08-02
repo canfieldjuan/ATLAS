@@ -150,6 +150,7 @@ startup modes in #2255.
 - `HARDENING.md`
 - `atlas_brain/api/invoicing/auth.py`
 - `atlas_brain/config.py`
+- `atlas_brain/eom_api/auth.py`
 - `plans/PR-EOM-Receivables-Digest-Deadlock.md`
 - `tests/test_eom_render_profile.py`
 - `tests/test_receivables.py`
@@ -159,12 +160,15 @@ startup modes in #2255.
 
 The broad invoicing settings model now carries the same
 `receivables_service_token_sha256` field that the newer EOM API stack already
-uses. The legacy invoicing auth boundary rejects configured raw token material,
-validates the stored digest with the shared generated-token digest validator,
-and authenticates callers by hashing the presented generated bearer before
-performing constant-time digest comparison. The regression tests cover both the
-legacy receivables route behavior and the full app startup path that imports
-the EOM API stack and mounts public lead intake.
+uses. The EOM token-generation helper is importable without initializing
+runtime settings so operators can generate a replacement caller bearer/digest
+even while a legacy raw-token environment still exists. The legacy invoicing
+auth boundary rejects configured raw token material, validates the stored
+digest with the shared generated-token digest validator, and authenticates
+callers by hashing the presented generated bearer before performing
+constant-time digest comparison. The regression tests cover both the legacy
+receivables route behavior and the full app startup path that imports the EOM
+API stack and mounts public lead intake.
 
 ## Intentional
 
@@ -177,6 +181,9 @@ the EOM API stack and mounts public lead intake.
 - `api.invoicing.auth.require_receivables_api` now hashes the caller-provided
   generated bearer through the shared receivables token helper and compares the
   digest with `hmac.compare_digest`.
+- `eom_api.auth.generate_receivables_service_token` no longer imports runtime
+  settings at module import time; runtime settings are loaded lazily only when
+  validation/request dependencies need default config.
 - Existing legacy-router receivables tests now use generated caller tokens plus
   stored digests.
 - Full-app subprocess regression tests cover digest-only startup, raw-token
@@ -215,12 +222,17 @@ Parked hardening:
 - Changed `atlas_brain/api/invoicing/auth.py` so the legacy full-app
   receivables routes reject raw token material, require a generated-token
   digest when enabled, and compare caller bearer digests instead of raw values.
+- Changed `atlas_brain/eom_api/auth.py` so token generation does not initialize
+  `EOMInvoicingConfig`; runtime invoicing settings are imported only when
+  validating default runtime config or serving the request dependency.
 - Changed `tests/test_receivables.py` to validate raw-token rejection, bad
   digest rejection, digest-backed bearer authentication, and the existing HTTP
   receivables entrypoint under the new auth contract.
 - Changed `tests/test_eom_render_profile.py` to add full-app subprocess probes
   for digest-only startup, raw-token failure, missing-digest failure, and
-  lead-intake route reachability while receivables is enabled.
+  lead-intake route reachability while receivables is enabled, plus a
+  raw-token-env subprocess proof that token generation remains independent of
+  runtime settings initialization.
 - Changed `CLAUDE.md` to replace the stale raw-token Atlas setup with
   generated-token digest provisioning and maintenance-window rollout steps.
 - Changed `HARDENING.md` to register the deferred startup blast-radius
@@ -246,13 +258,18 @@ isolation remains intentionally deferred.
   three stale unit-gate baseline entries in
   `tests/test_reasoning_graph_routing.py`; this follow-up removes those
   entries from `tests/unit_gate_baseline.txt`.
-- `python3 -m py_compile atlas_brain/config.py atlas_brain/api/invoicing/auth.py tests/test_receivables.py tests/test_eom_render_profile.py`
+- `python3 -m py_compile atlas_brain/eom_api/auth.py atlas_brain/config.py atlas_brain/api/invoicing/auth.py tests/test_receivables.py tests/test_eom_render_profile.py`
   — exit 0.
+- `/tmp/atlas-pr2259-venv/bin/python -m pytest tests/test_eom_render_profile.py::test_eom_receivables_token_generation_ignores_legacy_raw_env tests/test_eom_render_profile.py::test_eom_receivables_runtime_config_rejects_raw_token_env_before_projection tests/test_eom_render_profile.py::test_eom_profile_rejects_raw_receivables_token_from_dotenv_before_projection -q`
+  — 9 passed.
 - `/tmp/atlas-pr2259-venv/bin/python -m pytest tests/test_eom_render_profile.py::test_route_path_probe_follows_included_router_context -q`
   — 1 passed.
 - Local `/tmp/atlas-pr2259-venv/bin/python -m pytest tests/test_receivables.py::test_receivables_api_is_fail_closed tests/test_receivables.py::test_legacy_invoicing_route_rejects_well_formed_mismatched_bearer -q`
   — not runnable in that venv because collection imports `torch`, which is not
   installed there; rerun on the Office PC worktree below.
+- Office PC `/tmp/atlas-pr2259-test` worktree with this follow-up patch:
+  `~/Desktop/Atlas/.venv/bin/python -m pytest tests/test_eom_render_profile.py::test_eom_receivables_token_generation_ignores_legacy_raw_env tests/test_eom_render_profile.py::test_eom_receivables_runtime_config_rejects_raw_token_env_before_projection tests/test_eom_render_profile.py::test_eom_profile_rejects_raw_receivables_token_from_dotenv_before_projection -q`
+  — 9 passed in 1.15s.
 - Office PC `/tmp/atlas-pr2259-test` worktree with this follow-up patch:
   `~/Desktop/Atlas/.venv/bin/python -m pytest tests/test_receivables.py::test_receivables_api_is_fail_closed tests/test_receivables.py::test_legacy_invoicing_route_rejects_well_formed_mismatched_bearer -q`
   — 2 passed in 3.87s.
@@ -264,10 +281,10 @@ isolation remains intentionally deferred.
   — 3 passed in 2.69s.
 - Office PC `/tmp/atlas-pr2259-test` worktree with this follow-up patch:
   `~/Desktop/Atlas/.venv/bin/python -m pytest tests/test_eom_render_profile.py tests/test_receivables.py -q`
-  — 96 passed, 6 skipped in 42.10s.
+  — 97 passed, 6 skipped in 43.37s.
 - Office PC `/tmp/atlas-pr2259-test` worktree with this follow-up patch:
   `git diff --check` and
-  `~/Desktop/Atlas/.venv/bin/python -m py_compile atlas_brain/config.py atlas_brain/api/invoicing/auth.py tests/test_receivables.py tests/test_eom_render_profile.py`
+  `~/Desktop/Atlas/.venv/bin/python -m py_compile atlas_brain/eom_api/auth.py atlas_brain/config.py atlas_brain/api/invoicing/auth.py tests/test_receivables.py tests/test_eom_render_profile.py`
   — exit 0.
 - `python3 scripts/audit_plan_doc.py plans/PR-EOM-Receivables-Digest-Deadlock.md`
   — OK for required sections and review contract.
@@ -281,8 +298,9 @@ isolation remains intentionally deferred.
 | `HARDENING.md` | 19 |
 | `atlas_brain/api/invoicing/auth.py` | 53 |
 | `atlas_brain/config.py` | 12 |
-| `plans/PR-EOM-Receivables-Digest-Deadlock.md` | 288 |
-| `tests/test_eom_render_profile.py` | 154 |
+| `atlas_brain/eom_api/auth.py` | 15 |
+| `plans/PR-EOM-Receivables-Digest-Deadlock.md` | 306 |
+| `tests/test_eom_render_profile.py` | 186 |
 | `tests/test_receivables.py` | 53 |
 | `tests/unit_gate_baseline.txt` | 3 |
-| **Total** | **604** |
+| **Total** | **669** |

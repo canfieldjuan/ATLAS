@@ -582,6 +582,38 @@ def test_eom_receivables_runtime_config_accepts_generated_digest_only():
     assert "receivables_service_token" not in EOMInvoicingConfig.model_fields
 
 
+def test_eom_receivables_token_generation_ignores_legacy_raw_env():
+    probe = """
+import json
+import sys
+
+from atlas_brain.eom_api import auth
+
+generated = auth.generate_receivables_service_token()
+print(json.dumps({
+    "token": generated.token,
+    "sha256": generated.sha256,
+    "config_loaded": "atlas_brain.eom_api.config" in sys.modules,
+}))
+"""
+    env = _isolated_eom_subprocess_env()
+    env["ATLAS_INVOICING_RECEIVABLES_SERVICE_TOKEN"] = (
+        "legacy-raw-token-still-present"
+    )
+    result = subprocess.run(
+        [sys.executable, "-c", probe],
+        check=True,
+        capture_output=True,
+        env=env,
+        text=True,
+    )
+    observed = json.loads(result.stdout.strip().splitlines()[-1])
+
+    assert _generated_receivables_token_oracle(observed["token"])
+    assert observed["sha256"] == _sha256_ascii(observed["token"])
+    assert observed["config_loaded"] is False
+
+
 def test_eom_receivables_raw_token_source_admission_matches_casefold_oracle(
     tmp_path,
 ):
