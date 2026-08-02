@@ -584,8 +584,11 @@ Do not set `ATLAS_INVOICING_RECEIVABLES_SERVICE_TOKEN` on Atlas. That raw
 secret is rejected at startup; keep it only in the EOM caller as the
 `Authorization: Bearer ...` value. For old/raw-token deployments, use a
 maintenance window: disable the receivables API, remove the raw Atlas secret,
-deploy the digest-only Atlas code everywhere, provision the digest, then
-re-enable the API after `/api/v1/receivables/ready` authenticates.
+deploy the digest-only Atlas code everywhere, provision the digest, re-enable
+the receivables API, then run an authenticated `/api/v1/receivables/ready`
+probe. If the readiness probe fails, disable the receivables API again and
+roll back to the last known-good Atlas deployment/config before reopening
+traffic to that surface.
 
 ### Invoicing Readonly MCP Server (8 tools)
 ```bash

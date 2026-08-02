@@ -262,7 +262,7 @@ isolation remains intentionally deferred.
 
 | File | LOC |
 |---|---:|
-| `CLAUDE.md` | 19 |
+| `CLAUDE.md` | 22 |
 | `HARDENING.md` | 19 |
 | `atlas_brain/api/invoicing/auth.py` | 53 |
 | `atlas_brain/config.py` | 12 |
@@ -270,4 +270,4 @@ isolation remains intentionally deferred.
 | `tests/test_eom_render_profile.py` | 154 |
 | `tests/test_receivables.py` | 53 |
 | `tests/unit_gate_baseline.txt` | 3 |
-| **Total** | **586** |
+| **Total** | **589** |
