@@ -108,6 +108,8 @@ def parse_gate_registry(text: str) -> list[dict[str, str | bool | None]]:
         gates.append(current)
     if not gates:
         raise ValueError("ci/gates.yml: no gates declared")
+    if not any(gate.get("enforcement") == BRANCH_REQUIRED for gate in gates):
+        raise ValueError("ci/gates.yml: at least one branch_required gate required")
     return gates
 
 

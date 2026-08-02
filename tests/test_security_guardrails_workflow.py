@@ -252,6 +252,27 @@ gates:
         raise AssertionError("unknown enforcement class passed")
 
 
+def test_gate_registry_fails_closed_without_branch_required_gate() -> None:
+    checker = _load_required_status_script()
+    malformed = """\
+gates:
+  - id: advisory-only
+    name: Advisory Only
+    context: advisory-only
+    enforcement: advisory
+    trusted_base: false
+    workflow: .github/workflows/advisory.yml
+    local_command: null
+"""
+
+    try:
+        checker.parse_gate_registry(malformed)
+    except ValueError as exc:
+        assert "at least one branch_required gate required" in str(exc)
+    else:
+        raise AssertionError("registry without branch_required gate passed")
+
+
 def test_required_status_cli_reports_registry_errors(tmp_path, capsys) -> None:
     checker = _load_required_status_script()
     registry = tmp_path / "gates.yml"

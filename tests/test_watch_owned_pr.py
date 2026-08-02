@@ -25,6 +25,20 @@ def _run_watcher(tmp_path: Path, *, scenario: str, sha: str = "head-a") -> subpr
         f"""\
         #!/usr/bin/env sh
         if [ "$4" = "origin/main:ci/gates.yml" ]; then
+          if [ "$WATCHER_NO_TRUSTED_REGISTRY" = "1" ]; then
+            exit 2
+          fi
+          if [ "$WATCHER_EMPTY_REQUIRED_REGISTRY" = "1" ]; then
+            printf '%s\n' 'gates:'
+            printf '%s\n' '  - id: advisory-a'
+            printf '%s\n' '    name: Advisory A'
+            printf '%s\n' '    context: advisory-a'
+            printf '%s\n' '    enforcement: advisory'
+            printf '%s\n' '    trusted_base: false'
+            printf '%s\n' '    workflow: .github/workflows/advisory_a.yml'
+            printf '%s\n' '    local_command: null'
+            exit 0
+          fi
           printf '%s\n' 'gates:'
           printf '%s\n' '  - id: required-a'
           printf '%s\n' '    name: Required A'
@@ -84,14 +98,25 @@ def _run_watcher(tmp_path: Path, *, scenario: str, sha: str = "head-a") -> subpr
                     handle.write(str(check_count + 1))
             status = "in_progress" if scenario == "final_required_check_reruns" and check_count > 0 else "completed"
             conclusion = None if status == "in_progress" else "success"
+            contexts = (
+                [
+                    "live-reconciliation",
+                    "diff-budget",
+                    "Gitleaks PR secret scan",
+                    "Gitleaks baseline growth guard",
+                ]
+                if scenario == "legacy_trusted_fallback"
+                else ["required-a"]
+            )
             print(json.dumps({"check_runs": [
                 {
-                    "name": "required-a",
+                    "name": context,
                     "status": status,
                     "conclusion": conclusion,
                     "started_at": "2026-07-27T00:00:00Z",
                     "app": {"id": 15368},
                 }
+                for context in contexts
             ]}))
         elif args[:2] == ["api", "graphql"]:
             joined = " ".join(args)
@@ -300,6 +325,10 @@ def _run_watcher(tmp_path: Path, *, scenario: str, sha: str = "head-a") -> subpr
         "WATCHER_SCENARIO": scenario,
         "WATCHER_STATE_FILE": str(tmp_path / "watcher-state.txt"),
     }
+    if scenario == "legacy_trusted_fallback":
+        env["WATCHER_NO_TRUSTED_REGISTRY"] = "1"
+    if scenario == "empty_required_registry":
+        env["WATCHER_EMPTY_REQUIRED_REGISTRY"] = "1"
     return subprocess.run(
         ["bash", str(SCRIPT)],
         cwd=ROOT,
@@ -316,6 +345,29 @@ def test_watcher_reports_ready_with_current_head_codex_review(tmp_path: Path) ->
     assert result.returncode == 0, result.stdout + result.stderr
     assert "MERGE-READY" in result.stdout
     assert "codex-head-attestations=1" in result.stdout
+
+
+def test_watcher_uses_fixed_legacy_contexts_without_trusted_registry(tmp_path: Path) -> None:
+    result = _run_watcher(tmp_path, scenario="legacy_trusted_fallback")
+
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert "MERGE-READY" in result.stdout
+    assert (
+        "required contexts: live-reconciliation diff-budget "
+        "Gitleaks PR secret scan Gitleaks baseline growth guard"
+    ) in result.stdout
+    assert "required contexts: required-a" not in result.stdout
+
+
+def test_watcher_fails_closed_for_trusted_registry_without_required_contexts(
+    tmp_path: Path,
+) -> None:
+    result = _run_watcher(tmp_path, scenario="empty_required_registry")
+
+    assert result.returncode == 2
+    assert "failed to parse trusted ci/gates.yml" in result.stderr
+    assert "at least one branch_required gate required" in result.stderr
+    assert "required contexts: live-reconciliation" not in result.stdout
 
 
 def test_watcher_ignores_unresolved_non_codex_thread(tmp_path: Path) -> None:

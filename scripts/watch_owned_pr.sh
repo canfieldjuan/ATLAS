@@ -31,18 +31,21 @@ CYCLES="${CYCLES:-32}"
 TOK="$(grep -m1 '^GITHUB_ACCESS_TOKEN=' "$ROOT/.env" 2>/dev/null | cut -d= -f2-)"
 [ -n "$TOK" ] || TOK="${GH_TOKEN:-}"
 [ -n "$TOK" ] || { echo "no GITHUB_ACCESS_TOKEN in $ROOT/.env and no GH_TOKEN set" >&2; exit 2; }
-# Canonical required contexts (branch protection), read from the TRUSTED ref
-# (origin/main), never from the watched branch's working tree -- a PR that
+# Canonical required contexts (branch protection), read only from the TRUSTED
+# ref (origin/main), never from the watched branch's working tree -- a PR that
 # edits ci/gates.yml or check_required_status_checks.py must not be able to
 # weaken its own gate. When a trusted registry is available, parse it through
 # the trusted checker implementation and fail closed on parser errors. Falls
-# back to the documented legacy four only when no registry exists yet.
+# back to the fixed documented legacy four only when the trusted registry does
+# not exist yet on origin/main.
 GATES_SRC="$(git -C "$ROOT" show origin/main:ci/gates.yml 2>/dev/null)"
-[ -n "$GATES_SRC" ] || GATES_SRC="$(cat "$ROOT/ci/gates.yml" 2>/dev/null)"
 CHECKER_SRC="$(git -C "$ROOT" show origin/main:scripts/check_required_status_checks.py 2>/dev/null)"
-[ -n "$CHECKER_SRC" ] || CHECKER_SRC="$(cat "$ROOT/scripts/check_required_status_checks.py" 2>/dev/null)"
 REQ_CONTEXTS=()
 if [ -n "$GATES_SRC" ]; then
+  if [ -z "$CHECKER_SRC" ]; then
+    echo "watch_owned_pr.sh: trusted ci/gates.yml exists but trusted required-status checker is unavailable" >&2
+    exit 2
+  fi
   CHECKER_TMP="$(mktemp --suffix=.py)"
   GATES_TMP="$(mktemp)"
   REQ_CONTEXTS_TMP="$(mktemp)"
@@ -79,6 +82,10 @@ PY
   fi
   mapfile -t REQ_CONTEXTS < "$REQ_CONTEXTS_TMP"
   rm -f "$CHECKER_TMP" "$GATES_TMP" "$REQ_CONTEXTS_TMP" "$REQ_CONTEXTS_ERR"
+  if [ "${#REQ_CONTEXTS[@]}" -eq 0 ]; then
+    echo "watch_owned_pr.sh: trusted ci/gates.yml produced no required contexts" >&2
+    exit 2
+  fi
 fi
 if [ "${#REQ_CONTEXTS[@]}" -eq 0 ]; then
   REQ_CONTEXTS=("live-reconciliation" "diff-budget" "Gitleaks PR secret scan" "Gitleaks baseline growth guard")

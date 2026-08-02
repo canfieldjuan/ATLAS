@@ -62,7 +62,12 @@ Slice phase: workflow/process
   branch-protection meta gates, local/pre-push meta gates, and structural
   advisory gates. Product/package workflows not listed in `ci/gates.yml` are
   intentionally unclassified by Phase 1; adding them requires a later registry
-  edit with tests rather than implicit membership.
+  edit with tests rather than implicit membership. That default is the cheaper
+  safe direction for this slice because Phase 1 is not changing product/package
+  enforcement or branch protection; implicitly classifying unknown workflows
+  would create false authority in the registry, while explicit unclassified
+  status preserves current behavior and forces any future promotion to carry
+  code-owned tests and review.
 - Reviewer rules triggered: R1, R2, R10, R12, R13, R14.
 
 ### Boundary-change enumeration
@@ -162,9 +167,9 @@ Parked hardening: none against that predicate.
 | `docs/ci_cd_autonomous_coding_map.md` | 14 |
 | `docs/ci_cd_runtime_duplication_audit.md` | 10 |
 | `docs/long_running_session_watcher_handoff.md` | 5 |
-| `plans/PR-CI-Gate-Registry.md` | 170 |
-| `scripts/check_required_status_checks.py` | 209 |
-| `scripts/watch_owned_pr.sh` | 59 |
-| `tests/test_security_guardrails_workflow.py` | 105 |
-| `tests/test_watch_owned_pr.py` | 25 |
-| **Total** | **830** |
+| `plans/PR-CI-Gate-Registry.md` | 175 |
+| `scripts/check_required_status_checks.py` | 211 |
+| `scripts/watch_owned_pr.sh` | 72 |
+| `tests/test_security_guardrails_workflow.py` | 126 |
+| `tests/test_watch_owned_pr.py` | 79 |
+| **Total** | **925** |
