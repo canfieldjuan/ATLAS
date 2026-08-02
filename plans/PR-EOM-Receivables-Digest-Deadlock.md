@@ -55,9 +55,19 @@ Must not change:
 Ownership lane: eom/receivables-auth
 Slice phase: Production hardening
 
-This PR is limited to the full-app EOM receivables auth/config migration from
-raw-token storage to digest-only storage, plus regression tests for the exact
-startup modes in #2255.
+1. Migrate the full-app EOM receivables auth/config path from Atlas-side raw
+   token storage to Atlas-side digest-only storage.
+2. Keep caller authentication on the generated raw bearer by hashing the
+   presented bearer and comparing it with the stored digest.
+3. Update operator setup/rollout instructions so legacy raw-token deployments
+   can migrate through a maintenance window without relying on an invalid
+   mixed configuration.
+4. Prove the full Atlas app starts with receivables enabled under digest-only
+   config and keeps public lead intake mounted.
+5. Prove legacy invoice action routes and receivables ledger routes enforce
+   the same generated-token digest boundary.
+6. Register startup blast-radius isolation as follow-up hardening instead of
+   silently parking it in the plan only.
 
 ### Review Contract
 
@@ -110,6 +120,30 @@ startup modes in #2255.
 - Caller x input shape: callers reach `/api/v1/receivables/*` only with the
   same generated raw bearer digest match plus route-specific actor headers
   where required.
+- Closure declaration for the enumerated auth boundary:
+  - Router/route inventory is CLOSED and DERIVED from the current routers that
+    install `Depends(require_receivables_api)` from
+    `atlas_brain.api.invoicing.auth`: `api.invoicing.actions.router` and
+    `api.invoicing.receivables.router`. Their member routes come from the
+    decorators in those two router modules at review time; future routes or
+    routers are outside this slice and must carry their own review, but any
+    route that reuses this dependency inherits the same fail-closed auth
+    decision.
+  - Config-field inventory is CLOSED and ENUMERATED by the changed
+    authorization/config boundary:
+    `ATLAS_INVOICING_RECEIVABLES_API_ENABLED`,
+    `ATLAS_INVOICING_RECEIVABLES_SERVICE_TOKEN`, and
+    `ATLAS_INVOICING_RECEIVABLES_SERVICE_TOKEN_SHA256`. Unlisted environment
+    variables do not participate in this auth decision and cannot grant access;
+    ambiguous/missing/invalid values for the listed fields fail startup or make
+    the API unavailable.
+  - HTTP bearer input space is OPEN. The sole admitted class is a generated
+    `eomrx_v1_...` bearer whose SHA-256 digest matches the configured digest.
+    Missing headers, malformed schemes, malformed generated-token syntax,
+    well-formed generated tokens with mismatched digests, disabled API config,
+    raw Atlas-side token material, and unknown bearer shapes all fail closed as
+    401/503 request denial or startup rejection. This is the safer direction
+    because receivables routes mutate payment/ledger state.
 
 ### Deployed-config probing
 
@@ -299,8 +333,8 @@ isolation remains intentionally deferred.
 | `atlas_brain/api/invoicing/auth.py` | 53 |
 | `atlas_brain/config.py` | 12 |
 | `atlas_brain/eom_api/auth.py` | 15 |
-| `plans/PR-EOM-Receivables-Digest-Deadlock.md` | 306 |
+| `plans/PR-EOM-Receivables-Digest-Deadlock.md` | 340 |
 | `tests/test_eom_render_profile.py` | 186 |
 | `tests/test_receivables.py` | 53 |
 | `tests/unit_gate_baseline.txt` | 3 |
-| **Total** | **669** |
+| **Total** | **703** |
