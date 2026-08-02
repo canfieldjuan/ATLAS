@@ -73,6 +73,13 @@ class EOMProfileConfig(BaseSettings):
         default=False,
         description="Run database migrations during the slim EOM profile startup",
     )
+    canonical_crm_database_confirmed: bool = Field(
+        default=False,
+        description=(
+            "Confirm the slim EOM profile is connected to the canonical Atlas CRM "
+            "database before it may serve funnel APIs"
+        ),
+    )
 
 
 class EOMInvoicingConfig(BaseSettings):

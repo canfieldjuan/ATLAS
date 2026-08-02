@@ -66,8 +66,12 @@ from .eom_api.auth import validate_receivables_api_config
 from .eom_api.config import (
     eom_profile_settings,
     eom_settings,
+    funnel_settings,
     invoicing_settings,
 )
+from .eom_api.funnel import router as funnel_router
+from .eom_api.funnel_auth import validate_eom_funnel_api_config
+from .eom_api.funnel_readiness import require_eom_funnel_data_store
 from .eom_api.receivables import router as receivables_router
 from .logging_config import configure_logging
 from .storage.config import db_settings
@@ -78,11 +82,8 @@ logger = logging.getLogger("atlas.eom")
 
 MigrationRunner = Callable[..., Awaitable[None]]
 
-# Closure for the EOM startup migration set: CLOSED and ENUMERATED from the
+# Closure for the EOM receivables migration set: CLOSED and ENUMERATED from the
 # current receivables readiness contract plus its SQL prerequisite chain.
-# Migrations outside this set are intentionally not run by the EOM profile; a
-# new receivables readiness table/index or SQL prerequisite must update this
-# tuple and the live readiness migration test in the same slice.
 EOM_RECEIVABLES_READINESS_MIGRATIONS: tuple[str, ...] = (
     "012_appointments",
     "035_contacts",
@@ -91,9 +92,30 @@ EOM_RECEIVABLES_READINESS_MIGRATIONS: tuple[str, ...] = (
     "345_receivables_event_key_lookup",
 )
 
+# Closure for the EOM funnel migration set: CLOSED and ENUMERATED from the
+# current lead-review/customer-handoff contracts plus their SQL prerequisite
+# chain.
+EOM_FUNNEL_READINESS_MIGRATIONS: tuple[str, ...] = (
+    "346_contact_lead_pipeline",
+    "351_eom_lead_lifecycle_events",
+    "353_eom_customer_handoffs",
+    "354_eom_customer_handoff_privileges",
+    "355_eom_lead_review_queue_index",
+)
 
-async def _apply_eom_receivables_migrations(
+# Migrations outside this set are intentionally not run by the EOM profile; a
+# new EOM API table/index or SQL prerequisite must update this tuple and the
+# live readiness migration test in the same slice.
+EOM_API_READINESS_MIGRATIONS: tuple[str, ...] = (
+    *EOM_RECEIVABLES_READINESS_MIGRATIONS,
+    *EOM_FUNNEL_READINESS_MIGRATIONS,
+)
+
+
+async def _apply_eom_api_migrations(
     pool: Any,
+    *,
+    migrations: tuple[str, ...] = EOM_API_READINESS_MIGRATIONS,
     run_migrations_fn: MigrationRunner | None = None,
 ) -> None:
     if run_migrations_fn is None:
@@ -103,17 +125,46 @@ async def _apply_eom_receivables_migrations(
     else:
         runner = run_migrations_fn
 
-    await runner(pool, only=EOM_RECEIVABLES_READINESS_MIGRATIONS)
+    await runner(pool, only=migrations)
+
+
+def _startup_migrations_for_enabled_apis() -> tuple[str, ...]:
+    if funnel_settings.api_enabled:
+        _require_canonical_crm_database_for_funnel()
+        return EOM_API_READINESS_MIGRATIONS
+    return EOM_RECEIVABLES_READINESS_MIGRATIONS
+
+
+def _require_canonical_crm_database_for_funnel() -> None:
+    if (
+        funnel_settings.api_enabled
+        and not eom_profile_settings.canonical_crm_database_confirmed
+    ):
+        raise RuntimeError(
+            "EOM funnel requires the canonical Atlas CRM database before startup; "
+            "set ATLAS_EOM_CANONICAL_CRM_DATABASE_CONFIRMED=true only after "
+            "ATLAS_DB_CONNECTION_STRING points at the canonical CRM store."
+        )
 
 
 async def _run_startup_migrations() -> None:
     pool = get_db_pool()
     if pool.is_initialized:
-        await _apply_eom_receivables_migrations(pool)
+        migrations = _startup_migrations_for_enabled_apis()
+        await _apply_eom_api_migrations(pool, migrations=migrations)
         logger.info(
-            "EOM receivables readiness migrations checked: %s",
-            ", ".join(EOM_RECEIVABLES_READINESS_MIGRATIONS),
+            "EOM API readiness migrations checked: %s",
+            ", ".join(migrations),
         )
+
+
+async def _validate_eom_funnel_startup() -> None:
+    _require_canonical_crm_database_for_funnel()
+    await require_eom_funnel_data_store(
+        funnel_settings,
+        database_enabled=db_settings.enabled,
+        pool_getter=get_db_pool,
+    )
 
 
 @asynccontextmanager
@@ -121,6 +172,8 @@ async def lifespan(app: FastAPI):
     """Initialize only the dependencies required by the EOM API profile."""
     logger.info("Atlas EOM API starting up")
     validate_receivables_api_config(invoicing_settings)
+    validate_eom_funnel_api_config(funnel_settings)
+    _require_canonical_crm_database_for_funnel()
 
     try:
         if db_settings.enabled:
@@ -130,6 +183,7 @@ async def lifespan(app: FastAPI):
                 await _run_startup_migrations()
         else:
             logger.warning("Database persistence is disabled")
+        await _validate_eom_funnel_startup()
         yield
     finally:
         if db_settings.enabled:
@@ -160,3 +214,4 @@ async def ping() -> dict[str, str]:
 
 
 app.include_router(receivables_router, prefix="/api/v1")
+app.include_router(funnel_router, prefix="/api/v1")
