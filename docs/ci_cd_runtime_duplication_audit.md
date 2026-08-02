@@ -30,14 +30,14 @@ contexts in the first table; the process guardrails in the second table are
 still non-negotiable for Atlas PR work, but they are not current
 branch-protection required contexts.
 
-### Branch-Protection Required
+### Branch-Protection Gate Set
 
-| Gate | Why it stays PR-blocking |
+| Gate | Why it stays expected PR-blocking |
 |---|---|
 | `live-reconciliation` | Prevents stale "fixed/waived" AI-review claims while automated review threads remain open. |
-| `diff-budget` | Keeps slices small or forces an explicit override. |
 | `Gitleaks PR secret scan` | Blocks leaked secrets before merge. |
 | `Gitleaks baseline growth guard` | Prevents PR-side poisoning or expansion of the secret baseline. |
+| `diff-budget` | Keeps slices small or forces an explicit override. Repo code expects this context, but live branch protection may need alignment. |
 
 ### Process Guardrails
 
@@ -54,7 +54,7 @@ these gates.
 
 | Class | Examples | Optimization posture |
 |---|---|---|
-| Branch-required meta gates | `live-reconciliation`, `diff-budget`, `Gitleaks PR secret scan`, `Gitleaks baseline growth guard` | Keep required; optimize only by making the implementation faster without weakening coverage. |
+| Branch-required meta gates | Live today: `live-reconciliation`, `Gitleaks PR secret scan`, `Gitleaks baseline growth guard`. Expected by `ci/gates.yml` / repo checker: those plus `diff-budget`, `plan-admission`, `session-lane`, `review-contract`, `pr-body-contract`. | Keep the intended gate set explicit; optimize only by making implementation faster without weakening coverage. |
 | Process/meta CI contexts | `pr-body-contract`, `pre-push-audit`, branch-protection audit workflows | Keep as workflow guardrails; distinguish their latency from branch-required merge latency. |
 | Product/package gates | Content-ops checks, extracted pipeline checks, Reddit listening checks, deflection package checks | Optimize with caching, narrower triggers, or safe decomposition while preserving package coverage. |
 | Advisory checks | Advisory maturity sweeps, non-blocking detector runs, informational audits | Keep visible; reduce noise and runtime after required gates and product checks are stable. |
@@ -85,7 +85,7 @@ Advisor (advisory).
 | AI Reconciliation (live) | `pull_request_target` | 14 | 17s | 633s | Typical job is ~10s; review-event outliers affect run envelope. |
 | Security Guardrails | `pull_request` | 9 | 15s | 168s | PR secret scan job is fast; skipped heavy jobs still add envelope. |
 | PR Body Contract | `pull_request_target` | 14 | 14s | 155s | Fast process/meta context, not currently branch-required. |
-| Diff Budget | `pull_request_target` | 14 | 12s | 143s | Fast required meta gate. |
+| Diff Budget | `pull_request_target` | 14 | 12s | 143s | Fast expected meta gate; repo code expects branch protection to require it, but live protection may need alignment. |
 | Gitleaks Baseline Growth Guard | `pull_request_target` | 9 | 10s | 164s | Fast required meta gate. |
 
 ## Step-Level Findings

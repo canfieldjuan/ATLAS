@@ -17,6 +17,7 @@ on:
       - ".github/workflows/review_contract.yml"
       - ".github/workflows/security_guardrails.yml"
       - ".github/workflows/session_lane.yml"
+      - "ci/gates.yml"
       - "docs/SECURITY_GUARDRAILS.md"
       - "scripts/check_required_status_checks.py"
       - "tests/test_security_guardrails_workflow.py"
