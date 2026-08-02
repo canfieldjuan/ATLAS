@@ -23,10 +23,10 @@ or enforce the full-app funnel datastore preflight.
   keep that blueprint fail-closed against the non-canonical attached database,
   mount the funnel router in the slim EOM app, validate its startup config, run
   its curated schema prerequisites when the funnel API is enabled, run the same
-  datastore preflight before serving funnel routes, enroll the shared readiness
-  guard in the relevant domain workflow filters, and update EOM render profile
-  tests to prove the env contract, real-app route reachability, startup ordering,
-  and rejection paths.
+  datastore preflight before serving funnel routes, enroll the slim funnel
+  dependency set in the relevant domain workflow filters, and update EOM render
+  profile tests to prove the env contract, real-app route reachability, startup
+  ordering, and rejection paths.
 - Must not change: no Atlas endpoint behavior, CRM behavior, receivables config,
   migrations, public routes, or user-facing product shape.
 
@@ -46,8 +46,9 @@ Slice phase: production hardening
    and call it from the slim app after database initialization and migrations.
 6. Keep the slim EOM funnel path fail-closed unless the operator explicitly
    confirms `ATLAS_DB_CONNECTION_STRING` points at the canonical Atlas CRM store.
-7. Add the shared readiness guard module to both invoicing and EOM lead-pipeline
-   workflow path filters.
+7. Add the slim funnel config/router/auth/readiness modules and readiness
+   migrations to the relevant invoicing and EOM lead-pipeline workflow path
+   filters.
 
 ### Review Contract
 
@@ -171,9 +172,10 @@ datastore preflight before serving. The render-profile tests load the real YAML,
 call the real slim app route with a generated service token, and prove the
 enabled startup rejection paths.
 
-The shared readiness module is also enrolled in the invoicing and EOM
-lead-pipeline workflow path filters so later guard-only changes run the same
-domain suites that prove startup and privilege behavior.
+The slim funnel dependency set is also enrolled in the invoicing and EOM
+lead-pipeline workflow path filters so later guard-, config-, router-, auth-, or
+readiness-migration-only changes run the same domain suites that prove startup
+and privilege behavior.
 
 ## Intentional
 
@@ -217,13 +219,13 @@ Parked hardening: none.
 
 | File | LOC |
 |---|---:|
-| `.github/workflows/atlas_eom_lead_pipeline_checks.yml` | 2 |
-| `.github/workflows/atlas_invoicing_checks.yml` | 2 |
+| `.github/workflows/atlas_eom_lead_pipeline_checks.yml` | 4 |
+| `.github/workflows/atlas_invoicing_checks.yml` | 18 |
 | `atlas_brain/eom_api/config.py` | 7 |
 | `atlas_brain/eom_api/funnel_readiness.py` | 157 |
 | `atlas_brain/main.py` | 145 |
 | `atlas_brain/main_eom.py` | 73 |
-| `plans/PR-EOM-Funnel-Render-Env.md` | 229 |
+| `plans/PR-EOM-Funnel-Render-Env.md` | 231 |
 | `render.eom.yaml` | 6 |
 | `tests/test_eom_render_profile.py` | 374 |
-| **Total** | **995** |
+| **Total** | **1015** |
