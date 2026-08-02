@@ -9,6 +9,16 @@ the funnel enable flag, service-token digest slot, and canonical CRM database
 confirmation bit, and the slim EOM entrypoint does not mount the funnel router
 or enforce the full-app funnel datastore preflight.
 
+This slice is oversized because the reviewed failure modes are coupled at the
+deployment boundary: declaring the Render env slots without mounting the slim
+router leaves the enabled service at 404, mounting the router without the shared
+preflight serves privileged funnel routes against an unproven schema, and running
+funnel readiness migrations without the canonical CRM confirmation can mutate the
+wrong database. The workflow path-filter updates and route/startup tests are part
+of the same indivisible safety boundary because they keep later edits to the new
+guard, config, router, auth, and migration prerequisites inside the domain CI
+that proves this startup contract.
+
 ### Problem-derived contract
 
 - Root cause: `render.eom.yaml` declares receivables auth envs for the slim EOM
@@ -225,7 +235,7 @@ Parked hardening: none.
 | `atlas_brain/eom_api/funnel_readiness.py` | 157 |
 | `atlas_brain/main.py` | 145 |
 | `atlas_brain/main_eom.py` | 73 |
-| `plans/PR-EOM-Funnel-Render-Env.md` | 231 |
+| `plans/PR-EOM-Funnel-Render-Env.md` | 241 |
 | `render.eom.yaml` | 6 |
 | `tests/test_eom_render_profile.py` | 374 |
-| **Total** | **1015** |
+| **Total** | **1025** |
