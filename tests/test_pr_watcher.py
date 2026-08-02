@@ -449,6 +449,43 @@ gates:
     ] in fake.commands
 
 
+def test_registry_required_checks_match_all_reported_checks(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    registry = """\
+gates:
+  - id: required-a
+    name: Required A
+    context: required-a
+    enforcement: branch_required
+    trusted_base: true
+    workflow: .github/workflows/required_a.yml
+    local_command: null
+  - id: required-b
+    name: Required B
+    context: required-b
+    enforcement: branch_required
+    trusted_base: true
+    workflow: .github/workflows/required_b.yml
+    local_command: null
+"""
+    status = _produce(
+        tmp_path,
+        monkeypatch,
+        FakeRun(
+            all_checks=_response([_check("required-a"), _check("required-b")]),
+            required_checks=_response([_check("required-a")]),
+            gate_registry=(0, registry, ""),
+        ),
+    )
+
+    assert status["state"] == "ready_for_human_merge"
+    assert status["readiness"]["required_check_count"] == 2
+    assert status["readiness"]["required_checks_complete"] is True
+    assert status["readiness"]["required_check_pending"] == []
+
+
 def test_registry_required_checks_preserve_live_policy_contexts(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,

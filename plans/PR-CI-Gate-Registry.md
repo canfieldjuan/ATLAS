@@ -149,7 +149,7 @@ Parked hardening: none against that predicate.
 ## Verification
 
 - Passed:
-  - `/tmp/atlas-ci-gate-registry-venv/bin/python -m pytest tests/test_security_guardrails_workflow.py tests/test_watch_owned_pr.py tests/test_pr_watcher.py -q` — 120 passed.
+  - `/tmp/atlas-ci-gate-registry-venv/bin/python -m pytest tests/test_security_guardrails_workflow.py tests/test_watch_owned_pr.py tests/test_pr_watcher.py -q` — 126 passed.
   - `python3 -m py_compile scripts/check_required_status_checks.py scripts/pr_watcher.py` — exit 0.
   - `bash -n scripts/watch_owned_pr.sh` — exit 0.
   - `git diff --check` — exit 0.
@@ -185,10 +185,10 @@ Parked hardening: none against that predicate.
 | `docs/ci_cd_runtime_duplication_audit.md` | 10 |
 | `docs/long_running_session_watcher_handoff.md` | 5 |
 | `plans/PR-CI-Gate-Registry.md` | 194 |
-| `scripts/check_required_status_checks.py` | 287 |
-| `scripts/pr_watcher.py` | 50 |
+| `scripts/check_required_status_checks.py` | 305 |
+| `scripts/pr_watcher.py` | 57 |
 | `scripts/watch_owned_pr.sh` | 72 |
-| `tests/test_pr_watcher.py` | 97 |
-| `tests/test_security_guardrails_workflow.py` | 195 |
+| `tests/test_pr_watcher.py` | 134 |
+| `tests/test_security_guardrails_workflow.py` | 301 |
 | `tests/test_watch_owned_pr.py` | 79 |
-| **Total** | **1236** |
+| **Total** | **1404** |

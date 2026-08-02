@@ -305,6 +305,27 @@ gates:
     assert checker.parse_gate_registry(registry)[0]["context"] == 'Gate "# 1'
 
 
+def test_gate_registry_rejects_unsupported_escape_sequence() -> None:
+    checker = _load_required_status_script()
+    malformed = """\
+gates:
+  - id: unsupported-escape
+    name: Unsupported Escape
+    context: "Gate\\u0020One"
+    enforcement: branch_required
+    trusted_base: true
+    workflow: .github/workflows/escaped.yml
+    local_command: null
+"""
+
+    try:
+        checker.parse_gate_registry(malformed)
+    except ValueError as exc:
+        assert "unsupported escape sequence" in str(exc)
+    else:
+        raise AssertionError("unsupported escape sequence passed")
+
+
 def test_gate_registry_preserves_doubled_single_quote_before_hash() -> None:
     checker = _load_required_status_script()
     registry = """\
@@ -340,6 +361,91 @@ gates:
         assert "malformed quoted scalar" in str(exc)
     else:
         raise AssertionError("malformed quoted scalar passed")
+
+
+def test_gate_registry_rejects_unknown_fields() -> None:
+    checker = _load_required_status_script()
+    malformed = """\
+gates:
+  - id: typo
+    name: Typo
+    context: typo
+    enforcement: branch_required
+    enforcment: advisory
+    trusted_base: true
+    workflow: .github/workflows/typo.yml
+    local_command: null
+"""
+
+    try:
+        checker.parse_gate_registry(malformed)
+    except ValueError as exc:
+        assert "unsupported fields: enforcment" in str(exc)
+    else:
+        raise AssertionError("unknown registry field passed")
+
+
+def test_gate_registry_rejects_invalid_field_types() -> None:
+    checker = _load_required_status_script()
+    malformed = """\
+gates:
+  - id: invalid-types
+    name: true
+    context: false
+    enforcement: advisory
+    trusted_base: true
+    workflow: .github/workflows/invalid.yml
+    local_command: false
+"""
+
+    try:
+        checker.parse_gate_registry(malformed)
+    except ValueError as exc:
+        assert "has invalid name" in str(exc)
+    else:
+        raise AssertionError("invalid registry field types passed")
+
+
+def test_gate_registry_rejects_boolean_context_on_non_required_gate() -> None:
+    checker = _load_required_status_script()
+    malformed = """\
+gates:
+  - id: invalid-context
+    name: Invalid Context
+    context: false
+    enforcement: advisory
+    trusted_base: true
+    workflow: .github/workflows/invalid.yml
+    local_command: null
+"""
+
+    try:
+        checker.parse_gate_registry(malformed)
+    except ValueError as exc:
+        assert "has invalid context" in str(exc)
+    else:
+        raise AssertionError("boolean context passed")
+
+
+def test_gate_registry_rejects_boolean_local_command() -> None:
+    checker = _load_required_status_script()
+    malformed = """\
+gates:
+  - id: invalid-local-command
+    name: Invalid Local Command
+    context: invalid-local-command
+    enforcement: advisory
+    trusted_base: true
+    workflow: .github/workflows/invalid.yml
+    local_command: false
+"""
+
+    try:
+        checker.parse_gate_registry(malformed)
+    except ValueError as exc:
+        assert "has invalid local_command" in str(exc)
+    else:
+        raise AssertionError("boolean local_command passed")
 
 
 def test_required_status_cli_reports_registry_errors(tmp_path, capsys) -> None:

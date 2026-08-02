@@ -54,9 +54,14 @@ def _decode_quoted_scalar(value: str, *, lineno: int) -> str:
 
     decoded = []
     escaped = False
+    supported_escapes = {'"': '"', "\\": "\\"}
     for char in inner:
         if escaped:
-            decoded.append(char)
+            if char not in supported_escapes:
+                raise ValueError(
+                    f"ci/gates.yml:{lineno}: unsupported escape sequence: \\{char}"
+                )
+            decoded.append(supported_escapes[char])
             escaped = False
             continue
         if char == "\\":
@@ -207,6 +212,9 @@ def _validate_gate(
     missing = sorted(required_fields - set(gate))
     if missing:
         raise ValueError(f"ci/gates.yml: gate {index} missing fields: {', '.join(missing)}")
+    extra = sorted(set(gate) - required_fields)
+    if extra:
+        raise ValueError(f"ci/gates.yml: gate {index} unsupported fields: {', '.join(extra)}")
 
     gate_id = gate["id"]
     if not isinstance(gate_id, str) or not gate_id:
@@ -221,6 +229,10 @@ def _validate_gate(
             f"ci/gates.yml: gate {gate_id} has invalid enforcement: {enforcement!r}"
         )
 
+    name = gate["name"]
+    if not isinstance(name, str) or not name:
+        raise ValueError(f"ci/gates.yml: gate {gate_id} has invalid name")
+
     trusted_base = gate["trusted_base"]
     if not isinstance(trusted_base, bool):
         raise ValueError(f"ci/gates.yml: gate {gate_id} trusted_base must be true/false")
@@ -232,10 +244,16 @@ def _validate_gate(
     context = gate["context"]
     if enforcement == BRANCH_REQUIRED and (not isinstance(context, str) or not context):
         raise ValueError(f"ci/gates.yml: gate {gate_id} branch_required needs context")
+    if context is not None and not isinstance(context, str):
+        raise ValueError(f"ci/gates.yml: gate {gate_id} has invalid context")
     if isinstance(context, str) and context:
         if context in seen_contexts:
             raise ValueError(f"ci/gates.yml: duplicate context: {context}")
         seen_contexts.add(context)
+
+    local_command = gate["local_command"]
+    if local_command is not None and not isinstance(local_command, str):
+        raise ValueError(f"ci/gates.yml: gate {gate_id} has invalid local_command")
 
 
 def load_gate_registry(

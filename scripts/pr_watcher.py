@@ -898,7 +898,12 @@ def produce(watcher_id: str, *, config_dir: Path, state_dir: Path) -> tuple[int,
         for item in required_checks
         if isinstance(item, dict) and isinstance(item.get("name"), str) and item.get("name")
     }
-    missing_required = sorted(expected_required - reported_required)
+    reported_all = {
+        item.get("name")
+        for item in all_checks
+        if isinstance(item, dict) and isinstance(item.get("name"), str) and item.get("name")
+    }
+    missing_required = sorted(expected_required - reported_all)
     required_pending.extend(f"{name} (not reported)" for name in missing_required)
     required_contexts = expected_required | reported_required
     docs_only_exemption_signal = (
