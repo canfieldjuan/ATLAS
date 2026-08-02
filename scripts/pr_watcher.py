@@ -892,7 +892,7 @@ def produce(watcher_id: str, *, config_dir: Path, state_dir: Path) -> tuple[int,
     expected_required, required_policy_shape_error = _required_contexts(required_policy)
     registry_required, registry_required_error = _trusted_registry_required_contexts(repo_dir)
     if registry_required:
-        expected_required = registry_required
+        expected_required |= registry_required
     reported_required = {
         item.get("name")
         for item in required_checks

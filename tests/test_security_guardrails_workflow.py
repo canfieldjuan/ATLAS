@@ -289,6 +289,38 @@ gates:
     assert checker.parse_gate_registry(registry)[0]["context"] == "Gate # 1"
 
 
+def test_gate_registry_preserves_escaped_quote_before_hash() -> None:
+    checker = _load_required_status_script()
+    registry = """\
+gates:
+  - id: escaped-double-quote
+    name: Escaped Double Quote
+    context: "Gate \\"# 1"
+    enforcement: branch_required
+    trusted_base: true
+    workflow: .github/workflows/escaped.yml
+    local_command: null
+"""
+
+    assert checker.parse_gate_registry(registry)[0]["context"] == 'Gate "# 1'
+
+
+def test_gate_registry_preserves_doubled_single_quote_before_hash() -> None:
+    checker = _load_required_status_script()
+    registry = """\
+gates:
+  - id: escaped-single-quote
+    name: Escaped Single Quote
+    context: 'Owner''s # Gate'
+    enforcement: branch_required
+    trusted_base: true
+    workflow: .github/workflows/escaped.yml
+    local_command: null
+"""
+
+    assert checker.parse_gate_registry(registry)[0]["context"] == "Owner's # Gate"
+
+
 def test_gate_registry_rejects_malformed_quoted_scalar() -> None:
     checker = _load_required_status_script()
     malformed = """\

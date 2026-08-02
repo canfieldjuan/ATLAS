@@ -34,6 +34,40 @@ class RequiredCheckFailure(NamedTuple):
     reason: str
 
 
+def _decode_quoted_scalar(value: str, *, lineno: int) -> str:
+    quote = value[0]
+    inner = value[1:-1]
+    if quote == "'":
+        decoded: list[str] = []
+        index = 0
+        while index < len(inner):
+            char = inner[index]
+            if char == "'":
+                if index + 1 < len(inner) and inner[index + 1] == "'":
+                    decoded.append("'")
+                    index += 2
+                    continue
+                raise ValueError(f"ci/gates.yml:{lineno}: malformed quoted scalar")
+            decoded.append(char)
+            index += 1
+        return "".join(decoded)
+
+    decoded = []
+    escaped = False
+    for char in inner:
+        if escaped:
+            decoded.append(char)
+            escaped = False
+            continue
+        if char == "\\":
+            escaped = True
+            continue
+        decoded.append(char)
+    if escaped:
+        raise ValueError(f"ci/gates.yml:{lineno}: malformed quoted scalar")
+    return "".join(decoded)
+
+
 def _parse_scalar(raw: str, *, lineno: int) -> str | bool | None:
     value = raw.strip()
     if value == "null":
@@ -54,7 +88,7 @@ def _parse_scalar(raw: str, *, lineno: int) -> str | bool | None:
         and value[0] == value[-1]
         and value.startswith(("'", '"'))
     ):
-        return value[1:-1]
+        return _decode_quoted_scalar(value, lineno=lineno)
     return value
 
 
@@ -67,16 +101,34 @@ def _parse_key_value(text: str, *, lineno: int) -> tuple[str, str | bool | None]
 
 def _strip_inline_comment(raw_line: str, *, lineno: int) -> str:
     quote: str | None = None
-    for index, char in enumerate(raw_line):
+    escaped = False
+    index = 0
+    length = len(raw_line)
+    while index < length:
+        char = raw_line[index]
         if quote is not None:
+            if quote == '"' and escaped:
+                escaped = False
+                index += 1
+                continue
+            if quote == '"' and char == "\\":
+                escaped = True
+                index += 1
+                continue
+            if quote == "'" and char == "'" and index + 1 < length and raw_line[index + 1] == "'":
+                index += 2
+                continue
             if char == quote:
                 quote = None
+            index += 1
             continue
         if char in {"'", '"'}:
             quote = char
+            index += 1
             continue
         if char == "#":
             return raw_line[:index].rstrip()
+        index += 1
     if quote is not None:
         raise ValueError(f"ci/gates.yml:{lineno}: malformed quoted scalar")
     return raw_line.rstrip()
