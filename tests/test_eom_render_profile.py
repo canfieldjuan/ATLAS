@@ -372,6 +372,22 @@ def test_eom_render_blueprint_maps_database_and_receivables_auth():
         "key": "ATLAS_INVOICING_RECEIVABLES_SERVICE_TOKEN_SHA256",
         "sync": False,
     }
+    assert env_vars["ATLAS_EOM_FUNNEL_API_ENABLED"] == {
+        "key": "ATLAS_EOM_FUNNEL_API_ENABLED",
+        "value": "false",
+    }
+    assert env_vars["ATLAS_EOM_FUNNEL_SERVICE_TOKEN_SHA256"] == {
+        "key": "ATLAS_EOM_FUNNEL_SERVICE_TOKEN_SHA256",
+        "sync": False,
+    }
+    assert env_vars["ATLAS_EOM_FUNNEL_DB_CONNECTION_STRING"] == {
+        "key": "ATLAS_EOM_FUNNEL_DB_CONNECTION_STRING",
+        "sync": False,
+    }
+    assert env_vars["ATLAS_EOM_CANONICAL_CRM_DATABASE_CONFIRMED"] == {
+        "key": "ATLAS_EOM_CANONICAL_CRM_DATABASE_CONFIRMED",
+        "value": "false",
+    }
     assert env_vars["ATLAS_EOM_RUN_MIGRATIONS"] == {
         "key": "ATLAS_EOM_RUN_MIGRATIONS",
         "value": "true",
@@ -389,6 +405,44 @@ def test_eom_render_blueprint_maps_database_and_receivables_auth():
         "ATLAS_DB_PASSWORD",
     ):
         assert split_key not in env_vars
+
+
+def test_eom_funnel_placeholders_load_from_env_and_default_fail_closed(monkeypatch):
+    for key in (
+        "ATLAS_EOM_CANONICAL_CRM_DATABASE_CONFIRMED",
+        "ATLAS_EOM_FUNNEL_API_ENABLED",
+        "ATLAS_EOM_FUNNEL_SERVICE_TOKEN_SHA256",
+        "ATLAS_EOM_FUNNEL_DB_CONNECTION_STRING",
+        _RAW_RECEIVABLES_SERVICE_TOKEN_ENV,
+    ):
+        monkeypatch.delenv(key, raising=False)
+
+    from atlas_brain.eom_api.config import EOMFunnelConfig, EOMProfileConfig
+
+    profile_defaults = EOMProfileConfig()
+    funnel_defaults = EOMFunnelConfig()
+    assert profile_defaults.canonical_crm_database_confirmed is False
+    assert funnel_defaults.api_enabled is False
+    assert funnel_defaults.service_token_sha256 == ""
+    assert funnel_defaults.db_connection_string == ""
+
+    monkeypatch.setenv("ATLAS_EOM_CANONICAL_CRM_DATABASE_CONFIRMED", "true")
+    monkeypatch.setenv("ATLAS_EOM_FUNNEL_API_ENABLED", "true")
+    monkeypatch.setenv("ATLAS_EOM_FUNNEL_SERVICE_TOKEN_SHA256", "abc123")
+    monkeypatch.setenv(
+        "ATLAS_EOM_FUNNEL_DB_CONNECTION_STRING",
+        "postgresql://atlas-eom-funnel.example/db",
+    )
+
+    profile = EOMProfileConfig()
+    funnel = EOMFunnelConfig()
+    assert profile.canonical_crm_database_confirmed is True
+    assert funnel.api_enabled is True
+    assert funnel.service_token_sha256 == "abc123"
+    assert (
+        funnel.db_connection_string
+        == "postgresql://atlas-eom-funnel.example/db"
+    )
 
 
 def test_eom_startup_migrations_are_curated_for_receivables_readiness():

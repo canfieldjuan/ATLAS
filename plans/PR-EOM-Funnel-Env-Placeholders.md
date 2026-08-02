@@ -24,6 +24,7 @@ Slice phase: production hardening
 
 1. Add disabled-by-default funnel env placeholders to `render.eom.yaml`.
 2. Add matching settings fields to `atlas_brain/eom_api/config.py`.
+3. Add focused tests for the new Render keys and settings env projections.
 
 ### Review Contract
 
@@ -39,13 +40,14 @@ Slice phase: production hardening
     fields without changing serving behavior.
 - Affected surfaces: EOM Render blueprint and slim EOM settings.
 - Risk areas: environment naming drift and accidental live enablement.
-- Reviewer rules triggered: R1, R11, R12.
+- Reviewer rules triggered: R1, R2, R11, R12.
 
 ### Files touched
 
 - `atlas_brain/eom_api/config.py`
 - `plans/PR-EOM-Funnel-Env-Placeholders.md`
 - `render.eom.yaml`
+- `tests/test_eom_render_profile.py`
 
 ## Mechanism
 
@@ -73,6 +75,7 @@ Parked hardening: none.
 ## Verification
 
 - Passed: `/tmp/atlas-eom-funnel-env-1785688582/.venv/bin/python -m py_compile atlas_brain/eom_api/config.py`.
+- Passed: `/tmp/atlas-eom-funnel-env-1785688582/.venv/bin/python -m pytest tests/test_eom_render_profile.py::test_eom_render_blueprint_maps_database_and_receivables_auth tests/test_eom_render_profile.py::test_eom_funnel_placeholders_load_from_env_and_default_fail_closed -q`.
 
 ## Estimated diff size
 
@@ -80,5 +83,6 @@ Parked hardening: none.
 |---|---:|
 | `atlas_brain/eom_api/config.py` | 14 |
 | `render.eom.yaml` | 8 |
-| `plans/PR-EOM-Funnel-Env-Placeholders.md` | 84 |
-| **Total** | **106** |
+| `tests/test_eom_render_profile.py` | 54 |
+| `plans/PR-EOM-Funnel-Env-Placeholders.md` | 88 |
+| **Total** | **164** |
