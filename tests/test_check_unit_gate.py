@@ -42,6 +42,18 @@ def test_parse_ignores_non_summary_lines():
     assert gate.parse_failing_nodes("...\n5 passed in 1.2s\n") == set()
 
 
+def test_removed_node_pass_proof_ignores_warning_prose_near_misses():
+    output = (
+        ". [100%]\n"
+        "=============================== warnings summary ===============================\n"
+        "tests/test_removed.py::test_old_failure\n"
+        "  UserWarning: optional migration skipped because it is not configured\n"
+        "1 passed, 1 warning in 0.10s\n"
+    )
+
+    assert gate.removed_node_pass_proof_error(output, 1) is None
+
+
 def test_compare_subset_is_no_regression():
     regressions, fixed = gate.compare({"a", "b"}, {"a", "b", "c"})
     assert regressions == []
@@ -379,6 +391,44 @@ def test_cli_exit2_when_selected_scope_not_bound_to_pytest_args(tmp_path, monkey
 @pytest.mark.parametrize(
     "pytest_args",
     [
+        ["tests/test_a.py::test_unrelated"],
+        ["tests/test_a.py", "@narrow.args"],
+    ],
+)
+def test_cli_exit2_when_scoped_pytest_target_is_not_exact_file(
+    tmp_path, monkeypatch, capsys, pytest_args
+):
+    base = tmp_path / "base.txt"
+    base.write_text("tests/test_a.py::old_failure\n")
+    pr = tmp_path / "pr.txt"
+    pr.write_text("")
+    selected = tmp_path / "selected.txt"
+    selected.write_text("tests/test_a.py\n")
+
+    returncode, calls = _run_gate_with_pytest_report(
+        [
+            "--baseline",
+            str(pr),
+            "--base-baseline",
+            str(base),
+            "--selected-files",
+            str(selected),
+            "--pytest-args",
+            *pytest_args,
+        ],
+        "1 passed in 0.10s\n",
+        monkeypatch,
+    )
+    captured = capsys.readouterr()
+
+    assert returncode == 2, captured.out + captured.err
+    assert calls == []
+    assert "must be exact selected test files" in captured.err
+
+
+@pytest.mark.parametrize(
+    "pytest_args",
+    [
         ["tests/test_removed.py", "-k", "unrelated"],
         ["tests/test_removed.py", "--collect-only"],
         ["tests/test_removed.py", "--co"],
@@ -546,6 +596,50 @@ def test_cli_exit2_when_removed_node_did_not_genuinely_pass(
     assert calls
     assert "tests/test_removed.py::test_old_failure" in calls[0]
     assert "must genuinely pass" in captured.err
+
+
+def test_cli_exit0_when_removed_file_collection_error_is_fixed_with_skip(
+    tmp_path, monkeypatch, capsys
+):
+    base = tmp_path / "base.txt"
+    base.write_text("tests/test_removed.py\n")
+    pr = tmp_path / "pr.txt"
+    pr.write_text("")
+    selected = tmp_path / "selected.txt"
+    selected.write_text("tests/test_removed.py\n")
+
+    returncode, calls = _run_gate_with_pytest_report(
+        [
+            "--baseline",
+            str(pr),
+            "--base-baseline",
+            str(base),
+            "--selected-files",
+            str(selected),
+            "--pytest-args",
+            "tests/test_removed.py",
+            "-m",
+            "not integration and not e2e",
+            "--continue-on-collection-errors",
+            "-rfE",
+            "--tb=no",
+            "-q",
+            "-p",
+            "no:cacheprovider",
+        ],
+        [
+            ".s [100%]\n1 passed, 1 skipped in 0.10s\n",
+            ".s [100%]\n1 passed, 1 skipped in 0.10s\n",
+        ],
+        monkeypatch,
+        returncode=[0, 0],
+    )
+    captured = capsys.readouterr()
+
+    assert returncode == 0, captured.out + captured.err
+    assert len(calls) == 2
+    assert calls[0].count("tests/test_removed.py") == 1
+    assert "exactly matches" in captured.out
 
 
 @pytest.mark.parametrize(

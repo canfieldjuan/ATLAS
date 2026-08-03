@@ -28,10 +28,11 @@ explain the failed review/CI rounds without opening separate symptom PRs.
   `tests/test_check_unit_gate.py` for growth-only, unscoped-report,
   scoped-report, scoped-missing-proof, scoped-invocation mismatch,
   scoped-invocation filter rejection, unscoped custom-invocation rejection,
-  scoped-proven-shrink, and removed-node-still-failing cases; isolate the
-  order-dependent LLM registry state that made #2259-removed routing nodes fail
-  only in the full suite; remove only the stale baseline entries the full gate
-  proved passing.
+  scoped-proven-shrink, genuine-pass outcome proof, exact selected-file
+  targets, bare-file collection-error proof, warning-text near misses, and
+  removed-node-still-failing cases; isolate the order-dependent LLM registry
+  state that made #2259-removed routing nodes fail only in the full suite;
+  remove only the stale baseline entries the full gate proved passing.
 - Must not change: do not change product behavior, reviewer-convergence policy
   in #2263, live-reconciliation policy from #2258, selected-test ownership
   mappings except where this proof requires them, or runtime LLM routing
@@ -85,6 +86,15 @@ Slice phase: Workflow/process
     xfailed still exits 2 because baseline removal requires a genuine pass,
     settled by
     `tests/test_check_unit_gate.py::test_cli_exit2_when_removed_node_did_not_genuinely_pass`.
+  - Warning prose that contains words like "skipped" does not invalidate a
+    genuine pass because outcome proof reads pytest outcome counts, settled by
+    `tests/test_check_unit_gate.py::test_removed_node_pass_proof_ignores_warning_prose_near_misses`.
+  - Scoped shrink proof rejects node-level targets and pytest `@args`
+    indirection before subprocess launch, settled by
+    `tests/test_check_unit_gate.py::test_cli_exit2_when_scoped_pytest_target_is_not_exact_file`.
+  - A removed bare-file collection-error entry can be removed when the file now
+    collects and exits cleanly even if legitimate tests skip, settled by
+    `tests/test_check_unit_gate.py::test_cli_exit0_when_removed_file_collection_error_is_fixed_with_skip`.
   - An unscoped custom `--pytest-args` invocation cannot prove a baseline shrink;
     shrink proof must use the default full-suite invocation or a scoped
     `--selected-files` proof, settled by
@@ -161,11 +171,14 @@ the selected-file scope before pytest is launched. A scoped shrink proof also
 rejects custom pytest options outside the unit-gate workflow's known execution
 model because filters, deselectors, collect-only modes, and early-exit flags can
 skip removed nodes while still targeting the selected file. Any live shrink
-proof also runs each removed node id directly through pytest; a deleted or
-renamed node therefore fails closed instead of being inferred from file-level
-selection, and a skipped/xfail/deselected exact-node outcome fails closed
-because baseline removal requires a genuine pass. An unscoped custom
-`--pytest-args` invocation cannot prove a shrink at all; use the default
+proof also runs each removed node id directly through pytest. Leaf node ids
+must report genuine passed outcomes from pytest's numeric outcome summary, so
+deleted, renamed, skipped, xfailed, xpassed, or deselected nodes fail closed
+without matching unrelated warning prose. Bare-file collection-error baseline
+entries are proved separately: the repaired file must collect and finish with
+pytest exit 0, but legitimate skip/xfail outcomes inside the now-collecting
+file do not block removing the obsolete collection-error entry. An unscoped
+custom `--pytest-args` invocation cannot prove a shrink at all; use the default
 full-suite invocation or a scoped `--selected-files` proof. `--growth-only` has
 no pytest evidence and fails closed. The existing comparison then still catches
 the other half: if a removed node still appears in the failing set, it is a
@@ -177,7 +190,8 @@ Pytest inventory closure:
   list. Its source is the pytest option shapes this checker must skip while
   extracting positional file targets. Unlisted dash-prefixed options are treated
   as flags with no value for target parsing, then rejected by scoped-shrink
-  proof unless separately admitted below.
+  proof unless separately admitted below; `@args` indirection and node-level
+  positional targets are rejected before shrink proof.
 - `_SCOPED_SHRINK_ALLOWED_FLAGS` is a closed allowlist for value-less options
   in scoped shrink proof. Membership comes from the unit-gate workflow's
   execution model, and any unlisted flag makes the shrink proof exit 2 before
@@ -206,9 +220,9 @@ Parked hardening: none.
 ## Verification
 
 - `python -m pytest tests/test_check_unit_gate.py tests/test_select_impacted_tests.py tests/test_unit_gate_selector_fallback.py -q`
-  - `105 passed in 0.75s`
+  - `109 passed in 0.72s`
 - `python -m pytest tests/test_reasoning_graph_routing.py -q -rfE --tb=short`
-  - `12 passed, 1 warning in 1.15s`
+  - `12 passed, 1 warning in 2.02s`
 - `python -m py_compile scripts/check_unit_gate.py`
   - passed
 - `python scripts/check_unit_gate.py --baseline tests/unit_gate_baseline.txt --base-baseline /tmp/origin-main-unit-baseline.txt --selected-files /tmp/unit-gate-selected-reasoning.txt --pytest-args tests/test_reasoning_graph_routing.py -m 'not integration and not e2e' --continue-on-collection-errors -rfE --tb=no -q -p no:cacheprovider`
@@ -231,9 +245,9 @@ Parked hardening: none.
 
 | File | LOC |
 |---|---:|
-| `plans/PR-Unit-Gate-Baseline-Shrink-Proof.md` | 239 |
-| `scripts/check_unit_gate.py` | 295 |
-| `tests/test_check_unit_gate.py` | 495 |
+| `plans/PR-Unit-Gate-Baseline-Shrink-Proof.md` | 253 |
+| `scripts/check_unit_gate.py` | 361 |
+| `tests/test_check_unit_gate.py` | 589 |
 | `tests/test_reasoning_graph_routing.py` | 28 |
 | `tests/unit_gate_baseline.txt` | 4 |
-| **Total** | **1061** |
+| **Total** | **1235** |

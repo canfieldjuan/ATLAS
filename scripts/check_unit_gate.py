@@ -52,9 +52,10 @@ from pathlib import Path
 # ids whole even when the params contain " - ". (Nested [] inside params is not
 # handled -- vanishingly rare for pytest ids.)
 _SUMMARY_RE = re.compile(r"^(?:FAILED|ERROR)\s+(?P<node>[^\s\[]+(?:\[[^\]]*\])?)")
-_PASSED_OUTCOME_RE = re.compile(r"\b(?P<count>\d+)\s+passed\b", re.IGNORECASE)
-_NON_PASS_OUTCOME_RE = re.compile(
-    r"\b(?:skipped|xfailed|xpassed|deselected)\b", re.IGNORECASE
+_OUTCOME_COUNT_RE = re.compile(
+    r"\b(?P<count>\d+)\s+"
+    r"(?P<outcome>passed|skipped|xfailed|xpassed|deselected)\b",
+    re.IGNORECASE,
 )
 
 # Normal pytest exit statuses for a gate run: 0 = all passed, 1 = tests failed
@@ -101,12 +102,14 @@ def parse_failing_nodes(pytest_output: str) -> set[str]:
     return nodes
 
 
-def count_passed_nodes(pytest_output: str) -> int:
-    """Return pytest's summarized passed-test count."""
-    return sum(
-        int(match.group("count"))
-        for match in _PASSED_OUTCOME_RE.finditer(pytest_output)
-    )
+def count_pytest_outcomes(pytest_output: str, outcomes: set[str]) -> int:
+    """Return pytest's summarized count for the requested outcomes."""
+    requested = {outcome.lower() for outcome in outcomes}
+    total = 0
+    for match in _OUTCOME_COUNT_RE.finditer(pytest_output):
+        if match.group("outcome").lower() in requested:
+            total += int(match.group("count"))
+    return total
 
 
 def removed_node_pass_proof_error(
@@ -114,12 +117,16 @@ def removed_node_pass_proof_error(
     expected_nodes: int,
 ) -> str | None:
     """Return an error when exact-node shrink proof did not genuinely pass."""
-    if _NON_PASS_OUTCOME_RE.search(pytest_output):
+    non_passed = count_pytest_outcomes(
+        pytest_output,
+        {"skipped", "xfailed", "xpassed", "deselected"},
+    )
+    if non_passed:
         return (
             "pytest reported skipped, xfailed, xpassed, or deselected outcomes; "
             "removed baseline nodes must genuinely pass"
         )
-    passed = count_passed_nodes(pytest_output)
+    passed = count_pytest_outcomes(pytest_output, {"passed"})
     if passed < expected_nodes:
         return (
             f"pytest reported {passed} passed node(s), but "
@@ -207,10 +214,20 @@ def pytest_target_files(pytest_args: list[str]) -> set[str]:
 
 def validate_selected_pytest_args(selected_files: set[str], pytest_args: list[str]) -> int:
     """Fail closed when scoped proof claims files the pytest invocation won't run."""
-    targets = pytest_target_files(pytest_args)
+    targets: set[str] = set()
+    invalid_targets: list[str] = []
+    for target in pytest_positional_targets(pytest_args):
+        normalized = target.removeprefix("./").rstrip("/")
+        if target.startswith("@") or "::" in normalized:
+            invalid_targets.append(target)
+            continue
+        if normalized.startswith("tests/") and normalized.endswith(".py"):
+            targets.add(normalized)
+        else:
+            invalid_targets.append(target)
     missing = sorted(selected_files - targets)
     extra = sorted(targets - selected_files)
-    if not missing and not extra:
+    if not missing and not extra and not invalid_targets:
         return 0
     print(
         "unit gate: --selected-files must match the pytest file targets used "
@@ -224,6 +241,13 @@ def validate_selected_pytest_args(selected_files: set[str], pytest_args: list[st
     if extra:
         print("unit gate: pytest target(s) outside --selected-files:", file=sys.stderr)
         for path in extra[:20]:
+            print(f"  {path}", file=sys.stderr)
+    if invalid_targets:
+        print(
+            "unit gate: pytest target(s) must be exact selected test files:",
+            file=sys.stderr,
+        )
+        for path in invalid_targets[:20]:
             print(f"  {path}", file=sys.stderr)
     return 2
 
@@ -318,6 +342,21 @@ def run_pytest(pytest_args: list[str]) -> tuple[str, int]:
 
 def validate_removed_nodes_execute(removed_nodes: list[str]) -> int:
     """Run removed node ids directly so shrink proof is node-level, not file-level."""
+    leaf_nodes = [node for node in removed_nodes if "::" in node]
+    file_nodes = [node for node in removed_nodes if "::" not in node]
+    if leaf_nodes:
+        status = validate_removed_leaf_nodes_execute(leaf_nodes)
+        if status:
+            return status
+    if file_nodes:
+        status = validate_removed_file_nodes_execute(file_nodes)
+        if status:
+            return status
+    return 0
+
+
+def validate_removed_leaf_nodes_execute(removed_nodes: list[str]) -> int:
+    """Run removed leaf node ids and require genuine pass outcomes."""
     output, returncode = run_pytest([*removed_nodes, *UNIT_GATE_OPTION_ARGS])
     if returncode == 0:
         proof_error = removed_node_pass_proof_error(output, len(removed_nodes))
@@ -344,6 +383,33 @@ def validate_removed_nodes_execute(removed_nodes: list[str]) -> int:
     except RuntimeError as exc:
         print(
             "unit gate: removed baseline node proof failed; "
+            f"{exc}",
+            file=sys.stderr,
+        )
+        return 2
+    return 0
+
+
+def validate_removed_file_nodes_execute(removed_nodes: list[str]) -> int:
+    """Run removed bare-file collection-error entries and require a clean file run."""
+    output, returncode = run_pytest([*removed_nodes, *UNIT_GATE_OPTION_ARGS])
+    if returncode == 0:
+        return 0
+    if returncode == 1:
+        failing = parse_failing_nodes(output)
+        print(
+            "unit gate: removed baseline file proof failed; file(s) still fail "
+            "or error when run directly:",
+            file=sys.stderr,
+        )
+        for node in sorted(failing or set(removed_nodes))[:20]:
+            print(f"  {node}", file=sys.stderr)
+        return 1
+    try:
+        ensure_pytest_ran(returncode)
+    except RuntimeError as exc:
+        print(
+            "unit gate: removed baseline file proof failed; "
             f"{exc}",
             file=sys.stderr,
         )
