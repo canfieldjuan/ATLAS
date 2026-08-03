@@ -94,6 +94,27 @@ def test_pytest_target_files_extracts_test_file_args():
     ]) == {"tests/test_a.py", "tests/test_b.py"}
 
 
+def test_pytest_positional_targets_skip_option_values():
+    assert gate.pytest_positional_targets([
+        "--ignore",
+        "tests/skipped.py",
+        "--deselect=tests/test_a.py::test_old",
+        "-k",
+        "not slow",
+        "tests/",
+    ]) == ["tests/"]
+
+
+def test_custom_pytest_args_full_suite_detection():
+    assert gate.pytest_args_target_full_suite(["tests/", "-m", "not integration"])
+    assert gate.pytest_args_target_full_suite(["./tests", "-q"])
+    assert not gate.pytest_args_target_full_suite(["tests/test_a.py"])
+    assert gate.pytest_args_narrow_scope(["tests/", "-k", "not slow"])
+    assert gate.pytest_args_narrow_scope(["tests/", "-knot slow"])
+    assert gate.pytest_args_narrow_scope(["tests/", "--ignore=tests/test_a.py"])
+    assert gate.pytest_args_narrow_scope(["tests/", "--deselect", "tests/test_a.py::test_old"])
+
+
 def _run(args, tmp_path, report):
     rf = tmp_path / "report.txt"
     rf.write_text(report)
@@ -348,6 +369,103 @@ def test_cli_exit2_when_selected_scope_not_bound_to_pytest_args(tmp_path, monkey
     assert calls == []
     assert "selected file(s) missing from --pytest-args" in captured.err
     assert "tests/test_a.py" in captured.err
+
+
+def test_cli_exit2_when_unscoped_custom_pytest_args_cannot_prove_shrink(
+    tmp_path, monkeypatch, capsys
+):
+    base = tmp_path / "base.txt"
+    base.write_text("tests/test_removed.py::test_old_failure\n")
+    pr = tmp_path / "pr.txt"
+    pr.write_text("")
+
+    returncode, calls = _run_gate_with_pytest_report(
+        [
+            "--baseline",
+            str(pr),
+            "--base-baseline",
+            str(base),
+            "--pytest-args",
+            "tests/test_unrelated.py",
+        ],
+        "1 passed in 0.10s\n",
+        monkeypatch,
+    )
+    captured = capsys.readouterr()
+
+    assert returncode == 2, captured.out + captured.err
+    assert calls == []
+    assert "custom --pytest-args cannot prove a baseline shrink" in captured.err
+    assert "do not target tests/" in captured.err
+
+
+@pytest.mark.parametrize(
+    "pytest_args",
+    [
+        ["tests/", "-k", "not old_failure"],
+        ["tests/", "--ignore=tests/test_removed.py"],
+        ["tests/", "--ignore", "tests/test_removed.py"],
+        ["tests/", "--deselect", "tests/test_removed.py::test_old_failure"],
+    ],
+)
+def test_cli_exit2_when_unscoped_custom_pytest_args_narrow_shrink_proof(
+    tmp_path, monkeypatch, capsys, pytest_args
+):
+    base = tmp_path / "base.txt"
+    base.write_text("tests/test_removed.py::test_old_failure\n")
+    pr = tmp_path / "pr.txt"
+    pr.write_text("")
+
+    returncode, calls = _run_gate_with_pytest_report(
+        [
+            "--baseline",
+            str(pr),
+            "--base-baseline",
+            str(base),
+            "--pytest-args",
+            *pytest_args,
+        ],
+        "1 passed in 0.10s\n",
+        monkeypatch,
+    )
+    captured = capsys.readouterr()
+
+    assert returncode == 2, captured.out + captured.err
+    assert calls == []
+    assert "contain a narrowing option" in captured.err
+
+
+def test_cli_exit0_when_unscoped_custom_pytest_args_run_full_suite(
+    tmp_path, monkeypatch, capsys
+):
+    base = tmp_path / "base.txt"
+    base.write_text(
+        "tests/test_a.py::old_failure\n"
+        "tests/test_b.py::still_fails\n"
+    )
+    pr = tmp_path / "pr.txt"
+    pr.write_text("tests/test_b.py::still_fails\n")
+
+    returncode, calls = _run_gate_with_pytest_report(
+        [
+            "--baseline",
+            str(pr),
+            "--base-baseline",
+            str(base),
+            "--pytest-args",
+            "tests/",
+            "-m",
+            "not integration",
+        ],
+        "FAILED tests/test_b.py::still_fails - boom\n",
+        monkeypatch,
+    )
+    captured = capsys.readouterr()
+
+    assert returncode == 0, captured.out + captured.err
+    assert calls
+    assert "tests/" in calls[0]
+    assert "exactly matches" in captured.out
 
 
 def test_cli_exit1_when_removed_baseline_node_still_fails(tmp_path, monkeypatch, capsys):

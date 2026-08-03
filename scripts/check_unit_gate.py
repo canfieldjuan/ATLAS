@@ -62,6 +62,19 @@ _NO_TESTS_COLLECTED = 5
 DEFAULT_PYTEST_ARGS = ["tests/", "-m", "not integration and not e2e",
                        "--continue-on-collection-errors", "-rfE", "--tb=no",
                        "-q", "-p", "no:cacheprovider"]
+_PYTEST_OPTIONS_WITH_VALUES = frozenset((
+    "-k",
+    "-m",
+    "-p",
+    "--basetemp",
+    "--confcutdir",
+    "--deselect",
+    "--ignore",
+    "--ignore-glob",
+    "--rootdir",
+    "--tb",
+))
+_PYTEST_NARROWING_OPTIONS = frozenset(("-k", "--deselect", "--ignore", "--ignore-glob"))
 
 
 def parse_failing_nodes(pytest_output: str) -> set[str]:
@@ -121,16 +134,51 @@ def restrict_baseline(baseline: set[str], selected_files: set[str]) -> set[str]:
     return {node for node in baseline if node_file(node) in selected_files}
 
 
+def pytest_positional_targets(pytest_args: list[str]) -> list[str]:
+    """Return pytest positional targets, skipping option values."""
+    targets: list[str] = []
+    index = 0
+    while index < len(pytest_args):
+        arg = pytest_args[index]
+        if arg == "--":
+            targets.extend(pytest_args[index + 1:])
+            break
+        option = arg.split("=", 1)[0]
+        if arg.startswith("-"):
+            index += 2 if option in _PYTEST_OPTIONS_WITH_VALUES and "=" not in arg else 1
+            continue
+        targets.append(arg)
+        index += 1
+    return targets
+
+
 def pytest_target_files(pytest_args: list[str]) -> set[str]:
     """Test file targets named in pytest args, normalized like selected-files."""
     targets: set[str] = set()
-    for arg in pytest_args:
+    for arg in pytest_positional_targets(pytest_args):
         if arg.startswith("-"):
             continue
         normalized = arg.removeprefix("./").rstrip("/").split("::", 1)[0]
         if normalized.startswith("tests/") and normalized.endswith(".py"):
             targets.add(normalized)
     return targets
+
+
+def pytest_args_narrow_scope(pytest_args: list[str]) -> bool:
+    """Whether custom pytest args can silently skip part of the test tree."""
+    for arg in pytest_args:
+        option = arg.split("=", 1)[0]
+        if option in _PYTEST_NARROWING_OPTIONS or arg.startswith("-k"):
+            return True
+    return False
+
+
+def pytest_args_target_full_suite(pytest_args: list[str]) -> bool:
+    """Whether pytest args explicitly run the whole unit-test tree."""
+    return any(
+        target.removeprefix("./").rstrip("/") == "tests"
+        for target in pytest_positional_targets(pytest_args)
+    )
 
 
 def validate_selected_pytest_args(selected_files: set[str], pytest_args: list[str]) -> int:
@@ -153,6 +201,26 @@ def validate_selected_pytest_args(selected_files: set[str], pytest_args: list[st
         print("unit gate: pytest target(s) outside --selected-files:", file=sys.stderr)
         for path in extra[:20]:
             print(f"  {path}", file=sys.stderr)
+    return 2
+
+
+def validate_unscoped_shrink_pytest_args(pytest_args: list[str]) -> int:
+    """Fail closed when custom args narrow a baseline-shrink proof."""
+    if pytest_args_target_full_suite(pytest_args) and not pytest_args_narrow_scope(pytest_args):
+        return 0
+    print(
+        "unit gate: custom --pytest-args cannot prove a baseline shrink unless "
+        "they explicitly target the full tests/ tree and avoid narrowing options.",
+        file=sys.stderr,
+    )
+    if not pytest_args_target_full_suite(pytest_args):
+        print("unit gate: custom --pytest-args do not target tests/.", file=sys.stderr)
+    if pytest_args_narrow_scope(pytest_args):
+        print(
+            "unit gate: custom --pytest-args contain a narrowing option "
+            "(-k, --ignore, --ignore-glob, or --deselect).",
+            file=sys.stderr,
+        )
     return 2
 
 
@@ -341,6 +409,10 @@ def main(argv: list[str] | None = None) -> int:
                     removed_baseline_nodes,
                     missing_files=missing_removed_files,
                 )
+    elif removed_baseline_nodes and args.pytest_args:
+        scope_status = validate_unscoped_shrink_pytest_args(args.pytest_args)
+        if scope_status:
+            return scope_status
 
     if args.report_file is not None:
         if removed_baseline_nodes:
