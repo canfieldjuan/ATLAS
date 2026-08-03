@@ -115,12 +115,12 @@ def _run(args, tmp_path, report):
     )
 
 
-def _run_gate_with_pytest_report(args, report, monkeypatch):
+def _run_gate_with_pytest_report(args, report, monkeypatch, returncode=1):
     calls = []
 
     def fake_run(cmd, capture_output, text):
         calls.append(cmd)
-        return subprocess.CompletedProcess(cmd, 1, stdout=report, stderr="")
+        return subprocess.CompletedProcess(cmd, returncode, stdout=report, stderr="")
 
     monkeypatch.setattr(gate.subprocess, "run", fake_run)
     return gate.main(args), calls
@@ -314,7 +314,13 @@ def test_cli_exit0_when_scoped_run_proves_removed_node_passes(tmp_path, monkeypa
             "tests/test_a.py",
             "tests/test_b.py",
             "-m",
-            "not integration",
+            "not integration and not e2e",
+            "--continue-on-collection-errors",
+            "-rfE",
+            "--tb=no",
+            "-q",
+            "-p",
+            "no:cacheprovider",
         ],
         "FAILED tests/test_b.py::still_fails - boom\n",
         monkeypatch,
@@ -359,6 +365,91 @@ def test_cli_exit2_when_selected_scope_not_bound_to_pytest_args(tmp_path, monkey
     assert calls == []
     assert "selected file(s) missing from --pytest-args" in captured.err
     assert "tests/test_a.py" in captured.err
+
+
+@pytest.mark.parametrize(
+    "pytest_args",
+    [
+        ["tests/test_removed.py", "-k", "unrelated"],
+        ["tests/test_removed.py", "--collect-only"],
+        ["tests/test_removed.py", "--co"],
+        ["tests/test_removed.py", "-x"],
+        ["tests/test_removed.py", "--maxfail=1"],
+        ["tests/test_removed.py", "--lf"],
+        ["tests/test_removed.py", "--stepwise"],
+        ["tests/test_removed.py", "--ignore=tests/test_removed.py"],
+        ["tests/test_removed.py", "--ignore", "tests/test_removed.py"],
+        ["tests/test_removed.py", "--deselect", "tests/test_removed.py::test_old_failure"],
+        ["tests/test_removed.py", "-m", "not old_failure_marker"],
+    ],
+)
+def test_cli_exit2_when_scoped_custom_pytest_args_can_skip_removed_node(
+    tmp_path, monkeypatch, capsys, pytest_args
+):
+    base = tmp_path / "base.txt"
+    base.write_text("tests/test_removed.py::test_old_failure\n")
+    pr = tmp_path / "pr.txt"
+    pr.write_text("")
+    selected = tmp_path / "selected.txt"
+    selected.write_text("tests/test_removed.py\n")
+
+    returncode, calls = _run_gate_with_pytest_report(
+        [
+            "--baseline",
+            str(pr),
+            "--base-baseline",
+            str(base),
+            "--selected-files",
+            str(selected),
+            "--pytest-args",
+            *pytest_args,
+        ],
+        "1 passed in 0.10s\n",
+        monkeypatch,
+    )
+    captured = capsys.readouterr()
+
+    assert returncode == 2, captured.out + captured.err
+    assert calls == []
+    assert "scoped custom --pytest-args cannot prove a baseline shrink" in captured.err
+
+
+def test_cli_exit2_when_scoped_shrink_run_collects_no_tests(tmp_path, monkeypatch, capsys):
+    base = tmp_path / "base.txt"
+    base.write_text("tests/test_removed.py::test_old_failure\n")
+    pr = tmp_path / "pr.txt"
+    pr.write_text("")
+    selected = tmp_path / "selected.txt"
+    selected.write_text("tests/test_removed.py\n")
+
+    returncode, calls = _run_gate_with_pytest_report(
+        [
+            "--baseline",
+            str(pr),
+            "--base-baseline",
+            str(base),
+            "--selected-files",
+            str(selected),
+            "--pytest-args",
+            "tests/test_removed.py",
+            "-m",
+            "not integration and not e2e",
+            "--continue-on-collection-errors",
+            "-rfE",
+            "--tb=no",
+            "-q",
+            "-p",
+            "no:cacheprovider",
+        ],
+        "no tests ran in 0.10s\n",
+        monkeypatch,
+        returncode=5,
+    )
+    captured = capsys.readouterr()
+
+    assert returncode == 2, captured.out + captured.err
+    assert calls
+    assert "pytest exited 5" in captured.err
 
 
 @pytest.mark.parametrize(

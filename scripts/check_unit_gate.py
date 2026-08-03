@@ -74,6 +74,16 @@ _PYTEST_OPTIONS_WITH_VALUES = frozenset((
     "--rootdir",
     "--tb",
 ))
+_SCOPED_SHRINK_ALLOWED_FLAGS = frozenset((
+    "--continue-on-collection-errors",
+    "-q",
+    "-rfE",
+))
+_SCOPED_SHRINK_ALLOWED_OPTIONS_WITH_VALUES = {
+    "-m": frozenset(("not integration and not e2e",)),
+    "-p": frozenset(("no:cacheprovider",)),
+    "--tb": frozenset(("no",)),
+}
 
 
 def parse_failing_nodes(pytest_output: str) -> set[str]:
@@ -183,6 +193,50 @@ def validate_selected_pytest_args(selected_files: set[str], pytest_args: list[st
         print("unit gate: pytest target(s) outside --selected-files:", file=sys.stderr)
         for path in extra[:20]:
             print(f"  {path}", file=sys.stderr)
+    return 2
+
+
+def validate_scoped_shrink_pytest_args(pytest_args: list[str]) -> int:
+    """Fail closed when scoped shrink proof can skip selected-file tests."""
+    unsafe: list[str] = []
+    index = 0
+    while index < len(pytest_args):
+        arg = pytest_args[index]
+        if arg == "--":
+            break
+        option, has_inline_value, inline_value = arg.partition("=")
+        if not arg.startswith("-"):
+            index += 1
+            continue
+        if arg in _SCOPED_SHRINK_ALLOWED_FLAGS:
+            index += 1
+            continue
+        allowed_values = _SCOPED_SHRINK_ALLOWED_OPTIONS_WITH_VALUES.get(option)
+        if allowed_values is not None:
+            if has_inline_value:
+                value = inline_value
+                step = 1
+            elif index + 1 < len(pytest_args):
+                value = pytest_args[index + 1]
+                step = 2
+            else:
+                value = ""
+                step = 1
+            if value in allowed_values:
+                index += step
+                continue
+        unsafe.append(arg)
+        index += 1
+    if not unsafe:
+        return 0
+    print(
+        "unit gate: scoped custom --pytest-args cannot prove a baseline shrink "
+        "with pytest option(s) that can filter, deselect, skip execution, or "
+        "short-circuit the selected files.",
+        file=sys.stderr,
+    )
+    for arg in unsafe[:20]:
+        print(f"  {arg}", file=sys.stderr)
     return 2
 
 
@@ -382,6 +436,10 @@ def main(argv: list[str] | None = None) -> int:
                     removed_baseline_nodes,
                     missing_files=missing_removed_files,
                 )
+            if args.pytest_args:
+                scope_status = validate_scoped_shrink_pytest_args(args.pytest_args)
+                if scope_status:
+                    return scope_status
     elif removed_baseline_nodes and args.pytest_args:
         scope_status = validate_unscoped_shrink_pytest_args()
         if scope_status:
@@ -401,7 +459,10 @@ def main(argv: list[str] | None = None) -> int:
     else:
         output, returncode = run_pytest(args.pytest_args or DEFAULT_PYTEST_ARGS)
         try:
-            ensure_pytest_ran(returncode, allow_no_tests=selected is not None)
+            ensure_pytest_ran(
+                returncode,
+                allow_no_tests=selected is not None and not removed_baseline_nodes,
+            )
         except RuntimeError as exc:
             print(f"unit gate: {exc}", file=sys.stderr)
             return 2
