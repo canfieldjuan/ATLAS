@@ -117,10 +117,14 @@ def _run(args, tmp_path, report):
 
 def _run_gate_with_pytest_report(args, report, monkeypatch, returncode=1):
     calls = []
+    reports = list(report) if isinstance(report, list) else [report]
+    returncodes = list(returncode) if isinstance(returncode, list) else [returncode]
 
     def fake_run(cmd, capture_output, text):
         calls.append(cmd)
-        return subprocess.CompletedProcess(cmd, returncode, stdout=report, stderr="")
+        stdout = reports.pop(0) if reports else ""
+        code = returncodes.pop(0) if returncodes else 0
+        return subprocess.CompletedProcess(cmd, code, stdout=stdout, stderr="")
 
     monkeypatch.setattr(gate.subprocess, "run", fake_run)
     return gate.main(args), calls
@@ -322,15 +326,20 @@ def test_cli_exit0_when_scoped_run_proves_removed_node_passes(tmp_path, monkeypa
             "-p",
             "no:cacheprovider",
         ],
-        "FAILED tests/test_b.py::still_fails - boom\n",
+        [
+            "1 passed in 0.10s\n",
+            "FAILED tests/test_b.py::still_fails - boom\n",
+        ],
         monkeypatch,
+        returncode=[0, 1],
     )
     captured = capsys.readouterr()
 
     assert returncode == 0, captured.out + captured.err
     assert calls
-    assert "tests/test_a.py" in calls[0]
-    assert "tests/test_b.py" in calls[0]
+    assert "tests/test_a.py::old_failure" in calls[0]
+    assert "tests/test_a.py" in calls[1]
+    assert "tests/test_b.py" in calls[1]
     assert "exactly matches" in captured.out
 
 
@@ -412,6 +421,45 @@ def test_cli_exit2_when_scoped_custom_pytest_args_can_skip_removed_node(
     assert returncode == 2, captured.out + captured.err
     assert calls == []
     assert "scoped custom --pytest-args cannot prove a baseline shrink" in captured.err
+
+
+def test_cli_exit2_when_removed_node_was_not_collected(tmp_path, monkeypatch, capsys):
+    base = tmp_path / "base.txt"
+    base.write_text("tests/test_removed.py::test_old_failure\n")
+    pr = tmp_path / "pr.txt"
+    pr.write_text("")
+    selected = tmp_path / "selected.txt"
+    selected.write_text("tests/test_removed.py\n")
+
+    returncode, calls = _run_gate_with_pytest_report(
+        [
+            "--baseline",
+            str(pr),
+            "--base-baseline",
+            str(base),
+            "--selected-files",
+            str(selected),
+            "--pytest-args",
+            "tests/test_removed.py",
+            "-m",
+            "not integration and not e2e",
+            "--continue-on-collection-errors",
+            "-rfE",
+            "--tb=no",
+            "-q",
+            "-p",
+            "no:cacheprovider",
+        ],
+        "ERROR: not found: tests/test_removed.py::test_old_failure\n",
+        monkeypatch,
+        returncode=4,
+    )
+    captured = capsys.readouterr()
+
+    assert returncode == 2, captured.out + captured.err
+    assert calls
+    assert "tests/test_removed.py::test_old_failure" in calls[0]
+    assert "removed baseline node proof failed" in captured.err
 
 
 def test_cli_exit2_when_scoped_shrink_run_collects_no_tests(tmp_path, monkeypatch, capsys):
@@ -519,18 +567,16 @@ def test_cli_exit1_when_removed_baseline_node_still_fails(tmp_path, monkeypatch,
             "tests/test_a.py",
             "tests/test_b.py",
         ],
-        "FAILED tests/test_a.py::old_failure - boom\n"
-        "FAILED tests/test_b.py::still_fails - boom\n",
+        "FAILED tests/test_a.py::old_failure - boom\n",
         monkeypatch,
     )
     captured = capsys.readouterr()
 
     assert returncode == 1, captured.out + captured.err
     assert calls
-    assert "tests/test_a.py" in calls[0]
-    assert "tests/test_b.py" in calls[0]
-    assert "REGRESSION" in captured.out
-    assert "tests/test_a.py::old_failure" in captured.out
+    assert "tests/test_a.py::old_failure" in calls[0]
+    assert "removed baseline node proof failed" in captured.err
+    assert "tests/test_a.py::old_failure" in captured.err
 
 
 def test_cli_report_without_baseline_shrink_still_gates_fixture_output(tmp_path):

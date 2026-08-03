@@ -74,6 +74,10 @@ Slice phase: Workflow/process
     collect-only, short-circuit, or otherwise skip removed nodes exits 2 before
     launching pytest, settled by
     `tests/test_check_unit_gate.py::test_cli_exit2_when_scoped_custom_pytest_args_can_skip_removed_node`.
+  - A scoped run cannot prove a removed node by selecting only the containing
+    file; every removed node is run directly and exits 2 if pytest cannot
+    collect it, settled by
+    `tests/test_check_unit_gate.py::test_cli_exit2_when_removed_node_was_not_collected`.
   - A scoped shrink run that collects no tests exits 2 because no removed node
     was observed, settled by
     `tests/test_check_unit_gate.py::test_cli_exit2_when_scoped_shrink_run_collects_no_tests`.
@@ -152,12 +156,15 @@ when `--pytest-args` is supplied the file targets in that invocation must match
 the selected-file scope before pytest is launched. A scoped shrink proof also
 rejects custom pytest options outside the unit-gate workflow's known execution
 model because filters, deselectors, collect-only modes, and early-exit flags can
-skip removed nodes while still targeting the selected file. An unscoped custom
-`--pytest-args` invocation cannot prove a shrink at all; use the default
-full-suite invocation or a scoped `--selected-files` proof. `--growth-only` has
-no pytest evidence and fails closed. The existing comparison then still catches
-the other half: if a removed node still appears in the failing set, it is a
-regression because it is no longer in the PR baseline.
+skip removed nodes while still targeting the selected file. Any live shrink
+proof also runs each removed node id directly through pytest; a deleted or
+renamed node therefore fails closed instead of being inferred from file-level
+selection. An unscoped custom `--pytest-args` invocation cannot prove a shrink
+at all; use the default full-suite invocation or a scoped `--selected-files`
+proof. `--growth-only` has no pytest evidence and fails closed. The existing
+comparison then still catches the other half: if a removed node still appears
+in the failing set, it is a regression because it is no longer in the PR
+baseline.
 
 ## Intentional
 
@@ -178,11 +185,15 @@ Parked hardening: none.
 ## Verification
 
 - `python -m pytest tests/test_check_unit_gate.py tests/test_select_impacted_tests.py tests/test_unit_gate_selector_fallback.py -q`
-  - `102 passed in 0.94s`
+  - `103 passed in 0.63s`
 - `python -m pytest tests/test_reasoning_graph_routing.py -q -rfE --tb=short`
-  - `12 passed, 1 warning in 1.27s`
+  - `12 passed, 1 warning in 1.04s`
 - `python -m py_compile scripts/check_unit_gate.py`
   - passed
+- `python scripts/check_unit_gate.py --baseline tests/unit_gate_baseline.txt --base-baseline /tmp/origin-main-unit-baseline.txt --selected-files /tmp/unit-gate-selected-reasoning.txt --pytest-args tests/test_reasoning_graph_routing.py -m 'not integration and not e2e' --continue-on-collection-errors -rfE --tb=no -q -p no:cacheprovider`
+  - `OK: the baseline exactly matches the current failing set`; scoped baseline
+    `0/175`, proving the four removed reasoning nodes by exact-node proof plus
+    the selected file run.
 - `python scripts/check_unit_gate.py --baseline tests/unit_gate_baseline.txt --base-baseline /tmp/origin-main-unit-baseline.txt --growth-only; test $? -eq 2`
   - expected exit 2; names exactly the four remaining removed
     `tests/test_reasoning_graph_routing.py::*` routing entries.
@@ -199,9 +210,9 @@ Parked hardening: none.
 
 | File | LOC |
 |---|---:|
-| `plans/PR-Unit-Gate-Baseline-Shrink-Proof.md` | 207 |
-| `scripts/check_unit_gate.py` | 217 |
-| `tests/test_check_unit_gate.py` | 401 |
+| `plans/PR-Unit-Gate-Baseline-Shrink-Proof.md` | 218 |
+| `scripts/check_unit_gate.py` | 256 |
+| `tests/test_check_unit_gate.py` | 447 |
 | `tests/test_reasoning_graph_routing.py` | 28 |
 | `tests/unit_gate_baseline.txt` | 4 |
-| **Total** | **857** |
+| **Total** | **953** |

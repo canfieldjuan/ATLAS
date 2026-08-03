@@ -59,9 +59,10 @@ _SUMMARY_RE = re.compile(r"^(?:FAILED|ERROR)\s+(?P<node>[^\s\[]+(?:\[[^\]]*\])?)
 _OK_PYTEST_EXIT = frozenset((0, 1))
 _NO_TESTS_COLLECTED = 5
 
-DEFAULT_PYTEST_ARGS = ["tests/", "-m", "not integration and not e2e",
-                       "--continue-on-collection-errors", "-rfE", "--tb=no",
-                       "-q", "-p", "no:cacheprovider"]
+UNIT_GATE_OPTION_ARGS = ["-m", "not integration and not e2e",
+                         "--continue-on-collection-errors", "-rfE", "--tb=no",
+                         "-q", "-p", "no:cacheprovider"]
+DEFAULT_PYTEST_ARGS = ["tests/", *UNIT_GATE_OPTION_ARGS]
 _PYTEST_OPTIONS_WITH_VALUES = frozenset((
     "-k",
     "-m",
@@ -284,6 +285,33 @@ def run_pytest(pytest_args: list[str]) -> tuple[str, int]:
     return proc.stdout + proc.stderr, proc.returncode
 
 
+def validate_removed_nodes_execute(removed_nodes: list[str]) -> int:
+    """Run removed node ids directly so shrink proof is node-level, not file-level."""
+    output, returncode = run_pytest([*removed_nodes, *UNIT_GATE_OPTION_ARGS])
+    if returncode == 0:
+        return 0
+    if returncode == 1:
+        failing = parse_failing_nodes(output)
+        print(
+            "unit gate: removed baseline node proof failed; node(s) still fail "
+            "or error when run directly:",
+            file=sys.stderr,
+        )
+        for node in sorted(failing or set(removed_nodes))[:20]:
+            print(f"  {node}", file=sys.stderr)
+        return 1
+    try:
+        ensure_pytest_ran(returncode)
+    except RuntimeError as exc:
+        print(
+            "unit gate: removed baseline node proof failed; "
+            f"{exc}",
+            file=sys.stderr,
+        )
+        return 2
+    return 0
+
+
 def write_baseline(path: Path, failing: set[str], *, header: str) -> None:
     body = "\n".join(sorted(failing))
     path.write_text(header.rstrip() + "\n" + body + "\n", encoding="utf-8")
@@ -444,6 +472,11 @@ def main(argv: list[str] | None = None) -> int:
         scope_status = validate_unscoped_shrink_pytest_args()
         if scope_status:
             return scope_status
+
+    if removed_baseline_nodes and args.report_file is None:
+        proof_status = validate_removed_nodes_execute(removed_baseline_nodes)
+        if proof_status:
+            return proof_status
 
     if args.report_file is not None:
         if removed_baseline_nodes:
