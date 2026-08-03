@@ -27,7 +27,7 @@ to explain the failed first run without opening a separate symptom PR.
   `.github/workflows/unit_gate.yml`; add adversarial tests in
   `tests/test_check_unit_gate.py` for growth-only, unscoped-report,
   scoped-report, scoped-missing-proof, scoped-invocation mismatch,
-  unscoped custom-invocation narrowing, scoped-proven-shrink, and
+  unscoped custom-invocation rejection, scoped-proven-shrink, and
   removed-node-still-failing cases; isolate the order-dependent LLM registry
   state that made #2259-removed routing nodes fail only in the full suite;
   remove only the stale baseline entries the full gate proved passing.
@@ -69,12 +69,10 @@ Slice phase: Workflow/process
   - A scoped run whose `--selected-files` claim is broader than the file targets
     in `--pytest-args` exits 2 before launching pytest, settled by
     `tests/test_check_unit_gate.py::test_cli_exit2_when_selected_scope_not_bound_to_pytest_args`.
-  - An unscoped custom `--pytest-args` invocation cannot prove a baseline shrink
-    unless it explicitly targets `tests/` and avoids narrowing flags, settled by
-    `tests/test_check_unit_gate.py::test_cli_exit2_when_unscoped_custom_pytest_args_cannot_prove_shrink`,
-    `tests/test_check_unit_gate.py::test_cli_exit2_when_unscoped_custom_pytest_args_narrow_shrink_proof`,
-    and
-    `tests/test_check_unit_gate.py::test_cli_exit0_when_unscoped_custom_pytest_args_run_full_suite`.
+  - An unscoped custom `--pytest-args` invocation cannot prove a baseline shrink;
+    shrink proof must use the default full-suite invocation or a scoped
+    `--selected-files` proof, settled by
+    `tests/test_check_unit_gate.py::test_cli_exit2_when_unscoped_custom_pytest_args_cannot_prove_shrink`.
   - A scoped run launched by the gate that selected every removed node's file
     and whose report no longer contains those nodes can pass, settled by
     `tests/test_check_unit_gate.py::test_cli_exit0_when_scoped_run_proves_removed_node_passes`.
@@ -109,8 +107,8 @@ seam in the enumeration; otherwise write "N/A - no boundary change."
 - Replaced-path behaviors: baseline growth remains exit 3; unchanged exact
   baseline comparisons remain exit 0/1; new shrink-without-proof cases exit 2.
 - Guard-relevant fields: base-baseline node ids, PR baseline node ids, removed
-  node ids, selected test files, pytest positional targets, pytest narrowing
-  options, pytest-argument file targets, parsed pytest failing node ids.
+  node ids, selected test files, pytest positional targets, pytest-argument file
+  targets, parsed pytest failing node ids.
 - Caller x input shape: `.github/workflows/unit_gate.yml` calls
   `check_unit_gate.py` in FULL, scoped, and growth-only modes; tests drive the
   same CLI modes with fixture baselines/reports.
@@ -144,12 +142,11 @@ output is not bound to a verified execution scope; scoped runs launched by the
 gate must include every removed node's test file in `--selected-files`, and
 when `--pytest-args` is supplied the file targets in that invocation must match
 the selected-file scope before pytest is launched. An unscoped custom
-`--pytest-args` invocation can only prove a shrink if it targets the full
-`tests/` tree and does not use `-k`, `--ignore`, `--ignore-glob`, or
-`--deselect`; otherwise it fails closed before pytest is launched.
-`--growth-only` has no pytest evidence and fails closed. The existing comparison
-then still catches the other half: if a removed node still appears in the
-failing set, it is a regression because it is no longer in the PR baseline.
+`--pytest-args` invocation cannot prove a shrink at all; use the default
+full-suite invocation or a scoped `--selected-files` proof. `--growth-only` has
+no pytest evidence and fails closed. The existing comparison then still catches
+the other half: if a removed node still appears in the failing set, it is a
+regression because it is no longer in the PR baseline.
 
 ## Intentional
 
@@ -170,7 +167,7 @@ Parked hardening: none.
 ## Verification
 
 - `python -m pytest tests/test_check_unit_gate.py tests/test_select_impacted_tests.py tests/test_unit_gate_selector_fallback.py -q`
-  - `85 passed in 0.96s`
+  - `90 passed in 0.82s`
 - `python -m pytest tests/test_reasoning_graph_routing.py -q -rfE --tb=short`
   - `12 passed, 1 warning in 1.27s`
 - `python -m py_compile scripts/check_unit_gate.py`
@@ -191,9 +188,9 @@ Parked hardening: none.
 
 | File | LOC |
 |---|---:|
-| `plans/PR-Unit-Gate-Baseline-Shrink-Proof.md` | 199 |
-| `scripts/check_unit_gate.py` | 181 |
-| `tests/test_check_unit_gate.py` | 373 |
+| `plans/PR-Unit-Gate-Baseline-Shrink-Proof.md` | 196 |
+| `scripts/check_unit_gate.py` | 154 |
+| `tests/test_check_unit_gate.py` | 310 |
 | `tests/test_reasoning_graph_routing.py` | 28 |
 | `tests/unit_gate_baseline.txt` | 4 |
-| **Total** | **785** |
+| **Total** | **692** |

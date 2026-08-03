@@ -74,7 +74,6 @@ _PYTEST_OPTIONS_WITH_VALUES = frozenset((
     "--rootdir",
     "--tb",
 ))
-_PYTEST_NARROWING_OPTIONS = frozenset(("-k", "--deselect", "--ignore", "--ignore-glob"))
 
 
 def parse_failing_nodes(pytest_output: str) -> set[str]:
@@ -164,23 +163,6 @@ def pytest_target_files(pytest_args: list[str]) -> set[str]:
     return targets
 
 
-def pytest_args_narrow_scope(pytest_args: list[str]) -> bool:
-    """Whether custom pytest args can silently skip part of the test tree."""
-    for arg in pytest_args:
-        option = arg.split("=", 1)[0]
-        if option in _PYTEST_NARROWING_OPTIONS or arg.startswith("-k"):
-            return True
-    return False
-
-
-def pytest_args_target_full_suite(pytest_args: list[str]) -> bool:
-    """Whether pytest args explicitly run the whole unit-test tree."""
-    return any(
-        target.removeprefix("./").rstrip("/") == "tests"
-        for target in pytest_positional_targets(pytest_args)
-    )
-
-
 def validate_selected_pytest_args(selected_files: set[str], pytest_args: list[str]) -> int:
     """Fail closed when scoped proof claims files the pytest invocation won't run."""
     targets = pytest_target_files(pytest_args)
@@ -204,23 +186,14 @@ def validate_selected_pytest_args(selected_files: set[str], pytest_args: list[st
     return 2
 
 
-def validate_unscoped_shrink_pytest_args(pytest_args: list[str]) -> int:
-    """Fail closed when custom args narrow a baseline-shrink proof."""
-    if pytest_args_target_full_suite(pytest_args) and not pytest_args_narrow_scope(pytest_args):
-        return 0
+def validate_unscoped_shrink_pytest_args() -> int:
+    """Fail closed when custom args claim unscoped baseline-shrink proof."""
     print(
-        "unit gate: custom --pytest-args cannot prove a baseline shrink unless "
-        "they explicitly target the full tests/ tree and avoid narrowing options.",
+        "unit gate: unscoped custom --pytest-args cannot prove a baseline "
+        "shrink; use the default full-suite invocation or pass --selected-files "
+        "for a scoped proof.",
         file=sys.stderr,
     )
-    if not pytest_args_target_full_suite(pytest_args):
-        print("unit gate: custom --pytest-args do not target tests/.", file=sys.stderr)
-    if pytest_args_narrow_scope(pytest_args):
-        print(
-            "unit gate: custom --pytest-args contain a narrowing option "
-            "(-k, --ignore, --ignore-glob, or --deselect).",
-            file=sys.stderr,
-        )
     return 2
 
 
@@ -410,7 +383,7 @@ def main(argv: list[str] | None = None) -> int:
                     missing_files=missing_removed_files,
                 )
     elif removed_baseline_nodes and args.pytest_args:
-        scope_status = validate_unscoped_shrink_pytest_args(args.pytest_args)
+        scope_status = validate_unscoped_shrink_pytest_args()
         if scope_status:
             return scope_status
 
