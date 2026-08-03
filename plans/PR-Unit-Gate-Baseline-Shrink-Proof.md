@@ -26,10 +26,10 @@ to explain the failed first run without opening a separate symptom PR.
   `scripts/check_unit_gate.py`, exercised through the CLI path used by
   `.github/workflows/unit_gate.yml`; add adversarial tests in
   `tests/test_check_unit_gate.py` for growth-only, unscoped-report,
-  scoped-missing-proof, scoped-proven-shrink, and removed-node-still-failing
-  cases; isolate the order-dependent LLM registry state that made #2259-removed
-  routing nodes fail only in the full suite; remove only the stale baseline
-  entries the full gate proved passing.
+  scoped-report, scoped-missing-proof, scoped-proven-shrink, and
+  removed-node-still-failing cases; isolate the order-dependent LLM registry
+  state that made #2259-removed routing nodes fail only in the full suite;
+  remove only the stale baseline entries the full gate proved passing.
 - Must not change: do not change product behavior, reviewer-convergence policy
   in #2263, live-reconciliation policy from #2258, selected-test ownership
   mappings except where this proof requires them, or runtime LLM routing
@@ -61,11 +61,15 @@ Slice phase: Workflow/process
   - A captured report without a selected-file scope cannot prove a baseline
     shrink, settled by
     `tests/test_check_unit_gate.py::test_cli_exit2_when_unscoped_report_claims_baseline_shrink`.
-  - A scoped run that selected every removed node's file and whose report no
-    longer contains those nodes can pass, settled by
-    `tests/test_check_unit_gate.py::test_cli_exit0_when_scoped_run_proves_removed_node_passes`.
-  - A scoped report where a removed node still fails reports a regression,
+  - A captured report with a selected-file scope still cannot prove a baseline
+    shrink because the claimed scope is not bound to the captured output,
     settled by
+    `tests/test_check_unit_gate.py::test_cli_exit2_when_scoped_report_claims_baseline_shrink`.
+  - A scoped run launched by the gate that selected every removed node's file
+    and whose report no longer contains those nodes can pass, settled by
+    `tests/test_check_unit_gate.py::test_cli_exit0_when_scoped_run_proves_removed_node_passes`.
+  - A scoped run launched by the gate where a removed node still fails reports
+    a regression, settled by
     `tests/test_check_unit_gate.py::test_cli_exit1_when_removed_baseline_node_still_fails`.
   - Reasoning graph routing tests pass as a full file and no longer depend on
     prior-suite LLM registry state, settled by
@@ -74,7 +78,7 @@ Slice phase: Workflow/process
     base baseline resolved from `origin/main`, settled by
     `python scripts/check_unit_gate.py --baseline tests/unit_gate_baseline.txt --base-baseline /tmp/unit_gate_base_baseline.txt`.
 - Reachability proof: `python scripts/check_unit_gate.py --baseline <pr>
-  --base-baseline <base> --selected-files <scope> --report-file <report>`
+  --base-baseline <base> --selected-files <scope> --pytest-args <files...>`
   exercises the same CLI entrypoint the unit-gate workflow calls; focused tests
   assert the observable exit code/stdout/stderr outcomes.
 - Affected surfaces: `scripts/check_unit_gate.py`,
@@ -124,12 +128,12 @@ fallback changes; otherwise write "N/A - no guard/config boundary change."
 Compute `removed_baseline_entries = base_baseline - pr_baseline` when
 `--base-baseline` is available. If that set is non-empty, require a proof path:
 a real full run can prove the shrink from the pytest invocation it just ran;
-captured `--report-file` evidence must also supply `--selected-files` so the
-gate can validate the report's execution scope; scoped runs must include every
-removed node's test file in `--selected-files`; `--growth-only` has no pytest
-evidence and fails closed. The existing comparison then still catches the other
-half: if a removed node still appears in the failing set, it is a regression
-because it is no longer in the PR baseline.
+captured `--report-file` evidence cannot prove a shrink because the captured
+output is not bound to a verified execution scope; scoped runs launched by the
+gate must include every removed node's test file in `--selected-files`;
+`--growth-only` has no pytest evidence and fails closed. The existing comparison
+then still catches the other half: if a removed node still appears in the
+failing set, it is a regression because it is no longer in the PR baseline.
 
 ## Intentional
 
@@ -150,7 +154,7 @@ Parked hardening: none.
 ## Verification
 
 - `python -m pytest tests/test_check_unit_gate.py tests/test_select_impacted_tests.py tests/test_unit_gate_selector_fallback.py -q`
-  - `73 passed in 0.64s`
+  - `75 passed in 0.66s`
 - `python -m pytest tests/test_reasoning_graph_routing.py -q -rfE --tb=short`
   - `12 passed, 1 warning in 1.15s`
 - `python -m py_compile scripts/check_unit_gate.py`
@@ -168,9 +172,9 @@ Parked hardening: none.
 
 | File | LOC |
 |---|---:|
-| `plans/PR-Unit-Gate-Baseline-Shrink-Proof.md` | 176 |
-| `scripts/check_unit_gate.py` | 69 |
-| `tests/test_check_unit_gate.py` | 146 |
+| `plans/PR-Unit-Gate-Baseline-Shrink-Proof.md` | 180 |
+| `scripts/check_unit_gate.py` | 70 |
+| `tests/test_check_unit_gate.py` | 191 |
 | `tests/test_reasoning_graph_routing.py` | 28 |
 | `tests/unit_gate_baseline.txt` | 4 |
-| **Total** | **423** |
+| **Total** | **473** |

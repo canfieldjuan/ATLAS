@@ -93,6 +93,11 @@ def _run(args, tmp_path, report):
     )
 
 
+def _run_gate_with_pytest_report(args, report, monkeypatch):
+    monkeypatch.setattr(gate, "run_pytest", lambda _pytest_args: (report, 1))
+    return gate.main(args)
+
+
 _EXACT_BASELINE = (
     "tests/security/test_network_ids.py::TestX::test_arp\n"
     "tests/test_call_workflow.py::TestCall::test_route[make a call]\n"
@@ -226,11 +231,10 @@ def test_cli_exit2_when_unscoped_report_claims_baseline_shrink(tmp_path):
 
     assert r.returncode == 2, r.stdout + r.stderr
     assert "--report-file cannot prove a baseline shrink" in r.stderr
-    assert "--selected-files" in r.stderr
     assert "tests/test_a.py::old_failure" in r.stderr
 
 
-def test_cli_exit0_when_scoped_run_proves_removed_node_passes(tmp_path):
+def test_cli_exit2_when_scoped_report_claims_baseline_shrink(tmp_path):
     base = tmp_path / "base.txt"
     base.write_text(
         "tests/test_a.py::old_failure\n"
@@ -253,39 +257,80 @@ def test_cli_exit0_when_scoped_run_proves_removed_node_passes(tmp_path):
         tmp_path,
         "FAILED tests/test_b.py::still_fails - boom\n",
     )
+
+    assert r.returncode == 2, r.stdout + r.stderr
+    assert "--report-file cannot prove a baseline shrink" in r.stderr
+    assert "tests/test_a.py::old_failure" in r.stderr
+
+
+def test_cli_exit0_when_scoped_run_proves_removed_node_passes(tmp_path, monkeypatch, capsys):
+    base = tmp_path / "base.txt"
+    base.write_text(
+        "tests/test_a.py::old_failure\n"
+        "tests/test_b.py::still_fails\n"
+    )
+    pr = tmp_path / "pr.txt"
+    pr.write_text("tests/test_b.py::still_fails\n")
+    selected = tmp_path / "selected.txt"
+    selected.write_text("tests/test_a.py\ntests/test_b.py\n")
+
+    returncode = _run_gate_with_pytest_report(
+        [
+            "--baseline",
+            str(pr),
+            "--base-baseline",
+            str(base),
+            "--selected-files",
+            str(selected),
+        ],
+        "FAILED tests/test_b.py::still_fails - boom\n",
+        monkeypatch,
+    )
+    captured = capsys.readouterr()
+
+    assert returncode == 0, captured.out + captured.err
+    assert "exactly matches" in captured.out
+
+
+def test_cli_exit1_when_removed_baseline_node_still_fails(tmp_path, monkeypatch, capsys):
+    base = tmp_path / "base.txt"
+    base.write_text(
+        "tests/test_a.py::old_failure\n"
+        "tests/test_b.py::still_fails\n"
+    )
+    pr = tmp_path / "pr.txt"
+    pr.write_text("tests/test_b.py::still_fails\n")
+    selected = tmp_path / "selected.txt"
+    selected.write_text("tests/test_a.py\ntests/test_b.py\n")
+
+    returncode = _run_gate_with_pytest_report(
+        [
+            "--baseline",
+            str(pr),
+            "--base-baseline",
+            str(base),
+            "--selected-files",
+            str(selected),
+        ],
+        "FAILED tests/test_a.py::old_failure - boom\n"
+        "FAILED tests/test_b.py::still_fails - boom\n",
+        monkeypatch,
+    )
+    captured = capsys.readouterr()
+
+    assert returncode == 1, captured.out + captured.err
+    assert "REGRESSION" in captured.out
+    assert "tests/test_a.py::old_failure" in captured.out
+
+
+def test_cli_report_without_baseline_shrink_still_gates_fixture_output(tmp_path):
+    baseline = tmp_path / "baseline.txt"
+    baseline.write_text(_EXACT_BASELINE)
+
+    r = _run(["--baseline", str(baseline)], tmp_path, SAMPLE_PYTEST_OUTPUT)
 
     assert r.returncode == 0, r.stdout + r.stderr
     assert "exactly matches" in r.stdout
-
-
-def test_cli_exit1_when_removed_baseline_node_still_fails(tmp_path):
-    base = tmp_path / "base.txt"
-    base.write_text(
-        "tests/test_a.py::old_failure\n"
-        "tests/test_b.py::still_fails\n"
-    )
-    pr = tmp_path / "pr.txt"
-    pr.write_text("tests/test_b.py::still_fails\n")
-    selected = tmp_path / "selected.txt"
-    selected.write_text("tests/test_a.py\ntests/test_b.py\n")
-
-    r = _run(
-        [
-            "--baseline",
-            str(pr),
-            "--base-baseline",
-            str(base),
-            "--selected-files",
-            str(selected),
-        ],
-        tmp_path,
-        "FAILED tests/test_a.py::old_failure - boom\n"
-        "FAILED tests/test_b.py::still_fails - boom\n",
-    )
-
-    assert r.returncode == 1, r.stdout + r.stderr
-    assert "REGRESSION" in r.stdout
-    assert "tests/test_a.py::old_failure" in r.stdout
 
 
 def test_cli_empty_base_baseline_allows_initial_seed(tmp_path):
