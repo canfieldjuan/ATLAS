@@ -1,6 +1,6 @@
 # Plan archive index
 
-1501 archived plan doc(s). Merged plan docs are moved under `archive/` and listed below; once the archive sweep has run, the `plans/` root holds only in-flight slices.
+1502 archived plan doc(s). Merged plan docs are moved under `archive/` and listed below; once the archive sweep has run, the `plans/` root holds only in-flight slices.
 
 - [PR-ASR-Pip-Audit-Egg-Fragment](archive/PR-ASR-Pip-Audit-Egg-Fragment.md) - lane: security/workflow | phase: Production hardening
 - [PR-ASR-Requirements-Audit-Pin](archive/PR-ASR-Requirements-Audit-Pin.md) - lane: security/workflow | phase: Production hardening
@@ -1257,6 +1257,7 @@
 - [PR-LinkedIn-Marketing-Kit](archive/PR-LinkedIn-Marketing-Kit.md) - lane: linkedin-marketing-kit/reference | phase: Product polish
 - [PR-Live-Provider-Circular-Import](archive/PR-Live-Provider-Circular-Import.md)
 - [PR-Live-Reconciliation-Open-Threads-Only](archive/PR-Live-Reconciliation-Open-Threads-Only.md) - lane: workflow/live-reconciliation-open-threads-only | phase: Workflow/process
+- [PR-Live-Reconciliation-Thread-Gate](archive/PR-Live-Reconciliation-Thread-Gate.md) - lane: workflow/live-reconciliation-open-threads-only | phase: Workflow/process
 - [PR-Live-Smoke-Saved-Draft-Export](archive/PR-Live-Smoke-Saved-Draft-Export.md) - lane: content-ops/support-ticket-input-provider | phase: Functional validation
 - [PR-Local-MCP-Eval-Live-Runbook](archive/PR-Local-MCP-Eval-Live-Runbook.md) - lane: mcp/local-model-evals | phase: Functional validation
 - [PR-Local-MCP-Model-Eval-Harness](archive/PR-Local-MCP-Model-Eval-Harness.md) - lane: mcp/local-model-evals | phase: Vertical slice
