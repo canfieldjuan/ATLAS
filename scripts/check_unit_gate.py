@@ -121,6 +121,41 @@ def restrict_baseline(baseline: set[str], selected_files: set[str]) -> set[str]:
     return {node for node in baseline if node_file(node) in selected_files}
 
 
+def pytest_target_files(pytest_args: list[str]) -> set[str]:
+    """Test file targets named in pytest args, normalized like selected-files."""
+    targets: set[str] = set()
+    for arg in pytest_args:
+        if arg.startswith("-"):
+            continue
+        normalized = arg.removeprefix("./").rstrip("/").split("::", 1)[0]
+        if normalized.startswith("tests/") and normalized.endswith(".py"):
+            targets.add(normalized)
+    return targets
+
+
+def validate_selected_pytest_args(selected_files: set[str], pytest_args: list[str]) -> int:
+    """Fail closed when scoped proof claims files the pytest invocation won't run."""
+    targets = pytest_target_files(pytest_args)
+    missing = sorted(selected_files - targets)
+    extra = sorted(targets - selected_files)
+    if not missing and not extra:
+        return 0
+    print(
+        "unit gate: --selected-files must match the pytest file targets used "
+        "for a scoped run.",
+        file=sys.stderr,
+    )
+    if missing:
+        print("unit gate: selected file(s) missing from --pytest-args:", file=sys.stderr)
+        for path in missing[:20]:
+            print(f"  {path}", file=sys.stderr)
+    if extra:
+        print("unit gate: pytest target(s) outside --selected-files:", file=sys.stderr)
+        for path in extra[:20]:
+            print(f"  {path}", file=sys.stderr)
+    return 2
+
+
 def ensure_pytest_ran(returncode: int, *, allow_no_tests: bool = False) -> None:
     """Raise when pytest did not finish as a normal pass/fail run.
 
@@ -294,6 +329,10 @@ def main(argv: list[str] | None = None) -> int:
             print("--selected-files is empty; use --growth-only for the "
                   "zero-test path", file=sys.stderr)
             return 2
+        if args.pytest_args:
+            scope_status = validate_selected_pytest_args(selected, args.pytest_args)
+            if scope_status:
+                return scope_status
         if removed_baseline_nodes:
             removed_files = {node_file(node) for node in removed_baseline_nodes}
             missing_removed_files = sorted(removed_files - selected)
