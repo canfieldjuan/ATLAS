@@ -9,16 +9,16 @@ from datetime import datetime
 from typing import Annotated, Any
 from uuid import UUID
 
-from fastapi import APIRouter, Depends, Header, HTTPException, Query, status
+from fastapi import APIRouter, Depends, Header, HTTPException, Query, Request, status
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, ConfigDict, Field
 
-from ..services.crm_provider import get_crm_provider
 from ..services.eom_lead_conversion import (
     EOMCustomerHandoff,
     EOMLeadConversionError,
     finalize_eom_customer_handoff,
 )
+from ..services.crm_provider import get_crm_provider
 from .funnel_auth import require_eom_funnel_actor, require_eom_funnel_api
 
 router = APIRouter(prefix="/eom-funnel", tags=["eom-funnel"])
@@ -72,7 +72,10 @@ class EOMLeadReviewResponse(BaseModel):
     )
 
 
-def _crm_dependency() -> Any:
+def _crm_dependency(request: Request) -> Any:
+    provider_factory = getattr(request.app.state, "eom_funnel_crm_provider", None)
+    if callable(provider_factory):
+        return provider_factory()
     return get_crm_provider()
 
 

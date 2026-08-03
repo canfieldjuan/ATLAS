@@ -107,6 +107,13 @@ class EOMProfileConfig(BaseSettings):
         default=False,
         description="Run database migrations during the slim EOM profile startup",
     )
+    canonical_crm_database_confirmed: bool = Field(
+        default=False,
+        description=(
+            "Confirm the slim EOM funnel runtime is configured with the "
+            "authoritative Atlas CRM database before it may serve funnel APIs"
+        ),
+    )
 
 
 class EOMInvoicingConfig(BaseSettings):
@@ -160,6 +167,13 @@ class EOMFunnelConfig(BaseSettings):
         description=(
             "SHA-256 digest of the generated bearer accepted from the EOM time "
             "tracker only; the raw bearer is never stored in Atlas"
+        ),
+    )
+    db_connection_string: str = Field(
+        default="",
+        description=(
+            "Authoritative Atlas CRM PostgreSQL connection string used only by "
+            "the slim EOM funnel routes"
         ),
     )
 

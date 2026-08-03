@@ -403,6 +403,14 @@ def test_eom_render_blueprint_maps_database_and_receivables_auth():
         "key": "ATLAS_EOM_FUNNEL_SERVICE_TOKEN_SHA256",
         "sync": False,
     }
+    assert env_vars["ATLAS_EOM_FUNNEL_DB_CONNECTION_STRING"] == {
+        "key": "ATLAS_EOM_FUNNEL_DB_CONNECTION_STRING",
+        "sync": False,
+    }
+    assert env_vars["ATLAS_EOM_CANONICAL_CRM_DATABASE_CONFIRMED"] == {
+        "key": "ATLAS_EOM_CANONICAL_CRM_DATABASE_CONFIRMED",
+        "value": "false",
+    }
     assert env_vars["ATLAS_EOM_RUN_MIGRATIONS"] == {
         "key": "ATLAS_EOM_RUN_MIGRATIONS",
         "value": "true",
@@ -441,6 +449,99 @@ def test_eom_startup_migrations_are_curated_for_receivables_readiness():
         migration.startswith(("066_", "068_", "074_", "076_", "083_", "095_"))
         for migration in main_eom.EOM_RECEIVABLES_READINESS_MIGRATIONS
     )
+
+
+def test_eom_funnel_canonical_crm_config_defaults_fail_closed(monkeypatch):
+    for key in (
+        "ATLAS_EOM_CANONICAL_CRM_DATABASE_CONFIRMED",
+        "ATLAS_EOM_FUNNEL_API_ENABLED",
+        "ATLAS_EOM_FUNNEL_SERVICE_TOKEN_SHA256",
+        "ATLAS_EOM_FUNNEL_DB_CONNECTION_STRING",
+        _RAW_EOM_FUNNEL_SERVICE_TOKEN_ENV,
+    ):
+        monkeypatch.delenv(key, raising=False)
+
+    from atlas_brain.eom_api import funnel_auth
+    from atlas_brain.eom_api.config import EOMFunnelConfig, EOMProfileConfig
+    from atlas_brain.eom_api.funnel_database import (
+        validate_eom_funnel_canonical_crm_config,
+    )
+
+    profile_defaults = EOMProfileConfig()
+    funnel_defaults = EOMFunnelConfig()
+    assert profile_defaults.canonical_crm_database_confirmed is False
+    assert funnel_defaults.api_enabled is False
+    assert funnel_defaults.db_connection_string == ""
+    validate_eom_funnel_canonical_crm_config(
+        funnel_defaults,
+        canonical_crm_database_confirmed=False,
+    )
+
+    generated = funnel_auth.generate_eom_funnel_service_token()
+    enabled_without_confirmation = EOMFunnelConfig(
+        api_enabled=True,
+        service_token_sha256=generated.sha256,
+        db_connection_string="postgresql://atlas:secret@crm.internal/atlas",
+    )
+    with pytest.raises(
+        RuntimeError,
+        match="ATLAS_EOM_CANONICAL_CRM_DATABASE_CONFIRMED=true",
+    ):
+        validate_eom_funnel_canonical_crm_config(
+            enabled_without_confirmation,
+            canonical_crm_database_confirmed=False,
+        )
+
+    enabled_without_dsn = EOMFunnelConfig(
+        api_enabled=True,
+        service_token_sha256=generated.sha256,
+        db_connection_string="",
+    )
+    with pytest.raises(RuntimeError, match="ATLAS_EOM_FUNNEL_DB_CONNECTION_STRING"):
+        validate_eom_funnel_canonical_crm_config(
+            enabled_without_dsn,
+            canonical_crm_database_confirmed=True,
+        )
+
+    validate_eom_funnel_canonical_crm_config(
+        enabled_without_confirmation,
+        canonical_crm_database_confirmed=True,
+    )
+
+
+def test_eom_funnel_database_pool_uses_dedicated_canonical_dsn(monkeypatch):
+    from atlas_brain.eom_api import funnel_database
+
+    dsn = "postgresql://atlas_funnel:secret@canonical-crm.internal:5432/atlas"
+    calls: dict[str, object] = {}
+
+    class _FakePool:
+        async def close(self):
+            calls["closed"] = True
+
+    async def create_pool(**kwargs):
+        calls["create_pool"] = kwargs
+        return _FakePool()
+
+    monkeypatch.setattr(funnel_database.asyncpg, "create_pool", create_pool)
+
+    async def drive_pool():
+        pool = funnel_database.EOMFunnelDatabasePool(dsn=f" {dsn} ")
+        await pool.initialize()
+        await pool.close()
+        return pool.target_label
+
+    target_label = asyncio.run(drive_pool())
+
+    assert calls["create_pool"] == {
+        "dsn": dsn,
+        "min_size": 1,
+        "max_size": 5,
+        "command_timeout": 30,
+    }
+    assert calls["closed"] is True
+    assert "secret" not in target_label
+    assert target_label == "dsn=canonical-crm.internal:5432/atlas"
 
 
 def test_eom_migration_helper_uses_curated_set():
@@ -500,7 +601,7 @@ def test_eom_funnel_startup_guard_requires_authoritative_datastore(monkeypatch):
     def fail_if_looked_up():
         pytest.fail("disabled EOM funnel must not require a database pool")
 
-    monkeypatch.setattr(main_eom, "get_db_pool", fail_if_looked_up)
+    monkeypatch.setattr(main_eom, "get_eom_funnel_db_pool", fail_if_looked_up)
     asyncio.run(
         main_eom._require_eom_funnel_data_store(
             disabled,
@@ -510,7 +611,7 @@ def test_eom_funnel_startup_guard_requires_authoritative_datastore(monkeypatch):
 
     enabled = SimpleNamespace(api_enabled=True)
     ready_pool = _Pool(initialized=True, schema_ready=True)
-    monkeypatch.setattr(main_eom, "get_db_pool", lambda: ready_pool)
+    monkeypatch.setattr(main_eom, "get_eom_funnel_db_pool", lambda: ready_pool)
 
     asyncio.run(
         main_eom._require_eom_funnel_data_store(
@@ -534,7 +635,7 @@ def test_eom_funnel_startup_guard_requires_authoritative_datastore(monkeypatch):
 
     monkeypatch.setattr(
         main_eom,
-        "get_db_pool",
+        "get_eom_funnel_db_pool",
         lambda: _Pool(initialized=False, schema_ready=True),
     )
     with pytest.raises(RuntimeError, match="initialized Atlas database pool"):
@@ -547,7 +648,7 @@ def test_eom_funnel_startup_guard_requires_authoritative_datastore(monkeypatch):
 
     monkeypatch.setattr(
         main_eom,
-        "get_db_pool",
+        "get_eom_funnel_db_pool",
         lambda: _Pool(initialized=True, schema_ready=False),
     )
     with pytest.raises(RuntimeError, match="CRM lifecycle and handoff schema"):
@@ -1478,6 +1579,83 @@ def test_eom_lifespan_initializes_database_without_running_migrations(monkeypatc
     assert events == ["init", "inside", "close"]
 
 
+def test_eom_lifespan_closes_generic_database_when_funnel_close_fails(monkeypatch):
+    from atlas_brain import main_eom
+    from atlas_brain.eom_api import funnel_auth
+
+    events: list[str] = []
+    generated = funnel_auth.generate_eom_funnel_service_token()
+
+    class _Pool:
+        is_initialized = True
+
+        async def fetchval(self, query: str) -> bool:
+            events.append("datastore-check")
+            return True
+
+    async def init_database():
+        events.append("init")
+
+    async def init_eom_funnel_database(config=None):
+        events.append("funnel-init")
+
+    async def close_eom_funnel_database():
+        events.append("funnel-close")
+        raise RuntimeError("funnel close failed")
+
+    async def close_database():
+        events.append("close")
+
+    async def drive_lifespan():
+        async with main_eom.lifespan(FastAPI()):
+            events.append("inside")
+
+    monkeypatch.setattr(main_eom, "db_settings", SimpleNamespace(enabled=True))
+    monkeypatch.setattr(main_eom, "get_eom_funnel_db_pool", lambda: _Pool())
+    monkeypatch.setattr(main_eom, "init_database", init_database)
+    monkeypatch.setattr(
+        main_eom,
+        "init_eom_funnel_database",
+        init_eom_funnel_database,
+    )
+    monkeypatch.setattr(
+        main_eom,
+        "close_eom_funnel_database",
+        close_eom_funnel_database,
+    )
+    monkeypatch.setattr(main_eom, "close_database", close_database)
+    monkeypatch.setattr(main_eom.eom_profile_settings, "run_migrations", False)
+    monkeypatch.setattr(
+        main_eom.eom_profile_settings,
+        "canonical_crm_database_confirmed",
+        True,
+    )
+    monkeypatch.setattr(main_eom.invoicing_settings, "receivables_api_enabled", False)
+    monkeypatch.setattr(main_eom.funnel_settings, "api_enabled", True)
+    monkeypatch.setattr(
+        main_eom.funnel_settings,
+        "service_token_sha256",
+        generated.sha256,
+    )
+    monkeypatch.setattr(
+        main_eom.funnel_settings,
+        "db_connection_string",
+        "postgresql://atlas_funnel:secret@canonical-crm.internal/atlas",
+    )
+
+    with pytest.raises(RuntimeError, match="funnel close failed"):
+        asyncio.run(drive_lifespan())
+
+    assert events == [
+        "init",
+        "funnel-init",
+        "datastore-check",
+        "inside",
+        "funnel-close",
+        "close",
+    ]
+
+
 def test_eom_lifespan_rejects_enabled_funnel_missing_digest_before_db_work(
     monkeypatch,
 ):
@@ -1488,8 +1666,14 @@ def test_eom_lifespan_rejects_enabled_funnel_missing_digest_before_db_work(
     async def init_database():
         events.append("init")
 
+    async def init_eom_funnel_database(config=None):
+        events.append("funnel-init")
+
     async def run_migrations():
         events.append("migrations")
+
+    async def close_eom_funnel_database():
+        events.append("funnel-close")
 
     async def close_database():
         events.append("close")
@@ -1508,6 +1692,74 @@ def test_eom_lifespan_rejects_enabled_funnel_missing_digest_before_db_work(
     monkeypatch.setattr(main_eom.funnel_settings, "service_token_sha256", "")
 
     with pytest.raises(RuntimeError, match="ATLAS_EOM_FUNNEL_SERVICE_TOKEN_SHA256"):
+        asyncio.run(drive_lifespan())
+    assert events == []
+
+
+@pytest.mark.parametrize(
+    ("canonical_confirmed", "dsn", "message"),
+    (
+        (
+            False,
+            "postgresql://atlas_funnel:secret@canonical-crm.internal/atlas",
+            "ATLAS_EOM_CANONICAL_CRM_DATABASE_CONFIRMED=true",
+        ),
+        (True, " ", "ATLAS_EOM_FUNNEL_DB_CONNECTION_STRING"),
+    ),
+)
+def test_eom_lifespan_rejects_enabled_funnel_canonical_crm_config_before_db_work(
+    monkeypatch,
+    canonical_confirmed,
+    dsn,
+    message,
+):
+    from atlas_brain import main_eom
+    from atlas_brain.eom_api import funnel_auth
+
+    events: list[str] = []
+    generated = funnel_auth.generate_eom_funnel_service_token()
+
+    async def init_database():
+        events.append("init")
+
+    async def init_eom_funnel_database(config=None):
+        events.append("funnel-init")
+
+    async def run_migrations():
+        events.append("migrations")
+
+    async def close_database():
+        events.append("close")
+
+    async def drive_lifespan():
+        async with main_eom.lifespan(FastAPI()):
+            raise AssertionError("enabled funnel with bad canonical config must not serve")
+
+    monkeypatch.setattr(main_eom, "db_settings", SimpleNamespace(enabled=True))
+    monkeypatch.setattr(main_eom, "init_database", init_database)
+    monkeypatch.setattr(
+        main_eom,
+        "init_eom_funnel_database",
+        init_eom_funnel_database,
+    )
+    monkeypatch.setattr(main_eom, "_run_startup_migrations", run_migrations)
+    monkeypatch.setattr(main_eom, "close_database", close_database)
+    monkeypatch.setattr(main_eom.eom_profile_settings, "run_migrations", True)
+    monkeypatch.setattr(
+        main_eom.eom_profile_settings,
+        "canonical_crm_database_confirmed",
+        canonical_confirmed,
+    )
+    monkeypatch.setattr(main_eom.invoicing_settings, "receivables_api_enabled", False)
+    monkeypatch.setattr(main_eom.funnel_settings, "api_enabled", True)
+    monkeypatch.setattr(
+        main_eom.funnel_settings,
+        "service_token_sha256",
+        generated.sha256,
+    )
+    monkeypatch.setattr(main_eom.funnel_settings, "db_connection_string", dsn)
+
+    with pytest.raises(RuntimeError, match=message):
         asyncio.run(drive_lifespan())
     assert events == []
 
@@ -1533,8 +1785,14 @@ def test_eom_lifespan_rejects_funnel_datastore_before_migrations(
     async def init_database():
         events.append("init")
 
+    async def init_eom_funnel_database(config=None):
+        events.append("funnel-init")
+
     async def run_migrations():
         events.append("migrations")
+
+    async def close_eom_funnel_database():
+        events.append("funnel-close")
 
     async def close_database():
         events.append("close")
@@ -1544,11 +1802,26 @@ def test_eom_lifespan_rejects_funnel_datastore_before_migrations(
             raise AssertionError("enabled funnel without datastore must not serve")
 
     monkeypatch.setattr(main_eom, "db_settings", SimpleNamespace(enabled=True))
-    monkeypatch.setattr(main_eom, "get_db_pool", lambda: _Pool())
+    monkeypatch.setattr(main_eom, "get_eom_funnel_db_pool", lambda: _Pool())
     monkeypatch.setattr(main_eom, "init_database", init_database)
+    monkeypatch.setattr(
+        main_eom,
+        "init_eom_funnel_database",
+        init_eom_funnel_database,
+    )
     monkeypatch.setattr(main_eom, "_run_startup_migrations", run_migrations)
+    monkeypatch.setattr(
+        main_eom,
+        "close_eom_funnel_database",
+        close_eom_funnel_database,
+    )
     monkeypatch.setattr(main_eom, "close_database", close_database)
     monkeypatch.setattr(main_eom.eom_profile_settings, "run_migrations", True)
+    monkeypatch.setattr(
+        main_eom.eom_profile_settings,
+        "canonical_crm_database_confirmed",
+        True,
+    )
     monkeypatch.setattr(main_eom.invoicing_settings, "receivables_api_enabled", False)
     monkeypatch.setattr(main_eom.funnel_settings, "api_enabled", True)
     monkeypatch.setattr(
@@ -1556,10 +1829,15 @@ def test_eom_lifespan_rejects_funnel_datastore_before_migrations(
         "service_token_sha256",
         generated.sha256,
     )
+    monkeypatch.setattr(
+        main_eom.funnel_settings,
+        "db_connection_string",
+        "postgresql://atlas_funnel:secret@canonical-crm.internal/atlas",
+    )
 
     with pytest.raises(RuntimeError, match="CRM lifecycle and handoff schema"):
         asyncio.run(drive_lifespan())
-    assert events == ["init", "datastore-check", "close"]
+    assert events == ["init", "funnel-init", "datastore-check", "funnel-close", "close"]
 
 
 def test_eom_profile_ping_is_database_independent(monkeypatch):
@@ -1670,6 +1948,7 @@ from fastapi.testclient import TestClient
 
 from atlas_brain import main_eom
 from atlas_brain.eom_api import funnel as funnel_mod
+from atlas_brain.eom_api import funnel_database as funnel_db
 
 
 class _ReadyPool:
@@ -1677,33 +1956,23 @@ class _ReadyPool:
 
     def __init__(self):
         self.queries = []
+        self.closed = 0
 
     async def fetchval(self, query):
         self.queries.append(query)
         return True
 
-
-class _CRM:
-    def __init__(self):
-        self.calls = []
-
-    async def finalize_eom_customer_handoff(self, **kwargs):
-        self.calls.append(kwargs)
-        return {
-            "handoff_id": "b4fef3b3-a2bd-44e5-aac4-67176270c173",
-            "contact_id": kwargs["contact_id"],
-            "tracker_customer_id": kwargs["tracker_customer_id"],
-            "tracker_site_id": kwargs["tracker_site_id"],
-            "approval_key": kwargs["approval_key"],
-            "idempotent": False,
-        }
+    async def close(self):
+        self.closed += 1
 
 
 pool = _ReadyPool()
-crm = _CRM()
-
 
 async def init_database():
+    return None
+
+
+async def init_eom_funnel_database(config=None):
     return None
 
 
@@ -1711,11 +1980,27 @@ async def close_database():
     return None
 
 
+async def finalize_eom_customer_handoff(crm, handoff):
+    if getattr(crm, "_pool_override", None) is not pool:
+        raise AssertionError("funnel route must use the dedicated funnel CRM pool")
+    return {
+        "handoff_id": "b4fef3b3-a2bd-44e5-aac4-67176270c173",
+        "contact_id": str(handoff.contact_id),
+        "tracker_customer_id": handoff.tracker_customer_id,
+        "tracker_site_id": handoff.tracker_site_id,
+        "approval_key": handoff.approval_key,
+        "idempotent": False,
+    }
+
+
+funnel_db._eom_funnel_db_pool = pool
 main_eom.get_db_pool = lambda: pool
+main_eom.get_eom_funnel_db_pool = lambda: pool
 main_eom.init_database = init_database
+main_eom.init_eom_funnel_database = init_eom_funnel_database
 main_eom.close_database = close_database
 main_eom.eom_profile_settings.run_migrations = False
-funnel_mod.get_crm_provider = lambda: crm
+funnel_mod.finalize_eom_customer_handoff = finalize_eom_customer_handoff
 
 if main_eom.app.dependency_overrides:
     raise AssertionError("auth dependency must not be overridden")
@@ -1746,7 +2031,7 @@ print(json.dumps({
     ),
     "dependency_overrides": len(main_eom.app.dependency_overrides),
     "startup_guard_queries": len(pool.queries),
-    "crm_calls": crm.calls,
+    "funnel_pool_closed": pool.closed,
 }))
 """
     env = _isolated_eom_subprocess_env()
@@ -1759,8 +2044,12 @@ print(json.dumps({
     )
     env["ATLAS_DB_ENABLED"] = "true"
     env["ATLAS_EOM_RUN_MIGRATIONS"] = "false"
+    env["ATLAS_EOM_CANONICAL_CRM_DATABASE_CONFIRMED"] = "true"
     env["ATLAS_EOM_FUNNEL_API_ENABLED"] = "true"
     env["ATLAS_EOM_FUNNEL_SERVICE_TOKEN_SHA256"] = generated.sha256
+    env["ATLAS_EOM_FUNNEL_DB_CONNECTION_STRING"] = (
+        "postgresql://atlas_funnel:secret@canonical-crm.internal/atlas"
+    )
     env["EOM_TEST_CALLER_TOKEN"] = generated.token
     env["EOM_TEST_APPROVAL_KEY"] = approval_key
 
@@ -1790,16 +2079,7 @@ print(json.dumps({
         "env_projected_digest": True,
         "dependency_overrides": 0,
         "startup_guard_queries": 1,
-        "crm_calls": [
-            {
-                "contact_id": "11111111-1111-1111-1111-111111111111",
-                "tracker_customer_id": 12,
-                "tracker_site_id": 24,
-                "approval_key": approval_key,
-                "actor_id": 1,
-                "actor_name": "Juan Canfield",
-            }
-        ],
+        "funnel_pool_closed": 1,
     }
 
 
