@@ -17,6 +17,7 @@ from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
 _RAW_RECEIVABLES_SERVICE_TOKEN_ENV = "ATLAS_INVOICING_RECEIVABLES_SERVICE_TOKEN"
+_RAW_EOM_FUNNEL_SERVICE_TOKEN_ENV = "ATLAS_EOM_FUNNEL_SERVICE_TOKEN"
 _GENERATED_RECEIVABLES_TOKEN_PREFIX = "eomrx_v1_"
 _GENERATED_RECEIVABLES_TOKEN_PAYLOAD_LENGTH = 43
 _GENERATED_RECEIVABLES_TOKEN_PAYLOAD_CHARS = (
@@ -47,6 +48,22 @@ _RAW_RECEIVABLES_SERVICE_TOKEN_KEY_CASES = tuple(
             ),
             _alternating_case(
                 _RAW_RECEIVABLES_SERVICE_TOKEN_ENV,
+                starts_upper=False,
+            ),
+        )
+    )
+)
+_RAW_EOM_FUNNEL_SERVICE_TOKEN_KEY_CASES = tuple(
+    dict.fromkeys(
+        (
+            _RAW_EOM_FUNNEL_SERVICE_TOKEN_ENV,
+            _RAW_EOM_FUNNEL_SERVICE_TOKEN_ENV.lower(),
+            _alternating_case(
+                _RAW_EOM_FUNNEL_SERVICE_TOKEN_ENV,
+                starts_upper=True,
+            ),
+            _alternating_case(
+                _RAW_EOM_FUNNEL_SERVICE_TOKEN_ENV,
                 starts_upper=False,
             ),
         )
@@ -111,8 +128,12 @@ def _route_paths(app):
 def _isolated_eom_subprocess_env() -> dict[str, str]:
     env = os.environ.copy()
     for key in list(env):
-        if key.upper().startswith("ATLAS_INVOICING_"):
+        if key.upper().startswith(("ATLAS_INVOICING_", "ATLAS_EOM_FUNNEL_")):
             env.pop(key, None)
+    env[_RAW_RECEIVABLES_SERVICE_TOKEN_ENV] = ""
+    env[_RAW_EOM_FUNNEL_SERVICE_TOKEN_ENV] = ""
+    env["ATLAS_INVOICING_RECEIVABLES_API_ENABLED"] = "false"
+    env["ATLAS_EOM_FUNNEL_API_ENABLED"] = "false"
     env["ATLAS_DB_ENABLED"] = "false"
     return env
 
@@ -199,6 +220,8 @@ print(json.dumps({
     paths = set(observed["paths"])
     assert "/api/v1/ping" in paths
     assert "/api/v1/receivables/ready" in paths
+    assert "/api/v1/eom-funnel/leads" in paths
+    assert "/api/v1/eom-funnel/customer-handoffs" in paths
     assert "/openapi.json" not in paths
     assert "/docs" not in paths
     assert "/docs/oauth2-redirect" not in paths
@@ -372,6 +395,14 @@ def test_eom_render_blueprint_maps_database_and_receivables_auth():
         "key": "ATLAS_INVOICING_RECEIVABLES_SERVICE_TOKEN_SHA256",
         "sync": False,
     }
+    assert env_vars["ATLAS_EOM_FUNNEL_API_ENABLED"] == {
+        "key": "ATLAS_EOM_FUNNEL_API_ENABLED",
+        "value": "false",
+    }
+    assert env_vars["ATLAS_EOM_FUNNEL_SERVICE_TOKEN_SHA256"] == {
+        "key": "ATLAS_EOM_FUNNEL_SERVICE_TOKEN_SHA256",
+        "sync": False,
+    }
     assert env_vars["ATLAS_EOM_RUN_MIGRATIONS"] == {
         "key": "ATLAS_EOM_RUN_MIGRATIONS",
         "value": "true",
@@ -381,6 +412,11 @@ def test_eom_render_blueprint_maps_database_and_receivables_auth():
         for key in env_vars
         if key.startswith("ATLAS_INVOICING_") and "TOKEN" in key
     ] == ["ATLAS_INVOICING_RECEIVABLES_SERVICE_TOKEN_SHA256"]
+    assert [
+        key
+        for key in env_vars
+        if key.startswith("ATLAS_EOM_FUNNEL_") and "TOKEN" in key
+    ] == ["ATLAS_EOM_FUNNEL_SERVICE_TOKEN_SHA256"]
     for split_key in (
         "ATLAS_DB_HOST",
         "ATLAS_DB_PORT",
@@ -444,6 +480,143 @@ def test_eom_startup_migration_runner_skips_uninitialized_pool(monkeypatch):
     )
 
     asyncio.run(main_eom._run_startup_migrations())
+
+
+def test_eom_funnel_startup_guard_requires_authoritative_datastore(monkeypatch):
+    from atlas_brain import main_eom
+
+    class _Pool:
+        def __init__(self, *, initialized: bool, schema_ready: bool) -> None:
+            self.is_initialized = initialized
+            self._schema_ready = schema_ready
+            self.queries: list[str] = []
+
+        async def fetchval(self, query: str) -> bool:
+            self.queries.append(query)
+            return self._schema_ready
+
+    disabled = SimpleNamespace(api_enabled=False)
+
+    def fail_if_looked_up():
+        pytest.fail("disabled EOM funnel must not require a database pool")
+
+    monkeypatch.setattr(main_eom, "get_db_pool", fail_if_looked_up)
+    asyncio.run(
+        main_eom._require_eom_funnel_data_store(
+            disabled,
+            database_enabled=False,
+        )
+    )
+
+    enabled = SimpleNamespace(api_enabled=True)
+    ready_pool = _Pool(initialized=True, schema_ready=True)
+    monkeypatch.setattr(main_eom, "get_db_pool", lambda: ready_pool)
+
+    asyncio.run(
+        main_eom._require_eom_funnel_data_store(
+            enabled,
+            database_enabled=True,
+        )
+    )
+    assert "atlas_eom_handoff_owner" in ready_pool.queries[0]
+    assert "atlas_nocodb" in ready_pool.queries[0]
+    assert "pg_auth_members" in ready_pool.queries[0]
+    assert "has_table_privilege" in ready_pool.queries[0]
+    assert "has_column_privilege" in ready_pool.queries[0]
+
+    with pytest.raises(RuntimeError, match="authoritative Atlas database"):
+        asyncio.run(
+            main_eom._require_eom_funnel_data_store(
+                enabled,
+                database_enabled=False,
+            )
+        )
+
+    monkeypatch.setattr(
+        main_eom,
+        "get_db_pool",
+        lambda: _Pool(initialized=False, schema_ready=True),
+    )
+    with pytest.raises(RuntimeError, match="initialized Atlas database pool"):
+        asyncio.run(
+            main_eom._require_eom_funnel_data_store(
+                enabled,
+                database_enabled=True,
+            )
+        )
+
+    monkeypatch.setattr(
+        main_eom,
+        "get_db_pool",
+        lambda: _Pool(initialized=True, schema_ready=False),
+    )
+    with pytest.raises(RuntimeError, match="CRM lifecycle and handoff schema"):
+        asyncio.run(
+            main_eom._require_eom_funnel_data_store(
+                enabled,
+                database_enabled=True,
+            )
+        )
+
+
+def test_shared_eom_funnel_datastore_guard_accepts_injected_pool():
+    from atlas_brain.eom_api.funnel_store import require_eom_funnel_data_store
+
+    class _Pool:
+        is_initialized = True
+
+        def __init__(self) -> None:
+            self.queries: list[str] = []
+
+        async def fetchval(self, query: str) -> bool:
+            self.queries.append(query)
+            return True
+
+    pool = _Pool()
+    asyncio.run(
+        require_eom_funnel_data_store(
+            SimpleNamespace(api_enabled=True),
+            database_enabled=True,
+            get_db_pool_fn=lambda: pool,
+        )
+    )
+
+    assert len(pool.queries) == 1
+    assert "eom_customer_handoffs" in pool.queries[0]
+    assert "atlas_eom_handoff_owner" in pool.queries[0]
+    assert "atlas_nocodb" in pool.queries[0]
+
+
+def test_shared_eom_funnel_datastore_guard_keeps_missing_relations_in_verdict():
+    from atlas_brain.eom_api.funnel_store import require_eom_funnel_data_store
+
+    class _Pool:
+        is_initialized = True
+
+        def __init__(self) -> None:
+            self.query = ""
+
+        async def fetchval(self, query: str) -> bool:
+            self.query = query
+            return False
+
+    pool = _Pool()
+    with pytest.raises(RuntimeError, match="CRM lifecycle and handoff schema"):
+        asyncio.run(
+            require_eom_funnel_data_store(
+                SimpleNamespace(api_enabled=True),
+                database_enabled=True,
+                get_db_pool_fn=lambda: pool,
+            )
+        )
+
+    assert "::regclass" not in pool.query
+    assert "WITH readiness_relations AS" in pool.query
+    assert "readiness_columns AS" in pool.query
+    assert "to_regclass('eom_customer_handoffs') AS handoff_rel" in pool.query
+    assert "contacts_required_columns_ready" in pool.query
+    assert "WHEN NOT readiness_columns.contacts_required_columns_ready THEN FALSE" in pool.query
+    assert "WHEN readiness_relations.handoff_rel IS NULL THEN FALSE" in pool.query
 
 
 def test_database_config_prefers_connection_string_for_asyncpg_kwargs():
@@ -652,6 +825,33 @@ def test_eom_receivables_raw_token_source_admission_matches_casefold_oracle(
         assert observed is expected, (source, key, repr(value))
 
 
+def test_raw_token_source_admission_preserves_explicit_empty_environ(monkeypatch):
+    from atlas_brain.eom_api import config as eom_config
+
+    monkeypatch.setenv(
+        _RAW_RECEIVABLES_SERVICE_TOKEN_ENV,
+        "operator-receivables-token",
+    )
+    monkeypatch.setenv(_RAW_EOM_FUNNEL_SERVICE_TOKEN_ENV, "operator-funnel-token")
+
+    assert not eom_config.raw_receivables_service_token_configured(
+        environ={},
+        env_files=(),
+    )
+    assert not eom_config.raw_eom_funnel_service_token_configured(
+        environ={},
+        env_files=(),
+    )
+    assert eom_config.raw_receivables_service_token_configured(
+        environ=None,
+        env_files=(),
+    )
+    assert eom_config.raw_eom_funnel_service_token_configured(
+        environ=None,
+        env_files=(),
+    )
+
+
 @pytest.mark.parametrize(
     ("raw_token_key", "api_enabled"),
     (
@@ -784,6 +984,132 @@ def test_eom_receivables_startup_rejects_unsafe_enabled_runtime_config():
     for config, message in cases:
         with pytest.raises(RuntimeError, match=message):
             auth.validate_receivables_api_config(config)
+
+
+def test_eom_funnel_raw_token_source_admission_matches_casefold_oracle(
+    tmp_path,
+):
+    from atlas_brain.eom_api import config as eom_config
+
+    raw_values = ("", "   ", "caller-side-funnel-token")
+    unrelated_keys = (
+        "ATLAS_EOM_FUNNEL_SERVICE_TOKEN_SHA256",
+        "ATLAS_INVOICING_RECEIVABLES_SERVICE_TOKEN",
+    )
+
+    case_index = 0
+    for source, key, value in product(
+        ("process-env", ".env", ".env.local"),
+        (*_RAW_EOM_FUNNEL_SERVICE_TOKEN_KEY_CASES, *unrelated_keys),
+        raw_values,
+    ):
+        expected = (
+            key.casefold() == _RAW_EOM_FUNNEL_SERVICE_TOKEN_ENV.casefold()
+            and bool(value.strip())
+        )
+        if source == "process-env":
+            observed = eom_config.raw_eom_funnel_service_token_configured(
+                environ={key: value},
+                env_files=(),
+            )
+        else:
+            case_index += 1
+            env_file = tmp_path / f"raw-funnel-token-source-{case_index}{source}"
+            env_file.write_text(f"{key}={value}\n", encoding="utf-8")
+            observed = eom_config.raw_eom_funnel_service_token_configured(
+                environ={},
+                env_files=(env_file,),
+            )
+
+        assert observed is expected, (source, key, repr(value))
+
+
+@pytest.mark.parametrize(
+    ("raw_token_key", "api_enabled"),
+    (
+        ("ATLAS_EOM_FUNNEL_SERVICE_TOKEN", "true"),
+        ("atlas_eom_funnel_service_token", "true"),
+        ("ATLAS_EOM_FUNNEL_SERVICE_TOKEN", "false"),
+        (_RAW_EOM_FUNNEL_SERVICE_TOKEN_KEY_CASES[-1], "false"),
+    ),
+)
+def test_eom_funnel_runtime_config_rejects_raw_token_env_before_projection(
+    monkeypatch,
+    raw_token_key,
+    api_enabled,
+):
+    from pydantic import ValidationError
+
+    from atlas_brain.eom_api import funnel_auth
+    from atlas_brain.eom_api.config import (
+        EOMFunnelConfig,
+        RAW_EOM_FUNNEL_SERVICE_TOKEN_ENV,
+    )
+
+    generated = funnel_auth.generate_eom_funnel_service_token()
+    monkeypatch.setenv("ATLAS_EOM_FUNNEL_API_ENABLED", api_enabled)
+    monkeypatch.setenv("ATLAS_EOM_FUNNEL_SERVICE_TOKEN_SHA256", generated.sha256)
+    monkeypatch.setenv(raw_token_key, generated.token)
+
+    with pytest.raises(
+        ValidationError,
+        match="Raw EOM funnel bearer token",
+    ):
+        EOMFunnelConfig()
+    assert "service_token" not in EOMFunnelConfig.model_fields
+    assert RAW_EOM_FUNNEL_SERVICE_TOKEN_ENV not in EOMFunnelConfig.model_fields
+
+
+@pytest.mark.parametrize(
+    ("env_file_name", "raw_token_key", "api_enabled"),
+    (
+        (".env", "ATLAS_EOM_FUNNEL_SERVICE_TOKEN", "true"),
+        (".env.local", "atlas_eom_funnel_service_token", "true"),
+        (".env", "ATLAS_EOM_FUNNEL_SERVICE_TOKEN", "false"),
+        (".env.local", _RAW_EOM_FUNNEL_SERVICE_TOKEN_KEY_CASES[-1], "false"),
+    ),
+)
+def test_eom_profile_rejects_raw_funnel_token_from_dotenv_before_projection(
+    tmp_path,
+    env_file_name,
+    raw_token_key,
+    api_enabled,
+):
+    from atlas_brain.eom_api import funnel_auth
+    from atlas_brain.eom_api.config import RAW_EOM_FUNNEL_SERVICE_TOKEN_ENV
+
+    generated = funnel_auth.generate_eom_funnel_service_token()
+    (tmp_path / env_file_name).write_text(
+        "\n".join(
+            [
+                f"ATLAS_EOM_FUNNEL_API_ENABLED={api_enabled}",
+                f"ATLAS_EOM_FUNNEL_SERVICE_TOKEN_SHA256={generated.sha256}",
+                f"{raw_token_key}={generated.token}",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    env = _isolated_eom_subprocess_env()
+    repo_root = Path(__file__).resolve().parents[1]
+    existing_pythonpath = env.get("PYTHONPATH", "")
+    env["PYTHONPATH"] = (
+        str(repo_root)
+        if not existing_pythonpath
+        else f"{repo_root}{os.pathsep}{existing_pythonpath}"
+    )
+
+    result = subprocess.run(
+        [sys.executable, "-c", "import atlas_brain.main_eom"],
+        check=False,
+        capture_output=True,
+        cwd=tmp_path,
+        env=env,
+        text=True,
+    )
+
+    assert result.returncode != 0
+    assert "Raw EOM funnel bearer token material" in result.stderr
+    assert RAW_EOM_FUNNEL_SERVICE_TOKEN_ENV in result.stderr
 
 
 def test_eom_receivables_trusted_config_rejects_bad_token_digests():
@@ -1113,6 +1439,7 @@ def test_eom_lifespan_closes_database_when_migration_startup_fails(monkeypatch):
     monkeypatch.setattr(main_eom, "close_database", close_database)
     monkeypatch.setattr(main_eom.eom_profile_settings, "run_migrations", True)
     monkeypatch.setattr(main_eom.invoicing_settings, "receivables_api_enabled", False)
+    monkeypatch.setattr(main_eom.funnel_settings, "api_enabled", False)
 
     with pytest.raises(RuntimeError, match="migration failed"):
         asyncio.run(drive_lifespan())
@@ -1144,10 +1471,95 @@ def test_eom_lifespan_initializes_database_without_running_migrations(monkeypatc
     monkeypatch.setattr(main_eom, "close_database", close_database)
     monkeypatch.setattr(main_eom.eom_profile_settings, "run_migrations", False)
     monkeypatch.setattr(main_eom.invoicing_settings, "receivables_api_enabled", False)
+    monkeypatch.setattr(main_eom.funnel_settings, "api_enabled", False)
 
     asyncio.run(drive_lifespan())
 
     assert events == ["init", "inside", "close"]
+
+
+def test_eom_lifespan_rejects_enabled_funnel_missing_digest_before_db_work(
+    monkeypatch,
+):
+    from atlas_brain import main_eom
+
+    events: list[str] = []
+
+    async def init_database():
+        events.append("init")
+
+    async def run_migrations():
+        events.append("migrations")
+
+    async def close_database():
+        events.append("close")
+
+    async def drive_lifespan():
+        async with main_eom.lifespan(FastAPI()):
+            raise AssertionError("enabled funnel without digest must not serve")
+
+    monkeypatch.setattr(main_eom, "db_settings", SimpleNamespace(enabled=True))
+    monkeypatch.setattr(main_eom, "init_database", init_database)
+    monkeypatch.setattr(main_eom, "_run_startup_migrations", run_migrations)
+    monkeypatch.setattr(main_eom, "close_database", close_database)
+    monkeypatch.setattr(main_eom.eom_profile_settings, "run_migrations", True)
+    monkeypatch.setattr(main_eom.invoicing_settings, "receivables_api_enabled", False)
+    monkeypatch.setattr(main_eom.funnel_settings, "api_enabled", True)
+    monkeypatch.setattr(main_eom.funnel_settings, "service_token_sha256", "")
+
+    with pytest.raises(RuntimeError, match="ATLAS_EOM_FUNNEL_SERVICE_TOKEN_SHA256"):
+        asyncio.run(drive_lifespan())
+    assert events == []
+
+
+def test_eom_lifespan_rejects_funnel_datastore_before_migrations(
+    monkeypatch,
+):
+    from atlas_brain import main_eom
+    from atlas_brain.eom_api import funnel_auth
+
+    events: list[str] = []
+    generated = funnel_auth.generate_eom_funnel_service_token()
+
+    class _Pool:
+        is_initialized = True
+
+        async def fetchval(self, query: str) -> bool:
+            events.append("datastore-check")
+            assert "eom_customer_handoffs" in query
+            assert "atlas_eom_handoff_owner" in query
+            return False
+
+    async def init_database():
+        events.append("init")
+
+    async def run_migrations():
+        events.append("migrations")
+
+    async def close_database():
+        events.append("close")
+
+    async def drive_lifespan():
+        async with main_eom.lifespan(FastAPI()):
+            raise AssertionError("enabled funnel without datastore must not serve")
+
+    monkeypatch.setattr(main_eom, "db_settings", SimpleNamespace(enabled=True))
+    monkeypatch.setattr(main_eom, "get_db_pool", lambda: _Pool())
+    monkeypatch.setattr(main_eom, "init_database", init_database)
+    monkeypatch.setattr(main_eom, "_run_startup_migrations", run_migrations)
+    monkeypatch.setattr(main_eom, "close_database", close_database)
+    monkeypatch.setattr(main_eom.eom_profile_settings, "run_migrations", True)
+    monkeypatch.setattr(main_eom.invoicing_settings, "receivables_api_enabled", False)
+    monkeypatch.setattr(main_eom.funnel_settings, "api_enabled", True)
+    monkeypatch.setattr(
+        main_eom.funnel_settings,
+        "service_token_sha256",
+        generated.sha256,
+    )
+
+    with pytest.raises(RuntimeError, match="CRM lifecycle and handoff schema"):
+        asyncio.run(drive_lifespan())
+    assert events == ["init", "datastore-check", "close"]
 
 
 def test_eom_profile_ping_is_database_independent(monkeypatch):
@@ -1156,13 +1568,16 @@ def test_eom_profile_ping_is_database_independent(monkeypatch):
 
     monkeypatch.setattr(main_eom, "db_settings", SimpleNamespace(enabled=False))
     original_enabled = main_eom.invoicing_settings.receivables_api_enabled
+    original_funnel_enabled = main_eom.funnel_settings.api_enabled
     main_eom.invoicing_settings.receivables_api_enabled = False
+    main_eom.funnel_settings.api_enabled = False
 
     try:
         with TestClient(app) as client:
             response = client.get("/api/v1/ping")
     finally:
         main_eom.invoicing_settings.receivables_api_enabled = original_enabled
+        main_eom.funnel_settings.api_enabled = original_funnel_enabled
 
     assert response.status_code == 200
     assert response.json() == {"status": "ok", "profile": "eom"}
@@ -1239,6 +1654,152 @@ print(json.dumps({
         "env_projected_enabled": True,
         "env_projected_digest": True,
         "dependency_overrides": 0,
+    }
+
+
+def test_eom_profile_reaches_private_funnel_handoff_through_real_app(tmp_path):
+    from atlas_brain.eom_api import funnel_auth
+
+    generated = funnel_auth.generate_eom_funnel_service_token()
+    approval_key = "office-handoff-real-app-0001"
+    probe = """
+import json
+import os
+
+from fastapi.testclient import TestClient
+
+from atlas_brain import main_eom
+from atlas_brain.eom_api import funnel as funnel_mod
+
+
+class _ReadyPool:
+    is_initialized = True
+
+    def __init__(self):
+        self.queries = []
+
+    async def fetchval(self, query):
+        self.queries.append(query)
+        return True
+
+
+class _CRM:
+    def __init__(self):
+        self.calls = []
+
+    async def finalize_eom_customer_handoff(self, **kwargs):
+        self.calls.append(kwargs)
+        return {
+            "handoff_id": "b4fef3b3-a2bd-44e5-aac4-67176270c173",
+            "contact_id": kwargs["contact_id"],
+            "tracker_customer_id": kwargs["tracker_customer_id"],
+            "tracker_site_id": kwargs["tracker_site_id"],
+            "approval_key": kwargs["approval_key"],
+            "idempotent": False,
+        }
+
+
+pool = _ReadyPool()
+crm = _CRM()
+
+
+async def init_database():
+    return None
+
+
+async def close_database():
+    return None
+
+
+main_eom.get_db_pool = lambda: pool
+main_eom.init_database = init_database
+main_eom.close_database = close_database
+main_eom.eom_profile_settings.run_migrations = False
+funnel_mod.get_crm_provider = lambda: crm
+
+if main_eom.app.dependency_overrides:
+    raise AssertionError("auth dependency must not be overridden")
+
+with TestClient(main_eom.app) as client:
+    response = client.post(
+        "/api/v1/eom-funnel/customer-handoffs",
+        headers={
+            "Authorization": f"Bearer {os.environ['EOM_TEST_CALLER_TOKEN']}",
+            "X-EOM-Actor": "Juan Canfield",
+            "X-EOM-Actor-ID": "1",
+            "Idempotency-Key": os.environ["EOM_TEST_APPROVAL_KEY"],
+        },
+        json={
+            "contact_id": "11111111-1111-1111-1111-111111111111",
+            "tracker_customer_id": 12,
+            "tracker_site_id": 24,
+        },
+    )
+
+print(json.dumps({
+    "status_code": response.status_code,
+    "body": response.json(),
+    "env_projected_enabled": main_eom.funnel_settings.api_enabled,
+    "env_projected_digest": (
+        main_eom.funnel_settings.service_token_sha256
+        == os.environ["ATLAS_EOM_FUNNEL_SERVICE_TOKEN_SHA256"]
+    ),
+    "dependency_overrides": len(main_eom.app.dependency_overrides),
+    "startup_guard_queries": len(pool.queries),
+    "crm_calls": crm.calls,
+}))
+"""
+    env = _isolated_eom_subprocess_env()
+    repo_root = Path(__file__).resolve().parents[1]
+    existing_pythonpath = env.get("PYTHONPATH", "")
+    env["PYTHONPATH"] = (
+        str(repo_root)
+        if not existing_pythonpath
+        else f"{repo_root}{os.pathsep}{existing_pythonpath}"
+    )
+    env["ATLAS_DB_ENABLED"] = "true"
+    env["ATLAS_EOM_RUN_MIGRATIONS"] = "false"
+    env["ATLAS_EOM_FUNNEL_API_ENABLED"] = "true"
+    env["ATLAS_EOM_FUNNEL_SERVICE_TOKEN_SHA256"] = generated.sha256
+    env["EOM_TEST_CALLER_TOKEN"] = generated.token
+    env["EOM_TEST_APPROVAL_KEY"] = approval_key
+
+    result = subprocess.run(
+        [sys.executable, "-c", probe],
+        check=False,
+        capture_output=True,
+        cwd=tmp_path,
+        env=env,
+        text=True,
+    )
+
+    assert result.returncode == 0, result.stderr
+    observed = json.loads(result.stdout.strip().splitlines()[-1])
+    assert observed == {
+        "status_code": 201,
+        "body": {
+            "success": True,
+            "handoff_id": "b4fef3b3-a2bd-44e5-aac4-67176270c173",
+            "contact_id": "11111111-1111-1111-1111-111111111111",
+            "tracker_customer_id": 12,
+            "tracker_site_id": 24,
+            "approval_key": approval_key,
+            "idempotent": False,
+        },
+        "env_projected_enabled": True,
+        "env_projected_digest": True,
+        "dependency_overrides": 0,
+        "startup_guard_queries": 1,
+        "crm_calls": [
+            {
+                "contact_id": "11111111-1111-1111-1111-111111111111",
+                "tracker_customer_id": 12,
+                "tracker_site_id": 24,
+                "approval_key": approval_key,
+                "actor_id": 1,
+                "actor_name": "Juan Canfield",
+            }
+        ],
     }
 
 

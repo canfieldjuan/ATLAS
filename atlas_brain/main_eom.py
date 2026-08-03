@@ -66,7 +66,13 @@ from .eom_api.auth import validate_receivables_api_config
 from .eom_api.config import (
     eom_profile_settings,
     eom_settings,
+    funnel_settings,
     invoicing_settings,
+)
+from .eom_api.funnel import router as funnel_router
+from .eom_api.funnel_auth import validate_eom_funnel_api_config
+from .eom_api.funnel_store import (
+    require_eom_funnel_data_store as _require_eom_funnel_data_store_with_pool,
 )
 from .eom_api.receivables import router as receivables_router
 from .logging_config import configure_logging
@@ -116,20 +122,43 @@ async def _run_startup_migrations() -> None:
         )
 
 
+async def _require_eom_funnel_data_store(
+    config: object,
+    *,
+    database_enabled: bool,
+) -> None:
+    """Fail closed if an enabled handoff cannot use the primary CRM store."""
+    await _require_eom_funnel_data_store_with_pool(
+        config,
+        database_enabled=database_enabled,
+        get_db_pool_fn=get_db_pool,
+    )
+
+
+async def _validate_eom_funnel_startup() -> None:
+    """Run enabled funnel datastore preflight after DB init and before migrations."""
+    await _require_eom_funnel_data_store(
+        funnel_settings,
+        database_enabled=db_settings.enabled,
+    )
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """Initialize only the dependencies required by the EOM API profile."""
     logger.info("Atlas EOM API starting up")
     validate_receivables_api_config(invoicing_settings)
+    validate_eom_funnel_api_config(funnel_settings)
 
     try:
         if db_settings.enabled:
             await init_database()
             logger.info("Database connection pool initialized")
-            if eom_profile_settings.run_migrations:
-                await _run_startup_migrations()
         else:
             logger.warning("Database persistence is disabled")
+        await _validate_eom_funnel_startup()
+        if db_settings.enabled and eom_profile_settings.run_migrations:
+            await _run_startup_migrations()
         yield
     finally:
         if db_settings.enabled:
@@ -160,3 +189,4 @@ async def ping() -> dict[str, str]:
 
 
 app.include_router(receivables_router, prefix="/api/v1")
+app.include_router(funnel_router, prefix="/api/v1")

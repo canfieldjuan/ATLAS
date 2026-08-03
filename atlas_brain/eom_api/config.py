@@ -14,20 +14,47 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 ENV_FILES = (".env", ".env.local")
 RAW_RECEIVABLES_SERVICE_TOKEN_ENV = "ATLAS_INVOICING_RECEIVABLES_SERVICE_TOKEN"
 _RAW_RECEIVABLES_SERVICE_TOKEN_ENV_KEY = RAW_RECEIVABLES_SERVICE_TOKEN_ENV.casefold()
+RAW_EOM_FUNNEL_SERVICE_TOKEN_ENV = "ATLAS_EOM_FUNNEL_SERVICE_TOKEN"
+_RAW_EOM_FUNNEL_SERVICE_TOKEN_ENV_KEY = RAW_EOM_FUNNEL_SERVICE_TOKEN_ENV.casefold()
 
 
-def _has_raw_receivables_service_token(value: object) -> bool:
+def _has_raw_service_token(value: object) -> bool:
     return isinstance(value, str) and bool(value.strip())
 
 
-def _mapping_contains_raw_receivables_service_token(
+def _mapping_contains_raw_service_token(
     values: Mapping[str, object],
+    *,
+    raw_env_key: str,
 ) -> bool:
     return any(
-        key.casefold() == _RAW_RECEIVABLES_SERVICE_TOKEN_ENV_KEY
-        and _has_raw_receivables_service_token(value)
+        key.casefold() == raw_env_key
+        and _has_raw_service_token(value)
         for key, value in values.items()
     )
+
+
+def _raw_service_token_configured(
+    *,
+    raw_env_key: str,
+    environ: Mapping[str, str] | None = None,
+    env_files: Iterable[str | Path] = ENV_FILES,
+) -> bool:
+    """Return true when any admitted settings source carries raw token material."""
+    source_environ = os.environ if environ is None else environ
+    if _mapping_contains_raw_service_token(
+        source_environ,
+        raw_env_key=raw_env_key,
+    ):
+        return True
+    for env_file in env_files:
+        try:
+            values = dotenv_values(env_file)
+        except OSError:
+            continue
+        if _mapping_contains_raw_service_token(values, raw_env_key=raw_env_key):
+            return True
+    return False
 
 
 def raw_receivables_service_token_configured(
@@ -35,16 +62,23 @@ def raw_receivables_service_token_configured(
     env_files: Iterable[str | Path] = ENV_FILES,
 ) -> bool:
     """Return true when any admitted settings source carries raw token material."""
-    if _mapping_contains_raw_receivables_service_token(environ or os.environ):
-        return True
-    for env_file in env_files:
-        try:
-            values = dotenv_values(env_file)
-        except OSError:
-            continue
-        if _mapping_contains_raw_receivables_service_token(values):
-            return True
-    return False
+    return _raw_service_token_configured(
+        raw_env_key=_RAW_RECEIVABLES_SERVICE_TOKEN_ENV_KEY,
+        environ=environ,
+        env_files=env_files,
+    )
+
+
+def raw_eom_funnel_service_token_configured(
+    environ: Mapping[str, str] | None = None,
+    env_files: Iterable[str | Path] = ENV_FILES,
+) -> bool:
+    """Return true when any admitted settings source carries raw funnel token."""
+    return _raw_service_token_configured(
+        raw_env_key=_RAW_EOM_FUNNEL_SERVICE_TOKEN_ENV_KEY,
+        environ=environ,
+        env_files=env_files,
+    )
 
 
 class EOMRuntimeConfig(BaseSettings):
@@ -128,6 +162,17 @@ class EOMFunnelConfig(BaseSettings):
             "tracker only; the raw bearer is never stored in Atlas"
         ),
     )
+
+    @model_validator(mode="after")
+    def reject_raw_eom_funnel_service_token_env(self) -> "EOMFunnelConfig":
+        if raw_eom_funnel_service_token_configured():
+            raise ValueError(
+                "Raw EOM funnel bearer token material must not be configured "
+                f"in {RAW_EOM_FUNNEL_SERVICE_TOKEN_ENV}; provision only "
+                "ATLAS_EOM_FUNNEL_SERVICE_TOKEN_SHA256 on the Atlas API service "
+                "and keep the raw token on the caller side."
+            )
+        return self
 
 
 eom_settings = EOMRuntimeConfig()
