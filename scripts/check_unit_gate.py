@@ -52,6 +52,10 @@ from pathlib import Path
 # ids whole even when the params contain " - ". (Nested [] inside params is not
 # handled -- vanishingly rare for pytest ids.)
 _SUMMARY_RE = re.compile(r"^(?:FAILED|ERROR)\s+(?P<node>[^\s\[]+(?:\[[^\]]*\])?)")
+_PASSED_OUTCOME_RE = re.compile(r"\b(?P<count>\d+)\s+passed\b", re.IGNORECASE)
+_NON_PASS_OUTCOME_RE = re.compile(
+    r"\b(?:skipped|xfailed|xpassed|deselected)\b", re.IGNORECASE
+)
 
 # Normal pytest exit statuses for a gate run: 0 = all passed, 1 = tests failed
 # (expected -- the baseline exists). 2 interrupted / 3 internal / 4 usage /
@@ -95,6 +99,33 @@ def parse_failing_nodes(pytest_output: str) -> set[str]:
         if m:
             nodes.add(m.group("node").strip())
     return nodes
+
+
+def count_passed_nodes(pytest_output: str) -> int:
+    """Return pytest's summarized passed-test count."""
+    return sum(
+        int(match.group("count"))
+        for match in _PASSED_OUTCOME_RE.finditer(pytest_output)
+    )
+
+
+def removed_node_pass_proof_error(
+    pytest_output: str,
+    expected_nodes: int,
+) -> str | None:
+    """Return an error when exact-node shrink proof did not genuinely pass."""
+    if _NON_PASS_OUTCOME_RE.search(pytest_output):
+        return (
+            "pytest reported skipped, xfailed, xpassed, or deselected outcomes; "
+            "removed baseline nodes must genuinely pass"
+        )
+    passed = count_passed_nodes(pytest_output)
+    if passed < expected_nodes:
+        return (
+            f"pytest reported {passed} passed node(s), but "
+            f"{expected_nodes} removed baseline node(s) require proof"
+        )
+    return None
 
 
 def load_baseline(path: Path) -> set[str]:
@@ -289,6 +320,14 @@ def validate_removed_nodes_execute(removed_nodes: list[str]) -> int:
     """Run removed node ids directly so shrink proof is node-level, not file-level."""
     output, returncode = run_pytest([*removed_nodes, *UNIT_GATE_OPTION_ARGS])
     if returncode == 0:
+        proof_error = removed_node_pass_proof_error(output, len(removed_nodes))
+        if proof_error:
+            print(
+                "unit gate: removed baseline node proof failed; "
+                f"{proof_error}.",
+                file=sys.stderr,
+            )
+            return 2
         return 0
     if returncode == 1:
         failing = parse_failing_nodes(output)

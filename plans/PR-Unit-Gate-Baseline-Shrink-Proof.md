@@ -9,10 +9,10 @@ That is a workflow/process defect: a baseline shrink is a claim that those node
 ids are now passing, and the gate should mechanically require evidence from a
 run that could have observed the removed nodes.
 
-Diff-budget note: this is slightly over the 400 LOC target because the
-indivisible repair includes the checker behavior, adversarial CLI fixtures,
-baseline correction against the pinned CI runner, and the plan evidence needed
-to explain the failed first run without opening a separate symptom PR.
+Diff-budget note: this is over the 400 LOC target because the indivisible
+repair includes the checker behavior, adversarial CLI fixtures, baseline
+correction against the pinned CI runner, and the plan evidence needed to
+explain the failed review/CI rounds without opening separate symptom PRs.
 
 ### Problem-derived contract
 
@@ -81,6 +81,10 @@ Slice phase: Workflow/process
   - A scoped shrink run that collects no tests exits 2 because no removed node
     was observed, settled by
     `tests/test_check_unit_gate.py::test_cli_exit2_when_scoped_shrink_run_collects_no_tests`.
+  - A direct removed-node proof that exits 0 because the node was skipped or
+    xfailed still exits 2 because baseline removal requires a genuine pass,
+    settled by
+    `tests/test_check_unit_gate.py::test_cli_exit2_when_removed_node_did_not_genuinely_pass`.
   - An unscoped custom `--pytest-args` invocation cannot prove a baseline shrink;
     shrink proof must use the default full-suite invocation or a scoped
     `--selected-files` proof, settled by
@@ -159,12 +163,29 @@ model because filters, deselectors, collect-only modes, and early-exit flags can
 skip removed nodes while still targeting the selected file. Any live shrink
 proof also runs each removed node id directly through pytest; a deleted or
 renamed node therefore fails closed instead of being inferred from file-level
-selection. An unscoped custom `--pytest-args` invocation cannot prove a shrink
-at all; use the default full-suite invocation or a scoped `--selected-files`
-proof. `--growth-only` has no pytest evidence and fails closed. The existing
-comparison then still catches the other half: if a removed node still appears
-in the failing set, it is a regression because it is no longer in the PR
-baseline.
+selection, and a skipped/xfail/deselected exact-node outcome fails closed
+because baseline removal requires a genuine pass. An unscoped custom
+`--pytest-args` invocation cannot prove a shrink at all; use the default
+full-suite invocation or a scoped `--selected-files` proof. `--growth-only` has
+no pytest evidence and fails closed. The existing comparison then still catches
+the other half: if a removed node still appears in the failing set, it is a
+regression because it is no longer in the PR baseline.
+
+Pytest inventory closure:
+
+- `_PYTEST_OPTIONS_WITH_VALUES` is an open parser helper, not a permission
+  list. Its source is the pytest option shapes this checker must skip while
+  extracting positional file targets. Unlisted dash-prefixed options are treated
+  as flags with no value for target parsing, then rejected by scoped-shrink
+  proof unless separately admitted below.
+- `_SCOPED_SHRINK_ALLOWED_FLAGS` is a closed allowlist for value-less options
+  in scoped shrink proof. Membership comes from the unit-gate workflow's
+  execution model, and any unlisted flag makes the shrink proof exit 2 before
+  pytest runs.
+- `_SCOPED_SHRINK_ALLOWED_OPTIONS_WITH_VALUES` is a closed allowlist for
+  option/value pairs in scoped shrink proof. Membership comes from
+  `UNIT_GATE_OPTION_ARGS`, and any unlisted option or listed option with an
+  unlisted value makes the shrink proof exit 2 before pytest runs.
 
 ## Intentional
 
@@ -185,9 +206,9 @@ Parked hardening: none.
 ## Verification
 
 - `python -m pytest tests/test_check_unit_gate.py tests/test_select_impacted_tests.py tests/test_unit_gate_selector_fallback.py -q`
-  - `103 passed in 0.63s`
+  - `105 passed in 0.75s`
 - `python -m pytest tests/test_reasoning_graph_routing.py -q -rfE --tb=short`
-  - `12 passed, 1 warning in 1.04s`
+  - `12 passed, 1 warning in 1.15s`
 - `python -m py_compile scripts/check_unit_gate.py`
   - passed
 - `python scripts/check_unit_gate.py --baseline tests/unit_gate_baseline.txt --base-baseline /tmp/origin-main-unit-baseline.txt --selected-files /tmp/unit-gate-selected-reasoning.txt --pytest-args tests/test_reasoning_graph_routing.py -m 'not integration and not e2e' --continue-on-collection-errors -rfE --tb=no -q -p no:cacheprovider`
@@ -210,9 +231,9 @@ Parked hardening: none.
 
 | File | LOC |
 |---|---:|
-| `plans/PR-Unit-Gate-Baseline-Shrink-Proof.md` | 218 |
-| `scripts/check_unit_gate.py` | 256 |
-| `tests/test_check_unit_gate.py` | 447 |
+| `plans/PR-Unit-Gate-Baseline-Shrink-Proof.md` | 239 |
+| `scripts/check_unit_gate.py` | 295 |
+| `tests/test_check_unit_gate.py` | 495 |
 | `tests/test_reasoning_graph_routing.py` | 28 |
 | `tests/unit_gate_baseline.txt` | 4 |
-| **Total** | **953** |
+| **Total** | **1061** |

@@ -501,6 +501,54 @@ def test_cli_exit2_when_scoped_shrink_run_collects_no_tests(tmp_path, monkeypatc
 
 
 @pytest.mark.parametrize(
+    "report",
+    [
+        "s [100%]\n1 skipped in 0.10s\n",
+        "x [100%]\n1 xfailed in 0.10s\n",
+    ],
+)
+def test_cli_exit2_when_removed_node_did_not_genuinely_pass(
+    tmp_path, monkeypatch, capsys, report
+):
+    base = tmp_path / "base.txt"
+    base.write_text("tests/test_removed.py::test_old_failure\n")
+    pr = tmp_path / "pr.txt"
+    pr.write_text("")
+    selected = tmp_path / "selected.txt"
+    selected.write_text("tests/test_removed.py\n")
+
+    returncode, calls = _run_gate_with_pytest_report(
+        [
+            "--baseline",
+            str(pr),
+            "--base-baseline",
+            str(base),
+            "--selected-files",
+            str(selected),
+            "--pytest-args",
+            "tests/test_removed.py",
+            "-m",
+            "not integration and not e2e",
+            "--continue-on-collection-errors",
+            "-rfE",
+            "--tb=no",
+            "-q",
+            "-p",
+            "no:cacheprovider",
+        ],
+        report,
+        monkeypatch,
+        returncode=0,
+    )
+    captured = capsys.readouterr()
+
+    assert returncode == 2, captured.out + captured.err
+    assert calls
+    assert "tests/test_removed.py::test_old_failure" in calls[0]
+    assert "must genuinely pass" in captured.err
+
+
+@pytest.mark.parametrize(
     "pytest_args",
     [
         ["tests/test_unrelated.py"],
