@@ -98,6 +98,11 @@ def added_baseline_entries(pr_baseline: set[str], base_baseline: set[str]) -> li
     return sorted(pr_baseline - base_baseline)
 
 
+def removed_baseline_entries(pr_baseline: set[str], base_baseline: set[str]) -> list[str]:
+    """Node ids the PR removes from the baseline vs the base branch."""
+    return sorted(base_baseline - pr_baseline)
+
+
 def node_file(node_id: str) -> str:
     """The test-file part of a pytest node id (``tests/t.py::k[x::y]`` -> ``tests/t.py``)."""
     return node_id.split("::", 1)[0]
@@ -174,6 +179,33 @@ def _fail_growth(added: list[str]) -> int:
     return 3
 
 
+def _fail_unproven_shrink(removed: list[str], *, missing_files: list[str] | None) -> int:
+    print(
+        f"unit gate: baseline shrink removes {len(removed)} node(s), but this "
+        "run did not provide pytest evidence for every removed node.",
+        file=sys.stderr,
+    )
+    if missing_files is None:
+        print(
+            "unit gate: --growth-only has no pytest report; run the full suite "
+            "or a scoped run that includes every removed node's test file.",
+            file=sys.stderr,
+        )
+    elif missing_files:
+        print(
+            "unit gate: selected-files omitted removed baseline node file(s):",
+            file=sys.stderr,
+        )
+        for path in missing_files:
+            print(f"  {path}", file=sys.stderr)
+    print("unit gate: removed baseline node(s):", file=sys.stderr)
+    for node in removed[:20]:
+        print(f"  {node}", file=sys.stderr)
+    if len(removed) > 20:
+        print(f"  ... {len(removed) - 20} more", file=sys.stderr)
+    return 2
+
+
 def main(argv: list[str] | None = None) -> int:
     ap = argparse.ArgumentParser(description="Repo-wide unit gate (ratchet baseline).")
     ap.add_argument("--baseline", required=True, type=Path)
@@ -217,16 +249,22 @@ def main(argv: list[str] | None = None) -> int:
         print(f"baseline not found: {args.baseline}", file=sys.stderr)
         return 2
 
-    # Ratchet growth guard (fast, no pytest): a PR may not add baseline entries
-    # once the base branch has a baseline. An empty base file = initial seed.
+    # Ratchet diff guards (fast, no pytest): a PR may not add baseline entries
+    # once the base branch has a baseline. It may shrink, but only when the run
+    # can prove every removed node by executing that node's test file.
+    removed_baseline_nodes: list[str] = []
     if args.base_baseline is not None and args.base_baseline.exists():
         base = load_baseline(args.base_baseline)
         if base:
-            added = added_baseline_entries(load_baseline(args.baseline), base)
+            pr_baseline = load_baseline(args.baseline)
+            added = added_baseline_entries(pr_baseline, base)
             if added:
                 return _fail_growth(added)
+            removed_baseline_nodes = removed_baseline_entries(pr_baseline, base)
 
     if args.growth_only:
+        if removed_baseline_nodes:
+            return _fail_unproven_shrink(removed_baseline_nodes, missing_files=None)
         print("unit gate: growth guard passed; no reachable unit tests selected")
         return 0
 
@@ -244,6 +282,14 @@ def main(argv: list[str] | None = None) -> int:
             print("--selected-files is empty; use --growth-only for the "
                   "zero-test path", file=sys.stderr)
             return 2
+        if removed_baseline_nodes:
+            removed_files = {node_file(node) for node in removed_baseline_nodes}
+            missing_removed_files = sorted(removed_files - selected)
+            if missing_removed_files:
+                return _fail_unproven_shrink(
+                    removed_baseline_nodes,
+                    missing_files=missing_removed_files,
+                )
 
     if args.report_file is not None:
         if not args.report_file.exists():

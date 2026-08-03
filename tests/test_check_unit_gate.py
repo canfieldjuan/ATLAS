@@ -78,6 +78,11 @@ def test_added_baseline_entries_detects_growth():
     assert gate.added_baseline_entries({"a"}, {"a", "b"}) == []   # shrink is fine
 
 
+def test_removed_baseline_entries_detects_shrink():
+    assert gate.removed_baseline_entries({"a"}, {"a", "b", "c"}) == ["b", "c"]
+    assert gate.removed_baseline_entries({"a", "b", "NEW"}, {"a", "b"}) == []
+
+
 def _run(args, tmp_path, report):
     rf = tmp_path / "report.txt"
     rf.write_text(report)
@@ -140,6 +145,112 @@ def test_cli_exit3_on_baseline_growth_vs_base(tmp_path):
              SAMPLE_PYTEST_OUTPUT)
     assert r.returncode == 3, r.stdout + r.stderr
     assert "RATCHET VIOLATION" in r.stdout
+
+
+def test_cli_exit2_when_growth_only_cannot_prove_baseline_shrink(tmp_path):
+    base = tmp_path / "base.txt"
+    base.write_text(
+        "tests/test_a.py::old_failure\n"
+        "tests/test_b.py::still_fails\n"
+    )
+    pr = tmp_path / "pr.txt"
+    pr.write_text("tests/test_b.py::still_fails\n")
+
+    r = subprocess.run(
+        [
+            sys.executable,
+            str(ROOT / "scripts" / "check_unit_gate.py"),
+            "--baseline",
+            str(pr),
+            "--base-baseline",
+            str(base),
+            "--growth-only",
+        ],
+        capture_output=True,
+        text=True,
+    )
+
+    assert r.returncode == 2, r.stdout + r.stderr
+    assert "--growth-only has no pytest report" in r.stderr
+    assert "tests/test_a.py::old_failure" in r.stderr
+
+
+def test_cli_exit2_when_scoped_run_omits_removed_baseline_node_file(tmp_path):
+    base = tmp_path / "base.txt"
+    base.write_text(
+        "tests/test_a.py::old_failure\n"
+        "tests/test_b.py::still_fails\n"
+    )
+    pr = tmp_path / "pr.txt"
+    pr.write_text("tests/test_b.py::still_fails\n")
+    selected = tmp_path / "selected.txt"
+    selected.write_text("tests/test_b.py\n")
+
+    r = _run(
+        [
+            "--baseline",
+            str(pr),
+            "--base-baseline",
+            str(base),
+            "--selected-files",
+            str(selected),
+        ],
+        tmp_path,
+        "FAILED tests/test_b.py::still_fails - boom\n",
+    )
+
+    assert r.returncode == 2, r.stdout + r.stderr
+    assert "selected-files omitted removed baseline node file" in r.stderr
+    assert "tests/test_a.py" in r.stderr
+
+
+def test_cli_exit0_when_scoped_run_proves_removed_node_passes(tmp_path):
+    base = tmp_path / "base.txt"
+    base.write_text(
+        "tests/test_a.py::old_failure\n"
+        "tests/test_b.py::still_fails\n"
+    )
+    pr = tmp_path / "pr.txt"
+    pr.write_text("tests/test_b.py::still_fails\n")
+    selected = tmp_path / "selected.txt"
+    selected.write_text("tests/test_a.py\ntests/test_b.py\n")
+
+    r = _run(
+        [
+            "--baseline",
+            str(pr),
+            "--base-baseline",
+            str(base),
+            "--selected-files",
+            str(selected),
+        ],
+        tmp_path,
+        "FAILED tests/test_b.py::still_fails - boom\n",
+    )
+
+    assert r.returncode == 0, r.stdout + r.stderr
+    assert "exactly matches" in r.stdout
+
+
+def test_cli_exit1_when_removed_baseline_node_still_fails(tmp_path):
+    base = tmp_path / "base.txt"
+    base.write_text(
+        "tests/test_a.py::old_failure\n"
+        "tests/test_b.py::still_fails\n"
+    )
+    pr = tmp_path / "pr.txt"
+    pr.write_text("tests/test_b.py::still_fails\n")
+
+    r = _run(
+        ["--baseline", str(pr), "--base-baseline", str(base)],
+        tmp_path,
+        "FAILED tests/test_a.py::old_failure - boom\n"
+        "FAILED tests/test_b.py::still_fails - boom\n",
+    )
+
+    assert r.returncode == 1, r.stdout + r.stderr
+    assert "REGRESSION" in r.stdout
+    assert "tests/test_a.py::old_failure" in r.stdout
 
 
 def test_cli_empty_base_baseline_allows_initial_seed(tmp_path):
