@@ -1,6 +1,6 @@
 # Plan archive index
 
-1502 archived plan doc(s). Merged plan docs are moved under `archive/` and listed below; once the archive sweep has run, the `plans/` root holds only in-flight slices.
+1503 archived plan doc(s). Merged plan docs are moved under `archive/` and listed below; once the archive sweep has run, the `plans/` root holds only in-flight slices.
 
 - [PR-ASR-Pip-Audit-Egg-Fragment](archive/PR-ASR-Pip-Audit-Egg-Fragment.md) - lane: security/workflow | phase: Production hardening
 - [PR-ASR-Requirements-Audit-Pin](archive/PR-ASR-Requirements-Audit-Pin.md) - lane: security/workflow | phase: Production hardening
@@ -1009,6 +1009,7 @@
 - [PR-EOM-Calendar-Demotion-Guard](archive/PR-EOM-Calendar-Demotion-Guard.md) - lane: eom-crm/lead-funnel | phase: vertical slice
 - [PR-EOM-Calendar-Email-Veto](archive/PR-EOM-Calendar-Email-Veto.md) - lane: eom-crm/calendar-veto | phase: production hardening
 - [PR-EOM-Complaints-Tracking](archive/PR-EOM-Complaints-Tracking.md) - lane: eom-crm/complaints | phase: Vertical slice
+- [PR-EOM-Funnel-Canonical-CRM-Runtime](archive/PR-EOM-Funnel-Canonical-CRM-Runtime.md) - lane: eom-funnel | phase: production hardening
 - [PR-EOM-Funnel-Ingress](archive/PR-EOM-Funnel-Ingress.md) - lane: eom-crm/lead-funnel | phase: Vertical slice
 - [PR-EOM-Lead-Intake](archive/PR-EOM-Lead-Intake.md) - lane: eom-crm/lead-funnel | phase: vertical slice
 - [PR-EOM-Lead-Pipeline](archive/PR-EOM-Lead-Pipeline.md) - lane: eom-crm/lead-funnel | phase: Vertical slice
