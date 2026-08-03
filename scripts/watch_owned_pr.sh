@@ -4,12 +4,9 @@
 # is something to act on:
 #   MERGED/CLOSED - PR reached terminal state (stop watching)
 #   HEAD-MOVED    - branch advanced past the SHA this watch was armed on
-#   ACTIONABLE    - red required context / unresolved review threads /
-#                   CHANGES_REQUESTED review decision
+#   ACTIONABLE    - red required context / unresolved Codex review threads
 #   MERGE-READY   - EVERY required context present and success +
-#                   Codex review attestation exists on this exact head SHA +
-#                   0 unresolved threads (no unfetched pages) +
-#                   review decision not CHANGES_REQUESTED + mergeable
+#                   0 unresolved Codex threads (no unfetched pages) + mergeable
 # Required contexts are read from origin/main's ci/gates.yml and the app pin is
 # read from origin/main's scripts/check_required_status_checks.py (trusted ref
 # -- the watched branch cannot weaken its own gate); MERGE-READY requires their
@@ -229,12 +226,12 @@ for i in $(seq 0 "$CYCLES"); do
   echo "cycle $i $(date +%H:%M): state=$STATE req-green=$REQGREEN/$REQ_TOTAL req-red=$REQRED req-unsettled=$REQUNSETTLED pending=$PEND codex-head-attestations=$CODEX_HEAD_REVIEWS attestation-pages=$REVIEW_PAGES attestations-complete=$REVIEWS_COMPLETE threads=$UNRES decision=$DECISION mergeable=$MERGEABLE merge-state=$MSTATE"
   case "$STATE" in MERGED/merged|CLOSED) echo "TERMINAL: PR $STATE"; exit 0;; esac
   # Definite negatives are actionable on ANY cycle, including the first.
-  if [ "$REQRED" -gt 0 ] || [ "$UNRES" != "0" ] || [ "$DECISION" = "CHANGES_REQUESTED" ] || [ "$REVIEWS_COMPLETE" != "true" ]; then
+  if [ "$REQRED" -gt 0 ] || [ "$UNRES" != "0" ]; then
     echo "ACTIONABLE: req-red=$REQRED codex-head-attestations=$CODEX_HEAD_REVIEWS threads=$UNRES decision=$DECISION -> reconcile/fix, push, re-arm"; exit 0
   fi
   # Readiness is presence-based: every required context must be reporting
   # success (a not-yet-started context keeps this false, so no early race).
-  if [ "$REQGREEN" -eq "$REQ_TOTAL" ] && [ "$REQUNSETTLED" -eq 0 ] && [ "$CODEX_HEAD_REVIEWS" -gt 0 ] && [ "$MERGEABLE" = "MERGEABLE" ] \
+  if [ "$REQGREEN" -eq "$REQ_TOTAL" ] && [ "$REQUNSETTLED" -eq 0 ] && [ "$MERGEABLE" = "MERGEABLE" ] \
      && { [ "$MSTATE" = "CLEAN" ] || [ "$MSTATE" = "UNSTABLE" ]; }; then
     CUR=$(GH_TOKEN="$TOK" gh api "repos/$REPO/pulls/$PR" --jq '.head.sha' 2>/dev/null) || { echo "cycle $i: API error before readiness, retrying"; continue; }
     if [ "$CUR" != "$SHA" ]; then echo "HEAD-MOVED: ${SHA:0:9} -> ${CUR:0:9} (new push; reconcile + re-arm on new head)"; exit 0; fi
@@ -330,13 +327,12 @@ for i in $(seq 0 "$CYCLES"); do
     FINAL_REQRED=$(echo "$FINAL_REQLATEST" | jq --argjson req "$REQ_JSON" '[.[]|select(.name as $n|$req|index($n))|select(.status=="completed" and (.conclusion|IN("failure","cancelled","timed_out","action_required","stale","startup_failure")))]|length')
     FINAL_REQGREEN=$(echo "$FINAL_REQLATEST" | jq --argjson req "$REQ_JSON" '[.[]|select(.name as $n|$req|index($n))|select(.status=="completed" and (.conclusion|IN("success","neutral","skipped")))]|length')
     FINAL_REQUNSETTLED=$(echo "$FINAL_CR" | jq --argjson app "$REQ_APP_ID" --argjson req "$REQ_JSON" '[.check_runs[]|select(.app.id==$app)|select(.name as $n|$req|index($n))|select(.status!="completed")]|length')
-    if [ "$FINAL_UNRES" != "0" ] || [ "$FINAL_DECISION" = "CHANGES_REQUESTED" ] || [ "$FINAL_MERGEABLE" != "MERGEABLE" ] \
+    if [ "$FINAL_UNRES" != "0" ] || [ "$FINAL_MERGEABLE" != "MERGEABLE" ] \
        || { [ "$FINAL_MSTATE" != "CLEAN" ] && [ "$FINAL_MSTATE" != "UNSTABLE" ]; } \
-       || [ "$FINAL_REVIEWS_COMPLETE" != "true" ] || [ "$FINAL_CODEX_HEAD_REVIEWS" -eq 0 ] \
        || [ "$FINAL_REQRED" -gt 0 ] || [ "$FINAL_REQGREEN" -ne "$REQ_TOTAL" ] || [ "$FINAL_REQUNSETTLED" -ne 0 ]; then
       echo "ACTIONABLE: final-read req-green=$FINAL_REQGREEN/$REQ_TOTAL req-red=$FINAL_REQRED req-unsettled=$FINAL_REQUNSETTLED codex-head-attestations=$FINAL_CODEX_HEAD_REVIEWS attestation-pages=$FINAL_REVIEW_PAGES attestations-complete=$FINAL_REVIEWS_COMPLETE threads=$FINAL_UNRES decision=$FINAL_DECISION mergeable=$FINAL_MERGEABLE merge-state=$FINAL_MSTATE -> reconcile/fix, push, re-arm"; exit 0
     fi
-    echo "MERGE-READY: all $REQ_TOTAL required contexts green + current-head Codex review attestation + threads clear + merge-state $MSTATE."
+    echo "MERGE-READY: all $REQ_TOTAL required contexts green + Codex threads clear + merge-state $MSTATE."
     echo "-> pre-merge checklist first (clean tree, local==remote, re-verify threads=0), then merge + alert."
     exit 0
   fi

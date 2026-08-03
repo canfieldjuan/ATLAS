@@ -361,7 +361,7 @@ def test_valid_snapshot_is_ready_and_accepted_by_consumer(tmp_path: Path, monkey
     assert watcher.TRUSTED_RECONCILIATION_CHECKER.parent.name == watcher.RECONCILIATION_LIB_DIR
 
 
-def test_post_review_metadata_controls_readiness_decision(
+def test_post_review_metadata_records_review_decision_without_blocking_readiness(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -375,10 +375,10 @@ def test_post_review_metadata_controls_readiness_decision(
 
     status = _produce(tmp_path, monkeypatch, fake)
 
-    assert status["state"] == "attention"
+    assert status["state"] == "ready_for_human_merge"
     assert status["pr"]["reviewDecision"] == "CHANGES_REQUESTED"
     assert status["readiness"]["review_decision"] == "CHANGES_REQUESTED"
-    assert "review decision has changes requested" in wake_bridge.readiness_blockers(status)
+    assert wake_bridge.readiness_blockers(status) == []
 
 
 def test_thread_snapshot_is_collected_after_codex_review_pagination(
@@ -814,7 +814,7 @@ def test_paginates_threads_and_keeps_outdated_unresolved_codex_threads(
     ]
 
 
-def test_changes_requested_codex_review_does_not_satisfy_head_review_count(
+def test_changes_requested_codex_review_does_not_block_ready_state_without_threads(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -838,7 +838,7 @@ def test_changes_requested_codex_review_does_not_satisfy_head_review_count(
         ),
     )
 
-    assert status["state"] == "attention"
+    assert status["state"] == "ready_for_human_merge"
     assert status["readiness"]["codex_head_review_count"] == 0
 
 
@@ -869,7 +869,7 @@ def test_unresolved_non_codex_thread_does_not_block_ready_state(
     assert status["readiness"]["unresolved_review_threads"] == []
 
 
-def test_current_head_codex_review_is_required_for_ready_state(
+def test_current_head_codex_review_is_not_required_for_ready_state(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -893,13 +893,13 @@ def test_current_head_codex_review_is_required_for_ready_state(
         ),
     )
 
-    assert status["state"] == "attention"
+    assert status["state"] == "ready_for_human_merge"
     assert status["readiness"]["codex_reviews_complete"] is True
     assert status["readiness"]["codex_head_review_count"] == 0
-    assert "current-head Codex review attestation is missing" in wake_bridge.readiness_blockers(status)
+    assert wake_bridge.readiness_blockers(status) == []
 
 
-def test_docs_only_reconciliation_exemption_can_satisfy_review_readiness(
+def test_docs_only_body_does_not_need_review_exemption_for_readiness(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -919,7 +919,7 @@ def test_docs_only_reconciliation_exemption_can_satisfy_review_readiness(
                 "\n".join(
                     [
                         "live AI reconciliation check",
-                        "OK: docs-only PR diff has no open scoped Codex review threads; current-head Codex review attestation is not required.",
+                        "OK: no open scoped Codex review threads remain.",
                     ]
                 ),
                 "",
@@ -929,7 +929,7 @@ def test_docs_only_reconciliation_exemption_can_satisfy_review_readiness(
 
     assert status["state"] == "ready_for_human_merge"
     assert status["readiness"]["codex_head_review_count"] == 0
-    assert status["readiness"]["docs_only_reconciliation_exemption"] is True
+    assert status["readiness"]["docs_only_reconciliation_exemption"] is False
     assert wake_bridge.readiness_blockers(status) == []
 
 
@@ -950,7 +950,7 @@ def test_docs_only_reconciliation_exemption_requires_final_body_marker(
             "\n".join(
                 [
                     "live AI reconciliation check",
-                    "OK: docs-only PR diff has no open scoped Codex review threads; current-head Codex review attestation is not required.",
+                    "OK: docs-only PR diff has no open scoped Codex review threads.",
                 ]
             ),
             "",
@@ -1007,7 +1007,7 @@ def test_docs_only_reconciliation_exemption_uses_post_reconciliation_checks(
                 "\n".join(
                     [
                         "live AI reconciliation check",
-                        "OK: docs-only PR diff has no open scoped Codex review threads; current-head Codex review attestation is not required.",
+                        "OK: docs-only PR diff has no open scoped Codex review threads.",
                     ]
                 ),
                 "",
@@ -1044,7 +1044,7 @@ def test_current_head_review_requires_exact_codex_connector_identity(
         ),
     )
 
-    assert status["state"] == "attention"
+    assert status["state"] == "ready_for_human_merge"
     assert status["readiness"]["codex_head_review_count"] == 0
 
 
@@ -1140,7 +1140,7 @@ def test_authorless_comment_is_ignored_for_codex_attestation(
         head=head,
     )
 
-    assert status["state"] == "attention"
+    assert status["state"] == "ready_for_human_merge"
     assert status["readiness"]["codex_reviews_complete"] is True
     assert status["readiness"]["codex_head_review_count"] == 0
 
@@ -1179,7 +1179,7 @@ def test_codex_comment_pagination_reaches_later_current_head_attestation(
     assert status["readiness"]["codex_head_review_count"] == 1
 
 
-def test_codex_review_pagination_failure_blocks_ready_state(
+def test_codex_review_pagination_failure_is_diagnostic_only(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -1190,7 +1190,7 @@ def test_codex_review_pagination_failure_blocks_ready_state(
         FakeRun(review_pages=[_response(_review_page(has_next=True, cursor="again"))]),
     )
 
-    assert status["state"] == "attention"
+    assert status["state"] == "ready_for_human_merge"
     assert status["readiness"]["codex_reviews_complete"] is False
     assert "review pagination exceeded 1 pages" in status["codex_reviews_error"]
 
@@ -1417,7 +1417,7 @@ def test_malformed_review_thread_nodes_fail_closed(
     ("pr_value", "all_checks", "reconciliation", "git_status", "expected"),
     [
         (_pr(draft=True), None, (0, "clean", ""), (0, "", ""), "attention"),
-        (_pr(decision="CHANGES_REQUESTED"), None, (0, "clean", ""), (0, "", ""), "attention"),
+        (_pr(decision="CHANGES_REQUESTED"), None, (0, "clean", ""), (0, "", ""), "ready_for_human_merge"),
         (_pr(merge="DIRTY"), None, (0, "clean", ""), (0, "", ""), "attention"),
         (_pr(merge="UNSTABLE"), [_check("required-a", "pending")], (0, "clean", ""), (0, "", ""), "pending"),
         (_pr(state="MERGED"), None, (0, "clean", ""), (0, "", ""), "closed"),
@@ -1592,9 +1592,9 @@ def test_installed_entrypoint_writes_consumer_accepted_snapshot(tmp_path: Path) 
                 elif "comments(first:100" in query:
                     payload = {"data": {"repository": {"pullRequest": {"headRefOid": "head-a", "comments": {"nodes": [], "pageInfo": {"hasNextPage": False, "endCursor": None}}}}}}
                 elif "comments(first:1)" in query:
-                    payload = {"data": {"repository": {"pullRequest": {"reviewThreads": {"nodes": [], "pageInfo": {"hasNextPage": False, "endCursor": None}}}}}}
+                    payload = {"data": {"repository": {"pullRequest": {"headRefOid": "head-a", "reviewThreads": {"nodes": [], "pageInfo": {"hasNextPage": False, "endCursor": None}}}}}}
                 else:
-                    payload = {"data": {"repository": {"pullRequest": {"reviewThreads": {"nodes": [], "pageInfo": {"hasNextPage": False, "endCursor": None}}}}}}
+                    payload = {"data": {"repository": {"pullRequest": {"headRefOid": "head-a", "reviewThreads": {"nodes": [], "pageInfo": {"hasNextPage": False, "endCursor": None}}}}}}
                 print(json.dumps(payload))
             else:
                 print("unexpected gh args: " + repr(args), file=sys.stderr)

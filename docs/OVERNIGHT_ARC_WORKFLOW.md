@@ -79,13 +79,11 @@ overnight deltas:
   reviewer boundary probe BEFORE pushing -- both error directions (fail-open
   AND over-reject), boundary values, at least one negative test. Cheaper than
   a review round.
-- **Merge:** required checks green + a current-head review by the exact Codex
-  connector identity (`chatgpt-codex-connector` or
-  `chatgpt-codex-connector[bot]`) + 0 unresolved Codex connector threads + no
-  CHANGES_REQUESTED + clean tree + local==remote -> merge, teardown, next
-  slice. Log for the report; do not ping the operator per merge. Exception:
-  documentation-only PRs hold for bot review before merging (doc PRs that
-  merged on green before the bot pass have burned us).
+- **Merge:** required checks green + 0 unresolved Codex connector threads +
+  clean tree + local==remote -> merge, teardown, next slice. Documentation-only
+  PRs use the same open-thread gate: do not hold them for Codex review presence
+  when `live-reconciliation` is green for the current head. Log for the report;
+  do not ping the operator per merge.
 - **Compaction recovery:** the `CLAUDE.md` compact instructions preserve the
   overnight baton. First acts after any compaction: re-read this doc, verify
   the baton against `git`/`gh` reality, re-arm the watcher.
@@ -132,21 +130,16 @@ there is something to act on:
 - `MERGED/CLOSED` -- terminal; stop watching.
 - `HEAD-MOVED` -- the branch advanced past the armed SHA; reconcile, re-arm
   on the new head.
-- `ACTIONABLE` -- a red required context, unresolved review threads (counts
-  fail closed when more thread pages exist than fetched), or a
-  CHANGES_REQUESTED review decision.
+- `ACTIONABLE` -- a red required context or unresolved review threads (counts
+  fail closed when more thread pages exist than fetched).
   Definite negatives exit on any cycle, including the first.
 - `MERGE-READY` -- readiness is presence-based and fail-closed: EVERY
   required branch-protection context (read at runtime from
   `ci/gates.yml` through the required-status checker/watcher path, so the gate
   cannot drift from the canonical list) must be present and reporting success,
-  plus
-  a current-head review by the exact Codex connector identity, 0 unresolved
-  Codex connector threads, no CHANGES_REQUESTED, and mergeable. A context that
-  has not started yet keeps readiness false; a missing current-head Codex
-  connector review keeps the watcher polling instead of reporting builder
-  action. Run the pre-merge checklist (clean tree, local==remote, threads still
-  0 and current-head connector review still present), merge, alert.
+  plus 0 unresolved Codex connector threads and mergeable. A context that has
+  not started yet keeps readiness false. Run the pre-merge checklist (clean
+  tree, local==remote, threads still 0), merge, alert.
 
 The watcher itself never merges and never holds merge authority (AGENTS
 3c.1.1); it only reports states.

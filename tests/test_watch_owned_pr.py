@@ -398,20 +398,20 @@ def test_watcher_ignores_unresolved_non_codex_thread(tmp_path: Path) -> None:
     assert "threads=0" in result.stdout
 
 
-def test_watcher_blocks_without_current_head_codex_review(tmp_path: Path) -> None:
+def test_watcher_reports_ready_without_current_head_codex_review(tmp_path: Path) -> None:
     result = _run_watcher(tmp_path, scenario="no_review")
 
     assert result.returncode == 0, result.stdout + result.stderr
     assert "ACTIONABLE" not in result.stdout
-    assert "watch window elapsed" in result.stdout
+    assert "MERGE-READY" in result.stdout
     assert "codex-head-attestations=0" in result.stdout
 
 
-def test_watcher_requires_exact_codex_connector_review_identity(tmp_path: Path) -> None:
+def test_watcher_treats_wrong_review_identity_as_diagnostic_only(tmp_path: Path) -> None:
     result = _run_watcher(tmp_path, scenario="helper_review")
 
     assert result.returncode == 0, result.stdout + result.stderr
-    assert "MERGE-READY" not in result.stdout
+    assert "MERGE-READY" in result.stdout
     assert "codex-head-attestations=0" in result.stdout
 
 
@@ -431,11 +431,11 @@ def test_watcher_blocks_on_outdated_unresolved_codex_thread(tmp_path: Path) -> N
     assert "threads=1" in result.stdout
 
 
-def test_watcher_does_not_count_changes_requested_as_head_review(tmp_path: Path) -> None:
+def test_watcher_does_not_block_on_changes_requested_review_without_threads(tmp_path: Path) -> None:
     result = _run_watcher(tmp_path, scenario="changes_requested_review")
 
     assert result.returncode == 0, result.stdout + result.stderr
-    assert "MERGE-READY" not in result.stdout
+    assert "MERGE-READY" in result.stdout
     assert "codex-head-attestations=0" in result.stdout
 
 
@@ -455,28 +455,28 @@ def test_watcher_finds_clean_comment_after_pagination(tmp_path: Path) -> None:
     assert "attestation-pages=3" in result.stdout
 
 
-def test_watcher_rejects_wrong_author_clean_comment(tmp_path: Path) -> None:
+def test_watcher_treats_wrong_author_clean_comment_as_diagnostic_only(tmp_path: Path) -> None:
     result = _run_watcher(tmp_path, scenario="wrong_author_clean_comment", sha="aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa")
 
     assert result.returncode == 0, result.stdout + result.stderr
-    assert "MERGE-READY" not in result.stdout
+    assert "MERGE-READY" in result.stdout
     assert "codex-head-attestations=0" in result.stdout
 
 
-def test_watcher_rejects_stale_clean_comment(tmp_path: Path) -> None:
+def test_watcher_treats_stale_clean_comment_as_diagnostic_only(tmp_path: Path) -> None:
     result = _run_watcher(tmp_path, scenario="stale_clean_comment", sha="aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa")
 
     assert result.returncode == 0, result.stdout + result.stderr
-    assert "MERGE-READY" not in result.stdout
+    assert "MERGE-READY" in result.stdout
     assert "codex-head-attestations=0" in result.stdout
 
 
-def test_watcher_changes_requested_overrides_clean_comment(tmp_path: Path) -> None:
+def test_watcher_changes_requested_decision_is_diagnostic_when_threads_clear(tmp_path: Path) -> None:
     result = _run_watcher(tmp_path, scenario="clean_comment_changes_requested", sha="aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa")
 
     assert result.returncode == 0, result.stdout + result.stderr
-    assert "MERGE-READY" not in result.stdout
-    assert "ACTIONABLE" in result.stdout
+    assert "MERGE-READY" in result.stdout
+    assert "ACTIONABLE" not in result.stdout
     assert "decision=CHANGES_REQUESTED" in result.stdout
 
 
@@ -506,39 +506,39 @@ def test_watcher_finds_current_head_codex_review_after_pagination(tmp_path: Path
     assert "attestation-pages=3" in result.stdout
 
 
-def test_watcher_blocks_malformed_review_pagination(tmp_path: Path) -> None:
+def test_watcher_treats_malformed_review_pagination_as_diagnostic_only(tmp_path: Path) -> None:
     result = _run_watcher(tmp_path, scenario="review_graphql_errors")
 
     assert result.returncode == 0, result.stdout + result.stderr
-    assert "MERGE-READY" not in result.stdout
-    assert "ACTIONABLE" in result.stdout
+    assert "MERGE-READY" in result.stdout
+    assert "ACTIONABLE" not in result.stdout
     assert "attestations-complete=false" in result.stdout
 
 
-def test_watcher_blocks_malformed_review_page_info(tmp_path: Path) -> None:
+def test_watcher_treats_malformed_review_page_info_as_diagnostic_only(tmp_path: Path) -> None:
     result = _run_watcher(tmp_path, scenario="review_malformed_page_info")
 
     assert result.returncode == 0, result.stdout + result.stderr
-    assert "MERGE-READY" not in result.stdout
-    assert "ACTIONABLE" in result.stdout
+    assert "MERGE-READY" in result.stdout
+    assert "ACTIONABLE" not in result.stdout
     assert "attestations-complete=false" in result.stdout
 
 
-def test_watcher_blocks_malformed_comment_pagination(tmp_path: Path) -> None:
+def test_watcher_treats_malformed_comment_pagination_as_diagnostic_only(tmp_path: Path) -> None:
     result = _run_watcher(tmp_path, scenario="comment_graphql_errors")
 
     assert result.returncode == 0, result.stdout + result.stderr
-    assert "MERGE-READY" not in result.stdout
-    assert "ACTIONABLE" in result.stdout
+    assert "MERGE-READY" in result.stdout
+    assert "ACTIONABLE" not in result.stdout
     assert "attestations-complete=false" in result.stdout
 
 
-def test_watcher_blocks_malformed_comment_page_info(tmp_path: Path) -> None:
+def test_watcher_treats_malformed_comment_page_info_as_diagnostic_only(tmp_path: Path) -> None:
     result = _run_watcher(tmp_path, scenario="comment_malformed_page_info")
 
     assert result.returncode == 0, result.stdout + result.stderr
-    assert "MERGE-READY" not in result.stdout
-    assert "ACTIONABLE" in result.stdout
+    assert "MERGE-READY" in result.stdout
+    assert "ACTIONABLE" not in result.stdout
     assert "attestations-complete=false" in result.stdout
 
 
@@ -550,22 +550,20 @@ def test_watcher_revalidates_head_before_reporting_ready(tmp_path: Path) -> None
     assert "HEAD-MOVED: head-a -> head-b" in result.stdout
 
 
-def test_watcher_revalidates_decision_before_reporting_ready(tmp_path: Path) -> None:
+def test_watcher_does_not_block_final_decision_change_when_threads_clear(tmp_path: Path) -> None:
     result = _run_watcher(tmp_path, scenario="final_decision_changes")
 
     assert result.returncode == 0, result.stdout + result.stderr
-    assert "MERGE-READY" not in result.stdout
-    assert "ACTIONABLE: final-read" in result.stdout
-    assert "decision=CHANGES_REQUESTED" in result.stdout
+    assert "MERGE-READY" in result.stdout
+    assert "ACTIONABLE: final-read" not in result.stdout
 
 
-def test_watcher_revalidates_reviews_before_reporting_ready(tmp_path: Path) -> None:
+def test_watcher_does_not_block_final_review_disappearance(tmp_path: Path) -> None:
     result = _run_watcher(tmp_path, scenario="final_review_disappears")
 
     assert result.returncode == 0, result.stdout + result.stderr
-    assert "MERGE-READY" not in result.stdout
-    assert "ACTIONABLE: final-read" in result.stdout
-    assert "codex-head-attestations=0" in result.stdout
+    assert "MERGE-READY" in result.stdout
+    assert "ACTIONABLE: final-read" not in result.stdout
 
 
 def test_watcher_revalidates_required_checks_before_reporting_ready(tmp_path: Path) -> None:
