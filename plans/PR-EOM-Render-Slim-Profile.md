@@ -224,7 +224,6 @@ fallback changes; otherwise write "N/A - no guard/config boundary change."
 - `tests/test_eom_lead_conversion_integration.py`
 - `tests/test_eom_render_profile.py`
 - `tests/test_reasoning_graph_routing.py`
-- `tests/unit_gate_baseline.txt`
 
 ## Mechanism
 
@@ -340,9 +339,11 @@ Parked hardening: none.
     — 12 passed, 1 warning from the existing `torch`/`pynvml` import path;
     synthetic `sys.modules` pollution probe for
     `atlas_brain.pipelines.llm` — 12 passed, 1 warning and reloaded the real
-    module;
-    scoped `scripts/check_unit_gate.py` for `tests/test_reasoning_graph_routing.py`
-    — 0 failing/errored nodes, baseline=0, regressions=0, newly-passing=0.
+    module.  The next GitHub unit-gate run showed the four pre-existing
+    full-suite-only routing failures still fail in full context, so the
+    existing unit-gate baseline entries are intentionally retained; this repair
+    targets the three newly exposed unbaselined routing failures from the
+    previous CI run.
 
 ## Estimated diff size
 
@@ -359,5 +360,4 @@ Parked hardening: none.
 | `tests/test_eom_lead_conversion_integration.py` | 92 |
 | `tests/test_eom_render_profile.py` | 563 |
 | `tests/test_reasoning_graph_routing.py` | 96 |
-| `tests/unit_gate_baseline.txt` | 4 |
-| **Total** | **1621** |
+| **Total** | **1617** |
