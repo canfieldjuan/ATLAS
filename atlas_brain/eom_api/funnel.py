@@ -11,8 +11,13 @@ from uuid import UUID
 
 from fastapi import APIRouter, Depends, Header, HTTPException, Query, Request, status
 from fastapi.responses import JSONResponse
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 
+from ..services.eom_estimate_booking import (
+    EOMEstimateBooking,
+    EOMEstimateBookingError,
+    schedule_eom_estimate_booking,
+)
 from ..services.eom_lead_conversion import (
     EOMCustomerHandoff,
     EOMLeadConversionError,
@@ -35,12 +40,31 @@ class EOMCustomerHandoffRequest(BaseModel):
 
     model_config = ConfigDict(extra="forbid")
     contact_id: UUID
-    tracker_customer_id: Annotated[
-        int, Field(strict=True, gt=0, le=_MAX_SIGNED_BIGINT)
+    tracker_customer_id: Annotated[int, Field(strict=True, gt=0, le=_MAX_SIGNED_BIGINT)]
+    tracker_site_id: Annotated[int, Field(strict=True, gt=0, le=_MAX_SIGNED_BIGINT)]
+
+
+class EOMEstimateBookingRequest(BaseModel):
+    """The office-selected estimate appointment window for one EOM lead."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    scheduled_start: datetime
+    scheduled_end: datetime
+    calendar_id: Annotated[
+        str | None, Field(default=None, min_length=1, max_length=256)
     ]
-    tracker_site_id: Annotated[
-        int, Field(strict=True, gt=0, le=_MAX_SIGNED_BIGINT)
-    ]
+    notes: Annotated[str | None, Field(default=None, max_length=1000)]
+
+    @model_validator(mode="after")
+    def _validate_window(self) -> "EOMEstimateBookingRequest":
+        if self.scheduled_start.tzinfo is None:
+            raise ValueError("scheduled_start must include a timezone")
+        if self.scheduled_end.tzinfo is None:
+            raise ValueError("scheduled_end must include a timezone")
+        if self.scheduled_end <= self.scheduled_start:
+            raise ValueError("scheduled_end must be after scheduled_start")
+        return self
 
 
 class EOMLeadReviewItem(BaseModel):
@@ -54,6 +78,7 @@ class EOMLeadReviewItem(BaseModel):
     phone: str | None = None
     address: str | None = None
     source: str | None = None
+    lead_stage: str = Field(serialization_alias="leadStage")
     created_at: datetime = Field(serialization_alias="createdAt")
 
 
@@ -79,6 +104,12 @@ def _crm_dependency(request: Request) -> Any:
     return get_crm_provider()
 
 
+def _calendar_dependency() -> Any:
+    from ..tools.calendar import calendar_tool
+
+    return calendar_tool
+
+
 def _encode_lead_review_cursor(*, created_at: datetime, contact_id: UUID) -> str:
     payload = f"{created_at.isoformat()}|{contact_id}"
     return base64.urlsafe_b64encode(payload.encode("utf-8")).decode("ascii").rstrip("=")
@@ -97,7 +128,9 @@ def _decode_lead_review_cursor(cursor: str | None) -> dict[str, object] | None:
         created_at = datetime.fromisoformat(created_at_text)
         contact_id = UUID(contact_id_text)
     except (ValueError, UnicodeDecodeError, binascii.Error):
-        raise HTTPException(status_code=422, detail="Invalid lead review cursor") from None
+        raise HTTPException(
+            status_code=422, detail="Invalid lead review cursor"
+        ) from None
     if created_at.tzinfo is None:
         raise HTTPException(status_code=422, detail="Invalid lead review cursor")
     return {"created_at": created_at, "contact_id": contact_id}
@@ -132,7 +165,7 @@ async def list_eom_lead_review_items(
     _actor: dict[str, object] = Depends(require_eom_funnel_actor),
     crm: Any = Depends(_crm_dependency),
 ) -> EOMLeadReviewResponse:
-    """List only active EOM ``lead/new`` records for office review.
+    """List active EOM lead records that still need office review.
 
     The tracker keeps the service bearer and the browser never calls this
     route directly. Reading this projection does not alter CRM lifecycle,
@@ -167,6 +200,49 @@ async def list_eom_lead_review_items(
 
 
 @router.post(
+    "/leads/{contact_id}/estimate-bookings",
+    status_code=status.HTTP_201_CREATED,
+    dependencies=[Depends(require_eom_funnel_api)],
+)
+async def create_estimate_booking(
+    contact_id: UUID,
+    payload: EOMEstimateBookingRequest,
+    booking_key: str = Depends(_approval_key_dependency),
+    actor: dict[str, object] = Depends(require_eom_funnel_actor),
+    crm: Any = Depends(_crm_dependency),
+    calendar: Any = Depends(_calendar_dependency),
+) -> JSONResponse:
+    """Book an estimate appointment without converting the lead to a customer."""
+    try:
+        result = await schedule_eom_estimate_booking(
+            crm,
+            calendar,
+            EOMEstimateBooking(
+                contact_id=str(contact_id),
+                scheduled_start=payload.scheduled_start,
+                scheduled_end=payload.scheduled_end,
+                calendar_id=payload.calendar_id,
+                notes=payload.notes,
+                booking_key=booking_key,
+                actor_id=int(actor["id"]),
+                actor_name=str(actor["name"]),
+            ),
+        )
+    except EOMEstimateBookingError as exc:
+        raise HTTPException(status_code=exc.status_code, detail=str(exc)) from exc
+    except EOMLeadConversionError as exc:
+        raise HTTPException(status_code=exc.status_code, detail=str(exc)) from exc
+    return JSONResponse(
+        status_code=(
+            status.HTTP_200_OK
+            if bool(result.get("idempotent"))
+            else status.HTTP_201_CREATED
+        ),
+        content={"success": True, **result},
+    )
+
+
+@router.post(
     "/customer-handoffs",
     status_code=status.HTTP_201_CREATED,
     dependencies=[Depends(require_eom_funnel_api)],
@@ -194,7 +270,9 @@ async def create_customer_handoff(
         raise HTTPException(status_code=exc.status_code, detail=str(exc)) from exc
     return JSONResponse(
         status_code=(
-            status.HTTP_200_OK if bool(result.get("idempotent")) else status.HTTP_201_CREATED
+            status.HTTP_200_OK
+            if bool(result.get("idempotent"))
+            else status.HTTP_201_CREATED
         ),
         content={"success": True, **result},
     )

@@ -166,6 +166,30 @@ def test_eom_lead_review_queue_index_matches_keyset_order():
     assert "lead_stage = 'new'" in migration
 
 
+def test_eom_lead_review_queue_booked_stage_index_matches_provider_filter():
+    migration = (
+        Path(__file__).resolve().parent.parent
+        / "atlas_brain"
+        / "storage"
+        / "migrations"
+        / "356_eom_lead_review_queue_booked_stage.sql"
+    ).read_text()
+
+    assert (
+        "DROP INDEX CONCURRENTLY IF EXISTS idx_contacts_eom_lead_review_queue"
+        in migration
+    )
+    assert "CREATE INDEX CONCURRENTLY idx_contacts_eom_lead_review_queue" in migration
+    assert "ON contacts (created_at DESC, id DESC)" in migration
+    assert "business_context_id = 'effingham_maids'" in migration
+    assert "status = 'active'" in migration
+    assert "contact_type = 'lead'" in migration
+    assert "lead_stage IN ('new', 'estimate_booked')" in migration
+    assert "Rollback evidence:" in migration
+    assert "lead_stage = 'new'" in migration
+    assert "old code still filters lead_stage = 'new' at query time" in migration
+
+
 def test_customer_service_ticket_migration_is_additive_tenant_scoped_and_indexed():
     migration = (
         Path(__file__).resolve().parent.parent

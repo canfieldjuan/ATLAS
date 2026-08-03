@@ -13,8 +13,12 @@ import pytest
 asyncpg = pytest.importorskip("asyncpg")
 
 from atlas_brain.services.crm_provider import DatabaseCRMProvider  # noqa: E402
-from atlas_brain.services.eom_lead_conversion import EOMLeadConversionError  # noqa: E402
-
+from atlas_brain.services.eom_estimate_booking import (  # noqa: E402
+    deterministic_eom_estimate_calendar_event_id,
+)
+from atlas_brain.services.eom_lead_conversion import (
+    EOMLeadConversionError,
+)  # noqa: E402
 
 ROOT = Path(__file__).resolve().parent.parent
 MIGRATIONS = ROOT / "atlas_brain" / "storage" / "migrations"
@@ -35,13 +39,11 @@ def _quote_ident(identifier: str) -> str:
 
 
 async def _require_disposable_role_administration(conn) -> None:
-    can_administer_roles = await conn.fetchval(
-        """
+    can_administer_roles = await conn.fetchval("""
         SELECT rolsuper OR rolcreaterole
         FROM pg_roles
         WHERE rolname = current_user
-        """
-    )
+        """)
     if not can_administer_roles:
         pytest.skip("privilege migration proof requires disposable role administration")
 
@@ -70,8 +72,7 @@ async def _provision_nocodb_login(conn) -> None:
 
 async def _provision_handoff_guard(conn) -> None:
     await _require_disposable_role_administration(conn)
-    await conn.execute(
-        """
+    await conn.execute("""
         DO $$
         BEGIN
             IF NOT EXISTS (
@@ -81,8 +82,7 @@ async def _provision_handoff_guard(conn) -> None:
             END IF;
         END;
         $$;
-        """
-    )
+        """)
 
 
 async def _prepare_schema(
@@ -93,15 +93,13 @@ async def _prepare_schema(
 ) -> None:
     await conn.execute(f'CREATE SCHEMA "{schema}"')
     await conn.execute(f'SET search_path TO "{schema}", public')
-    await conn.execute(
-        """
+    await conn.execute("""
         CREATE TABLE schema_migrations (
             version INTEGER PRIMARY KEY,
             name VARCHAR(255) NOT NULL,
             applied_at TIMESTAMPTZ DEFAULT NOW()
         )
-        """
-    )
+        """)
     await conn.execute("CREATE TABLE appointments (id UUID PRIMARY KEY)")
     await conn.execute("CREATE TABLE api_keys (id UUID PRIMARY KEY)")
     await conn.execute("CREATE TABLE byok_keys (id UUID PRIMARY KEY)")
@@ -157,7 +155,9 @@ async def _insert_contact(
     )
 
 
-async def _contact_state(conn, contact_id: uuid.UUID) -> tuple[dict[str, object], int, int]:
+async def _contact_state(
+    conn, contact_id: uuid.UUID
+) -> tuple[dict[str, object], int, int]:
     contact = await conn.fetchrow(
         """
         SELECT business_context_id, contact_type, lead_stage, status
@@ -205,6 +205,7 @@ async def test_eom_lead_review_projection_is_closed_filtered_and_read_only():
             address="100 Main St",
             source="web",
             created_at=created_at,
+            lead_stage="estimate_booked",
         )
         await _insert_contact(
             conn,
@@ -259,8 +260,12 @@ async def test_eom_lead_review_projection_is_closed_filtered_and_read_only():
 
         before_counts = {
             "contacts": await conn.fetchval("SELECT COUNT(*) FROM contacts"),
-            "events": await conn.fetchval("SELECT COUNT(*) FROM eom_lead_lifecycle_events"),
-            "handoffs": await conn.fetchval("SELECT COUNT(*) FROM eom_customer_handoffs"),
+            "events": await conn.fetchval(
+                "SELECT COUNT(*) FROM eom_lead_lifecycle_events"
+            ),
+            "handoffs": await conn.fetchval(
+                "SELECT COUNT(*) FROM eom_customer_handoffs"
+            ),
         }
         rows = await provider.list_eom_new_lead_review_items(limit=10)
         second_page = await provider.list_eom_new_lead_review_items(
@@ -277,6 +282,7 @@ async def test_eom_lead_review_projection_is_closed_filtered_and_read_only():
                 "phone": "2175550199",
                 "address": "101 Main St",
                 "source": "web",
+                "lead_stage": "new",
                 "created_at": newer_created_at,
             },
             {
@@ -286,6 +292,7 @@ async def test_eom_lead_review_projection_is_closed_filtered_and_read_only():
                 "phone": "2175550100",
                 "address": "100 Main St",
                 "source": "web",
+                "lead_stage": "estimate_booked",
                 "created_at": created_at,
             },
         ]
@@ -297,6 +304,7 @@ async def test_eom_lead_review_projection_is_closed_filtered_and_read_only():
                 "phone": "2175550100",
                 "address": "100 Main St",
                 "source": "web",
+                "lead_stage": "estimate_booked",
                 "created_at": created_at,
             }
         ]
@@ -307,12 +315,17 @@ async def test_eom_lead_review_projection_is_closed_filtered_and_read_only():
             "phone",
             "address",
             "source",
+            "lead_stage",
             "created_at",
         }
         assert {
             "contacts": await conn.fetchval("SELECT COUNT(*) FROM contacts"),
-            "events": await conn.fetchval("SELECT COUNT(*) FROM eom_lead_lifecycle_events"),
-            "handoffs": await conn.fetchval("SELECT COUNT(*) FROM eom_customer_handoffs"),
+            "events": await conn.fetchval(
+                "SELECT COUNT(*) FROM eom_lead_lifecycle_events"
+            ),
+            "handoffs": await conn.fetchval(
+                "SELECT COUNT(*) FROM eom_customer_handoffs"
+            ),
         } == before_counts
     finally:
         await conn.execute(f'DROP SCHEMA IF EXISTS "{schema}" CASCADE')
@@ -371,10 +384,13 @@ async def test_public_intake_and_handoff_share_the_authoritative_postgres_provid
             "lead_stage": "new",
             "status": "active",
         }
-        assert await conn.fetchval(
-            "SELECT COUNT(*) FROM contact_interactions WHERE contact_id = $1",
-            contact["id"],
-        ) == 1
+        assert (
+            await conn.fetchval(
+                "SELECT COUNT(*) FROM contact_interactions WHERE contact_id = $1",
+                contact["id"],
+            )
+            == 1
+        )
 
         handoff = await provider.finalize_eom_customer_handoff(
             contact_id=str(contact["id"]),
@@ -395,6 +411,371 @@ async def test_public_intake_and_handoff_share_the_authoritative_postgres_provid
             },
             1,
             1,
+        )
+    finally:
+        await conn.execute(f'DROP SCHEMA IF EXISTS "{schema}" CASCADE')
+        await conn.close()
+
+
+@pytest.mark.asyncio
+async def test_estimate_booking_lifecycle_is_idempotent_and_keeps_lead_approvable():
+    database_url = _database_url_or_skip()
+    schema = f"atlas_eom_estimate_booking_{uuid.uuid4().hex}"
+    conn = await asyncpg.connect(database_url)
+    try:
+        await _prepare_schema(conn, schema)
+        provider = DatabaseCRMProvider(pool=conn)
+        contact_id = uuid.uuid4()
+        booking_key = f"office-booking-{uuid.uuid4().hex}"
+        calendar_event_id = deterministic_eom_estimate_calendar_event_id(
+            contact_id=str(contact_id),
+            booking_key=booking_key,
+        )
+        start = datetime(2026, 8, 4, 19, 0, tzinfo=timezone.utc)
+        end = datetime(2026, 8, 4, 20, 0, tzinfo=timezone.utc)
+        await _insert_contact(
+            conn,
+            contact_id=contact_id,
+            full_name="Booked Estimate",
+            address="100 Main St",
+        )
+
+        prepared = await provider.prepare_eom_estimate_booking(
+            contact_id=str(contact_id),
+            scheduled_start=start,
+            scheduled_end=end,
+            calendar_id="estimate-calendar",
+            notes="Bring estimate worksheet",
+            booking_key=booking_key,
+            expected_calendar_event_id=calendar_event_id,
+            actor_id=1,
+            actor_name="Juan Canfield",
+        )
+        contact_after_prepare = await conn.fetchrow(
+            "SELECT contact_type, lead_stage FROM contacts WHERE id = $1",
+            contact_id,
+        )
+        completed = await provider.complete_eom_estimate_booking(
+            contact_id=str(contact_id),
+            scheduled_start=start,
+            scheduled_end=end,
+            calendar_id="estimate-calendar",
+            notes="Bring estimate worksheet",
+            booking_key=booking_key,
+            expected_calendar_event_id=calendar_event_id,
+            calendar_event_id=calendar_event_id,
+            actor_id=1,
+            actor_name="Juan Canfield",
+        )
+        replay = await provider.prepare_eom_estimate_booking(
+            contact_id=str(contact_id),
+            scheduled_start=start,
+            scheduled_end=end,
+            calendar_id="estimate-calendar",
+            notes="Bring estimate worksheet",
+            booking_key=booking_key,
+            expected_calendar_event_id=calendar_event_id,
+            actor_id=1,
+            actor_name="Juan Canfield",
+        )
+        lifecycle_counts = {
+            row["event_type"]: int(row["count"])
+            for row in await conn.fetch(
+                """
+                SELECT event_type, COUNT(*) AS count
+                FROM eom_lead_lifecycle_events
+                WHERE contact_id = $1
+                  AND event_type IN ('estimate_booking_requested', 'estimate_booked')
+                GROUP BY event_type
+                """,
+                contact_id,
+            )
+        }
+
+        assert prepared["idempotent"] is False
+        assert prepared["status"] == "calendar_pending"
+        assert dict(contact_after_prepare) == {
+            "contact_type": "lead",
+            "lead_stage": "new",
+        }
+        assert completed["idempotent"] is False
+        assert completed["status"] == "estimate_booked"
+        assert completed["calendar_event_id"] == calendar_event_id
+        assert replay["idempotent"] is True
+        assert replay["status"] == "estimate_booked"
+        assert lifecycle_counts == {
+            "estimate_booking_requested": 1,
+            "estimate_booked": 1,
+        }
+
+        handoff = await provider.finalize_eom_customer_handoff(
+            contact_id=str(contact_id),
+            tracker_customer_id=101,
+            tracker_site_id=202,
+            approval_key=_approval_key(),
+            actor_id=1,
+            actor_name="Juan Canfield",
+        )
+        approval_from_stage = await conn.fetchval(
+            """
+            SELECT from_stage
+            FROM eom_lead_lifecycle_events
+            WHERE contact_id = $1
+              AND event_type = 'customer_approved'
+            """,
+            contact_id,
+        )
+
+        assert handoff["idempotent"] is False
+        assert approval_from_stage == "estimate_booked"
+        assert await _contact_state(conn, contact_id) == (
+            {
+                "business_context_id": "effingham_maids",
+                "contact_type": "customer",
+                "lead_stage": None,
+                "status": "active",
+            },
+            1,
+            1,
+        )
+    finally:
+        await conn.execute(f'DROP SCHEMA IF EXISTS "{schema}" CASCADE')
+        await conn.close()
+
+
+@pytest.mark.asyncio
+async def test_estimate_booking_rejects_conflicting_replay_before_new_lifecycle_event():
+    database_url = _database_url_or_skip()
+    schema = f"atlas_eom_estimate_booking_conflict_{uuid.uuid4().hex}"
+    conn = await asyncpg.connect(database_url)
+    try:
+        await _prepare_schema(conn, schema)
+        provider = DatabaseCRMProvider(pool=conn)
+        contact_id = uuid.uuid4()
+        booking_key = f"office-booking-{uuid.uuid4().hex}"
+        calendar_event_id = deterministic_eom_estimate_calendar_event_id(
+            contact_id=str(contact_id),
+            booking_key=booking_key,
+        )
+        start = datetime(2026, 8, 4, 19, 0, tzinfo=timezone.utc)
+        end = datetime(2026, 8, 4, 20, 0, tzinfo=timezone.utc)
+        await _insert_contact(conn, contact_id=contact_id)
+
+        await provider.prepare_eom_estimate_booking(
+            contact_id=str(contact_id),
+            scheduled_start=start,
+            scheduled_end=end,
+            calendar_id="estimate-calendar",
+            notes="Bring estimate worksheet",
+            booking_key=booking_key,
+            expected_calendar_event_id=calendar_event_id,
+            actor_id=1,
+            actor_name="Juan Canfield",
+        )
+
+        with pytest.raises(
+            EOMLeadConversionError,
+            match="different estimate booking",
+        ):
+            await provider.prepare_eom_estimate_booking(
+                contact_id=str(contact_id),
+                scheduled_start=start,
+                scheduled_end=end,
+                calendar_id="second-calendar",
+                notes="Bring estimate worksheet",
+                booking_key=booking_key,
+                expected_calendar_event_id=calendar_event_id,
+                actor_id=1,
+                actor_name="Juan Canfield",
+            )
+        with pytest.raises(
+            EOMLeadConversionError,
+            match="different estimate booking",
+        ):
+            different_booking_key = f"office-booking-{uuid.uuid4().hex}"
+            await provider.prepare_eom_estimate_booking(
+                contact_id=str(contact_id),
+                scheduled_start=start,
+                scheduled_end=end,
+                calendar_id="estimate-calendar",
+                notes="Bring estimate worksheet",
+                booking_key=different_booking_key,
+                expected_calendar_event_id=deterministic_eom_estimate_calendar_event_id(
+                    contact_id=str(contact_id),
+                    booking_key=different_booking_key,
+                ),
+                actor_id=1,
+                actor_name="Juan Canfield",
+            )
+
+        assert (
+            await conn.fetchval(
+                """
+            SELECT COUNT(*)
+            FROM eom_lead_lifecycle_events
+            WHERE contact_id = $1
+              AND event_type = 'estimate_booking_requested'
+            """,
+                contact_id,
+            )
+            == 1
+        )
+    finally:
+        await conn.execute(f'DROP SCHEMA IF EXISTS "{schema}" CASCADE')
+        await conn.close()
+
+
+@pytest.mark.asyncio
+async def test_pending_estimate_booking_blocks_handoff_until_terminal_event():
+    database_url = _database_url_or_skip()
+    schema = f"atlas_eom_estimate_booking_handoff_{uuid.uuid4().hex}"
+    conn = await asyncpg.connect(database_url)
+    try:
+        await _prepare_schema(conn, schema)
+        provider = DatabaseCRMProvider(pool=conn)
+        contact_id = uuid.uuid4()
+        failed_key = f"office-booking-{uuid.uuid4().hex}"
+        corrected_key = f"office-booking-{uuid.uuid4().hex}"
+        start = datetime(2026, 8, 4, 19, 0, tzinfo=timezone.utc)
+        end = datetime(2026, 8, 4, 20, 0, tzinfo=timezone.utc)
+        failed_event_id = deterministic_eom_estimate_calendar_event_id(
+            contact_id=str(contact_id),
+            booking_key=failed_key,
+        )
+        corrected_event_id = deterministic_eom_estimate_calendar_event_id(
+            contact_id=str(contact_id),
+            booking_key=corrected_key,
+        )
+        await _insert_contact(conn, contact_id=contact_id)
+
+        await provider.prepare_eom_estimate_booking(
+            contact_id=str(contact_id),
+            scheduled_start=start,
+            scheduled_end=end,
+            calendar_id="mistyped-calendar",
+            notes="Bring estimate worksheet",
+            booking_key=failed_key,
+            expected_calendar_event_id=failed_event_id,
+            actor_id=1,
+            actor_name="Juan Canfield",
+        )
+
+        with pytest.raises(EOMLeadConversionError, match="still pending"):
+            await provider.finalize_eom_customer_handoff(
+                contact_id=str(contact_id),
+                tracker_customer_id=101,
+                tracker_site_id=202,
+                approval_key=_approval_key(),
+                actor_id=1,
+                actor_name="Juan Canfield",
+            )
+
+        await provider.mark_eom_estimate_booking_calendar_failed(
+            contact_id=str(contact_id),
+            booking_key=failed_key,
+            expected_calendar_event_id=failed_event_id,
+            calendar_error="API_ERROR",
+            calendar_message="Calendar API error: 404",
+            actor_id=1,
+            actor_name="Juan Canfield",
+        )
+        corrected = await provider.prepare_eom_estimate_booking(
+            contact_id=str(contact_id),
+            scheduled_start=start,
+            scheduled_end=end,
+            calendar_id="estimate-calendar",
+            notes="Bring estimate worksheet",
+            booking_key=corrected_key,
+            expected_calendar_event_id=corrected_event_id,
+            actor_id=1,
+            actor_name="Juan Canfield",
+        )
+        lifecycle_counts = {
+            row["event_type"]: int(row["count"])
+            for row in await conn.fetch(
+                """
+                SELECT event_type, COUNT(*) AS count
+                FROM eom_lead_lifecycle_events
+                WHERE contact_id = $1
+                  AND event_type IN (
+                      'estimate_booking_requested',
+                      'estimate_booking_calendar_failed'
+                  )
+                GROUP BY event_type
+                """,
+                contact_id,
+            )
+        }
+
+        assert corrected["idempotent"] is False
+        assert corrected["status"] == "calendar_pending"
+        assert lifecycle_counts == {
+            "estimate_booking_requested": 2,
+            "estimate_booking_calendar_failed": 1,
+        }
+    finally:
+        await conn.execute(f'DROP SCHEMA IF EXISTS "{schema}" CASCADE')
+        await conn.close()
+
+
+@pytest.mark.asyncio
+async def test_estimate_booking_key_is_owned_across_contacts():
+    database_url = _database_url_or_skip()
+    schema = f"atlas_eom_estimate_booking_key_owner_{uuid.uuid4().hex}"
+    conn = await asyncpg.connect(database_url)
+    try:
+        await _prepare_schema(conn, schema)
+        provider = DatabaseCRMProvider(pool=conn)
+        first_contact_id = uuid.uuid4()
+        second_contact_id = uuid.uuid4()
+        booking_key = f"office-booking-{uuid.uuid4().hex}"
+        start = datetime(2026, 8, 4, 19, 0, tzinfo=timezone.utc)
+        end = datetime(2026, 8, 4, 20, 0, tzinfo=timezone.utc)
+        await _insert_contact(conn, contact_id=first_contact_id)
+        await _insert_contact(conn, contact_id=second_contact_id)
+
+        await provider.prepare_eom_estimate_booking(
+            contact_id=str(first_contact_id),
+            scheduled_start=start,
+            scheduled_end=end,
+            calendar_id="estimate-calendar",
+            notes="Bring estimate worksheet",
+            booking_key=booking_key,
+            expected_calendar_event_id=deterministic_eom_estimate_calendar_event_id(
+                contact_id=str(first_contact_id),
+                booking_key=booking_key,
+            ),
+            actor_id=1,
+            actor_name="Juan Canfield",
+        )
+
+        with pytest.raises(EOMLeadConversionError, match="different EOM lead"):
+            await provider.prepare_eom_estimate_booking(
+                contact_id=str(second_contact_id),
+                scheduled_start=start,
+                scheduled_end=end,
+                calendar_id="estimate-calendar",
+                notes="Bring estimate worksheet",
+                booking_key=booking_key,
+                expected_calendar_event_id=deterministic_eom_estimate_calendar_event_id(
+                    contact_id=str(second_contact_id),
+                    booking_key=booking_key,
+                ),
+                actor_id=1,
+                actor_name="Juan Canfield",
+            )
+
+        assert (
+            await conn.fetchval(
+                """
+                SELECT COUNT(*)
+                FROM eom_lead_lifecycle_events
+                WHERE contact_id = $1
+                  AND event_type = 'estimate_booking_requested'
+                """,
+                second_contact_id,
+            )
+            == 0
         )
     finally:
         await conn.execute(f'DROP SCHEMA IF EXISTS "{schema}" CASCADE')
@@ -438,16 +819,23 @@ async def test_office_handoff_is_atomic_idempotent_and_keeps_rate_schedule_out_o
             "SELECT contact_type, lead_stage FROM contacts WHERE id = $1", contact_id
         )
         assert dict(contact) == {"contact_type": "customer", "lead_stage": None}
-        assert await conn.fetchval(
-            "SELECT COUNT(*) FROM eom_customer_handoffs WHERE contact_id = $1", contact_id
-        ) == 1
-        assert await conn.fetchval(
-            """
+        assert (
+            await conn.fetchval(
+                "SELECT COUNT(*) FROM eom_customer_handoffs WHERE contact_id = $1",
+                contact_id,
+            )
+            == 1
+        )
+        assert (
+            await conn.fetchval(
+                """
             SELECT COUNT(*) FROM eom_lead_lifecycle_events
             WHERE contact_id = $1 AND event_type = 'customer_approved'
             """,
-            contact_id,
-        ) == 1
+                contact_id,
+            )
+            == 1
+        )
 
         with pytest.raises(asyncpg.exceptions.RaiseError, match="immutable"):
             await conn.execute(
@@ -458,20 +846,26 @@ async def test_office_handoff_is_atomic_idempotent_and_keeps_rate_schedule_out_o
                 """,
                 contact_id,
             )
-        assert await conn.fetchval(
-            "SELECT tracker_site_id FROM eom_customer_handoffs WHERE contact_id = $1",
-            contact_id,
-        ) == 202
+        assert (
+            await conn.fetchval(
+                "SELECT tracker_site_id FROM eom_customer_handoffs WHERE contact_id = $1",
+                contact_id,
+            )
+            == 202
+        )
 
         with pytest.raises(asyncpg.exceptions.RaiseError, match="immutable"):
             await conn.execute(
                 "DELETE FROM eom_customer_handoffs WHERE contact_id = $1",
                 contact_id,
             )
-        assert await conn.fetchval(
-            "SELECT COUNT(*) FROM eom_customer_handoffs WHERE contact_id = $1",
-            contact_id,
-        ) == 1
+        assert (
+            await conn.fetchval(
+                "SELECT COUNT(*) FROM eom_customer_handoffs WHERE contact_id = $1",
+                contact_id,
+            )
+            == 1
+        )
 
         with pytest.raises(asyncpg.exceptions.RaiseError, match="immutable"):
             await conn.execute("TRUNCATE TABLE eom_customer_handoffs")
@@ -561,7 +955,9 @@ async def test_office_handoff_rejects_an_incomplete_preexisting_replay_row():
             )
             await conn.execute("RESET ROLE")
 
-        with pytest.raises(EOMLeadConversionError, match="not a completed finalization"):
+        with pytest.raises(
+            EOMLeadConversionError, match="not a completed finalization"
+        ):
             await provider.finalize_eom_customer_handoff(
                 contact_id=str(contact_id),
                 tracker_customer_id=101,
@@ -598,16 +994,14 @@ async def test_nocodb_role_cannot_bypass_handoff_or_lifecycle_guards():
         assert not await conn.fetchval(
             "SELECT pg_has_role('atlas_nocodb', 'atlas_eom_handoff_owner', 'MEMBER')"
         )
-        assert not await conn.fetchval(
-            """
+        assert not await conn.fetchval("""
             SELECT EXISTS (
                 SELECT 1
                 FROM pg_auth_members AS membership
                 JOIN pg_roles AS nocodb_role ON nocodb_role.oid = membership.member
                 WHERE nocodb_role.rolname = 'atlas_nocodb'
             )
-            """
-        )
+            """)
 
         nocodb_conn = await asyncpg.connect(
             database_url,
@@ -615,7 +1009,9 @@ async def test_nocodb_role_cannot_bypass_handoff_or_lifecycle_guards():
             password=_NOCODB_TEST_PASSWORD,
         )
         try:
-            await nocodb_conn.execute(f'SET search_path TO {_quote_ident(schema)}, public')
+            await nocodb_conn.execute(
+                f"SET search_path TO {_quote_ident(schema)}, public"
+            )
             assert await nocodb_conn.fetchval("SELECT current_user") == "atlas_nocodb"
             blocked_statements = (
                 "CREATE TABLE nocodb_bypass (id INTEGER)",
@@ -665,9 +1061,12 @@ async def test_nocodb_role_cannot_bypass_handoff_or_lifecycle_guards():
                 "UPDATE contacts SET notes = 'ordinary edit' WHERE id = $1",
                 contact_id,
             )
-            assert await nocodb_conn.fetchval(
-                "SELECT notes FROM contacts WHERE id = $1", contact_id
-            ) == "ordinary edit"
+            assert (
+                await nocodb_conn.fetchval(
+                    "SELECT notes FROM contacts WHERE id = $1", contact_id
+                )
+                == "ordinary edit"
+            )
             await nocodb_conn.execute(
                 """
                 INSERT INTO contact_interactions (id, contact_id, interaction_type)
@@ -712,8 +1111,7 @@ async def test_privilege_migration_rolls_back_if_ledger_recording_fails():
         await conn.execute(
             f"GRANT atlas_eom_handoff_owner TO {runtime_ident} WITH ADMIN OPTION"
         )
-        await conn.execute(
-            """
+        await conn.execute("""
             CREATE FUNCTION fail_eom_privilege_bookkeeping()
             RETURNS TRIGGER
             LANGUAGE plpgsql
@@ -729,8 +1127,7 @@ async def test_privilege_migration_rolls_back_if_ledger_recording_fails():
             BEFORE INSERT ON schema_migrations
             FOR EACH ROW
             EXECUTE FUNCTION fail_eom_privilege_bookkeeping();
-            """
-        )
+            """)
 
         class _SchemaPool:
             async def acquire(self):
@@ -739,22 +1136,21 @@ async def test_privilege_migration_rolls_back_if_ledger_recording_fails():
             async def release(self, released):
                 assert released is conn
 
-        with pytest.raises(asyncpg.exceptions.RaiseError, match="injected privilege ledger failure"):
+        with pytest.raises(
+            asyncpg.exceptions.RaiseError, match="injected privilege ledger failure"
+        ):
             await run_migrations(
                 _SchemaPool(),
                 migrations_dir=MIGRATIONS,
                 only={"354_eom_customer_handoff_privileges"},
             )
 
-        assert await conn.fetchval(
-            """
+        assert await conn.fetchval("""
             SELECT pg_get_userbyid(relowner) = current_user
             FROM pg_class
             WHERE oid = 'eom_customer_handoffs'::regclass
-            """
-        )
-        assert await conn.fetchval(
-            """
+            """)
+        assert await conn.fetchval("""
             SELECT EXISTS (
                 SELECT 1
                 FROM pg_auth_members AS membership
@@ -763,18 +1159,17 @@ async def test_privilege_migration_rolls_back_if_ledger_recording_fails():
                 WHERE member_role.rolname = current_user
                   AND guard_role.rolname = 'atlas_eom_handoff_owner'
             )
-            """
-        )
-        assert not await conn.fetchval(
-            """
+            """)
+        assert not await conn.fetchval("""
             SELECT EXISTS (
                 SELECT 1 FROM schema_migrations
                 WHERE name = '354_eom_customer_handoff_privileges'
             )
-            """
-        )
+            """)
 
-        await conn.execute("DROP TRIGGER trg_fail_eom_privilege_bookkeeping ON schema_migrations")
+        await conn.execute(
+            "DROP TRIGGER trg_fail_eom_privilege_bookkeeping ON schema_migrations"
+        )
         await conn.execute("DROP FUNCTION fail_eom_privilege_bookkeeping()")
         await run_migrations(
             _SchemaPool(),
@@ -782,15 +1177,12 @@ async def test_privilege_migration_rolls_back_if_ledger_recording_fails():
             only={"354_eom_customer_handoff_privileges"},
         )
 
-        assert await conn.fetchval(
-            """
+        assert await conn.fetchval("""
             SELECT pg_get_userbyid(relowner) = 'atlas_eom_handoff_owner'
             FROM pg_class
             WHERE oid = 'eom_customer_handoffs'::regclass
-            """
-        )
-        assert await conn.fetchval(
-            """
+            """)
+        assert await conn.fetchval("""
             SELECT EXISTS (
                 SELECT 1
                 FROM pg_auth_members AS membership
@@ -799,13 +1191,11 @@ async def test_privilege_migration_rolls_back_if_ledger_recording_fails():
                 WHERE member_role.rolname = current_user
                   AND guard_role.rolname = 'atlas_eom_handoff_owner'
             )
-            """
-        )
+            """)
         await conn.execute(
             f"REVOKE atlas_eom_handoff_owner FROM {runtime_ident} CASCADE"
         )
-        assert not await conn.fetchval(
-            """
+        assert not await conn.fetchval("""
             SELECT EXISTS (
                 SELECT 1
                 FROM pg_auth_members AS membership
@@ -814,16 +1204,13 @@ async def test_privilege_migration_rolls_back_if_ledger_recording_fails():
                 WHERE member_role.rolname = current_user
                   AND guard_role.rolname = 'atlas_eom_handoff_owner'
             )
-            """
-        )
-        assert await conn.fetchval(
-            """
+            """)
+        assert await conn.fetchval("""
             SELECT EXISTS (
                 SELECT 1 FROM schema_migrations
                 WHERE name = '354_eom_customer_handoff_privileges'
             )
-            """
-        )
+            """)
     finally:
         await conn.execute(f'DROP SCHEMA IF EXISTS "{schema}" CASCADE')
         await conn.close()
@@ -912,8 +1299,7 @@ async def test_privilege_migration_runs_from_a_real_non_superuser_login(monkeypa
                 return bool(await executor_conn.fetchval(query))
 
         monkeypatch.setattr(main, "get_db_pool", lambda: _Pool())
-        assert await executor_conn.fetchval(
-            """
+        assert await executor_conn.fetchval("""
             SELECT EXISTS (
                 SELECT 1
                 FROM pg_auth_members AS membership
@@ -922,8 +1308,7 @@ async def test_privilege_migration_runs_from_a_real_non_superuser_login(monkeypa
                 WHERE member_role.rolname = current_user
                   AND guard_role.rolname = 'atlas_eom_handoff_owner'
             )
-            """
-        )
+            """)
         with pytest.raises(RuntimeError, match="CRM lifecycle and handoff schema"):
             await main._require_eom_funnel_data_store(
                 type("Config", (), {"api_enabled": True})(),
@@ -997,7 +1382,9 @@ async def test_privilege_migration_runs_from_a_real_non_superuser_login(monkeypa
 
 
 @pytest.mark.asyncio
-async def test_privilege_migration_satisfies_the_enabled_full_app_startup_guard(monkeypatch):
+async def test_privilege_migration_satisfies_the_enabled_full_app_startup_guard(
+    monkeypatch,
+):
     """The live preflight query accepts only the protected role arrangement."""
     from atlas_brain import main
 
@@ -1249,8 +1636,7 @@ async def test_office_handoff_serializes_overlapping_key_and_contact_callbacks()
     pool = None
     try:
         await _prepare_schema(conn, schema)
-        await conn.execute(
-            """
+        await conn.execute("""
             CREATE OR REPLACE FUNCTION delay_eom_customer_handoff_insert()
             RETURNS TRIGGER LANGUAGE plpgsql AS $$
             BEGIN
@@ -1261,8 +1647,7 @@ async def test_office_handoff_serializes_overlapping_key_and_contact_callbacks()
             CREATE TRIGGER trg_delay_eom_customer_handoff_insert
             BEFORE INSERT ON eom_customer_handoffs
             FOR EACH ROW EXECUTE FUNCTION delay_eom_customer_handoff_insert();
-            """
-        )
+            """)
         pool = await asyncpg.create_pool(
             database_url,
             min_size=2,
@@ -1314,15 +1699,20 @@ async def test_office_handoff_serializes_overlapping_key_and_contact_callbacks()
         )
         successes = [result for result in cross_results if isinstance(result, dict)]
         rejections = [
-            result for result in cross_results if isinstance(result, EOMLeadConversionError)
+            result
+            for result in cross_results
+            if isinstance(result, EOMLeadConversionError)
         ]
         assert len(successes) == 1
         assert len(rejections) == 1
         assert rejections[0].status_code == 409
-        assert await conn.fetchval(
-            "SELECT COUNT(*) FROM eom_customer_handoffs WHERE approval_key = $1",
-            cross_contact_key,
-        ) == 1
+        assert (
+            await conn.fetchval(
+                "SELECT COUNT(*) FROM eom_customer_handoffs WHERE approval_key = $1",
+                cross_contact_key,
+            )
+            == 1
+        )
 
         tracker_collision_results = await asyncio.gather(
             finalize(fourth_contact_id, _approval_key(), 505, 606),
@@ -1340,19 +1730,20 @@ async def test_office_handoff_serializes_overlapping_key_and_contact_callbacks()
         assert len(tracker_successes) == 1
         assert len(tracker_rejections) == 1
         assert tracker_rejections[0].status_code == 409
-        assert await conn.fetchval(
-            """
+        assert await conn.fetchval("""
             SELECT COUNT(*) FROM eom_customer_handoffs
             WHERE tracker_customer_id = 505 AND tracker_site_id = 606
-            """
-        ) == 1
-        assert await conn.fetchval(
-            """
+            """) == 1
+        assert (
+            await conn.fetchval(
+                """
             SELECT COUNT(*) FROM contacts
             WHERE id = ANY($1::uuid[]) AND contact_type = 'customer'
             """,
-            [second_contact_id, third_contact_id],
-        ) == 1
+                [second_contact_id, third_contact_id],
+            )
+            == 1
+        )
     finally:
         if pool is not None:
             await pool.close()

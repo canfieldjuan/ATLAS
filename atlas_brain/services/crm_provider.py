@@ -113,9 +113,7 @@ def _interaction_attribution_identity(metadata: dict[str, Any]) -> str:
             str(value) if value is not None else "",
         )
         for key, value in attribution.items()
-        if _normalize_interaction_text(key)
-        and value is not None
-        and str(value).strip()
+        if _normalize_interaction_text(key) and value is not None and str(value).strip()
     )
     return json.dumps(normalized, separators=(",", ":"))
 
@@ -225,6 +223,7 @@ async def _write_contact_interaction(
 # DatabaseCRMProvider  (asyncpg direct)
 # ---------------------------------------------------------------------------
 
+
 class DatabaseCRMProvider:
     """CRM provider -- queries the `contacts` table directly via asyncpg."""
 
@@ -329,9 +328,7 @@ class DatabaseCRMProvider:
         normalized_source_ref = str(source_ref or "").strip()
         normalized_relay_event_id = str(relay_event_id or "").strip()
         identityless_relay = not phone_digits and not normalized_email
-        if identityless_relay and not (
-            normalized_source and normalized_relay_event_id
-        ):
+        if identityless_relay and not (normalized_source and normalized_relay_event_id):
             raise ValueError(
                 "EOM inbound lead requires phone, email, or a stable relay event identity"
             )
@@ -349,8 +346,7 @@ class DatabaseCRMProvider:
         result: dict[str, Any] = {}
         interaction_result: Optional[dict[str, Any]] = None
         async with _transaction_connection(pool) as conn:
-            lifecycle_ready = await conn.fetchval(
-                """
+            lifecycle_ready = await conn.fetchval("""
                 SELECT to_regclass('eom_lead_lifecycle_events') IS NOT NULL
                    AND to_regclass('eom_inbound_delivery_receipts') IS NOT NULL
                    AND EXISTS (
@@ -361,8 +357,7 @@ class DatabaseCRMProvider:
                          AND NOT tgisinternal
                          AND tgenabled IN ('O', 'A')
                    )
-                """
-            )
+                """)
             if not lifecycle_ready:
                 raise RuntimeError(
                     "EOM inbound lead ingress unavailable: lifecycle ledger or delivery receipts are not ready"
@@ -513,7 +508,10 @@ class DatabaseCRMProvider:
 
             if not result:
                 existing = None
-                for channel, value in (("phone", phone_digits), ("email", normalized_email)):
+                for channel, value in (
+                    ("phone", phone_digits),
+                    ("email", normalized_email),
+                ):
                     if not value:
                         continue
                     for context in (EOM_BUSINESS_CONTEXT_ID, None):
@@ -735,9 +733,21 @@ class DatabaseCRMProvider:
                 return result
             # Merge any new non-null fields into the existing record
             _MERGEABLE = {
-                "full_name", "first_name", "last_name", "email", "phone",
-                "address", "city", "state", "zip", "contact_type",
-                "tags", "notes", "business_context_id", "source", "source_ref",
+                "full_name",
+                "first_name",
+                "last_name",
+                "email",
+                "phone",
+                "address",
+                "city",
+                "state",
+                "zip",
+                "contact_type",
+                "tags",
+                "notes",
+                "business_context_id",
+                "source",
+                "source_ref",
             }
             updates = {
                 k: (v.lower() if k == "email" and v else v)
@@ -793,8 +803,8 @@ class DatabaseCRMProvider:
             data.get("lead_stage"),
             data.get("lead_owner"),
             data.get("next_follow_up_at"),
-            now,   # created_at ($21)
-            now,   # updated_at ($22) -- same value on insert
+            now,  # created_at ($21)
+            now,  # updated_at ($22) -- same value on insert
             metadata_json,
         )
         result = dict(row) if row else {}
@@ -827,10 +837,16 @@ class DatabaseCRMProvider:
 
         # Emit event for reasoning agent
         from ..reasoning.producers import emit_if_enabled
+
         await emit_if_enabled(
-            "crm.contact_created", "crm_provider",
-            {"contact_id": result.get("id", ""), "full_name": full_name,
-             "email": email, "phone": phone},
+            "crm.contact_created",
+            "crm_provider",
+            {
+                "contact_id": result.get("id", ""),
+                "full_name": full_name,
+                "email": email,
+                "phone": phone,
+            },
             entity_type="contact",
             entity_id=result.get("id"),
         )
@@ -878,9 +894,7 @@ class DatabaseCRMProvider:
 
         if phone:
             digits = "".join(c for c in phone if c.isdigit())
-            conditions.append(
-                f"REGEXP_REPLACE(phone, '[^0-9]', '', 'g') LIKE ${idx}"
-            )
+            conditions.append(f"REGEXP_REPLACE(phone, '[^0-9]', '', 'g') LIKE ${idx}")
             params.append(f"%{digits[-10:]}%")
             idx += 1
         if email:
@@ -919,35 +933,47 @@ class DatabaseCRMProvider:
     ) -> Optional[dict[str, Any]]:
         pool = self._get_pool()
         allowed = {
-            "full_name", "first_name", "last_name", "email", "phone",
-            "address", "city", "state", "zip", "contact_type", "status",
-            "tags", "notes", "business_context_id", "source", "source_ref",
-            "metadata", "lead_stage", "lead_owner", "next_follow_up_at",
+            "full_name",
+            "first_name",
+            "last_name",
+            "email",
+            "phone",
+            "address",
+            "city",
+            "state",
+            "zip",
+            "contact_type",
+            "status",
+            "tags",
+            "notes",
+            "business_context_id",
+            "source",
+            "source_ref",
+            "metadata",
+            "lead_stage",
+            "lead_owner",
+            "next_follow_up_at",
         }
         updates = {k: v for k, v in data.items() if k in allowed}
         lifecycle_requested = bool({"contact_type", "lead_stage"} & updates.keys())
         ownership_requested = "business_context_id" in updates
         pipeline_requested = any(
-            key in updates
-            for key in ("lead_stage", "lead_owner", "next_follow_up_at")
+            key in updates for key in ("lead_stage", "lead_owner", "next_follow_up_at")
         )
         if pipeline_requested:
-            if (
-                "contact_type" in updates
-                and updates["contact_type"] != "lead"
-            ):
-                raise ValueError(
-                    "Lead pipeline fields require contact_type='lead'"
-                )
+            if "contact_type" in updates and updates["contact_type"] != "lead":
+                raise ValueError("Lead pipeline fields require contact_type='lead'")
             if require_contact_type not in (None, "lead"):
-                raise ValueError(
-                    "Lead pipeline fields require contact_type='lead'"
-                )
+                raise ValueError("Lead pipeline fields require contact_type='lead'")
             require_contact_type = "lead"
         if "email" in updates and updates["email"]:
             updates["email"] = updates["email"].lower()
         if "metadata" in updates:
-            updates["metadata"] = json.dumps(updates["metadata"]) if isinstance(updates["metadata"], dict) else updates["metadata"]
+            updates["metadata"] = (
+                json.dumps(updates["metadata"])
+                if isinstance(updates["metadata"], dict)
+                else updates["metadata"]
+            )
         if not updates:
             return await self.get_contact(contact_id)
 
@@ -972,12 +998,9 @@ class DatabaseCRMProvider:
                 raise ValueError(
                     "EOM contact ownership changes require the funnel transition service"
                 )
-            if (
-                lifecycle_transition
-                and (
-                    existing["business_context_id"] in (None, EOM_BUSINESS_CONTEXT_ID)
-                    or updates.get("business_context_id") == EOM_BUSINESS_CONTEXT_ID
-                )
+            if lifecycle_transition and (
+                existing["business_context_id"] in (None, EOM_BUSINESS_CONTEXT_ID)
+                or updates.get("business_context_id") == EOM_BUSINESS_CONTEXT_ID
             ):
                 raise ValueError(
                     "EOM lead type and stage changes require the funnel transition service"
@@ -1086,9 +1109,7 @@ class DatabaseCRMProvider:
             params.append(status)
             idx += 1
         if include_unclaimed_legacy and not business_context_id:
-            raise ValueError(
-                "include_unclaimed_legacy requires business_context_id"
-            )
+            raise ValueError("include_unclaimed_legacy requires business_context_id")
         if include_unclaimed_legacy and business_context_id_is_null:
             raise ValueError(
                 "include_unclaimed_legacy conflicts with business_context_id_is_null"
@@ -1145,12 +1166,12 @@ class DatabaseCRMProvider:
         cursor_created_at: datetime | None = None,
         cursor_contact_id: UUID | None = None,
     ) -> list[dict[str, Any]]:
-        """Return the closed office-review projection for active EOM new leads.
+        """Return the closed office-review projection for active EOM leads.
 
         This is intentionally separate from ``list_contacts``: the generic
         method returns complete CRM rows, while the office funnel boundary may
         expose only the small identity/readiness projection required to start
-        the existing customer-handoff command.
+        the existing booking and customer-handoff commands.
         """
         cursor_clause = ""
         params: list[Any] = [limit]
@@ -1167,6 +1188,7 @@ class DatabaseCRMProvider:
                 COALESCE(latest_intake.submitted_phone, c.phone) AS phone,
                 c.address,
                 c.source,
+                c.lead_stage,
                 c.created_at
             FROM contacts AS c
             LEFT JOIN LATERAL (
@@ -1187,7 +1209,7 @@ class DatabaseCRMProvider:
             WHERE c.business_context_id = 'effingham_maids'
               AND c.status = 'active'
               AND c.contact_type = 'lead'
-              AND c.lead_stage = 'new'
+              AND c.lead_stage IN ('new', 'estimate_booked')
               {cursor_clause}
             ORDER BY c.created_at DESC, c.id DESC
             LIMIT $1
@@ -1195,6 +1217,547 @@ class DatabaseCRMProvider:
             *params,
         )
         return [dict(row) for row in rows]
+
+    @staticmethod
+    def _eom_estimate_booking_metadata(
+        *,
+        scheduled_start: datetime,
+        scheduled_end: datetime,
+        calendar_id: str,
+        notes: str | None,
+        expected_calendar_event_id: str,
+        calendar_event_id: str | None = None,
+        actor_id: int | None = None,
+    ) -> dict[str, Any]:
+        metadata: dict[str, Any] = {
+            "scheduled_start": scheduled_start.astimezone(timezone.utc).isoformat(),
+            "scheduled_end": scheduled_end.astimezone(timezone.utc).isoformat(),
+            "calendar_id": calendar_id,
+            "notes": notes or "",
+            "expected_calendar_event_id": expected_calendar_event_id,
+        }
+        if calendar_event_id is not None:
+            metadata["calendar_event_id"] = calendar_event_id
+        if actor_id is not None:
+            metadata["scheduled_by_employee_id"] = actor_id
+        return metadata
+
+    @staticmethod
+    def _eom_estimate_booking_payload_matches(
+        metadata: dict[str, Any] | None,
+        *,
+        scheduled_start: datetime,
+        scheduled_end: datetime,
+        calendar_id: str,
+        notes: str | None,
+        expected_calendar_event_id: str,
+    ) -> bool:
+        if not metadata:
+            return False
+        expected = DatabaseCRMProvider._eom_estimate_booking_metadata(
+            scheduled_start=scheduled_start,
+            scheduled_end=scheduled_end,
+            calendar_id=calendar_id,
+            notes=notes,
+            expected_calendar_event_id=expected_calendar_event_id,
+        )
+        return all(metadata.get(key) == value for key, value in expected.items())
+
+    @staticmethod
+    def _eom_estimate_booking_operation_is_terminal(event_types: set[str]) -> bool:
+        return bool(
+            event_types
+            & {
+                "estimate_booked",
+                "estimate_booking_calendar_failed",
+                "estimate_booking_calendar_ambiguous",
+            }
+        )
+
+    async def prepare_eom_estimate_booking(
+        self,
+        *,
+        contact_id: str,
+        scheduled_start: datetime,
+        scheduled_end: datetime,
+        calendar_id: str,
+        notes: str | None,
+        booking_key: str,
+        expected_calendar_event_id: str,
+        actor_id: int,
+        actor_name: str,
+    ) -> dict[str, Any]:
+        """Claim one lead/booking key before the external Calendar side effect."""
+        from .eom_lead_conversion import EOMLeadConversionError
+        from .eom_lead_ingress import EOM_BUSINESS_CONTEXT_ID
+
+        pool = self._get_pool()
+        async with _transaction_connection(pool) as conn:
+            lock_keys = sorted(
+                {
+                    f"eom-estimate-booking:booking:{booking_key}",
+                    f"eom-estimate-booking:contact:{contact_id}",
+                }
+            )
+            for lock_key in lock_keys:
+                await conn.execute(
+                    "SELECT pg_advisory_xact_lock(hashtextextended($1, 0))",
+                    lock_key,
+                )
+
+            key_events = await conn.fetch(
+                """
+                SELECT contact_id, event_type, operation_key, metadata
+                FROM eom_lead_lifecycle_events
+                WHERE operation_key = $1
+                  AND event_type IN (
+                      'estimate_booking_requested',
+                      'estimate_booking_calendar_failed',
+                      'estimate_booking_calendar_ambiguous',
+                      'estimate_booked'
+                  )
+                FOR UPDATE
+                """,
+                booking_key,
+            )
+            for event in key_events:
+                if str(event["contact_id"]) != contact_id:
+                    raise EOMLeadConversionError(
+                        409,
+                        "Booking key already belongs to a different EOM lead",
+                    )
+
+            contact = await conn.fetchrow(
+                """
+                SELECT id, full_name, email, phone, address, business_context_id,
+                       contact_type, lead_stage, status
+                FROM contacts
+                WHERE id = $1
+                FOR UPDATE
+                """,
+                contact_id,
+            )
+            if (
+                contact is None
+                or contact["business_context_id"] != EOM_BUSINESS_CONTEXT_ID
+            ):
+                raise EOMLeadConversionError(404, "EOM lead was not found")
+            if contact["status"] != "active":
+                raise EOMLeadConversionError(
+                    409, "EOM lead must be active before booking"
+                )
+            if contact["contact_type"] != "lead":
+                raise EOMLeadConversionError(409, "EOM contact is not a lead")
+            if contact["lead_stage"] not in ("new", "estimate_booked"):
+                raise EOMLeadConversionError(
+                    409, "EOM lead is not ready for estimate booking"
+                )
+
+            events = await conn.fetch(
+                """
+                SELECT event_type, operation_key, metadata
+                FROM eom_lead_lifecycle_events
+                WHERE contact_id = $1
+                  AND event_type IN (
+                      'estimate_booking_requested',
+                      'estimate_booking_calendar_failed',
+                      'estimate_booking_calendar_ambiguous',
+                      'estimate_booked'
+                  )
+                FOR UPDATE
+                """,
+                contact_id,
+            )
+            request_for_key = None
+            booked_for_key = None
+            failed_for_key = None
+            ambiguous_for_key = None
+            operation_event_types: dict[str, set[str]] = {}
+            for event in events:
+                event_key = event["operation_key"]
+                operation_event_types.setdefault(event_key, set()).add(
+                    event["event_type"]
+                )
+                if event_key == booking_key:
+                    if event["event_type"] == "estimate_booking_requested":
+                        request_for_key = event
+                    elif event["event_type"] == "estimate_booked":
+                        booked_for_key = event
+                    elif event["event_type"] == "estimate_booking_calendar_failed":
+                        failed_for_key = event
+                    elif event["event_type"] == "estimate_booking_calendar_ambiguous":
+                        ambiguous_for_key = event
+
+            other_operation = next(
+                (
+                    operation_key
+                    for operation_key, event_types in operation_event_types.items()
+                    if operation_key != booking_key
+                    and (
+                        "estimate_booked" in event_types
+                        or "estimate_booking_calendar_ambiguous" in event_types
+                        or (
+                            "estimate_booking_requested" in event_types
+                            and not self._eom_estimate_booking_operation_is_terminal(
+                                event_types
+                            )
+                        )
+                    )
+                ),
+                None,
+            )
+            if other_operation is not None:
+                raise EOMLeadConversionError(
+                    409,
+                    "EOM lead already has a different estimate booking",
+                )
+            if ambiguous_for_key is not None:
+                raise EOMLeadConversionError(
+                    409,
+                    "EOM estimate booking requires calendar reconciliation",
+                )
+            if failed_for_key is not None:
+                raise EOMLeadConversionError(
+                    409,
+                    "EOM estimate booking attempt failed; use a new booking key",
+                )
+            if request_for_key is not None:
+                if not self._eom_estimate_booking_payload_matches(
+                    dict(request_for_key["metadata"] or {}),
+                    scheduled_start=scheduled_start,
+                    scheduled_end=scheduled_end,
+                    calendar_id=calendar_id,
+                    notes=notes,
+                    expected_calendar_event_id=expected_calendar_event_id,
+                ):
+                    raise EOMLeadConversionError(
+                        409,
+                        "Booking key already belongs to a different estimate booking",
+                    )
+                if booked_for_key is not None:
+                    return {
+                        "contact_id": str(contact["id"]),
+                        "lead_stage": "estimate_booked",
+                        "status": "estimate_booked",
+                        "calendar_event_id": expected_calendar_event_id,
+                        "expected_calendar_event_id": expected_calendar_event_id,
+                        "idempotent": True,
+                        "contact": dict(contact),
+                    }
+                return {
+                    "contact_id": str(contact["id"]),
+                    "lead_stage": str(contact["lead_stage"]),
+                    "status": "calendar_pending",
+                    "calendar_event_id": None,
+                    "expected_calendar_event_id": expected_calendar_event_id,
+                    "idempotent": True,
+                    "contact": dict(contact),
+                }
+
+            if contact["lead_stage"] == "estimate_booked":
+                raise EOMLeadConversionError(
+                    409,
+                    "EOM lead already has a different estimate booking",
+                )
+
+            await conn.execute(
+                """
+                INSERT INTO eom_lead_lifecycle_events (
+                    contact_id, event_type, from_stage, to_stage, actor,
+                    source, operation_key, metadata
+                )
+                VALUES ($1, 'estimate_booking_requested', 'new', 'new',
+                        $2, 'eom_office', $3, $4::jsonb)
+                """,
+                contact_id,
+                f"employee:{actor_id}:{actor_name}",
+                booking_key,
+                json.dumps(
+                    self._eom_estimate_booking_metadata(
+                        scheduled_start=scheduled_start,
+                        scheduled_end=scheduled_end,
+                        calendar_id=calendar_id,
+                        notes=notes,
+                        expected_calendar_event_id=expected_calendar_event_id,
+                        actor_id=actor_id,
+                    )
+                ),
+            )
+            return {
+                "contact_id": str(contact["id"]),
+                "lead_stage": str(contact["lead_stage"]),
+                "status": "calendar_pending",
+                "calendar_event_id": None,
+                "expected_calendar_event_id": expected_calendar_event_id,
+                "idempotent": False,
+                "contact": dict(contact),
+            }
+
+    async def mark_eom_estimate_booking_calendar_ambiguous(
+        self,
+        *,
+        contact_id: str,
+        booking_key: str,
+        expected_calendar_event_id: str,
+        observed_calendar_event_id: str,
+        actor_id: int,
+        actor_name: str,
+    ) -> None:
+        """Record an unsafe Calendar response without promoting the lead."""
+        pool = self._get_pool()
+        async with _transaction_connection(pool) as conn:
+            await conn.execute(
+                "SELECT pg_advisory_xact_lock(hashtextextended($1, 0))",
+                f"eom-estimate-booking:booking:{booking_key}",
+            )
+            await conn.execute(
+                """
+                INSERT INTO eom_lead_lifecycle_events (
+                    contact_id, event_type, from_stage, to_stage, actor,
+                    source, operation_key, metadata
+                )
+                VALUES ($1, 'estimate_booking_calendar_ambiguous', 'new', 'new',
+                        $2, 'eom_office', $3, jsonb_build_object(
+                            'expected_calendar_event_id', $4,
+                            'observed_calendar_event_id', $5
+                        ))
+                ON CONFLICT (contact_id, event_type, operation_key)
+                    WHERE operation_key IS NOT NULL
+                    DO NOTHING
+                """,
+                contact_id,
+                f"employee:{actor_id}:{actor_name}",
+                booking_key,
+                expected_calendar_event_id,
+                observed_calendar_event_id,
+            )
+
+    async def mark_eom_estimate_booking_calendar_failed(
+        self,
+        *,
+        contact_id: str,
+        booking_key: str,
+        expected_calendar_event_id: str,
+        calendar_error: str | None,
+        calendar_message: str,
+        actor_id: int,
+        actor_name: str,
+    ) -> None:
+        """Record a definitive Calendar failure as a terminal booking attempt."""
+        pool = self._get_pool()
+        async with _transaction_connection(pool) as conn:
+            lock_keys = sorted(
+                {
+                    f"eom-estimate-booking:booking:{booking_key}",
+                    f"eom-estimate-booking:contact:{contact_id}",
+                }
+            )
+            for lock_key in lock_keys:
+                await conn.execute(
+                    "SELECT pg_advisory_xact_lock(hashtextextended($1, 0))",
+                    lock_key,
+                )
+            await conn.execute(
+                """
+                INSERT INTO eom_lead_lifecycle_events (
+                    contact_id, event_type, from_stage, to_stage, actor,
+                    source, operation_key, metadata, reason
+                )
+                VALUES ($1, 'estimate_booking_calendar_failed', 'new', 'new',
+                        $2, 'eom_office', $3, jsonb_build_object(
+                            'expected_calendar_event_id', $4,
+                            'calendar_error', $5,
+                            'calendar_message', $6
+                        ), $6)
+                ON CONFLICT (contact_id, event_type, operation_key)
+                    WHERE operation_key IS NOT NULL
+                    DO NOTHING
+                """,
+                contact_id,
+                f"employee:{actor_id}:{actor_name}",
+                booking_key,
+                expected_calendar_event_id,
+                calendar_error,
+                calendar_message,
+            )
+
+    async def complete_eom_estimate_booking(
+        self,
+        *,
+        contact_id: str,
+        scheduled_start: datetime,
+        scheduled_end: datetime,
+        calendar_id: str,
+        notes: str | None,
+        booking_key: str,
+        expected_calendar_event_id: str,
+        calendar_event_id: str,
+        actor_id: int,
+        actor_name: str,
+    ) -> dict[str, Any]:
+        """Complete the lead-stage transition after Calendar returns the expected ID."""
+        from .eom_lead_conversion import EOMLeadConversionError
+        from .eom_lead_ingress import EOM_BUSINESS_CONTEXT_ID
+
+        if calendar_event_id != expected_calendar_event_id:
+            raise EOMLeadConversionError(
+                409,
+                "Calendar event id does not match prepared estimate booking",
+            )
+
+        pool = self._get_pool()
+        async with _transaction_connection(pool) as conn:
+            lock_keys = sorted(
+                {
+                    f"eom-estimate-booking:booking:{booking_key}",
+                    f"eom-estimate-booking:contact:{contact_id}",
+                }
+            )
+            for lock_key in lock_keys:
+                await conn.execute(
+                    "SELECT pg_advisory_xact_lock(hashtextextended($1, 0))",
+                    lock_key,
+                )
+
+            contact = await conn.fetchrow(
+                """
+                SELECT id, full_name, email, phone, address, business_context_id,
+                       contact_type, lead_stage, status
+                FROM contacts
+                WHERE id = $1
+                FOR UPDATE
+                """,
+                contact_id,
+            )
+            if (
+                contact is None
+                or contact["business_context_id"] != EOM_BUSINESS_CONTEXT_ID
+            ):
+                raise EOMLeadConversionError(404, "EOM lead was not found")
+            if contact["status"] != "active":
+                raise EOMLeadConversionError(
+                    409, "EOM lead must be active before booking"
+                )
+            if contact["contact_type"] != "lead":
+                raise EOMLeadConversionError(409, "EOM contact is not a lead")
+
+            events = await conn.fetch(
+                """
+                SELECT event_type, operation_key, metadata
+                FROM eom_lead_lifecycle_events
+                WHERE contact_id = $1
+                  AND event_type IN (
+                      'estimate_booking_requested',
+                      'estimate_booking_calendar_failed',
+                      'estimate_booking_calendar_ambiguous',
+                      'estimate_booked'
+                  )
+                FOR UPDATE
+                """,
+                contact_id,
+            )
+            request_for_key = None
+            booked_for_key = None
+            failed_for_key = None
+            ambiguous_for_key = None
+            for event in events:
+                if event["operation_key"] != booking_key:
+                    continue
+                if event["event_type"] == "estimate_booking_requested":
+                    request_for_key = event
+                elif event["event_type"] == "estimate_booked":
+                    booked_for_key = event
+                elif event["event_type"] == "estimate_booking_calendar_failed":
+                    failed_for_key = event
+                elif event["event_type"] == "estimate_booking_calendar_ambiguous":
+                    ambiguous_for_key = event
+            if ambiguous_for_key is not None:
+                raise EOMLeadConversionError(
+                    409,
+                    "EOM estimate booking requires calendar reconciliation",
+                )
+            if failed_for_key is not None:
+                raise EOMLeadConversionError(
+                    409,
+                    "EOM estimate booking attempt failed; use a new booking key",
+                )
+            if (
+                request_for_key is None
+                or not self._eom_estimate_booking_payload_matches(
+                    dict(request_for_key["metadata"] or {}),
+                    scheduled_start=scheduled_start,
+                    scheduled_end=scheduled_end,
+                    calendar_id=calendar_id,
+                    notes=notes,
+                    expected_calendar_event_id=expected_calendar_event_id,
+                )
+            ):
+                raise EOMLeadConversionError(
+                    409,
+                    "EOM estimate booking was not prepared for this payload",
+                )
+            if booked_for_key is not None:
+                return {
+                    "contact_id": str(contact["id"]),
+                    "lead_stage": str(contact["lead_stage"]),
+                    "status": "estimate_booked",
+                    "calendar_event_id": calendar_event_id,
+                    "expected_calendar_event_id": expected_calendar_event_id,
+                    "idempotent": True,
+                }
+            if contact["lead_stage"] != "new":
+                raise EOMLeadConversionError(
+                    409, "EOM lead is not ready for estimate booking"
+                )
+
+            updated = await conn.fetchrow(
+                """
+                UPDATE contacts
+                SET lead_stage = 'estimate_booked', updated_at = NOW()
+                WHERE id = $1
+                  AND business_context_id = $2
+                  AND contact_type = 'lead'
+                  AND lead_stage = 'new'
+                  AND status = 'active'
+                RETURNING id, lead_stage
+                """,
+                contact_id,
+                EOM_BUSINESS_CONTEXT_ID,
+            )
+            if updated is None:
+                raise RuntimeError("EOM lead changed during estimate booking")
+            await conn.execute(
+                """
+                INSERT INTO eom_lead_lifecycle_events (
+                    contact_id, event_type, from_stage, to_stage, actor,
+                    source, operation_key, metadata
+                )
+                VALUES ($1, 'estimate_booked', 'new', 'estimate_booked',
+                        $2, 'eom_office', $3, $4::jsonb)
+                """,
+                contact_id,
+                f"employee:{actor_id}:{actor_name}",
+                booking_key,
+                json.dumps(
+                    self._eom_estimate_booking_metadata(
+                        scheduled_start=scheduled_start,
+                        scheduled_end=scheduled_end,
+                        calendar_id=calendar_id,
+                        notes=notes,
+                        expected_calendar_event_id=expected_calendar_event_id,
+                        calendar_event_id=calendar_event_id,
+                        actor_id=actor_id,
+                    )
+                ),
+            )
+            return {
+                "contact_id": str(contact["id"]),
+                "lead_stage": str(updated["lead_stage"]),
+                "status": "estimate_booked",
+                "calendar_event_id": calendar_event_id,
+                "expected_calendar_event_id": expected_calendar_event_id,
+                "idempotent": False,
+            }
 
     async def open_customer_service_ticket(
         self,
@@ -1431,8 +1994,10 @@ class DatabaseCRMProvider:
         if inserted:
             # Emit event for reasoning agent only for new interactions.
             from ..reasoning.producers import emit_if_enabled
+
             await emit_if_enabled(
-                "crm.interaction_logged", "crm_provider",
+                "crm.interaction_logged",
+                "crm_provider",
                 {
                     "contact_id": contact_id,
                     "interaction_id": result.get("id"),
@@ -1453,7 +2018,9 @@ class DatabaseCRMProvider:
         return result
 
     async def get_interactions(
-        self, contact_id: str, limit: int = 20,
+        self,
+        contact_id: str,
+        limit: int = 20,
         business_context_id: Optional[str] = None,
         include_unclaimed_legacy: bool = True,
     ) -> list[dict[str, Any]]:
@@ -1751,7 +2318,10 @@ class DatabaseCRMProvider:
                 """,
                 contact_id,
             )
-            if contact is None or contact["business_context_id"] != EOM_BUSINESS_CONTEXT_ID:
+            if (
+                contact is None
+                or contact["business_context_id"] != EOM_BUSINESS_CONTEXT_ID
+            ):
                 raise EOMLeadConversionError(404, "EOM lead was not found")
 
             existing_contact = await conn.fetchrow(
@@ -1783,12 +2353,59 @@ class DatabaseCRMProvider:
                     409,
                     "Tracker Customer or Site already belongs to an EOM customer handoff",
                 )
+            booking_events = await conn.fetch(
+                """
+                SELECT event_type, operation_key
+                FROM eom_lead_lifecycle_events
+                WHERE contact_id = $1
+                  AND event_type IN (
+                      'estimate_booking_requested',
+                      'estimate_booking_calendar_failed',
+                      'estimate_booking_calendar_ambiguous',
+                      'estimate_booked'
+                  )
+                FOR UPDATE
+                """,
+                contact_id,
+            )
+            booking_event_types: dict[str, set[str]] = {}
+            for event in booking_events:
+                booking_event_types.setdefault(event["operation_key"], set()).add(
+                    event["event_type"]
+                )
+            blocking_booking = next(
+                (
+                    event_types
+                    for event_types in booking_event_types.values()
+                    if "estimate_booking_calendar_ambiguous" in event_types
+                    or (
+                        "estimate_booking_requested" in event_types
+                        and not self._eom_estimate_booking_operation_is_terminal(
+                            event_types
+                        )
+                    )
+                ),
+                None,
+            )
+            if blocking_booking is not None:
+                if "estimate_booking_calendar_ambiguous" in blocking_booking:
+                    raise EOMLeadConversionError(
+                        409,
+                        "EOM estimate booking requires calendar reconciliation",
+                    )
+                raise EOMLeadConversionError(
+                    409,
+                    "EOM estimate booking is still pending calendar completion",
+                )
             if contact["status"] != "active":
-                raise EOMLeadConversionError(409, "EOM lead must be active before approval")
+                raise EOMLeadConversionError(
+                    409, "EOM lead must be active before approval"
+                )
             if contact["contact_type"] != "lead":
                 raise EOMLeadConversionError(409, "EOM contact is not a lead")
-            if contact["lead_stage"] != "new":
+            if contact["lead_stage"] not in ("new", "estimate_booked"):
                 raise EOMLeadConversionError(409, "EOM lead is not ready for approval")
+            from_stage = str(contact["lead_stage"])
 
             updated = await conn.fetchrow(
                 """
@@ -1797,22 +2414,25 @@ class DatabaseCRMProvider:
                 WHERE id = $1
                   AND business_context_id = $2
                   AND contact_type = 'lead'
-                  AND lead_stage = 'new'
+                  AND lead_stage = $3
                   AND status = 'active'
                 RETURNING id
                 """,
                 contact_id,
                 EOM_BUSINESS_CONTEXT_ID,
+                from_stage,
             )
             if updated is None:
-                raise RuntimeError("EOM lead changed during customer handoff finalization")
+                raise RuntimeError(
+                    "EOM lead changed during customer handoff finalization"
+                )
             await conn.execute(
                 """
                 INSERT INTO eom_lead_lifecycle_events (
                     contact_id, event_type, from_stage, to_stage, actor,
                     source, operation_key, metadata
                 )
-                VALUES ($1, 'customer_approved', 'new', NULL, $2, 'eom_office', $3,
+                VALUES ($1, 'customer_approved', $7, NULL, $2, 'eom_office', $3,
                         jsonb_build_object(
                             'tracker_customer_id', $4::bigint,
                             'tracker_site_id', $5::bigint,
@@ -1825,6 +2445,7 @@ class DatabaseCRMProvider:
                 tracker_customer_id,
                 tracker_site_id,
                 actor_id,
+                from_stage,
             )
             handoff = await conn.fetchrow(
                 """

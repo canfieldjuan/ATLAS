@@ -30,6 +30,47 @@ CALENDAR_API_BASE = "https://www.googleapis.com/calendar/v3"
 TOKEN_URL = "https://oauth2.googleapis.com/token"
 
 
+def _parse_google_event_datetime(value: Any) -> datetime | None:
+    if not isinstance(value, dict):
+        return None
+    raw = value.get("dateTime")
+    if not isinstance(raw, str) or not raw.strip():
+        return None
+    try:
+        return datetime.fromisoformat(raw.strip().replace("Z", "+00:00"))
+    except ValueError as exc:
+        raise ValueError("Google Calendar event dateTime is not ISO-8601") from exc
+
+
+def _google_event_datetime_matches(value: Any, expected: datetime) -> bool:
+    parsed = _parse_google_event_datetime(value)
+    return parsed is not None and parsed == expected
+
+
+def _existing_calendar_event_matches(
+    existing: dict[str, Any],
+    *,
+    summary: str,
+    start: datetime,
+    end: datetime,
+    location: Optional[str],
+    description: Optional[str],
+) -> bool:
+    if existing.get("status") == "cancelled":
+        return False
+    if existing.get("summary") != summary:
+        return False
+    if not _google_event_datetime_matches(existing.get("start"), start):
+        return False
+    if not _google_event_datetime_matches(existing.get("end"), end):
+        return False
+    if (existing.get("location") or None) != (location or None):
+        return False
+    if (existing.get("description") or None) != (description or None):
+        return False
+    return True
+
+
 @dataclass
 class CachedEvent:
     """Cached calendar event."""
@@ -521,6 +562,7 @@ class CalendarTool:
         location: Optional[str] = None,
         description: Optional[str] = None,
         calendar_id: Optional[str] = None,
+        event_id: Optional[str] = None,
     ) -> ToolResult:
         """
         Create a new calendar event.
@@ -532,6 +574,7 @@ class CalendarTool:
             location: Optional location string
             description: Optional description
             calendar_id: Calendar to create in (default: primary)
+            event_id: Optional caller-owned Google event ID for idempotent creates
 
         Returns:
             ToolResult with created event details
@@ -562,6 +605,8 @@ class CalendarTool:
                 "start": {"dateTime": start.isoformat()},
                 "end": {"dateTime": end.isoformat()},
             }
+            if event_id:
+                event_body["id"] = event_id
 
             if location:
                 event_body["location"] = location
@@ -578,6 +623,67 @@ class CalendarTool:
                 headers = await self._get_auth_header(force_refresh=True)
                 headers["Content-Type"] = "application/json"
                 response = await client.post(url, headers=headers, json=event_body)
+
+            if response.status_code == 409 and event_id:
+                existing_response = await client.get(
+                    f"{url}/{event_id}",
+                    headers=headers,
+                )
+                if existing_response.status_code == 401:
+                    logger.warning(
+                        "Calendar get-after-conflict 401 -- forcing token refresh"
+                    )
+                    self._invalidate_access_token()
+                    headers = await self._get_auth_header(force_refresh=True)
+                    existing_response = await client.get(
+                        f"{url}/{event_id}",
+                        headers=headers,
+                    )
+                existing_response.raise_for_status()
+                existing = existing_response.json()
+                existing_event_id = existing.get("id", "")
+                if not _existing_calendar_event_matches(
+                    existing,
+                    summary=summary,
+                    start=start,
+                    end=end,
+                    location=location,
+                    description=description,
+                ):
+                    self._cache.last_updated = 0.0
+                    logger.warning(
+                        "Calendar event id conflict does not match request: %s",
+                        existing_event_id,
+                    )
+                    return ToolResult(
+                        success=False,
+                        error="IDEMPOTENCY_CONFLICT",
+                        data={
+                            "event_id": existing_event_id,
+                            "status": existing.get("status"),
+                        },
+                        message=(
+                            "Existing calendar event does not match requested event; "
+                            "booking requires reconciliation"
+                        ),
+                    )
+                self._cache.last_updated = 0.0
+                logger.info("Reused existing calendar event: %s", existing_event_id)
+                return ToolResult(
+                    success=True,
+                    data={
+                        "event_id": existing_event_id,
+                        "summary": existing.get("summary", summary),
+                        "start": (existing.get("start") or {}).get(
+                            "dateTime", start.isoformat()
+                        ),
+                        "end": (existing.get("end") or {}).get(
+                            "dateTime", end.isoformat()
+                        ),
+                        "location": existing.get("location", location),
+                    },
+                    message=f"Created event: {summary}",
+                )
 
             response.raise_for_status()
 
@@ -739,7 +845,10 @@ class CreateCalendarEventTool:
 
         end = start + timedelta(minutes=duration)
         return await calendar_tool.create_event(
-            summary=summary, start=start, end=end, location=location,
+            summary=summary,
+            start=start,
+            end=end,
+            location=location,
         )
 
 
