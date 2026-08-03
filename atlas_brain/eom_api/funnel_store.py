@@ -28,10 +28,37 @@ async def require_eom_funnel_data_store(
                 to_regclass('contacts') AS contacts_rel,
                 to_regclass('eom_lead_lifecycle_events') AS lifecycle_rel,
                 to_regclass('eom_customer_handoffs') AS handoff_rel
+        ),
+        readiness_columns AS (
+            SELECT
+                readiness_relations.contacts_rel IS NOT NULL
+                AND EXISTS (
+                    SELECT 1
+                    FROM pg_attribute
+                    WHERE attrelid = readiness_relations.contacts_rel
+                      AND attname = 'business_context_id'
+                      AND NOT attisdropped
+                )
+                AND EXISTS (
+                    SELECT 1
+                    FROM pg_attribute
+                    WHERE attrelid = readiness_relations.contacts_rel
+                      AND attname = 'contact_type'
+                      AND NOT attisdropped
+                )
+                AND EXISTS (
+                    SELECT 1
+                    FROM pg_attribute
+                    WHERE attrelid = readiness_relations.contacts_rel
+                      AND attname = 'lead_stage'
+                      AND NOT attisdropped
+                ) AS contacts_required_columns_ready
+            FROM readiness_relations
         )
         SELECT readiness_relations.contacts_rel IS NOT NULL
            AND readiness_relations.lifecycle_rel IS NOT NULL
            AND readiness_relations.handoff_rel IS NOT NULL
+           AND readiness_columns.contacts_required_columns_ready
            AND EXISTS (
                SELECT 1
                FROM pg_class AS handoff_table
@@ -112,7 +139,7 @@ async def require_eom_funnel_data_store(
                       )
                   END
                   AND CASE
-                      WHEN readiness_relations.contacts_rel IS NULL THEN FALSE
+                      WHEN NOT readiness_columns.contacts_required_columns_ready THEN FALSE
                       ELSE NOT has_column_privilege(
                           nocodb_role.oid,
                           readiness_relations.contacts_rel,
@@ -208,7 +235,7 @@ async def require_eom_funnel_data_store(
                FROM pg_roles AS nocodb_role
                WHERE nocodb_role.rolname = 'atlas_nocodb'
            ), FALSE)
-        FROM readiness_relations
+        FROM readiness_relations, readiness_columns
         """
     )
     if not ready:

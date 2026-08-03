@@ -612,7 +612,10 @@ def test_shared_eom_funnel_datastore_guard_keeps_missing_relations_in_verdict():
 
     assert "::regclass" not in pool.query
     assert "WITH readiness_relations AS" in pool.query
+    assert "readiness_columns AS" in pool.query
     assert "to_regclass('eom_customer_handoffs') AS handoff_rel" in pool.query
+    assert "contacts_required_columns_ready" in pool.query
+    assert "WHEN NOT readiness_columns.contacts_required_columns_ready THEN FALSE" in pool.query
     assert "WHEN readiness_relations.handoff_rel IS NULL THEN FALSE" in pool.query
 
 

@@ -340,11 +340,11 @@ Parked hardening: none.
 | `.github/workflows/atlas_eom_lead_pipeline_checks.yml` | 2 |
 | `.github/workflows/atlas_invoicing_checks.yml` | 14 |
 | `atlas_brain/eom_api/config.py` | 59 |
-| `atlas_brain/eom_api/funnel_store.py` | 217 |
+| `atlas_brain/eom_api/funnel_store.py` | 244 |
 | `atlas_brain/main.py` | 146 |
 | `atlas_brain/main_eom.py` | 34 |
 | `plans/PR-EOM-Render-Slim-Profile.md` | 350 |
 | `render.eom.yaml` | 4 |
-| `tests/test_eom_lead_conversion_integration.py` | 41 |
-| `tests/test_eom_render_profile.py` | 560 |
-| **Total** | **1427** |
+| `tests/test_eom_lead_conversion_integration.py` | 92 |
+| `tests/test_eom_render_profile.py` | 563 |
+| **Total** | **1508** |

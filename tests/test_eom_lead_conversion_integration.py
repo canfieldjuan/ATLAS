@@ -1085,6 +1085,57 @@ async def test_enabled_shared_guard_returns_controlled_error_when_required_relat
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
+    "missing_column",
+    ("business_context_id", "contact_type", "lead_stage"),
+)
+async def test_enabled_shared_guard_handles_missing_required_contact_column(
+    missing_column: str,
+):
+    """A partial contacts migration must fail readiness without undefined-column errors."""
+    from atlas_brain.eom_api.funnel_store import require_eom_funnel_data_store
+
+    database_url = _database_url_or_skip()
+    schema = f"atlas_eom_conversion_missing_column_{uuid.uuid4().hex}"
+    conn = await asyncpg.connect(database_url)
+    try:
+        await _prepare_schema(conn, schema, apply_privilege_migration=False)
+        await _provision_handoff_guard(conn)
+        await _provision_nocodb_login(conn)
+        await conn.execute(
+            f"ALTER TABLE contacts DROP COLUMN {_quote_ident(missing_column)}"
+        )
+        assert not await conn.fetchval(
+            """
+            SELECT EXISTS (
+                SELECT 1
+                FROM pg_attribute
+                WHERE attrelid = 'contacts'::regclass
+                  AND attname = $1
+                  AND NOT attisdropped
+            )
+            """,
+            missing_column,
+        )
+
+        class _Pool:
+            is_initialized = True
+
+            async def fetchval(self, query: str) -> bool:
+                return bool(await conn.fetchval(query))
+
+        with pytest.raises(RuntimeError, match="CRM lifecycle and handoff schema"):
+            await require_eom_funnel_data_store(
+                type("Config", (), {"api_enabled": True})(),
+                database_enabled=True,
+                get_db_pool_fn=lambda: _Pool(),
+            )
+    finally:
+        await conn.execute(f'DROP SCHEMA IF EXISTS "{schema}" CASCADE')
+        await conn.close()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
     ("business_context_id", "contact_type", "lead_stage", "status", "expected_status"),
     (
         ("other_business", "lead", "new", "active", 404),
