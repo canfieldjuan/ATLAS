@@ -9,6 +9,11 @@ That is a workflow/process defect: a baseline shrink is a claim that those node
 ids are now passing, and the gate should mechanically require evidence from a
 run that could have observed the removed nodes.
 
+Diff-budget note: this is slightly over the 400 LOC target because the
+indivisible repair includes the checker behavior, adversarial CLI fixtures,
+baseline correction against the pinned CI runner, and the plan evidence needed
+to explain the failed first run without opening a separate symptom PR.
+
 ### Problem-derived contract
 
 - Root cause: `scripts/check_unit_gate.py` rejects baseline growth and reports
@@ -20,11 +25,11 @@ run that could have observed the removed nodes.
 - Correct fix must touch/change: add a baseline-shrink proof check in
   `scripts/check_unit_gate.py`, exercised through the CLI path used by
   `.github/workflows/unit_gate.yml`; add adversarial tests in
-  `tests/test_check_unit_gate.py` for growth-only, scoped-missing-proof,
-  scoped-proven-shrink, and removed-node-still-failing cases; isolate the
-  order-dependent LLM registry state that made three #2259-removed routing
-  nodes fail only in the full suite; remove only the stale baseline entries the
-  full gate proved passing.
+  `tests/test_check_unit_gate.py` for growth-only, unscoped-report,
+  scoped-missing-proof, scoped-proven-shrink, and removed-node-still-failing
+  cases; isolate the order-dependent LLM registry state that made #2259-removed
+  routing nodes fail only in the full suite; remove only the stale baseline
+  entries the full gate proved passing.
 - Must not change: do not change product behavior, reviewer-convergence policy
   in #2263, live-reconciliation policy from #2258, selected-test ownership
   mappings except where this proof requires them, or runtime LLM routing
@@ -40,7 +45,7 @@ Slice phase: Workflow/process
 2. Add CLI-level tests that prove shrink-without-execution fails closed and
    shrink-with-execution behaves as the ratchet intends.
 3. Make the existing reasoning graph routing tests independent of full-suite
-   LLM registry state so the three #2259-removed nodes are genuinely proven.
+   LLM registry state so the four #2259-removed nodes are genuinely proven.
 4. Shrink `tests/unit_gate_baseline.txt` by the stale entries reported by the
    full gate before and after the routing isolation fix.
 
@@ -53,10 +58,13 @@ Slice phase: Workflow/process
   - A scoped run whose selected files omit any removed baseline node's file
     exits 2 before treating the shrink as passing, settled by
     `tests/test_check_unit_gate.py::test_cli_exit2_when_scoped_run_omits_removed_baseline_node_file`.
+  - A captured report without a selected-file scope cannot prove a baseline
+    shrink, settled by
+    `tests/test_check_unit_gate.py::test_cli_exit2_when_unscoped_report_claims_baseline_shrink`.
   - A scoped run that selected every removed node's file and whose report no
     longer contains those nodes can pass, settled by
     `tests/test_check_unit_gate.py::test_cli_exit0_when_scoped_run_proves_removed_node_passes`.
-  - A full/report run where a removed node still fails reports a regression,
+  - A scoped report where a removed node still fails reports a regression,
     settled by
     `tests/test_check_unit_gate.py::test_cli_exit1_when_removed_baseline_node_still_fails`.
   - Reasoning graph routing tests pass as a full file and no longer depend on
@@ -115,20 +123,23 @@ fallback changes; otherwise write "N/A - no guard/config boundary change."
 
 Compute `removed_baseline_entries = base_baseline - pr_baseline` when
 `--base-baseline` is available. If that set is non-empty, require a proof path:
-FULL/report runs without `--selected-files` are allowed to prove the shrink by
-absence from the parsed failing set; scoped runs must include every removed
-node's test file in `--selected-files`; `--growth-only` has no pytest evidence
-and fails closed. The existing comparison then still catches the other half: if
-a removed node still appears in the failing set, it is a regression because it
-is no longer in the PR baseline.
+a real full run can prove the shrink from the pytest invocation it just ran;
+captured `--report-file` evidence must also supply `--selected-files` so the
+gate can validate the report's execution scope; scoped runs must include every
+removed node's test file in `--selected-files`; `--growth-only` has no pytest
+evidence and fails closed. The existing comparison then still catches the other
+half: if a removed node still appears in the failing set, it is a regression
+because it is no longer in the PR baseline.
 
 ## Intentional
 
 - No selector mapping change in this slice; the selector already treats
   `tests/unit_gate_baseline.txt` as global/FULL, and this PR hardens the gate
   against future scoped or growth-only callers.
-- Baseline edits are limited to entries the full unit gate reported as stale
-  before/after the routing isolation fix; no new baseline entries are added.
+- Baseline edits do not grow the ledger versus `origin/main`; the first CI run
+  proved that 20 of the attempted removals still fail on the pinned runner, so
+  this update restores those and leaves only the four reasoning-routing removals
+  that CI did not report as regressions.
 
 ## Deferred
 
@@ -139,22 +150,27 @@ Parked hardening: none.
 ## Verification
 
 - `python -m pytest tests/test_check_unit_gate.py tests/test_select_impacted_tests.py tests/test_unit_gate_selector_fallback.py -q`
-  - `72 passed in 0.57s`
+  - `73 passed in 0.64s`
 - `python -m pytest tests/test_reasoning_graph_routing.py -q -rfE --tb=short`
   - `12 passed, 1 warning in 1.15s`
 - `python -m py_compile scripts/check_unit_gate.py`
   - passed
-- `git show origin/main:tests/unit_gate_baseline.txt > /tmp/unit_gate_base_baseline.txt && python scripts/check_unit_gate.py --baseline tests/unit_gate_baseline.txt --base-baseline /tmp/unit_gate_base_baseline.txt`
-  - `unit gate: 155 failing/errored node(s); baseline=155; regressions=0; newly-passing=0`
-  - `OK: the baseline exactly matches the current failing set.`
+- `git show origin/main:tests/unit_gate_baseline.txt > /tmp/origin-main-unit-baseline.txt && comm -23 <(rg -v '^#|^$' /tmp/origin-main-unit-baseline.txt | sort) <(rg -v '^#|^$' tests/unit_gate_baseline.txt | sort)`
+  - remaining removed nodes are exactly the four
+    `tests/test_reasoning_graph_routing.py::*` routing entries.
+- GitHub unit-gate job `91580674681` on head
+  `6f424d8b8578b02c1f16d4427e5f0c087a1f59c3` reported:
+  `unit gate: 175 failing/errored node(s); baseline=155; regressions=20; newly-passing=0`.
+  This update restores those 20 CI-proven failures, leaving a 175-node PR
+  baseline and the four-node shrink above.
 
 ## Estimated diff size
 
 | File | LOC |
 |---|---:|
-| `plans/PR-Unit-Gate-Baseline-Shrink-Proof.md` | 160 |
-| `scripts/check_unit_gate.py` | 52 |
-| `tests/test_check_unit_gate.py` | 111 |
+| `plans/PR-Unit-Gate-Baseline-Shrink-Proof.md` | 176 |
+| `scripts/check_unit_gate.py` | 69 |
+| `tests/test_check_unit_gate.py` | 146 |
 | `tests/test_reasoning_graph_routing.py` | 28 |
-| `tests/unit_gate_baseline.txt` | 24 |
-| **Total** | **375** |
+| `tests/unit_gate_baseline.txt` | 4 |
+| **Total** | **423** |

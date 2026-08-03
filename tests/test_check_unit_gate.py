@@ -204,6 +204,32 @@ def test_cli_exit2_when_scoped_run_omits_removed_baseline_node_file(tmp_path):
     assert "tests/test_a.py" in r.stderr
 
 
+def test_cli_exit2_when_unscoped_report_claims_baseline_shrink(tmp_path):
+    base = tmp_path / "base.txt"
+    base.write_text(
+        "tests/test_a.py::old_failure\n"
+        "tests/test_b.py::still_fails\n"
+    )
+    pr = tmp_path / "pr.txt"
+    pr.write_text("tests/test_b.py::still_fails\n")
+
+    r = _run(
+        [
+            "--baseline",
+            str(pr),
+            "--base-baseline",
+            str(base),
+        ],
+        tmp_path,
+        "FAILED tests/test_b.py::still_fails - boom\n",
+    )
+
+    assert r.returncode == 2, r.stdout + r.stderr
+    assert "--report-file cannot prove a baseline shrink" in r.stderr
+    assert "--selected-files" in r.stderr
+    assert "tests/test_a.py::old_failure" in r.stderr
+
+
 def test_cli_exit0_when_scoped_run_proves_removed_node_passes(tmp_path):
     base = tmp_path / "base.txt"
     base.write_text(
@@ -240,9 +266,18 @@ def test_cli_exit1_when_removed_baseline_node_still_fails(tmp_path):
     )
     pr = tmp_path / "pr.txt"
     pr.write_text("tests/test_b.py::still_fails\n")
+    selected = tmp_path / "selected.txt"
+    selected.write_text("tests/test_a.py\ntests/test_b.py\n")
 
     r = _run(
-        ["--baseline", str(pr), "--base-baseline", str(base)],
+        [
+            "--baseline",
+            str(pr),
+            "--base-baseline",
+            str(base),
+            "--selected-files",
+            str(selected),
+        ],
         tmp_path,
         "FAILED tests/test_a.py::old_failure - boom\n"
         "FAILED tests/test_b.py::still_fails - boom\n",

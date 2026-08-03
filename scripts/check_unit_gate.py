@@ -179,13 +179,24 @@ def _fail_growth(added: list[str]) -> int:
     return 3
 
 
-def _fail_unproven_shrink(removed: list[str], *, missing_files: list[str] | None) -> int:
+def _fail_unproven_shrink(
+    removed: list[str],
+    *,
+    missing_files: list[str] | None,
+    unscoped_report: bool = False,
+) -> int:
     print(
         f"unit gate: baseline shrink removes {len(removed)} node(s), but this "
         "run did not provide pytest evidence for every removed node.",
         file=sys.stderr,
     )
-    if missing_files is None:
+    if unscoped_report:
+        print(
+            "unit gate: --report-file cannot prove a baseline shrink without "
+            "--selected-files listing the executed test-file scope.",
+            file=sys.stderr,
+        )
+    elif missing_files is None:
         print(
             "unit gate: --growth-only has no pytest report; run the full suite "
             "or a scoped run that includes every removed node's test file.",
@@ -292,6 +303,12 @@ def main(argv: list[str] | None = None) -> int:
                 )
 
     if args.report_file is not None:
+        if removed_baseline_nodes and selected is None:
+            return _fail_unproven_shrink(
+                removed_baseline_nodes,
+                missing_files=None,
+                unscoped_report=True,
+            )
         if not args.report_file.exists():
             print(f"report file not found: {args.report_file}", file=sys.stderr)
             return 2
