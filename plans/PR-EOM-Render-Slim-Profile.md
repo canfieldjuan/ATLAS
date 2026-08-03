@@ -223,6 +223,8 @@ fallback changes; otherwise write "N/A - no guard/config boundary change."
 - `render.eom.yaml`
 - `tests/test_eom_lead_conversion_integration.py`
 - `tests/test_eom_render_profile.py`
+- `tests/test_reasoning_graph_routing.py`
+- `tests/unit_gate_baseline.txt`
 
 ## Mechanism
 
@@ -332,6 +334,15 @@ Parked hardening: none.
     `python -m pytest tests/test_eom_lead_conversion_integration.py -q`
     — 18 skipped locally because `ATLAS_MIGRATION_TEST_DATABASE_URL` is not
     configured.
+  - Unit-gate follow-up for full-suite reasoning-routing isolation:
+    `python -m py_compile tests/test_reasoning_graph_routing.py`;
+    `python -m pytest tests/test_reasoning_graph_routing.py -q --tb=short -rfE`
+    — 12 passed, 1 warning from the existing `torch`/`pynvml` import path;
+    synthetic `sys.modules` pollution probe for
+    `atlas_brain.pipelines.llm` — 12 passed, 1 warning and reloaded the real
+    module;
+    scoped `scripts/check_unit_gate.py` for `tests/test_reasoning_graph_routing.py`
+    — 0 failing/errored nodes, baseline=0, regressions=0, newly-passing=0.
 
 ## Estimated diff size
 
@@ -343,8 +354,10 @@ Parked hardening: none.
 | `atlas_brain/eom_api/funnel_store.py` | 244 |
 | `atlas_brain/main.py` | 146 |
 | `atlas_brain/main_eom.py` | 34 |
-| `plans/PR-EOM-Render-Slim-Profile.md` | 350 |
+| `plans/PR-EOM-Render-Slim-Profile.md` | 363 |
 | `render.eom.yaml` | 4 |
 | `tests/test_eom_lead_conversion_integration.py` | 92 |
 | `tests/test_eom_render_profile.py` | 563 |
-| **Total** | **1508** |
+| `tests/test_reasoning_graph_routing.py` | 96 |
+| `tests/unit_gate_baseline.txt` | 4 |
+| **Total** | **1621** |
