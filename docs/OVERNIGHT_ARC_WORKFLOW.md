@@ -138,8 +138,9 @@ there is something to act on:
   Definite negatives exit on any cycle, including the first.
 - `MERGE-READY` -- readiness is presence-based and fail-closed: EVERY
   required branch-protection context (read at runtime from
-  `scripts/check_required_status_checks.py`, so the gate cannot drift from
-  the canonical list) must be present and reporting success, plus
+  `ci/gates.yml` through the required-status checker/watcher path, so the gate
+  cannot drift from the canonical list) must be present and reporting success,
+  plus
   a current-head review by the exact Codex connector identity, 0 unresolved
   Codex connector threads, no CHANGES_REQUESTED, and mergeable. A context that
   has not started yet keeps readiness false; a missing current-head Codex

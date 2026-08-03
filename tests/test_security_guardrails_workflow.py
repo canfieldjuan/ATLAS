@@ -15,6 +15,7 @@ BRANCH_PROTECTION_WORKFLOW = Path(__file__).resolve().parents[1] / ".github" / "
 PRE_COMMIT_CONFIG = Path(__file__).resolve().parents[1] / ".pre-commit-config.yaml"
 SECURITY_GUARDRAILS_DOC = Path(__file__).resolve().parents[1] / "docs" / "SECURITY_GUARDRAILS.md"
 REQUIRED_STATUS_SCRIPT = Path(__file__).resolve().parents[1] / "scripts" / "check_required_status_checks.py"
+GATE_REGISTRY = Path(__file__).resolve().parents[1] / "ci" / "gates.yml"
 
 REQUIRED_STATUS_CONTEXTS = (
     "live-reconciliation",
@@ -36,6 +37,7 @@ REQUIRED_STATUS_WORKFLOW_PATHS = (
     ".github/workflows/session_lane.yml",
     ".github/workflows/gitleaks_baseline_growth_guard.yml",
     ".github/workflows/security_guardrails.yml",
+    "ci/gates.yml",
 )
 
 
@@ -173,6 +175,353 @@ def test_required_status_check_audit_accepts_contexts_and_checks_shapes() -> Non
     }
 
     assert checker.missing_required_contexts(payload) == []
+
+
+def test_required_status_check_defaults_are_registry_derived() -> None:
+    checker = _load_required_status_script()
+
+    assert checker.default_required_contexts(GATE_REGISTRY) == REQUIRED_STATUS_CONTEXTS
+    assert "DEFAULT_REQUIRED_CONTEXTS = (" not in REQUIRED_STATUS_SCRIPT.read_text(
+        encoding="utf-8"
+    )
+
+
+def test_gate_registry_excludes_advisory_from_required_contexts() -> None:
+    checker = _load_required_status_script()
+    gates = checker.load_gate_registry(GATE_REGISTRY)
+    advisory_contexts = {
+        gate["context"]
+        for gate in gates
+        if gate["enforcement"] == "advisory" and gate["context"]
+    }
+
+    assert "seam-convergence" in advisory_contexts
+    assert "guard-class-closure-lint" in advisory_contexts
+    assert advisory_contexts.isdisjoint(checker.default_required_contexts(GATE_REGISTRY))
+
+
+def test_gate_registry_workflow_paths_exist() -> None:
+    checker = _load_required_status_script()
+    root = GATE_REGISTRY.parents[1]
+
+    for gate in checker.load_gate_registry(GATE_REGISTRY):
+        workflow = gate["workflow"]
+        assert isinstance(workflow, str)
+        assert (root / workflow).is_file(), gate["id"]
+
+
+def test_gate_registry_fails_closed_for_malformed_branch_required_gate() -> None:
+    checker = _load_required_status_script()
+    malformed = """\
+gates:
+  - id: missing-context
+    name: Missing Context
+    context: null
+    enforcement: branch_required
+    trusted_base: true
+    workflow: .github/workflows/missing.yml
+    local_command: null
+"""
+
+    try:
+        checker.parse_gate_registry(malformed)
+    except ValueError as exc:
+        assert "branch_required needs context" in str(exc)
+    else:
+        raise AssertionError("malformed branch_required gate passed")
+
+
+def test_gate_registry_fails_closed_for_unknown_enforcement_class() -> None:
+    checker = _load_required_status_script()
+    malformed = """\
+gates:
+  - id: unknown-class
+    name: Unknown Class
+    context: unknown-class
+    enforcement: maybe_required
+    trusted_base: true
+    workflow: .github/workflows/unknown.yml
+    local_command: null
+"""
+
+    try:
+        checker.parse_gate_registry(malformed)
+    except ValueError as exc:
+        assert "invalid enforcement" in str(exc)
+    else:
+        raise AssertionError("unknown enforcement class passed")
+
+
+def test_gate_registry_fails_closed_without_branch_required_gate() -> None:
+    checker = _load_required_status_script()
+    malformed = """\
+gates:
+  - id: advisory-only
+    name: Advisory Only
+    context: advisory-only
+    enforcement: advisory
+    trusted_base: false
+    workflow: .github/workflows/advisory.yml
+    local_command: null
+"""
+
+    try:
+        checker.parse_gate_registry(malformed)
+    except ValueError as exc:
+        assert "at least one branch_required gate required" in str(exc)
+    else:
+        raise AssertionError("registry without branch_required gate passed")
+
+
+def test_gate_registry_preserves_hash_inside_quoted_scalar() -> None:
+    checker = _load_required_status_script()
+    registry = """\
+gates:
+  - id: quoted-context
+    name: Quoted Context
+    context: "Gate # 1"
+    enforcement: branch_required # supported inline comment
+    trusted_base: true
+    workflow: .github/workflows/quoted.yml
+    local_command: null
+"""
+
+    assert checker.parse_gate_registry(registry)[0]["context"] == "Gate # 1"
+
+
+def test_gate_registry_preserves_hash_inside_plain_scalar() -> None:
+    checker = _load_required_status_script()
+    registry = """\
+gates:
+  - id: plain-hash-context
+    name: Plain Hash Context
+    context: Gate#1
+    enforcement: branch_required
+    trusted_base: true
+    workflow: .github/workflows/plain.yml
+    local_command: null
+"""
+
+    assert checker.parse_gate_registry(registry)[0]["context"] == "Gate#1"
+
+
+def test_gate_registry_preserves_apostrophe_inside_plain_scalar() -> None:
+    checker = _load_required_status_script()
+    registry = """\
+gates:
+  - id: plain-apostrophe-name
+    name: Owner's Gate
+    context: owner-gate
+    enforcement: branch_required
+    trusted_base: true
+    workflow: .github/workflows/plain.yml
+    local_command: null
+"""
+
+    assert checker.parse_gate_registry(registry)[0]["name"] == "Owner's Gate"
+
+
+def test_gate_registry_strips_plain_scalar_comment_after_space_hash() -> None:
+    checker = _load_required_status_script()
+    registry = """\
+gates:
+  - id: plain-comment-context
+    name: Plain Comment Context
+    context: Gate # supported inline comment
+    enforcement: branch_required
+    trusted_base: true
+    workflow: .github/workflows/plain.yml
+    local_command: null
+"""
+
+    assert checker.parse_gate_registry(registry)[0]["context"] == "Gate"
+
+
+def test_gate_registry_preserves_escaped_quote_before_hash() -> None:
+    checker = _load_required_status_script()
+    registry = """\
+gates:
+  - id: escaped-double-quote
+    name: Escaped Double Quote
+    context: "Gate \\"# 1"
+    enforcement: branch_required
+    trusted_base: true
+    workflow: .github/workflows/escaped.yml
+    local_command: null
+"""
+
+    assert checker.parse_gate_registry(registry)[0]["context"] == 'Gate "# 1'
+
+
+def test_gate_registry_rejects_unsupported_escape_sequence() -> None:
+    checker = _load_required_status_script()
+    malformed = """\
+gates:
+  - id: unsupported-escape
+    name: Unsupported Escape
+    context: "Gate\\u0020One"
+    enforcement: branch_required
+    trusted_base: true
+    workflow: .github/workflows/escaped.yml
+    local_command: null
+"""
+
+    try:
+        checker.parse_gate_registry(malformed)
+    except ValueError as exc:
+        assert "unsupported escape sequence" in str(exc)
+    else:
+        raise AssertionError("unsupported escape sequence passed")
+
+
+def test_gate_registry_preserves_doubled_single_quote_before_hash() -> None:
+    checker = _load_required_status_script()
+    registry = """\
+gates:
+  - id: escaped-single-quote
+    name: Escaped Single Quote
+    context: 'Owner''s # Gate'
+    enforcement: branch_required
+    trusted_base: true
+    workflow: .github/workflows/escaped.yml
+    local_command: null
+"""
+
+    assert checker.parse_gate_registry(registry)[0]["context"] == "Owner's # Gate"
+
+
+def test_gate_registry_rejects_malformed_quoted_scalar() -> None:
+    checker = _load_required_status_script()
+    malformed = """\
+gates:
+  - id: malformed-quote
+    name: Malformed Quote
+    context: "Gate # 1
+    enforcement: branch_required
+    trusted_base: true
+    workflow: .github/workflows/malformed.yml
+    local_command: null
+"""
+
+    try:
+        checker.parse_gate_registry(malformed)
+    except ValueError as exc:
+        assert "malformed quoted scalar" in str(exc)
+    else:
+        raise AssertionError("malformed quoted scalar passed")
+
+
+def test_gate_registry_rejects_unknown_fields() -> None:
+    checker = _load_required_status_script()
+    malformed = """\
+gates:
+  - id: typo
+    name: Typo
+    context: typo
+    enforcement: branch_required
+    enforcment: advisory
+    trusted_base: true
+    workflow: .github/workflows/typo.yml
+    local_command: null
+"""
+
+    try:
+        checker.parse_gate_registry(malformed)
+    except ValueError as exc:
+        assert "unsupported fields: enforcment" in str(exc)
+    else:
+        raise AssertionError("unknown registry field passed")
+
+
+def test_gate_registry_rejects_invalid_field_types() -> None:
+    checker = _load_required_status_script()
+    malformed = """\
+gates:
+  - id: invalid-types
+    name: true
+    context: false
+    enforcement: advisory
+    trusted_base: true
+    workflow: .github/workflows/invalid.yml
+    local_command: false
+"""
+
+    try:
+        checker.parse_gate_registry(malformed)
+    except ValueError as exc:
+        assert "has invalid name" in str(exc)
+    else:
+        raise AssertionError("invalid registry field types passed")
+
+
+def test_gate_registry_rejects_boolean_context_on_non_required_gate() -> None:
+    checker = _load_required_status_script()
+    malformed = """\
+gates:
+  - id: invalid-context
+    name: Invalid Context
+    context: false
+    enforcement: advisory
+    trusted_base: true
+    workflow: .github/workflows/invalid.yml
+    local_command: null
+"""
+
+    try:
+        checker.parse_gate_registry(malformed)
+    except ValueError as exc:
+        assert "has invalid context" in str(exc)
+    else:
+        raise AssertionError("boolean context passed")
+
+
+def test_gate_registry_rejects_boolean_local_command() -> None:
+    checker = _load_required_status_script()
+    malformed = """\
+gates:
+  - id: invalid-local-command
+    name: Invalid Local Command
+    context: invalid-local-command
+    enforcement: advisory
+    trusted_base: true
+    workflow: .github/workflows/invalid.yml
+    local_command: false
+"""
+
+    try:
+        checker.parse_gate_registry(malformed)
+    except ValueError as exc:
+        assert "has invalid local_command" in str(exc)
+    else:
+        raise AssertionError("boolean local_command passed")
+
+
+def test_required_status_cli_reports_registry_errors(tmp_path, capsys) -> None:
+    checker = _load_required_status_script()
+    registry = tmp_path / "gates.yml"
+    registry.write_text(
+        """\
+gates:
+  - id: missing-context
+    name: Missing Context
+    context: null
+    enforcement: branch_required
+    trusted_base: true
+    workflow: .github/workflows/missing.yml
+    local_command: null
+""",
+        encoding="utf-8",
+    )
+    payload = tmp_path / "payload.json"
+    payload.write_text("{}", encoding="utf-8")
+
+    code = checker.main(
+        ["--registry-file", str(registry), "--payload-file", str(payload)]
+    )
+    captured = capsys.readouterr()
+
+    assert code == 2
+    assert "branch_required needs context" in captured.err
 
 
 def test_required_status_check_audit_accepts_github_actions_source() -> None:

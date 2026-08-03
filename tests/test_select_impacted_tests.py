@@ -130,13 +130,77 @@ def test_unrelated_module_is_not_selected(tmp_path):
     "pytest.ini",
     "pyproject.toml",
     "tests/unit_gate_baseline.txt",
-    "scripts/check_unit_gate.py",
-    "scripts/select_impacted_tests.py",
-    ".github/workflows/unit_gate.yml",
 ])
 def test_global_files_escalate_to_full(tmp_path, path):
     repo = _mkrepo(tmp_path, {"atlas_brain/__init__.py": ""})
     assert sel.select([path], repo) == sel.FULL
+
+
+@pytest.mark.parametrize(("path", "owners"), [
+    (
+        ".github/workflows/branch_protection_required_checks.yml",
+        ["tests/test_security_guardrails_workflow.py"],
+    ),
+    (
+        ".github/workflows/unit_gate.yml",
+        [
+            "tests/test_check_unit_gate.py",
+            "tests/test_select_impacted_tests.py",
+            "tests/test_unit_gate_selector_fallback.py",
+        ],
+    ),
+    ("ci/gates.yml", ["tests/test_security_guardrails_workflow.py"]),
+    (
+        "scripts/check_required_status_checks.py",
+        ["tests/test_security_guardrails_workflow.py"],
+    ),
+    (
+        "scripts/check_unit_gate.py",
+        ["tests/test_check_unit_gate.py", "tests/test_select_impacted_tests.py"],
+    ),
+    ("scripts/pr_watcher.py", ["tests/test_pr_watcher.py"]),
+    ("scripts/select_impacted_tests.py", ["tests/test_select_impacted_tests.py"]),
+    ("scripts/watch_owned_pr.sh", ["tests/test_watch_owned_pr.py"]),
+])
+def test_explicit_ci_surface_owners_are_selected(tmp_path, path, owners):
+    files = {"atlas_brain/__init__.py": "", path: "VALUE = 1\n"}
+    files.update({owner: "def test_owner():\n    assert True\n" for owner in owners})
+    repo = _mkrepo(tmp_path, files)
+
+    assert sel.select([path], repo) == sorted(owners)
+
+
+def test_explicit_ci_surface_with_missing_owner_escalates_to_full(tmp_path):
+    repo = _mkrepo(tmp_path, {
+        "atlas_brain/__init__.py": "",
+        "scripts/pr_watcher.py": "VALUE = 1\n",
+    })
+
+    assert sel.select(["scripts/pr_watcher.py"], repo) == sel.FULL
+
+
+def test_explicit_ci_surface_deletion_escalates_to_full(tmp_path):
+    repo = _mkrepo(tmp_path, {
+        "atlas_brain/__init__.py": "",
+        "tests/test_pr_watcher.py": "def test_owner():\n    assert True\n",
+    })
+
+    assert sel.select(["scripts/pr_watcher.py"], repo) == sel.FULL
+
+
+def test_explicit_ci_surface_owners_union_with_import_graph(tmp_path):
+    repo = _mkrepo(tmp_path, {
+        "atlas_brain/__init__.py": "",
+        "atlas_brain/svc.py": "VALUE = 1\n",
+        "tests/test_svc.py": "from atlas_brain.svc import VALUE\n",
+        "scripts/pr_watcher.py": "VALUE = 1\n",
+        "tests/test_pr_watcher.py": "def test_owner():\n    assert True\n",
+    })
+
+    assert sel.select(["atlas_brain/svc.py", "scripts/pr_watcher.py"], repo) == [
+        "tests/test_pr_watcher.py",
+        "tests/test_svc.py",
+    ]
 
 
 def test_unparseable_module_escalates_to_full(tmp_path):

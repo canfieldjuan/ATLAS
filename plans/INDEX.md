@@ -1,6 +1,6 @@
 # Plan archive index
 
-1500 archived plan doc(s). Merged plan docs are moved under `archive/` and listed below; once the archive sweep has run, the `plans/` root holds only in-flight slices.
+1501 archived plan doc(s). Merged plan docs are moved under `archive/` and listed below; once the archive sweep has run, the `plans/` root holds only in-flight slices.
 
 - [PR-ASR-Pip-Audit-Egg-Fragment](archive/PR-ASR-Pip-Audit-Egg-Fragment.md) - lane: security/workflow | phase: Production hardening
 - [PR-ASR-Requirements-Audit-Pin](archive/PR-ASR-Requirements-Audit-Pin.md) - lane: security/workflow | phase: Production hardening
@@ -197,6 +197,7 @@
 - [PR-CF-Routing-Coverage-Scope](archive/PR-CF-Routing-Coverage-Scope.md) - lane: content-factory | phase: production hardening
 - [PR-CI-CD-Autonomous-Map](archive/PR-CI-CD-Autonomous-Map.md) - lane: workflow/autonomous-ci-cd-map | phase: Workflow/process
 - [PR-CI-CD-Runtime-Audit](archive/PR-CI-CD-Runtime-Audit.md) - lane: workflow/autonomous-ci-cd-map | phase: Workflow/process
+- [PR-CI-Gate-Registry](archive/PR-CI-Gate-Registry.md) - lane: ci-cd-enforcement | phase: workflow/process
 - [PR-CI-Hygiene-Stale-Test-Expectations](archive/PR-CI-Hygiene-Stale-Test-Expectations.md) - lane: testing/ci-hygiene | phase: Robust testing
 - [PR-CI-Repo-Wide-Unit-Backstop](archive/PR-CI-Repo-Wide-Unit-Backstop.md) - lane: ci/coverage | phase: Production hardening
 - [PR-CI-Trigger-Coverage-Hardening](archive/PR-CI-Trigger-Coverage-Hardening.md) - lane: ci/trigger-coverage | phase: Production hardening

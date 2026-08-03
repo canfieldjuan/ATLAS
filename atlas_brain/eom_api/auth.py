@@ -7,11 +7,12 @@ import hashlib
 import secrets
 from dataclasses import dataclass
 from re import fullmatch
-from typing import Protocol
+from typing import TYPE_CHECKING, Protocol
 
 from fastapi import Depends, Header, HTTPException
 
-from .config import EOMInvoicingConfig, invoicing_settings
+if TYPE_CHECKING:
+    from .config import EOMInvoicingConfig
 
 _GENERATED_TOKEN_PREFIX = "eomrx_v1_"
 _GENERATED_TOKEN_RANDOM_LENGTH = 43
@@ -157,11 +158,17 @@ def _validate_generated_token_digest(token_digest: str) -> None:
     )
 
 
+def _runtime_invoicing_settings() -> ReceivablesApiAuthConfig:
+    from .config import invoicing_settings
+
+    return invoicing_settings
+
+
 def validate_receivables_api_config(
     config: ReceivablesApiAuthConfig | EOMInvoicingConfig | None = None,
 ) -> None:
     """Fail startup unless enabled auth has digest-only generated-token config."""
-    resolved = config or invoicing_settings
+    resolved = config or _runtime_invoicing_settings()
     if not resolved.receivables_api_enabled:
         return
     raw_token = getattr(resolved, "receivables_service_token", "")
@@ -189,6 +196,8 @@ def trusted_receivables_api_config(
 
 def get_receivables_api_config() -> EOMInvoicingConfig:
     """Return the runtime config through an overrideable request boundary."""
+    from .config import invoicing_settings
+
     return invoicing_settings
 
 

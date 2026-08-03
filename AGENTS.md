@@ -788,11 +788,11 @@ per-test list**, not a glob, so adding a `test:<name>` script to
 `atlas-intel-ui/package.json` does **not** make CI run it. Any PR that
 adds or renames a `test:*` script must add the matching
 `run: npm run test:<name>` step to that workflow **in the same PR**.
-The `extracted-checks` suite has an automated enrollment check that
-fails on un-enrolled tests; the intel-ui workflow does not, so this one
-is manual and has been dropped repeatedly. Reviewer/self check: grep the
-workflow's run list for the new test name — `package.json` presence is
-not CI execution.
+The local/pre-push audit has an automated UI enrollment check
+(`scripts/audit_ui_test_enrollment.py`) that fails on un-enrolled
+`test:*` scripts across `*-ui` packages. Reviewer/self check: when the
+audit names a missing script, add the matching workflow `run:` step in
+the same PR — `package.json` presence is not CI execution.
 
 ### 3e.1. Real adapters by default — mock only true external boundaries
 

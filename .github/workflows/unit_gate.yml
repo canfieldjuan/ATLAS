@@ -2,11 +2,11 @@ name: Unit Gate
 
 # The per-area checks are path-filtered and run hand-maintained test lists, so a
 # test file that no workflow enrolls can pass CI while never executing
-# (#2035 / G1.1, G2). This gate runs the WHOLE unit suite (no integration/e2e,
-# which need Postgres/Neo4j) on every PR and fails only on a REGRESSION -- a
-# failing/errored node not already in tests/unit_gate_baseline.txt. It runs on
-# all PR paths (unlike the path-filtered per-area checks and the schedule-only
-# repo_wide_unit_backstop) so nothing merges without the suite executing.
+# (#2035 / G1.1, G2). This gate runs on every PR and ratchets against
+# tests/unit_gate_baseline.txt. It selects impacted unit tests when the selector
+# can map the diff, escalates to the full non-integration/e2e unit suite when the
+# selector is absent or returns FULL, and runs the baseline growth guard only when
+# no changed file is reachable from a test.
 #
 # Advisory at birth: this check is not yet in branch-protection required checks;
 # enrolling it is the next slice, once it is proven on live PRs.

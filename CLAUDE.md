@@ -565,12 +565,30 @@ Tools: `create_invoice`, `get_invoice`, `list_invoices`, `update_invoice`,
 `list_pending_drafts`, `approve_and_send`, `export_invoice_pdf`
 
 The EOM admin portal uses the separate FastAPI receivables surface, not MCP.
-Enable it only with a dedicated service token:
+Enable it only with a generated service token whose raw value stays only on
+the caller side. Atlas stores the SHA-256 digest:
 
 ```bash
+python - <<'PY'
+from atlas_brain.eom_api.auth import generate_receivables_service_token
+token = generate_receivables_service_token()
+print(f"caller bearer token: {token.token}")
+print(f"ATLAS_INVOICING_RECEIVABLES_SERVICE_TOKEN_SHA256={token.sha256}")
+PY
+
 ATLAS_INVOICING_RECEIVABLES_API_ENABLED=true
-ATLAS_INVOICING_RECEIVABLES_SERVICE_TOKEN=<long-random-service-token>
+ATLAS_INVOICING_RECEIVABLES_SERVICE_TOKEN_SHA256=<generated-token-sha256>
 ```
+
+Do not set `ATLAS_INVOICING_RECEIVABLES_SERVICE_TOKEN` on Atlas. That raw
+secret is rejected at startup; keep it only in the EOM caller as the
+`Authorization: Bearer ...` value. For old/raw-token deployments, use a
+maintenance window: disable the receivables API, remove the raw Atlas secret,
+deploy the digest-only Atlas code everywhere, provision the digest, re-enable
+the receivables API, then run an authenticated `/api/v1/receivables/ready`
+probe. If the readiness probe fails, disable the receivables API again and
+roll back to the last known-good Atlas deployment/config before reopening
+traffic to that surface.
 
 ### Invoicing Readonly MCP Server (8 tools)
 ```bash

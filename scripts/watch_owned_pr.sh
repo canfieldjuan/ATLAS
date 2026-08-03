@@ -10,11 +10,11 @@
 #                   Codex review attestation exists on this exact head SHA +
 #                   0 unresolved threads (no unfetched pages) +
 #                   review decision not CHANGES_REQUESTED + mergeable
-# Required contexts + app pin are read from origin/main's
-# scripts/check_required_status_checks.py (trusted ref -- the watched branch
-# cannot weaken its own gate); MERGE-READY requires their PRESENCE with
-# success and no unsettled (queued/rerunning) required run, so a context
-# that has not started or is rerunning fails closed.
+# Required contexts are read from origin/main's ci/gates.yml and the app pin is
+# read from origin/main's scripts/check_required_status_checks.py (trusted ref
+# -- the watched branch cannot weaken its own gate); MERGE-READY requires their
+# PRESENCE with success and no unsettled (queued/rerunning) required run, so a
+# context that has not started or is rerunning fails closed.
 # The watcher never merges and holds no merge authority (AGENTS.md 3c.1.1);
 # it reports state and exits fast so the builder session acts.
 #
@@ -31,16 +31,80 @@ CYCLES="${CYCLES:-32}"
 TOK="$(grep -m1 '^GITHUB_ACCESS_TOKEN=' "$ROOT/.env" 2>/dev/null | cut -d= -f2-)"
 [ -n "$TOK" ] || TOK="${GH_TOKEN:-}"
 [ -n "$TOK" ] || { echo "no GITHUB_ACCESS_TOKEN in $ROOT/.env and no GH_TOKEN set" >&2; exit 2; }
-# Canonical required contexts (branch protection), read from the TRUSTED ref
-# (origin/main), never from the watched branch's working tree -- a PR that
-# edits check_required_status_checks.py must not be able to weaken its own
-# gate. Falls back to the checkout copy, then the documented four.
+# Refresh the trusted base before reading gate policy. A long-running installed
+# watcher must not use a stale origin/main that predates a registry addition.
+git -C "$ROOT" fetch origin main:refs/remotes/origin/main --quiet || {
+  echo "watch_owned_pr.sh: failed to refresh trusted origin/main" >&2
+  exit 2
+}
+
+# Canonical required contexts (branch protection), read only from the TRUSTED
+# ref (origin/main), never from the watched branch's working tree -- a PR that
+# edits ci/gates.yml or check_required_status_checks.py must not be able to
+# weaken its own gate. When a trusted registry is available, parse it through
+# the trusted checker implementation and fail closed on parser errors. Falls
+# back to the fixed documented legacy four only when the trusted registry does
+# not exist yet on origin/main.
+GATES_SRC="$(git -C "$ROOT" show origin/main:ci/gates.yml 2>/dev/null)"
 CHECKER_SRC="$(git -C "$ROOT" show origin/main:scripts/check_required_status_checks.py 2>/dev/null)"
-[ -n "$CHECKER_SRC" ] || CHECKER_SRC="$(cat "$ROOT/scripts/check_required_status_checks.py" 2>/dev/null)"
-mapfile -t REQ_CONTEXTS < <(printf '%s\n' "$CHECKER_SRC" \
-  | sed -n '/^DEFAULT_REQUIRED_CONTEXTS = (/,/^)/p' | grep -oE '"[^"]+"' | tr -d '"')
+REQ_CONTEXTS=()
+if [ -n "$GATES_SRC" ]; then
+  if [ -z "$CHECKER_SRC" ]; then
+    echo "watch_owned_pr.sh: trusted ci/gates.yml exists but trusted required-status checker is unavailable" >&2
+    exit 2
+  fi
+  CHECKER_TMP="$(mktemp --suffix=.py)"
+  GATES_TMP="$(mktemp)"
+  REQ_CONTEXTS_TMP="$(mktemp)"
+  REQ_CONTEXTS_ERR="$(mktemp)"
+  printf '%s\n' "$CHECKER_SRC" > "$CHECKER_TMP"
+  printf '%s\n' "$GATES_SRC" > "$GATES_TMP"
+  if ! python3 - "$CHECKER_TMP" "$GATES_TMP" > "$REQ_CONTEXTS_TMP" 2>"$REQ_CONTEXTS_ERR" <<'PY'
+from __future__ import annotations
+
+import importlib.util
+from pathlib import Path
+import sys
+
+checker_path = Path(sys.argv[1])
+registry_path = Path(sys.argv[2])
+spec = importlib.util.spec_from_file_location(
+    "trusted_check_required_status_checks",
+    checker_path,
+)
+if spec is None or spec.loader is None:
+    raise SystemExit("could not load trusted required-status checker")
+checker = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(checker)
+if not hasattr(checker, "default_required_contexts"):
+    raise SystemExit("trusted required-status checker has no registry parser")
+for context in checker.default_required_contexts(registry_path):
+    print(context)
+PY
+  then
+    echo "watch_owned_pr.sh: failed to parse trusted ci/gates.yml:" >&2
+    sed 's/^/  /' "$REQ_CONTEXTS_ERR" >&2
+    rm -f "$CHECKER_TMP" "$GATES_TMP" "$REQ_CONTEXTS_TMP" "$REQ_CONTEXTS_ERR"
+    exit 2
+  fi
+  mapfile -t REQ_CONTEXTS < "$REQ_CONTEXTS_TMP"
+  rm -f "$CHECKER_TMP" "$GATES_TMP" "$REQ_CONTEXTS_TMP" "$REQ_CONTEXTS_ERR"
+  if [ "${#REQ_CONTEXTS[@]}" -eq 0 ]; then
+    echo "watch_owned_pr.sh: trusted ci/gates.yml produced no required contexts" >&2
+    exit 2
+  fi
+fi
 if [ "${#REQ_CONTEXTS[@]}" -eq 0 ]; then
-  REQ_CONTEXTS=("live-reconciliation" "diff-budget" "Gitleaks PR secret scan" "Gitleaks baseline growth guard")
+  REQ_CONTEXTS=(
+    "live-reconciliation"
+    "diff-budget"
+    "plan-admission"
+    "session-lane"
+    "review-contract"
+    "pr-body-contract"
+    "Gitleaks PR secret scan"
+    "Gitleaks baseline growth guard"
+  )
 fi
 REQ_JSON=$(printf '%s\n' "${REQ_CONTEXTS[@]}" | jq -R . | jq -cs .)
 REQ_TOTAL=${#REQ_CONTEXTS[@]}

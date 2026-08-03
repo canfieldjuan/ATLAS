@@ -21,6 +21,7 @@ from fastapi.testclient import TestClient
 
 from atlas_brain.api.invoicing import actions
 from atlas_brain.api.invoicing import auth as receivables_auth
+from atlas_brain.eom_api import auth as eom_receivables_auth
 from atlas_brain.services.receivables import (
     _RECEIVABLES_REQUIRED_COLUMNS,
     _RECEIVABLES_REQUIRED_INDEXES,
@@ -1680,15 +1681,19 @@ async def test_return_waits_for_concurrent_create_before_balance_snapshot():
         await observer.close()
 
 
-def test_enabled_receivables_api_rejects_missing_placeholder_and_short_tokens():
-    for token, message in (
-        ("", "is required"),
-        ("change-me", "placeholder"),
-        ("still-too-short", "at least 24"),
+def test_enabled_receivables_api_rejects_raw_missing_placeholder_and_bad_digests():
+    generated = eom_receivables_auth.generate_receivables_service_token()
+    for token, digest, message in (
+        (generated.token, generated.sha256, "Raw EOM receivables bearer token"),
+        ("", "", "digest is required"),
+        ("", "0" * 63, "lowercase SHA-256"),
+        ("", "0" * 64, "placeholder"),
+        ("", eom_receivables_auth._token_sha256("change-me"), "placeholder"),
     ):
         config = SimpleNamespace(
             receivables_api_enabled=True,
             receivables_service_token=token,
+            receivables_service_token_sha256=digest,
         )
         with pytest.raises(RuntimeError, match=message):
             receivables_auth.validate_receivables_api_config(config)
@@ -1696,9 +1701,11 @@ def test_enabled_receivables_api_rejects_missing_placeholder_and_short_tokens():
 
 @pytest.mark.asyncio
 async def test_receivables_api_is_fail_closed():
+    generated = eom_receivables_auth.generate_receivables_service_token()
     config = SimpleNamespace(
         receivables_api_enabled=True,
-        receivables_service_token="a-valid-service-token-for-tests",
+        receivables_service_token="",
+        receivables_service_token_sha256=generated.sha256,
     )
 
     with pytest.raises(HTTPException) as missing:
@@ -1714,7 +1721,7 @@ async def test_receivables_api_is_fail_closed():
 
     assert (
         await receivables_auth.require_receivables_api(
-            "Bearer a-valid-service-token-for-tests",
+            f"Bearer {generated.token}",
             config=config,
         )
         is None
@@ -1725,9 +1732,35 @@ async def test_receivables_api_is_fail_closed():
             config=SimpleNamespace(
                 receivables_api_enabled=False,
                 receivables_service_token="",
+                receivables_service_token_sha256="",
             ),
         )
     assert disabled.value.status_code == 503
+
+
+def test_legacy_invoicing_route_rejects_well_formed_mismatched_bearer():
+    configured = eom_receivables_auth.generate_receivables_service_token()
+    presented = eom_receivables_auth.generate_receivables_service_token()
+    while presented.token == configured.token:
+        presented = eom_receivables_auth.generate_receivables_service_token()
+    config = SimpleNamespace(
+        receivables_api_enabled=True,
+        receivables_service_token="",
+        receivables_service_token_sha256=configured.sha256,
+    )
+    app = FastAPI()
+    app.include_router(actions.router)
+    app.dependency_overrides[receivables_auth.get_receivables_api_config] = (
+        lambda: config
+    )
+
+    response = TestClient(app).get(
+        "/invoicing/INV-1",
+        headers={"Authorization": f"Bearer {presented.token}"},
+    )
+
+    assert response.status_code == 401
+    assert response.json()["detail"] == "Invalid bearer token"
 
 
 @pytest.mark.asyncio
@@ -2007,9 +2040,11 @@ async def test_real_postgres_http_and_mcp_entrypoints_use_supported_dependencies
         assert [item["invoice_id"] for item in suggestions] == [
             str(older_due_invoice)
         ]
+        generated = eom_receivables_auth.generate_receivables_service_token()
         config = SimpleNamespace(
             receivables_api_enabled=True,
-            receivables_service_token="a-valid-service-token-for-tests",
+            receivables_service_token="",
+            receivables_service_token_sha256=generated.sha256,
         )
         app = FastAPI()
         app.include_router(routes.router)
@@ -2041,7 +2076,7 @@ async def test_real_postgres_http_and_mcp_entrypoints_use_supported_dependencies
             response = await client.post(
                 "/receivables/payments",
                 headers={
-                    "Authorization": "Bearer a-valid-service-token-for-tests",
+                    "Authorization": f"Bearer {generated.token}",
                     "X-EOM-Actor": "Juan Canfield",
                     "Idempotency-Key": "http-payment-1",
                 },
