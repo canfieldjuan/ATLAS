@@ -142,6 +142,15 @@ Slice phase: vertical slice
         `tests/test_eom_lead_conversion.py` and
         `tests/test_eom_lead_conversion_integration.py` when
         `ATLAS_MIGRATION_TEST_DATABASE_URL` is configured.
+  - [ ] The execution lock and every lifecycle step of one booking share a
+        single pooled connection, so `max_size` concurrent bookings cannot
+        exhaust the pool by each reserving a lock connection plus a
+        transaction connection, settled by `tests/test_eom_lead_conversion.py`.
+  - [ ] OAuth token-acquisition failures before any Google Calendar event
+        request surface `request_phase='auth'` from `CalendarTool.create_event`
+        and record a terminal failed attempt instead of an ambiguous wedge,
+        while failures during conflict verification stay ambiguous, settled by
+        `tests/test_eom_lead_conversion.py`.
 - Reachability proof: the real FastAPI route
   `POST /api/v1/eom-funnel/leads/{contact_id}/estimate-bookings` is exercised
   with auth headers in `tests/test_eom_lead_conversion.py`, asserting both the
@@ -178,15 +187,21 @@ seam in the enumeration; otherwise write "N/A - no boundary change."
   `DatabaseCRMProvider` lead-stage/lifecycle predicates for review, booking,
   terminal failure, execution fencing, and handoff.
   - Replaced-path behaviors: Calendar create previously sent no caller-supplied
-    event ID; handoff previously admitted any terminal failed marker without
-    probing for an in-flight same-key execution.
+    event ID and reported every pre-POST failure under the create phase;
+    handoff previously admitted any terminal failed marker without probing for
+    an in-flight same-key execution.
   - Guard-relevant fields: lead `business_context_id`, `contact_type`,
     `lead_stage`, `status`, lifecycle `operation_key`/`event_type` sets, the
-    `eom-estimate-booking:execution:<booking_key>` advisory lock key.
+    `eom-estimate-booking:execution:<booking_key>` advisory lock key,
+    `ToolResult.data.request_phase` (`auth` / `create` /
+    `conflict_verification`).
   - Caller x input shape: the booking service is the only caller of
-    prepare/complete/markers and holds the execution lock for its whole span;
-    handoff probes the same lock key with a transaction-scoped try-lock and
-    rejects 409 while a non-booked same-key execution is in flight.
+    prepare/complete/markers, holds the execution lock for its whole span, and
+    runs every lifecycle step on the lock's single pooled connection via the
+    yielded execution-scoped provider; handoff probes the same lock key with a
+    transaction-scoped try-lock and rejects 409 while a non-booked same-key
+    execution is in flight; the classifier treats auth-phase failures as
+    proven-no-write terminal and conflict-verification failures as ambiguous.
 
 ### Deployed-config probing
 
@@ -264,14 +279,29 @@ preventing Customer/Site approval from racing the external Calendar side effect.
 The booking service additionally holds a session advisory lock on
 `eom-estimate-booking:execution:<booking_key>` for its whole
 prepare -> Calendar -> complete span, so at most one same-key execution talks
-to Calendar at a time. Handoff probes that lock with
-`pg_try_advisory_xact_lock` for every non-booked operation key it read: a
-failed probe means a same-key execution is still in flight and its terminal
-failed marker may yet be superseded by a stronger booked/ambiguous outcome, so
-handoff rejects with 409 until the executor releases the lock. The request
-model also rejects non-string `scheduled_start`/`scheduled_end` values before
-Pydantic's lax mode can coerce JSON epoch numbers into a spurious 1970-era
-appointment window.
+to Calendar at a time. The lock context yields an execution-scoped provider
+bound to the same connection that holds the lock, and every lifecycle step of
+that booking runs through it: one booking therefore consumes exactly one
+pooled connection, which matters because the EOM funnel pool has `max_size=5`
+and a lock-connection-plus-transaction-connection shape would let five
+concurrent bookings exhaust the pool and deadlock behind their own locks.
+Handoff probes the lock key with `pg_try_advisory_xact_lock` for every
+non-booked operation key it read: a failed probe means a same-key execution is
+still in flight and its terminal failed marker may yet be superseded by a
+stronger booked/ambiguous outcome, so handoff rejects with 409 until the
+executor releases the lock. The request model also rejects non-string
+`scheduled_start`/`scheduled_end` values before Pydantic's lax mode can coerce
+JSON epoch numbers into a spurious 1970-era appointment window.
+
+`CalendarTool.create_event` tracks a request phase across its lifetime:
+failures raised while acquiring the client or OAuth token surface
+`request_phase='auth'`, proving no Google Calendar event request was issued,
+and the booking classifier records them as terminal failures instead of
+ambiguity (a token outage must not wedge the lead). A token refresh after the
+create POST returned 401 is still pre-event-write, because the 401 response
+proves Google rejected that create. Failures during get-after-conflict
+verification keep `request_phase='conflict_verification'` and stay ambiguous,
+because the 409 already established the event may exist.
 
 Migration `357_eom_estimate_booking_operation_key_index.sql` adds an additive
 partial index with `operation_key` as the leading column for estimate-booking
@@ -352,26 +382,31 @@ full stack):
 - `python -m pytest -q tests/test_audit_plan_doc.py tests/test_audit_plan_code_consistency.py` -- 26 passed.
 - ASCII scan of every touched Python file -- no non-ASCII bytes.
 
+Pool-exhaustion and auth-phase reverification (same torch caveat as above):
+
+- `python -m pytest tests/test_eom_lead_conversion.py -q` -- 77 passed, 3 pre-existing torch-import failures.
+- `ATLAS_MIGRATION_TEST_DATABASE_URL=postgresql://postgres@localhost:5433/atlas_migration_tests python -m pytest tests/test_eom_lead_conversion_integration.py tests/test_migrations_runner.py -q` -- 48 passed against disposable Postgres 16, 3 pre-existing torch-import failures.
+
 ## Estimated diff size
 
 | File | LOC |
 |---|---:|
 | `.github/workflows/atlas_eom_lead_pipeline_checks.yml` | 8 |
 | `atlas_brain/eom_api/funnel.py` | 98 |
-| `atlas_brain/services/crm_provider.py` | 875 |
-| `atlas_brain/services/eom_estimate_booking.py` | 303 |
+| `atlas_brain/services/crm_provider.py` | 881 |
+| `atlas_brain/services/eom_estimate_booking.py` | 323 |
 | `atlas_brain/storage/migrations/356_eom_lead_review_queue_booked_stage.sql` | 27 |
 | `atlas_brain/storage/migrations/357_eom_estimate_booking_operation_key_index.sql` | 26 |
-| `atlas_brain/tools/calendar.py` | 131 |
-| `plans/PR-EOM-Estimate-Booking-CurrentMain.md` | 537 |
+| `atlas_brain/tools/calendar.py` | 141 |
+| `plans/PR-EOM-Estimate-Booking-CurrentMain.md` | 590 |
 | `render.eom.yaml` | 10 |
 | `requirements.eom.txt` | 1 |
-| `tests/test_eom_lead_conversion.py` | 963 |
+| `tests/test_eom_lead_conversion.py` | 1139 |
 | `tests/test_eom_lead_conversion_integration.py` | 857 |
 | `tests/test_eom_lead_pipeline_integration.py` | 7 |
 | `tests/test_eom_render_profile.py` | 38 |
 | `tests/test_migrations_runner.py` | 66 |
-| **Total** | **3947** |
+| **Total** | **4212** |
 
 ## Cold diff reconstruction
 

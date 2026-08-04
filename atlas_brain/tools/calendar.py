@@ -607,7 +607,10 @@ class CalendarTool:
                 message="Calendar not configured. Run calendar setup first.",
             )
 
-        request_phase = "create"
+        # "auth" marks failures raised before any Google Calendar event
+        # request is issued (client setup and OAuth token acquisition), so
+        # the booking classifier can prove no event write exists.
+        request_phase = "auth"
         try:
             client = await self._ensure_client()
             headers = await self._get_auth_header()
@@ -629,14 +632,19 @@ class CalendarTool:
                 event_body["description"] = description
 
             url = f"{CALENDAR_API_BASE}/calendars/{cal_id}/events"
+            request_phase = "create"
             response = await client.post(url, headers=headers, json=event_body)
 
-            # Retry once on 401 with fresh token
+            # Retry once on 401 with fresh token. The 401 response proves
+            # Google rejected the create, so a token-refresh failure here is
+            # still a pre-event-write ("auth") outcome.
             if response.status_code == 401:
                 logger.warning("Calendar create 401 -- forcing token refresh")
                 self._invalidate_access_token()
+                request_phase = "auth"
                 headers = await self._get_auth_header(force_refresh=True)
                 headers["Content-Type"] = "application/json"
+                request_phase = "create"
                 response = await client.post(url, headers=headers, json=event_body)
 
             if response.status_code == 409 and event_id:
@@ -746,6 +754,7 @@ class CalendarTool:
             return ToolResult(
                 success=False,
                 error="EXECUTION_ERROR",
+                data={"request_phase": request_phase},
                 message="Calendar event creation failed",
             )
 

@@ -105,6 +105,12 @@ def _calendar_failure_proves_no_write(result: Any) -> bool:
     data = result.data if isinstance(result.data, dict) else {}
     if data.get("request_phase") == "conflict_verification":
         return False
+    if data.get("request_phase") == "auth":
+        # The failure happened while acquiring the OAuth token, before any
+        # Google Calendar event request was issued, so no event write can
+        # exist; recording ambiguity would wedge the lead behind a token
+        # outage with no reconciliation surface.
+        return True
     if result.error in {"TOOL_DISABLED", "NOT_CONFIGURED"}:
         # CalendarTool returns these before issuing any Google request, so no
         # event can exist; recording ambiguity here would wedge the lead with
@@ -138,12 +144,7 @@ def _booking_result(result: dict[str, Any]) -> dict[str, Any]:
     }
 
 
-async def schedule_eom_estimate_booking(
-    crm: Any,
-    calendar: Any,
-    command: EOMEstimateBooking,
-) -> dict[str, Any]:
-    """Prepare, create the Calendar event, then complete the CRM transition."""
+def _booking_lifecycle_callables(crm: Any) -> tuple[Any, Any, Any, Any]:
     preparer = getattr(crm, "prepare_eom_estimate_booking", None)
     completer = getattr(crm, "complete_eom_estimate_booking", None)
     marker = getattr(crm, "mark_eom_estimate_booking_calendar_ambiguous", None)
@@ -157,6 +158,16 @@ async def schedule_eom_estimate_booking(
         raise RuntimeError(
             "Configured CRM provider cannot schedule EOM estimate bookings"
         )
+    return preparer, completer, marker, failure_marker
+
+
+async def schedule_eom_estimate_booking(
+    crm: Any,
+    calendar: Any,
+    command: EOMEstimateBooking,
+) -> dict[str, Any]:
+    """Prepare, create the Calendar event, then complete the CRM transition."""
+    _booking_lifecycle_callables(crm)
     execution_lock = getattr(crm, "eom_estimate_booking_execution_lock", None)
     if not callable(execution_lock):
         raise RuntimeError(
@@ -165,8 +176,17 @@ async def schedule_eom_estimate_booking(
 
     # The lock spans prepare -> Calendar -> complete so customer handoff can
     # detect an in-flight same-key execution and stay fenced until the
-    # strongest outcome for this key is on the ledger.
-    async with execution_lock(booking_key=command.booking_key):
+    # strongest outcome for this key is on the ledger. The lock may yield an
+    # execution-scoped provider bound to its own session connection; running
+    # the lifecycle steps through that provider keeps the whole booking on
+    # one pooled connection, so max_size concurrent bookings cannot exhaust
+    # the pool by each reserving a lock connection plus a transaction
+    # connection.
+    async with execution_lock(booking_key=command.booking_key) as execution_crm:
+        scoped_crm = execution_crm if execution_crm is not None else crm
+        preparer, completer, marker, failure_marker = _booking_lifecycle_callables(
+            scoped_crm
+        )
         return await _run_estimate_booking(
             calendar=calendar,
             command=command,

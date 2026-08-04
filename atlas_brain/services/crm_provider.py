@@ -1339,12 +1339,18 @@ class DatabaseCRMProvider:
     async def eom_estimate_booking_execution_lock(self, *, booking_key: str):
         """Serialize one booking key's external Calendar attempt.
 
-        Held on a dedicated session connection across the whole
+        The session advisory lock is held across the whole
         prepare -> Calendar -> complete span so that
         finalize_eom_customer_handoff can detect an in-flight same-key
         execution with pg_try_advisory_xact_lock: a terminal failed marker
         alone must not admit handoff while a concurrent same-key call could
         still produce a stronger (booked/ambiguous) outcome.
+
+        Yields an execution-scoped provider bound to the same connection
+        that holds the lock. The whole booking must run on that one pooled
+        connection: reserving the lock on one connection while the
+        lifecycle steps acquire a second would let max_size concurrent
+        bookings exhaust the pool and deadlock behind their own locks.
         """
         from .eom_lead_conversion import EOMLeadConversionError
 
@@ -1372,7 +1378,7 @@ class DatabaseCRMProvider:
                     409,
                     "EOM estimate booking is already executing for this key",
                 )
-            yield
+            yield DatabaseCRMProvider(pool=conn)
         finally:
             if acquired:
                 await conn.fetchval(

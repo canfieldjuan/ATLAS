@@ -639,6 +639,128 @@ async def test_private_estimate_booking_pre_request_calendar_failure_is_terminal
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("auth_error", ["EXECUTION_ERROR", "API_ERROR", "AUTH_ERROR"])
+async def test_private_estimate_booking_auth_phase_failure_is_terminal(auth_error):
+    """OAuth token acquisition happens before any Google Calendar event
+    request, so a token timeout/5xx/refresh failure proves no event write
+    exists: the booking must record a terminal failed attempt, never an
+    ambiguous wedge that outlives the token outage."""
+    data: dict[str, object] = {"request_phase": "auth"}
+    if auth_error == "API_ERROR":
+        data["status_code"] = 503
+    crm = _CRM()
+    calendar = _Calendar(
+        success=False,
+        error=auth_error,
+        message="OAuth token endpoint unavailable",
+        data=data,
+    )
+    app = _app(crm, _enabled_config(), calendar=calendar)
+    contact_id = uuid4()
+    booking_key = f"office-booking-{uuid4().hex}"
+
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=app), base_url="http://test"
+    ) as client:
+        response = await client.post(
+            f"/eom-funnel/leads/{contact_id}/estimate-bookings",
+            headers=_headers(approval_key=booking_key),
+            json=_booking_payload(),
+        )
+
+    assert response.status_code == 502
+    assert crm.ambiguous_calls == []
+    assert len(crm.failed_calls) == 1
+    assert crm.failed_calls[0]["calendar_error"] == auth_error
+
+
+@pytest.mark.asyncio
+async def test_private_estimate_booking_runs_lifecycle_on_execution_scoped_provider():
+    """The execution lock may yield a provider bound to the lock's own
+    session connection; every lifecycle step must run through it so one
+    booking consumes exactly one pooled connection instead of reserving a
+    lock connection plus a transaction connection."""
+
+    class _ScopingCRM(_CRM):
+        def __init__(self) -> None:
+            super().__init__()
+            self.scoped = _CRM()
+
+        @asynccontextmanager
+        async def eom_estimate_booking_execution_lock(self, *, booking_key: str):
+            self.execution_lock_keys.append(booking_key)
+            yield self.scoped
+
+    crm = _ScopingCRM()
+    calendar = _Calendar()
+    app = _app(crm, _enabled_config(), calendar=calendar)
+    contact_id = uuid4()
+    booking_key = f"office-booking-{uuid4().hex}"
+
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=app), base_url="http://test"
+    ) as client:
+        response = await client.post(
+            f"/eom-funnel/leads/{contact_id}/estimate-bookings",
+            headers=_headers(approval_key=booking_key),
+            json=_booking_payload(),
+        )
+
+    assert response.status_code == 201
+    assert crm.execution_lock_keys == [booking_key]
+    assert crm.prepare_calls == []
+    assert crm.complete_calls == []
+    assert len(crm.scoped.prepare_calls) == 1
+    assert len(crm.scoped.complete_calls) == 1
+
+
+@pytest.mark.asyncio
+async def test_database_provider_execution_lock_uses_one_pool_connection():
+    """The EOM funnel pool has max_size=5; if the lock reserved one
+    connection and the lifecycle steps acquired a second, five concurrent
+    bookings would exhaust the pool and deadlock behind their own locks. The
+    lock must yield a provider bound to the lock's own connection."""
+    from atlas_brain.services.crm_provider import DatabaseCRMProvider
+
+    class _LockConn:
+        def __init__(self) -> None:
+            self.statements: list[tuple[str, tuple[object, ...]]] = []
+
+        async def fetchval(self, query: str, *args: object):
+            self.statements.append((query.strip(), args))
+            return True
+
+    class _Pool:
+        def __init__(self) -> None:
+            self.conn = _LockConn()
+            self.acquire_count = 0
+            self.released: list[object] = []
+
+        async def acquire(self):
+            self.acquire_count += 1
+            return self.conn
+
+        async def release(self, conn):
+            self.released.append(conn)
+
+    pool = _Pool()
+    provider = DatabaseCRMProvider(pool=pool)
+    booking_key = f"office-booking-{uuid4().hex}"
+
+    async with provider.eom_estimate_booking_execution_lock(
+        booking_key=booking_key
+    ) as scoped:
+        assert isinstance(scoped, DatabaseCRMProvider)
+        assert scoped._get_pool() is pool.conn
+        assert pool.acquire_count == 1
+
+    assert pool.acquire_count == 1
+    assert pool.released == [pool.conn]
+    assert "pg_try_advisory_lock" in pool.conn.statements[0][0]
+    assert "pg_advisory_unlock" in pool.conn.statements[-1][0]
+
+
+@pytest.mark.asyncio
 async def test_private_estimate_booking_reuses_prepared_calendar_snapshot():
     class _SnapshotCRM(_CRM):
         async def prepare_eom_estimate_booking(self, **kwargs):
@@ -1118,6 +1240,60 @@ async def test_calendar_create_event_propagates_http_status_for_failure_classifi
     assert result.error == "API_ERROR"
     assert result.data == {"request_phase": "create", "status_code": 404}
     assert result.message == "Calendar API error: 404"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "raised, expected_error",
+    [
+        ("http_503", "API_ERROR"),
+        ("timeout", "EXECUTION_ERROR"),
+        ("auth", "AUTH_ERROR"),
+    ],
+)
+async def test_calendar_create_event_marks_auth_phase_before_any_event_request(
+    monkeypatch, raised, expected_error
+):
+    """A token-endpoint failure happens before any Google Calendar event
+    request, so create_event must surface request_phase='auth' for the
+    booking classifier to prove no event write exists."""
+    tool = CalendarTool()
+    tool._config = SimpleNamespace(
+        calendar_enabled=True, calendar_refresh_token="refresh"
+    )
+    client = _CalendarClient(
+        post_response=_CalendarResponse(status_code=200, payload={"id": "unused"})
+    )
+
+    async def ensure_client():
+        return client
+
+    async def auth_header(**_kwargs):
+        if raised == "http_503":
+            raise httpx.HTTPStatusError(
+                "token endpoint error",
+                request=httpx.Request("POST", "https://oauth2.example/token"),
+                response=httpx.Response(503),
+            )
+        if raised == "timeout":
+            raise RuntimeError("token endpoint timed out")
+        raise CalendarAuthError("refresh token rejected")
+
+    monkeypatch.setattr(tool, "_ensure_client", ensure_client)
+    monkeypatch.setattr(tool, "_get_auth_header", auth_header)
+
+    result = await tool.create_event(
+        summary="Estimate",
+        start=datetime.fromisoformat("2026-08-04T14:00:00-05:00"),
+        end=datetime.fromisoformat("2026-08-04T15:00:00-05:00"),
+        calendar_id="estimate-calendar",
+        event_id="eomestabc123",
+    )
+
+    assert result.success is False
+    assert result.error == expected_error
+    assert result.data["request_phase"] == "auth"
+    assert client.post_calls == []
 
 
 @pytest.mark.asyncio
