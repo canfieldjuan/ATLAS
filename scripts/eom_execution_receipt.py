@@ -137,12 +137,9 @@ class EomExecutionReceipt:
         if mode not in TOOL_MODES.get(tool, set()):
             raise ValueError(f"unsupported EOM receipt tool/mode: {tool}/{mode}")
         self.receipt_dir = Path(receipt_dir).expanduser().resolve()
-        created = False
-        try:
+        created = not self.receipt_dir.exists()
+        if created:
             self.receipt_dir.mkdir(mode=0o700, parents=True, exist_ok=False)
-            created = True
-        except FileExistsError:
-            pass
         if not self.receipt_dir.is_dir():
             raise ValueError("receipt directory must be a directory")
         if created:

@@ -167,19 +167,19 @@ Parked hardening: none.
 ## Verification
 
 - `python -m py_compile scripts/eom_execution_receipt.py scripts/import_eom_customers_live.py scripts/sync_eom_portal_customers.py tests/test_eom_execution_receipts.py tests/test_sync_eom_portal_customers.py` — passed.
-- `python -m pytest tests/test_eom_execution_receipts.py tests/test_eom_live_calendar_import.py tests/test_sync_eom_portal_customers.py -q` — 117 passed.
+- `python -m pytest tests/test_eom_execution_receipts.py tests/test_eom_live_calendar_import.py tests/test_sync_eom_portal_customers.py -q` — 118 passed.
 - `python -m ruff check scripts/eom_execution_receipt.py scripts/import_eom_customers_live.py scripts/sync_eom_portal_customers.py tests/test_eom_execution_receipts.py tests/test_sync_eom_portal_customers.py` — passed.
-- `python scripts/maturity_sweep.py scripts --tests-root tests --baseline tests/maturity_sweep/baseline_scripts.json --min-score 8 --top 25` — passed.
+- `python scripts/maturity_sweep.py scripts --tests-root tests --baseline tests/maturity_sweep/baseline_scripts.json --min-score 8 --sensitive-glob '**/*' --top 25` — passed.
 
 ## Estimated diff size
 
 | File | LOC |
 |---|---:|
 | `docs/EOM_RECONCILIATION_RECEIPTS.md` | 31 |
-| `plans/PR-EOM-Execution-Receipts-V2.md` | 182 |
-| `scripts/eom_execution_receipt.py` | 293 |
+| `plans/PR-EOM-Execution-Receipts-V2.md` | 185 |
+| `scripts/eom_execution_receipt.py` | 290 |
 | `scripts/import_eom_customers_live.py` | 184 |
-| `scripts/sync_eom_portal_customers.py` | 153 |
+| `scripts/sync_eom_portal_customers.py` | 151 |
 | `tests/test_eom_execution_receipts.py` | 310 |
-| `tests/test_sync_eom_portal_customers.py` | 62 |
-| **Total** | **1218** |
+| `tests/test_sync_eom_portal_customers.py` | 137 |
+| **Total** | **1288** |

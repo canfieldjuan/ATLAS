@@ -645,55 +645,61 @@ async def demote_unmatched(pool, matched_ids: set, apply: bool,
     calendars (owner veto rule). Only rows this pipeline claimed as active
     (calendar_import / portal_sync provenance) are eligible; leads, manual,
     web, and every other source are never touched."""
-    rows = await pool.fetch(
-        """
-        SELECT id, full_name, tags, phone, email, address FROM contacts
-        WHERE business_context_id = $1
-          AND contact_type = 'customer'
-          AND status = 'active'
-          AND source = ANY($2::text[])
-        ORDER BY lower(full_name)
-        """,
-        EOM_CONTEXT_ID,
-        list(DEMOTABLE_SOURCES),
-    )
+    rows = []
     demoted = 0
     kept = 0
-    for row in rows:
-        if str(row["id"]) in matched_ids:
-            continue
-        if on_calendar(row, guard_keys):
-            kept += 1
-            print(f"  KEPT (on your calendar, missing from portal): "
-                  f"{row['full_name']} -- add them to the portal")
-            continue
-        print(f"  DEMOTE (past customer): {row['full_name']}")
-        if not apply:
-            demoted += 1
-            continue
-        tags = sorted(set(row["tags"] or []) | {"past_customer"})
-        result = await _await_receipted_mutation(
-            receipt,
-            pool.fetchrow(
-                """
-                UPDATE contacts
-                   SET status = 'inactive', tags = $2, updated_at = NOW()
-                 WHERE id = $1
-                   AND business_context_id = $3
-                   AND contact_type = 'customer'
-                   AND status = 'active'
-                   AND source = ANY($4::text[])
-                RETURNING id
-                """,
-                str(row["id"]),
-                tags,
-                EOM_CONTEXT_ID,
-                list(DEMOTABLE_SOURCES),
-            ),
-            changed_contact_id_from=lambda row: row and row["id"],
+    try:
+        rows = await pool.fetch(
+            """
+            SELECT id, full_name, tags, phone, email, address FROM contacts
+            WHERE business_context_id = $1
+              AND contact_type = 'customer'
+              AND status = 'active'
+              AND source = ANY($2::text[])
+            ORDER BY lower(full_name)
+            """,
+            EOM_CONTEXT_ID,
+            list(DEMOTABLE_SOURCES),
         )
-        if result is not None:
-            demoted += 1
+        for row in rows:
+            if str(row["id"]) in matched_ids:
+                continue
+            if on_calendar(row, guard_keys):
+                kept += 1
+                print(f"  KEPT (on your calendar, missing from portal): "
+                      f"{row['full_name']} -- add them to the portal")
+                continue
+            print(f"  DEMOTE (past customer): {row['full_name']}")
+            if not apply:
+                demoted += 1
+                continue
+            tags = sorted(set(row["tags"] or []) | {"past_customer"})
+            result = await _await_receipted_mutation(
+                receipt,
+                pool.fetchrow(
+                    """
+                    UPDATE contacts
+                       SET status = 'inactive', tags = $2, updated_at = NOW()
+                     WHERE id = $1
+                       AND business_context_id = $3
+                       AND contact_type = 'customer'
+                       AND status = 'active'
+                       AND source = ANY($4::text[])
+                    RETURNING id
+                    """,
+                    str(row["id"]),
+                    tags,
+                    EOM_CONTEXT_ID,
+                    list(DEMOTABLE_SOURCES),
+                ),
+                changed_contact_id_from=lambda row: row and row["id"],
+            )
+            if result is not None:
+                demoted += 1
+    except Exception:
+        if receipt is not None:
+            receipt.record_demotions(demoted=demoted, eligible=len(rows), kept=kept)
+        raise
     if kept:
         print(f"\n  {kept} calendar-active customer(s) kept; reconcile them "
               "in the portal.")
@@ -822,9 +828,15 @@ async def run(args, receipt=None) -> int:
         if guard_keys is None:
             demoted, eligible = 0, 0
         else:
-            demoted, eligible = await demote_unmatched(
-                pool, matched_ids, args.apply, guard_keys, receipt=receipt
-            )
+            try:
+                demoted, eligible = await demote_unmatched(
+                    pool, matched_ids, args.apply, guard_keys, receipt=receipt
+                )
+            except Exception:
+                counts["errors"] += 1
+                if receipt is not None:
+                    receipt.record_outcome_counts(counts)
+                raise
     if receipt is not None:
         receipt.record_outcome_counts(counts)
 

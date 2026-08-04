@@ -9,10 +9,13 @@ tested at the seam (env token short-circuits any prompt; failures exit).
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import sys
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from types import SimpleNamespace
+
+import pytest
 
 REPO = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(REPO / "scripts"))
@@ -930,3 +933,76 @@ def test_demotion_dry_run_counts_without_writing():
         demote_unmatched(pool, set(), apply=False, guard_keys=NO_GUARD))
     assert (demoted, eligible) == (1, 1)
     assert pool.updates == []
+
+
+def test_demotion_failure_persists_partial_receipt_before_reraising(monkeypatch):
+    import httpx
+    import atlas_brain.services.crm_provider as crm_provider_mod
+    import atlas_brain.storage.database as database_mod
+    import sync_eom_portal_customers as sync_mod
+
+    class Client:
+        def __init__(self, **_kwargs):
+            pass
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_args):
+            return False
+
+    class Pool(SyncPool):
+        async def initialize(self):
+            return None
+
+        async def fetchrow(self, sql, *args):
+            if "SET status = 'inactive'" in sql and self.updates:
+                raise RuntimeError("second demotion failed")
+            return await super().fetchrow(sql, *args)
+
+    class Receipt:
+        def __init__(self):
+            self.changed = []
+            self.counts = []
+            self.demotions = []
+
+        @contextlib.asynccontextmanager
+        async def mutation_boundary(self):
+            yield
+
+        def record_changed_contact_id(self, contact_id):
+            self.changed.append(str(contact_id))
+
+        def record_outcome_counts(self, counts):
+            self.counts.append(dict(counts))
+
+        def record_demotions(self, **totals):
+            self.demotions.append(dict(totals))
+
+    async def guard_keys():
+        return NO_GUARD
+
+    pool = Pool(demotion_rows=[
+        {"id": "gone", "full_name": "Moved Away", "tags": []},
+        {"id": "also-gone", "full_name": "Also Gone", "tags": []},
+    ])
+    receipt = Receipt()
+    monkeypatch.setattr(httpx, "Client", Client)
+    monkeypatch.setattr(sync_mod, "portal_login", lambda *_args: "token")
+    monkeypatch.setattr(sync_mod, "fetch_portal_customers", lambda *_args: [])
+    monkeypatch.setattr(sync_mod, "fetch_calendar_guard_keys", guard_keys)
+    monkeypatch.setattr(crm_provider_mod, "get_crm_provider", StubCRM)
+    previous_pool = database_mod._db_pool
+    database_mod._db_pool = pool
+    try:
+        with pytest.raises(RuntimeError, match="second demotion failed"):
+            asyncio.run(sync_mod.run(
+                SimpleNamespace(apply=True, base_url="https://example.invalid"),
+                receipt=receipt,
+            ))
+    finally:
+        database_mod._db_pool = previous_pool
+
+    assert receipt.changed == ["gone"]
+    assert receipt.demotions[-1] == {"demoted": 1, "eligible": 2, "kept": 0}
+    assert receipt.counts[-1]["errors"] == 1
