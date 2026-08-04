@@ -9,6 +9,7 @@ import os
 import stat
 import subprocess
 import uuid
+from collections.abc import AsyncIterator
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Mapping
@@ -64,9 +65,12 @@ def _git_sha_for(path: Path) -> str:
 
 def _sha256_file(path: Path) -> str:
     digest = hashlib.sha256()
-    with path.open("rb") as handle:
-        for chunk in iter(lambda: handle.read(1024 * 1024), b""):
-            digest.update(chunk)
+    try:
+        with path.open("rb") as handle:
+            for chunk in iter(lambda: handle.read(1024 * 1024), b""):
+                digest.update(chunk)
+    except OSError as exc:
+        raise RuntimeError(f"failed to hash receipt script: {path}") from exc
     return digest.hexdigest()
 
 
@@ -98,7 +102,10 @@ def _write_json_exclusive(path: Path, payload: Mapping[str, object]) -> None:
 
 
 def _fsync_directory(path: Path) -> None:
-    fd = os.open(path, os.O_RDONLY)
+    try:
+        fd = os.open(path, os.O_RDONLY)
+    except OSError as exc:
+        raise RuntimeError(f"failed to open receipt directory for fsync: {path}") from exc
     try:
         os.fsync(fd)
     finally:
@@ -193,7 +200,7 @@ class EomExecutionReceipt:
         self._persist_in_progress()
 
     @contextlib.asynccontextmanager
-    async def mutation_boundary(self):
+    async def mutation_boundary(self) -> AsyncIterator[None]:
         """Mark the receipt indeterminate if cancellation interrupts a mutation."""
         try:
             yield
@@ -260,8 +267,8 @@ def run_receipted(receipt: EomExecutionReceipt | None, operation) -> int:
         if receipt is not None:
             try:
                 receipt.finalize(exit_code_for_exception(exc))
-            except IndeterminateMutation:
-                pass
+            except IndeterminateMutation as indeterminate:
+                indeterminate.add_note("left in-progress receipt for operator review")
         raise
     if receipt is not None:
         receipt.finalize(exit_code)
