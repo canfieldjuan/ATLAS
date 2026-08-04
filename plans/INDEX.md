@@ -1,6 +1,6 @@
 # Plan archive index
 
-1506 archived plan doc(s). Merged plan docs are moved under `archive/` and listed below; once the archive sweep has run, the `plans/` root holds only in-flight slices.
+1507 archived plan doc(s). Merged plan docs are moved under `archive/` and listed below; once the archive sweep has run, the `plans/` root holds only in-flight slices.
 
 - [PR-ASR-Pip-Audit-Egg-Fragment](archive/PR-ASR-Pip-Audit-Egg-Fragment.md) - lane: security/workflow | phase: Production hardening
 - [PR-ASR-Requirements-Audit-Pin](archive/PR-ASR-Requirements-Audit-Pin.md) - lane: security/workflow | phase: Production hardening
@@ -1296,6 +1296,7 @@
 - [PR-Npm-Security-Patch-Batch](archive/PR-Npm-Security-Patch-Batch.md) - lane: security/dependencies | phase: Production hardening
 - [PR-Open-Input-Evidence-Gate-Slice](archive/PR-Open-Input-Evidence-Gate-Slice.md) - lane: workflow/review-discipline | phase: Workflow/process
 - [PR-Open-PR-Final-Admission-Gate](archive/PR-Open-PR-Final-Admission-Gate.md) - lane: workflow/open-pr-final-admission | phase: Workflow/process
+- [PR-Open-Ready-Draft-Consent-Guard](archive/PR-Open-Ready-Draft-Consent-Guard.md) - lane: dev-workflow/open-ready-draft-consent | phase: Workflow/process
 - [PR-OptionA-1](archive/PR-OptionA-1.md)
 - [PR-OptionA-2](archive/PR-OptionA-2.md)
 - [PR-OptionA-3](archive/PR-OptionA-3.md)
