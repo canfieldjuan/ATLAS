@@ -35,6 +35,12 @@ refresh_base_ref() {
     fi
 }
 
+require_pr_branch_name() {
+    local branch
+    branch="$(git branch --show-current)"
+    "$python_bin" scripts/check_pr_branch_name.py --branch "$branch" "$body_file"
+}
+
 if [ "$#" -lt 1 ] || [ "${1:-}" = "--help" ] || [ "${1:-}" = "-h" ]; then
     usage
     exit 2
@@ -66,6 +72,7 @@ if has_managed_pre_push_hook && [ "${ATLAS_SKIP_LOCAL_PR_REVIEW:-}" != "1" ]; th
 fi
 
 if [ "${ATLAS_PUSH_PR_DRY_RUN:-}" = "1" ]; then
+    require_pr_branch_name
     echo "DRY RUN: git fetch --quiet origin main"
     if [ "$run_wrapper_review" -eq 1 ]; then
         echo "DRY RUN: ATLAS_CURRENT_PR_BODY_FILE=$body_file bash scripts/local_pr_review.sh --current-pr-body-file $body_file"
@@ -76,6 +83,7 @@ if [ "${ATLAS_PUSH_PR_DRY_RUN:-}" = "1" ]; then
     exit 0
 fi
 
+require_pr_branch_name
 refresh_base_ref
 
 body_audit_args=(--base-ref origin/main)

@@ -15,6 +15,7 @@ AUDIT_SCRIPT = REPO_ROOT / "scripts" / "audit_pr_body.py"
 AI_RECONCILIATION_SCRIPT = REPO_ROOT / "scripts" / "audit_ai_reconciliation.py"
 CHANGE_POLICY_SCRIPT = REPO_ROOT / "scripts" / "_pr_change_policy.py"
 LOCAL_REVIEW_SCRIPT = REPO_ROOT / "scripts" / "local_pr_review.sh"
+BRANCH_NAME_SCRIPT = REPO_ROOT / "scripts" / "check_pr_branch_name.py"
 
 
 def test_open_pr_create_passes_body_via_stdin_not_path(tmp_path: Path) -> None:
@@ -66,6 +67,19 @@ def test_open_pr_existing_pr_rejects_create_only_args(tmp_path: Path) -> None:
 
     assert result.returncode == 2
     assert "PR already exists" in result.stderr
+
+
+def test_open_pr_rejects_branch_that_does_not_match_plan_before_fetch(tmp_path: Path) -> None:
+    repo, body, env, log, stdin_capture = _ready(tmp_path, view_exit=1)
+    _git(repo, "switch", "-c", "claude/pr-other")
+
+    result = _run(repo, env, body, "--title", "Workflow wrapper")
+
+    assert result.returncode == 2
+    assert "does not match PR plan branch" in result.stderr
+    assert "Refreshing origin/main" not in result.stdout
+    assert not log.exists()
+    assert not stdin_capture.exists()
 
 
 @pytest.mark.parametrize(
@@ -284,10 +298,15 @@ def test_open_pr_draft_admission_matches_gh_argv_grammar(tmp_path: Path) -> None
     repo = tmp_path / "grammar-repo"
     (repo / "scripts").mkdir(parents=True)
     copy2(SCRIPT, repo / "scripts" / "open_pr.sh")
+    copy2(BRANCH_NAME_SCRIPT, repo / "scripts" / "check_pr_branch_name.py")
     subprocess.run(
         ["git", "init", "--initial-branch", "main"],
         cwd=repo, check=True, capture_output=True, text=True,
     )
+    (repo / "README.md").write_text("base\n", encoding="utf-8")
+    _git(repo, "add", ".")
+    _git(repo, "commit", "-qm", "base")
+    _git(repo, "switch", "-c", "claude/pr-test")
     body = tmp_path / "grammar-body.md"
     body.write_text(_valid_body(), encoding="utf-8")
     env = {**os.environ, "PYTHONDONTWRITEBYTECODE": "1"}
@@ -590,6 +609,7 @@ def _write_fixture_repo(
         copy2(AUDIT_SCRIPT, repo / "scripts" / "audit_pr_body.py")
         copy2(AI_RECONCILIATION_SCRIPT, repo / "scripts" / "audit_ai_reconciliation.py")
         copy2(CHANGE_POLICY_SCRIPT, repo / "scripts" / "_pr_change_policy.py")
+        copy2(BRANCH_NAME_SCRIPT, repo / "scripts" / "check_pr_branch_name.py")
         (repo / "scripts" / "check_session_pr_ownership.py").write_text(
             """#!/usr/bin/env python3
 from __future__ import annotations
