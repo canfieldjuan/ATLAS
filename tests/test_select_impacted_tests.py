@@ -162,6 +162,28 @@ def test_global_files_escalate_to_full(tmp_path, path):
     ),
     ("ci/gates.yml", ["tests/test_security_guardrails_workflow.py"]),
     (
+        "scripts/audit_ai_reconciliation.py",
+        [
+            "tests/test_audit_ai_reconciliation.py",
+            "tests/test_audit_pr_body.py",
+            "tests/test_check_ai_reconciliation_live.py",
+        ],
+    ),
+    (
+        "scripts/audit_pr_body.py",
+        [
+            "tests/test_audit_pr_body.py",
+            "tests/test_check_ai_reconciliation_live.py",
+            "tests/test_local_pr_review.py",
+            "tests/test_open_pr_wrapper.py",
+            "tests/test_push_pr_wrapper.py",
+        ],
+    ),
+    (
+        "scripts/check_ai_reconciliation_live.py",
+        ["tests/test_check_ai_reconciliation_live.py"],
+    ),
+    (
         "scripts/check_required_status_checks.py",
         ["tests/test_security_guardrails_workflow.py"],
     ),
@@ -177,7 +199,15 @@ def test_global_files_escalate_to_full(tmp_path, path):
         "scripts/check_unit_gate.py",
         ["tests/test_check_unit_gate.py", "tests/test_select_impacted_tests.py"],
     ),
+    (
+        "extracted/_shared/scripts/check_ascii_python.sh",
+        ["tests/test_pre_push_audit.py"],
+    ),
+    ("scripts/local_pr_review.sh", ["tests/test_local_pr_review.py"]),
+    ("scripts/open_pr.sh", ["tests/test_open_pr_wrapper.py"]),
+    ("scripts/pre_push_audit.sh", ["tests/test_pre_push_audit.py"]),
     ("scripts/pr_watcher.py", ["tests/test_pr_watcher.py"]),
+    ("scripts/push_pr.sh", ["tests/test_push_pr_wrapper.py"]),
     ("scripts/select_impacted_tests.py", ["tests/test_select_impacted_tests.py"]),
     ("scripts/watch_owned_pr.sh", ["tests/test_watch_owned_pr.py"]),
 ])

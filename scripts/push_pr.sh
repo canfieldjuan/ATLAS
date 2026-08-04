@@ -4,6 +4,7 @@
 set -euo pipefail
 
 cd "$(git rev-parse --show-toplevel)"
+python_bin="${PYTHON:-python3}"
 
 usage() {
     cat <<'EOF'
@@ -81,7 +82,7 @@ body_audit_args=(--base-ref origin/main)
 if [ -n "${ATLAS_CURRENT_PR_AUTHOR:-}" ]; then
     body_audit_args+=(--pr-author "$ATLAS_CURRENT_PR_AUTHOR")
 fi
-python scripts/audit_pr_body.py "${body_audit_args[@]}" "$body_file"
+"$python_bin" scripts/audit_pr_body.py "${body_audit_args[@]}" "$body_file"
 
 if [ "$run_wrapper_review" -eq 1 ]; then
     echo "Running local PR review with PR body: $body_file"

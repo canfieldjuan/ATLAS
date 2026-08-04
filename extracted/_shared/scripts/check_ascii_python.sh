@@ -8,9 +8,16 @@ fi
 
 PRODUCT_DIR="$1"
 ROOT_DIR="${ATLAS_AUDIT_REPO_ROOT:-$(cd "$(dirname "${BASH_SOURCE[0]}")/../../.." && pwd)}"
+python_bin="${PYTHON:-python3}"
 cd "$ROOT_DIR"
 
-mapfile -t files < <(python - "$PRODUCT_DIR" <<'PY'
+files_tmp="$(mktemp)"
+cleanup() {
+  rm -f "$files_tmp"
+}
+trap cleanup EXIT
+
+if ! "$python_bin" - "$PRODUCT_DIR" >"$files_tmp" <<'PY'
 import json
 import sys
 from pathlib import Path
@@ -26,11 +33,16 @@ for entry in obj.get("owned", []):
     if target.endswith(".py"):
         print(target)
 PY
-)
+then
+  echo "ASCII check failed: could not enumerate $PRODUCT_DIR Python files" >&2
+  exit 1
+fi
+
+mapfile -t files < "$files_tmp"
 
 status=0
 for file in "${files[@]}"; do
-  if ! python - "$file" <<'PY'
+  if ! "$python_bin" - "$file" <<'PY'
 import sys
 from pathlib import Path
 

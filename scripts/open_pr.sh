@@ -4,6 +4,7 @@
 set -euo pipefail
 
 cd "$(git rev-parse --show-toplevel)"
+python_bin="${PYTHON:-python3}"
 
 usage() {
     cat <<'EOF'
@@ -137,7 +138,7 @@ verify_published_head() {
 origin_repo_name() {
     local url
     url="$(git config --get remote.origin.url)"
-    python - "$url" <<'PY'
+    "$python_bin" - "$url" <<'PY'
 import re
 import sys
 from urllib.parse import urlparse
@@ -196,7 +197,7 @@ existing_pr_number_for_branch() {
         echo "open_pr.sh: failed to query existing PR for head branch $branch" >&2
         exit 1
     fi
-    python - "$branch" "$current_repo" "$pr_json" <<'PY'
+    "$python_bin" - "$branch" "$current_repo" "$pr_json" <<'PY'
 import json
 import sys
 
@@ -277,7 +278,7 @@ body_audit_args=(--base-ref origin/main)
 if [ -n "${ATLAS_CURRENT_PR_AUTHOR:-}" ]; then
     body_audit_args+=(--pr-author "$ATLAS_CURRENT_PR_AUTHOR")
 fi
-python scripts/audit_pr_body.py "${body_audit_args[@]}" "$body_file"
+"$python_bin" scripts/audit_pr_body.py "${body_audit_args[@]}" "$body_file"
 
 for arg in "$@"; do
     case "$arg" in

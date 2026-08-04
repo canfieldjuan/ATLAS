@@ -12,6 +12,7 @@ import pytest
 REPO_ROOT = Path(__file__).resolve().parents[1]
 SCRIPT = REPO_ROOT / "scripts" / "open_pr.sh"
 AUDIT_SCRIPT = REPO_ROOT / "scripts" / "audit_pr_body.py"
+AI_RECONCILIATION_SCRIPT = REPO_ROOT / "scripts" / "audit_ai_reconciliation.py"
 CHANGE_POLICY_SCRIPT = REPO_ROOT / "scripts" / "_pr_change_policy.py"
 LOCAL_REVIEW_SCRIPT = REPO_ROOT / "scripts" / "local_pr_review.sh"
 
@@ -321,6 +322,7 @@ def _write_fixture_repo(
     else:
         copy2(SCRIPT, repo / "scripts" / "open_pr.sh")
         copy2(AUDIT_SCRIPT, repo / "scripts" / "audit_pr_body.py")
+        copy2(AI_RECONCILIATION_SCRIPT, repo / "scripts" / "audit_ai_reconciliation.py")
         copy2(CHANGE_POLICY_SCRIPT, repo / "scripts" / "_pr_change_policy.py")
         (repo / "scripts" / "local_pr_review.sh").write_text(
             """#!/usr/bin/env bash
@@ -392,6 +394,9 @@ def _valid_body() -> str:
         "## Intentional",
         "- a trade-off",
         "",
+        "## AI reconciliation",
+        "- no-findings",
+        "",
         "## Deferred",
         "- a follow-up",
         "",
@@ -405,6 +410,9 @@ def _valid_body() -> str:
         "",
         "## Verification",
         "- pytest passed",
+        "",
+        "## Mechanical verification",
+        "- Command: pytest tests/test_open_pr_wrapper.py - Result: passed - Environment: local",
         "",
         "## Diff size",
         "2 files, +10 / -2",
