@@ -558,6 +558,10 @@ async def test_private_estimate_booking_reports_explicit_calendar_id_to_prepare(
         {"scheduled_start": "0", "scheduled_end": "3600"},
         {"scheduled_start": "1754323200", "scheduled_end": "1754326800"},
         {"scheduled_start": "20260804T140000Z", "scheduled_end": "20260804T150000Z"},
+        {
+            "scheduled_start": "2026-08-04 19:00:00Z",
+            "scheduled_end": "2026-08-04 20:00:00Z",
+        },
     ],
 )
 async def test_private_estimate_booking_rejects_numeric_timestamps(numeric_payload):

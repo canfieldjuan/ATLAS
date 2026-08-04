@@ -183,10 +183,11 @@ seam in the enumeration; otherwise write "N/A - no boundary change."
     after start), `calendar_id`, `notes`.
   - Caller x input shape: server-side tracker/office caller sends snake_case
     JSON with aware RFC 3339 datetime strings and service-auth headers;
-    JSON-number and digit-only-string epoch timestamps and any non-RFC 3339
-    syntax reject with 422 before CRM or Calendar calls; a naive RFC 3339
-    string still reaches the window validator's dedicated timezone error;
-    browser/public website callers are not admitted.
+    JSON-number and digit-only-string epoch timestamps, space-separated
+    date-times, and any other non-RFC 3339 syntax reject with 422 before CRM
+    or Calendar calls; a naive RFC 3339 string still reaches the window
+    validator's dedicated timezone error; browser/public website callers are
+    not admitted.
 - Boundary path/seam: `CalendarTool.create_event` deterministic-ID handling and
   `DatabaseCRMProvider` lead-stage/lifecycle predicates for review, booking,
   terminal failure, execution fencing, and handoff.
@@ -396,27 +397,30 @@ Pool-exhaustion and auth-phase reverification (same torch caveat as above):
 RFC 3339 syntax-guard reverification (same torch caveat as above):
 
 - `python -m pytest tests/test_eom_lead_conversion.py -q` -- 80 passed, 3 pre-existing torch-import failures.
+- After removing the space-separator relaxation ('T'/'t' only):
+  `python -m pytest tests/test_eom_lead_conversion.py -q` -- 81 passed, same
+  torch caveat.
 
 ## Estimated diff size
 
 | File | LOC |
 |---|---:|
 | `.github/workflows/atlas_eom_lead_pipeline_checks.yml` | 8 |
-| `atlas_brain/eom_api/funnel.py` | 106 |
+| `atlas_brain/eom_api/funnel.py` | 107 |
 | `atlas_brain/services/crm_provider.py` | 881 |
 | `atlas_brain/services/eom_estimate_booking.py` | 323 |
 | `atlas_brain/storage/migrations/356_eom_lead_review_queue_booked_stage.sql` | 27 |
 | `atlas_brain/storage/migrations/357_eom_estimate_booking_operation_key_index.sql` | 26 |
 | `atlas_brain/tools/calendar.py` | 141 |
-| `plans/PR-EOM-Estimate-Booking-CurrentMain.md` | 598 |
+| `plans/PR-EOM-Estimate-Booking-CurrentMain.md` | 603 |
 | `render.eom.yaml` | 10 |
 | `requirements.eom.txt` | 1 |
-| `tests/test_eom_lead_conversion.py` | 1143 |
+| `tests/test_eom_lead_conversion.py` | 1147 |
 | `tests/test_eom_lead_conversion_integration.py` | 857 |
 | `tests/test_eom_lead_pipeline_integration.py` | 7 |
 | `tests/test_eom_render_profile.py` | 38 |
 | `tests/test_migrations_runner.py` | 66 |
-| **Total** | **4232** |
+| **Total** | **4242** |
 
 ## Cold diff reconstruction
 

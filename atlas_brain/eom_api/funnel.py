@@ -30,10 +30,11 @@ router = APIRouter(prefix="/eom-funnel", tags=["eom-funnel"])
 
 _APPROVAL_KEY_PATTERN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:-]{15,127}$")
 _LEAD_REVIEW_CURSOR_PATTERN = re.compile(r"^[A-Za-z0-9_-]{16,512}$")
-# RFC 3339 date-time shape. The offset stays optional here so a naive
-# date-time still reaches the window validator's dedicated timezone error.
+# RFC 3339 date-time shape ('T'/'t' separator only; the space relaxation is
+# not RFC 3339). The offset stays optional here so a naive date-time still
+# reaches the window validator's dedicated timezone error.
 _RFC3339_DATETIME_PATTERN = re.compile(
-    r"^\d{4}-\d{2}-\d{2}[Tt ]\d{2}:\d{2}:\d{2}(?:\.\d+)?"
+    r"^\d{4}-\d{2}-\d{2}[Tt]\d{2}:\d{2}:\d{2}(?:\.\d+)?"
     r"(?:[Zz]|[+-]\d{2}:\d{2})?$"
 )
 _MAX_SIGNED_BIGINT = 2**63 - 1
