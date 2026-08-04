@@ -20,6 +20,11 @@ from ..services.eom_estimate_booking import (
     schedule_eom_estimate_booking,
     schedule_eom_first_clean_booking,
 )
+from ..services.eom_onboarding_email import (
+    EOMOnboardingEmailApproval,
+    EOMOnboardingEmailError,
+    approve_and_send_eom_onboarding_email,
+)
 from ..services.eom_lead_conversion import (
     EOMCustomerHandoff,
     EOMLeadConversionError,
@@ -42,6 +47,7 @@ _RFC3339_DATETIME_PATTERN = re.compile(
 _MAX_SIGNED_BIGINT = 2**63 - 1
 _DEFAULT_LEAD_REVIEW_LIMIT = 100
 _MAX_LEAD_REVIEW_LIMIT = 200
+_ONBOARDING_EMAIL_DRAFT_STATUS_FILTERS = {"pending", "sending", "sent", "revoked", "all"}
 
 
 class EOMCustomerHandoffRequest(BaseModel):
@@ -119,6 +125,51 @@ class EOMLeadReviewResponse(BaseModel):
     )
 
 
+class EOMOnboardingEmailDraftItem(BaseModel):
+    """Office-review projection for one queued onboarding email draft."""
+
+    model_config = ConfigDict(extra="forbid", populate_by_name=True)
+
+    draft_id: UUID = Field(serialization_alias="draftId")
+    contact_id: UUID = Field(serialization_alias="contactId")
+    full_name: str = Field(serialization_alias="fullName")
+    lead_stage: str = Field(serialization_alias="leadStage")
+    status: str
+    recipient_email: str | None = Field(default=None, serialization_alias="recipientEmail")
+    blocker: str | None = None
+    subject: str
+    body: str
+    created_at: datetime = Field(serialization_alias="createdAt")
+    claimed_at: datetime | None = Field(default=None, serialization_alias="claimedAt")
+    sent_at: datetime | None = Field(default=None, serialization_alias="sentAt")
+    approved_by_name: str | None = Field(
+        default=None, serialization_alias="approvedByName"
+    )
+
+
+class EOMOnboardingEmailDraftResponse(BaseModel):
+    """Closed response envelope for onboarding-email approval drafts."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    drafts: list[EOMOnboardingEmailDraftItem]
+    limit: Annotated[int, Field(ge=1, le=_MAX_LEAD_REVIEW_LIMIT)]
+    status: str | None = None
+
+
+class EOMOnboardingEmailApprovalResponse(BaseModel):
+    """Result of an office-approved onboarding email send."""
+
+    model_config = ConfigDict(extra="forbid", populate_by_name=True)
+
+    success: bool = True
+    draft_id: UUID = Field(serialization_alias="draftId")
+    contact_id: UUID = Field(serialization_alias="contactId")
+    status: str
+    lead_stage: str | None = Field(default=None, serialization_alias="leadStage")
+    idempotent: bool
+
+
 def _crm_dependency(request: Request) -> Any:
     provider_factory = getattr(request.app.state, "eom_funnel_crm_provider", None)
     if callable(provider_factory):
@@ -130,6 +181,12 @@ def _calendar_dependency() -> Any:
     from ..tools.calendar import calendar_tool
 
     return calendar_tool
+
+
+def _email_dependency() -> Any:
+    from ..services.email_provider import get_email_provider
+
+    return get_email_provider()
 
 
 def _encode_lead_review_cursor(*, created_at: datetime, contact_id: UUID) -> str:
@@ -218,6 +275,67 @@ async def list_eom_lead_review_items(
         cursor=cursor,
         has_more=has_more,
         next_cursor=next_cursor,
+    )
+
+
+@router.get(
+    "/onboarding-email-drafts",
+    response_model=EOMOnboardingEmailDraftResponse,
+    dependencies=[Depends(require_eom_funnel_api)],
+)
+async def list_eom_onboarding_email_drafts(
+    limit: Annotated[
+        int,
+        Query(ge=1, le=_MAX_LEAD_REVIEW_LIMIT),
+    ] = _DEFAULT_LEAD_REVIEW_LIMIT,
+    draft_status: Annotated[
+        str | None,
+        Query(alias="status", min_length=3, max_length=16),
+    ] = "pending",
+    _actor: dict[str, object] = Depends(require_eom_funnel_actor),
+    crm: Any = Depends(_crm_dependency),
+) -> EOMOnboardingEmailDraftResponse:
+    """List onboarding email drafts waiting for office approval or review."""
+    if draft_status not in _ONBOARDING_EMAIL_DRAFT_STATUS_FILTERS:
+        raise HTTPException(status_code=422, detail="Invalid onboarding draft status")
+    status_filter = None if draft_status in {None, "all"} else draft_status
+    lister = getattr(crm, "list_eom_onboarding_email_drafts", None)
+    if not callable(lister):
+        raise RuntimeError("Configured CRM provider cannot list EOM onboarding drafts")
+    rows = await lister(status=status_filter, limit=limit)
+    return EOMOnboardingEmailDraftResponse(
+        drafts=[EOMOnboardingEmailDraftItem.model_validate(row) for row in rows],
+        limit=limit,
+        status=status_filter,
+    )
+
+
+@router.post(
+    "/onboarding-email-drafts/{draft_id}/approve-and-send",
+    response_model=EOMOnboardingEmailApprovalResponse,
+    dependencies=[Depends(require_eom_funnel_api)],
+)
+async def approve_eom_onboarding_email_draft(
+    draft_id: UUID,
+    actor: dict[str, object] = Depends(require_eom_funnel_actor),
+    crm: Any = Depends(_crm_dependency),
+    email_provider: Any = Depends(_email_dependency),
+) -> EOMOnboardingEmailApprovalResponse:
+    """Approve and send one queued onboarding email draft."""
+    try:
+        result = await approve_and_send_eom_onboarding_email(
+            crm,
+            email_provider,
+            EOMOnboardingEmailApproval(
+                draft_id=str(draft_id),
+                actor_id=int(actor["id"]),
+                actor_name=str(actor["name"]),
+            ),
+        )
+    except EOMOnboardingEmailError as exc:
+        raise HTTPException(status_code=exc.status_code, detail=str(exc)) from exc
+    return EOMOnboardingEmailApprovalResponse.model_validate(
+        {"success": True, **result}
     )
 
 

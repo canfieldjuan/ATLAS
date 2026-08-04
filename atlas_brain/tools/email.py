@@ -326,6 +326,8 @@ class EmailTool:
             payload["bcc"] = [e.strip() for e in params["bcc"].split(",")]
         if params.get("reply_to"):
             payload["reply_to"] = params["reply_to"]
+        if params.get("headers"):
+            payload["headers"] = params["headers"]
         if loaded_attachments:
             payload["attachments"] = loaded_attachments
 
@@ -353,7 +355,7 @@ class EmailTool:
                 error="API_ERROR",
                 message=f"Failed to send email: {e.response.status_code}",
             )
-        except Exception as e:
+        except Exception:
             logger.exception("Email tool error")
             return ToolResult(
                 success=False,
@@ -420,6 +422,7 @@ class EmailTool:
                 reply_to=params.get("reply_to"),
                 attachments=attachments or None,
                 html=params.get("html"),
+                headers=params.get("headers"),
             )
 
             response_data = {

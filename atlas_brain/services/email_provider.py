@@ -537,6 +537,7 @@ class GmailEmailProvider:
         thread_id: Optional[str] = None,
         in_reply_to: Optional[str] = None,
         references: Optional[str] = None,
+        headers: Optional[dict[str, str]] = None,
     ) -> dict[str, Any]:
         from ..tools.gmail import get_gmail_transport
 
@@ -553,6 +554,7 @@ class GmailEmailProvider:
             thread_id=thread_id,
             in_reply_to=in_reply_to,
             references=references,
+            headers=headers,
         )
 
     # -----------------------------------------------------------------------
@@ -771,6 +773,8 @@ class ResendEmailProvider:
             params["reply_to"] = reply_to
         if attachments:
             params["attachments"] = attachments
+        if _kwargs.get("headers"):
+            params["headers"] = _kwargs["headers"]
 
         result = await email_tool.execute(params)
         if result.success:

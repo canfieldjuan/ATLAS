@@ -18,6 +18,11 @@ from atlas_brain.services.eom_estimate_booking import (
     deterministic_eom_estimate_calendar_event_id,
     deterministic_eom_first_clean_calendar_event_id,
 )
+from atlas_brain.services.eom_onboarding_email import (
+    EOMOnboardingEmailApproval,
+    EOMOnboardingEmailError,
+    approve_and_send_eom_onboarding_email,
+)
 from atlas_brain.services.eom_lead_conversion import EOMLeadConversionError
 from atlas_brain.tools.base import ToolResult
 from atlas_brain.tools.calendar import CalendarAuthError, CalendarTool
@@ -40,6 +45,9 @@ class _CRM:
         self.first_clean_ambiguous_calls: list[dict[str, object]] = []
         self.first_clean_failed_calls: list[dict[str, object]] = []
         self.onboarding_draft_id = "0b8db22e-16b1-4a30-a15f-6c78ee9204a5"
+        self.onboarding_drafts: list[dict[str, object]] = []
+        self.claimed_onboarding_drafts: list[dict[str, object]] = []
+        self.confirmed_onboarding_drafts: list[dict[str, object]] = []
         self.execution_lock_keys: list[str] = []
         self.review_leads = review_leads or []
 
@@ -140,6 +148,82 @@ class _CRM:
     async def mark_eom_first_clean_booking_calendar_failed(self, **kwargs):
         self.first_clean_failed_calls.append(kwargs)
 
+    async def list_eom_onboarding_email_drafts(self, *, status=None, limit=100):
+        rows = self.onboarding_drafts
+        if status is not None:
+            rows = [row for row in rows if row["status"] == status]
+        return [
+            {key: value for key, value in row.items() if key != "operation_key"}
+            for row in rows[:limit]
+        ]
+
+    async def get_eom_onboarding_email_draft(self, *, draft_id):
+        return next(
+            (
+                draft
+                for draft in self.onboarding_drafts
+                if str(draft["draft_id"]) == str(draft_id)
+            ),
+            None,
+        )
+
+    async def claim_eom_onboarding_email_draft(
+        self, *, draft_id, actor_id, actor_name
+    ):
+        draft = await self.get_eom_onboarding_email_draft(draft_id=draft_id)
+        recipient_email = str(draft.get("recipient_email") or "").strip() if draft else ""
+        if (
+            draft is None
+            or draft["status"] != "pending"
+            or draft.get("blocker") is not None
+            or not recipient_email
+            or draft.get("lead_stage") != "won"
+        ):
+            return None
+        draft["status"] = "sending"
+        draft["approved_by_name"] = actor_name
+        self.claimed_onboarding_drafts.append(
+            {"draft_id": draft_id, "actor_id": actor_id, "actor_name": actor_name}
+        )
+        return {
+            "draft_id": draft["draft_id"],
+            "contact_id": draft["contact_id"],
+            "recipient_email": recipient_email,
+            "subject": draft["subject"],
+            "body": draft["body"],
+            "operation_key": draft.get("operation_key", "first-clean-key"),
+        }
+
+    async def confirm_eom_onboarding_email_sent(
+        self, *, draft_id, actor_id, actor_name
+    ):
+        draft = await self.get_eom_onboarding_email_draft(draft_id=draft_id)
+        if draft is None or draft["status"] != "sending":
+            return None
+        draft["status"] = "sent"
+        draft["lead_stage"] = "onboarding_sent"
+        self.confirmed_onboarding_drafts.append(
+            {"draft_id": draft_id, "actor_id": actor_id, "actor_name": actor_name}
+        )
+        return {
+            "draft_id": draft["draft_id"],
+            "contact_id": draft["contact_id"],
+            "status": "sent",
+            "lead_stage": "onboarding_sent",
+        }
+
+
+class _EmailProvider:
+    def __init__(self, *, fail: bool = False) -> None:
+        self.fail = fail
+        self.send_calls: list[dict[str, object]] = []
+
+    async def send(self, **kwargs):
+        self.send_calls.append(kwargs)
+        if self.fail:
+            raise RuntimeError("smtp down")
+        return {"id": "email-accepted"}
+
 
 class _Calendar:
     def __init__(
@@ -216,13 +300,19 @@ class _CalendarClient:
 
 
 def _app(
-    crm: _CRM, config: EOMFunnelConfig, calendar: _Calendar | None = None
+    crm: _CRM,
+    config: EOMFunnelConfig,
+    calendar: _Calendar | None = None,
+    email_provider: _EmailProvider | None = None,
 ) -> FastAPI:
     app = FastAPI()
     app.include_router(funnel_mod.router)
     app.dependency_overrides[funnel_mod._crm_dependency] = lambda: crm
     app.dependency_overrides[funnel_mod._calendar_dependency] = (
         lambda: calendar or _Calendar()
+    )
+    app.dependency_overrides[funnel_mod._email_dependency] = (
+        lambda: email_provider or _EmailProvider()
     )
     app.dependency_overrides[auth_mod.get_eom_funnel_api_config] = lambda: config
     return app
@@ -263,6 +353,29 @@ def _booking_payload(**overrides) -> dict[str, object]:
     }
     payload.update(overrides)
     return payload
+
+
+def _onboarding_draft(**overrides) -> dict[str, object]:
+    draft_id = uuid4()
+    contact_id = uuid4()
+    draft: dict[str, object] = {
+        "draft_id": draft_id,
+        "contact_id": contact_id,
+        "full_name": "Review Queue Lead",
+        "lead_stage": "won",
+        "status": "pending",
+        "recipient_email": "lead@example.com",
+        "blocker": None,
+        "subject": "Welcome to Effingham Office Maids",
+        "body": "Welcome aboard.",
+        "created_at": "2026-08-04T12:00:00+00:00",
+        "claimed_at": None,
+        "sent_at": None,
+        "approved_by_name": None,
+        "operation_key": "first-clean-key",
+    }
+    draft.update(overrides)
+    return draft
 
 
 @pytest.mark.asyncio
@@ -335,6 +448,381 @@ async def test_full_atlas_app_serves_public_intake_and_private_handoff_together(
     ]
     assert response.status_code == 201
     assert crm.calls
+
+
+@pytest.mark.asyncio
+async def test_onboarding_email_drafts_route_lists_pending_drafts():
+    crm = _CRM()
+    draft = _onboarding_draft()
+    crm.onboarding_drafts = [draft]
+    app = _app(crm, _enabled_config())
+
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=app), base_url="http://test"
+    ) as client:
+        response = await client.get(
+            "/eom-funnel/onboarding-email-drafts",
+            headers=_headers(),
+        )
+
+    assert response.status_code == 200
+    assert response.json() == {
+        "drafts": [
+            {
+                "draftId": str(draft["draft_id"]),
+                "contactId": str(draft["contact_id"]),
+                "fullName": "Review Queue Lead",
+                "leadStage": "won",
+                "status": "pending",
+                "recipientEmail": "lead@example.com",
+                "blocker": None,
+                "subject": "Welcome to Effingham Office Maids",
+                "body": "Welcome aboard.",
+                "createdAt": "2026-08-04T12:00:00Z",
+                "claimedAt": None,
+                "sentAt": None,
+                "approvedByName": None,
+            }
+        ],
+        "limit": 100,
+        "status": "pending",
+    }
+
+
+@pytest.mark.asyncio
+async def test_onboarding_email_drafts_route_rejects_unknown_status():
+    crm = _CRM()
+    email_provider = _EmailProvider()
+    app = _app(crm, _enabled_config(), email_provider=email_provider)
+
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=app), base_url="http://test"
+    ) as client:
+        response = await client.get(
+            "/eom-funnel/onboarding-email-drafts?status=surprise",
+            headers=_headers(),
+        )
+
+    assert response.status_code == 422
+    assert response.json()["detail"] == "Invalid onboarding draft status"
+    assert email_provider.send_calls == []
+
+
+@pytest.mark.asyncio
+async def test_onboarding_email_approval_route_sends_then_confirms():
+    crm = _CRM()
+    draft = _onboarding_draft()
+    crm.onboarding_drafts = [draft]
+    email_provider = _EmailProvider()
+    app = _app(crm, _enabled_config(), email_provider=email_provider)
+
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=app), base_url="http://test"
+    ) as client:
+        response = await client.post(
+            f"/eom-funnel/onboarding-email-drafts/{draft['draft_id']}/approve-and-send",
+            headers=_headers(actor="Juan Canfield", actor_id="1"),
+        )
+
+    assert response.status_code == 200
+    assert response.json() == {
+        "success": True,
+        "draftId": str(draft["draft_id"]),
+        "contactId": str(draft["contact_id"]),
+        "status": "sent",
+        "leadStage": "onboarding_sent",
+        "idempotent": False,
+    }
+    assert email_provider.send_calls == [
+            {
+                "to": ["lead@example.com"],
+                "subject": "Welcome to Effingham Office Maids",
+                "body": "Welcome aboard.",
+                "headers": {
+                    "X-Atlas-EOM-Onboarding-Draft-ID": str(draft["draft_id"]),
+                },
+            }
+        ]
+    assert crm.confirmed_onboarding_drafts == [
+        {
+            "draft_id": str(draft["draft_id"]),
+            "actor_id": 1,
+            "actor_name": "Juan Canfield",
+        }
+    ]
+
+
+@pytest.mark.asyncio
+async def test_blocked_onboarding_email_draft_refuses_before_transport():
+    crm = _CRM()
+    draft = _onboarding_draft(
+        recipient_email=None,
+        blocker="no_email",
+    )
+    crm.onboarding_drafts = [draft]
+    email_provider = _EmailProvider()
+
+    with pytest.raises(EOMOnboardingEmailError, match="blocked: no_email"):
+        await approve_and_send_eom_onboarding_email(
+            crm,
+            email_provider,
+            EOMOnboardingEmailApproval(
+                draft_id=str(draft["draft_id"]),
+                actor_id=1,
+                actor_name="Juan Canfield",
+            ),
+        )
+
+    assert email_provider.send_calls == []
+    assert crm.confirmed_onboarding_drafts == []
+
+
+@pytest.mark.asyncio
+async def test_blank_onboarding_email_recipient_refuses_before_transport():
+    crm = _CRM()
+    draft = _onboarding_draft(recipient_email="   ")
+    crm.onboarding_drafts = [draft]
+    email_provider = _EmailProvider()
+
+    with pytest.raises(EOMOnboardingEmailError, match="has no recipient"):
+        await approve_and_send_eom_onboarding_email(
+            crm,
+            email_provider,
+            EOMOnboardingEmailApproval(
+                draft_id=str(draft["draft_id"]),
+                actor_id=1,
+                actor_name="Juan Canfield",
+            ),
+        )
+
+    assert draft["status"] == "pending"
+    assert email_provider.send_calls == []
+    assert crm.confirmed_onboarding_drafts == []
+
+
+@pytest.mark.asyncio
+async def test_sent_onboarding_email_draft_approval_is_idempotent_noop():
+    crm = _CRM()
+    draft = _onboarding_draft(status="sent", lead_stage="onboarding_sent")
+    crm.onboarding_drafts = [draft]
+    email_provider = _EmailProvider()
+
+    result = await approve_and_send_eom_onboarding_email(
+        crm,
+        email_provider,
+        EOMOnboardingEmailApproval(
+            draft_id=str(draft["draft_id"]),
+            actor_id=1,
+            actor_name="Juan Canfield",
+        ),
+    )
+
+    assert result == {
+        "draft_id": str(draft["draft_id"]),
+        "contact_id": str(draft["contact_id"]),
+        "status": "sent",
+        "idempotent": True,
+    }
+    assert email_provider.send_calls == []
+    assert crm.confirmed_onboarding_drafts == []
+
+
+@pytest.mark.asyncio
+async def test_onboarding_email_send_failure_leaves_claim_unconfirmed():
+    crm = _CRM()
+    draft = _onboarding_draft()
+    crm.onboarding_drafts = [draft]
+    email_provider = _EmailProvider(fail=True)
+
+    with pytest.raises(RuntimeError, match="smtp down"):
+        await approve_and_send_eom_onboarding_email(
+            crm,
+            email_provider,
+            EOMOnboardingEmailApproval(
+                draft_id=str(draft["draft_id"]),
+                actor_id=1,
+                actor_name="Juan Canfield",
+            ),
+        )
+
+    assert draft["status"] == "sending"
+    assert email_provider.send_calls == [
+            {
+                "to": ["lead@example.com"],
+                "subject": "Welcome to Effingham Office Maids",
+                "body": "Welcome aboard.",
+                "headers": {
+                    "X-Atlas-EOM-Onboarding-Draft-ID": str(draft["draft_id"]),
+                },
+            }
+        ]
+    assert crm.confirmed_onboarding_drafts == []
+
+
+@pytest.mark.asyncio
+async def test_provider_claim_onboarding_email_draft_uses_single_winner_predicate():
+    from atlas_brain.services.crm_provider import DatabaseCRMProvider
+
+    draft_id = uuid4()
+    contact_id = uuid4()
+
+    class Pool:
+        def __init__(self):
+            self.query = None
+            self.args = None
+
+        async def fetchrow(self, query, *args):
+            self.query = query
+            self.args = args
+            return {
+                "draft_id": draft_id,
+                "contact_id": contact_id,
+                "full_name": "Review Queue Lead",
+                "lead_stage": "won",
+                "status": "sending",
+                "recipient_email": "lead@example.com",
+                "subject": "Welcome",
+                "body": "Body",
+                "operation_key": "first-clean-key",
+            }
+
+    pool = Pool()
+    provider = DatabaseCRMProvider(pool=pool)
+    row = await provider.claim_eom_onboarding_email_draft(
+        draft_id=str(draft_id),
+        actor_id=1,
+        actor_name="Juan Canfield",
+    )
+
+    assert row["draft_id"] == draft_id
+    assert "SET status = 'sending'" in pool.query
+    assert "AND d.status = 'pending'" in pool.query
+    assert "AND d.blocker IS NULL" in pool.query
+    assert "NULLIF(BTRIM(d.recipient_email), '') IS NOT NULL" in pool.query
+    assert "BTRIM(d.recipient_email) AS recipient_email" in pool.query
+    assert "AND c.lead_stage = 'won'" in pool.query
+    assert "FOR UPDATE OF d, c" in pool.query
+    assert pool.args == (str(draft_id), 1, "Juan Canfield")
+
+
+@pytest.mark.asyncio
+async def test_provider_customer_handoff_rejects_sending_onboarding_draft():
+    from atlas_brain.services.crm_provider import DatabaseCRMProvider
+
+    contact_id = uuid4()
+    sending_draft_id = uuid4()
+    handoff_key = f"office-handoff-{uuid4().hex}"
+
+    class Pool:
+        def __init__(self):
+            self.fetchrow_queries: list[str] = []
+
+        @asynccontextmanager
+        async def transaction(self):
+            yield self
+
+        async def execute(self, *_args):
+            return "SELECT 1"
+
+        async def fetchrow(self, query, *args):
+            self.fetchrow_queries.append(query)
+            if "WHERE approval_key = $1" in query:
+                return None
+            if "FROM contacts" in query and "WHERE id = $1" in query:
+                return {
+                    "id": contact_id,
+                    "business_context_id": "effingham_maids",
+                    "contact_type": "lead",
+                    "lead_stage": "won",
+                    "status": "active",
+                }
+            if "WHERE contact_id = $1" in query and "FROM eom_customer_handoffs" in query:
+                return None
+            if "WHERE tracker_customer_id = $1 OR tracker_site_id = $2" in query:
+                return None
+            if (
+                "FROM eom_onboarding_email_drafts" in query
+                and "status = 'sending'" in query
+            ):
+                return {"id": sending_draft_id}
+            raise AssertionError(f"unexpected fetchrow query: {query}")
+
+    pool = Pool()
+    provider = DatabaseCRMProvider(pool=pool)
+
+    with pytest.raises(
+        EOMLeadConversionError, match="onboarding email send is still confirming"
+    ):
+        await provider.finalize_eom_customer_handoff(
+            contact_id=str(contact_id),
+            tracker_customer_id=1001,
+            tracker_site_id=2002,
+            approval_key=handoff_key,
+            actor_id=1,
+            actor_name="Juan Canfield",
+        )
+
+    assert any("FROM eom_onboarding_email_drafts" in q for q in pool.fetchrow_queries)
+    assert not any("UPDATE contacts" in q for q in pool.fetchrow_queries)
+
+
+@pytest.mark.asyncio
+async def test_provider_confirm_onboarding_email_sent_records_stage_event():
+    from atlas_brain.services.crm_provider import DatabaseCRMProvider
+
+    draft_id = uuid4()
+    contact_id = uuid4()
+
+    class Pool:
+        def __init__(self):
+            self.fetchrow_calls = []
+            self.execute_calls = []
+
+        @asynccontextmanager
+        async def transaction(self):
+            yield
+
+        async def fetchrow(self, query, *args):
+            self.fetchrow_calls.append((query, args))
+            return {
+                "draft_id": draft_id,
+                "contact_id": contact_id,
+                "operation_key": "first-clean-key",
+                "status": "sent",
+                "from_stage": "won",
+                "lead_stage": "onboarding_sent",
+            }
+
+        async def execute(self, query, *args):
+            self.execute_calls.append((query, args))
+            return "INSERT 0 1"
+
+    pool = Pool()
+    provider = DatabaseCRMProvider(pool=pool)
+    row = await provider.confirm_eom_onboarding_email_sent(
+        draft_id=str(draft_id),
+        actor_id=1,
+        actor_name="Juan Canfield",
+    )
+
+    assert row["status"] == "sent"
+    confirm_query, confirm_args = pool.fetchrow_calls[0]
+    assert "lead_stage = 'onboarding_sent'" in confirm_query
+    assert "d.status = 'sending'" in confirm_query
+    assert "c.lead_stage = 'won'" in confirm_query
+    assert confirm_args == (str(draft_id), "effingham_maids")
+    event_query, event_args = pool.execute_calls[0]
+    assert "'onboarding_email_sent'" in event_query
+    assert "jsonb_build_object" in event_query
+    assert event_args == (
+        contact_id,
+        "employee:1:Juan Canfield",
+        "first-clean-key",
+        draft_id,
+        1,
+        "won",
+        "onboarding_sent",
+    )
 
 
 @pytest.mark.asyncio

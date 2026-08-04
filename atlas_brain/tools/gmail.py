@@ -96,6 +96,7 @@ class GmailTransport:
         thread_id: str | None = None,
         in_reply_to: str | None = None,
         references: str | None = None,
+        headers: dict[str, str] | None = None,
     ) -> dict[str, Any]:
         """
         Send an email via Gmail API.
@@ -113,6 +114,7 @@ class GmailTransport:
             thread_id: Gmail thread ID for threading replies.
             in_reply_to: Message-ID of the email being replied to.
             references: Message-ID references for threading.
+            headers: Additional RFC 822 headers for provider-log correlation.
 
         Returns:
             Dict with "id" (Gmail message ID) and "threadId".
@@ -144,6 +146,15 @@ class GmailTransport:
             msg["In-Reply-To"] = in_reply_to
         if references:
             msg["References"] = references
+        if headers:
+            for header_name, header_value in headers.items():
+                name = str(header_name).strip()
+                value = str(header_value).strip()
+                if not name or "\r" in name or "\n" in name:
+                    raise ValueError("Invalid email header name")
+                if "\r" in value or "\n" in value:
+                    raise ValueError("Invalid email header value")
+                msg[name] = value
 
         # Add attachments
         if attachments:

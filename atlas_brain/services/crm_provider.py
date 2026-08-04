@@ -566,7 +566,7 @@ class DatabaseCRMProvider:
                     )
                 if channel == "phone":
                     return await conn.fetchrow(
-                        f"""
+                        """
                         SELECT * FROM contacts
                         WHERE business_context_id = $1
                           AND status != 'archived'
@@ -580,7 +580,7 @@ class DatabaseCRMProvider:
                         value,
                     )
                 return await conn.fetchrow(
-                    f"""
+                    """
                     SELECT * FROM contacts
                     WHERE business_context_id = $1
                       AND status != 'archived'
@@ -1296,7 +1296,7 @@ class DatabaseCRMProvider:
             WHERE c.business_context_id = 'effingham_maids'
               AND c.status = 'active'
               AND c.contact_type = 'lead'
-              AND c.lead_stage IN ('new', 'estimate_booked', 'won')
+              AND c.lead_stage IN ('new', 'estimate_booked', 'won', 'onboarding_sent')
               {cursor_clause}
             ORDER BY c.created_at DESC, c.id DESC
             LIMIT $1
@@ -1304,6 +1304,205 @@ class DatabaseCRMProvider:
             *params,
         )
         return [dict(row) for row in rows]
+
+    async def list_eom_onboarding_email_drafts(
+        self, *, status: str | None = "pending", limit: int = 100
+    ) -> list[dict[str, Any]]:
+        """List EOM onboarding email drafts for the office approval queue."""
+        status_clause = ""
+        params: list[Any] = [limit]
+        if status is not None:
+            status_clause = "AND d.status = $2"
+            params.append(status)
+        pool = self._get_pool()
+        rows = await pool.fetch(
+            f"""
+            SELECT
+                d.id AS draft_id,
+                d.contact_id,
+                c.full_name,
+                c.lead_stage,
+                d.status,
+                d.recipient_email,
+                d.blocker,
+                d.subject,
+                d.body,
+                d.created_at,
+                d.claimed_at,
+                d.sent_at,
+                d.approved_by_name
+            FROM eom_onboarding_email_drafts AS d
+            JOIN contacts AS c ON c.id = d.contact_id
+            WHERE c.business_context_id = 'effingham_maids'
+              AND c.contact_type = 'lead'
+              {status_clause}
+            ORDER BY d.created_at DESC, d.id DESC
+            LIMIT $1
+            """,
+            *params,
+        )
+        return [dict(row) for row in rows]
+
+    async def get_eom_onboarding_email_draft(
+        self, *, draft_id: str
+    ) -> dict[str, Any] | None:
+        """Return one onboarding email draft with its EOM lead projection."""
+        pool = self._get_pool()
+        row = await pool.fetchrow(
+            """
+            SELECT
+                d.id AS draft_id,
+                d.id,
+                d.contact_id,
+                c.full_name,
+                c.lead_stage,
+                d.status,
+                d.recipient_email,
+                d.blocker,
+                d.subject,
+                d.body,
+                d.created_at,
+                d.claimed_at,
+                d.sent_at,
+                d.approved_by_name
+            FROM eom_onboarding_email_drafts AS d
+            JOIN contacts AS c ON c.id = d.contact_id
+            WHERE d.id = $1::uuid
+              AND c.business_context_id = 'effingham_maids'
+              AND c.contact_type = 'lead'
+            """,
+            draft_id,
+        )
+        return dict(row) if row else None
+
+    async def claim_eom_onboarding_email_draft(
+        self, *, draft_id: str, actor_id: int, actor_name: str
+    ) -> dict[str, Any] | None:
+        """Atomically claim exactly one pending, sendable onboarding draft."""
+        pool = self._get_pool()
+        row = await pool.fetchrow(
+            """
+            WITH sendable AS (
+                SELECT
+                    d.id AS draft_id,
+                    d.contact_id,
+                    c.full_name,
+                    c.lead_stage,
+                    BTRIM(d.recipient_email) AS recipient_email,
+                    d.subject,
+                    d.body,
+                    d.operation_key
+                FROM eom_onboarding_email_drafts AS d
+                JOIN contacts AS c ON c.id = d.contact_id
+                WHERE d.id = $1::uuid
+                  AND d.status = 'pending'
+                  AND d.blocker IS NULL
+                  AND NULLIF(BTRIM(d.recipient_email), '') IS NOT NULL
+                  AND c.business_context_id = 'effingham_maids'
+                  AND c.contact_type = 'lead'
+                  AND c.status = 'active'
+                  AND c.lead_stage = 'won'
+                FOR UPDATE OF d, c
+            ),
+            claimed AS (
+                UPDATE eom_onboarding_email_drafts AS d
+                   SET status = 'sending',
+                       claimed_at = NOW(),
+                       approved_by_employee_id = $2,
+                       approved_by_name = $3
+                  FROM sendable
+                 WHERE d.id = sendable.draft_id
+                 RETURNING d.id AS draft_id, d.contact_id, d.status
+            )
+            SELECT
+                claimed.draft_id,
+                claimed.contact_id,
+                sendable.full_name,
+                sendable.lead_stage,
+                claimed.status,
+                sendable.recipient_email,
+                sendable.subject,
+                sendable.body,
+                sendable.operation_key
+            FROM claimed
+            JOIN sendable ON sendable.draft_id = claimed.draft_id
+            """,
+            draft_id,
+            actor_id,
+            actor_name,
+        )
+        return dict(row) if row else None
+
+    async def confirm_eom_onboarding_email_sent(
+        self, *, draft_id: str, actor_id: int, actor_name: str
+    ) -> dict[str, Any] | None:
+        """Confirm delivery after transport acceptance and advance the lead."""
+        from .eom_lead_ingress import EOM_BUSINESS_CONTEXT_ID
+
+        pool = self._get_pool()
+        async with _transaction_connection(pool) as conn:
+            row = await conn.fetchrow(
+                """
+                WITH draft AS (
+                    SELECT id, contact_id, operation_key
+                    FROM eom_onboarding_email_drafts
+                    WHERE id = $1::uuid AND status = 'sending'
+                    FOR UPDATE
+                ),
+                updated_contact AS (
+                    UPDATE contacts AS c
+                       SET lead_stage = 'onboarding_sent', updated_at = NOW()
+                      FROM draft
+                     WHERE c.id = draft.contact_id
+                       AND c.business_context_id = $2
+                       AND c.contact_type = 'lead'
+                       AND c.status = 'active'
+                       AND c.lead_stage = 'won'
+                     RETURNING c.id, 'won'::text AS from_stage, c.lead_stage
+                ),
+                sent_draft AS (
+                    UPDATE eom_onboarding_email_drafts AS d
+                       SET status = 'sent', sent_at = NOW()
+                      FROM updated_contact
+                     WHERE d.id = $1::uuid AND d.status = 'sending'
+                     RETURNING d.id AS draft_id, d.contact_id, d.operation_key, d.status
+                )
+                SELECT
+                    sent_draft.draft_id,
+                    sent_draft.contact_id,
+                    sent_draft.operation_key,
+                    sent_draft.status,
+                    updated_contact.from_stage,
+                    updated_contact.lead_stage
+                FROM sent_draft
+                JOIN updated_contact ON updated_contact.id = sent_draft.contact_id
+                """,
+                draft_id,
+                EOM_BUSINESS_CONTEXT_ID,
+            )
+            if row is None:
+                return None
+            await conn.execute(
+                """
+                INSERT INTO eom_lead_lifecycle_events (
+                    contact_id, event_type, from_stage, to_stage, actor,
+                    source, operation_key, metadata
+                )
+                VALUES ($1, 'onboarding_email_sent', $6, $7, $2, 'eom_office',
+                        $3, jsonb_build_object(
+                            'draft_id', $4::uuid,
+                            'approved_by_employee_id', $5::bigint
+                        ))
+                """,
+                row["contact_id"],
+                f"employee:{actor_id}:{actor_name}",
+                row["operation_key"],
+                row["draft_id"],
+                actor_id,
+                row["from_stage"],
+                row["lead_stage"],
+            )
+            return dict(row)
 
     @staticmethod
     def _eom_estimate_booking_metadata(
@@ -2180,8 +2379,6 @@ class DatabaseCRMProvider:
             )
             request_for_key = None
             booked_for_key = None
-            failed_for_key = None
-            ambiguous_for_key = None
             for event in events:
                 if event["operation_key"] != booking_key:
                     continue
@@ -2189,10 +2386,6 @@ class DatabaseCRMProvider:
                     request_for_key = event
                 elif event["event_type"] == family.booked_event:
                     booked_for_key = event
-                elif event["event_type"] == family.failed_event:
-                    failed_for_key = event
-                elif event["event_type"] == family.ambiguous_event:
-                    ambiguous_for_key = event
             if (
                 request_for_key is None
                 or not self._eom_estimate_booking_payload_matches(
@@ -2962,6 +3155,21 @@ class DatabaseCRMProvider:
                     409,
                     "Tracker Customer or Site already belongs to an EOM customer handoff",
                 )
+            sending_onboarding_draft = await conn.fetchrow(
+                """
+                SELECT id
+                FROM eom_onboarding_email_drafts
+                WHERE contact_id = $1
+                  AND status = 'sending'
+                LIMIT 1
+                """,
+                contact_id,
+            )
+            if sending_onboarding_draft is not None:
+                raise EOMLeadConversionError(
+                    409,
+                    "EOM onboarding email send is still confirming; retry after it settles",
+                )
             booking_events = await conn.fetch(
                 """
                 SELECT event_type, operation_key
@@ -3032,7 +3240,12 @@ class DatabaseCRMProvider:
                 )
             if contact["contact_type"] != "lead":
                 raise EOMLeadConversionError(409, "EOM contact is not a lead")
-            if contact["lead_stage"] not in ("new", "estimate_booked", "won"):
+            if contact["lead_stage"] not in (
+                "new",
+                "estimate_booked",
+                "won",
+                "onboarding_sent",
+            ):
                 raise EOMLeadConversionError(409, "EOM lead is not ready for approval")
             from_stage = str(contact["lead_stage"])
 

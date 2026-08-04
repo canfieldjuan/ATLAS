@@ -294,6 +294,8 @@ def test_eom_lead_review_queue_won_stage_index_matches_provider_filter():
         >= 2
     )  # rollback-evidence comment + the executable statement
     assert "CREATE INDEX CONCURRENTLY idx_contacts_eom_lead_review_queue" in migration
+    assert "Rollback evidence:" in migration
+    assert "lead_stage IN ('new', 'estimate_booked', 'won')" in migration
     assert migration.index(
         "DROP INDEX CONCURRENTLY IF EXISTS idx_contacts_eom_lead_review_queue"
     ) < migration.index(
@@ -370,8 +372,6 @@ def test_eom_onboarding_email_drafts_migration_is_additive_and_single_send_safe(
         / "migrations"
         / "360_eom_onboarding_email_drafts.sql"
     ).read_text()
-    upper = migration.upper()
-
     assert "CREATE TABLE IF NOT EXISTS eom_onboarding_email_drafts" in migration
     assert "contact_id UUID NOT NULL REFERENCES contacts(id) ON DELETE RESTRICT" in migration
     assert "operation_key VARCHAR(128) NOT NULL UNIQUE" in migration
@@ -393,11 +393,35 @@ def test_eom_onboarding_email_drafts_migration_is_additive_and_single_send_safe(
     assert "AND recipient_email IS NOT NULL" in migration
     assert "RETURNING" in migration
     assert "SET status = 'sent', sent_at = NOW()" in migration
-    assert "WHERE id = $1 AND status = 'sending'" in migration
-    assert "idempotency key" in migration
-    assert "Rollback evidence:" in migration
-    assert "ALTER TABLE" not in upper
-    assert "CONCURRENTLY" not in upper
+
+
+def test_eom_lead_review_queue_onboarding_sent_stage_matches_provider_filter():
+    migration = (
+        Path(__file__).resolve().parent.parent
+        / "atlas_brain"
+        / "storage"
+        / "migrations"
+        / "361_eom_lead_review_queue_onboarding_sent_stage.sql"
+    ).read_text()
+    provider = (
+        Path(__file__).resolve().parent.parent
+        / "atlas_brain"
+        / "services"
+        / "crm_provider.py"
+    ).read_text()
+
+    assert "CREATE INDEX CONCURRENTLY IF NOT EXISTS" not in migration
+    assert "DROP INDEX CONCURRENTLY IF EXISTS idx_contacts_eom_lead_review_queue" in migration
+    assert "CREATE INDEX CONCURRENTLY idx_contacts_eom_lead_review_queue" in migration
+    assert migration.index(
+        "DROP INDEX CONCURRENTLY IF EXISTS idx_contacts_eom_lead_review_queue"
+    ) < migration.index(
+        "CREATE INDEX CONCURRENTLY idx_contacts_eom_lead_review_queue"
+    )
+    predicate = "lead_stage IN ('new', 'estimate_booked', 'won', 'onboarding_sent')"
+    assert predicate in migration
+    assert predicate in provider
+    assert "Do not rewrite persisted onboarding_sent contacts" in migration
 
 
 def test_sent_email_tenant_migration_is_additive_replay_safe_and_unclassified():

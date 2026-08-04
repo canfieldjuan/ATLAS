@@ -221,6 +221,11 @@ print(json.dumps({
     assert "/api/v1/ping" in paths
     assert "/api/v1/receivables/ready" in paths
     assert "/api/v1/eom-funnel/leads" in paths
+    assert "/api/v1/eom-funnel/onboarding-email-drafts" in paths
+    assert (
+        "/api/v1/eom-funnel/onboarding-email-drafts/{draft_id}/approve-and-send"
+        in paths
+    )
     assert "/api/v1/eom-funnel/leads/{contact_id}/estimate-bookings" in paths
     assert "/api/v1/eom-funnel/leads/{contact_id}/first-clean-bookings" in paths
     assert "/api/v1/eom-funnel/customer-handoffs" in paths
@@ -1016,7 +1021,6 @@ def test_eom_receivables_runtime_config_rejects_raw_token_env_before_projection(
     from atlas_brain.eom_api import auth
     from atlas_brain.eom_api.config import (
         EOMInvoicingConfig,
-        RAW_RECEIVABLES_SERVICE_TOKEN_ENV,
     )
 
     generated = auth.generate_receivables_service_token()
