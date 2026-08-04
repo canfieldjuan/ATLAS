@@ -70,12 +70,16 @@ Target branch protection for `main` is derived from `ci/gates.yml` entries
 marked `branch_required`: `live-reconciliation`, `diff-budget`,
 `plan-admission`, `session-lane`, `review-contract`, `pr-body-contract`,
 `Gitleaks PR secret scan`, and `Gitleaks baseline growth guard`, all pinned to
-the GitHub Actions app source instead of legacy bare context names. At the time
-of this slice, live GitHub settings still require only `live-reconciliation`,
-`Gitleaks PR secret scan`, and `Gitleaks baseline growth guard`; the REST PATCH
-that preserves those and adds `diff-budget`, `plan-admission`, `session-lane`,
-`review-contract`, and `pr-body-contract` remains a separate
-repository-settings step.
+the GitHub Actions app source instead of legacy bare context names. As of
+2026-08-04, live GitHub settings match that registry; the verification command
+is:
+
+```bash
+gh api repos/canfieldjuan/ATLAS/branches/main/protection/required_status_checks \
+  > /tmp/atlas-required-status-checks-live-after.json
+python scripts/check_required_status_checks.py \
+  --payload-file /tmp/atlas-required-status-checks-live-after.json
+```
 
 The `Branch Protection Required Checks` workflow audits that live repository
 setting against the target set on a weekly/manual cadence and on trusted `main`
