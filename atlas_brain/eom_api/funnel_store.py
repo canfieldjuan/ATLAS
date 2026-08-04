@@ -27,7 +27,8 @@ async def require_eom_funnel_data_store(
             SELECT
                 to_regclass('contacts') AS contacts_rel,
                 to_regclass('eom_lead_lifecycle_events') AS lifecycle_rel,
-                to_regclass('eom_customer_handoffs') AS handoff_rel
+                to_regclass('eom_customer_handoffs') AS handoff_rel,
+                to_regclass('eom_onboarding_email_drafts') AS onboarding_drafts_rel
         ),
         readiness_columns AS (
             SELECT
@@ -52,13 +53,34 @@ async def require_eom_funnel_data_store(
                     WHERE attrelid = readiness_relations.contacts_rel
                       AND attname = 'lead_stage'
                       AND NOT attisdropped
-                ) AS contacts_required_columns_ready
+                ) AS contacts_required_columns_ready,
+                -- First-clean completion inserts the onboarding draft in the
+                -- same transaction as the won transition; admitting the funnel
+                -- without migration 360 would let Calendar creation succeed
+                -- and then wedge the operation ambiguous on undefined_table.
+                readiness_relations.onboarding_drafts_rel IS NOT NULL
+                AND NOT EXISTS (
+                    SELECT required.attname
+                    FROM unnest(ARRAY[
+                        'contact_id', 'operation_key', 'status',
+                        'recipient_email', 'blocker', 'subject', 'body'
+                    ]) AS required(attname)
+                    WHERE NOT EXISTS (
+                        SELECT 1
+                        FROM pg_attribute
+                        WHERE attrelid = readiness_relations.onboarding_drafts_rel
+                          AND attname = required.attname
+                          AND NOT attisdropped
+                    )
+                ) AS onboarding_drafts_required_columns_ready
             FROM readiness_relations
         )
         SELECT readiness_relations.contacts_rel IS NOT NULL
            AND readiness_relations.lifecycle_rel IS NOT NULL
            AND readiness_relations.handoff_rel IS NOT NULL
+           AND readiness_relations.onboarding_drafts_rel IS NOT NULL
            AND readiness_columns.contacts_required_columns_ready
+           AND readiness_columns.onboarding_drafts_required_columns_ready
            AND EXISTS (
                SELECT 1
                FROM pg_class AS handoff_table

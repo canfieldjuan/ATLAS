@@ -84,11 +84,14 @@ Slice phase: vertical slice
 4. Widen the review queue and customer handoff to admit `won` leads, with
    the handoff fence and blocking predicates covering all eight booking
    event types.
-5. Create `eom_onboarding_email_drafts` (migration 360) with the atomic
-   single-send claim contract documented in the migration header, UNIQUE
-   operation_key replay idempotency, and a partial unique index allowing at
-   most one pending draft per contact; enqueue the rendered
-   `onboarding_welcome` template inside the won-completion transaction.
+5. Create `eom_onboarding_email_drafts` (migration 360) with claim
+   ownership modeled separately from delivery (pending -> sending -> sent,
+   readiness predicate built into the atomic claim), UNIQUE operation_key
+   replay idempotency, and a partial unique index allowing at most one
+   live draft per contact; enqueue the rendered `onboarding_welcome`
+   template inside the won-completion transaction, resolving the recipient
+   through the review queue's latest-intake projection; gate funnel
+   startup on the table so deployments ahead of the migration fail closed.
 6. Recreate the review-queue index (migration 358) and the booking
    operation-key index (migration 359) with widened predicates using the
    355/356/357 replay-safe ritual.
@@ -126,17 +129,34 @@ Slice phase: vertical slice
         `tests/test_eom_lead_conversion.py` and
         `tests/test_eom_lead_conversion_integration.py` when
         `ATLAS_MIGRATION_TEST_DATABASE_URL` is configured.
-  - [ ] The draft claim contract
-        `UPDATE ... SET status='sent' ... WHERE id=$1 AND status='pending'
-        RETURNING` settles to exactly one winner under two concurrent
-        sessions, and the partial unique index refuses a second pending
+  - [ ] The draft recipient resolves through the same latest-intake
+        projection the office review queue shows (ingress keeps
+        re-submitted addresses in the web_form interaction metadata, not
+        the contact column), settled by `tests/test_eom_lead_conversion.py`
+        and `tests/test_eom_lead_conversion_integration.py` when
+        `ATLAS_MIGRATION_TEST_DATABASE_URL` is configured.
+  - [ ] The draft claim contract models ownership separately from
+        delivery: claiming flips exactly one `pending` row to `sending`
+        under the built-in readiness predicate (blocked or recipient-less
+        rows are never claimable), two concurrent sessions settle to one
+        winner, delivery confirms `sending -> sent` only after transport
+        acceptance, and the partial unique index refuses a second live
         draft per contact, settled by
         `tests/test_eom_lead_conversion_integration.py` when
         `ATLAS_MIGRATION_TEST_DATABASE_URL` is configured.
+  - [ ] The shared funnel startup guard fails closed until migration 360
+        provisions the draft table and its required columns, so a
+        deployment ahead of the migration cannot admit the first-clean
+        route and wedge completions on undefined_table, settled by
+        `tests/test_eom_lead_conversion_integration.py` when
+        `ATLAS_MIGRATION_TEST_DATABASE_URL` is configured and
+        `tests/test_eom_render_profile.py`.
   - [ ] A booking key belongs to one family permanently; an unsettled
         operation of either family blocks the other family's prepare; a
-        completed estimate booking admits the first-clean prepare, settled
-        by `tests/test_eom_lead_conversion_integration.py` when
+        completed estimate booking admits the first-clean prepare, and a
+        booked outcome dominates that operation's own historical ambiguity
+        marker when the other family scans it, settled by
+        `tests/test_eom_lead_conversion_integration.py` when
         `ATLAS_MIGRATION_TEST_DATABASE_URL` is configured.
   - [ ] The review queue returns `won` leads and customer handoff approves
         from `won`, recording `from_stage='won'` in the customer-approved
@@ -208,8 +228,28 @@ seam in the enumeration; otherwise write "N/A - no boundary change."
     execution-scoped provider; a booking key found under another family's
     event types rejects 409 for every caller; unsettled operations of either
     family block the other family's prepare while completed estimate
-    bookings admit first-clean prepare; handoff and review read all eight
-    event types and the widened stage set.
+    bookings admit first-clean prepare, and a booked outcome dominates that
+    operation's own historical ambiguous/failed markers (same precedence
+    ladder as completion writers and handoff), so a reconciled estimate with
+    a stale ambiguity row cannot wedge the first clean; handoff and review
+    read all eight event types and the widened stage set; the draft
+    recipient resolves through the same latest-intake projection the review
+    queue shows before falling back to the contact column.
+- Boundary path/seam: atlas_brain/eom_api/funnel_store.py
+  - Replaced-path behaviors: the shared funnel readiness guard previously
+    admitted the funnel surface once contacts, lifecycle events, and
+    handoffs were provisioned; a deployment missing migration 360 would
+    have started, let Calendar creation succeed, and then wedged the
+    first-clean completion ambiguous on undefined_table.
+  - Guard-relevant fields: `to_regclass('eom_onboarding_email_drafts')`
+    plus the draft columns the enqueue and claim contract require
+    (`contact_id`, `operation_key`, `status`, `recipient_email`, `blocker`,
+    `subject`, `body`).
+  - Caller x input shape: the same enabled-funnel startup preflight in
+    `main.py`/`main_eom.py`; the guard fails closed with the existing
+    controlled RuntimeError until migration 360 is applied, exactly as it
+    already does for the lifecycle and handoff relations; disabled funnels
+    still skip the probe entirely.
 
 ### Deployed-config probing
 
@@ -238,6 +278,7 @@ fallback changes; otherwise write "N/A - no guard/config boundary change."
 
 - `.github/workflows/atlas_eom_lead_pipeline_checks.yml`
 - `atlas_brain/eom_api/funnel.py`
+- `atlas_brain/eom_api/funnel_store.py`
 - `atlas_brain/services/crm_provider.py`
 - `atlas_brain/services/eom_estimate_booking.py`
 - `atlas_brain/storage/migrations/358_eom_lead_review_queue_won_stage.sql`
@@ -284,13 +325,19 @@ Completion for the first-clean family updates `lead_stage` to `won` from
 the family's completion stages, appends `first_clean_booked` with the
 actual from-stage, and calls the draft-enqueue helper on the same
 transaction connection: rendered subject/body from
-`format_onboarding_welcome`, recipient snapshotted from the contact's
-current email, `blocker='no_email'` with a NULL recipient when the contact
-has none (never silently skip -- A3 surfaces the blocker like invoicing's
-needs_hours). The insert is `ON CONFLICT (operation_key) DO NOTHING` with a
-fallback SELECT, so a won-replay reports the existing draft id without a
-second row; a booked first clean without a draft row is impossible because
-they commit or roll back together.
+`format_onboarding_welcome`, recipient resolved through the same
+latest-intake projection the review queue shows (ingress leaves
+contacts.email unchanged on re-submission, so the contact column alone can
+be stale) with the contact email as fallback, and `blocker='no_email'`
+with a NULL recipient when neither exists (never silently skip -- A3
+surfaces the blocker like invoicing's needs_hours). The insert is
+`ON CONFLICT (operation_key) DO NOTHING` with a fallback SELECT, so a
+won-replay reports the existing draft id without a second row; a booked
+first clean without a draft row is impossible because they commit or roll
+back together. The shared funnel startup guard now also requires the
+draft table and its claim columns, so a deployment ahead of migration 360
+fails closed at startup instead of wedging completions on
+undefined_table.
 
 `eom_estimate_booking.py` mirrors the shape with a frozen
 `_EOMBookingServiceBinding` naming the deterministic-ID prefix (`eomest`
@@ -311,12 +358,26 @@ Migration 358 recreates the review-queue partial index with
 recreates the operation-key index with all eight booking event types; both
 use the concurrent drop-then-create ritual because a canceled concurrent
 build leaves an INVALID same-named index that IF NOT EXISTS would record as
-applied. Migration 360 creates `eom_onboarding_email_drafts` with the
-status CHECK, UNIQUE operation_key, the one-pending-per-contact partial
-unique index, and the single-send claim documented in the header:
-`UPDATE ... SET status='sent' ... WHERE id=$1 AND status='pending'
-RETURNING` -- the guard clause makes concurrent approvals settle to exactly
-one winner, which the two-session integration test proves.
+applied. Migration 358's header also documents the application-rollback
+data step: old code admits only `new`/`estimate_booked`, so reverting the
+application runs the documented UPDATE that returns won leads to
+`estimate_booked` -- stage state only; the append-only ledger keeps the
+`first_clean_booked` evidence, replays still return the booked outcome,
+and the booked-operation guard still refuses a second first-clean booking.
+
+Migration 360 creates `eom_onboarding_email_drafts` with claim ownership
+modeled separately from delivery: the status ladder is
+`pending -> sending -> sent` (plus `revoked`), the atomic claim documented
+in the header flips exactly one `pending` row to `sending` and carries the
+readiness predicate inline (`AND blocker IS NULL AND recipient_email IS
+NOT NULL`, so a blocked or recipient-less draft is never claimable),
+delivery is confirmed `sending -> sent` only after the transport accepts
+with the draft id as the transport idempotency key, and a row stuck in
+`sending` is operator reconciliation evidence rather than silently
+retryable. The partial unique index covers `('pending', 'sending')` so at
+most one live draft exists per contact. The two-session integration test
+proves the single-winner claim, the blocked-claim refusal, and the
+separate delivery confirmation.
 
 ## Intentional
 
@@ -385,6 +446,12 @@ pinned requirements.
 - `python scripts/check_deployed_config_probing.py --base origin/main --strict` -- OK.
 - `python -m pytest tests/test_eom_render_profile.py::test_eom_profile_import_does_not_load_full_api_package -q` -- 1 passed; the slim profile exposes the first-clean route.
 - `python -m pytest tests/test_eom_render_profile.py -q` -- 56 passed; 5 environment-only failures (llm-registry deps, receivables subprocess env) reproduced identically on an origin/main worktree.
+
+Round-1 Codex reconciliation reverification (same environment caveats):
+
+- `python -m pytest tests/test_eom_lead_conversion.py tests/test_migrations_runner.py -q` -- 145 passed, 1 skipped; the pre-existing torch-import trio.
+- `ATLAS_MIGRATION_TEST_DATABASE_URL=postgresql://postgres@localhost:5433/atlas_migration_tests python -m pytest tests/test_eom_lead_conversion_integration.py -q` -- 33 passed against disposable Postgres 16, adding the latest-intake recipient proof, the two-phase claim/confirm proof with blocked-claim refusal, the drafts-relation startup-guard admission case, and the cross-family mixed-marker regression; the pre-existing torch-import trio.
+- `python -m pytest tests/test_eom_render_profile.py::test_shared_eom_funnel_datastore_guard_keeps_missing_relations_in_verdict tests/test_eom_render_profile.py::test_eom_profile_import_does_not_load_full_api_package -q` -- 2 passed.
 - `python scripts/maturity_sweep.py atlas_brain/templates --tests-root tests --baseline tests/maturity_sweep/baseline_atlas_brain_templates.json --min-score 8` (with the workflow's sensitive globs) -- ratchet gate passed; `onboarding_welcome.py` scores 6, below the ratchet threshold.
 
 ## Estimated diff size
@@ -393,19 +460,20 @@ pinned requirements.
 |---|---:|
 | `.github/workflows/atlas_eom_lead_pipeline_checks.yml` | 10 |
 | `atlas_brain/eom_api/funnel.py` | 46 |
-| `atlas_brain/services/crm_provider.py` | 483 |
+| `atlas_brain/eom_api/funnel_store.py` | 26 |
+| `atlas_brain/services/crm_provider.py` | 689 |
 | `atlas_brain/services/eom_estimate_booking.py` | 156 |
-| `atlas_brain/storage/migrations/358_eom_lead_review_queue_won_stage.sql` | 33 |
+| `atlas_brain/storage/migrations/358_eom_lead_review_queue_won_stage.sql` | 48 |
 | `atlas_brain/storage/migrations/359_eom_booking_operation_key_index_first_clean.sql` | 46 |
-| `atlas_brain/storage/migrations/360_eom_onboarding_email_drafts.sql` | 53 |
+| `atlas_brain/storage/migrations/360_eom_onboarding_email_drafts.sql` | 80 |
 | `atlas_brain/templates/email/__init__.py` | 5 |
 | `atlas_brain/templates/email/onboarding_welcome.py` | 61 |
-| `plans/PR-EOM-First-Clean-Won.md` | 420 |
-| `tests/test_eom_lead_conversion.py` | 400 |
-| `tests/test_eom_lead_conversion_integration.py` | 714 |
-| `tests/test_eom_render_profile.py` | 1 |
-| `tests/test_migrations_runner.py` | 109 |
-| **Total** | **2542** |
+| `plans/PR-EOM-First-Clean-Won.md` | 560 |
+| `tests/test_eom_lead_conversion.py` | 433 |
+| `tests/test_eom_lead_conversion_integration.py` | 898 |
+| `tests/test_eom_render_profile.py` | 6 |
+| `tests/test_migrations_runner.py` | 140 |
+| **Total** | **3204** |
 
 ## Cold diff reconstruction
 
@@ -432,8 +500,8 @@ Change-by-change reconstruction against the contract:
 - The first-clean markers bind the shared ambiguous/failed internals with
   family event types as bind parameters, on the unchanged
   `eom-estimate-booking:` lock prefixes. Citations:
-  `atlas_brain/services/crm_provider.py:1855`,
-  `atlas_brain/services/crm_provider.py:1917`.
+  `atlas_brain/services/crm_provider.py:1891`,
+  `atlas_brain/services/crm_provider.py:1987`.
 - `complete_eom_first_clean_booking` binds `_complete_eom_booking`, which
   updates the widened completion stages to `won`, appends
   `first_clean_booked` with the actual from-stage, and calls
@@ -441,15 +509,15 @@ Change-by-change reconstruction against the contract:
   the helper renders the template, snapshots the recipient, records the
   `no_email` blocker, and is replay-idempotent via
   `ON CONFLICT (operation_key) DO NOTHING` plus a fallback SELECT.
-  Citations: `atlas_brain/services/crm_provider.py:1983`,
-  `atlas_brain/services/crm_provider.py:1986`,
-  `atlas_brain/services/crm_provider.py:2182`.
+  Citations: `atlas_brain/services/crm_provider.py:2078`,
+  `atlas_brain/services/crm_provider.py:2106`,
+  `atlas_brain/services/crm_provider.py:2302`.
 - The execution lock docstring documents the shared cross-family namespace;
   handoff fetches all eight event types, fences in-flight executions, and
   admits `won`; the review queue filters
   `lead_stage IN ('new', 'estimate_booked', 'won')`. Citations:
   `atlas_brain/services/crm_provider.py:1424`,
-  `atlas_brain/services/crm_provider.py:2661`,
+  `atlas_brain/services/crm_provider.py:2807`,
   `atlas_brain/services/crm_provider.py:1249`.
 - The service module gains `EOMFirstCleanBooking`, the
   `_EOMBookingServiceBinding` config, the `eomfcl` deterministic-ID helper,
@@ -493,11 +561,11 @@ Change-by-change reconstruction against the contract:
   two-session claim contract; the fence over an in-flight first-clean
   execution; status-flip settlement; and cross-family ownership/blocking.
   Citations: `tests/test_eom_lead_conversion_integration.py:2216`,
-  `tests/test_eom_lead_conversion_integration.py:2442`,
-  `tests/test_eom_lead_conversion_integration.py:2515`,
-  `tests/test_eom_lead_conversion_integration.py:2597`,
-  `tests/test_eom_lead_conversion_integration.py:2695`,
-  `tests/test_eom_lead_conversion_integration.py:2792`.
+  `tests/test_eom_lead_conversion_integration.py:2447`,
+  `tests/test_eom_lead_conversion_integration.py:2634`,
+  `tests/test_eom_lead_conversion_integration.py:2743`,
+  `tests/test_eom_lead_conversion_integration.py:2841`,
+  `tests/test_eom_lead_conversion_integration.py:2938`.
 - Migration-shape tests assert the 358/359 ritual and predicates and the
   360 schema/claim documentation. Citations:
   `tests/test_migrations_runner.py:277`,
@@ -506,6 +574,25 @@ Change-by-change reconstruction against the contract:
 - The slim Render profile test now asserts the first-clean route is exposed
   without loading the full API/config/reasoning stack, preserving the slim
   EOM runtime boundary. Citation: `tests/test_eom_render_profile.py:225`.
+- Round-1 Codex reconciliation: the estimate wrappers (complete + both
+  markers) keep their original typed keyword-only signatures and the
+  first-clean siblings match; the other-operation predicate lets a booked
+  outcome dominate that operation's own historical ambiguity (with the
+  cross-family mixed-marker regression); the draft recipient resolves
+  through the review queue's latest-intake projection with an
+  ingress-shaped integration proof; the shared funnel startup guard
+  requires the drafts relation and claim columns; migration 360 models
+  claim ownership separately from delivery (pending -> sending -> sent,
+  readiness predicate inline, live-draft unique index) with the two-phase
+  proof; migration 358 documents the application-rollback data step for
+  persisted won leads. Citations:
+  `atlas_brain/services/crm_provider.py:1851`,
+  `atlas_brain/services/crm_provider.py:1668`,
+  `atlas_brain/services/crm_provider.py:2302`,
+  `atlas_brain/eom_api/funnel_store.py:26`,
+  `atlas_brain/storage/migrations/360_eom_onboarding_email_drafts.sql:13`,
+  `atlas_brain/storage/migrations/358_eom_lead_review_queue_won_stage.sql:26`,
+  `tests/test_eom_lead_conversion_integration.py:2539`.
 
 Scope check:
 

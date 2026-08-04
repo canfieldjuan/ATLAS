@@ -1482,31 +1482,42 @@ async def test_private_first_clean_booking_idempotent_replay_skips_calendar_side
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
-    ("contact_email", "expected_recipient", "expected_blocker"),
+    ("contact_email", "latest_intake_email", "expected_recipient", "expected_blocker"),
     (
-        ("lead@example.com", "lead@example.com", None),
-        ("", None, "no_email"),
-        (None, None, "no_email"),
-        ("   ", None, "no_email"),
+        ("lead@example.com", None, "lead@example.com", None),
+        # Ingress leaves contacts.email unchanged on re-submission; the
+        # latest intake projection must win over the stale contact column.
+        ("stale@example.com", "fresh@example.com", "fresh@example.com", None),
+        (None, "fresh@example.com", "fresh@example.com", None),
+        ("", None, None, "no_email"),
+        (None, None, None, "no_email"),
+        ("   ", None, None, "no_email"),
     ),
 )
 async def test_onboarding_draft_enqueue_snapshots_recipient_or_records_blocker(
-    contact_email, expected_recipient, expected_blocker
+    contact_email, latest_intake_email, expected_recipient, expected_blocker
 ):
     """A contact without an email is enqueued with blocker='no_email' rather
-    than silently skipped, so the approval queue surfaces the gap."""
+    than silently skipped, and the recipient resolves through the same
+    latest-intake projection the review queue shows."""
     from atlas_brain.services.crm_provider import DatabaseCRMProvider
     from atlas_brain.templates.email import format_onboarding_welcome
 
     class _Conn:
-        def __init__(self) -> None:
+        def __init__(self, intake_email) -> None:
+            self.intake_email = intake_email
+            self.fetchval_calls: list[tuple[str, tuple[object, ...]]] = []
             self.fetchrow_calls: list[tuple[str, tuple[object, ...]]] = []
+
+        async def fetchval(self, query: str, *args):
+            self.fetchval_calls.append((query, args))
+            return self.intake_email
 
         async def fetchrow(self, query: str, *args):
             self.fetchrow_calls.append((query, args))
             return {"id": UUID("0b8db22e-16b1-4a30-a15f-6c78ee9204a5")}
 
-    conn = _Conn()
+    conn = _Conn(latest_intake_email)
     contact_id = uuid4()
     draft_id = await DatabaseCRMProvider._enqueue_eom_onboarding_email_draft(
         conn,
@@ -1519,6 +1530,10 @@ async def test_onboarding_draft_enqueue_snapshots_recipient_or_records_blocker(
     )
 
     assert draft_id == "0b8db22e-16b1-4a30-a15f-6c78ee9204a5"
+    intake_query, intake_args = conn.fetchval_calls[0]
+    assert "contact_interactions" in intake_query
+    assert "submitted_email" in intake_query
+    assert intake_args == (str(contact_id),)
     query, args = conn.fetchrow_calls[0]
     assert "INSERT INTO eom_onboarding_email_drafts" in query
     assert "ON CONFLICT (operation_key) DO NOTHING" in query

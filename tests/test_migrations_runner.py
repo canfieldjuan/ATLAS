@@ -306,6 +306,13 @@ def test_eom_lead_review_queue_won_stage_index_matches_provider_filter():
     assert "lead_stage IN ('new', 'estimate_booked', 'won')" in migration
     assert "Rollback evidence:" in migration
     assert "lead_stage IN ('new', 'estimate_booked')" in migration
+    # Application rollback keeps persisted won leads operable under old
+    # code (which admits only new/estimate_booked to review and handoff):
+    # the documented data step reverts stage state while the append-only
+    # ledger keeps the first_clean_booked evidence.
+    assert "Application rollback" in migration
+    assert "UPDATE contacts SET lead_stage = 'estimate_booked'" in migration
+    assert "AND lead_stage = 'won'" in migration
 
 
 def test_eom_booking_operation_key_index_covers_first_clean_events():
@@ -368,16 +375,26 @@ def test_eom_onboarding_email_drafts_migration_is_additive_and_single_send_safe(
     assert "CREATE TABLE IF NOT EXISTS eom_onboarding_email_drafts" in migration
     assert "contact_id UUID NOT NULL REFERENCES contacts(id) ON DELETE RESTRICT" in migration
     assert "operation_key VARCHAR(128) NOT NULL UNIQUE" in migration
-    assert "CHECK (status IN ('pending', 'sent', 'revoked'))" in migration
+    # Claim ownership ('sending') is modeled separately from confirmed
+    # delivery ('sent') so a crashed send can never be recorded as sent.
+    assert "CHECK (status IN ('pending', 'sending', 'sent', 'revoked'))" in migration
+    assert "claimed_at TIMESTAMPTZ" in migration
     assert "subject TEXT NOT NULL" in migration
     assert "body TEXT NOT NULL" in migration
-    # At most one live pending draft per contact.
-    assert "uq_eom_onboarding_email_drafts_pending_contact" in migration
-    assert "WHERE status = 'pending'" in migration
-    # The A3 approval surface inherits the atomic single-send claim from this
-    # header; the guard clause must be documented verbatim.
-    assert "WHERE id = $1 AND status = 'pending'" in migration
+    # At most one live draft per contact, across pending AND sending.
+    assert "uq_eom_onboarding_email_drafts_live_contact" in migration
+    assert "WHERE status IN ('pending', 'sending')" in migration
+    # The A3 approval surface inherits the atomic claim from this header:
+    # single winner, readiness predicate built in (no blocked or
+    # recipient-less row is claimable), delivery confirmed separately.
+    assert "SET status = 'sending', claimed_at = NOW()" in migration
+    assert "AND status = 'pending'" in migration
+    assert "AND blocker IS NULL" in migration
+    assert "AND recipient_email IS NOT NULL" in migration
     assert "RETURNING" in migration
+    assert "SET status = 'sent', sent_at = NOW()" in migration
+    assert "WHERE id = $1 AND status = 'sending'" in migration
+    assert "idempotency key" in migration
     assert "Rollback evidence:" in migration
     assert "ALTER TABLE" not in upper
     assert "CONCURRENTLY" not in upper

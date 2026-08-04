@@ -1654,23 +1654,31 @@ class DatabaseCRMProvider:
             # family (pending or ambiguous work must reconcile first), or
             # when it completed THIS family's booking (one estimate and one
             # first clean per lead). A completed booking in the other family
-            # never blocks: estimate booked -> first clean booked is the
-            # funnel's normal path.
+            # never blocks -- estimate booked -> first clean booked is the
+            # funnel's normal path -- and a booked outcome dominates that
+            # operation's own historical ambiguity/failed markers (the same
+            # precedence ladder the completion writers and handoff enforce),
+            # so a reconciled estimate with a stale ambiguous row cannot
+            # permanently wedge the first clean.
+            def _other_operation_blocks(event_types: set[str]) -> bool:
+                if family.booked_event in event_types:
+                    return True
+                if event_types & _ALL_EOM_BOOKED_EVENTS:
+                    return False
+                if event_types & _ALL_EOM_AMBIGUOUS_EVENTS:
+                    return True
+                return bool(
+                    event_types & _ALL_EOM_REQUESTED_EVENTS
+                ) and not self._eom_estimate_booking_operation_is_terminal(
+                    event_types
+                )
+
             other_operation = next(
                 (
                     operation_key
                     for operation_key, event_types in operation_event_types.items()
                     if operation_key != booking_key
-                    and (
-                        family.booked_event in event_types
-                        or bool(event_types & _ALL_EOM_AMBIGUOUS_EVENTS)
-                        or (
-                            bool(event_types & _ALL_EOM_REQUESTED_EVENTS)
-                            and not self._eom_estimate_booking_operation_is_terminal(
-                                event_types
-                            )
-                        )
-                    )
+                    and _other_operation_blocks(event_types)
                 ),
                 None,
             )
@@ -1840,16 +1848,44 @@ class DatabaseCRMProvider:
         )
         return str(row["id"]) if row else None
 
-    async def mark_eom_estimate_booking_calendar_ambiguous(self, **kwargs: Any) -> None:
+    async def mark_eom_estimate_booking_calendar_ambiguous(
+        self,
+        *,
+        contact_id: str,
+        booking_key: str,
+        expected_calendar_event_id: str,
+        observed_calendar_event_id: str,
+        actor_id: int,
+        actor_name: str,
+    ) -> None:
         await self._mark_eom_booking_calendar_ambiguous(
-            _ESTIMATE_BOOKING_FAMILY, **kwargs
+            _ESTIMATE_BOOKING_FAMILY,
+            contact_id=contact_id,
+            booking_key=booking_key,
+            expected_calendar_event_id=expected_calendar_event_id,
+            observed_calendar_event_id=observed_calendar_event_id,
+            actor_id=actor_id,
+            actor_name=actor_name,
         )
 
     async def mark_eom_first_clean_booking_calendar_ambiguous(
-        self, **kwargs: Any
+        self,
+        *,
+        contact_id: str,
+        booking_key: str,
+        expected_calendar_event_id: str,
+        observed_calendar_event_id: str,
+        actor_id: int,
+        actor_name: str,
     ) -> None:
         await self._mark_eom_booking_calendar_ambiguous(
-            _FIRST_CLEAN_BOOKING_FAMILY, **kwargs
+            _FIRST_CLEAN_BOOKING_FAMILY,
+            contact_id=contact_id,
+            booking_key=booking_key,
+            expected_calendar_event_id=expected_calendar_event_id,
+            observed_calendar_event_id=observed_calendar_event_id,
+            actor_id=actor_id,
+            actor_name=actor_name,
         )
 
     async def _mark_eom_booking_calendar_ambiguous(
@@ -1904,14 +1940,48 @@ class DatabaseCRMProvider:
                 family.booked_event,
             )
 
-    async def mark_eom_estimate_booking_calendar_failed(self, **kwargs: Any) -> None:
-        await self._mark_eom_booking_calendar_failed(_ESTIMATE_BOOKING_FAMILY, **kwargs)
-
-    async def mark_eom_first_clean_booking_calendar_failed(
-        self, **kwargs: Any
+    async def mark_eom_estimate_booking_calendar_failed(
+        self,
+        *,
+        contact_id: str,
+        booking_key: str,
+        expected_calendar_event_id: str,
+        calendar_error: str | None,
+        calendar_message: str,
+        actor_id: int,
+        actor_name: str,
     ) -> None:
         await self._mark_eom_booking_calendar_failed(
-            _FIRST_CLEAN_BOOKING_FAMILY, **kwargs
+            _ESTIMATE_BOOKING_FAMILY,
+            contact_id=contact_id,
+            booking_key=booking_key,
+            expected_calendar_event_id=expected_calendar_event_id,
+            calendar_error=calendar_error,
+            calendar_message=calendar_message,
+            actor_id=actor_id,
+            actor_name=actor_name,
+        )
+
+    async def mark_eom_first_clean_booking_calendar_failed(
+        self,
+        *,
+        contact_id: str,
+        booking_key: str,
+        expected_calendar_event_id: str,
+        calendar_error: str | None,
+        calendar_message: str,
+        actor_id: int,
+        actor_name: str,
+    ) -> None:
+        await self._mark_eom_booking_calendar_failed(
+            _FIRST_CLEAN_BOOKING_FAMILY,
+            contact_id=contact_id,
+            booking_key=booking_key,
+            expected_calendar_event_id=expected_calendar_event_id,
+            calendar_error=calendar_error,
+            calendar_message=calendar_message,
+            actor_id=actor_id,
+            actor_name=actor_name,
         )
 
     async def _mark_eom_booking_calendar_failed(
@@ -1977,11 +2047,61 @@ class DatabaseCRMProvider:
                 family.ambiguous_event,
             )
 
-    async def complete_eom_estimate_booking(self, **kwargs: Any) -> dict[str, Any]:
-        return await self._complete_eom_booking(_ESTIMATE_BOOKING_FAMILY, **kwargs)
+    async def complete_eom_estimate_booking(
+        self,
+        *,
+        contact_id: str,
+        scheduled_start: datetime,
+        scheduled_end: datetime,
+        calendar_id: str,
+        notes: str | None,
+        booking_key: str,
+        expected_calendar_event_id: str,
+        calendar_event_id: str,
+        actor_id: int,
+        actor_name: str,
+    ) -> dict[str, Any]:
+        return await self._complete_eom_booking(
+            _ESTIMATE_BOOKING_FAMILY,
+            contact_id=contact_id,
+            scheduled_start=scheduled_start,
+            scheduled_end=scheduled_end,
+            calendar_id=calendar_id,
+            notes=notes,
+            booking_key=booking_key,
+            expected_calendar_event_id=expected_calendar_event_id,
+            calendar_event_id=calendar_event_id,
+            actor_id=actor_id,
+            actor_name=actor_name,
+        )
 
-    async def complete_eom_first_clean_booking(self, **kwargs: Any) -> dict[str, Any]:
-        return await self._complete_eom_booking(_FIRST_CLEAN_BOOKING_FAMILY, **kwargs)
+    async def complete_eom_first_clean_booking(
+        self,
+        *,
+        contact_id: str,
+        scheduled_start: datetime,
+        scheduled_end: datetime,
+        calendar_id: str,
+        notes: str | None,
+        booking_key: str,
+        expected_calendar_event_id: str,
+        calendar_event_id: str,
+        actor_id: int,
+        actor_name: str,
+    ) -> dict[str, Any]:
+        return await self._complete_eom_booking(
+            _FIRST_CLEAN_BOOKING_FAMILY,
+            contact_id=contact_id,
+            scheduled_start=scheduled_start,
+            scheduled_end=scheduled_end,
+            calendar_id=calendar_id,
+            notes=notes,
+            booking_key=booking_key,
+            expected_calendar_event_id=expected_calendar_event_id,
+            calendar_event_id=calendar_event_id,
+            actor_id=actor_id,
+            actor_name=actor_name,
+        )
 
     async def _complete_eom_booking(
         self,
@@ -2187,15 +2307,41 @@ class DatabaseCRMProvider:
         Runs in the same transaction as the won transition, so a booked
         first clean without a draft row is impossible. Nothing is sent
         here: the draft stays 'pending' until the approval surface claims
-        it with UPDATE ... WHERE status = 'pending' RETURNING (the atomic
-        single-send contract documented in migration 360). A contact with
-        no email is enqueued with blocker='no_email' rather than skipped,
-        so the approval queue surfaces the gap. Replay is idempotent via
-        UNIQUE(operation_key).
+        it with the single-send contract documented in migration 360. A
+        contact with no email is enqueued with blocker='no_email' rather
+        than skipped, so the approval queue surfaces the gap. Replay is
+        idempotent via UNIQUE(operation_key).
+
+        The recipient resolves through the same latest-intake projection
+        the office review queue shows: ingress deliberately leaves
+        contacts.email unchanged when an existing contact re-submits with
+        a new address (the new address lives in the web_form interaction
+        metadata), so snapshotting contacts.email alone could target an
+        obsolete inbox.
         """
         from ..templates.email import format_onboarding_welcome
 
-        recipient = str(contact.get("email") or "").strip() or None
+        latest_intake_email = await conn.fetchval(
+            """
+            SELECT NULLIF(ci.metadata->>'submitted_email', '')
+            FROM contact_interactions AS ci
+            WHERE ci.contact_id = $1::uuid
+              AND ci.interaction_type = 'web_form'
+              AND ci.intent = 'estimate_request'
+              AND (
+                  NULLIF(ci.metadata->>'submitted_email', '') IS NOT NULL
+                  OR NULLIF(ci.metadata->>'submitted_phone', '') IS NOT NULL
+              )
+            ORDER BY ci.occurred_at DESC, ci.created_at DESC, ci.id DESC
+            LIMIT 1
+            """,
+            str(contact["id"]),
+        )
+        recipient = (
+            str(latest_intake_email or "").strip()
+            or str(contact.get("email") or "").strip()
+            or None
+        )
         subject, body = format_onboarding_welcome(
             client_name=str(contact.get("full_name") or "")
         )

@@ -1894,7 +1894,12 @@ async def test_privilege_migration_satisfies_the_enabled_full_app_startup_guard(
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
     "missing_relation",
-    ("contacts", "eom_lead_lifecycle_events", "eom_customer_handoffs"),
+    (
+        "contacts",
+        "eom_lead_lifecycle_events",
+        "eom_customer_handoffs",
+        "eom_onboarding_email_drafts",
+    ),
 )
 async def test_enabled_shared_guard_returns_controlled_error_when_required_relation_is_absent(
     missing_relation: str,
@@ -2495,6 +2500,25 @@ async def test_first_clean_draft_enqueue_records_no_email_blocker_and_one_pendin
         assert draft["blocker"] == "no_email"
         assert draft["status"] == "pending"
 
+        # The migration-360 claim predicate refuses blocked rows outright: a
+        # draft with no usable recipient can never be claimed into sending.
+        blocked_claim = await conn.fetchrow(
+            """
+            UPDATE eom_onboarding_email_drafts
+               SET status = 'sending', claimed_at = NOW(),
+                   approved_by_employee_id = $2, approved_by_name = $3
+             WHERE id = $1::uuid
+               AND status = 'pending'
+               AND blocker IS NULL
+               AND recipient_email IS NOT NULL
+             RETURNING id
+            """,
+            draft["id"],
+            1,
+            "Juan Canfield",
+        )
+        assert blocked_claim is None
+
         with pytest.raises(asyncpg.UniqueViolationError):
             await conn.execute(
                 """
@@ -2506,6 +2530,101 @@ async def test_first_clean_draft_enqueue_records_no_email_blocker_and_one_pendin
                 contact_id,
                 f"office-first-clean-{uuid.uuid4().hex}",
             )
+    finally:
+        await conn.execute(f'DROP SCHEMA IF EXISTS "{schema}" CASCADE')
+        await conn.close()
+
+
+@pytest.mark.asyncio
+async def test_first_clean_draft_recipient_follows_latest_intake_projection():
+    """Ingress leaves contacts.email unchanged when an existing contact
+    re-submits with a new address (the new address lives in the web_form
+    interaction metadata), so the draft recipient must resolve through the
+    same latest-intake projection the office review queue shows -- not the
+    stale contact column."""
+    database_url = _database_url_or_skip()
+    schema = f"atlas_eom_first_clean_recipient_{uuid.uuid4().hex}"
+    conn = await asyncpg.connect(database_url)
+    try:
+        await _prepare_schema(conn, schema)
+        provider = DatabaseCRMProvider(pool=conn)
+        contact_id = uuid.uuid4()
+        first_clean_key = f"office-first-clean-{uuid.uuid4().hex}"
+        first_clean_event_id = deterministic_eom_first_clean_calendar_event_id(
+            contact_id=str(contact_id),
+            booking_key=first_clean_key,
+        )
+        start = datetime(2026, 8, 11, 14, 0, tzinfo=timezone.utc)
+        end = datetime(2026, 8, 11, 17, 0, tzinfo=timezone.utc)
+        await _insert_contact(
+            conn,
+            contact_id=contact_id,
+            full_name="Re-Submitting Lead",
+            email="stale-original@example.com",
+        )
+        # The same ingress-shaped interaction rows the review projection
+        # reads: an older re-submission and the latest one.
+        await conn.execute(
+            """
+            INSERT INTO contact_interactions (
+                id, contact_id, interaction_type, summary, intent, occurred_at, metadata
+            ) VALUES (
+                $1, $2, 'web_form', 'older re-submission', 'estimate_request', $3,
+                '{"submitted_email":"older-address@example.com","submitted_phone":"2175550102"}'::jsonb
+            )
+            """,
+            uuid.uuid4(),
+            contact_id,
+            datetime(2026, 8, 10, 12, 0, tzinfo=timezone.utc),
+        )
+        await conn.execute(
+            """
+            INSERT INTO contact_interactions (
+                id, contact_id, interaction_type, summary, intent, occurred_at, metadata
+            ) VALUES (
+                $1, $2, 'web_form', 'latest re-submission', 'estimate_request', $3,
+                '{"submitted_email":"latest-address@example.com","submitted_phone":"2175550199"}'::jsonb
+            )
+            """,
+            uuid.uuid4(),
+            contact_id,
+            datetime(2026, 8, 10, 13, 0, tzinfo=timezone.utc),
+        )
+
+        review_rows = await provider.list_eom_new_lead_review_items(limit=10)
+        assert review_rows[0]["email"] == "latest-address@example.com"
+
+        await provider.prepare_eom_first_clean_booking(
+            contact_id=str(contact_id),
+            scheduled_start=start,
+            scheduled_end=end,
+            calendar_id="estimate-calendar",
+            notes=None,
+            booking_key=first_clean_key,
+            expected_calendar_event_id=first_clean_event_id,
+            actor_id=1,
+            actor_name="Juan Canfield",
+        )
+        completed = await provider.complete_eom_first_clean_booking(
+            contact_id=str(contact_id),
+            scheduled_start=start,
+            scheduled_end=end,
+            calendar_id="estimate-calendar",
+            notes=None,
+            booking_key=first_clean_key,
+            expected_calendar_event_id=first_clean_event_id,
+            calendar_event_id=first_clean_event_id,
+            actor_id=1,
+            actor_name="Juan Canfield",
+        )
+
+        draft = await conn.fetchrow(
+            "SELECT recipient_email, blocker FROM eom_onboarding_email_drafts "
+            "WHERE id = $1::uuid",
+            completed["onboarding_draft_id"],
+        )
+        assert draft["recipient_email"] == "latest-address@example.com"
+        assert draft["blocker"] is None
     finally:
         await conn.execute(f'DROP SCHEMA IF EXISTS "{schema}" CASCADE')
         await conn.close()
@@ -2565,9 +2684,12 @@ async def test_onboarding_draft_claim_contract_wins_exactly_once_under_two_sessi
         await claimer_conn.execute(f'SET search_path TO "{schema}", public')
         claim_sql = """
             UPDATE eom_onboarding_email_drafts
-               SET status = 'sent', sent_at = NOW(),
+               SET status = 'sending', claimed_at = NOW(),
                    approved_by_employee_id = $2, approved_by_name = $3
-             WHERE id = $1::uuid AND status = 'pending'
+             WHERE id = $1::uuid
+               AND status = 'pending'
+               AND blocker IS NULL
+               AND recipient_email IS NOT NULL
              RETURNING id
         """
         first_claim, second_claim = await asyncio.gather(
@@ -2577,15 +2699,39 @@ async def test_onboarding_draft_claim_contract_wins_exactly_once_under_two_sessi
         winners = [row for row in (first_claim, second_claim) if row is not None]
         assert len(winners) == 1
 
-        settled = await conn.fetchrow(
-            "SELECT status, sent_at FROM eom_onboarding_email_drafts "
+        claimed = await conn.fetchrow(
+            "SELECT status, claimed_at, sent_at FROM eom_onboarding_email_drafts "
             "WHERE id = $1::uuid",
             draft_id,
         )
-        assert settled["status"] == "sent"
-        assert settled["sent_at"] is not None
+        assert claimed["status"] == "sending"
+        assert claimed["claimed_at"] is not None
+        assert claimed["sent_at"] is None
         late_claim = await conn.fetchrow(claim_sql, draft_id, 3, "Tina Gomez")
         assert late_claim is None
+
+        # Delivery is confirmed separately, only after transport acceptance.
+        confirmed = await conn.fetchrow(
+            """
+            UPDATE eom_onboarding_email_drafts
+               SET status = 'sent', sent_at = NOW()
+             WHERE id = $1::uuid AND status = 'sending'
+             RETURNING status, sent_at
+            """,
+            draft_id,
+        )
+        assert confirmed["status"] == "sent"
+        assert confirmed["sent_at"] is not None
+        reconfirm = await conn.fetchrow(
+            """
+            UPDATE eom_onboarding_email_drafts
+               SET status = 'sent', sent_at = NOW()
+             WHERE id = $1::uuid AND status = 'sending'
+             RETURNING id
+            """,
+            draft_id,
+        )
+        assert reconfirm is None
     finally:
         if claimer_conn is not None:
             await claimer_conn.close()
@@ -2879,6 +3025,30 @@ async def test_booking_key_ownership_and_blocking_across_families():
             await provider.prepare_eom_first_clean_booking(
                 **_first_clean_kwargs(estimate_key)
             )
+
+        # A reconciled estimate operation can legitimately carry BOTH a
+        # historical ambiguous marker and the booked outcome (the A1
+        # precedence ladder); the booked outcome must dominate that stale
+        # ambiguity when the first-clean prepare scans other operations,
+        # or the normal estimate -> first clean path wedges permanently.
+        await conn.execute(
+            """
+            INSERT INTO eom_lead_lifecycle_events (
+                contact_id, event_type, from_stage, to_stage, actor,
+                source, operation_key, metadata
+            )
+            VALUES ($1::uuid, 'estimate_booking_calendar_ambiguous',
+                    'estimate_booked', 'estimate_booked',
+                    'employee:1:Juan Canfield', 'eom_office', $2::varchar,
+                    jsonb_build_object(
+                        'expected_calendar_event_id', $3::text,
+                        'observed_calendar_event_id', ''
+                    ))
+            """,
+            contact_id,
+            estimate_key,
+            estimate_event_id,
+        )
 
         # The settled estimate booking is the normal path into first clean.
         prepared = await provider.prepare_eom_first_clean_booking(
