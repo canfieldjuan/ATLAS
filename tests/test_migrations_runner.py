@@ -274,6 +274,132 @@ def test_eom_estimate_booking_operation_key_index_is_additive_and_leading_key():
     assert "ALTER TABLE" not in upper
 
 
+def test_eom_lead_review_queue_won_stage_index_matches_provider_filter():
+    migration = (
+        Path(__file__).resolve().parent.parent
+        / "atlas_brain"
+        / "storage"
+        / "migrations"
+        / "358_eom_lead_review_queue_won_stage.sql"
+    ).read_text()
+
+    # Replay-safe pattern (same as migrations 355/356/357): the drop must be
+    # real and must precede the recreate; IF NOT EXISTS on the create would
+    # record an INVALID leftover index as applied.
+    assert "CREATE INDEX CONCURRENTLY IF NOT EXISTS" not in migration
+    assert (
+        migration.count(
+            "DROP INDEX CONCURRENTLY IF EXISTS idx_contacts_eom_lead_review_queue"
+        )
+        >= 2
+    )  # rollback-evidence comment + the executable statement
+    assert "CREATE INDEX CONCURRENTLY idx_contacts_eom_lead_review_queue" in migration
+    assert migration.index(
+        "DROP INDEX CONCURRENTLY IF EXISTS idx_contacts_eom_lead_review_queue"
+    ) < migration.index(
+        "CREATE INDEX CONCURRENTLY idx_contacts_eom_lead_review_queue"
+    )
+    assert "ON contacts (created_at DESC, id DESC)" in migration
+    assert "business_context_id = 'effingham_maids'" in migration
+    assert "status = 'active'" in migration
+    assert "contact_type = 'lead'" in migration
+    assert "lead_stage IN ('new', 'estimate_booked', 'won')" in migration
+    assert "Rollback evidence:" in migration
+    assert "lead_stage IN ('new', 'estimate_booked')" in migration
+    # Application rollback keeps persisted won leads operable under old
+    # code (which admits only new/estimate_booked to review and handoff):
+    # the documented data step reverts stage state while the append-only
+    # ledger keeps the first_clean_booked evidence.
+    assert "Application rollback" in migration
+    assert "UPDATE contacts SET lead_stage = 'estimate_booked'" in migration
+    assert "AND lead_stage = 'won'" in migration
+
+
+def test_eom_booking_operation_key_index_covers_first_clean_events():
+    migration = (
+        Path(__file__).resolve().parent.parent
+        / "atlas_brain"
+        / "storage"
+        / "migrations"
+        / "359_eom_booking_operation_key_index_first_clean.sql"
+    ).read_text()
+    upper = migration.upper()
+
+    # Replay-safe pattern (same as migration 357): real drop preceding the
+    # recreate, no IF NOT EXISTS on the create.
+    assert "CREATE INDEX CONCURRENTLY IF NOT EXISTS" not in migration
+    assert (
+        migration.count(
+            "DROP INDEX CONCURRENTLY IF EXISTS "
+            "idx_eom_lead_lifecycle_booking_operation_key"
+        )
+        >= 2
+    )  # rollback-evidence comment + the executable statement
+    assert (
+        "CREATE INDEX CONCURRENTLY idx_eom_lead_lifecycle_booking_operation_key"
+        in migration
+    )
+    assert migration.index(
+        "DROP INDEX CONCURRENTLY IF EXISTS "
+        "idx_eom_lead_lifecycle_booking_operation_key"
+    ) < migration.index(
+        "CREATE INDEX CONCURRENTLY idx_eom_lead_lifecycle_booking_operation_key"
+    )
+    assert "ON eom_lead_lifecycle_events (operation_key, contact_id, event_type)" in migration
+    assert "operation_key IS NOT NULL" in migration
+    # Both booking families must stay covered so cross-family ownership
+    # checks keep the leading-key access path.
+    assert "'estimate_booking_requested'" in migration
+    assert "'estimate_booking_calendar_failed'" in migration
+    assert "'estimate_booking_calendar_ambiguous'" in migration
+    assert "'estimate_booked'" in migration
+    assert "'first_clean_booking_requested'" in migration
+    assert "'first_clean_booking_calendar_failed'" in migration
+    assert "'first_clean_booking_calendar_ambiguous'" in migration
+    assert "'first_clean_booked'" in migration
+    assert "Rollback evidence:" in migration
+    assert "DROP TABLE" not in upper
+    assert "ALTER TABLE" not in upper
+
+
+def test_eom_onboarding_email_drafts_migration_is_additive_and_single_send_safe():
+    migration = (
+        Path(__file__).resolve().parent.parent
+        / "atlas_brain"
+        / "storage"
+        / "migrations"
+        / "360_eom_onboarding_email_drafts.sql"
+    ).read_text()
+    upper = migration.upper()
+
+    assert "CREATE TABLE IF NOT EXISTS eom_onboarding_email_drafts" in migration
+    assert "contact_id UUID NOT NULL REFERENCES contacts(id) ON DELETE RESTRICT" in migration
+    assert "operation_key VARCHAR(128) NOT NULL UNIQUE" in migration
+    # Claim ownership ('sending') is modeled separately from confirmed
+    # delivery ('sent') so a crashed send can never be recorded as sent.
+    assert "CHECK (status IN ('pending', 'sending', 'sent', 'revoked'))" in migration
+    assert "claimed_at TIMESTAMPTZ" in migration
+    assert "subject TEXT NOT NULL" in migration
+    assert "body TEXT NOT NULL" in migration
+    # At most one live draft per contact, across pending AND sending.
+    assert "uq_eom_onboarding_email_drafts_live_contact" in migration
+    assert "WHERE status IN ('pending', 'sending')" in migration
+    # The A3 approval surface inherits the atomic claim from this header:
+    # single winner, readiness predicate built in (no blocked or
+    # recipient-less row is claimable), delivery confirmed separately.
+    assert "SET status = 'sending', claimed_at = NOW()" in migration
+    assert "AND status = 'pending'" in migration
+    assert "AND blocker IS NULL" in migration
+    assert "AND recipient_email IS NOT NULL" in migration
+    assert "RETURNING" in migration
+    assert "SET status = 'sent', sent_at = NOW()" in migration
+    assert "WHERE id = $1 AND status = 'sending'" in migration
+    assert "idempotency key" in migration
+    assert "Rollback evidence:" in migration
+    assert "ALTER TABLE" not in upper
+    assert "CONCURRENTLY" not in upper
+
+
 def test_sent_email_tenant_migration_is_additive_replay_safe_and_unclassified():
     migration = (
         Path(__file__).resolve().parent.parent

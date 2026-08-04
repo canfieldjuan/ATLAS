@@ -16,6 +16,10 @@ from .request_acknowledgement import (
     format_request_acknowledgement,
 )
 
+from .onboarding_welcome import (
+    format_onboarding_welcome,
+)
+
 from .proposal import (
     format_business_proposal,
     format_residential_proposal,
@@ -34,6 +38,7 @@ __all__ = [
     "format_business_email",
     "format_residential_email",
     "format_request_acknowledgement",
+    "format_onboarding_welcome",
     "format_business_proposal",
     "format_residential_proposal",
     "render_invoice_html",

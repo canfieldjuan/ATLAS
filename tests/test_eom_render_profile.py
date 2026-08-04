@@ -222,6 +222,7 @@ print(json.dumps({
     assert "/api/v1/receivables/ready" in paths
     assert "/api/v1/eom-funnel/leads" in paths
     assert "/api/v1/eom-funnel/leads/{contact_id}/estimate-bookings" in paths
+    assert "/api/v1/eom-funnel/leads/{contact_id}/first-clean-bookings" in paths
     assert "/api/v1/eom-funnel/customer-handoffs" in paths
     assert "/openapi.json" not in paths
     assert "/docs" not in paths
@@ -753,7 +754,12 @@ def test_shared_eom_funnel_datastore_guard_keeps_missing_relations_in_verdict():
     assert "WITH readiness_relations AS" in pool.query
     assert "readiness_columns AS" in pool.query
     assert "to_regclass('eom_customer_handoffs') AS handoff_rel" in pool.query
+    assert (
+        "to_regclass('eom_onboarding_email_drafts') AS onboarding_drafts_rel"
+        in pool.query
+    )
     assert "contacts_required_columns_ready" in pool.query
+    assert "onboarding_drafts_required_columns_ready" in pool.query
     assert "WHEN NOT readiness_columns.contacts_required_columns_ready THEN FALSE" in pool.query
     assert "WHEN readiness_relations.handoff_rel IS NULL THEN FALSE" in pool.query
 

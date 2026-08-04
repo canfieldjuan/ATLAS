@@ -16,6 +16,7 @@ from atlas_brain.eom_api import funnel_auth as auth_mod
 from atlas_brain.eom_api.config import EOMFunnelConfig
 from atlas_brain.services.eom_estimate_booking import (
     deterministic_eom_estimate_calendar_event_id,
+    deterministic_eom_first_clean_calendar_event_id,
 )
 from atlas_brain.services.eom_lead_conversion import EOMLeadConversionError
 from atlas_brain.tools.base import ToolResult
@@ -34,6 +35,11 @@ class _CRM:
         self.complete_calls: list[dict[str, object]] = []
         self.ambiguous_calls: list[dict[str, object]] = []
         self.failed_calls: list[dict[str, object]] = []
+        self.first_clean_prepare_calls: list[dict[str, object]] = []
+        self.first_clean_complete_calls: list[dict[str, object]] = []
+        self.first_clean_ambiguous_calls: list[dict[str, object]] = []
+        self.first_clean_failed_calls: list[dict[str, object]] = []
+        self.onboarding_draft_id = "0b8db22e-16b1-4a30-a15f-6c78ee9204a5"
         self.execution_lock_keys: list[str] = []
         self.review_leads = review_leads or []
 
@@ -100,6 +106,39 @@ class _CRM:
 
     async def mark_eom_estimate_booking_calendar_failed(self, **kwargs):
         self.failed_calls.append(kwargs)
+
+    async def prepare_eom_first_clean_booking(self, **kwargs):
+        self.first_clean_prepare_calls.append(kwargs)
+        return {
+            "contact_id": kwargs["contact_id"],
+            "lead_stage": "estimate_booked",
+            "status": "calendar_pending",
+            "calendar_event_id": None,
+            "expected_calendar_event_id": kwargs["expected_calendar_event_id"],
+            "idempotent": False,
+            "contact": {
+                "full_name": "Review Queue Lead",
+                "address": "100 Main St",
+            },
+        }
+
+    async def complete_eom_first_clean_booking(self, **kwargs):
+        self.first_clean_complete_calls.append(kwargs)
+        return {
+            "contact_id": kwargs["contact_id"],
+            "lead_stage": "won",
+            "status": "first_clean_booked",
+            "calendar_event_id": kwargs["calendar_event_id"],
+            "expected_calendar_event_id": kwargs["expected_calendar_event_id"],
+            "idempotent": False,
+            "onboarding_draft_id": self.onboarding_draft_id,
+        }
+
+    async def mark_eom_first_clean_booking_calendar_ambiguous(self, **kwargs):
+        self.first_clean_ambiguous_calls.append(kwargs)
+
+    async def mark_eom_first_clean_booking_calendar_failed(self, **kwargs):
+        self.first_clean_failed_calls.append(kwargs)
 
 
 class _Calendar:
@@ -575,11 +614,17 @@ async def test_private_estimate_booking_reports_explicit_calendar_id_to_prepare(
         },
     ],
 )
-async def test_private_estimate_booking_rejects_numeric_timestamps(numeric_payload):
+@pytest.mark.parametrize(
+    "booking_path", ["estimate-bookings", "first-clean-bookings"]
+)
+async def test_private_estimate_booking_rejects_numeric_timestamps(
+    numeric_payload, booking_path
+):
     """Pydantic lax mode would coerce epoch numbers -- and digit-only strings
     like "3600" -- into 1970-era UTC-aware datetimes that pass the
     timezone/ordering checks; the boundary must 422 anything that is not an
-    RFC 3339 date-time string before CRM or Calendar sees it."""
+    RFC 3339 date-time string before CRM or Calendar sees it. Both booking
+    routes share the request model, so both are held to it."""
     crm = _CRM()
     calendar = _Calendar()
     app = _app(crm, _enabled_config(), calendar=calendar)
@@ -590,13 +635,14 @@ async def test_private_estimate_booking_rejects_numeric_timestamps(numeric_paylo
         transport=httpx.ASGITransport(app=app), base_url="http://test"
     ) as client:
         response = await client.post(
-            f"/eom-funnel/leads/{contact_id}/estimate-bookings",
+            f"/eom-funnel/leads/{contact_id}/{booking_path}",
             headers=_headers(approval_key=booking_key),
             json=_booking_payload(**numeric_payload),
         )
 
     assert response.status_code == 422
     assert crm.prepare_calls == []
+    assert crm.first_clean_prepare_calls == []
     assert calendar.calls == []
 
 
@@ -1158,6 +1204,353 @@ async def test_private_estimate_booking_calendar_conflict_marks_ambiguous():
 
 
 @pytest.mark.asyncio
+async def test_private_first_clean_booking_prepares_calendar_and_completes_in_order():
+    crm = _CRM()
+    calendar = _Calendar()
+    app = _app(crm, _enabled_config(), calendar=calendar)
+    contact_id = uuid4()
+    booking_key = f"office-first-clean-{uuid4().hex}"
+    expected_event_id = deterministic_eom_first_clean_calendar_event_id(
+        contact_id=str(contact_id),
+        booking_key=booking_key,
+    )
+
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=app), base_url="http://test"
+    ) as client:
+        response = await client.post(
+            f"/eom-funnel/leads/{contact_id}/first-clean-bookings",
+            headers=_headers(approval_key=booking_key),
+            json=_booking_payload(),
+        )
+
+    assert response.status_code == 201
+    assert response.json() == {
+        "success": True,
+        "contact_id": str(contact_id),
+        "lead_stage": "won",
+        "status": "first_clean_booked",
+        "calendar_event_id": expected_event_id,
+        "expected_calendar_event_id": expected_event_id,
+        "idempotent": False,
+        "onboarding_draft_id": crm.onboarding_draft_id,
+    }
+    assert crm.first_clean_prepare_calls[0]["contact_id"] == str(contact_id)
+    assert crm.first_clean_prepare_calls[0]["booking_key"] == booking_key
+    assert (
+        crm.first_clean_prepare_calls[0]["expected_calendar_event_id"]
+        == expected_event_id
+    )
+    assert calendar.calls == [
+        {
+            "summary": "First clean: Review Queue Lead",
+            "start": datetime.fromisoformat("2026-08-04T14:00:00-05:00"),
+            "end": datetime.fromisoformat("2026-08-04T15:00:00-05:00"),
+            "location": "100 Main St",
+            "description": (
+                "Scheduled from the private EOM lead funnel.\n\n"
+                "Bring estimate worksheet"
+            ),
+            "calendar_id": "estimate-calendar",
+            "event_id": expected_event_id,
+        }
+    ]
+    assert crm.first_clean_complete_calls[0]["calendar_event_id"] == expected_event_id
+    # The estimate family must stay untouched by a first-clean booking.
+    assert crm.prepare_calls == []
+    assert crm.complete_calls == []
+    assert crm.first_clean_ambiguous_calls == []
+
+
+@pytest.mark.asyncio
+async def test_private_first_clean_booking_shares_the_execution_lock_namespace():
+    """Both families serialize through the same execution lock so the handoff
+    fence sees an in-flight first-clean booking exactly like an estimate."""
+    crm = _CRM()
+    calendar = _Calendar()
+    app = _app(crm, _enabled_config(), calendar=calendar)
+    contact_id = uuid4()
+    booking_key = f"office-first-clean-{uuid4().hex}"
+
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=app), base_url="http://test"
+    ) as client:
+        response = await client.post(
+            f"/eom-funnel/leads/{contact_id}/first-clean-bookings",
+            headers=_headers(approval_key=booking_key),
+            json=_booking_payload(),
+        )
+
+    assert response.status_code == 201
+    assert crm.execution_lock_keys == [booking_key]
+
+
+@pytest.mark.asyncio
+async def test_private_first_clean_booking_runs_lifecycle_on_execution_scoped_provider():
+    """The first-clean bindings must resolve on the execution-scoped provider
+    the lock yields, not the outer provider, or one booking reserves two
+    pooled connections."""
+
+    class _ScopingCRM(_CRM):
+        def __init__(self) -> None:
+            super().__init__()
+            self.scoped = _CRM()
+
+        @asynccontextmanager
+        async def eom_estimate_booking_execution_lock(self, *, booking_key: str):
+            self.execution_lock_keys.append(booking_key)
+            yield self.scoped
+
+    crm = _ScopingCRM()
+    calendar = _Calendar()
+    app = _app(crm, _enabled_config(), calendar=calendar)
+    contact_id = uuid4()
+    booking_key = f"office-first-clean-{uuid4().hex}"
+
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=app), base_url="http://test"
+    ) as client:
+        response = await client.post(
+            f"/eom-funnel/leads/{contact_id}/first-clean-bookings",
+            headers=_headers(approval_key=booking_key),
+            json=_booking_payload(),
+        )
+
+    assert response.status_code == 201
+    assert crm.execution_lock_keys == [booking_key]
+    assert crm.first_clean_prepare_calls == []
+    assert crm.first_clean_complete_calls == []
+    assert len(crm.scoped.first_clean_prepare_calls) == 1
+    assert len(crm.scoped.first_clean_complete_calls) == 1
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("pre_request_error", ["TOOL_DISABLED", "NOT_CONFIGURED"])
+async def test_private_first_clean_booking_pre_request_calendar_failure_is_terminal(
+    pre_request_error,
+):
+    """Pre-request Calendar failures prove no event write for the first-clean
+    family exactly as for estimates: terminal failed attempt, never an
+    ambiguous wedge."""
+    crm = _CRM()
+    calendar = _Calendar(
+        success=False,
+        error=pre_request_error,
+        message="Calendar unavailable before any request",
+    )
+    app = _app(crm, _enabled_config(), calendar=calendar)
+    contact_id = uuid4()
+    booking_key = f"office-first-clean-{uuid4().hex}"
+
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=app), base_url="http://test"
+    ) as client:
+        response = await client.post(
+            f"/eom-funnel/leads/{contact_id}/first-clean-bookings",
+            headers=_headers(approval_key=booking_key),
+            json=_booking_payload(),
+        )
+
+    assert response.status_code == 502
+    assert crm.first_clean_ambiguous_calls == []
+    assert len(crm.first_clean_failed_calls) == 1
+    assert crm.first_clean_failed_calls[0]["calendar_error"] == pre_request_error
+    assert crm.failed_calls == []
+
+
+@pytest.mark.asyncio
+async def test_private_first_clean_booking_auth_phase_failure_is_terminal():
+    """An OAuth-phase failure proves no event write for the first-clean
+    family: terminal failed attempt on the first-clean markers."""
+    crm = _CRM()
+    calendar = _Calendar(
+        success=False,
+        error="AUTH_ERROR",
+        message="OAuth token endpoint unavailable",
+        data={"request_phase": "auth"},
+    )
+    app = _app(crm, _enabled_config(), calendar=calendar)
+    contact_id = uuid4()
+    booking_key = f"office-first-clean-{uuid4().hex}"
+
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=app), base_url="http://test"
+    ) as client:
+        response = await client.post(
+            f"/eom-funnel/leads/{contact_id}/first-clean-bookings",
+            headers=_headers(approval_key=booking_key),
+            json=_booking_payload(),
+        )
+
+    assert response.status_code == 502
+    assert crm.first_clean_ambiguous_calls == []
+    assert len(crm.first_clean_failed_calls) == 1
+    assert crm.first_clean_failed_calls[0]["calendar_error"] == "AUTH_ERROR"
+
+
+@pytest.mark.asyncio
+async def test_private_first_clean_booking_marks_ambiguous_when_completion_rejects():
+    """Completion rejection after a successful Calendar create must leave
+    reconciliation evidence on the first-clean markers."""
+
+    class _RejectingCompletionCRM(_CRM):
+        async def complete_eom_first_clean_booking(self, **kwargs):
+            self.first_clean_complete_calls.append(kwargs)
+            raise EOMLeadConversionError(409, "EOM contact is not a lead")
+
+    crm = _RejectingCompletionCRM()
+    calendar = _Calendar()
+    app = _app(crm, _enabled_config(), calendar=calendar)
+    contact_id = uuid4()
+    booking_key = f"office-first-clean-{uuid4().hex}"
+    expected_event_id = deterministic_eom_first_clean_calendar_event_id(
+        contact_id=str(contact_id),
+        booking_key=booking_key,
+    )
+
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=app), base_url="http://test"
+    ) as client:
+        response = await client.post(
+            f"/eom-funnel/leads/{contact_id}/first-clean-bookings",
+            headers=_headers(approval_key=booking_key),
+            json=_booking_payload(),
+        )
+
+    assert response.status_code == 409
+    assert len(crm.first_clean_complete_calls) == 1
+    assert len(crm.first_clean_ambiguous_calls) == 1
+    assert (
+        crm.first_clean_ambiguous_calls[0]["expected_calendar_event_id"]
+        == expected_event_id
+    )
+    assert (
+        crm.first_clean_ambiguous_calls[0]["observed_calendar_event_id"]
+        == expected_event_id
+    )
+    assert crm.ambiguous_calls == []
+
+
+@pytest.mark.asyncio
+async def test_private_first_clean_booking_idempotent_replay_skips_calendar_side_effect():
+    class _BookedCRM(_CRM):
+        async def prepare_eom_first_clean_booking(self, **kwargs):
+            self.first_clean_prepare_calls.append(kwargs)
+            return {
+                "contact_id": UUID(kwargs["contact_id"]),
+                "lead_stage": "won",
+                "status": "first_clean_booked",
+                "calendar_event_id": kwargs["expected_calendar_event_id"],
+                "expected_calendar_event_id": kwargs["expected_calendar_event_id"],
+                "idempotent": True,
+                "onboarding_draft_id": self.onboarding_draft_id,
+                "contact": {
+                    "full_name": "Review Queue Lead",
+                    "address": "100 Main St",
+                },
+            }
+
+    crm = _BookedCRM()
+    calendar = _Calendar()
+    app = _app(crm, _enabled_config(), calendar=calendar)
+    contact_id = uuid4()
+    booking_key = f"office-first-clean-{uuid4().hex}"
+    expected_event_id = deterministic_eom_first_clean_calendar_event_id(
+        contact_id=str(contact_id),
+        booking_key=booking_key,
+    )
+
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=app), base_url="http://test"
+    ) as client:
+        response = await client.post(
+            f"/eom-funnel/leads/{contact_id}/first-clean-bookings",
+            headers=_headers(approval_key=booking_key),
+            json=_booking_payload(),
+        )
+
+    assert response.status_code == 200
+    assert response.json()["contact_id"] == str(contact_id)
+    assert response.json()["idempotent"] is True
+    assert response.json()["calendar_event_id"] == expected_event_id
+    assert response.json()["onboarding_draft_id"] == crm.onboarding_draft_id
+    assert len(crm.first_clean_prepare_calls) == 1
+    assert calendar.calls == []
+    assert crm.first_clean_complete_calls == []
+    assert crm.first_clean_failed_calls == []
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("contact_email", "latest_intake_email", "expected_recipient", "expected_blocker"),
+    (
+        ("lead@example.com", None, "lead@example.com", None),
+        # Ingress leaves contacts.email unchanged on re-submission; the
+        # latest intake projection must win over the stale contact column.
+        ("stale@example.com", "fresh@example.com", "fresh@example.com", None),
+        (None, "fresh@example.com", "fresh@example.com", None),
+        ("", None, None, "no_email"),
+        (None, None, None, "no_email"),
+        ("   ", None, None, "no_email"),
+    ),
+)
+async def test_onboarding_draft_enqueue_snapshots_recipient_or_records_blocker(
+    contact_email, latest_intake_email, expected_recipient, expected_blocker
+):
+    """A contact without an email is enqueued with blocker='no_email' rather
+    than silently skipped, and the recipient resolves through the same
+    latest-intake projection the review queue shows."""
+    from atlas_brain.services.crm_provider import DatabaseCRMProvider
+    from atlas_brain.templates.email import format_onboarding_welcome
+
+    class _Conn:
+        def __init__(self, intake_email) -> None:
+            self.intake_email = intake_email
+            self.fetchval_calls: list[tuple[str, tuple[object, ...]]] = []
+            self.fetchrow_calls: list[tuple[str, tuple[object, ...]]] = []
+
+        async def fetchval(self, query: str, *args):
+            self.fetchval_calls.append((query, args))
+            return self.intake_email
+
+        async def fetchrow(self, query: str, *args):
+            self.fetchrow_calls.append((query, args))
+            return {"id": UUID("0b8db22e-16b1-4a30-a15f-6c78ee9204a5")}
+
+    conn = _Conn(latest_intake_email)
+    contact_id = uuid4()
+    draft_id = await DatabaseCRMProvider._enqueue_eom_onboarding_email_draft(
+        conn,
+        contact={
+            "id": contact_id,
+            "full_name": "Review Queue Lead",
+            "email": contact_email,
+        },
+        operation_key="office-first-clean-abc123",
+    )
+
+    assert draft_id == "0b8db22e-16b1-4a30-a15f-6c78ee9204a5"
+    intake_query, intake_args = conn.fetchval_calls[0]
+    assert "contact_interactions" in intake_query
+    assert "submitted_email" in intake_query
+    assert intake_args == (str(contact_id),)
+    query, args = conn.fetchrow_calls[0]
+    assert "INSERT INTO eom_onboarding_email_drafts" in query
+    assert "ON CONFLICT (operation_key) DO NOTHING" in query
+    expected_subject, expected_body = format_onboarding_welcome(
+        client_name="Review Queue Lead"
+    )
+    assert args == (
+        str(contact_id),
+        "office-first-clean-abc123",
+        expected_recipient,
+        expected_blocker,
+        expected_subject,
+        expected_body,
+    )
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize(
     "body",
     (
@@ -1167,8 +1560,12 @@ async def test_private_estimate_booking_calendar_conflict_marks_ambiguous():
         _booking_payload(per_visit_rate=150),
     ),
 )
+@pytest.mark.parametrize(
+    "booking_path", ["estimate-bookings", "first-clean-bookings"]
+)
 async def test_private_estimate_booking_rejects_bad_body_before_side_effects(
     body: dict[str, object],
+    booking_path: str,
 ):
     crm = _CRM()
     calendar = _Calendar()
@@ -1178,15 +1575,17 @@ async def test_private_estimate_booking_rejects_bad_body_before_side_effects(
         transport=httpx.ASGITransport(app=app), base_url="http://test"
     ) as client:
         response = await client.post(
-            f"/eom-funnel/leads/{uuid4()}/estimate-bookings",
+            f"/eom-funnel/leads/{uuid4()}/{booking_path}",
             headers=_headers(approval_key=f"office-booking-{uuid4().hex}"),
             json=body,
         )
 
     assert response.status_code == 422
     assert crm.prepare_calls == []
+    assert crm.first_clean_prepare_calls == []
     assert calendar.calls == []
     assert crm.complete_calls == []
+    assert crm.first_clean_complete_calls == []
 
 
 @pytest.mark.asyncio
@@ -1202,10 +1601,14 @@ async def test_private_estimate_booking_rejects_bad_body_before_side_effects(
         (_enabled_config(), {**_headers(actor_id="-1")}, 422),
     ),
 )
+@pytest.mark.parametrize(
+    "booking_path", ["estimate-bookings", "first-clean-bookings"]
+)
 async def test_private_estimate_booking_rejects_http_guards_before_side_effects(
     config: EOMFunnelConfig,
     headers: dict[str, str],
     expected_status: int,
+    booking_path: str,
 ):
     crm = _CRM()
     calendar = _Calendar()
@@ -1215,15 +1618,17 @@ async def test_private_estimate_booking_rejects_http_guards_before_side_effects(
         transport=httpx.ASGITransport(app=app), base_url="http://test"
     ) as client:
         response = await client.post(
-            f"/eom-funnel/leads/{uuid4()}/estimate-bookings",
+            f"/eom-funnel/leads/{uuid4()}/{booking_path}",
             headers=headers,
             json=_booking_payload(),
         )
 
     assert response.status_code == expected_status
     assert crm.prepare_calls == []
+    assert crm.first_clean_prepare_calls == []
     assert calendar.calls == []
     assert crm.complete_calls == []
+    assert crm.first_clean_complete_calls == []
 
 
 @pytest.mark.asyncio
