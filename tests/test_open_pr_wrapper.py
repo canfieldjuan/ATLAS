@@ -66,6 +66,10 @@ def test_open_pr_existing_pr_rejects_create_only_args(tmp_path: Path) -> None:
         (["-d=true"], {}, "refusing draft PR without explicit operator consent"),
         (["-d=1"], {}, "refusing draft PR without explicit operator consent"),
         (["-dw"], {}, "refusing draft PR without explicit operator consent"),
+        (["-fd"], {}, "refusing draft PR without explicit operator consent"),
+        (["-wd"], {}, "refusing draft PR without explicit operator consent"),
+        (["-fd=true"], {}, "refusing draft PR without explicit operator consent"),
+        (["-fwd"], {}, "refusing draft PR without explicit operator consent"),
         (["--base", "release"], {}, "refusing non-main base: release"),
         (["-Brelease"], {}, "refusing non-main base: release"),
         ([], {"GH_REPO": "other/repo"}, "refusing GH_REPO target override"),
@@ -110,6 +114,20 @@ def test_open_pr_forwards_draft_assignment_when_operator_consent_flag_is_set(tmp
     assert result.returncode == 0, result.stdout + result.stderr
     assert log.read_text(encoding="utf-8").strip() == (
         "pr create --draft=true --title Draft wrapper --repo canfieldjuan/ATLAS --base main --body-file -"
+    )
+    assert stdin_capture.read_text(encoding="utf-8") == body.read_text(encoding="utf-8")
+
+
+def test_open_pr_allows_value_shorthand_containing_d_without_consent(tmp_path: Path) -> None:
+    # -t takes a value, so the attached text (even containing 'd') is a title,
+    # not a shorthand cluster that enables draft mode.
+    repo, body, env, log, stdin_capture = _ready(tmp_path, view_exit=1)
+
+    result = _run(repo, env, body, "-tdraft-note")
+
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert log.read_text(encoding="utf-8").strip() == (
+        "pr create -tdraft-note --repo canfieldjuan/ATLAS --base main --body-file -"
     )
     assert stdin_capture.read_text(encoding="utf-8") == body.read_text(encoding="utf-8")
 

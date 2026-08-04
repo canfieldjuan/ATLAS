@@ -15,8 +15,10 @@ already cost this lane manual attention.
   default.
 - Correct fix must touch/change: `scripts/open_pr.sh` must reject every draft
   flag spelling `gh pr create` accepts -- `--draft`, `--draft=<value>`, `-d`,
-  `-d=<value>`, and `-d`-leading short-flag clusters such as `-dw` -- unless an
-  explicit operator-consent environment flag is present.
+  `-d=<value>`, and shorthand clusters that enable draft in any position
+  (`-dw`, `-fd`, `-wd`, `-fd=true`) -- unless an explicit operator-consent
+  environment flag is present. Value-taking shorthands whose attached value
+  merely contains a `d` (for example `-tdraft-note`) must not be gated.
   `tests/test_open_pr_wrapper.py` must prove reject-by-default happens before
   any GitHub mutation for each spelling class and prove the explicit flag
   forwards draft mode when the operator intentionally allows it.
@@ -37,8 +39,11 @@ Slice phase: Workflow/process
 
 - Acceptance criteria:
   - `scripts/open_pr.sh` rejects `--draft`, `--draft=<value>`, `-d`,
-    `-d=<value>`, and `-d`-leading short-flag clusters before GitHub mutation
+    `-d=<value>`, and shorthand clusters containing `d` in any boolean
+    position (`-dw`, `-fd`, `-wd`, `-fwd`, `-fd=true`) before GitHub mutation
     when `ATLAS_OPEN_PR_DRAFT_CONSENT` is not set to `1`.
+  - `scripts/open_pr.sh` does not gate value-taking shorthands whose attached
+    value contains `d` (`-tdraft-note` forwards without consent).
   - `scripts/open_pr.sh` forwards `--draft` and `--draft=true` to
     `gh pr create` when `ATLAS_OPEN_PR_DRAFT_CONSENT=1` is set.
   - Existing safe ready-for-review create and edit flows continue to pass.
@@ -58,9 +63,10 @@ router/classifier, or admission boundary. Name each changed boundary path or
 seam in the enumeration; otherwise write "N/A - no boundary change."
 
 - Boundary path/seam: `scripts/open_pr.sh` create-argument admission.
-- Replaced-path behaviors: `--draft`, `--draft=<value>`, and every `-d`-leading
-  token (`-d`, `-d=<value>`, clusters like `-dw`) no longer pass through by
-  default.
+- Replaced-path behaviors: `--draft`, `--draft=<value>`, and every shorthand
+  cluster whose pflag walk reaches a boolean `d` (`-d`, `-d=<value>`, `-dw`,
+  `-fd`, `-wd`) no longer pass through by default; value-attached shorthands
+  like `-tdraft-note` still do.
 - Guard-relevant fields: wrapper argv and `ATLAS_OPEN_PR_DRAFT_CONSENT`.
 - Caller x input shape: local builder running `bash scripts/open_pr.sh
   BODY_FILE [gh-pr-create-args...]`.
@@ -89,15 +95,20 @@ fallback changes; otherwise write "N/A - no guard/config boundary change."
 ## Mechanism
 
 `reject_target_overrides` treats every draft-flag spelling as a consent-gated
-create argument via the case pattern `--draft|--draft=*|-d*`. The `-d*` arm
-covers bare `-d`, boolean assignments (`-d=true`), and `-d`-leading short-flag
-clusters (`-dw`), because `gh`'s pflag parser accepts all of them as draft
-mode. The gate is value-blind on purpose: `--draft=false` is also held behind
-consent rather than parsing pflag's six truthy spellings, since ready-for-review
-is already the default and fail-closed is simpler. Without
-`ATLAS_OPEN_PR_DRAFT_CONSENT=1`, the wrapper prints a targeted error and exits
-before any GitHub call. With the flag set, it leaves the argument in place so
-the existing `gh pr create` call can intentionally create a draft PR.
+create argument. Long forms match `--draft|--draft=*` directly. Every other
+one-dash token goes through `shorthand_cluster_sets_draft`, which mirrors
+`gh`'s pflag cluster walk: boolean shorthands keep scanning (so `-fd` and
+`-wd` enable draft just like `-dw`), a value-taking shorthand (`-a -B -b -F
+-H -l -m -p -r -R -t -T`) consumes the rest of the token as its value (so
+`-tdraft-note` is a title, not a draft flag), and `=` binds the remainder to
+the shorthand before it. Unknown letters scan on as booleans, which fails
+closed. The gate is value-blind on purpose: `--draft=false` and `-d=false`
+are also held behind consent rather than parsing pflag's six truthy
+spellings, since ready-for-review is already the default and fail-closed is
+simpler. Without `ATLAS_OPEN_PR_DRAFT_CONSENT=1`, `require_draft_consent`
+prints a targeted error and exits before any GitHub call. With the flag set,
+the wrapper leaves the argument in place so the existing `gh pr create` call
+can intentionally create a draft PR.
 
 ## Intentional
 
@@ -115,14 +126,14 @@ Parked hardening: none.
 
 ## Verification
 
-- `python -m pytest tests/test_open_pr_wrapper.py` - 36 passed.
+- `python -m pytest tests/test_open_pr_wrapper.py` - 41 passed.
 - `ATLAS_SESSION_STATE_FILE=SESSION_STATE.codex-open-ready-draft-consent.local.md bash scripts/local_pr_review.sh --current-pr-body-file /tmp/atlas-pr-body-open-ready-draft-consent.md` - passed.
 
 ## Estimated diff size
 
 | File | LOC |
 |---|---:|
-| `plans/PR-Open-Ready-Draft-Consent-Guard.md` | 128 |
-| `scripts/open_pr.sh` | 10 |
-| `tests/test_open_pr_wrapper.py` | 35 |
-| **Total** | **173** |
+| `plans/PR-Open-Ready-Draft-Consent-Guard.md` | 139 |
+| `scripts/open_pr.sh` | 48 |
+| `tests/test_open_pr_wrapper.py` | 53 |
+| **Total** | **240** |

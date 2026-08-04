@@ -54,6 +54,43 @@ refresh_base_ref() {
     fi
 }
 
+require_draft_consent() {
+    if [ "${ATLAS_OPEN_PR_DRAFT_CONSENT:-}" != "1" ]; then
+        echo "open_pr.sh: refusing draft PR without explicit operator consent: $1" >&2
+        echo "Set ATLAS_OPEN_PR_DRAFT_CONSENT=1 only when the operator asked for a draft." >&2
+        exit 2
+    fi
+}
+
+shorthand_cluster_sets_draft() {
+    # gh's pflag parser walks a one-dash cluster left to right: boolean
+    # shorthands keep scanning (so -fd and -wd both enable draft), a
+    # value-taking shorthand consumes the rest of the token as its value, and
+    # '=' binds the remainder to the shorthand before it. Value-taking
+    # shorthands for `gh pr create`: -a -B -b -F -H -l -m -p -r -R -t -T.
+    # Unknown letters are treated as booleans, which fail closed: scanning
+    # continues, so a 'd' after them still requires consent.
+    local cluster="${1#-}" ch
+    while [ -n "$cluster" ]; do
+        ch="${cluster:0:1}"
+        if [ "$ch" = "d" ]; then
+            return 0
+        fi
+        case "$ch" in
+            a|B|b|F|H|l|m|p|r|R|t|T)
+                return 1
+                ;;
+        esac
+        cluster="${cluster:1}"
+        case "$cluster" in
+            =*)
+                return 1
+                ;;
+        esac
+    done
+    return 1
+}
+
 reject_target_overrides() {
     if [ -n "${GH_REPO:-}" ]; then
         echo "open_pr.sh: refusing GH_REPO target override: $GH_REPO" >&2
@@ -74,12 +111,8 @@ reject_target_overrides() {
                 echo "open_pr.sh: refusing target-changing create arg: $arg" >&2
                 exit 2
                 ;;
-            --draft|--draft=*|-d*)
-                if [ "${ATLAS_OPEN_PR_DRAFT_CONSENT:-}" != "1" ]; then
-                    echo "open_pr.sh: refusing draft PR without explicit operator consent: $arg" >&2
-                    echo "Set ATLAS_OPEN_PR_DRAFT_CONSENT=1 only when the operator asked for a draft." >&2
-                    exit 2
-                fi
+            --draft|--draft=*)
+                require_draft_consent "$arg"
                 ;;
             --base|-B)
                 if [ "$#" -eq 0 ]; then
@@ -108,6 +141,11 @@ reject_target_overrides() {
                     echo "open_pr.sh: refusing non-main base: $value" >&2
                     echo "The local review gate is bound to origin/main." >&2
                     exit 2
+                fi
+                ;;
+            -[!-]*)
+                if shorthand_cluster_sets_draft "$arg"; then
+                    require_draft_consent "$arg"
                 fi
                 ;;
         esac
