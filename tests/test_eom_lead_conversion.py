@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from contextlib import asynccontextmanager
 from datetime import datetime
 from types import SimpleNamespace
 from uuid import UUID, uuid4
@@ -33,7 +34,13 @@ class _CRM:
         self.complete_calls: list[dict[str, object]] = []
         self.ambiguous_calls: list[dict[str, object]] = []
         self.failed_calls: list[dict[str, object]] = []
+        self.execution_lock_keys: list[str] = []
         self.review_leads = review_leads or []
+
+    @asynccontextmanager
+    async def eom_estimate_booking_execution_lock(self, *, booking_key: str):
+        self.execution_lock_keys.append(booking_key)
+        yield
 
     async def list_eom_new_lead_review_items(
         self,
@@ -540,6 +547,61 @@ async def test_private_estimate_booking_reports_explicit_calendar_id_to_prepare(
     assert response.status_code == 201
     assert crm.prepare_calls[0]["calendar_id"] == "estimate-calendar"
     assert crm.prepare_calls[0]["calendar_id_explicit"] is True
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "numeric_payload",
+    [
+        {"scheduled_start": 0, "scheduled_end": 3600},
+        {"scheduled_start": 1754323200.5, "scheduled_end": 1754326800.5},
+    ],
+)
+async def test_private_estimate_booking_rejects_numeric_timestamps(numeric_payload):
+    """Pydantic lax mode would coerce epoch numbers into 1970-era UTC-aware
+    datetimes that pass the timezone/ordering checks; the boundary must 422
+    before CRM or Calendar sees them."""
+    crm = _CRM()
+    calendar = _Calendar()
+    app = _app(crm, _enabled_config(), calendar=calendar)
+    contact_id = uuid4()
+    booking_key = f"office-booking-{uuid4().hex}"
+
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=app), base_url="http://test"
+    ) as client:
+        response = await client.post(
+            f"/eom-funnel/leads/{contact_id}/estimate-bookings",
+            headers=_headers(approval_key=booking_key),
+            json=_booking_payload(**numeric_payload),
+        )
+
+    assert response.status_code == 422
+    assert crm.prepare_calls == []
+    assert calendar.calls == []
+
+
+@pytest.mark.asyncio
+async def test_private_estimate_booking_holds_execution_lock_for_booking_key():
+    """The whole prepare -> Calendar -> complete span runs under the same-key
+    execution lock so handoff can fence in-flight attempts."""
+    crm = _CRM()
+    calendar = _Calendar()
+    app = _app(crm, _enabled_config(), calendar=calendar)
+    contact_id = uuid4()
+    booking_key = f"office-booking-{uuid4().hex}"
+
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=app), base_url="http://test"
+    ) as client:
+        response = await client.post(
+            f"/eom-funnel/leads/{contact_id}/estimate-bookings",
+            headers=_headers(approval_key=booking_key),
+            json=_booking_payload(),
+        )
+
+    assert response.status_code == 201
+    assert crm.execution_lock_keys == [booking_key]
 
 
 @pytest.mark.asyncio

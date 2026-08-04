@@ -11,7 +11,7 @@ from uuid import UUID
 
 from fastapi import APIRouter, Depends, Header, HTTPException, Query, Request, status
 from fastapi.responses import JSONResponse
-from pydantic import BaseModel, ConfigDict, Field, model_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 from ..services.eom_estimate_booking import (
     EOMEstimateBooking,
@@ -55,6 +55,17 @@ class EOMEstimateBookingRequest(BaseModel):
         str | None, Field(default=None, min_length=1, max_length=256)
     ]
     notes: Annotated[str | None, Field(default=None, max_length=1000)]
+
+    @field_validator("scheduled_start", "scheduled_end", mode="before")
+    @classmethod
+    def _require_datetime_strings(cls, value: Any) -> Any:
+        # Pydantic's lax mode coerces JSON numbers (epoch seconds) into
+        # UTC-aware datetimes, which would pass the timezone/ordering checks
+        # as a 1970 appointment. Only RFC 3339 date-time strings are valid at
+        # this boundary.
+        if not isinstance(value, str):
+            raise ValueError("must be an RFC 3339 date-time string")
+        return value
 
     @model_validator(mode="after")
     def _validate_window(self) -> "EOMEstimateBookingRequest":

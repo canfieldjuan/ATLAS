@@ -157,7 +157,36 @@ async def schedule_eom_estimate_booking(
         raise RuntimeError(
             "Configured CRM provider cannot schedule EOM estimate bookings"
         )
+    execution_lock = getattr(crm, "eom_estimate_booking_execution_lock", None)
+    if not callable(execution_lock):
+        raise RuntimeError(
+            "Configured CRM provider cannot serialize EOM estimate bookings"
+        )
 
+    # The lock spans prepare -> Calendar -> complete so customer handoff can
+    # detect an in-flight same-key execution and stay fenced until the
+    # strongest outcome for this key is on the ledger.
+    async with execution_lock(booking_key=command.booking_key):
+        return await _run_estimate_booking(
+            calendar=calendar,
+            command=command,
+            preparer=preparer,
+            completer=completer,
+            marker=marker,
+            failure_marker=failure_marker,
+        )
+
+
+async def _run_estimate_booking(
+    *,
+    calendar: Any,
+    command: EOMEstimateBooking,
+    preparer: Any,
+    completer: Any,
+    marker: Any,
+    failure_marker: Any,
+) -> dict[str, Any]:
+    """Execute one estimate-booking attempt while the execution lock is held."""
     expected_event_id = deterministic_eom_estimate_calendar_event_id(
         contact_id=command.contact_id,
         booking_key=command.booking_key,

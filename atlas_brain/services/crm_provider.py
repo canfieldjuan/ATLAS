@@ -1335,6 +1335,53 @@ class DatabaseCRMProvider:
             }
         )
 
+    @asynccontextmanager
+    async def eom_estimate_booking_execution_lock(self, *, booking_key: str):
+        """Serialize one booking key's external Calendar attempt.
+
+        Held on a dedicated session connection across the whole
+        prepare -> Calendar -> complete span so that
+        finalize_eom_customer_handoff can detect an in-flight same-key
+        execution with pg_try_advisory_xact_lock: a terminal failed marker
+        alone must not admit handoff while a concurrent same-key call could
+        still produce a stronger (booked/ambiguous) outcome.
+        """
+        from .eom_lead_conversion import EOMLeadConversionError
+
+        lock_key = f"eom-estimate-booking:execution:{booking_key}"
+        pool = self._get_pool()
+        acquire = getattr(pool, "acquire", None)
+        if callable(acquire):
+            conn = await pool.acquire()
+            release = pool.release
+        else:
+            # Repository test adapters expose query methods directly; the
+            # lock then lives on their single session.
+            conn = pool
+            release = None
+        acquired = False
+        try:
+            acquired = bool(
+                await conn.fetchval(
+                    "SELECT pg_try_advisory_lock(hashtextextended($1, 0))",
+                    lock_key,
+                )
+            )
+            if not acquired:
+                raise EOMLeadConversionError(
+                    409,
+                    "EOM estimate booking is already executing for this key",
+                )
+            yield
+        finally:
+            if acquired:
+                await conn.fetchval(
+                    "SELECT pg_advisory_unlock(hashtextextended($1, 0))",
+                    lock_key,
+                )
+            if release is not None:
+                await release(conn)
+
     async def prepare_eom_estimate_booking(
         self,
         *,
@@ -2496,6 +2543,27 @@ class DatabaseCRMProvider:
                 booking_event_types.setdefault(event["operation_key"], set()).add(
                     event["event_type"]
                 )
+            # A terminal failed marker alone does not prove the key settled:
+            # a concurrent same-key call past preparation may still be talking
+            # to Calendar and can produce a stronger booked/ambiguous outcome.
+            # The executor holds a session advisory lock on
+            # eom-estimate-booking:execution:<key> for its whole attempt, so a
+            # failed try-lock here means an execution is in flight and handoff
+            # must stay fenced until it settles.
+            for operation_key, event_types in booking_event_types.items():
+                if "estimate_booked" in event_types:
+                    continue
+                execution_settled = bool(
+                    await conn.fetchval(
+                        "SELECT pg_try_advisory_xact_lock(hashtextextended($1, 0))",
+                        f"eom-estimate-booking:execution:{operation_key}",
+                    )
+                )
+                if not execution_settled:
+                    raise EOMLeadConversionError(
+                        409,
+                        "EOM estimate booking is still executing; retry after it settles",
+                    )
             blocking_booking = next(
                 (
                     event_types

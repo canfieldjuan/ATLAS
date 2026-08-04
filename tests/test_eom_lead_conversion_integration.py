@@ -844,6 +844,119 @@ async def test_pending_estimate_booking_blocks_handoff_until_terminal_event():
 
 
 @pytest.mark.asyncio
+async def test_handoff_stays_fenced_while_a_same_key_booking_is_executing():
+    """A terminal failed marker alone must not admit handoff mid-execution.
+
+    The booking executor holds a session advisory lock on
+    eom-estimate-booking:execution:<key> for its whole prepare -> Calendar ->
+    complete span. While a concurrent same-key retry is still talking to
+    Calendar, the ledger's failed marker is not yet the settled outcome, so
+    finalize must stay fenced until the executor releases the lock.
+    """
+    database_url = _database_url_or_skip()
+    schema = f"atlas_eom_estimate_booking_fence_{uuid.uuid4().hex}"
+    conn = await asyncpg.connect(database_url)
+    executor_conn = None
+    try:
+        await _prepare_schema(conn, schema)
+        provider = DatabaseCRMProvider(pool=conn)
+        contact_id = uuid.uuid4()
+        booking_key = f"office-booking-{uuid.uuid4().hex}"
+        execution_lock_key = f"eom-estimate-booking:execution:{booking_key}"
+        calendar_event_id = deterministic_eom_estimate_calendar_event_id(
+            contact_id=str(contact_id),
+            booking_key=booking_key,
+        )
+        start = datetime(2026, 8, 4, 19, 0, tzinfo=timezone.utc)
+        end = datetime(2026, 8, 4, 20, 0, tzinfo=timezone.utc)
+        await _insert_contact(conn, contact_id=contact_id)
+
+        await provider.prepare_eom_estimate_booking(
+            contact_id=str(contact_id),
+            scheduled_start=start,
+            scheduled_end=end,
+            calendar_id="estimate-calendar",
+            notes="Bring estimate worksheet",
+            booking_key=booking_key,
+            expected_calendar_event_id=calendar_event_id,
+            actor_id=1,
+            actor_name="Juan Canfield",
+        )
+        await provider.mark_eom_estimate_booking_calendar_failed(
+            contact_id=str(contact_id),
+            booking_key=booking_key,
+            expected_calendar_event_id=calendar_event_id,
+            calendar_error="API_ERROR",
+            calendar_message="Calendar API error: 404",
+            actor_id=1,
+            actor_name="Juan Canfield",
+        )
+
+        executor_conn = await asyncpg.connect(database_url)
+        assert await executor_conn.fetchval(
+            "SELECT pg_try_advisory_lock(hashtextextended($1, 0))",
+            execution_lock_key,
+        )
+
+        with pytest.raises(EOMLeadConversionError, match="still executing"):
+            await provider.finalize_eom_customer_handoff(
+                contact_id=str(contact_id),
+                tracker_customer_id=101,
+                tracker_site_id=202,
+                approval_key=_approval_key(),
+                actor_id=1,
+                actor_name="Juan Canfield",
+            )
+
+        with pytest.raises(EOMLeadConversionError, match="already executing"):
+            async with provider.eom_estimate_booking_execution_lock(
+                booking_key=booking_key
+            ):
+                pass  # pragma: no cover - the lock must refuse entry
+
+        assert await _contact_state(conn, contact_id) == (
+            {
+                "business_context_id": "effingham_maids",
+                "contact_type": "lead",
+                "lead_stage": "new",
+                "status": "active",
+            },
+            0,
+            0,
+        )
+
+        assert await executor_conn.fetchval(
+            "SELECT pg_advisory_unlock(hashtextextended($1, 0))",
+            execution_lock_key,
+        )
+
+        settled = await provider.finalize_eom_customer_handoff(
+            contact_id=str(contact_id),
+            tracker_customer_id=101,
+            tracker_site_id=202,
+            approval_key=_approval_key(),
+            actor_id=1,
+            actor_name="Juan Canfield",
+        )
+        assert settled["idempotent"] is False
+        assert await _contact_state(conn, contact_id) == (
+            {
+                "business_context_id": "effingham_maids",
+                "contact_type": "customer",
+                "lead_stage": None,
+                "status": "active",
+            },
+            1,
+            1,
+        )
+    finally:
+        if executor_conn is not None:
+            await executor_conn.close()
+        await conn.execute(f'DROP SCHEMA IF EXISTS "{schema}" CASCADE')
+        await conn.close()
+
+
+@pytest.mark.asyncio
 async def test_estimate_booking_completion_dominates_failed_and_ambiguous_markers():
     database_url = _database_url_or_skip()
     schema = f"atlas_eom_estimate_booking_precedence_{uuid.uuid4().hex}"

@@ -76,8 +76,8 @@ Slice phase: vertical slice
 - Acceptance criteria:
   - [ ] `POST /api/v1/eom-funnel/leads/{contact_id}/estimate-bookings` rejects
         unauthenticated, malformed actor, bad idempotency-key, naive datetime,
-        and `end <= start` requests before CRM or Calendar calls, settled by
-        `tests/test_eom_lead_conversion.py`.
+        numeric-epoch timestamp, and `end <= start` requests before CRM or
+        Calendar calls, settled by `tests/test_eom_lead_conversion.py`.
   - [ ] A valid booking request calls the CRM prepare step before Calendar, uses
         the prepared deterministic `expected_calendar_event_id` in the Calendar
         create call, then completes CRM only when Calendar returns that same ID,
@@ -135,6 +135,13 @@ Slice phase: vertical slice
   - [ ] The global booking-key ownership lookup has an additive partial index
         with `operation_key` as the leading column, settled by
         `tests/test_migrations_runner.py`.
+  - [ ] The booking service holds a per-key advisory execution lock across its
+        whole prepare -> Calendar -> complete span, refuses a concurrent
+        same-key execution with 409, and customer handoff stays fenced with 409
+        while a non-booked same-key execution is still in flight, settled by
+        `tests/test_eom_lead_conversion.py` and
+        `tests/test_eom_lead_conversion_integration.py` when
+        `ATLAS_MIGRATION_TEST_DATABASE_URL` is configured.
 - Reachability proof: the real FastAPI route
   `POST /api/v1/eom-funnel/leads/{contact_id}/estimate-bookings` is exercised
   with auth headers in `tests/test_eom_lead_conversion.py`, asserting both the
@@ -154,20 +161,32 @@ Required when this diff changes a guard, validator, normalizer, resolver,
 router/classifier, or admission boundary. Name each changed boundary path or
 seam in the enumeration; otherwise write "N/A - no boundary change."
 
-- Boundary path/seam: private EOM funnel route admission for
-  `/eom-funnel/leads/{contact_id}/estimate-bookings`; `CalendarTool.create_event`
-  deterministic-ID handling; `DatabaseCRMProvider` lead-stage/lifecycle
-  predicates for review, booking, terminal failure, and handoff.
-- Replaced-path behaviors: no prior booking route exists; handoff previously
-  admitted only `lead_stage = 'new'`; Calendar create previously sent no
-  caller-supplied event ID.
-- Guard-relevant fields: bearer token digest, `X-EOM-Actor`,
-  `X-EOM-Actor-ID`, `Idempotency-Key`, `contact_id`, `scheduled_start`,
-  `scheduled_end`, `calendar_id`, `notes`, lead `business_context_id`,
-  `contact_type`, `lead_stage`, `status`.
-- Caller x input shape: server-side tracker/office caller sends snake_case JSON
-  with aware datetimes and service-auth headers; browser/public website callers
-  are not admitted.
+- Boundary path/seam: atlas_brain/eom_api/funnel.py
+  - Replaced-path behaviors: no prior booking route exists; handoff previously
+    admitted only `lead_stage = 'new'`; the request model previously accepted
+    any Pydantic-coercible datetime value, so JSON epoch numbers coerced into
+    a 1970-era aware window.
+  - Guard-relevant fields: bearer token digest, `X-EOM-Actor`,
+    `X-EOM-Actor-ID`, `Idempotency-Key`, `contact_id`, `scheduled_start`,
+    `scheduled_end` (RFC 3339 strings only, timezone-aware, end after start),
+    `calendar_id`, `notes`.
+  - Caller x input shape: server-side tracker/office caller sends snake_case
+    JSON with aware datetime strings and service-auth headers; numeric epoch
+    timestamps reject with 422 before CRM or Calendar calls; browser/public
+    website callers are not admitted.
+- Boundary path/seam: `CalendarTool.create_event` deterministic-ID handling and
+  `DatabaseCRMProvider` lead-stage/lifecycle predicates for review, booking,
+  terminal failure, execution fencing, and handoff.
+  - Replaced-path behaviors: Calendar create previously sent no caller-supplied
+    event ID; handoff previously admitted any terminal failed marker without
+    probing for an in-flight same-key execution.
+  - Guard-relevant fields: lead `business_context_id`, `contact_type`,
+    `lead_stage`, `status`, lifecycle `operation_key`/`event_type` sets, the
+    `eom-estimate-booking:execution:<booking_key>` advisory lock key.
+  - Caller x input shape: the booking service is the only caller of
+    prepare/complete/markers and holds the execution lock for its whole span;
+    handoff probes the same lock key with a transaction-scoped try-lock and
+    rejects 409 while a non-booked same-key execution is in flight.
 
 ### Deployed-config probing
 
@@ -184,10 +203,10 @@ fallback changes; otherwise write "N/A - no guard/config boundary change."
   and full app with explicit dependency overrides; no ambient operator context
   is trusted.
 - Side-effect ordering: CRM prepare must complete before Calendar create;
-  CRM completion must not run unless Calendar returns the prepared deterministic
-  ID; only Calendar failures that prove no write occurred are marked terminal;
-  transport/5xx/conflict-verification ambiguity is marked for reconciliation;
-  tests assert the call order and failure branches.
+  CRM completion is reached only when Calendar returns the prepared
+  deterministic ID; only Calendar failures that prove no write occurred are
+  marked terminal; transport/5xx/conflict-verification ambiguity is marked for
+  reconciliation; tests assert the call order and failure branches.
 
 ### Files touched
 
@@ -242,6 +261,18 @@ that key. Handoff rereads lifecycle events under the contact transaction and
 rejects while any booking is pending or ambiguous without a matching completion,
 preventing Customer/Site approval from racing the external Calendar side effect.
 
+The booking service additionally holds a session advisory lock on
+`eom-estimate-booking:execution:<booking_key>` for its whole
+prepare -> Calendar -> complete span, so at most one same-key execution talks
+to Calendar at a time. Handoff probes that lock with
+`pg_try_advisory_xact_lock` for every non-booked operation key it read: a
+failed probe means a same-key execution is still in flight and its terminal
+failed marker may yet be superseded by a stronger booked/ambiguous outcome, so
+handoff rejects with 409 until the executor releases the lock. The request
+model also rejects non-string `scheduled_start`/`scheduled_end` values before
+Pydantic's lax mode can coerce JSON epoch numbers into a spurious 1970-era
+appointment window.
+
 Migration `357_eom_estimate_booking_operation_key_index.sql` adds an additive
 partial index with `operation_key` as the leading column for estimate-booking
 event types, matching the provider's cross-contact ownership lookup without
@@ -264,6 +295,11 @@ not widen old query results.
   using it avoids another owned table before the workflow proves it needs one.
 - This slice does not implement reschedule/cancel. Those need their own
   lifecycle semantics and should not be smuggled into the first booking command.
+- The in-flight execution fence uses Postgres advisory locks rather than a new
+  `estimate_booking_executing` ledger event. A ledger row would outlive a
+  crashed executor and wedge the lead behind evidence nobody can settle;
+  session advisory locks self-release when the executor's connection drops, so
+  the fence can never strand a key.
 
 ## Deferred
 
@@ -305,26 +341,37 @@ Parked hardening: none.
 - `python scripts/maturity_sweep.py atlas_brain/services --tests-root tests --top 10` -- informational; changed `crm_provider.py` score 97 among broad pre-existing service debt.
 - `python scripts/maturity_sweep.py atlas_brain/tools --tests-root tests --top 10` -- informational; changed `calendar.py` score 15 with pre-existing swallowed-exception/prefetch findings at lines outside this slice.
 
+Execution-fence and strict-timestamp reverification (torch is unavailable in
+this container; the failures listed below reproduce identically on the
+unmodified branch via `git stash`, and the `eom-lead-pipeline` CI lane runs the
+full stack):
+
+- `python -m pytest tests/test_eom_lead_conversion.py tests/test_migrations_runner.py -q` -- 92 passed, 1 skipped, 3 pre-existing torch-import failures.
+- `ATLAS_MIGRATION_TEST_DATABASE_URL=postgresql://postgres@localhost:5433/atlas_migration_tests python -m pytest tests/test_eom_lead_conversion_integration.py -q` -- 24 passed against disposable Postgres 16, including the two-session execution-fence proof, 3 pre-existing torch-import failures.
+- `python -m py_compile atlas_brain/eom_api/funnel.py atlas_brain/services/crm_provider.py atlas_brain/services/eom_estimate_booking.py tests/test_eom_lead_conversion.py tests/test_eom_lead_conversion_integration.py` -- passed.
+- `python -m pytest -q tests/test_audit_plan_doc.py tests/test_audit_plan_code_consistency.py` -- 26 passed.
+- ASCII scan of all touched `.py` files -- no non-ASCII bytes.
+
 ## Estimated diff size
 
 | File | LOC |
 |---|---:|
 | `.github/workflows/atlas_eom_lead_pipeline_checks.yml` | 8 |
-| `atlas_brain/eom_api/funnel.py` | 96 |
-| `atlas_brain/services/crm_provider.py` | 843 |
-| `atlas_brain/services/eom_estimate_booking.py` | 262 |
+| `atlas_brain/eom_api/funnel.py` | 98 |
+| `atlas_brain/services/crm_provider.py` | 875 |
+| `atlas_brain/services/eom_estimate_booking.py` | 303 |
 | `atlas_brain/storage/migrations/356_eom_lead_review_queue_booked_stage.sql` | 27 |
-| `atlas_brain/storage/migrations/357_eom_estimate_booking_operation_key_index.sql` | 18 |
-| `atlas_brain/tools/calendar.py` | 119 |
-| `plans/PR-EOM-Estimate-Booking-CurrentMain.md` | 483 |
+| `atlas_brain/storage/migrations/357_eom_estimate_booking_operation_key_index.sql` | 26 |
+| `atlas_brain/tools/calendar.py` | 131 |
+| `plans/PR-EOM-Estimate-Booking-CurrentMain.md` | 537 |
 | `render.eom.yaml` | 10 |
 | `requirements.eom.txt` | 1 |
-| `tests/test_eom_lead_conversion.py` | 849 |
-| `tests/test_eom_lead_conversion_integration.py` | 847 |
+| `tests/test_eom_lead_conversion.py` | 963 |
+| `tests/test_eom_lead_conversion_integration.py` | 857 |
 | `tests/test_eom_lead_pipeline_integration.py` | 7 |
-| `tests/test_eom_render_profile.py` | 15 |
-| `tests/test_migrations_runner.py` | 47 |
-| **Total** | **3632** |
+| `tests/test_eom_render_profile.py` | 38 |
+| `tests/test_migrations_runner.py` | 66 |
+| **Total** | **3947** |
 
 ## Cold diff reconstruction
 
