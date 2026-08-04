@@ -700,8 +700,9 @@ def evaluate(
                     "dispositions for the resolved review findings."
                 )
                 return 1, messages
+        has_structured_dispositions = bool(reconciliation_disposition_roots(body))
         missing_dispositions = []
-        if prior_threads and body_class == "claims_clear":
+        if prior_threads and (body_class == "claims_clear" or has_structured_dispositions):
             missing_dispositions = missing_thread_dispositions(prior_threads, body)
         if missing_dispositions:
             messages.append(

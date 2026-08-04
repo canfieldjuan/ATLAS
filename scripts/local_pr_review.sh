@@ -210,7 +210,7 @@ if [ -f "$script_root/scripts/audit_ai_reconciliation.py" ]; then
     if [ -n "$current_pr_body_file" ]; then
         reconcile_args+=(--current-pr-body-file "$current_pr_body_file")
         current_pr_author_lc="${current_pr_author,,}"
-        if [[ "$current_pr_author_lc" != "dependabot[bot]" && "$current_pr_author_lc" != "app/dependabot" ]] && ! body_uses_docs_only_marker; then
+        if [[ "$current_pr_author_lc" != "dependabot[bot]" && "$current_pr_author_lc" != "app/dependabot" && "$current_pr_author_lc" != "dependabot" ]] && ! body_uses_docs_only_marker; then
             reconcile_args+=(--require)
         fi
     fi

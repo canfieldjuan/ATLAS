@@ -366,6 +366,23 @@ def test_clear_body_requires_disposition_for_each_resolved_codex_thread():
     assert any("Second wrapper issue" in msg for msg in msgs)
 
 
+def test_structured_disposition_only_body_rejects_missing_thread_history():
+    c = load_check()
+    nodes = [
+        thread(
+            resolved=True,
+            body="Run history correlation for disposition-only ledgers R2/R13 details",
+        )
+    ]
+    body = "## AI reconciliation\n- unrelated decision -- fixed-in: fake.py\n"
+
+    code, msgs = c.evaluate(nodes, body, BOTS)
+
+    assert code == 1
+    assert any("missing dispositions" in msg for msg in msgs)
+    assert any("Run history correlation for disposition-only ledgers" in msg for msg in msgs)
+
+
 def test_clear_body_passes_when_each_resolved_codex_thread_is_named():
     c = load_check()
     nodes = [

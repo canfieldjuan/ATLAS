@@ -291,6 +291,51 @@ def test_local_pr_review_real_body_audit_honors_dependabot_exemption(
     assert "Dependabot PR body exempt" in result.stdout
 
 
+def test_local_pr_review_ai_reconciliation_honors_plain_dependabot_author(
+    tmp_path: Path,
+) -> None:
+    repo = tmp_path / "repo"
+    _write_fixture_repo(repo)
+    body = tmp_path / "body.md"
+    body.write_text("Dependabot generated body without Atlas reconciliation.\n", encoding="utf-8")
+    _write_executable(
+        repo / "scripts" / "audit_pr_body.py",
+        (REPO_ROOT / "scripts" / "audit_pr_body.py").read_text(encoding="utf-8"),
+    )
+    _write_executable(
+        repo / "scripts" / "_pr_change_policy.py",
+        (REPO_ROOT / "scripts" / "_pr_change_policy.py").read_text(encoding="utf-8"),
+    )
+    _write_executable(
+        repo / "scripts" / "audit_ai_reconciliation.py",
+        (REPO_ROOT / "scripts" / "audit_ai_reconciliation.py").read_text(encoding="utf-8"),
+    )
+    _git(
+        repo,
+        "add",
+        "scripts/audit_pr_body.py",
+        "scripts/_pr_change_policy.py",
+        "scripts/audit_ai_reconciliation.py",
+    )
+    _git(repo, "commit", "-m", "add real body audit")
+
+    result = _run(
+        repo,
+        [
+            "bash",
+            "scripts/local_pr_review.sh",
+            "--current-pr-body-file",
+            str(body),
+            "--pr-author",
+            "dependabot",
+        ],
+    )
+
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert "Dependabot PR body exempt" in result.stdout
+    assert "no 'AI reconciliation' section" not in result.stdout
+
+
 def test_local_pr_review_real_body_audit_honors_docs_only_exemption(
     tmp_path: Path,
 ) -> None:
