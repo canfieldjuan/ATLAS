@@ -3,11 +3,12 @@
 ## 2026-08-04 Update
 
 The required-status contradiction found in this audit has been closed in live
-branch protection. `main` now requires the `ci/gates.yml` `branch_required`
-contexts from the GitHub Actions app source: `live-reconciliation`,
+branch protection. `main` now contains every `ci/gates.yml` `branch_required`
+context pinned to the GitHub Actions app source: `live-reconciliation`,
 `diff-budget`, `plan-admission`, `session-lane`, `review-contract`,
 `pr-body-contract`, `Gitleaks PR secret scan`, and
-`Gitleaks baseline growth guard`.
+`Gitleaks baseline growth guard`. The checker proves required registry coverage
+and source pinning; it is not an exact-set audit for extra required contexts.
 
 Verification:
 
@@ -63,7 +64,10 @@ python scripts/check_required_status_checks.py --payload-file /tmp/atlas-require
 - `PROSE_ONLY`: policy exists in docs, but no enforcing artifact was found.
 - `CONTRADICTED`: policy or checker expectation is stronger than live config.
 
-## Enforcement Matrix
+## Original Enforcement Matrix
+
+The matrix below records the 2026-07-29 audit state. Rows that mention live
+branch protection may be superseded by the 2026-08-04 update above.
 
 | Promise | Status | Evidence |
 |---|---|---|
@@ -93,11 +97,9 @@ python scripts/check_required_status_checks.py --payload-file /tmp/atlas-require
 
 ## Follow-Up Slices
 
-1. `PR-Required-Status-Check-Alignment`: make live branch protection match
-   `scripts/check_required_status_checks.py` by requiring `diff-budget`,
-   `plan-admission`, `session-lane`, `review-contract`, and
-   `pr-body-contract`, or intentionally remove those contexts from the
-   required-context expectation.
+1. `PR-Required-Status-Check-Alignment`: closed 2026-08-04 by updating live
+   branch protection so `scripts/check_required_status_checks.py` passes against
+   the GitHub payload.
 2. `PR-Required-Workflow-Enrollment-Audit`: decide which existing CI-only
    process checks must become branch-protection required, starting with
    `pre-push-audit` and the impacted-test/growth-only `unit-gate`.
