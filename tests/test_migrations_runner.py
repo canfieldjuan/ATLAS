@@ -166,6 +166,30 @@ def test_eom_lead_review_queue_index_matches_keyset_order():
     assert "lead_stage = 'new'" in migration
 
 
+def test_eom_lead_review_queue_booked_stage_index_matches_provider_filter():
+    migration = (
+        Path(__file__).resolve().parent.parent
+        / "atlas_brain"
+        / "storage"
+        / "migrations"
+        / "356_eom_lead_review_queue_booked_stage.sql"
+    ).read_text()
+
+    assert (
+        "DROP INDEX CONCURRENTLY IF EXISTS idx_contacts_eom_lead_review_queue"
+        in migration
+    )
+    assert "CREATE INDEX CONCURRENTLY idx_contacts_eom_lead_review_queue" in migration
+    assert "ON contacts (created_at DESC, id DESC)" in migration
+    assert "business_context_id = 'effingham_maids'" in migration
+    assert "status = 'active'" in migration
+    assert "contact_type = 'lead'" in migration
+    assert "lead_stage IN ('new', 'estimate_booked')" in migration
+    assert "Rollback evidence:" in migration
+    assert "lead_stage = 'new'" in migration
+    assert "old code still filters lead_stage = 'new' at query time" in migration
+
+
 def test_customer_service_ticket_migration_is_additive_tenant_scoped_and_indexed():
     migration = (
         Path(__file__).resolve().parent.parent
@@ -206,6 +230,48 @@ def test_appointment_operating_fields_migration_is_additive_and_constrained():
     assert "chk_appointments_assigned_cleaner" in migration
     assert "chk_appointments_per_visit_price" in migration
     assert "DROP " not in migration.upper()
+
+
+def test_eom_estimate_booking_operation_key_index_is_additive_and_leading_key():
+    migration = (
+        Path(__file__).resolve().parent.parent
+        / "atlas_brain"
+        / "storage"
+        / "migrations"
+        / "357_eom_estimate_booking_operation_key_index.sql"
+    ).read_text()
+    upper = migration.upper()
+
+    # Replay-safe pattern (same as migration 355): a canceled concurrent build
+    # leaves an INVALID same-named index, so IF NOT EXISTS on the create would
+    # record a broken index as applied. The drop must be real (not just the
+    # rollback-evidence comment) and must precede the recreate.
+    assert "CREATE INDEX CONCURRENTLY IF NOT EXISTS" not in migration
+    assert (
+        migration.count(
+            "DROP INDEX CONCURRENTLY IF EXISTS "
+            "idx_eom_lead_lifecycle_booking_operation_key"
+        )
+        >= 2
+    )  # rollback-evidence comment + the executable statement
+    assert (
+        "CREATE INDEX CONCURRENTLY idx_eom_lead_lifecycle_booking_operation_key"
+        in migration
+    )
+    assert migration.index(
+        "DROP INDEX CONCURRENTLY IF EXISTS "
+        "idx_eom_lead_lifecycle_booking_operation_key"
+    ) < migration.index(
+        "CREATE INDEX CONCURRENTLY idx_eom_lead_lifecycle_booking_operation_key"
+    )
+    assert "ON eom_lead_lifecycle_events (operation_key, contact_id, event_type)" in migration
+    assert "operation_key IS NOT NULL" in migration
+    assert "'estimate_booking_requested'" in migration
+    assert "'estimate_booking_calendar_failed'" in migration
+    assert "'estimate_booking_calendar_ambiguous'" in migration
+    assert "'estimate_booked'" in migration
+    assert "DROP TABLE" not in upper
+    assert "ALTER TABLE" not in upper
 
 
 def test_sent_email_tenant_migration_is_additive_replay_safe_and_unclassified():

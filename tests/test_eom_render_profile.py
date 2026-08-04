@@ -221,6 +221,7 @@ print(json.dumps({
     assert "/api/v1/ping" in paths
     assert "/api/v1/receivables/ready" in paths
     assert "/api/v1/eom-funnel/leads" in paths
+    assert "/api/v1/eom-funnel/leads/{contact_id}/estimate-bookings" in paths
     assert "/api/v1/eom-funnel/customer-handoffs" in paths
     assert "/openapi.json" not in paths
     assert "/docs" not in paths
@@ -356,6 +357,29 @@ def test_eom_env_loader_preserves_process_env_and_local_precedence(
     assert os.environ[process_interpolated_key] == "process-secret"
 
 
+def test_eom_requirements_cover_estimate_booking_calendar_runtime():
+    """The booking route loads tools/calendar.py, whose module-level
+    `import httpx` must be satisfiable in the slim EOM runtime: the Render
+    build installs only requirements.eom.txt, so the httpx pin has to live
+    there and match the main requirements pin."""
+    eom_requirements = Path("requirements.eom.txt").read_text(encoding="utf-8")
+    main_requirements = Path("requirements.txt").read_text(encoding="utf-8")
+
+    eom_pins = {
+        line.strip().split("==")[0].split("[")[0].lower(): line.strip()
+        for line in eom_requirements.splitlines()
+        if "==" in line
+    }
+    assert "httpx" in eom_pins
+
+    main_httpx_pin = next(
+        line.strip()
+        for line in main_requirements.splitlines()
+        if line.strip().startswith("httpx==")
+    )
+    assert eom_pins["httpx"] == main_httpx_pin
+
+
 def test_eom_render_blueprint_maps_database_and_receivables_auth():
     blueprint = yaml.safe_load(Path("render.eom.yaml").read_text(encoding="utf-8"))
 
@@ -415,6 +439,20 @@ def test_eom_render_blueprint_maps_database_and_receivables_auth():
         "key": "ATLAS_EOM_RUN_MIGRATIONS",
         "value": "true",
     }
+    assert env_vars["ATLAS_TOOLS_CALENDAR_ENABLED"] == {
+        "key": "ATLAS_TOOLS_CALENDAR_ENABLED",
+        "value": "true",
+    }
+    for calendar_secret_key in (
+        "ATLAS_TOOLS_CALENDAR_CLIENT_ID",
+        "ATLAS_TOOLS_CALENDAR_CLIENT_SECRET",
+        "ATLAS_TOOLS_CALENDAR_REFRESH_TOKEN",
+        "ATLAS_TOOLS_CALENDAR_ID",
+    ):
+        assert env_vars[calendar_secret_key] == {
+            "key": calendar_secret_key,
+            "sync": False,
+        }
     assert [
         key
         for key in env_vars
