@@ -20,8 +20,8 @@ is cwd-relative; the deploy runbook covers the runtime worktree symlink).
 
 Usage:
   python scripts/import_eom_customers_live.py --dry-run
-  python scripts/import_eom_customers_live.py
-  python scripts/import_eom_customers_live.py --calendar residential --months-back 12
+  python scripts/import_eom_customers_live.py --receipt-dir ~/.local/state/atlas/eom-receipts
+  python scripts/import_eom_customers_live.py --receipt-dir ~/.local/state/atlas/eom-receipts --calendar residential --months-back 12
 """
 
 import argparse
@@ -36,6 +36,7 @@ sys.path.insert(0, str(Path(__file__).parent))          # sibling script import
 sys.path.insert(0, str(Path(__file__).parent.parent))   # atlas_brain import
 
 import import_calendar_contacts as ics  # noqa: E402  (reused extraction core)
+from eom_execution_receipt import EomExecutionReceipt, run_receipted  # noqa: E402
 
 EOM_CONTEXT_ID = "effingham_maids"
 
@@ -535,7 +536,19 @@ async def _search_channel(crm, **channel):
     return (legacy[0], True) if legacy else (None, False)
 
 
-async def import_one(rec, crm, pool) -> str:
+async def _await_receipted_mutation(receipt, awaitable):
+    if receipt is None:
+        return await awaitable
+    async with receipt.mutation_boundary():
+        return await awaitable
+
+
+def _record_receipt_contact(receipt, contact_id) -> None:
+    if receipt is not None and contact_id:
+        receipt.record_changed_contact_id(contact_id)
+
+
+async def import_one(rec, crm, pool, receipt=None) -> str:
     """Import a single record; returns 'created' or 'updated'.
 
     Resolution order: tenant-scoped phone, then email (provider priority),
@@ -578,14 +591,23 @@ async def import_one(rec, crm, pool) -> str:
         # from a phone/email match is strong, so those claims require only
         # unarchived; the weaker address-only match additionally requires
         # calendar_import provenance (rounds 3+7 semantics, race-proof).
-        existing = await claim_legacy_row(
-            pool, str(existing["id"]),
-            require_import_source=claim_by_address,
-            identity=matched_identity,
+        existing = await _await_receipted_mutation(
+            receipt,
+            claim_legacy_row(
+                pool, str(existing["id"]),
+                require_import_source=claim_by_address,
+                identity=matched_identity,
+            ),
         )
+        if existing is not None:
+            _record_receipt_contact(receipt, existing["id"])
 
     if existing is not None:
-        contact_id, outcome = await _update_matched(pool, existing, data)
+        contact_id, outcome = await _await_receipted_mutation(
+            receipt, _update_matched(pool, existing, data)
+        )
+        if outcome == "updated":
+            _record_receipt_contact(receipt, contact_id)
     else:
         create_data = dict(data)
         # create_contact can still race-merge into a contact created
@@ -594,14 +616,20 @@ async def import_one(rec, crm, pool) -> str:
         # so both ride the controlled paths only (Codex rounds 6-7, R1/R8).
         create_data.pop("source", None)
         create_data.pop("tags", None)
-        result = await crm.create_contact(create_data)
+        result = await _await_receipted_mutation(
+            receipt, crm.create_contact(create_data)
+        )
         if result.get("_was_created"):
             contact_id = str(result.get("id", ""))
             outcome = "created"
+            _record_receipt_contact(receipt, contact_id)
             if contact_id:
-                stamp = await _guarded_update(
-                    pool, contact_id,
-                    {"source": "calendar_import", "tags": data["tags"]},
+                stamp = await _await_receipted_mutation(
+                    receipt,
+                    _guarded_update(
+                        pool, contact_id,
+                        {"source": "calendar_import", "tags": data["tags"]},
+                    ),
                 )
                 if stamp is None:
                     # Archived/reassigned within the create window: the row
@@ -614,7 +642,11 @@ async def import_one(rec, crm, pool) -> str:
         else:
             # Race-merged: reconcile exactly like any matched contact
             # (Codex round 7, R1/R8).
-            contact_id, outcome = await _update_matched(pool, result, data)
+            contact_id, outcome = await _await_receipted_mutation(
+                receipt, _update_matched(pool, result, data)
+            )
+            if outcome == "updated":
+                _record_receipt_contact(receipt, contact_id)
 
     if contact_id and rec.last_event_date and outcome != "skipped":
         # The archive can land after the contact write but before this log:
@@ -633,33 +665,38 @@ async def import_one(rec, crm, pool) -> str:
         # source_ref inside metadata is a dedupe anchor (migration 256): the
         # same address never accumulates duplicate import interactions across
         # re-runs.
-        await crm.log_interaction(
-            contact_id=contact_id,
-            interaction_type="appointment",
-            summary=(
-                f"Live calendar import: {rec.event_count} booking event(s). "
-                f"Most recent: {rec.last_event_date.isoformat()}. "
-                f"Source: {rec.source_calendar}"
+        interaction = await _await_receipted_mutation(
+            receipt,
+            crm.log_interaction(
+                contact_id=contact_id,
+                interaction_type="appointment",
+                summary=(
+                    f"Live calendar import: {rec.event_count} booking event(s). "
+                    f"Most recent: {rec.last_event_date.isoformat()}. "
+                    f"Source: {rec.source_calendar}"
+                ),
+                occurred_at=(
+                    getattr(rec, "latest_event_dt", None)
+                    or datetime.combine(rec.last_event_date, datetime.min.time())
+                    .replace(tzinfo=timezone.utc)
+                ).isoformat(),
+                # Date-scoped anchor: re-runs with the same latest booking dedupe,
+                # while each NEW latest booking advances the timeline instead of
+                # colliding with the old anchored row forever (Codex round 11,
+                # R1/R6).
+                metadata={
+                    # Timestamp-scoped: a same-day newer booking advances the
+                    # timeline too (Codex rounds 11+15, R1/R6).
+                    "source_ref": (
+                        f"eom_live_calendar:{rec.address.lower()}:"
+                        + (getattr(rec, "latest_event_dt", None)
+                           or rec.last_event_date).isoformat()
+                    )
+                },
             ),
-            occurred_at=(
-                getattr(rec, "latest_event_dt", None)
-                or datetime.combine(rec.last_event_date, datetime.min.time())
-                .replace(tzinfo=timezone.utc)
-            ).isoformat(),
-            # Date-scoped anchor: re-runs with the same latest booking dedupe,
-            # while each NEW latest booking advances the timeline instead of
-            # colliding with the old anchored row forever (Codex round 11,
-            # R1/R6).
-            metadata={
-                # Timestamp-scoped: a same-day newer booking advances the
-                # timeline too (Codex rounds 11+15, R1/R6).
-                "source_ref": (
-                    f"eom_live_calendar:{rec.address.lower()}:"
-                    + (getattr(rec, "latest_event_dt", None)
-                       or rec.last_event_date).isoformat()
-                )
-            },
         )
+        if interaction.get("inserted") is True:
+            _record_receipt_contact(receipt, contact_id)
     return outcome
 
 
@@ -669,8 +706,12 @@ def exit_code_for(counts: dict) -> int:
     return 1 if counts.get("errors") else 0
 
 
-async def run_import(records, dry_run: bool) -> dict:
+async def run_import(records, dry_run: bool, receipt=None) -> dict:
     counts = {"created": 0, "updated": 0, "unchanged": 0, "skipped": 0, "errors": 0}
+    if dry_run:
+        counts["import-planned"] = len(records)
+    if receipt is not None:
+        receipt.record_outcome_counts(counts)
     crm = None
     pool = None
     if not dry_run:
@@ -690,27 +731,16 @@ async def run_import(records, dry_run: bool) -> dict:
         if dry_run:
             continue
         try:
-            counts[await import_one(rec, crm, pool)] += 1
+            counts[await import_one(rec, crm, pool, receipt=receipt)] += 1
         except Exception as e:  # noqa: BLE001 -- operator script: report and continue
             print(f"    ERROR: {rec.name} -- {e}")
             counts["errors"] += 1
+        if receipt is not None:
+            receipt.record_outcome_counts(counts)
     return counts
 
 
-async def main():
-    parser = argparse.ArgumentParser(
-        description="Import EOM customers from the live booking calendars"
-    )
-    parser.add_argument("--dry-run", action="store_true", help="Preview only -- no DB writes")
-    parser.add_argument(
-        "--calendar",
-        choices=["commercial", "residential", "one_time", "all"],
-        default="all",
-    )
-    parser.add_argument("--months-back", type=int, default=24)
-    parser.add_argument("--months-forward", type=int, default=12)
-    args = parser.parse_args()
-
+async def run(args, receipt=None):
     calendar_ids = resolve_calendar_ids(effective_calendar_env(os.environ), args.calendar)
 
     now = datetime.now(timezone.utc)
@@ -758,7 +788,7 @@ async def main():
         await pool.initialize()
         print("Database pool initialized.\n")
 
-    counts = await run_import(records, args.dry_run)
+    counts = await run_import(records, args.dry_run, receipt=receipt)
 
     print(f"\n{'=' * 70}")
     if args.dry_run:
@@ -774,5 +804,35 @@ async def main():
     return exit_code_for(counts)
 
 
+def main(argv=None):
+    parser = argparse.ArgumentParser(
+        description="Import EOM customers from the live booking calendars"
+    )
+    parser.add_argument("--dry-run", action="store_true", help="Preview only -- no DB writes")
+    parser.add_argument(
+        "--calendar",
+        choices=["commercial", "residential", "one_time", "all"],
+        default="all",
+    )
+    parser.add_argument("--months-back", type=int, default=24)
+    parser.add_argument("--months-forward", type=int, default=12)
+    parser.add_argument(
+        "--receipt-dir",
+        help="Private execution-receipt directory; required for live writes",
+    )
+    args = parser.parse_args(argv)
+    if not args.dry_run and not args.receipt_dir:
+        parser.error("live writes require --receipt-dir")
+    receipt = None
+    if args.receipt_dir:
+        receipt = EomExecutionReceipt(
+            receipt_dir=args.receipt_dir,
+            tool="import_eom_customers_live",
+            mode="dry-run" if args.dry_run else "write",
+            script_path=Path(__file__),
+        )
+    return run_receipted(receipt, lambda: asyncio.run(run(args, receipt=receipt)))
+
+
 if __name__ == "__main__":
-    sys.exit(asyncio.run(main()))
+    sys.exit(main())
