@@ -11,10 +11,11 @@ schedule the estimate itself without promoting the lead into a customer.
 Diff-budget justification: this is over the 400 LOC soft cap because the
 durable vertical is indivisible at the Calendar boundary. The route admission,
 CRM lifecycle prepare/complete pair, deterministic Calendar ID behavior, booked
-lead review compatibility, later handoff compatibility, and regression tests
-must land together; splitting any one of those would either expose an unwired
-route, permit duplicate Calendar events on retry, or leave booked leads unable
-to become customers.
+lead review compatibility, later handoff compatibility, immutable prepared
+Calendar snapshot, booking-key ownership index, and regression tests must land
+together; splitting any one of those would either expose an unwired route,
+permit duplicate Calendar events on retry, create mutable-contact replay drift,
+or leave booked leads unable to become customers.
 
 ### Problem-derived contract
 
@@ -22,19 +23,25 @@ to become customers.
   customer-handoff endpoint, but no durable middle transition for "Juan booked
   an estimate." Scheduling that estimate is an external Calendar side effect; if
   the route records only the Calendar result, retries can duplicate calendar
-  events, and if it promotes the contact straight to customer it violates the
-  office-owned approval boundary.
+  events; if retries recompute Calendar fields from mutable contact state, the
+  deterministic-ID replay can reject the event that the original request
+  actually created; and if booking promotes the contact straight to customer it
+  violates the office-owned approval boundary.
 - Correct fix must touch/change: add one private EOM funnel booking command for
   an existing active EOM lead; validate the operator, idempotency key, contact,
   and aware start/end times before any Calendar write; record immutable
-  lifecycle evidence before and after the Calendar write; use a deterministic
-  Calendar event ID for safe retries; move the lead only from `new` to
-  `estimate_booked`; keep `estimate_booked` leads visible to office review; and
-  allow the existing customer handoff to approve either `new` or
-  `estimate_booked` leads only after any prepared booking reaches a terminal
-  booked/failed state, while preserving its idempotency and tracker-ID
-  uniqueness guarantees. Definite Calendar failures must be terminal evidence
-  that allow a corrected new operation; ambiguous Calendar state must block
+  lifecycle evidence before and after the Calendar write; persist and replay
+  the prepared Calendar summary/start/end/location/description/calendar ID/event
+  ID from the lifecycle request event; use a deterministic Calendar event ID for
+  safe retries; move the lead only from `new` to `estimate_booked`; keep
+  `estimate_booked` leads visible to office review; index booking operation-key
+  lookups with `operation_key` as the leading indexed column; and allow the
+  existing customer handoff to approve either `new` or `estimate_booked` leads
+  only after any prepared booking reaches a terminal booked/failed state, while
+  preserving its idempotency and tracker-ID uniqueness guarantees. Only Calendar
+  failures that prove no write occurred must be terminal evidence that allow a
+  corrected new operation; transport failures, 5xx responses, and
+  conflict-verification failures are ambiguous Calendar state and must block
   until reconciliation.
 - Must not change: do not create or update tracker Customer/Site records; do not
   add Stripe/card-on-file, receivables, first-clean, reschedule, cancel,
@@ -61,6 +68,8 @@ Slice phase: vertical slice
 4. Add HTTP and provider-level tests for boundary validation, idempotent retry,
    conflict rejection, non-promotion on Calendar failure, and later customer
    approval from `estimate_booked`.
+5. Add the booking-key lookup index and keep the integration test migration
+   setup aligned with the appointment columns read by CRM context queries.
 
 ### Review Contract
 
@@ -73,21 +82,28 @@ Slice phase: vertical slice
         the prepared deterministic `expected_calendar_event_id` in the Calendar
         create call, then completes CRM only when Calendar returns that same ID,
         settled by `tests/test_eom_lead_conversion.py`.
-  - [ ] Definite Calendar failure records
+  - [ ] Calendar failures that prove no write occurred record
         `estimate_booking_calendar_failed`, returns an error without completing
         the booking or promoting the lead, and admits a corrected new booking
         key for the same lead, settled by `tests/test_eom_lead_conversion.py`
         and `tests/test_eom_lead_conversion_integration.py` when
         `ATLAS_MIGRATION_TEST_DATABASE_URL` is configured.
-  - [ ] Ambiguous Calendar state, including a deterministic-ID 409 whose
-        fetched event no longer matches the requested booking, records
-        `estimate_booking_calendar_ambiguous` and remains fail-closed until
-        reconciliation, settled by `tests/test_eom_lead_conversion.py`.
+  - [ ] Ambiguous Calendar state, including transport failure, 5xx response,
+        and a deterministic-ID 409 whose fetched event no longer matches the
+        requested booking, records `estimate_booking_calendar_ambiguous` and
+        remains fail-closed until reconciliation, settled by
+        `tests/test_eom_lead_conversion.py`.
+  - [ ] Same-key retry uses the originally prepared Calendar event snapshot
+        instead of mutable contact fields, settled by
+        `tests/test_eom_lead_conversion.py` and
+        `tests/test_eom_lead_conversion_integration.py` when
+        `ATLAS_MIGRATION_TEST_DATABASE_URL` is configured.
   - [ ] Replaying the same idempotency key and same payload returns the existing
         booking without creating a second lifecycle transition or second
-        Calendar event, settled locally by `tests/test_eom_lead_conversion.py`
-        and on real Postgres by `tests/test_eom_lead_conversion_integration.py`
-        when `ATLAS_MIGRATION_TEST_DATABASE_URL` is configured.
+        Calendar event, including after the booked lead is later handed off to a
+        customer, settled locally by `tests/test_eom_lead_conversion.py` and on
+        real Postgres by `tests/test_eom_lead_conversion_integration.py` when
+        `ATLAS_MIGRATION_TEST_DATABASE_URL` is configured.
   - [ ] Reusing a booking key across contacts, or reusing a booking key or lead
         with a different active booking payload, rejects with 409 before
         another Calendar write, settled by `tests/test_eom_lead_conversion.py`
@@ -107,6 +123,9 @@ Slice phase: vertical slice
         idempotent success only after verifying active status, summary, start,
         end, location, and description, settled by
         `tests/test_eom_lead_conversion.py`.
+  - [ ] The global booking-key ownership lookup has an additive partial index
+        with `operation_key` as the leading column, settled by
+        `tests/test_migrations_runner.py`.
 - Reachability proof: the real FastAPI route
   `POST /api/v1/eom-funnel/leads/{contact_id}/estimate-bookings` is exercised
   with auth headers in `tests/test_eom_lead_conversion.py`, asserting both the
@@ -116,8 +135,8 @@ Slice phase: vertical slice
   helper, lead review projection, customer handoff from booked leads, migration
   for the review-queue index predicate.
 - Risk areas: external side-effect retry/idempotency, lead-stage compatibility,
-  authorization boundary, migration/index deploy safety, response-shape
-  compatibility for the private tracker client.
+  authorization boundary, migration/index deploy safety, mutable contact drift
+  during retry, response-shape compatibility for the private tracker client.
 - Reviewer rules triggered: R1, R2, R3, R4, R5, R6, R8, R10, R12, R14.
 
 ### Boundary-change enumeration
@@ -157,20 +176,22 @@ fallback changes; otherwise write "N/A - no guard/config boundary change."
   is trusted.
 - Side-effect ordering: CRM prepare must complete before Calendar create;
   CRM completion must not run unless Calendar returns the prepared deterministic
-  ID; definite Calendar failures are marked terminal; ambiguous Calendar
-  conflicts are marked for reconciliation; tests assert the call order and
-  failure branches.
+  ID; only Calendar failures that prove no write occurred are marked terminal;
+  transport/5xx/conflict-verification ambiguity is marked for reconciliation;
+  tests assert the call order and failure branches.
 
 ### Files touched
 
 - `atlas_brain/eom_api/funnel.py`
 - `atlas_brain/services/crm_provider.py`
 - `atlas_brain/services/eom_estimate_booking.py`
+- `atlas_brain/storage/migrations/357_eom_estimate_booking_operation_key_index.sql`
 - `atlas_brain/storage/migrations/356_eom_lead_review_queue_booked_stage.sql`
 - `atlas_brain/tools/calendar.py`
 - `plans/PR-EOM-Estimate-Booking-CurrentMain.md`
 - `tests/test_eom_lead_conversion.py`
 - `tests/test_eom_lead_conversion_integration.py`
+- `tests/test_eom_lead_pipeline_integration.py`
 - `tests/test_eom_render_profile.py`
 - `tests/test_migrations_runner.py`
 
@@ -181,10 +202,14 @@ key, contact UUID, and aware start/end window. It delegates to a small service
 that asks the CRM provider to prepare a booking. The provider locks the contact
 and operation key, verifies an active EOM lead, rejects conflicting existing
 bookings, and appends `estimate_booking_requested` lifecycle evidence that
-contains the deterministic Calendar event ID. The service then calls Calendar
-with that ID. Only a matching Calendar result is allowed to complete the CRM
+contains the deterministic Calendar event ID and the immutable prepared Calendar
+summary/start/end/location/description/calendar ID/event ID. The service then
+calls Calendar with that prepared snapshot, not freshly recomputed contact
+fields. Only a matching Calendar result is allowed to complete the CRM
 transition to `lead_stage = 'estimate_booked'` and append `estimate_booked`
-lifecycle evidence.
+lifecycle evidence. Completed same-key replay is validated against the
+operation metadata before applying lead-only admission checks, so a delayed
+retry remains idempotent after a later customer handoff.
 
 The Calendar helper keeps existing callers unchanged. When a deterministic ID is
 provided, it includes that ID in the Google event body; if Google reports a
@@ -193,12 +218,19 @@ idempotent result only when the active event still matches the requested
 summary, start, end, location, and description. A mismatched duplicate is an
 ambiguous Calendar state, not a completed booking.
 
-Definitive Calendar create failures append
+Calendar create failures that prove no write occurred append
 `estimate_booking_calendar_failed`, which terminates that operation key and
-allows a corrected new booking key for the same lead. Handoff rereads lifecycle
-events under the contact transaction and rejects while any booking is pending
-or ambiguous, preventing Customer/Site approval from racing the external
-Calendar side effect.
+allows a corrected new booking key for the same lead. Transport failures, 5xx
+responses, and deterministic-conflict verification failures append
+`estimate_booking_calendar_ambiguous` instead, because the Calendar event may
+already exist. Handoff rereads lifecycle events under the contact transaction
+and rejects while any booking is pending or ambiguous, preventing Customer/Site
+approval from racing the external Calendar side effect.
+
+Migration `357_eom_estimate_booking_operation_key_index.sql` adds an additive
+partial index with `operation_key` as the leading column for estimate-booking
+event types, matching the provider's cross-contact ownership lookup without
+changing ledger uniqueness or append-only behavior.
 
 Migration rollback for the review-queue index is explicit: drop
 `idx_contacts_eom_lead_review_queue` concurrently, then recreate it concurrently
@@ -235,8 +267,10 @@ Parked hardening: none.
 
 ## Verification
 
-- `pytest -q tests/test_eom_lead_conversion.py tests/test_migrations_runner.py tests/test_eom_render_profile.py` -- 142 passed, 1 skipped, 1 warning.
-- `pytest -q tests/test_eom_lead_conversion_integration.py` -- 25 skipped locally because `ATLAS_MIGRATION_TEST_DATABASE_URL` is not configured.
+- `python -m py_compile atlas_brain/services/eom_estimate_booking.py atlas_brain/services/crm_provider.py atlas_brain/tools/calendar.py` -- passed.
+- `pytest -q tests/test_eom_lead_conversion.py tests/test_migrations_runner.py tests/test_eom_render_profile.py` -- 145 passed, 1 skipped, 1 warning.
+- `pytest -q tests/test_eom_lead_conversion_integration.py tests/test_eom_lead_pipeline_integration.py` -- 1 passed, 40 skipped locally because `ATLAS_MIGRATION_TEST_DATABASE_URL` is not configured.
+- `python scripts/maturity_sweep.py atlas_brain/tools --tests-root tests --baseline tests/maturity_sweep/baseline_atlas_brain_tools.json` -- ratchet gate passed; `calendar.py` remains at baseline score 15.
 - `python -m py_compile atlas_brain/eom_api/funnel.py atlas_brain/services/eom_estimate_booking.py atlas_brain/services/crm_provider.py atlas_brain/tools/calendar.py tests/test_eom_lead_conversion.py tests/test_eom_lead_conversion_integration.py tests/test_eom_render_profile.py tests/test_migrations_runner.py` -- passed.
 - `python -m pytest -q tests/test_audit_plan_doc.py tests/test_audit_plan_code_consistency.py tests/test_audit_pr_plan_presence.py tests/test_check_diff_budget.py` -- 103 passed.
 - `python scripts/check_boundary_change_enumeration.py --base origin/main --strict` -- OK.
@@ -250,16 +284,22 @@ Parked hardening: none.
 | File | LOC |
 |---|---:|
 | `atlas_brain/eom_api/funnel.py` | 96 |
-| `atlas_brain/services/crm_provider.py` | 739 |
-| `atlas_brain/services/eom_estimate_booking.py` | 161 |
+| `atlas_brain/services/crm_provider.py` | 814 |
+| `atlas_brain/services/eom_estimate_booking.py` | 223 |
 | `atlas_brain/storage/migrations/356_eom_lead_review_queue_booked_stage.sql` | 27 |
-| `atlas_brain/tools/calendar.py` | 111 |
-| `plans/PR-EOM-Estimate-Booking-CurrentMain.md` | 396 |
-| `tests/test_eom_lead_conversion.py` | 597 |
-| `tests/test_eom_lead_conversion_integration.py` | 597 |
+| `atlas_brain/storage/migrations/357_eom_estimate_booking_operation_key_index.sql` | 18 |
+| `atlas_brain/tools/calendar.py` | 112 |
+| `plans/PR-EOM-Estimate-Booking-CurrentMain.md` | 430 |
+| `tests/test_eom_lead_conversion.py` | 701 |
+| `tests/test_eom_lead_conversion_integration.py` | 662 |
+| `tests/test_eom_lead_pipeline_integration.py` | 7 |
 | `tests/test_eom_render_profile.py` | 1 |
-| `tests/test_migrations_runner.py` | 24 |
-| **Total** | **2749** |
+| `tests/test_migrations_runner.py` | 47 |
+| **Total** | **3138** |
+
+Full PR branch numstat versus `origin/main` is currently 4,376 changed lines
+(2,974 added / 1,402 removed), because the branch also carries pre-existing
+unit-gate baseline shrink proof changes outside this estimate-booking slice.
 
 ## Cold diff reconstruction
 
@@ -287,27 +327,33 @@ Change-by-change reconstruction against the contract:
   command. Citation: `atlas_brain/eom_api/funnel.py:203`.
 - The booking service derives a deterministic Google-safe event ID from the
   contact and idempotency key, requires CRM prepare/complete/ambiguous/failed
-  lifecycle hooks, prepares CRM first, skips Calendar on completed idempotent
-  replay, marks deterministic-ID conflicts ambiguous, records definitive
-  Calendar failures as terminal failed attempts, refuses to complete CRM if
-  Calendar returns a different ID, and otherwise completes CRM. This traces to
-  the contract's duplicate-safe Calendar side-effect ordering. Citations:
+  lifecycle hooks, prepares CRM first, uses the prepared Calendar snapshot for
+  create/retry, skips Calendar on completed idempotent replay, marks
+  deterministic-ID conflicts and indeterminate Calendar failures ambiguous,
+  records only no-write-proven Calendar failures as terminal failed attempts,
+  refuses to complete CRM if Calendar returns a different ID, and otherwise
+  completes CRM. This traces to the contract's duplicate-safe Calendar
+  side-effect ordering. Citations:
   `atlas_brain/services/eom_estimate_booking.py:57`,
-  `atlas_brain/services/eom_estimate_booking.py:66`,
-  `atlas_brain/services/eom_estimate_booking.py:111`.
+  `atlas_brain/services/eom_estimate_booking.py:92`,
+  `atlas_brain/services/eom_estimate_booking.py:148`.
 - `DatabaseCRMProvider.list_eom_new_lead_review_items` now selects `lead_stage`
   and filters active EOM leads by `lead_stage IN ('new', 'estimate_booked')`.
   This traces to keeping booked estimates visible until Juan approves the
   Customer/Site handoff. Citation: `atlas_brain/services/crm_provider.py:1212`.
 - `DatabaseCRMProvider.prepare_eom_estimate_booking` locks the contact and
   operation key, enforces booking-key ownership across contacts, validates
-  active EOM lead ownership/type/stage, treats failed attempts as terminal,
+  active EOM lead ownership/type/stage for new or pending operations, treats
+  failed attempts as terminal,
   rejects pending/booked/ambiguous conflicting operations, compares replay
-  payload metadata, and writes `estimate_booking_requested` before Calendar is
-  called. This traces to the contract's durable prepare/idempotency
-  requirement. Citations: `atlas_brain/services/crm_provider.py:1267`,
-  `atlas_brain/services/crm_provider.py:1308`,
-  `atlas_brain/services/crm_provider.py:1419`.
+  payload metadata, returns completed same-key replay before lead-only
+  admission checks, persists the immutable Calendar event snapshot, and writes
+  `estimate_booking_requested` before Calendar is called. This traces to the
+  contract's durable prepare/idempotency requirement. Citations:
+  `atlas_brain/services/crm_provider.py:1221`,
+  `atlas_brain/services/crm_provider.py:1307`,
+  `atlas_brain/services/crm_provider.py:1475`,
+  `atlas_brain/services/crm_provider.py:1530`.
 - `DatabaseCRMProvider.mark_eom_estimate_booking_calendar_ambiguous` records an
   immutable ambiguity event when Calendar returns an unexpected ID, without
   promoting the lead. This traces to the contract's "do not release/complete on
@@ -338,11 +384,14 @@ Change-by-change reconstruction against the contract:
   the Google Calendar body only when provided, treats a 409 duplicate as
   idempotent success only when the fetched active event matches the requested
   summary/start/end/location/description, and returns `IDEMPOTENCY_CONFLICT`
-  otherwise. Existing callers that omit `event_id` keep the old request body.
-  This traces to the contract's Calendar retry requirement without changing
-  general Calendar callers. Citations: `atlas_brain/tools/calendar.py:50`,
+  otherwise. HTTP status failures now expose the Calendar status code so the
+  booking service can distinguish no-write-proven 4xx responses from
+  indeterminate 5xx/transport failures. Existing callers that omit `event_id`
+  keep the old request body. This traces to the contract's Calendar retry
+  requirement without changing general Calendar callers. Citations:
+  `atlas_brain/tools/calendar.py:50`,
   `atlas_brain/tools/calendar.py:557`, `atlas_brain/tools/calendar.py:645`,
-  `atlas_brain/tools/calendar.py:660`.
+  `atlas_brain/tools/calendar.py:660`, `atlas_brain/tools/calendar.py:720`.
 - Migration `356_eom_lead_review_queue_booked_stage.sql` replaces the review
   queue index predicate so it matches the new provider filter for `new` and
   `estimate_booked` leads, and documents the exact concurrent rollback plus the
@@ -350,8 +399,14 @@ Change-by-change reconstruction against the contract:
   compatibility and migration rollback requirements. Citations:
   `atlas_brain/storage/migrations/356_eom_lead_review_queue_booked_stage.sql:7`,
   `atlas_brain/storage/migrations/356_eom_lead_review_queue_booked_stage.sql:27`.
+- Migration `357_eom_estimate_booking_operation_key_index.sql` adds an
+  additive partial index on `(operation_key, contact_id, event_type)` for
+  estimate-booking lifecycle events. This traces to the cross-contact
+  booking-key ownership lookup and avoids a lifecycle-ledger scan. Citation:
+  `atlas_brain/storage/migrations/357_eom_estimate_booking_operation_key_index.sql:10`.
 - Route tests cover valid prepare-Calendar-complete ordering, Calendar failure
-  with terminal failed lifecycle marking, unexpected Calendar ID ambiguity,
+  classification into ambiguous vs no-write-proven terminal failure, immutable
+  prepared Calendar snapshot reuse, unexpected Calendar ID ambiguity,
   deterministic-ID 409 ambiguity, completed replay without another Calendar
   call, provider conflict without Calendar, bad body rejection, HTTP guard
   rejection, and deterministic Calendar helper verification. This traces to the
@@ -363,14 +418,20 @@ Change-by-change reconstruction against the contract:
   `tests/test_eom_lead_conversion.py:854`.
 - Real-Postgres tests, when the migration DB URL is configured, cover booked
   leads staying visible in the review projection, one requested/booked
-  lifecycle pair on replay, approval from `estimate_booked`, pending booking
-  handoff rejection plus corrected-operation admission after a failed terminal
-  event, and cross-contact booking-key ownership. This traces to the provider
-  lifecycle and handoff compatibility criteria. Citations:
+  lifecycle pair on replay, immutable prepared Calendar snapshot persistence,
+  same-key replay after customer handoff, approval from `estimate_booked`,
+  pending booking handoff rejection plus corrected-operation admission after a
+  failed terminal event, and cross-contact booking-key ownership. This traces to
+  the provider lifecycle and handoff compatibility criteria. Citations:
   `tests/test_eom_lead_conversion_integration.py:190`,
   `tests/test_eom_lead_conversion_integration.py:421`,
   `tests/test_eom_lead_conversion_integration.py:629`,
   `tests/test_eom_lead_conversion_integration.py:722`.
+- EOM lead-pipeline integration fixtures now apply
+  `348_appointment_operating_fields.sql` before lifecycle/contact code queries
+  appointment operating columns, matching the production migration dependency
+  and fixing the CI `appointments.recurrence_interval` failure. Citation:
+  `tests/test_eom_lead_pipeline_integration.py:52`.
 - Slim Render profile tests now assert the new route is exposed without loading
   the full API/config/reasoning stack. This traces to preserving the slim EOM
   runtime boundary. Citation: `tests/test_eom_render_profile.py:220`.

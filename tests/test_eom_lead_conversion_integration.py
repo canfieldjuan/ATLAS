@@ -108,6 +108,7 @@ async def _prepare_schema(
         "035_contacts.sql",
         "256_contact_interaction_dedupe.sql",
         "346_contact_lead_pipeline.sql",
+        "348_appointment_operating_fields.sql",
         "351_eom_lead_lifecycle_events.sql",
         "352_eom_inbound_delivery_receipts.sql",
         "353_eom_customer_handoffs.sql",
@@ -451,6 +452,49 @@ async def test_estimate_booking_lifecycle_is_idempotent_and_keeps_lead_approvabl
             actor_id=1,
             actor_name="Juan Canfield",
         )
+        requested_metadata = await conn.fetchval(
+            """
+            SELECT metadata
+            FROM eom_lead_lifecycle_events
+            WHERE contact_id = $1
+              AND event_type = 'estimate_booking_requested'
+              AND operation_key = $2
+            """,
+            contact_id,
+            booking_key,
+        )
+        assert requested_metadata["calendar_event"] == {
+            "summary": "Estimate: Booked Estimate",
+            "start": start.isoformat(),
+            "end": end.isoformat(),
+            "location": "100 Main St",
+            "description": (
+                "Scheduled from the private EOM lead funnel.\n\n"
+                "Bring estimate worksheet"
+            ),
+            "calendar_id": "estimate-calendar",
+            "event_id": calendar_event_id,
+        }
+        await conn.execute(
+            """
+            UPDATE contacts
+            SET full_name = 'Edited Before Retry',
+                address = '999 Changed Ave'
+            WHERE id = $1
+            """,
+            contact_id,
+        )
+        pending_replay = await provider.prepare_eom_estimate_booking(
+            contact_id=str(contact_id),
+            scheduled_start=start,
+            scheduled_end=end,
+            calendar_id="estimate-calendar",
+            notes="Bring estimate worksheet",
+            booking_key=booking_key,
+            expected_calendar_event_id=calendar_event_id,
+            actor_id=1,
+            actor_name="Juan Canfield",
+        )
         contact_after_prepare = await conn.fetchrow(
             "SELECT contact_type, lead_stage FROM contacts WHERE id = $1",
             contact_id,
@@ -494,6 +538,10 @@ async def test_estimate_booking_lifecycle_is_idempotent_and_keeps_lead_approvabl
 
         assert prepared["idempotent"] is False
         assert prepared["status"] == "calendar_pending"
+        assert pending_replay["idempotent"] is True
+        assert pending_replay["status"] == "calendar_pending"
+        assert pending_replay["calendar_event"]["summary"] == "Estimate: Booked Estimate"
+        assert pending_replay["calendar_event"]["location"] == "100 Main St"
         assert dict(contact_after_prepare) == {
             "contact_type": "lead",
             "lead_stage": "new",
@@ -503,6 +551,7 @@ async def test_estimate_booking_lifecycle_is_idempotent_and_keeps_lead_approvabl
         assert completed["calendar_event_id"] == calendar_event_id
         assert replay["idempotent"] is True
         assert replay["status"] == "estimate_booked"
+        assert replay["calendar_event"]["summary"] == "Estimate: Booked Estimate"
         assert lifecycle_counts == {
             "estimate_booking_requested": 1,
             "estimate_booked": 1,
@@ -537,6 +586,22 @@ async def test_estimate_booking_lifecycle_is_idempotent_and_keeps_lead_approvabl
             },
             1,
             1,
+        )
+        post_handoff_replay = await provider.prepare_eom_estimate_booking(
+            contact_id=str(contact_id),
+            scheduled_start=start,
+            scheduled_end=end,
+            calendar_id="estimate-calendar",
+            notes="Bring estimate worksheet",
+            booking_key=booking_key,
+            expected_calendar_event_id=calendar_event_id,
+            actor_id=1,
+            actor_name="Juan Canfield",
+        )
+        assert post_handoff_replay["idempotent"] is True
+        assert post_handoff_replay["status"] == "estimate_booked"
+        assert post_handoff_replay["calendar_event"]["summary"] == (
+            "Estimate: Booked Estimate"
         )
     finally:
         await conn.execute(f'DROP SCHEMA IF EXISTS "{schema}" CASCADE')

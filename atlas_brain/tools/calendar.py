@@ -390,6 +390,7 @@ class CalendarTool:
             return ToolResult(
                 success=False,
                 error="API_ERROR",
+                data={"status_code": e.response.status_code},
                 message=f"Calendar API error: {e.response.status_code}",
             )
         except Exception as e:

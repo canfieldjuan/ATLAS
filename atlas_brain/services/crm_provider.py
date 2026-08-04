@@ -20,7 +20,7 @@ import hashlib
 import re
 from contextlib import asynccontextmanager
 from datetime import datetime, timezone
-from typing import Any, Optional
+from typing import Any, Mapping, Optional
 from uuid import UUID, uuid4
 
 logger = logging.getLogger("atlas.services.crm_provider")
@@ -1226,6 +1226,7 @@ class DatabaseCRMProvider:
         calendar_id: str,
         notes: str | None,
         expected_calendar_event_id: str,
+        calendar_event: dict[str, Any] | None = None,
         calendar_event_id: str | None = None,
         actor_id: int | None = None,
     ) -> dict[str, Any]:
@@ -1236,11 +1237,56 @@ class DatabaseCRMProvider:
             "notes": notes or "",
             "expected_calendar_event_id": expected_calendar_event_id,
         }
+        if calendar_event is not None:
+            metadata["calendar_event"] = calendar_event
         if calendar_event_id is not None:
             metadata["calendar_event_id"] = calendar_event_id
         if actor_id is not None:
             metadata["scheduled_by_employee_id"] = actor_id
         return metadata
+
+    @staticmethod
+    def _eom_estimate_booking_summary(contact: Mapping[str, Any]) -> str:
+        name = str(contact.get("full_name") or "").strip() or "EOM lead"
+        return f"Estimate: {name}"
+
+    @staticmethod
+    def _eom_estimate_booking_description(notes: str | None) -> str:
+        parts = ["Scheduled from the private EOM lead funnel."]
+        if notes:
+            parts.append(notes)
+        return "\n\n".join(parts)
+
+    @staticmethod
+    def _eom_estimate_booking_calendar_event(
+        *,
+        contact: Mapping[str, Any],
+        scheduled_start: datetime,
+        scheduled_end: datetime,
+        calendar_id: str,
+        notes: str | None,
+        expected_calendar_event_id: str,
+    ) -> dict[str, Any]:
+        return {
+            "summary": DatabaseCRMProvider._eom_estimate_booking_summary(contact),
+            "start": scheduled_start.astimezone(timezone.utc).isoformat(),
+            "end": scheduled_end.astimezone(timezone.utc).isoformat(),
+            "location": contact.get("address"),
+            "description": DatabaseCRMProvider._eom_estimate_booking_description(notes),
+            "calendar_id": calendar_id,
+            "event_id": expected_calendar_event_id,
+        }
+
+    @staticmethod
+    def _eom_estimate_booking_calendar_event_from_metadata(
+        metadata: dict[str, Any] | None,
+    ) -> dict[str, Any] | None:
+        if not metadata:
+            return None
+        event = metadata.get("calendar_event")
+        if not isinstance(event, dict):
+            return None
+        return event
 
     @staticmethod
     def _eom_estimate_booking_payload_matches(
@@ -1342,16 +1388,6 @@ class DatabaseCRMProvider:
                 or contact["business_context_id"] != EOM_BUSINESS_CONTEXT_ID
             ):
                 raise EOMLeadConversionError(404, "EOM lead was not found")
-            if contact["status"] != "active":
-                raise EOMLeadConversionError(
-                    409, "EOM lead must be active before booking"
-                )
-            if contact["contact_type"] != "lead":
-                raise EOMLeadConversionError(409, "EOM contact is not a lead")
-            if contact["lead_stage"] not in ("new", "estimate_booked"):
-                raise EOMLeadConversionError(
-                    409, "EOM lead is not ready for estimate booking"
-                )
 
             events = await conn.fetch(
                 """
@@ -1422,8 +1458,9 @@ class DatabaseCRMProvider:
                     "EOM estimate booking attempt failed; use a new booking key",
                 )
             if request_for_key is not None:
+                request_metadata = dict(request_for_key["metadata"] or {})
                 if not self._eom_estimate_booking_payload_matches(
-                    dict(request_for_key["metadata"] or {}),
+                    request_metadata,
                     scheduled_start=scheduled_start,
                     scheduled_end=scheduled_end,
                     calendar_id=calendar_id,
@@ -1443,7 +1480,20 @@ class DatabaseCRMProvider:
                         "expected_calendar_event_id": expected_calendar_event_id,
                         "idempotent": True,
                         "contact": dict(contact),
+                        "calendar_event": self._eom_estimate_booking_calendar_event_from_metadata(
+                            request_metadata
+                        ),
                     }
+                if contact["status"] != "active":
+                    raise EOMLeadConversionError(
+                        409, "EOM lead must be active before booking"
+                    )
+                if contact["contact_type"] != "lead":
+                    raise EOMLeadConversionError(409, "EOM contact is not a lead")
+                if contact["lead_stage"] not in ("new", "estimate_booked"):
+                    raise EOMLeadConversionError(
+                        409, "EOM lead is not ready for estimate booking"
+                    )
                 return {
                     "contact_id": str(contact["id"]),
                     "lead_stage": str(contact["lead_stage"]),
@@ -1452,14 +1502,35 @@ class DatabaseCRMProvider:
                     "expected_calendar_event_id": expected_calendar_event_id,
                     "idempotent": True,
                     "contact": dict(contact),
+                    "calendar_event": self._eom_estimate_booking_calendar_event_from_metadata(
+                        request_metadata
+                    ),
                 }
 
+            if contact["status"] != "active":
+                raise EOMLeadConversionError(
+                    409, "EOM lead must be active before booking"
+                )
+            if contact["contact_type"] != "lead":
+                raise EOMLeadConversionError(409, "EOM contact is not a lead")
+            if contact["lead_stage"] not in ("new", "estimate_booked"):
+                raise EOMLeadConversionError(
+                    409, "EOM lead is not ready for estimate booking"
+                )
             if contact["lead_stage"] == "estimate_booked":
                 raise EOMLeadConversionError(
                     409,
                     "EOM lead already has a different estimate booking",
                 )
 
+            calendar_event = self._eom_estimate_booking_calendar_event(
+                contact=contact,
+                scheduled_start=scheduled_start,
+                scheduled_end=scheduled_end,
+                calendar_id=calendar_id,
+                notes=notes,
+                expected_calendar_event_id=expected_calendar_event_id,
+            )
             await conn.execute(
                 """
                 INSERT INTO eom_lead_lifecycle_events (
@@ -1479,6 +1550,7 @@ class DatabaseCRMProvider:
                         calendar_id=calendar_id,
                         notes=notes,
                         expected_calendar_event_id=expected_calendar_event_id,
+                        calendar_event=calendar_event,
                         actor_id=actor_id,
                     )
                 ),
@@ -1491,6 +1563,7 @@ class DatabaseCRMProvider:
                 "expected_calendar_event_id": expected_calendar_event_id,
                 "idempotent": False,
                 "contact": dict(contact),
+                "calendar_event": calendar_event,
             }
 
     async def mark_eom_estimate_booking_calendar_ambiguous(

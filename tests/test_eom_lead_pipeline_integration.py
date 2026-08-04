@@ -49,6 +49,7 @@ async def test_intake_to_pipeline_roundtrip_preserves_managed_state(monkeypatch)
             "035_contacts.sql",
             "256_contact_interaction_dedupe.sql",
             "346_contact_lead_pipeline.sql",
+            "348_appointment_operating_fields.sql",
             "351_eom_lead_lifecycle_events.sql",
             "352_eom_inbound_delivery_receipts.sql",
         ):
@@ -462,6 +463,7 @@ async def test_atomic_eom_inbound_identity_creates_one_contact_and_one_ledger_ev
         for name in (
             "035_contacts.sql",
             "346_contact_lead_pipeline.sql",
+            "348_appointment_operating_fields.sql",
             "351_eom_lead_lifecycle_events.sql",
             "352_eom_inbound_delivery_receipts.sql",
         ):
@@ -569,6 +571,7 @@ async def test_atomic_eom_inbound_resolution_is_active_phone_first_and_blocks_cl
         for name in (
             "035_contacts.sql",
             "346_contact_lead_pipeline.sql",
+            "348_appointment_operating_fields.sql",
             "351_eom_lead_lifecycle_events.sql",
             "352_eom_inbound_delivery_receipts.sql",
         ):
@@ -747,6 +750,7 @@ async def test_atomic_eom_resolution_holds_selected_match_against_concurrent_arc
             "035_contacts.sql",
             "256_contact_interaction_dedupe.sql",
             "346_contact_lead_pipeline.sql",
+            "348_appointment_operating_fields.sql",
             "351_eom_lead_lifecycle_events.sql",
             "352_eom_inbound_delivery_receipts.sql",
         ):
@@ -838,6 +842,7 @@ async def test_atomic_eom_delivery_commits_contact_and_interaction_before_archiv
             "035_contacts.sql",
             "256_contact_interaction_dedupe.sql",
             "346_contact_lead_pipeline.sql",
+            "348_appointment_operating_fields.sql",
             "351_eom_lead_lifecycle_events.sql",
             "352_eom_inbound_delivery_receipts.sql",
         ):
@@ -952,6 +957,7 @@ async def test_generic_ownership_update_and_eom_claim_serialize_on_the_locked_ro
         for name in (
             "035_contacts.sql",
             "346_contact_lead_pipeline.sql",
+            "348_appointment_operating_fields.sql",
             "351_eom_lead_lifecycle_events.sql",
         ):
             await setup.execute((MIGRATIONS / name).read_text())
@@ -1036,6 +1042,7 @@ async def test_atomic_eom_inbound_rejects_when_lifecycle_ledger_is_incomplete(
         for name in (
             "035_contacts.sql",
             "346_contact_lead_pipeline.sql",
+            "348_appointment_operating_fields.sql",
             "351_eom_lead_lifecycle_events.sql",
             "352_eom_inbound_delivery_receipts.sql",
         ):

@@ -103,11 +103,13 @@ class _Calendar:
         event_id: str | None = None,
         error: str = "API_ERROR",
         message: str = "Calendar API error: 503",
+        data: dict[str, object] | None = None,
     ) -> None:
         self.success = success
         self.event_id = event_id
         self.error = error
         self.message = message
+        self.data = data or {}
         self.calls: list[dict[str, object]] = []
 
     async def create_event(self, **kwargs):
@@ -116,6 +118,7 @@ class _Calendar:
             return ToolResult(
                 success=False,
                 error=self.error,
+                data=self.data,
                 message=self.message,
             )
         return ToolResult(
@@ -493,7 +496,67 @@ async def test_private_estimate_booking_prepares_calendar_and_completes_in_order
 
 
 @pytest.mark.asyncio
-async def test_private_estimate_booking_calendar_failure_does_not_complete_crm():
+async def test_private_estimate_booking_reuses_prepared_calendar_snapshot():
+    class _SnapshotCRM(_CRM):
+        async def prepare_eom_estimate_booking(self, **kwargs):
+            prepared = await super().prepare_eom_estimate_booking(**kwargs)
+            prepared["contact"] = {
+                "full_name": "Mutated Lead",
+                "address": "999 Changed Ave",
+            }
+            prepared["calendar_event"] = {
+                "summary": "Estimate: Original Lead",
+                "location": "100 Original St",
+                "description": (
+                    "Scheduled from the private EOM lead funnel.\n\n"
+                    "Original prepared note"
+                ),
+                "calendar_id": "prepared-calendar",
+                "event_id": kwargs["expected_calendar_event_id"],
+            }
+            return prepared
+
+    crm = _SnapshotCRM()
+    calendar = _Calendar()
+    app = _app(crm, _enabled_config(), calendar=calendar)
+    contact_id = uuid4()
+    booking_key = f"office-booking-{uuid4().hex}"
+    expected_event_id = deterministic_eom_estimate_calendar_event_id(
+        contact_id=str(contact_id),
+        booking_key=booking_key,
+    )
+
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=app), base_url="http://test"
+    ) as client:
+        response = await client.post(
+            f"/eom-funnel/leads/{contact_id}/estimate-bookings",
+            headers=_headers(approval_key=booking_key),
+            json=_booking_payload(),
+        )
+
+    assert response.status_code == 201
+    assert calendar.calls == [
+        {
+            "summary": "Estimate: Original Lead",
+            "start": datetime.fromisoformat("2026-08-04T14:00:00-05:00"),
+            "end": datetime.fromisoformat("2026-08-04T15:00:00-05:00"),
+            "location": "100 Original St",
+            "description": (
+                "Scheduled from the private EOM lead funnel.\n\n"
+                "Original prepared note"
+            ),
+            "calendar_id": "prepared-calendar",
+            "event_id": expected_event_id,
+        }
+    ]
+    assert crm.complete_calls[0]["calendar_event_id"] == expected_event_id
+    assert crm.ambiguous_calls == []
+    assert crm.failed_calls == []
+
+
+@pytest.mark.asyncio
+async def test_private_estimate_booking_indeterminate_calendar_failure_marks_ambiguous():
     crm = _CRM()
     calendar = _Calendar(success=False)
     app = _app(crm, _enabled_config(), calendar=calendar)
@@ -512,6 +575,46 @@ async def test_private_estimate_booking_calendar_failure_does_not_complete_crm()
     assert len(crm.prepare_calls) == 1
     assert len(calendar.calls) == 1
     assert crm.complete_calls == []
+    assert crm.failed_calls == []
+    assert crm.ambiguous_calls == [
+        {
+            "contact_id": crm.prepare_calls[0]["contact_id"],
+            "booking_key": crm.prepare_calls[0]["booking_key"],
+            "expected_calendar_event_id": crm.prepare_calls[0][
+                "expected_calendar_event_id"
+            ],
+            "observed_calendar_event_id": "",
+            "actor_id": 1,
+            "actor_name": "Juan Canfield",
+        }
+    ]
+
+
+@pytest.mark.asyncio
+async def test_private_estimate_booking_definitive_calendar_failure_does_not_complete_crm():
+    crm = _CRM()
+    calendar = _Calendar(
+        success=False,
+        error="API_ERROR",
+        message="Calendar API error: 404",
+        data={"status_code": 404},
+    )
+    app = _app(crm, _enabled_config(), calendar=calendar)
+
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=app), base_url="http://test"
+    ) as client:
+        response = await client.post(
+            f"/eom-funnel/leads/{uuid4()}/estimate-bookings",
+            headers=_headers(approval_key=f"office-booking-{uuid4().hex}"),
+            json=_booking_payload(),
+        )
+
+    assert response.status_code == 502
+    assert response.json()["detail"] == "Calendar API error: 404"
+    assert len(crm.prepare_calls) == 1
+    assert len(calendar.calls) == 1
+    assert crm.complete_calls == []
     assert crm.ambiguous_calls == []
     assert crm.failed_calls == [
         {
@@ -521,7 +624,7 @@ async def test_private_estimate_booking_calendar_failure_does_not_complete_crm()
                 "expected_calendar_event_id"
             ],
             "calendar_error": "API_ERROR",
-            "calendar_message": "Calendar API error: 503",
+            "calendar_message": "Calendar API error: 404",
             "actor_id": 1,
             "actor_name": "Juan Canfield",
         }
@@ -649,21 +752,22 @@ async def test_private_estimate_booking_provider_conflict_skips_calendar_side_ef
 @pytest.mark.asyncio
 async def test_private_estimate_booking_calendar_conflict_marks_ambiguous():
     crm = _CRM()
-    calendar = _Calendar(
-        success=False,
-        error="IDEMPOTENCY_CONFLICT",
-        message=(
-            "Existing calendar event does not match requested event; "
-            "booking requires reconciliation"
-        ),
-    )
-    app = _app(crm, _enabled_config(), calendar=calendar)
     contact_id = uuid4()
     booking_key = f"office-booking-{uuid4().hex}"
     expected_event_id = deterministic_eom_estimate_calendar_event_id(
         contact_id=str(contact_id),
         booking_key=booking_key,
     )
+    calendar = _Calendar(
+        success=False,
+        error="IDEMPOTENCY_CONFLICT",
+        data={"event_id": expected_event_id},
+        message=(
+            "Existing calendar event does not match requested event; "
+            "booking requires reconciliation"
+        ),
+    )
+    app = _app(crm, _enabled_config(), calendar=calendar)
 
     async with httpx.AsyncClient(
         transport=httpx.ASGITransport(app=app), base_url="http://test"

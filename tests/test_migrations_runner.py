@@ -232,6 +232,29 @@ def test_appointment_operating_fields_migration_is_additive_and_constrained():
     assert "DROP " not in migration.upper()
 
 
+def test_eom_estimate_booking_operation_key_index_is_additive_and_leading_key():
+    migration = (
+        Path(__file__).resolve().parent.parent
+        / "atlas_brain"
+        / "storage"
+        / "migrations"
+        / "357_eom_estimate_booking_operation_key_index.sql"
+    ).read_text()
+    upper = migration.upper()
+
+    assert "CREATE INDEX CONCURRENTLY IF NOT EXISTS" in migration
+    assert "idx_eom_lead_lifecycle_booking_operation_key" in migration
+    assert "ON eom_lead_lifecycle_events (operation_key, contact_id, event_type)" in migration
+    assert "operation_key IS NOT NULL" in migration
+    assert "'estimate_booking_requested'" in migration
+    assert "'estimate_booking_calendar_failed'" in migration
+    assert "'estimate_booking_calendar_ambiguous'" in migration
+    assert "'estimate_booked'" in migration
+    assert "DROP INDEX CONCURRENTLY IF EXISTS" in migration
+    assert "DROP TABLE" not in upper
+    assert "ALTER TABLE" not in upper
+
+
 def test_sent_email_tenant_migration_is_additive_replay_safe_and_unclassified():
     migration = (
         Path(__file__).resolve().parent.parent
