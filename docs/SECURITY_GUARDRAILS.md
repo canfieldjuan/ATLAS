@@ -70,12 +70,18 @@ Target branch protection for `main` is derived from `ci/gates.yml` entries
 marked `branch_required`: `live-reconciliation`, `diff-budget`,
 `plan-admission`, `session-lane`, `review-contract`, `pr-body-contract`,
 `Gitleaks PR secret scan`, and `Gitleaks baseline growth guard`, all pinned to
-the GitHub Actions app source instead of legacy bare context names. At the time
-of this slice, live GitHub settings still require only `live-reconciliation`,
-`Gitleaks PR secret scan`, and `Gitleaks baseline growth guard`; the REST PATCH
-that preserves those and adds `diff-budget`, `plan-admission`, `session-lane`,
-`review-contract`, and `pr-body-contract` remains a separate
-repository-settings step.
+the GitHub Actions app source instead of legacy bare context names. As of
+2026-08-04, live GitHub settings contain every registry-required context pinned
+to the GitHub Actions app source. The checker intentionally proves required
+registry coverage and source pinning; it is not an exact-set audit for extra
+required contexts. Verification:
+
+```bash
+gh api repos/canfieldjuan/ATLAS/branches/main/protection/required_status_checks \
+  > /tmp/atlas-required-status-checks-live-after.json
+python scripts/check_required_status_checks.py \
+  --payload-file /tmp/atlas-required-status-checks-live-after.json
+```
 
 The `Branch Protection Required Checks` workflow audits that live repository
 setting against the target set on a weekly/manual cadence and on trusted `main`
@@ -86,20 +92,16 @@ is configured with GitHub Administration read permission.
 The workflow security posture auditor admits
 `.github/workflows/session_lane.yml` / `session-lane` only when it has the same
 event guard and base-SHA checkout shape as the existing PR meta-gates. The
-workflow is an advisory producer for #2104 burn-in: it checks out trusted base
-code, materializes the PR head as git data, writes the trusted event PR body to
-a temporary file, and runs the base-owned session-drift auditor against that
-data worktree. Branch-protection enrollment remains a separate REST PATCH slice
-after the producer proves stable and the existing required contexts can be
-preserved.
+workflow completed its #2104 burn-in and is now branch-required. It checks out
+trusted base code, materializes the PR head as git data, writes the trusted
+event PR body to a temporary file, and runs the base-owned session-drift auditor
+against that data worktree.
 
 The same auditor admits
 `.github/workflows/plan_admission.yml` / `plan-admission` only under that exact
-guard shape. The workflow is an advisory producer for #2104 burn-in: it checks
-out trusted base code, materializes the PR head as git data, and runs the
-base-owned plan-admission auditor against that data worktree. Branch-protection
-enrollment remains a separate REST PATCH slice after the producer proves stable
-and the existing required contexts can be preserved.
+guard shape. The workflow completed its #2104 burn-in and is now
+branch-required. It checks out trusted base code, materializes the PR head as git
+data, and runs the base-owned plan-admission auditor against that data worktree.
 
 The same auditor pre-admits a future
 `.github/workflows/review_contract.yml` / `review-contract` trusted-base

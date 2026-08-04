@@ -1,11 +1,32 @@
 # AGENTS Mechanical Enforcement Audit - 2026-07-29
 
+## 2026-08-04 Update
+
+The required-status contradiction found in this audit has been closed in live
+branch protection. `main` now contains every `ci/gates.yml` `branch_required`
+context pinned to the GitHub Actions app source: `live-reconciliation`,
+`diff-budget`, `plan-admission`, `session-lane`, `review-contract`,
+`pr-body-contract`, `Gitleaks PR secret scan`, and
+`Gitleaks baseline growth guard`. The checker proves required registry coverage
+and source pinning; it is not an exact-set audit for extra required contexts.
+
+Verification:
+
+```bash
+gh api repos/canfieldjuan/ATLAS/branches/main/protection/required_status_checks \
+  > /tmp/atlas-required-status-checks-live-after.json
+python scripts/check_required_status_checks.py \
+  --payload-file /tmp/atlas-required-status-checks-live-after.json
+# required status check audit: PASS
+```
+
 ## Summary
 
 Current `origin/main` is not a Claude two-reviewer gate. AGENTS.md defines one
 builder plus the GitHub Codex connector, whose threads are enforced by
 `live-reconciliation` (`AGENTS.md:3`, `AGENTS.md:7`, `AGENTS.md:8`). The live
-branch-protection payload for `main` currently requires only these contexts:
+branch-protection payload for `main` required only these contexts at the time
+of the original 2026-07-29 audit:
 
 - `live-reconciliation`
 - `Gitleaks PR secret scan`
@@ -17,8 +38,8 @@ Command evidence:
 gh api repos/canfieldjuan/ATLAS/branches/main/protection/required_status_checks
 ```
 
-The local required-status checker confirms the mismatch between intended and
-live protection:
+The local required-status checker confirmed the mismatch between intended and
+live protection at that time:
 
 ```bash
 gh api repos/canfieldjuan/ATLAS/branches/main/protection/required_status_checks > /tmp/atlas-required-status-checks.json
@@ -43,7 +64,10 @@ python scripts/check_required_status_checks.py --payload-file /tmp/atlas-require
 - `PROSE_ONLY`: policy exists in docs, but no enforcing artifact was found.
 - `CONTRADICTED`: policy or checker expectation is stronger than live config.
 
-## Enforcement Matrix
+## Original Enforcement Matrix
+
+The matrix below records the 2026-07-29 audit state. Rows that mention live
+branch protection may be superseded by the 2026-08-04 update above.
 
 | Promise | Status | Evidence |
 |---|---|---|
@@ -73,11 +97,9 @@ python scripts/check_required_status_checks.py --payload-file /tmp/atlas-require
 
 ## Follow-Up Slices
 
-1. `PR-Required-Status-Check-Alignment`: make live branch protection match
-   `scripts/check_required_status_checks.py` by requiring `diff-budget`,
-   `plan-admission`, `session-lane`, `review-contract`, and
-   `pr-body-contract`, or intentionally remove those contexts from the
-   required-context expectation.
+1. `PR-Required-Status-Check-Alignment`: closed 2026-08-04 by updating live
+   branch protection so `scripts/check_required_status_checks.py` passes against
+   the GitHub payload.
 2. `PR-Required-Workflow-Enrollment-Audit`: decide which existing CI-only
    process checks must become branch-protection required, starting with
    `pre-push-audit` and the impacted-test/growth-only `unit-gate`.
@@ -102,14 +124,8 @@ python scripts/check_required_status_checks.py --payload-file /tmp/atlas-require
 
 ## Bottom Line
 
-The current hard merge gate is much narrower than the local/CI review bundle:
-branch protection blocks Codex thread reconciliation and Gitleaks only. The
-AGENTS rules that keep PR shape sane split into three buckets: a narrow hard
-merge gate, several CI-only checks that are visible but not required, and several
-local/manual promises that no current gate can prove were respected. The biggest
-concrete branch-protection contradiction is the five-context gap between
-`scripts/check_required_status_checks.py` and live protection: `diff-budget`,
-`plan-admission`, `session-lane`, `review-contract`, and `pr-body-contract` are
-expected by repo code but not currently required by GitHub. The biggest remaining
-pre-mutation gap is PR ownership: the helper exists, but the PR mutation wrappers
-do not invoke it automatically.
+As of 2026-08-04, the biggest branch-protection contradiction identified here
+has been closed: live protection requires the registry's `branch_required`
+contexts. The remaining mechanical gaps are local/manual promises that GitHub
+cannot prove directly, plus follow-up decisions about whether `pre-push-audit`
+and `unit-gate` should stay visible-but-not-required or become branch-required.
