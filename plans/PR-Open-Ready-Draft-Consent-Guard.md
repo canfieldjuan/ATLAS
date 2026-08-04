@@ -7,7 +7,7 @@ ready for review by default, but `open_pr.sh` still forwards `--draft` without
 any explicit operator-consent signal. Draft PRs delay automated review and have
 already cost this lane manual attention.
 
-Diff budget: the slice exceeds the 400 LOC soft cap (543 actual) because four
+Diff budget: the slice exceeds the 400 LOC soft cap (622 actual) because five
 Codex review rounds required class-closure work rather than spot fixes -- the
 pflag-faithful argv-grammar walk, the admission-before-side-effects ordering,
 a grammar-derived property suite with an independent oracle, and the plan's
@@ -61,6 +61,10 @@ Slice phase: Workflow/process
   - `scripts/open_pr.sh` exports `GH_PROMPT_DISABLED=1` so gh's interactive
     create survey (which offers "Submit as draft" with no argv token) is
     unreachable through the wrapper.
+  - `scripts/open_pr.sh` rejects the browser create route (`--web`,
+    `--web=<value>`, and clusters whose walk reaches a boolean `w`) even when
+    draft consent is set, because the web UI can submit a draft with no argv
+    token and escapes post-mutation verification.
   - The consent decision matches an independent pflag oracle across a
     generated product of boolean-shorthand positions x value-taking
     terminators x attached/separate/`=` values
@@ -184,15 +188,24 @@ default and fail-closed is simpler. Without `ATLAS_OPEN_PR_DRAFT_CONSENT=1`,
 call. With the flag set, the wrapper leaves the argument in place so the
 existing `gh pr create` call can intentionally create a draft PR.
 
-Two structural guarantees close the remaining entry points: the wrapper
+Three structural guarantees close the remaining entry points: the wrapper
 exports `GH_PROMPT_DISABLED=1`, so gh's interactive create survey -- whose
 "Submit as draft" action carries no argv token -- is unreachable and draft
-mode can only arrive through the gated argv path; and
+mode can only arrive through the gated argv path; `reject_web_create`
+refuses the browser route (`--web`, `--web=<value>`, and clusters whose walk
+reaches a boolean `w`) even under draft consent, because GitHub's create UI
+can submit a draft with no argv token and the web flow also escapes this
+wrapper's post-mutation head/body verification; and
 `test_open_pr_draft_admission_matches_gh_argv_grammar` proves grammar closure
 by generating the product of boolean-shorthand positions, value-taking
 terminators, and attached/separate/`=` value bindings, then asserting the
-wrapper's consent decision equals an independent Python oracle modeling gh's
-pflag walk for every generated sequence.
+wrapper's admission decision (consent-gate, web-reject, or pass) equals an
+independent Python oracle modeling gh's pflag walk for every generated
+sequence. Creating a new PR requires `--title` or a gh fill option by
+pre-existing necessity, not as a change here: the wrapper binds stdin to the
+body file, so gh has never been able to prompt for a title through it;
+`GH_PROMPT_DISABLED` makes that non-interactive contract explicit and the
+usage text now states it.
 
 ## Intentional
 
@@ -213,20 +226,27 @@ pflag walk for every generated sequence.
 - Non-leading cluster spellings of the pre-existing `-H`/`-R`/`-B`
   target-override gates (e.g. `-fHother`) predate this slice and belong to a
   separate target-override hardening follow-up; this slice's argv-grammar
-  walk gates draft mode only.
+  walk gates draft mode and the browser route only.
 
-Parked hardening: none.
+Parking predicate: this slice parks, by default, hardening of `gh pr create`
+surfaces other than ready-for-review admission through this wrapper --
+non-draft flag hygiene, target-override cluster spellings, and gh-version
+drift tooling. Findings inside the draft/web admission path itself are owned
+by this slice and were fixed in-review, not parked.
+
+Parked hardening: none against that predicate; the two deferrals above are
+named follow-ups, not silent parkings.
 
 ## Verification
 
-- `python -m pytest tests/test_open_pr_wrapper.py` - 47 passed.
+- `python -m pytest tests/test_open_pr_wrapper.py` - 52 passed.
 - `ATLAS_SESSION_STATE_FILE=SESSION_STATE.codex-open-ready-draft-consent.local.md bash scripts/local_pr_review.sh --current-pr-body-file /tmp/atlas-pr-body-open-ready-draft-consent.md` - passed.
 
 ## Estimated diff size
 
 | File | LOC |
 |---|---:|
-| `plans/PR-Open-Ready-Draft-Consent-Guard.md` | 232 |
-| `scripts/open_pr.sh` | 93 |
-| `tests/test_open_pr_wrapper.py` | 218 |
-| **Total** | **543** |
+| `plans/PR-Open-Ready-Draft-Consent-Guard.md` | 252 |
+| `scripts/open_pr.sh` | 119 |
+| `tests/test_open_pr_wrapper.py` | 251 |
+| **Total** | **622** |

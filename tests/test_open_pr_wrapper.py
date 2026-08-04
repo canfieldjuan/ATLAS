@@ -71,6 +71,10 @@ def test_open_pr_existing_pr_rejects_create_only_args(tmp_path: Path) -> None:
         (["-fd=true"], {}, "refusing draft PR without explicit operator consent"),
         (["-fwd"], {}, "refusing draft PR without explicit operator consent"),
         (["-dt", "some title"], {}, "refusing draft PR without explicit operator consent"),
+        (["--web"], {}, "refusing browser-based create arg"),
+        (["--web=true"], {}, "refusing browser-based create arg"),
+        (["-w"], {}, "refusing browser-based create arg"),
+        (["-fw"], {}, "refusing browser-based create arg"),
         (["--base", "release"], {}, "refusing non-main base: release"),
         (["-Brelease"], {}, "refusing non-main base: release"),
         ([], {"GH_REPO": "other/repo"}, "refusing GH_REPO target override"),
@@ -166,14 +170,16 @@ def test_open_pr_disables_gh_prompts_so_interactive_draft_is_unreachable(tmp_pat
     assert prompt_state.read_text(encoding="utf-8").strip() == "GH_PROMPT_DISABLED=1"
 
 
-def _pflag_draft_present(args: list[str]) -> bool:
-    """Independent consent oracle: walk argv as gh's pflag parser would.
+def _wrapper_expected_outcome(args: list[str]) -> str:
+    """Independent admission oracle: walk argv as gh's pflag parser would.
 
-    Reports whether any draft-flag occurrence is present in the sequence
-    (value-blind, matching the wrapper's declared contract), modeling long
-    options with separate or '='-attached values, '--' end-of-options, and
-    shorthand clusters where booleans keep scanning and a value-taking
-    shorthand consumes the attached remainder or the next token.
+    Returns "draft" when the first offending token carries a draft flag
+    (value-blind, matching the wrapper's declared contract), "web" when it
+    carries the browser-create flag without a draft flag, and "pass"
+    otherwise -- modeling long options with separate or '='-attached values,
+    '--' end-of-options, and shorthand clusters where booleans keep scanning
+    and a value-taking shorthand consumes the attached remainder or the next
+    token. Within one token, draft rejection takes precedence over web.
     """
     val_short = set("aBbFHlmprRtT")
     long_val = {
@@ -181,17 +187,19 @@ def _pflag_draft_present(args: list[str]) -> bool:
         "--milestone", "--project", "--recover", "--repo", "--reviewer",
         "--template", "--title",
     }
-    draft = False
     i = 0
     while i < len(args):
         tok = args[i]
         i += 1
+        draft_tok = web_tok = False
         if tok == "--":
             break
         if tok.startswith("--"):
             name = tok.split("=", 1)[0]
             if name == "--draft":
-                draft = True
+                draft_tok = True
+            elif name == "--web":
+                web_tok = True
             elif name in long_val and "=" not in tok:
                 i += 1
         elif tok.startswith("-") and len(tok) > 1:
@@ -203,11 +211,17 @@ def _pflag_draft_present(args: list[str]) -> bool:
                         i += 1
                     break
                 if ch == "d":
-                    draft = True
+                    draft_tok = True
+                elif ch == "w":
+                    web_tok = True
                 cluster = cluster[1:]
                 if cluster.startswith("="):
                     break
-    return draft
+        if draft_tok:
+            return "draft"
+        if web_tok:
+            return "web"
+    return "pass"
 
 
 def _generate_argv_grammar_cases() -> list[list[str]]:
@@ -265,17 +279,36 @@ def test_open_pr_draft_admission_matches_gh_argv_grammar(tmp_path: Path) -> None
 
     failures = []
     for args in _generate_argv_grammar_cases():
-        expected_draft = _pflag_draft_present(args)
+        expected = _wrapper_expected_outcome(args)
         result = subprocess.run(
             ["bash", str(repo / "scripts" / "open_pr.sh"), str(body), *args],
             cwd=repo, env=env, capture_output=True, text=True,
         )
-        gated = "refusing draft PR without explicit operator consent" in result.stderr
-        if gated != expected_draft:
-            failures.append((args, f"oracle draft={expected_draft}", result.returncode, result.stderr.strip()))
-        elif not expected_draft and "failed to refresh origin/main" not in result.stderr:
+        if "refusing draft PR without explicit operator consent" in result.stderr:
+            observed = "draft"
+        elif "refusing browser-based create arg" in result.stderr:
+            observed = "web"
+        else:
+            observed = "pass"
+        if observed != expected:
+            failures.append((args, f"oracle={expected} observed={observed}", result.returncode, result.stderr.strip()))
+        elif expected == "pass" and "failed to refresh origin/main" not in result.stderr:
             failures.append((args, "admission pass did not reach base refresh", result.returncode, result.stderr.strip()))
     assert not failures, failures
+
+
+def test_open_pr_rejects_web_create_even_with_draft_consent(tmp_path: Path) -> None:
+    # Draft consent authorizes the flag-based draft path only; the browser
+    # flow escapes post-mutation verification and stays rejected.
+    repo, body, env, log, stdin_capture = _ready(tmp_path, view_exit=1)
+    env["ATLAS_OPEN_PR_DRAFT_CONSENT"] = "1"
+
+    result = _run(repo, env, body, "--draft", "--web")
+
+    assert result.returncode == 2
+    assert "refusing browser-based create arg" in result.stderr
+    assert not log.exists()
+    assert not stdin_capture.exists()
 
 
 def test_open_pr_rejects_draft_before_any_fetch_side_effect(tmp_path: Path) -> None:

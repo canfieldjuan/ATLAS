@@ -27,6 +27,12 @@ Examples:
 Draft PRs require explicit operator consent:
   ATLAS_OPEN_PR_DRAFT_CONSENT=1 bash scripts/open_pr.sh tmp/pr-body-my-slice.md --draft
 
+Creating a new PR requires --title (or a gh --fill option): the body is fed
+through stdin, so gh can never prompt for a title through this wrapper.
+Updating an existing PR needs no extra args. Browser-based creation
+(--web / -w) is refused even with draft consent; it bypasses both draft
+consent and this wrapper's post-mutation verification.
+
 Use scripts/push_pr.sh before this wrapper to push the branch with the local
 review body env wired into the pre-push hook.
 
@@ -68,6 +74,16 @@ require_draft_consent() {
     fi
 }
 
+reject_web_create() {
+    # The browser create flow lets the builder pick "draft" in GitHub's UI
+    # with no draft token in argv, and it also escapes this wrapper's
+    # post-mutation head/body verification. It is rejected outright -- even
+    # with draft consent -- because no verified path exists through it.
+    echo "open_pr.sh: refusing browser-based create arg: $1" >&2
+    echo "The web flow bypasses draft consent and post-mutation verification; use this wrapper's flag-based create path." >&2
+    exit 2
+}
+
 scan_shorthand_cluster() {
     # gh's pflag parser walks a one-dash cluster left to right: boolean
     # shorthands keep scanning (so -fd and -wd both enable draft), a
@@ -78,6 +94,7 @@ scan_shorthand_cluster() {
     # are treated as booleans, which fails closed: scanning continues, so a
     # 'd' after them still requires consent.
     cluster_sets_draft=0
+    cluster_sets_web=0
     cluster_consumes_next=0
     local cluster="${1#-}" ch
     while [ -n "$cluster" ]; do
@@ -85,6 +102,9 @@ scan_shorthand_cluster() {
         case "$ch" in
             d)
                 cluster_sets_draft=1
+                ;;
+            w)
+                cluster_sets_web=1
                 ;;
             a|B|b|F|H|l|m|p|r|R|t|T)
                 if [ -z "${cluster:1}" ]; then
@@ -131,6 +151,9 @@ reject_target_overrides() {
             --draft|--draft=*)
                 require_draft_consent "$arg"
                 ;;
+            --web|--web=*)
+                reject_web_create "$arg"
+                ;;
             --base|-B)
                 if [ "$#" -eq 0 ]; then
                     echo "open_pr.sh: $arg requires a value" >&2
@@ -170,6 +193,9 @@ reject_target_overrides() {
                 scan_shorthand_cluster "$arg"
                 if [ "$cluster_sets_draft" = "1" ]; then
                     require_draft_consent "$arg"
+                fi
+                if [ "$cluster_sets_web" = "1" ]; then
+                    reject_web_create "$arg"
                 fi
                 if [ "$cluster_consumes_next" = "1" ] && [ "$#" -gt 0 ]; then
                     shift
