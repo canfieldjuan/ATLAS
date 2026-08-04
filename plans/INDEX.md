@@ -1,6 +1,6 @@
 # Plan archive index
 
-1503 archived plan doc(s). Merged plan docs are moved under `archive/` and listed below; once the archive sweep has run, the `plans/` root holds only in-flight slices.
+1504 archived plan doc(s). Merged plan docs are moved under `archive/` and listed below; once the archive sweep has run, the `plans/` root holds only in-flight slices.
 
 - [PR-ASR-Pip-Audit-Egg-Fragment](archive/PR-ASR-Pip-Audit-Egg-Fragment.md) - lane: security/workflow | phase: Production hardening
 - [PR-ASR-Requirements-Audit-Pin](archive/PR-ASR-Requirements-Audit-Pin.md) - lane: security/workflow | phase: Production hardening
@@ -1492,6 +1492,7 @@
 - [PR-Twilio-SignalWire-Decouple](archive/PR-Twilio-SignalWire-Decouple.md) - lane: comms-provider | phase: Vertical slice
 - [PR-TypeScript-Major-Batch](archive/PR-TypeScript-Major-Batch.md) - lane: security/dependencies | phase: Production hardening
 - [PR-UI-Test-Enrollment-Audit](archive/PR-UI-Test-Enrollment-Audit.md) - lane: intel-ui/ci-enrollment | phase: Workflow/process
+- [PR-Unit-Gate-Baseline-Shrink-Proof](archive/PR-Unit-Gate-Baseline-Shrink-Proof.md) - lane: workflow/unit-gate-baseline-shrink-proof | phase: Workflow/process
 - [PR-Unit-Gate-Impacted-Selection](archive/PR-Unit-Gate-Impacted-Selection.md) - lane: ci-gates | phase: vertical slice
 - [PR-Unit-Gate-Selector-Absent-Fallback](archive/PR-Unit-Gate-Selector-Absent-Fallback.md) - lane: ci-gates | phase: Production hardening
 - [PR-Unit-Gate](archive/PR-Unit-Gate.md) - lane: ci-cd/enforcement-gaps | phase: workflow/process
