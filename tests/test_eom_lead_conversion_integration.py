@@ -552,6 +552,58 @@ async def test_estimate_booking_lifecycle_is_idempotent_and_keeps_lead_approvabl
         assert replay["idempotent"] is True
         assert replay["status"] == "estimate_booked"
         assert replay["calendar_event"]["summary"] == "Estimate: Booked Estimate"
+        await provider.mark_eom_estimate_booking_calendar_ambiguous(
+            contact_id=str(contact_id),
+            booking_key=booking_key,
+            expected_calendar_event_id=calendar_event_id,
+            observed_calendar_event_id="",
+            actor_id=1,
+            actor_name="Juan Canfield",
+        )
+        assert (
+            await conn.fetchval(
+                """
+                SELECT COUNT(*)
+                FROM eom_lead_lifecycle_events
+                WHERE contact_id = $1
+                  AND operation_key = $2
+                  AND event_type = 'estimate_booking_calendar_ambiguous'
+                """,
+                contact_id,
+                booking_key,
+            )
+            == 0
+        )
+        await conn.execute(
+            """
+            INSERT INTO eom_lead_lifecycle_events (
+                contact_id, event_type, from_stage, to_stage, actor,
+                source, operation_key, metadata
+            )
+            VALUES ($1, 'estimate_booking_calendar_ambiguous', 'new', 'new',
+                    'employee:1:Juan Canfield', 'eom_office', $2,
+                    jsonb_build_object(
+                        'expected_calendar_event_id', $3,
+                        'observed_calendar_event_id', ''
+                    ))
+            """,
+            contact_id,
+            booking_key,
+            calendar_event_id,
+        )
+        replay_with_historical_ambiguity = await provider.prepare_eom_estimate_booking(
+            contact_id=str(contact_id),
+            scheduled_start=start,
+            scheduled_end=end,
+            calendar_id="estimate-calendar",
+            notes="Bring estimate worksheet",
+            booking_key=booking_key,
+            expected_calendar_event_id=calendar_event_id,
+            actor_id=1,
+            actor_name="Juan Canfield",
+        )
+        assert replay_with_historical_ambiguity["idempotent"] is True
+        assert replay_with_historical_ambiguity["status"] == "estimate_booked"
         assert lifecycle_counts == {
             "estimate_booking_requested": 1,
             "estimate_booked": 1,

@@ -1447,11 +1447,6 @@ class DatabaseCRMProvider:
                     409,
                     "EOM lead already has a different estimate booking",
                 )
-            if ambiguous_for_key is not None:
-                raise EOMLeadConversionError(
-                    409,
-                    "EOM estimate booking requires calendar reconciliation",
-                )
             if failed_for_key is not None:
                 raise EOMLeadConversionError(
                     409,
@@ -1484,6 +1479,11 @@ class DatabaseCRMProvider:
                             request_metadata
                         ),
                     }
+                if ambiguous_for_key is not None:
+                    raise EOMLeadConversionError(
+                        409,
+                        "EOM estimate booking requires calendar reconciliation",
+                    )
                 if contact["status"] != "active":
                     raise EOMLeadConversionError(
                         409, "EOM lead must be active before booking"
@@ -1589,11 +1589,18 @@ class DatabaseCRMProvider:
                     contact_id, event_type, from_stage, to_stage, actor,
                     source, operation_key, metadata
                 )
-                VALUES ($1, 'estimate_booking_calendar_ambiguous', 'new', 'new',
-                        $2, 'eom_office', $3, jsonb_build_object(
-                            'expected_calendar_event_id', $4,
-                            'observed_calendar_event_id', $5
-                        ))
+                SELECT $1, 'estimate_booking_calendar_ambiguous', 'new', 'new',
+                       $2, 'eom_office', $3, jsonb_build_object(
+                           'expected_calendar_event_id', $4,
+                           'observed_calendar_event_id', $5
+                       )
+                WHERE NOT EXISTS (
+                    SELECT 1
+                    FROM eom_lead_lifecycle_events
+                    WHERE contact_id = $1
+                      AND operation_key = $3
+                      AND event_type = 'estimate_booked'
+                )
                 ON CONFLICT (contact_id, event_type, operation_key)
                     WHERE operation_key IS NOT NULL
                     DO NOTHING
@@ -1744,11 +1751,6 @@ class DatabaseCRMProvider:
                     failed_for_key = event
                 elif event["event_type"] == "estimate_booking_calendar_ambiguous":
                     ambiguous_for_key = event
-            if ambiguous_for_key is not None:
-                raise EOMLeadConversionError(
-                    409,
-                    "EOM estimate booking requires calendar reconciliation",
-                )
             if failed_for_key is not None:
                 raise EOMLeadConversionError(
                     409,
@@ -1778,6 +1780,11 @@ class DatabaseCRMProvider:
                     "expected_calendar_event_id": expected_calendar_event_id,
                     "idempotent": True,
                 }
+            if ambiguous_for_key is not None:
+                raise EOMLeadConversionError(
+                    409,
+                    "EOM estimate booking requires calendar reconciliation",
+                )
             if contact["lead_stage"] != "new":
                 raise EOMLeadConversionError(
                     409, "EOM lead is not ready for estimate booking"
@@ -2450,7 +2457,10 @@ class DatabaseCRMProvider:
                 (
                     event_types
                     for event_types in booking_event_types.values()
-                    if "estimate_booking_calendar_ambiguous" in event_types
+                    if (
+                        "estimate_booking_calendar_ambiguous" in event_types
+                        and "estimate_booked" not in event_types
+                    )
                     or (
                         "estimate_booking_requested" in event_types
                         and not self._eom_estimate_booking_operation_is_terminal(

@@ -898,6 +898,44 @@ async def test_calendar_create_event_sends_optional_deterministic_event_id(monke
 
 
 @pytest.mark.asyncio
+async def test_calendar_create_event_propagates_http_status_for_failure_classifier(
+    monkeypatch,
+):
+    tool = CalendarTool()
+    tool._config = SimpleNamespace(
+        calendar_enabled=True, calendar_refresh_token="refresh"
+    )
+    client = _CalendarClient(
+        post_response=_CalendarResponse(
+            status_code=404,
+            payload={"error": "calendar not found"},
+        )
+    )
+
+    async def ensure_client():
+        return client
+
+    async def auth_header(**_kwargs):
+        return {"Authorization": "Bearer token"}
+
+    monkeypatch.setattr(tool, "_ensure_client", ensure_client)
+    monkeypatch.setattr(tool, "_get_auth_header", auth_header)
+
+    result = await tool.create_event(
+        summary="Estimate",
+        start=datetime.fromisoformat("2026-08-04T14:00:00-05:00"),
+        end=datetime.fromisoformat("2026-08-04T15:00:00-05:00"),
+        calendar_id="missing-calendar",
+        event_id="eomestabc123",
+    )
+
+    assert result.success is False
+    assert result.error == "API_ERROR"
+    assert result.data == {"status_code": 404}
+    assert result.message == "Calendar API error: 404"
+
+
+@pytest.mark.asyncio
 async def test_calendar_create_event_reuses_existing_deterministic_event_id(
     monkeypatch,
 ):
