@@ -350,7 +350,7 @@ full stack):
 - `ATLAS_MIGRATION_TEST_DATABASE_URL=postgresql://postgres@localhost:5433/atlas_migration_tests python -m pytest tests/test_eom_lead_conversion_integration.py -q` -- 24 passed against disposable Postgres 16, including the two-session execution-fence proof, 3 pre-existing torch-import failures.
 - `python -m py_compile atlas_brain/eom_api/funnel.py atlas_brain/services/crm_provider.py atlas_brain/services/eom_estimate_booking.py tests/test_eom_lead_conversion.py tests/test_eom_lead_conversion_integration.py` -- passed.
 - `python -m pytest -q tests/test_audit_plan_doc.py tests/test_audit_plan_code_consistency.py` -- 26 passed.
-- ASCII scan of all touched `.py` files -- no non-ASCII bytes.
+- ASCII scan of every touched Python file -- no non-ASCII bytes.
 
 ## Estimated diff size
 
