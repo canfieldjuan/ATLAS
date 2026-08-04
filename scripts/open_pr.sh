@@ -74,7 +74,7 @@ reject_target_overrides() {
                 echo "open_pr.sh: refusing target-changing create arg: $arg" >&2
                 exit 2
                 ;;
-            --draft|-d)
+            --draft|--draft=*|-d*)
                 if [ "${ATLAS_OPEN_PR_DRAFT_CONSENT:-}" != "1" ]; then
                     echo "open_pr.sh: refusing draft PR without explicit operator consent: $arg" >&2
                     echo "Set ATLAS_OPEN_PR_DRAFT_CONSENT=1 only when the operator asked for a draft." >&2
