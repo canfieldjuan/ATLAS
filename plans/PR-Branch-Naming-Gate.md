@@ -12,9 +12,10 @@ Audit finding: `docs/audits/agents-mechanical-enforcement-audit-2026-07-29.md`
 classified "Builder branch names use `claude/pr-<slice-name>`" as `PROSE_ONLY`;
 no branch-name gate was found in `open_pr.sh`, `push_pr.sh`, or CI.
 
-Review-fix overage: Codex found two admission-boundary gaps in the first push
-(forwarded refspecs and Dependabot-generated bodies). They are indivisible from
-this gate because both are ways around or through the same wrapper boundary.
+Review-fix overage: Codex found admission-boundary gaps in the first pushes
+(forwarded refspecs, unqualified/bulk refs, and Dependabot-generated bodies).
+They are indivisible from this gate because each is a way around or through the
+same wrapper boundary.
 
 ### Problem-derived contract
 
@@ -62,7 +63,13 @@ Slice phase: Workflow/process
   5. Explicit push refspecs cannot send the reviewed branch to another PR branch;
      settled by
      `tests/test_push_pr_wrapper.py::test_push_pr_rejects_mismatched_refspec_before_fetch`.
-  6. Dependabot-generated bodies keep their existing author exemption in both
+  6. Unqualified non-matching refs, repository-only pushes, and bulk push modes
+     fail before fetch; settled by
+     `tests/test_check_pr_branch_name.py::test_push_refspec_rejects_unqualified_other_branch`,
+     `tests/test_check_pr_branch_name.py::test_push_refspec_rejects_bulk_push_mode`,
+     and
+     `tests/test_push_pr_wrapper.py::test_push_pr_rejects_bulk_push_mode_before_fetch`.
+  7. Dependabot-generated bodies keep their existing author exemption in both
      wrappers; settled by
      `tests/test_push_pr_wrapper.py::test_push_pr_dependabot_author_keeps_generated_body_exemption`
      and
@@ -149,7 +156,7 @@ generated-PR exemption used by the PR body audit.
   for plan-backed slices.
 - No CI-only branch-protection change in this slice; the wrappers are the point
   where the local branch exists and can be rejected cheapest.
-- The 618 LOC total is over the soft cap because the Codex review fixes require
+- The 729 LOC total is over the soft cap because the Codex review fixes require
   checker, wrapper, direct, and wrapper-fixture coverage for the same admission
   boundary; splitting would leave `live-reconciliation` red on this PR.
 
@@ -162,7 +169,7 @@ Parked hardening: none.
 ## Verification
 
 - `python -m pytest tests/test_check_pr_branch_name.py tests/test_push_pr_wrapper.py tests/test_open_pr_wrapper.py`
-  - 81 passed.
+  - 86 passed.
 - `python scripts/maturity_sweep.py scripts --tests-root tests --baseline tests/maturity_sweep/baseline_scripts.json --min-score 8 --sensitive-glob 'scripts/**'`
   - Ratchet gate passed: no new brittleness above baseline.
 
@@ -170,11 +177,11 @@ Parked hardening: none.
 
 | File | LOC |
 |---|---:|
-| `plans/PR-Branch-Naming-Gate.md` | 180 |
-| `scripts/check_pr_branch_name.py` | 147 |
+| `plans/PR-Branch-Naming-Gate.md` | 187 |
+| `scripts/check_pr_branch_name.py` | 160 |
 | `scripts/open_pr.sh` | 24 |
 | `scripts/push_pr.sh` | 18 |
-| `tests/test_check_pr_branch_name.py` | 111 |
+| `tests/test_check_pr_branch_name.py` | 148 |
 | `tests/test_open_pr_wrapper.py` | 49 |
-| `tests/test_push_pr_wrapper.py` | 89 |
-| **Total** | **618** |
+| `tests/test_push_pr_wrapper.py` | 143 |
+| **Total** | **729** |

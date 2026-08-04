@@ -14,6 +14,10 @@ from _pr_change_policy import is_dependabot_author
 PLAN_LINE_RE = re.compile(r"^Plan:\s+plans/PR-(?P<slice>[A-Za-z0-9._-]+)\.md\s*$")
 DOCS_ONLY_RE = re.compile(r"^Docs-only:\s*true\s*$", re.IGNORECASE)
 PR_BRANCH_RE = re.compile(r"^claude/pr-[a-z0-9](?:[a-z0-9._-]*[a-z0-9])?$")
+BULK_PUSH_MODES = frozenset({"--all", "--mirror", "--tags", "--delete", "-d"})
+PUSH_OPTIONS_WITH_VALUES = frozenset(
+    {"--receive-pack", "--exec", "--push-option", "-o"}
+)
 
 
 def plan_slug(slice_name: str) -> str:
@@ -78,10 +82,30 @@ def push_refspec_errors(
     clean_branch = branch.strip()
     allowed_sources = {"HEAD", clean_branch, f"refs/heads/{clean_branch}"}
     allowed_destinations = {clean_branch, f"refs/heads/{clean_branch}"}
-    for arg in push_args:
-        refspec = arg.lstrip("+")
-        if not _looks_branch_refspec(refspec):
+    repository_seen = False
+    refspec_seen = False
+    index = 0
+    while index < len(push_args):
+        arg = push_args[index]
+        index += 1
+        if arg in BULK_PUSH_MODES or any(
+            arg.startswith(f"{mode}=") for mode in BULK_PUSH_MODES
+        ):
+            errors.append(f"push mode {arg!r} can push refs outside {clean_branch!r}")
             continue
+        if arg in PUSH_OPTIONS_WITH_VALUES:
+            index += 1
+            continue
+        if arg == "--":
+            continue
+        if arg.startswith("-"):
+            continue
+        if not repository_seen:
+            repository_seen = True
+            continue
+
+        refspec_seen = True
+        refspec = arg.lstrip("+")
         if ":" in refspec:
             source, destination = refspec.split(":", 1)
             if source not in allowed_sources:
@@ -94,20 +118,9 @@ def push_refspec_errors(
                 )
         elif refspec not in allowed_sources:
             errors.append(f"push refspec {refspec!r} must be HEAD or {clean_branch!r}")
+    if repository_seen and not refspec_seen:
+        errors.append(f"push must explicitly name HEAD or {clean_branch!r} as refspec")
     return errors
-
-
-def _looks_branch_refspec(value: str) -> bool:
-    if not value or value.startswith("-"):
-        return False
-    return (
-        value == "HEAD"
-        or value.startswith("HEAD:")
-        or value.startswith("claude/")
-        or value.startswith("refs/heads/")
-        or ":claude/" in value
-        or ":refs/heads/" in value
-    )
 
 
 def _build_parser() -> argparse.ArgumentParser:

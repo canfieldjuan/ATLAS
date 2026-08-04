@@ -109,3 +109,40 @@ def test_push_refspec_accepts_head_to_matching_destination() -> None:
         body=_body(),
         push_args=["-u", "origin", "HEAD:refs/heads/claude/pr-branch-naming-gate"],
     ) == []
+
+
+def test_push_refspec_rejects_unqualified_other_branch() -> None:
+    errors = checker.push_refspec_errors(
+        branch="claude/pr-branch-naming-gate",
+        body=_body(),
+        push_args=["-u", "origin", "main"],
+    )
+
+    assert errors == [
+        "push refspec 'main' must be HEAD or 'claude/pr-branch-naming-gate'"
+    ]
+
+
+def test_push_refspec_rejects_bulk_push_mode() -> None:
+    errors = checker.push_refspec_errors(
+        branch="claude/pr-branch-naming-gate",
+        body=_body(),
+        push_args=["--all", "origin"],
+    )
+
+    assert errors == [
+        "push mode '--all' can push refs outside 'claude/pr-branch-naming-gate'",
+        "push must explicitly name HEAD or 'claude/pr-branch-naming-gate' as refspec",
+    ]
+
+
+def test_push_refspec_rejects_repository_without_refspec() -> None:
+    errors = checker.push_refspec_errors(
+        branch="claude/pr-branch-naming-gate",
+        body=_body(),
+        push_args=["origin"],
+    )
+
+    assert errors == [
+        "push must explicitly name HEAD or 'claude/pr-branch-naming-gate' as refspec"
+    ]

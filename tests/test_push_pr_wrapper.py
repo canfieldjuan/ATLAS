@@ -182,6 +182,60 @@ def test_push_pr_rejects_mismatched_refspec_before_fetch(tmp_path: Path) -> None
     assert "git fetch --quiet origin main" not in order_log.read_text(encoding="utf-8")
 
 
+def test_push_pr_rejects_unqualified_other_branch_before_fetch(tmp_path: Path) -> None:
+    repo = _write_fixture_repo(tmp_path)
+    body = _write_body(repo)
+    order_log = repo / "order.log"
+    fake_bin = _write_fake_git(repo, order_log)
+    env = {
+        **os.environ,
+        "PATH": f"{fake_bin}{os.pathsep}{os.environ['PATH']}",
+        "FAKE_GIT_TOPLEVEL": str(repo),
+        "FAKE_GIT_LOG": str(order_log),
+        "ORDER_LOG": str(order_log),
+    }
+
+    result = subprocess.run(
+        ["bash", "scripts/push_pr.sh", str(body), "-u", "origin", "main"],
+        cwd=repo,
+        env=env,
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+
+    assert result.returncode == 2
+    assert "push refspec 'main' must be HEAD" in result.stderr
+    assert "git fetch --quiet origin main" not in order_log.read_text(encoding="utf-8")
+
+
+def test_push_pr_rejects_bulk_push_mode_before_fetch(tmp_path: Path) -> None:
+    repo = _write_fixture_repo(tmp_path)
+    body = _write_body(repo)
+    order_log = repo / "order.log"
+    fake_bin = _write_fake_git(repo, order_log)
+    env = {
+        **os.environ,
+        "PATH": f"{fake_bin}{os.pathsep}{os.environ['PATH']}",
+        "FAKE_GIT_TOPLEVEL": str(repo),
+        "FAKE_GIT_LOG": str(order_log),
+        "ORDER_LOG": str(order_log),
+    }
+
+    result = subprocess.run(
+        ["bash", "scripts/push_pr.sh", str(body), "--all", "origin"],
+        cwd=repo,
+        env=env,
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+
+    assert result.returncode == 2
+    assert "push mode '--all'" in result.stderr
+    assert "git fetch --quiet origin main" not in order_log.read_text(encoding="utf-8")
+
+
 def test_push_pr_dependabot_author_keeps_generated_body_exemption(tmp_path: Path) -> None:
     repo = _write_fixture_repo(tmp_path)
     _git(repo, "switch", "-c", "dependabot/pip/security-update")
