@@ -30,6 +30,12 @@ router = APIRouter(prefix="/eom-funnel", tags=["eom-funnel"])
 
 _APPROVAL_KEY_PATTERN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:-]{15,127}$")
 _LEAD_REVIEW_CURSOR_PATTERN = re.compile(r"^[A-Za-z0-9_-]{16,512}$")
+# RFC 3339 date-time shape. The offset stays optional here so a naive
+# date-time still reaches the window validator's dedicated timezone error.
+_RFC3339_DATETIME_PATTERN = re.compile(
+    r"^\d{4}-\d{2}-\d{2}[Tt ]\d{2}:\d{2}:\d{2}(?:\.\d+)?"
+    r"(?:[Zz]|[+-]\d{2}:\d{2})?$"
+)
 _MAX_SIGNED_BIGINT = 2**63 - 1
 _DEFAULT_LEAD_REVIEW_LIMIT = 100
 _MAX_LEAD_REVIEW_LIMIT = 200
@@ -59,11 +65,13 @@ class EOMEstimateBookingRequest(BaseModel):
     @field_validator("scheduled_start", "scheduled_end", mode="before")
     @classmethod
     def _require_datetime_strings(cls, value: Any) -> Any:
-        # Pydantic's lax mode coerces JSON numbers (epoch seconds) into
-        # UTC-aware datetimes, which would pass the timezone/ordering checks
-        # as a 1970 appointment. Only RFC 3339 date-time strings are valid at
-        # this boundary.
-        if not isinstance(value, str):
+        # Pydantic's lax mode coerces JSON numbers AND digit-only strings
+        # (epoch seconds, e.g. "3600") into UTC-aware datetimes, which would
+        # pass the timezone/ordering checks as a 1970 appointment. Only
+        # strings with RFC 3339 date-time syntax are valid at this boundary.
+        if not isinstance(value, str) or not _RFC3339_DATETIME_PATTERN.fullmatch(
+            value
+        ):
             raise ValueError("must be an RFC 3339 date-time string")
         return value
 

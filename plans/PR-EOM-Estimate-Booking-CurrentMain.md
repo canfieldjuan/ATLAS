@@ -76,7 +76,8 @@ Slice phase: vertical slice
 - Acceptance criteria:
   - [ ] `POST /api/v1/eom-funnel/leads/{contact_id}/estimate-bookings` rejects
         unauthenticated, malformed actor, bad idempotency-key, naive datetime,
-        numeric-epoch timestamp, and `end <= start` requests before CRM or
+        numeric-epoch timestamp (JSON number or digit-only string), non-RFC
+        3339 date-time syntax, and `end <= start` requests before CRM or
         Calendar calls, settled by `tests/test_eom_lead_conversion.py`.
   - [ ] A valid booking request calls the CRM prepare step before Calendar, uses
         the prepared deterministic `expected_calendar_event_id` in the Calendar
@@ -173,16 +174,19 @@ seam in the enumeration; otherwise write "N/A - no boundary change."
 - Boundary path/seam: atlas_brain/eom_api/funnel.py
   - Replaced-path behaviors: no prior booking route exists; handoff previously
     admitted only `lead_stage = 'new'`; the request model previously accepted
-    any Pydantic-coercible datetime value, so JSON epoch numbers coerced into
-    a 1970-era aware window.
+    any Pydantic-coercible datetime value, so JSON epoch numbers and
+    digit-only epoch strings (e.g. "3600") coerced into a 1970-era aware
+    window.
   - Guard-relevant fields: bearer token digest, `X-EOM-Actor`,
     `X-EOM-Actor-ID`, `Idempotency-Key`, `contact_id`, `scheduled_start`,
-    `scheduled_end` (RFC 3339 strings only, timezone-aware, end after start),
-    `calendar_id`, `notes`.
+    `scheduled_end` (RFC 3339 date-time syntax only, timezone-aware, end
+    after start), `calendar_id`, `notes`.
   - Caller x input shape: server-side tracker/office caller sends snake_case
-    JSON with aware datetime strings and service-auth headers; numeric epoch
-    timestamps reject with 422 before CRM or Calendar calls; browser/public
-    website callers are not admitted.
+    JSON with aware RFC 3339 datetime strings and service-auth headers;
+    JSON-number and digit-only-string epoch timestamps and any non-RFC 3339
+    syntax reject with 422 before CRM or Calendar calls; a naive RFC 3339
+    string still reaches the window validator's dedicated timezone error;
+    browser/public website callers are not admitted.
 - Boundary path/seam: `CalendarTool.create_event` deterministic-ID handling and
   `DatabaseCRMProvider` lead-stage/lifecycle predicates for review, booking,
   terminal failure, execution fencing, and handoff.
@@ -289,9 +293,11 @@ Handoff probes the lock key with `pg_try_advisory_xact_lock` for every
 non-booked operation key it read: a failed probe means a same-key execution is
 still in flight and its terminal failed marker may yet be superseded by a
 stronger booked/ambiguous outcome, so handoff rejects with 409 until the
-executor releases the lock. The request model also rejects non-string
-`scheduled_start`/`scheduled_end` values before Pydantic's lax mode can coerce
-JSON epoch numbers into a spurious 1970-era appointment window.
+executor releases the lock. The request model also requires
+`scheduled_start`/`scheduled_end` to be strings with RFC 3339 date-time
+syntax before Pydantic's lax mode can coerce JSON epoch numbers -- or
+digit-only epoch strings such as "3600" -- into a spurious 1970-era
+appointment window.
 
 `CalendarTool.create_event` tracks a request phase across its lifetime:
 failures raised while acquiring the client or OAuth token surface
@@ -387,26 +393,30 @@ Pool-exhaustion and auth-phase reverification (same torch caveat as above):
 - `python -m pytest tests/test_eom_lead_conversion.py -q` -- 77 passed, 3 pre-existing torch-import failures.
 - `ATLAS_MIGRATION_TEST_DATABASE_URL=postgresql://postgres@localhost:5433/atlas_migration_tests python -m pytest tests/test_eom_lead_conversion_integration.py tests/test_migrations_runner.py -q` -- 48 passed against disposable Postgres 16, 3 pre-existing torch-import failures.
 
+RFC 3339 syntax-guard reverification (same torch caveat as above):
+
+- `python -m pytest tests/test_eom_lead_conversion.py -q` -- 80 passed, 3 pre-existing torch-import failures.
+
 ## Estimated diff size
 
 | File | LOC |
 |---|---:|
 | `.github/workflows/atlas_eom_lead_pipeline_checks.yml` | 8 |
-| `atlas_brain/eom_api/funnel.py` | 98 |
+| `atlas_brain/eom_api/funnel.py` | 106 |
 | `atlas_brain/services/crm_provider.py` | 881 |
 | `atlas_brain/services/eom_estimate_booking.py` | 323 |
 | `atlas_brain/storage/migrations/356_eom_lead_review_queue_booked_stage.sql` | 27 |
 | `atlas_brain/storage/migrations/357_eom_estimate_booking_operation_key_index.sql` | 26 |
 | `atlas_brain/tools/calendar.py` | 141 |
-| `plans/PR-EOM-Estimate-Booking-CurrentMain.md` | 590 |
+| `plans/PR-EOM-Estimate-Booking-CurrentMain.md` | 598 |
 | `render.eom.yaml` | 10 |
 | `requirements.eom.txt` | 1 |
-| `tests/test_eom_lead_conversion.py` | 1139 |
+| `tests/test_eom_lead_conversion.py` | 1143 |
 | `tests/test_eom_lead_conversion_integration.py` | 857 |
 | `tests/test_eom_lead_pipeline_integration.py` | 7 |
 | `tests/test_eom_render_profile.py` | 38 |
 | `tests/test_migrations_runner.py` | 66 |
-| **Total** | **4212** |
+| **Total** | **4232** |
 
 ## Cold diff reconstruction
 

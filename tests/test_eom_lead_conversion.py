@@ -555,12 +555,16 @@ async def test_private_estimate_booking_reports_explicit_calendar_id_to_prepare(
     [
         {"scheduled_start": 0, "scheduled_end": 3600},
         {"scheduled_start": 1754323200.5, "scheduled_end": 1754326800.5},
+        {"scheduled_start": "0", "scheduled_end": "3600"},
+        {"scheduled_start": "1754323200", "scheduled_end": "1754326800"},
+        {"scheduled_start": "20260804T140000Z", "scheduled_end": "20260804T150000Z"},
     ],
 )
 async def test_private_estimate_booking_rejects_numeric_timestamps(numeric_payload):
-    """Pydantic lax mode would coerce epoch numbers into 1970-era UTC-aware
-    datetimes that pass the timezone/ordering checks; the boundary must 422
-    before CRM or Calendar sees them."""
+    """Pydantic lax mode would coerce epoch numbers -- and digit-only strings
+    like "3600" -- into 1970-era UTC-aware datetimes that pass the
+    timezone/ordering checks; the boundary must 422 anything that is not an
+    RFC 3339 date-time string before CRM or Calendar sees it."""
     crm = _CRM()
     calendar = _Calendar()
     app = _app(crm, _enabled_config(), calendar=calendar)
