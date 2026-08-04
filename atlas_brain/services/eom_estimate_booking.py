@@ -308,16 +308,30 @@ async def _run_estimate_booking(
             "Calendar returned an unexpected event id; booking requires reconciliation",
         )
 
-    completed = await completer(
-        contact_id=command.contact_id,
-        scheduled_start=command.scheduled_start,
-        scheduled_end=command.scheduled_end,
-        calendar_id=str(calendar_event["calendar_id"]),
-        notes=command.notes,
-        booking_key=command.booking_key,
-        expected_calendar_event_id=expected_event_id,
-        calendar_event_id=calendar_event_id,
-        actor_id=command.actor_id,
-        actor_name=command.actor_name,
-    )
+    try:
+        completed = await completer(
+            contact_id=command.contact_id,
+            scheduled_start=command.scheduled_start,
+            scheduled_end=command.scheduled_end,
+            calendar_id=str(calendar_event["calendar_id"]),
+            notes=command.notes,
+            booking_key=command.booking_key,
+            expected_calendar_event_id=expected_event_id,
+            calendar_event_id=calendar_event_id,
+            actor_id=command.actor_id,
+            actor_name=command.actor_name,
+        )
+    except Exception:
+        # The Calendar event exists (create returned the expected ID), so a
+        # completion rejection must leave reconciliation evidence instead of
+        # an orphaned appointment with a forever-pending ledger.
+        await marker(
+            contact_id=command.contact_id,
+            booking_key=command.booking_key,
+            expected_calendar_event_id=expected_event_id,
+            observed_calendar_event_id=calendar_event_id,
+            actor_id=command.actor_id,
+            actor_name=command.actor_name,
+        )
+        raise
     return _booking_result(completed)

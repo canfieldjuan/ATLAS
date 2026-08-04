@@ -1818,10 +1818,13 @@ class DatabaseCRMProvider:
                 or contact["business_context_id"] != EOM_BUSINESS_CONTEXT_ID
             ):
                 raise EOMLeadConversionError(404, "EOM lead was not found")
-            if contact["status"] != "active":
-                raise EOMLeadConversionError(
-                    409, "EOM lead must be active before booking"
-                )
+            # No status re-check here: admission was validated at prepare
+            # time, and the Calendar event now exists. NocoDB holds an
+            # UPDATE (status) grant, so an operator can archive the lead
+            # while the Calendar call is in flight; refusing to record the
+            # booked outcome would orphan a real appointment. Downstream
+            # surfaces (review queue, customer handoff) apply their own
+            # active-status admission.
             if contact["contact_type"] != "lead":
                 raise EOMLeadConversionError(409, "EOM contact is not a lead")
 
@@ -1894,7 +1897,6 @@ class DatabaseCRMProvider:
                   AND business_context_id = $2
                   AND contact_type = 'lead'
                   AND lead_stage = 'new'
-                  AND status = 'active'
                 RETURNING id, lead_stage
                 """,
                 contact_id,

@@ -957,6 +957,103 @@ async def test_handoff_stays_fenced_while_a_same_key_booking_is_executing():
 
 
 @pytest.mark.asyncio
+async def test_booking_completion_settles_after_mid_execution_status_flip():
+    """NocoDB holds an UPDATE (status) grant, so an operator can archive the
+    lead while the Calendar call is in flight. Admission was validated at
+    prepare time and the Calendar event exists, so completion must still
+    record the booked outcome; the active-status admission lives downstream
+    in review and handoff, which must keep rejecting the inactive contact.
+    """
+    database_url = _database_url_or_skip()
+    schema = f"atlas_eom_estimate_booking_status_flip_{uuid.uuid4().hex}"
+    conn = await asyncpg.connect(database_url)
+    try:
+        await _prepare_schema(conn, schema)
+        provider = DatabaseCRMProvider(pool=conn)
+        contact_id = uuid.uuid4()
+        booking_key = f"office-booking-{uuid.uuid4().hex}"
+        calendar_event_id = deterministic_eom_estimate_calendar_event_id(
+            contact_id=str(contact_id),
+            booking_key=booking_key,
+        )
+        start = datetime(2026, 8, 4, 19, 0, tzinfo=timezone.utc)
+        end = datetime(2026, 8, 4, 20, 0, tzinfo=timezone.utc)
+        await _insert_contact(conn, contact_id=contact_id)
+
+        await provider.prepare_eom_estimate_booking(
+            contact_id=str(contact_id),
+            scheduled_start=start,
+            scheduled_end=end,
+            calendar_id="estimate-calendar",
+            notes="Bring estimate worksheet",
+            booking_key=booking_key,
+            expected_calendar_event_id=calendar_event_id,
+            actor_id=1,
+            actor_name="Juan Canfield",
+        )
+        await conn.execute(
+            "UPDATE contacts SET status = 'inactive' WHERE id = $1",
+            contact_id,
+        )
+
+        completed = await provider.complete_eom_estimate_booking(
+            contact_id=str(contact_id),
+            scheduled_start=start,
+            scheduled_end=end,
+            calendar_id="estimate-calendar",
+            notes="Bring estimate worksheet",
+            booking_key=booking_key,
+            expected_calendar_event_id=calendar_event_id,
+            calendar_event_id=calendar_event_id,
+            actor_id=1,
+            actor_name="Juan Canfield",
+        )
+
+        assert completed["idempotent"] is False
+        assert completed["status"] == "estimate_booked"
+        contact = await conn.fetchrow(
+            "SELECT lead_stage, status FROM contacts WHERE id = $1", contact_id
+        )
+        assert dict(contact) == {"lead_stage": "estimate_booked", "status": "inactive"}
+        assert (
+            await conn.fetchval(
+                """
+                SELECT COUNT(*)
+                FROM eom_lead_lifecycle_events
+                WHERE contact_id = $1
+                  AND operation_key = $2
+                  AND event_type = 'estimate_booked'
+                """,
+                contact_id,
+                booking_key,
+            )
+            == 1
+        )
+        assert (
+            await conn.fetchval(
+                "SELECT COUNT(*) FROM contacts WHERE id = $1 AND id IN ("
+                "SELECT contact_id FROM eom_lead_lifecycle_events)",
+                contact_id,
+            )
+            == 1
+        )
+
+        with pytest.raises(EOMLeadConversionError, match="must be active"):
+            await provider.finalize_eom_customer_handoff(
+                contact_id=str(contact_id),
+                tracker_customer_id=101,
+                tracker_site_id=202,
+                approval_key=_approval_key(),
+                actor_id=1,
+                actor_name="Juan Canfield",
+            )
+        assert await provider.list_eom_new_lead_review_items(limit=10) == []
+    finally:
+        await conn.execute(f'DROP SCHEMA IF EXISTS "{schema}" CASCADE')
+        await conn.close()
+
+
+@pytest.mark.asyncio
 async def test_estimate_booking_completion_dominates_failed_and_ambiguous_markers():
     database_url = _database_url_or_skip()
     schema = f"atlas_eom_estimate_booking_precedence_{uuid.uuid4().hex}"

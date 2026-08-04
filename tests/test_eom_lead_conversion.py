@@ -694,6 +694,44 @@ async def test_private_estimate_booking_auth_phase_failure_is_terminal(auth_erro
 
 
 @pytest.mark.asyncio
+async def test_private_estimate_booking_marks_ambiguous_when_completion_rejects():
+    """Once Calendar returned the expected event ID the appointment exists;
+    a completion rejection (e.g. the contact mutated out-of-band mid-flight)
+    must record reconciliation evidence instead of orphaning the event
+    behind a forever-pending ledger."""
+
+    class _RejectingCompletionCRM(_CRM):
+        async def complete_eom_estimate_booking(self, **kwargs):
+            self.complete_calls.append(kwargs)
+            raise EOMLeadConversionError(409, "EOM contact is not a lead")
+
+    crm = _RejectingCompletionCRM()
+    calendar = _Calendar()
+    app = _app(crm, _enabled_config(), calendar=calendar)
+    contact_id = uuid4()
+    booking_key = f"office-booking-{uuid4().hex}"
+    expected_event_id = deterministic_eom_estimate_calendar_event_id(
+        contact_id=str(contact_id),
+        booking_key=booking_key,
+    )
+
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=app), base_url="http://test"
+    ) as client:
+        response = await client.post(
+            f"/eom-funnel/leads/{contact_id}/estimate-bookings",
+            headers=_headers(approval_key=booking_key),
+            json=_booking_payload(),
+        )
+
+    assert response.status_code == 409
+    assert len(crm.complete_calls) == 1
+    assert len(crm.ambiguous_calls) == 1
+    assert crm.ambiguous_calls[0]["expected_calendar_event_id"] == expected_event_id
+    assert crm.ambiguous_calls[0]["observed_calendar_event_id"] == expected_event_id
+
+
+@pytest.mark.asyncio
 async def test_private_estimate_booking_runs_lifecycle_on_execution_scoped_provider():
     """The execution lock may yield a provider bound to the lock's own
     session connection; every lifecycle step must run through it so one

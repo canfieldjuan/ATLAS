@@ -152,6 +152,14 @@ Slice phase: vertical slice
         and record a terminal failed attempt instead of an ambiguous wedge,
         while failures during conflict verification stay ambiguous, settled by
         `tests/test_eom_lead_conversion.py`.
+  - [ ] After Calendar returns the expected event ID, completion settles the
+        booked outcome even if the contact's status was flipped mid-execution
+        (admission is prepare-time; review and handoff keep their own
+        active-status gates), and any residual completion rejection records
+        the ambiguous reconciliation marker instead of orphaning the event,
+        settled by `tests/test_eom_lead_conversion.py` and
+        `tests/test_eom_lead_conversion_integration.py` when
+        `ATLAS_MIGRATION_TEST_DATABASE_URL` is configured.
 - Reachability proof: the real FastAPI route
   `POST /api/v1/eom-funnel/leads/{contact_id}/estimate-bookings` is exercised
   with auth headers in `tests/test_eom_lead_conversion.py`, asserting both the
@@ -194,7 +202,9 @@ seam in the enumeration; otherwise write "N/A - no boundary change."
   - Replaced-path behaviors: Calendar create previously sent no caller-supplied
     event ID and reported every pre-POST failure under the create phase;
     handoff previously admitted any terminal failed marker without probing for
-    an in-flight same-key execution.
+    an in-flight same-key execution; booking completion previously re-required
+    active contact status after the Calendar write, so a mid-execution status
+    flip orphaned a real event with no marker.
   - Guard-relevant fields: lead `business_context_id`, `contact_type`,
     `lead_stage`, `status`, lifecycle `operation_key`/`event_type` sets, the
     `eom-estimate-booking:execution:<booking_key>` advisory lock key,
@@ -299,6 +309,20 @@ executor releases the lock. The request model also requires
 syntax before Pydantic's lax mode can coerce JSON epoch numbers -- or
 digit-only epoch strings such as "3600" -- into a spurious 1970-era
 appointment window.
+
+Booking completion settles rather than re-admits. Admission (active status,
+lead type, new stage) is validated at prepare time; once Calendar has
+returned the expected event ID, completion records the `estimate_booked`
+outcome even if the contact's status was flipped mid-execution -- NocoDB
+holds an `UPDATE (status)` column grant, so an operator can archive a lead
+while the Calendar call is in flight, and refusing to record the outcome
+would orphan a real appointment. The review queue and customer handoff keep
+their own active-status gates, so an archived booked lead is not silently
+promoted. As a backstop, if completion still rejects after a successful
+Calendar create (out-of-band contact mutation through a privileged path),
+the booking service records the ambiguous reconciliation marker with the
+observed event ID before propagating the error, so no completion rejection
+can leave a Calendar event without ledger evidence.
 
 `CalendarTool.create_event` tracks a request phase across its lifetime:
 failures raised while acquiring the client or OAuth token surface
@@ -405,26 +429,32 @@ RFC 3339 syntax-guard reverification (same torch caveat as above):
   `python -m pytest tests/test_eom_lead_conversion.py -q` -- 84 passed, same
   torch caveat; the timestamp boundary table now holds 9 malformed shapes.
 
+Completion-settlement reverification (same torch caveat as above):
+
+- `python -m pytest tests/test_eom_lead_conversion.py -q` -- 85 passed,
+  including the completion-rejection ambiguous-marker backstop.
+- `ATLAS_MIGRATION_TEST_DATABASE_URL=postgresql://postgres@localhost:5433/atlas_migration_tests python -m pytest tests/test_eom_lead_conversion_integration.py -q` -- 25 passed against disposable Postgres 16, including the mid-execution status-flip settlement proof.
+
 ## Estimated diff size
 
 | File | LOC |
 |---|---:|
 | `.github/workflows/atlas_eom_lead_pipeline_checks.yml` | 8 |
 | `atlas_brain/eom_api/funnel.py` | 107 |
-| `atlas_brain/services/crm_provider.py` | 881 |
-| `atlas_brain/services/eom_estimate_booking.py` | 323 |
+| `atlas_brain/services/crm_provider.py` | 883 |
+| `atlas_brain/services/eom_estimate_booking.py` | 337 |
 | `atlas_brain/storage/migrations/356_eom_lead_review_queue_booked_stage.sql` | 27 |
 | `atlas_brain/storage/migrations/357_eom_estimate_booking_operation_key_index.sql` | 26 |
 | `atlas_brain/tools/calendar.py` | 141 |
-| `plans/PR-EOM-Estimate-Booking-CurrentMain.md` | 611 |
+| `plans/PR-EOM-Estimate-Booking-CurrentMain.md` | 645 |
 | `render.eom.yaml` | 10 |
 | `requirements.eom.txt` | 1 |
-| `tests/test_eom_lead_conversion.py` | 1160 |
-| `tests/test_eom_lead_conversion_integration.py` | 857 |
+| `tests/test_eom_lead_conversion.py` | 1196 |
+| `tests/test_eom_lead_conversion_integration.py` | 1007 |
 | `tests/test_eom_lead_pipeline_integration.py` | 7 |
 | `tests/test_eom_render_profile.py` | 38 |
 | `tests/test_migrations_runner.py` | 66 |
-| **Total** | **4263** |
+| **Total** | **4471** |
 
 ## Cold diff reconstruction
 
