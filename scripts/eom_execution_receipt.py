@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import contextlib
+import asyncio
 import hashlib
 import json
 import os
@@ -112,6 +113,15 @@ def _fsync_directory(path: Path) -> None:
         os.close(fd)
 
 
+def _assert_private_directory(path: Path) -> None:
+    stat_result = path.stat()
+    if stat_result.st_uid != os.getuid():
+        raise ValueError(f"receipt directory is not owned by the current user: {path}")
+    mode = stat.S_IMODE(stat_result.st_mode)
+    if mode != 0o700:
+        raise ValueError(f"receipt directory must be private mode 0700: {path}")
+
+
 class EomExecutionReceipt:
     """Durable non-PII artifact for one EOM operator-tool invocation."""
 
@@ -127,9 +137,17 @@ class EomExecutionReceipt:
         if mode not in TOOL_MODES.get(tool, set()):
             raise ValueError(f"unsupported EOM receipt tool/mode: {tool}/{mode}")
         self.receipt_dir = Path(receipt_dir).expanduser().resolve()
-        self.receipt_dir.mkdir(mode=0o700, parents=True, exist_ok=True)
+        created = False
+        try:
+            self.receipt_dir.mkdir(mode=0o700, parents=True, exist_ok=False)
+            created = True
+        except FileExistsError:
+            pass
         if not self.receipt_dir.is_dir():
             raise ValueError("receipt directory must be a directory")
+        if created:
+            self.receipt_dir.chmod(0o700)
+        _assert_private_directory(self.receipt_dir)
         script = Path(script_path).resolve()
         self.receipt_id = str(uuid.UUID(str(receipt_id or uuid.uuid4())))
         self._changed_contact_ids: set[str] = set()
@@ -204,7 +222,7 @@ class EomExecutionReceipt:
         """Mark the receipt indeterminate if cancellation interrupts a mutation."""
         try:
             yield
-        except BaseException:
+        except (asyncio.CancelledError, KeyboardInterrupt, SystemExit):
             self._indeterminate = True
             self._payload["indeterminate"] = True
             self._persist_in_progress()

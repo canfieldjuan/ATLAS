@@ -804,6 +804,8 @@ async def run(args, receipt=None) -> int:
             demoted, eligible = await demote_unmatched(
                 pool, matched_ids, args.apply, guard_keys, receipt=receipt
             )
+    if receipt is not None:
+        receipt.record_outcome_counts(counts)
 
     print(f"\n{'=' * 70}")
     if args.apply:

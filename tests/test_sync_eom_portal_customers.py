@@ -555,6 +555,57 @@ def test_apply_entrypoint_aborts_roster_collision_before_sync(monkeypatch):
     assert pool.updates == [] and pool.atomic_writes == []
 
 
+def test_apply_run_persists_calendar_guard_error_counts(monkeypatch):
+    import httpx
+    import atlas_brain.services.crm_provider as crm_provider_mod
+    import atlas_brain.storage.database as database_mod
+    import sync_eom_portal_customers as sync_mod
+
+    class Client:
+        def __init__(self, **_kwargs):
+            pass
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_args):
+            return False
+
+    class Pool(SyncPool):
+        async def initialize(self):
+            return None
+
+    class Receipt:
+        def __init__(self):
+            self.counts = []
+
+        def record_outcome_counts(self, counts):
+            self.counts.append(dict(counts))
+
+    async def unavailable_guard():
+        raise RuntimeError("calendar offline")
+
+    pool = Pool(rows=[])
+    receipt = Receipt()
+    monkeypatch.setattr(httpx, "Client", Client)
+    monkeypatch.setattr(sync_mod, "portal_login", lambda *_args: "token")
+    monkeypatch.setattr(sync_mod, "fetch_portal_customers", lambda *_args: [])
+    monkeypatch.setattr(sync_mod, "fetch_calendar_guard_keys", unavailable_guard)
+    monkeypatch.setattr(crm_provider_mod, "get_crm_provider", StubCRM)
+    previous_pool = database_mod._db_pool
+    database_mod._db_pool = pool
+    try:
+        result = asyncio.run(sync_mod.run(
+            SimpleNamespace(apply=True, base_url="https://example.invalid"),
+            receipt=receipt,
+        ))
+    finally:
+        database_mod._db_pool = previous_pool
+
+    assert result == 1
+    assert receipt.counts[-1]["errors"] == 1
+
+
 def test_boolean_portal_id_is_rejected_before_writes():
     # Codex A2 round 5: bool subclasses int; id=true must not pass.
     crm = StubCRM(scoped_hit={"id": "k", "tags": [], "status": "active"})

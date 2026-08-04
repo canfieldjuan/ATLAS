@@ -86,7 +86,7 @@ Slice phase: Production hardening
   and portal sync.
 - Affected surfaces: `scripts/eom_execution_receipt.py`,
   `scripts/import_eom_customers_live.py`, `scripts/sync_eom_portal_customers.py`,
-  focused EOM receipt tests, and this plan.
+  focused EOM receipt/portal-sync tests, and this plan.
 - Risk areas: operator write admission, artifact privacy, source/run
   reproducibility, cancellation/process semantics, and accidental changes to
   existing CRM reconciliation behavior.
@@ -134,6 +134,7 @@ fallback changes; otherwise write "N/A - no guard/config boundary change."
 - `scripts/import_eom_customers_live.py`
 - `scripts/sync_eom_portal_customers.py`
 - `tests/test_eom_execution_receipts.py`
+- `tests/test_sync_eom_portal_customers.py`
 
 ## Mechanism
 
@@ -165,9 +166,10 @@ Parked hardening: none.
 
 ## Verification
 
-- `python -m py_compile scripts/eom_execution_receipt.py scripts/import_eom_customers_live.py scripts/sync_eom_portal_customers.py tests/test_eom_execution_receipts.py` — passed.
-- `python -m pytest tests/test_eom_execution_receipts.py tests/test_eom_live_calendar_import.py tests/test_sync_eom_portal_customers.py -q` — 113 passed.
-- `python -m ruff check scripts/eom_execution_receipt.py scripts/import_eom_customers_live.py scripts/sync_eom_portal_customers.py tests/test_eom_execution_receipts.py` — passed.
+- `python -m py_compile scripts/eom_execution_receipt.py scripts/import_eom_customers_live.py scripts/sync_eom_portal_customers.py tests/test_eom_execution_receipts.py tests/test_sync_eom_portal_customers.py` — passed.
+- `python -m pytest tests/test_eom_execution_receipts.py tests/test_eom_live_calendar_import.py tests/test_sync_eom_portal_customers.py -q` — 116 passed.
+- `python -m ruff check scripts/eom_execution_receipt.py scripts/import_eom_customers_live.py scripts/sync_eom_portal_customers.py tests/test_eom_execution_receipts.py tests/test_sync_eom_portal_customers.py` — passed.
+- `python scripts/maturity_sweep.py scripts --tests-root tests --baseline tests/maturity_sweep/baseline_scripts.json --min-score 8 --top 25` — passed.
 
 ## Estimated diff size
 
@@ -175,8 +177,9 @@ Parked hardening: none.
 |---|---:|
 | `docs/EOM_RECONCILIATION_RECEIPTS.md` | 31 |
 | `plans/PR-EOM-Execution-Receipts-V2.md` | 182 |
-| `scripts/eom_execution_receipt.py` | 268 |
+| `scripts/eom_execution_receipt.py` | 293 |
 | `scripts/import_eom_customers_live.py` | 172 |
-| `scripts/sync_eom_portal_customers.py` | 130 |
-| `tests/test_eom_execution_receipts.py` | 239 |
-| **Total** | **1022** |
+| `scripts/sync_eom_portal_customers.py` | 132 |
+| `tests/test_eom_execution_receipts.py` | 280 |
+| `tests/test_sync_eom_portal_customers.py` | 51 |
+| **Total** | **1141** |

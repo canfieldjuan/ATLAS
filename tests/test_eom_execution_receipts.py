@@ -33,6 +33,23 @@ def _private(path: Path) -> bool:
     return stat.S_IMODE(path.stat().st_mode) == 0o600
 
 
+def test_existing_receipt_directory_must_be_private(tmp_path):
+    unsafe = tmp_path / "unsafe-receipts"
+    unsafe.mkdir()
+    unsafe.chmod(0o755)
+    try:
+        with pytest.raises(ValueError, match="private mode 0700"):
+            EomExecutionReceipt(
+                receipt_dir=unsafe,
+                tool="import_eom_customers_live",
+                mode="write",
+                script_path=REPO / "scripts" / "import_eom_customers_live.py",
+                receipt_id=UUID_A,
+            )
+    finally:
+        unsafe.chmod(0o700)
+
+
 def test_receipt_publishes_private_source_bound_non_pii_payload(tmp_path):
     receipt = EomExecutionReceipt(
         receipt_dir=tmp_path,
@@ -117,6 +134,30 @@ def test_indeterminate_mutation_keeps_in_progress_and_no_final(tmp_path):
     assert receipt.in_progress_path.exists()
     assert not list(tmp_path.glob("eom-*.exit-*.json"))
     assert _payload(receipt.in_progress_path)["indeterminate"] is True
+
+
+def test_ordinary_mutation_exception_finalizes_failure_receipt(tmp_path):
+    receipt = EomExecutionReceipt(
+        receipt_dir=tmp_path,
+        tool="import_eom_customers_live",
+        mode="write",
+        script_path=REPO / "scripts" / "import_eom_customers_live.py",
+        receipt_id=UUID_A,
+    )
+
+    async def failed_mutation():
+        async with receipt.mutation_boundary():
+            raise RuntimeError("database timeout")
+
+    with pytest.raises(RuntimeError, match="database timeout"):
+        run_receipted(receipt, lambda: asyncio.run(failed_mutation()))
+
+    final = receipt.final_path_for(1)
+    assert final.exists()
+    assert not receipt.in_progress_path.exists()
+    payload = _payload(final)
+    assert payload["exit_code"] == 1
+    assert payload["indeterminate"] is False
 
 
 def test_calendar_live_write_requires_receipt_before_runtime_work(monkeypatch):
