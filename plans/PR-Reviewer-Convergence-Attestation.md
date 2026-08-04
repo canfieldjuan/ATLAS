@@ -151,8 +151,8 @@ test file.
 
 - `python3 -m py_compile scripts/audit_ai_reconciliation.py scripts/audit_pr_body.py scripts/check_ai_reconciliation_live.py scripts/select_impacted_tests.py` -- passed locally.
 - `/tmp/atlas-pr2259-venv/bin/python -m pytest tests/test_check_ai_reconciliation_live.py tests/test_audit_pr_body.py tests/test_select_impacted_tests.py -q` -- passed locally, 190 passed.
-- `python -m pytest tests/test_check_ai_reconciliation_live.py tests/test_select_impacted_tests.py tests/test_local_pr_review.py -q` -- passed locally, 142 passed.
-- `python -m pytest tests/test_audit_ai_reconciliation.py tests/test_audit_pr_body.py tests/test_local_pr_review.py tests/test_open_pr_wrapper.py tests/test_push_pr_wrapper.py tests/test_pre_push_audit.py tests/test_check_ai_reconciliation_live.py tests/test_select_impacted_tests.py -q` -- passed locally, 279 passed.
+- `python -m pytest tests/test_check_ai_reconciliation_live.py tests/test_select_impacted_tests.py tests/test_local_pr_review.py -q` -- passed locally, 145 passed.
+- `python -m pytest tests/test_audit_ai_reconciliation.py tests/test_audit_pr_body.py tests/test_local_pr_review.py tests/test_open_pr_wrapper.py tests/test_push_pr_wrapper.py tests/test_pre_push_audit.py tests/test_check_ai_reconciliation_live.py tests/test_select_impacted_tests.py -q` -- passed locally, 282 passed.
 - `python3 scripts/maturity_sweep.py scripts --tests-root tests --baseline tests/maturity_sweep/baseline_scripts.json --min-score 8 --sensitive-glob 'scripts/**'` -- passed locally after reducing `scripts/audit_ai_reconciliation.py` back under its ratchet.
 - `bash scripts/local_pr_review.sh --current-pr-body-file <body>` -- passed locally.
 
@@ -166,7 +166,7 @@ test file.
 | `plans/PR-Reviewer-Convergence-Attestation.md` | 183 |
 | `scripts/audit_ai_reconciliation.py` | 132 |
 | `scripts/audit_pr_body.py` | 163 |
-| `scripts/check_ai_reconciliation_live.py` | 174 |
+| `scripts/check_ai_reconciliation_live.py` | 178 |
 | `scripts/local_pr_review.sh` | 37 |
 | `scripts/open_pr.sh` | 7 |
 | `scripts/pre_push_audit.sh` | 21 |
@@ -174,10 +174,10 @@ test file.
 | `scripts/select_impacted_tests.py` | 30 |
 | `tests/test_audit_ai_reconciliation.py` | 123 |
 | `tests/test_audit_pr_body.py` | 177 |
-| `tests/test_check_ai_reconciliation_live.py` | 131 |
+| `tests/test_check_ai_reconciliation_live.py` | 133 |
 | `tests/test_local_pr_review.py` | 111 |
 | `tests/test_open_pr_wrapper.py` | 8 |
 | `tests/test_pre_push_audit.py` | 19 |
 | `tests/test_push_pr_wrapper.py` | 8 |
 | `tests/test_select_impacted_tests.py` | 30 |
-| **Total** | **1412** |
+| **Total** | **1418** |

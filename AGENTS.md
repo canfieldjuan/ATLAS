@@ -1370,8 +1370,7 @@ Before LGTM or merge readiness:
 - [ ] R14 is satisfied: verdict claims are backed by checked-out code,
       caller/test/artifact spot-checks, CI, or explicit not-verified notes.
 - [ ] Codex threads are resolved or waived with a reason in the PR body, and
-      `live-reconciliation` is green for the current PR head after a Codex
-      connector review on that exact head SHA.
+      `live-reconciliation` is green for the current PR head.
 - [ ] No drift from the plan's stated scope.
 
 ---

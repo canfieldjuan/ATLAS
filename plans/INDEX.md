@@ -1,6 +1,6 @@
 # Plan archive index
 
-1501 archived plan doc(s). Merged plan docs are moved under `archive/` and listed below; once the archive sweep has run, the `plans/` root holds only in-flight slices.
+1504 archived plan doc(s). Merged plan docs are moved under `archive/` and listed below; once the archive sweep has run, the `plans/` root holds only in-flight slices.
 
 - [PR-ASR-Pip-Audit-Egg-Fragment](archive/PR-ASR-Pip-Audit-Egg-Fragment.md) - lane: security/workflow | phase: Production hardening
 - [PR-ASR-Requirements-Audit-Pin](archive/PR-ASR-Requirements-Audit-Pin.md) - lane: security/workflow | phase: Production hardening
@@ -1009,6 +1009,7 @@
 - [PR-EOM-Calendar-Demotion-Guard](archive/PR-EOM-Calendar-Demotion-Guard.md) - lane: eom-crm/lead-funnel | phase: vertical slice
 - [PR-EOM-Calendar-Email-Veto](archive/PR-EOM-Calendar-Email-Veto.md) - lane: eom-crm/calendar-veto | phase: production hardening
 - [PR-EOM-Complaints-Tracking](archive/PR-EOM-Complaints-Tracking.md) - lane: eom-crm/complaints | phase: Vertical slice
+- [PR-EOM-Funnel-Canonical-CRM-Runtime](archive/PR-EOM-Funnel-Canonical-CRM-Runtime.md) - lane: eom-funnel | phase: production hardening
 - [PR-EOM-Funnel-Ingress](archive/PR-EOM-Funnel-Ingress.md) - lane: eom-crm/lead-funnel | phase: Vertical slice
 - [PR-EOM-Lead-Intake](archive/PR-EOM-Lead-Intake.md) - lane: eom-crm/lead-funnel | phase: vertical slice
 - [PR-EOM-Lead-Pipeline](archive/PR-EOM-Lead-Pipeline.md) - lane: eom-crm/lead-funnel | phase: Vertical slice
@@ -1257,6 +1258,7 @@
 - [PR-LinkedIn-Marketing-Kit](archive/PR-LinkedIn-Marketing-Kit.md) - lane: linkedin-marketing-kit/reference | phase: Product polish
 - [PR-Live-Provider-Circular-Import](archive/PR-Live-Provider-Circular-Import.md)
 - [PR-Live-Reconciliation-Open-Threads-Only](archive/PR-Live-Reconciliation-Open-Threads-Only.md) - lane: workflow/live-reconciliation-open-threads-only | phase: Workflow/process
+- [PR-Live-Reconciliation-Thread-Gate](archive/PR-Live-Reconciliation-Thread-Gate.md) - lane: workflow/live-reconciliation-open-threads-only | phase: Workflow/process
 - [PR-Live-Smoke-Saved-Draft-Export](archive/PR-Live-Smoke-Saved-Draft-Export.md) - lane: content-ops/support-ticket-input-provider | phase: Functional validation
 - [PR-Local-MCP-Eval-Live-Runbook](archive/PR-Local-MCP-Eval-Live-Runbook.md) - lane: mcp/local-model-evals | phase: Functional validation
 - [PR-Local-MCP-Model-Eval-Harness](archive/PR-Local-MCP-Model-Eval-Harness.md) - lane: mcp/local-model-evals | phase: Vertical slice
@@ -1490,6 +1492,7 @@
 - [PR-Twilio-SignalWire-Decouple](archive/PR-Twilio-SignalWire-Decouple.md) - lane: comms-provider | phase: Vertical slice
 - [PR-TypeScript-Major-Batch](archive/PR-TypeScript-Major-Batch.md) - lane: security/dependencies | phase: Production hardening
 - [PR-UI-Test-Enrollment-Audit](archive/PR-UI-Test-Enrollment-Audit.md) - lane: intel-ui/ci-enrollment | phase: Workflow/process
+- [PR-Unit-Gate-Baseline-Shrink-Proof](archive/PR-Unit-Gate-Baseline-Shrink-Proof.md) - lane: workflow/unit-gate-baseline-shrink-proof | phase: Workflow/process
 - [PR-Unit-Gate-Impacted-Selection](archive/PR-Unit-Gate-Impacted-Selection.md) - lane: ci-gates | phase: vertical slice
 - [PR-Unit-Gate-Selector-Absent-Fallback](archive/PR-Unit-Gate-Selector-Absent-Fallback.md) - lane: ci-gates | phase: Production hardening
 - [PR-Unit-Gate](archive/PR-Unit-Gate.md) - lane: ci-cd/enforcement-gaps | phase: workflow/process

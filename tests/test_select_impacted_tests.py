@@ -142,6 +142,17 @@ def test_global_files_escalate_to_full(tmp_path, path):
         ["tests/test_security_guardrails_workflow.py"],
     ),
     (
+        ".github/workflows/ai_reconciliation_live.yml",
+        [
+            "tests/test_audit_workflow_security_posture.py",
+            "tests/test_check_ai_reconciliation_live.py",
+        ],
+    ),
+    (
+        ".github/workflows/ai_reconciliation_review_retrigger.yml",
+        ["tests/test_check_ai_reconciliation_live.py"],
+    ),
+    (
         ".github/workflows/unit_gate.yml",
         [
             "tests/test_check_unit_gate.py",
@@ -175,6 +186,14 @@ def test_global_files_escalate_to_full(tmp_path, path):
     (
         "scripts/check_required_status_checks.py",
         ["tests/test_security_guardrails_workflow.py"],
+    ),
+    (
+        "scripts/check_ai_reconciliation_live.py",
+        ["tests/test_check_ai_reconciliation_live.py"],
+    ),
+    (
+        "scripts/codex_wake_bridge.py",
+        ["tests/test_codex_wake_bridge.py"],
     ),
     (
         "scripts/check_unit_gate.py",

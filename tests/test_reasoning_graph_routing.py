@@ -1,12 +1,51 @@
+import importlib
+import subprocess
+import sys
 from unittest.mock import AsyncMock
 from types import SimpleNamespace
 
 import pytest
 
-from atlas_brain.config import settings
 from atlas_brain.reasoning.graph import _node_reason, _node_synthesize, _node_triage
 from atlas_brain.reasoning.reflection import run_reflection
-from atlas_brain.pipelines.llm import get_pipeline_llm
+
+
+def _pipeline_llm_module():
+    """Return the real pipeline LLM module, not a sibling-test stub.
+
+    A few standalone reasoning-port tests temporarily install lightweight
+    ``atlas_brain.pipelines.llm`` stubs in ``sys.modules``. In full-suite
+    collection/execution order this file must not bind one of those stubs at
+    module import time, because these routing tests patch internals such as
+    ``_try_openrouter`` and then call the real ``get_pipeline_llm``.
+    """
+
+    module = sys.modules.get("atlas_brain.pipelines.llm")
+    if module is not None and not hasattr(module, "_try_openrouter"):
+        sys.modules.pop("atlas_brain.pipelines.llm", None)
+        package = sys.modules.get("atlas_brain.pipelines")
+        if package is not None and not getattr(package, "__file__", None):
+            sys.modules.pop("atlas_brain.pipelines", None)
+    return importlib.import_module("atlas_brain.pipelines.llm")
+
+
+@pytest.fixture(autouse=True)
+def _isolate_pipeline_llm_state():
+    pipeline_llm = _pipeline_llm_module()
+    from atlas_brain.services import llm_registry
+
+    importlib.reload(pipeline_llm)
+    llm_registry.deactivate()
+    llm_registry.release_all_slots()
+    yield
+    llm_registry.deactivate()
+    llm_registry.release_all_slots()
+
+
+def _settings():
+    import atlas_brain.config as config
+
+    return config.settings
 
 
 class _StaticChatService:
@@ -18,6 +57,35 @@ class _StaticChatService:
     def chat(self, **kwargs):
         self.calls.append(kwargs)
         return {"response": self.response, "usage": dict(self.usage)}
+
+
+def test_pipeline_llm_helper_discards_sibling_test_stub():
+    code = """
+import importlib
+import sys
+import types
+
+package = types.ModuleType("atlas_brain.pipelines")
+package.__path__ = []
+stub = types.ModuleType("atlas_brain.pipelines.llm")
+stub.get_pipeline_llm = lambda **_kwargs: object()
+sys.modules["atlas_brain.pipelines"] = package
+sys.modules["atlas_brain.pipelines.llm"] = stub
+
+mod = importlib.import_module("tests.test_reasoning_graph_routing")
+real = mod._pipeline_llm_module()
+assert real.__name__ == "atlas_brain.pipelines.llm"
+assert hasattr(real, "_try_openrouter")
+assert real.get_pipeline_llm.__module__ == "atlas_brain.pipelines.llm"
+"""
+    result = subprocess.run(
+        [sys.executable, "-c", code],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+
+    assert result.returncode == 0, result.stderr or result.stdout
 
 
 def test_reasoning_prompt_exports_are_available_from_both_modules():
@@ -35,6 +103,8 @@ def test_reasoning_prompt_exports_are_available_from_both_modules():
 
 @pytest.mark.asyncio
 async def test_graph_triage_uses_configured_pipeline_workload(monkeypatch):
+    pipeline_llm = _pipeline_llm_module()
+    settings = _settings()
     monkeypatch.setattr(settings.reasoning, "graph_triage_workload", "triage")
     monkeypatch.setattr(settings.reasoning, "graph_openrouter_model", "openai/o4-mini")
     calls = []
@@ -46,7 +116,7 @@ async def test_graph_triage_uses_configured_pipeline_workload(monkeypatch):
         calls.append(kwargs)
         return service
 
-    monkeypatch.setattr("atlas_brain.pipelines.llm.get_pipeline_llm", _fake_get_pipeline_llm)
+    monkeypatch.setattr(pipeline_llm, "get_pipeline_llm", _fake_get_pipeline_llm)
 
     state = {"event_type": "b2b.high_intent_detected", "source": "test", "entity_type": "company", "entity_id": "Acme", "payload": {}}
     result = await _node_triage(state)
@@ -63,6 +133,8 @@ async def test_graph_triage_uses_configured_pipeline_workload(monkeypatch):
 
 @pytest.mark.asyncio
 async def test_graph_reason_uses_configured_pipeline_workload(monkeypatch):
+    pipeline_llm = _pipeline_llm_module()
+    settings = _settings()
     monkeypatch.setattr(settings.reasoning, "graph_reasoning_workload", "openrouter")
     monkeypatch.setattr(settings.reasoning, "graph_openrouter_model", "openai/o4-mini")
     calls = []
@@ -74,7 +146,7 @@ async def test_graph_reason_uses_configured_pipeline_workload(monkeypatch):
         calls.append(kwargs)
         return service
 
-    monkeypatch.setattr("atlas_brain.pipelines.llm.get_pipeline_llm", _fake_get_pipeline_llm)
+    monkeypatch.setattr(pipeline_llm, "get_pipeline_llm", _fake_get_pipeline_llm)
 
     state = {"event_type": "b2b.high_intent_detected", "source": "test", "payload": {}, "b2b_churn": {}}
     result = await _node_reason(state)
@@ -90,6 +162,8 @@ async def test_graph_reason_uses_configured_pipeline_workload(monkeypatch):
 
 @pytest.mark.asyncio
 async def test_graph_synthesis_uses_configured_pipeline_workload(monkeypatch):
+    pipeline_llm = _pipeline_llm_module()
+    settings = _settings()
     monkeypatch.setattr(settings.reasoning, "graph_synthesis_workload", "triage")
     monkeypatch.setattr(settings.reasoning, "graph_openrouter_model", "openai/o4-mini")
     calls = []
@@ -99,7 +173,7 @@ async def test_graph_synthesis_uses_configured_pipeline_workload(monkeypatch):
         calls.append(kwargs)
         return service
 
-    monkeypatch.setattr("atlas_brain.pipelines.llm.get_pipeline_llm", _fake_get_pipeline_llm)
+    monkeypatch.setattr(pipeline_llm, "get_pipeline_llm", _fake_get_pipeline_llm)
 
     state = {"should_notify": True, "event_type": "b2b.high_intent_detected", "action_results": [], "rationale": "ok"}
     result = await _node_synthesize(state)
@@ -116,6 +190,8 @@ async def test_graph_synthesis_uses_configured_pipeline_workload(monkeypatch):
 
 @pytest.mark.asyncio
 async def test_reflection_uses_configured_pipeline_workload(monkeypatch):
+    pipeline_llm = _pipeline_llm_module()
+    settings = _settings()
     monkeypatch.setattr(settings.reasoning, "graph_synthesis_workload", "triage")
     calls = []
     service = _StaticChatService('{"findings":[]}')
@@ -124,7 +200,7 @@ async def test_reflection_uses_configured_pipeline_workload(monkeypatch):
         calls.append(kwargs)
         return service
 
-    monkeypatch.setattr("atlas_brain.pipelines.llm.get_pipeline_llm", _fake_get_pipeline_llm)
+    monkeypatch.setattr(pipeline_llm, "get_pipeline_llm", _fake_get_pipeline_llm)
     monkeypatch.setattr(
         "atlas_brain.reasoning.patterns.run_all_pattern_detectors",
         AsyncMock(return_value=[{"description": "signal"}]),
@@ -142,6 +218,8 @@ async def test_reflection_uses_configured_pipeline_workload(monkeypatch):
 
 
 def test_openrouter_workload_uses_configured_model(monkeypatch):
+    pipeline_llm = _pipeline_llm_module()
+    settings = _settings()
     monkeypatch.setattr(settings.llm, "openrouter_reasoning_model", "anthropic/claude-haiku-4-5-20251001")
     seen = []
 
@@ -149,15 +227,17 @@ def test_openrouter_workload_uses_configured_model(monkeypatch):
         seen.append(model)
         return object()
 
-    monkeypatch.setattr("atlas_brain.pipelines.llm._try_openrouter", _fake_try_openrouter)
+    monkeypatch.setattr(pipeline_llm, "_try_openrouter", _fake_try_openrouter)
 
-    llm = get_pipeline_llm(workload="openrouter", auto_activate_ollama=False)
+    llm = pipeline_llm.get_pipeline_llm(workload="openrouter", auto_activate_ollama=False)
 
     assert llm is not None
     assert seen == ["anthropic/claude-haiku-4-5-20251001"]
 
 
 def test_openrouter_workload_normalizes_deprecated_gpt_oss(monkeypatch):
+    pipeline_llm = _pipeline_llm_module()
+    settings = _settings()
     monkeypatch.setattr(settings.llm, "openrouter_reasoning_model", "openai/gpt-oss-120b")
     seen = []
 
@@ -165,17 +245,19 @@ def test_openrouter_workload_normalizes_deprecated_gpt_oss(monkeypatch):
         seen.append(model)
         return object()
 
-    monkeypatch.setattr("atlas_brain.pipelines.llm._try_openrouter", _fake_try_openrouter)
+    monkeypatch.setattr(pipeline_llm, "_try_openrouter", _fake_try_openrouter)
 
-    llm = get_pipeline_llm(workload="openrouter", auto_activate_ollama=False)
+    llm = pipeline_llm.get_pipeline_llm(workload="openrouter", auto_activate_ollama=False)
 
     assert llm is not None
     assert seen == ["anthropic/claude-sonnet-4-5"]
 
 
 def test_synthesis_explicit_openrouter_override_uses_settings_api_key(monkeypatch):
+    pipeline_llm = _pipeline_llm_module()
     from atlas_brain.services.llm.openrouter import OpenRouterLLM
 
+    settings = _settings()
     monkeypatch.delenv("OPENROUTER_API_KEY", raising=False)
     monkeypatch.delenv("ATLAS_B2B_CHURN_OPENROUTER_API_KEY", raising=False)
     monkeypatch.setattr(settings.b2b_churn, "openrouter_api_key", "test-openrouter-key")
@@ -185,7 +267,7 @@ def test_synthesis_explicit_openrouter_override_uses_settings_api_key(monkeypatc
 
     monkeypatch.setattr(OpenRouterLLM, "load", _fake_load)
 
-    llm = get_pipeline_llm(
+    llm = pipeline_llm.get_pipeline_llm(
         workload="synthesis",
         openrouter_model="anthropic/claude-sonnet-4",
         auto_activate_ollama=False,
@@ -197,9 +279,11 @@ def test_synthesis_explicit_openrouter_override_uses_settings_api_key(monkeypatc
 
 
 def test_synthesis_strict_openrouter_does_not_fallback(monkeypatch):
+    pipeline_llm = _pipeline_llm_module()
+    settings = _settings()
     monkeypatch.setattr(settings.llm, "openrouter_reasoning_model", "deepseek/deepseek-v3.2")
     monkeypatch.setattr(settings.llm, "openrouter_reasoning_strict", True)
-    monkeypatch.setattr("atlas_brain.pipelines.llm._try_openrouter", lambda model=None: None)
+    monkeypatch.setattr(pipeline_llm, "_try_openrouter", lambda model=None: None)
 
     calls = []
 
@@ -213,40 +297,42 @@ def test_synthesis_strict_openrouter_does_not_fallback(monkeypatch):
     monkeypatch.setattr("atlas_brain.services.llm_router.get_draft_llm", _record("draft"))
     monkeypatch.setattr("atlas_brain.services.llm_router.get_triage_llm", _record("triage"))
 
-    llm = get_pipeline_llm(workload="synthesis", auto_activate_ollama=False)
+    llm = pipeline_llm.get_pipeline_llm(workload="synthesis", auto_activate_ollama=False)
 
     assert llm is None
     assert calls == []
 
 
 def test_anthropic_workload_uses_anthropic_primary_without_vllm_fallback(monkeypatch):
+    pipeline_llm = _pipeline_llm_module()
     calls = []
 
     def _fake_activate_anthropic(*, fallback_from=None):
         calls.append(fallback_from)
         return object()
 
-    monkeypatch.setattr("atlas_brain.pipelines.llm._activate_anthropic", _fake_activate_anthropic)
-    monkeypatch.setattr("atlas_brain.pipelines.llm._activate_vllm", lambda: pytest.fail("unexpected vLLM activation"))
+    monkeypatch.setattr(pipeline_llm, "_activate_anthropic", _fake_activate_anthropic)
+    monkeypatch.setattr(pipeline_llm, "_activate_vllm", lambda: pytest.fail("unexpected vLLM activation"))
 
-    llm = get_pipeline_llm(workload="anthropic", auto_activate_ollama=False)
+    llm = pipeline_llm.get_pipeline_llm(workload="anthropic", auto_activate_ollama=False)
 
     assert llm is not None
     assert calls == [None]
 
 
 def test_vllm_workload_uses_anthropic_as_labeled_fallback(monkeypatch):
+    pipeline_llm = _pipeline_llm_module()
     calls = []
 
-    monkeypatch.setattr("atlas_brain.pipelines.llm._activate_vllm", lambda: None)
+    monkeypatch.setattr(pipeline_llm, "_activate_vllm", lambda: None)
 
     def _fake_activate_anthropic(*, fallback_from=None):
         calls.append(fallback_from)
         return object()
 
-    monkeypatch.setattr("atlas_brain.pipelines.llm._activate_anthropic", _fake_activate_anthropic)
+    monkeypatch.setattr(pipeline_llm, "_activate_anthropic", _fake_activate_anthropic)
 
-    llm = get_pipeline_llm(workload="vllm", auto_activate_ollama=False)
+    llm = pipeline_llm.get_pipeline_llm(workload="vllm", auto_activate_ollama=False)
 
     assert llm is not None
     assert calls == ["vLLM"]

@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import importlib.util
 import json
-from datetime import UTC, datetime, timedelta
+from datetime import UTC, datetime
 from pathlib import Path
 
 SCRIPT = Path(__file__).resolve().parents[1] / "scripts" / "check_ai_reconciliation_live.py"
@@ -76,17 +76,6 @@ def changed_file(
     return item
 
 
-def changed_file_proof(c, files=None, *, base="base-a", head="head-a", merge_base=None, expected_count=None):
-    file_list = list(files if files is not None else [changed_file("docs/a.md")])
-    return c.ChangedFileProof(
-        base_sha=base,
-        head_sha=head,
-        merge_base_sha=merge_base or "a" * 40,
-        expected_count=len(file_list) if expected_count is None else expected_count,
-        files=file_list,
-    )
-
-
 BODY_CLEAR = "## AI reconciliation\n- All fixed or waived: Yes\n"
 BODY_NO_FINDINGS = "## AI reconciliation\n- no-findings\n"
 BODY_OPEN = "## AI reconciliation\n- fixed or waived: No\n"
@@ -132,6 +121,10 @@ def test_supported_review_events_retrigger_required_live_context():
     assert "head_sha=$(gh api" not in text
     assert "head_sha=${head_sha}" in text
     assert "actions/runs/${run_id}/rerun" in text
+    assert "timeout-minutes: 15" in text
+    assert "target run ${run_id} is ${status:-unknown}" in text
+    assert "actions/runs/${run_id}\" --jq '.status // empty'" in text
+    assert "rerun request for ${run_id} was rejected" in text
 
 
 # --- open_bot_threads filtering -------------------------------------------
@@ -440,7 +433,7 @@ def test_missing_current_head_codex_review_passes_when_threads_are_clear():
     assert any("no open scoped Codex review threads remain" in msg for msg in msgs)
 
 
-def test_missing_current_head_codex_review_waits_inside_fresh_update_window():
+def test_missing_current_head_codex_review_passes_inside_fresh_update_window():
     c = load_check()
     code, msgs = c.evaluate(
         [thread(resolved=True)],
@@ -453,8 +446,8 @@ def test_missing_current_head_codex_review_waits_inside_fresh_update_window():
         now=datetime(2026, 7, 30, 18, 2, tzinfo=UTC),
     )
 
-    assert code == 1
-    assert any("waiting for Codex connector review window" in msg for msg in msgs)
+    assert code == 0
+    assert any("no open scoped Codex review threads remain" in msg for msg in msgs)
 
 
 def test_missing_current_head_codex_review_passes_after_fresh_update_window():
@@ -487,10 +480,10 @@ def test_docs_only_no_open_threads_passes_without_current_head_review():
     )
 
     assert code == 0
-    assert any("docs-only PR diff has no open scoped Codex review threads" in msg for msg in msgs)
+    assert any("no open scoped Codex review threads remain" in msg for msg in msgs)
 
 
-def test_docs_only_current_head_change_request_still_fails_with_valid_file_proof():
+def test_docs_only_current_head_change_request_does_not_block_without_open_threads():
     c = load_check()
     code, msgs = c.evaluate(
         [thread(resolved=True)],
@@ -502,9 +495,8 @@ def test_docs_only_current_head_change_request_still_fails_with_valid_file_proof
         head_sha="head-a",
     )
 
-    assert code == 1
-    assert any("requested changes" in msg for msg in msgs)
-    assert not any("docs-only PR diff" in msg for msg in msgs)
+    assert code == 0
+    assert any("no open scoped Codex review threads remain" in msg for msg in msgs)
 
 
 def test_docs_only_non_markdown_diff_passes_when_threads_are_clear():
@@ -539,7 +531,7 @@ def test_docs_only_open_codex_thread_still_fails_without_ai_record():
     assert any("atlas_brain/x.py:12" in msg for msg in msgs)
 
 
-def test_current_head_changes_requested_review_fails_even_without_open_threads():
+def test_current_head_changes_requested_review_does_not_block_without_open_threads():
     c = load_check()
     code, msgs = c.evaluate(
         [thread(resolved=True)],
@@ -549,8 +541,8 @@ def test_current_head_changes_requested_review_fails_even_without_open_threads()
         head_sha="head-a",
     )
 
-    assert code == 1
-    assert any("requested changes" in msg for msg in msgs)
+    assert code == 0
+    assert any("no open scoped Codex review threads remain" in msg for msg in msgs)
 
 
 def test_current_head_codex_review_plus_no_open_threads_passes():
@@ -581,39 +573,7 @@ def test_current_head_clean_review_comment_plus_no_open_threads_passes():
     assert any("no open scoped Codex review threads remain" in msg for msg in msgs)
 
 
-def test_docs_only_exemption_skips_file_proof_when_current_head_review_already_present():
-    c = load_check()
-
-    assert (
-        c.docs_only_exemption_needs_file_proof(
-            [thread(resolved=True)],
-            BODY_DOCS_ONLY,
-            BOTS,
-            reviews=[review(commit="head-a")],
-            comments=[],
-            head_sha="head-a",
-        )
-        is False
-    )
-
-
-def test_docs_only_exemption_needs_file_proof_for_watcher_signal():
-    c = load_check()
-
-    assert (
-        c.docs_only_exemption_needs_file_proof(
-            [thread(resolved=True)],
-            BODY_DOCS_ONLY,
-            BOTS,
-            reviews=[],
-            comments=[],
-            head_sha="head-a",
-        )
-        is True
-    )
-
-
-def test_changes_requested_review_overrides_clean_review_comment():
+def test_changes_requested_review_does_not_override_clean_review_comment_without_open_threads():
     c = load_check()
     code, msgs = c.evaluate(
         [thread(resolved=True)],
@@ -624,8 +584,8 @@ def test_changes_requested_review_overrides_clean_review_comment():
         head_sha="abc1234567890",
     )
 
-    assert code == 1
-    assert any("requested changes" in msg for msg in msgs)
+    assert code == 0
+    assert any("no open scoped Codex review threads remain" in msg for msg in msgs)
 
 
 # --- main() via injection (no live GitHub) --------------------------------
@@ -717,15 +677,15 @@ def test_main_accepts_docs_only_without_current_head_review_when_threads_clear(t
     ) == 0
 
 
-def test_main_malformed_review_window_config_exit_2(monkeypatch, tmp_path):
+def test_main_ignores_malformed_review_window_config(monkeypatch, tmp_path):
     monkeypatch.setenv("ATLAS_CODEX_REVIEW_GRACE_SECONDS", "not-an-int")
     c = load_check()
     tf = tmp_path / "threads.json"
     tf.write_text(json.dumps([thread(resolved=True)]), encoding="utf-8")
     bf = tmp_path / "body.md"
-    bf.write_text(BODY_CLEAR, encoding="utf-8")
+    bf.write_text(BODY_COVERS_DEFAULT_THREAD, encoding="utf-8")
 
-    assert c.main(["--threads-file", str(tf), "--body-file", str(bf)]) == 2
+    assert c.main(["--threads-file", str(tf), "--body-file", str(bf)]) == 0
 
 
 def test_main_malformed_pr_updated_at_exit_2(tmp_path):
@@ -749,14 +709,12 @@ def test_main_malformed_pr_updated_at_exit_2(tmp_path):
     ) == 2
 
 
-def test_main_live_default_does_not_sleep_inside_review_window(monkeypatch, tmp_path):
+def test_main_live_default_does_not_refetch_inside_review_window(monkeypatch, tmp_path):
     c = load_check()
-    fresh_updated_at = (datetime.now(UTC) - timedelta(seconds=299)).isoformat().replace("+00:00", "Z")
     snapshots = [
         ([thread(resolved=True)], "head-a", [], []),
         ([thread(resolved=True)], "head-a", [], []),
     ]
-    sleeps = []
     bf = tmp_path / "body.md"
     bf.write_text(BODY_COVERS_DEFAULT_THREAD, encoding="utf-8")
 
@@ -765,24 +723,18 @@ def test_main_live_default_does_not_sleep_inside_review_window(monkeypatch, tmp_
 
     monkeypatch.setattr(c, "fetch_consistent_review_thread_snapshot", fake_snapshot)
     monkeypatch.setattr(c, "fetch_body", lambda pr, repo, gh: BODY_COVERS_DEFAULT_THREAD)
-    monkeypatch.setattr(c, "fetch_pr_updated_at", lambda pr, repo, gh: fresh_updated_at)
-    monkeypatch.setattr(c.time, "sleep", lambda seconds: sleeps.append(seconds))
+    monkeypatch.setattr(c, "fetch_pr_updated_at", lambda *args, **kwargs: (_ for _ in ()).throw(AssertionError()))
 
-    assert c.main(["--pr", "1431", "--repo", "owner/name", "--body-file", str(bf), "--gh", "gh"]) == 1
-    assert sleeps == []
+    assert c.main(["--pr", "1431", "--repo", "owner/name", "--body-file", str(bf), "--gh", "gh"]) == 0
     assert len(snapshots) == 1
 
 
-def test_main_live_waits_and_refetches_after_review_window(monkeypatch, tmp_path):
+def test_main_live_wait_flag_is_noop_inside_review_window(monkeypatch, tmp_path):
     c = load_check()
-    fresh_updated_at = (datetime.now(UTC) - timedelta(seconds=299)).isoformat().replace("+00:00", "Z")
-    stale_updated_at = (datetime.now(UTC) - timedelta(seconds=301)).isoformat().replace("+00:00", "Z")
     snapshots = [
         ([thread(resolved=True)], "head-a", [], []),
         ([thread(resolved=True)], "head-a", [], []),
     ]
-    updated_at_values = [fresh_updated_at, stale_updated_at]
-    sleeps = []
     bf = tmp_path / "body.md"
     bf.write_text(BODY_COVERS_DEFAULT_THREAD, encoding="utf-8")
 
@@ -791,8 +743,7 @@ def test_main_live_waits_and_refetches_after_review_window(monkeypatch, tmp_path
 
     monkeypatch.setattr(c, "fetch_consistent_review_thread_snapshot", fake_snapshot)
     monkeypatch.setattr(c, "fetch_body", lambda pr, repo, gh: BODY_COVERS_DEFAULT_THREAD)
-    monkeypatch.setattr(c, "fetch_pr_updated_at", lambda pr, repo, gh: updated_at_values.pop(0))
-    monkeypatch.setattr(c.time, "sleep", lambda seconds: sleeps.append(seconds))
+    monkeypatch.setattr(c, "fetch_pr_updated_at", lambda *args, **kwargs: (_ for _ in ()).throw(AssertionError()))
 
     assert c.main(
         [
@@ -807,26 +758,20 @@ def test_main_live_waits_and_refetches_after_review_window(monkeypatch, tmp_path
             "--wait-for-review-window",
         ]
     ) == 0
-    assert len(sleeps) == 1
-    assert not snapshots
-    assert not updated_at_values
+    assert len(snapshots) == 1
 
 
-def test_main_live_fetch_fails_when_review_generation_changes(monkeypatch, tmp_path):
+def test_main_live_fetch_does_not_call_review_or_comment_attestation(monkeypatch, tmp_path):
     c = load_check()
     bf = tmp_path / "body.md"
     bf.write_text(BODY_CLEAR, encoding="utf-8")
-    calls = {"reviews": 0}
 
     def fake_gh(args, gh):
         query = " ".join(args)
         if "reviews(first:100" in query:
-            calls["reviews"] += 1
-            if calls["reviews"] == 1:
-                return _review_page([], has_next=False)
-            return _review_page([review()], has_next=False)
+            raise AssertionError("thread-only live fetch must not call reviews")
         if "comments(first:100" in query:
-            return _comment_page([], has_next=False)
+            raise AssertionError("thread-only live fetch must not call comments")
         if "reviewThreads" in query:
             return _page([], has_next=False)
         if "/pulls/1431/files" in query:
@@ -835,11 +780,10 @@ def test_main_live_fetch_fails_when_review_generation_changes(monkeypatch, tmp_p
 
     monkeypatch.setattr(c, "_gh", fake_gh)
 
-    assert c.main(["--pr", "1431", "--repo", "owner/name", "--body-file", str(bf), "--gh", "gh"]) == 2
-    assert calls["reviews"] == 3
+    assert c.main(["--pr", "1431", "--repo", "owner/name", "--body-file", str(bf), "--gh", "gh"]) == 0
 
 
-def test_main_fetches_file_proof_for_docs_only_watcher_signal(monkeypatch, tmp_path):
+def test_main_does_not_fetch_file_proof_for_docs_only_no_thread_signal(monkeypatch, tmp_path):
     c = load_check()
     bf = tmp_path / "body.md"
     bf.write_text(BODY_DOCS_ONLY, encoding="utf-8")
@@ -849,9 +793,8 @@ def test_main_fetches_file_proof_for_docs_only_watcher_signal(monkeypatch, tmp_p
         "fetch_consistent_review_thread_snapshot",
         lambda pr, owner, name, gh, bot_logins: ([thread(resolved=True)], "head-a", [], []),
     )
-    monkeypatch.setattr(c, "fetch_changed_file_proof", lambda pr, repo, gh, head_sha=None: changed_file_proof(c))
-    monkeypatch.setattr(c, "fetch_pr_refs", lambda pr, repo, gh: ("base-a", "head-a", 1))
-    monkeypatch.setattr(c, "fetch_pr_updated_at", lambda pr, repo, gh: "2026-07-30T18:00:00Z")
+    monkeypatch.setattr(c, "fetch_changed_file_proof", lambda *args, **kwargs: (_ for _ in ()).throw(AssertionError()))
+    monkeypatch.setattr(c, "fetch_pr_updated_at", lambda *args, **kwargs: (_ for _ in ()).throw(AssertionError()))
     monkeypatch.setattr(c, "fetch_body", lambda pr, repo, gh: BODY_DOCS_ONLY)
 
     assert c.main(["--pr", "1431", "--repo", "owner/name", "--body-file", str(bf), "--gh", "gh"]) == 0
@@ -868,7 +811,7 @@ def test_main_does_not_fetch_file_proof_for_non_docs_body(monkeypatch, tmp_path)
         lambda pr, owner, name, gh, bot_logins: ([thread(resolved=True)], "head-a", [review(commit="head-a")], []),
     )
     monkeypatch.setattr(c, "fetch_changed_file_proof", lambda *args, **kwargs: (_ for _ in ()).throw(AssertionError()))
-    monkeypatch.setattr(c, "fetch_pr_updated_at", lambda pr, repo, gh: "2026-07-30T18:00:00Z")
+    monkeypatch.setattr(c, "fetch_pr_updated_at", lambda *args, **kwargs: (_ for _ in ()).throw(AssertionError()))
 
     assert c.main(["--pr", "1431", "--repo", "owner/name", "--body-file", str(bf), "--gh", "gh"]) == 0
 
@@ -1127,12 +1070,15 @@ def test_main_legacy_bot_alias_exit_2(tmp_path):
 
 # --- pagination: a thread past the first page must not be missed -----------
 
-def _page(nodes, *, has_next, cursor=None):
+def _page(nodes, *, head="head-a", has_next, cursor=None):
     return json.dumps(
-        {"data": {"repository": {"pullRequest": {"reviewThreads": {
-            "pageInfo": {"hasNextPage": has_next, "endCursor": cursor},
-            "nodes": nodes,
-        }}}}}
+        {"data": {"repository": {"pullRequest": {
+            "headRefOid": head,
+            "reviewThreads": {
+                "pageInfo": {"hasNextPage": has_next, "endCursor": cursor},
+                "nodes": nodes,
+            },
+        }}}}
     )
 
 
@@ -1209,10 +1155,13 @@ def test_fetch_threads_malformed_page_info_fails_closed(monkeypatch):
         c,
         "_gh",
         lambda args, gh: json.dumps(
-            {"data": {"repository": {"pullRequest": {"reviewThreads": {
-                "pageInfo": {},
-                "nodes": [],
-            }}}}}
+            {"data": {"repository": {"pullRequest": {
+                "headRefOid": "head-a",
+                "reviewThreads": {
+                    "pageInfo": {},
+                    "nodes": [],
+                },
+            }}}}
         ),
     )
 
@@ -1235,6 +1184,29 @@ def test_fetch_threads_page_cap_exhaustion_fails_closed(monkeypatch):
         assert "pagination exceeded 1 pages" in str(exc)
     else:  # pragma: no cover - assertion clarity
         raise AssertionError("pagination cap exhaustion must fail closed")
+
+
+def test_fetch_thread_snapshot_head_change_fails_closed(monkeypatch):
+    c = load_check()
+    pages = [
+        _page([], head="head-a", has_next=True, cursor="C1"),
+        _page([], head="head-b", has_next=False),
+    ]
+    seen = {"n": 0}
+
+    def fake_gh(args, gh):
+        out = pages[seen["n"]]
+        seen["n"] += 1
+        return out
+
+    monkeypatch.setattr(c, "_gh", fake_gh)
+
+    try:
+        c.fetch_thread_snapshot(1431, "owner", "name", "gh")
+    except RuntimeError as exc:
+        assert "changed PR head" in str(exc)
+    else:  # pragma: no cover - assertion clarity
+        raise AssertionError("head changes during thread pagination must fail closed")
 
 
 def test_fetch_review_attestation_paginates(monkeypatch):
@@ -1303,24 +1275,15 @@ def test_fetch_review_attestation_head_change_fails_closed(monkeypatch):
         raise AssertionError("head changes during review pagination must fail closed")
 
 
-def test_consistent_snapshot_refetches_threads_after_attestation(monkeypatch):
+def test_consistent_snapshot_refetches_threads(monkeypatch):
     c = load_check()
-    calls = {"reviews": 0, "threads": 0}
+    calls = {"snapshots": 0}
 
-    def fake_fetch_reviews(pr, owner, name, gh):
-        calls["reviews"] += 1
-        return "head-a", [review(commit="head-a")]
+    def fake_fetch_thread_snapshot(pr, owner, name, gh):
+        calls["snapshots"] += 1
+        return "head-a", [thread(path=f"snapshot-{calls['snapshots']}.py")]
 
-    def fake_fetch_comments(pr, owner, name, gh):
-        return "head-a", []
-
-    def fake_fetch_threads(pr, owner, name, gh):
-        calls["threads"] += 1
-        return [thread(path=f"snapshot-{calls['threads']}.py")]
-
-    monkeypatch.setattr(c, "fetch_review_attestation", fake_fetch_reviews)
-    monkeypatch.setattr(c, "fetch_comment_attestation", fake_fetch_comments)
-    monkeypatch.setattr(c, "fetch_threads", fake_fetch_threads)
+    monkeypatch.setattr(c, "fetch_thread_snapshot", fake_fetch_thread_snapshot)
 
     try:
         c.fetch_consistent_review_thread_snapshot(1431, "owner", "name", "gh", BOTS)
@@ -1328,46 +1291,46 @@ def test_consistent_snapshot_refetches_threads_after_attestation(monkeypatch):
         assert "review thread generation changed" in str(exc)
     else:  # pragma: no cover - assertion clarity
         raise AssertionError("thread movement during snapshot fetch must fail closed")
-    assert calls == {"reviews": 3, "threads": 2}
+    assert calls == {"snapshots": 2}
 
 
-def test_consistent_snapshot_fails_when_review_generation_changes(monkeypatch):
+def test_consistent_snapshot_does_not_fetch_reviews(monkeypatch):
     c = load_check()
-    seen = {"reviews": 0}
 
-    def fake_fetch_reviews(pr, owner, name, gh):
-        seen["reviews"] += 1
-        state = "COMMENTED" if seen["reviews"] == 1 else "CHANGES_REQUESTED"
-        return "head-a", [review(commit="head-a", state=state)]
+    monkeypatch.setattr(c, "fetch_review_attestation", lambda *args, **kwargs: (_ for _ in ()).throw(AssertionError()))
+    monkeypatch.setattr(c, "fetch_comment_attestation", lambda *args, **kwargs: (_ for _ in ()).throw(AssertionError()))
+    monkeypatch.setattr(c, "fetch_thread_snapshot", lambda pr, owner, name, gh: ("head-a", [thread()]))
 
-    monkeypatch.setattr(c, "fetch_review_attestation", fake_fetch_reviews)
-    monkeypatch.setattr(c, "fetch_comment_attestation", lambda pr, owner, name, gh: ("head-a", []))
-    monkeypatch.setattr(c, "fetch_threads", lambda pr, owner, name, gh: [thread()])
+    nodes, head, reviews, comments = c.fetch_consistent_review_thread_snapshot(
+        1431,
+        "owner",
+        "name",
+        "gh",
+        BOTS,
+    )
 
-    try:
-        c.fetch_consistent_review_thread_snapshot(1431, "owner", "name", "gh", BOTS)
-    except RuntimeError as exc:
-        assert "Codex review generation changed" in str(exc)
-    else:  # pragma: no cover - assertion clarity
-        raise AssertionError("review movement during snapshot fetch must fail closed")
+    assert nodes == [thread()]
+    assert head == "head-a"
+    assert reviews == []
+    assert comments == []
 
 
-def test_consistent_snapshot_fails_when_clean_comment_generation_changes(monkeypatch):
+def test_consistent_snapshot_does_not_fetch_comments(monkeypatch):
     c = load_check()
-    seen = {"comments": 0}
 
-    def fake_fetch_comments(pr, owner, name, gh):
-        seen["comments"] += 1
-        comments = [] if seen["comments"] == 1 else [pr_comment(commit="abc1234567")]
-        return "abc1234567890", comments
+    monkeypatch.setattr(c, "fetch_review_attestation", lambda *args, **kwargs: (_ for _ in ()).throw(AssertionError()))
+    monkeypatch.setattr(c, "fetch_comment_attestation", lambda *args, **kwargs: (_ for _ in ()).throw(AssertionError()))
+    monkeypatch.setattr(c, "fetch_thread_snapshot", lambda pr, owner, name, gh: ("abc1234567890", [thread()]))
 
-    monkeypatch.setattr(c, "fetch_review_attestation", lambda pr, owner, name, gh: ("abc1234567890", []))
-    monkeypatch.setattr(c, "fetch_comment_attestation", fake_fetch_comments)
-    monkeypatch.setattr(c, "fetch_threads", lambda pr, owner, name, gh: [thread()])
+    nodes, head, reviews, comments = c.fetch_consistent_review_thread_snapshot(
+        1431,
+        "owner",
+        "name",
+        "gh",
+        BOTS,
+    )
 
-    try:
-        c.fetch_consistent_review_thread_snapshot(1431, "owner", "name", "gh", BOTS)
-    except RuntimeError as exc:
-        assert "Codex review generation changed" in str(exc)
-    else:  # pragma: no cover - assertion clarity
-        raise AssertionError("comment movement during snapshot fetch must fail closed")
+    assert nodes == [thread()]
+    assert head == "abc1234567890"
+    assert reviews == []
+    assert comments == []

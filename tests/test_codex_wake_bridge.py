@@ -280,11 +280,6 @@ def test_github_read_errors_override_scheduled_ready(
             "unresolved review threads remain: 1",
         ),
         (
-            {"review_decision": "CHANGES_REQUESTED"},
-            {"reviewDecision": "CHANGES_REQUESTED"},
-            "has changes requested",
-        ),
-        (
             {"review_decision": "APPROVED"},
             {},
             "review decision does not match PR metadata",
@@ -363,9 +358,6 @@ def test_malformed_readiness_objects_fail_closed(
     [
         ("pr", "headRefOid", "PR head SHA is missing"),
         ("readiness", "review_decision", "review decision evidence is missing"),
-        ("readiness", "codex_reviews_complete", "Codex review pagination is incomplete"),
-        ("readiness", "codex_review_pages_fetched", "Codex review pages fetched must be at least 1"),
-        ("readiness", "codex_head_review_count", "current-head Codex review attestation is missing"),
         ("pr", "reviewDecision", "review decision evidence is missing"),
         ("readiness", "merge_state_status", "merge state must be CLEAN"),
     ],
@@ -383,15 +375,49 @@ def test_missing_readiness_evidence_fails_closed(
     assert expected in bridge.readiness_blockers(status)
 
 
-def test_docs_only_reconciliation_exemption_satisfies_codex_review_attestation(
+def test_codex_review_attestation_is_not_required_for_ready_state(
     tmp_path: Path,
 ) -> None:
     _config_dir, state_dir, watcher_id = _write_fixture(tmp_path)
     status = json.loads((state_dir / f"{watcher_id}.json").read_text(encoding="utf-8"))
     status["readiness"]["codex_head_review_count"] = 0
-    status["readiness"]["docs_only_reconciliation_exemption"] = True
+    status["readiness"]["docs_only_reconciliation_exemption"] = False
 
     assert bridge.readiness_blockers(status) == []
+
+
+def test_codex_review_attestation_error_is_diagnostic_for_ready_state(
+    tmp_path: Path,
+) -> None:
+    config_dir, state_dir, watcher_id = _write_fixture(
+        tmp_path,
+        extra_status={"codex_reviews_error": "review pagination exceeded 1 pages"},
+    )
+    status_path = state_dir / f"{watcher_id}.json"
+    status = json.loads(status_path.read_text(encoding="utf-8"))
+    status["readiness"]["codex_reviews_complete"] = False
+    status["readiness"]["codex_review_pages_fetched"] = 1
+    status["readiness"]["codex_head_review_count"] = 0
+    status_path.write_text(json.dumps(status), encoding="utf-8")
+
+    assert bridge.attention_blockers(status) == []
+    assert bridge.readiness_blockers(status) == []
+
+    code = bridge.main([
+        watcher_id,
+        "--source",
+        "scheduled",
+        "--config-dir",
+        str(config_dir),
+        "--state-dir",
+        str(state_dir),
+    ])
+
+    assert code == 0
+    payload, prompt = _read_handoff(state_dir, watcher_id)
+    assert payload["wake_kind"] == "scheduled-ready"
+    assert payload["actionable"] is True
+    assert "Scheduled green-confirmation wake" in prompt
 
 
 def test_malformed_status_fails_closed_to_attention_handoff(tmp_path: Path) -> None:
