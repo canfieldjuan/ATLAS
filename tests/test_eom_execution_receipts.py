@@ -136,6 +136,27 @@ def test_indeterminate_mutation_keeps_in_progress_and_no_final(tmp_path):
     assert _payload(receipt.in_progress_path)["indeterminate"] is True
 
 
+def test_indeterminate_mutation_note_is_attached_to_original_interrupt(tmp_path):
+    receipt = EomExecutionReceipt(
+        receipt_dir=tmp_path,
+        tool="import_eom_customers_live",
+        mode="write",
+        script_path=REPO / "scripts" / "import_eom_customers_live.py",
+        receipt_id=UUID_A,
+    )
+
+    async def interrupted():
+        async with receipt.mutation_boundary():
+            raise KeyboardInterrupt
+
+    with pytest.raises(KeyboardInterrupt) as raised:
+        run_receipted(receipt, lambda: asyncio.run(interrupted()))
+
+    assert "left in-progress receipt" in "\n".join(
+        getattr(raised.value, "__notes__", [])
+    )
+
+
 def test_ordinary_mutation_exception_finalizes_failure_receipt(tmp_path):
     receipt = EomExecutionReceipt(
         receipt_dir=tmp_path,
@@ -183,11 +204,15 @@ class _ReceiptSpy:
         self.changed = []
         self.counts = []
         self.demotions = None
+        self.boundary_open = False
+        self.changed_recorded_inside_boundary = []
 
     async def __aenter__(self):
+        self.boundary_open = True
         return self
 
     async def __aexit__(self, *_exc):
+        self.boundary_open = False
         return False
 
     def mutation_boundary(self):
@@ -195,6 +220,7 @@ class _ReceiptSpy:
 
     def record_changed_contact_id(self, contact_id):
         self.changed.append(str(contact_id))
+        self.changed_recorded_inside_boundary.append(self.boundary_open)
 
     def record_outcome_counts(self, counts):
         self.counts.append(dict(counts))
@@ -224,6 +250,8 @@ def test_calendar_import_records_changed_contacts_and_counts():
     )
     assert outcome == "created"
     assert UUID_A in receipt.changed
+    assert receipt.changed_recorded_inside_boundary
+    assert all(receipt.changed_recorded_inside_boundary)
 
     counts = asyncio.run(
         calendar_import.run_import([], dry_run=True, receipt=receipt)
@@ -277,4 +305,6 @@ def test_portal_sync_records_changed_contacts_and_demotion_totals():
     )
     assert (demoted, eligible) == (1, 2)
     assert UUID_B in receipt.changed
+    assert receipt.changed_recorded_inside_boundary
+    assert all(receipt.changed_recorded_inside_boundary)
     assert receipt.demotions == {"demoted": 1, "eligible": 2, "kept": 1}

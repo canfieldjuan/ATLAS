@@ -536,11 +536,14 @@ async def _search_channel(crm, **channel):
     return (legacy[0], True) if legacy else (None, False)
 
 
-async def _await_receipted_mutation(receipt, awaitable):
+async def _await_receipted_mutation(receipt, awaitable, *, changed_contact_id_from=None):
     if receipt is None:
         return await awaitable
     async with receipt.mutation_boundary():
-        return await awaitable
+        result = await awaitable
+        if changed_contact_id_from is not None:
+            _record_receipt_contact(receipt, changed_contact_id_from(result))
+        return result
 
 
 def _record_receipt_contact(receipt, contact_id) -> None:
@@ -598,16 +601,17 @@ async def import_one(rec, crm, pool, receipt=None) -> str:
                 require_import_source=claim_by_address,
                 identity=matched_identity,
             ),
+            changed_contact_id_from=lambda row: row and row["id"],
         )
-        if existing is not None:
-            _record_receipt_contact(receipt, existing["id"])
 
     if existing is not None:
         contact_id, outcome = await _await_receipted_mutation(
-            receipt, _update_matched(pool, existing, data)
+            receipt,
+            _update_matched(pool, existing, data),
+            changed_contact_id_from=(
+                lambda result: result[0] if result[1] == "updated" else None
+            ),
         )
-        if outcome == "updated":
-            _record_receipt_contact(receipt, contact_id)
     else:
         create_data = dict(data)
         # create_contact can still race-merge into a contact created
@@ -617,12 +621,15 @@ async def import_one(rec, crm, pool, receipt=None) -> str:
         create_data.pop("source", None)
         create_data.pop("tags", None)
         result = await _await_receipted_mutation(
-            receipt, crm.create_contact(create_data)
+            receipt,
+            crm.create_contact(create_data),
+            changed_contact_id_from=(
+                lambda row: row.get("id") if row.get("_was_created") else None
+            ),
         )
         if result.get("_was_created"):
             contact_id = str(result.get("id", ""))
             outcome = "created"
-            _record_receipt_contact(receipt, contact_id)
             if contact_id:
                 stamp = await _await_receipted_mutation(
                     receipt,
@@ -643,10 +650,14 @@ async def import_one(rec, crm, pool, receipt=None) -> str:
             # Race-merged: reconcile exactly like any matched contact
             # (Codex round 7, R1/R8).
             contact_id, outcome = await _await_receipted_mutation(
-                receipt, _update_matched(pool, result, data)
+                receipt,
+                _update_matched(pool, result, data),
+                changed_contact_id_from=(
+                    lambda update_result: (
+                        update_result[0] if update_result[1] == "updated" else None
+                    )
+                ),
             )
-            if outcome == "updated":
-                _record_receipt_contact(receipt, contact_id)
 
     if contact_id and rec.last_event_date and outcome != "skipped":
         # The archive can land after the contact write but before this log:
@@ -665,7 +676,7 @@ async def import_one(rec, crm, pool, receipt=None) -> str:
         # source_ref inside metadata is a dedupe anchor (migration 256): the
         # same address never accumulates duplicate import interactions across
         # re-runs.
-        interaction = await _await_receipted_mutation(
+        await _await_receipted_mutation(
             receipt,
             crm.log_interaction(
                 contact_id=contact_id,
@@ -694,9 +705,10 @@ async def import_one(rec, crm, pool, receipt=None) -> str:
                     )
                 },
             ),
+            changed_contact_id_from=(
+                lambda row: contact_id if row.get("inserted") is True else None
+            ),
         )
-        if interaction.get("inserted") is True:
-            _record_receipt_contact(receipt, contact_id)
     return outcome
 
 

@@ -167,7 +167,7 @@ Parked hardening: none.
 ## Verification
 
 - `python -m py_compile scripts/eom_execution_receipt.py scripts/import_eom_customers_live.py scripts/sync_eom_portal_customers.py tests/test_eom_execution_receipts.py tests/test_sync_eom_portal_customers.py` — passed.
-- `python -m pytest tests/test_eom_execution_receipts.py tests/test_eom_live_calendar_import.py tests/test_sync_eom_portal_customers.py -q` — 116 passed.
+- `python -m pytest tests/test_eom_execution_receipts.py tests/test_eom_live_calendar_import.py tests/test_sync_eom_portal_customers.py -q` — 117 passed.
 - `python -m ruff check scripts/eom_execution_receipt.py scripts/import_eom_customers_live.py scripts/sync_eom_portal_customers.py tests/test_eom_execution_receipts.py tests/test_sync_eom_portal_customers.py` — passed.
 - `python scripts/maturity_sweep.py scripts --tests-root tests --baseline tests/maturity_sweep/baseline_scripts.json --min-score 8 --top 25` — passed.
 
@@ -178,8 +178,8 @@ Parked hardening: none.
 | `docs/EOM_RECONCILIATION_RECEIPTS.md` | 31 |
 | `plans/PR-EOM-Execution-Receipts-V2.md` | 182 |
 | `scripts/eom_execution_receipt.py` | 293 |
-| `scripts/import_eom_customers_live.py` | 172 |
-| `scripts/sync_eom_portal_customers.py` | 132 |
-| `tests/test_eom_execution_receipts.py` | 280 |
-| `tests/test_sync_eom_portal_customers.py` | 51 |
-| **Total** | **1141** |
+| `scripts/import_eom_customers_live.py` | 184 |
+| `scripts/sync_eom_portal_customers.py` | 153 |
+| `tests/test_eom_execution_receipts.py` | 310 |
+| `tests/test_sync_eom_portal_customers.py` | 62 |
+| **Total** | **1218** |

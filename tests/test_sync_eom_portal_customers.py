@@ -525,6 +525,14 @@ def test_apply_entrypoint_aborts_roster_collision_before_sync(monkeypatch):
             return None
 
     pool = Pool(rows=[None, None])
+    class Receipt:
+        def __init__(self):
+            self.counts = []
+
+        def record_outcome_counts(self, counts):
+            self.counts.append(dict(counts))
+
+    receipt = Receipt()
     monkeypatch.setattr(httpx, "Client", Client)
     monkeypatch.setattr(sync_mod, "portal_login", lambda *_args: "token")
     monkeypatch.setattr(
@@ -547,12 +555,13 @@ def test_apply_entrypoint_aborts_roster_collision_before_sync(monkeypatch):
         result = asyncio.run(sync_mod.run(SimpleNamespace(
             apply=True,
             base_url="https://example.invalid",
-        )))
+        ), receipt=receipt))
     finally:
         database_mod._db_pool = previous_pool
     assert result == 1
     assert sync_calls == []
     assert pool.updates == [] and pool.atomic_writes == []
+    assert receipt.counts[-1]["errors"] == 1
 
 
 def test_apply_run_persists_calendar_guard_error_counts(monkeypatch):

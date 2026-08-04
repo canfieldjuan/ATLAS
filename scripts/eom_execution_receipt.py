@@ -285,8 +285,8 @@ def run_receipted(receipt: EomExecutionReceipt | None, operation) -> int:
         if receipt is not None:
             try:
                 receipt.finalize(exit_code_for_exception(exc))
-            except IndeterminateMutation as indeterminate:
-                indeterminate.add_note("left in-progress receipt for operator review")
+            except IndeterminateMutation:
+                exc.add_note("left in-progress receipt for operator review")
         raise
     if receipt is not None:
         receipt.finalize(exit_code)

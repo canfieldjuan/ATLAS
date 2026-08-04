@@ -49,11 +49,14 @@ DEMOTABLE_SOURCES = ("calendar_import", "portal_sync")
 MANAGED_TAGS = {"portal", "residential", "commercial", "one_time", "past_customer"}
 
 
-async def _await_receipted_mutation(receipt, awaitable):
+async def _await_receipted_mutation(receipt, awaitable, *, changed_contact_id_from=None):
     if receipt is None:
         return await awaitable
     async with receipt.mutation_boundary():
-        return await awaitable
+        result = await awaitable
+        if changed_contact_id_from is not None:
+            _record_receipt_contact(receipt, changed_contact_id_from(result))
+        return result
 
 
 def _record_receipt_contact(receipt, contact_id) -> None:
@@ -513,21 +516,25 @@ async def sync_one(
                 needs_claim=needs_claim,
                 identity=identity,
             ),
+            changed_contact_id_from=(
+                lambda result: result[0] if result[1] == "updated" else None
+            ),
         )
         if outcome == "rejected":
             return "errors", None
-        if outcome == "updated":
-            _record_receipt_contact(receipt, contact_id)
     else:
         create_data = dict(data)
         create_data["metadata"] = {"portal_customer_id": portal_id}
         result = await _await_receipted_mutation(
-            receipt, crm.create_contact(create_data, merge_existing=False)
+            receipt,
+            crm.create_contact(create_data, merge_existing=False),
+            changed_contact_id_from=(
+                lambda row: row.get("id") if row.get("_was_created") else None
+            ),
         )
         contact_id = str(result.get("id", ""))
         if result.get("_was_created"):
             outcome = "created"
-            _record_receipt_contact(receipt, contact_id)
         else:
             race_identity = ("email", data["email"]) if data.get("email") else None
             contact_id, outcome = await _await_receipted_mutation(
@@ -540,11 +547,16 @@ async def sync_one(
                     needs_claim=False,
                     identity=race_identity,
                 ),
+                changed_contact_id_from=(
+                    lambda reconcile_result: (
+                        reconcile_result[0]
+                        if reconcile_result[1] == "updated"
+                        else None
+                    )
+                ),
             )
             if outcome == "rejected":
                 return "errors", None
-            if outcome == "updated":
-                _record_receipt_contact(receipt, contact_id)
     return outcome, contact_id
 
 
@@ -678,10 +690,10 @@ async def demote_unmatched(pool, matched_ids: set, apply: bool,
                 EOM_CONTEXT_ID,
                 list(DEMOTABLE_SOURCES),
             ),
+            changed_contact_id_from=lambda row: row and row["id"],
         )
         if result is not None:
             demoted += 1
-            _record_receipt_contact(receipt, row["id"])
     if kept:
         print(f"\n  {kept} calendar-active customer(s) kept; reconcile them "
               "in the portal.")
@@ -741,6 +753,9 @@ async def run(args, receipt=None) -> int:
                   f"name={c.get('name')!r}")
         print(f"\n  ABORTED: {len(invalid)} malformed portal record(s); "
               "nothing written.")
+        counts["errors"] += len(invalid)
+        if receipt is not None:
+            receipt.record_outcome_counts(counts)
         return 1
 
     resolutions = {}
@@ -751,6 +766,9 @@ async def run(args, receipt=None) -> int:
             )
         except Exception as e:  # noqa: BLE001 -- no writes have started
             print(f"\n  ABORTED: roster preflight failed ({e}); nothing written.")
+            counts["errors"] += 1
+            if receipt is not None:
+                receipt.record_outcome_counts(counts)
             return 1
         if collision_errors:
             for error in collision_errors:
@@ -759,6 +777,9 @@ async def run(args, receipt=None) -> int:
                 f"\n  ABORTED: {len(collision_errors)} roster collision(s); "
                 "nothing written."
             )
+            counts["errors"] += len(collision_errors)
+            if receipt is not None:
+                receipt.record_outcome_counts(counts)
             return 1
 
     matched_ids: set = set()
