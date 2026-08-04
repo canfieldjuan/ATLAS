@@ -200,6 +200,7 @@ fallback changes; otherwise write "N/A - no guard/config boundary change."
 - `atlas_brain/tools/calendar.py`
 - `plans/PR-EOM-Estimate-Booking-CurrentMain.md`
 - `render.eom.yaml`
+- `requirements.eom.txt`
 - `tests/test_eom_lead_conversion.py`
 - `tests/test_eom_lead_conversion_integration.py`
 - `tests/test_eom_lead_pipeline_integration.py`
@@ -317,12 +318,13 @@ Parked hardening: none.
 | `atlas_brain/tools/calendar.py` | 119 |
 | `plans/PR-EOM-Estimate-Booking-CurrentMain.md` | 483 |
 | `render.eom.yaml` | 10 |
+| `requirements.eom.txt` | 1 |
 | `tests/test_eom_lead_conversion.py` | 849 |
 | `tests/test_eom_lead_conversion_integration.py` | 847 |
 | `tests/test_eom_lead_pipeline_integration.py` | 7 |
 | `tests/test_eom_render_profile.py` | 15 |
 | `tests/test_migrations_runner.py` | 47 |
-| **Total** | **3631** |
+| **Total** | **3632** |
 
 ## Cold diff reconstruction
 
