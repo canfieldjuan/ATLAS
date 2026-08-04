@@ -57,6 +57,8 @@ def test_open_pr_existing_pr_rejects_create_only_args(tmp_path: Path) -> None:
         (["--body-file", "body.md"], {}, "pass the PR body as BODY_FILE"),
         (["--head", "other"], {}, "refusing target-changing create arg: --head"),
         (["--repo", "other/repo"], {}, "refusing target-changing create arg: --repo"),
+        (["--draft"], {}, "refusing draft PR without explicit operator consent"),
+        (["-d"], {}, "refusing draft PR without explicit operator consent"),
         (["--base", "release"], {}, "refusing non-main base: release"),
         (["-Brelease"], {}, "refusing non-main base: release"),
         ([], {"GH_REPO": "other/repo"}, "refusing GH_REPO target override"),
@@ -77,6 +79,19 @@ def test_open_pr_rejects_unsafe_inputs_before_gh(
     assert expected in result.stderr
     assert not log.exists()
     assert not stdin_capture.exists()
+
+
+def test_open_pr_forwards_draft_when_operator_consent_flag_is_set(tmp_path: Path) -> None:
+    repo, body, env, log, stdin_capture = _ready(tmp_path, view_exit=1)
+    env["ATLAS_OPEN_PR_DRAFT_CONSENT"] = "1"
+
+    result = _run(repo, env, body, "--draft", "--title", "Draft wrapper")
+
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert log.read_text(encoding="utf-8").strip() == (
+        "pr create --draft --title Draft wrapper --repo canfieldjuan/ATLAS --base main --body-file -"
+    )
+    assert stdin_capture.read_text(encoding="utf-8") == body.read_text(encoding="utf-8")
 
 
 def test_open_pr_rejects_invalid_body_before_gh(tmp_path: Path) -> None:

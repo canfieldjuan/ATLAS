@@ -18,6 +18,9 @@ Examples:
   bash scripts/open_pr.sh tmp/pr-body-my-slice.md --title "My slice" --base main
   bash scripts/open_pr.sh tmp/pr-body-my-slice.md
 
+Draft PRs require explicit operator consent:
+  ATLAS_OPEN_PR_DRAFT_CONSENT=1 bash scripts/open_pr.sh tmp/pr-body-my-slice.md --draft
+
 Use scripts/push_pr.sh before this wrapper to push the branch with the local
 review body env wired into the pre-push hook.
 
@@ -70,6 +73,13 @@ reject_target_overrides() {
             --head=*|--repo=*|-H*|-R*)
                 echo "open_pr.sh: refusing target-changing create arg: $arg" >&2
                 exit 2
+                ;;
+            --draft|-d)
+                if [ "${ATLAS_OPEN_PR_DRAFT_CONSENT:-}" != "1" ]; then
+                    echo "open_pr.sh: refusing draft PR without explicit operator consent: $arg" >&2
+                    echo "Set ATLAS_OPEN_PR_DRAFT_CONSENT=1 only when the operator asked for a draft." >&2
+                    exit 2
+                fi
                 ;;
             --base|-B)
                 if [ "$#" -eq 0 ]; then
