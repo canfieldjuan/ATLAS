@@ -52,6 +52,11 @@ from pathlib import Path
 # ids whole even when the params contain " - ". (Nested [] inside params is not
 # handled -- vanishingly rare for pytest ids.)
 _SUMMARY_RE = re.compile(r"^(?:FAILED|ERROR)\s+(?P<node>[^\s\[]+(?:\[[^\]]*\])?)")
+_OUTCOME_COUNT_RE = re.compile(
+    r"\b(?P<count>\d+)\s+"
+    r"(?P<outcome>passed|skipped|xfailed|xpassed|deselected)\b",
+    re.IGNORECASE,
+)
 
 # Normal pytest exit statuses for a gate run: 0 = all passed, 1 = tests failed
 # (expected -- the baseline exists). 2 interrupted / 3 internal / 4 usage /
@@ -59,9 +64,32 @@ _SUMMARY_RE = re.compile(r"^(?:FAILED|ERROR)\s+(?P<node>[^\s\[]+(?:\[[^\]]*\])?)
 _OK_PYTEST_EXIT = frozenset((0, 1))
 _NO_TESTS_COLLECTED = 5
 
-DEFAULT_PYTEST_ARGS = ["tests/", "-m", "not integration and not e2e",
-                       "--continue-on-collection-errors", "-rfE", "--tb=no",
-                       "-q", "-p", "no:cacheprovider"]
+UNIT_GATE_OPTION_ARGS = ["-m", "not integration and not e2e",
+                         "--continue-on-collection-errors", "-rfE", "--tb=no",
+                         "-q", "-p", "no:cacheprovider"]
+DEFAULT_PYTEST_ARGS = ["tests/", *UNIT_GATE_OPTION_ARGS]
+_PYTEST_OPTIONS_WITH_VALUES = frozenset((
+    "-k",
+    "-m",
+    "-p",
+    "--basetemp",
+    "--confcutdir",
+    "--deselect",
+    "--ignore",
+    "--ignore-glob",
+    "--rootdir",
+    "--tb",
+))
+_SCOPED_SHRINK_ALLOWED_FLAGS = frozenset((
+    "--continue-on-collection-errors",
+    "-q",
+    "-rfE",
+))
+_SCOPED_SHRINK_ALLOWED_OPTIONS_WITH_VALUES = {
+    "-m": frozenset(("not integration and not e2e",)),
+    "-p": frozenset(("no:cacheprovider",)),
+    "--tb": frozenset(("no",)),
+}
 
 
 def parse_failing_nodes(pytest_output: str) -> set[str]:
@@ -72,6 +100,39 @@ def parse_failing_nodes(pytest_output: str) -> set[str]:
         if m:
             nodes.add(m.group("node").strip())
     return nodes
+
+
+def count_pytest_outcomes(pytest_output: str, outcomes: set[str]) -> int:
+    """Return pytest's summarized count for the requested outcomes."""
+    requested = {outcome.lower() for outcome in outcomes}
+    total = 0
+    for match in _OUTCOME_COUNT_RE.finditer(pytest_output):
+        if match.group("outcome").lower() in requested:
+            total += int(match.group("count"))
+    return total
+
+
+def removed_node_pass_proof_error(
+    pytest_output: str,
+    expected_nodes: int,
+) -> str | None:
+    """Return an error when exact-node shrink proof did not genuinely pass."""
+    non_passed = count_pytest_outcomes(
+        pytest_output,
+        {"skipped", "xfailed", "xpassed", "deselected"},
+    )
+    if non_passed:
+        return (
+            "pytest reported skipped, xfailed, xpassed, or deselected outcomes; "
+            "removed baseline nodes must genuinely pass"
+        )
+    passed = count_pytest_outcomes(pytest_output, {"passed"})
+    if passed < expected_nodes:
+        return (
+            f"pytest reported {passed} passed node(s), but "
+            f"{expected_nodes} removed baseline node(s) require proof"
+        )
+    return None
 
 
 def load_baseline(path: Path) -> set[str]:
@@ -98,6 +159,11 @@ def added_baseline_entries(pr_baseline: set[str], base_baseline: set[str]) -> li
     return sorted(pr_baseline - base_baseline)
 
 
+def removed_baseline_entries(pr_baseline: set[str], base_baseline: set[str]) -> list[str]:
+    """Node ids the PR removes from the baseline vs the base branch."""
+    return sorted(base_baseline - pr_baseline)
+
+
 def node_file(node_id: str) -> str:
     """The test-file part of a pytest node id (``tests/t.py::k[x::y]`` -> ``tests/t.py``)."""
     return node_id.split("::", 1)[0]
@@ -114,6 +180,131 @@ def restrict_baseline(baseline: set[str], selected_files: set[str]) -> set[str]:
     the ratchet meaningful -- regressions AND stale entries -- within that scope.
     """
     return {node for node in baseline if node_file(node) in selected_files}
+
+
+def pytest_positional_targets(pytest_args: list[str]) -> list[str]:
+    """Return pytest positional targets, skipping option values."""
+    targets: list[str] = []
+    index = 0
+    while index < len(pytest_args):
+        arg = pytest_args[index]
+        if arg == "--":
+            targets.extend(pytest_args[index + 1:])
+            break
+        option = arg.split("=", 1)[0]
+        if arg.startswith("-"):
+            index += 2 if option in _PYTEST_OPTIONS_WITH_VALUES and "=" not in arg else 1
+            continue
+        targets.append(arg)
+        index += 1
+    return targets
+
+
+def pytest_target_files(pytest_args: list[str]) -> set[str]:
+    """Test file targets named in pytest args, normalized like selected-files."""
+    targets: set[str] = set()
+    for arg in pytest_positional_targets(pytest_args):
+        if arg.startswith("-"):
+            continue
+        normalized = arg.removeprefix("./").rstrip("/").split("::", 1)[0]
+        if normalized.startswith("tests/") and normalized.endswith(".py"):
+            targets.add(normalized)
+    return targets
+
+
+def validate_selected_pytest_args(selected_files: set[str], pytest_args: list[str]) -> int:
+    """Fail closed when scoped proof claims files the pytest invocation won't run."""
+    targets: set[str] = set()
+    invalid_targets: list[str] = []
+    for target in pytest_positional_targets(pytest_args):
+        normalized = target.removeprefix("./").rstrip("/")
+        if target.startswith("@") or "::" in normalized:
+            invalid_targets.append(target)
+            continue
+        if normalized.startswith("tests/") and normalized.endswith(".py"):
+            targets.add(normalized)
+        else:
+            invalid_targets.append(target)
+    missing = sorted(selected_files - targets)
+    extra = sorted(targets - selected_files)
+    if not missing and not extra and not invalid_targets:
+        return 0
+    print(
+        "unit gate: --selected-files must match the pytest file targets used "
+        "for a scoped run.",
+        file=sys.stderr,
+    )
+    if missing:
+        print("unit gate: selected file(s) missing from --pytest-args:", file=sys.stderr)
+        for path in missing[:20]:
+            print(f"  {path}", file=sys.stderr)
+    if extra:
+        print("unit gate: pytest target(s) outside --selected-files:", file=sys.stderr)
+        for path in extra[:20]:
+            print(f"  {path}", file=sys.stderr)
+    if invalid_targets:
+        print(
+            "unit gate: pytest target(s) must be exact selected test files:",
+            file=sys.stderr,
+        )
+        for path in invalid_targets[:20]:
+            print(f"  {path}", file=sys.stderr)
+    return 2
+
+
+def validate_scoped_shrink_pytest_args(pytest_args: list[str]) -> int:
+    """Fail closed when scoped shrink proof can skip selected-file tests."""
+    unsafe: list[str] = []
+    index = 0
+    while index < len(pytest_args):
+        arg = pytest_args[index]
+        if arg == "--":
+            break
+        option, has_inline_value, inline_value = arg.partition("=")
+        if not arg.startswith("-"):
+            index += 1
+            continue
+        if arg in _SCOPED_SHRINK_ALLOWED_FLAGS:
+            index += 1
+            continue
+        allowed_values = _SCOPED_SHRINK_ALLOWED_OPTIONS_WITH_VALUES.get(option)
+        if allowed_values is not None:
+            if has_inline_value:
+                value = inline_value
+                step = 1
+            elif index + 1 < len(pytest_args):
+                value = pytest_args[index + 1]
+                step = 2
+            else:
+                value = ""
+                step = 1
+            if value in allowed_values:
+                index += step
+                continue
+        unsafe.append(arg)
+        index += 1
+    if not unsafe:
+        return 0
+    print(
+        "unit gate: scoped custom --pytest-args cannot prove a baseline shrink "
+        "with pytest option(s) that can filter, deselect, skip execution, or "
+        "short-circuit the selected files.",
+        file=sys.stderr,
+    )
+    for arg in unsafe[:20]:
+        print(f"  {arg}", file=sys.stderr)
+    return 2
+
+
+def validate_unscoped_shrink_pytest_args() -> int:
+    """Fail closed when custom args claim unscoped baseline-shrink proof."""
+    print(
+        "unit gate: unscoped custom --pytest-args cannot prove a baseline "
+        "shrink; use the default full-suite invocation or pass --selected-files "
+        "for a scoped proof.",
+        file=sys.stderr,
+    )
+    return 2
 
 
 def ensure_pytest_ran(returncode: int, *, allow_no_tests: bool = False) -> None:
@@ -149,6 +340,83 @@ def run_pytest(pytest_args: list[str]) -> tuple[str, int]:
     return proc.stdout + proc.stderr, proc.returncode
 
 
+def validate_removed_nodes_execute(removed_nodes: list[str]) -> int:
+    """Run removed node ids directly so shrink proof is node-level, not file-level."""
+    leaf_nodes = [node for node in removed_nodes if "::" in node]
+    file_nodes = [node for node in removed_nodes if "::" not in node]
+    if leaf_nodes:
+        status = validate_removed_leaf_nodes_execute(leaf_nodes)
+        if status:
+            return status
+    if file_nodes:
+        status = validate_removed_file_nodes_execute(file_nodes)
+        if status:
+            return status
+    return 0
+
+
+def validate_removed_leaf_nodes_execute(removed_nodes: list[str]) -> int:
+    """Run removed leaf node ids and require genuine pass outcomes."""
+    output, returncode = run_pytest([*removed_nodes, *UNIT_GATE_OPTION_ARGS])
+    if returncode == 0:
+        proof_error = removed_node_pass_proof_error(output, len(removed_nodes))
+        if proof_error:
+            print(
+                "unit gate: removed baseline node proof failed; "
+                f"{proof_error}.",
+                file=sys.stderr,
+            )
+            return 2
+        return 0
+    if returncode == 1:
+        failing = parse_failing_nodes(output)
+        print(
+            "unit gate: removed baseline node proof failed; node(s) still fail "
+            "or error when run directly:",
+            file=sys.stderr,
+        )
+        for node in sorted(failing or set(removed_nodes))[:20]:
+            print(f"  {node}", file=sys.stderr)
+        return 1
+    try:
+        ensure_pytest_ran(returncode)
+    except RuntimeError as exc:
+        print(
+            "unit gate: removed baseline node proof failed; "
+            f"{exc}",
+            file=sys.stderr,
+        )
+        return 2
+    return 0
+
+
+def validate_removed_file_nodes_execute(removed_nodes: list[str]) -> int:
+    """Run removed bare-file collection-error entries and require a clean file run."""
+    output, returncode = run_pytest([*removed_nodes, *UNIT_GATE_OPTION_ARGS])
+    if returncode == 0:
+        return 0
+    if returncode == 1:
+        failing = parse_failing_nodes(output)
+        print(
+            "unit gate: removed baseline file proof failed; file(s) still fail "
+            "or error when run directly:",
+            file=sys.stderr,
+        )
+        for node in sorted(failing or set(removed_nodes))[:20]:
+            print(f"  {node}", file=sys.stderr)
+        return 1
+    try:
+        ensure_pytest_ran(returncode)
+    except RuntimeError as exc:
+        print(
+            "unit gate: removed baseline file proof failed; "
+            f"{exc}",
+            file=sys.stderr,
+        )
+        return 2
+    return 0
+
+
 def write_baseline(path: Path, failing: set[str], *, header: str) -> None:
     body = "\n".join(sorted(failing))
     path.write_text(header.rstrip() + "\n" + body + "\n", encoding="utf-8")
@@ -172,6 +440,45 @@ def _fail_growth(added: list[str]) -> int:
     print("\nA new failure must be fixed, not baselined. Baseline additions "
           "belong in a dedicated, reviewed change, not a feature PR.")
     return 3
+
+
+def _fail_unproven_shrink(
+    removed: list[str],
+    *,
+    missing_files: list[str] | None,
+    report_file: bool = False,
+) -> int:
+    print(
+        f"unit gate: baseline shrink removes {len(removed)} node(s), but this "
+        "run did not provide pytest evidence for every removed node.",
+        file=sys.stderr,
+    )
+    if report_file:
+        print(
+            "unit gate: --report-file cannot prove a baseline shrink because "
+            "captured output is not bound to a verified pytest execution scope; "
+            "run pytest through this gate instead.",
+            file=sys.stderr,
+        )
+    elif missing_files is None:
+        print(
+            "unit gate: --growth-only has no pytest report; run the full suite "
+            "or a scoped run that includes every removed node's test file.",
+            file=sys.stderr,
+        )
+    elif missing_files:
+        print(
+            "unit gate: selected-files omitted removed baseline node file(s):",
+            file=sys.stderr,
+        )
+        for path in missing_files:
+            print(f"  {path}", file=sys.stderr)
+    print("unit gate: removed baseline node(s):", file=sys.stderr)
+    for node in removed[:20]:
+        print(f"  {node}", file=sys.stderr)
+    if len(removed) > 20:
+        print(f"  ... {len(removed) - 20} more", file=sys.stderr)
+    return 2
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -217,16 +524,22 @@ def main(argv: list[str] | None = None) -> int:
         print(f"baseline not found: {args.baseline}", file=sys.stderr)
         return 2
 
-    # Ratchet growth guard (fast, no pytest): a PR may not add baseline entries
-    # once the base branch has a baseline. An empty base file = initial seed.
+    # Ratchet diff guards (fast, no pytest): a PR may not add baseline entries
+    # once the base branch has a baseline. It may shrink, but only when the run
+    # can prove every removed node by executing that node's test file.
+    removed_baseline_nodes: list[str] = []
     if args.base_baseline is not None and args.base_baseline.exists():
         base = load_baseline(args.base_baseline)
         if base:
-            added = added_baseline_entries(load_baseline(args.baseline), base)
+            pr_baseline = load_baseline(args.baseline)
+            added = added_baseline_entries(pr_baseline, base)
             if added:
                 return _fail_growth(added)
+            removed_baseline_nodes = removed_baseline_entries(pr_baseline, base)
 
     if args.growth_only:
+        if removed_baseline_nodes:
+            return _fail_unproven_shrink(removed_baseline_nodes, missing_files=None)
         print("unit gate: growth guard passed; no reachable unit tests selected")
         return 0
 
@@ -244,8 +557,39 @@ def main(argv: list[str] | None = None) -> int:
             print("--selected-files is empty; use --growth-only for the "
                   "zero-test path", file=sys.stderr)
             return 2
+        if args.pytest_args:
+            scope_status = validate_selected_pytest_args(selected, args.pytest_args)
+            if scope_status:
+                return scope_status
+        if removed_baseline_nodes:
+            removed_files = {node_file(node) for node in removed_baseline_nodes}
+            missing_removed_files = sorted(removed_files - selected)
+            if missing_removed_files:
+                return _fail_unproven_shrink(
+                    removed_baseline_nodes,
+                    missing_files=missing_removed_files,
+                )
+            if args.pytest_args:
+                scope_status = validate_scoped_shrink_pytest_args(args.pytest_args)
+                if scope_status:
+                    return scope_status
+    elif removed_baseline_nodes and args.pytest_args:
+        scope_status = validate_unscoped_shrink_pytest_args()
+        if scope_status:
+            return scope_status
+
+    if removed_baseline_nodes and args.report_file is None:
+        proof_status = validate_removed_nodes_execute(removed_baseline_nodes)
+        if proof_status:
+            return proof_status
 
     if args.report_file is not None:
+        if removed_baseline_nodes:
+            return _fail_unproven_shrink(
+                removed_baseline_nodes,
+                missing_files=None,
+                report_file=True,
+            )
         if not args.report_file.exists():
             print(f"report file not found: {args.report_file}", file=sys.stderr)
             return 2
@@ -253,7 +597,10 @@ def main(argv: list[str] | None = None) -> int:
     else:
         output, returncode = run_pytest(args.pytest_args or DEFAULT_PYTEST_ARGS)
         try:
-            ensure_pytest_ran(returncode, allow_no_tests=selected is not None)
+            ensure_pytest_ran(
+                returncode,
+                allow_no_tests=selected is not None and not removed_baseline_nodes,
+            )
         except RuntimeError as exc:
             print(f"unit gate: {exc}", file=sys.stderr)
             return 2

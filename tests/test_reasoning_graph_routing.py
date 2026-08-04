@@ -6,7 +6,6 @@ from types import SimpleNamespace
 
 import pytest
 
-from atlas_brain.config import settings
 from atlas_brain.reasoning.graph import _node_reason, _node_synthesize, _node_triage
 from atlas_brain.reasoning.reflection import run_reflection
 
@@ -28,6 +27,25 @@ def _pipeline_llm_module():
         if package is not None and not getattr(package, "__file__", None):
             sys.modules.pop("atlas_brain.pipelines", None)
     return importlib.import_module("atlas_brain.pipelines.llm")
+
+
+@pytest.fixture(autouse=True)
+def _isolate_pipeline_llm_state():
+    pipeline_llm = _pipeline_llm_module()
+    from atlas_brain.services import llm_registry
+
+    importlib.reload(pipeline_llm)
+    llm_registry.deactivate()
+    llm_registry.release_all_slots()
+    yield
+    llm_registry.deactivate()
+    llm_registry.release_all_slots()
+
+
+def _settings():
+    import atlas_brain.config as config
+
+    return config.settings
 
 
 class _StaticChatService:
@@ -86,6 +104,7 @@ def test_reasoning_prompt_exports_are_available_from_both_modules():
 @pytest.mark.asyncio
 async def test_graph_triage_uses_configured_pipeline_workload(monkeypatch):
     pipeline_llm = _pipeline_llm_module()
+    settings = _settings()
     monkeypatch.setattr(settings.reasoning, "graph_triage_workload", "triage")
     monkeypatch.setattr(settings.reasoning, "graph_openrouter_model", "openai/o4-mini")
     calls = []
@@ -115,6 +134,7 @@ async def test_graph_triage_uses_configured_pipeline_workload(monkeypatch):
 @pytest.mark.asyncio
 async def test_graph_reason_uses_configured_pipeline_workload(monkeypatch):
     pipeline_llm = _pipeline_llm_module()
+    settings = _settings()
     monkeypatch.setattr(settings.reasoning, "graph_reasoning_workload", "openrouter")
     monkeypatch.setattr(settings.reasoning, "graph_openrouter_model", "openai/o4-mini")
     calls = []
@@ -143,6 +163,7 @@ async def test_graph_reason_uses_configured_pipeline_workload(monkeypatch):
 @pytest.mark.asyncio
 async def test_graph_synthesis_uses_configured_pipeline_workload(monkeypatch):
     pipeline_llm = _pipeline_llm_module()
+    settings = _settings()
     monkeypatch.setattr(settings.reasoning, "graph_synthesis_workload", "triage")
     monkeypatch.setattr(settings.reasoning, "graph_openrouter_model", "openai/o4-mini")
     calls = []
@@ -170,6 +191,7 @@ async def test_graph_synthesis_uses_configured_pipeline_workload(monkeypatch):
 @pytest.mark.asyncio
 async def test_reflection_uses_configured_pipeline_workload(monkeypatch):
     pipeline_llm = _pipeline_llm_module()
+    settings = _settings()
     monkeypatch.setattr(settings.reasoning, "graph_synthesis_workload", "triage")
     calls = []
     service = _StaticChatService('{"findings":[]}')
@@ -197,6 +219,7 @@ async def test_reflection_uses_configured_pipeline_workload(monkeypatch):
 
 def test_openrouter_workload_uses_configured_model(monkeypatch):
     pipeline_llm = _pipeline_llm_module()
+    settings = _settings()
     monkeypatch.setattr(settings.llm, "openrouter_reasoning_model", "anthropic/claude-haiku-4-5-20251001")
     seen = []
 
@@ -214,6 +237,7 @@ def test_openrouter_workload_uses_configured_model(monkeypatch):
 
 def test_openrouter_workload_normalizes_deprecated_gpt_oss(monkeypatch):
     pipeline_llm = _pipeline_llm_module()
+    settings = _settings()
     monkeypatch.setattr(settings.llm, "openrouter_reasoning_model", "openai/gpt-oss-120b")
     seen = []
 
@@ -233,6 +257,7 @@ def test_synthesis_explicit_openrouter_override_uses_settings_api_key(monkeypatc
     pipeline_llm = _pipeline_llm_module()
     from atlas_brain.services.llm.openrouter import OpenRouterLLM
 
+    settings = _settings()
     monkeypatch.delenv("OPENROUTER_API_KEY", raising=False)
     monkeypatch.delenv("ATLAS_B2B_CHURN_OPENROUTER_API_KEY", raising=False)
     monkeypatch.setattr(settings.b2b_churn, "openrouter_api_key", "test-openrouter-key")
@@ -255,6 +280,7 @@ def test_synthesis_explicit_openrouter_override_uses_settings_api_key(monkeypatc
 
 def test_synthesis_strict_openrouter_does_not_fallback(monkeypatch):
     pipeline_llm = _pipeline_llm_module()
+    settings = _settings()
     monkeypatch.setattr(settings.llm, "openrouter_reasoning_model", "deepseek/deepseek-v3.2")
     monkeypatch.setattr(settings.llm, "openrouter_reasoning_strict", True)
     monkeypatch.setattr(pipeline_llm, "_try_openrouter", lambda model=None: None)
