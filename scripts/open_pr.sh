@@ -6,6 +6,12 @@ set -euo pipefail
 cd "$(git rev-parse --show-toplevel)"
 python_bin="${PYTHON:-python3}"
 
+# gh's interactive create survey exposes a "Submit as draft" action that would
+# bypass argv admission entirely; disable prompting structurally so every gh
+# call in this wrapper is non-interactive and draft mode can only arrive as an
+# argv flag through the consent gate.
+export GH_PROMPT_DISABLED=1
+
 usage() {
     cat <<'EOF'
 Usage: bash scripts/open_pr.sh BODY_FILE [gh-pr-create-args...]
@@ -17,6 +23,15 @@ the GitHub CLI never has to open BODY_FILE itself.
 Examples:
   bash scripts/open_pr.sh tmp/pr-body-my-slice.md --title "My slice" --base main
   bash scripts/open_pr.sh tmp/pr-body-my-slice.md
+
+Draft PRs require explicit operator consent:
+  ATLAS_OPEN_PR_DRAFT_CONSENT=1 bash scripts/open_pr.sh tmp/pr-body-my-slice.md --draft
+
+Creating a new PR requires --title (or a gh --fill option): the body is fed
+through stdin, so gh can never prompt for a title through this wrapper.
+Updating an existing PR needs no extra args. Browser-based creation
+(--web / -w) is refused even with draft consent; it bypasses both draft
+consent and this wrapper's post-mutation verification.
 
 Use scripts/push_pr.sh before this wrapper to push the branch with the local
 review body env wired into the pre-push hook.
@@ -51,6 +66,63 @@ refresh_base_ref() {
     fi
 }
 
+require_draft_consent() {
+    if [ "${ATLAS_OPEN_PR_DRAFT_CONSENT:-}" != "1" ]; then
+        echo "open_pr.sh: refusing draft PR without explicit operator consent: $1" >&2
+        echo "Set ATLAS_OPEN_PR_DRAFT_CONSENT=1 only when the operator asked for a draft." >&2
+        exit 2
+    fi
+}
+
+reject_web_create() {
+    # The browser create flow lets the builder pick "draft" in GitHub's UI
+    # with no draft token in argv, and it also escapes this wrapper's
+    # post-mutation head/body verification. It is rejected outright -- even
+    # with draft consent -- because no verified path exists through it.
+    echo "open_pr.sh: refusing browser-based create arg: $1" >&2
+    echo "The web flow bypasses draft consent and post-mutation verification; use this wrapper's flag-based create path." >&2
+    exit 2
+}
+
+scan_shorthand_cluster() {
+    # gh's pflag parser walks a one-dash cluster left to right: boolean
+    # shorthands keep scanning (so -fd and -wd both enable draft), a
+    # value-taking shorthand takes the attached remainder as its value or,
+    # when nothing is attached, consumes the NEXT argv token, and '=' binds
+    # the remainder to the shorthand before it. Value-taking shorthands for
+    # `gh pr create`: -a -B -b -F -H -l -m -p -r -R -t -T. Unknown letters
+    # are treated as booleans, which fails closed: scanning continues, so a
+    # 'd' after them still requires consent.
+    cluster_sets_draft=0
+    cluster_sets_web=0
+    cluster_consumes_next=0
+    local cluster="${1#-}" ch
+    while [ -n "$cluster" ]; do
+        ch="${cluster:0:1}"
+        case "$ch" in
+            d)
+                cluster_sets_draft=1
+                ;;
+            w)
+                cluster_sets_web=1
+                ;;
+            a|B|b|F|H|l|m|p|r|R|t|T)
+                if [ -z "${cluster:1}" ]; then
+                    cluster_consumes_next=1
+                fi
+                return 0
+                ;;
+        esac
+        cluster="${cluster:1}"
+        case "$cluster" in
+            =*)
+                return 0
+                ;;
+        esac
+    done
+    return 0
+}
+
 reject_target_overrides() {
     if [ -n "${GH_REPO:-}" ]; then
         echo "open_pr.sh: refusing GH_REPO target override: $GH_REPO" >&2
@@ -63,6 +135,11 @@ reject_target_overrides() {
         arg="$1"
         shift
         case "$arg" in
+            --)
+                # pflag stops option parsing here and `gh pr create` accepts
+                # no positional args, so nothing after -- can enable draft.
+                break
+                ;;
             --head|-H|--repo|-R)
                 echo "open_pr.sh: refusing target-changing create arg: $arg" >&2
                 exit 2
@@ -70,6 +147,12 @@ reject_target_overrides() {
             --head=*|--repo=*|-H*|-R*)
                 echo "open_pr.sh: refusing target-changing create arg: $arg" >&2
                 exit 2
+                ;;
+            --draft|--draft=*)
+                require_draft_consent "$arg"
+                ;;
+            --web|--web=*)
+                reject_web_create "$arg"
                 ;;
             --base|-B)
                 if [ "$#" -eq 0 ]; then
@@ -98,6 +181,24 @@ reject_target_overrides() {
                     echo "open_pr.sh: refusing non-main base: $value" >&2
                     echo "The local review gate is bound to origin/main." >&2
                     exit 2
+                fi
+                ;;
+            --assignee|--label|--milestone|--project|--reviewer|--title|--template|--recover)
+                # Long value-taking option with a separate value token: gh
+                # consumes the next token as the value, so a following
+                # "--draft"-shaped token is data, not a draft flag.
+                [ "$#" -gt 0 ] && shift
+                ;;
+            -[!-]*)
+                scan_shorthand_cluster "$arg"
+                if [ "$cluster_sets_draft" = "1" ]; then
+                    require_draft_consent "$arg"
+                fi
+                if [ "$cluster_sets_web" = "1" ]; then
+                    reject_web_create "$arg"
+                fi
+                if [ "$cluster_consumes_next" = "1" ] && [ "$#" -gt 0 ]; then
+                    shift
                 fi
                 ;;
         esac
@@ -272,14 +373,8 @@ normalize_create_args() {
     done
 }
 
-refresh_base_ref
-
-body_audit_args=(--base-ref origin/main)
-if [ -n "${ATLAS_CURRENT_PR_AUTHOR:-}" ]; then
-    body_audit_args+=(--pr-author "$ATLAS_CURRENT_PR_AUTHOR")
-fi
-"$python_bin" scripts/audit_pr_body.py "${body_audit_args[@]}" "$body_file"
-
+# Argument admission runs before any side effect (base fetch, body audit,
+# GitHub calls): a rejected invocation must not touch the network or refs.
 for arg in "$@"; do
     case "$arg" in
         --body|--body-file|-b|-F)
@@ -289,6 +384,14 @@ for arg in "$@"; do
     esac
 done
 reject_target_overrides "$@"
+
+refresh_base_ref
+
+body_audit_args=(--base-ref origin/main)
+if [ -n "${ATLAS_CURRENT_PR_AUTHOR:-}" ]; then
+    body_audit_args+=(--pr-author "$ATLAS_CURRENT_PR_AUTHOR")
+fi
+"$python_bin" scripts/audit_pr_body.py "${body_audit_args[@]}" "$body_file"
 
 branch="$(git branch --show-current)"
 if [ -z "$branch" ]; then

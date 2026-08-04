@@ -57,6 +57,24 @@ def test_open_pr_existing_pr_rejects_create_only_args(tmp_path: Path) -> None:
         (["--body-file", "body.md"], {}, "pass the PR body as BODY_FILE"),
         (["--head", "other"], {}, "refusing target-changing create arg: --head"),
         (["--repo", "other/repo"], {}, "refusing target-changing create arg: --repo"),
+        (["--draft"], {}, "refusing draft PR without explicit operator consent"),
+        (["--draft=true"], {}, "refusing draft PR without explicit operator consent"),
+        (["--draft=TRUE"], {}, "refusing draft PR without explicit operator consent"),
+        (["--draft=1"], {}, "refusing draft PR without explicit operator consent"),
+        (["--draft=false"], {}, "refusing draft PR without explicit operator consent"),
+        (["-d"], {}, "refusing draft PR without explicit operator consent"),
+        (["-d=true"], {}, "refusing draft PR without explicit operator consent"),
+        (["-d=1"], {}, "refusing draft PR without explicit operator consent"),
+        (["-dw"], {}, "refusing draft PR without explicit operator consent"),
+        (["-fd"], {}, "refusing draft PR without explicit operator consent"),
+        (["-wd"], {}, "refusing draft PR without explicit operator consent"),
+        (["-fd=true"], {}, "refusing draft PR without explicit operator consent"),
+        (["-fwd"], {}, "refusing draft PR without explicit operator consent"),
+        (["-dt", "some title"], {}, "refusing draft PR without explicit operator consent"),
+        (["--web"], {}, "refusing browser-based create arg"),
+        (["--web=true"], {}, "refusing browser-based create arg"),
+        (["-w"], {}, "refusing browser-based create arg"),
+        (["-fw"], {}, "refusing browser-based create arg"),
         (["--base", "release"], {}, "refusing non-main base: release"),
         (["-Brelease"], {}, "refusing non-main base: release"),
         ([], {"GH_REPO": "other/repo"}, "refusing GH_REPO target override"),
@@ -75,6 +93,237 @@ def test_open_pr_rejects_unsafe_inputs_before_gh(
 
     assert result.returncode == 2
     assert expected in result.stderr
+    assert not log.exists()
+    assert not stdin_capture.exists()
+
+
+def test_open_pr_forwards_draft_when_operator_consent_flag_is_set(tmp_path: Path) -> None:
+    repo, body, env, log, stdin_capture = _ready(tmp_path, view_exit=1)
+    env["ATLAS_OPEN_PR_DRAFT_CONSENT"] = "1"
+
+    result = _run(repo, env, body, "--draft", "--title", "Draft wrapper")
+
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert log.read_text(encoding="utf-8").strip() == (
+        "pr create --draft --title Draft wrapper --repo canfieldjuan/ATLAS --base main --body-file -"
+    )
+    assert stdin_capture.read_text(encoding="utf-8") == body.read_text(encoding="utf-8")
+
+
+def test_open_pr_forwards_draft_assignment_when_operator_consent_flag_is_set(tmp_path: Path) -> None:
+    repo, body, env, log, stdin_capture = _ready(tmp_path, view_exit=1)
+    env["ATLAS_OPEN_PR_DRAFT_CONSENT"] = "1"
+
+    result = _run(repo, env, body, "--draft=true", "--title", "Draft wrapper")
+
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert log.read_text(encoding="utf-8").strip() == (
+        "pr create --draft=true --title Draft wrapper --repo canfieldjuan/ATLAS --base main --body-file -"
+    )
+    assert stdin_capture.read_text(encoding="utf-8") == body.read_text(encoding="utf-8")
+
+
+def test_open_pr_allows_value_shorthand_containing_d_without_consent(tmp_path: Path) -> None:
+    # -t takes a value, so the attached text (even containing 'd') is a title,
+    # not a shorthand cluster that enables draft mode.
+    repo, body, env, log, stdin_capture = _ready(tmp_path, view_exit=1)
+
+    result = _run(repo, env, body, "-tdraft-note")
+
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert log.read_text(encoding="utf-8").strip() == (
+        "pr create -tdraft-note --repo canfieldjuan/ATLAS --base main --body-file -"
+    )
+    assert stdin_capture.read_text(encoding="utf-8") == body.read_text(encoding="utf-8")
+
+
+@pytest.mark.parametrize("args", [["--title", "--draft"], ["-t", "-d"]])
+def test_open_pr_allows_draft_shaped_value_of_title_without_consent(
+    tmp_path: Path,
+    args: list[str],
+) -> None:
+    # gh consumes the token after --title/-t as the title value, so a
+    # "--draft"-shaped value does not enable draft mode and needs no consent.
+    repo, body, env, log, stdin_capture = _ready(tmp_path, view_exit=1)
+
+    result = _run(repo, env, body, *args)
+
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert log.read_text(encoding="utf-8").strip() == (
+        f"pr create {' '.join(args)} --repo canfieldjuan/ATLAS --base main --body-file -"
+    )
+    assert stdin_capture.read_text(encoding="utf-8") == body.read_text(encoding="utf-8")
+
+
+def test_open_pr_disables_gh_prompts_so_interactive_draft_is_unreachable(tmp_path: Path) -> None:
+    # gh's interactive create survey offers a "Submit as draft" action that
+    # never appears in argv; the wrapper must export GH_PROMPT_DISABLED=1 so
+    # every gh call is non-interactive and draft mode can only arrive as an
+    # argv flag through the consent gate.
+    repo, body, env, log, stdin_capture = _ready(tmp_path, view_exit=1)
+    env.pop("GH_PROMPT_DISABLED", None)
+
+    result = _run(repo, env, body, "--title", "Prompt gate")
+
+    assert result.returncode == 0, result.stdout + result.stderr
+    prompt_state = Path(env["GH_PROMPT_STATE"])
+    assert prompt_state.read_text(encoding="utf-8").strip() == "GH_PROMPT_DISABLED=1"
+
+
+def _wrapper_expected_outcome(args: list[str]) -> str:
+    """Independent admission oracle: walk argv as gh's pflag parser would.
+
+    Returns "draft" when the first offending token carries a draft flag
+    (value-blind, matching the wrapper's declared contract), "web" when it
+    carries the browser-create flag without a draft flag, and "pass"
+    otherwise -- modeling long options with separate or '='-attached values,
+    '--' end-of-options, and shorthand clusters where booleans keep scanning
+    and a value-taking shorthand consumes the attached remainder or the next
+    token. Within one token, draft rejection takes precedence over web.
+    """
+    val_short = set("aBbFHlmprRtT")
+    long_val = {
+        "--assignee", "--base", "--body", "--body-file", "--head", "--label",
+        "--milestone", "--project", "--recover", "--repo", "--reviewer",
+        "--template", "--title",
+    }
+    i = 0
+    while i < len(args):
+        tok = args[i]
+        i += 1
+        draft_tok = web_tok = False
+        if tok == "--":
+            break
+        if tok.startswith("--"):
+            name = tok.split("=", 1)[0]
+            if name == "--draft":
+                draft_tok = True
+            elif name == "--web":
+                web_tok = True
+            elif name in long_val and "=" not in tok:
+                i += 1
+        elif tok.startswith("-") and len(tok) > 1:
+            cluster = tok[1:]
+            while cluster:
+                ch = cluster[0]
+                if ch in val_short:
+                    if len(cluster) == 1:
+                        i += 1
+                    break
+                if ch == "d":
+                    draft_tok = True
+                elif ch == "w":
+                    web_tok = True
+                cluster = cluster[1:]
+                if cluster.startswith("="):
+                    break
+        if draft_tok:
+            return "draft"
+        if web_tok:
+            return "web"
+    return "pass"
+
+
+def _generate_argv_grammar_cases() -> list[list[str]]:
+    # Product of boolean-shorthand positions x value-taking terminators x
+    # attached/separate/'=' values, restricted to letters the wrapper does not
+    # reject for target/body reasons (booleans f, w, e; value-taking t, l).
+    cases: list[tuple[str, ...]] = []
+    for pre in ("", "f", "w", "fw", "e"):
+        for core in ("", "d"):
+            base = pre + core
+            if base:
+                cases.append((f"-{base}",))
+                cases.append((f"-{base}=true",))
+                cases.append((f"-{base}=false",))
+            for val in ("t", "l"):
+                cases.append((f"-{base}{val}attached-value",))
+                cases.append((f"-{base}{val}", "separate-value"))
+                cases.append((f"-{base}{val}", "-d"))
+    cases += [
+        ("--draft",), ("--draft=true",), ("--draft=false",),
+        ("--title", "--draft"), ("--title", "-d"), ("--title", "t", "--draft"),
+        ("--label", "--draft", "--draft"),
+        ("--fill", "--draft"), ("--web", "-d"),
+        ("--", "--draft"), ("--", "-d"),
+        ("-t", "-d"), ("-a", "-d"), ("-t", "-d", "--draft"),
+        ("--template", "--draft"), ("--reviewer", "-fd"),
+    ]
+    unique: list[list[str]] = []
+    seen: set[tuple[str, ...]] = set()
+    for case in cases:
+        if case not in seen and all(tok != "-" for tok in case):
+            seen.add(case)
+            unique.append(list(case))
+    return unique
+
+
+def test_open_pr_draft_admission_matches_gh_argv_grammar(tmp_path: Path) -> None:
+    # Grammar-derived closure proof: for every generated argv sequence the
+    # wrapper's consent decision must equal the independent pflag oracle.
+    # The fixture has no origin remote, so a sequence that passes admission
+    # deterministically fails later at the base refresh -- proving admission
+    # neither gated it nor needed the network.
+    repo = tmp_path / "grammar-repo"
+    (repo / "scripts").mkdir(parents=True)
+    copy2(SCRIPT, repo / "scripts" / "open_pr.sh")
+    subprocess.run(
+        ["git", "init", "--initial-branch", "main"],
+        cwd=repo, check=True, capture_output=True, text=True,
+    )
+    body = tmp_path / "grammar-body.md"
+    body.write_text(_valid_body(), encoding="utf-8")
+    env = {**os.environ, "PYTHONDONTWRITEBYTECODE": "1"}
+    env.pop("GH_REPO", None)
+    env.pop("ATLAS_OPEN_PR_DRAFT_CONSENT", None)
+
+    failures = []
+    for args in _generate_argv_grammar_cases():
+        expected = _wrapper_expected_outcome(args)
+        result = subprocess.run(
+            ["bash", str(repo / "scripts" / "open_pr.sh"), str(body), *args],
+            cwd=repo, env=env, capture_output=True, text=True,
+        )
+        if "refusing draft PR without explicit operator consent" in result.stderr:
+            observed = "draft"
+        elif "refusing browser-based create arg" in result.stderr:
+            observed = "web"
+        else:
+            observed = "pass"
+        if observed != expected:
+            failures.append((args, f"oracle={expected} observed={observed}", result.returncode, result.stderr.strip()))
+        elif expected == "pass" and "failed to refresh origin/main" not in result.stderr:
+            failures.append((args, "admission pass did not reach base refresh", result.returncode, result.stderr.strip()))
+    assert not failures, failures
+
+
+def test_open_pr_rejects_web_create_even_with_draft_consent(tmp_path: Path) -> None:
+    # Draft consent authorizes the flag-based draft path only; the browser
+    # flow escapes post-mutation verification and stays rejected.
+    repo, body, env, log, stdin_capture = _ready(tmp_path, view_exit=1)
+    env["ATLAS_OPEN_PR_DRAFT_CONSENT"] = "1"
+
+    result = _run(repo, env, body, "--draft", "--web")
+
+    assert result.returncode == 2
+    assert "refusing browser-based create arg" in result.stderr
+    assert not log.exists()
+    assert not stdin_capture.exists()
+
+
+def test_open_pr_rejects_draft_before_any_fetch_side_effect(tmp_path: Path) -> None:
+    # Argument admission must run before refresh_base_ref: with origin
+    # destroyed, an unauthorized --draft still fails on consent, not on fetch.
+    import shutil
+
+    repo, body, env, log, stdin_capture = _ready(tmp_path, view_exit=1)
+    shutil.rmtree(tmp_path / "origin.git")
+
+    result = _run(repo, env, body, "--draft")
+
+    assert result.returncode == 2
+    assert "refusing draft PR without explicit operator consent" in result.stderr
+    assert "failed to refresh origin/main" not in result.stderr
     assert not log.exists()
     assert not stdin_capture.exists()
 
@@ -446,6 +695,7 @@ if [ "$1" = "pr" ] && [ "$2" = "list" ]; then
     exit 0
 fi
 printf '%s\\n' "$*" > "${GH_ARGV_LOG}"
+printf 'GH_PROMPT_DISABLED=%s\\n' "${GH_PROMPT_DISABLED:-}" > "${GH_PROMPT_STATE}"
 cat > "${GH_STDIN_CAPTURE}"
 if [ "$1" = "pr" ] && [ "$2" = "create" ]; then
     : > "${GH_CREATED_PR_FLAG}"
@@ -461,6 +711,7 @@ fi
         "GH_ARGV_LOG": str(log),
         "GH_STDIN_CAPTURE": str(stdin_capture),
         "GH_CREATED_PR_FLAG": str(created_flag),
+        "GH_PROMPT_STATE": str(tmp_path / "gh-prompt-state.txt"),
         "PYTHONDONTWRITEBYTECODE": "1",
     }, log, stdin_capture
 
