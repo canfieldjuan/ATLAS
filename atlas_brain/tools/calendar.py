@@ -594,6 +594,7 @@ class CalendarTool:
                 message="Calendar not configured. Run calendar setup first.",
             )
 
+        request_phase = "create"
         try:
             client = await self._ensure_client()
             headers = await self._get_auth_header()
@@ -626,6 +627,7 @@ class CalendarTool:
                 response = await client.post(url, headers=headers, json=event_body)
 
             if response.status_code == 409 and event_id:
+                request_phase = "conflict_verification"
                 existing_response = await client.get(
                     f"{url}/{event_id}",
                     headers=headers,
@@ -712,6 +714,7 @@ class CalendarTool:
             return ToolResult(
                 success=False,
                 error="AUTH_ERROR",
+                data={"request_phase": request_phase},
                 message="Calendar authentication failed. Refresh token needs renewal.",
             )
         except httpx.HTTPStatusError as e:
@@ -719,7 +722,10 @@ class CalendarTool:
             return ToolResult(
                 success=False,
                 error="API_ERROR",
-                data={"status_code": e.response.status_code},
+                data={
+                    "request_phase": request_phase,
+                    "status_code": e.response.status_code,
+                },
                 message=f"Calendar API error: {e.response.status_code}",
             )
         except Exception as e:

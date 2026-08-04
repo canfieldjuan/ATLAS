@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from datetime import datetime
 from types import SimpleNamespace
-from uuid import uuid4
+from uuid import UUID, uuid4
 
 import httpx
 import pytest
@@ -18,7 +18,7 @@ from atlas_brain.services.eom_estimate_booking import (
 )
 from atlas_brain.services.eom_lead_conversion import EOMLeadConversionError
 from atlas_brain.tools.base import ToolResult
-from atlas_brain.tools.calendar import CalendarTool
+from atlas_brain.tools.calendar import CalendarAuthError, CalendarTool
 
 _GENERATED_SERVICE_TOKEN = auth_mod.generate_eom_funnel_service_token()
 _SERVICE_TOKEN = _GENERATED_SERVICE_TOKEN.token
@@ -496,6 +496,30 @@ async def test_private_estimate_booking_prepares_calendar_and_completes_in_order
 
 
 @pytest.mark.asyncio
+async def test_private_estimate_booking_uses_configured_calendar_when_payload_omits_id():
+    crm = _CRM()
+    calendar = _Calendar()
+    calendar._config = SimpleNamespace(calendar_id="configured-estimate-calendar")
+    app = _app(crm, _enabled_config(), calendar=calendar)
+    contact_id = uuid4()
+    booking_key = f"office-booking-{uuid4().hex}"
+
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=app), base_url="http://test"
+    ) as client:
+        response = await client.post(
+            f"/eom-funnel/leads/{contact_id}/estimate-bookings",
+            headers=_headers(approval_key=booking_key),
+            json=_booking_payload(calendar_id=None),
+        )
+
+    assert response.status_code == 201
+    assert crm.prepare_calls[0]["calendar_id"] == "configured-estimate-calendar"
+    assert calendar.calls[0]["calendar_id"] == "configured-estimate-calendar"
+    assert crm.complete_calls[0]["calendar_id"] == "configured-estimate-calendar"
+
+
+@pytest.mark.asyncio
 async def test_private_estimate_booking_reuses_prepared_calendar_snapshot():
     class _SnapshotCRM(_CRM):
         async def prepare_eom_estimate_booking(self, **kwargs):
@@ -632,6 +656,47 @@ async def test_private_estimate_booking_definitive_calendar_failure_does_not_com
 
 
 @pytest.mark.asyncio
+async def test_private_estimate_booking_post_conflict_auth_failure_marks_ambiguous():
+    crm = _CRM()
+    contact_id = uuid4()
+    booking_key = f"office-booking-{uuid4().hex}"
+    expected_event_id = deterministic_eom_estimate_calendar_event_id(
+        contact_id=str(contact_id),
+        booking_key=booking_key,
+    )
+    calendar = _Calendar(
+        success=False,
+        error="AUTH_ERROR",
+        data={"request_phase": "conflict_verification"},
+        message="Calendar authentication failed. Refresh token needs renewal.",
+    )
+    app = _app(crm, _enabled_config(), calendar=calendar)
+
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=app), base_url="http://test"
+    ) as client:
+        response = await client.post(
+            f"/eom-funnel/leads/{contact_id}/estimate-bookings",
+            headers=_headers(approval_key=booking_key),
+            json=_booking_payload(),
+        )
+
+    assert response.status_code == 502
+    assert crm.complete_calls == []
+    assert crm.failed_calls == []
+    assert crm.ambiguous_calls == [
+        {
+            "contact_id": str(contact_id),
+            "booking_key": booking_key,
+            "expected_calendar_event_id": expected_event_id,
+            "observed_calendar_event_id": "",
+            "actor_id": 1,
+            "actor_name": "Juan Canfield",
+        }
+    ]
+
+
+@pytest.mark.asyncio
 async def test_private_estimate_booking_unexpected_calendar_id_marks_ambiguous():
     crm = _CRM()
     calendar = _Calendar(event_id="surprise-calendar-event")
@@ -676,7 +741,7 @@ async def test_private_estimate_booking_idempotent_replay_skips_calendar_side_ef
         async def prepare_eom_estimate_booking(self, **kwargs):
             self.prepare_calls.append(kwargs)
             return {
-                "contact_id": kwargs["contact_id"],
+                "contact_id": UUID(kwargs["contact_id"]),
                 "lead_stage": "estimate_booked",
                 "status": "estimate_booked",
                 "calendar_event_id": kwargs["expected_calendar_event_id"],
@@ -708,6 +773,7 @@ async def test_private_estimate_booking_idempotent_replay_skips_calendar_side_ef
         )
 
     assert response.status_code == 200
+    assert response.json()["contact_id"] == str(contact_id)
     assert response.json()["idempotent"] is True
     assert response.json()["calendar_event_id"] == expected_event_id
     assert len(crm.prepare_calls) == 1
@@ -931,8 +997,50 @@ async def test_calendar_create_event_propagates_http_status_for_failure_classifi
 
     assert result.success is False
     assert result.error == "API_ERROR"
-    assert result.data == {"status_code": 404}
+    assert result.data == {"request_phase": "create", "status_code": 404}
     assert result.message == "Calendar API error: 404"
+
+
+@pytest.mark.asyncio
+async def test_calendar_create_event_marks_auth_error_after_conflict_verification(
+    monkeypatch,
+):
+    tool = CalendarTool()
+    tool._config = SimpleNamespace(
+        calendar_enabled=True, calendar_refresh_token="refresh"
+    )
+    client = _CalendarClient(
+        post_response=_CalendarResponse(
+            status_code=409, payload={"error": "duplicate"}
+        ),
+        get_response=_CalendarResponse(
+            status_code=401,
+            payload={"error": "unauthorized"},
+        ),
+    )
+
+    async def ensure_client():
+        return client
+
+    async def auth_header(**kwargs):
+        if kwargs.get("force_refresh"):
+            raise CalendarAuthError("refresh failed")
+        return {"Authorization": "Bearer token"}
+
+    monkeypatch.setattr(tool, "_ensure_client", ensure_client)
+    monkeypatch.setattr(tool, "_get_auth_header", auth_header)
+
+    result = await tool.create_event(
+        summary="Estimate",
+        start=datetime.fromisoformat("2026-08-04T14:00:00-05:00"),
+        end=datetime.fromisoformat("2026-08-04T15:00:00-05:00"),
+        calendar_id="estimate-calendar",
+        event_id="eomestabc123",
+    )
+
+    assert result.success is False
+    assert result.error == "AUTH_ERROR"
+    assert result.data == {"request_phase": "conflict_verification"}
 
 
 @pytest.mark.asyncio

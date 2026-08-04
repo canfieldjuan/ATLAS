@@ -42,6 +42,19 @@ def _calendar_id(value: str | None) -> str:
     return (value or "primary").strip() or "primary"
 
 
+def _configured_calendar_id(calendar: Any) -> str:
+    config = getattr(calendar, "_config", None)
+    configured = getattr(config, "calendar_id", None)
+    return _calendar_id(configured if isinstance(configured, str) else None)
+
+
+def _effective_calendar_id(value: str | None, calendar: Any) -> str:
+    requested = (value or "").strip()
+    if requested:
+        return requested
+    return _configured_calendar_id(calendar)
+
+
 def _event_summary(contact: dict[str, Any]) -> str:
     name = str(contact.get("full_name") or "").strip() or "EOM lead"
     return f"Estimate: {name}"
@@ -58,6 +71,7 @@ def _prepared_calendar_event(
     prepared: dict[str, Any],
     *,
     command: EOMEstimateBooking,
+    effective_calendar_id: str,
     expected_event_id: str,
 ) -> dict[str, Any]:
     """Return the immutable Calendar payload claimed by CRM preparation."""
@@ -68,28 +82,50 @@ def _prepared_calendar_event(
             or _event_summary(prepared.get("contact", {})),
             "location": event.get("location"),
             "description": str(event.get("description") or ""),
-            "calendar_id": _calendar_id(str(event.get("calendar_id") or "")),
+            "calendar_id": _calendar_id(
+                str(event.get("calendar_id") or effective_calendar_id)
+            ),
             "event_id": str(event.get("event_id") or "").strip() or expected_event_id,
         }
     return {
         "summary": _event_summary(prepared.get("contact", {})),
         "location": prepared.get("contact", {}).get("address"),
         "description": _event_description(command),
-        "calendar_id": _calendar_id(command.calendar_id),
+        "calendar_id": effective_calendar_id,
         "event_id": expected_event_id,
     }
 
 
 def _calendar_failure_proves_no_write(result: Any) -> bool:
     """Classify Calendar create failures before choosing failed vs ambiguous."""
+    data = result.data if isinstance(result.data, dict) else {}
+    if data.get("request_phase") == "conflict_verification":
+        return False
     if result.error == "AUTH_ERROR":
         return True
     if result.error != "API_ERROR":
         return False
-    if not isinstance(result.data, dict):
-        return False
-    status_code = result.data.get("status_code")
+    status_code = data.get("status_code")
     return status_code in {400, 401, 403, 404}
+
+
+def _booking_result(result: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "contact_id": str(result.get("contact_id") or ""),
+        "lead_stage": str(result.get("lead_stage") or ""),
+        "status": str(result.get("status") or ""),
+        "calendar_event_id": (
+            str(result["calendar_event_id"])
+            if result.get("calendar_event_id") is not None
+            else None
+        ),
+        "expected_calendar_event_id": (
+            str(result["expected_calendar_event_id"])
+            if result.get("expected_calendar_event_id") is not None
+            else None
+        ),
+        "idempotent": bool(result.get("idempotent")),
+    }
 
 
 async def schedule_eom_estimate_booking(
@@ -116,11 +152,12 @@ async def schedule_eom_estimate_booking(
         contact_id=command.contact_id,
         booking_key=command.booking_key,
     )
+    effective_calendar_id = _effective_calendar_id(command.calendar_id, calendar)
     prepared = await preparer(
         contact_id=command.contact_id,
         scheduled_start=command.scheduled_start,
         scheduled_end=command.scheduled_end,
-        calendar_id=_calendar_id(command.calendar_id),
+        calendar_id=effective_calendar_id,
         notes=command.notes,
         booking_key=command.booking_key,
         expected_calendar_event_id=expected_event_id,
@@ -128,7 +165,7 @@ async def schedule_eom_estimate_booking(
         actor_name=command.actor_name,
     )
     if bool(prepared.get("idempotent")) and prepared.get("status") == "estimate_booked":
-        return prepared
+        return _booking_result(prepared)
 
     create_event = getattr(calendar, "create_event", None)
     if not callable(create_event):
@@ -139,6 +176,7 @@ async def schedule_eom_estimate_booking(
     calendar_event = _prepared_calendar_event(
         prepared,
         command=command,
+        effective_calendar_id=effective_calendar_id,
         expected_event_id=expected_event_id,
     )
     if calendar_event["event_id"] != expected_event_id:
@@ -209,11 +247,11 @@ async def schedule_eom_estimate_booking(
             "Calendar returned an unexpected event id; booking requires reconciliation",
         )
 
-    return await completer(
+    completed = await completer(
         contact_id=command.contact_id,
         scheduled_start=command.scheduled_start,
         scheduled_end=command.scheduled_end,
-        calendar_id=_calendar_id(command.calendar_id),
+        calendar_id=effective_calendar_id,
         notes=command.notes,
         booking_key=command.booking_key,
         expected_calendar_event_id=expected_event_id,
@@ -221,3 +259,4 @@ async def schedule_eom_estimate_booking(
         actor_id=command.actor_id,
         actor_name=command.actor_name,
     )
+    return _booking_result(completed)
