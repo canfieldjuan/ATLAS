@@ -8,12 +8,9 @@ rule before a PR branch is pushed or opened. That leaves branch/lane drift as a
 manual convention at the same point where `push_pr.sh` and `open_pr.sh` already
 have the PR body and current branch available.
 
-Audit finding:
-
-- `docs/audits/agents-mechanical-enforcement-audit-2026-07-29.md` classified
-  "Builder branch names use `claude/pr-<slice-name>`" as `PROSE_ONLY` because
-  `AGENTS.md` defines the convention but no branch-name gate was found in
-  `open_pr.sh`, `push_pr.sh`, or CI.
+Audit finding: `docs/audits/agents-mechanical-enforcement-audit-2026-07-29.md`
+classified "Builder branch names use `claude/pr-<slice-name>`" as `PROSE_ONLY`;
+no branch-name gate was found in `open_pr.sh`, `push_pr.sh`, or CI.
 
 ### Problem-derived contract
 
@@ -142,17 +139,19 @@ Parked hardening: none.
 ## Verification
 
 - `python -m pytest tests/test_check_pr_branch_name.py tests/test_push_pr_wrapper.py tests/test_open_pr_wrapper.py`
-  - 74 passed.
+  - 75 passed.
+- `python scripts/maturity_sweep.py scripts --tests-root tests --baseline tests/maturity_sweep/baseline_scripts.json --min-score 8 --sensitive-glob 'scripts/**'`
+  - Ratchet gate passed: no new brittleness above baseline.
 
 ## Estimated diff size
 
 | File | LOC |
 |---|---:|
-| `plans/PR-Branch-Naming-Gate.md` | 158 |
+| `plans/PR-Branch-Naming-Gate.md` | 157 |
 | `scripts/check_pr_branch_name.py` | 85 |
 | `scripts/open_pr.sh` | 17 |
 | `scripts/push_pr.sh` | 8 |
-| `tests/test_check_pr_branch_name.py` | 74 |
+| `tests/test_check_pr_branch_name.py` | 81 |
 | `tests/test_open_pr_wrapper.py` | 20 |
 | `tests/test_push_pr_wrapper.py` | 31 |
-| **Total** | **393** |
+| **Total** | **399** |

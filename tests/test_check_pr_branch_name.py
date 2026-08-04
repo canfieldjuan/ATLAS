@@ -4,6 +4,8 @@ import importlib.util
 from pathlib import Path
 import sys
 
+import pytest
+
 
 ROOT = Path(__file__).resolve().parents[1]
 SCRIPT = ROOT / "scripts/check_pr_branch_name.py"
@@ -72,3 +74,8 @@ def test_detached_branch_fails() -> None:
     assert checker.branch_name_errors(branch="", body=_body()) == [
         "current checkout is detached; switch to a PR branch first"
     ]
+
+
+def test_cli_parser_rejects_missing_required_arguments() -> None:
+    with pytest.raises(SystemExit):
+        checker.main([])
