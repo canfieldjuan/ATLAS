@@ -14,7 +14,9 @@ from _pr_change_policy import is_dependabot_author
 PLAN_LINE_RE = re.compile(r"^Plan:\s+plans/PR-(?P<slice>[A-Za-z0-9._-]+)\.md\s*$")
 DOCS_ONLY_RE = re.compile(r"^Docs-only:\s*true\s*$", re.IGNORECASE)
 PR_BRANCH_RE = re.compile(r"^claude/pr-[a-z0-9](?:[a-z0-9._-]*[a-z0-9])?$")
-BULK_PUSH_MODES = frozenset({"--all", "--mirror", "--tags", "--delete", "-d"})
+BULK_PUSH_MODES = frozenset(
+    {"--all", "--mirror", "--tags", "--follow-tags", "--delete", "-d"}
+)
 PUSH_OPTIONS_WITH_VALUES = frozenset(
     {"--receive-pack", "--exec", "--push-option", "-o"}
 )
@@ -93,6 +95,9 @@ def push_refspec_errors(
         ):
             errors.append(f"push mode {arg!r} can push refs outside {clean_branch!r}")
             continue
+        if arg.startswith("-") and not arg.startswith("--") and "d" in arg[1:]:
+            errors.append(f"push mode {arg!r} can push refs outside {clean_branch!r}")
+            continue
         if arg in PUSH_OPTIONS_WITH_VALUES:
             index += 1
             continue
@@ -118,7 +123,7 @@ def push_refspec_errors(
                 )
         elif refspec not in allowed_sources:
             errors.append(f"push refspec {refspec!r} must be HEAD or {clean_branch!r}")
-    if repository_seen and not refspec_seen:
+    if push_args and not refspec_seen:
         errors.append(f"push must explicitly name HEAD or {clean_branch!r} as refspec")
     return errors
 

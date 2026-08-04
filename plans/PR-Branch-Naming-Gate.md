@@ -13,7 +13,8 @@ classified "Builder branch names use `claude/pr-<slice-name>`" as `PROSE_ONLY`;
 no branch-name gate was found in `open_pr.sh`, `push_pr.sh`, or CI.
 
 Review-fix overage: Codex found admission-boundary gaps in the first pushes
-(forwarded refspecs, unqualified/bulk refs, and Dependabot-generated bodies).
+(forwarded refspecs, unqualified/bulk refs, tag-pushing modes, option-only
+pushes, clustered delete flags, and Dependabot-generated bodies).
 They are indivisible from this gate because each is a way around or through the
 same wrapper boundary.
 
@@ -25,9 +26,10 @@ same wrapper boundary.
   plan file.
 - Correct fix must touch/change: add a branch-name checker that reads the PR body
   and current branch; call it from `scripts/push_pr.sh` and `scripts/open_pr.sh`
-  before fetch/review/GitHub mutation; validate forwarded push refspecs;
-  preserve the Dependabot author exemption; add direct and wrapper tests for
-  matching, mismatched, docs-only, refspec, and Dependabot bodies.
+  before fetch/review/GitHub mutation; validate forwarded push refspecs; reject
+  tag-pushing modes, option-only forwarded pushes, and delete-mode short-option
+  clusters; preserve the Dependabot author exemption; add direct and wrapper
+  tests for matching, mismatched, docs-only, refspec, and Dependabot bodies.
 - Must not change: do not change product code, branch protection, PR body audit
   semantics, draft consent semantics, PR ownership semantics, docs-only body
   admission, Dependabot behavior, or any EOM / dependency / non-owned PR lane.
@@ -63,12 +65,18 @@ Slice phase: Workflow/process
   5. Explicit push refspecs cannot send the reviewed branch to another PR branch;
      settled by
      `tests/test_push_pr_wrapper.py::test_push_pr_rejects_mismatched_refspec_before_fetch`.
-  6. Unqualified non-matching refs, repository-only pushes, and bulk push modes
-     fail before fetch; settled by
+  6. Unqualified non-matching refs, repository-only pushes, option-only pushes,
+     tag-pushing modes, clustered delete flags, and bulk push modes fail before
+     fetch; settled by
      `tests/test_check_pr_branch_name.py::test_push_refspec_rejects_unqualified_other_branch`,
      `tests/test_check_pr_branch_name.py::test_push_refspec_rejects_bulk_push_mode`,
-     and
-     `tests/test_push_pr_wrapper.py::test_push_pr_rejects_bulk_push_mode_before_fetch`.
+     `tests/test_check_pr_branch_name.py::test_push_refspec_rejects_follow_tags`,
+     `tests/test_check_pr_branch_name.py::test_push_refspec_rejects_clustered_delete_flag`,
+     `tests/test_check_pr_branch_name.py::test_push_refspec_rejects_option_only_push`,
+     `tests/test_push_pr_wrapper.py::test_push_pr_rejects_bulk_push_mode_before_fetch`,
+     `tests/test_push_pr_wrapper.py::test_push_pr_rejects_follow_tags_before_fetch`,
+     `tests/test_push_pr_wrapper.py::test_push_pr_rejects_clustered_delete_flag_before_fetch`,
+     and `tests/test_push_pr_wrapper.py::test_push_pr_rejects_option_only_push_before_fetch`.
   7. Dependabot-generated bodies keep their existing author exemption in both
      wrappers; settled by
      `tests/test_push_pr_wrapper.py::test_push_pr_dependabot_author_keeps_generated_body_exemption`
@@ -96,7 +104,8 @@ seam in the enumeration; otherwise write "N/A - no boundary change."
   deferred failure to later GitHub/session behavior.
 - Guard-relevant fields: current branch name, first structural PR body marker
   (`Plan:` or `Docs-only: true`), plan filename slug, PR author, and forwarded
-  push refspecs.
+  push refspecs, tag-pushing modes, option-only pushes, and clustered delete
+  flags.
 - Caller x input shape: wrapper invocations with a planned PR body, docs-only
   body, mismatched branch, non-PR branch, and detached branch.
 
@@ -143,9 +152,14 @@ local review, push, or GitHub mutation. That makes the branch-name convention an
 admission gate rather than a review-memory rule.
 
 `push_pr.sh` passes forwarded git-push arguments to the checker so explicit
-branch/refspec destinations must still target the reviewed branch. Dependabot
-authors bypass the builder-only plan/body/branch contract, matching the existing
-generated-PR exemption used by the PR body audit.
+branch/refspec destinations must still target the reviewed branch. It also
+rejects push modes that publish additional refs (`--tags`, `--follow-tags`,
+`--all`, `--mirror`) or delete refs (`--delete`, `-d`, clustered `-d` forms
+such as `-fd`). Forwarded push invocations must include an explicit `HEAD` or
+current-branch refspec, so option-only pushes cannot rely on implicit Git
+configuration. Dependabot authors bypass the builder-only plan/body/branch
+contract, matching the existing generated-PR exemption used by the PR body
+audit.
 
 ## Intentional
 
@@ -156,7 +170,7 @@ generated-PR exemption used by the PR body audit.
   for plan-backed slices.
 - No CI-only branch-protection change in this slice; the wrappers are the point
   where the local branch exists and can be rejected cheapest.
-- The 729 LOC total is over the soft cap because the Codex review fixes require
+- The LOC total is over the soft cap because the Codex review fixes require
   checker, wrapper, direct, and wrapper-fixture coverage for the same admission
   boundary; splitting would leave `live-reconciliation` red on this PR.
 
@@ -169,7 +183,7 @@ Parked hardening: none.
 ## Verification
 
 - `python -m pytest tests/test_check_pr_branch_name.py tests/test_push_pr_wrapper.py tests/test_open_pr_wrapper.py`
-  - 86 passed.
+  - 92 passed.
 - `python scripts/maturity_sweep.py scripts --tests-root tests --baseline tests/maturity_sweep/baseline_scripts.json --min-score 8 --sensitive-glob 'scripts/**'`
   - Ratchet gate passed: no new brittleness above baseline.
 
@@ -177,11 +191,11 @@ Parked hardening: none.
 
 | File | LOC |
 |---|---:|
-| `plans/PR-Branch-Naming-Gate.md` | 187 |
-| `scripts/check_pr_branch_name.py` | 160 |
+| `plans/PR-Branch-Naming-Gate.md` | 201 |
+| `scripts/check_pr_branch_name.py` | 165 |
 | `scripts/open_pr.sh` | 24 |
 | `scripts/push_pr.sh` | 18 |
-| `tests/test_check_pr_branch_name.py` | 148 |
+| `tests/test_check_pr_branch_name.py` | 185 |
 | `tests/test_open_pr_wrapper.py` | 49 |
-| `tests/test_push_pr_wrapper.py` | 143 |
-| **Total** | **729** |
+| `tests/test_push_pr_wrapper.py` | 231 |
+| **Total** | **873** |

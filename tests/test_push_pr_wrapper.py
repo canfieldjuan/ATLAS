@@ -236,6 +236,94 @@ def test_push_pr_rejects_bulk_push_mode_before_fetch(tmp_path: Path) -> None:
     assert "git fetch --quiet origin main" not in order_log.read_text(encoding="utf-8")
 
 
+def test_push_pr_rejects_follow_tags_before_fetch(tmp_path: Path) -> None:
+    repo = _write_fixture_repo(tmp_path)
+    body = _write_body(repo)
+    order_log = repo / "order.log"
+    fake_bin = _write_fake_git(repo, order_log)
+    env = {
+        **os.environ,
+        "PATH": f"{fake_bin}{os.pathsep}{os.environ['PATH']}",
+        "FAKE_GIT_TOPLEVEL": str(repo),
+        "FAKE_GIT_LOG": str(order_log),
+        "ORDER_LOG": str(order_log),
+    }
+
+    result = subprocess.run(
+        ["bash", "scripts/push_pr.sh", str(body), "--follow-tags", "origin", "HEAD"],
+        cwd=repo,
+        env=env,
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+
+    assert result.returncode == 2
+    assert "push mode '--follow-tags'" in result.stderr
+    assert "git fetch --quiet origin main" not in order_log.read_text(encoding="utf-8")
+
+
+def test_push_pr_rejects_clustered_delete_flag_before_fetch(tmp_path: Path) -> None:
+    repo = _write_fixture_repo(tmp_path)
+    body = _write_body(repo)
+    order_log = repo / "order.log"
+    fake_bin = _write_fake_git(repo, order_log)
+    env = {
+        **os.environ,
+        "PATH": f"{fake_bin}{os.pathsep}{os.environ['PATH']}",
+        "FAKE_GIT_TOPLEVEL": str(repo),
+        "FAKE_GIT_LOG": str(order_log),
+        "ORDER_LOG": str(order_log),
+    }
+
+    result = subprocess.run(
+        [
+            "bash",
+            "scripts/push_pr.sh",
+            str(body),
+            "-fd",
+            "origin",
+            "claude/pr-test",
+        ],
+        cwd=repo,
+        env=env,
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+
+    assert result.returncode == 2
+    assert "push mode '-fd'" in result.stderr
+    assert "git fetch --quiet origin main" not in order_log.read_text(encoding="utf-8")
+
+
+def test_push_pr_rejects_option_only_push_before_fetch(tmp_path: Path) -> None:
+    repo = _write_fixture_repo(tmp_path)
+    body = _write_body(repo)
+    order_log = repo / "order.log"
+    fake_bin = _write_fake_git(repo, order_log)
+    env = {
+        **os.environ,
+        "PATH": f"{fake_bin}{os.pathsep}{os.environ['PATH']}",
+        "FAKE_GIT_TOPLEVEL": str(repo),
+        "FAKE_GIT_LOG": str(order_log),
+        "ORDER_LOG": str(order_log),
+    }
+
+    result = subprocess.run(
+        ["bash", "scripts/push_pr.sh", str(body), "--force"],
+        cwd=repo,
+        env=env,
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+
+    assert result.returncode == 2
+    assert "push must explicitly name HEAD" in result.stderr
+    assert "git fetch --quiet origin main" not in order_log.read_text(encoding="utf-8")
+
+
 def test_push_pr_dependabot_author_keeps_generated_body_exemption(tmp_path: Path) -> None:
     repo = _write_fixture_repo(tmp_path)
     _git(repo, "switch", "-c", "dependabot/pip/security-update")

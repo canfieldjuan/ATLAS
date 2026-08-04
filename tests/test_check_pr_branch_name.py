@@ -136,11 +136,48 @@ def test_push_refspec_rejects_bulk_push_mode() -> None:
     ]
 
 
+def test_push_refspec_rejects_follow_tags() -> None:
+    errors = checker.push_refspec_errors(
+        branch="claude/pr-branch-naming-gate",
+        body=_body(),
+        push_args=["--follow-tags", "origin", "HEAD"],
+    )
+
+    assert errors == [
+        "push mode '--follow-tags' can push refs outside "
+        "'claude/pr-branch-naming-gate'"
+    ]
+
+
+def test_push_refspec_rejects_clustered_delete_flag() -> None:
+    errors = checker.push_refspec_errors(
+        branch="claude/pr-branch-naming-gate",
+        body=_body(),
+        push_args=["-fd", "origin", "claude/pr-branch-naming-gate"],
+    )
+
+    assert errors == [
+        "push mode '-fd' can push refs outside 'claude/pr-branch-naming-gate'"
+    ]
+
+
 def test_push_refspec_rejects_repository_without_refspec() -> None:
     errors = checker.push_refspec_errors(
         branch="claude/pr-branch-naming-gate",
         body=_body(),
         push_args=["origin"],
+    )
+
+    assert errors == [
+        "push must explicitly name HEAD or 'claude/pr-branch-naming-gate' as refspec"
+    ]
+
+
+def test_push_refspec_rejects_option_only_push() -> None:
+    errors = checker.push_refspec_errors(
+        branch="claude/pr-branch-naming-gate",
+        body=_body(),
+        push_args=["--force"],
     )
 
     assert errors == [
