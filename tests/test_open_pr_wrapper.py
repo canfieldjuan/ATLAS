@@ -70,6 +70,7 @@ def test_open_pr_existing_pr_rejects_create_only_args(tmp_path: Path) -> None:
         (["-wd"], {}, "refusing draft PR without explicit operator consent"),
         (["-fd=true"], {}, "refusing draft PR without explicit operator consent"),
         (["-fwd"], {}, "refusing draft PR without explicit operator consent"),
+        (["-dt", "some title"], {}, "refusing draft PR without explicit operator consent"),
         (["--base", "release"], {}, "refusing non-main base: release"),
         (["-Brelease"], {}, "refusing non-main base: release"),
         ([], {"GH_REPO": "other/repo"}, "refusing GH_REPO target override"),
@@ -130,6 +131,41 @@ def test_open_pr_allows_value_shorthand_containing_d_without_consent(tmp_path: P
         "pr create -tdraft-note --repo canfieldjuan/ATLAS --base main --body-file -"
     )
     assert stdin_capture.read_text(encoding="utf-8") == body.read_text(encoding="utf-8")
+
+
+@pytest.mark.parametrize("args", [["--title", "--draft"], ["-t", "-d"]])
+def test_open_pr_allows_draft_shaped_value_of_title_without_consent(
+    tmp_path: Path,
+    args: list[str],
+) -> None:
+    # gh consumes the token after --title/-t as the title value, so a
+    # "--draft"-shaped value does not enable draft mode and needs no consent.
+    repo, body, env, log, stdin_capture = _ready(tmp_path, view_exit=1)
+
+    result = _run(repo, env, body, *args)
+
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert log.read_text(encoding="utf-8").strip() == (
+        f"pr create {' '.join(args)} --repo canfieldjuan/ATLAS --base main --body-file -"
+    )
+    assert stdin_capture.read_text(encoding="utf-8") == body.read_text(encoding="utf-8")
+
+
+def test_open_pr_rejects_draft_before_any_fetch_side_effect(tmp_path: Path) -> None:
+    # Argument admission must run before refresh_base_ref: with origin
+    # destroyed, an unauthorized --draft still fails on consent, not on fetch.
+    import shutil
+
+    repo, body, env, log, stdin_capture = _ready(tmp_path, view_exit=1)
+    shutil.rmtree(tmp_path / "origin.git")
+
+    result = _run(repo, env, body, "--draft")
+
+    assert result.returncode == 2
+    assert "refusing draft PR without explicit operator consent" in result.stderr
+    assert "failed to refresh origin/main" not in result.stderr
+    assert not log.exists()
+    assert not stdin_capture.exists()
 
 
 def test_open_pr_rejects_invalid_body_before_gh(tmp_path: Path) -> None:

@@ -62,33 +62,39 @@ require_draft_consent() {
     fi
 }
 
-shorthand_cluster_sets_draft() {
+scan_shorthand_cluster() {
     # gh's pflag parser walks a one-dash cluster left to right: boolean
     # shorthands keep scanning (so -fd and -wd both enable draft), a
-    # value-taking shorthand consumes the rest of the token as its value, and
-    # '=' binds the remainder to the shorthand before it. Value-taking
-    # shorthands for `gh pr create`: -a -B -b -F -H -l -m -p -r -R -t -T.
-    # Unknown letters are treated as booleans, which fail closed: scanning
-    # continues, so a 'd' after them still requires consent.
+    # value-taking shorthand takes the attached remainder as its value or,
+    # when nothing is attached, consumes the NEXT argv token, and '=' binds
+    # the remainder to the shorthand before it. Value-taking shorthands for
+    # `gh pr create`: -a -B -b -F -H -l -m -p -r -R -t -T. Unknown letters
+    # are treated as booleans, which fails closed: scanning continues, so a
+    # 'd' after them still requires consent.
+    cluster_sets_draft=0
+    cluster_consumes_next=0
     local cluster="${1#-}" ch
     while [ -n "$cluster" ]; do
         ch="${cluster:0:1}"
-        if [ "$ch" = "d" ]; then
-            return 0
-        fi
         case "$ch" in
+            d)
+                cluster_sets_draft=1
+                ;;
             a|B|b|F|H|l|m|p|r|R|t|T)
-                return 1
+                if [ -z "${cluster:1}" ]; then
+                    cluster_consumes_next=1
+                fi
+                return 0
                 ;;
         esac
         cluster="${cluster:1}"
         case "$cluster" in
             =*)
-                return 1
+                return 0
                 ;;
         esac
     done
-    return 1
+    return 0
 }
 
 reject_target_overrides() {
@@ -103,6 +109,11 @@ reject_target_overrides() {
         arg="$1"
         shift
         case "$arg" in
+            --)
+                # pflag stops option parsing here and `gh pr create` accepts
+                # no positional args, so nothing after -- can enable draft.
+                break
+                ;;
             --head|-H|--repo|-R)
                 echo "open_pr.sh: refusing target-changing create arg: $arg" >&2
                 exit 2
@@ -143,9 +154,19 @@ reject_target_overrides() {
                     exit 2
                 fi
                 ;;
+            --assignee|--label|--milestone|--project|--reviewer|--title|--template|--recover)
+                # Long value-taking option with a separate value token: gh
+                # consumes the next token as the value, so a following
+                # "--draft"-shaped token is data, not a draft flag.
+                [ "$#" -gt 0 ] && shift
+                ;;
             -[!-]*)
-                if shorthand_cluster_sets_draft "$arg"; then
+                scan_shorthand_cluster "$arg"
+                if [ "$cluster_sets_draft" = "1" ]; then
                     require_draft_consent "$arg"
+                fi
+                if [ "$cluster_consumes_next" = "1" ] && [ "$#" -gt 0 ]; then
+                    shift
                 fi
                 ;;
         esac
@@ -320,14 +341,8 @@ normalize_create_args() {
     done
 }
 
-refresh_base_ref
-
-body_audit_args=(--base-ref origin/main)
-if [ -n "${ATLAS_CURRENT_PR_AUTHOR:-}" ]; then
-    body_audit_args+=(--pr-author "$ATLAS_CURRENT_PR_AUTHOR")
-fi
-"$python_bin" scripts/audit_pr_body.py "${body_audit_args[@]}" "$body_file"
-
+# Argument admission runs before any side effect (base fetch, body audit,
+# GitHub calls): a rejected invocation must not touch the network or refs.
 for arg in "$@"; do
     case "$arg" in
         --body|--body-file|-b|-F)
@@ -337,6 +352,14 @@ for arg in "$@"; do
     esac
 done
 reject_target_overrides "$@"
+
+refresh_base_ref
+
+body_audit_args=(--base-ref origin/main)
+if [ -n "${ATLAS_CURRENT_PR_AUTHOR:-}" ]; then
+    body_audit_args+=(--pr-author "$ATLAS_CURRENT_PR_AUTHOR")
+fi
+"$python_bin" scripts/audit_pr_body.py "${body_audit_args[@]}" "$body_file"
 
 branch="$(git branch --show-current)"
 if [ -z "$branch" ]; then
