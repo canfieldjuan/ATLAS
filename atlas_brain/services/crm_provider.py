@@ -1347,8 +1347,17 @@ class DatabaseCRMProvider:
         expected_calendar_event_id: str,
         actor_id: int,
         actor_name: str,
+        calendar_id_explicit: bool = True,
     ) -> dict[str, Any]:
-        """Claim one lead/booking key before the external Calendar side effect."""
+        """Claim one lead/booking key before the external Calendar side effect.
+
+        Row-lock order contract: the contact row is locked BEFORE any
+        eom_lead_lifecycle_events rows, matching
+        finalize_eom_customer_handoff (contact first, then lifecycle rows).
+        Locking lifecycle rows first here deadlocks against a concurrent
+        handoff finalization that already holds the contact row and is
+        waiting on the same lifecycle rows (Postgres 40P01).
+        """
         from .eom_lead_conversion import EOMLeadConversionError
         from .eom_lead_ingress import EOM_BUSINESS_CONTEXT_ID
 
@@ -1365,6 +1374,22 @@ class DatabaseCRMProvider:
                     "SELECT pg_advisory_xact_lock(hashtextextended($1, 0))",
                     lock_key,
                 )
+
+            contact = await conn.fetchrow(
+                """
+                SELECT id, full_name, email, phone, address, business_context_id,
+                       contact_type, lead_stage, status
+                FROM contacts
+                WHERE id = $1
+                FOR UPDATE
+                """,
+                contact_id,
+            )
+            if (
+                contact is None
+                or contact["business_context_id"] != EOM_BUSINESS_CONTEXT_ID
+            ):
+                raise EOMLeadConversionError(404, "EOM lead was not found")
 
             key_events = await conn.fetch(
                 """
@@ -1387,22 +1412,6 @@ class DatabaseCRMProvider:
                         409,
                         "Booking key already belongs to a different EOM lead",
                     )
-
-            contact = await conn.fetchrow(
-                """
-                SELECT id, full_name, email, phone, address, business_context_id,
-                       contact_type, lead_stage, status
-                FROM contacts
-                WHERE id = $1
-                FOR UPDATE
-                """,
-                contact_id,
-            )
-            if (
-                contact is None
-                or contact["business_context_id"] != EOM_BUSINESS_CONTEXT_ID
-            ):
-                raise EOMLeadConversionError(404, "EOM lead was not found")
 
             events = await conn.fetch(
                 """
@@ -1466,6 +1475,15 @@ class DatabaseCRMProvider:
                 request_metadata = self._eom_estimate_booking_metadata_from_row(
                     request_for_key["metadata"]
                 )
+                if not calendar_id_explicit:
+                    # The caller omitted calendar_id; a delayed same-key retry
+                    # must replay against the persisted request snapshot, not
+                    # whatever the configured default has drifted to since.
+                    snapshot_calendar_id = str(
+                        request_metadata.get("calendar_id") or ""
+                    ).strip()
+                    if snapshot_calendar_id:
+                        calendar_id = snapshot_calendar_id
                 if not self._eom_estimate_booking_payload_matches(
                     request_metadata,
                     scheduled_start=scheduled_start,
@@ -1606,12 +1624,15 @@ class DatabaseCRMProvider:
                     contact_id, event_type, from_stage, to_stage, actor,
                     source, operation_key, metadata
                 )
-                SELECT $1::uuid, 'estimate_booking_calendar_ambiguous', 'new', 'new',
+                SELECT c.id, 'estimate_booking_calendar_ambiguous',
+                       c.lead_stage, c.lead_stage,
                        $2::varchar, 'eom_office', $3::varchar, jsonb_build_object(
                            'expected_calendar_event_id', $4::text,
                            'observed_calendar_event_id', $5::text
                        )
-                WHERE NOT EXISTS (
+                FROM contacts c
+                WHERE c.id = $1::uuid
+                  AND NOT EXISTS (
                     SELECT 1
                     FROM eom_lead_lifecycle_events
                     WHERE contact_id = $1::uuid
@@ -1660,13 +1681,16 @@ class DatabaseCRMProvider:
                     contact_id, event_type, from_stage, to_stage, actor,
                     source, operation_key, metadata, reason
                 )
-                SELECT $1::uuid, 'estimate_booking_calendar_failed', 'new', 'new',
+                SELECT c.id, 'estimate_booking_calendar_failed',
+                       c.lead_stage, c.lead_stage,
                        $2::varchar, 'eom_office', $3::varchar, jsonb_build_object(
                             'expected_calendar_event_id', $4::text,
                             'calendar_error', $5::text,
                             'calendar_message', $6::text
                        ), $6::text
-                WHERE NOT EXISTS (
+                FROM contacts c
+                WHERE c.id = $1::uuid
+                  AND NOT EXISTS (
                     SELECT 1
                     FROM eom_lead_lifecycle_events
                     WHERE contact_id = $1::uuid

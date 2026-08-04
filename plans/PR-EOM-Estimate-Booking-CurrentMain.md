@@ -271,6 +271,13 @@ not widen old query results.
 - Tracker UI wiring for collecting estimate date/time from the office screen.
 - Customer/Site onboarding after estimate approval.
 - First-clean/card-on-file automation after Customer/Site approval.
+- Ambiguous-booking calendar reconciliation surface. Transport/5xx ambiguity
+  is an absorbing state in this slice (fail-closed by design); the follow-up
+  either ships an operator reconciliation command or admits deterministic-ID
+  same-key retry for transport/5xx ambiguity, which the 409 fetch-verify path
+  makes provably duplicate-safe. Pre-request failures (TOOL_DISABLED /
+  NOT_CONFIGURED) are already terminal-failed in this slice, so misconfigured
+  boots cannot wedge a lead.
 
 Parking predicate: hardening that is narrower than one estimate-booking request,
 or that requires a new table/subsystem/dependency beyond the lifecycle ledger,

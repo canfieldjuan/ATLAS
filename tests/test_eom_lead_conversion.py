@@ -515,8 +515,65 @@ async def test_private_estimate_booking_uses_configured_calendar_when_payload_om
 
     assert response.status_code == 201
     assert crm.prepare_calls[0]["calendar_id"] == "configured-estimate-calendar"
+    assert crm.prepare_calls[0]["calendar_id_explicit"] is False
     assert calendar.calls[0]["calendar_id"] == "configured-estimate-calendar"
     assert crm.complete_calls[0]["calendar_id"] == "configured-estimate-calendar"
+
+
+@pytest.mark.asyncio
+async def test_private_estimate_booking_reports_explicit_calendar_id_to_prepare():
+    crm = _CRM()
+    calendar = _Calendar()
+    app = _app(crm, _enabled_config(), calendar=calendar)
+    contact_id = uuid4()
+    booking_key = f"office-booking-{uuid4().hex}"
+
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=app), base_url="http://test"
+    ) as client:
+        response = await client.post(
+            f"/eom-funnel/leads/{contact_id}/estimate-bookings",
+            headers=_headers(approval_key=booking_key),
+            json=_booking_payload(calendar_id="estimate-calendar"),
+        )
+
+    assert response.status_code == 201
+    assert crm.prepare_calls[0]["calendar_id"] == "estimate-calendar"
+    assert crm.prepare_calls[0]["calendar_id_explicit"] is True
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("pre_request_error", ["TOOL_DISABLED", "NOT_CONFIGURED"])
+async def test_private_estimate_booking_pre_request_calendar_failure_is_terminal(
+    pre_request_error,
+):
+    """TOOL_DISABLED/NOT_CONFIGURED happen before any Google request, so no
+    event can exist: the booking must record a terminal failed attempt, never
+    an ambiguous wedge (a service booted before Calendar secrets are populated
+    must not permanently block the lead)."""
+    crm = _CRM()
+    calendar = _Calendar(
+        success=False,
+        error=pre_request_error,
+        message="Calendar unavailable before any request",
+    )
+    app = _app(crm, _enabled_config(), calendar=calendar)
+    contact_id = uuid4()
+    booking_key = f"office-booking-{uuid4().hex}"
+
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=app), base_url="http://test"
+    ) as client:
+        response = await client.post(
+            f"/eom-funnel/leads/{contact_id}/estimate-bookings",
+            headers=_headers(approval_key=booking_key),
+            json=_booking_payload(),
+        )
+
+    assert response.status_code == 502
+    assert crm.ambiguous_calls == []
+    assert len(crm.failed_calls) == 1
+    assert crm.failed_calls[0]["calendar_error"] == pre_request_error
 
 
 @pytest.mark.asyncio

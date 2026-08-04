@@ -43,6 +43,10 @@ def _calendar_id(value: str | None) -> str:
 
 
 def _configured_calendar_id(calendar: Any) -> str:
+    configured = getattr(calendar, "configured_calendar_id", None)
+    if isinstance(configured, str) and configured.strip():
+        return _calendar_id(configured)
+    # Fallback for providers/fakes that predate the public accessor.
     config = getattr(calendar, "_config", None)
     configured = getattr(config, "calendar_id", None)
     return _calendar_id(configured if isinstance(configured, str) else None)
@@ -101,6 +105,12 @@ def _calendar_failure_proves_no_write(result: Any) -> bool:
     data = result.data if isinstance(result.data, dict) else {}
     if data.get("request_phase") == "conflict_verification":
         return False
+    if result.error in {"TOOL_DISABLED", "NOT_CONFIGURED"}:
+        # CalendarTool returns these before issuing any Google request, so no
+        # event can exist; recording ambiguity here would wedge the lead with
+        # no reconciliation surface (e.g. service booted before Calendar
+        # secrets were populated).
+        return True
     if result.error == "AUTH_ERROR":
         return True
     if result.error != "API_ERROR":
@@ -152,12 +162,14 @@ async def schedule_eom_estimate_booking(
         contact_id=command.contact_id,
         booking_key=command.booking_key,
     )
+    requested_calendar_id = (command.calendar_id or "").strip()
     effective_calendar_id = _effective_calendar_id(command.calendar_id, calendar)
     prepared = await preparer(
         contact_id=command.contact_id,
         scheduled_start=command.scheduled_start,
         scheduled_end=command.scheduled_end,
         calendar_id=effective_calendar_id,
+        calendar_id_explicit=bool(requested_calendar_id),
         notes=command.notes,
         booking_key=command.booking_key,
         expected_calendar_event_id=expected_event_id,
@@ -251,7 +263,7 @@ async def schedule_eom_estimate_booking(
         contact_id=command.contact_id,
         scheduled_start=command.scheduled_start,
         scheduled_end=command.scheduled_end,
-        calendar_id=effective_calendar_id,
+        calendar_id=str(calendar_event["calendar_id"]),
         notes=command.notes,
         booking_key=command.booking_key,
         expected_calendar_event_id=expected_event_id,

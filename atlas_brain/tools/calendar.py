@@ -44,7 +44,12 @@ def _parse_google_event_datetime(value: Any) -> datetime | None:
 
 def _google_event_datetime_matches(value: Any, expected: datetime) -> bool:
     parsed = _parse_google_event_datetime(value)
-    return parsed is not None and parsed == expected
+    if parsed is None:
+        return False
+    # Google truncates sub-second precision on stored events; compare at
+    # whole-second granularity so a successful create followed by a retry
+    # with microsecond input still verifies as the same event.
+    return parsed.replace(microsecond=0) == expected.replace(microsecond=0)
 
 
 def _existing_calendar_event_matches(
@@ -147,6 +152,14 @@ class CalendarTool:
     @property
     def name(self) -> str:
         return "get_calendar"
+
+    @property
+    def configured_calendar_id(self) -> str:
+        """Public accessor for the configured default calendar id."""
+        configured = getattr(self._config, "calendar_id", None)
+        if isinstance(configured, str) and configured.strip():
+            return configured.strip()
+        return "primary"
 
     @property
     def description(self) -> str:
