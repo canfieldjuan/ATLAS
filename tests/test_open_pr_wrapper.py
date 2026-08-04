@@ -151,6 +151,133 @@ def test_open_pr_allows_draft_shaped_value_of_title_without_consent(
     assert stdin_capture.read_text(encoding="utf-8") == body.read_text(encoding="utf-8")
 
 
+def test_open_pr_disables_gh_prompts_so_interactive_draft_is_unreachable(tmp_path: Path) -> None:
+    # gh's interactive create survey offers a "Submit as draft" action that
+    # never appears in argv; the wrapper must export GH_PROMPT_DISABLED=1 so
+    # every gh call is non-interactive and draft mode can only arrive as an
+    # argv flag through the consent gate.
+    repo, body, env, log, stdin_capture = _ready(tmp_path, view_exit=1)
+    env.pop("GH_PROMPT_DISABLED", None)
+
+    result = _run(repo, env, body, "--title", "Prompt gate")
+
+    assert result.returncode == 0, result.stdout + result.stderr
+    prompt_state = Path(env["GH_PROMPT_STATE"])
+    assert prompt_state.read_text(encoding="utf-8").strip() == "GH_PROMPT_DISABLED=1"
+
+
+def _pflag_draft_present(args: list[str]) -> bool:
+    """Independent consent oracle: walk argv as gh's pflag parser would.
+
+    Reports whether any draft-flag occurrence is present in the sequence
+    (value-blind, matching the wrapper's declared contract), modeling long
+    options with separate or '='-attached values, '--' end-of-options, and
+    shorthand clusters where booleans keep scanning and a value-taking
+    shorthand consumes the attached remainder or the next token.
+    """
+    val_short = set("aBbFHlmprRtT")
+    long_val = {
+        "--assignee", "--base", "--body", "--body-file", "--head", "--label",
+        "--milestone", "--project", "--recover", "--repo", "--reviewer",
+        "--template", "--title",
+    }
+    draft = False
+    i = 0
+    while i < len(args):
+        tok = args[i]
+        i += 1
+        if tok == "--":
+            break
+        if tok.startswith("--"):
+            name = tok.split("=", 1)[0]
+            if name == "--draft":
+                draft = True
+            elif name in long_val and "=" not in tok:
+                i += 1
+        elif tok.startswith("-") and len(tok) > 1:
+            cluster = tok[1:]
+            while cluster:
+                ch = cluster[0]
+                if ch in val_short:
+                    if len(cluster) == 1:
+                        i += 1
+                    break
+                if ch == "d":
+                    draft = True
+                cluster = cluster[1:]
+                if cluster.startswith("="):
+                    break
+    return draft
+
+
+def _generate_argv_grammar_cases() -> list[list[str]]:
+    # Product of boolean-shorthand positions x value-taking terminators x
+    # attached/separate/'=' values, restricted to letters the wrapper does not
+    # reject for target/body reasons (booleans f, w, e; value-taking t, l).
+    cases: list[tuple[str, ...]] = []
+    for pre in ("", "f", "w", "fw", "e"):
+        for core in ("", "d"):
+            base = pre + core
+            if base:
+                cases.append((f"-{base}",))
+                cases.append((f"-{base}=true",))
+                cases.append((f"-{base}=false",))
+            for val in ("t", "l"):
+                cases.append((f"-{base}{val}attached-value",))
+                cases.append((f"-{base}{val}", "separate-value"))
+                cases.append((f"-{base}{val}", "-d"))
+    cases += [
+        ("--draft",), ("--draft=true",), ("--draft=false",),
+        ("--title", "--draft"), ("--title", "-d"), ("--title", "t", "--draft"),
+        ("--label", "--draft", "--draft"),
+        ("--fill", "--draft"), ("--web", "-d"),
+        ("--", "--draft"), ("--", "-d"),
+        ("-t", "-d"), ("-a", "-d"), ("-t", "-d", "--draft"),
+        ("--template", "--draft"), ("--reviewer", "-fd"),
+    ]
+    unique: list[list[str]] = []
+    seen: set[tuple[str, ...]] = set()
+    for case in cases:
+        if case not in seen and all(tok != "-" for tok in case):
+            seen.add(case)
+            unique.append(list(case))
+    return unique
+
+
+def test_open_pr_draft_admission_matches_gh_argv_grammar(tmp_path: Path) -> None:
+    # Grammar-derived closure proof: for every generated argv sequence the
+    # wrapper's consent decision must equal the independent pflag oracle.
+    # The fixture has no origin remote, so a sequence that passes admission
+    # deterministically fails later at the base refresh -- proving admission
+    # neither gated it nor needed the network.
+    repo = tmp_path / "grammar-repo"
+    (repo / "scripts").mkdir(parents=True)
+    copy2(SCRIPT, repo / "scripts" / "open_pr.sh")
+    subprocess.run(
+        ["git", "init", "--initial-branch", "main"],
+        cwd=repo, check=True, capture_output=True, text=True,
+    )
+    body = tmp_path / "grammar-body.md"
+    body.write_text(_valid_body(), encoding="utf-8")
+    env = {**os.environ, "PYTHONDONTWRITEBYTECODE": "1"}
+    env.pop("GH_REPO", None)
+    env.pop("ATLAS_OPEN_PR_DRAFT_CONSENT", None)
+
+    failures = []
+    for args in _generate_argv_grammar_cases():
+        expected_draft = _pflag_draft_present(args)
+        result = subprocess.run(
+            ["bash", str(repo / "scripts" / "open_pr.sh"), str(body), *args],
+            cwd=repo, env=env, capture_output=True, text=True,
+        )
+        gated = "refusing draft PR without explicit operator consent" in result.stderr
+        if gated != expected_draft:
+            failures.append((args, f"oracle draft={expected_draft}", result.returncode, result.stderr.strip()))
+        elif not expected_draft and "failed to refresh origin/main" not in result.stderr:
+            failures.append((args, "admission pass did not reach base refresh", result.returncode, result.stderr.strip()))
+    assert not failures, failures
+
+
 def test_open_pr_rejects_draft_before_any_fetch_side_effect(tmp_path: Path) -> None:
     # Argument admission must run before refresh_base_ref: with origin
     # destroyed, an unauthorized --draft still fails on consent, not on fetch.
@@ -535,6 +662,7 @@ if [ "$1" = "pr" ] && [ "$2" = "list" ]; then
     exit 0
 fi
 printf '%s\\n' "$*" > "${GH_ARGV_LOG}"
+printf 'GH_PROMPT_DISABLED=%s\\n' "${GH_PROMPT_DISABLED:-}" > "${GH_PROMPT_STATE}"
 cat > "${GH_STDIN_CAPTURE}"
 if [ "$1" = "pr" ] && [ "$2" = "create" ]; then
     : > "${GH_CREATED_PR_FLAG}"
@@ -550,6 +678,7 @@ fi
         "GH_ARGV_LOG": str(log),
         "GH_STDIN_CAPTURE": str(stdin_capture),
         "GH_CREATED_PR_FLAG": str(created_flag),
+        "GH_PROMPT_STATE": str(tmp_path / "gh-prompt-state.txt"),
         "PYTHONDONTWRITEBYTECODE": "1",
     }, log, stdin_capture
 

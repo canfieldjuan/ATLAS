@@ -6,6 +6,12 @@ set -euo pipefail
 cd "$(git rev-parse --show-toplevel)"
 python_bin="${PYTHON:-python3}"
 
+# gh's interactive create survey exposes a "Submit as draft" action that would
+# bypass argv admission entirely; disable prompting structurally so every gh
+# call in this wrapper is non-interactive and draft mode can only arrive as an
+# argv flag through the consent gate.
+export GH_PROMPT_DISABLED=1
+
 usage() {
     cat <<'EOF'
 Usage: bash scripts/open_pr.sh BODY_FILE [gh-pr-create-args...]

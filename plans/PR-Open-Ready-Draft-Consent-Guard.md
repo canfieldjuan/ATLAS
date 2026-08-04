@@ -7,6 +7,13 @@ ready for review by default, but `open_pr.sh` still forwards `--draft` without
 any explicit operator-consent signal. Draft PRs delay automated review and have
 already cost this lane manual attention.
 
+Diff budget: the slice exceeds the 400 LOC soft cap (543 actual) because four
+Codex review rounds required class-closure work rather than spot fixes -- the
+pflag-faithful argv-grammar walk, the admission-before-side-effects ordering,
+a grammar-derived property suite with an independent oracle, and the plan's
+closure/R11 declarations. The runtime product surface is one wrapper script;
+over half the diff is tests and plan contract.
+
 ### Problem-derived contract
 
 - Root cause: The PR mutation wrapper rejects target-changing args, but it does
@@ -51,10 +58,20 @@ Slice phase: Workflow/process
     not on fetch.
   - `scripts/open_pr.sh` forwards `--draft` and `--draft=true` to
     `gh pr create` when `ATLAS_OPEN_PR_DRAFT_CONSENT=1` is set.
+  - `scripts/open_pr.sh` exports `GH_PROMPT_DISABLED=1` so gh's interactive
+    create survey (which offers "Submit as draft" with no argv token) is
+    unreachable through the wrapper.
+  - The consent decision matches an independent pflag oracle across a
+    generated product of boolean-shorthand positions x value-taking
+    terminators x attached/separate/`=` values
+    (`test_open_pr_draft_admission_matches_gh_argv_grammar`).
   - Existing safe ready-for-review create and edit flows continue to pass.
 - Reachability proof: `tests/test_open_pr_wrapper.py` invokes the real wrapper
   script against a fake `gh`; observable effects are process exit code, stderr,
-  and captured `gh pr create` argv/stdin.
+  and captured `gh pr create` argv/stdin. Class closure of the argv grammar is
+  proven by a grammar-derived property test whose expected verdicts come from
+  an independent Python model of gh's pflag walk, not from the shell code
+  under test.
 - Affected surfaces: `scripts/open_pr.sh` create-argument boundary and
   `tests/test_open_pr_wrapper.py` fixtures.
 - Risk areas: create-argument parsing, accidental draft mode, consent flag
@@ -167,6 +184,16 @@ default and fail-closed is simpler. Without `ATLAS_OPEN_PR_DRAFT_CONSENT=1`,
 call. With the flag set, the wrapper leaves the argument in place so the
 existing `gh pr create` call can intentionally create a draft PR.
 
+Two structural guarantees close the remaining entry points: the wrapper
+exports `GH_PROMPT_DISABLED=1`, so gh's interactive create survey -- whose
+"Submit as draft" action carries no argv token -- is unreachable and draft
+mode can only arrive through the gated argv path; and
+`test_open_pr_draft_admission_matches_gh_argv_grammar` proves grammar closure
+by generating the product of boolean-shorthand positions, value-taking
+terminators, and attached/separate/`=` value bindings, then asserting the
+wrapper's consent decision equals an independent Python oracle modeling gh's
+pflag walk for every generated sequence.
+
 ## Intentional
 
 - The consent signal is an environment flag, not a new persistent session-state
@@ -192,14 +219,14 @@ Parked hardening: none.
 
 ## Verification
 
-- `python -m pytest tests/test_open_pr_wrapper.py` - 45 passed.
+- `python -m pytest tests/test_open_pr_wrapper.py` - 47 passed.
 - `ATLAS_SESSION_STATE_FILE=SESSION_STATE.codex-open-ready-draft-consent.local.md bash scripts/local_pr_review.sh --current-pr-body-file /tmp/atlas-pr-body-open-ready-draft-consent.md` - passed.
 
 ## Estimated diff size
 
 | File | LOC |
 |---|---:|
-| `plans/PR-Open-Ready-Draft-Consent-Guard.md` | 205 |
-| `scripts/open_pr.sh` | 87 |
-| `tests/test_open_pr_wrapper.py` | 89 |
-| **Total** | **381** |
+| `plans/PR-Open-Ready-Draft-Consent-Guard.md` | 232 |
+| `scripts/open_pr.sh` | 93 |
+| `tests/test_open_pr_wrapper.py` | 218 |
+| **Total** | **543** |
