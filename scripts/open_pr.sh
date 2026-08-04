@@ -353,6 +353,14 @@ verify_pr_snapshot_head() {
     fi
 }
 
+guard_existing_pr_ownership() {
+    local pr_number="$1" branch="$2" expected_head="$3"
+    "$python_bin" scripts/check_session_pr_ownership.py \
+        --pr "$pr_number" \
+        --branch "$branch" \
+        --head-sha "$expected_head"
+}
+
 normalize_create_args() {
     trusted_create_args=()
     local arg value
@@ -416,6 +424,8 @@ if [ -n "$existing_pr_number" ]; then
         echo "Use gh pr edit manually for title/base/label changes." >&2
         exit 2
     fi
+
+    guard_existing_pr_ownership "$existing_pr_number" "$branch" "$reviewed_head"
 
     if [ "${ATLAS_OPEN_PR_DRY_RUN:-}" = "1" ]; then
         echo "DRY RUN: gh pr edit $existing_pr_number --body-file - < $body_file"
