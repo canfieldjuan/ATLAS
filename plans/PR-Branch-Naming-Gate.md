@@ -12,15 +12,21 @@ Audit finding: `docs/audits/agents-mechanical-enforcement-audit-2026-07-29.md`
 classified "Builder branch names use `claude/pr-<slice-name>`" as `PROSE_ONLY`;
 no branch-name gate was found in `open_pr.sh`, `push_pr.sh`, or CI.
 
+Review-fix overage: Codex found two admission-boundary gaps in the first push
+(forwarded refspecs and Dependabot-generated bodies). They are indivisible from
+this gate because both are ways around or through the same wrapper boundary.
+
 ### Problem-derived contract
 
 - Root cause: PR publication wrappers accept any current branch name, so a
-  builder can push/open a human PR from `main`, `claude/<topic>`, or a
-  wrong-slice branch even when the PR body names a PR plan file.
+  builder can push/open a human PR from `main`, `claude/<topic>`, a wrong-slice
+  branch, or a mismatched forwarded refspec even when the PR body names a PR
+  plan file.
 - Correct fix must touch/change: add a branch-name checker that reads the PR body
   and current branch; call it from `scripts/push_pr.sh` and `scripts/open_pr.sh`
-  before fetch/review/GitHub mutation; add direct and wrapper tests for matching,
-  mismatched, and docs-only bodies.
+  before fetch/review/GitHub mutation; validate forwarded push refspecs;
+  preserve the Dependabot author exemption; add direct and wrapper tests for
+  matching, mismatched, docs-only, refspec, and Dependabot bodies.
 - Must not change: do not change product code, branch protection, PR body audit
   semantics, draft consent semantics, PR ownership semantics, docs-only body
   admission, Dependabot behavior, or any EOM / dependency / non-owned PR lane.
@@ -53,6 +59,14 @@ Slice phase: Workflow/process
   4. Docs-only bodies keep the narrower exemption but still require a
      `claude/pr-*` PR branch; settled by
      `tests/test_check_pr_branch_name.py::test_docs_only_body_requires_pr_prefix_only`.
+  5. Explicit push refspecs cannot send the reviewed branch to another PR branch;
+     settled by
+     `tests/test_push_pr_wrapper.py::test_push_pr_rejects_mismatched_refspec_before_fetch`.
+  6. Dependabot-generated bodies keep their existing author exemption in both
+     wrappers; settled by
+     `tests/test_push_pr_wrapper.py::test_push_pr_dependabot_author_keeps_generated_body_exemption`
+     and
+     `tests/test_open_pr_wrapper.py::test_open_pr_dependabot_author_keeps_generated_body_exemption`.
 - Reachability proof: the real entrypoints `bash scripts/push_pr.sh BODY_FILE`
   and `bash scripts/open_pr.sh BODY_FILE` are exercised by wrapper tests; the
   observable effect is early failure before fetch/GitHub logs on mismatched
@@ -74,7 +88,8 @@ seam in the enumeration; otherwise write "N/A - no boundary change."
 - Replaced-path behaviors: wrappers previously accepted any current branch and
   deferred failure to later GitHub/session behavior.
 - Guard-relevant fields: current branch name, first structural PR body marker
-  (`Plan:` or `Docs-only: true`), and plan filename slug.
+  (`Plan:` or `Docs-only: true`), plan filename slug, PR author, and forwarded
+  push refspecs.
 - Caller x input shape: wrapper invocations with a planned PR body, docs-only
   body, mismatched branch, non-PR branch, and detached branch.
 
@@ -120,6 +135,11 @@ by the wrapper:
 local review, push, or GitHub mutation. That makes the branch-name convention an
 admission gate rather than a review-memory rule.
 
+`push_pr.sh` passes forwarded git-push arguments to the checker so explicit
+branch/refspec destinations must still target the reviewed branch. Dependabot
+authors bypass the builder-only plan/body/branch contract, matching the existing
+generated-PR exemption used by the PR body audit.
+
 ## Intentional
 
 - Docs-only bodies require only `claude/pr-*` because there is intentionally no
@@ -129,6 +149,9 @@ admission gate rather than a review-memory rule.
   for plan-backed slices.
 - No CI-only branch-protection change in this slice; the wrappers are the point
   where the local branch exists and can be rejected cheapest.
+- The 618 LOC total is over the soft cap because the Codex review fixes require
+  checker, wrapper, direct, and wrapper-fixture coverage for the same admission
+  boundary; splitting would leave `live-reconciliation` red on this PR.
 
 ## Deferred
 
@@ -139,7 +162,7 @@ Parked hardening: none.
 ## Verification
 
 - `python -m pytest tests/test_check_pr_branch_name.py tests/test_push_pr_wrapper.py tests/test_open_pr_wrapper.py`
-  - 75 passed.
+  - 81 passed.
 - `python scripts/maturity_sweep.py scripts --tests-root tests --baseline tests/maturity_sweep/baseline_scripts.json --min-score 8 --sensitive-glob 'scripts/**'`
   - Ratchet gate passed: no new brittleness above baseline.
 
@@ -147,11 +170,11 @@ Parked hardening: none.
 
 | File | LOC |
 |---|---:|
-| `plans/PR-Branch-Naming-Gate.md` | 157 |
-| `scripts/check_pr_branch_name.py` | 85 |
-| `scripts/open_pr.sh` | 17 |
-| `scripts/push_pr.sh` | 8 |
-| `tests/test_check_pr_branch_name.py` | 81 |
-| `tests/test_open_pr_wrapper.py` | 20 |
-| `tests/test_push_pr_wrapper.py` | 31 |
-| **Total** | **399** |
+| `plans/PR-Branch-Naming-Gate.md` | 180 |
+| `scripts/check_pr_branch_name.py` | 147 |
+| `scripts/open_pr.sh` | 24 |
+| `scripts/push_pr.sh` | 18 |
+| `tests/test_check_pr_branch_name.py` | 111 |
+| `tests/test_open_pr_wrapper.py` | 49 |
+| `tests/test_push_pr_wrapper.py` | 89 |
+| **Total** | **618** |

@@ -8,6 +8,8 @@ import re
 import sys
 from typing import Sequence
 
+from _pr_change_policy import is_dependabot_author
+
 
 PLAN_LINE_RE = re.compile(r"^Plan:\s+plans/PR-(?P<slice>[A-Za-z0-9._-]+)\.md\s*$")
 DOCS_ONLY_RE = re.compile(r"^Docs-only:\s*true\s*$", re.IGNORECASE)
@@ -36,8 +38,15 @@ def expected_branch_for_body(body: str) -> str | None:
     return ""
 
 
-def branch_name_errors(*, branch: str, body: str) -> list[str]:
+def branch_name_errors(
+    *,
+    branch: str,
+    body: str,
+    pr_author: str | None = None,
+) -> list[str]:
     errors: list[str] = []
+    if is_dependabot_author(pr_author):
+        return errors
     clean_branch = branch.strip()
     if not clean_branch:
         return ["current checkout is detached; switch to a PR branch first"]
@@ -55,11 +64,59 @@ def branch_name_errors(*, branch: str, body: str) -> list[str]:
     return errors
 
 
+def push_refspec_errors(
+    *,
+    branch: str,
+    body: str,
+    push_args: Sequence[str],
+    pr_author: str | None = None,
+) -> list[str]:
+    errors = branch_name_errors(branch=branch, body=body, pr_author=pr_author)
+    if errors or is_dependabot_author(pr_author):
+        return errors
+
+    clean_branch = branch.strip()
+    allowed_sources = {"HEAD", clean_branch, f"refs/heads/{clean_branch}"}
+    allowed_destinations = {clean_branch, f"refs/heads/{clean_branch}"}
+    for arg in push_args:
+        refspec = arg.lstrip("+")
+        if not _looks_branch_refspec(refspec):
+            continue
+        if ":" in refspec:
+            source, destination = refspec.split(":", 1)
+            if source not in allowed_sources:
+                errors.append(
+                    f"push refspec source {source!r} must be HEAD or {clean_branch!r}"
+                )
+            if destination not in allowed_destinations:
+                errors.append(
+                    f"push refspec destination {destination!r} must be {clean_branch!r}"
+                )
+        elif refspec not in allowed_sources:
+            errors.append(f"push refspec {refspec!r} must be HEAD or {clean_branch!r}")
+    return errors
+
+
+def _looks_branch_refspec(value: str) -> bool:
+    if not value or value.startswith("-"):
+        return False
+    return (
+        value == "HEAD"
+        or value.startswith("HEAD:")
+        or value.startswith("claude/")
+        or value.startswith("refs/heads/")
+        or ":claude/" in value
+        or ":refs/heads/" in value
+    )
+
+
 def _build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         description="Validate the current PR branch name against the PR body."
     )
     parser.add_argument("--branch", required=True)
+    parser.add_argument("--pr-author", default="")
+    parser.add_argument("--push-arg", action="append", default=[])
     parser.add_argument("body_file", type=Path)
     return parser
 
@@ -71,7 +128,12 @@ def main(argv: Sequence[str] | None = None) -> int:
     except OSError as exc:
         print(f"branch name check could not read PR body file: {exc}", file=sys.stderr)
         return 2
-    errors = branch_name_errors(branch=args.branch, body=body)
+    errors = push_refspec_errors(
+        branch=args.branch,
+        body=body,
+        push_args=args.push_arg,
+        pr_author=args.pr_author,
+    )
     if errors:
         print("PR branch name check failed:", file=sys.stderr)
         for error in errors:

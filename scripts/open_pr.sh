@@ -276,7 +276,14 @@ verify_body_hash() {
 }
 
 require_pr_branch_name() {
-    "$python_bin" scripts/check_pr_branch_name.py --branch "$branch" "$body_file"
+    local checker_args=()
+    if [ -n "${ATLAS_CURRENT_PR_AUTHOR:-}" ]; then
+        checker_args+=(--pr-author "$ATLAS_CURRENT_PR_AUTHOR")
+    fi
+    "$python_bin" scripts/check_pr_branch_name.py \
+        --branch "$branch" \
+        "${checker_args[@]}" \
+        "$body_file"
 }
 
 run_final_local_review() {

@@ -9,6 +9,7 @@ import pytest
 
 ROOT = Path(__file__).resolve().parents[1]
 SCRIPT = ROOT / "scripts/check_pr_branch_name.py"
+sys.path.insert(0, str(ROOT / "scripts"))
 SPEC = importlib.util.spec_from_file_location("check_pr_branch_name", SCRIPT)
 assert SPEC is not None and SPEC.loader is not None
 checker = importlib.util.module_from_spec(SPEC)
@@ -79,3 +80,32 @@ def test_detached_branch_fails() -> None:
 def test_cli_parser_rejects_missing_required_arguments() -> None:
     with pytest.raises(SystemExit):
         checker.main([])
+
+
+def test_dependabot_author_bypasses_builder_branch_contract() -> None:
+    assert checker.branch_name_errors(
+        branch="dependabot/pip/security-update",
+        body="Generated dependency update body.\n",
+        pr_author="dependabot[bot]",
+    ) == []
+
+
+def test_push_refspec_rejects_mismatched_destination() -> None:
+    errors = checker.push_refspec_errors(
+        branch="claude/pr-branch-naming-gate",
+        body=_body(),
+        push_args=["-u", "origin", "HEAD:claude/pr-other"],
+    )
+
+    assert errors == [
+        "push refspec destination 'claude/pr-other' must be "
+        "'claude/pr-branch-naming-gate'"
+    ]
+
+
+def test_push_refspec_accepts_head_to_matching_destination() -> None:
+    assert checker.push_refspec_errors(
+        branch="claude/pr-branch-naming-gate",
+        body=_body(),
+        push_args=["-u", "origin", "HEAD:refs/heads/claude/pr-branch-naming-gate"],
+    ) == []

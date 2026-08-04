@@ -82,6 +82,31 @@ def test_open_pr_rejects_branch_that_does_not_match_plan_before_fetch(tmp_path: 
     assert not stdin_capture.exists()
 
 
+def test_open_pr_dependabot_author_keeps_generated_body_exemption(tmp_path: Path) -> None:
+    repo = _write_fixture_repo(tmp_path)
+    _git(repo, "switch", "-c", "dependabot/pip/security-update")
+    (repo / "scripts" / "dependabot_example.py").write_text(
+        "print('dependency update')\n",
+        encoding="utf-8",
+    )
+    _git(repo, "add", "scripts/dependabot_example.py")
+    _git(repo, "commit", "-qm", "dependabot fixture")
+    _git(repo, "push", "-q", "-u", "origin", "HEAD")
+    body = repo.parent / "body-dependabot.md"
+    body.write_text("Generated dependency update body.\n", encoding="utf-8")
+    env, log, stdin_capture = _fake_gh_env(tmp_path, view_exit=1)
+    env["ATLAS_CURRENT_PR_AUTHOR"] = "dependabot[bot]"
+
+    result = _run(repo, env, body, "--title", "Dependabot fixture")
+
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert "pr body audit: PASS (Dependabot PR body exempt)" in result.stdout
+    assert log.read_text(encoding="utf-8").strip() == (
+        "pr create --title Dependabot fixture --repo canfieldjuan/ATLAS --base main --body-file -"
+    )
+    assert stdin_capture.read_text(encoding="utf-8") == body.read_text(encoding="utf-8")
+
+
 @pytest.mark.parametrize(
     ("args", "extra_env", "expected"),
     [
@@ -299,6 +324,7 @@ def test_open_pr_draft_admission_matches_gh_argv_grammar(tmp_path: Path) -> None
     (repo / "scripts").mkdir(parents=True)
     copy2(SCRIPT, repo / "scripts" / "open_pr.sh")
     copy2(BRANCH_NAME_SCRIPT, repo / "scripts" / "check_pr_branch_name.py")
+    copy2(CHANGE_POLICY_SCRIPT, repo / "scripts" / "_pr_change_policy.py")
     subprocess.run(
         ["git", "init", "--initial-branch", "main"],
         cwd=repo, check=True, capture_output=True, text=True,
@@ -763,8 +789,9 @@ if [ "$1" = "pr" ] && [ "$2" = "list" ]; then
         printf '%s\\n' "${GH_PR_LIST_JSON}"
         exit 0
     fi
+    current_branch="$(git branch --show-current)"
     if [ "${GH_VIEW_EXIT}" = "0" ] || [ -f "${GH_CREATED_PR_FLAG}" ]; then
-        printf '[{"number":17,"headRefName":"claude/pr-test","headRefOid":"%s","baseRefName":"main","headRepository":{"nameWithOwner":"canfieldjuan/ATLAS"},"isCrossRepository":false}]\\n' "$(git rev-parse HEAD)"
+        printf '[{"number":17,"headRefName":"%s","headRefOid":"%s","baseRefName":"main","headRepository":{"nameWithOwner":"canfieldjuan/ATLAS"},"isCrossRepository":false}]\\n' "$current_branch" "$(git rev-parse HEAD)"
     else
         printf '[]\\n'
     fi

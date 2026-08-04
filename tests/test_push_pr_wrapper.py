@@ -155,6 +155,64 @@ def test_push_pr_rejects_branch_that_does_not_match_plan_before_fetch(tmp_path: 
     assert "git fetch --quiet origin main" not in order_log.read_text(encoding="utf-8")
 
 
+def test_push_pr_rejects_mismatched_refspec_before_fetch(tmp_path: Path) -> None:
+    repo = _write_fixture_repo(tmp_path)
+    body = _write_body(repo)
+    order_log = repo / "order.log"
+    fake_bin = _write_fake_git(repo, order_log)
+    env = {
+        **os.environ,
+        "PATH": f"{fake_bin}{os.pathsep}{os.environ['PATH']}",
+        "FAKE_GIT_TOPLEVEL": str(repo),
+        "FAKE_GIT_LOG": str(order_log),
+        "ORDER_LOG": str(order_log),
+    }
+
+    result = subprocess.run(
+        ["bash", "scripts/push_pr.sh", str(body), "-u", "origin", "HEAD:claude/pr-other"],
+        cwd=repo,
+        env=env,
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+
+    assert result.returncode == 2
+    assert "push refspec destination 'claude/pr-other'" in result.stderr
+    assert "git fetch --quiet origin main" not in order_log.read_text(encoding="utf-8")
+
+
+def test_push_pr_dependabot_author_keeps_generated_body_exemption(tmp_path: Path) -> None:
+    repo = _write_fixture_repo(tmp_path)
+    _git(repo, "switch", "-c", "dependabot/pip/security-update")
+    body = repo / "body-dependabot.md"
+    body.write_text("Generated dependency update body.\n", encoding="utf-8")
+    order_log = repo / "order.log"
+    _write_local_review(repo)
+    fake_bin = _write_fake_git(repo, order_log)
+    env = {
+        **os.environ,
+        "ATLAS_CURRENT_PR_AUTHOR": "dependabot[bot]",
+        "PATH": f"{fake_bin}{os.pathsep}{os.environ['PATH']}",
+        "FAKE_GIT_TOPLEVEL": str(repo),
+        "FAKE_GIT_LOG": str(order_log),
+        "ORDER_LOG": str(order_log),
+    }
+
+    result = subprocess.run(
+        ["bash", "scripts/push_pr.sh", str(body), "-u", "origin", "HEAD"],
+        cwd=repo,
+        env=env,
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert "pr body audit: PASS (Dependabot PR body exempt)" in result.stdout
+    assert "git push -u origin HEAD" in order_log.read_text(encoding="utf-8")
+
+
 def test_push_pr_refreshes_before_docs_only_body_audit(tmp_path: Path) -> None:
     repo = _write_fixture_repo(tmp_path)
     body = _write_docs_only_body(repo)
