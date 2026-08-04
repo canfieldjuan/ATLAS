@@ -33,13 +33,30 @@ def test_open_pr_create_passes_body_via_stdin_not_path(tmp_path: Path) -> None:
 
 def test_open_pr_edit_passes_body_via_stdin_not_path(tmp_path: Path) -> None:
     repo, body, env, log, stdin_capture = _ready(tmp_path, view_exit=0)
+    guard_log = Path(env["OWNERSHIP_GUARD_LOG"])
 
     result = _run(repo, env, body)
 
     assert result.returncode == 0
     assert log.read_text(encoding="utf-8").strip() == "pr edit 17 --repo canfieldjuan/ATLAS --body-file -"
+    assert guard_log.read_text(encoding="utf-8").strip() == (
+        f"--pr 17 --branch claude/pr-test --head-sha {_git_output(repo, 'rev-parse', 'HEAD')}"
+    )
     assert str(body) not in log.read_text(encoding="utf-8")
     assert stdin_capture.read_text(encoding="utf-8") == body.read_text(encoding="utf-8")
+
+
+def test_open_pr_existing_pr_ownership_guard_failure_blocks_before_edit(tmp_path: Path) -> None:
+    repo, body, env, log, stdin_capture = _ready(tmp_path, view_exit=0)
+    env["OWNERSHIP_GUARD_EXIT"] = "23"
+
+    result = _run(repo, env, body)
+
+    assert result.returncode == 23
+    assert "fake ownership guard failed" in result.stderr
+    assert not log.exists()
+    assert not stdin_capture.exists()
+    assert not (repo / "local-review.log").exists()
 
 
 def test_open_pr_existing_pr_rejects_create_only_args(tmp_path: Path) -> None:
@@ -573,6 +590,25 @@ def _write_fixture_repo(
         copy2(AUDIT_SCRIPT, repo / "scripts" / "audit_pr_body.py")
         copy2(AI_RECONCILIATION_SCRIPT, repo / "scripts" / "audit_ai_reconciliation.py")
         copy2(CHANGE_POLICY_SCRIPT, repo / "scripts" / "_pr_change_policy.py")
+        (repo / "scripts" / "check_session_pr_ownership.py").write_text(
+            """#!/usr/bin/env python3
+from __future__ import annotations
+
+import os
+import sys
+
+log = os.environ.get("OWNERSHIP_GUARD_LOG")
+if log:
+    with open(log, "a", encoding="utf-8") as handle:
+        handle.write(" ".join(sys.argv[1:]) + "\\n")
+exit_code = int(os.environ.get("OWNERSHIP_GUARD_EXIT", "0"))
+if exit_code:
+    print("fake ownership guard failed", file=sys.stderr)
+raise SystemExit(exit_code)
+""",
+            encoding="utf-8",
+        )
+        (repo / "scripts" / "check_session_pr_ownership.py").chmod(0o755)
         (repo / "scripts" / "local_pr_review.sh").write_text(
             """#!/usr/bin/env bash
 set -euo pipefail
@@ -674,6 +710,26 @@ def _fake_gh_env(tmp_path: Path, *, view_exit: int) -> tuple[dict[str, str], Pat
     log = tmp_path / "gh-argv.txt"
     stdin_capture = tmp_path / "gh-stdin.txt"
     created_flag = tmp_path / "gh-created-pr"
+    ownership_guard_log = tmp_path / "ownership-guard-argv.txt"
+    state_file = tmp_path / "SESSION_STATE.codex-test.local.md"
+    state_file.write_text(
+        """# Atlas Builder Session State
+
+## Owned Active PR
+
+PR: none
+Branch: claude/pr-test
+Expected head SHA: none
+
+## PRs This Session May Touch
+
+- #17 Workflow wrapper -- fixture-owned PR.
+
+## PRs This Session Must Not Touch
+
+""",
+        encoding="utf-8",
+    )
     gh = bin_dir / "gh"
     gh.write_text(
         """#!/usr/bin/env bash
@@ -712,6 +768,8 @@ fi
         "GH_STDIN_CAPTURE": str(stdin_capture),
         "GH_CREATED_PR_FLAG": str(created_flag),
         "GH_PROMPT_STATE": str(tmp_path / "gh-prompt-state.txt"),
+        "OWNERSHIP_GUARD_LOG": str(ownership_guard_log),
+        "ATLAS_SESSION_STATE_FILE": str(state_file),
         "PYTHONDONTWRITEBYTECODE": "1",
     }, log, stdin_capture
 
@@ -724,3 +782,7 @@ def _git(repo: Path, *args: str) -> None:
         capture_output=True,
         text=True,
     )
+
+
+def _git_output(repo: Path, *args: str) -> str:
+    return subprocess.check_output(["git", *args], cwd=repo, text=True).strip()
