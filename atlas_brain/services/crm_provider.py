@@ -1462,11 +1462,6 @@ class DatabaseCRMProvider:
                     409,
                     "EOM lead already has a different estimate booking",
                 )
-            if failed_for_key is not None:
-                raise EOMLeadConversionError(
-                    409,
-                    "EOM estimate booking attempt failed; use a new booking key",
-                )
             if request_for_key is not None:
                 request_metadata = self._eom_estimate_booking_metadata_from_row(
                     request_for_key["metadata"]
@@ -1500,6 +1495,11 @@ class DatabaseCRMProvider:
                     raise EOMLeadConversionError(
                         409,
                         "EOM estimate booking requires calendar reconciliation",
+                    )
+                if failed_for_key is not None:
+                    raise EOMLeadConversionError(
+                        409,
+                        "EOM estimate booking attempt failed; use a new booking key",
                     )
                 if contact["status"] != "active":
                     raise EOMLeadConversionError(
@@ -1660,12 +1660,22 @@ class DatabaseCRMProvider:
                     contact_id, event_type, from_stage, to_stage, actor,
                     source, operation_key, metadata, reason
                 )
-                VALUES ($1::uuid, 'estimate_booking_calendar_failed', 'new', 'new',
-                        $2::varchar, 'eom_office', $3::varchar, jsonb_build_object(
+                SELECT $1::uuid, 'estimate_booking_calendar_failed', 'new', 'new',
+                       $2::varchar, 'eom_office', $3::varchar, jsonb_build_object(
                             'expected_calendar_event_id', $4::text,
                             'calendar_error', $5::text,
                             'calendar_message', $6::text
-                        ), $6::text)
+                       ), $6::text
+                WHERE NOT EXISTS (
+                    SELECT 1
+                    FROM eom_lead_lifecycle_events
+                    WHERE contact_id = $1::uuid
+                      AND operation_key = $3::varchar
+                      AND event_type IN (
+                          'estimate_booked',
+                          'estimate_booking_calendar_ambiguous'
+                      )
+                )
                 ON CONFLICT (contact_id, event_type, operation_key)
                     WHERE operation_key IS NOT NULL
                     DO NOTHING
@@ -1768,11 +1778,6 @@ class DatabaseCRMProvider:
                     failed_for_key = event
                 elif event["event_type"] == "estimate_booking_calendar_ambiguous":
                     ambiguous_for_key = event
-            if failed_for_key is not None:
-                raise EOMLeadConversionError(
-                    409,
-                    "EOM estimate booking attempt failed; use a new booking key",
-                )
             if (
                 request_for_key is None
                 or not self._eom_estimate_booking_payload_matches(
@@ -1799,11 +1804,6 @@ class DatabaseCRMProvider:
                     "expected_calendar_event_id": expected_calendar_event_id,
                     "idempotent": True,
                 }
-            if ambiguous_for_key is not None:
-                raise EOMLeadConversionError(
-                    409,
-                    "EOM estimate booking requires calendar reconciliation",
-                )
             if contact["lead_stage"] != "new":
                 raise EOMLeadConversionError(
                     409, "EOM lead is not ready for estimate booking"

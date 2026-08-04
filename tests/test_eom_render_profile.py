@@ -416,6 +416,20 @@ def test_eom_render_blueprint_maps_database_and_receivables_auth():
         "key": "ATLAS_EOM_RUN_MIGRATIONS",
         "value": "true",
     }
+    assert env_vars["ATLAS_TOOLS_CALENDAR_ENABLED"] == {
+        "key": "ATLAS_TOOLS_CALENDAR_ENABLED",
+        "value": "true",
+    }
+    for calendar_secret_key in (
+        "ATLAS_TOOLS_CALENDAR_CLIENT_ID",
+        "ATLAS_TOOLS_CALENDAR_CLIENT_SECRET",
+        "ATLAS_TOOLS_CALENDAR_REFRESH_TOKEN",
+        "ATLAS_TOOLS_CALENDAR_ID",
+    ):
+        assert env_vars[calendar_secret_key] == {
+            "key": calendar_secret_key,
+            "sync": False,
+        }
     assert [
         key
         for key in env_vars

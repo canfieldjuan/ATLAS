@@ -844,6 +844,131 @@ async def test_pending_estimate_booking_blocks_handoff_until_terminal_event():
 
 
 @pytest.mark.asyncio
+async def test_estimate_booking_completion_dominates_failed_and_ambiguous_markers():
+    database_url = _database_url_or_skip()
+    schema = f"atlas_eom_estimate_booking_precedence_{uuid.uuid4().hex}"
+    conn = await asyncpg.connect(database_url)
+    try:
+        await _prepare_schema(conn, schema)
+        provider = DatabaseCRMProvider(pool=conn)
+        contact_id = uuid.uuid4()
+        booking_key = f"office-booking-{uuid.uuid4().hex}"
+        calendar_event_id = deterministic_eom_estimate_calendar_event_id(
+            contact_id=str(contact_id),
+            booking_key=booking_key,
+        )
+        start = datetime(2026, 8, 4, 19, 0, tzinfo=timezone.utc)
+        end = datetime(2026, 8, 4, 20, 0, tzinfo=timezone.utc)
+        await _insert_contact(conn, contact_id=contact_id)
+
+        await provider.prepare_eom_estimate_booking(
+            contact_id=str(contact_id),
+            scheduled_start=start,
+            scheduled_end=end,
+            calendar_id="estimate-calendar",
+            notes="Bring estimate worksheet",
+            booking_key=booking_key,
+            expected_calendar_event_id=calendar_event_id,
+            actor_id=1,
+            actor_name="Juan Canfield",
+        )
+        await provider.mark_eom_estimate_booking_calendar_failed(
+            contact_id=str(contact_id),
+            booking_key=booking_key,
+            expected_calendar_event_id=calendar_event_id,
+            calendar_error="API_ERROR",
+            calendar_message="Calendar API error: 404",
+            actor_id=1,
+            actor_name="Juan Canfield",
+        )
+        await provider.mark_eom_estimate_booking_calendar_ambiguous(
+            contact_id=str(contact_id),
+            booking_key=booking_key,
+            expected_calendar_event_id=calendar_event_id,
+            observed_calendar_event_id="",
+            actor_id=1,
+            actor_name="Juan Canfield",
+        )
+
+        with pytest.raises(EOMLeadConversionError, match="calendar reconciliation"):
+            await provider.prepare_eom_estimate_booking(
+                contact_id=str(contact_id),
+                scheduled_start=start,
+                scheduled_end=end,
+                calendar_id="estimate-calendar",
+                notes="Bring estimate worksheet",
+                booking_key=booking_key,
+                expected_calendar_event_id=calendar_event_id,
+                actor_id=1,
+                actor_name="Juan Canfield",
+            )
+
+        completed = await provider.complete_eom_estimate_booking(
+            contact_id=str(contact_id),
+            scheduled_start=start,
+            scheduled_end=end,
+            calendar_id="estimate-calendar",
+            notes="Bring estimate worksheet",
+            booking_key=booking_key,
+            expected_calendar_event_id=calendar_event_id,
+            calendar_event_id=calendar_event_id,
+            actor_id=1,
+            actor_name="Juan Canfield",
+        )
+        await provider.mark_eom_estimate_booking_calendar_failed(
+            contact_id=str(contact_id),
+            booking_key=booking_key,
+            expected_calendar_event_id=calendar_event_id,
+            calendar_error="API_ERROR",
+            calendar_message="Calendar API error: 404",
+            actor_id=1,
+            actor_name="Juan Canfield",
+        )
+        replay = await provider.prepare_eom_estimate_booking(
+            contact_id=str(contact_id),
+            scheduled_start=start,
+            scheduled_end=end,
+            calendar_id="estimate-calendar",
+            notes="Bring estimate worksheet",
+            booking_key=booking_key,
+            expected_calendar_event_id=calendar_event_id,
+            actor_id=1,
+            actor_name="Juan Canfield",
+        )
+        lifecycle_counts = {
+            row["event_type"]: int(row["count"])
+            for row in await conn.fetch(
+                """
+                SELECT event_type, COUNT(*) AS count
+                FROM eom_lead_lifecycle_events
+                WHERE contact_id = $1
+                  AND operation_key = $2
+                  AND event_type IN (
+                      'estimate_booking_calendar_failed',
+                      'estimate_booking_calendar_ambiguous',
+                      'estimate_booked'
+                  )
+                GROUP BY event_type
+                """,
+                contact_id,
+                booking_key,
+            )
+        }
+
+        assert completed["status"] == "estimate_booked"
+        assert replay["idempotent"] is True
+        assert replay["status"] == "estimate_booked"
+        assert lifecycle_counts == {
+            "estimate_booking_calendar_failed": 1,
+            "estimate_booking_calendar_ambiguous": 1,
+            "estimate_booked": 1,
+        }
+    finally:
+        await conn.execute(f'DROP SCHEMA IF EXISTS "{schema}" CASCADE')
+        await conn.close()
+
+
+@pytest.mark.asyncio
 async def test_estimate_booking_key_is_owned_across_contacts():
     database_url = _database_url_or_skip()
     schema = f"atlas_eom_estimate_booking_key_owner_{uuid.uuid4().hex}"
