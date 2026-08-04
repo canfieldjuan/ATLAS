@@ -77,10 +77,23 @@ def changed_file(
 
 
 BODY_CLEAR = "## AI reconciliation\n- All fixed or waived: Yes\n"
+BODY_NO_FINDINGS = "## AI reconciliation\n- no-findings\n"
 BODY_OPEN = "## AI reconciliation\n- fixed or waived: No\n"
 BODY_ABSENT = "## Summary\njust a normal PR body\n"
 BODY_DOCS_ONLY = "Docs-only: true\n\nArchive merged plans.\n"
 BOTS = ["chatgpt-codex-connector", "chatgpt-codex-connector[bot]"]
+
+
+def body_with_dispositions(*decisions: str) -> str:
+    lines = ["## AI reconciliation", "- AI findings reviewed: Yes", "- All fixed or waived: Yes"]
+    lines.extend(
+        f"- {decision} -- fixed-in: tests/test_check_ai_reconciliation_live.py"
+        for decision in decisions
+    )
+    return "\n".join(lines) + "\n"
+
+
+BODY_COVERS_DEFAULT_THREAD = body_with_dispositions("use the typed config field")
 
 
 def test_live_reconciliation_uses_supported_review_events_not_review_threads():
@@ -231,6 +244,9 @@ def test_parse_bot_logins_rejects_legacy_codex_alias():
 def test_classify_body():
     c = load_check()
     assert c.classify_body(BODY_CLEAR) == "claims_clear"
+    assert c.classify_body(BODY_NO_FINDINGS) == "claims_clear"
+    assert c.body_uses_no_findings(BODY_NO_FINDINGS) is True
+    assert c.body_uses_no_findings(BODY_CLEAR) is False
     assert c.classify_body(BODY_OPEN) == "acknowledges_open"
     assert c.classify_body(BODY_ABSENT) == "absent"
 
@@ -316,15 +332,115 @@ def test_open_thread_plus_acknowledges_open_still_fails():
 
 def test_no_open_threads_passes_even_with_clear_body():
     c = load_check()
-    code, _ = c.evaluate([thread(resolved=True)], BODY_CLEAR, BOTS)
+    code, _ = c.evaluate([], BODY_CLEAR, BOTS)
     assert code == 0
+
+
+def test_no_findings_fails_when_resolved_codex_thread_history_exists():
+    c = load_check()
+    code, msgs = c.evaluate([thread(resolved=True)], BODY_NO_FINDINGS, BOTS)
+    assert code == 1
+    assert any("records no-findings" in msg for msg in msgs)
+    assert any("atlas_brain/x.py:12" in msg for msg in msgs)
+
+
+def test_clear_body_requires_disposition_for_each_resolved_codex_thread():
+    c = load_check()
+    nodes = [
+        thread(resolved=True, body="First parser issue R2 (BLOCKER) details"),
+        thread(resolved=True, path="scripts/y.py", body="Second wrapper issue R13 (BLOCKER) details"),
+    ]
+
+    code, msgs = c.evaluate(nodes, body_with_dispositions("Unrelated issue"), BOTS)
+
+    assert code == 1
+    assert any("missing dispositions" in msg for msg in msgs)
+    assert any("First parser issue" in msg for msg in msgs)
+    assert any("Second wrapper issue" in msg for msg in msgs)
+
+
+def test_structured_disposition_only_body_rejects_missing_thread_history():
+    c = load_check()
+    nodes = [
+        thread(
+            resolved=True,
+            body="Run history correlation for disposition-only ledgers R2/R13 details",
+        )
+    ]
+    body = "## AI reconciliation\n- unrelated decision -- fixed-in: fake.py\n"
+
+    code, msgs = c.evaluate(nodes, body, BOTS)
+
+    assert code == 1
+    assert any("missing dispositions" in msg for msg in msgs)
+    assert any("Run history correlation for disposition-only ledgers" in msg for msg in msgs)
+
+
+def test_thread_dispositions_reject_tiny_substring_roots():
+    c = load_check()
+    nodes = [
+        thread(
+            resolved=True,
+            body="Require a disposition for every resolved thread R2/R13 details",
+        )
+    ]
+    body = "## AI reconciliation\n- a -- fixed-in: fake.py\n"
+
+    code, msgs = c.evaluate(nodes, body, BOTS)
+
+    assert code == 1
+    assert any("missing dispositions" in msg for msg in msgs)
+    assert any("Require a disposition for every resolved thread" in msg for msg in msgs)
+
+
+def test_clear_body_passes_when_each_resolved_codex_thread_is_named():
+    c = load_check()
+    nodes = [
+        thread(resolved=True, body="First parser issue R2 (BLOCKER) details"),
+        thread(resolved=True, path="scripts/y.py", body="Second wrapper issue R13 (BLOCKER) details"),
+    ]
+
+    code, msgs = c.evaluate(
+        nodes,
+        body_with_dispositions("First parser issue", "Second wrapper issue"),
+        BOTS,
+    )
+
+    assert code == 0
+    assert any("no open scoped Codex review threads remain" in msg for msg in msgs)
+
+
+def test_thread_dispositions_use_canonical_pr_body_section():
+    c = load_check()
+    body = "\n".join(
+        [
+            "    ## AI reconciliation",
+            "- Correlate only the canonical reconciliation ledger -- fixed-in: fake.py",
+            "## AI reconciliation",
+            "- AI findings reviewed: Yes",
+            "- All fixed or waived: Yes",
+            "- Some other finding -- fixed-in: tests/test_check_ai_reconciliation_live.py",
+        ]
+    )
+    nodes = [
+        thread(
+            resolved=True,
+            body="Correlate only the canonical reconciliation ledger R2/R13 (BLOCKER) details",
+        )
+    ]
+
+    code, msgs = c.evaluate(nodes, body, BOTS)
+
+    assert code == 1
+    assert any("missing dispositions" in msg for msg in msgs)
+    assert any("Correlate only the canonical reconciliation ledger" in msg for msg in msgs)
 
 
 def test_missing_current_head_codex_review_passes_when_threads_are_clear():
     c = load_check()
     code, msgs = c.evaluate(
         [thread(resolved=True)],
-        BODY_CLEAR,
+        BODY_COVERS_DEFAULT_THREAD,
         BOTS,
         reviews=[review(commit="old-head")],
         head_sha="head-a",
@@ -338,7 +454,7 @@ def test_missing_current_head_codex_review_passes_inside_fresh_update_window():
     c = load_check()
     code, msgs = c.evaluate(
         [thread(resolved=True)],
-        BODY_CLEAR,
+        BODY_COVERS_DEFAULT_THREAD,
         BOTS,
         reviews=[review(commit="old-head")],
         head_sha="head-a",
@@ -355,7 +471,7 @@ def test_missing_current_head_codex_review_passes_after_fresh_update_window():
     c = load_check()
     code, msgs = c.evaluate(
         [thread(resolved=True)],
-        BODY_CLEAR,
+        BODY_COVERS_DEFAULT_THREAD,
         BOTS,
         reviews=[review(commit="old-head")],
         head_sha="head-a",
@@ -436,7 +552,7 @@ def test_current_head_changes_requested_review_does_not_block_without_open_threa
     c = load_check()
     code, msgs = c.evaluate(
         [thread(resolved=True)],
-        BODY_CLEAR,
+        BODY_COVERS_DEFAULT_THREAD,
         BOTS,
         reviews=[review(commit="head-a", state="CHANGES_REQUESTED")],
         head_sha="head-a",
@@ -450,7 +566,7 @@ def test_current_head_codex_review_plus_no_open_threads_passes():
     c = load_check()
     code, msgs = c.evaluate(
         [thread(resolved=True)],
-        BODY_CLEAR,
+        BODY_COVERS_DEFAULT_THREAD,
         BOTS,
         reviews=[review(commit="head-a")],
         head_sha="head-a",
@@ -464,7 +580,7 @@ def test_current_head_clean_review_comment_plus_no_open_threads_passes():
     c = load_check()
     code, msgs = c.evaluate(
         [thread(resolved=True)],
-        BODY_CLEAR,
+        BODY_COVERS_DEFAULT_THREAD,
         BOTS,
         comments=[pr_comment(commit="abc1234567")],
         head_sha="abc1234567890",
@@ -478,7 +594,7 @@ def test_changes_requested_review_does_not_override_clean_review_comment_without
     c = load_check()
     code, msgs = c.evaluate(
         [thread(resolved=True)],
-        BODY_CLEAR,
+        BODY_COVERS_DEFAULT_THREAD,
         BOTS,
         reviews=[review(commit="abc1234567890", state="CHANGES_REQUESTED")],
         comments=[pr_comment(commit="abc1234567")],
@@ -505,7 +621,7 @@ def test_main_clean_exit_0(tmp_path):
     tf = tmp_path / "threads.json"
     tf.write_text(json.dumps([thread(resolved=True)]), encoding="utf-8")
     bf = tmp_path / "body.md"
-    bf.write_text(BODY_CLEAR, encoding="utf-8")
+    bf.write_text(BODY_COVERS_DEFAULT_THREAD, encoding="utf-8")
     assert c.main(["--threads-file", str(tf), "--body-file", str(bf)]) == 0
 
 
@@ -514,7 +630,7 @@ def test_main_accepts_missing_current_head_review_when_threads_clear(tmp_path):
     tf = tmp_path / "threads.json"
     tf.write_text(json.dumps([thread(resolved=True)]), encoding="utf-8")
     bf = tmp_path / "body.md"
-    bf.write_text(BODY_CLEAR, encoding="utf-8")
+    bf.write_text(BODY_COVERS_DEFAULT_THREAD, encoding="utf-8")
     rf = tmp_path / "reviews.json"
     rf.write_text(json.dumps([review(commit="old-head")]), encoding="utf-8")
 
@@ -537,7 +653,7 @@ def test_main_accepts_current_head_clean_review_comment_when_head_sha_supplied(t
     tf = tmp_path / "threads.json"
     tf.write_text(json.dumps([thread(resolved=True)]), encoding="utf-8")
     bf = tmp_path / "body.md"
-    bf.write_text(BODY_CLEAR, encoding="utf-8")
+    bf.write_text(BODY_COVERS_DEFAULT_THREAD, encoding="utf-8")
     cf = tmp_path / "comments.json"
     cf.write_text(json.dumps([pr_comment(commit="abc1234567")]), encoding="utf-8")
 
@@ -584,7 +700,7 @@ def test_main_ignores_malformed_review_window_config(monkeypatch, tmp_path):
     tf = tmp_path / "threads.json"
     tf.write_text(json.dumps([thread(resolved=True)]), encoding="utf-8")
     bf = tmp_path / "body.md"
-    bf.write_text(BODY_CLEAR, encoding="utf-8")
+    bf.write_text(BODY_COVERS_DEFAULT_THREAD, encoding="utf-8")
 
     assert c.main(["--threads-file", str(tf), "--body-file", str(bf)]) == 0
 
@@ -617,13 +733,13 @@ def test_main_live_default_does_not_refetch_inside_review_window(monkeypatch, tm
         ([thread(resolved=True)], "head-a", [], []),
     ]
     bf = tmp_path / "body.md"
-    bf.write_text(BODY_CLEAR, encoding="utf-8")
+    bf.write_text(BODY_COVERS_DEFAULT_THREAD, encoding="utf-8")
 
     def fake_snapshot(pr, owner, name, gh, bot_logins):
         return snapshots.pop(0)
 
     monkeypatch.setattr(c, "fetch_consistent_review_thread_snapshot", fake_snapshot)
-    monkeypatch.setattr(c, "fetch_body", lambda pr, repo, gh: BODY_CLEAR)
+    monkeypatch.setattr(c, "fetch_body", lambda pr, repo, gh: BODY_COVERS_DEFAULT_THREAD)
     monkeypatch.setattr(c, "fetch_pr_updated_at", lambda *args, **kwargs: (_ for _ in ()).throw(AssertionError()))
 
     assert c.main(["--pr", "1431", "--repo", "owner/name", "--body-file", str(bf), "--gh", "gh"]) == 0
@@ -637,13 +753,13 @@ def test_main_live_wait_flag_is_noop_inside_review_window(monkeypatch, tmp_path)
         ([thread(resolved=True)], "head-a", [], []),
     ]
     bf = tmp_path / "body.md"
-    bf.write_text(BODY_CLEAR, encoding="utf-8")
+    bf.write_text(BODY_COVERS_DEFAULT_THREAD, encoding="utf-8")
 
     def fake_snapshot(pr, owner, name, gh, bot_logins):
         return snapshots.pop(0)
 
     monkeypatch.setattr(c, "fetch_consistent_review_thread_snapshot", fake_snapshot)
-    monkeypatch.setattr(c, "fetch_body", lambda pr, repo, gh: BODY_CLEAR)
+    monkeypatch.setattr(c, "fetch_body", lambda pr, repo, gh: BODY_COVERS_DEFAULT_THREAD)
     monkeypatch.setattr(c, "fetch_pr_updated_at", lambda *args, **kwargs: (_ for _ in ()).throw(AssertionError()))
 
     assert c.main(
@@ -704,7 +820,7 @@ def test_main_does_not_fetch_file_proof_for_docs_only_no_thread_signal(monkeypat
 def test_main_does_not_fetch_file_proof_for_non_docs_body(monkeypatch, tmp_path):
     c = load_check()
     bf = tmp_path / "body.md"
-    bf.write_text(BODY_CLEAR, encoding="utf-8")
+    bf.write_text(BODY_COVERS_DEFAULT_THREAD, encoding="utf-8")
 
     monkeypatch.setattr(
         c,

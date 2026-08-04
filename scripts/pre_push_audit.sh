@@ -6,6 +6,7 @@ set -euo pipefail
 repo_root=""
 script_root=""
 current_pr_author="${ATLAS_CURRENT_PR_AUTHOR:-}"
+python_bin="${PYTHON:-python3}"
 
 while [ "$#" -gt 0 ]; do
     case "$1" in
@@ -107,17 +108,17 @@ fi
 
 base="$(git merge-base HEAD "$base_ref")"
 
-run_check "CLAUDE.md MCP tool counts" python "$script_root/scripts/audit_claude_md_claims.py"
-run_check "MCP port assignments" python "$script_root/scripts/audit_mcp_port_assignments.py"
-run_check "MCP tool-name inventories" python "$script_root/scripts/audit_mcp_tool_names_match_docs.py"
-run_check "Extracted manifest sync" python "$script_root/scripts/audit_extracted_manifests.py"
-run_check "UI test:* CI enrollment" python "$script_root/scripts/audit_ui_test_enrollment.py"
-run_check "PR watcher safety" python "$script_root/scripts/audit_pr_watcher_safety.py" --repo-root "$repo_root"
+run_check "CLAUDE.md MCP tool counts" "$python_bin" "$script_root/scripts/audit_claude_md_claims.py"
+run_check "MCP port assignments" "$python_bin" "$script_root/scripts/audit_mcp_port_assignments.py"
+run_check "MCP tool-name inventories" "$python_bin" "$script_root/scripts/audit_mcp_tool_names_match_docs.py"
+run_check "Extracted manifest sync" "$python_bin" "$script_root/scripts/audit_extracted_manifests.py"
+run_check "UI test:* CI enrollment" "$python_bin" "$script_root/scripts/audit_ui_test_enrollment.py"
+run_check "PR watcher safety" "$python_bin" "$script_root/scripts/audit_pr_watcher_safety.py" --repo-root "$repo_root"
 plan_admission_args=("$script_root/scripts/audit_pr_plan_presence.py" "$base_ref")
 if [ -n "$current_pr_author" ]; then
     plan_admission_args+=(--pr-author "$current_pr_author")
 fi
-run_check "Plan admission" python "${plan_admission_args[@]}"
+run_check "Plan admission" "$python_bin" "${plan_admission_args[@]}"
 
 committed=$(
     git diff --name-only --diff-filter=AM "$base"...HEAD -- 'plans/PR-*.md' 2>/dev/null || true
@@ -138,13 +139,13 @@ diff_plan_docs=$(
 if [ -n "$plan_docs" ]; then
     while IFS= read -r doc; do
         [ -z "$doc" ] && continue
-        run_check "Plan shape: $doc" python "$script_root/scripts/audit_plan_doc.py" "$doc"
+        run_check "Plan shape: $doc" "$python_bin" "$script_root/scripts/audit_plan_doc.py" "$doc"
     done <<< "$plan_docs"
 
     while IFS= read -r doc; do
         [ -z "$doc" ] && continue
-        run_check "Plan files touched: $doc" python "$script_root/scripts/audit_plan_doc_files_touched.py" "$doc" "$base_ref"
-        run_check "Plan diff size: $doc" python "$script_root/scripts/audit_plan_doc_diff_size.py" "$doc" "$base_ref"
+        run_check "Plan files touched: $doc" "$python_bin" "$script_root/scripts/audit_plan_doc_files_touched.py" "$doc" "$base_ref"
+        run_check "Plan diff size: $doc" "$python_bin" "$script_root/scripts/audit_plan_doc_diff_size.py" "$doc" "$base_ref"
     done <<< "$diff_plan_docs"
 else
     echo

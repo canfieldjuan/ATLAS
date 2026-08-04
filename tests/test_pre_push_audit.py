@@ -7,6 +7,25 @@ from pathlib import Path
 REPO_ROOT = Path(__file__).resolve().parents[1]
 
 
+def test_ascii_python_policy_fails_when_interpreter_missing() -> None:
+    result = subprocess.run(
+        [
+            "bash",
+            str(REPO_ROOT / "extracted" / "_shared" / "scripts" / "check_ascii_python.sh"),
+            "extracted_content_pipeline",
+        ],
+        cwd=REPO_ROOT,
+        check=False,
+        capture_output=True,
+        text=True,
+        env={**os.environ, "PYTHON": "/definitely/missing/python"},
+    )
+
+    assert result.returncode == 1
+    assert "could not enumerate extracted_content_pipeline Python files" in result.stderr
+    assert "ASCII check passed" not in result.stdout
+
+
 def test_pre_push_audit_runs_plan_auditors_for_touched_plan(tmp_path):
     repo = tmp_path / "repo"
     _write_fixture_repo(repo)

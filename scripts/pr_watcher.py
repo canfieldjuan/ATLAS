@@ -436,6 +436,26 @@ def _check_summary(
     return failures, pending, None
 
 
+def _reported_check_names(
+    checks: list[Any],
+    *,
+    ignore_contexts: set[str] | frozenset[str] = frozenset(),
+) -> tuple[set[str], str | None]:
+    names: set[str] = set()
+    for index, item in enumerate(checks):
+        if not isinstance(item, dict):
+            return set(), f"check result {index} is not an object"
+        name = item.get("name")
+        bucket = item.get("bucket")
+        if not isinstance(name, str) or not name:
+            return set(), f"check result {index} has no name"
+        if not isinstance(bucket, str) or not bucket:
+            return set(), f"check {name!r} has no bucket"
+        if name not in ignore_contexts:
+            names.add(name)
+    return names, None
+
+
 def _latest_github_actions_check_runs(
     payload: dict[str, Any],
     *,
@@ -1036,9 +1056,8 @@ def produce(watcher_id: str, *, config_dir: Path, state_dir: Path) -> tuple[int,
     expected_required |= registry_policy.branch_required
     expected_blocking = expected_required | registry_policy.ci_blocking
     policy_managed_contexts = expected_blocking | registry_policy.non_blocking
-    failures, pending, all_shape_error = _check_summary(
+    reported_optional, all_shape_error = _reported_check_names(
         all_checks,
-        required=False,
         ignore_contexts=policy_managed_contexts,
     )
     _required_gh_failures, _required_gh_pending, required_shape_error = _check_summary(
@@ -1062,6 +1081,10 @@ def produce(watcher_id: str, *, config_dir: Path, state_dir: Path) -> tuple[int,
     )
     required_failures, required_pending, run_summary_error = _blocking_check_summary_from_runs(
         expected_blocking,
+        runs_by_name,
+    )
+    failures, pending, optional_run_summary_error = _blocking_check_summary_from_runs(
+        reported_optional,
         runs_by_name,
     )
     reported_required = {
@@ -1101,6 +1124,7 @@ def produce(watcher_id: str, *, config_dir: Path, state_dir: Path) -> tuple[int,
             required_shape_error,
             check_runs_shape_error,
             run_summary_error,
+            optional_run_summary_error,
             required_policy_shape_error,
             registry_required_error,
         )

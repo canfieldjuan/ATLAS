@@ -768,6 +768,89 @@ def test_optional_non_skipped_failure_still_blocks_green_state(
     assert status["readiness"]["required_checks_complete"] is True
 
 
+def test_stale_duplicate_optional_check_failure_is_ignored_when_latest_head_run_passes(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    status = _produce(
+        tmp_path,
+        monkeypatch,
+        FakeRun(
+            all_checks=_response(
+                [
+                    _check("required-a"),
+                    _check("optional-a", "fail"),
+                    _check("optional-a"),
+                ]
+            ),
+            required_checks=_response([_check("required-a")]),
+            check_runs=_response(
+                {
+                    "check_runs": [
+                        _check_run("required-a"),
+                        _check_run(
+                            "optional-a",
+                            conclusion="failure",
+                            started_at="2026-07-27T00:00:00Z",
+                        ),
+                        _check_run(
+                            "optional-a",
+                            conclusion="success",
+                            started_at="2026-07-27T00:05:00Z",
+                        ),
+                    ]
+                }
+            ),
+        ),
+    )
+
+    assert status["state"] == "ready_for_human_merge"
+    assert status["check_failures"] == []
+    assert status["check_pending"] == []
+    assert status["readiness"]["required_checks_complete"] is True
+
+
+def test_latest_duplicate_optional_check_failure_still_blocks_readiness(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    status = _produce(
+        tmp_path,
+        monkeypatch,
+        FakeRun(
+            all_checks=_response(
+                [
+                    _check("required-a"),
+                    _check("optional-a"),
+                    _check("optional-a", "fail"),
+                ]
+            ),
+            required_checks=_response([_check("required-a")]),
+            check_runs=_response(
+                {
+                    "check_runs": [
+                        _check_run("required-a"),
+                        _check_run(
+                            "optional-a",
+                            conclusion="success",
+                            started_at="2026-07-27T00:00:00Z",
+                        ),
+                        _check_run(
+                            "optional-a",
+                            conclusion="failure",
+                            started_at="2026-07-27T00:05:00Z",
+                        ),
+                    ]
+                }
+            ),
+        ),
+    )
+
+    assert status["state"] == "attention"
+    assert status["check_failures"] == ["optional-a (failure)"]
+    assert status["readiness"]["required_checks_complete"] is True
+
+
 def test_optional_skipped_check_does_not_block_green_state(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -778,6 +861,14 @@ def test_optional_skipped_check_does_not_block_green_state(
         FakeRun(
             all_checks=_response([_check("required-a"), _check("optional-a", "skipping")]),
             required_checks=_response([_check("required-a")]),
+            check_runs=_response(
+                {
+                    "check_runs": [
+                        _check_run("required-a"),
+                        _check_run("optional-a", conclusion="skipped"),
+                    ]
+                }
+            ),
         ),
     )
 
