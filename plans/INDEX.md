@@ -1,6 +1,6 @@
 # Plan archive index
 
-1505 archived plan doc(s). Merged plan docs are moved under `archive/` and listed below; once the archive sweep has run, the `plans/` root holds only in-flight slices.
+1506 archived plan doc(s). Merged plan docs are moved under `archive/` and listed below; once the archive sweep has run, the `plans/` root holds only in-flight slices.
 
 - [PR-ASR-Pip-Audit-Egg-Fragment](archive/PR-ASR-Pip-Audit-Egg-Fragment.md) - lane: security/workflow | phase: Production hardening
 - [PR-ASR-Requirements-Audit-Pin](archive/PR-ASR-Requirements-Audit-Pin.md) - lane: security/workflow | phase: Production hardening
@@ -742,6 +742,7 @@
 - [PR-Contract-Dispositionable-Criteria](archive/PR-Contract-Dispositionable-Criteria.md) - lane: reviewer-contract/plan-authoring | phase: Workflow/process
 - [PR-Control-Surfaces-Reasoning-Provider](archive/PR-Control-Surfaces-Reasoning-Provider.md)
 - [PR-Cross-Session-PR-Drift-Guard](archive/PR-Cross-Session-PR-Drift-Guard.md) - lane: workflow/pr-drift-guard
+- [PR-Current-Head-Check-Readiness](archive/PR-Current-Head-Check-Readiness.md) - lane: dev-workflow/current-head-check-readiness | phase: Workflow/process
 - [PR-D6e-chat-response-cached-field](archive/PR-D6e-chat-response-cached-field.md)
 - [PR-D6f-cache-control-no-store](archive/PR-D6f-cache-control-no-store.md)
 - [PR-D6g-1-batch-cache-prefilter-schema](archive/PR-D6g-1-batch-cache-prefilter-schema.md)
