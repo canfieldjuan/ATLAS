@@ -1289,6 +1289,21 @@ class DatabaseCRMProvider:
         return event
 
     @staticmethod
+    def _eom_estimate_booking_metadata_from_row(
+        metadata: Any,
+    ) -> dict[str, Any]:
+        if isinstance(metadata, Mapping):
+            return dict(metadata)
+        if isinstance(metadata, str):
+            try:
+                parsed = json.loads(metadata)
+            except json.JSONDecodeError:
+                return {}
+            if isinstance(parsed, Mapping):
+                return dict(parsed)
+        return {}
+
+    @staticmethod
     def _eom_estimate_booking_payload_matches(
         metadata: dict[str, Any] | None,
         *,
@@ -1453,7 +1468,9 @@ class DatabaseCRMProvider:
                     "EOM estimate booking attempt failed; use a new booking key",
                 )
             if request_for_key is not None:
-                request_metadata = dict(request_for_key["metadata"] or {})
+                request_metadata = self._eom_estimate_booking_metadata_from_row(
+                    request_for_key["metadata"]
+                )
                 if not self._eom_estimate_booking_payload_matches(
                     request_metadata,
                     scheduled_start=scheduled_start,
@@ -1589,16 +1606,16 @@ class DatabaseCRMProvider:
                     contact_id, event_type, from_stage, to_stage, actor,
                     source, operation_key, metadata
                 )
-                SELECT $1, 'estimate_booking_calendar_ambiguous', 'new', 'new',
-                       $2, 'eom_office', $3, jsonb_build_object(
-                           'expected_calendar_event_id', $4,
-                           'observed_calendar_event_id', $5
+                SELECT $1::uuid, 'estimate_booking_calendar_ambiguous', 'new', 'new',
+                       $2::varchar, 'eom_office', $3::varchar, jsonb_build_object(
+                           'expected_calendar_event_id', $4::text,
+                           'observed_calendar_event_id', $5::text
                        )
                 WHERE NOT EXISTS (
                     SELECT 1
                     FROM eom_lead_lifecycle_events
-                    WHERE contact_id = $1
-                      AND operation_key = $3
+                    WHERE contact_id = $1::uuid
+                      AND operation_key = $3::varchar
                       AND event_type = 'estimate_booked'
                 )
                 ON CONFLICT (contact_id, event_type, operation_key)
@@ -1643,12 +1660,12 @@ class DatabaseCRMProvider:
                     contact_id, event_type, from_stage, to_stage, actor,
                     source, operation_key, metadata, reason
                 )
-                VALUES ($1, 'estimate_booking_calendar_failed', 'new', 'new',
-                        $2, 'eom_office', $3, jsonb_build_object(
-                            'expected_calendar_event_id', $4,
-                            'calendar_error', $5,
-                            'calendar_message', $6
-                        ), $6)
+                VALUES ($1::uuid, 'estimate_booking_calendar_failed', 'new', 'new',
+                        $2::varchar, 'eom_office', $3::varchar, jsonb_build_object(
+                            'expected_calendar_event_id', $4::text,
+                            'calendar_error', $5::text,
+                            'calendar_message', $6::text
+                        ), $6::text)
                 ON CONFLICT (contact_id, event_type, operation_key)
                     WHERE operation_key IS NOT NULL
                     DO NOTHING
@@ -1759,7 +1776,9 @@ class DatabaseCRMProvider:
             if (
                 request_for_key is None
                 or not self._eom_estimate_booking_payload_matches(
-                    dict(request_for_key["metadata"] or {}),
+                    self._eom_estimate_booking_metadata_from_row(
+                        request_for_key["metadata"]
+                    ),
                     scheduled_start=scheduled_start,
                     scheduled_end=scheduled_end,
                     calendar_id=calendar_id,

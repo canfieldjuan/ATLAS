@@ -194,8 +194,8 @@ fallback changes; otherwise write "N/A - no guard/config boundary change."
 - `atlas_brain/eom_api/funnel.py`
 - `atlas_brain/services/crm_provider.py`
 - `atlas_brain/services/eom_estimate_booking.py`
-- `atlas_brain/storage/migrations/357_eom_estimate_booking_operation_key_index.sql`
 - `atlas_brain/storage/migrations/356_eom_lead_review_queue_booked_stage.sql`
+- `atlas_brain/storage/migrations/357_eom_estimate_booking_operation_key_index.sql`
 - `atlas_brain/tools/calendar.py`
 - `plans/PR-EOM-Estimate-Booking-CurrentMain.md`
 - `tests/test_eom_lead_conversion.py`
@@ -282,6 +282,7 @@ Parked hardening: none.
 - `python -m py_compile atlas_brain/services/eom_estimate_booking.py atlas_brain/services/crm_provider.py atlas_brain/tools/calendar.py` -- passed.
 - `pytest -q tests/test_eom_lead_conversion.py tests/test_migrations_runner.py tests/test_eom_render_profile.py` -- 146 passed, 1 skipped, 1 warning.
 - `pytest -q tests/test_eom_lead_conversion_integration.py tests/test_eom_lead_pipeline_integration.py` -- 1 passed, 40 skipped locally because `ATLAS_MIGRATION_TEST_DATABASE_URL` is not configured.
+- `ATLAS_MIGRATION_TEST_DATABASE_URL=postgresql://atlas:atlas@localhost:32768/atlas_migration_tests python -m pytest tests/test_crm_read_scoping.py tests/test_eom_complaints_integration.py tests/test_eom_contacts_api_tenant_scope.py tests/test_eom_lead_conversion.py tests/test_eom_lead_conversion_integration.py tests/test_eom_lead_pipeline_integration.py tests/test_eom_mailbox_context_binding.py tests/test_eom_lead_ingress.py tests/test_eom_recurring_appointments_integration.py tests/test_eom_scoped_gmail_credentials.py tests/test_eom_scoped_gmail_hardening.py tests/test_eom_sent_email_tenant_scope.py tests/test_leads_intake.py tests/test_migrations_runner.py -q` -- 332 passed, 1 warning against disposable Postgres 16.
 - `python scripts/maturity_sweep.py atlas_brain/tools --tests-root tests --baseline tests/maturity_sweep/baseline_atlas_brain_tools.json` -- ratchet gate passed; `calendar.py` remains at baseline score 15.
 - `python -m py_compile atlas_brain/eom_api/funnel.py atlas_brain/services/eom_estimate_booking.py atlas_brain/services/crm_provider.py atlas_brain/tools/calendar.py tests/test_eom_lead_conversion.py tests/test_eom_lead_conversion_integration.py tests/test_eom_render_profile.py tests/test_migrations_runner.py` -- passed.
 - `python -m pytest -q tests/test_audit_plan_doc.py tests/test_audit_plan_code_consistency.py tests/test_audit_pr_plan_presence.py tests/test_check_diff_budget.py` -- 103 passed.
@@ -296,29 +297,25 @@ Parked hardening: none.
 | File | LOC |
 |---|---:|
 | `atlas_brain/eom_api/funnel.py` | 96 |
-| `atlas_brain/services/crm_provider.py` | 824 |
+| `atlas_brain/services/crm_provider.py` | 843 |
 | `atlas_brain/services/eom_estimate_booking.py` | 223 |
 | `atlas_brain/storage/migrations/356_eom_lead_review_queue_booked_stage.sql` | 27 |
 | `atlas_brain/storage/migrations/357_eom_estimate_booking_operation_key_index.sql` | 18 |
 | `atlas_brain/tools/calendar.py` | 113 |
-| `plans/PR-EOM-Estimate-Booking-CurrentMain.md` | 481 |
+| `plans/PR-EOM-Estimate-Booking-CurrentMain.md` | 478 |
 | `tests/test_eom_lead_conversion.py` | 739 |
-| `tests/test_eom_lead_conversion_integration.py` | 714 |
+| `tests/test_eom_lead_conversion_integration.py` | 722 |
 | `tests/test_eom_lead_pipeline_integration.py` | 7 |
 | `tests/test_eom_render_profile.py` | 1 |
 | `tests/test_migrations_runner.py` | 47 |
-| **Total** | **3290** |
-
-Full PR branch numstat versus `origin/main` is currently 4,528 changed lines
-(3,126 added / 1,402 removed), because the branch also carries pre-existing
-unit-gate baseline shrink proof changes outside this estimate-booking slice.
+| **Total** | **3314** |
 
 ## Cold diff reconstruction
 
-Gaps first: no contract gaps found in the current diff. The only verification
-caveat is environmental: `tests/test_eom_lead_conversion_integration.py`
-contains the real-Postgres lifecycle proof, but it skipped locally because
-`ATLAS_MIGRATION_TEST_DATABASE_URL` is not configured.
+Gaps first: no contract gaps found in the current diff. The real-Postgres
+EOM lead pipeline proof now ran locally against disposable Postgres 16, covering
+the CI lane that previously failed on estimate-booking metadata and typed
+Calendar failure inserts.
 
 Change-by-change reconstruction against the contract:
 

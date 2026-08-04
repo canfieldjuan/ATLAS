@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import os
 import uuid
 from datetime import datetime, timezone
@@ -183,6 +184,12 @@ async def _contact_state(
 
 def _approval_key() -> str:
     return f"office-handoff-{uuid.uuid4().hex}"
+
+
+def _metadata_dict(value):
+    if isinstance(value, str):
+        return json.loads(value)
+    return dict(value or {})
 
 
 @pytest.mark.asyncio
@@ -463,6 +470,7 @@ async def test_estimate_booking_lifecycle_is_idempotent_and_keeps_lead_approvabl
             contact_id,
             booking_key,
         )
+        requested_metadata = _metadata_dict(requested_metadata)
         assert requested_metadata["calendar_event"] == {
             "summary": "Estimate: Booked Estimate",
             "start": start.isoformat(),
@@ -580,10 +588,10 @@ async def test_estimate_booking_lifecycle_is_idempotent_and_keeps_lead_approvabl
                 contact_id, event_type, from_stage, to_stage, actor,
                 source, operation_key, metadata
             )
-            VALUES ($1, 'estimate_booking_calendar_ambiguous', 'new', 'new',
-                    'employee:1:Juan Canfield', 'eom_office', $2,
+            VALUES ($1::uuid, 'estimate_booking_calendar_ambiguous', 'new', 'new',
+                    'employee:1:Juan Canfield', 'eom_office', $2::varchar,
                     jsonb_build_object(
-                        'expected_calendar_event_id', $3,
+                        'expected_calendar_event_id', $3::text,
                         'observed_calendar_event_id', ''
                     ))
             """,
