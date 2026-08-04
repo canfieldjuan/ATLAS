@@ -357,6 +357,29 @@ def test_eom_env_loader_preserves_process_env_and_local_precedence(
     assert os.environ[process_interpolated_key] == "process-secret"
 
 
+def test_eom_requirements_cover_estimate_booking_calendar_runtime():
+    """The booking route loads tools/calendar.py, whose module-level
+    `import httpx` must be satisfiable in the slim EOM runtime: the Render
+    build installs only requirements.eom.txt, so the httpx pin has to live
+    there and match the main requirements pin."""
+    eom_requirements = Path("requirements.eom.txt").read_text(encoding="utf-8")
+    main_requirements = Path("requirements.txt").read_text(encoding="utf-8")
+
+    eom_pins = {
+        line.strip().split("==")[0].split("[")[0].lower(): line.strip()
+        for line in eom_requirements.splitlines()
+        if "==" in line
+    }
+    assert "httpx" in eom_pins
+
+    main_httpx_pin = next(
+        line.strip()
+        for line in main_requirements.splitlines()
+        if line.strip().startswith("httpx==")
+    )
+    assert eom_pins["httpx"] == main_httpx_pin
+
+
 def test_eom_render_blueprint_maps_database_and_receivables_auth():
     blueprint = yaml.safe_load(Path("render.eom.yaml").read_text(encoding="utf-8"))
 
