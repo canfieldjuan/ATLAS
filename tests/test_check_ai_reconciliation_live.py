@@ -376,6 +376,23 @@ def test_structured_disposition_only_body_rejects_missing_thread_history():
     assert any("Run history correlation for disposition-only ledgers" in msg for msg in msgs)
 
 
+def test_thread_dispositions_reject_tiny_substring_roots():
+    c = load_check()
+    nodes = [
+        thread(
+            resolved=True,
+            body="Require a disposition for every resolved thread R2/R13 details",
+        )
+    ]
+    body = "## AI reconciliation\n- a -- fixed-in: fake.py\n"
+
+    code, msgs = c.evaluate(nodes, body, BOTS)
+
+    assert code == 1
+    assert any("missing dispositions" in msg for msg in msgs)
+    assert any("Require a disposition for every resolved thread" in msg for msg in msgs)
+
+
 def test_clear_body_passes_when_each_resolved_codex_thread_is_named():
     c = load_check()
     nodes = [

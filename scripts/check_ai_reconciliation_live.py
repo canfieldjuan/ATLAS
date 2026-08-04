@@ -256,6 +256,20 @@ def reconciliation_disposition_roots(body: str) -> list[str]:
     return roots
 
 
+def root_decision_matches_thread(root: str, decision: str) -> bool:
+    """Return true when a structured disposition names the thread decision."""
+
+    if root == decision:
+        return True
+    root_tokens = root.split()
+    decision_tokens = decision.split()
+    if len(root) < 24 or len(root_tokens) < 4:
+        return False
+    if len(decision) < 24 or len(decision_tokens) < 4:
+        return False
+    return root in decision or decision in root
+
+
 def missing_thread_dispositions(
     thread_summaries: Sequence[dict],
     body: str,
@@ -269,7 +283,7 @@ def missing_thread_dispositions(
         normalized = _normalized_decision(decision)
         if not normalized:
             continue
-        if not any(normalized in root or root in normalized for root in roots):
+        if not any(root_decision_matches_thread(root, normalized) for root in roots):
             copy = dict(summary)
             copy["decision"] = decision
             missing.append(copy)

@@ -79,6 +79,9 @@ Slice phase: Workflow/process
   not name every scoped Codex review-thread root decision.
 - Live reconciliation also correlates disposition-only structured ledgers
   against resolved Codex review-thread history.
+- Live reconciliation requires exact root-decision correlation or a sufficiently
+  long normalized-title match, so tiny substrings cannot satisfy a resolved
+  thread disposition.
 - Live reconciliation correlates resolved-thread dispositions against the same
   canonical, top-level, unfenced `## AI reconciliation` section used by the
   PR-body audit.
@@ -115,6 +118,9 @@ body file is supplied, except for the existing Dependabot body exemption.
 resolved Codex review-thread history proves findings existed, and it rejects a
 clear full-body ledger, including a structured disposition-only ledger, that
 omits any scoped Codex review-thread title.
+The correlator requires an exact normalized root-decision match, or a long
+multi-token containment match, so a one-character disposition cannot stand in
+for a real review-thread title.
 The live correlator now derives disposition roots from the canonical PR-body
 section parser so indented or fenced heading-like examples cannot satisfy a
 different ledger than the PR-body audit validates.
@@ -150,9 +156,10 @@ test file.
 ## Verification
 
 - `python3 -m py_compile scripts/audit_ai_reconciliation.py scripts/audit_pr_body.py scripts/check_ai_reconciliation_live.py scripts/select_impacted_tests.py` -- passed locally.
+- `python -m pytest tests/test_check_ai_reconciliation_live.py -q` -- passed locally, 70 passed.
 - `/tmp/atlas-pr2259-venv/bin/python -m pytest tests/test_check_ai_reconciliation_live.py tests/test_audit_pr_body.py tests/test_select_impacted_tests.py -q` -- passed locally, 190 passed.
 - `python -m pytest tests/test_check_ai_reconciliation_live.py tests/test_select_impacted_tests.py tests/test_local_pr_review.py -q` -- passed locally, 145 passed.
-- `python -m pytest tests/test_audit_ai_reconciliation.py tests/test_audit_pr_body.py tests/test_local_pr_review.py tests/test_open_pr_wrapper.py tests/test_push_pr_wrapper.py tests/test_pre_push_audit.py tests/test_check_ai_reconciliation_live.py tests/test_select_impacted_tests.py -q` -- passed locally, 282 passed.
+- `python -m pytest tests/test_audit_ai_reconciliation.py tests/test_audit_pr_body.py tests/test_local_pr_review.py tests/test_open_pr_wrapper.py tests/test_push_pr_wrapper.py tests/test_pre_push_audit.py tests/test_check_ai_reconciliation_live.py tests/test_select_impacted_tests.py -q` -- passed locally, 283 passed.
 - `python3 scripts/maturity_sweep.py scripts --tests-root tests --baseline tests/maturity_sweep/baseline_scripts.json --min-score 8 --sensitive-glob 'scripts/**'` -- passed locally after reducing `scripts/audit_ai_reconciliation.py` back under its ratchet.
 - `bash scripts/local_pr_review.sh --current-pr-body-file <body>` -- passed locally.
 
@@ -163,10 +170,10 @@ test file.
 | `AGENTS.md` | 31 |
 | `docs/REVIEWER_RULES.md` | 6 |
 | `extracted/_shared/scripts/check_ascii_python.sh` | 18 |
-| `plans/PR-Reviewer-Convergence-Attestation.md` | 183 |
+| `plans/PR-Reviewer-Convergence-Attestation.md` | 190 |
 | `scripts/audit_ai_reconciliation.py` | 132 |
 | `scripts/audit_pr_body.py` | 163 |
-| `scripts/check_ai_reconciliation_live.py` | 178 |
+| `scripts/check_ai_reconciliation_live.py` | 192 |
 | `scripts/local_pr_review.sh` | 37 |
 | `scripts/open_pr.sh` | 7 |
 | `scripts/pre_push_audit.sh` | 21 |
@@ -174,10 +181,10 @@ test file.
 | `scripts/select_impacted_tests.py` | 30 |
 | `tests/test_audit_ai_reconciliation.py` | 123 |
 | `tests/test_audit_pr_body.py` | 177 |
-| `tests/test_check_ai_reconciliation_live.py` | 133 |
+| `tests/test_check_ai_reconciliation_live.py` | 150 |
 | `tests/test_local_pr_review.py` | 111 |
 | `tests/test_open_pr_wrapper.py` | 8 |
 | `tests/test_pre_push_audit.py` | 19 |
 | `tests/test_push_pr_wrapper.py` | 8 |
 | `tests/test_select_impacted_tests.py` | 30 |
-| **Total** | **1418** |
+| **Total** | **1456** |
