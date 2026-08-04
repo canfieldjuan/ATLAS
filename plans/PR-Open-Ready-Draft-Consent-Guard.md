@@ -59,7 +59,14 @@ Slice phase: Workflow/process
   `tests/test_open_pr_wrapper.py` fixtures.
 - Risk areas: create-argument parsing, accidental draft mode, consent flag
   misuse, existing PR edit/create wrapper regression.
-- Reviewer rules triggered: R1, R2, R6, R10, R12, R14.
+- Reviewer rules triggered: R1, R2, R6, R10, R11, R12, R13, R14.
+- R11 configuration disposition: `ATLAS_OPEN_PR_DRAFT_CONSENT` is a
+  per-invocation operator consent flag for a local dev-workflow wrapper, not a
+  runtime `atlas_brain/config.py` setting. Default is unset, which refuses
+  drafts. It is documented in the wrapper's usage text (the only operator
+  surface for this script), and it must not be exported persistently in
+  `.env`, shell profiles, or CI -- persisting it would convert a one-time
+  exception into standing consent, defeating the gate.
 
 ### Boundary-change enumeration
 
@@ -72,6 +79,42 @@ seam in the enumeration; otherwise write "N/A - no boundary change."
   cluster whose pflag walk reaches a boolean `d` (`-d`, `-d=<value>`, `-dw`,
   `-fd`, `-wd`) no longer pass through by default; value-attached shorthands
   like `-tdraft-note` still do.
+
+### Closure declaration
+
+Set-valued dependencies in the admission decision, per
+`docs/GUARD_CLASS_CLOSURE.md` (each answers closed/open, sourcing, and the
+outside-set direction):
+
+- Draft-flag spelling set (`--draft`, `--draft=<value>`, shorthand `d`):
+  CLOSED with respect to the installed gh CLI (2.96.0), whose help documents
+  exactly `-d, --draft` as the draft flag. Sourcing is ENUMERATED from
+  `gh pr create --help` at authoring time; a bash wrapper has no runtime
+  derivation point against gh's flag table, so a future gh alias for draft
+  would not be auto-detected.
+- Value-taking option inventory (long options with a separate value token:
+  `--assignee --label --milestone --project --reviewer --title --template
+  --recover`, plus the dedicated admission arms for `--base --head --repo
+  --body --body-file`; shorthand letters: `a B b F H l m p r R t T`): CLOSED
+  with respect to gh 2.96.0. Sourcing is ENUMERATED from
+  `gh pr create --help` at authoring time; ENUMERATED is the honest answer
+  because the wrapper cannot recompute gh's flag table per run and therefore
+  cannot notice upstream drift.
+- Caller x input shape: CLOSED. The only caller is a local builder running
+  `bash scripts/open_pr.sh BODY_FILE [gh-pr-create-args...]`, and every
+  scanned token is forwarded to exactly one consumer, `gh pr create`.
+
+Outside-the-set direction (required even for CLOSED sets): every token the
+inventory does not recognize flows to the consent-gated side. An unknown long
+option is not treated as value-taking, so a `--draft`-shaped token after it is
+still gated; an unknown shorthand letter scans on as a boolean, so a `d` after
+it is still gated. Inventory incompleteness therefore produces over-rejection
+(a ready invocation asked for consent it did not need -- cheap, because the
+operator reruns with the flag or without the token) and never an unconsented
+draft PR, which is the failure this slice exists to prevent. The one residual
+drift direction -- a future gh release demoting a currently value-taking flag
+to boolean, re-opening a cross-token spelling -- is accepted under ENUMERATED
+sourcing and named in Deferred.
 - Guard-relevant fields: wrapper argv and `ATLAS_OPEN_PR_DRAFT_CONSENT`.
 - Caller x input shape: local builder running `bash scripts/open_pr.sh
   BODY_FILE [gh-pr-create-args...]`.
@@ -134,7 +177,16 @@ existing `gh pr create` call can intentionally create a draft PR.
 
 ## Deferred
 
-None.
+- gh CLI flag-table drift: the value-taking inventory is enumerated from
+  gh 2.96.0. A future gh release that changes an existing flag's arity
+  (value-taking to boolean) would re-open a cross-token spelling and requires
+  re-auditing the inventory; no runtime derivation point exists in a bash
+  wrapper. Unlisted-member drift in the other direction only over-rejects
+  (see Closure declaration).
+- Non-leading cluster spellings of the pre-existing `-H`/`-R`/`-B`
+  target-override gates (e.g. `-fHother`) predate this slice and belong to a
+  separate target-override hardening follow-up; this slice's argv-grammar
+  walk gates draft mode only.
 
 Parked hardening: none.
 
@@ -147,7 +199,7 @@ Parked hardening: none.
 
 | File | LOC |
 |---|---:|
-| `plans/PR-Open-Ready-Draft-Consent-Guard.md` | 153 |
+| `plans/PR-Open-Ready-Draft-Consent-Guard.md` | 205 |
 | `scripts/open_pr.sh` | 87 |
 | `tests/test_open_pr_wrapper.py` | 89 |
-| **Total** | **329** |
+| **Total** | **381** |
