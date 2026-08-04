@@ -562,6 +562,17 @@ async def test_private_estimate_booking_reports_explicit_calendar_id_to_prepare(
             "scheduled_start": "2026-08-04 19:00:00Z",
             "scheduled_end": "2026-08-04 20:00:00Z",
         },
+        # Held-out shapes Pydantic accepts but RFC 3339 forbids: missing
+        # seconds, date-only, and a colon-less UTC offset.
+        {
+            "scheduled_start": "2026-08-04T19:00Z",
+            "scheduled_end": "2026-08-04T20:00Z",
+        },
+        {"scheduled_start": "2026-08-04", "scheduled_end": "2026-08-05"},
+        {
+            "scheduled_start": "2026-08-04T19:00:00+0500",
+            "scheduled_end": "2026-08-04T20:00:00+0500",
+        },
     ],
 )
 async def test_private_estimate_booking_rejects_numeric_timestamps(numeric_payload):

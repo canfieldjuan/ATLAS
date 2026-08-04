@@ -400,6 +400,10 @@ RFC 3339 syntax-guard reverification (same torch caveat as above):
 - After removing the space-separator relaxation ('T'/'t' only):
   `python -m pytest tests/test_eom_lead_conversion.py -q` -- 81 passed, same
   torch caveat.
+- After adding held-out probes (missing seconds, date-only, colon-less
+  offset -- all verified locally as shapes Pydantic otherwise accepts):
+  `python -m pytest tests/test_eom_lead_conversion.py -q` -- 84 passed, same
+  torch caveat; the timestamp boundary table now holds 9 malformed shapes.
 
 ## Estimated diff size
 
@@ -412,15 +416,15 @@ RFC 3339 syntax-guard reverification (same torch caveat as above):
 | `atlas_brain/storage/migrations/356_eom_lead_review_queue_booked_stage.sql` | 27 |
 | `atlas_brain/storage/migrations/357_eom_estimate_booking_operation_key_index.sql` | 26 |
 | `atlas_brain/tools/calendar.py` | 141 |
-| `plans/PR-EOM-Estimate-Booking-CurrentMain.md` | 603 |
+| `plans/PR-EOM-Estimate-Booking-CurrentMain.md` | 611 |
 | `render.eom.yaml` | 10 |
 | `requirements.eom.txt` | 1 |
-| `tests/test_eom_lead_conversion.py` | 1147 |
+| `tests/test_eom_lead_conversion.py` | 1160 |
 | `tests/test_eom_lead_conversion_integration.py` | 857 |
 | `tests/test_eom_lead_pipeline_integration.py` | 7 |
 | `tests/test_eom_render_profile.py` | 38 |
 | `tests/test_migrations_runner.py` | 66 |
-| **Total** | **4242** |
+| **Total** | **4263** |
 
 ## Cold diff reconstruction
 
