@@ -1,6 +1,6 @@
 # Plan archive index
 
-1508 archived plan doc(s). Merged plan docs are moved under `archive/` and listed below; once the archive sweep has run, the `plans/` root holds only in-flight slices.
+1509 archived plan doc(s). Merged plan docs are moved under `archive/` and listed below; once the archive sweep has run, the `plans/` root holds only in-flight slices.
 
 - [PR-ASR-Pip-Audit-Egg-Fragment](archive/PR-ASR-Pip-Audit-Egg-Fragment.md) - lane: security/workflow | phase: Production hardening
 - [PR-ASR-Requirements-Audit-Pin](archive/PR-ASR-Requirements-Audit-Pin.md) - lane: security/workflow | phase: Production hardening
@@ -183,6 +183,7 @@
 - [PR-Blog-Strip-Generic-H2-Posts](archive/PR-Blog-Strip-Generic-H2-Posts.md)
 - [PR-Blog-Topic-Per-Call](archive/PR-Blog-Topic-Per-Call.md)
 - [PR-Boundary-Change-Enumeration](archive/PR-Boundary-Change-Enumeration.md) - lane: dev-workflow/codification | phase: Workflow/process
+- [PR-Branch-Naming-Gate](archive/PR-Branch-Naming-Gate.md) - lane: dev-workflow/branch-naming | phase: Workflow/process
 - [PR-Brand-Voice-Json-Report](archive/PR-Brand-Voice-Json-Report.md) - lane: content-marketing/brand-voice-checks | phase: Vertical slice
 - [PR-Brand-Voice-Severity-Gate](archive/PR-Brand-Voice-Severity-Gate.md) - lane: content-marketing/brand-voice-checks | phase: Vertical slice
 - [PR-Brand-Voice-Strict-Mixed-Label](archive/PR-Brand-Voice-Strict-Mixed-Label.md) - lane: content-marketing/brand-voice-checks | phase: Product polish
