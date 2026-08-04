@@ -275,6 +275,17 @@ verify_body_hash() {
     fi
 }
 
+require_pr_branch_name() {
+    local checker_args=()
+    if [ -n "${ATLAS_CURRENT_PR_AUTHOR:-}" ]; then
+        checker_args+=(--pr-author "$ATLAS_CURRENT_PR_AUTHOR")
+    fi
+    "$python_bin" scripts/check_pr_branch_name.py \
+        --branch "$branch" \
+        "${checker_args[@]}" \
+        "$body_file"
+}
+
 run_final_local_review() {
     echo "Running final local PR review before GitHub mutation..."
     ATLAS_CURRENT_PR_BODY_FILE="$body_file" \
@@ -393,6 +404,13 @@ for arg in "$@"; do
 done
 reject_target_overrides "$@"
 
+branch="$(git branch --show-current)"
+if [ -z "$branch" ]; then
+    echo "open_pr.sh: current checkout is detached; switch to a branch first" >&2
+    exit 2
+fi
+require_pr_branch_name
+
 refresh_base_ref
 
 body_audit_args=(--base-ref origin/main)
@@ -400,12 +418,6 @@ if [ -n "${ATLAS_CURRENT_PR_AUTHOR:-}" ]; then
     body_audit_args+=(--pr-author "$ATLAS_CURRENT_PR_AUTHOR")
 fi
 "$python_bin" scripts/audit_pr_body.py "${body_audit_args[@]}" "$body_file"
-
-branch="$(git branch --show-current)"
-if [ -z "$branch" ]; then
-    echo "open_pr.sh: current checkout is detached; switch to a branch first" >&2
-    exit 2
-fi
 
 acquire_mutation_lock
 
