@@ -19,6 +19,7 @@ import logging
 import hashlib
 import re
 from contextlib import asynccontextmanager
+from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import Any, Mapping, Optional
 from uuid import UUID, uuid4
@@ -36,6 +37,92 @@ _INTERACTION_DEDUPE_ANCHOR_KEYS = (
     "appointment_id",
     "invoice_id",
     "external_id",
+)
+
+
+@dataclass(frozen=True)
+class _EOMBookingFamily:
+    """One EOM booking kind sharing the durable Calendar-boundary engine.
+
+    The estimate and first-clean bookings run the exact same
+    prepare -> Calendar -> complete lifecycle; a family carries only the
+    constants that differ: ledger event names, the stages a lead may be in
+    when the booking is requested, the stage a completed booking advances
+    the lead to, and whether completion enqueues the onboarding email
+    draft. Both families share the operation-key advisory-lock namespaces
+    (operation keys are globally unique across contacts and families), so
+    the customer-handoff execution fence covers every family with one
+    probe per key.
+    """
+
+    label: str
+    requested_event: str
+    booked_event: str
+    failed_event: str
+    ambiguous_event: str
+    admission_stages: tuple[str, ...]
+    already_booked_stage: str
+    target_stage: str
+    summary_prefix: str
+    enqueues_onboarding_draft: bool
+
+    @property
+    def event_types(self) -> tuple[str, ...]:
+        return (
+            self.requested_event,
+            self.booked_event,
+            self.failed_event,
+            self.ambiguous_event,
+        )
+
+    @property
+    def terminal_events(self) -> frozenset[str]:
+        return frozenset(
+            {self.booked_event, self.failed_event, self.ambiguous_event}
+        )
+
+
+_ESTIMATE_BOOKING_FAMILY = _EOMBookingFamily(
+    label="estimate",
+    requested_event="estimate_booking_requested",
+    booked_event="estimate_booked",
+    failed_event="estimate_booking_calendar_failed",
+    ambiguous_event="estimate_booking_calendar_ambiguous",
+    admission_stages=("new", "estimate_booked"),
+    already_booked_stage="estimate_booked",
+    target_stage="estimate_booked",
+    summary_prefix="Estimate",
+    enqueues_onboarding_draft=False,
+)
+
+_FIRST_CLEAN_BOOKING_FAMILY = _EOMBookingFamily(
+    label="first clean",
+    requested_event="first_clean_booking_requested",
+    booked_event="first_clean_booked",
+    failed_event="first_clean_booking_calendar_failed",
+    ambiguous_event="first_clean_booking_calendar_ambiguous",
+    admission_stages=("new", "estimate_booked", "won"),
+    already_booked_stage="won",
+    target_stage="won",
+    summary_prefix="First clean",
+    enqueues_onboarding_draft=True,
+)
+
+_EOM_BOOKING_FAMILIES = (_ESTIMATE_BOOKING_FAMILY, _FIRST_CLEAN_BOOKING_FAMILY)
+_ALL_EOM_BOOKING_EVENT_TYPES = tuple(
+    event for family in _EOM_BOOKING_FAMILIES for event in family.event_types
+)
+_ALL_EOM_BOOKED_EVENTS = frozenset(
+    family.booked_event for family in _EOM_BOOKING_FAMILIES
+)
+_ALL_EOM_TERMINAL_EVENTS = frozenset(
+    event for family in _EOM_BOOKING_FAMILIES for event in family.terminal_events
+)
+_ALL_EOM_AMBIGUOUS_EVENTS = frozenset(
+    family.ambiguous_event for family in _EOM_BOOKING_FAMILIES
+)
+_ALL_EOM_REQUESTED_EVENTS = frozenset(
+    family.requested_event for family in _EOM_BOOKING_FAMILIES
 )
 
 
@@ -1209,7 +1296,7 @@ class DatabaseCRMProvider:
             WHERE c.business_context_id = 'effingham_maids'
               AND c.status = 'active'
               AND c.contact_type = 'lead'
-              AND c.lead_stage IN ('new', 'estimate_booked')
+              AND c.lead_stage IN ('new', 'estimate_booked', 'won')
               {cursor_clause}
             ORDER BY c.created_at DESC, c.id DESC
             LIMIT $1
@@ -1246,9 +1333,11 @@ class DatabaseCRMProvider:
         return metadata
 
     @staticmethod
-    def _eom_estimate_booking_summary(contact: Mapping[str, Any]) -> str:
+    def _eom_booking_summary(
+        family: _EOMBookingFamily, contact: Mapping[str, Any]
+    ) -> str:
         name = str(contact.get("full_name") or "").strip() or "EOM lead"
-        return f"Estimate: {name}"
+        return f"{family.summary_prefix}: {name}"
 
     @staticmethod
     def _eom_estimate_booking_description(notes: str | None) -> str:
@@ -1258,7 +1347,8 @@ class DatabaseCRMProvider:
         return "\n\n".join(parts)
 
     @staticmethod
-    def _eom_estimate_booking_calendar_event(
+    def _eom_booking_calendar_event(
+        family: _EOMBookingFamily,
         *,
         contact: Mapping[str, Any],
         scheduled_start: datetime,
@@ -1268,7 +1358,7 @@ class DatabaseCRMProvider:
         expected_calendar_event_id: str,
     ) -> dict[str, Any]:
         return {
-            "summary": DatabaseCRMProvider._eom_estimate_booking_summary(contact),
+            "summary": DatabaseCRMProvider._eom_booking_summary(family, contact),
             "start": scheduled_start.astimezone(timezone.utc).isoformat(),
             "end": scheduled_end.astimezone(timezone.utc).isoformat(),
             "location": contact.get("address"),
@@ -1326,18 +1416,20 @@ class DatabaseCRMProvider:
 
     @staticmethod
     def _eom_estimate_booking_operation_is_terminal(event_types: set[str]) -> bool:
-        return bool(
-            event_types
-            & {
-                "estimate_booked",
-                "estimate_booking_calendar_failed",
-                "estimate_booking_calendar_ambiguous",
-            }
-        )
+        # One operation key only ever carries one family's events, so the
+        # cross-family union is exact for per-operation terminality.
+        return bool(event_types & _ALL_EOM_TERMINAL_EVENTS)
 
     @asynccontextmanager
     async def eom_estimate_booking_execution_lock(self, *, booking_key: str):
         """Serialize one booking key's external Calendar attempt.
+
+        Shared by every EOM booking family (estimate and first clean):
+        operation keys are globally unique across contacts and families, so
+        one lock namespace covers all of them and the handoff fence needs
+        only one probe per key. The historical "estimate" in the key prefix
+        is kept so in-flight deployments and the merged handoff fence stay
+        byte-compatible.
 
         The session advisory lock is held across the whole
         prepare -> Calendar -> complete span so that
@@ -1402,6 +1494,65 @@ class DatabaseCRMProvider:
         actor_name: str,
         calendar_id_explicit: bool = True,
     ) -> dict[str, Any]:
+        """Claim one lead/booking key before the estimate Calendar write."""
+        return await self._prepare_eom_booking(
+            _ESTIMATE_BOOKING_FAMILY,
+            contact_id=contact_id,
+            scheduled_start=scheduled_start,
+            scheduled_end=scheduled_end,
+            calendar_id=calendar_id,
+            notes=notes,
+            booking_key=booking_key,
+            expected_calendar_event_id=expected_calendar_event_id,
+            actor_id=actor_id,
+            actor_name=actor_name,
+            calendar_id_explicit=calendar_id_explicit,
+        )
+
+    async def prepare_eom_first_clean_booking(
+        self,
+        *,
+        contact_id: str,
+        scheduled_start: datetime,
+        scheduled_end: datetime,
+        calendar_id: str,
+        notes: str | None,
+        booking_key: str,
+        expected_calendar_event_id: str,
+        actor_id: int,
+        actor_name: str,
+        calendar_id_explicit: bool = True,
+    ) -> dict[str, Any]:
+        """Claim one lead/booking key before the first-clean Calendar write."""
+        return await self._prepare_eom_booking(
+            _FIRST_CLEAN_BOOKING_FAMILY,
+            contact_id=contact_id,
+            scheduled_start=scheduled_start,
+            scheduled_end=scheduled_end,
+            calendar_id=calendar_id,
+            notes=notes,
+            booking_key=booking_key,
+            expected_calendar_event_id=expected_calendar_event_id,
+            actor_id=actor_id,
+            actor_name=actor_name,
+            calendar_id_explicit=calendar_id_explicit,
+        )
+
+    async def _prepare_eom_booking(
+        self,
+        family: _EOMBookingFamily,
+        *,
+        contact_id: str,
+        scheduled_start: datetime,
+        scheduled_end: datetime,
+        calendar_id: str,
+        notes: str | None,
+        booking_key: str,
+        expected_calendar_event_id: str,
+        actor_id: int,
+        actor_name: str,
+        calendar_id_explicit: bool = True,
+    ) -> dict[str, Any]:
         """Claim one lead/booking key before the external Calendar side effect.
 
         Row-lock order contract: the contact row is locked BEFORE any
@@ -1449,21 +1600,23 @@ class DatabaseCRMProvider:
                 SELECT contact_id, event_type, operation_key, metadata
                 FROM eom_lead_lifecycle_events
                 WHERE operation_key = $1
-                  AND event_type IN (
-                      'estimate_booking_requested',
-                      'estimate_booking_calendar_failed',
-                      'estimate_booking_calendar_ambiguous',
-                      'estimate_booked'
-                  )
+                  AND event_type = ANY($2::varchar[])
                 FOR UPDATE
                 """,
                 booking_key,
+                list(_ALL_EOM_BOOKING_EVENT_TYPES),
             )
+            family_events = set(family.event_types)
             for event in key_events:
                 if str(event["contact_id"]) != contact_id:
                     raise EOMLeadConversionError(
                         409,
                         "Booking key already belongs to a different EOM lead",
+                    )
+                if event["event_type"] not in family_events:
+                    raise EOMLeadConversionError(
+                        409,
+                        "Booking key already belongs to a different EOM booking",
                     )
 
             events = await conn.fetch(
@@ -1471,15 +1624,11 @@ class DatabaseCRMProvider:
                 SELECT event_type, operation_key, metadata
                 FROM eom_lead_lifecycle_events
                 WHERE contact_id = $1
-                  AND event_type IN (
-                      'estimate_booking_requested',
-                      'estimate_booking_calendar_failed',
-                      'estimate_booking_calendar_ambiguous',
-                      'estimate_booked'
-                  )
+                  AND event_type = ANY($2::varchar[])
                 FOR UPDATE
                 """,
                 contact_id,
+                list(_ALL_EOM_BOOKING_EVENT_TYPES),
             )
             request_for_key = None
             booked_for_key = None
@@ -1492,25 +1641,31 @@ class DatabaseCRMProvider:
                     event["event_type"]
                 )
                 if event_key == booking_key:
-                    if event["event_type"] == "estimate_booking_requested":
+                    if event["event_type"] == family.requested_event:
                         request_for_key = event
-                    elif event["event_type"] == "estimate_booked":
+                    elif event["event_type"] == family.booked_event:
                         booked_for_key = event
-                    elif event["event_type"] == "estimate_booking_calendar_failed":
+                    elif event["event_type"] == family.failed_event:
                         failed_for_key = event
-                    elif event["event_type"] == "estimate_booking_calendar_ambiguous":
+                    elif event["event_type"] == family.ambiguous_event:
                         ambiguous_for_key = event
 
+            # Another operation blocks this one when it is unsettled in ANY
+            # family (pending or ambiguous work must reconcile first), or
+            # when it completed THIS family's booking (one estimate and one
+            # first clean per lead). A completed booking in the other family
+            # never blocks: estimate booked -> first clean booked is the
+            # funnel's normal path.
             other_operation = next(
                 (
                     operation_key
                     for operation_key, event_types in operation_event_types.items()
                     if operation_key != booking_key
                     and (
-                        "estimate_booked" in event_types
-                        or "estimate_booking_calendar_ambiguous" in event_types
+                        family.booked_event in event_types
+                        or bool(event_types & _ALL_EOM_AMBIGUOUS_EVENTS)
                         or (
-                            "estimate_booking_requested" in event_types
+                            bool(event_types & _ALL_EOM_REQUESTED_EVENTS)
                             and not self._eom_estimate_booking_operation_is_terminal(
                                 event_types
                             )
@@ -1520,9 +1675,15 @@ class DatabaseCRMProvider:
                 None,
             )
             if other_operation is not None:
+                other_types = operation_event_types.get(other_operation, set())
+                if other_types & family_events:
+                    raise EOMLeadConversionError(
+                        409,
+                        f"EOM lead already has a different {family.label} booking",
+                    )
                 raise EOMLeadConversionError(
                     409,
-                    "EOM lead already has a different estimate booking",
+                    "EOM lead has another booking operation in progress",
                 )
             if request_for_key is not None:
                 request_metadata = self._eom_estimate_booking_metadata_from_row(
@@ -1547,13 +1708,14 @@ class DatabaseCRMProvider:
                 ):
                     raise EOMLeadConversionError(
                         409,
-                        "Booking key already belongs to a different estimate booking",
+                        "Booking key already belongs to a different "
+                        f"{family.label} booking",
                     )
                 if booked_for_key is not None:
-                    return {
+                    replay: dict[str, Any] = {
                         "contact_id": str(contact["id"]),
-                        "lead_stage": "estimate_booked",
-                        "status": "estimate_booked",
+                        "lead_stage": family.target_stage,
+                        "status": family.booked_event,
                         "calendar_event_id": expected_calendar_event_id,
                         "expected_calendar_event_id": expected_calendar_event_id,
                         "idempotent": True,
@@ -1562,15 +1724,24 @@ class DatabaseCRMProvider:
                             request_metadata
                         ),
                     }
+                    if family.enqueues_onboarding_draft:
+                        replay["onboarding_draft_id"] = (
+                            await self._eom_onboarding_draft_id_for_operation(
+                                conn, booking_key
+                            )
+                        )
+                    return replay
                 if ambiguous_for_key is not None:
                     raise EOMLeadConversionError(
                         409,
-                        "EOM estimate booking requires calendar reconciliation",
+                        f"EOM {family.label} booking requires calendar "
+                        "reconciliation",
                     )
                 if failed_for_key is not None:
                     raise EOMLeadConversionError(
                         409,
-                        "EOM estimate booking attempt failed; use a new booking key",
+                        f"EOM {family.label} booking attempt failed; "
+                        "use a new booking key",
                     )
                 if contact["status"] != "active":
                     raise EOMLeadConversionError(
@@ -1578,9 +1749,10 @@ class DatabaseCRMProvider:
                     )
                 if contact["contact_type"] != "lead":
                     raise EOMLeadConversionError(409, "EOM contact is not a lead")
-                if contact["lead_stage"] not in ("new", "estimate_booked"):
+                if contact["lead_stage"] not in family.admission_stages:
                     raise EOMLeadConversionError(
-                        409, "EOM lead is not ready for estimate booking"
+                        409,
+                        f"EOM lead is not ready for {family.label} booking",
                     )
                 return {
                     "contact_id": str(contact["id"]),
@@ -1601,17 +1773,19 @@ class DatabaseCRMProvider:
                 )
             if contact["contact_type"] != "lead":
                 raise EOMLeadConversionError(409, "EOM contact is not a lead")
-            if contact["lead_stage"] not in ("new", "estimate_booked"):
-                raise EOMLeadConversionError(
-                    409, "EOM lead is not ready for estimate booking"
-                )
-            if contact["lead_stage"] == "estimate_booked":
+            if contact["lead_stage"] not in family.admission_stages:
                 raise EOMLeadConversionError(
                     409,
-                    "EOM lead already has a different estimate booking",
+                    f"EOM lead is not ready for {family.label} booking",
+                )
+            if contact["lead_stage"] == family.already_booked_stage:
+                raise EOMLeadConversionError(
+                    409,
+                    f"EOM lead already has a different {family.label} booking",
                 )
 
-            calendar_event = self._eom_estimate_booking_calendar_event(
+            calendar_event = self._eom_booking_calendar_event(
+                family,
                 contact=contact,
                 scheduled_start=scheduled_start,
                 scheduled_end=scheduled_end,
@@ -1619,14 +1793,14 @@ class DatabaseCRMProvider:
                 notes=notes,
                 expected_calendar_event_id=expected_calendar_event_id,
             )
+            from_stage = str(contact["lead_stage"])
             await conn.execute(
                 """
                 INSERT INTO eom_lead_lifecycle_events (
                     contact_id, event_type, from_stage, to_stage, actor,
                     source, operation_key, metadata
                 )
-                VALUES ($1, 'estimate_booking_requested', 'new', 'new',
-                        $2, 'eom_office', $3, $4::jsonb)
+                VALUES ($1, $5, $6, $6, $2, 'eom_office', $3, $4::jsonb)
                 """,
                 contact_id,
                 f"employee:{actor_id}:{actor_name}",
@@ -1642,10 +1816,12 @@ class DatabaseCRMProvider:
                         actor_id=actor_id,
                     )
                 ),
+                family.requested_event,
+                from_stage,
             )
             return {
                 "contact_id": str(contact["id"]),
-                "lead_stage": str(contact["lead_stage"]),
+                "lead_stage": from_stage,
                 "status": "calendar_pending",
                 "calendar_event_id": None,
                 "expected_calendar_event_id": expected_calendar_event_id,
@@ -1654,8 +1830,31 @@ class DatabaseCRMProvider:
                 "calendar_event": calendar_event,
             }
 
-    async def mark_eom_estimate_booking_calendar_ambiguous(
+    @staticmethod
+    async def _eom_onboarding_draft_id_for_operation(
+        conn: Any, operation_key: str
+    ) -> str | None:
+        row = await conn.fetchrow(
+            "SELECT id FROM eom_onboarding_email_drafts WHERE operation_key = $1",
+            operation_key,
+        )
+        return str(row["id"]) if row else None
+
+    async def mark_eom_estimate_booking_calendar_ambiguous(self, **kwargs: Any) -> None:
+        await self._mark_eom_booking_calendar_ambiguous(
+            _ESTIMATE_BOOKING_FAMILY, **kwargs
+        )
+
+    async def mark_eom_first_clean_booking_calendar_ambiguous(
+        self, **kwargs: Any
+    ) -> None:
+        await self._mark_eom_booking_calendar_ambiguous(
+            _FIRST_CLEAN_BOOKING_FAMILY, **kwargs
+        )
+
+    async def _mark_eom_booking_calendar_ambiguous(
         self,
+        family: _EOMBookingFamily,
         *,
         contact_id: str,
         booking_key: str,
@@ -1677,7 +1876,7 @@ class DatabaseCRMProvider:
                     contact_id, event_type, from_stage, to_stage, actor,
                     source, operation_key, metadata
                 )
-                SELECT c.id, 'estimate_booking_calendar_ambiguous',
+                SELECT c.id, $6::varchar,
                        c.lead_stage, c.lead_stage,
                        $2::varchar, 'eom_office', $3::varchar, jsonb_build_object(
                            'expected_calendar_event_id', $4::text,
@@ -1690,7 +1889,7 @@ class DatabaseCRMProvider:
                     FROM eom_lead_lifecycle_events
                     WHERE contact_id = $1::uuid
                       AND operation_key = $3::varchar
-                      AND event_type = 'estimate_booked'
+                      AND event_type = $7::varchar
                 )
                 ON CONFLICT (contact_id, event_type, operation_key)
                     WHERE operation_key IS NOT NULL
@@ -1701,10 +1900,23 @@ class DatabaseCRMProvider:
                 booking_key,
                 expected_calendar_event_id,
                 observed_calendar_event_id,
+                family.ambiguous_event,
+                family.booked_event,
             )
 
-    async def mark_eom_estimate_booking_calendar_failed(
+    async def mark_eom_estimate_booking_calendar_failed(self, **kwargs: Any) -> None:
+        await self._mark_eom_booking_calendar_failed(_ESTIMATE_BOOKING_FAMILY, **kwargs)
+
+    async def mark_eom_first_clean_booking_calendar_failed(
+        self, **kwargs: Any
+    ) -> None:
+        await self._mark_eom_booking_calendar_failed(
+            _FIRST_CLEAN_BOOKING_FAMILY, **kwargs
+        )
+
+    async def _mark_eom_booking_calendar_failed(
         self,
+        family: _EOMBookingFamily,
         *,
         contact_id: str,
         booking_key: str,
@@ -1734,7 +1946,7 @@ class DatabaseCRMProvider:
                     contact_id, event_type, from_stage, to_stage, actor,
                     source, operation_key, metadata, reason
                 )
-                SELECT c.id, 'estimate_booking_calendar_failed',
+                SELECT c.id, $7::varchar,
                        c.lead_stage, c.lead_stage,
                        $2::varchar, 'eom_office', $3::varchar, jsonb_build_object(
                             'expected_calendar_event_id', $4::text,
@@ -1748,10 +1960,7 @@ class DatabaseCRMProvider:
                     FROM eom_lead_lifecycle_events
                     WHERE contact_id = $1::uuid
                       AND operation_key = $3::varchar
-                      AND event_type IN (
-                          'estimate_booked',
-                          'estimate_booking_calendar_ambiguous'
-                      )
+                      AND event_type IN ($8::varchar, $9::varchar)
                 )
                 ON CONFLICT (contact_id, event_type, operation_key)
                     WHERE operation_key IS NOT NULL
@@ -1763,10 +1972,20 @@ class DatabaseCRMProvider:
                 expected_calendar_event_id,
                 calendar_error,
                 calendar_message,
+                family.failed_event,
+                family.booked_event,
+                family.ambiguous_event,
             )
 
-    async def complete_eom_estimate_booking(
+    async def complete_eom_estimate_booking(self, **kwargs: Any) -> dict[str, Any]:
+        return await self._complete_eom_booking(_ESTIMATE_BOOKING_FAMILY, **kwargs)
+
+    async def complete_eom_first_clean_booking(self, **kwargs: Any) -> dict[str, Any]:
+        return await self._complete_eom_booking(_FIRST_CLEAN_BOOKING_FAMILY, **kwargs)
+
+    async def _complete_eom_booking(
         self,
+        family: _EOMBookingFamily,
         *,
         contact_id: str,
         scheduled_start: datetime,
@@ -1786,7 +2005,7 @@ class DatabaseCRMProvider:
         if calendar_event_id != expected_calendar_event_id:
             raise EOMLeadConversionError(
                 409,
-                "Calendar event id does not match prepared estimate booking",
+                f"Calendar event id does not match prepared {family.label} booking",
             )
 
         pool = self._get_pool()
@@ -1833,15 +2052,11 @@ class DatabaseCRMProvider:
                 SELECT event_type, operation_key, metadata
                 FROM eom_lead_lifecycle_events
                 WHERE contact_id = $1
-                  AND event_type IN (
-                      'estimate_booking_requested',
-                      'estimate_booking_calendar_failed',
-                      'estimate_booking_calendar_ambiguous',
-                      'estimate_booked'
-                  )
+                  AND event_type = ANY($2::varchar[])
                 FOR UPDATE
                 """,
                 contact_id,
+                list(family.event_types),
             )
             request_for_key = None
             booked_for_key = None
@@ -1850,13 +2065,13 @@ class DatabaseCRMProvider:
             for event in events:
                 if event["operation_key"] != booking_key:
                     continue
-                if event["event_type"] == "estimate_booking_requested":
+                if event["event_type"] == family.requested_event:
                     request_for_key = event
-                elif event["event_type"] == "estimate_booked":
+                elif event["event_type"] == family.booked_event:
                     booked_for_key = event
-                elif event["event_type"] == "estimate_booking_calendar_failed":
+                elif event["event_type"] == family.failed_event:
                     failed_for_key = event
-                elif event["event_type"] == "estimate_booking_calendar_ambiguous":
+                elif event["event_type"] == family.ambiguous_event:
                     ambiguous_for_key = event
             if (
                 request_for_key is None
@@ -1873,45 +2088,61 @@ class DatabaseCRMProvider:
             ):
                 raise EOMLeadConversionError(
                     409,
-                    "EOM estimate booking was not prepared for this payload",
+                    f"EOM {family.label} booking was not prepared for this payload",
                 )
             if booked_for_key is not None:
-                return {
+                replay: dict[str, Any] = {
                     "contact_id": str(contact["id"]),
                     "lead_stage": str(contact["lead_stage"]),
-                    "status": "estimate_booked",
+                    "status": family.booked_event,
                     "calendar_event_id": calendar_event_id,
                     "expected_calendar_event_id": expected_calendar_event_id,
                     "idempotent": True,
                 }
-            if contact["lead_stage"] != "new":
+                if family.enqueues_onboarding_draft:
+                    replay["onboarding_draft_id"] = (
+                        await self._eom_onboarding_draft_id_for_operation(
+                            conn, booking_key
+                        )
+                    )
+                return replay
+            completion_stages = tuple(
+                stage
+                for stage in family.admission_stages
+                if stage != family.already_booked_stage
+            )
+            if contact["lead_stage"] not in completion_stages:
                 raise EOMLeadConversionError(
-                    409, "EOM lead is not ready for estimate booking"
+                    409, f"EOM lead is not ready for {family.label} booking"
                 )
+            from_stage = str(contact["lead_stage"])
 
             updated = await conn.fetchrow(
                 """
                 UPDATE contacts
-                SET lead_stage = 'estimate_booked', updated_at = NOW()
+                SET lead_stage = $3, updated_at = NOW()
                 WHERE id = $1
                   AND business_context_id = $2
                   AND contact_type = 'lead'
-                  AND lead_stage = 'new'
+                  AND lead_stage = ANY($4::varchar[])
                 RETURNING id, lead_stage
                 """,
                 contact_id,
                 EOM_BUSINESS_CONTEXT_ID,
+                family.target_stage,
+                list(completion_stages),
             )
             if updated is None:
-                raise RuntimeError("EOM lead changed during estimate booking")
+                raise RuntimeError(
+                    f"EOM lead changed during {family.label} booking"
+                )
             await conn.execute(
                 """
                 INSERT INTO eom_lead_lifecycle_events (
                     contact_id, event_type, from_stage, to_stage, actor,
                     source, operation_key, metadata
                 )
-                VALUES ($1, 'estimate_booked', 'new', 'estimate_booked',
-                        $2, 'eom_office', $3, $4::jsonb)
+                VALUES ($1, $5, $6, $7, $2, 'eom_office', $3, $4::jsonb)
                 """,
                 contact_id,
                 f"employee:{actor_id}:{actor_name}",
@@ -1927,15 +2158,69 @@ class DatabaseCRMProvider:
                         actor_id=actor_id,
                     )
                 ),
+                family.booked_event,
+                from_stage,
+                family.target_stage,
             )
-            return {
+            result: dict[str, Any] = {
                 "contact_id": str(contact["id"]),
                 "lead_stage": str(updated["lead_stage"]),
-                "status": "estimate_booked",
+                "status": family.booked_event,
                 "calendar_event_id": calendar_event_id,
                 "expected_calendar_event_id": expected_calendar_event_id,
                 "idempotent": False,
             }
+            if family.enqueues_onboarding_draft:
+                result["onboarding_draft_id"] = (
+                    await self._enqueue_eom_onboarding_email_draft(
+                        conn, contact=contact, operation_key=booking_key
+                    )
+                )
+            return result
+
+    @staticmethod
+    async def _enqueue_eom_onboarding_email_draft(
+        conn: Any, *, contact: Mapping[str, Any], operation_key: str
+    ) -> str | None:
+        """Snapshot the onboarding email as one pending draft row.
+
+        Runs in the same transaction as the won transition, so a booked
+        first clean without a draft row is impossible. Nothing is sent
+        here: the draft stays 'pending' until the approval surface claims
+        it with UPDATE ... WHERE status = 'pending' RETURNING (the atomic
+        single-send contract documented in migration 360). A contact with
+        no email is enqueued with blocker='no_email' rather than skipped,
+        so the approval queue surfaces the gap. Replay is idempotent via
+        UNIQUE(operation_key).
+        """
+        from ..templates.email import format_onboarding_welcome
+
+        recipient = str(contact.get("email") or "").strip() or None
+        subject, body = format_onboarding_welcome(
+            client_name=str(contact.get("full_name") or "")
+        )
+        row = await conn.fetchrow(
+            """
+            INSERT INTO eom_onboarding_email_drafts (
+                contact_id, operation_key, recipient_email, blocker,
+                subject, body
+            )
+            VALUES ($1::uuid, $2, $3, $4, $5, $6)
+            ON CONFLICT (operation_key) DO NOTHING
+            RETURNING id
+            """,
+            str(contact["id"]),
+            operation_key,
+            recipient,
+            None if recipient else "no_email",
+            subject,
+            body,
+        )
+        if row is not None:
+            return str(row["id"])
+        return await DatabaseCRMProvider._eom_onboarding_draft_id_for_operation(
+            conn, operation_key
+        )
 
     async def open_customer_service_ticket(
         self,
@@ -2536,15 +2821,11 @@ class DatabaseCRMProvider:
                 SELECT event_type, operation_key
                 FROM eom_lead_lifecycle_events
                 WHERE contact_id = $1
-                  AND event_type IN (
-                      'estimate_booking_requested',
-                      'estimate_booking_calendar_failed',
-                      'estimate_booking_calendar_ambiguous',
-                      'estimate_booked'
-                  )
+                  AND event_type = ANY($2::varchar[])
                 FOR UPDATE
                 """,
                 contact_id,
+                list(_ALL_EOM_BOOKING_EVENT_TYPES),
             )
             booking_event_types: dict[str, set[str]] = {}
             for event in booking_events:
@@ -2554,12 +2835,12 @@ class DatabaseCRMProvider:
             # A terminal failed marker alone does not prove the key settled:
             # a concurrent same-key call past preparation may still be talking
             # to Calendar and can produce a stronger booked/ambiguous outcome.
-            # The executor holds a session advisory lock on
-            # eom-estimate-booking:execution:<key> for its whole attempt, so a
-            # failed try-lock here means an execution is in flight and handoff
-            # must stay fenced until it settles.
+            # The executor of EITHER booking family holds a session advisory
+            # lock on eom-estimate-booking:execution:<key> for its whole
+            # attempt, so a failed try-lock here means an execution is in
+            # flight and handoff must stay fenced until it settles.
             for operation_key, event_types in booking_event_types.items():
-                if "estimate_booked" in event_types:
+                if event_types & _ALL_EOM_BOOKED_EVENTS:
                     continue
                 execution_settled = bool(
                     await conn.fetchval(
@@ -2570,18 +2851,18 @@ class DatabaseCRMProvider:
                 if not execution_settled:
                     raise EOMLeadConversionError(
                         409,
-                        "EOM estimate booking is still executing; retry after it settles",
+                        "EOM booking is still executing; retry after it settles",
                     )
             blocking_booking = next(
                 (
                     event_types
                     for event_types in booking_event_types.values()
                     if (
-                        "estimate_booking_calendar_ambiguous" in event_types
-                        and "estimate_booked" not in event_types
+                        bool(event_types & _ALL_EOM_AMBIGUOUS_EVENTS)
+                        and not (event_types & _ALL_EOM_BOOKED_EVENTS)
                     )
                     or (
-                        "estimate_booking_requested" in event_types
+                        bool(event_types & _ALL_EOM_REQUESTED_EVENTS)
                         and not self._eom_estimate_booking_operation_is_terminal(
                             event_types
                         )
@@ -2590,14 +2871,14 @@ class DatabaseCRMProvider:
                 None,
             )
             if blocking_booking is not None:
-                if "estimate_booking_calendar_ambiguous" in blocking_booking:
+                if blocking_booking & _ALL_EOM_AMBIGUOUS_EVENTS:
                     raise EOMLeadConversionError(
                         409,
-                        "EOM estimate booking requires calendar reconciliation",
+                        "EOM booking requires calendar reconciliation",
                     )
                 raise EOMLeadConversionError(
                     409,
-                    "EOM estimate booking is still pending calendar completion",
+                    "EOM booking is still pending calendar completion",
                 )
             if contact["status"] != "active":
                 raise EOMLeadConversionError(
@@ -2605,7 +2886,7 @@ class DatabaseCRMProvider:
                 )
             if contact["contact_type"] != "lead":
                 raise EOMLeadConversionError(409, "EOM contact is not a lead")
-            if contact["lead_stage"] not in ("new", "estimate_booked"):
+            if contact["lead_stage"] not in ("new", "estimate_booked", "won"):
                 raise EOMLeadConversionError(409, "EOM lead is not ready for approval")
             from_stage = str(contact["lead_stage"])
 

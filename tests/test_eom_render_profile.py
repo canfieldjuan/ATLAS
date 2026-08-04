@@ -222,6 +222,7 @@ print(json.dumps({
     assert "/api/v1/receivables/ready" in paths
     assert "/api/v1/eom-funnel/leads" in paths
     assert "/api/v1/eom-funnel/leads/{contact_id}/estimate-bookings" in paths
+    assert "/api/v1/eom-funnel/leads/{contact_id}/first-clean-bookings" in paths
     assert "/api/v1/eom-funnel/customer-handoffs" in paths
     assert "/openapi.json" not in paths
     assert "/docs" not in paths

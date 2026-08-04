@@ -1,4 +1,12 @@
-"""Office-owned EOM estimate booking command."""
+"""Office-owned EOM booking commands (estimate and first clean).
+
+Both booking families run the same durable prepare -> Calendar -> complete
+engine; a service binding carries only what differs: the deterministic
+event-ID prefix, the CRM provider method names, and the completed-status
+token. The first-clean completion additionally enqueues the onboarding
+email draft inside the CRM transaction (see
+DatabaseCRMProvider._enqueue_eom_onboarding_email_draft).
+"""
 
 from __future__ import annotations
 
@@ -9,7 +17,7 @@ from typing import Any
 
 
 class EOMEstimateBookingError(Exception):
-    """HTTP-mappable failure for the private EOM estimate booking command."""
+    """HTTP-mappable failure for the private EOM booking commands."""
 
     def __init__(self, status_code: int, message: str):
         super().__init__(message)
@@ -28,14 +36,75 @@ class EOMEstimateBooking:
     actor_name: str
 
 
+@dataclass(frozen=True)
+class EOMFirstCleanBooking(EOMEstimateBooking):
+    """Same payload shape; the distinct type names the office action."""
+
+
+@dataclass(frozen=True)
+class _EOMBookingServiceBinding:
+    """Family-specific constants for the shared booking engine."""
+
+    label: str
+    summary_prefix: str
+    event_id_prefix: str
+    booked_status: str
+    preparer_name: str
+    completer_name: str
+    ambiguous_marker_name: str
+    failed_marker_name: str
+
+
+_ESTIMATE_SERVICE_BINDING = _EOMBookingServiceBinding(
+    label="estimate",
+    summary_prefix="Estimate",
+    event_id_prefix="eomest",
+    booked_status="estimate_booked",
+    preparer_name="prepare_eom_estimate_booking",
+    completer_name="complete_eom_estimate_booking",
+    ambiguous_marker_name="mark_eom_estimate_booking_calendar_ambiguous",
+    failed_marker_name="mark_eom_estimate_booking_calendar_failed",
+)
+
+_FIRST_CLEAN_SERVICE_BINDING = _EOMBookingServiceBinding(
+    label="first clean",
+    summary_prefix="First clean",
+    event_id_prefix="eomfcl",
+    booked_status="first_clean_booked",
+    preparer_name="prepare_eom_first_clean_booking",
+    completer_name="complete_eom_first_clean_booking",
+    ambiguous_marker_name="mark_eom_first_clean_booking_calendar_ambiguous",
+    failed_marker_name="mark_eom_first_clean_booking_calendar_failed",
+)
+
+
+def _deterministic_eom_booking_event_id(
+    prefix: str, *, contact_id: str, booking_key: str
+) -> str:
+    digest = hashlib.sha256(f"{contact_id}:{booking_key}".encode("utf-8")).hexdigest()
+    return f"{prefix}{digest[:56]}"
+
+
 def deterministic_eom_estimate_calendar_event_id(
     *,
     contact_id: str,
     booking_key: str,
 ) -> str:
     """Return a Google-safe deterministic event ID for one booking operation."""
-    digest = hashlib.sha256(f"{contact_id}:{booking_key}".encode("utf-8")).hexdigest()
-    return f"eomest{digest[:56]}"
+    return _deterministic_eom_booking_event_id(
+        "eomest", contact_id=contact_id, booking_key=booking_key
+    )
+
+
+def deterministic_eom_first_clean_calendar_event_id(
+    *,
+    contact_id: str,
+    booking_key: str,
+) -> str:
+    """Return a Google-safe deterministic event ID for one first-clean booking."""
+    return _deterministic_eom_booking_event_id(
+        "eomfcl", contact_id=contact_id, booking_key=booking_key
+    )
 
 
 def _calendar_id(value: str | None) -> str:
@@ -59,9 +128,11 @@ def _effective_calendar_id(value: str | None, calendar: Any) -> str:
     return _configured_calendar_id(calendar)
 
 
-def _event_summary(contact: dict[str, Any]) -> str:
+def _event_summary(
+    binding: _EOMBookingServiceBinding, contact: dict[str, Any]
+) -> str:
     name = str(contact.get("full_name") or "").strip() or "EOM lead"
-    return f"Estimate: {name}"
+    return f"{binding.summary_prefix}: {name}"
 
 
 def _event_description(command: EOMEstimateBooking) -> str:
@@ -74,6 +145,7 @@ def _event_description(command: EOMEstimateBooking) -> str:
 def _prepared_calendar_event(
     prepared: dict[str, Any],
     *,
+    binding: _EOMBookingServiceBinding,
     command: EOMEstimateBooking,
     effective_calendar_id: str,
     expected_event_id: str,
@@ -83,7 +155,7 @@ def _prepared_calendar_event(
     if isinstance(event, dict):
         return {
             "summary": str(event.get("summary") or "").strip()
-            or _event_summary(prepared.get("contact", {})),
+            or _event_summary(binding, prepared.get("contact", {})),
             "location": event.get("location"),
             "description": str(event.get("description") or ""),
             "calendar_id": _calendar_id(
@@ -92,7 +164,7 @@ def _prepared_calendar_event(
             "event_id": str(event.get("event_id") or "").strip() or expected_event_id,
         }
     return {
-        "summary": _event_summary(prepared.get("contact", {})),
+        "summary": _event_summary(binding, prepared.get("contact", {})),
         "location": prepared.get("contact", {}).get("address"),
         "description": _event_description(command),
         "calendar_id": effective_calendar_id,
@@ -126,7 +198,7 @@ def _calendar_failure_proves_no_write(result: Any) -> bool:
 
 
 def _booking_result(result: dict[str, Any]) -> dict[str, Any]:
-    return {
+    closed: dict[str, Any] = {
         "contact_id": str(result.get("contact_id") or ""),
         "lead_stage": str(result.get("lead_stage") or ""),
         "status": str(result.get("status") or ""),
@@ -142,13 +214,21 @@ def _booking_result(result: dict[str, Any]) -> dict[str, Any]:
         ),
         "idempotent": bool(result.get("idempotent")),
     }
+    if "onboarding_draft_id" in result:
+        draft_id = result.get("onboarding_draft_id")
+        closed["onboarding_draft_id"] = (
+            str(draft_id) if draft_id is not None else None
+        )
+    return closed
 
 
-def _booking_lifecycle_callables(crm: Any) -> tuple[Any, Any, Any, Any]:
-    preparer = getattr(crm, "prepare_eom_estimate_booking", None)
-    completer = getattr(crm, "complete_eom_estimate_booking", None)
-    marker = getattr(crm, "mark_eom_estimate_booking_calendar_ambiguous", None)
-    failure_marker = getattr(crm, "mark_eom_estimate_booking_calendar_failed", None)
+def _booking_lifecycle_callables(
+    crm: Any, binding: _EOMBookingServiceBinding
+) -> tuple[Any, Any, Any, Any]:
+    preparer = getattr(crm, binding.preparer_name, None)
+    completer = getattr(crm, binding.completer_name, None)
+    marker = getattr(crm, binding.ambiguous_marker_name, None)
+    failure_marker = getattr(crm, binding.failed_marker_name, None)
     if (
         not callable(preparer)
         or not callable(completer)
@@ -156,7 +236,7 @@ def _booking_lifecycle_callables(crm: Any) -> tuple[Any, Any, Any, Any]:
         or not callable(failure_marker)
     ):
         raise RuntimeError(
-            "Configured CRM provider cannot schedule EOM estimate bookings"
+            f"Configured CRM provider cannot schedule EOM {binding.label} bookings"
         )
     return preparer, completer, marker, failure_marker
 
@@ -167,11 +247,33 @@ async def schedule_eom_estimate_booking(
     command: EOMEstimateBooking,
 ) -> dict[str, Any]:
     """Prepare, create the Calendar event, then complete the CRM transition."""
-    _booking_lifecycle_callables(crm)
+    return await _schedule_eom_booking(
+        crm, calendar, command, _ESTIMATE_SERVICE_BINDING
+    )
+
+
+async def schedule_eom_first_clean_booking(
+    crm: Any,
+    calendar: Any,
+    command: EOMFirstCleanBooking,
+) -> dict[str, Any]:
+    """Book the first cleaning: Calendar event + lead_stage -> won + draft."""
+    return await _schedule_eom_booking(
+        crm, calendar, command, _FIRST_CLEAN_SERVICE_BINDING
+    )
+
+
+async def _schedule_eom_booking(
+    crm: Any,
+    calendar: Any,
+    command: EOMEstimateBooking,
+    binding: _EOMBookingServiceBinding,
+) -> dict[str, Any]:
+    _booking_lifecycle_callables(crm, binding)
     execution_lock = getattr(crm, "eom_estimate_booking_execution_lock", None)
     if not callable(execution_lock):
         raise RuntimeError(
-            "Configured CRM provider cannot serialize EOM estimate bookings"
+            f"Configured CRM provider cannot serialize EOM {binding.label} bookings"
         )
 
     # The lock spans prepare -> Calendar -> complete so customer handoff can
@@ -185,11 +287,12 @@ async def schedule_eom_estimate_booking(
     async with execution_lock(booking_key=command.booking_key) as execution_crm:
         scoped_crm = execution_crm if execution_crm is not None else crm
         preparer, completer, marker, failure_marker = _booking_lifecycle_callables(
-            scoped_crm
+            scoped_crm, binding
         )
-        return await _run_estimate_booking(
+        return await _run_eom_booking(
             calendar=calendar,
             command=command,
+            binding=binding,
             preparer=preparer,
             completer=completer,
             marker=marker,
@@ -197,17 +300,19 @@ async def schedule_eom_estimate_booking(
         )
 
 
-async def _run_estimate_booking(
+async def _run_eom_booking(
     *,
     calendar: Any,
     command: EOMEstimateBooking,
+    binding: _EOMBookingServiceBinding,
     preparer: Any,
     completer: Any,
     marker: Any,
     failure_marker: Any,
 ) -> dict[str, Any]:
-    """Execute one estimate-booking attempt while the execution lock is held."""
-    expected_event_id = deterministic_eom_estimate_calendar_event_id(
+    """Execute one booking attempt while the execution lock is held."""
+    expected_event_id = _deterministic_eom_booking_event_id(
+        binding.event_id_prefix,
         contact_id=command.contact_id,
         booking_key=command.booking_key,
     )
@@ -225,17 +330,18 @@ async def _run_estimate_booking(
         actor_id=command.actor_id,
         actor_name=command.actor_name,
     )
-    if bool(prepared.get("idempotent")) and prepared.get("status") == "estimate_booked":
+    if bool(prepared.get("idempotent")) and prepared.get("status") == binding.booked_status:
         return _booking_result(prepared)
 
     create_event = getattr(calendar, "create_event", None)
     if not callable(create_event):
         raise RuntimeError(
-            "Configured Calendar provider cannot create EOM estimate events"
+            f"Configured Calendar provider cannot create EOM {binding.label} events"
         )
 
     calendar_event = _prepared_calendar_event(
         prepared,
+        binding=binding,
         command=command,
         effective_calendar_id=effective_calendar_id,
         expected_event_id=expected_event_id,
@@ -251,7 +357,7 @@ async def _run_estimate_booking(
         )
         raise EOMEstimateBookingError(
             502,
-            "Prepared calendar event id does not match estimate booking",
+            f"Prepared calendar event id does not match {binding.label} booking",
         )
 
     result = await create_event(

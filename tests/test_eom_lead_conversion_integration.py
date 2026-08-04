@@ -16,6 +16,7 @@ asyncpg = pytest.importorskip("asyncpg")
 from atlas_brain.services.crm_provider import DatabaseCRMProvider  # noqa: E402
 from atlas_brain.services.eom_estimate_booking import (  # noqa: E402
     deterministic_eom_estimate_calendar_event_id,
+    deterministic_eom_first_clean_calendar_event_id,
 )
 from atlas_brain.services.eom_lead_conversion import (
     EOMLeadConversionError,
@@ -113,6 +114,7 @@ async def _prepare_schema(
         "351_eom_lead_lifecycle_events.sql",
         "352_eom_inbound_delivery_receipts.sql",
         "353_eom_customer_handoffs.sql",
+        "360_eom_onboarding_email_drafts.sql",
     )
     if apply_privilege_migration:
         await _provision_nocodb_login(conn)
@@ -2207,5 +2209,717 @@ async def test_office_handoff_serializes_overlapping_key_and_contact_callbacks()
     finally:
         if pool is not None:
             await pool.close()
+        await conn.execute(f'DROP SCHEMA IF EXISTS "{schema}" CASCADE')
+        await conn.close()
+
+@pytest.mark.asyncio
+async def test_first_clean_booking_lifecycle_promotes_to_won_with_pending_draft():
+    """The normal path: estimate booked, then the first cleaning is booked.
+
+    Completion must move the lead to won and enqueue exactly one pending
+    onboarding draft in the same transaction; prepare/complete replays must
+    stay idempotent and report the same draft; the won lead must remain in
+    the review queue and hand off with from_stage='won'.
+    """
+    database_url = _database_url_or_skip()
+    schema = f"atlas_eom_first_clean_{uuid.uuid4().hex}"
+    conn = await asyncpg.connect(database_url)
+    try:
+        await _prepare_schema(conn, schema)
+        provider = DatabaseCRMProvider(pool=conn)
+        contact_id = uuid.uuid4()
+        estimate_key = f"office-booking-{uuid.uuid4().hex}"
+        first_clean_key = f"office-first-clean-{uuid.uuid4().hex}"
+        estimate_event_id = deterministic_eom_estimate_calendar_event_id(
+            contact_id=str(contact_id),
+            booking_key=estimate_key,
+        )
+        first_clean_event_id = deterministic_eom_first_clean_calendar_event_id(
+            contact_id=str(contact_id),
+            booking_key=first_clean_key,
+        )
+        estimate_start = datetime(2026, 8, 4, 19, 0, tzinfo=timezone.utc)
+        estimate_end = datetime(2026, 8, 4, 20, 0, tzinfo=timezone.utc)
+        clean_start = datetime(2026, 8, 11, 14, 0, tzinfo=timezone.utc)
+        clean_end = datetime(2026, 8, 11, 17, 0, tzinfo=timezone.utc)
+        await _insert_contact(
+            conn,
+            contact_id=contact_id,
+            full_name="Won Lead",
+            email="won-lead@example.com",
+            address="100 Main St",
+        )
+
+        await provider.prepare_eom_estimate_booking(
+            contact_id=str(contact_id),
+            scheduled_start=estimate_start,
+            scheduled_end=estimate_end,
+            calendar_id="estimate-calendar",
+            notes="Bring estimate worksheet",
+            booking_key=estimate_key,
+            expected_calendar_event_id=estimate_event_id,
+            actor_id=1,
+            actor_name="Juan Canfield",
+        )
+        await provider.complete_eom_estimate_booking(
+            contact_id=str(contact_id),
+            scheduled_start=estimate_start,
+            scheduled_end=estimate_end,
+            calendar_id="estimate-calendar",
+            notes="Bring estimate worksheet",
+            booking_key=estimate_key,
+            expected_calendar_event_id=estimate_event_id,
+            calendar_event_id=estimate_event_id,
+            actor_id=1,
+            actor_name="Juan Canfield",
+        )
+
+        prepared = await provider.prepare_eom_first_clean_booking(
+            contact_id=str(contact_id),
+            scheduled_start=clean_start,
+            scheduled_end=clean_end,
+            calendar_id="estimate-calendar",
+            notes="First clean crew notes",
+            booking_key=first_clean_key,
+            expected_calendar_event_id=first_clean_event_id,
+            actor_id=1,
+            actor_name="Juan Canfield",
+        )
+        assert prepared["idempotent"] is False
+        assert prepared["status"] == "calendar_pending"
+        requested_metadata = _metadata_dict(
+            await conn.fetchval(
+                """
+                SELECT metadata
+                FROM eom_lead_lifecycle_events
+                WHERE contact_id = $1
+                  AND event_type = 'first_clean_booking_requested'
+                  AND operation_key = $2
+                """,
+                contact_id,
+                first_clean_key,
+            )
+        )
+        assert requested_metadata["calendar_event"]["summary"] == (
+            "First clean: Won Lead"
+        )
+        assert requested_metadata["calendar_event"]["event_id"] == (
+            first_clean_event_id
+        )
+
+        completed = await provider.complete_eom_first_clean_booking(
+            contact_id=str(contact_id),
+            scheduled_start=clean_start,
+            scheduled_end=clean_end,
+            calendar_id="estimate-calendar",
+            notes="First clean crew notes",
+            booking_key=first_clean_key,
+            expected_calendar_event_id=first_clean_event_id,
+            calendar_event_id=first_clean_event_id,
+            actor_id=1,
+            actor_name="Juan Canfield",
+        )
+        assert completed["idempotent"] is False
+        assert completed["status"] == "first_clean_booked"
+        assert completed["lead_stage"] == "won"
+        draft_id = completed["onboarding_draft_id"]
+        assert draft_id
+
+        draft = await conn.fetchrow(
+            "SELECT * FROM eom_onboarding_email_drafts WHERE id = $1::uuid",
+            draft_id,
+        )
+        assert draft["contact_id"] == contact_id
+        assert draft["operation_key"] == first_clean_key
+        assert draft["status"] == "pending"
+        assert draft["recipient_email"] == "won-lead@example.com"
+        assert draft["blocker"] is None
+        assert draft["subject"].strip()
+        assert "Won Lead" in draft["body"]
+        assert draft["sent_at"] is None
+
+        booked_event = await conn.fetchrow(
+            """
+            SELECT from_stage, to_stage
+            FROM eom_lead_lifecycle_events
+            WHERE contact_id = $1
+              AND event_type = 'first_clean_booked'
+              AND operation_key = $2
+            """,
+            contact_id,
+            first_clean_key,
+        )
+        assert dict(booked_event) == {
+            "from_stage": "estimate_booked",
+            "to_stage": "won",
+        }
+        contact = await conn.fetchrow(
+            "SELECT contact_type, lead_stage FROM contacts WHERE id = $1",
+            contact_id,
+        )
+        assert dict(contact) == {"contact_type": "lead", "lead_stage": "won"}
+
+        prepare_replay = await provider.prepare_eom_first_clean_booking(
+            contact_id=str(contact_id),
+            scheduled_start=clean_start,
+            scheduled_end=clean_end,
+            calendar_id="estimate-calendar",
+            notes="First clean crew notes",
+            booking_key=first_clean_key,
+            expected_calendar_event_id=first_clean_event_id,
+            actor_id=1,
+            actor_name="Juan Canfield",
+        )
+        assert prepare_replay["idempotent"] is True
+        assert prepare_replay["status"] == "first_clean_booked"
+        assert prepare_replay["onboarding_draft_id"] == draft_id
+
+        complete_replay = await provider.complete_eom_first_clean_booking(
+            contact_id=str(contact_id),
+            scheduled_start=clean_start,
+            scheduled_end=clean_end,
+            calendar_id="estimate-calendar",
+            notes="First clean crew notes",
+            booking_key=first_clean_key,
+            expected_calendar_event_id=first_clean_event_id,
+            calendar_event_id=first_clean_event_id,
+            actor_id=1,
+            actor_name="Juan Canfield",
+        )
+        assert complete_replay["idempotent"] is True
+        assert complete_replay["onboarding_draft_id"] == draft_id
+        assert (
+            await conn.fetchval(
+                """
+                SELECT COUNT(*) FROM eom_onboarding_email_drafts
+                WHERE contact_id = $1
+                """,
+                contact_id,
+            )
+            == 1
+        )
+
+        review_rows = await provider.list_eom_new_lead_review_items(limit=10)
+        assert [(row["contact_id"], row["lead_stage"]) for row in review_rows] == [
+            (contact_id, "won")
+        ]
+
+        handoff = await provider.finalize_eom_customer_handoff(
+            contact_id=str(contact_id),
+            tracker_customer_id=101,
+            tracker_site_id=202,
+            approval_key=_approval_key(),
+            actor_id=1,
+            actor_name="Juan Canfield",
+        )
+        assert handoff["idempotent"] is False
+        approval_from_stage = await conn.fetchval(
+            """
+            SELECT from_stage
+            FROM eom_lead_lifecycle_events
+            WHERE contact_id = $1
+              AND event_type = 'customer_approved'
+            """,
+            contact_id,
+        )
+        assert approval_from_stage == "won"
+        assert await _contact_state(conn, contact_id) == (
+            {
+                "business_context_id": "effingham_maids",
+                "contact_type": "customer",
+                "lead_stage": None,
+                "status": "active",
+            },
+            1,
+            1,
+        )
+    finally:
+        await conn.execute(f'DROP SCHEMA IF EXISTS "{schema}" CASCADE')
+        await conn.close()
+
+
+@pytest.mark.asyncio
+async def test_first_clean_draft_enqueue_records_no_email_blocker_and_one_pending_row():
+    """A contact without an email still gets a draft (blocker='no_email'),
+    and the partial unique index refuses a second pending draft per contact."""
+    database_url = _database_url_or_skip()
+    schema = f"atlas_eom_first_clean_draft_{uuid.uuid4().hex}"
+    conn = await asyncpg.connect(database_url)
+    try:
+        await _prepare_schema(conn, schema)
+        provider = DatabaseCRMProvider(pool=conn)
+        contact_id = uuid.uuid4()
+        first_clean_key = f"office-first-clean-{uuid.uuid4().hex}"
+        first_clean_event_id = deterministic_eom_first_clean_calendar_event_id(
+            contact_id=str(contact_id),
+            booking_key=first_clean_key,
+        )
+        start = datetime(2026, 8, 11, 14, 0, tzinfo=timezone.utc)
+        end = datetime(2026, 8, 11, 17, 0, tzinfo=timezone.utc)
+        await _insert_contact(
+            conn,
+            contact_id=contact_id,
+            full_name="No Email Lead",
+            email=None,
+        )
+
+        await provider.prepare_eom_first_clean_booking(
+            contact_id=str(contact_id),
+            scheduled_start=start,
+            scheduled_end=end,
+            calendar_id="estimate-calendar",
+            notes=None,
+            booking_key=first_clean_key,
+            expected_calendar_event_id=first_clean_event_id,
+            actor_id=1,
+            actor_name="Juan Canfield",
+        )
+        completed = await provider.complete_eom_first_clean_booking(
+            contact_id=str(contact_id),
+            scheduled_start=start,
+            scheduled_end=end,
+            calendar_id="estimate-calendar",
+            notes=None,
+            booking_key=first_clean_key,
+            expected_calendar_event_id=first_clean_event_id,
+            calendar_event_id=first_clean_event_id,
+            actor_id=1,
+            actor_name="Juan Canfield",
+        )
+
+        draft = await conn.fetchrow(
+            "SELECT * FROM eom_onboarding_email_drafts WHERE id = $1::uuid",
+            completed["onboarding_draft_id"],
+        )
+        assert draft["recipient_email"] is None
+        assert draft["blocker"] == "no_email"
+        assert draft["status"] == "pending"
+
+        with pytest.raises(asyncpg.UniqueViolationError):
+            await conn.execute(
+                """
+                INSERT INTO eom_onboarding_email_drafts (
+                    contact_id, operation_key, subject, body
+                )
+                VALUES ($1, $2, 'dup subject', 'dup body')
+                """,
+                contact_id,
+                f"office-first-clean-{uuid.uuid4().hex}",
+            )
+    finally:
+        await conn.execute(f'DROP SCHEMA IF EXISTS "{schema}" CASCADE')
+        await conn.close()
+
+
+@pytest.mark.asyncio
+async def test_onboarding_draft_claim_contract_wins_exactly_once_under_two_sessions():
+    """The A3 single-send contract documented in migration 360: two sessions
+    racing UPDATE ... WHERE status = 'pending' RETURNING settle to exactly
+    one winner; the loser gets zero rows, never a second send."""
+    database_url = _database_url_or_skip()
+    schema = f"atlas_eom_draft_claim_{uuid.uuid4().hex}"
+    conn = await asyncpg.connect(database_url)
+    claimer_conn = None
+    try:
+        await _prepare_schema(conn, schema)
+        provider = DatabaseCRMProvider(pool=conn)
+        contact_id = uuid.uuid4()
+        first_clean_key = f"office-first-clean-{uuid.uuid4().hex}"
+        first_clean_event_id = deterministic_eom_first_clean_calendar_event_id(
+            contact_id=str(contact_id),
+            booking_key=first_clean_key,
+        )
+        start = datetime(2026, 8, 11, 14, 0, tzinfo=timezone.utc)
+        end = datetime(2026, 8, 11, 17, 0, tzinfo=timezone.utc)
+        await _insert_contact(
+            conn,
+            contact_id=contact_id,
+            email="claim-race@example.com",
+        )
+        await provider.prepare_eom_first_clean_booking(
+            contact_id=str(contact_id),
+            scheduled_start=start,
+            scheduled_end=end,
+            calendar_id="estimate-calendar",
+            notes=None,
+            booking_key=first_clean_key,
+            expected_calendar_event_id=first_clean_event_id,
+            actor_id=1,
+            actor_name="Juan Canfield",
+        )
+        completed = await provider.complete_eom_first_clean_booking(
+            contact_id=str(contact_id),
+            scheduled_start=start,
+            scheduled_end=end,
+            calendar_id="estimate-calendar",
+            notes=None,
+            booking_key=first_clean_key,
+            expected_calendar_event_id=first_clean_event_id,
+            calendar_event_id=first_clean_event_id,
+            actor_id=1,
+            actor_name="Juan Canfield",
+        )
+        draft_id = completed["onboarding_draft_id"]
+
+        claimer_conn = await asyncpg.connect(database_url)
+        await claimer_conn.execute(f'SET search_path TO "{schema}", public')
+        claim_sql = """
+            UPDATE eom_onboarding_email_drafts
+               SET status = 'sent', sent_at = NOW(),
+                   approved_by_employee_id = $2, approved_by_name = $3
+             WHERE id = $1::uuid AND status = 'pending'
+             RETURNING id
+        """
+        first_claim, second_claim = await asyncio.gather(
+            conn.fetchrow(claim_sql, draft_id, 1, "Juan Canfield"),
+            claimer_conn.fetchrow(claim_sql, draft_id, 2, "Mayra Canfield"),
+        )
+        winners = [row for row in (first_claim, second_claim) if row is not None]
+        assert len(winners) == 1
+
+        settled = await conn.fetchrow(
+            "SELECT status, sent_at FROM eom_onboarding_email_drafts "
+            "WHERE id = $1::uuid",
+            draft_id,
+        )
+        assert settled["status"] == "sent"
+        assert settled["sent_at"] is not None
+        late_claim = await conn.fetchrow(claim_sql, draft_id, 3, "Tina Gomez")
+        assert late_claim is None
+    finally:
+        if claimer_conn is not None:
+            await claimer_conn.close()
+        await conn.execute(f'DROP SCHEMA IF EXISTS "{schema}" CASCADE')
+        await conn.close()
+
+
+@pytest.mark.asyncio
+async def test_handoff_stays_fenced_while_a_first_clean_booking_is_executing():
+    """The handoff fence covers the first-clean family through the shared
+    eom-estimate-booking:execution:<key> namespace: while a first-clean
+    executor holds the lock, a terminal failed marker alone must not admit
+    handoff."""
+    database_url = _database_url_or_skip()
+    schema = f"atlas_eom_first_clean_fence_{uuid.uuid4().hex}"
+    conn = await asyncpg.connect(database_url)
+    executor_conn = None
+    try:
+        await _prepare_schema(conn, schema)
+        provider = DatabaseCRMProvider(pool=conn)
+        contact_id = uuid.uuid4()
+        booking_key = f"office-first-clean-{uuid.uuid4().hex}"
+        execution_lock_key = f"eom-estimate-booking:execution:{booking_key}"
+        first_clean_event_id = deterministic_eom_first_clean_calendar_event_id(
+            contact_id=str(contact_id),
+            booking_key=booking_key,
+        )
+        start = datetime(2026, 8, 11, 14, 0, tzinfo=timezone.utc)
+        end = datetime(2026, 8, 11, 17, 0, tzinfo=timezone.utc)
+        await _insert_contact(conn, contact_id=contact_id)
+
+        await provider.prepare_eom_first_clean_booking(
+            contact_id=str(contact_id),
+            scheduled_start=start,
+            scheduled_end=end,
+            calendar_id="estimate-calendar",
+            notes=None,
+            booking_key=booking_key,
+            expected_calendar_event_id=first_clean_event_id,
+            actor_id=1,
+            actor_name="Juan Canfield",
+        )
+        await provider.mark_eom_first_clean_booking_calendar_failed(
+            contact_id=str(contact_id),
+            booking_key=booking_key,
+            expected_calendar_event_id=first_clean_event_id,
+            calendar_error="API_ERROR",
+            calendar_message="Calendar API error: 404",
+            actor_id=1,
+            actor_name="Juan Canfield",
+        )
+
+        executor_conn = await asyncpg.connect(database_url)
+        assert await executor_conn.fetchval(
+            "SELECT pg_try_advisory_lock(hashtextextended($1, 0))",
+            execution_lock_key,
+        )
+
+        with pytest.raises(EOMLeadConversionError, match="still executing"):
+            await provider.finalize_eom_customer_handoff(
+                contact_id=str(contact_id),
+                tracker_customer_id=101,
+                tracker_site_id=202,
+                approval_key=_approval_key(),
+                actor_id=1,
+                actor_name="Juan Canfield",
+            )
+
+        with pytest.raises(EOMLeadConversionError, match="already executing"):
+            async with provider.eom_estimate_booking_execution_lock(
+                booking_key=booking_key
+            ):
+                pass  # pragma: no cover - the lock must refuse entry
+
+        assert await executor_conn.fetchval(
+            "SELECT pg_advisory_unlock(hashtextextended($1, 0))",
+            execution_lock_key,
+        )
+
+        settled = await provider.finalize_eom_customer_handoff(
+            contact_id=str(contact_id),
+            tracker_customer_id=101,
+            tracker_site_id=202,
+            approval_key=_approval_key(),
+            actor_id=1,
+            actor_name="Juan Canfield",
+        )
+        assert settled["idempotent"] is False
+        assert await _contact_state(conn, contact_id) == (
+            {
+                "business_context_id": "effingham_maids",
+                "contact_type": "customer",
+                "lead_stage": None,
+                "status": "active",
+            },
+            1,
+            1,
+        )
+    finally:
+        if executor_conn is not None:
+            await executor_conn.close()
+        await conn.execute(f'DROP SCHEMA IF EXISTS "{schema}" CASCADE')
+        await conn.close()
+
+
+@pytest.mark.asyncio
+async def test_first_clean_completion_settles_after_mid_execution_status_flip():
+    """An operator status flip mid-execution must not orphan the Calendar
+    event: completion still records won and the pending draft; the inactive
+    contact stays rejected downstream by review and handoff."""
+    database_url = _database_url_or_skip()
+    schema = f"atlas_eom_first_clean_status_flip_{uuid.uuid4().hex}"
+    conn = await asyncpg.connect(database_url)
+    try:
+        await _prepare_schema(conn, schema)
+        provider = DatabaseCRMProvider(pool=conn)
+        contact_id = uuid.uuid4()
+        booking_key = f"office-first-clean-{uuid.uuid4().hex}"
+        first_clean_event_id = deterministic_eom_first_clean_calendar_event_id(
+            contact_id=str(contact_id),
+            booking_key=booking_key,
+        )
+        start = datetime(2026, 8, 11, 14, 0, tzinfo=timezone.utc)
+        end = datetime(2026, 8, 11, 17, 0, tzinfo=timezone.utc)
+        await _insert_contact(
+            conn, contact_id=contact_id, email="flip@example.com"
+        )
+
+        await provider.prepare_eom_first_clean_booking(
+            contact_id=str(contact_id),
+            scheduled_start=start,
+            scheduled_end=end,
+            calendar_id="estimate-calendar",
+            notes=None,
+            booking_key=booking_key,
+            expected_calendar_event_id=first_clean_event_id,
+            actor_id=1,
+            actor_name="Juan Canfield",
+        )
+        await conn.execute(
+            "UPDATE contacts SET status = 'inactive' WHERE id = $1",
+            contact_id,
+        )
+
+        completed = await provider.complete_eom_first_clean_booking(
+            contact_id=str(contact_id),
+            scheduled_start=start,
+            scheduled_end=end,
+            calendar_id="estimate-calendar",
+            notes=None,
+            booking_key=booking_key,
+            expected_calendar_event_id=first_clean_event_id,
+            calendar_event_id=first_clean_event_id,
+            actor_id=1,
+            actor_name="Juan Canfield",
+        )
+
+        assert completed["idempotent"] is False
+        assert completed["status"] == "first_clean_booked"
+        assert completed["onboarding_draft_id"]
+        contact = await conn.fetchrow(
+            "SELECT lead_stage, status FROM contacts WHERE id = $1", contact_id
+        )
+        assert dict(contact) == {"lead_stage": "won", "status": "inactive"}
+        assert (
+            await conn.fetchval(
+                """
+                SELECT COUNT(*)
+                FROM eom_lead_lifecycle_events
+                WHERE contact_id = $1
+                  AND operation_key = $2
+                  AND event_type = 'first_clean_booked'
+                """,
+                contact_id,
+                booking_key,
+            )
+            == 1
+        )
+        assert (
+            await conn.fetchval(
+                "SELECT status FROM eom_onboarding_email_drafts "
+                "WHERE operation_key = $1",
+                booking_key,
+            )
+            == "pending"
+        )
+
+        with pytest.raises(EOMLeadConversionError, match="must be active"):
+            await provider.finalize_eom_customer_handoff(
+                contact_id=str(contact_id),
+                tracker_customer_id=101,
+                tracker_site_id=202,
+                approval_key=_approval_key(),
+                actor_id=1,
+                actor_name="Juan Canfield",
+            )
+        assert await provider.list_eom_new_lead_review_items(limit=10) == []
+    finally:
+        await conn.execute(f'DROP SCHEMA IF EXISTS "{schema}" CASCADE')
+        await conn.close()
+
+
+@pytest.mark.asyncio
+async def test_booking_key_ownership_and_blocking_across_families():
+    """A booking key belongs to one family forever; an unsettled operation of
+    either family blocks the other; a COMPLETED estimate booking never blocks
+    the first clean (that is the normal funnel path)."""
+    database_url = _database_url_or_skip()
+    schema = f"atlas_eom_cross_family_{uuid.uuid4().hex}"
+    conn = await asyncpg.connect(database_url)
+    try:
+        await _prepare_schema(conn, schema)
+        provider = DatabaseCRMProvider(pool=conn)
+        contact_id = uuid.uuid4()
+        estimate_key = f"office-booking-{uuid.uuid4().hex}"
+        first_clean_key = f"office-first-clean-{uuid.uuid4().hex}"
+        estimate_event_id = deterministic_eom_estimate_calendar_event_id(
+            contact_id=str(contact_id),
+            booking_key=estimate_key,
+        )
+        start = datetime(2026, 8, 4, 19, 0, tzinfo=timezone.utc)
+        end = datetime(2026, 8, 4, 20, 0, tzinfo=timezone.utc)
+        await _insert_contact(
+            conn, contact_id=contact_id, email="cross@example.com"
+        )
+
+        await provider.prepare_eom_estimate_booking(
+            contact_id=str(contact_id),
+            scheduled_start=start,
+            scheduled_end=end,
+            calendar_id="estimate-calendar",
+            notes=None,
+            booking_key=estimate_key,
+            expected_calendar_event_id=estimate_event_id,
+            actor_id=1,
+            actor_name="Juan Canfield",
+        )
+
+        def _first_clean_kwargs(key: str) -> dict:
+            return dict(
+                contact_id=str(contact_id),
+                scheduled_start=start,
+                scheduled_end=end,
+                calendar_id="estimate-calendar",
+                notes=None,
+                booking_key=key,
+                expected_calendar_event_id=(
+                    deterministic_eom_first_clean_calendar_event_id(
+                        contact_id=str(contact_id),
+                        booking_key=key,
+                    )
+                ),
+                actor_id=1,
+                actor_name="Juan Canfield",
+            )
+
+        # The estimate family owns this key even before it settles.
+        with pytest.raises(
+            EOMLeadConversionError, match="different EOM booking"
+        ):
+            await provider.prepare_eom_first_clean_booking(
+                **_first_clean_kwargs(estimate_key)
+            )
+
+        # An unsettled estimate operation blocks a first-clean request under
+        # a fresh key.
+        with pytest.raises(
+            EOMLeadConversionError, match="another booking operation"
+        ):
+            await provider.prepare_eom_first_clean_booking(
+                **_first_clean_kwargs(first_clean_key)
+            )
+
+        await provider.complete_eom_estimate_booking(
+            contact_id=str(contact_id),
+            scheduled_start=start,
+            scheduled_end=end,
+            calendar_id="estimate-calendar",
+            notes=None,
+            booking_key=estimate_key,
+            expected_calendar_event_id=estimate_event_id,
+            calendar_event_id=estimate_event_id,
+            actor_id=1,
+            actor_name="Juan Canfield",
+        )
+
+        # Key ownership is permanent after settlement too.
+        with pytest.raises(
+            EOMLeadConversionError, match="different EOM booking"
+        ):
+            await provider.prepare_eom_first_clean_booking(
+                **_first_clean_kwargs(estimate_key)
+            )
+
+        # The settled estimate booking is the normal path into first clean.
+        prepared = await provider.prepare_eom_first_clean_booking(
+            **_first_clean_kwargs(first_clean_key)
+        )
+        assert prepared["idempotent"] is False
+        assert prepared["status"] == "calendar_pending"
+
+        # And the first-clean family owns its key against estimate reuse.
+        with pytest.raises(
+            EOMLeadConversionError, match="different EOM booking"
+        ):
+            await provider.prepare_eom_estimate_booking(
+                contact_id=str(contact_id),
+                scheduled_start=start,
+                scheduled_end=end,
+                calendar_id="estimate-calendar",
+                notes=None,
+                booking_key=first_clean_key,
+                expected_calendar_event_id=(
+                    deterministic_eom_estimate_calendar_event_id(
+                        contact_id=str(contact_id),
+                        booking_key=first_clean_key,
+                    )
+                ),
+                actor_id=1,
+                actor_name="Juan Canfield",
+            )
+
+        assert (
+            await conn.fetchval(
+                """
+                SELECT COUNT(*)
+                FROM eom_lead_lifecycle_events
+                WHERE contact_id = $1
+                  AND event_type = 'first_clean_booking_requested'
+                """,
+                contact_id,
+            )
+            == 1
+        )
+    finally:
         await conn.execute(f'DROP SCHEMA IF EXISTS "{schema}" CASCADE')
         await conn.close()

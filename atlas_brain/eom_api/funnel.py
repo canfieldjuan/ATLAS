@@ -16,7 +16,9 @@ from pydantic import BaseModel, ConfigDict, Field, field_validator, model_valida
 from ..services.eom_estimate_booking import (
     EOMEstimateBooking,
     EOMEstimateBookingError,
+    EOMFirstCleanBooking,
     schedule_eom_estimate_booking,
+    schedule_eom_first_clean_booking,
 )
 from ..services.eom_lead_conversion import (
     EOMCustomerHandoff,
@@ -238,6 +240,50 @@ async def create_estimate_booking(
             crm,
             calendar,
             EOMEstimateBooking(
+                contact_id=str(contact_id),
+                scheduled_start=payload.scheduled_start,
+                scheduled_end=payload.scheduled_end,
+                calendar_id=payload.calendar_id,
+                notes=payload.notes,
+                booking_key=booking_key,
+                actor_id=int(actor["id"]),
+                actor_name=str(actor["name"]),
+            ),
+        )
+    except EOMEstimateBookingError as exc:
+        raise HTTPException(status_code=exc.status_code, detail=str(exc)) from exc
+    except EOMLeadConversionError as exc:
+        raise HTTPException(status_code=exc.status_code, detail=str(exc)) from exc
+    return JSONResponse(
+        status_code=(
+            status.HTTP_200_OK
+            if bool(result.get("idempotent"))
+            else status.HTTP_201_CREATED
+        ),
+        content={"success": True, **result},
+    )
+
+
+@router.post(
+    "/leads/{contact_id}/first-clean-bookings",
+    status_code=status.HTTP_201_CREATED,
+    dependencies=[Depends(require_eom_funnel_api)],
+)
+async def create_first_clean_booking(
+    contact_id: UUID,
+    payload: EOMEstimateBookingRequest,
+    booking_key: str = Depends(_approval_key_dependency),
+    actor: dict[str, object] = Depends(require_eom_funnel_actor),
+    crm: Any = Depends(_crm_dependency),
+    calendar: Any = Depends(_calendar_dependency),
+) -> JSONResponse:
+    """Book the first cleaning: the lead becomes won and an onboarding
+    email draft is enqueued for office approval. Nothing sends here."""
+    try:
+        result = await schedule_eom_first_clean_booking(
+            crm,
+            calendar,
+            EOMFirstCleanBooking(
                 contact_id=str(contact_id),
                 scheduled_start=payload.scheduled_start,
                 scheduled_end=payload.scheduled_end,
