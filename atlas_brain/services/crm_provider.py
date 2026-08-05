@@ -3554,8 +3554,11 @@ class DatabaseCRMProvider:
                     reason_code_value=replay["reason_code"],
                 )
             if contact["contact_type"] == "lead" and contact["lead_stage"] == "lost":
-                # Already lost under a different key: idempotent no-op.
-                return _result("lost", idempotent=True)
+                # Already lost under a *different* key (this key has no replay
+                # row). Reject rather than a keyless no-op: a 200 here would
+                # report this operation_key successful with nothing durable
+                # behind it, so a later reopen+retry would re-apply it.
+                raise EOMLeadConversionError(409, "EOM lead is already lost")
             if contact["contact_type"] != "lead":
                 raise EOMLeadConversionError(409, "EOM contact is not a lead")
             if contact["status"] != "active":
@@ -3742,16 +3745,23 @@ class DatabaseCRMProvider:
             ):
                 raise EOMLeadConversionError(404, "EOM lead was not found")
             if replay:
-                # Only idempotent while the lead is not lost again; a later
-                # lost under a new key means this reopen no longer describes
-                # the row.
-                if contact["contact_type"] == "lead" and contact["lead_stage"] == "lost":
+                # A replay is only truthfully idempotent while the row is still
+                # the active lead at `new` this key produced. If it was lost
+                # again, finalized to a customer, or archived, reporting
+                # new/active would assert a state the row no longer has.
+                if not (
+                    contact["contact_type"] == "lead"
+                    and contact["lead_stage"] == "new"
+                    and contact["status"] == "active"
+                ):
                     raise EOMLeadConversionError(
-                        409, "EOM lead was marked lost after this operation"
+                        409, "EOM lead changed after this reopen"
                     )
                 return _result(idempotent=True)
-            if contact["contact_type"] == "lead" and contact["lead_stage"] == "new":
-                return _result(idempotent=True)
+            # Not a replay of this key: the lead must currently be lost. An
+            # already-active lead reached under a *different* key is a conflict,
+            # not a keyless no-op, so no operation_key is reported successful
+            # without a durable replay row behind it.
             if contact["contact_type"] != "lead" or contact["lead_stage"] != "lost":
                 raise EOMLeadConversionError(
                     409, "EOM lead is not lost and cannot be reopened"

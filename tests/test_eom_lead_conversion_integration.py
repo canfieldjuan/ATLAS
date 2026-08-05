@@ -3812,6 +3812,56 @@ async def test_mark_lead_lost_guards_admission_fence_reuse_and_reopen():
                 actor_id=1,
                 actor_name="Juan Canfield",
             )
+
+        # (6) already lost under a *different* key is a conflict, not a keyless
+        # 200 — so no operation_key is reported successful without a durable
+        # replay row behind it.
+        d_id = uuid.uuid4()
+        await _insert_contact(conn, contact_id=d_id, lead_stage="new")
+        await _lose(d_id, f"lost-{uuid.uuid4().hex}")
+        with pytest.raises(EOMLeadConversionError, match="already lost"):
+            await _lose(d_id, f"lost-{uuid.uuid4().hex}")
+
+        # (7) reopen under a different key when the lead is already active is a
+        # conflict, not a no-op.
+        await provider.reopen_eom_lead(
+            contact_id=str(d_id),
+            operation_key=f"re-{uuid.uuid4().hex}",
+            actor_id=1,
+            actor_name="Juan Canfield",
+        )
+        with pytest.raises(
+            EOMLeadConversionError, match="not lost and cannot be reopened"
+        ):
+            await provider.reopen_eom_lead(
+                contact_id=str(d_id),
+                operation_key=f"re-{uuid.uuid4().hex}",
+                actor_id=1,
+                actor_name="Juan Canfield",
+            )
+
+        # (8) replaying a reopen key after the lead was lost again is a 409, not
+        # a stale "new/active" success.
+        e_id = uuid.uuid4()
+        await _insert_contact(conn, contact_id=e_id, lead_stage="new")
+        await _lose(e_id, f"lost-{uuid.uuid4().hex}")
+        reopen_e = f"re-{uuid.uuid4().hex}"
+        await provider.reopen_eom_lead(
+            contact_id=str(e_id),
+            operation_key=reopen_e,
+            actor_id=1,
+            actor_name="Juan Canfield",
+        )
+        await _lose(e_id, f"lost-{uuid.uuid4().hex}")
+        with pytest.raises(
+            EOMLeadConversionError, match="changed after this reopen"
+        ):
+            await provider.reopen_eom_lead(
+                contact_id=str(e_id),
+                operation_key=reopen_e,
+                actor_id=1,
+                actor_name="Juan Canfield",
+            )
     finally:
         await conn.execute(f'DROP SCHEMA IF EXISTS "{schema}" CASCADE')
         await conn.close()
