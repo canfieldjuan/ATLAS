@@ -7,6 +7,7 @@ that the run escalates to FULL.
 """
 from __future__ import annotations
 
+import ast
 import importlib.util
 from pathlib import Path
 
@@ -161,6 +162,17 @@ def test_global_files_escalate_to_full(tmp_path, path):
         ],
     ),
     ("ci/gates.yml", ["tests/test_security_guardrails_workflow.py"]),
+    ("docs/SECURITY_GUARDRAILS.md", ["tests/test_security_guardrails_workflow.py"]),
+    ("docs/ci_cd_autonomous_coding_map.md", ["tests/test_security_guardrails_workflow.py"]),
+    ("docs/ci_cd_runtime_duplication_audit.md", ["tests/test_security_guardrails_workflow.py"]),
+    (
+        "docs/audits/agents-mechanical-enforcement-audit-2026-07-29.md",
+        ["tests/test_security_guardrails_workflow.py"],
+    ),
+    (
+        "docs/audits/required-workflow-enrollment-audit-2026-08-04.md",
+        ["tests/test_security_guardrails_workflow.py"],
+    ),
     (
         "scripts/audit_ai_reconciliation.py",
         [
@@ -188,10 +200,6 @@ def test_global_files_escalate_to_full(tmp_path, path):
         ["tests/test_security_guardrails_workflow.py"],
     ),
     (
-        "scripts/check_ai_reconciliation_live.py",
-        ["tests/test_check_ai_reconciliation_live.py"],
-    ),
-    (
         "scripts/codex_wake_bridge.py",
         ["tests/test_codex_wake_bridge.py"],
     ),
@@ -217,6 +225,25 @@ def test_explicit_ci_surface_owners_are_selected(tmp_path, path, owners):
     repo = _mkrepo(tmp_path, files)
 
     assert sel.select([path], repo) == sorted(owners)
+
+
+def test_explicit_owner_map_has_no_duplicate_keys():
+    text = (REPO / "scripts" / "select_impacted_tests.py").read_text(encoding="utf-8")
+    tree = compile(text, "select_impacted_tests.py", "exec", ast.PyCF_ONLY_AST)
+    owner_map = next(
+        node
+        for node in tree.body
+        if isinstance(node, ast.AnnAssign)
+        and getattr(node.target, "id", None) == "EXPLICIT_TEST_OWNERS"
+    )
+    assert isinstance(owner_map.value, ast.Dict)
+    keys = [
+        key.value
+        for key in owner_map.value.keys
+        if isinstance(key, ast.Constant) and isinstance(key.value, str)
+    ]
+
+    assert len(keys) == len(set(keys))
 
 
 def test_explicit_ci_surface_with_missing_owner_escalates_to_full(tmp_path):
