@@ -8,8 +8,9 @@ name: Unit Gate
 # selector is absent or returns FULL, and runs the baseline growth guard only when
 # no changed file is reachable from a test.
 #
-# Advisory at birth: this check is not yet in branch-protection required checks;
-# enrolling it is the next slice, once it is proven on live PRs.
+# Visible CI, not branch-required: the 2026-08-04 enrollment audit keeps this
+# check outside branch protection until the docs/security selector coverage gap
+# and other recorded blockers are closed.
 
 permissions:
   contents: read
