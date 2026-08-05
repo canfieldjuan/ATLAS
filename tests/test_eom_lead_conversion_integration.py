@@ -3093,3 +3093,354 @@ async def test_booking_key_ownership_and_blocking_across_families():
     finally:
         await conn.execute(f'DROP SCHEMA IF EXISTS "{schema}" CASCADE')
         await conn.close()
+
+from atlas_brain.services.eom_onboarding_drafts import (  # noqa: E402
+    EOMOnboardingDraftApproval,
+    approve_and_send_eom_onboarding_draft,
+)
+
+
+class _RecordingDraftSender:
+    def __init__(self, *, fail: bool = False):
+        self.fail = fail
+        self.calls: list[dict[str, object]] = []
+
+    async def __call__(self, *, to, subject, body, idempotency_key):
+        self.calls.append(
+            {
+                "to": to,
+                "subject": subject,
+                "body": body,
+                "idempotency_key": idempotency_key,
+            }
+        )
+        if self.fail:
+            raise RuntimeError("transport unavailable")
+        return {"message_id": "resend-msg-1", "idempotent_replay": False}
+
+
+async def _book_first_clean_draft(
+    conn,
+    provider,
+    *,
+    email: str | None = "won-lead@example.com",
+    full_name: str = "Won Lead",
+) -> tuple[uuid.UUID, str]:
+    """Insert a lead and complete a first-clean booking; return its draft."""
+    contact_id = uuid.uuid4()
+    booking_key = f"office-first-clean-{uuid.uuid4().hex}"
+    event_id = deterministic_eom_first_clean_calendar_event_id(
+        contact_id=str(contact_id),
+        booking_key=booking_key,
+    )
+    start = datetime(2026, 8, 11, 14, 0, tzinfo=timezone.utc)
+    end = datetime(2026, 8, 11, 17, 0, tzinfo=timezone.utc)
+    await _insert_contact(
+        conn, contact_id=contact_id, email=email, full_name=full_name
+    )
+    await provider.prepare_eom_first_clean_booking(
+        contact_id=str(contact_id),
+        scheduled_start=start,
+        scheduled_end=end,
+        calendar_id="estimate-calendar",
+        notes=None,
+        booking_key=booking_key,
+        expected_calendar_event_id=event_id,
+        actor_id=1,
+        actor_name="Juan Canfield",
+    )
+    completed = await provider.complete_eom_first_clean_booking(
+        contact_id=str(contact_id),
+        scheduled_start=start,
+        scheduled_end=end,
+        calendar_id="estimate-calendar",
+        notes=None,
+        booking_key=booking_key,
+        expected_calendar_event_id=event_id,
+        calendar_event_id=event_id,
+        actor_id=1,
+        actor_name="Juan Canfield",
+    )
+    return contact_id, str(completed["onboarding_draft_id"])
+
+
+@pytest.mark.asyncio
+async def test_onboarding_draft_approval_pipeline_edits_sends_and_replays():
+    """Edit -> approve -> sent against real Postgres, then idempotent replay.
+
+    The sent_emails/interaction evidence writers use the global pool, which
+    is deliberately uninitialized here; their failure must be swallowed
+    (secondary evidence) while the migration-360 state machine advances.
+    """
+    database_url = _database_url_or_skip()
+    schema = f"atlas_eom_draft_approval_{uuid.uuid4().hex}"
+    conn = await asyncpg.connect(database_url)
+    try:
+        await _prepare_schema(conn, schema)
+        provider = DatabaseCRMProvider(pool=conn)
+        contact_id, draft_id = await _book_first_clean_draft(conn, provider)
+
+        edited = await provider.update_eom_onboarding_draft(
+            draft_id=draft_id,
+            subject="Welcome aboard, from the whole crew",
+        )
+        assert edited["subject"] == "Welcome aboard, from the whole crew"
+        assert edited["status"] == "pending"
+
+        sender = _RecordingDraftSender()
+        result = await approve_and_send_eom_onboarding_draft(
+            provider,
+            EOMOnboardingDraftApproval(
+                draft_id=draft_id, actor_id=7, actor_name="Mayra Canfield"
+            ),
+            sender=sender,
+        )
+        assert result["status"] == "sent"
+        assert result["idempotent"] is False
+        assert result["resend_message_id"] == "resend-msg-1"
+        assert sender.calls == [
+            {
+                "to": "won-lead@example.com",
+                "subject": "Welcome aboard, from the whole crew",
+                "body": result["body"],
+                "idempotency_key": f"eom-onboarding-draft:{draft_id}",
+            }
+        ]
+        row = await conn.fetchrow(
+            "SELECT status, sent_at, claimed_at, approved_by_employee_id, "
+            "approved_by_name FROM eom_onboarding_email_drafts "
+            "WHERE id = $1::uuid",
+            draft_id,
+        )
+        assert row["status"] == "sent"
+        assert row["sent_at"] is not None
+        assert row["claimed_at"] is not None
+        assert row["approved_by_employee_id"] == 7
+        assert row["approved_by_name"] == "Mayra Canfield"
+
+        replay = await approve_and_send_eom_onboarding_draft(
+            provider,
+            EOMOnboardingDraftApproval(
+                draft_id=draft_id, actor_id=7, actor_name="Mayra Canfield"
+            ),
+            sender=sender,
+        )
+        assert replay["idempotent"] is True
+        assert replay["status"] == "sent"
+        assert len(sender.calls) == 1  # no second transport call
+
+        with pytest.raises(EOMLeadConversionError, match="only pending"):
+            await provider.update_eom_onboarding_draft(
+                draft_id=draft_id, subject="Too late"
+            )
+        with pytest.raises(EOMLeadConversionError, match="cannot be revoked"):
+            await provider.revoke_eom_onboarding_draft(draft_id=draft_id)
+    finally:
+        await conn.execute(f'DROP SCHEMA IF EXISTS "{schema}" CASCADE')
+        await conn.close()
+
+
+@pytest.mark.asyncio
+async def test_onboarding_draft_provider_claim_wins_exactly_once_under_two_sessions():
+    database_url = _database_url_or_skip()
+    schema = f"atlas_eom_draft_provider_claim_{uuid.uuid4().hex}"
+    conn = await asyncpg.connect(database_url)
+    second_conn = None
+    try:
+        await _prepare_schema(conn, schema)
+        provider = DatabaseCRMProvider(pool=conn)
+        contact_id, draft_id = await _book_first_clean_draft(conn, provider)
+
+        second_conn = await asyncpg.connect(database_url)
+        await second_conn.execute(f'SET search_path TO "{schema}", public')
+        second_provider = DatabaseCRMProvider(pool=second_conn)
+
+        first, second = await asyncio.gather(
+            provider.claim_eom_onboarding_draft(
+                draft_id=draft_id, actor_id=1, actor_name="Juan Canfield"
+            ),
+            second_provider.claim_eom_onboarding_draft(
+                draft_id=draft_id, actor_id=2, actor_name="Mayra Canfield"
+            ),
+            return_exceptions=True,
+        )
+        outcomes = [first, second]
+        winners = [
+            result
+            for result in outcomes
+            if isinstance(result, dict) and result.get("claimed")
+        ]
+        losers = [
+            result
+            for result in outcomes
+            if isinstance(result, EOMLeadConversionError)
+        ]
+        assert len(winners) == 1
+        assert len(losers) == 1
+        assert losers[0].status_code == 409
+        assert (
+            await conn.fetchval(
+                "SELECT status FROM eom_onboarding_email_drafts "
+                "WHERE id = $1::uuid",
+                draft_id,
+            )
+            == "sending"
+        )
+    finally:
+        if second_conn is not None:
+            await second_conn.close()
+        await conn.execute(f'DROP SCHEMA IF EXISTS "{schema}" CASCADE')
+        await conn.close()
+
+
+@pytest.mark.asyncio
+async def test_onboarding_draft_no_email_blocker_resolves_through_edit():
+    database_url = _database_url_or_skip()
+    schema = f"atlas_eom_draft_blocker_{uuid.uuid4().hex}"
+    conn = await asyncpg.connect(database_url)
+    try:
+        await _prepare_schema(conn, schema)
+        provider = DatabaseCRMProvider(pool=conn)
+        contact_id, draft_id = await _book_first_clean_draft(
+            conn, provider, email=None, full_name="No Email Lead"
+        )
+
+        with pytest.raises(EOMLeadConversionError, match="blocked: no_email"):
+            await provider.claim_eom_onboarding_draft(
+                draft_id=draft_id, actor_id=1, actor_name="Juan Canfield"
+            )
+
+        fixed = await provider.update_eom_onboarding_draft(
+            draft_id=draft_id, recipient_email="found-address@example.com"
+        )
+        assert fixed["recipient_email"] == "found-address@example.com"
+        assert fixed["blocker"] is None
+
+        sender = _RecordingDraftSender()
+        result = await approve_and_send_eom_onboarding_draft(
+            provider,
+            EOMOnboardingDraftApproval(
+                draft_id=draft_id, actor_id=1, actor_name="Juan Canfield"
+            ),
+            sender=sender,
+        )
+        assert result["status"] == "sent"
+        assert sender.calls[0]["to"] == "found-address@example.com"
+    finally:
+        await conn.execute(f'DROP SCHEMA IF EXISTS "{schema}" CASCADE')
+        await conn.close()
+
+
+@pytest.mark.asyncio
+async def test_onboarding_draft_stuck_sending_reconciles_by_confirm_or_revoke():
+    """Migration 360 step 4 against real Postgres: a transport failure
+    leaves 'sending'; the operator either confirms sent or revokes, and a
+    revoke that raced the send makes the later confirm fail loudly."""
+    database_url = _database_url_or_skip()
+    schema = f"atlas_eom_draft_reconcile_{uuid.uuid4().hex}"
+    conn = await asyncpg.connect(database_url)
+    try:
+        await _prepare_schema(conn, schema)
+        provider = DatabaseCRMProvider(pool=conn)
+
+        # Draft A: transport fails mid-approve -> stuck sending -> confirm.
+        _, draft_a = await _book_first_clean_draft(conn, provider)
+        failing = _RecordingDraftSender(fail=True)
+        from atlas_brain.services.eom_onboarding_drafts import (
+            EOMOnboardingDraftError,
+        )
+
+        with pytest.raises(EOMOnboardingDraftError) as excinfo:
+            await approve_and_send_eom_onboarding_draft(
+                provider,
+                EOMOnboardingDraftApproval(
+                    draft_id=draft_a, actor_id=1, actor_name="Juan Canfield"
+                ),
+                sender=failing,
+            )
+        assert excinfo.value.status_code == 502
+        assert (
+            await conn.fetchval(
+                "SELECT status FROM eom_onboarding_email_drafts "
+                "WHERE id = $1::uuid",
+                draft_a,
+            )
+            == "sending"
+        )
+        confirmed = await provider.confirm_eom_onboarding_draft_sent(
+            draft_id=draft_a
+        )
+        assert confirmed["status"] == "sent"
+        assert confirmed["idempotent"] is False
+        replay = await provider.confirm_eom_onboarding_draft_sent(
+            draft_id=draft_a
+        )
+        assert replay["idempotent"] is True
+
+        # Draft B: stuck sending -> revoked -> a late confirm fails loudly
+        # and further claims stay refused.
+        _, draft_b = await _book_first_clean_draft(conn, provider)
+        await provider.claim_eom_onboarding_draft(
+            draft_id=draft_b, actor_id=1, actor_name="Juan Canfield"
+        )
+        revoked = await provider.revoke_eom_onboarding_draft(draft_id=draft_b)
+        assert revoked["status"] == "revoked"
+        with pytest.raises(EOMLeadConversionError, match="revoked while sending"):
+            await provider.confirm_eom_onboarding_draft_sent(draft_id=draft_b)
+        with pytest.raises(EOMLeadConversionError, match="revoked"):
+            await provider.claim_eom_onboarding_draft(
+                draft_id=draft_b, actor_id=1, actor_name="Juan Canfield"
+            )
+    finally:
+        await conn.execute(f'DROP SCHEMA IF EXISTS "{schema}" CASCADE')
+        await conn.close()
+
+
+@pytest.mark.asyncio
+async def test_onboarding_draft_list_projection_filters_and_paginates():
+    database_url = _database_url_or_skip()
+    schema = f"atlas_eom_draft_list_{uuid.uuid4().hex}"
+    conn = await asyncpg.connect(database_url)
+    try:
+        await _prepare_schema(conn, schema)
+        provider = DatabaseCRMProvider(pool=conn)
+        contact_a, draft_a = await _book_first_clean_draft(
+            conn, provider, full_name="Lead Alpha"
+        )
+        contact_b, draft_b = await _book_first_clean_draft(
+            conn, provider, full_name="Lead Beta"
+        )
+
+        pending = await provider.list_eom_onboarding_drafts(status="pending")
+        assert {str(row["draft_id"]) for row in pending} == {draft_a, draft_b}
+        assert {row["full_name"] for row in pending} == {
+            "Lead Alpha",
+            "Lead Beta",
+        }
+
+        first_page = await provider.list_eom_onboarding_drafts(
+            status="pending", limit=1
+        )
+        assert len(first_page) == 1
+        second_page = await provider.list_eom_onboarding_drafts(
+            status="pending",
+            limit=2,
+            cursor_created_at=first_page[0]["created_at"],
+            cursor_draft_id=first_page[0]["draft_id"],
+        )
+        assert len(second_page) == 1
+        assert second_page[0]["draft_id"] != first_page[0]["draft_id"]
+
+        await provider.claim_eom_onboarding_draft(
+            draft_id=draft_a, actor_id=1, actor_name="Juan Canfield"
+        )
+        assert {
+            str(row["draft_id"])
+            for row in await provider.list_eom_onboarding_drafts(status="pending")
+        } == {draft_b}
+        sending = await provider.list_eom_onboarding_drafts(status="sending")
+        assert [str(row["draft_id"]) for row in sending] == [draft_a]
+        assert sending[0]["approved_by_name"] == "Juan Canfield"
+    finally:
+        await conn.execute(f'DROP SCHEMA IF EXISTS "{schema}" CASCADE')
+        await conn.close()

@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from contextlib import asynccontextmanager
-from datetime import datetime
+from datetime import datetime, timezone
 from types import SimpleNamespace
 from uuid import UUID, uuid4
 
@@ -42,6 +42,14 @@ class _CRM:
         self.onboarding_draft_id = "0b8db22e-16b1-4a30-a15f-6c78ee9204a5"
         self.execution_lock_keys: list[str] = []
         self.review_leads = review_leads or []
+        self.draft_rows: dict[str, dict[str, object]] = {}
+        self.draft_list_rows: list[dict[str, object]] = []
+        self.draft_list_calls: list[dict[str, object]] = []
+        self.draft_update_calls: list[dict[str, object]] = []
+        self.draft_claim_calls: list[dict[str, object]] = []
+        self.draft_confirm_calls: list[dict[str, object]] = []
+        self.draft_revoke_calls: list[dict[str, object]] = []
+        self.interaction_logs: list[dict[str, object]] = []
 
     @asynccontextmanager
     async def eom_estimate_booking_execution_lock(self, *, booking_key: str):
@@ -139,6 +147,171 @@ class _CRM:
 
     async def mark_eom_first_clean_booking_calendar_failed(self, **kwargs):
         self.first_clean_failed_calls.append(kwargs)
+
+    # -- Onboarding draft fake: mirrors the provider's migration-360 state
+    # -- machine in memory so route+service behavior is provable without
+    # -- Postgres; the SQL itself is proven by the integration suite.
+
+    @staticmethod
+    def _draft_closed(row: dict[str, object], *, idempotent: bool = False):
+        def _iso(value):
+            return value.isoformat() if value is not None else None
+
+        return {
+            "draft_id": str(row["id"]),
+            "contact_id": str(row["contact_id"]),
+            "status": str(row["status"]),
+            "recipient_email": row["recipient_email"],
+            "blocker": row["blocker"],
+            "subject": str(row["subject"]),
+            "body": str(row["body"]),
+            "created_at": _iso(row["created_at"]),
+            "claimed_at": _iso(row["claimed_at"]),
+            "sent_at": _iso(row["sent_at"]),
+            "revoked_at": _iso(row["revoked_at"]),
+            "approved_by_name": row["approved_by_name"],
+            "idempotent": idempotent,
+        }
+
+    def seed_draft(self, **overrides) -> dict[str, object]:
+        row: dict[str, object] = {
+            "id": uuid4(),
+            "contact_id": uuid4(),
+            "full_name": "Review Queue Lead",
+            "recipient_email": "lead@example.com",
+            "blocker": None,
+            "subject": "Welcome aboard - Effingham Office Maids",
+            "body": "Hi Review Queue Lead,\n\nWelcome to the team.",
+            "status": "pending",
+            "created_at": datetime(2026, 8, 4, 12, 0, tzinfo=timezone.utc),
+            "claimed_at": None,
+            "sent_at": None,
+            "revoked_at": None,
+            "approved_by_employee_id": None,
+            "approved_by_name": None,
+        }
+        row.update(overrides)
+        self.draft_rows[str(row["id"])] = row
+        return row
+
+    async def list_eom_onboarding_drafts(self, **kwargs):
+        self.draft_list_calls.append(kwargs)
+        return list(self.draft_list_rows)
+
+    async def get_eom_onboarding_draft(self, draft_id):
+        return self.draft_rows.get(str(draft_id))
+
+    async def update_eom_onboarding_draft(
+        self, *, draft_id, subject=None, body=None, recipient_email=None
+    ):
+        self.draft_update_calls.append(
+            {
+                "draft_id": str(draft_id),
+                "subject": subject,
+                "body": body,
+                "recipient_email": recipient_email,
+            }
+        )
+        row = self.draft_rows.get(str(draft_id))
+        if row is None:
+            raise EOMLeadConversionError(404, "EOM onboarding draft not found")
+        if row["status"] != "pending":
+            raise EOMLeadConversionError(
+                409,
+                "EOM onboarding draft is "
+                f"{row['status']}; only pending drafts can be edited",
+            )
+        if subject is not None:
+            row["subject"] = subject
+        if body is not None:
+            row["body"] = body
+        if recipient_email is not None:
+            row["recipient_email"] = recipient_email
+            row["blocker"] = None
+        return self._draft_closed(row)
+
+    async def claim_eom_onboarding_draft(self, *, draft_id, actor_id, actor_name):
+        self.draft_claim_calls.append(
+            {"draft_id": str(draft_id), "actor_id": actor_id, "actor_name": actor_name}
+        )
+        row = self.draft_rows.get(str(draft_id))
+        if row is None:
+            raise EOMLeadConversionError(404, "EOM onboarding draft not found")
+        if (
+            row["status"] == "pending"
+            and not row["blocker"]
+            and row["recipient_email"]
+        ):
+            row["status"] = "sending"
+            row["claimed_at"] = datetime.now(timezone.utc)
+            row["approved_by_employee_id"] = actor_id
+            row["approved_by_name"] = actor_name
+            return {"claimed": True, "draft": self._draft_closed(row)}
+        if row["status"] == "sent":
+            return {
+                "claimed": False,
+                "draft": self._draft_closed(row, idempotent=True),
+            }
+        if row["status"] == "sending":
+            raise EOMLeadConversionError(
+                409,
+                "EOM onboarding draft send is already in flight or requires "
+                "reconciliation",
+            )
+        if row["status"] == "revoked":
+            raise EOMLeadConversionError(409, "EOM onboarding draft is revoked")
+        if row["blocker"]:
+            raise EOMLeadConversionError(
+                409, f"EOM onboarding draft is blocked: {row['blocker']}"
+            )
+        raise EOMLeadConversionError(
+            409, "EOM onboarding draft has no recipient email"
+        )
+
+    async def confirm_eom_onboarding_draft_sent(self, *, draft_id):
+        self.draft_confirm_calls.append({"draft_id": str(draft_id)})
+        row = self.draft_rows.get(str(draft_id))
+        if row is None:
+            raise EOMLeadConversionError(404, "EOM onboarding draft not found")
+        if row["status"] == "sending":
+            row["status"] = "sent"
+            row["sent_at"] = datetime.now(timezone.utc)
+            return self._draft_closed(row)
+        if row["status"] == "sent":
+            return self._draft_closed(row, idempotent=True)
+        if row["status"] == "revoked":
+            raise EOMLeadConversionError(
+                409,
+                "EOM onboarding draft was revoked while sending; reconcile "
+                "against the transport log",
+            )
+        raise EOMLeadConversionError(
+            409, "EOM onboarding draft has not been claimed for sending"
+        )
+
+    async def revoke_eom_onboarding_draft(self, *, draft_id):
+        self.draft_revoke_calls.append({"draft_id": str(draft_id)})
+        row = self.draft_rows.get(str(draft_id))
+        if row is None:
+            raise EOMLeadConversionError(404, "EOM onboarding draft not found")
+        if row["status"] in ("pending", "sending"):
+            row["status"] = "revoked"
+            row["revoked_at"] = datetime.now(timezone.utc)
+            return self._draft_closed(row)
+        if row["status"] == "revoked":
+            return self._draft_closed(row, idempotent=True)
+        raise EOMLeadConversionError(
+            409, "EOM onboarding draft was already sent and cannot be revoked"
+        )
+
+    async def log_interaction(self, contact_id, interaction_type, summary):
+        self.interaction_logs.append(
+            {
+                "contact_id": str(contact_id),
+                "interaction_type": interaction_type,
+                "summary": summary,
+            }
+        )
 
 
 class _Calendar:
@@ -2304,3 +2477,565 @@ async def test_private_handoff_preserves_provider_rejection_without_side_effect_
     assert response.status_code == 409
     assert response.json()["detail"] == "EOM lead is not ready for approval"
     assert len(crm.calls) == 1
+
+class _DraftSender:
+    """Fake transport for approve-and-send tests."""
+
+    def __init__(self, *, fail: bool = False, idempotent_replay: bool = False):
+        self.fail = fail
+        self.idempotent_replay = idempotent_replay
+        self.calls: list[dict[str, object]] = []
+
+    async def __call__(self, *, to, subject, body, idempotency_key):
+        self.calls.append(
+            {
+                "to": to,
+                "subject": subject,
+                "body": body,
+                "idempotency_key": idempotency_key,
+            }
+        )
+        if self.fail:
+            raise RuntimeError("transport unavailable")
+        if self.idempotent_replay:
+            return {"message_id": None, "idempotent_replay": True}
+        return {"message_id": "resend-msg-1", "idempotent_replay": False}
+
+
+class _SentEmailHistory:
+    """Recording stand-in for EmailRepository."""
+
+    instances: list["_SentEmailHistory"] = []
+
+    def __init__(self) -> None:
+        self.created: list[dict[str, object]] = []
+        _SentEmailHistory.instances.append(self)
+
+    async def create(self, **kwargs):
+        self.created.append(kwargs)
+        return SimpleNamespace(id=uuid4())
+
+
+def _draft_app(crm: _CRM, sender=None) -> FastAPI:
+    app = _app(crm, _enabled_config())
+    app.dependency_overrides[funnel_mod._onboarding_sender_dependency] = (
+        lambda: sender
+    )
+    return app
+
+
+async def _post(app: FastAPI, path: str, *, json_body=None, method: str = "POST"):
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=app), base_url="http://test"
+    ) as client:
+        return await client.request(
+            method,
+            path,
+            headers=_headers(approval_key=f"office-draft-{uuid4().hex}"),
+            json=json_body,
+        )
+
+
+@pytest.mark.asyncio
+async def test_private_onboarding_draft_list_returns_closed_projection():
+    crm = _CRM()
+    draft_id = uuid4()
+    contact_id = uuid4()
+    crm.draft_list_rows = [
+        {
+            "draft_id": draft_id,
+            "contact_id": contact_id,
+            "full_name": "Won Lead",
+            "recipient_email": None,
+            "blocker": "no_email",
+            "subject": "Welcome aboard - Effingham Office Maids",
+            "body": "Hi Won Lead,",
+            "status": "pending",
+            "created_at": datetime(2026, 8, 4, 12, 0, tzinfo=timezone.utc),
+            "claimed_at": None,
+            "sent_at": None,
+            "revoked_at": None,
+            "approved_by_name": None,
+            # A leaked column must be rejected by the closed response model.
+        }
+    ]
+    app = _draft_app(crm)
+
+    response = await _post(
+        app, "/eom-funnel/onboarding-drafts?limit=25", method="GET"
+    )
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["status"] == "pending"
+    assert payload["limit"] == 25
+    assert payload["hasMore"] is False
+    assert payload["nextCursor"] is None
+    assert payload["drafts"] == [
+        {
+            "draftId": str(draft_id),
+            "contactId": str(contact_id),
+            "fullName": "Won Lead",
+            "recipientEmail": None,
+            "blocker": "no_email",
+            "subject": "Welcome aboard - Effingham Office Maids",
+            "body": "Hi Won Lead,",
+            "status": "pending",
+            "createdAt": "2026-08-04T12:00:00Z",
+            "claimedAt": None,
+            "sentAt": None,
+            "revokedAt": None,
+            "approvedByName": None,
+        }
+    ]
+    assert crm.draft_list_calls == [
+        {
+            "status": "pending",
+            "limit": 26,
+            "cursor_created_at": None,
+            "cursor_draft_id": None,
+        }
+    ]
+
+
+@pytest.mark.asyncio
+async def test_private_onboarding_draft_list_rejects_unknown_status_before_crm_call():
+    crm = _CRM()
+    app = _draft_app(crm)
+
+    response = await _post(
+        app, "/eom-funnel/onboarding-drafts?status=draining", method="GET"
+    )
+
+    assert response.status_code == 422
+    assert crm.draft_list_calls == []
+
+
+@pytest.mark.asyncio
+async def test_private_onboarding_draft_edit_sets_recipient_and_clears_blocker():
+    crm = _CRM()
+    row = crm.seed_draft(recipient_email=None, blocker="no_email")
+    app = _draft_app(crm)
+
+    response = await _post(
+        app,
+        f"/eom-funnel/onboarding-drafts/{row['id']}",
+        method="PATCH",
+        json_body={"recipient_email": "fixed@example.com"},
+    )
+
+    assert response.status_code == 200
+    assert response.json()["recipient_email"] == "fixed@example.com"
+    assert response.json()["blocker"] is None
+    assert crm.draft_update_calls == [
+        {
+            "draft_id": str(row["id"]),
+            "subject": None,
+            "body": None,
+            "recipient_email": "fixed@example.com",
+        }
+    ]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "body",
+    (
+        {},
+        {"subject": "   "},
+        {"body": ""},
+        {"recipient_email": "not-an-email"},
+        {"recipient_email": "two words@example.com"},
+        {"subject": "ok", "unexpected": "field"},
+    ),
+)
+async def test_private_onboarding_draft_edit_rejects_bad_body_before_crm_call(body):
+    crm = _CRM()
+    row = crm.seed_draft()
+    app = _draft_app(crm)
+
+    response = await _post(
+        app,
+        f"/eom-funnel/onboarding-drafts/{row['id']}",
+        method="PATCH",
+        json_body=body,
+    )
+
+    assert response.status_code == 422
+    assert crm.draft_update_calls == []
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("frozen_status", ("sending", "sent", "revoked"))
+async def test_private_onboarding_draft_edit_rejects_non_pending(frozen_status):
+    crm = _CRM()
+    row = crm.seed_draft(status=frozen_status)
+    app = _draft_app(crm)
+
+    response = await _post(
+        app,
+        f"/eom-funnel/onboarding-drafts/{row['id']}",
+        method="PATCH",
+        json_body={"subject": "Edited"},
+    )
+
+    assert response.status_code == 409
+    assert frozen_status in response.json()["detail"]
+    assert crm.draft_rows[str(row["id"])]["subject"] != "Edited"
+
+
+@pytest.mark.asyncio
+async def test_private_onboarding_draft_approve_claims_sends_confirms_in_order(
+    monkeypatch,
+):
+    from atlas_brain.storage.repositories import email as email_repo_mod
+
+    _SentEmailHistory.instances = []
+    monkeypatch.setattr(email_repo_mod, "EmailRepository", _SentEmailHistory)
+    crm = _CRM()
+    row = crm.seed_draft()
+    sender = _DraftSender()
+    app = _draft_app(crm, sender=sender)
+
+    response = await _post(
+        app, f"/eom-funnel/onboarding-drafts/{row['id']}/approve-send"
+    )
+
+    assert response.status_code == 201
+    payload = response.json()
+    assert payload["success"] is True
+    assert payload["status"] == "sent"
+    assert payload["idempotent"] is False
+    assert payload["resend_message_id"] == "resend-msg-1"
+    assert payload["transport_idempotent_replay"] is False
+    assert crm.draft_claim_calls == [
+        {
+            "draft_id": str(row["id"]),
+            "actor_id": 1,
+            "actor_name": "Juan Canfield",
+        }
+    ]
+    assert sender.calls == [
+        {
+            "to": "lead@example.com",
+            "subject": row["subject"],
+            "body": row["body"],
+            "idempotency_key": f"eom-onboarding-draft:{row['id']}",
+        }
+    ]
+    assert crm.draft_confirm_calls == [{"draft_id": str(row["id"])}]
+    assert crm.draft_rows[str(row["id"])]["status"] == "sent"
+    assert crm.draft_rows[str(row["id"])]["approved_by_name"] == "Juan Canfield"
+    history = _SentEmailHistory.instances[0].created[0]
+    assert history["to_addresses"] == ["lead@example.com"]
+    assert history["template_type"] == "onboarding_welcome"
+    assert history["resend_message_id"] == "resend-msg-1"
+    assert history["business_context_id"] == "effingham_maids"
+    assert history["metadata"]["draft_id"] == str(row["id"])
+    assert len(crm.interaction_logs) == 1
+    assert crm.interaction_logs[0]["interaction_type"] == "email"
+
+
+@pytest.mark.asyncio
+async def test_private_onboarding_draft_approve_replays_sent_without_transport():
+    crm = _CRM()
+    row = crm.seed_draft(
+        status="sent",
+        sent_at=datetime(2026, 8, 4, 13, 0, tzinfo=timezone.utc),
+    )
+    sender = _DraftSender()
+    app = _draft_app(crm, sender=sender)
+
+    response = await _post(
+        app, f"/eom-funnel/onboarding-drafts/{row['id']}/approve-send"
+    )
+
+    assert response.status_code == 200
+    assert response.json()["idempotent"] is True
+    assert response.json()["status"] == "sent"
+    assert sender.calls == []
+    assert crm.draft_confirm_calls == []
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("overrides", "detail_fragment"),
+    (
+        ({"blocker": "no_email", "recipient_email": None}, "blocked"),
+        ({"recipient_email": None}, "no recipient"),
+        ({"status": "sending"}, "in flight"),
+        ({"status": "revoked"}, "revoked"),
+    ),
+)
+async def test_private_onboarding_draft_approve_refuses_unready_states(
+    overrides, detail_fragment
+):
+    crm = _CRM()
+    row = crm.seed_draft(**overrides)
+    sender = _DraftSender()
+    app = _draft_app(crm, sender=sender)
+
+    response = await _post(
+        app, f"/eom-funnel/onboarding-drafts/{row['id']}/approve-send"
+    )
+
+    assert response.status_code == 409
+    assert detail_fragment in response.json()["detail"]
+    assert sender.calls == []
+    assert crm.draft_confirm_calls == []
+
+
+@pytest.mark.asyncio
+async def test_private_onboarding_draft_approve_transport_failure_leaves_sending():
+    crm = _CRM()
+    row = crm.seed_draft()
+    sender = _DraftSender(fail=True)
+    app = _draft_app(crm, sender=sender)
+
+    response = await _post(
+        app, f"/eom-funnel/onboarding-drafts/{row['id']}/approve-send"
+    )
+
+    assert response.status_code == 502
+    assert "reconciliation" in response.json()["detail"]
+    assert len(sender.calls) == 1
+    # The row stays 'sending' as operator evidence (migration 360 step 4):
+    # neither auto-retried nor rolled back to pending.
+    assert crm.draft_rows[str(row["id"])]["status"] == "sending"
+    assert crm.draft_confirm_calls == []
+
+
+@pytest.mark.asyncio
+async def test_private_onboarding_draft_approve_resend_replay_confirms_sent(
+    monkeypatch,
+):
+    from atlas_brain.storage.repositories import email as email_repo_mod
+
+    _SentEmailHistory.instances = []
+    monkeypatch.setattr(email_repo_mod, "EmailRepository", _SentEmailHistory)
+    crm = _CRM()
+    row = crm.seed_draft()
+    sender = _DraftSender(idempotent_replay=True)
+    app = _draft_app(crm, sender=sender)
+
+    response = await _post(
+        app, f"/eom-funnel/onboarding-drafts/{row['id']}/approve-send"
+    )
+
+    assert response.status_code == 201
+    assert response.json()["status"] == "sent"
+    assert response.json()["transport_idempotent_replay"] is True
+    assert crm.draft_rows[str(row["id"])]["status"] == "sent"
+
+
+@pytest.mark.asyncio
+async def test_private_onboarding_draft_approve_requires_transport_before_claim(
+    monkeypatch,
+):
+    from atlas_brain.config import settings
+
+    monkeypatch.setattr(settings.email, "enabled", False)
+    crm = _CRM()
+    row = crm.seed_draft()
+    app = _draft_app(crm, sender=None)
+
+    response = await _post(
+        app, f"/eom-funnel/onboarding-drafts/{row['id']}/approve-send"
+    )
+
+    assert response.status_code == 503
+    assert "not claimed" in response.json()["detail"]
+    assert crm.draft_claim_calls == []
+    assert crm.draft_rows[str(row["id"])]["status"] == "pending"
+
+
+@pytest.mark.asyncio
+async def test_private_onboarding_draft_revoke_paths():
+    crm = _CRM()
+    pending = crm.seed_draft()
+    stuck = crm.seed_draft(status="sending")
+    sent = crm.seed_draft(status="sent")
+    app = _draft_app(crm)
+
+    fresh = await _post(app, f"/eom-funnel/onboarding-drafts/{pending['id']}/revoke")
+    assert fresh.status_code == 201
+    assert fresh.json()["status"] == "revoked"
+    assert len(crm.interaction_logs) == 1
+    assert "revoked onboarding draft" in crm.interaction_logs[0]["summary"]
+
+    replay = await _post(app, f"/eom-funnel/onboarding-drafts/{pending['id']}/revoke")
+    assert replay.status_code == 200
+    assert replay.json()["idempotent"] is True
+    assert len(crm.interaction_logs) == 1  # replay logs nothing
+
+    reconciled = await _post(app, f"/eom-funnel/onboarding-drafts/{stuck['id']}/revoke")
+    assert reconciled.status_code == 201
+
+    refused = await _post(app, f"/eom-funnel/onboarding-drafts/{sent['id']}/revoke")
+    assert refused.status_code == 409
+    assert "already sent" in refused.json()["detail"]
+
+
+@pytest.mark.asyncio
+async def test_private_onboarding_draft_confirm_sent_paths():
+    crm = _CRM()
+    stuck = crm.seed_draft(status="sending")
+    pending = crm.seed_draft()
+    app = _draft_app(crm)
+
+    confirmed = await _post(
+        app, f"/eom-funnel/onboarding-drafts/{stuck['id']}/confirm-sent"
+    )
+    assert confirmed.status_code == 201
+    assert confirmed.json()["status"] == "sent"
+    assert len(crm.interaction_logs) == 1
+    assert "transport-log" in crm.interaction_logs[0]["summary"]
+
+    replay = await _post(
+        app, f"/eom-funnel/onboarding-drafts/{stuck['id']}/confirm-sent"
+    )
+    assert replay.status_code == 200
+    assert replay.json()["idempotent"] is True
+    assert len(crm.interaction_logs) == 1
+
+    refused = await _post(
+        app, f"/eom-funnel/onboarding-drafts/{pending['id']}/confirm-sent"
+    )
+    assert refused.status_code == 409
+    assert "not been claimed" in refused.json()["detail"]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("config", "headers", "expected_status"),
+    (
+        (EOMFunnelConfig(api_enabled=False), _headers(), 503),
+        (_enabled_config(), {**_headers(), "Authorization": ""}, 401),
+        (_enabled_config(), {**_headers(actor_id="not-an-id")}, 422),
+    ),
+)
+@pytest.mark.parametrize(
+    ("method", "path_suffix"),
+    (
+        ("GET", ""),
+        ("POST", "/{draft_id}/approve-send"),
+        ("PATCH", "/{draft_id}"),
+    ),
+)
+async def test_private_onboarding_draft_routes_reject_http_guards_before_crm_call(
+    config, headers, expected_status, method, path_suffix
+):
+    crm = _CRM()
+    row = crm.seed_draft()
+    app = FastAPI()
+    app.include_router(funnel_mod.router)
+    app.dependency_overrides[funnel_mod._crm_dependency] = lambda: crm
+    app.dependency_overrides[funnel_mod._onboarding_sender_dependency] = (
+        lambda: _DraftSender()
+    )
+    app.dependency_overrides[auth_mod.get_eom_funnel_api_config] = lambda: config
+    path = "/eom-funnel/onboarding-drafts" + path_suffix.format(
+        draft_id=row["id"]
+    )
+
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=app), base_url="http://test"
+    ) as client:
+        response = await client.request(
+            method,
+            path,
+            headers=headers,
+            json={"subject": "Edited"} if method == "PATCH" else None,
+        )
+
+    assert response.status_code == expected_status
+    assert crm.draft_list_calls == []
+    assert crm.draft_update_calls == []
+    assert crm.draft_claim_calls == []
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("response_status", "response_json", "expected"),
+    (
+        (200, {"id": "resend-abc"}, {"message_id": "resend-abc", "idempotent_replay": False}),
+        (
+            409,
+            {"name": "invalid_idempotent_request", "message": "key reuse"},
+            {"message_id": None, "idempotent_replay": True},
+        ),
+    ),
+)
+async def test_send_onboarding_email_maps_resend_responses(
+    response_status, response_json, expected
+):
+    from atlas_brain.services.eom_onboarding_drafts import send_onboarding_email
+
+    class _Response:
+        status_code = response_status
+
+        def json(self):
+            return response_json
+
+        def raise_for_status(self):
+            if self.status_code >= 400:
+                raise httpx.HTTPStatusError(
+                    "resend error",
+                    request=httpx.Request("POST", "https://api.resend.com/emails"),
+                    response=httpx.Response(self.status_code),
+                )
+
+    class _Client:
+        def __init__(self):
+            self.posts = []
+
+        async def post(self, url, *, json, headers):
+            self.posts.append({"url": url, "json": json, "headers": headers})
+            return _Response()
+
+    client = _Client()
+    result = await send_onboarding_email(
+        to="lead@example.com",
+        subject="Welcome",
+        body="Hi",
+        idempotency_key="eom-onboarding-draft:abc",
+        http_client=client,
+    )
+
+    assert result == expected
+    posted = client.posts[0]
+    assert posted["headers"]["Idempotency-Key"] == "eom-onboarding-draft:abc"
+    assert posted["json"]["to"] == ["lead@example.com"]
+    assert posted["json"]["text"] == "Hi"
+    assert posted["json"]["from"].startswith("Effingham Office Maids <")
+
+
+@pytest.mark.asyncio
+async def test_send_onboarding_email_raises_on_transport_error():
+    from atlas_brain.services.eom_onboarding_drafts import send_onboarding_email
+
+    class _Response:
+        status_code = 500
+
+        def json(self):
+            return {"message": "server error"}
+
+        def raise_for_status(self):
+            raise httpx.HTTPStatusError(
+                "resend error",
+                request=httpx.Request("POST", "https://api.resend.com/emails"),
+                response=httpx.Response(500),
+            )
+
+    class _Client:
+        async def post(self, url, *, json, headers):
+            return _Response()
+
+    with pytest.raises(httpx.HTTPStatusError):
+        await send_onboarding_email(
+            to="lead@example.com",
+            subject="Welcome",
+            body="Hi",
+            idempotency_key="eom-onboarding-draft:abc",
+            http_client=_Client(),
+        )

@@ -2368,6 +2368,274 @@ class DatabaseCRMProvider:
             conn, operation_key
         )
 
+    @staticmethod
+    def _eom_onboarding_draft_closed(
+        row: Mapping[str, Any], *, idempotent: bool = False
+    ) -> dict[str, Any]:
+        """Return the closed JSON-safe draft shape the funnel routes expose."""
+
+        def _iso(value: Any) -> str | None:
+            return value.isoformat() if value is not None else None
+
+        return {
+            "draft_id": str(row["id"]),
+            "contact_id": str(row["contact_id"]),
+            "status": str(row["status"]),
+            "recipient_email": row["recipient_email"],
+            "blocker": row["blocker"],
+            "subject": str(row["subject"]),
+            "body": str(row["body"]),
+            "created_at": _iso(row["created_at"]),
+            "claimed_at": _iso(row["claimed_at"]),
+            "sent_at": _iso(row["sent_at"]),
+            "revoked_at": _iso(row["revoked_at"]),
+            "approved_by_name": row["approved_by_name"],
+            "idempotent": idempotent,
+        }
+
+    async def list_eom_onboarding_drafts(
+        self,
+        *,
+        status: str = "pending",
+        limit: int = 100,
+        cursor_created_at: datetime | None = None,
+        cursor_draft_id: UUID | None = None,
+    ) -> list[dict[str, Any]]:
+        """Return the closed office-review projection of onboarding drafts."""
+        from .eom_lead_conversion import EOMLeadConversionError
+
+        if status not in ("pending", "sending", "sent", "revoked"):
+            raise EOMLeadConversionError(
+                422, "EOM onboarding draft status filter is not recognized"
+            )
+        cursor_clause = ""
+        params: list[Any] = [status, limit]
+        if cursor_created_at is not None and cursor_draft_id is not None:
+            cursor_clause = "AND (d.created_at, d.id) < ($3::timestamptz, $4::uuid)"
+            params.extend([cursor_created_at, cursor_draft_id])
+        pool = self._get_pool()
+        rows = await pool.fetch(
+            f"""
+            SELECT
+                d.id AS draft_id,
+                d.contact_id,
+                c.full_name,
+                d.recipient_email,
+                d.blocker,
+                d.subject,
+                d.body,
+                d.status,
+                d.created_at,
+                d.claimed_at,
+                d.sent_at,
+                d.revoked_at,
+                d.approved_by_name
+            FROM eom_onboarding_email_drafts AS d
+            JOIN contacts AS c ON c.id = d.contact_id
+            WHERE d.status = $1
+              {cursor_clause}
+            ORDER BY d.created_at DESC, d.id DESC
+            LIMIT $2
+            """,
+            *params,
+        )
+        return [dict(row) for row in rows]
+
+    async def get_eom_onboarding_draft(self, draft_id: str) -> dict[str, Any] | None:
+        pool = self._get_pool()
+        row = await pool.fetchrow(
+            "SELECT * FROM eom_onboarding_email_drafts WHERE id = $1::uuid",
+            str(draft_id),
+        )
+        return dict(row) if row else None
+
+    async def update_eom_onboarding_draft(
+        self,
+        *,
+        draft_id: str,
+        subject: str | None = None,
+        body: str | None = None,
+        recipient_email: str | None = None,
+    ) -> dict[str, Any]:
+        """Edit a draft while it is still pending.
+
+        Setting a recipient clears blocker='no_email': the draft becomes
+        claimable under migration 360's readiness predicate. Any other
+        status rejects 409 -- a claimed, sent, or revoked snapshot is
+        evidence and must not mutate.
+        """
+        from .eom_lead_conversion import EOMLeadConversionError
+
+        set_fragments: list[str] = []
+        params: list[Any] = [str(draft_id)]
+        for column, value in (
+            ("subject", subject),
+            ("body", body),
+        ):
+            if value is not None:
+                params.append(value)
+                set_fragments.append(f"{column} = ${len(params)}")
+        if recipient_email is not None:
+            params.append(recipient_email)
+            set_fragments.append(f"recipient_email = ${len(params)}")
+            set_fragments.append("blocker = NULL")
+        if not set_fragments:
+            raise EOMLeadConversionError(
+                422, "EOM onboarding draft edit requires at least one field"
+            )
+        pool = self._get_pool()
+        row = await pool.fetchrow(
+            f"""
+            UPDATE eom_onboarding_email_drafts
+               SET {', '.join(set_fragments)}
+             WHERE id = $1::uuid
+               AND status = 'pending'
+             RETURNING *
+            """,
+            *params,
+        )
+        if row is not None:
+            return self._eom_onboarding_draft_closed(row)
+        existing = await self.get_eom_onboarding_draft(draft_id)
+        if existing is None:
+            raise EOMLeadConversionError(404, "EOM onboarding draft not found")
+        raise EOMLeadConversionError(
+            409,
+            "EOM onboarding draft is "
+            f"{existing['status']}; only pending drafts can be edited",
+        )
+
+    async def claim_eom_onboarding_draft(
+        self,
+        *,
+        draft_id: str,
+        actor_id: int,
+        actor_name: str,
+    ) -> dict[str, Any]:
+        """Atomically claim one pending draft into 'sending' (migration 360).
+
+        The readiness predicate is part of the claim: a blocked or
+        recipient-less row is never claimable. Zero updated rows settle to
+        an idempotent replay only when the draft is already sent; every
+        other state is a 4xx the office can act on.
+        """
+        from .eom_lead_conversion import EOMLeadConversionError
+
+        pool = self._get_pool()
+        row = await pool.fetchrow(
+            """
+            UPDATE eom_onboarding_email_drafts
+               SET status = 'sending', claimed_at = NOW(),
+                   approved_by_employee_id = $2, approved_by_name = $3
+             WHERE id = $1::uuid
+               AND status = 'pending'
+               AND blocker IS NULL
+               AND recipient_email IS NOT NULL
+             RETURNING *
+            """,
+            str(draft_id),
+            actor_id,
+            actor_name,
+        )
+        if row is not None:
+            return {
+                "claimed": True,
+                "draft": self._eom_onboarding_draft_closed(row),
+            }
+        existing = await self.get_eom_onboarding_draft(draft_id)
+        if existing is None:
+            raise EOMLeadConversionError(404, "EOM onboarding draft not found")
+        status = str(existing["status"])
+        if status == "sent":
+            return {
+                "claimed": False,
+                "draft": self._eom_onboarding_draft_closed(
+                    existing, idempotent=True
+                ),
+            }
+        if status == "sending":
+            raise EOMLeadConversionError(
+                409,
+                "EOM onboarding draft send is already in flight or requires "
+                "reconciliation",
+            )
+        if status == "revoked":
+            raise EOMLeadConversionError(409, "EOM onboarding draft is revoked")
+        if existing["blocker"]:
+            raise EOMLeadConversionError(
+                409,
+                f"EOM onboarding draft is blocked: {existing['blocker']}",
+            )
+        raise EOMLeadConversionError(
+            409, "EOM onboarding draft has no recipient email"
+        )
+
+    async def confirm_eom_onboarding_draft_sent(
+        self, *, draft_id: str
+    ) -> dict[str, Any]:
+        """Confirm delivery for a claimed draft (sending -> sent)."""
+        from .eom_lead_conversion import EOMLeadConversionError
+
+        pool = self._get_pool()
+        row = await pool.fetchrow(
+            """
+            UPDATE eom_onboarding_email_drafts
+               SET status = 'sent', sent_at = NOW()
+             WHERE id = $1::uuid
+               AND status = 'sending'
+             RETURNING *
+            """,
+            str(draft_id),
+        )
+        if row is not None:
+            return self._eom_onboarding_draft_closed(row)
+        existing = await self.get_eom_onboarding_draft(draft_id)
+        if existing is None:
+            raise EOMLeadConversionError(404, "EOM onboarding draft not found")
+        status = str(existing["status"])
+        if status == "sent":
+            return self._eom_onboarding_draft_closed(existing, idempotent=True)
+        if status == "revoked":
+            raise EOMLeadConversionError(
+                409,
+                "EOM onboarding draft was revoked while sending; reconcile "
+                "against the transport log",
+            )
+        raise EOMLeadConversionError(
+            409, "EOM onboarding draft has not been claimed for sending"
+        )
+
+    async def revoke_eom_onboarding_draft(self, *, draft_id: str) -> dict[str, Any]:
+        """Revoke a pending draft, or reconcile a stuck 'sending' one.
+
+        Revoking from 'sending' is the migration-360 operator recovery
+        action after checking the transport log; a sent draft is immutable
+        delivery evidence and rejects.
+        """
+        from .eom_lead_conversion import EOMLeadConversionError
+
+        pool = self._get_pool()
+        row = await pool.fetchrow(
+            """
+            UPDATE eom_onboarding_email_drafts
+               SET status = 'revoked', revoked_at = NOW()
+             WHERE id = $1::uuid
+               AND status IN ('pending', 'sending')
+             RETURNING *
+            """,
+            str(draft_id),
+        )
+        if row is not None:
+            return self._eom_onboarding_draft_closed(row)
+        existing = await self.get_eom_onboarding_draft(draft_id)
+        if existing is None:
+            raise EOMLeadConversionError(404, "EOM onboarding draft not found")
+        if str(existing["status"]) == "revoked":
+            return self._eom_onboarding_draft_closed(existing, idempotent=True)
+        raise EOMLeadConversionError(
+            409, "EOM onboarding draft was already sent and cannot be revoked"
+        )
+
     async def open_customer_service_ticket(
         self,
         *,
