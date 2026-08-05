@@ -333,6 +333,17 @@ class DatabaseCRMProvider:
 
         return get_db_pool()
 
+    @property
+    def pool(self) -> Any:
+        """The store this provider reads and writes.
+
+        Evidence writers that describe rows owned by this provider (e.g.
+        sent_emails history for an onboarding draft) must share this pool;
+        the EOM funnel binds the provider to its own connection string, so
+        the global pool may be a different database entirely.
+        """
+        return self._get_pool()
+
     async def health_check(self) -> bool:
         try:
             from ..storage.database import get_db_pool
@@ -2532,13 +2543,20 @@ class DatabaseCRMProvider:
         pool = self._get_pool()
         row = await pool.fetchrow(
             """
-            UPDATE eom_onboarding_email_drafts
+            UPDATE eom_onboarding_email_drafts AS d
                SET status = 'sending', claimed_at = NOW(),
                    approved_by_employee_id = $2, approved_by_name = $3
-             WHERE id = $1::uuid
-               AND status = 'pending'
-               AND blocker IS NULL
-               AND recipient_email IS NOT NULL
+             WHERE d.id = $1::uuid
+               AND d.status = 'pending'
+               AND d.blocker IS NULL
+               AND d.recipient_email IS NOT NULL
+               AND EXISTS (
+                   SELECT 1
+                   FROM contacts AS c
+                   WHERE c.id = d.contact_id
+                     AND c.business_context_id = 'effingham_maids'
+                     AND c.status = 'active'
+               )
              RETURNING *
             """,
             str(draft_id),
@@ -2574,8 +2592,17 @@ class DatabaseCRMProvider:
                 409,
                 f"EOM onboarding draft is blocked: {existing['blocker']}",
             )
+        if existing["recipient_email"] is None:
+            raise EOMLeadConversionError(
+                409, "EOM onboarding draft has no recipient email"
+            )
+        # The draft itself was claimable, so the contact guard is the only
+        # predicate left: same admission the booking family applies before
+        # any customer-facing EOM action.
         raise EOMLeadConversionError(
-            409, "EOM onboarding draft has no recipient email"
+            409,
+            "EOM onboarding draft contact is not an active "
+            "effingham_maids contact",
         )
 
     async def confirm_eom_onboarding_draft_sent(
@@ -2866,9 +2893,11 @@ class DatabaseCRMProvider:
         intent: Optional[str] = None,
         metadata: Optional[dict[str, Any]] = None,
     ) -> dict[str, Any]:
-        from ..storage.database import get_db_pool
-
-        pool = get_db_pool()
+        # Interaction evidence must land in the store this provider is
+        # bound to: the EOM funnel runs the provider against its own
+        # connection string, where the global pool may be a different
+        # database (or uninitialized).
+        pool = self._get_pool()
         interaction_id = str(uuid4())
         occ = _coerce_occurrence(occurred_at)
         metadata_json = json.dumps(metadata or {})

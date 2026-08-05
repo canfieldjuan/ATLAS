@@ -72,6 +72,21 @@ async def require_eom_funnel_data_store(
                           AND attname = required.attname
                           AND NOT attisdropped
                     )
+                )
+                -- The funnel actor boundary admits signed-64 ids; serving
+                -- draft approvals against migration 360's INTEGER approver
+                -- column would pass the HTTP boundary and then fail in
+                -- Postgres after the claim. Migration 361 widens it; the
+                -- slim profile only applies receivables migrations, so the
+                -- funnel stays fail-closed until the canonical store has
+                -- the BIGINT column.
+                AND EXISTS (
+                    SELECT 1
+                    FROM pg_attribute
+                    WHERE attrelid = readiness_relations.onboarding_drafts_rel
+                      AND attname = 'approved_by_employee_id'
+                      AND NOT attisdropped
+                      AND atttypid = 'bigint'::regtype
                 ) AS onboarding_drafts_required_columns_ready
             FROM readiness_relations
         )

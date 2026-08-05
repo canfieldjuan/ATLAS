@@ -189,6 +189,7 @@ class _CRM:
             "revoked_at": None,
             "approved_by_employee_id": None,
             "approved_by_name": None,
+            "contact_status": "active",
         }
         row.update(overrides)
         self.draft_rows[str(row["id"])] = row
@@ -241,6 +242,7 @@ class _CRM:
             row["status"] == "pending"
             and not row["blocker"]
             and row["recipient_email"]
+            and row.get("contact_status", "active") == "active"
         ):
             row["status"] = "sending"
             row["claimed_at"] = datetime.now(timezone.utc)
@@ -264,8 +266,14 @@ class _CRM:
             raise EOMLeadConversionError(
                 409, f"EOM onboarding draft is blocked: {row['blocker']}"
             )
+        if row["recipient_email"] is None:
+            raise EOMLeadConversionError(
+                409, "EOM onboarding draft has no recipient email"
+            )
         raise EOMLeadConversionError(
-            409, "EOM onboarding draft has no recipient email"
+            409,
+            "EOM onboarding draft contact is not an active "
+            "effingham_maids contact",
         )
 
     @staticmethod
@@ -2668,6 +2676,9 @@ async def test_private_onboarding_draft_edit_sets_recipient_and_clears_blocker()
         {"body": ""},
         {"recipient_email": "not-an-email"},
         {"recipient_email": "two words@example.com"},
+        # Valid pattern but 255 chars: one over the intake boundary's 254
+        # cap, which office corrections must never exceed.
+        {"recipient_email": ("a" * 243) + "@example.com"},
         {"subject": "ok", "unexpected": "field"},
     ),
 )
@@ -2784,6 +2795,50 @@ async def test_approve_service_records_send_evidence_through_injected_history():
     assert str(row["id"]) in crm.interaction_logs[0]["summary"]
 
 
+class _EvidencePool:
+    """Recording store adapter standing in for the funnel CRM pool."""
+
+    is_initialized = True
+
+    def __init__(self) -> None:
+        self.fetchrow_calls: list[tuple[str, tuple]] = []
+
+    async def fetchrow(self, query: str, *args):
+        self.fetchrow_calls.append((query, args))
+        return {"id": args[0], "sent_at": datetime.now(timezone.utc)}
+
+
+@pytest.mark.asyncio
+async def test_approve_service_default_history_uses_the_crm_providers_pool():
+    """Without an injected history seam, the sent_emails evidence write goes
+    through the CRM provider's own pool -- the store that owns the draft --
+    not the global pool (which the slim funnel profile may not even point at
+    the same database)."""
+    from atlas_brain.services.eom_onboarding_drafts import (
+        EOMOnboardingDraftApproval,
+        approve_and_send_eom_onboarding_draft,
+    )
+
+    crm = _CRM()
+    crm.pool = _EvidencePool()
+    row = crm.seed_draft()
+    sender = _DraftSender()
+
+    result = await approve_and_send_eom_onboarding_draft(
+        crm,
+        EOMOnboardingDraftApproval(
+            draft_id=str(row["id"]), actor_id=1, actor_name="Juan Canfield"
+        ),
+        sender=sender,
+    )
+
+    assert result["status"] == "sent"
+    assert len(crm.pool.fetchrow_calls) == 1
+    insert_query, insert_args = crm.pool.fetchrow_calls[0]
+    assert "INSERT INTO sent_emails" in insert_query
+    assert ["lead@example.com"] in insert_args
+
+
 @pytest.mark.asyncio
 async def test_private_onboarding_draft_approve_replays_sent_without_transport():
     crm = _CRM()
@@ -2813,6 +2868,7 @@ async def test_private_onboarding_draft_approve_replays_sent_without_transport()
         ({"recipient_email": None}, "no recipient"),
         ({"status": "sending"}, "in flight"),
         ({"status": "revoked"}, "revoked"),
+        ({"contact_status": "archived"}, "not an active"),
     ),
 )
 async def test_private_onboarding_draft_approve_refuses_unready_states(

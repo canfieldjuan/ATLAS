@@ -24,6 +24,20 @@ class EmailRepository:
     Handles persistence of sent emails for history queries.
     """
 
+    def __init__(self, *, pool: Any | None = None) -> None:
+        """Use the configured pool, or a caller-supplied store adapter.
+
+        The EOM funnel runs against its own connection string; evidence
+        writes must land in the same store that owns the record they
+        describe, not whatever the global pool points at.
+        """
+        self._pool_override = pool
+
+    def _get_pool(self) -> Any:
+        if self._pool_override is not None:
+            return self._pool_override
+        return get_db_pool()
+
     async def create(
         self,
         to_addresses: list[str],
@@ -39,9 +53,9 @@ class EmailRepository:
         business_context_id: Optional[str] = None,
     ) -> SentEmail:
         """Create a new sent email record."""
-        pool = get_db_pool()
+        pool = self._get_pool()
 
-        if not pool.is_initialized:
+        if not getattr(pool, "is_initialized", True):
             raise DatabaseUnavailableError("create sent email")
 
         email_id = uuid4()
@@ -116,9 +130,9 @@ class EmailRepository:
         business_context_id: Optional[str] = None,
     ) -> Optional[SentEmail]:
         """Get a sent email by ID."""
-        pool = get_db_pool()
+        pool = self._get_pool()
 
-        if not pool.is_initialized:
+        if not getattr(pool, "is_initialized", True):
             raise DatabaseUnavailableError("get sent email by id")
 
         try:
@@ -181,9 +195,9 @@ class EmailRepository:
                 with to_address, either identity may match
         """
         limit = min(limit, 500)
-        pool = get_db_pool()
+        pool = self._get_pool()
 
-        if not pool.is_initialized:
+        if not getattr(pool, "is_initialized", True):
             raise DatabaseUnavailableError("query sent emails")
 
         try:
@@ -314,9 +328,9 @@ class EmailRepository:
         business_context_id: Optional[str] = None,
     ) -> int:
         """Count emails matching filters."""
-        pool = get_db_pool()
+        pool = self._get_pool()
 
-        if not pool.is_initialized:
+        if not getattr(pool, "is_initialized", True):
             raise DatabaseUnavailableError("count sent emails")
 
         try:
@@ -364,9 +378,9 @@ class EmailRepository:
 
     async def delete_old(self, older_than_days: int = 90) -> int:
         """Delete emails older than N days."""
-        pool = get_db_pool()
+        pool = self._get_pool()
 
-        if not pool.is_initialized:
+        if not getattr(pool, "is_initialized", True):
             raise DatabaseUnavailableError("delete old sent emails")
 
         try:

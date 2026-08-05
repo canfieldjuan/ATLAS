@@ -75,12 +75,20 @@ Slice phase: vertical slice
    `list_eom_onboarding_drafts`, `get_eom_onboarding_draft`,
    `update_eom_onboarding_draft`, `claim_eom_onboarding_draft`,
    `confirm_eom_onboarding_draft_sent`, `revoke_eom_onboarding_draft`.
+   The claim additionally admits only drafts whose contact is still an
+   active `effingham_maids` contact -- the same activity admission the
+   booking family applies -- so archiving a lead after its draft was
+   enqueued blocks approval with a precise 409.
 3. Add `atlas_brain/services/eom_onboarding_drafts.py`: approve
    orchestration with injectable sender and sent-emails history seams,
    transport preflight before any claim, the direct Resend sender with
    deterministic idempotency key and 409-as-delivered, and
    post-acceptance evidence writers (sent_emails + CRM interaction) that
-   log-and-continue on failure.
+   log-and-continue on failure. Both default evidence writers bind to the
+   CRM provider's own pool (public `pool` property; `EmailRepository`
+   gains a pool override and `log_interaction` uses the provider pool),
+   so evidence lands in the store that owns the draft even when the slim
+   funnel profile points the provider at its own connection string.
 4. Actor provenance: the claim stores `approved_by_employee_id/name`
    (widened to BIGINT by migration 361 to match the funnel actor boundary
    and the handoff precedent); revoke and confirm-sent record the acting
@@ -98,6 +106,12 @@ Slice phase: vertical slice
    route exposure.
 6. Enroll the new service module in the EOM lead pipeline workflow path
    filters.
+7. Gate the slim funnel on the actor-id widening: the shared funnel
+   datastore guard additionally requires
+   `approved_by_employee_id` to be BIGINT, so a canonical store with
+   migration 360 but not 361 fails readiness closed instead of failing
+   approvals after the claim. Recipient edits are bounded at the same
+   254-character cap as the public intake email field.
 
 ### Review Contract
 
@@ -171,6 +185,25 @@ Slice phase: vertical slice
         loading `atlas_brain.config`, the tools registry, or the full API
         package at import time, settled by
         `tests/test_eom_render_profile.py`.
+  - [ ] A pending draft whose contact is no longer an active
+        `effingham_maids` contact rejects approval 409 with zero state
+        change, and restoring the contact makes the same draft claimable,
+        settled by `tests/test_eom_lead_conversion.py` and
+        `tests/test_eom_lead_conversion_integration.py` when
+        `ATLAS_MIGRATION_TEST_DATABASE_URL` is configured.
+  - [ ] The shared funnel datastore guard fails readiness closed against a
+        store whose `approved_by_employee_id` column is still INTEGER
+        (migration 360 without 361) and passes once it is BIGINT, settled
+        by `tests/test_eom_lead_conversion_integration.py` when
+        `ATLAS_MIGRATION_TEST_DATABASE_URL` is configured.
+  - [ ] The default evidence writers bind to the CRM provider's own pool:
+        with the global pool deliberately uninitialized, the sent_emails
+        history row and the CRM interaction land in the store that owns
+        the draft, settled by `tests/test_eom_lead_conversion.py` (service
+        default-history seam proof) and the real-Postgres pipeline proof.
+  - [ ] Recipient edits reject a 255-character address 422 before any CRM
+        call, matching the public intake boundary's 254-character cap,
+        settled by `tests/test_eom_lead_conversion.py`.
 - Reachability proof: every route is exercised through the real FastAPI
   router with service-auth headers in `tests/test_eom_lead_conversion.py`,
   asserting both the JSON responses and the fake CRM/sender call
@@ -215,7 +248,9 @@ seam in the enumeration; otherwise write "N/A - no boundary change."
     `approved_by_employee_id`/`approved_by_name`, `claimed_at`/`sent_at`/
     `revoked_at`, list status allowlist.
   - Caller x input shape: claim admits only
-    `pending AND blocker IS NULL AND recipient_email IS NOT NULL` and is
+    `pending AND blocker IS NULL AND recipient_email IS NOT NULL` plus an
+    active `effingham_maids` contact (the booking family's activity
+    admission) and is
     the single guarded UPDATE from migration 360's header; the in-flow
     confirm admits `sending` unconditionally (it just observed transport
     acceptance) while the operator confirm passes `require_stale=True`;
@@ -240,11 +275,27 @@ seam in the enumeration; otherwise write "N/A - no boundary change."
   - Guard-relevant fields: `recipient_email` on the draft edit request,
     validated against the same conservative pattern the public intake
     boundary uses (`_EMAIL_RE` in atlas_brain/api/leads.py), stripped
-    before matching, bounded 3-320 characters at the field level.
+    before matching, bounded 3-254 characters at the field level -- the
+    intake boundary's exact cap, so a corrected address can never clear
+    the blocker only for the transport to reject it after the claim.
   - Caller x input shape: the office edit PATCH; an invalid shape rejects
     422 before any CRM call, and a valid value is what clears the
     `no_email` blocker downstream, so an office-corrected address can
     never be looser than an intake-submitted one.
+- Boundary path/seam: atlas_brain/eom_api/funnel_store.py
+  - Replaced-path behaviors: the shared datastore guard admitted the
+    onboarding drafts table on column presence alone, so a canonical
+    store carrying migration 360 without 361 was treated as ready and a
+    signed-64 actor id would fail in Postgres only after the claim.
+  - Guard-relevant fields: `approved_by_employee_id` attribute type
+    (`atttypid = 'bigint'::regtype`) alongside the existing
+    relation/column/role readiness predicates.
+  - Caller x input shape: both startup guards (full app and slim profile)
+    run the same readiness SQL; an INTEGER approver column now fails
+    readiness closed with the existing controlled error, and the slim
+    profile -- which only applies receivables migrations by design --
+    refuses to serve draft routes until the canonical store has the
+    widened column.
 - Boundary path/seam: atlas_brain/services/eom_onboarding_drafts.py
   - Replaced-path behaviors: new module; previously nothing could send.
   - Guard-relevant fields: `settings.email.enabled` + `settings.email.api_key`
@@ -295,9 +346,11 @@ fallback changes; otherwise write "N/A - no guard/config boundary change."
 - `.github/workflows/atlas_eom_lead_pipeline_checks.yml`
 - `.github/workflows/atlas_invoicing_checks.yml`
 - `atlas_brain/eom_api/funnel.py`
+- `atlas_brain/eom_api/funnel_store.py`
 - `atlas_brain/services/crm_provider.py`
 - `atlas_brain/services/eom_onboarding_drafts.py`
 - `atlas_brain/storage/migrations/361_eom_onboarding_draft_actor_bigint.sql`
+- `atlas_brain/storage/repositories/email.py`
 - `plans/PR-EOM-Onboarding-Draft-Approval.md`
 - `tests/test_eom_lead_conversion.py`
 - `tests/test_eom_lead_conversion_integration.py`
@@ -370,6 +423,25 @@ succeeded, so history failures log a warning and never flip the outcome.
 Revoke and confirm-sent record the acting employee the same way, giving
 reconciliation actions provenance without a schema change.
 
+Codex round 2 tightened three admissions and one binding. The claim now
+carries the booking family's contact-activity predicate (`EXISTS` on an
+active `effingham_maids` contact), so archiving a lead after its draft
+was enqueued blocks approval with a precise 409 while the queue still
+lists the draft for the office to revoke. The shared funnel datastore
+guard requires the approver column to be BIGINT, closing the deployment
+window where a canonical store carries migration 360 without 361: the
+slim profile applies only receivables migrations by design, so the guard
+-- not a migration-list change -- is the seam that keeps it fail-closed.
+The default evidence writers bind to the CRM provider's own pool: the
+provider exposes a public `pool` property, `EmailRepository` gains the
+same pool-override shape the provider already uses, and
+`log_interaction` writes through the provider pool, so in the split-DB
+Render shape (funnel provider on `ATLAS_EOM_FUNNEL_DB_CONNECTION_STRING`,
+global pool elsewhere or uninitialized) the sent_emails history and CRM
+interaction land in the store that owns the draft instead of being
+silently swallowed or misfiled. And the recipient edit cap drops from
+320 to the intake boundary's 254.
+
 The routes are verbatim siblings of the existing funnel surface: same
 bearer + actor dependencies, same closed camelCase projections, same
 201-fresh / 200-idempotent convention, same domain-error-to-HTTPException
@@ -406,6 +478,18 @@ can never be looser than an intake-submitted one.
   note carries reconciliation provenance without schema churn. If A4+
   needs queryable provenance, that is a one-column additive migration
   then.
+- Migration 361 is gated by the funnel datastore guard, not by enrolling
+  it in the slim profile's startup migration set: that set is closed over
+  the receivables readiness contract by design, and the guard is the
+  existing seam that keeps the funnel fail-closed until the canonical
+  store (migrated by the main brain) is ready.
+- The queue list still shows drafts whose contact has been archived:
+  visibility is what lets the office revoke them, and only the claim --
+  the decision to send -- carries the contact-activity admission.
+- Only `log_interaction` moves to the provider-pool seam in this slice;
+  it is the one provider method on the draft evidence path. The remaining
+  legacy `DatabaseCRMProvider` methods that still read the global pool
+  directly are named in Deferred.
 
 ## Deferred
 
@@ -419,6 +503,11 @@ can never be looser than an intake-submitted one.
   alerting is hardening once real volume exists).
 - Estimate/first-clean reschedule-cancel lifecycle (unchanged from A1/A2
   deferrals).
+- Migrating the remaining `DatabaseCRMProvider` methods that still call
+  `get_db_pool()` directly (contact CRUD/search/list, service tickets,
+  `get_interactions`, appointment operations) onto `self._get_pool()`.
+  None of them is on a funnel route today; when one is wired into a
+  funnel path it must move to the provider-pool seam in that slice.
 
 Parking predicate: hardening narrower than one draft approval request, or
 requiring a new table/subsystem/dependency, is parked unless it can send
@@ -431,8 +520,8 @@ Parked hardening: none.
 
 - `python -m py_compile atlas_brain/eom_api/funnel.py atlas_brain/services/crm_provider.py atlas_brain/services/eom_onboarding_drafts.py tests/test_eom_lead_conversion.py tests/test_eom_lead_conversion_integration.py tests/test_eom_render_profile.py` -- passed.
 - ASCII scan of every touched Python file -- no non-ASCII bytes.
-- `python -m pytest tests/test_eom_lead_conversion.py tests/test_migrations_runner.py -q` -- 182 passed, 1 skipped (including the migration-361 shape test and the fresh-claim in-flight 409 unit coverage); 3 pre-existing torch-import failures reproduced identically on the unmodified base.
-- `ATLAS_MIGRATION_TEST_DATABASE_URL=postgresql://postgres@localhost:5433/atlas_migration_tests python -m pytest tests/test_eom_lead_conversion_integration.py -q` -- 38 passed against disposable Postgres 16 (migrations through 361), including the approval pipeline from first-clean booking through edited approved send with idempotent replay, the two-session single-winner provider claim, blocker resolution through edit, stuck-`sending` reconciliation that first proves fresh claims answer confirm-sent and revoke with the in-flight 409 and only backdated (20-minute-old) claims are admitted, the revoked-while-sending zombie-confirm regression, and the list projection; 3 pre-existing torch-import failures.
+- `python -m pytest tests/test_eom_lead_conversion.py tests/test_migrations_runner.py -q` -- 185 passed, 1 skipped (including the migration-361 shape test, the fresh-claim in-flight 409 coverage, the archived-contact approval refusal, the 255-character recipient rejection, and the default-history provider-pool binding proof); 3 pre-existing torch-import failures reproduced identically on the unmodified base.
+- `ATLAS_MIGRATION_TEST_DATABASE_URL=postgresql://postgres@localhost:5433/atlas_migration_tests python -m pytest tests/test_eom_lead_conversion_integration.py -q` -- 40 passed against disposable Postgres 16 (migrations through 361 plus sent_emails history 016/349), including the approval pipeline from first-clean booking through edited approved send with idempotent replay and the sent_emails + interaction evidence landing in the provider's own store while the global pool stays uninitialized, the two-session single-winner provider claim, blocker resolution through edit, stuck-`sending` reconciliation that first proves fresh claims answer confirm-sent and revoke with the in-flight 409 and only backdated (20-minute-old) claims are admitted, the revoked-while-sending zombie-confirm regression, the archived-contact claim refusal with restore-then-claim, the datastore guard failing closed on an INTEGER approver column, and the list projection; 3 pre-existing torch-import failures.
 - `python3 scripts/maturity_sweep.py atlas_brain/storage --tests-root tests --baseline tests/maturity_sweep/baseline_atlas_brain_storage.json` -- ratchet gate passed (send evidence is exercised through the injected history seam, not by patching the repository module).
 - `python -m pytest tests/test_eom_render_profile.py::test_eom_profile_import_does_not_load_full_api_package tests/test_eom_render_profile.py::test_shared_eom_funnel_datastore_guard_keeps_missing_relations_in_verdict -q` -- 2 passed; the slim profile exposes all five draft routes with its import-isolation contract intact.
 - `python -m pytest -q tests/test_audit_plan_doc.py tests/test_audit_plan_code_consistency.py tests/test_audit_pr_plan_presence.py tests/test_check_diff_budget.py` -- 103 passed.
@@ -446,16 +535,18 @@ Parked hardening: none.
 |---|---:|
 | `.github/workflows/atlas_eom_lead_pipeline_checks.yml` | 4 |
 | `.github/workflows/atlas_invoicing_checks.yml` | 2 |
-| `atlas_brain/eom_api/funnel.py` | 299 |
-| `atlas_brain/services/crm_provider.py` | 315 |
-| `atlas_brain/services/eom_onboarding_drafts.py` | 259 |
+| `atlas_brain/eom_api/funnel.py` | 303 |
+| `atlas_brain/eom_api/funnel_store.py` | 15 |
+| `atlas_brain/services/crm_provider.py` | 350 |
+| `atlas_brain/services/eom_onboarding_drafts.py` | 263 |
 | `atlas_brain/storage/migrations/361_eom_onboarding_draft_actor_bigint.sql` | 23 |
-| `plans/PR-EOM-Onboarding-Draft-Approval.md` | 540 |
-| `tests/test_eom_lead_conversion.py` | 814 |
-| `tests/test_eom_lead_conversion_integration.py` | 373 |
+| `atlas_brain/storage/repositories/email.py` | 34 |
+| `plans/PR-EOM-Onboarding-Draft-Approval.md` | 665 |
+| `tests/test_eom_lead_conversion.py` | 870 |
+| `tests/test_eom_lead_conversion_integration.py` | 491 |
 | `tests/test_eom_render_profile.py` | 5 |
 | `tests/test_migrations_runner.py` | 27 |
-| **Total** | **2661** |
+| **Total** | **3052** |
 
 ## Cold diff reconstruction
 
@@ -508,6 +599,37 @@ the PR body):
   either surface re-run the guards that own them. Citation:
   `.github/workflows/atlas_invoicing_checks.yml:27`,
   `.github/workflows/atlas_eom_lead_pipeline_checks.yml:58`.
+
+Codex round 2 (four fixes in this diff):
+
+- The claim carries the booking family's contact-activity admission: an
+  `EXISTS` predicate on an active `effingham_maids` contact inside the
+  guarded UPDATE, with the zero-row re-read mapping the archived-contact
+  case to its own 409 after blocker and recipient truth. Citation:
+  `atlas_brain/services/crm_provider.py:2553`,
+  `tests/test_eom_lead_conversion_integration.py:3319`.
+- The shared funnel datastore guard requires
+  `approved_by_employee_id` to be `bigint`, so a canonical store with
+  migration 360 but not 361 fails readiness closed instead of failing a
+  valid signed-64 approval after the claim; proven both directions
+  (INTEGER refuses, BIGINT admits) against real Postgres. Citation:
+  `atlas_brain/eom_api/funnel_store.py:89`,
+  `tests/test_eom_lead_conversion_integration.py:1948`.
+- The default evidence writers bind to the CRM provider's own pool: the
+  provider exposes a public `pool` property, `EmailRepository` gains the
+  provider's pool-override shape, the service builds the default history
+  writer from `crm.pool`, and `log_interaction` writes through
+  `self._get_pool()`; the real-Postgres pipeline proof now asserts the
+  sent_emails row and interaction land in the provider's store while the
+  global pool stays uninitialized. Citation:
+  `atlas_brain/services/crm_provider.py:337`,
+  `atlas_brain/services/crm_provider.py:2896`,
+  `atlas_brain/storage/repositories/email.py:27`,
+  `atlas_brain/services/eom_onboarding_drafts.py:171`.
+- The recipient edit cap drops from 320 to the intake boundary's 254
+  characters, so an office correction can never clear the `no_email`
+  blocker only for the transport to reject the over-long address after
+  the claim. Citation: `atlas_brain/eom_api/funnel.py:144`.
 - Unit tests extend the `_CRM` fake with an in-memory mirror of the
   provider state machine and cover the route projections, edit admission
   and validation, the full approve failure matrix (blocked,

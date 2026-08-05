@@ -164,7 +164,11 @@ async def _record_send_evidence(
         if email_history is None:
             from ..storage.repositories.email import EmailRepository
 
-            email_history = EmailRepository()
+            # The sent_emails row must land in the same store that owns the
+            # draft it describes. The funnel CRM provider is bound to its own
+            # connection string in the slim profile, where the global pool
+            # may point at a different database (or be uninitialized).
+            email_history = EmailRepository(pool=getattr(crm, "pool", None))
         await email_history.create(
             to_addresses=[str(draft["recipient_email"])],
             subject=str(draft["subject"]),

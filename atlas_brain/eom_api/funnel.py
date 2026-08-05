@@ -136,8 +136,12 @@ class EOMOnboardingDraftEditRequest(BaseModel):
 
     subject: Annotated[str | None, Field(default=None, min_length=1, max_length=500)]
     body: Annotated[str | None, Field(default=None, min_length=1, max_length=20000)]
+    # Same 254-character bound as the public intake email field: an
+    # office-corrected address must never be looser than an intake one,
+    # or the edit clears the blocker only for the transport to reject it
+    # after the claim.
     recipient_email: Annotated[
-        str | None, Field(default=None, min_length=3, max_length=320)
+        str | None, Field(default=None, min_length=3, max_length=254)
     ]
 
     @field_validator("subject", "body", mode="after")
