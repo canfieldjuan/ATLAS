@@ -364,7 +364,6 @@ fallback changes; otherwise write "N/A - no guard/config boundary change."
 - `tests/test_eom_lead_conversion_integration.py`
 - `tests/test_eom_render_profile.py`
 - `tests/test_migrations_runner.py`
-- `tests/test_security_guardrails_workflow.py`
 
 ## Mechanism
 
@@ -499,14 +498,11 @@ can never be looser than an intake-submitted one.
   it is the one provider method on the draft evidence path. The remaining
   legacy `DatabaseCRMProvider` methods that still read the global pool
   directly are named in Deferred.
-- `tests/test_security_guardrails_workflow.py` carries the identical
-  two-assertion update that open PR #2283 ships for the stale
-  security-guardrails docs expectation: main commit `a51e414` changed the
-  docs and left this test red repo-wide, which kept `pre-push-audit` and
-  `unit-gate` failing on this PR for an inherited reason. Mirroring the
-  exact lines (operator-directed) makes this PR green on its own and
-  merges cleanly with #2283 in either order; the root fix and its
-  enrollment decision remain #2283's.
+- An interim commit mirrored PR #2283's two-assertion guardrails-test
+  fix (operator-directed) to clear the inherited `pre-push-audit` and
+  `unit-gate` reds; once #2283 merged and this branch updated from main,
+  the identical lines merged out of this PR's diff, so the file is no
+  longer touched here.
 
 ## Deferred
 
@@ -544,7 +540,7 @@ Parked hardening: none.
 - `python -m pytest -q tests/test_audit_plan_doc.py tests/test_audit_plan_code_consistency.py tests/test_audit_pr_plan_presence.py tests/test_check_diff_budget.py` -- 103 passed.
 - `python scripts/check_boundary_change_enumeration.py --base origin/main --strict` -- OK.
 - `python scripts/check_deployed_config_probing.py --base origin/main --strict` -- OK.
-- `python -m pytest tests/test_security_guardrails_workflow.py -q` -- 35 passed with the mirrored #2283 assertion fix (the exact test `pre-push-audit` and `unit-gate` were failing on).
+- `python -m pytest tests/test_security_guardrails_workflow.py -q` -- 35 passed on the updated branch (the suite `pre-push-audit` and `unit-gate` were failing on before #2283 merged).
 - `bash scripts/local_pr_review.sh --current-pr-body-file <pr-body-file> --pr-author canfieldjuan origin/main` -- local PR review passed.
 
 ## Estimated diff size
@@ -564,8 +560,7 @@ Parked hardening: none.
 | `tests/test_eom_lead_conversion_integration.py` | 491 |
 | `tests/test_eom_render_profile.py` | 5 |
 | `tests/test_migrations_runner.py` | 27 |
-| `tests/test_security_guardrails_workflow.py` | 4 |
-| **Total** | **3153** |
+| **Total** | **3149** |
 
 ## Cold diff reconstruction
 
