@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from contextlib import asynccontextmanager
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from types import SimpleNamespace
 from uuid import UUID, uuid4
 
@@ -268,12 +268,29 @@ class _CRM:
             409, "EOM onboarding draft has no recipient email"
         )
 
-    async def confirm_eom_onboarding_draft_sent(self, *, draft_id):
-        self.draft_confirm_calls.append({"draft_id": str(draft_id)})
+    @staticmethod
+    def _sending_claim_is_stale(row):
+        claimed_at = row.get("claimed_at")
+        if claimed_at is None:
+            return True
+        return datetime.now(timezone.utc) - claimed_at >= timedelta(minutes=15)
+
+    async def confirm_eom_onboarding_draft_sent(
+        self, *, draft_id, require_stale=False
+    ):
+        self.draft_confirm_calls.append(
+            {"draft_id": str(draft_id), "require_stale": require_stale}
+        )
         row = self.draft_rows.get(str(draft_id))
         if row is None:
             raise EOMLeadConversionError(404, "EOM onboarding draft not found")
         if row["status"] == "sending":
+            if require_stale and not self._sending_claim_is_stale(row):
+                raise EOMLeadConversionError(
+                    409,
+                    "EOM onboarding draft send is still in flight; reconcile "
+                    "only after the claim goes stale",
+                )
             row["status"] = "sent"
             row["sent_at"] = datetime.now(timezone.utc)
             return self._draft_closed(row)
@@ -294,10 +311,18 @@ class _CRM:
         row = self.draft_rows.get(str(draft_id))
         if row is None:
             raise EOMLeadConversionError(404, "EOM onboarding draft not found")
-        if row["status"] in ("pending", "sending"):
+        if row["status"] == "pending" or (
+            row["status"] == "sending" and self._sending_claim_is_stale(row)
+        ):
             row["status"] = "revoked"
             row["revoked_at"] = datetime.now(timezone.utc)
             return self._draft_closed(row)
+        if row["status"] == "sending":
+            raise EOMLeadConversionError(
+                409,
+                "EOM onboarding draft send is still in flight; reconcile "
+                "only after the claim goes stale",
+            )
         if row["status"] == "revoked":
             return self._draft_closed(row, idempotent=True)
         raise EOMLeadConversionError(
@@ -2714,7 +2739,9 @@ async def test_private_onboarding_draft_approve_claims_sends_confirms_in_order()
             "idempotency_key": f"eom-onboarding-draft:{row['id']}",
         }
     ]
-    assert crm.draft_confirm_calls == [{"draft_id": str(row["id"])}]
+    assert crm.draft_confirm_calls == [
+        {"draft_id": str(row["id"]), "require_stale": False}
+    ]
     assert crm.draft_rows[str(row["id"])]["status"] == "sent"
     assert crm.draft_rows[str(row["id"])]["approved_by_name"] == "Juan Canfield"
     assert len(crm.interaction_logs) == 1
@@ -2868,7 +2895,14 @@ async def test_private_onboarding_draft_approve_requires_transport_before_claim(
 async def test_private_onboarding_draft_revoke_paths():
     crm = _CRM()
     pending = crm.seed_draft()
-    stuck = crm.seed_draft(status="sending")
+    stuck = crm.seed_draft(
+        status="sending",
+        claimed_at=datetime.now(timezone.utc) - timedelta(minutes=20),
+    )
+    active = crm.seed_draft(
+        status="sending",
+        claimed_at=datetime.now(timezone.utc),
+    )
     sent = crm.seed_draft(status="sent")
     app = _draft_app(crm)
 
@@ -2886,6 +2920,15 @@ async def test_private_onboarding_draft_revoke_paths():
     reconciled = await _post(app, f"/eom-funnel/onboarding-drafts/{stuck['id']}/revoke")
     assert reconciled.status_code == 201
 
+    # An ACTIVE send (fresh claim) must not be revocable: the customer email
+    # may already be delivered while its confirmation is still in flight.
+    in_flight = await _post(
+        app, f"/eom-funnel/onboarding-drafts/{active['id']}/revoke"
+    )
+    assert in_flight.status_code == 409
+    assert "still in flight" in in_flight.json()["detail"]
+    assert crm.draft_rows[str(active["id"])]["status"] == "sending"
+
     refused = await _post(app, f"/eom-funnel/onboarding-drafts/{sent['id']}/revoke")
     assert refused.status_code == 409
     assert "already sent" in refused.json()["detail"]
@@ -2894,7 +2937,14 @@ async def test_private_onboarding_draft_revoke_paths():
 @pytest.mark.asyncio
 async def test_private_onboarding_draft_confirm_sent_paths():
     crm = _CRM()
-    stuck = crm.seed_draft(status="sending")
+    stuck = crm.seed_draft(
+        status="sending",
+        claimed_at=datetime.now(timezone.utc) - timedelta(minutes=20),
+    )
+    active = crm.seed_draft(
+        status="sending",
+        claimed_at=datetime.now(timezone.utc),
+    )
     pending = crm.seed_draft()
     app = _draft_app(crm)
 
@@ -2903,6 +2953,9 @@ async def test_private_onboarding_draft_confirm_sent_paths():
     )
     assert confirmed.status_code == 201
     assert confirmed.json()["status"] == "sent"
+    # The operator route demands a stale claim; the in-flow service confirm
+    # does not (it just observed transport acceptance).
+    assert crm.draft_confirm_calls[-1]["require_stale"] is True
     assert len(crm.interaction_logs) == 1
     assert "transport-log" in crm.interaction_logs[0]["summary"]
 
@@ -2912,6 +2965,15 @@ async def test_private_onboarding_draft_confirm_sent_paths():
     assert replay.status_code == 200
     assert replay.json()["idempotent"] is True
     assert len(crm.interaction_logs) == 1
+
+    # A fresh claim is an active send with an unknown outcome; the operator
+    # cannot record it as delivered before it settles or goes stale.
+    in_flight = await _post(
+        app, f"/eom-funnel/onboarding-drafts/{active['id']}/confirm-sent"
+    )
+    assert in_flight.status_code == 409
+    assert "still in flight" in in_flight.json()["detail"]
+    assert crm.draft_rows[str(active["id"])]["status"] == "sending"
 
     refused = await _post(
         app, f"/eom-funnel/onboarding-drafts/{pending['id']}/confirm-sent"

@@ -27,6 +27,14 @@ from uuid import UUID, uuid4
 logger = logging.getLogger("atlas.services.crm_provider")
 
 _INTERACTION_DEDUPE_SUMMARY_MAX_CHARS = 2000
+
+# How old a 'sending' claim must be before operator reconciliation (revoke
+# or confirm-sent) may act on it. An active approve-send holds the window
+# between its transport POST and its confirmation far below this, so a
+# fresh claim can never be recorded as revoked while the customer email may
+# already be delivered. Well inside Resend's 24h idempotency-dedupe window,
+# so an operator-driven retry after reconciliation stays duplicate-safe.
+_EOM_ONBOARDING_SENDING_STALE_AFTER_MINUTES = 15
 _INTERACTION_DEDUPE_ANCHOR_KEYS = (
     "crm_event_id",
     "source_ref",
@@ -2571,21 +2579,37 @@ class DatabaseCRMProvider:
         )
 
     async def confirm_eom_onboarding_draft_sent(
-        self, *, draft_id: str
+        self, *, draft_id: str, require_stale: bool = False
     ) -> dict[str, Any]:
-        """Confirm delivery for a claimed draft (sending -> sent)."""
+        """Confirm delivery for a claimed draft (sending -> sent).
+
+        The approve flow confirms immediately after transport acceptance
+        (require_stale=False: it KNOWS the send outcome). The operator
+        reconciliation route passes require_stale=True so a fresh claim --
+        a send that may still be mid-flight with an unknown outcome --
+        cannot be recorded as delivered before it settles or goes stale.
+        """
         from .eom_lead_conversion import EOMLeadConversionError
 
         pool = self._get_pool()
+        stale_clause = (
+            "AND claimed_at <= NOW() - make_interval(mins => $2)"
+            if require_stale
+            else ""
+        )
+        params: list[Any] = [str(draft_id)]
+        if require_stale:
+            params.append(_EOM_ONBOARDING_SENDING_STALE_AFTER_MINUTES)
         row = await pool.fetchrow(
-            """
+            f"""
             UPDATE eom_onboarding_email_drafts
                SET status = 'sent', sent_at = NOW()
              WHERE id = $1::uuid
                AND status = 'sending'
+               {stale_clause}
              RETURNING *
             """,
-            str(draft_id),
+            *params,
         )
         if row is not None:
             return self._eom_onboarding_draft_closed(row)
@@ -2601,15 +2625,24 @@ class DatabaseCRMProvider:
                 "EOM onboarding draft was revoked while sending; reconcile "
                 "against the transport log",
             )
+        if status == "sending":
+            raise EOMLeadConversionError(
+                409,
+                "EOM onboarding draft send is still in flight; reconcile "
+                "only after the claim goes stale",
+            )
         raise EOMLeadConversionError(
             409, "EOM onboarding draft has not been claimed for sending"
         )
 
     async def revoke_eom_onboarding_draft(self, *, draft_id: str) -> dict[str, Any]:
-        """Revoke a pending draft, or reconcile a stuck 'sending' one.
+        """Revoke a pending draft, or reconcile a STALE 'sending' one.
 
         Revoking from 'sending' is the migration-360 operator recovery
-        action after checking the transport log; a sent draft is immutable
+        action after checking the transport log, and it is admitted only
+        once the claim is stale: an active send between the transport POST
+        and its confirmation must not be recordable as revoked when the
+        customer email may already be delivered. A sent draft is immutable
         delivery evidence and rejects.
         """
         from .eom_lead_conversion import EOMLeadConversionError
@@ -2620,18 +2653,32 @@ class DatabaseCRMProvider:
             UPDATE eom_onboarding_email_drafts
                SET status = 'revoked', revoked_at = NOW()
              WHERE id = $1::uuid
-               AND status IN ('pending', 'sending')
+               AND (
+                   status = 'pending'
+                   OR (
+                       status = 'sending'
+                       AND claimed_at <= NOW() - make_interval(mins => $2)
+                   )
+               )
              RETURNING *
             """,
             str(draft_id),
+            _EOM_ONBOARDING_SENDING_STALE_AFTER_MINUTES,
         )
         if row is not None:
             return self._eom_onboarding_draft_closed(row)
         existing = await self.get_eom_onboarding_draft(draft_id)
         if existing is None:
             raise EOMLeadConversionError(404, "EOM onboarding draft not found")
-        if str(existing["status"]) == "revoked":
+        status = str(existing["status"])
+        if status == "revoked":
             return self._eom_onboarding_draft_closed(existing, idempotent=True)
+        if status == "sending":
+            raise EOMLeadConversionError(
+                409,
+                "EOM onboarding draft send is still in flight; reconcile "
+                "only after the claim goes stale",
+            )
         raise EOMLeadConversionError(
             409, "EOM onboarding draft was already sent and cannot be revoked"
         )

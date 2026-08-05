@@ -54,9 +54,11 @@ leaves a double-send hazard on the first customer-facing send path.
 - Must not change: no email leaves without an explicit office action; no
   auto-retry or auto-reclaim of stuck `sending` rows (operator-in-the-loop
   per migration 360, diverging deliberately from deflection's 15-minute
-  auto-reclaim); no schema change; no change to A2's enqueue, booking, or
-  handoff semantics or tests; no change to the generic email provider port
-  or its callers; no public/customer-facing route; no tracker UI.
+  auto-reclaim -- the same 15-minute threshold instead gates when operator
+  reconciliation may touch a `sending` row at all); no change to A2's
+  enqueue, booking, or handoff semantics or tests; no change to the
+  generic email provider port or its callers; no public/customer-facing
+  route; no tracker UI.
 
 ## Scope (this PR)
 
@@ -79,9 +81,14 @@ Slice phase: vertical slice
    deterministic idempotency key and 409-as-delivered, and
    post-acceptance evidence writers (sent_emails + CRM interaction) that
    log-and-continue on failure.
-4. Actor provenance: the claim stores `approved_by_employee_id/name`;
-   revoke and confirm-sent record the acting employee through a CRM
-   interaction note (no schema change).
+4. Actor provenance: the claim stores `approved_by_employee_id/name`
+   (widened to BIGINT by migration 361 to match the funnel actor boundary
+   and the handoff precedent); revoke and confirm-sent record the acting
+   employee through a CRM interaction note. Operator reconciliation of a
+   `sending` row (revoke or confirm-sent) is admitted only once the claim
+   is at least 15 minutes stale, so an active send between the transport
+   POST and its confirmation can never be recorded as revoked or as
+   delivered ahead of its actual outcome.
 5. Tests: unit route/service coverage on fakes (state machine, failure
    matrix, sender contract, boundary guards), real-Postgres proofs
    (pipeline from first-clean booking through edited approved send,
@@ -128,13 +135,25 @@ Slice phase: vertical slice
         `tests/test_eom_lead_conversion_integration.py` when
         `ATLAS_MIGRATION_TEST_DATABASE_URL` is configured.
   - [ ] A transport failure leaves the row in `sending` (no auto-retry, no
-        rollback to pending) and returns 502 naming reconciliation; the
-        operator then either confirms sent or revokes, both recorded with
-        actor provenance; a revoke that raced the send makes the later
-        confirm fail loudly, settled by
+        rollback to pending) and returns 502 naming reconciliation; while
+        the claim is fresh both operator reconciliation actions
+        (confirm-sent and revoke) reject 409 as still-in-flight, and once
+        the claim is stale (15 minutes) they succeed with actor
+        provenance; a zombie in-flow confirmation arriving after a stale
+        revoke fails loudly instead of re-recording delivery, settled by
         `tests/test_eom_lead_conversion.py` and
         `tests/test_eom_lead_conversion_integration.py` when
         `ATLAS_MIGRATION_TEST_DATABASE_URL` is configured.
+  - [ ] The draft approver column stores the full funnel actor range:
+        migration 361 widens `approved_by_employee_id` to BIGINT (handoff
+        precedent), atomically with its ledger row, settled by
+        `tests/test_migrations_runner.py` and the integration schema
+        fixture applying 361.
+  - [ ] Editing the new service module re-triggers both guarding CI lanes:
+        the EOM lead pipeline workflow and the invoicing-checks workflow
+        (which runs the slim Render profile import-isolation proof) both
+        list `atlas_brain/services/eom_onboarding_drafts.py` in their path
+        filters, settled by inspection of the two workflow files.
   - [ ] Resend's 409 invalid_idempotent_request is treated as proof of
         prior delivery: the draft confirms sent and the response flags the
         transport replay, settled by `tests/test_eom_lead_conversion.py`.
@@ -164,7 +183,7 @@ Slice phase: vertical slice
   transport fails, send-without-approval, blocked drafts becoming
   permanently unsendable, slim-profile import breakage, response-shape
   compatibility for the private tracker client.
-- Reviewer rules triggered: R1, R2, R3, R5, R6, R8, R12.
+- Reviewer rules triggered: R1, R2, R3, R4, R5, R6, R8, R12.
 
 ### Boundary-change enumeration
 
@@ -197,12 +216,15 @@ seam in the enumeration; otherwise write "N/A - no boundary change."
     `revoked_at`, list status allowlist.
   - Caller x input shape: claim admits only
     `pending AND blocker IS NULL AND recipient_email IS NOT NULL` and is
-    the single guarded UPDATE from migration 360's header; confirm admits
-    only `sending`; revoke admits `pending` and `sending` (the documented
-    operator recovery) and refuses `sent`; edit admits only `pending` and
-    clears the blocker exactly when a recipient is set; every zero-row
-    outcome re-reads the row and maps to 404/409/idempotent-200 truth
-    rather than a generic failure.
+    the single guarded UPDATE from migration 360's header; the in-flow
+    confirm admits `sending` unconditionally (it just observed transport
+    acceptance) while the operator confirm passes `require_stale=True`;
+    revoke admits `pending` always and `sending` only once `claimed_at`
+    is at least 15 minutes old (the documented operator recovery, now
+    provably unable to race an active send) and refuses `sent`; edit
+    admits only `pending` and clears the blocker exactly when a recipient
+    is set; every zero-row outcome re-reads the row and maps to
+    404/409/idempotent-200 truth rather than a generic failure.
 - Boundary path/seam: _reject_blank
   - Replaced-path behaviors: no draft edit model existed; nothing rejected
     whitespace-only subject or body values.
@@ -271,13 +293,16 @@ fallback changes; otherwise write "N/A - no guard/config boundary change."
 ### Files touched
 
 - `.github/workflows/atlas_eom_lead_pipeline_checks.yml`
+- `.github/workflows/atlas_invoicing_checks.yml`
 - `atlas_brain/eom_api/funnel.py`
 - `atlas_brain/services/crm_provider.py`
 - `atlas_brain/services/eom_onboarding_drafts.py`
+- `atlas_brain/storage/migrations/361_eom_onboarding_draft_actor_bigint.sql`
 - `plans/PR-EOM-Onboarding-Draft-Approval.md`
 - `tests/test_eom_lead_conversion.py`
 - `tests/test_eom_lead_conversion_integration.py`
 - `tests/test_eom_render_profile.py`
+- `tests/test_migrations_runner.py`
 
 ## Mechanism
 
@@ -289,9 +314,20 @@ winner carries the snapshot it must send. Zero updated rows are never a
 generic error: the provider re-reads the row and returns the idempotent
 already-sent replay, or raises the precise 404/409 (in-flight, revoked,
 blocked, recipient-less) the office can act on. Confirm admits only
-`sending`; revoke admits `pending` plus `sending` -- the latter is
-migration 360's documented operator recovery -- and refuses `sent`
-outright, so delivery evidence can never be un-recorded. Edit admits only
+`sending`, with a `require_stale` split: the in-flow confirm the service
+issues immediately after transport acceptance runs unguarded, while the
+operator reconciliation route additionally demands the claim be at least
+15 minutes old (`claimed_at <= NOW() - make_interval(mins => ...)`), so a
+human cannot mark a just-claimed send as delivered while its worker may
+still be mid-transport. Revoke admits `pending` plus *stale* `sending`
+under the same threshold -- migration 360's documented operator recovery,
+now gated so an active claim cannot be revoked out from under its sender
+-- and refuses `sent` outright, so delivery evidence can never be
+un-recorded; a fresh `sending` row answers both reconciliation actions
+with the same in-flight 409. Migration 361 widens
+`approved_by_employee_id` to BIGINT in one atomic, value-preserving ALTER
+so the column matches the signed-64 actor ids the funnel auth boundary
+already admits and the handoff table already stores. Edit admits only
 `pending`, builds its SET clause from the provided fields, and clears
 `blocker` exactly when a recipient is set, which is what makes a
 `no_email` draft claimable at all. The list projection joins the contact
@@ -314,8 +350,10 @@ replay instead of failing -- the same semantics
 other transport failure leaves the row in `sending` and returns 502
 naming reconciliation: the send outcome is unknown, so neither a silent
 retry nor a rollback to `pending` is safe, and the row is the operator's
-evidence (deliberate divergence from deflection's 15-minute auto-reclaim,
-per migration 360's operator-in-the-loop recovery policy). The direct
+evidence. Deflection spends its 15-minute threshold on auto-reclaim; here
+the same threshold instead gates when the operator reconciliation actions
+admit the row at all, keeping migration 360's operator-in-the-loop
+recovery while closing the fresh-claim race. The direct
 sender exists because the generic email port offers no idempotency key
 and its send() imports the `atlas_brain.tools` registry, whose
 dependencies (`dateparser` et al.) are deliberately absent from the slim
@@ -345,9 +383,10 @@ can never be looser than an intake-submitted one.
 
 ## Intentional
 
-- No new migration: A2 shipped the table, the status CHECK including
-  `sending`, the live-draft unique index, and the startup-guard admission;
-  this slice only executes the documented contract.
+- One migration only (361): an atomic, value-preserving INT -> BIGINT
+  widening of the draft approver id, aligning it with the funnel actor
+  boundary and the handoff table; everything else executes A2's schema as
+  shipped.
 - Stuck `sending` rows require explicit operator action (confirm-sent or
   revoke). Auto-reclaim was considered and rejected: migration 360 records
   the operator-in-the-loop policy, and the deterministic transport key
@@ -392,8 +431,9 @@ Parked hardening: none.
 
 - `python -m py_compile atlas_brain/eom_api/funnel.py atlas_brain/services/crm_provider.py atlas_brain/services/eom_onboarding_drafts.py tests/test_eom_lead_conversion.py tests/test_eom_lead_conversion_integration.py tests/test_eom_render_profile.py` -- passed.
 - ASCII scan of every touched Python file -- no non-ASCII bytes.
-- `python -m pytest tests/test_eom_lead_conversion.py tests/test_migrations_runner.py -q` -- 180 passed, 1 skipped; 3 pre-existing torch-import failures reproduced identically on the unmodified base.
-- `ATLAS_MIGRATION_TEST_DATABASE_URL=postgresql://postgres@localhost:5433/atlas_migration_tests python -m pytest tests/test_eom_lead_conversion_integration.py -q` -- 38 passed against disposable Postgres 16, including the approval pipeline from first-clean booking through edited approved send with idempotent replay, the two-session single-winner provider claim, blocker resolution through edit, stuck-`sending` reconciliation with the revoked-while-sending race, and the list projection; 3 pre-existing torch-import failures.
+- `python -m pytest tests/test_eom_lead_conversion.py tests/test_migrations_runner.py -q` -- 182 passed, 1 skipped (including the migration-361 shape test and the fresh-claim in-flight 409 unit coverage); 3 pre-existing torch-import failures reproduced identically on the unmodified base.
+- `ATLAS_MIGRATION_TEST_DATABASE_URL=postgresql://postgres@localhost:5433/atlas_migration_tests python -m pytest tests/test_eom_lead_conversion_integration.py -q` -- 38 passed against disposable Postgres 16 (migrations through 361), including the approval pipeline from first-clean booking through edited approved send with idempotent replay, the two-session single-winner provider claim, blocker resolution through edit, stuck-`sending` reconciliation that first proves fresh claims answer confirm-sent and revoke with the in-flight 409 and only backdated (20-minute-old) claims are admitted, the revoked-while-sending zombie-confirm regression, and the list projection; 3 pre-existing torch-import failures.
+- `python3 scripts/maturity_sweep.py atlas_brain/storage --tests-root tests --baseline tests/maturity_sweep/baseline_atlas_brain_storage.json` -- ratchet gate passed (send evidence is exercised through the injected history seam, not by patching the repository module).
 - `python -m pytest tests/test_eom_render_profile.py::test_eom_profile_import_does_not_load_full_api_package tests/test_eom_render_profile.py::test_shared_eom_funnel_datastore_guard_keeps_missing_relations_in_verdict -q` -- 2 passed; the slim profile exposes all five draft routes with its import-isolation contract intact.
 - `python -m pytest -q tests/test_audit_plan_doc.py tests/test_audit_plan_code_consistency.py tests/test_audit_pr_plan_presence.py tests/test_check_diff_budget.py` -- 103 passed.
 - `python scripts/check_boundary_change_enumeration.py --base origin/main --strict` -- OK.
@@ -404,15 +444,18 @@ Parked hardening: none.
 
 | File | LOC |
 |---|---:|
-| `.github/workflows/atlas_eom_lead_pipeline_checks.yml` | 2 |
-| `atlas_brain/eom_api/funnel.py` | 297 |
-| `atlas_brain/services/crm_provider.py` | 268 |
-| `atlas_brain/services/eom_onboarding_drafts.py` | 249 |
-| `plans/PR-EOM-Onboarding-Draft-Approval.md` | 400 |
-| `tests/test_eom_lead_conversion.py` | 737 |
-| `tests/test_eom_lead_conversion_integration.py` | 351 |
+| `.github/workflows/atlas_eom_lead_pipeline_checks.yml` | 4 |
+| `.github/workflows/atlas_invoicing_checks.yml` | 2 |
+| `atlas_brain/eom_api/funnel.py` | 299 |
+| `atlas_brain/services/crm_provider.py` | 315 |
+| `atlas_brain/services/eom_onboarding_drafts.py` | 259 |
+| `atlas_brain/storage/migrations/361_eom_onboarding_draft_actor_bigint.sql` | 23 |
+| `plans/PR-EOM-Onboarding-Draft-Approval.md` | 540 |
+| `tests/test_eom_lead_conversion.py` | 814 |
+| `tests/test_eom_lead_conversion_integration.py` | 373 |
 | `tests/test_eom_render_profile.py` | 5 |
-| **Total** | **2309** |
+| `tests/test_migrations_runner.py` | 27 |
+| **Total** | **2661** |
 
 ## Cold diff reconstruction
 
@@ -438,6 +481,33 @@ Change-by-change reconstruction against the contract:
   revoke and confirm-sent log actor provenance through the CRM
   interaction writer. Citation: `atlas_brain/eom_api/funnel.py:132`,
   `atlas_brain/eom_api/funnel.py:441`.
+
+Codex round 1 (three fixes in this diff; the fourth finding is waived in
+the PR body):
+
+- Reconciliation staleness gate: `_EOM_ONBOARDING_SENDING_STALE_AFTER_MINUTES = 15`
+  is the single threshold; revoke admits `sending` only when
+  `claimed_at <= NOW() - make_interval(mins => $2)`, and confirm gains the
+  `require_stale` split -- the operator route passes True, the in-flow
+  service confirm after transport acceptance passes False. A fresh claim
+  answers both operator actions with the in-flight 409. Citation:
+  `atlas_brain/services/crm_provider.py:37`,
+  `atlas_brain/services/crm_provider.py:2581`,
+  `atlas_brain/services/crm_provider.py:2638`,
+  `atlas_brain/eom_api/funnel.py:611`.
+- Migration 361 atomically widens `approved_by_employee_id` from INTEGER
+  to BIGINT (value-preserving, no CONCURRENTLY, no DROP), matching the
+  signed-64 funnel actor boundary and the migration-353 handoff column;
+  the shape test pins the marker, the ALTER, and the rollback evidence.
+  Citation: `atlas_brain/storage/migrations/361_eom_onboarding_draft_actor_bigint.sql:1`,
+  `tests/test_migrations_runner.py:403`.
+- CI-lane enrollment: the new service module is added to the invoicing
+  workflow's path filters (that lane runs the slim-profile guard in
+  `tests/test_eom_render_profile.py`) alongside the EOM lead-pipeline
+  lane, and migration 361 joins the lead-pipeline filters, so edits to
+  either surface re-run the guards that own them. Citation:
+  `.github/workflows/atlas_invoicing_checks.yml:27`,
+  `.github/workflows/atlas_eom_lead_pipeline_checks.yml:58`.
 - Unit tests extend the `_CRM` fake with an in-memory mirror of the
   provider state machine and cover the route projections, edit admission
   and validation, the full approve failure matrix (blocked,

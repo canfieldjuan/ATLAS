@@ -400,6 +400,33 @@ def test_eom_onboarding_email_drafts_migration_is_additive_and_single_send_safe(
     assert "CONCURRENTLY" not in upper
 
 
+def test_eom_onboarding_draft_actor_bigint_migration_is_atomic_and_value_preserving():
+    migration = (
+        Path(__file__).resolve().parent.parent
+        / "atlas_brain"
+        / "storage"
+        / "migrations"
+        / "361_eom_onboarding_draft_actor_bigint.sql"
+    ).read_text()
+    upper = migration.upper()
+    first_line = next(
+        line.strip() for line in migration.splitlines() if line.strip()
+    )
+
+    # Atomic bookkeeping: the widening and its ledger row commit together.
+    assert first_line == "-- atlas: atomic-bookkeeping"
+    # The funnel actor boundary admits signed 64-bit ids and the handoff
+    # table already stores BIGINT; the draft approver column must match.
+    assert (
+        "ALTER COLUMN approved_by_employee_id TYPE BIGINT" in migration
+    )
+    assert "ALTER TABLE eom_onboarding_email_drafts" in migration
+    assert "Rollback evidence:" in migration
+    assert "TYPE INTEGER" in migration
+    assert "CONCURRENTLY" not in upper
+    assert "DROP " not in upper
+
+
 def test_sent_email_tenant_migration_is_additive_replay_safe_and_unclassified():
     migration = (
         Path(__file__).resolve().parent.parent

@@ -599,14 +599,16 @@ async def confirm_onboarding_draft_sent(
     actor: dict[str, object] = Depends(require_eom_funnel_actor),
     crm: Any = Depends(_crm_dependency),
 ) -> JSONResponse:
-    """Operator reconciliation: mark a stuck 'sending' draft as delivered.
+    """Operator reconciliation: mark a stale 'sending' draft as delivered.
 
     Only for migration 360 step 4, after verifying the send in the
-    transport log (query Resend by the draft-id idempotency key).
+    transport log (query Resend by the draft-id idempotency key). The
+    stale requirement keeps an operator from recording a still-in-flight
+    send whose outcome the transport has not yet reported.
     """
     try:
         result = await crm.confirm_eom_onboarding_draft_sent(
-            draft_id=str(draft_id)
+            draft_id=str(draft_id), require_stale=True
         )
     except EOMLeadConversionError as exc:
         raise HTTPException(status_code=exc.status_code, detail=str(exc)) from exc

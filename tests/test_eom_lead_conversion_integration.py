@@ -115,6 +115,7 @@ async def _prepare_schema(
         "352_eom_inbound_delivery_receipts.sql",
         "353_eom_customer_handoffs.sql",
         "360_eom_onboarding_email_drafts.sql",
+        "361_eom_onboarding_draft_actor_bigint.sql",
     )
     if apply_privilege_migration:
         await _provision_nocodb_login(conn)
@@ -3367,21 +3368,42 @@ async def test_onboarding_draft_stuck_sending_reconciles_by_confirm_or_revoke():
             )
             == "sending"
         )
+        # While the claim is FRESH the send may still be mid-flight:
+        # operator reconciliation (confirm-sent and revoke alike) refuses.
+        with pytest.raises(EOMLeadConversionError, match="still in flight"):
+            await provider.confirm_eom_onboarding_draft_sent(
+                draft_id=draft_a, require_stale=True
+            )
+        with pytest.raises(EOMLeadConversionError, match="still in flight"):
+            await provider.revoke_eom_onboarding_draft(draft_id=draft_a)
+        await conn.execute(
+            "UPDATE eom_onboarding_email_drafts "
+            "SET claimed_at = NOW() - INTERVAL '20 minutes' "
+            "WHERE id = $1::uuid",
+            draft_a,
+        )
         confirmed = await provider.confirm_eom_onboarding_draft_sent(
-            draft_id=draft_a
+            draft_id=draft_a, require_stale=True
         )
         assert confirmed["status"] == "sent"
         assert confirmed["idempotent"] is False
         replay = await provider.confirm_eom_onboarding_draft_sent(
-            draft_id=draft_a
+            draft_id=draft_a, require_stale=True
         )
         assert replay["idempotent"] is True
 
-        # Draft B: stuck sending -> revoked -> a late confirm fails loudly
-        # and further claims stay refused.
+        # Draft B: STALE sending -> revoked -> a late zombie confirm from
+        # the in-flow path (require_stale=False) fails loudly instead of
+        # re-recording delivery, and further claims stay refused.
         _, draft_b = await _book_first_clean_draft(conn, provider)
         await provider.claim_eom_onboarding_draft(
             draft_id=draft_b, actor_id=1, actor_name="Juan Canfield"
+        )
+        await conn.execute(
+            "UPDATE eom_onboarding_email_drafts "
+            "SET claimed_at = NOW() - INTERVAL '20 minutes' "
+            "WHERE id = $1::uuid",
+            draft_b,
         )
         revoked = await provider.revoke_eom_onboarding_draft(draft_id=draft_b)
         assert revoked["status"] == "revoked"
