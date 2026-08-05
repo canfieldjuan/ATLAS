@@ -25,10 +25,10 @@ and are better for optimization decisions.
 
 ## Non-Negotiable Gates
 
-Do not weaken these to save time. Branch protection requires only the four
-contexts in the first table; the process guardrails in the second table are
-still non-negotiable for Atlas PR work, but they are not current
-branch-protection required contexts.
+Do not weaken these to save time. As of 2026-08-04, branch protection contains
+every `ci/gates.yml` `branch_required` context. The process guardrails in the
+second table are still non-negotiable for Atlas PR work, but only the contexts
+marked `branch_required` are hard branch-protection gates.
 
 ### Branch-Protection Gate Set
 
@@ -37,14 +37,18 @@ branch-protection required contexts.
 | `live-reconciliation` | Prevents stale "fixed/waived" AI-review claims while automated review threads remain open. |
 | `Gitleaks PR secret scan` | Blocks leaked secrets before merge. |
 | `Gitleaks baseline growth guard` | Prevents PR-side poisoning or expansion of the secret baseline. |
-| `diff-budget` | Keeps slices small or forces an explicit override. Repo code expects this context, but live branch protection may need alignment. |
+| `diff-budget` | Keeps slices small or forces an explicit override. Live branch protection is aligned with this registry-required context as of 2026-08-04. |
+| `plan-admission` | Enforces plan/doc admission rules for non-docs-only PRs. |
+| `session-lane` | Checks session lane/body drift against the PR. |
+| `review-contract` | Checks plan Review Contract shape and triggered rules. |
+| `pr-body-contract` | Keeps PR bodies tied to the plan contract. |
 
 ### Process Guardrails
 
 | Gate | Why it stays non-negotiable |
 |---|---|
-| `pr-body-contract` | Keeps PR bodies tied to the plan contract, even though it is not in the current branch-protection required-context set. |
-| `pre-push-audit` trusted-base local review | Re-runs the local mechanical bundle from trusted base so a PR cannot weaken its own audit. |
+| `pre-push-audit` trusted-base local review | Re-runs the local mechanical bundle from trusted base so a PR cannot weaken its own audit. It remains visible CI, not branch-required, per the 2026-08-04 enrollment audit. |
+| `unit-gate` | Runs impacted unit tests, full-suite fallback, or baseline growth guard on every PR. It remains visible CI, not branch-required, per the 2026-08-04 enrollment audit. |
 | Session-scoped state file ownership guard | Prevents long-running sessions from touching another lane's PR before review, push, comment handling, or merge. |
 
 The optimization target is redundant runtime and broad triggering, not removing
@@ -54,8 +58,8 @@ these gates.
 
 | Class | Examples | Optimization posture |
 |---|---|---|
-| Branch-required meta gates | Live today: `live-reconciliation`, `Gitleaks PR secret scan`, `Gitleaks baseline growth guard`. Expected by `ci/gates.yml` / repo checker: those plus `diff-budget`, `plan-admission`, `session-lane`, `review-contract`, `pr-body-contract`. | Keep the intended gate set explicit; optimize only by making implementation faster without weakening coverage. |
-| Process/meta CI contexts | `pr-body-contract`, `pre-push-audit`, branch-protection audit workflows | Keep as workflow guardrails; distinguish their latency from branch-required merge latency. |
+| Branch-required meta gates | `live-reconciliation`, `diff-budget`, `plan-admission`, `session-lane`, `review-contract`, `pr-body-contract`, `Gitleaks PR secret scan`, and `Gitleaks baseline growth guard`. | Keep the intended gate set explicit; optimize only by making implementation faster without weakening coverage. |
+| Process/meta CI contexts | `pre-push-audit`, `unit-gate`, branch-protection audit workflows | Keep as workflow guardrails; distinguish their latency from branch-required merge latency. |
 | Product/package gates | Content-ops checks, extracted pipeline checks, Reddit listening checks, deflection package checks | Optimize with caching, narrower triggers, or safe decomposition while preserving package coverage. |
 | Advisory checks | Advisory maturity sweeps, non-blocking detector runs, informational audits | Keep visible; reduce noise and runtime after required gates and product checks are stable. |
 | Local-only gates | `scripts/local_pr_review.sh`, `scripts/push_pr.sh` hook path, package gauntlets run before push, session ownership guard | Treat as developer-loop cost and trusted-source duplication inputs; do not misread them as GitHub branch-protection contexts. |
@@ -84,8 +88,8 @@ Advisor (advisory).
 | Atlas Reddit Listening Checks | `pull_request` | 1 | 18s | 18s | Fast targeted package check. |
 | AI Reconciliation (live) | `pull_request_target` | 14 | 17s | 633s | Typical job is ~10s; review-event outliers affect run envelope. |
 | Security Guardrails | `pull_request` | 9 | 15s | 168s | PR secret scan job is fast; skipped heavy jobs still add envelope. |
-| PR Body Contract | `pull_request_target` | 14 | 14s | 155s | Fast process/meta context, not currently branch-required. |
-| Diff Budget | `pull_request_target` | 14 | 12s | 143s | Fast expected meta gate; repo code expects branch protection to require it, but live protection may need alignment. |
+| PR Body Contract | `pull_request_target` | 14 | 14s | 155s | Fast registry-required process/meta context. |
+| Diff Budget | `pull_request_target` | 14 | 12s | 143s | Fast registry-required meta gate. |
 | Gitleaks Baseline Growth Guard | `pull_request_target` | 9 | 10s | 164s | Fast required meta gate. |
 
 ## Step-Level Findings

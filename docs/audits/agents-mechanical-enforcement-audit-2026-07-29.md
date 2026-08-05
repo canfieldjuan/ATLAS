@@ -100,9 +100,10 @@ branch protection may be superseded by the 2026-08-04 update above.
 1. `PR-Required-Status-Check-Alignment`: closed 2026-08-04 by updating live
    branch protection so `scripts/check_required_status_checks.py` passes against
    the GitHub payload.
-2. `PR-Required-Workflow-Enrollment-Audit`: decide which existing CI-only
-   process checks must become branch-protection required, starting with
-   `pre-push-audit` and the impacted-test/growth-only `unit-gate`.
+2. `PR-Required-Workflow-Enrollment-Audit`: closed 2026-08-04 in
+   `docs/audits/required-workflow-enrollment-audit-2026-08-04.md`. Decision:
+   keep `pre-push-audit` and `unit-gate` visible-but-not-branch-required until
+   the documented enrollment blockers are closed.
 3. `PR-PR-Mutation-Ownership-Wrapper`: wire `check_session_pr_ownership.py` into
    the PR mutation helpers, or downgrade the AGENTS wording to manual-only.
 4. `PR-Commit-Message-Contract-Gate`: validate canonical commit-message
@@ -126,6 +127,8 @@ branch protection may be superseded by the 2026-08-04 update above.
 
 As of 2026-08-04, the biggest branch-protection contradiction identified here
 has been closed: live protection requires the registry's `branch_required`
-contexts. The remaining mechanical gaps are local/manual promises that GitHub
-cannot prove directly, plus follow-up decisions about whether `pre-push-audit`
-and `unit-gate` should stay visible-but-not-required or become branch-required.
+contexts. The `pre-push-audit` / `unit-gate` enrollment decision is also recorded:
+both remain visible-but-not-branch-required until their enrollment blockers are
+closed. The remaining mechanical gaps are local/manual promises that GitHub
+cannot prove directly and the follow-up hardening called out by the enrollment
+audit.
