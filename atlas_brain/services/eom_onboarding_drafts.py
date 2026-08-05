@@ -156,12 +156,16 @@ async def _record_send_evidence(
     crm: Any,
     draft: dict[str, Any],
     message_id: str | None,
+    *,
+    email_history: Any | None = None,
 ) -> None:
     """Secondary evidence after confirmed delivery; never flips the outcome."""
     try:
-        from ..storage.repositories.email import EmailRepository
+        if email_history is None:
+            from ..storage.repositories.email import EmailRepository
 
-        await EmailRepository().create(
+            email_history = EmailRepository()
+        await email_history.create(
             to_addresses=[str(draft["recipient_email"])],
             subject=str(draft["subject"]),
             body=str(draft["body"]),
@@ -204,6 +208,7 @@ async def approve_and_send_eom_onboarding_draft(
     command: EOMOnboardingDraftApproval,
     *,
     sender: Callable[..., Awaitable[dict[str, Any]]] | None = None,
+    email_history: Any | None = None,
 ) -> dict[str, Any]:
     """Claim, send, then confirm one onboarding draft (migration 360)."""
     claimer, confirmer = _draft_lifecycle_callables(crm)
@@ -240,7 +245,12 @@ async def approve_and_send_eom_onboarding_draft(
         ) from exc
 
     confirmed = await confirmer(draft_id=command.draft_id)
-    await _record_send_evidence(crm, confirmed, send_result.get("message_id"))
+    await _record_send_evidence(
+        crm,
+        confirmed,
+        send_result.get("message_id"),
+        email_history=email_history,
+    )
     result = dict(confirmed)
     result["resend_message_id"] = send_result.get("message_id")
     result["transport_idempotent_replay"] = bool(

@@ -2503,13 +2503,10 @@ class _DraftSender:
 
 
 class _SentEmailHistory:
-    """Recording stand-in for EmailRepository."""
-
-    instances: list["_SentEmailHistory"] = []
+    """Recording stand-in injected through the service's history seam."""
 
     def __init__(self) -> None:
         self.created: list[dict[str, object]] = []
-        _SentEmailHistory.instances.append(self)
 
     async def create(self, **kwargs):
         self.created.append(kwargs)
@@ -2685,13 +2682,7 @@ async def test_private_onboarding_draft_edit_rejects_non_pending(frozen_status):
 
 
 @pytest.mark.asyncio
-async def test_private_onboarding_draft_approve_claims_sends_confirms_in_order(
-    monkeypatch,
-):
-    from atlas_brain.storage.repositories import email as email_repo_mod
-
-    _SentEmailHistory.instances = []
-    monkeypatch.setattr(email_repo_mod, "EmailRepository", _SentEmailHistory)
+async def test_private_onboarding_draft_approve_claims_sends_confirms_in_order():
     crm = _CRM()
     row = crm.seed_draft()
     sender = _DraftSender()
@@ -2726,14 +2717,44 @@ async def test_private_onboarding_draft_approve_claims_sends_confirms_in_order(
     assert crm.draft_confirm_calls == [{"draft_id": str(row["id"])}]
     assert crm.draft_rows[str(row["id"])]["status"] == "sent"
     assert crm.draft_rows[str(row["id"])]["approved_by_name"] == "Juan Canfield"
-    history = _SentEmailHistory.instances[0].created[0]
-    assert history["to_addresses"] == ["lead@example.com"]
-    assert history["template_type"] == "onboarding_welcome"
-    assert history["resend_message_id"] == "resend-msg-1"
-    assert history["business_context_id"] == "effingham_maids"
-    assert history["metadata"]["draft_id"] == str(row["id"])
     assert len(crm.interaction_logs) == 1
     assert crm.interaction_logs[0]["interaction_type"] == "email"
+
+
+@pytest.mark.asyncio
+async def test_approve_service_records_send_evidence_through_injected_history():
+    """Evidence is recorded only after confirmed delivery, through the
+    injectable history seam (no internal module patching)."""
+    from atlas_brain.services.eom_onboarding_drafts import (
+        EOMOnboardingDraftApproval,
+        approve_and_send_eom_onboarding_draft,
+    )
+
+    crm = _CRM()
+    row = crm.seed_draft()
+    sender = _DraftSender()
+    history = _SentEmailHistory()
+
+    result = await approve_and_send_eom_onboarding_draft(
+        crm,
+        EOMOnboardingDraftApproval(
+            draft_id=str(row["id"]), actor_id=1, actor_name="Juan Canfield"
+        ),
+        sender=sender,
+        email_history=history,
+    )
+
+    assert result["status"] == "sent"
+    created = history.created[0]
+    assert created["to_addresses"] == ["lead@example.com"]
+    assert created["template_type"] == "onboarding_welcome"
+    assert created["resend_message_id"] == "resend-msg-1"
+    assert created["business_context_id"] == "effingham_maids"
+    assert created["metadata"]["draft_id"] == str(row["id"])
+    assert created["metadata"]["contact_id"] == str(row["contact_id"])
+    assert len(crm.interaction_logs) == 1
+    assert crm.interaction_logs[0]["interaction_type"] == "email"
+    assert str(row["id"]) in crm.interaction_logs[0]["summary"]
 
 
 @pytest.mark.asyncio
@@ -2806,13 +2827,7 @@ async def test_private_onboarding_draft_approve_transport_failure_leaves_sending
 
 
 @pytest.mark.asyncio
-async def test_private_onboarding_draft_approve_resend_replay_confirms_sent(
-    monkeypatch,
-):
-    from atlas_brain.storage.repositories import email as email_repo_mod
-
-    _SentEmailHistory.instances = []
-    monkeypatch.setattr(email_repo_mod, "EmailRepository", _SentEmailHistory)
+async def test_private_onboarding_draft_approve_resend_replay_confirms_sent():
     crm = _CRM()
     row = crm.seed_draft()
     sender = _DraftSender(idempotent_replay=True)

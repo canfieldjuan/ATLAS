@@ -74,10 +74,11 @@ Slice phase: vertical slice
    `update_eom_onboarding_draft`, `claim_eom_onboarding_draft`,
    `confirm_eom_onboarding_draft_sent`, `revoke_eom_onboarding_draft`.
 3. Add `atlas_brain/services/eom_onboarding_drafts.py`: approve
-   orchestration with injectable sender, transport preflight before any
-   claim, the direct Resend sender with deterministic idempotency key and
-   409-as-delivered, and post-acceptance evidence writers (sent_emails +
-   CRM interaction) that log-and-continue on failure.
+   orchestration with injectable sender and sent-emails history seams,
+   transport preflight before any claim, the direct Resend sender with
+   deterministic idempotency key and 409-as-delivered, and
+   post-acceptance evidence writers (sent_emails + CRM interaction) that
+   log-and-continue on failure.
 4. Actor provenance: the claim stores `approved_by_employee_id/name`;
    revoke and confirm-sent record the acting employee through a CRM
    interaction note (no schema change).
