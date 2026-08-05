@@ -123,8 +123,15 @@ def test_security_guardrails_docs_name_required_gitleaks_checks() -> None:
     for context in REQUIRED_STATUS_CONTEXTS:
         assert f"`{context}`" in text
     assert "`Branch Protection Required Checks` workflow" in text
-    assert "live GitHub settings still require only" in normalized_text
-    assert "REST PATCH" in text
+    # 2026-08-04 status alignment: live settings now carry every
+    # registry-required context, so the doc records that completed state
+    # (plus the verification command) instead of the old partial-set /
+    # separate-REST-PATCH interim wording.
+    assert (
+        "live GitHub settings contain every registry-required context pinned "
+        "to the GitHub Actions app source" in normalized_text
+    )
+    assert "scripts/check_required_status_checks.py" in text
 
 
 def test_branch_protection_workflow_audits_live_required_checks() -> None:
