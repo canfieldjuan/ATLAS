@@ -10,6 +10,7 @@ Operator + DBA procedure to bring the private EOM funnel live on the **ts.net At
 
 - The `atlas-api` unit runs the **full** app: `grep ExecStart ~/.config/systemd/user/atlas-api.service` shows `uvicorn atlas_brain.main:app`. The slim `main_eom` applies only receivables migrations and can never satisfy the gate.
 - The runtime is on current `origin/main` (has `funnel_store.py` + migrations 356–361). If it is behind, advance it — a **fresh-worktree cutover** is the safe form: `git -C <atlas> worktree add --detach worktrees/atlas-runtime-main origin/main`, repoint the unit's `WorkingDirectory` to it (keep a `.bak`), `systemctl --user daemon-reload`. Rollback = repoint to the old worktree + restart.
+  - **Env carries automatically:** the unit's `EnvironmentFile` is an **absolute** path to the main repo's `.env` (e.g. `EnvironmentFile=-/home/<user>/Desktop/Atlas/.env`), so the fresh worktree needs **no** `.env` copy — systemd injects the process environment regardless of `WorkingDirectory`. Confirm the `EnvironmentFile` path is absolute (not worktree-relative) before cutting over.
 - A superuser DB session is reachable: on this host, `psql -U postgres -d atlas -h localhost -p 5433` connects as superuser (no external DBA needed).
 
 ## Phase 1 — DBA role bootstrap (privileged psql)
@@ -17,6 +18,7 @@ Operator + DBA procedure to bring the private EOM funnel live on the **ts.net At
 ```sql
 -- psql -U postgres -d atlas -h localhost -p 5433
 CREATE ROLE atlas_nocodb LOGIN NOINHERIT PASSWORD '<nocodb password>';   -- 354 will NOT create this
+GRANT CONNECT ON DATABASE atlas TO atlas_nocodb;                         -- explicit: the gate checks has_database_privilege(...,'CONNECT'); needed where CONNECT is revoked from PUBLIC
 CREATE ROLE atlas_eom_handoff_owner NOLOGIN NOINHERIT;
 GRANT atlas_eom_handoff_owner TO <app-login> WITH ADMIN OPTION;          -- temporary; lets 354's ownership transfer run as the app login
 ```
@@ -79,7 +81,7 @@ curl -s -X PUT -H "Authorization: Bearer $RENDER_TOKEN" -H 'Content-Type: applic
   -d '{"value":"https://atlas-brain.tailc7bd29.ts.net/api/v1"}' "$API/env-vars/ATLAS_FUNNEL_BASE_URL"
 python3 -c "import json,os;print(json.dumps({'value':os.environ['FT']}))" | \
   curl -s -X PUT -H "Authorization: Bearer $RENDER_TOKEN" -H 'Content-Type: application/json' --data-binary @- "$API/env-vars/ATLAS_FUNNEL_SERVICE_TOKEN"   # FT=raw token
-curl -s -X POST -H "Authorization: Bearer $RENDER_TOKEN" -d '{}' "$API/deploys"   # redeploy
+curl -s -X POST -H "Authorization: Bearer $RENDER_TOKEN" -H 'Content-Type: application/json' -d '{}' "$API/deploys"   # redeploy (JSON content-type required)
 ```
 Then: admin login → portal Leads tab loads live; `/api/admin/funnel/review` returns 200 with admin creds (401 unauthenticated = wired). If the Render→ts.net call times out while a direct curl to Atlas works, check Tailscale Funnel/serve exposure.
 
