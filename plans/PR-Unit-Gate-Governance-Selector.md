@@ -43,14 +43,18 @@ Slice phase: Workflow/process
     `tests/test_security_guardrails_workflow.py` and
     `tests/test_security_policy_docs.py`.
   - `scripts/select_impacted_tests.py` maps the current CI/CD governance audit
-    docs in scope to `tests/test_security_guardrails_workflow.py`.
+    docs in scope to their owning pytest suites.
   - `tests/test_select_impacted_tests.py::test_explicit_ci_surface_owners_are_selected`
     proves those mappings select the owning suite.
+  - `tests/test_audit_pr_watcher_safety.py` proves the watcher safety audit
+    catches unsafe merge-authority wording in
+    `docs/ci_cd_autonomous_coding_map.md`.
   - `scripts/select_impacted_tests.py` has only one explicit-owner entry for
     `scripts/check_ai_reconciliation_live.py`.
 - Reachability proof: `python -m pytest tests/test_select_impacted_tests.py -q`
   exercises the real selector entrypoint and observes selected test paths.
 - Affected surfaces: `scripts/select_impacted_tests.py`,
+  `tests/test_audit_pr_watcher_safety.py`,
   `tests/test_select_impacted_tests.py`, and this plan.
 - Risk areas: under-selection of CI governance tests, stale owner paths,
   over-broad selector escalation, and duplicate owner-map membership.
@@ -61,13 +65,15 @@ Closure declaration for explicit governance-doc owners:
 - Set status: CLOSED for this slice. The set is the current docs whose
   required-status/security governance claims are directly coupled to
   `tests/test_security_guardrails_workflow.py`: `docs/SECURITY_GUARDRAILS.md`,
-  `docs/ci_cd_autonomous_coding_map.md`,
   `docs/ci_cd_runtime_duplication_audit.md`,
   `docs/audits/agents-mechanical-enforcement-audit-2026-07-29.md`, and
   `docs/audits/required-workflow-enrollment-audit-2026-08-04.md`.
   `docs/SECURITY_GUARDRAILS.md` also selects
   `tests/test_security_policy_docs.py` because that suite directly reads the
   same doc and enforces the repo-label manifest markers.
+  `docs/ci_cd_autonomous_coding_map.md` selects
+  `tests/test_audit_pr_watcher_safety.py` because the watcher safety audit
+  scans that doc for unsafe watcher merge-authority claims.
 - Membership source: ENUMERATED from issue #2260, the #2283 audit's named
   blocker, and the current repository docs that state required-status/security
   gate policy. A future governance doc that makes the same kind of claim must
@@ -86,7 +92,9 @@ seam in the enumeration; otherwise write "N/A - no boundary change."
 - Replaced-path behaviors: listed governance docs select
   `tests/test_security_guardrails_workflow.py`; `docs/SECURITY_GUARDRAILS.md`
   also selects `tests/test_security_policy_docs.py`; ordinary Markdown docs
-  remain test-free; missing owner files still escalate to FULL.
+  remain test-free; `docs/ci_cd_autonomous_coding_map.md` selects
+  `tests/test_audit_pr_watcher_safety.py`; missing owner files still escalate
+  to FULL.
 - Guard-relevant fields: changed path string, explicit owner tuple, owner file
   existence.
 - Caller x input shape: unit-gate passes newline-separated changed paths from
@@ -108,6 +116,7 @@ fallback changes; otherwise write "N/A - no guard/config boundary change."
 
 - `plans/PR-Unit-Gate-Governance-Selector.md`
 - `scripts/select_impacted_tests.py`
+- `tests/test_audit_pr_watcher_safety.py`
 - `tests/test_select_impacted_tests.py`
 
 ## Mechanism
@@ -117,9 +126,12 @@ explicit-owner fallback. This slice adds the current CI/security governance docs
 to `EXPLICIT_TEST_OWNERS`, pointing them at
 `tests/test_security_guardrails_workflow.py`; `docs/SECURITY_GUARDRAILS.md`
 also selects `tests/test_security_policy_docs.py` for the repo-label manifest
-checks that directly read that file. The slice also removes a duplicate
-`scripts/check_ai_reconciliation_live.py` entry. The existing owner-file
-existence check continues to escalate stale owners to FULL.
+checks that directly read that file, and
+`docs/ci_cd_autonomous_coding_map.md` selects
+`tests/test_audit_pr_watcher_safety.py` for watcher merge-authority claims.
+The slice also removes a duplicate `scripts/check_ai_reconciliation_live.py`
+entry. The existing owner-file existence check continues to escalate stale
+owners to FULL.
 
 ## Intentional
 
@@ -147,13 +159,16 @@ Parked hardening: none.
   -- passed locally, 96 passed.
 - `/tmp/atlas-pr2259-venv/bin/python -m pytest tests/test_security_policy_docs.py tests/test_security_guardrails_workflow.py tests/test_select_impacted_tests.py -q`
   -- passed locally, 116 passed, 43 subtests passed.
+- `/tmp/atlas-pr2259-venv/bin/python -m pytest tests/test_audit_pr_watcher_safety.py tests/test_security_policy_docs.py tests/test_security_guardrails_workflow.py tests/test_select_impacted_tests.py -q`
+  -- passed locally, 138 passed, 43 subtests passed.
 - `python3 -m py_compile scripts/select_impacted_tests.py` -- passed locally.
 
 ## Estimated diff size
 
 | File | LOC |
 |---|---:|
-| `plans/PR-Unit-Gate-Governance-Selector.md` | 159 |
+| `plans/PR-Unit-Gate-Governance-Selector.md` | 174 |
 | `scripts/select_impacted_tests.py` | 19 |
+| `tests/test_audit_pr_watcher_safety.py` | 15 |
 | `tests/test_select_impacted_tests.py` | 41 |
-| **Total** | **219** |
+| **Total** | **249** |

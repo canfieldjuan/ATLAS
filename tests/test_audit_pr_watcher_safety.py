@@ -166,6 +166,21 @@ def test_fails_on_docs_that_grant_watcher_merge_authority(tmp_path: Path) -> Non
     assert "repo docs/templates must not grant merge authority" in result.stdout
 
 
+def test_fails_on_autonomous_coding_map_that_grants_watcher_merge_authority(tmp_path: Path) -> None:
+    repo = _repo(tmp_path)
+    autonomous_map = repo / "docs" / "ci_cd_autonomous_coding_map.md"
+    autonomous_map.write_text(
+        "The watcher may merge once checks are green.\n",
+        encoding="utf-8",
+    )
+
+    result = _run(tmp_path, "--repo-root", str(repo), "--repo-only")
+
+    assert result.returncode == 1
+    assert "docs/ci_cd_autonomous_coding_map.md" in result.stdout
+    assert "repo docs/templates must not grant merge authority" in result.stdout
+
+
 @pytest.mark.parametrize("surface", ["timer", "notification", "bridge", "wake bridge"])
 def test_fails_on_docs_that_grant_wake_surface_merge_authority(
     tmp_path: Path,
