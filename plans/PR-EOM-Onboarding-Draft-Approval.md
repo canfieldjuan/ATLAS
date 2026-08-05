@@ -88,7 +88,10 @@ Slice phase: vertical slice
    CRM provider's own pool (public `pool` property; `EmailRepository`
    gains a pool override and `log_interaction` uses the provider pool),
    so evidence lands in the store that owns the draft even when the slim
-   funnel profile points the provider at its own connection string.
+   funnel profile points the provider at its own connection string. The
+   operator confirm-sent recovery route records the same sent-email
+   history with a null transport id (`record_operator_confirmed_send_evidence`),
+   so a crash-recovered delivery is never missing from customer history.
 4. Actor provenance: the claim stores `approved_by_employee_id/name`
    (widened to BIGINT by migration 361 to match the funnel actor boundary
    and the handoff precedent); revoke and confirm-sent record the acting
@@ -208,6 +211,12 @@ Slice phase: vertical slice
   - [ ] Recipient edits reject a 255-character address 422 before any CRM
         call, matching the public intake boundary's 254-character cap,
         settled by `tests/test_eom_lead_conversion.py`.
+  - [ ] A non-idempotent operator confirm-sent records the same
+        sent-email history as the approve path with a null transport id
+        (and its idempotent replay records nothing), settled by
+        `tests/test_eom_lead_conversion.py` and
+        `tests/test_eom_lead_conversion_integration.py` when
+        `ATLAS_MIGRATION_TEST_DATABASE_URL` is configured.
 - Reachability proof: every route is exercised through the real FastAPI
   router with service-auth headers in `tests/test_eom_lead_conversion.py`,
   asserting both the JSON responses and the fake CRM/sender call
@@ -493,7 +502,16 @@ can never be looser than an intake-submitted one.
   store (migrated by the main brain) is ready.
 - The queue list still shows drafts whose contact has been archived:
   visibility is what lets the office revoke them, and only the claim --
-  the decision to send -- carries the contact-activity admission.
+  the decision to send -- carries the contact-activity admission. Hiding
+  those rows would make them unrevokable while the live-contact unique
+  index (`uq_eom_onboarding_email_drafts_live_contact`) still counts
+  them, so a re-activated contact's next first-clean enqueue would
+  collide with a row no office surface can see or clear. The queue is an
+  authenticated office-only surface behind the funnel bearer digest and
+  actor evidence -- the same audience that can see the archived contact
+  in the CRM itself. A dedicated reconciliation-only view or a
+  contact-status field in the projection is W-lane tracker UI work,
+  named in Deferred.
 - Only `log_interaction` moves to the provider-pool seam in this slice;
   it is the one provider method on the draft evidence path. The remaining
   legacy `DatabaseCRMProvider` methods that still read the global pool
@@ -521,6 +539,9 @@ can never be looser than an intake-submitted one.
   `get_interactions`, appointment operations) onto `self._get_pool()`.
   None of them is on a funnel route today; when one is wired into a
   funnel path it must move to the provider-pool seam in that slice.
+- Queue treatment of archived-contact drafts beyond the gated claim: a
+  contact-status field in the closed projection or a dedicated
+  reconciliation-only view (W-lane tracker UI slice).
 
 Parking predicate: hardening narrower than one draft approval request, or
 requiring a new table/subsystem/dependency, is parked unless it can send
@@ -534,7 +555,7 @@ Parked hardening: none.
 - `python -m py_compile atlas_brain/eom_api/funnel.py atlas_brain/services/crm_provider.py atlas_brain/services/eom_onboarding_drafts.py tests/test_eom_lead_conversion.py tests/test_eom_lead_conversion_integration.py tests/test_eom_render_profile.py` -- passed.
 - ASCII scan of every touched Python file -- no non-ASCII bytes.
 - `python -m pytest tests/test_eom_lead_conversion.py tests/test_migrations_runner.py -q` -- 193 passed, 1 skipped (including the migration-361 shape test, the fresh-claim in-flight 409 coverage, the archived-contact approval refusal, the 255-character recipient rejection, the default-history provider-pool binding proof, the five-route HTTP guard matrix, the whitespace-only-key 503 probe, and the stripped-Authorization sender proof); 3 pre-existing torch-import failures reproduced identically on the unmodified base.
-- `ATLAS_MIGRATION_TEST_DATABASE_URL=postgresql://postgres@localhost:5433/atlas_migration_tests python -m pytest tests/test_eom_lead_conversion_integration.py -q` -- 40 passed against disposable Postgres 16 (migrations through 361 plus sent_emails history 016/349), including the approval pipeline from first-clean booking through edited approved send with idempotent replay and the sent_emails + interaction evidence landing in the provider's own store while the global pool stays uninitialized, the two-session single-winner provider claim, blocker resolution through edit, stuck-`sending` reconciliation that first proves fresh claims answer confirm-sent and revoke with the in-flight 409 and only backdated (20-minute-old) claims are admitted, the revoked-while-sending zombie-confirm regression, the archived-contact claim refusal with restore-then-claim, the datastore guard failing closed on an INTEGER approver column, and the list projection; 3 pre-existing torch-import failures.
+- `ATLAS_MIGRATION_TEST_DATABASE_URL=postgresql://postgres@localhost:5433/atlas_migration_tests python -m pytest tests/test_eom_lead_conversion_integration.py -q` -- 40 passed against disposable Postgres 16 (migrations through 361 plus sent_emails history 016/349), including the approval pipeline from first-clean booking through edited approved send with idempotent replay and the sent_emails + interaction evidence landing in the provider's own store while the global pool stays uninitialized, the two-session single-winner provider claim, blocker resolution through edit, stuck-`sending` reconciliation that first proves fresh claims answer confirm-sent and revoke with the in-flight 409 and only backdated (20-minute-old) claims are admitted (the confirm branch now also records recovery sent-email history with a null transport id in the provider's store), the revoked-while-sending zombie-confirm regression, the archived-contact claim refusal with restore-then-claim, the datastore guard failing closed on an INTEGER approver column, and the list projection; 3 pre-existing torch-import failures.
 - `python3 scripts/maturity_sweep.py atlas_brain/storage --tests-root tests --baseline tests/maturity_sweep/baseline_atlas_brain_storage.json` -- ratchet gate passed (send evidence is exercised through the injected history seam, not by patching the repository module).
 - `python -m pytest tests/test_eom_render_profile.py::test_eom_profile_import_does_not_load_full_api_package tests/test_eom_render_profile.py::test_shared_eom_funnel_datastore_guard_keeps_missing_relations_in_verdict -q` -- 2 passed; the slim profile exposes all five draft routes with its import-isolation contract intact.
 - `python -m pytest -q tests/test_audit_plan_doc.py tests/test_audit_plan_code_consistency.py tests/test_audit_pr_plan_presence.py tests/test_check_diff_budget.py` -- 103 passed.
@@ -549,18 +570,18 @@ Parked hardening: none.
 |---|---:|
 | `.github/workflows/atlas_eom_lead_pipeline_checks.yml` | 6 |
 | `.github/workflows/atlas_invoicing_checks.yml` | 4 |
-| `atlas_brain/eom_api/funnel.py` | 303 |
+| `atlas_brain/eom_api/funnel.py` | 316 |
 | `atlas_brain/eom_api/funnel_store.py` | 15 |
 | `atlas_brain/services/crm_provider.py` | 350 |
-| `atlas_brain/services/eom_onboarding_drafts.py` | 268 |
+| `atlas_brain/services/eom_onboarding_drafts.py` | 285 |
 | `atlas_brain/storage/migrations/361_eom_onboarding_draft_actor_bigint.sql` | 23 |
 | `atlas_brain/storage/repositories/email.py` | 39 |
-| `plans/PR-EOM-Onboarding-Draft-Approval.md` | 696 |
-| `tests/test_eom_lead_conversion.py` | 922 |
-| `tests/test_eom_lead_conversion_integration.py` | 491 |
+| `plans/PR-EOM-Onboarding-Draft-Approval.md` | 748 |
+| `tests/test_eom_lead_conversion.py` | 935 |
+| `tests/test_eom_lead_conversion_integration.py` | 506 |
 | `tests/test_eom_render_profile.py` | 5 |
 | `tests/test_migrations_runner.py` | 27 |
-| **Total** | **3149** |
+| **Total** | **3259** |
 
 ## Cold diff reconstruction
 
@@ -669,6 +690,27 @@ Codex round 3 (three fixes in this diff):
   the slim-profile import proof and the draft suites. Citation:
   `.github/workflows/atlas_invoicing_checks.yml:37`,
   `.github/workflows/atlas_eom_lead_pipeline_checks.yml:30`.
+
+Codex round 4 (one fix, one waiver in this diff):
+
+- The operator confirm-sent recovery route records the same sent-email
+  history as the approve path: on a non-idempotent confirmation the
+  route calls `record_operator_confirmed_send_evidence` (a public
+  wrapper over the shared evidence writer, null transport id because
+  the message id was never observed), through a route-level history
+  seam for tests; the idempotent replay records nothing. Proven at unit
+  level through the injected seam and against real Postgres in the
+  stuck-`sending` reconciliation test. Citation:
+  `atlas_brain/services/eom_onboarding_drafts.py:215`,
+  `atlas_brain/eom_api/funnel.py:637`,
+  `atlas_brain/eom_api/funnel.py:234`.
+- Filtering archived-contact drafts out of the queue was waived: hiding
+  those rows would make them unrevokable while the live-contact unique
+  index still counts them (a re-activated contact's next enqueue would
+  collide with an invisible row), the queue is an authenticated
+  office-only surface, and the claim already refuses to send; the
+  reconciliation-only view / projection status field is named in
+  Deferred for the W-lane UI slice.
 - Unit tests extend the `_CRM` fake with an in-memory mirror of the
   provider state machine and cover the route projections, edit admission
   and validation, the full approve failure matrix (blocked,

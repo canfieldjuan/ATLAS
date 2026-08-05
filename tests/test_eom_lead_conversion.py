@@ -2546,10 +2546,13 @@ class _SentEmailHistory:
         return SimpleNamespace(id=uuid4())
 
 
-def _draft_app(crm: _CRM, sender=None) -> FastAPI:
+def _draft_app(crm: _CRM, sender=None, email_history=None) -> FastAPI:
     app = _app(crm, _enabled_config())
     app.dependency_overrides[funnel_mod._onboarding_sender_dependency] = (
         lambda: sender
+    )
+    app.dependency_overrides[funnel_mod._onboarding_email_history_dependency] = (
+        lambda: email_history
     )
     return app
 
@@ -3012,7 +3015,8 @@ async def test_private_onboarding_draft_confirm_sent_paths():
         claimed_at=datetime.now(timezone.utc),
     )
     pending = crm.seed_draft()
-    app = _draft_app(crm)
+    history = _SentEmailHistory()
+    app = _draft_app(crm, email_history=history)
 
     confirmed = await _post(
         app, f"/eom-funnel/onboarding-drafts/{stuck['id']}/confirm-sent"
@@ -3022,15 +3026,24 @@ async def test_private_onboarding_draft_confirm_sent_paths():
     # The operator route demands a stale claim; the in-flow service confirm
     # does not (it just observed transport acceptance).
     assert crm.draft_confirm_calls[-1]["require_stale"] is True
-    assert len(crm.interaction_logs) == 1
+    assert len(crm.interaction_logs) == 2
     assert "transport-log" in crm.interaction_logs[0]["summary"]
+    assert crm.interaction_logs[1]["interaction_type"] == "email"
+    # Crash-recovery deliveries record the same sent-email history as the
+    # normal approve path, with a null transport id (never observed).
+    assert len(history.created) == 1
+    assert history.created[0]["resend_message_id"] is None
+    assert history.created[0]["template_type"] == "onboarding_welcome"
+    assert history.created[0]["to_addresses"] == [stuck["recipient_email"]]
+    assert history.created[0]["business_context_id"] == "effingham_maids"
 
     replay = await _post(
         app, f"/eom-funnel/onboarding-drafts/{stuck['id']}/confirm-sent"
     )
     assert replay.status_code == 200
     assert replay.json()["idempotent"] is True
-    assert len(crm.interaction_logs) == 1
+    assert len(crm.interaction_logs) == 2
+    assert len(history.created) == 1
 
     # A fresh claim is an active send with an unknown outcome; the operator
     # cannot record it as delivered before it settles or goes stale.

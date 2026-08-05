@@ -3505,6 +3505,21 @@ async def test_onboarding_draft_stuck_sending_reconciles_by_confirm_or_revoke():
         )
         assert confirmed["status"] == "sent"
         assert confirmed["idempotent"] is False
+        # Crash-recovery deliveries record sent-email history in the
+        # provider's own store, with a null transport id (never observed).
+        from atlas_brain.services.eom_onboarding_drafts import (
+            record_operator_confirmed_send_evidence,
+        )
+
+        await record_operator_confirmed_send_evidence(provider, confirmed)
+        recovery_evidence = await conn.fetchrow(
+            "SELECT to_addresses, resend_message_id, template_type "
+            "FROM sent_emails"
+        )
+        assert recovery_evidence is not None
+        assert recovery_evidence["to_addresses"] == ["won-lead@example.com"]
+        assert recovery_evidence["resend_message_id"] is None
+        assert recovery_evidence["template_type"] == "onboarding_welcome"
         replay = await provider.confirm_eom_onboarding_draft_sent(
             draft_id=draft_a, require_stale=True
         )

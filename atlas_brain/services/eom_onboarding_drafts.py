@@ -212,6 +212,23 @@ async def _record_send_evidence(
         )
 
 
+async def record_operator_confirmed_send_evidence(
+    crm: Any,
+    draft: dict[str, Any],
+    *,
+    email_history: Any | None = None,
+) -> None:
+    """Sent-email history for the operator confirm-sent recovery path.
+
+    The transport accepted the send before the process died, so the
+    message id was never observed: the history row carries a null
+    transport id but otherwise the same evidence as the normal approve
+    path -- without this, a crash-recovered delivery would be missing
+    from customer history forever.
+    """
+    await _record_send_evidence(crm, draft, None, email_history=email_history)
+
+
 async def approve_and_send_eom_onboarding_draft(
     crm: Any,
     command: EOMOnboardingDraftApproval,

@@ -29,6 +29,7 @@ from ..services.eom_onboarding_drafts import (
     EOMOnboardingDraftApproval,
     EOMOnboardingDraftError,
     approve_and_send_eom_onboarding_draft,
+    record_operator_confirmed_send_evidence,
 )
 from ..services.crm_provider import get_crm_provider
 from .funnel_auth import require_eom_funnel_actor, require_eom_funnel_api
@@ -227,6 +228,11 @@ def _calendar_dependency() -> Any:
 
 def _onboarding_sender_dependency() -> Any:
     """Test seam for the direct Resend sender; None means the real one."""
+    return None
+
+
+def _onboarding_email_history_dependency() -> Any:
+    """Test seam for the sent-email history writer; None means the real one."""
     return None
 
 
@@ -602,6 +608,7 @@ async def confirm_onboarding_draft_sent(
     draft_id: UUID,
     actor: dict[str, object] = Depends(require_eom_funnel_actor),
     crm: Any = Depends(_crm_dependency),
+    email_history: Any = Depends(_onboarding_email_history_dependency),
 ) -> JSONResponse:
     """Operator reconciliation: mark a stale 'sending' draft as delivered.
 
@@ -623,6 +630,12 @@ async def confirm_onboarding_draft_sent(
             f"employee:{actor['id']}:{actor['name']} confirmed onboarding "
             f"draft {result['draft_id']} as sent after transport-log "
             "reconciliation",
+        )
+        # The delivery happened; without this the crash-recovery path
+        # would leave the customer's sent-email history permanently
+        # missing the row the normal approve path records.
+        await record_operator_confirmed_send_evidence(
+            crm, result, email_history=email_history
         )
     return _draft_action_response(result)
 
