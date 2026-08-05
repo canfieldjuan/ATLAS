@@ -49,6 +49,8 @@ Slice phase: Workflow/process
   - `tests/test_audit_pr_watcher_safety.py` proves the watcher safety audit
     catches unsafe merge-authority wording in
     `docs/ci_cd_autonomous_coding_map.md`.
+  - `tests/test_audit_pr_watcher_safety.py` runs the watcher safety audit
+    against the checked-out repository docs, not only fixture docs.
   - `scripts/select_impacted_tests.py` has only one explicit-owner entry for
     `scripts/check_ai_reconciliation_live.py`.
 - Reachability proof: `python -m pytest tests/test_select_impacted_tests.py -q`
@@ -129,6 +131,8 @@ also selects `tests/test_security_policy_docs.py` for the repo-label manifest
 checks that directly read that file, and
 `docs/ci_cd_autonomous_coding_map.md` selects
 `tests/test_audit_pr_watcher_safety.py` for watcher merge-authority claims.
+That suite now runs both a fixture-level failure proof and a checked-out-repo
+audit, so scoped unit-gate runs exercise the actual changed doc content.
 The slice also removes a duplicate `scripts/check_ai_reconciliation_live.py`
 entry. The existing owner-file existence check continues to escalate stale
 owners to FULL.
@@ -160,15 +164,17 @@ Parked hardening: none.
 - `/tmp/atlas-pr2259-venv/bin/python -m pytest tests/test_security_policy_docs.py tests/test_security_guardrails_workflow.py tests/test_select_impacted_tests.py -q`
   -- passed locally, 116 passed, 43 subtests passed.
 - `/tmp/atlas-pr2259-venv/bin/python -m pytest tests/test_audit_pr_watcher_safety.py tests/test_security_policy_docs.py tests/test_security_guardrails_workflow.py tests/test_select_impacted_tests.py -q`
-  -- passed locally, 138 passed, 43 subtests passed.
+  -- passed locally, 139 passed, 43 subtests passed.
+- `/tmp/atlas-pr2259-venv/bin/python -m pytest tests/test_audit_pr_watcher_safety.py tests/test_select_impacted_tests.py -q`
+  -- passed locally, 84 passed.
 - `python3 -m py_compile scripts/select_impacted_tests.py` -- passed locally.
 
 ## Estimated diff size
 
 | File | LOC |
 |---|---:|
-| `plans/PR-Unit-Gate-Governance-Selector.md` | 174 |
+| `plans/PR-Unit-Gate-Governance-Selector.md` | 180 |
 | `scripts/select_impacted_tests.py` | 19 |
-| `tests/test_audit_pr_watcher_safety.py` | 15 |
+| `tests/test_audit_pr_watcher_safety.py` | 28 |
 | `tests/test_select_impacted_tests.py` | 41 |
-| **Total** | **249** |
+| **Total** | **268** |

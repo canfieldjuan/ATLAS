@@ -181,6 +181,19 @@ def test_fails_on_autonomous_coding_map_that_grants_watcher_merge_authority(tmp_
     assert "repo docs/templates must not grant merge authority" in result.stdout
 
 
+def test_checked_out_repo_docs_do_not_grant_watcher_merge_authority() -> None:
+    result = subprocess.run(
+        [sys.executable, str(SCRIPT), "--repo-root", str(REPO_ROOT), "--repo-only"],
+        check=False,
+        capture_output=True,
+        text=True,
+        cwd=REPO_ROOT,
+    )
+
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert "OK: watcher docs/config/source grant no merge authority" in result.stdout
+
+
 @pytest.mark.parametrize("surface", ["timer", "notification", "bridge", "wake bridge"])
 def test_fails_on_docs_that_grant_wake_surface_merge_authority(
     tmp_path: Path,
