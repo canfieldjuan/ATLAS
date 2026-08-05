@@ -71,7 +71,7 @@ These workflows use `pull_request_target` but execute trusted base-branch code
 and inspect PR content as data. They exist because a PR can edit the gate it is
 trying to pass.
 
-| Workflow | Required job/context | Purpose |
+| Workflow | Published job/context | Purpose |
 |---|---|---|
 | `ai_reconciliation_live.yml` | `live-reconciliation` | Fails when PR body claims AI findings are fixed/waived while Codex connector threads remain open |
 | `pr_body_contract.yml` | `pr-body-contract` | Ensures PR body names the plan and follows AGENTS.md body shape |
@@ -89,7 +89,9 @@ trying to pass.
 `pr-body-contract`, `Gitleaks PR secret scan`, and
 `Gitleaks baseline growth guard`. Live branch protection can drift from that
 expected set; the audit workflow reports that drift when its read token is
-configured.
+configured. `pre-push-audit` and `unit-gate` are visible CI signals, not
+branch-required contexts, until the blockers recorded in
+`docs/audits/required-workflow-enrollment-audit-2026-08-04.md` are closed.
 
 ### PR secret and product gates
 

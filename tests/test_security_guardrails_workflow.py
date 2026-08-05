@@ -123,8 +123,8 @@ def test_security_guardrails_docs_name_required_gitleaks_checks() -> None:
     for context in REQUIRED_STATUS_CONTEXTS:
         assert f"`{context}`" in text
     assert "`Branch Protection Required Checks` workflow" in text
-    assert "live GitHub settings still require only" in normalized_text
-    assert "REST PATCH" in text
+    assert "live GitHub settings contain every registry-required context" in normalized_text
+    assert "not an exact-set audit for extra required contexts" in normalized_text
 
 
 def test_branch_protection_workflow_audits_live_required_checks() -> None:
