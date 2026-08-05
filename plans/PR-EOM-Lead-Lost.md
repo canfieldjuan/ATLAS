@@ -6,7 +6,7 @@ The EOM funnel shipped the happy path only (`new → estimate_booked → won →
 
 ### Problem-derived contract
 
-The transition must be **endpoint-driven** (EOM stage changes are already forced through the funnel service by `crm_provider.py:_validate_eom_transition`, and NocoDB is revoked from writing `lead_stage` by migration 354). It must record **why** a lead was lost, be **idempotent**, be **reversible** (re-open), and must **not** let a lost lead still receive a calendar event from an in-flight booking. It must add no new stored side-table and no schema DDL.
+The transition must be **endpoint-driven** (EOM stage changes are already forced through the funnel service by `crm_provider.py:_validate_eom_transition`, and NocoDB is revoked from writing `lead_stage` by migration 354). It must record **why** a lead was lost, be **idempotent**, be **reversible** (re-open), and must **not** let a lost lead still receive a calendar event from an in-flight booking. It adds no new stored side-table and no table/column DDL; the one migration is an additive, concurrent, partial **index** (below).
 
 ## Scope (this PR)
 
@@ -16,27 +16,31 @@ Slice phase: vertical slice
 - `atlas_brain/eom_api/funnel.py`: `POST /eom-funnel/leads/{contact_id}/lost` (reason-carrying) and `POST /eom-funnel/leads/{contact_id}/reopen`, mirroring the `customer-handoffs` route (no calendar). New `EOMLeadLostRequest` (`reason_code` enum + optional `note`, `extra="forbid"`).
 - `atlas_brain/services/eom_lead_conversion.py`: `EOMLeadLost`/`EOMLeadReopen` dataclasses + `mark_eom_lead_lost`/`reopen_eom_lead` delegates.
 - `atlas_brain/services/crm_provider.py`: two single-transaction CRM methods structured like `finalize_eom_customer_handoff` — contact-row-first advisory lock order, in-flight booking fence, guarded compare-and-set on `lead_stage`, and an idempotent lifecycle INSERT.
+- `atlas_brain/storage/migrations/362_eom_lead_disposition_operation_key_index.sql`: an additive, concurrent, partial index so the cross-contact key-ownership probe is index-backed (below).
 - Unit + real-Postgres integration tests.
 
 ### Files touched
 - `atlas_brain/eom_api/funnel.py`
 - `atlas_brain/services/eom_lead_conversion.py`
 - `atlas_brain/services/crm_provider.py`
+- `atlas_brain/storage/migrations/362_eom_lead_disposition_operation_key_index.sql`
 - `tests/test_eom_lead_conversion.py`
 - `tests/test_eom_lead_conversion_integration.py`
+- `tests/test_migrations_runner.py`
 - `plans/PR-EOM-Lead-Lost.md`
 
 ### Review Contract
 
-- Reviewer rules triggered: R2, R8.
-- **R2 (tests / failure branches):** unit tests cover the reason model (valid/invalid code, blank-note→NULL), the actor forwarding, and reopen; the integration test proves the stage flip, the reason on the ledger, idempotent replay (exactly one event), and reopen — against real Postgres.
+- Reviewer rules triggered: R2, R4, R8.
+- **R2 (tests / failure branches):** unit tests cover the reason model (valid/invalid code, blank-note→NULL), the actor forwarding, and reopen; the integration test proves the stage flip, the reason on the ledger, idempotent replay (exactly one event), and reopen — against real Postgres. `test_migrations_runner.py` asserts the 362 index shape.
+- **R4 (data / migration safety):** migration 362 is additive only — a `CREATE INDEX CONCURRENTLY` partial index on `eom_lead_lifecycle_events (operation_key, contact_id, event_type) WHERE operation_key IS NOT NULL AND event_type IN ('lead_lost','lead_reopened')`. It changes no table, column, uniqueness, trigger, or row state; it is replay-safe (concurrent drop-then-recreate, no `IF NOT EXISTS` on create, mirroring 359) and carries rollback evidence. It is production-only, matching how the sibling index migrations (357/358/359) are excluded from the integration-test schema builder.
 - **R8 (concurrency / durability):** the transitions take a transaction-scoped `pg_advisory_xact_lock` on `eom-lead-lost:contact:<id>` and lock the contact row `FOR UPDATE` **before** the lifecycle rows — the same contact-before-lifecycle order the booking/handoff paths use — so a concurrent booking/handoff cannot deadlock (40P01). The in-flight booking fence **mirrors** the handoff: both the execution-lock probe (`pg_try_advisory_xact_lock('eom-estimate-booking:execution:<key>')`) **and** the subsequent requested/ambiguous-not-terminal block, so a lost transition cannot race an outstanding Calendar call **or** strand a booking whose executor died mid-flight. The lost/reopen idempotency keys are rejected when reused across a different contact, matching the booking/handoff paths, and an idempotent replay is validated against the current stage (a replay after the opposite transition is a 409, not a stale success).
 
 ### Boundary-change enumeration
 No module/ownership boundary changes: new routes register on the existing `eom_funnel_router`; new service delegates + CRM methods sit beside their siblings. No new imports across layers beyond the existing funnel service surface.
 
 ### Deployed-config probing
-No env/config or deployed-config change. No new secret, blueprint slot, or migration; `event_type` is bare `VARCHAR(64)` so `lead_lost`/`lead_reopened` need no DDL.
+No env/config or deployed-config change. No new secret or blueprint slot; `event_type` is bare `VARCHAR(64)` so `lead_lost`/`lead_reopened` need no table/column DDL. The single migration (362) is an additive concurrent index — no data movement, no lock on writes.
 
 ## Mechanism
 
@@ -64,8 +68,9 @@ No env/config or deployed-config change. No new secret, blueprint slot, or migra
 | Change | LOC |
 |---|---|
 | funnel.py routes + model | ~85 |
-| crm_provider.py two transactions + review-hardening | ~357 |
+| crm_provider.py two transactions + review-hardening | ~367 |
 | service delegates | ~50 |
-| unit + integration tests | ~315 |
-| this plan doc | ~85 |
-| **Total** | **~890** |
+| migration 362 (concurrent partial index) | ~40 |
+| unit + integration + migration-runner tests | ~410 |
+| this plan doc | ~95 |
+| **Total** | **~1050** |
