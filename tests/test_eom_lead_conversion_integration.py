@@ -1826,6 +1826,21 @@ async def test_privilege_migration_runs_from_a_real_non_superuser_login(monkeypa
                 type("Config", (), {"api_enabled": True})(),
                 database_enabled=True,
             )
+
+            # #2286: the readiness guard above does not check the runtime's own
+            # privileges, so it passed even though 354's pre-transfer self-grant
+            # left the runtime with nothing on eom_customer_handoffs. The app
+            # finalizes handoffs with a direct INSERT as this login, so assert
+            # the DML survives the ownership transfer AND the membership revoke.
+            for privilege in ("SELECT", "INSERT", "UPDATE", "DELETE"):
+                assert await verifier_conn.fetchval(
+                    "SELECT has_table_privilege("
+                    "current_user, 'eom_customer_handoffs', $1)",
+                    privilege,
+                ), (
+                    f"runtime login lost {privilege} on eom_customer_handoffs "
+                    "after ownership transfer + membership revoke (#2286)"
+                )
         finally:
             await verifier_conn.close()
 
