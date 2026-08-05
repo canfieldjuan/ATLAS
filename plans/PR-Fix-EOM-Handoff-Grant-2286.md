@@ -52,7 +52,13 @@ A table owner's privileges are implicit, so `GRANT ... TO <runtime>` while `<run
 Mechanism proven against real PostgreSQL (throwaway roles, rolled back): the buggy self-grant-then-transfer leaves the runtime with `INSERT = false`; granting as the owner after transfer yields `true`; and it stays `true` after the membership revoke. The extended integration test exercises the full path (non-super login applies 354, membership revoked) and asserts the DML persists; it is red against the pre-fix migration and green after.
 
 ## Estimated diff size
-~35 lines: a ~20-line SQL block in migration 354 and a ~12-line assertion loop in the existing non-superuser test, plus this plan.
+
+| Change | LOC |
+|---|---|
+| migration 354 post-transfer grant block | ~27 |
+| non-superuser regression assertion | ~15 |
+| this plan doc | ~65 |
+| **Total** | ~107 |
 
 ## Cold diff reconstruction
 - `354_...sql`: after the three `ALTER ... OWNER TO atlas_eom_handoff_owner` statements, add a `DO` block that captures `current_user`, `SET LOCAL ROLE atlas_eom_handoff_owner`, `GRANT SELECT, INSERT, UPDATE, DELETE, TRUNCATE ON <schema>.eom_customer_handoffs TO <runtime>`, then `RESET ROLE`.
