@@ -1,5 +1,30 @@
 # Required Workflow Enrollment Audit - 2026-08-04
 
+## 2026-08-05 Recheck
+
+#2290 closed the `unit-gate` selector blocker by mapping CI/security governance
+docs to their owning tests and by making the watcher governance doc owner run
+against the checked-out repository docs. The recheck decision is:
+
+- `unit-gate`: promote to `branch_required` and require it in live branch
+  protection.
+- `pre-push-audit`: keep at `ci_blocking_not_required` until the trusted-base
+  PR-side docs/test consistency blocker has a safe data-only probe.
+
+Fresh evidence on 2026-08-05:
+
+- #2290's `unit-gate` run passed in about 2m21s.
+- The latest sampled `unit_gate.yml` runs show the selector now produces bounded
+  runs for governance-doc changes. Recent failures were legitimate PR test
+  failures, not runner flakes.
+- A fresh live branch-protection payload now includes `unit-gate` pinned to the
+  GitHub Actions app source with `strict: false`, and
+  `scripts/check_required_status_checks.py` passes against that payload.
+- `pre-push-audit` remains useful and green in recent samples, but its open
+  blocker is different: because PR events run trusted base code, PR-side changes
+  to gate docs/tests can still be observed only after merge unless a safe
+  data-only consistency probe is added.
+
 ## Decision
 
 Keep `pre-push-audit` and `unit-gate` at `ci_blocking_not_required` for now.
