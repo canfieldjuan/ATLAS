@@ -84,6 +84,22 @@ EXPLICIT_TEST_OWNERS: dict[str, tuple[str, ...]] = {
     "ci/gates.yml": (
         "tests/test_security_guardrails_workflow.py",
     ),
+    "docs/SECURITY_GUARDRAILS.md": (
+        "tests/test_security_guardrails_workflow.py",
+        "tests/test_security_policy_docs.py",
+    ),
+    "docs/ci_cd_autonomous_coding_map.md": (
+        "tests/test_audit_pr_watcher_safety.py",
+    ),
+    "docs/ci_cd_runtime_duplication_audit.md": (
+        "tests/test_security_guardrails_workflow.py",
+    ),
+    "docs/audits/agents-mechanical-enforcement-audit-2026-07-29.md": (
+        "tests/test_security_guardrails_workflow.py",
+    ),
+    "docs/audits/required-workflow-enrollment-audit-2026-08-04.md": (
+        "tests/test_security_guardrails_workflow.py",
+    ),
     "scripts/audit_ai_reconciliation.py": (
         "tests/test_audit_ai_reconciliation.py",
         "tests/test_audit_pr_body.py",
@@ -101,9 +117,6 @@ EXPLICIT_TEST_OWNERS: dict[str, tuple[str, ...]] = {
     ),
     "scripts/check_required_status_checks.py": (
         "tests/test_security_guardrails_workflow.py",
-    ),
-    "scripts/check_ai_reconciliation_live.py": (
-        "tests/test_check_ai_reconciliation_live.py",
     ),
     "scripts/codex_wake_bridge.py": (
         "tests/test_codex_wake_bridge.py",
