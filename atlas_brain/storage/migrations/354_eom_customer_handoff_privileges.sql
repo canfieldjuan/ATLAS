@@ -211,6 +211,33 @@ ALTER TABLE eom_customer_handoffs OWNER TO atlas_eom_handoff_owner;
 ALTER FUNCTION require_eom_customer_handoff_finalization() OWNER TO atlas_eom_handoff_owner;
 ALTER FUNCTION prevent_eom_customer_handoff_mutation() OWNER TO atlas_eom_handoff_owner;
 
+-- Re-grant the runtime's handoff DML AS the new owner, after the transfer.
+-- The "Preserve Atlas finalization access" grant inside the DO block above is
+-- issued while the runtime still OWNS eom_customer_handoffs, where a table
+-- owner's privileges are implicit -- so that self-grant never materializes a
+-- durable ACL entry, and the runtime is left with no privileges the instant
+-- ownership moves to atlas_eom_handoff_owner. That silently breaks the direct
+-- INSERT the app makes when finalizing handoffs (crm_provider). Issue the grant
+-- here as the guard owner instead, so it persists past both the transfer and
+-- the DBA's post-commit membership revoke. The runtime still holds admin
+-- membership in atlas_eom_handoff_owner at this point in the migration, so the
+-- SET ROLE is permitted; the revoke only runs after this migration commits.
+DO $$
+DECLARE
+    runtime_role TEXT := current_user;
+    schema_name TEXT := current_schema();
+BEGIN
+    EXECUTE 'SET LOCAL ROLE atlas_eom_handoff_owner';
+    EXECUTE format(
+        'GRANT SELECT, INSERT, UPDATE, DELETE, TRUNCATE '
+        || 'ON TABLE %I.eom_customer_handoffs TO %I',
+        schema_name,
+        runtime_role
+    );
+    RESET ROLE;
+END;
+$$;
+
 -- A non-superuser cannot revoke a membership whose grantor is the database
 -- administrator. Do not pretend otherwise: the full-app startup preflight
 -- blocks while that membership remains, and the grantor revokes it only after
