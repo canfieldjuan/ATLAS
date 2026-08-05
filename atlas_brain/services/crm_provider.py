@@ -3458,14 +3458,25 @@ class DatabaseCRMProvider:
         from .eom_lead_conversion import EOMLeadConversionError
         from .eom_lead_ingress import EOM_BUSINESS_CONTEXT_ID
 
-        admission = ("new", "estimate_booked", "won")
+        # 'won' is deliberately excluded: a won lead already has a booked
+        # first clean and an enqueued onboarding welcome draft, and marking it
+        # lost would need to atomically revoke that draft and cancel the
+        # calendar event. Neither of #2289's cases ('spam' at new,
+        # 'declined_after_estimate' at estimate_booked) is won; losing a won
+        # lead is deferred to a follow-up that owns the draft/calendar teardown.
+        admission = ("new", "estimate_booked")
 
-        def _result(from_stage: str, *, idempotent: bool) -> dict[str, Any]:
+        def _result(
+            from_stage: str,
+            *,
+            idempotent: bool,
+            reason_code_value: str | None = None,
+        ) -> dict[str, Any]:
             return {
                 "contact_id": str(contact_id),
                 "lead_stage": "lost",
                 "status": "lost",
-                "reason_code": reason_code,
+                "reason_code": reason_code_value or reason_code,
                 "from_stage": from_stage,
                 "idempotent": idempotent,
             }
@@ -3484,7 +3495,7 @@ class DatabaseCRMProvider:
                 )
             replay = await conn.fetchrow(
                 """
-                SELECT from_stage
+                SELECT from_stage, metadata->>'lost_reason_code' AS reason_code
                 FROM eom_lead_lifecycle_events
                 WHERE contact_id = $1
                   AND event_type = 'lead_lost'
@@ -3493,6 +3504,25 @@ class DatabaseCRMProvider:
                 contact_id,
                 operation_key,
             )
+            # An Idempotency-Key belongs to exactly one lead: the same key on a
+            # different contact is a client error, not a second lost lead. The
+            # booking/handoff paths reject the same reuse.
+            foreign_key_owner = await conn.fetchval(
+                """
+                SELECT EXISTS (
+                    SELECT 1 FROM eom_lead_lifecycle_events
+                    WHERE operation_key = $1
+                      AND event_type = 'lead_lost'
+                      AND contact_id <> $2
+                )
+                """,
+                operation_key,
+                contact_id,
+            )
+            if foreign_key_owner:
+                raise EOMLeadConversionError(
+                    409, "Idempotency-Key already belongs to another EOM lead"
+                )
             contact = await conn.fetchrow(
                 """
                 SELECT id, business_context_id, contact_type, lead_stage, status
@@ -3508,7 +3538,21 @@ class DatabaseCRMProvider:
             ):
                 raise EOMLeadConversionError(404, "EOM lead was not found")
             if replay is not None:
-                return _result(str(replay["from_stage"]), idempotent=True)
+                # A replay is only truthfully idempotent while the lead is still
+                # lost. If it was reopened after this key, reporting "lost"
+                # would assert a stage the row no longer has.
+                if (
+                    contact["contact_type"] != "lead"
+                    or contact["lead_stage"] != "lost"
+                ):
+                    raise EOMLeadConversionError(
+                        409, "EOM lead was reopened after this operation"
+                    )
+                return _result(
+                    str(replay["from_stage"]),
+                    idempotent=True,
+                    reason_code_value=replay["reason_code"],
+                )
             if contact["contact_type"] == "lead" and contact["lead_stage"] == "lost":
                 # Already lost under a different key: idempotent no-op.
                 return _result("lost", idempotent=True)
@@ -3552,6 +3596,37 @@ class DatabaseCRMProvider:
                         409,
                         "EOM booking is still executing; retry after it settles",
                     )
+            # The execution lock only proves no attempt is running right now; a
+            # requested/ambiguous booking whose executor died mid-flight holds
+            # no lock yet is unreconciled. Mirror the handoff fence and refuse
+            # to lose a lead with an outstanding or unreconciled calendar event.
+            blocking_booking = next(
+                (
+                    event_types
+                    for event_types in booking_event_types.values()
+                    if (
+                        bool(event_types & _ALL_EOM_AMBIGUOUS_EVENTS)
+                        and not (event_types & _ALL_EOM_BOOKED_EVENTS)
+                    )
+                    or (
+                        bool(event_types & _ALL_EOM_REQUESTED_EVENTS)
+                        and not self._eom_estimate_booking_operation_is_terminal(
+                            event_types
+                        )
+                    )
+                ),
+                None,
+            )
+            if blocking_booking is not None:
+                if blocking_booking & _ALL_EOM_AMBIGUOUS_EVENTS:
+                    raise EOMLeadConversionError(
+                        409,
+                        "EOM booking requires calendar reconciliation",
+                    )
+                raise EOMLeadConversionError(
+                    409,
+                    "EOM booking is still pending calendar completion",
+                )
             from_stage = str(contact["lead_stage"])
             updated = await conn.fetchrow(
                 """
@@ -3636,6 +3711,22 @@ class DatabaseCRMProvider:
                 contact_id,
                 operation_key,
             )
+            foreign_key_owner = await conn.fetchval(
+                """
+                SELECT EXISTS (
+                    SELECT 1 FROM eom_lead_lifecycle_events
+                    WHERE operation_key = $1
+                      AND event_type = 'lead_reopened'
+                      AND contact_id <> $2
+                )
+                """,
+                operation_key,
+                contact_id,
+            )
+            if foreign_key_owner:
+                raise EOMLeadConversionError(
+                    409, "Idempotency-Key already belongs to another EOM lead"
+                )
             contact = await conn.fetchrow(
                 """
                 SELECT id, business_context_id, contact_type, lead_stage, status
@@ -3651,12 +3742,26 @@ class DatabaseCRMProvider:
             ):
                 raise EOMLeadConversionError(404, "EOM lead was not found")
             if replay:
+                # Only idempotent while the lead is not lost again; a later
+                # lost under a new key means this reopen no longer describes
+                # the row.
+                if contact["contact_type"] == "lead" and contact["lead_stage"] == "lost":
+                    raise EOMLeadConversionError(
+                        409, "EOM lead was marked lost after this operation"
+                    )
                 return _result(idempotent=True)
             if contact["contact_type"] == "lead" and contact["lead_stage"] == "new":
                 return _result(idempotent=True)
             if contact["contact_type"] != "lead" or contact["lead_stage"] != "lost":
                 raise EOMLeadConversionError(
                     409, "EOM lead is not lost and cannot be reopened"
+                )
+            if contact["status"] != "active":
+                # Reopen promises the lead returns to the active review queue;
+                # flipping only lead_stage on an archived/inactive contact would
+                # report status 'active' while the row stays out of the queue.
+                raise EOMLeadConversionError(
+                    409, "EOM lead must be active to reopen"
                 )
             updated = await conn.fetchrow(
                 """
@@ -3666,6 +3771,7 @@ class DatabaseCRMProvider:
                   AND business_context_id = $2
                   AND contact_type = 'lead'
                   AND lead_stage = 'lost'
+                  AND status = 'active'
                 RETURNING id
                 """,
                 contact_id,
