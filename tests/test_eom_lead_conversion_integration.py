@@ -3622,7 +3622,10 @@ async def test_mark_lead_lost_records_reason_is_idempotent_and_reopens():
     schema = f"atlas_eom_lead_lost_{uuid.uuid4().hex}"
     conn = await asyncpg.connect(database_url)
     try:
-        await _prepare_schema(conn, schema)
+        # lost/reopen need only the lifecycle + lead_stage schema, not the
+        # privilege-migration role bootstrap (354), so it runs without a
+        # disposable-role-admin session.
+        await _prepare_schema(conn, schema, apply_privilege_migration=False)
         provider = DatabaseCRMProvider(pool=conn)
         contact_id = uuid.uuid4()
         await _insert_contact(
