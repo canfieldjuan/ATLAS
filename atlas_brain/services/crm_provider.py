@@ -27,6 +27,14 @@ from uuid import UUID, uuid4
 logger = logging.getLogger("atlas.services.crm_provider")
 
 _INTERACTION_DEDUPE_SUMMARY_MAX_CHARS = 2000
+
+# How old a 'sending' claim must be before operator reconciliation (revoke
+# or confirm-sent) may act on it. An active approve-send holds the window
+# between its transport POST and its confirmation far below this, so a
+# fresh claim can never be recorded as revoked while the customer email may
+# already be delivered. Well inside Resend's 24h idempotency-dedupe window,
+# so an operator-driven retry after reconciliation stays duplicate-safe.
+_EOM_ONBOARDING_SENDING_STALE_AFTER_MINUTES = 15
 _INTERACTION_DEDUPE_ANCHOR_KEYS = (
     "crm_event_id",
     "source_ref",
@@ -324,6 +332,17 @@ class DatabaseCRMProvider:
         from ..storage.database import get_db_pool
 
         return get_db_pool()
+
+    @property
+    def pool(self) -> Any:
+        """The store this provider reads and writes.
+
+        Evidence writers that describe rows owned by this provider (e.g.
+        sent_emails history for an onboarding draft) must share this pool;
+        the EOM funnel binds the provider to its own connection string, so
+        the global pool may be a different database entirely.
+        """
+        return self._get_pool()
 
     async def health_check(self) -> bool:
         try:
@@ -2368,6 +2387,329 @@ class DatabaseCRMProvider:
             conn, operation_key
         )
 
+    @staticmethod
+    def _eom_onboarding_draft_closed(
+        row: Mapping[str, Any], *, idempotent: bool = False
+    ) -> dict[str, Any]:
+        """Return the closed JSON-safe draft shape the funnel routes expose."""
+
+        def _iso(value: Any) -> str | None:
+            return value.isoformat() if value is not None else None
+
+        return {
+            "draft_id": str(row["id"]),
+            "contact_id": str(row["contact_id"]),
+            "status": str(row["status"]),
+            "recipient_email": row["recipient_email"],
+            "blocker": row["blocker"],
+            "subject": str(row["subject"]),
+            "body": str(row["body"]),
+            "created_at": _iso(row["created_at"]),
+            "claimed_at": _iso(row["claimed_at"]),
+            "sent_at": _iso(row["sent_at"]),
+            "revoked_at": _iso(row["revoked_at"]),
+            "approved_by_name": row["approved_by_name"],
+            "idempotent": idempotent,
+        }
+
+    async def list_eom_onboarding_drafts(
+        self,
+        *,
+        status: str = "pending",
+        limit: int = 100,
+        cursor_created_at: datetime | None = None,
+        cursor_draft_id: UUID | None = None,
+    ) -> list[dict[str, Any]]:
+        """Return the closed office-review projection of onboarding drafts."""
+        from .eom_lead_conversion import EOMLeadConversionError
+
+        if status not in ("pending", "sending", "sent", "revoked"):
+            raise EOMLeadConversionError(
+                422, "EOM onboarding draft status filter is not recognized"
+            )
+        cursor_clause = ""
+        params: list[Any] = [status, limit]
+        if cursor_created_at is not None and cursor_draft_id is not None:
+            cursor_clause = "AND (d.created_at, d.id) < ($3::timestamptz, $4::uuid)"
+            params.extend([cursor_created_at, cursor_draft_id])
+        pool = self._get_pool()
+        rows = await pool.fetch(
+            f"""
+            SELECT
+                d.id AS draft_id,
+                d.contact_id,
+                c.full_name,
+                d.recipient_email,
+                d.blocker,
+                d.subject,
+                d.body,
+                d.status,
+                d.created_at,
+                d.claimed_at,
+                d.sent_at,
+                d.revoked_at,
+                d.approved_by_name
+            FROM eom_onboarding_email_drafts AS d
+            JOIN contacts AS c ON c.id = d.contact_id
+            WHERE d.status = $1
+              {cursor_clause}
+            ORDER BY d.created_at DESC, d.id DESC
+            LIMIT $2
+            """,
+            *params,
+        )
+        return [dict(row) for row in rows]
+
+    async def get_eom_onboarding_draft(self, draft_id: str) -> dict[str, Any] | None:
+        pool = self._get_pool()
+        row = await pool.fetchrow(
+            "SELECT * FROM eom_onboarding_email_drafts WHERE id = $1::uuid",
+            str(draft_id),
+        )
+        return dict(row) if row else None
+
+    async def update_eom_onboarding_draft(
+        self,
+        *,
+        draft_id: str,
+        subject: str | None = None,
+        body: str | None = None,
+        recipient_email: str | None = None,
+    ) -> dict[str, Any]:
+        """Edit a draft while it is still pending.
+
+        Setting a recipient clears blocker='no_email': the draft becomes
+        claimable under migration 360's readiness predicate. Any other
+        status rejects 409 -- a claimed, sent, or revoked snapshot is
+        evidence and must not mutate.
+        """
+        from .eom_lead_conversion import EOMLeadConversionError
+
+        set_fragments: list[str] = []
+        params: list[Any] = [str(draft_id)]
+        for column, value in (
+            ("subject", subject),
+            ("body", body),
+        ):
+            if value is not None:
+                params.append(value)
+                set_fragments.append(f"{column} = ${len(params)}")
+        if recipient_email is not None:
+            params.append(recipient_email)
+            set_fragments.append(f"recipient_email = ${len(params)}")
+            set_fragments.append("blocker = NULL")
+        if not set_fragments:
+            raise EOMLeadConversionError(
+                422, "EOM onboarding draft edit requires at least one field"
+            )
+        pool = self._get_pool()
+        row = await pool.fetchrow(
+            f"""
+            UPDATE eom_onboarding_email_drafts
+               SET {', '.join(set_fragments)}
+             WHERE id = $1::uuid
+               AND status = 'pending'
+             RETURNING *
+            """,
+            *params,
+        )
+        if row is not None:
+            return self._eom_onboarding_draft_closed(row)
+        existing = await self.get_eom_onboarding_draft(draft_id)
+        if existing is None:
+            raise EOMLeadConversionError(404, "EOM onboarding draft not found")
+        raise EOMLeadConversionError(
+            409,
+            "EOM onboarding draft is "
+            f"{existing['status']}; only pending drafts can be edited",
+        )
+
+    async def claim_eom_onboarding_draft(
+        self,
+        *,
+        draft_id: str,
+        actor_id: int,
+        actor_name: str,
+    ) -> dict[str, Any]:
+        """Atomically claim one pending draft into 'sending' (migration 360).
+
+        The readiness predicate is part of the claim: a blocked or
+        recipient-less row is never claimable. Zero updated rows settle to
+        an idempotent replay only when the draft is already sent; every
+        other state is a 4xx the office can act on.
+        """
+        from .eom_lead_conversion import EOMLeadConversionError
+
+        pool = self._get_pool()
+        row = await pool.fetchrow(
+            """
+            UPDATE eom_onboarding_email_drafts AS d
+               SET status = 'sending', claimed_at = NOW(),
+                   approved_by_employee_id = $2, approved_by_name = $3
+             WHERE d.id = $1::uuid
+               AND d.status = 'pending'
+               AND d.blocker IS NULL
+               AND d.recipient_email IS NOT NULL
+               AND EXISTS (
+                   SELECT 1
+                   FROM contacts AS c
+                   WHERE c.id = d.contact_id
+                     AND c.business_context_id = 'effingham_maids'
+                     AND c.status = 'active'
+               )
+             RETURNING *
+            """,
+            str(draft_id),
+            actor_id,
+            actor_name,
+        )
+        if row is not None:
+            return {
+                "claimed": True,
+                "draft": self._eom_onboarding_draft_closed(row),
+            }
+        existing = await self.get_eom_onboarding_draft(draft_id)
+        if existing is None:
+            raise EOMLeadConversionError(404, "EOM onboarding draft not found")
+        status = str(existing["status"])
+        if status == "sent":
+            return {
+                "claimed": False,
+                "draft": self._eom_onboarding_draft_closed(
+                    existing, idempotent=True
+                ),
+            }
+        if status == "sending":
+            raise EOMLeadConversionError(
+                409,
+                "EOM onboarding draft send is already in flight or requires "
+                "reconciliation",
+            )
+        if status == "revoked":
+            raise EOMLeadConversionError(409, "EOM onboarding draft is revoked")
+        if existing["blocker"]:
+            raise EOMLeadConversionError(
+                409,
+                f"EOM onboarding draft is blocked: {existing['blocker']}",
+            )
+        if existing["recipient_email"] is None:
+            raise EOMLeadConversionError(
+                409, "EOM onboarding draft has no recipient email"
+            )
+        # The draft itself was claimable, so the contact guard is the only
+        # predicate left: same admission the booking family applies before
+        # any customer-facing EOM action.
+        raise EOMLeadConversionError(
+            409,
+            "EOM onboarding draft contact is not an active "
+            "effingham_maids contact",
+        )
+
+    async def confirm_eom_onboarding_draft_sent(
+        self, *, draft_id: str, require_stale: bool = False
+    ) -> dict[str, Any]:
+        """Confirm delivery for a claimed draft (sending -> sent).
+
+        The approve flow confirms immediately after transport acceptance
+        (require_stale=False: it KNOWS the send outcome). The operator
+        reconciliation route passes require_stale=True so a fresh claim --
+        a send that may still be mid-flight with an unknown outcome --
+        cannot be recorded as delivered before it settles or goes stale.
+        """
+        from .eom_lead_conversion import EOMLeadConversionError
+
+        pool = self._get_pool()
+        stale_clause = (
+            "AND claimed_at <= NOW() - make_interval(mins => $2)"
+            if require_stale
+            else ""
+        )
+        params: list[Any] = [str(draft_id)]
+        if require_stale:
+            params.append(_EOM_ONBOARDING_SENDING_STALE_AFTER_MINUTES)
+        row = await pool.fetchrow(
+            f"""
+            UPDATE eom_onboarding_email_drafts
+               SET status = 'sent', sent_at = NOW()
+             WHERE id = $1::uuid
+               AND status = 'sending'
+               {stale_clause}
+             RETURNING *
+            """,
+            *params,
+        )
+        if row is not None:
+            return self._eom_onboarding_draft_closed(row)
+        existing = await self.get_eom_onboarding_draft(draft_id)
+        if existing is None:
+            raise EOMLeadConversionError(404, "EOM onboarding draft not found")
+        status = str(existing["status"])
+        if status == "sent":
+            return self._eom_onboarding_draft_closed(existing, idempotent=True)
+        if status == "revoked":
+            raise EOMLeadConversionError(
+                409,
+                "EOM onboarding draft was revoked while sending; reconcile "
+                "against the transport log",
+            )
+        if status == "sending":
+            raise EOMLeadConversionError(
+                409,
+                "EOM onboarding draft send is still in flight; reconcile "
+                "only after the claim goes stale",
+            )
+        raise EOMLeadConversionError(
+            409, "EOM onboarding draft has not been claimed for sending"
+        )
+
+    async def revoke_eom_onboarding_draft(self, *, draft_id: str) -> dict[str, Any]:
+        """Revoke a pending draft, or reconcile a STALE 'sending' one.
+
+        Revoking from 'sending' is the migration-360 operator recovery
+        action after checking the transport log, and it is admitted only
+        once the claim is stale: an active send between the transport POST
+        and its confirmation must not be recordable as revoked when the
+        customer email may already be delivered. A sent draft is immutable
+        delivery evidence and rejects.
+        """
+        from .eom_lead_conversion import EOMLeadConversionError
+
+        pool = self._get_pool()
+        row = await pool.fetchrow(
+            """
+            UPDATE eom_onboarding_email_drafts
+               SET status = 'revoked', revoked_at = NOW()
+             WHERE id = $1::uuid
+               AND (
+                   status = 'pending'
+                   OR (
+                       status = 'sending'
+                       AND claimed_at <= NOW() - make_interval(mins => $2)
+                   )
+               )
+             RETURNING *
+            """,
+            str(draft_id),
+            _EOM_ONBOARDING_SENDING_STALE_AFTER_MINUTES,
+        )
+        if row is not None:
+            return self._eom_onboarding_draft_closed(row)
+        existing = await self.get_eom_onboarding_draft(draft_id)
+        if existing is None:
+            raise EOMLeadConversionError(404, "EOM onboarding draft not found")
+        status = str(existing["status"])
+        if status == "revoked":
+            return self._eom_onboarding_draft_closed(existing, idempotent=True)
+        if status == "sending":
+            raise EOMLeadConversionError(
+                409,
+                "EOM onboarding draft send is still in flight; reconcile "
+                "only after the claim goes stale",
+            )
+        raise EOMLeadConversionError(
+            409, "EOM onboarding draft was already sent and cannot be revoked"
+        )
+
     async def open_customer_service_ticket(
         self,
         *,
@@ -2551,9 +2893,11 @@ class DatabaseCRMProvider:
         intent: Optional[str] = None,
         metadata: Optional[dict[str, Any]] = None,
     ) -> dict[str, Any]:
-        from ..storage.database import get_db_pool
-
-        pool = get_db_pool()
+        # Interaction evidence must land in the store this provider is
+        # bound to: the EOM funnel runs the provider against its own
+        # connection string, where the global pool may be a different
+        # database (or uninitialized).
+        pool = self._get_pool()
         interaction_id = str(uuid4())
         occ = _coerce_occurrence(occurred_at)
         metadata_json = json.dumps(metadata or {})
