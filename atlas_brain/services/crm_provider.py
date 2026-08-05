@@ -3438,6 +3438,257 @@ class DatabaseCRMProvider:
             )
             return _result(handoff, idempotent=False)
 
+    async def mark_eom_lead_lost(
+        self,
+        *,
+        contact_id: str,
+        reason_code: str,
+        note: str | None,
+        operation_key: str,
+        actor_id: int,
+        actor_name: str,
+    ) -> dict[str, Any]:
+        """Atomically mark one EOM lead lost, recording a reason on the ledger.
+
+        Reversible via reopen_eom_lead; no customer/site or calendar side
+        effect. Fences an in-flight booking the same way the customer handoff
+        does, so a lead cannot be marked lost while a calendar call is still
+        outstanding (which would otherwise land an event on a lost lead).
+        """
+        from .eom_lead_conversion import EOMLeadConversionError
+        from .eom_lead_ingress import EOM_BUSINESS_CONTEXT_ID
+
+        admission = ("new", "estimate_booked", "won")
+
+        def _result(from_stage: str, *, idempotent: bool) -> dict[str, Any]:
+            return {
+                "contact_id": str(contact_id),
+                "lead_stage": "lost",
+                "status": "lost",
+                "reason_code": reason_code,
+                "from_stage": from_stage,
+                "idempotent": idempotent,
+            }
+
+        pool = self._get_pool()
+        async with _transaction_connection(pool) as conn:
+            for lock_key in sorted(
+                {
+                    f"eom-lead-lost:contact:{contact_id}",
+                    f"eom-lead-lost:operation:{operation_key}",
+                }
+            ):
+                await conn.execute(
+                    "SELECT pg_advisory_xact_lock(hashtextextended($1, 0))",
+                    lock_key,
+                )
+            replay = await conn.fetchrow(
+                """
+                SELECT from_stage
+                FROM eom_lead_lifecycle_events
+                WHERE contact_id = $1
+                  AND event_type = 'lead_lost'
+                  AND operation_key = $2
+                """,
+                contact_id,
+                operation_key,
+            )
+            contact = await conn.fetchrow(
+                """
+                SELECT id, business_context_id, contact_type, lead_stage, status
+                FROM contacts
+                WHERE id = $1
+                FOR UPDATE
+                """,
+                contact_id,
+            )
+            if (
+                contact is None
+                or contact["business_context_id"] != EOM_BUSINESS_CONTEXT_ID
+            ):
+                raise EOMLeadConversionError(404, "EOM lead was not found")
+            if replay is not None:
+                return _result(str(replay["from_stage"]), idempotent=True)
+            if contact["contact_type"] == "lead" and contact["lead_stage"] == "lost":
+                # Already lost under a different key: idempotent no-op.
+                return _result("lost", idempotent=True)
+            if contact["contact_type"] != "lead":
+                raise EOMLeadConversionError(409, "EOM contact is not a lead")
+            if contact["status"] != "active":
+                raise EOMLeadConversionError(
+                    409, "EOM lead must be active to mark lost"
+                )
+            if contact["lead_stage"] not in admission:
+                raise EOMLeadConversionError(
+                    409, "EOM lead is not in a stage that can be marked lost"
+                )
+            booking_events = await conn.fetch(
+                """
+                SELECT event_type, operation_key
+                FROM eom_lead_lifecycle_events
+                WHERE contact_id = $1
+                  AND event_type = ANY($2::varchar[])
+                FOR UPDATE
+                """,
+                contact_id,
+                list(_ALL_EOM_BOOKING_EVENT_TYPES),
+            )
+            booking_event_types: dict[str, set[str]] = {}
+            for event in booking_events:
+                booking_event_types.setdefault(event["operation_key"], set()).add(
+                    event["event_type"]
+                )
+            for op_key, event_types in booking_event_types.items():
+                if event_types & _ALL_EOM_BOOKED_EVENTS:
+                    continue
+                settled = bool(
+                    await conn.fetchval(
+                        "SELECT pg_try_advisory_xact_lock(hashtextextended($1, 0))",
+                        f"eom-estimate-booking:execution:{op_key}",
+                    )
+                )
+                if not settled:
+                    raise EOMLeadConversionError(
+                        409,
+                        "EOM booking is still executing; retry after it settles",
+                    )
+            from_stage = str(contact["lead_stage"])
+            updated = await conn.fetchrow(
+                """
+                UPDATE contacts
+                SET lead_stage = 'lost', updated_at = NOW()
+                WHERE id = $1
+                  AND business_context_id = $2
+                  AND contact_type = 'lead'
+                  AND lead_stage = $3
+                  AND status = 'active'
+                RETURNING id
+                """,
+                contact_id,
+                EOM_BUSINESS_CONTEXT_ID,
+                from_stage,
+            )
+            if updated is None:
+                raise RuntimeError("EOM lead changed during mark-lost")
+            await conn.execute(
+                """
+                INSERT INTO eom_lead_lifecycle_events (
+                    contact_id, event_type, from_stage, to_stage, actor,
+                    source, operation_key, reason, metadata
+                )
+                VALUES ($1, 'lead_lost', $2, 'lost', $3, 'eom_office', $4, $5,
+                        jsonb_build_object(
+                            'lost_reason_code', $6::text,
+                            'lost_by_employee_id', $7::bigint
+                        ))
+                """,
+                contact_id,
+                from_stage,
+                f"employee:{actor_id}:{actor_name}",
+                operation_key,
+                note,
+                reason_code,
+                actor_id,
+            )
+            return _result(from_stage, idempotent=False)
+
+    async def reopen_eom_lead(
+        self,
+        *,
+        contact_id: str,
+        operation_key: str,
+        actor_id: int,
+        actor_name: str,
+    ) -> dict[str, Any]:
+        """Return a previously-lost EOM lead to the active queue (stage `new`)."""
+        from .eom_lead_conversion import EOMLeadConversionError
+        from .eom_lead_ingress import EOM_BUSINESS_CONTEXT_ID
+
+        def _result(*, idempotent: bool) -> dict[str, Any]:
+            return {
+                "contact_id": str(contact_id),
+                "lead_stage": "new",
+                "status": "active",
+                "idempotent": idempotent,
+            }
+
+        pool = self._get_pool()
+        async with _transaction_connection(pool) as conn:
+            for lock_key in sorted(
+                {
+                    f"eom-lead-lost:contact:{contact_id}",
+                    f"eom-lead-reopen:operation:{operation_key}",
+                }
+            ):
+                await conn.execute(
+                    "SELECT pg_advisory_xact_lock(hashtextextended($1, 0))",
+                    lock_key,
+                )
+            replay = await conn.fetchval(
+                """
+                SELECT EXISTS (
+                    SELECT 1 FROM eom_lead_lifecycle_events
+                    WHERE contact_id = $1
+                      AND event_type = 'lead_reopened'
+                      AND operation_key = $2
+                )
+                """,
+                contact_id,
+                operation_key,
+            )
+            contact = await conn.fetchrow(
+                """
+                SELECT id, business_context_id, contact_type, lead_stage, status
+                FROM contacts
+                WHERE id = $1
+                FOR UPDATE
+                """,
+                contact_id,
+            )
+            if (
+                contact is None
+                or contact["business_context_id"] != EOM_BUSINESS_CONTEXT_ID
+            ):
+                raise EOMLeadConversionError(404, "EOM lead was not found")
+            if replay:
+                return _result(idempotent=True)
+            if contact["contact_type"] == "lead" and contact["lead_stage"] == "new":
+                return _result(idempotent=True)
+            if contact["contact_type"] != "lead" or contact["lead_stage"] != "lost":
+                raise EOMLeadConversionError(
+                    409, "EOM lead is not lost and cannot be reopened"
+                )
+            updated = await conn.fetchrow(
+                """
+                UPDATE contacts
+                SET lead_stage = 'new', updated_at = NOW()
+                WHERE id = $1
+                  AND business_context_id = $2
+                  AND contact_type = 'lead'
+                  AND lead_stage = 'lost'
+                RETURNING id
+                """,
+                contact_id,
+                EOM_BUSINESS_CONTEXT_ID,
+            )
+            if updated is None:
+                raise RuntimeError("EOM lead changed during reopen")
+            await conn.execute(
+                """
+                INSERT INTO eom_lead_lifecycle_events (
+                    contact_id, event_type, from_stage, to_stage, actor,
+                    source, operation_key, metadata
+                )
+                VALUES ($1, 'lead_reopened', 'lost', 'new', $2, 'eom_office', $3,
+                        jsonb_build_object('reopened_by_employee_id', $4::bigint))
+                """,
+                contact_id,
+                f"employee:{actor_id}:{actor_name}",
+                operation_key,
+                actor_id,
+            )
+            return _result(idempotent=False)
+
 
 # ---------------------------------------------------------------------------
 # Factory

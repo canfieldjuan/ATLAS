@@ -3614,3 +3614,103 @@ async def test_onboarding_draft_list_projection_filters_and_paginates():
     finally:
         await conn.execute(f'DROP SCHEMA IF EXISTS "{schema}" CASCADE')
         await conn.close()
+
+
+@pytest.mark.asyncio
+async def test_mark_lead_lost_records_reason_is_idempotent_and_reopens():
+    database_url = _database_url_or_skip()
+    schema = f"atlas_eom_lead_lost_{uuid.uuid4().hex}"
+    conn = await asyncpg.connect(database_url)
+    try:
+        await _prepare_schema(conn, schema)
+        provider = DatabaseCRMProvider(pool=conn)
+        contact_id = uuid.uuid4()
+        await _insert_contact(
+            conn, contact_id=contact_id, lead_stage="estimate_booked"
+        )
+
+        lost_key = f"office-lost-{uuid.uuid4().hex}"
+        result = await provider.mark_eom_lead_lost(
+            contact_id=str(contact_id),
+            reason_code="declined_after_estimate",
+            note="Too expensive",
+            operation_key=lost_key,
+            actor_id=1,
+            actor_name="Juan Canfield",
+        )
+        assert result["idempotent"] is False
+        assert result["lead_stage"] == "lost"
+        assert result["from_stage"] == "estimate_booked"
+
+        contact, _, _ = await _contact_state(conn, contact_id)
+        assert contact["lead_stage"] == "lost"
+        # a lost lead is no longer in the office review-queue predicate
+        reviewable = await conn.fetchval(
+            """
+            SELECT COUNT(*) FROM contacts
+            WHERE id = $1 AND lead_stage IN ('new', 'estimate_booked', 'won')
+            """,
+            contact_id,
+        )
+        assert int(reviewable) == 0
+
+        row = await conn.fetchrow(
+            """
+            SELECT from_stage, to_stage, reason, actor, source, operation_key, metadata
+            FROM eom_lead_lifecycle_events
+            WHERE contact_id = $1 AND event_type = 'lead_lost'
+            """,
+            contact_id,
+        )
+        assert row["from_stage"] == "estimate_booked"
+        assert row["to_stage"] == "lost"
+        assert row["reason"] == "Too expensive"
+        assert row["actor"] == "employee:1:Juan Canfield"
+        assert row["source"] == "eom_office"
+        assert row["operation_key"] == lost_key
+        metadata = _metadata_dict(row["metadata"])
+        assert metadata["lost_reason_code"] == "declined_after_estimate"
+        assert metadata["lost_by_employee_id"] == 1
+
+        # replay under the same key: idempotent, no second lifecycle row
+        replay = await provider.mark_eom_lead_lost(
+            contact_id=str(contact_id),
+            reason_code="declined_after_estimate",
+            note="Too expensive",
+            operation_key=lost_key,
+            actor_id=1,
+            actor_name="Juan Canfield",
+        )
+        assert replay["idempotent"] is True
+        lost_count = await conn.fetchval(
+            """
+            SELECT COUNT(*) FROM eom_lead_lifecycle_events
+            WHERE contact_id = $1 AND event_type = 'lead_lost'
+            """,
+            contact_id,
+        )
+        assert int(lost_count) == 1
+
+        # reopen returns the lead to the active queue at stage new
+        reopen_key = f"office-reopen-{uuid.uuid4().hex}"
+        reopened = await provider.reopen_eom_lead(
+            contact_id=str(contact_id),
+            operation_key=reopen_key,
+            actor_id=1,
+            actor_name="Juan Canfield",
+        )
+        assert reopened["idempotent"] is False
+        assert reopened["lead_stage"] == "new"
+        contact, _, _ = await _contact_state(conn, contact_id)
+        assert contact["lead_stage"] == "new"
+        reopened_count = await conn.fetchval(
+            """
+            SELECT COUNT(*) FROM eom_lead_lifecycle_events
+            WHERE contact_id = $1 AND event_type = 'lead_reopened'
+            """,
+            contact_id,
+        )
+        assert int(reopened_count) == 1
+    finally:
+        await conn.execute(f'DROP SCHEMA IF EXISTS "{schema}" CASCADE')
+        await conn.close()

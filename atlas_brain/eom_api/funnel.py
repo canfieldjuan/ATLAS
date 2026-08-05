@@ -23,7 +23,11 @@ from ..services.eom_estimate_booking import (
 from ..services.eom_lead_conversion import (
     EOMCustomerHandoff,
     EOMLeadConversionError,
+    EOMLeadLost,
+    EOMLeadReopen,
     finalize_eom_customer_handoff,
+    mark_eom_lead_lost,
+    reopen_eom_lead,
 )
 from ..services.eom_onboarding_drafts import (
     EOMOnboardingDraftApproval,
@@ -98,6 +102,27 @@ class EOMEstimateBookingRequest(BaseModel):
         if self.scheduled_end <= self.scheduled_start:
             raise ValueError("scheduled_end must be after scheduled_start")
         return self
+
+
+class EOMLeadLostRequest(BaseModel):
+    """The office's disposition for a lead that will not convert."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    reason_code: Literal[
+        "spam", "no_response", "declined_after_estimate", "price", "other"
+    ]
+    note: Annotated[str | None, Field(default=None, max_length=1000)] = None
+
+    @field_validator("note", mode="before")
+    @classmethod
+    def _blank_note_is_none(cls, value: Any) -> Any:
+        # An all-whitespace note carries no signal; store NULL instead so the
+        # reason code stays the single structured field.
+        if isinstance(value, str):
+            stripped = value.strip()
+            return stripped or None
+        return value
 
 
 class EOMLeadReviewItem(BaseModel):
@@ -446,6 +471,66 @@ async def create_customer_handoff(
         ),
         content={"success": True, **result},
     )
+
+
+@router.post(
+    "/leads/{contact_id}/lost",
+    status_code=status.HTTP_201_CREATED,
+    dependencies=[Depends(require_eom_funnel_api)],
+)
+async def mark_lead_lost(
+    contact_id: UUID,
+    payload: EOMLeadLostRequest,
+    operation_key: str = Depends(_approval_key_dependency),
+    actor: dict[str, object] = Depends(require_eom_funnel_actor),
+    crm: Any = Depends(_crm_dependency),
+) -> JSONResponse:
+    """Disposition a lead that will not convert; it leaves the review queue.
+
+    Reversible via the reopen endpoint. Records a reason on the lifecycle
+    ledger. No calendar or customer/site side effect."""
+    try:
+        result = await mark_eom_lead_lost(
+            crm,
+            EOMLeadLost(
+                contact_id=str(contact_id),
+                reason_code=payload.reason_code,
+                note=payload.note,
+                operation_key=operation_key,
+                actor_id=int(actor["id"]),
+                actor_name=str(actor["name"]),
+            ),
+        )
+    except EOMLeadConversionError as exc:
+        raise HTTPException(status_code=exc.status_code, detail=str(exc)) from exc
+    return _draft_action_response(result)
+
+
+@router.post(
+    "/leads/{contact_id}/reopen",
+    status_code=status.HTTP_201_CREATED,
+    dependencies=[Depends(require_eom_funnel_api)],
+)
+async def reopen_lead(
+    contact_id: UUID,
+    operation_key: str = Depends(_approval_key_dependency),
+    actor: dict[str, object] = Depends(require_eom_funnel_actor),
+    crm: Any = Depends(_crm_dependency),
+) -> JSONResponse:
+    """Return a previously-lost lead to the active review queue (stage `new`)."""
+    try:
+        result = await reopen_eom_lead(
+            crm,
+            EOMLeadReopen(
+                contact_id=str(contact_id),
+                operation_key=operation_key,
+                actor_id=int(actor["id"]),
+                actor_name=str(actor["name"]),
+            ),
+        )
+    except EOMLeadConversionError as exc:
+        raise HTTPException(status_code=exc.status_code, detail=str(exc)) from exc
+    return _draft_action_response(result)
 
 
 def _draft_action_response(result: dict[str, Any]) -> JSONResponse:
