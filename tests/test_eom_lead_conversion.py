@@ -2927,12 +2927,22 @@ async def test_private_onboarding_draft_approve_resend_replay_confirms_sent():
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("enabled", "api_key"),
+    (
+        (False, "re_valid_key"),
+        # Whitespace-only key: truthy but unusable; must 503 before any
+        # claim rather than wedge the row in 'sending' at Resend.
+        (True, "   "),
+    ),
+)
 async def test_private_onboarding_draft_approve_requires_transport_before_claim(
-    monkeypatch,
+    monkeypatch, enabled, api_key
 ):
     from atlas_brain.config import settings
 
-    monkeypatch.setattr(settings.email, "enabled", False)
+    monkeypatch.setattr(settings.email, "enabled", enabled)
+    monkeypatch.setattr(settings.email, "api_key", api_key)
     crm = _CRM()
     row = crm.seed_draft()
     app = _draft_app(crm, sender=None)
@@ -3053,6 +3063,8 @@ async def test_private_onboarding_draft_confirm_sent_paths():
         ("GET", ""),
         ("POST", "/{draft_id}/approve-send"),
         ("PATCH", "/{draft_id}"),
+        ("POST", "/{draft_id}/revoke"),
+        ("POST", "/{draft_id}/confirm-sent"),
     ),
 )
 async def test_private_onboarding_draft_routes_reject_http_guards_before_crm_call(
@@ -3085,6 +3097,8 @@ async def test_private_onboarding_draft_routes_reject_http_guards_before_crm_cal
     assert crm.draft_list_calls == []
     assert crm.draft_update_calls == []
     assert crm.draft_claim_calls == []
+    assert crm.draft_revoke_calls == []
+    assert crm.draft_confirm_calls == []
 
 
 @pytest.mark.asyncio
@@ -3141,6 +3155,44 @@ async def test_send_onboarding_email_maps_resend_responses(
     assert posted["json"]["to"] == ["lead@example.com"]
     assert posted["json"]["text"] == "Hi"
     assert posted["json"]["from"].startswith("Effingham Office Maids <")
+
+
+@pytest.mark.asyncio
+async def test_send_onboarding_email_strips_the_configured_api_key(monkeypatch):
+    """A padded key reaches Resend stripped, matching the preflight bound."""
+    from atlas_brain.config import settings
+    from atlas_brain.services.eom_onboarding_drafts import send_onboarding_email
+
+    monkeypatch.setattr(settings.email, "api_key", "  re_padded_key  ")
+
+    class _Response:
+        status_code = 200
+
+        def json(self):
+            return {"id": "resend-abc"}
+
+        def raise_for_status(self):
+            return None
+
+    class _Client:
+        def __init__(self):
+            self.posts = []
+
+        async def post(self, url, *, json, headers):
+            self.posts.append({"url": url, "json": json, "headers": headers})
+            return _Response()
+
+    client = _Client()
+    result = await send_onboarding_email(
+        to="lead@example.com",
+        subject="Welcome",
+        body="Hi",
+        idempotency_key="eom-onboarding-draft:abc",
+        http_client=client,
+    )
+
+    assert result["message_id"] == "resend-abc"
+    assert client.posts[0]["headers"]["Authorization"] == "Bearer re_padded_key"
 
 
 @pytest.mark.asyncio

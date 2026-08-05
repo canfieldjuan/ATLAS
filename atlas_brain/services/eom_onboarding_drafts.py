@@ -107,7 +107,9 @@ async def send_onboarding_email(
     from ..config import settings
 
     headers = {
-        "Authorization": f"Bearer {settings.email.api_key}",
+        # Stripped to match the preflight admission: a padded key must not
+        # reach Resend as a malformed Authorization header.
+        "Authorization": f"Bearer {(settings.email.api_key or '').strip()}",
         "Content-Type": "application/json",
         # Resend dedupes identical Idempotency-Key values server-side for
         # 24h, so a retried send cannot produce a second email.
@@ -135,7 +137,10 @@ def _require_transport_configured() -> None:
     """Refuse to claim a draft the transport cannot serve."""
     from ..config import settings
 
-    if not settings.email.enabled or not settings.email.api_key:
+    # A whitespace-only key would pass a truthiness check, claim the draft,
+    # and only then fail at Resend -- wedging the row in 'sending' instead
+    # of taking the 503-before-claim path this guard promises.
+    if not settings.email.enabled or not (settings.email.api_key or "").strip():
         raise EOMOnboardingDraftError(
             503,
             "Email transport is not configured; the draft was not claimed",

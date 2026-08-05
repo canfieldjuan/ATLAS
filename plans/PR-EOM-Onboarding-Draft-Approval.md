@@ -166,14 +166,18 @@ Slice phase: vertical slice
   - [ ] Editing the new service module re-triggers both guarding CI lanes:
         the EOM lead pipeline workflow and the invoicing-checks workflow
         (which runs the slim Render profile import-isolation proof) both
-        list `atlas_brain/services/eom_onboarding_drafts.py` in their path
-        filters, settled by inspection of the two workflow files.
+        list `atlas_brain/services/eom_onboarding_drafts.py` -- and its
+        import-time template dependency
+        `atlas_brain/templates/email/estimate_confirmation.py` -- in their
+        path filters, settled by inspection of the two workflow files.
   - [ ] Resend's 409 invalid_idempotent_request is treated as proof of
         prior delivery: the draft confirms sent and the response flags the
         transport replay, settled by `tests/test_eom_lead_conversion.py`.
-  - [ ] A missing or disabled transport configuration rejects 503 BEFORE
-        claiming, so no row can enter `sending` that the deployment cannot
-        send, settled by `tests/test_eom_lead_conversion.py`.
+  - [ ] A missing, disabled, or whitespace-only transport configuration
+        rejects 503 BEFORE claiming, so no row can enter `sending` that
+        the deployment cannot send, and the sender's Authorization header
+        carries the stripped key, settled by
+        `tests/test_eom_lead_conversion.py`.
   - [ ] Confirmed delivery records sent_emails history
         (`business_context_id='effingham_maids'`,
         `template_type='onboarding_welcome'`, transport message id) and a
@@ -299,7 +303,10 @@ seam in the enumeration; otherwise write "N/A - no boundary change."
 - Boundary path/seam: atlas_brain/services/eom_onboarding_drafts.py
   - Replaced-path behaviors: new module; previously nothing could send.
   - Guard-relevant fields: `settings.email.enabled` + `settings.email.api_key`
-    transport preflight, the deterministic
+    transport preflight (the key is stripped before the truthiness check,
+    and the sender uses the same stripped value in the Authorization
+    header, so a whitespace-padded key cannot pass preflight and then
+    fail at Resend after the claim), the deterministic
     `eom-onboarding-draft:<draft_id>` idempotency key, Resend response
     status/error-name classification (2xx accepted, 409
     invalid_idempotent_request = already delivered, anything else =
@@ -325,9 +332,10 @@ fallback changes; otherwise write "N/A - no guard/config boundary change."
   asserting that `settings.email.api_key` reaches the Authorization header
   alongside the Idempotency-Key header.
 - Absent value probe: a dedicated unit test forces
-  `settings.email.enabled` to false (with `settings.email.api_key` unset
-  by default in the test environment) and proves 503 with zero claim
-  calls and the draft row untouched in its pre-approval state.
+  `settings.email.enabled` to false (with a valid key) and, separately,
+  enabled with a whitespace-only `settings.email.api_key`, and proves 503
+  with zero claim calls and the draft row untouched in its pre-approval
+  state for both.
 - Default-session/default-context probe: route tests call the isolated
   router with explicit dependency overrides, so neither
   `settings.email.enabled` nor `settings.email.api_key` is read from any
@@ -520,7 +528,7 @@ Parked hardening: none.
 
 - `python -m py_compile atlas_brain/eom_api/funnel.py atlas_brain/services/crm_provider.py atlas_brain/services/eom_onboarding_drafts.py tests/test_eom_lead_conversion.py tests/test_eom_lead_conversion_integration.py tests/test_eom_render_profile.py` -- passed.
 - ASCII scan of every touched Python file -- no non-ASCII bytes.
-- `python -m pytest tests/test_eom_lead_conversion.py tests/test_migrations_runner.py -q` -- 185 passed, 1 skipped (including the migration-361 shape test, the fresh-claim in-flight 409 coverage, the archived-contact approval refusal, the 255-character recipient rejection, and the default-history provider-pool binding proof); 3 pre-existing torch-import failures reproduced identically on the unmodified base.
+- `python -m pytest tests/test_eom_lead_conversion.py tests/test_migrations_runner.py -q` -- 193 passed, 1 skipped (including the migration-361 shape test, the fresh-claim in-flight 409 coverage, the archived-contact approval refusal, the 255-character recipient rejection, the default-history provider-pool binding proof, the five-route HTTP guard matrix, the whitespace-only-key 503 probe, and the stripped-Authorization sender proof); 3 pre-existing torch-import failures reproduced identically on the unmodified base.
 - `ATLAS_MIGRATION_TEST_DATABASE_URL=postgresql://postgres@localhost:5433/atlas_migration_tests python -m pytest tests/test_eom_lead_conversion_integration.py -q` -- 40 passed against disposable Postgres 16 (migrations through 361 plus sent_emails history 016/349), including the approval pipeline from first-clean booking through edited approved send with idempotent replay and the sent_emails + interaction evidence landing in the provider's own store while the global pool stays uninitialized, the two-session single-winner provider claim, blocker resolution through edit, stuck-`sending` reconciliation that first proves fresh claims answer confirm-sent and revoke with the in-flight 409 and only backdated (20-minute-old) claims are admitted, the revoked-while-sending zombie-confirm regression, the archived-contact claim refusal with restore-then-claim, the datastore guard failing closed on an INTEGER approver column, and the list projection; 3 pre-existing torch-import failures.
 - `python3 scripts/maturity_sweep.py atlas_brain/storage --tests-root tests --baseline tests/maturity_sweep/baseline_atlas_brain_storage.json` -- ratchet gate passed (send evidence is exercised through the injected history seam, not by patching the repository module).
 - `python -m pytest tests/test_eom_render_profile.py::test_eom_profile_import_does_not_load_full_api_package tests/test_eom_render_profile.py::test_shared_eom_funnel_datastore_guard_keeps_missing_relations_in_verdict -q` -- 2 passed; the slim profile exposes all five draft routes with its import-isolation contract intact.
@@ -533,20 +541,20 @@ Parked hardening: none.
 
 | File | LOC |
 |---|---:|
-| `.github/workflows/atlas_eom_lead_pipeline_checks.yml` | 4 |
-| `.github/workflows/atlas_invoicing_checks.yml` | 2 |
+| `.github/workflows/atlas_eom_lead_pipeline_checks.yml` | 6 |
+| `.github/workflows/atlas_invoicing_checks.yml` | 4 |
 | `atlas_brain/eom_api/funnel.py` | 303 |
 | `atlas_brain/eom_api/funnel_store.py` | 15 |
 | `atlas_brain/services/crm_provider.py` | 350 |
-| `atlas_brain/services/eom_onboarding_drafts.py` | 263 |
+| `atlas_brain/services/eom_onboarding_drafts.py` | 268 |
 | `atlas_brain/storage/migrations/361_eom_onboarding_draft_actor_bigint.sql` | 23 |
-| `atlas_brain/storage/repositories/email.py` | 34 |
-| `plans/PR-EOM-Onboarding-Draft-Approval.md` | 665 |
-| `tests/test_eom_lead_conversion.py` | 870 |
+| `atlas_brain/storage/repositories/email.py` | 39 |
+| `plans/PR-EOM-Onboarding-Draft-Approval.md` | 696 |
+| `tests/test_eom_lead_conversion.py` | 922 |
 | `tests/test_eom_lead_conversion_integration.py` | 491 |
 | `tests/test_eom_render_profile.py` | 5 |
 | `tests/test_migrations_runner.py` | 27 |
-| **Total** | **3052** |
+| **Total** | **3149** |
 
 ## Cold diff reconstruction
 
@@ -634,6 +642,27 @@ Codex round 2 (four fixes in this diff):
   characters, so an office correction can never clear the `no_email`
   blocker only for the transport to reject the over-long address after
   the claim. Citation: `atlas_brain/eom_api/funnel.py:144`.
+
+Codex round 3 (three fixes in this diff):
+
+- The HTTP guard matrix now exercises all five draft routes: revoke and
+  confirm-sent join list/approve-send/edit in the
+  disabled-API/bad-bearer/malformed-actor rejection parametrization, with
+  zero-CRM-call assertions extended to the revoke and confirm trackers,
+  so the Review Contract's all-five-routes claim is enforced by a
+  required test. Citation: `tests/test_eom_lead_conversion.py:3056`.
+- The transport preflight strips `settings.email.api_key` before the
+  truthiness check and the sender uses the stripped key in the
+  Authorization header, so a whitespace-only or padded key takes the
+  503-before-claim path instead of claiming and then failing at Resend.
+  Citation: `atlas_brain/services/eom_onboarding_drafts.py:112`,
+  `atlas_brain/services/eom_onboarding_drafts.py:143`.
+- The service's import-time template dependency
+  (`atlas_brain/templates/email/estimate_confirmation.py`) is enrolled in
+  both guarding CI lanes' path filters, so a future template edit re-runs
+  the slim-profile import proof and the draft suites. Citation:
+  `.github/workflows/atlas_invoicing_checks.yml:37`,
+  `.github/workflows/atlas_eom_lead_pipeline_checks.yml:30`.
 - Unit tests extend the `_CRM` fake with an in-memory mirror of the
   provider state machine and cover the route projections, edit admission
   and validation, the full approve failure matrix (blocked,
