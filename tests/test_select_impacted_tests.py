@@ -162,7 +162,13 @@ def test_global_files_escalate_to_full(tmp_path, path):
         ],
     ),
     ("ci/gates.yml", ["tests/test_security_guardrails_workflow.py"]),
-    ("docs/SECURITY_GUARDRAILS.md", ["tests/test_security_guardrails_workflow.py"]),
+    (
+        "docs/SECURITY_GUARDRAILS.md",
+        [
+            "tests/test_security_guardrails_workflow.py",
+            "tests/test_security_policy_docs.py",
+        ],
+    ),
     ("docs/ci_cd_autonomous_coding_map.md", ["tests/test_security_guardrails_workflow.py"]),
     ("docs/ci_cd_runtime_duplication_audit.md", ["tests/test_security_guardrails_workflow.py"]),
     (

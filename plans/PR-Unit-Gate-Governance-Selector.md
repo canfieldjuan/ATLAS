@@ -40,7 +40,8 @@ Slice phase: Workflow/process
 - Acceptance criteria:
   - `scripts/select_impacted_tests.py` maps
     `docs/SECURITY_GUARDRAILS.md` to
-    `tests/test_security_guardrails_workflow.py`.
+    `tests/test_security_guardrails_workflow.py` and
+    `tests/test_security_policy_docs.py`.
   - `scripts/select_impacted_tests.py` maps the current CI/CD governance audit
     docs in scope to `tests/test_security_guardrails_workflow.py`.
   - `tests/test_select_impacted_tests.py::test_explicit_ci_surface_owners_are_selected`
@@ -64,6 +65,9 @@ Closure declaration for explicit governance-doc owners:
   `docs/ci_cd_runtime_duplication_audit.md`,
   `docs/audits/agents-mechanical-enforcement-audit-2026-07-29.md`, and
   `docs/audits/required-workflow-enrollment-audit-2026-08-04.md`.
+  `docs/SECURITY_GUARDRAILS.md` also selects
+  `tests/test_security_policy_docs.py` because that suite directly reads the
+  same doc and enforces the repo-label manifest markers.
 - Membership source: ENUMERATED from issue #2260, the #2283 audit's named
   blocker, and the current repository docs that state required-status/security
   gate policy. A future governance doc that makes the same kind of claim must
@@ -80,8 +84,9 @@ seam in the enumeration; otherwise write "N/A - no boundary change."
 
 - Boundary path/seam: `scripts/select_impacted_tests.py` explicit owner map.
 - Replaced-path behaviors: listed governance docs select
-  `tests/test_security_guardrails_workflow.py`; ordinary Markdown docs remain
-  test-free; missing owner files still escalate to FULL.
+  `tests/test_security_guardrails_workflow.py`; `docs/SECURITY_GUARDRAILS.md`
+  also selects `tests/test_security_policy_docs.py`; ordinary Markdown docs
+  remain test-free; missing owner files still escalate to FULL.
 - Guard-relevant fields: changed path string, explicit owner tuple, owner file
   existence.
 - Caller x input shape: unit-gate passes newline-separated changed paths from
@@ -110,7 +115,9 @@ fallback changes; otherwise write "N/A - no guard/config boundary change."
 `scripts/select_impacted_tests.py` keeps its existing import-graph selector and
 explicit-owner fallback. This slice adds the current CI/security governance docs
 to `EXPLICIT_TEST_OWNERS`, pointing them at
-`tests/test_security_guardrails_workflow.py`, and removes a duplicate
+`tests/test_security_guardrails_workflow.py`; `docs/SECURITY_GUARDRAILS.md`
+also selects `tests/test_security_policy_docs.py` for the repo-label manifest
+checks that directly read that file. The slice also removes a duplicate
 `scripts/check_ai_reconciliation_live.py` entry. The existing owner-file
 existence check continues to escalate stale owners to FULL.
 
@@ -138,13 +145,15 @@ Parked hardening: none.
   -- passed locally, 61 passed.
 - `/tmp/atlas-pr2259-venv/bin/python -m pytest tests/test_security_guardrails_workflow.py tests/test_select_impacted_tests.py -q`
   -- passed locally, 96 passed.
+- `/tmp/atlas-pr2259-venv/bin/python -m pytest tests/test_security_policy_docs.py tests/test_security_guardrails_workflow.py tests/test_select_impacted_tests.py -q`
+  -- passed locally, 116 passed, 43 subtests passed.
 - `python3 -m py_compile scripts/select_impacted_tests.py` -- passed locally.
 
 ## Estimated diff size
 
 | File | LOC |
 |---|---:|
-| `plans/PR-Unit-Gate-Governance-Selector.md` | 145 |
-| `scripts/select_impacted_tests.py` | 18 |
-| `tests/test_select_impacted_tests.py` | 35 |
-| **Total** | **198** |
+| `plans/PR-Unit-Gate-Governance-Selector.md` | 159 |
+| `scripts/select_impacted_tests.py` | 19 |
+| `tests/test_select_impacted_tests.py` | 41 |
+| **Total** | **219** |

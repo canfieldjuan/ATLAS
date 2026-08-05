@@ -86,6 +86,7 @@ EXPLICIT_TEST_OWNERS: dict[str, tuple[str, ...]] = {
     ),
     "docs/SECURITY_GUARDRAILS.md": (
         "tests/test_security_guardrails_workflow.py",
+        "tests/test_security_policy_docs.py",
     ),
     "docs/ci_cd_autonomous_coding_map.md": (
         "tests/test_security_guardrails_workflow.py",
