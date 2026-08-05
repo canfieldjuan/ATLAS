@@ -24,6 +24,11 @@ class EmailRepository:
     Handles persistence of sent emails for history queries.
     """
 
+    # Class-level default so subclasses that do not chain __init__ keep
+    # the historical global-pool behavior instead of failing attribute
+    # lookup.
+    _pool_override: Any | None = None
+
     def __init__(self, *, pool: Any | None = None) -> None:
         """Use the configured pool, or a caller-supplied store adapter.
 

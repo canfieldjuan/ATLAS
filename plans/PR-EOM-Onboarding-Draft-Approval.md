@@ -621,7 +621,11 @@ Codex round 2 (four fixes in this diff):
   writer from `crm.pool`, and `log_interaction` writes through
   `self._get_pool()`; the real-Postgres pipeline proof now asserts the
   sent_emails row and interaction land in the provider's store while the
-  global pool stays uninitialized. Citation:
+  global pool stays uninitialized. `_pool_override` carries a class-level
+  None default so `EmailRepository` subclasses that do not chain
+  `__init__` (the tenant-scope suite's reassigning double) keep the
+  historical global-pool behavior instead of failing attribute lookup --
+  the CI regression the first round-2 push introduced. Citation:
   `atlas_brain/services/crm_provider.py:337`,
   `atlas_brain/services/crm_provider.py:2896`,
   `atlas_brain/storage/repositories/email.py:27`,
