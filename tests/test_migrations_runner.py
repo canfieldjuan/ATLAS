@@ -362,6 +362,50 @@ def test_eom_booking_operation_key_index_covers_first_clean_events():
     assert "ALTER TABLE" not in upper
 
 
+def test_eom_lead_disposition_operation_key_index_covers_lost_and_reopen():
+    migration = (
+        Path(__file__).resolve().parent.parent
+        / "atlas_brain"
+        / "storage"
+        / "migrations"
+        / "362_eom_lead_disposition_operation_key_index.sql"
+    ).read_text()
+    upper = migration.upper()
+
+    # Replay-safe pattern (same as 357/359): real drop preceding the recreate,
+    # no IF NOT EXISTS on the create.
+    assert "CREATE INDEX CONCURRENTLY IF NOT EXISTS" not in migration
+    assert (
+        migration.count(
+            "DROP INDEX CONCURRENTLY IF EXISTS "
+            "idx_eom_lead_lifecycle_disposition_operation_key"
+        )
+        >= 2
+    )  # rollback-evidence comment + the executable statement
+    assert (
+        "CREATE INDEX CONCURRENTLY "
+        "idx_eom_lead_lifecycle_disposition_operation_key" in migration
+    )
+    assert migration.index(
+        "DROP INDEX CONCURRENTLY IF EXISTS "
+        "idx_eom_lead_lifecycle_disposition_operation_key"
+    ) < migration.index(
+        "CREATE INDEX CONCURRENTLY "
+        "idx_eom_lead_lifecycle_disposition_operation_key"
+    )
+    # operation_key must lead so the cross-contact key-ownership probe in
+    # mark_eom_lead_lost / reopen_eom_lead is index-backed, and the predicate
+    # must cover exactly the two disposition events (not the booking families).
+    assert "ON eom_lead_lifecycle_events (operation_key, contact_id, event_type)" in migration
+    assert "operation_key IS NOT NULL" in migration
+    assert "'lead_lost'" in migration
+    assert "'lead_reopened'" in migration
+    assert "'estimate_booked'" not in migration
+    assert "Rollback evidence:" in migration
+    assert "DROP TABLE" not in upper
+    assert "ALTER TABLE" not in upper
+
+
 def test_eom_onboarding_email_drafts_migration_is_additive_and_single_send_safe():
     migration = (
         Path(__file__).resolve().parent.parent

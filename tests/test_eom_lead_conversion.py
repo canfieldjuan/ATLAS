@@ -50,11 +50,33 @@ class _CRM:
         self.draft_confirm_calls: list[dict[str, object]] = []
         self.draft_revoke_calls: list[dict[str, object]] = []
         self.interaction_logs: list[dict[str, object]] = []
+        self.lost_calls: list[dict[str, object]] = []
+        self.reopen_calls: list[dict[str, object]] = []
 
     @asynccontextmanager
     async def eom_estimate_booking_execution_lock(self, *, booking_key: str):
         self.execution_lock_keys.append(booking_key)
         yield
+
+    async def mark_eom_lead_lost(self, **kwargs: object) -> dict[str, object]:
+        self.lost_calls.append(kwargs)
+        return {
+            "contact_id": kwargs["contact_id"],
+            "lead_stage": "lost",
+            "status": "lost",
+            "reason_code": kwargs["reason_code"],
+            "from_stage": "new",
+            "idempotent": False,
+        }
+
+    async def reopen_eom_lead(self, **kwargs: object) -> dict[str, object]:
+        self.reopen_calls.append(kwargs)
+        return {
+            "contact_id": kwargs["contact_id"],
+            "lead_stage": "new",
+            "status": "active",
+            "idempotent": False,
+        }
 
     async def list_eom_new_lead_review_items(
         self,
@@ -3237,3 +3259,95 @@ async def test_send_onboarding_email_raises_on_transport_error():
             idempotency_key="eom-onboarding-draft:abc",
             http_client=_Client(),
         )
+
+
+@pytest.mark.asyncio
+async def test_private_mark_lead_lost_records_reason_note_and_actor():
+    crm = _CRM()
+    app = _app(crm, _enabled_config())
+    contact_id = uuid4()
+    op_key = f"office-lost-{uuid4().hex}"
+
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=app), base_url="http://test"
+    ) as client:
+        response = await client.post(
+            f"/eom-funnel/leads/{contact_id}/lost",
+            headers=_headers(approval_key=op_key),
+            json={"reason_code": "spam", "note": "  bot asked us to pay  "},
+        )
+
+    assert response.status_code == 201
+    body = response.json()
+    assert body["success"] is True
+    assert body["lead_stage"] == "lost"
+    assert body["reason_code"] == "spam"
+    assert crm.lost_calls[0]["contact_id"] == str(contact_id)
+    assert crm.lost_calls[0]["reason_code"] == "spam"
+    # the request model strips a whitespace-padded note
+    assert crm.lost_calls[0]["note"] == "bot asked us to pay"
+    assert crm.lost_calls[0]["operation_key"] == op_key
+    assert crm.lost_calls[0]["actor_id"] == 1
+    assert crm.lost_calls[0]["actor_name"] == "Juan Canfield"
+
+
+@pytest.mark.asyncio
+async def test_private_mark_lead_lost_rejects_unknown_reason_code():
+    crm = _CRM()
+    app = _app(crm, _enabled_config())
+    contact_id = uuid4()
+
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=app), base_url="http://test"
+    ) as client:
+        response = await client.post(
+            f"/eom-funnel/leads/{contact_id}/lost",
+            headers=_headers(),
+            json={"reason_code": "banana"},
+        )
+
+    assert response.status_code == 422
+    assert crm.lost_calls == []
+
+
+@pytest.mark.asyncio
+async def test_private_mark_lead_lost_blank_note_becomes_null():
+    crm = _CRM()
+    app = _app(crm, _enabled_config())
+    contact_id = uuid4()
+
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=app), base_url="http://test"
+    ) as client:
+        response = await client.post(
+            f"/eom-funnel/leads/{contact_id}/lost",
+            headers=_headers(),
+            json={"reason_code": "no_response", "note": "   "},
+        )
+
+    assert response.status_code == 201
+    assert crm.lost_calls[0]["note"] is None
+
+
+@pytest.mark.asyncio
+async def test_private_reopen_lead_transitions_back_to_new():
+    crm = _CRM()
+    app = _app(crm, _enabled_config())
+    contact_id = uuid4()
+    op_key = f"office-reopen-{uuid4().hex}"
+
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=app), base_url="http://test"
+    ) as client:
+        response = await client.post(
+            f"/eom-funnel/leads/{contact_id}/reopen",
+            headers=_headers(approval_key=op_key),
+        )
+
+    assert response.status_code == 201
+    body = response.json()
+    assert body["success"] is True
+    assert body["lead_stage"] == "new"
+    assert crm.reopen_calls[0]["contact_id"] == str(contact_id)
+    assert crm.reopen_calls[0]["operation_key"] == op_key
+    assert crm.reopen_calls[0]["actor_id"] == 1

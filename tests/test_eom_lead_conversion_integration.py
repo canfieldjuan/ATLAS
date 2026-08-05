@@ -3614,3 +3614,254 @@ async def test_onboarding_draft_list_projection_filters_and_paginates():
     finally:
         await conn.execute(f'DROP SCHEMA IF EXISTS "{schema}" CASCADE')
         await conn.close()
+
+
+@pytest.mark.asyncio
+async def test_mark_lead_lost_records_reason_is_idempotent_and_reopens():
+    database_url = _database_url_or_skip()
+    schema = f"atlas_eom_lead_lost_{uuid.uuid4().hex}"
+    conn = await asyncpg.connect(database_url)
+    try:
+        # lost/reopen need only the lifecycle + lead_stage schema, not the
+        # privilege-migration role bootstrap (354), so it runs without a
+        # disposable-role-admin session.
+        await _prepare_schema(conn, schema, apply_privilege_migration=False)
+        provider = DatabaseCRMProvider(pool=conn)
+        contact_id = uuid.uuid4()
+        await _insert_contact(
+            conn, contact_id=contact_id, lead_stage="estimate_booked"
+        )
+
+        lost_key = f"office-lost-{uuid.uuid4().hex}"
+        result = await provider.mark_eom_lead_lost(
+            contact_id=str(contact_id),
+            reason_code="declined_after_estimate",
+            note="Too expensive",
+            operation_key=lost_key,
+            actor_id=1,
+            actor_name="Juan Canfield",
+        )
+        assert result["idempotent"] is False
+        assert result["lead_stage"] == "lost"
+        assert result["from_stage"] == "estimate_booked"
+
+        contact, _, _ = await _contact_state(conn, contact_id)
+        assert contact["lead_stage"] == "lost"
+        # a lost lead is no longer in the office review-queue predicate
+        reviewable = await conn.fetchval(
+            """
+            SELECT COUNT(*) FROM contacts
+            WHERE id = $1 AND lead_stage IN ('new', 'estimate_booked', 'won')
+            """,
+            contact_id,
+        )
+        assert int(reviewable) == 0
+
+        row = await conn.fetchrow(
+            """
+            SELECT from_stage, to_stage, reason, actor, source, operation_key, metadata
+            FROM eom_lead_lifecycle_events
+            WHERE contact_id = $1 AND event_type = 'lead_lost'
+            """,
+            contact_id,
+        )
+        assert row["from_stage"] == "estimate_booked"
+        assert row["to_stage"] == "lost"
+        assert row["reason"] == "Too expensive"
+        assert row["actor"] == "employee:1:Juan Canfield"
+        assert row["source"] == "eom_office"
+        assert row["operation_key"] == lost_key
+        metadata = _metadata_dict(row["metadata"])
+        assert metadata["lost_reason_code"] == "declined_after_estimate"
+        assert metadata["lost_by_employee_id"] == 1
+
+        # replay under the same key: idempotent, no second lifecycle row
+        replay = await provider.mark_eom_lead_lost(
+            contact_id=str(contact_id),
+            reason_code="declined_after_estimate",
+            note="Too expensive",
+            operation_key=lost_key,
+            actor_id=1,
+            actor_name="Juan Canfield",
+        )
+        assert replay["idempotent"] is True
+        lost_count = await conn.fetchval(
+            """
+            SELECT COUNT(*) FROM eom_lead_lifecycle_events
+            WHERE contact_id = $1 AND event_type = 'lead_lost'
+            """,
+            contact_id,
+        )
+        assert int(lost_count) == 1
+
+        # reopen returns the lead to the active queue at stage new
+        reopen_key = f"office-reopen-{uuid.uuid4().hex}"
+        reopened = await provider.reopen_eom_lead(
+            contact_id=str(contact_id),
+            operation_key=reopen_key,
+            actor_id=1,
+            actor_name="Juan Canfield",
+        )
+        assert reopened["idempotent"] is False
+        assert reopened["lead_stage"] == "new"
+        contact, _, _ = await _contact_state(conn, contact_id)
+        assert contact["lead_stage"] == "new"
+        reopened_count = await conn.fetchval(
+            """
+            SELECT COUNT(*) FROM eom_lead_lifecycle_events
+            WHERE contact_id = $1 AND event_type = 'lead_reopened'
+            """,
+            contact_id,
+        )
+        assert int(reopened_count) == 1
+    finally:
+        await conn.execute(f'DROP SCHEMA IF EXISTS "{schema}" CASCADE')
+        await conn.close()
+
+
+@pytest.mark.asyncio
+async def test_mark_lead_lost_guards_admission_fence_reuse_and_reopen():
+    database_url = _database_url_or_skip()
+    schema = f"atlas_eom_lead_lost_guard_{uuid.uuid4().hex}"
+    conn = await asyncpg.connect(database_url)
+
+    async def _lose(contact_id, key, *, reason_code="spam"):
+        return await provider.mark_eom_lead_lost(
+            contact_id=str(contact_id),
+            reason_code=reason_code,
+            note=None,
+            operation_key=key,
+            actor_id=1,
+            actor_name="Juan Canfield",
+        )
+
+    try:
+        await _prepare_schema(conn, schema, apply_privilege_migration=False)
+        provider = DatabaseCRMProvider(pool=conn)
+
+        # (1) 'won' is out of the mark-lost admission set: it already booked a
+        # first clean and enqueued an onboarding welcome draft, so losing it is
+        # a separate slice.
+        won_id = uuid.uuid4()
+        await _insert_contact(conn, contact_id=won_id, lead_stage="won")
+        with pytest.raises(
+            EOMLeadConversionError, match="stage that can be marked lost"
+        ):
+            await _lose(won_id, f"k-{uuid.uuid4().hex}", reason_code="other")
+
+        # (2) an unreconciled requested booking (execution lock free, but no
+        # booked/terminal marker) still blocks the loss -- the complete handoff
+        # fence, not only the execution-lock probe.
+        booking_id = uuid.uuid4()
+        await _insert_contact(
+            conn, contact_id=booking_id, lead_stage="estimate_booked"
+        )
+        await conn.execute(
+            """
+            INSERT INTO eom_lead_lifecycle_events (
+                contact_id, event_type, from_stage, to_stage, actor, source,
+                operation_key
+            ) VALUES ($1, 'estimate_booking_requested', 'new', 'estimate_booked',
+                      'employee:1:Juan Canfield', 'eom_office', $2)
+            """,
+            booking_id,
+            f"book-{uuid.uuid4().hex}",
+        )
+        with pytest.raises(
+            EOMLeadConversionError, match="pending calendar completion"
+        ):
+            await _lose(booking_id, f"k-{uuid.uuid4().hex}", reason_code="other")
+
+        # (3) an Idempotency-Key is bound to one lead: reusing it on another
+        # contact is a client error, not a second loss.
+        a_id, b_id = uuid.uuid4(), uuid.uuid4()
+        await _insert_contact(conn, contact_id=a_id, lead_stage="new")
+        await _insert_contact(conn, contact_id=b_id, lead_stage="new")
+        shared_key = f"shared-{uuid.uuid4().hex}"
+        await _lose(a_id, shared_key)
+        with pytest.raises(EOMLeadConversionError, match="another EOM lead"):
+            await _lose(b_id, shared_key)
+
+        # (4) replaying the original lost key AFTER a reopen is a conflict, not a
+        # false "still lost" success reporting the stale stage.
+        await provider.reopen_eom_lead(
+            contact_id=str(a_id),
+            operation_key=f"re-{uuid.uuid4().hex}",
+            actor_id=1,
+            actor_name="Juan Canfield",
+        )
+        with pytest.raises(
+            EOMLeadConversionError, match="reopened after this operation"
+        ):
+            await _lose(a_id, shared_key)
+
+        # (5) reopen requires an active contact: an archived lost lead cannot be
+        # reported back as active while it stays out of the review queue.
+        c_id = uuid.uuid4()
+        await _insert_contact(conn, contact_id=c_id, lead_stage="new")
+        await _lose(c_id, f"lost-{uuid.uuid4().hex}", reason_code="no_response")
+        await conn.execute(
+            "UPDATE contacts SET status = 'inactive' WHERE id = $1", c_id
+        )
+        with pytest.raises(
+            EOMLeadConversionError, match="must be active to reopen"
+        ):
+            await provider.reopen_eom_lead(
+                contact_id=str(c_id),
+                operation_key=f"re-{uuid.uuid4().hex}",
+                actor_id=1,
+                actor_name="Juan Canfield",
+            )
+
+        # (6) already lost under a *different* key is a conflict, not a keyless
+        # 200 — so no operation_key is reported successful without a durable
+        # replay row behind it.
+        d_id = uuid.uuid4()
+        await _insert_contact(conn, contact_id=d_id, lead_stage="new")
+        await _lose(d_id, f"lost-{uuid.uuid4().hex}")
+        with pytest.raises(EOMLeadConversionError, match="already lost"):
+            await _lose(d_id, f"lost-{uuid.uuid4().hex}")
+
+        # (7) reopen under a different key when the lead is already active is a
+        # conflict, not a no-op.
+        await provider.reopen_eom_lead(
+            contact_id=str(d_id),
+            operation_key=f"re-{uuid.uuid4().hex}",
+            actor_id=1,
+            actor_name="Juan Canfield",
+        )
+        with pytest.raises(
+            EOMLeadConversionError, match="not lost and cannot be reopened"
+        ):
+            await provider.reopen_eom_lead(
+                contact_id=str(d_id),
+                operation_key=f"re-{uuid.uuid4().hex}",
+                actor_id=1,
+                actor_name="Juan Canfield",
+            )
+
+        # (8) replaying a reopen key after the lead was lost again is a 409, not
+        # a stale "new/active" success.
+        e_id = uuid.uuid4()
+        await _insert_contact(conn, contact_id=e_id, lead_stage="new")
+        await _lose(e_id, f"lost-{uuid.uuid4().hex}")
+        reopen_e = f"re-{uuid.uuid4().hex}"
+        await provider.reopen_eom_lead(
+            contact_id=str(e_id),
+            operation_key=reopen_e,
+            actor_id=1,
+            actor_name="Juan Canfield",
+        )
+        await _lose(e_id, f"lost-{uuid.uuid4().hex}")
+        with pytest.raises(
+            EOMLeadConversionError, match="changed after this reopen"
+        ):
+            await provider.reopen_eom_lead(
+                contact_id=str(e_id),
+                operation_key=reopen_e,
+                actor_id=1,
+                actor_name="Juan Canfield",
+            )
+    finally:
+        await conn.execute(f'DROP SCHEMA IF EXISTS "{schema}" CASCADE')
+        await conn.close()

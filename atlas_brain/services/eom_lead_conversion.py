@@ -42,3 +42,53 @@ async def finalize_eom_customer_handoff(
         actor_id=handoff.actor_id,
         actor_name=handoff.actor_name,
     )
+
+
+@dataclass(frozen=True)
+class EOMLeadLost:
+    """The office's disposition of a lead that will not convert."""
+
+    contact_id: str
+    reason_code: str
+    note: str | None
+    operation_key: str
+    actor_id: int
+    actor_name: str
+
+
+@dataclass(frozen=True)
+class EOMLeadReopen:
+    """Return a previously-lost lead to the active review queue."""
+
+    contact_id: str
+    operation_key: str
+    actor_id: int
+    actor_name: str
+
+
+async def mark_eom_lead_lost(crm: Any, command: EOMLeadLost) -> dict[str, Any]:
+    """Delegate to the authoritative CRM transaction implementation."""
+    marker = getattr(crm, "mark_eom_lead_lost", None)
+    if not callable(marker):
+        raise RuntimeError("Configured CRM provider cannot mark EOM leads lost")
+    return await marker(
+        contact_id=command.contact_id,
+        reason_code=command.reason_code,
+        note=command.note,
+        operation_key=command.operation_key,
+        actor_id=command.actor_id,
+        actor_name=command.actor_name,
+    )
+
+
+async def reopen_eom_lead(crm: Any, command: EOMLeadReopen) -> dict[str, Any]:
+    """Delegate to the authoritative CRM transaction implementation."""
+    reopener = getattr(crm, "reopen_eom_lead", None)
+    if not callable(reopener):
+        raise RuntimeError("Configured CRM provider cannot reopen EOM leads")
+    return await reopener(
+        contact_id=command.contact_id,
+        operation_key=command.operation_key,
+        actor_id=command.actor_id,
+        actor_name=command.actor_name,
+    )
