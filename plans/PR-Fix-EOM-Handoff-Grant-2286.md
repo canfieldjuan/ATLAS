@@ -13,7 +13,7 @@ Restore the runtime's handoff DML so it **persists** past both the ownership tra
 ## Scope (this PR)
 
 Ownership lane: eom-lead-funnel-handoff-privileges
-Slice phase: bug fix
+Slice phase: production hardening
 
 - Edit `354_...sql`: after the `ALTER TABLE ... OWNER TO atlas_eom_handoff_owner`, re-grant the runtime DML **as the guard owner** via `SET LOCAL ROLE atlas_eom_handoff_owner`, so the grant is made by the new owner and survives the transfer and the post-commit revoke. The runtime still holds admin membership at that point in the migration, so the `SET ROLE` is permitted.
 - Extend `test_privilege_migration_runs_from_a_real_non_superuser_login` to assert the runtime keeps `SELECT/INSERT/UPDATE/DELETE` on `eom_customer_handoffs` after the membership revoke — the assertion the readiness guard cannot make.
@@ -44,14 +44,14 @@ A table owner's privileges are implicit, so `GRANT ... TO <runtime>` while `<run
 - The pre-transfer self-grant block is retained (it correctly grants `eom_lead_lifecycle_events`, still owned by the runtime).
 - `TRUNCATE` is included to match the migration's original stated intent for the handoff table.
 
+## Deferred
+- Longer term, `finalize_eom_customer_handoff` could move to a `SECURITY DEFINER` function owned by the guard role so the runtime needs no direct table grant. Out of scope here; the grant-persistence fix is the minimal correct change.
+
 ## Verification
 
 Mechanism proven against real PostgreSQL (throwaway roles, rolled back): the buggy self-grant-then-transfer leaves the runtime with `INSERT = false`; granting as the owner after transfer yields `true`; and it stays `true` after the membership revoke. The extended integration test exercises the full path (non-super login applies 354, membership revoked) and asserts the DML persists; it is red against the pre-fix migration and green after.
 
-## Deferred
-- Longer term, `finalize_eom_customer_handoff` could move to a `SECURITY DEFINER` function owned by the guard role so the runtime needs no direct table grant. Out of scope here; the grant-persistence fix is the minimal correct change.
-
-## Diff size
+## Estimated diff size
 ~35 lines: a ~20-line SQL block in migration 354 and a ~12-line assertion loop in the existing non-superuser test, plus this plan.
 
 ## Cold diff reconstruction
