@@ -92,6 +92,7 @@ async def _prepare_schema(
     schema: str,
     *,
     apply_privilege_migration: bool = True,
+    apply_lifecycle_sequence_migration: bool = True,
 ) -> None:
     await conn.execute(f'CREATE SCHEMA "{schema}"')
     await conn.execute(f'SET search_path TO "{schema}", public')
@@ -110,7 +111,7 @@ async def _prepare_schema(
     # touches them.
     await conn.execute("CREATE TABLE sessions (id UUID PRIMARY KEY)")
     await conn.execute("CREATE TABLE users (id UUID PRIMARY KEY)")
-    migration_names = (
+    migration_names = [
         "016_sent_emails.sql",
         "035_contacts.sql",
         "256_contact_interaction_dedupe.sql",
@@ -122,11 +123,12 @@ async def _prepare_schema(
         "353_eom_customer_handoffs.sql",
         "360_eom_onboarding_email_drafts.sql",
         "361_eom_onboarding_draft_actor_bigint.sql",
-        "363_eom_lead_lifecycle_sequence.sql",
-    )
+    ]
+    if apply_lifecycle_sequence_migration:
+        migration_names.append("363_eom_lead_lifecycle_sequence.sql")
     if apply_privilege_migration:
         await _provision_nocodb_login(conn)
-        migration_names += ("354_eom_customer_handoff_privileges.sql",)
+        migration_names.append("354_eom_customer_handoff_privileges.sql")
     for name in migration_names:
         await conn.execute((MIGRATIONS / name).read_text())
 
@@ -4013,6 +4015,15 @@ async def test_mark_lead_lost_guards_admission_fence_reuse_and_reopen():
             EOMLeadConversionError, match="reopened after this operation"
         ):
             await _lose(a_id, shared_key)
+        current_loss_key = f"lost-current-{uuid.uuid4().hex}"
+        current_loss = await _lose(a_id, current_loss_key, reason_code="no_response")
+        assert current_loss["idempotent"] is False
+        current_replay = await _lose(
+            a_id, current_loss_key, reason_code="no_response"
+        )
+        assert current_replay["idempotent"] is True
+        with pytest.raises(EOMLeadConversionError, match="lost operation was superseded"):
+            await _lose(a_id, shared_key)
 
         # (5) reopen requires an active contact: an archived lost lead cannot be
         # reported back as active while it stays out of the review queue.
@@ -4081,8 +4092,184 @@ async def test_mark_lead_lost_guards_admission_fence_reuse_and_reopen():
                 actor_id=1,
                 actor_name="Juan Canfield",
             )
+        later_reopen_e = f"re-{uuid.uuid4().hex}"
+        later_reopen = await provider.reopen_eom_lead(
+            contact_id=str(e_id),
+            operation_key=later_reopen_e,
+            actor_id=1,
+            actor_name="Juan Canfield",
+        )
+        assert later_reopen["idempotent"] is False
+        later_replay = await provider.reopen_eom_lead(
+            contact_id=str(e_id),
+            operation_key=later_reopen_e,
+            actor_id=1,
+            actor_name="Juan Canfield",
+        )
+        assert later_replay["idempotent"] is True
+        with pytest.raises(
+            EOMLeadConversionError, match="reopen operation was superseded"
+        ):
+            await provider.reopen_eom_lead(
+                contact_id=str(e_id),
+                operation_key=reopen_e,
+                actor_id=1,
+                actor_name="Juan Canfield",
+            )
 
-        # (9) a lost contact without a lead_lost row cannot be reopened: the
+        # (9) legacy, pre-sequence replay rows are accepted only while they are
+        # the sole lost/reopen disposition for the contact. If another
+        # disposition row exists, replay ownership is ambiguous and fails closed.
+        legacy_loss_id = uuid.uuid4()
+        legacy_loss_key = f"legacy-lost-{uuid.uuid4().hex}"
+        await _insert_contact(conn, contact_id=legacy_loss_id, lead_stage="new")
+        await conn.execute(
+            "UPDATE contacts SET lead_stage = 'lost' WHERE id = $1",
+            legacy_loss_id,
+        )
+        await conn.execute(
+            """
+            INSERT INTO eom_lead_lifecycle_events (
+                contact_id, event_type, from_stage, to_stage, actor, source,
+                operation_key, metadata, lifecycle_sequence
+            )
+            VALUES (
+                $1, 'lead_lost', 'new', 'lost', 'employee:1:Juan Canfield',
+                'eom_office', $2, jsonb_build_object('lost_reason_code', 'spam'), NULL
+            )
+            """,
+            legacy_loss_id,
+            legacy_loss_key,
+        )
+        legacy_loss_replay = await provider.mark_eom_lead_lost(
+            contact_id=str(legacy_loss_id),
+            reason_code="spam",
+            note=None,
+            operation_key=legacy_loss_key,
+            actor_id=1,
+            actor_name="Juan Canfield",
+        )
+        assert legacy_loss_replay["idempotent"] is True
+
+        malformed_loss_id = uuid.uuid4()
+        malformed_loss_key = f"legacy-malformed-lost-{uuid.uuid4().hex}"
+        await _insert_contact(conn, contact_id=malformed_loss_id, lead_stage="new")
+        await conn.execute(
+            "UPDATE contacts SET lead_stage = 'lost' WHERE id = $1",
+            malformed_loss_id,
+        )
+        await conn.execute(
+            """
+            INSERT INTO eom_lead_lifecycle_events (
+                contact_id, event_type, from_stage, to_stage, actor, source,
+                operation_key, metadata, lifecycle_sequence
+            )
+            VALUES (
+                $1, 'lead_lost', 'won', 'lost', 'employee:1:Juan Canfield',
+                'eom_office', $2, jsonb_build_object('lost_reason_code', 'spam'), NULL
+            )
+            """,
+            malformed_loss_id,
+            malformed_loss_key,
+        )
+        with pytest.raises(EOMLeadConversionError, match="lost operation was superseded"):
+            await provider.mark_eom_lead_lost(
+                contact_id=str(malformed_loss_id),
+                reason_code="spam",
+                note=None,
+                operation_key=malformed_loss_key,
+                actor_id=1,
+                actor_name="Juan Canfield",
+            )
+
+        await conn.execute(
+            """
+            INSERT INTO eom_lead_lifecycle_events (
+                contact_id, event_type, from_stage, to_stage, actor, source,
+                operation_key, lifecycle_sequence
+            )
+            VALUES ($1, 'lead_lost', 'estimate_booked', 'lost',
+                    'employee:1:Juan Canfield', 'eom_office', $2, NULL)
+            """,
+            legacy_loss_id,
+            f"legacy-lost-later-{uuid.uuid4().hex}",
+        )
+        with pytest.raises(EOMLeadConversionError, match="lost operation was superseded"):
+            await provider.mark_eom_lead_lost(
+                contact_id=str(legacy_loss_id),
+                reason_code="spam",
+                note=None,
+                operation_key=legacy_loss_key,
+                actor_id=1,
+                actor_name="Juan Canfield",
+            )
+
+        legacy_reopen_id = uuid.uuid4()
+        legacy_reopen_loss_key = f"legacy-reopen-loss-{uuid.uuid4().hex}"
+        legacy_reopen_key = f"legacy-reopen-{uuid.uuid4().hex}"
+        await _insert_contact(conn, contact_id=legacy_reopen_id, lead_stage="new")
+        await conn.execute(
+            """
+            INSERT INTO eom_lead_lifecycle_events (
+                contact_id, event_type, from_stage, to_stage, actor, source,
+                operation_key, lifecycle_sequence
+            )
+            VALUES ($1, 'lead_lost', 'new', 'lost',
+                    'employee:1:Juan Canfield', 'eom_office', $2, NULL)
+            """,
+            legacy_reopen_id,
+            legacy_reopen_loss_key,
+        )
+        await conn.execute(
+            "UPDATE contacts SET lead_stage = 'lost' WHERE id = $1",
+            legacy_reopen_id,
+        )
+        await conn.execute(
+            """
+            INSERT INTO eom_lead_lifecycle_events (
+                contact_id, event_type, from_stage, to_stage, actor, source,
+                operation_key, lifecycle_sequence
+            )
+            VALUES ($1, 'lead_reopened', 'lost', 'new',
+                    'employee:1:Juan Canfield', 'eom_office', $2, NULL)
+            """,
+            legacy_reopen_id,
+            legacy_reopen_key,
+        )
+        await conn.execute(
+            "UPDATE contacts SET lead_stage = 'new' WHERE id = $1",
+            legacy_reopen_id,
+        )
+        legacy_reopen_replay = await provider.reopen_eom_lead(
+            contact_id=str(legacy_reopen_id),
+            operation_key=legacy_reopen_key,
+            actor_id=1,
+            actor_name="Juan Canfield",
+        )
+        assert legacy_reopen_replay["idempotent"] is True
+        await conn.execute(
+            """
+            INSERT INTO eom_lead_lifecycle_events (
+                contact_id, event_type, from_stage, to_stage, actor, source,
+                operation_key, lifecycle_sequence
+            )
+            VALUES ($1, 'lead_lost', 'new', 'lost',
+                    'employee:1:Juan Canfield', 'eom_office', $2, NULL)
+            """,
+            legacy_reopen_id,
+            f"legacy-reopen-later-loss-{uuid.uuid4().hex}",
+        )
+        with pytest.raises(
+            EOMLeadConversionError, match="reopen operation was superseded"
+        ):
+            await provider.reopen_eom_lead(
+                contact_id=str(legacy_reopen_id),
+                operation_key=legacy_reopen_key,
+                actor_id=1,
+                actor_name="Juan Canfield",
+            )
+
+        # (10) a lost contact without a lead_lost row cannot be reopened: the
         # transaction returns 409, leaves the contact lost, and appends no
         # lead_reopened lifecycle event.
         missing_loss_id = uuid.uuid4()
@@ -4111,7 +4298,7 @@ async def test_mark_lead_lost_guards_admission_fence_reuse_and_reopen():
         )
         assert int(missing_reopen_count) == 0
 
-        # (10) unsafe lead_lost.from_stage evidence is also rejected without
+        # (11) unsafe lead_lost.from_stage evidence is also rejected without
         # changing the contact or appending a lead_reopened event.
         unsafe_loss_id = uuid.uuid4()
         await _insert_contact(conn, contact_id=unsafe_loss_id, lead_stage="new")
@@ -4150,6 +4337,191 @@ async def test_mark_lead_lost_guards_admission_fence_reuse_and_reopen():
             unsafe_loss_id,
         )
         assert int(unsafe_reopen_count) == 0
+    finally:
+        await conn.execute(f'DROP SCHEMA IF EXISTS "{schema}" CASCADE')
+        await conn.close()
+
+
+@pytest.mark.asyncio
+async def test_legacy_reopen_replay_accepts_pre_sequence_loss_reopen_pair():
+    database_url = _database_url_or_skip()
+    schema = f"atlas_eom_legacy_reopen_pair_{uuid.uuid4().hex}"
+    conn = await asyncpg.connect(database_url)
+    try:
+        await _prepare_schema(
+            conn,
+            schema,
+            apply_privilege_migration=False,
+            apply_lifecycle_sequence_migration=False,
+        )
+        contact_id = uuid.uuid4()
+        lost_key = f"legacy-lost-{uuid.uuid4().hex}"
+        reopen_key = f"legacy-reopen-{uuid.uuid4().hex}"
+        await _insert_contact(conn, contact_id=contact_id, lead_stage="new")
+        await conn.execute(
+            """
+            INSERT INTO eom_lead_lifecycle_events (
+                contact_id, event_type, from_stage, to_stage, actor, source,
+                operation_key
+            ) VALUES (
+                $1, 'lead_lost', 'new', 'lost',
+                'employee:1:Juan Canfield', 'eom_office', $2
+            )
+            """,
+            contact_id,
+            lost_key,
+        )
+        await conn.execute("UPDATE contacts SET lead_stage = 'lost' WHERE id = $1", contact_id)
+        await conn.execute(
+            """
+            INSERT INTO eom_lead_lifecycle_events (
+                contact_id, event_type, from_stage, to_stage, actor, source,
+                operation_key
+            ) VALUES (
+                $1, 'lead_reopened', 'lost', 'new',
+                'employee:1:Juan Canfield', 'eom_office', $2
+            )
+            """,
+            contact_id,
+            reopen_key,
+        )
+        await conn.execute("UPDATE contacts SET lead_stage = 'new' WHERE id = $1", contact_id)
+        await conn.execute(
+            (MIGRATIONS / "363_eom_lead_lifecycle_sequence.sql").read_text()
+        )
+        provider = DatabaseCRMProvider(pool=conn)
+
+        sequence_rows = await conn.fetch(
+            """
+            SELECT event_type, lifecycle_sequence
+            FROM eom_lead_lifecycle_events
+            WHERE contact_id = $1
+              AND event_type IN ('lead_lost', 'lead_reopened')
+            ORDER BY event_type
+            """,
+            contact_id,
+        )
+        assert [row["event_type"] for row in sequence_rows] == [
+            "lead_lost",
+            "lead_reopened",
+        ]
+        assert all(row["lifecycle_sequence"] is None for row in sequence_rows)
+
+        replay = await provider.reopen_eom_lead(
+            contact_id=str(contact_id),
+            operation_key=reopen_key,
+            actor_id=1,
+            actor_name="Juan Canfield",
+        )
+        assert replay["idempotent"] is True
+        assert replay["lead_stage"] == "new"
+
+        await conn.execute(
+            """
+            INSERT INTO eom_lead_lifecycle_events (
+                contact_id, event_type, from_stage, to_stage, actor, source,
+                operation_key, lifecycle_sequence
+            ) VALUES (
+                $1, 'lead_lost', 'new', 'lost',
+                'employee:1:Juan Canfield', 'eom_office', $2, NULL
+            )
+            """,
+            contact_id,
+            f"legacy-extra-lost-{uuid.uuid4().hex}",
+        )
+        with pytest.raises(
+            EOMLeadConversionError, match="reopen operation was superseded"
+        ):
+            await provider.reopen_eom_lead(
+                contact_id=str(contact_id),
+                operation_key=reopen_key,
+                actor_id=1,
+                actor_name="Juan Canfield",
+            )
+
+        mismatched_contact_id = uuid.uuid4()
+        mismatched_loss_key = f"legacy-mismatched-lost-{uuid.uuid4().hex}"
+        mismatched_reopen_key = f"legacy-mismatched-reopen-{uuid.uuid4().hex}"
+        await _insert_contact(
+            conn, contact_id=mismatched_contact_id, lead_stage="new"
+        )
+        await conn.execute(
+            """
+            INSERT INTO eom_lead_lifecycle_events (
+                contact_id, event_type, from_stage, to_stage, actor, source,
+                operation_key, lifecycle_sequence
+            ) VALUES (
+                $1, 'lead_lost', 'estimate_booked', 'lost',
+                'employee:1:Juan Canfield', 'eom_office', $2, NULL
+            )
+            """,
+            mismatched_contact_id,
+            mismatched_loss_key,
+        )
+        await conn.execute(
+            """
+            INSERT INTO eom_lead_lifecycle_events (
+                contact_id, event_type, from_stage, to_stage, actor, source,
+                operation_key, lifecycle_sequence
+            ) VALUES (
+                $1, 'lead_reopened', 'lost', 'new',
+                'employee:1:Juan Canfield', 'eom_office', $2, NULL
+            )
+            """,
+            mismatched_contact_id,
+            mismatched_reopen_key,
+        )
+        with pytest.raises(
+            EOMLeadConversionError, match="reopen operation was superseded"
+        ):
+            await provider.reopen_eom_lead(
+                contact_id=str(mismatched_contact_id),
+                operation_key=mismatched_reopen_key,
+                actor_id=1,
+                actor_name="Juan Canfield",
+            )
+
+        malformed_reopen_contact_id = uuid.uuid4()
+        malformed_reopen_loss_key = f"legacy-malformed-reopen-lost-{uuid.uuid4().hex}"
+        malformed_reopen_key = f"legacy-malformed-reopen-{uuid.uuid4().hex}"
+        await _insert_contact(
+            conn, contact_id=malformed_reopen_contact_id, lead_stage="new"
+        )
+        await conn.execute(
+            """
+            INSERT INTO eom_lead_lifecycle_events (
+                contact_id, event_type, from_stage, to_stage, actor, source,
+                operation_key, lifecycle_sequence
+            ) VALUES (
+                $1, 'lead_lost', 'new', 'lost',
+                'employee:1:Juan Canfield', 'eom_office', $2, NULL
+            )
+            """,
+            malformed_reopen_contact_id,
+            malformed_reopen_loss_key,
+        )
+        await conn.execute(
+            """
+            INSERT INTO eom_lead_lifecycle_events (
+                contact_id, event_type, from_stage, to_stage, actor, source,
+                operation_key, lifecycle_sequence
+            ) VALUES (
+                $1, 'lead_reopened', 'estimate_booked', 'new',
+                'employee:1:Juan Canfield', 'eom_office', $2, NULL
+            )
+            """,
+            malformed_reopen_contact_id,
+            malformed_reopen_key,
+        )
+        with pytest.raises(
+            EOMLeadConversionError, match="reopen operation was superseded"
+        ):
+            await provider.reopen_eom_lead(
+                contact_id=str(malformed_reopen_contact_id),
+                operation_key=malformed_reopen_key,
+                actor_id=1,
+                actor_name="Juan Canfield",
+            )
     finally:
         await conn.execute(f'DROP SCHEMA IF EXISTS "{schema}" CASCADE')
         await conn.close()

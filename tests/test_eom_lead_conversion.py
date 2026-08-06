@@ -1093,6 +1093,151 @@ async def test_database_provider_execution_lock_uses_one_pool_connection():
 
 
 @pytest.mark.asyncio
+async def test_disposition_replay_supersession_uses_lifecycle_sequence():
+    from atlas_brain.services.crm_provider import (
+        _eom_disposition_replay_was_superseded,
+    )
+
+    class _Conn:
+        def __init__(self) -> None:
+            self.calls: list[tuple[str, tuple[object, ...]]] = []
+
+        async def fetchval(self, query: str, *args: object) -> bool:
+            self.calls.append((query, args))
+            return True
+
+    conn = _Conn()
+    replay_id = uuid4()
+
+    assert await _eom_disposition_replay_was_superseded(
+        conn,
+        contact_id="contact-1",
+        replay_event_type="lead_lost",
+        replay_event_id=replay_id,
+        replay_lifecycle_sequence=42,
+    )
+
+    query, args = conn.calls[0]
+    assert "lifecycle_sequence > $3" in query
+    assert args == (
+        "contact-1",
+        ["lead_lost", "lead_reopened"],
+        42,
+    )
+
+
+@pytest.mark.asyncio
+async def test_disposition_replay_supersession_checks_legacy_rows_by_other_id():
+    from atlas_brain.services.crm_provider import (
+        _eom_disposition_replay_was_superseded,
+    )
+
+    class _Conn:
+        def __init__(self) -> None:
+            self.calls: list[tuple[str, tuple[object, ...]]] = []
+
+        async def fetchval(self, query: str, *args: object) -> bool:
+            self.calls.append((query, args))
+            return True
+
+    conn = _Conn()
+    replay_id = uuid4()
+
+    assert await _eom_disposition_replay_was_superseded(
+        conn,
+        contact_id="contact-1",
+        replay_event_type="lead_lost",
+        replay_event_id=replay_id,
+        replay_lifecycle_sequence=None,
+    )
+
+    query, args = conn.calls[0]
+    assert "id <> $3" in query
+    assert "lifecycle_sequence > $3" not in query
+    assert args == (
+        "contact-1",
+        ["lead_lost", "lead_reopened"],
+        replay_id,
+    )
+
+
+@pytest.mark.asyncio
+async def test_disposition_replay_supersession_admits_legacy_reopen_pair():
+    from atlas_brain.services.crm_provider import (
+        _eom_disposition_replay_was_superseded,
+    )
+
+    class _Conn:
+        def __init__(self, row: dict[str, int]) -> None:
+            self.row = row
+            self.calls: list[tuple[str, tuple[object, ...]]] = []
+
+        async def fetchrow(self, query: str, *args: object) -> dict[str, int]:
+            self.calls.append((query, args))
+            return self.row
+
+    replay_id = uuid4()
+    conn = _Conn(
+        {
+            "disposition_count": 2,
+            "replay_reopen_count": 1,
+            "legacy_loss_predecessor_count": 1,
+        }
+    )
+
+    assert not await _eom_disposition_replay_was_superseded(
+        conn,
+        contact_id="contact-1",
+        replay_event_type="lead_reopened",
+        replay_event_id=replay_id,
+        replay_lifecycle_sequence=None,
+    )
+
+    query, args = conn.calls[0]
+    assert "COUNT(*) AS disposition_count" in query
+    assert "event.from_stage = 'lost'" in query
+    assert "event.from_stage = replay.to_stage" in query
+    assert "event.to_stage = ANY($4::varchar[])" in query
+    assert "legacy_loss_predecessor_count" in query
+    assert args == (
+        "contact-1",
+        ["lead_lost", "lead_reopened"],
+        replay_id,
+        ["new", "estimate_booked"],
+    )
+
+    ambiguous_conn = _Conn(
+        {
+            "disposition_count": 3,
+            "replay_reopen_count": 1,
+            "legacy_loss_predecessor_count": 1,
+        }
+    )
+    assert await _eom_disposition_replay_was_superseded(
+        ambiguous_conn,
+        contact_id="contact-1",
+        replay_event_type="lead_reopened",
+        replay_event_id=replay_id,
+        replay_lifecycle_sequence=None,
+    )
+
+    mismatched_conn = _Conn(
+        {
+            "disposition_count": 2,
+            "replay_reopen_count": 1,
+            "legacy_loss_predecessor_count": 0,
+        }
+    )
+    assert await _eom_disposition_replay_was_superseded(
+        mismatched_conn,
+        contact_id="contact-1",
+        replay_event_type="lead_reopened",
+        replay_event_id=replay_id,
+        replay_lifecycle_sequence=None,
+    )
+
+
+@pytest.mark.asyncio
 async def test_private_estimate_booking_reuses_prepared_calendar_snapshot():
     class _SnapshotCRM(_CRM):
         async def prepare_eom_estimate_booking(self, **kwargs):
