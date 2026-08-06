@@ -322,7 +322,37 @@ def test_audit_raises_when_push_branches_do_not_include_main(tmp_path: Path) -> 
         encoding="utf-8",
     )
 
-    with pytest.raises(auditor.AuditFailure, match="branches must include main"):
+    with pytest.raises(auditor.AuditFailure, match="branches must admit main"):
+        auditor.audit_repo(tmp_path)
+
+
+def test_audit_raises_when_push_branch_patterns_exclude_main(tmp_path: Path) -> None:
+    _write_fixture(tmp_path)
+    workflow = tmp_path / ".github" / "workflows" / "branch_protection_required_checks.yml"
+    workflow.write_text(
+        workflow.read_text(encoding="utf-8").replace(
+            "    branches:\n      - main",
+            "    branches: [main, '!main']",
+        ),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(auditor.AuditFailure, match="branches must admit main"):
+        auditor.audit_repo(tmp_path)
+
+
+def test_audit_raises_when_push_branch_ignore_pattern_excludes_main(tmp_path: Path) -> None:
+    _write_fixture(tmp_path)
+    workflow = tmp_path / ".github" / "workflows" / "branch_protection_required_checks.yml"
+    workflow.write_text(
+        workflow.read_text(encoding="utf-8").replace(
+            "    branches:\n      - main",
+            "    branches-ignore: ['m*']",
+        ),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(auditor.AuditFailure, match="branches-ignore must not exclude main"):
         auditor.audit_repo(tmp_path)
 
 
@@ -493,6 +523,24 @@ def test_audit_raises_when_test_context_constant_is_rebound_indirectly(
     test_path.write_text(
         test_path.read_text(encoding="utf-8")
         + '\nglobals()["REQUIRED_STATUS_CONTEXTS"] = ("shadow-required",)\n',
+        encoding="utf-8",
+    )
+
+    with pytest.raises(
+        auditor.AuditFailure,
+        match="runtime binding for REQUIRED_STATUS_CONTEXTS",
+    ):
+        auditor.audit_repo(tmp_path)
+
+
+def test_audit_raises_when_test_context_constant_is_rebound_through_namespace_alias(
+    tmp_path: Path,
+) -> None:
+    _write_fixture(tmp_path)
+    test_path = tmp_path / "tests" / "test_security_guardrails_workflow.py"
+    test_path.write_text(
+        test_path.read_text(encoding="utf-8")
+        + '\nnamespace = globals()\nnamespace["REQUIRED_STATUS_CONTEXTS"] = ("shadow-required",)\n',
         encoding="utf-8",
     )
 

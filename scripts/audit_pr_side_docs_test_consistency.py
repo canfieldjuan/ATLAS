@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import argparse
 import ast
+import fnmatch
 import importlib.util
 import os
 import sys
@@ -127,6 +128,8 @@ def _call_indirectly_binds_name(node: ast.AST, name: str) -> bool:
     if not isinstance(node, ast.Call):
         return False
     if isinstance(node.func, ast.Name):
+        if node.func.id in {"globals", "locals", "vars"}:
+            return True
         if node.func.id in {"setattr", "delattr"} and len(node.args) >= 2:
             return _literal_string(node.args[1]) == name
         if node.func.id in {"exec", "eval"}:
@@ -282,6 +285,48 @@ def _decode_workflow_path(raw_value: str, *, relative: Path, lineno: int) -> str
     if value.startswith(("[", "{")):
         raise AuditFailure(f"{relative}:{lineno}: push paths must be a scalar list")
     return value
+
+
+def _github_pattern_matches(pattern: str, ref_name: str) -> bool:
+    return fnmatch.fnmatchcase(ref_name, pattern)
+
+
+def _branch_patterns_admit_ref(
+    patterns: tuple[str, ...],
+    ref_name: str,
+    *,
+    relative: Path,
+) -> bool:
+    admitted = False
+    saw_positive = False
+    for pattern in patterns:
+        negative = pattern.startswith("!")
+        effective_pattern = pattern[1:] if negative else pattern
+        if not effective_pattern:
+            raise AuditFailure(f"{relative}: empty on.push.branches pattern")
+        if not negative:
+            saw_positive = True
+        if _github_pattern_matches(effective_pattern, ref_name):
+            admitted = not negative
+    if not saw_positive:
+        raise AuditFailure(f"{relative}: on.push.branches must include a positive pattern")
+    return admitted
+
+
+def _branch_ignore_patterns_exclude_ref(
+    patterns: tuple[str, ...],
+    ref_name: str,
+    *,
+    relative: Path,
+) -> bool:
+    for pattern in patterns:
+        if pattern.startswith("!"):
+            raise AuditFailure(
+                f"{relative}: negative on.push.branches-ignore patterns are unsupported"
+            )
+        if _github_pattern_matches(pattern, ref_name):
+            return True
+    return False
 
 
 def _mapping_entry(text: str) -> tuple[str, str] | None:
@@ -499,9 +544,9 @@ def _workflow_push_paths(
     )
     if branches and branches_ignore:
         raise AuditFailure(f"{relative}: on.push cannot define both branches and branches-ignore")
-    if branches and "main" not in branches:
-        raise AuditFailure(f"{relative}: on.push.branches must include main")
-    if "main" in branches_ignore:
+    if branches and not _branch_patterns_admit_ref(branches, "main", relative=relative):
+        raise AuditFailure(f"{relative}: on.push.branches must admit main")
+    if _branch_ignore_patterns_exclude_ref(branches_ignore, "main", relative=relative):
         raise AuditFailure(f"{relative}: on.push.branches-ignore must not exclude main")
     return tuple(paths)
 
