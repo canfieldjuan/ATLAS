@@ -198,6 +198,10 @@ def test_global_files_escalate_to_full(tmp_path, path):
         ],
     ),
     (
+        "scripts/audit_workflow_security_posture.py",
+        ["tests/test_audit_workflow_security_posture.py"],
+    ),
+    (
         "scripts/check_ai_reconciliation_live.py",
         ["tests/test_check_ai_reconciliation_live.py"],
     ),
