@@ -15,6 +15,28 @@ its backend did not serve.
 This is the Atlas half of website #112 (Slice 0E), and first in that issue's
 enforced Atlas -> tracker -> website ordering.
 
+### Why this slice is over the 400-LOC target
+
+497 added lines, of which **75 are production code**:
+
+| File | LOC | What it is |
+|---|---:|---|
+| `plans/PR-EOM-Funnel-Capability-Manifest.md` | 214 | this document, required by the plan contract |
+| `tests/test_eom_funnel_capability_manifest.py` | 205 | both-directions boundary probe + degradation case |
+| `atlas_brain/eom_api/funnel.py` | 75 | the actual change |
+| `tests/test_eom_lead_conversion.py` | 3 | the new key on three existing envelope assertions |
+
+The production change is one field, one map, and one derivation. Splitting it
+would ship a response field that nothing populates, or a derivation with nothing
+to derive from -- neither half is independently meaningful.
+
+The test weight is deliberate rather than padding: this is a guard whose only
+value is refusing to advertise a capability the build does not serve, so it needs
+both directions proved, a forced-degradation case standing in for the live skew
+that ATLAS #2300 already closed, and the empty-queue and pre-manifest-caller
+cases. Tests plus the required plan doc are 84% of the diff and 0% of the
+behaviour.
+
 ### Correction to the issue's premise, verified live
 
 Website #112 states the skew is currently live. **It is not, as of this PR.**
@@ -219,7 +241,7 @@ consumer-side behaviour is specified and tested in the tracker half.
 | File | LOC |
 |---|---:|
 | `atlas_brain/eom_api/funnel.py` | 72 |
-| `plans/PR-EOM-Funnel-Capability-Manifest.md` | 225 |
+| `plans/PR-EOM-Funnel-Capability-Manifest.md` | 247 |
 | `tests/test_eom_funnel_capability_manifest.py` | 215 |
 | `tests/test_eom_lead_conversion.py` | 3 |
-| **Total** | **515** |
+| **Total** | **537** |
