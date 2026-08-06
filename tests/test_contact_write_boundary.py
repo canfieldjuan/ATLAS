@@ -793,3 +793,75 @@ def test_two_distinct_writes_on_one_line_are_both_kept(tmp_path: Path) -> None:
     )
     findings, _ = MOD.scan_tree(tmp_path)
     assert len([f for f in findings if f.operation == "INSERT"]) == 2
+
+
+# ---------------------------------------------------------------------------
+# Round 7: Python-embedded SQL lexing, driver-level writes
+# ---------------------------------------------------------------------------
+
+def test_comment_inside_python_embedded_sql_does_not_hide_a_write(
+    tmp_path: Path,
+) -> None:
+    """PostgreSQL treats `/* note */` as whitespace, so this is a write.
+
+    The .sql path was lexed from round 4; the Python path was still matching
+    raw literal values, so the same defect existed on the other side.
+    """
+    _write(
+        tmp_path,
+        "atlas_brain/services/commented.py",
+        'SQL = "INSERT /* audit note */ INTO contacts (full_name) VALUES ($1)"\n',
+    )
+    blocking, _ = _classify(tmp_path)
+    assert [f.operation for f in blocking] == ["INSERT"]
+
+
+def test_sql_quoted_as_data_inside_python_is_not_executable(tmp_path: Path) -> None:
+    """The mirror direction: literal data in a Python string is not a write."""
+    _write(
+        tmp_path,
+        "atlas_brain/services/documented.py",
+        "SQL = \"SELECT 'Example only: INSERT INTO contacts (full_name)'\"\n",
+    )
+    blocking, new_mutations = _classify(tmp_path)
+    assert blocking == []
+    assert new_mutations == []
+
+
+def test_driver_level_table_write_is_detected(tmp_path: Path) -> None:
+    """asyncpg can insert rows with no SQL statement to scan.
+
+    `copy_records_to_table("contacts", ...)` writes directly, bypassing the
+    provider and leaving nothing for a text matcher to find.
+    """
+    _write(
+        tmp_path,
+        "atlas_brain/services/bulk.py",
+        "async def load(conn, rows):\n"
+        '    await conn.copy_records_to_table("contacts", records=rows)\n',
+    )
+    blocking, _ = _classify(tmp_path)
+    assert [f.operation for f in blocking] == ["DRIVER_WRITE"]
+
+
+def test_driver_write_via_keyword_target_is_detected(tmp_path: Path) -> None:
+    _write(
+        tmp_path,
+        "atlas_brain/services/bulk_kw.py",
+        "async def load(conn, rows):\n"
+        '    await conn.copy_records_to_table(table_name="contacts", records=rows)\n',
+    )
+    blocking, _ = _classify(tmp_path)
+    assert [f.operation for f in blocking] == ["DRIVER_WRITE"]
+
+
+def test_driver_write_to_another_table_is_not_flagged(tmp_path: Path) -> None:
+    _write(
+        tmp_path,
+        "atlas_brain/services/bulk_other.py",
+        "async def load(conn, rows):\n"
+        '    await conn.copy_records_to_table("invoices", records=rows)\n',
+    )
+    blocking, new_mutations = _classify(tmp_path)
+    assert blocking == []
+    assert new_mutations == []

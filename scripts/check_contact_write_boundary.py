@@ -253,6 +253,42 @@ def _folded_value(node: ast.AST):
     return None
 
 
+# asyncpg (pinned in requirements.txt) can write rows without a SQL statement.
+# `conn.copy_records_to_table("contacts", records=rows)` inserts directly and
+# leaves nothing for a text scanner to find.
+DRIVER_WRITE_METHODS = frozenset({
+    "copy_records_to_table",
+    "copy_to_table",
+})
+
+
+def _driver_write_findings(tree: ast.AST, rel: str) -> list:
+    """Find driver-level table writes whose target is a literal `contacts`."""
+    findings = []
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.Call):
+            continue
+        func = node.func
+        name = getattr(func, "attr", None) or getattr(func, "id", None)
+        if name not in DRIVER_WRITE_METHODS:
+            continue
+        targets = list(node.args) + [kw.value for kw in node.keywords if kw.arg in (None, "table_name")]
+        for target in targets:
+            if not (isinstance(target, ast.Constant) and isinstance(target.value, str)):
+                continue
+            if re.fullmatch(r'(?:public\.)?"?contacts"?', target.value.strip(), re.IGNORECASE):
+                findings.append(
+                    Finding(
+                        path=rel,
+                        line=getattr(node, "lineno", 0),
+                        operation="DRIVER_WRITE",
+                        snippet=_normalize(f"{name}({target.value!r}, ...)"),
+                    )
+                )
+                break
+    return findings
+
+
 def _docstring_nodes(tree: ast.AST) -> set:
     """Ids of Constant nodes that are docstrings.
 
@@ -344,7 +380,12 @@ def scan_file(path: Path, root: Path) -> tuple:
 
     findings = []
     seen = set()
-    for value, lineno in _string_literals(tree):
+    for raw_value, lineno in _string_literals(tree):
+        # Python-embedded SQL needs the same lexing as a .sql file: PostgreSQL
+        # treats `INSERT /* note */ INTO contacts` as a write, and treats
+        # `'... INSERT INTO contacts ...'` as data. Matching the raw literal
+        # missed the first and falsely blocked the second.
+        value = _blank_sql_noise(raw_value)
         for operation, pattern in PATTERNS.items():
             match = pattern.search(value)
             if not match:
@@ -382,6 +423,8 @@ def scan_file(path: Path, root: Path) -> tuple:
             if dedup not in seen:
                 seen.add(dedup)
                 findings.append(finding)
+    # Driver-level writes carry no SQL text for the patterns above to see.
+    findings.extend(_driver_write_findings(tree, rel))
     return findings, None
 
 
@@ -585,7 +628,9 @@ def scan_tree(root: Path) -> tuple:
 
 # Every statement form that can put a row into `contacts`. These share INSERT's
 # stricter allow-list; UPDATE/DELETE remain the softer, still-converging set.
-CREATE_OPERATIONS = ("INSERT", "MERGE", "COPY", "SELECT_INTO", "DYNAMIC")
+CREATE_OPERATIONS = (
+    "INSERT", "MERGE", "COPY", "SELECT_INTO", "DYNAMIC", "DRIVER_WRITE",
+)
 
 
 def is_allowed(finding: Finding) -> bool:
@@ -603,7 +648,7 @@ def classify(findings: list, baseline: dict) -> tuple:
             continue
         if is_allowed(finding):
             continue
-        if finding.operation in ("INSERT", "MERGE", "COPY", "SELECT_INTO"):
+        if finding.operation in ("INSERT", "MERGE", "COPY", "SELECT_INTO", "DRIVER_WRITE"):
             blocking.append(finding)
         elif finding.operation == "DYNAMIC":
             if _in_dynamic_scope(finding.path) and finding.key() not in known:
