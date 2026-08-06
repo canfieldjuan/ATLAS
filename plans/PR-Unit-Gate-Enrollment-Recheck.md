@@ -66,6 +66,28 @@ Slice phase: Workflow/process
   this slice.
 - Reviewer rules triggered: R1, R2, R10, R11, R12, R14.
 
+### Closure declaration
+
+The branch-required required-status context set is a decision-driving
+set-valued dependency, so this slice declares its closure per
+`docs/GUARD_CLASS_CLOSURE.md`.
+
+1. **Closed or open:** CLOSED. The decision input is the finite set of Atlas
+   required GitHub status/check contexts for `main` branch protection.
+2. **Where membership comes from:** DERIVED. Membership is derived from
+   `ci/gates.yml` entries whose `enforcement` is `branch_required`; the live
+   GitHub branch-protection payload is the deployed copy, and
+   `scripts/check_required_status_checks.py` recomputes the expected set from
+   the registry when verifying live state.
+3. **Outside-set behavior:** contexts not derived from that registry are not
+   hard merge requirements by default. They may still run as visible CI or
+   advisory/process checks, but they do not block merge until a future slice
+   explicitly promotes them in `ci/gates.yml` and verifies the live payload. This
+   is the cheaper/safe side for workflow process checks because accidental
+   branch-required enrollment can block every PR, while visible non-required
+   checks still surface failures for builder/reviewer action without changing
+   the hard merge contract.
+
 ### Boundary-change enumeration
 
 Required when this diff changes a guard, validator, normalizer, resolver,
@@ -155,6 +177,14 @@ Parked hardening: none.
   -- fetched fresh live payload after the update.
 - `python3 scripts/check_required_status_checks.py --payload-file /tmp/atlas-required-status-checks-unit-gate-recheck-after-fresh.json`
   -- passed locally; required set includes `unit-gate`.
+- `python scripts/audit_plan_doc.py plans/PR-Unit-Gate-Enrollment-Recheck.md`
+  -- passed locally after adding the closure declaration.
+- `python scripts/sync_pr_plan.py plans/PR-Unit-Gate-Enrollment-Recheck.md --check`
+  -- passed locally; plan file list and diff size are in sync.
+- `python -m pytest tests/test_security_guardrails_workflow.py tests/test_select_impacted_tests.py tests/test_unit_gate_selector_fallback.py -q`
+  -- passed locally, 101 passed.
+- `gh api repos/canfieldjuan/ATLAS/branches/main/protection/required_status_checks > /tmp/atlas-required-status-checks-unit-gate-recheck-after-fresh.json && python scripts/check_required_status_checks.py --payload-file /tmp/atlas-required-status-checks-unit-gate-recheck-after-fresh.json`
+  -- passed locally; required set includes `unit-gate`.
 
 ## Estimated diff size
 
@@ -165,9 +195,9 @@ Parked hardening: none.
 | `ci/gates.yml` | 2 |
 | `docs/SECURITY_GUARDRAILS.md` | 7 |
 | `docs/audits/agents-mechanical-enforcement-audit-2026-07-29.md` | 22 |
-| `docs/audits/required-workflow-enrollment-audit-2026-08-04.md` | 25 |
+| `docs/audits/required-workflow-enrollment-audit-2026-08-04.md` | 67 |
 | `docs/ci_cd_autonomous_coding_map.md` | 12 |
 | `docs/ci_cd_runtime_duplication_audit.md` | 8 |
-| `plans/PR-Unit-Gate-Enrollment-Recheck.md` | 173 |
+| `plans/PR-Unit-Gate-Enrollment-Recheck.md` | 203 |
 | `tests/test_security_guardrails_workflow.py` | 12 |
-| **Total** | **268** |
+| **Total** | **340** |
