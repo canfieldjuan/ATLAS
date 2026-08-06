@@ -162,7 +162,16 @@ def _permissions_oidc_state(permissions: Any) -> str:
     value = permissions["id-token"]
     if not isinstance(value, str):
         return OIDC_INVALID
-    return OIDC_WRITE if value == "write" else OIDC_NONE
+    # CLOSED vocabulary. GitHub accepts `write` or `none` for id-token, so
+    # anything else is a value this auditor cannot evaluate -- not an absence.
+    # Returning OIDC_NONE for the catch-all was a fail-open: `${{ inputs.x }}`,
+    # an empty string, and a case variant like `WRITE` all read as "no OIDC
+    # request" and skipped the allowlist entirely.
+    if value == "write":
+        return OIDC_WRITE
+    if value == "none":
+        return OIDC_NONE
+    return OIDC_INVALID
 
 
 def _permissions_write_oidc(permissions: Any) -> bool:

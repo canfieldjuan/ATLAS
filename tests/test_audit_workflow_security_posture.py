@@ -837,10 +837,15 @@ jobs:
     )
 
     findings = auditor.audit_workflow(workflow)
+    errors = [f for f in findings if f.level == "ERROR"]
 
-    assert [f for f in findings if f.level == "ERROR"], (
-        "a list-valued id-token on an enrolled trusted-base job must not be admitted"
-    )
+    # This fixture trips TWO independent branches: the workflow-scope
+    # id-token invalid finding, and the trusted-base admission rejection.
+    # Asserting only "some error exists" let either one carry the test, so
+    # deleting the OIDC branch kept it green -- verified by deleting it.
+    # Each branch is therefore asserted by its own message.
+    assert any("id-token value is not a scalar" in f.detail for f in errors), errors
+    assert any("trusted-base guard shape" in f.detail for f in errors), errors
 
 
 # --- OIDC tri-state: "unevaluable" must not be allowlistable -----------------
@@ -920,3 +925,63 @@ def test_valid_id_token_write_on_the_allowlisted_job_is_still_only_a_warning(
 def test_oidc_state_tri_state_boundaries(permissions: object, expected: str) -> None:
     auditor = load_auditor()
     assert auditor._permissions_oidc_state(permissions) == expected
+
+
+
+def test_workflow_scope_invalid_id_token_errors_on_its_own(tmp_path: Path) -> None:
+    """The workflow-scope branch in isolation, with nothing else wrong.
+
+    The combined fixture above can only prove both branches fire together. This
+    one removes every other reason to fail -- ordinary event, no allowlisted
+    identity, correct job shape -- so the invalid-value finding is the only
+    thing that can produce an error.
+    """
+    auditor = load_auditor()
+    workflow = _write_workflow(
+        tmp_path,
+        "some_ordinary_workflow.yml",
+        """
+name: Ordinary
+on:
+  workflow_dispatch:
+permissions:
+  contents: read
+  id-token:
+    - write
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0
+""",
+    )
+
+    findings = auditor.audit_workflow(workflow)
+    errors = [f for f in findings if f.level == "ERROR"]
+
+    assert len(errors) == 1, errors
+    assert "workflow-scope id-token value is not a scalar" in errors[0].detail
+
+
+@pytest.mark.parametrize(
+    "value, expected",
+    [
+        ("write", "write"),
+        ("none", "none"),
+        ("read", "invalid"),
+        ("", "invalid"),
+        ("${{ inputs.scope }}", "invalid"),
+        ("WRITE", "invalid"),
+        ("Write", "invalid"),
+        ("write ", "invalid"),
+    ],
+)
+def test_id_token_vocabulary_is_closed(value: str, expected: str) -> None:
+    """Only `write` and `none` are recognized; every other scalar is invalid.
+
+    The catch-all previously returned `none`, so an unresolved `${{ }}`
+    expression, an empty string, or a case variant read as "no OIDC request"
+    and skipped the allowlist. Absence and unevaluable are different answers.
+    """
+    auditor = load_auditor()
+    assert auditor._permissions_oidc_state({"id-token": value}) == expected
