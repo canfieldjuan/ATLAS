@@ -53,7 +53,10 @@ Slice phase: vertical slice
    from the latest `lead_lost.from_stage` instead of hard-coded `new`.
 2. Add focused proof that a lead lost from `estimate_booked` reopens to
    `estimate_booked`, while a lead lost from `new` still reopens to `new`.
-3. Mechanically clean pre-existing lint-only issues in touched files if required
+3. Add focused proof that reopen reads lifecycle chronology rather than UUID
+   ordering, and that missing or unsafe `lead_lost.from_stage` evidence fails
+   closed without changing the contact or appending `lead_reopened`.
+4. Mechanically clean pre-existing lint-only issues in touched files if required
    by the focused verification command; no behavior may change outside the
    reopen path.
 
@@ -66,6 +69,10 @@ Slice phase: vertical slice
   - A lost-from-`estimate_booked` lead reopens to `estimate_booked` in a
     real-Postgres integration test; a lost-from-`new` lead still reopens to
     `new`.
+  - A two-cycle ledger regression proves the latest loss is selected by
+    lifecycle chronology, not random UUID sort order.
+  - Missing lost-stage evidence and unsafe lost-stage evidence both return 409
+    without changing the contact or appending a `lead_reopened` lifecycle row.
   - A replay of the same reopen key remains idempotent only while the lead is
     still at the stage that key restored; if the lead is lost again, the
     existing 409 replay guard still fires.
@@ -99,6 +106,11 @@ seam in the enumeration; otherwise write "N/A - no boundary change."
   boundary for lost EOM leads.
 - Replaced-path behaviors: replaces hard-coded `lost -> new` with
   `lost -> <latest lead_lost.from_stage>` for the lead being reopened.
+- Restorable-stage closure: the set is deliberately closed over the stages
+  admitted by `mark_eom_lead_lost`, and both loss admission and reopen restore
+  validation read the same code-owned `_EOM_LOST_RESTORABLE_STAGES` tuple. Any
+  future stage added to one side must move through that shared source instead
+  of adding a second local literal.
 - Guard-relevant fields: `contacts.business_context_id`, `contact_type`,
   `lead_stage`, `status`; `eom_lead_lifecycle_events.event_type`,
   `from_stage`, `to_stage`, `operation_key`, `contact_id`.
@@ -130,11 +142,12 @@ fallback changes; otherwise write "N/A - no guard/config boundary change."
 
 Inside the existing `reopen_eom_lead` transaction, after the contact row is
 locked and proven to be an active lost EOM lead, query the latest
-`lead_lost` lifecycle row for that contact. Its `from_stage` is the stage the
-loss operation displaced. Reopen updates `contacts.lead_stage` from `lost` to
-that restored stage and records `lead_reopened` with `to_stage` equal to the
-same value. Idempotent replays validate against that same restored stage before
-returning 200.
+`lead_lost` lifecycle row for that contact by lifecycle timestamps, not UUID
+primary-key ordering. Its `from_stage` is the stage the loss operation
+displaced. Reopen updates `contacts.lead_stage` from `lost` to that restored
+stage and records `lead_reopened` with `to_stage` equal to the same value.
+Idempotent replays validate against that same restored stage before returning
+200.
 
 ## Intentional
 
@@ -155,7 +168,11 @@ returning 200.
 - A4/T2/W2 from #2275 remain deferred until the tracker #54 T3b audit/index
   gate is safe to continue.
 
-Parked hardening: none.
+Parking predicate: defer hardening only when it changes a different lifecycle
+owner or adds a new side-effect surface instead of proving the current
+lost/reopen inverse. Under that predicate, parked hardening is none: chronology
+ordering, unsafe/missing evidence rejection, and stage-set closure are all
+inside this slice and covered here.
 
 ## Verification
 
@@ -169,8 +186,8 @@ Parked hardening: none.
 | File | LOC |
 |---|---:|
 | `atlas_brain/eom_api/funnel.py` | 2 |
-| `atlas_brain/services/crm_provider.py` | 75 |
-| `plans/PR-EOM-Lead-Reopen-Stage.md` | 176 |
+| `atlas_brain/services/crm_provider.py` | 76 |
+| `plans/PR-EOM-Lead-Reopen-Stage.md` | 186 |
 | `tests/test_eom_lead_conversion.py` | 8 |
-| `tests/test_eom_lead_conversion_integration.py` | 41 |
-| **Total** | **302** |
+| `tests/test_eom_lead_conversion_integration.py` | 177 |
+| **Total** | **449** |

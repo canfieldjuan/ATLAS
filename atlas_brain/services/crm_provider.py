@@ -132,6 +132,7 @@ _ALL_EOM_AMBIGUOUS_EVENTS = frozenset(
 _ALL_EOM_REQUESTED_EVENTS = frozenset(
     family.requested_event for family in _EOM_BOOKING_FAMILIES
 )
+_EOM_LOST_RESTORABLE_STAGES = ("new", "estimate_booked")
 
 
 @asynccontextmanager
@@ -3458,7 +3459,7 @@ class DatabaseCRMProvider:
         # calendar event. Neither of #2289's cases ('spam' at new,
         # 'declined_after_estimate' at estimate_booked) is won; losing a won
         # lead is deferred to a follow-up that owns the draft/calendar teardown.
-        admission = ("new", "estimate_booked")
+        admission = _EOM_LOST_RESTORABLE_STAGES
 
         def _result(
             from_stage: str,
@@ -3676,8 +3677,6 @@ class DatabaseCRMProvider:
         from .eom_lead_conversion import EOMLeadConversionError
         from .eom_lead_ingress import EOM_BUSINESS_CONTEXT_ID
 
-        restorable_stages = {"new", "estimate_booked"}
-
         def _result(*, lead_stage: str, idempotent: bool) -> dict[str, Any]:
             return {
                 "contact_id": str(contact_id),
@@ -3775,7 +3774,7 @@ class DatabaseCRMProvider:
                 FROM eom_lead_lifecycle_events
                 WHERE contact_id = $1
                   AND event_type = 'lead_lost'
-                ORDER BY id DESC
+                ORDER BY occurred_at DESC, created_at DESC
                 LIMIT 1
                 """,
                 contact_id,
@@ -3785,7 +3784,7 @@ class DatabaseCRMProvider:
                     409, "EOM lead has no lost-stage evidence to reopen"
                 )
             restored_stage = str(latest_loss["from_stage"] or "")
-            if restored_stage not in restorable_stages:
+            if restored_stage not in _EOM_LOST_RESTORABLE_STAGES:
                 raise EOMLeadConversionError(
                     409,
                     "EOM lead lost-stage evidence cannot be safely restored",

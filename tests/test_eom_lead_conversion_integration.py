@@ -3739,6 +3739,73 @@ async def test_mark_lead_lost_records_reason_is_idempotent_and_reopens():
         assert reopened_new["lead_stage"] == "new"
         new_contact, _, _ = await _contact_state(conn, new_id)
         assert new_contact["lead_stage"] == "new"
+
+        # Lifecycle chronology, not UUID ordering, owns the latest loss. The
+        # stale loss intentionally has the lexically larger UUID; ordering by
+        # id DESC would restore this lead to new instead of estimate_booked.
+        chronological_id = uuid.uuid4()
+        await _insert_contact(
+            conn, contact_id=chronological_id, lead_stage="estimate_booked"
+        )
+        await conn.execute(
+            "UPDATE contacts SET lead_stage = 'lost' WHERE id = $1",
+            chronological_id,
+        )
+        await conn.executemany(
+            """
+            INSERT INTO eom_lead_lifecycle_events (
+                id, contact_id, event_type, from_stage, to_stage, actor,
+                source, operation_key, occurred_at, created_at
+            )
+            VALUES ($1::uuid, $2, $3, $4, $5, 'employee:1:Juan Canfield',
+                    'eom_office', $6, $7::timestamptz, $7::timestamptz)
+            """,
+            [
+                (
+                    uuid.UUID("ffffffff-ffff-ffff-ffff-ffffffffffff"),
+                    chronological_id,
+                    "lead_lost",
+                    "new",
+                    "lost",
+                    f"lost-old-{uuid.uuid4().hex}",
+                    "2026-01-01T00:00:00+00:00",
+                ),
+                (
+                    uuid.UUID("11111111-1111-1111-1111-111111111111"),
+                    chronological_id,
+                    "lead_reopened",
+                    "lost",
+                    "new",
+                    f"reopen-old-{uuid.uuid4().hex}",
+                    "2026-01-02T00:00:00+00:00",
+                ),
+                (
+                    uuid.UUID("22222222-2222-2222-2222-222222222222"),
+                    chronological_id,
+                    "estimate_booked",
+                    "new",
+                    "estimate_booked",
+                    f"estimate-{uuid.uuid4().hex}",
+                    "2026-01-03T00:00:00+00:00",
+                ),
+                (
+                    uuid.UUID("00000000-0000-0000-0000-000000000001"),
+                    chronological_id,
+                    "lead_lost",
+                    "estimate_booked",
+                    "lost",
+                    f"lost-current-{uuid.uuid4().hex}",
+                    "2026-01-04T00:00:00+00:00",
+                ),
+            ],
+        )
+        reopened_chronological = await provider.reopen_eom_lead(
+            contact_id=str(chronological_id),
+            operation_key=f"office-reopen-{uuid.uuid4().hex}",
+            actor_id=1,
+            actor_name="Juan Canfield",
+        )
+        assert reopened_chronological["lead_stage"] == "estimate_booked"
     finally:
         await conn.execute(f'DROP SCHEMA IF EXISTS "{schema}" CASCADE')
         await conn.close()
@@ -3887,6 +3954,75 @@ async def test_mark_lead_lost_guards_admission_fence_reuse_and_reopen():
                 actor_id=1,
                 actor_name="Juan Canfield",
             )
+
+        # (9) a lost contact without a lead_lost row cannot be reopened: the
+        # transaction returns 409, leaves the contact lost, and appends no
+        # lead_reopened lifecycle event.
+        missing_loss_id = uuid.uuid4()
+        await _insert_contact(conn, contact_id=missing_loss_id, lead_stage="new")
+        await conn.execute(
+            "UPDATE contacts SET lead_stage = 'lost' WHERE id = $1",
+            missing_loss_id,
+        )
+        with pytest.raises(
+            EOMLeadConversionError, match="no lost-stage evidence"
+        ):
+            await provider.reopen_eom_lead(
+                contact_id=str(missing_loss_id),
+                operation_key=f"re-{uuid.uuid4().hex}",
+                actor_id=1,
+                actor_name="Juan Canfield",
+            )
+        missing_loss_contact, _, _ = await _contact_state(conn, missing_loss_id)
+        assert missing_loss_contact["lead_stage"] == "lost"
+        missing_reopen_count = await conn.fetchval(
+            """
+            SELECT COUNT(*) FROM eom_lead_lifecycle_events
+            WHERE contact_id = $1 AND event_type = 'lead_reopened'
+            """,
+            missing_loss_id,
+        )
+        assert int(missing_reopen_count) == 0
+
+        # (10) unsafe lead_lost.from_stage evidence is also rejected without
+        # changing the contact or appending a lead_reopened event.
+        unsafe_loss_id = uuid.uuid4()
+        await _insert_contact(conn, contact_id=unsafe_loss_id, lead_stage="new")
+        await conn.execute(
+            "UPDATE contacts SET lead_stage = 'lost' WHERE id = $1",
+            unsafe_loss_id,
+        )
+        await conn.execute(
+            """
+            INSERT INTO eom_lead_lifecycle_events (
+                contact_id, event_type, from_stage, to_stage, actor, source,
+                operation_key
+            )
+            VALUES ($1, 'lead_lost', 'won', 'lost',
+                    'employee:1:Juan Canfield', 'eom_office', $2)
+            """,
+            unsafe_loss_id,
+            f"lost-unsafe-{uuid.uuid4().hex}",
+        )
+        with pytest.raises(
+            EOMLeadConversionError, match="cannot be safely restored"
+        ):
+            await provider.reopen_eom_lead(
+                contact_id=str(unsafe_loss_id),
+                operation_key=f"re-{uuid.uuid4().hex}",
+                actor_id=1,
+                actor_name="Juan Canfield",
+            )
+        unsafe_loss_contact, _, _ = await _contact_state(conn, unsafe_loss_id)
+        assert unsafe_loss_contact["lead_stage"] == "lost"
+        unsafe_reopen_count = await conn.fetchval(
+            """
+            SELECT COUNT(*) FROM eom_lead_lifecycle_events
+            WHERE contact_id = $1 AND event_type = 'lead_reopened'
+            """,
+            unsafe_loss_id,
+        )
+        assert int(unsafe_reopen_count) == 0
     finally:
         await conn.execute(f'DROP SCHEMA IF EXISTS "{schema}" CASCADE')
         await conn.close()
