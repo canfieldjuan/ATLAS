@@ -482,3 +482,71 @@ async def test_oversized_value_is_rejected_not_truncated(
     )
     _, updates = provider.calls[0]
     assert updates == {"email": "a@b.com"}
+
+
+@pytest.mark.asyncio
+async def test_null_is_classified_empty_not_malformed(
+    provider: _RecordingProvider, caplog: pytest.LogCaptureFixture
+) -> None:
+    """Sparse call data is ordinary, not malformed.
+
+    Checking the type before the null made the null branch unreachable, so an
+    ordinary call that mentioned one field logged the rest at WARNING.
+    """
+    with caplog.at_level(logging.WARNING, logger="atlas.api.comms.call_actions"):
+        await call_actions._exec_update_contact(
+            RECORD, {"customer_phone": "217-555-0100", "customer_email": None}
+        )
+    warnings = [r for r in caplog.records if r.levelno >= logging.WARNING]
+    assert warnings == [], "a null from the producer must not log as malformed"
+    _, updates = provider.calls[0]
+    assert updates == {"phone": "217-555-0100"}
+
+
+@pytest.mark.asyncio
+async def test_notification_title_matches_the_persisted_state(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """An all-errors plan is persisted terminal `executed` and is not retryable.
+
+    Titling that "Plan Not Executed" invites the operator to redo a send that
+    may already have gone out.
+    """
+    titles: list = []
+
+    async def _capture(_url, **kwargs):
+        titles.append(kwargs.get("headers", {}).get("Title", ""))
+
+        class _R:
+            status_code = 200
+
+            def raise_for_status(self):
+                return None
+
+        return _R()
+
+    monkeypatch.setattr(call_actions.settings.alerts, "ntfy_enabled", True, raising=False)
+    import httpx
+
+    class _Client:
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *_):
+            return False
+
+        async def post(self, url, **kwargs):
+            return await _capture(url, **kwargs)
+
+    monkeypatch.setattr(httpx, "AsyncClient", lambda *a, **k: _Client())
+
+    await call_actions._notify_plan_executed(
+        UUID("44444444-4444-4444-4444-444444444444"),
+        [{"action": "send_email", "status": "error", "detail": "timeout"}],
+        "EOM",
+        {},
+        plan_status="executed",
+    )
+    assert titles and "Not Executed" not in titles[0], (
+        f"an errored-but-terminal plan must not read as not executed: {titles}"
+    )

@@ -688,7 +688,9 @@ async def approve_plan(transcript_id: UUID):
 
     # Send completion notification
     try:
-        await _notify_plan_executed(transcript_id, results, biz_name, data)
+        await _notify_plan_executed(
+            transcript_id, results, biz_name, data, plan_status=plan_status
+        )
     except Exception as e:
         logger.warning("Plan execution notification failed: %s", e)
 
@@ -960,6 +962,13 @@ async def _exec_update_contact(record: dict, params: dict) -> str:
         if canonical not in _PLAN_UPDATABLE_CONTACT_FIELDS:
             rejected.append(key)
             continue
+        # Null first. `call_extraction.md` emits null for anything the caller
+        # did not mention, so sparse call data is ordinary, not malformed --
+        # classifying it as malformed made the null branch below unreachable
+        # and logged routine calls at WARNING.
+        if value is None:
+            empty.append(key)
+            continue
         # Only text reaches a text column. A bool is not a name, and a dict is
         # not an email; both would otherwise be stringified into the row.
         if not isinstance(value, str):
@@ -974,7 +983,7 @@ async def _exec_update_contact(record: dict, params: dict) -> str:
         # existing CRM data: a call that mentioned only a phone number would
         # erase the contact's email. A call can teach us a value; it cannot
         # teach us that a value is absent.
-        if value is None or (isinstance(value, str) and not value.strip()):
+        if not value.strip():
             empty.append(key)
             continue
         allowed[canonical] = value
@@ -1075,6 +1084,7 @@ async def _notify_plan_executed(
     results: list[dict],
     business_name: str,
     extracted_data: dict,
+    plan_status: str = "executed",
 ) -> None:
     """Send ntfy notification summarizing plan execution results."""
     if not settings.alerts.ntfy_enabled:
@@ -1107,7 +1117,14 @@ async def _notify_plan_executed(
     actions = f"view, View Transcript, {api_url}/api/v1/comms/call-actions/{transcript_id}/view"
 
     headers = {
-        "Title": f"{business_name}: Plan {'Executed' if ok else 'Not Executed'}",
+        # Mirrors the persisted terminal state, not whether any action
+        # succeeded. An all-errors plan is persisted "executed" and is NOT
+        # retryable, so telling the operator "Not Executed" invites a manual
+        # redo of a send that may already have gone out.
+        "Title": (
+            f"{business_name}: Plan "
+            f"{'Not Executed' if plan_status == 'skipped' else 'Executed'}"
+        ),
         "Priority": "default",
         "Tags": "white_check_mark" if not failed else "warning",
         "Actions": actions,

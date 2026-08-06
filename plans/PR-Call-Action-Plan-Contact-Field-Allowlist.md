@@ -42,6 +42,28 @@ not a one-line dependency.
 The field allow-list is the part that is both correct and safe to ship now: it
 closes the privilege escalation with zero effect on the notification workflow.
 
+### Why this exceeds the 400-LOC budget
+
+The diff is roughly 955 lines, of which the plan doc and the test file are the
+large majority; the executable change is confined to one module. It is over
+budget because the slice is not separable without shipping something unsafe:
+
+- The allow-list alone would have **silently broken every legitimate update**,
+  because the producer emits `customer_email` and the list accepts `email`. The
+  alias mapping is not a follow-up; without it the guard is a regression.
+- The alias mapping alone would have **written `email = NULL` over existing CRM
+  data**, because the producer emits null for un-mentioned fields. The null and
+  value-shape handling is not a follow-up either.
+- Filtering without the `PlanActionSkipped` outcome records a refused write as a
+  completed action, so the audit trail asserts something false about a security
+  control. That is not a defect worth shipping for a week.
+
+Each of those was found by review *after* the preceding piece landed, which is
+the evidence that they are one indivisible change rather than three. The tests
+are the deliverable for a security guard: shipping the filter without proof that
+forbidden fields are rejected and legitimate ones accepted is the exact failure
+this slice exists to prevent.
+
 ### Problem-derived contract
 
 - **Root cause:** the executor treats plan-proposed `params` as trusted, so the
@@ -96,11 +118,33 @@ Slice phase: production hardening
 6. Pre-existing skip behavior is unchanged --
    `::test_no_linked_contact_is_still_skipped`, `::test_empty_params_is_still_skipped`.
 
-Affected surfaces: the `update_contact` plan action only. Risk areas: an
-allow-list narrower than real call outcomes would silently stop applying
-legitimate updates (covered by criteria 1-2).
+7. **Plan persistence reflects what happened.** A plan whose only outcomes were
+   skips persists as `skipped`; a plan with any error persists as `executed` and
+   stays non-retryable, because an errored action may already have taken effect
+   -- `::test_approve_plan_persists_skipped_when_only_skips_occurred`,
+   `::test_approve_plan_persists_executed_when_an_action_errored`.
+8. **Result aggregation counts skips separately from failures.** `fail_count` is
+   computed from `status == "error"` rather than `len(results) - ok_count`, so a
+   skip is not billed as a failure in the operator log.
+9. **CRM interaction summary names only succeeded actions.** `action_summary`
+   filters on `status == "ok"`, so a skipped action does not appear as approved
+   work on the contact timeline.
+10. **The notification title mirrors the persisted terminal state**, not whether
+    any action succeeded -- `::test_notification_title_matches_the_persisted_state`.
+    Telling the operator "Not Executed" for a terminal, non-retryable plan
+    invites a manual redo of a send that may already have gone out.
+11. **Untrusted key names are bounded before reaching a log, the persisted
+    result, or ntfy** -- `::test_control_characters_in_keys_cannot_forge_log_records`,
+    `::test_rejected_key_rendering_is_length_bounded`.
 
-- Reviewer rules triggered: R1, R2, R3, R5, R14.
+Affected surfaces: the `update_contact` plan action; `approve_plan` persistence
+and retry semantics; result aggregation; the CRM interaction summary; and the
+plan-execution notification. Risk areas: an allow-list narrower than real call
+outcomes would silently stop applying legitimate updates (criteria 1-2); a
+terminal-state label that disagrees with what was persisted could prompt a
+duplicate send (criterion 10).
+
+- Reviewer rules triggered: R1, R2, R3, R5, R6, R8, R14.
 
 R1 and R5 are the path triggers for `atlas_brain/api/**`. R1 (requirements
 match): the change implements exactly the #2299 finding it cites and nothing
@@ -108,8 +152,11 @@ more -- no route, URL, or response shape moves. R5 (backward compatibility) is
 the load-bearing one here: the ten routes on this router are ntfy action-button
 targets, so the compatibility surface that must not move is the notification
 contract, and criterion 6 plus the untouched route signatures are the evidence.
-R3 (authz/privileged paths) applies because this is the privileged write
-reachable from an unauthenticated route; R14 (guard-class) because the change is
+R6 (observability/reporting) and R8 (idempotency and retry) are triggered by the
+plan-outcome changes: the persisted status feeds the idempotency guard, and the
+notification and logs are the operator's only view of what happened. R3
+(authz/privileged paths) applies because this is the privileged write reachable
+from an unauthenticated route; R14 (guard-class) because the change is
 an admission boundary, probed on both sides per criteria 1-2 versus 3-4; R2
 because the failure-branch fixtures are the evidence.
 
@@ -269,7 +316,7 @@ pre-existing: identical with the change stashed and unstashed.
 
 | File | LOC |
 |---|---:|
-| `atlas_brain/api/comms/call_actions.py` | 196 |
-| `plans/PR-Call-Action-Plan-Contact-Field-Allowlist.md` | 275 |
-| `tests/test_call_action_plan_contact_fields.py` | 484 |
-| **Total** | **955** |
+| `atlas_brain/api/comms/call_actions.py` | 215 |
+| `plans/PR-Call-Action-Plan-Contact-Field-Allowlist.md` | 322 |
+| `tests/test_call_action_plan_contact_fields.py` | 552 |
+| **Total** | **1089** |
