@@ -142,7 +142,19 @@ def _action_ref(uses: str) -> tuple[str, str] | None:
 def _permissions_write_oidc(permissions: Any) -> bool:
     if permissions == "write-all":
         return True
-    return isinstance(permissions, dict) and permissions.get("id-token") == "write"
+    if not isinstance(permissions, dict):
+        return False
+    if "id-token" not in permissions:
+        return False
+    value = permissions["id-token"]
+    if not isinstance(value, str):
+        # A non-scalar id-token value cannot be evaluated statically, so treat
+        # it as a write request rather than as absence. Comparing only against
+        # the scalar "write" meant `{id-token: [write]}` silently escaped the
+        # OIDC allowlist entirely -- this check governs every workflow, not
+        # only the trusted-base ones.
+        return True
+    return value == "write"
 
 
 def _normalized_workflow_text(text: str) -> str:
@@ -193,11 +205,23 @@ def _permissions_are_explicitly_read_only(permissions: Any) -> bool:
         return True
     if not isinstance(permissions, dict):
         return False
-    return all(
-        value in _READ_ONLY_PERMISSION_VALUES
-        for key, value in permissions.items()
-        if key != "id-token"
-    )
+    for key, value in permissions.items():
+        # Shape BEFORE meaning, and before the id-token exclusion. Skipping
+        # id-token by key without checking its value let `{id-token: [write]}`
+        # through: this predicate saw no other key and returned True, while
+        # `_permissions_write_oidc` compared against the scalar "write" and
+        # missed the list. Both guards passed the same malformed block.
+        #
+        # A non-string value elsewhere was worse than wrong -- `["read"] in
+        # frozenset(...)` raises TypeError: unhashable type, so the auditor
+        # crashed instead of reaching a verdict.
+        if not isinstance(key, str) or not isinstance(value, str):
+            return False
+        if key == "id-token":
+            continue
+        if value not in _READ_ONLY_PERMISSION_VALUES:
+            return False
+    return True
 
 
 def _effective_permissions(job: dict[str, Any], workflow: dict[str, Any]) -> Any:
