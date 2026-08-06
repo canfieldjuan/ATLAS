@@ -87,11 +87,13 @@ trying to pass.
 `scripts/check_required_status_checks.py`: `live-reconciliation`,
 `diff-budget`, `plan-admission`, `session-lane`, `review-contract`,
 `pr-body-contract`, `Gitleaks PR secret scan`, and
-`Gitleaks baseline growth guard`. Live branch protection can drift from that
-expected set; the audit workflow reports that drift when its read token is
-configured. `pre-push-audit` and `unit-gate` are visible CI signals, not
-branch-required contexts, until the blockers recorded in
-`docs/audits/required-workflow-enrollment-audit-2026-08-04.md` are closed.
+`Gitleaks baseline growth guard`, and `unit-gate`. Live branch protection can
+drift from that expected set; the audit workflow reports that drift when its
+read token is configured. `unit-gate` was promoted after the #2290 selector
+coverage fix. `pre-push-audit` remains a visible CI signal, not a
+branch-required context, until the trusted-base PR-side docs/test consistency
+blocker recorded in `docs/audits/required-workflow-enrollment-audit-2026-08-04.md`
+is closed.
 
 ### PR secret and product gates
 

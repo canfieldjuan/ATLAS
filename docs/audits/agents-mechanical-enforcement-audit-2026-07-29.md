@@ -1,5 +1,13 @@
 # AGENTS Mechanical Enforcement Audit - 2026-07-29
 
+## 2026-08-05 Update
+
+The `unit-gate` enrollment blocker recorded on 2026-08-04 was closed by #2290.
+`unit-gate` is now a `ci/gates.yml` `branch_required` context and live branch
+protection requires it, pinned to the GitHub Actions app source. `pre-push-audit`
+remains `ci_blocking_not_required` until its trusted-base PR-side docs/test
+consistency blocker is closed.
+
 ## 2026-08-04 Update
 
 The required-status contradiction found in this audit has been closed in live
@@ -7,8 +15,9 @@ branch protection. `main` now contains every `ci/gates.yml` `branch_required`
 context pinned to the GitHub Actions app source: `live-reconciliation`,
 `diff-budget`, `plan-admission`, `session-lane`, `review-contract`,
 `pr-body-contract`, `Gitleaks PR secret scan`, and
-`Gitleaks baseline growth guard`. The checker proves required registry coverage
-and source pinning; it is not an exact-set audit for extra required contexts.
+`Gitleaks baseline growth guard`. The 2026-08-05 update adds `unit-gate` to the
+required set. The checker proves required registry coverage and source pinning;
+it is not an exact-set audit for extra required contexts.
 
 Verification:
 
@@ -100,10 +109,11 @@ branch protection may be superseded by the 2026-08-04 update above.
 1. `PR-Required-Status-Check-Alignment`: closed 2026-08-04 by updating live
    branch protection so `scripts/check_required_status_checks.py` passes against
    the GitHub payload.
-2. `PR-Required-Workflow-Enrollment-Audit`: closed 2026-08-04 in
-   `docs/audits/required-workflow-enrollment-audit-2026-08-04.md`. Decision:
-   keep `pre-push-audit` and `unit-gate` visible-but-not-branch-required until
-   the documented enrollment blockers are closed.
+2. `PR-Required-Workflow-Enrollment-Audit`: initial audit closed 2026-08-04 in
+   `docs/audits/required-workflow-enrollment-audit-2026-08-04.md`; the
+   2026-08-05 recheck promotes `unit-gate` after #2290 closed its selector
+   blocker. `pre-push-audit` remains visible-but-not-branch-required until its
+   trusted-base PR-side docs/test consistency blocker is closed.
 3. `PR-PR-Mutation-Ownership-Wrapper`: wire `check_session_pr_ownership.py` into
    the PR mutation helpers, or downgrade the AGENTS wording to manual-only.
 4. `PR-Commit-Message-Contract-Gate`: validate canonical commit-message

@@ -1,10 +1,39 @@
 # Required Workflow Enrollment Audit - 2026-08-04
 
-## Decision
+## 2026-08-05 Recheck
 
-Keep `pre-push-audit` and `unit-gate` at `ci_blocking_not_required` for now.
-Do not add either context to `ci/gates.yml` `branch_required` or live branch
-protection in this slice.
+#2290 closed the `unit-gate` selector blocker by mapping CI/security governance
+docs to their owning tests and by making the watcher governance doc owner run
+against the checked-out repository docs. The recheck decision is:
+
+- `unit-gate`: promote to `branch_required` and require it in live branch
+  protection.
+- `pre-push-audit`: keep at `ci_blocking_not_required` until the trusted-base
+  PR-side docs/test consistency blocker has a safe data-only probe.
+
+Fresh evidence on 2026-08-05:
+
+- #2290's `unit-gate` run passed in about 2m21s.
+- The latest sampled `unit_gate.yml` runs show the selector now produces bounded
+  runs for governance-doc changes. Recent failures were legitimate PR test
+  failures, not runner flakes.
+- A fresh live branch-protection payload now includes `unit-gate` pinned to the
+  GitHub Actions app source with `strict: false`, and
+  `scripts/check_required_status_checks.py` passes against that payload.
+- `pre-push-audit` remains useful and green in recent samples, but its open
+  blocker is different: because PR events run trusted base code, PR-side changes
+  to gate docs/tests can still be observed only after merge unless a safe
+  data-only consistency probe is added.
+
+## 2026-08-04 Initial Decision
+
+Initial decision on 2026-08-04: keep `pre-push-audit` and `unit-gate` at
+`ci_blocking_not_required` for that slice. Do not add either context to
+`ci/gates.yml` `branch_required` or live branch protection in that slice.
+
+As of the 2026-08-05 recheck above, this initial decision remains current for
+`pre-push-audit` only. It is superseded for `unit-gate` because #2290 closed the
+specific selector blocker named by this audit.
 
 This is not a downgrade. Both checks remain real CI signals, and red runs must
 be fixed before calling a PR ready. The decision is that neither is ready to be
@@ -13,16 +42,16 @@ specific enrollment blockers below.
 
 ## Evidence
 
-Current registry state:
+Registry state at the 2026-08-04 initial decision:
 
 ```bash
-sed -n '72,92p' ci/gates.yml
+git show 9b4a37e6f7e3f7e34c1e87910591c65fcb8fa5b5:ci/gates.yml | sed -n '72,92p'
 ```
 
 - `pre-push-audit`: `ci_blocking_not_required`
 - `unit-gate`: `ci_blocking_not_required`
 
-Live branch protection as of this audit contains every existing
+Live branch protection as of the 2026-08-04 initial decision contained every existing
 `branch_required` registry context pinned to the GitHub Actions app source, and
 does not include `pre-push-audit` or `unit-gate`:
 
@@ -32,7 +61,8 @@ python scripts/check_required_status_checks.py \
   --payload-file /tmp/atlas-required-status-checks-live-required-workflow.json
 ```
 
-The checker passed for the current registry-required set.
+The checker passed for the then-current registry-required set. The 2026-08-05
+recheck above is the current deployed state for `unit-gate`.
 
 Recent `pre-push-audit` sample:
 
@@ -89,20 +119,23 @@ means a PR that changes docs/tests for the gate can pass before merge and fail
 the push-to-main variant after merge. That behavior should be fixed or made
 explicit before treating the context as a hard merge contract.
 
-`unit-gate` is not ready for branch protection because its selector did not run
-the security-guardrails docs test for the docs-only required-status PR. The PR
-run selected no reachable tests and passed growth-only, while a later full-suite
-path failed on `tests/test_security_guardrails_workflow.py`. Making `unit-gate`
-required before fixing that selector coverage would add wait time without
-closing the observed gap.
+At the 2026-08-04 initial decision, `unit-gate` was not ready for branch
+protection because its selector did not run the security-guardrails docs test
+for the docs-only required-status PR. The PR run selected no reachable tests and
+passed growth-only, while a later full-suite path failed on
+`tests/test_security_guardrails_workflow.py`. Making `unit-gate` required before
+fixing that selector coverage would have added wait time without closing the
+observed gap. #2290 later closed this specific blocker; see the 2026-08-05
+recheck above for the current `unit-gate` decision.
 
 ## Result
 
-The correct next hardening slice is not "require both checks." It is to close
-the observed coverage gap first:
+The 2026-08-04 initial result was not "require both checks." It was to close the
+observed coverage gap first:
 
 - Map `docs/SECURITY_GUARDRAILS.md` and branch-protection docs to
-  `tests/test_security_guardrails_workflow.py` in the unit-gate selector.
+  `tests/test_security_guardrails_workflow.py` in the unit-gate selector
+  (closed by #2290 before the 2026-08-05 recheck).
 - Decide whether trusted-base `pre-push-audit` needs a PR-side docs/test
   consistency probe that still avoids executing untrusted PR code.
 - Re-run this enrollment decision after those blockers are closed.

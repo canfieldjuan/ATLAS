@@ -69,9 +69,10 @@ trusted sweep, parked in plans/PR-Trusted-Base-Gate-Execution.md.
 Target branch protection for `main` is derived from `ci/gates.yml` entries
 marked `branch_required`: `live-reconciliation`, `diff-budget`,
 `plan-admission`, `session-lane`, `review-contract`, `pr-body-contract`,
-`Gitleaks PR secret scan`, and `Gitleaks baseline growth guard`, all pinned to
-the GitHub Actions app source instead of legacy bare context names. As of
-2026-08-04, live GitHub settings contain every registry-required context pinned
+`Gitleaks PR secret scan`, `Gitleaks baseline growth guard`, and `unit-gate`,
+all pinned to the GitHub Actions app source instead of legacy bare context
+names. As of 2026-08-05, live GitHub settings contain every registry-required
+context pinned
 to the GitHub Actions app source. The checker intentionally proves required
 registry coverage and source pinning; it is not an exact-set audit for extra
 required contexts. Verification:
