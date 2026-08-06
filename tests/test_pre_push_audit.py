@@ -248,7 +248,12 @@ def _write_pr_side_consistency_fixture(repo: Path) -> None:
         encoding="utf-8",
     )
     (repo / "docs" / "SECURITY_GUARDRAILS.md").write_text(
-        "# Security Guardrails\n\n- `live-reconciliation`\n",
+        """# Security Guardrails
+
+Target branch protection for `main` is derived from `ci/gates.yml` entries
+marked `branch_required`: `live-reconciliation`, all pinned to the GitHub
+Actions app source.
+""",
         encoding="utf-8",
     )
     (repo / ".github" / "workflows" / "branch_protection_required_checks.yml").write_text(

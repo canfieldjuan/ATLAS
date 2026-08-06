@@ -51,7 +51,9 @@ Slice phase: Workflow/process
     contexts/workflows from PR-side `ci/gates.yml` using the trusted
     `check_required_status_checks.py` parser.
   - The checker fails when `docs/SECURITY_GUARDRAILS.md` omits a
-    branch-required context.
+    branch-required context, keeps a stale extra branch-required context, or
+    reorders the canonical branch-required context inventory away from
+    `ci/gates.yml`.
   - The checker fails when `.github/workflows/branch_protection_required_checks.yml`
     omits a required workflow/doc/script/test trigger path.
   - The checker rejects `paths:` lists that are nested below another
@@ -114,9 +116,10 @@ seam in the enumeration; otherwise write "N/A - no boundary change."
 - Replaced-path behaviors: none; existing checks still run in the same order
   except the new checker runs before PR watcher safety.
 - Guard-relevant fields: `ci/gates.yml` branch-required `context` and
-  `workflow`; backticked contexts in `docs/SECURITY_GUARDRAILS.md`; quoted
-  push path triggers in `.github/workflows/branch_protection_required_checks.yml`;
-  literal `REQUIRED_STATUS_CONTEXTS` and `REQUIRED_STATUS_WORKFLOW_PATHS`.
+  `workflow`; the bounded canonical branch-required context inventory in
+  `docs/SECURITY_GUARDRAILS.md`; quoted push path triggers in
+  `.github/workflows/branch_protection_required_checks.yml`; literal
+  `REQUIRED_STATUS_CONTEXTS` and `REQUIRED_STATUS_WORKFLOW_PATHS`.
 - Caller x input shape: local and trusted-base CI call the checker with a repo
   root; the checker reads text/AST literals only and never imports PR tests.
 
@@ -159,8 +162,10 @@ and parses PR-side `ci/gates.yml` from `ATLAS_AUDIT_REPO_ROOT`. It derives the
 branch-required context set and workflow set, then reads three PR-side files as
 data:
 
-- `docs/SECURITY_GUARDRAILS.md` must mention every branch-required context as a
-  backticked context.
+- `docs/SECURITY_GUARDRAILS.md` must carry the bounded canonical
+  branch-required context inventory, and that inventory must exactly match the
+  registry contexts so stale extras and incidental mentions do not satisfy the
+  gate.
 - `.github/workflows/branch_protection_required_checks.yml` must trigger on
   every branch-required workflow plus the registry, docs, checker script,
   branch-protection workflow, and security-guardrails test file through the
@@ -198,7 +203,7 @@ Parked hardening: none.
 ## Verification
 
 - `python scripts/audit_pr_side_docs_test_consistency.py` - passed.
-- `python -m pytest tests/test_open_pr_wrapper.py tests/test_audit_pr_side_docs_test_consistency.py tests/test_pre_push_audit_workflow.py tests/test_pre_push_audit.py tests/test_security_guardrails_workflow.py -q` - 153 passed.
+- `python -m pytest tests/test_open_pr_wrapper.py tests/test_audit_pr_side_docs_test_consistency.py tests/test_pre_push_audit_workflow.py tests/test_pre_push_audit.py tests/test_security_guardrails_workflow.py -q` - 155 passed.
 - `python scripts/maturity_sweep.py scripts --tests-root tests --baseline tests/maturity_sweep/baseline_scripts.json --min-score 8 --sensitive-glob 'scripts/**'` - passed.
 
 ## Estimated diff size
@@ -210,11 +215,11 @@ Parked hardening: none.
 | `docs/audits/agents-mechanical-enforcement-audit-2026-07-29.md` | 9 |
 | `docs/audits/required-workflow-enrollment-audit-2026-08-04.md` | 13 |
 | `docs/ci_cd_autonomous_coding_map.md` | 6 |
-| `plans/PR-Pre-Push-Audit-Doc-Test-Probe.md` | 220 |
-| `scripts/audit_pr_side_docs_test_consistency.py` | 691 |
+| `plans/PR-Pre-Push-Audit-Doc-Test-Probe.md` | 225 |
+| `scripts/audit_pr_side_docs_test_consistency.py` | 719 |
 | `scripts/pre_push_audit.sh` | 1 |
-| `tests/test_audit_pr_side_docs_test_consistency.py` | 714 |
+| `tests/test_audit_pr_side_docs_test_consistency.py` | 758 |
 | `tests/test_open_pr_wrapper.py` | 6 |
-| `tests/test_pre_push_audit.py` | 57 |
+| `tests/test_pre_push_audit.py` | 62 |
 | `tests/test_pre_push_audit_workflow.py` | 6 |
-| **Total** | **1735** |
+| **Total** | **1817** |

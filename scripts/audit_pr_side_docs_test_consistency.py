@@ -7,6 +7,7 @@ import ast
 import fnmatch
 import importlib.util
 import os
+import re
 import sys
 from pathlib import Path
 
@@ -29,6 +30,12 @@ EXTRA_BRANCH_PROTECTION_TRIGGER_PATHS = (
     "docs/SECURITY_GUARDRAILS.md",
     "scripts/check_required_status_checks.py",
     "tests/test_security_guardrails_workflow.py",
+)
+DOC_BRANCH_REQUIRED_RE = re.compile(
+    r"Target branch protection for `main` is derived from `ci/gates\.yml` entries"
+    r"\s+marked `branch_required`:\s*(?P<contexts>.*?)\s+all pinned to the "
+    r"GitHub\s+Actions\s+app\s+source",
+    re.DOTALL,
 )
 
 
@@ -71,6 +78,15 @@ def _registry_inventory(
     )
     all_workflows = tuple(str(gate["workflow"]) for gate in gates)
     return contexts, workflows, all_workflows
+
+
+def _docs_branch_required_contexts(doc_text: str) -> tuple[str, ...]:
+    match = DOC_BRANCH_REQUIRED_RE.search(doc_text)
+    if match is None:
+        raise AuditFailure(
+            f"{SECURITY_GUARDRAILS_DOC}: missing canonical branch-required context inventory"
+        )
+    return tuple(re.findall(r"`([^`]+)`", match.group("contexts")))
 
 
 def _target_contains_name(target: ast.AST | None, name: str) -> bool:
@@ -615,11 +631,23 @@ def audit_repo(repo_root: Path = REPO_ROOT) -> list[str]:
         )
 
     doc_text = _read(repo_root, SECURITY_GUARDRAILS_DOC)
-    missing_doc_contexts = [context for context in contexts if f"`{context}`" not in doc_text]
+    doc_contexts = _docs_branch_required_contexts(doc_text)
+    missing_doc_contexts = [context for context in contexts if context not in doc_contexts]
     if missing_doc_contexts:
         failures.append(
             f"{SECURITY_GUARDRAILS_DOC}: missing branch-required context(s): "
             f"{_format_missing(missing_doc_contexts)}"
+        )
+    extra_doc_contexts = [context for context in doc_contexts if context not in contexts]
+    if extra_doc_contexts:
+        failures.append(
+            f"{SECURITY_GUARDRAILS_DOC}: extra branch-required context(s): "
+            f"{_format_missing(extra_doc_contexts)}"
+        )
+    if not missing_doc_contexts and not extra_doc_contexts and doc_contexts != contexts:
+        failures.append(
+            f"{SECURITY_GUARDRAILS_DOC}: branch-required context order differs from "
+            f"{GATE_REGISTRY} branch_required contexts"
         )
 
     workflow_text = _read(repo_root, BRANCH_PROTECTION_WORKFLOW)

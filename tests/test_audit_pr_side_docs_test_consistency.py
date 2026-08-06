@@ -35,15 +35,16 @@ def _write_fixture(
 ) -> None:
     doc_contexts = contexts if doc_contexts is None else doc_contexts
     test_contexts = contexts if test_contexts is None else test_contexts
-    branch_required = [
-        (
+    branch_required_by_context = {
+        "live-reconciliation": (
             "live-reconciliation",
             "AI reconciliation live",
             "live-reconciliation",
             ".github/workflows/ai_reconciliation_live.yml",
         ),
-        ("unit-gate", "Unit Gate", "unit-gate", ".github/workflows/unit_gate.yml"),
-    ]
+        "unit-gate": ("unit-gate", "Unit Gate", "unit-gate", ".github/workflows/unit_gate.yml"),
+    }
+    branch_required = [branch_required_by_context[context] for context in contexts]
     test_workflow_paths = (
         tuple(workflow for *_prefix, workflow in branch_required)
         + auditor.EXTRA_REQUIRED_STATUS_TEST_PATHS
@@ -81,8 +82,16 @@ def _write_fixture(
         workflow_path.parent.mkdir(parents=True, exist_ok=True)
         workflow_path.write_text("name: fixture\n", encoding="utf-8")
 
-    doc_lines = ["# Security Guardrails", ""]
-    doc_lines.extend(f"- `{context}`" for context in doc_contexts)
+    doc_lines = [
+        "# Security Guardrails",
+        "",
+        "Target branch protection for `main` is derived from `ci/gates.yml` entries",
+        "marked `branch_required`: "
+        + ", ".join(f"`{context}`" for context in doc_contexts)
+        + ", all pinned to the GitHub Actions app source.",
+        "",
+        "Other incidental references must not define the canonical inventory.",
+    ]
     (repo / "docs" / "SECURITY_GUARDRAILS.md").write_text(
         "\n".join(doc_lines),
         encoding="utf-8",
@@ -142,6 +151,41 @@ def test_audit_fails_when_docs_omit_branch_required_context(tmp_path: Path) -> N
 
     assert failures == [
         "docs/SECURITY_GUARDRAILS.md: missing branch-required context(s): unit-gate"
+    ]
+
+
+def test_audit_fails_when_docs_keep_stale_branch_required_context(
+    tmp_path: Path,
+) -> None:
+    _write_fixture(
+        tmp_path,
+        contexts=("live-reconciliation",),
+        doc_contexts=("live-reconciliation", "unit-gate"),
+        test_contexts=("live-reconciliation",),
+        test_workflow_paths=(".github/workflows/ai_reconciliation_live.yml", "ci/gates.yml"),
+        workflow_paths=(
+            ".github/workflows/ai_reconciliation_live.yml",
+            "ci/gates.yml",
+            *auditor.EXTRA_BRANCH_PROTECTION_TRIGGER_PATHS,
+        ),
+    )
+
+    failures = auditor.audit_repo(tmp_path)
+
+    assert failures == [
+        "docs/SECURITY_GUARDRAILS.md: extra branch-required context(s): unit-gate"
+    ]
+
+
+def test_audit_fails_when_docs_reorder_branch_required_contexts(
+    tmp_path: Path,
+) -> None:
+    _write_fixture(tmp_path, doc_contexts=("unit-gate", "live-reconciliation"))
+
+    failures = auditor.audit_repo(tmp_path)
+
+    assert failures == [
+        "docs/SECURITY_GUARDRAILS.md: branch-required context order differs from ci/gates.yml branch_required contexts"
     ]
 
 
