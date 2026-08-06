@@ -913,3 +913,90 @@ def test_unchanged_duplicate_writers_are_not_drift(tmp_path: Path) -> None:
     """The multiset must not report drift against an unchanged tree."""
     _seed_provider(tmp_path, _DUPLICATE_WRITES)
     assert MOD.main(["--root", str(tmp_path)]) == 0
+
+
+# ---------------------------------------------------------------------------
+# The workflow's own contract
+# ---------------------------------------------------------------------------
+
+def test_trusted_base_invocation_ignores_a_widened_pr_allowlist(
+    tmp_path: Path,
+) -> None:
+    """Run the shape the trusted job runs: base checker, PR tree as data.
+
+    Until this PR merges, `pull_request_target` has no base definition of the
+    workflow, so the enforcement job cannot execute in CI on the PR that
+    introduces it. This test is the standing proof of the wiring that the CI
+    run cannot yet provide -- and it stays useful afterwards, because it fails
+    if the trusted-base property is ever lost.
+    """
+    import json as _json
+    import subprocess
+    import sys
+
+    base = tmp_path / "base"
+    pr = tmp_path / "pr"
+    for tree in (base, pr):
+        (tree / "scripts").mkdir(parents=True, exist_ok=True)
+        (tree / "tests" / "contact_write_boundary").mkdir(parents=True, exist_ok=True)
+
+    # Base carries the real checker and an empty inventory.
+    (base / "scripts" / "check_contact_write_boundary.py").write_text(
+        SCRIPT.read_text(encoding="utf-8"), encoding="utf-8"
+    )
+    empty = _json.dumps(MOD.build_baseline([], []))
+    (base / "tests" / "contact_write_boundary" / "baseline.json").write_text(
+        empty, encoding="utf-8"
+    )
+
+    # The PR plants a forbidden writer AND widens its own allow-list to permit
+    # it, then records that state in its own inventory.
+    (pr / "atlas_brain" / "services").mkdir(parents=True, exist_ok=True)
+    (pr / "atlas_brain" / "services" / "evil.py").write_text(
+        'SQL = "INSERT INTO contacts (full_name) VALUES ($1)"\n', encoding="utf-8"
+    )
+    widened = SCRIPT.read_text(encoding="utf-8").replace(
+        'INSERT_ALLOWED = (PROVIDER_MODULE,)',
+        'INSERT_ALLOWED = (PROVIDER_MODULE, "atlas_brain/services/evil.py")',
+    )
+    assert "evil.py" in widened, "fixture failed to widen the allow-list"
+    (pr / "scripts" / "check_contact_write_boundary.py").write_text(
+        widened, encoding="utf-8"
+    )
+    pr_findings, pr_unanalyzable = MOD.scan_tree(pr)
+    (pr / "tests" / "contact_write_boundary" / "baseline.json").write_text(
+        _json.dumps(MOD.build_baseline(pr_findings, pr_unanalyzable)), encoding="utf-8"
+    )
+
+    result = subprocess.run(
+        [
+            sys.executable,
+            str(base / "scripts" / "check_contact_write_boundary.py"),
+            "--root", str(pr),
+            "--baseline", str(base / "tests" / "contact_write_boundary" / "baseline.json"),
+            "--inventory-baseline",
+            str(pr / "tests" / "contact_write_boundary" / "baseline.json"),
+        ],
+        capture_output=True,
+        text=True,
+    )
+    assert result.returncode == 1, (
+        "the base checker must reject a writer the PR allow-listed for itself\n"
+        f"{result.stdout}"
+    )
+    assert "evil.py" in result.stdout
+
+    # And the PR's own checker would have passed it -- the property being kept.
+    self_result = subprocess.run(
+        [
+            sys.executable,
+            str(pr / "scripts" / "check_contact_write_boundary.py"),
+            "--root", str(pr),
+            "--baseline", str(pr / "tests" / "contact_write_boundary" / "baseline.json"),
+        ],
+        capture_output=True,
+        text=True,
+    )
+    assert self_result.returncode == 0, (
+        "fixture is not demonstrating the difference between base and PR checkers"
+    )

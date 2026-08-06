@@ -27,6 +27,7 @@ name: Contact Write Boundary
 # module adding its own INSERT, and a new file matches no pre-existing filter.
 
 on:
+  pull_request:
   pull_request_target:
     types: [opened, synchronize, reopened, ready_for_review]
   push:
@@ -81,6 +82,43 @@ jobs:
           # for any test under tests/ even though this detector is stdlib-only.
           python -m pip install pytest pytest-asyncio
           cd base
+          python -m pytest tests/test_contact_write_boundary.py -q
+
+  # Advisory self-check. `pull_request_target` resolves the workflow from the
+  # BASE branch, so on the PR that introduces this file GitHub has no base
+  # definition and the trusted job cannot run at all -- the introducing PR
+  # would otherwise ship a gate that has never executed in CI. This job runs on
+  # the ordinary `pull_request` event so a signal exists from the first PR
+  # onward.
+  #
+  # It runs PR-owned code and is therefore NOT the enforcement gate and is not
+  # enrolled in ci/gates.yml: a PR can weaken the checker it runs. Enforcement
+  # is contact-write-boundary above, which begins at the first PR opened after
+  # this one merges.
+  contact-write-boundary-selfcheck:
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Checkout
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+
+      - name: Setup Python
+        uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6.3.0
+        with:
+          python-version: "3.11"
+
+      - name: Contact write-boundary self-check (advisory, PR-owned code)
+        run: |
+          set -euo pipefail
+          python scripts/check_contact_write_boundary.py \
+            --baseline tests/contact_write_boundary/baseline.json
+
+      - name: Detector self-tests
+        run: |
+          set -euo pipefail
+          python -m pip install --upgrade pip
+          python -m pip install pytest pytest-asyncio
           python -m pytest tests/test_contact_write_boundary.py -q
 
   contact-write-boundary-main:

@@ -52,7 +52,7 @@ Slice phase: workflow/process
    outside it is reported non-blocking while legacy writers are converged.
 2. Add `tests/contact_write_boundary/baseline.json`: the committed writer
    inventory (17 production write sites today).
-3. Add `tests/test_contact_write_boundary.py`: 56 tests, including planted
+3. Add `tests/test_contact_write_boundary.py`: 57 tests, including planted
    violations that must fail the gate and false-positive pins that must not.
 5. Record the gate in `ci/gates.yml` as `ci_blocking_not_required`; promoting it
    to a branch-required context is an operator action.
@@ -127,12 +127,40 @@ then removed and the same command returned exit code 0. Both transcripts are in
 Verification below. The planted module is intentionally absent from the diff -
 it exists only for the duration of the probe.
 
-**Guard-class closure declaration:** the decision-driving member set is the
-allow-list pair (`INSERT_ALLOWED`, `MUTATION_ALLOWED`) plus the three SQL
-operation patterns. Closure: all three write operations (INSERT/UPDATE/DELETE)
-are matched; both allow-list membership outcomes are tested; both error
-directions are tested; the baseline path is tested for silence-on-known and
-report-on-new; INSERT is proven non-silenceable.
+**Guard-class closure declaration**
+
+- **Decision-driving member sets:** `INSERT_ALLOWED`, `MUTATION_ALLOWED`,
+  `DYNAMIC_SCOPE`, `DRIVER_WRITE_METHODS`, `CREATE_OPERATIONS`, and the seven
+  entries of `PATTERNS` (INSERT, MERGE, COPY, SELECT_INTO, TRUNCATE, UPDATE,
+  DELETE) plus the derived `DYNAMIC` and `MERGE_UPDATE` classifications.
+- **Input space: OPEN.** Arbitrary Python and SQL source, so coverage is
+  demonstrated by planted fixtures per shape rather than enumeration.
+- **Out-of-set default: REJECT for creates, REPORT for mutations.** A create
+  form outside the allow-list blocks; UPDATE/DELETE/TRUNCATE surface without
+  blocking while legacy writers converge; an unanalyzable file blocks; a
+  missing inventory blocks.
+- **Closure evidence, per shape:** every create form has a blocking fixture and
+  every non-create a reporting one; both allow-list membership outcomes are
+  tested; literal-vs-executable is tested in both directions for `.sql` and
+  Python, for dollar bodies, and for EXECUTE position; dedup is tested for
+  shared snippet, shared line, and shared key; inventory is tested for add,
+  remove, unchanged, missing, and multiplicity; INSERT is proven
+  non-silenceable by the baseline.
+- **Reviewer rules:** R2 and R10 for the gate predicate, plus R12 (CI surface
+  and trusted-base execution) and R13/R14 (class-level guard behaviour) from
+  the workflow and classification changes.
+
+**Bootstrap, stated plainly:** `pull_request_target` resolves the workflow from
+the base branch, so on this PR -- which introduces the file -- GitHub has no
+base definition and the enforcement job **cannot run in CI**. This PR therefore
+does not, and cannot, demonstrate a green `contact-write-boundary` context.
+Enforcement begins on the first PR opened after this merges. Two things stand in
+for it here: an advisory `contact-write-boundary-selfcheck` job on the ordinary
+`pull_request` event (PR-owned code, deliberately not enrolled in
+`ci/gates.yml`), and
+`tests/test_contact_write_boundary.py::test_trusted_base_invocation_ignores_a_widened_pr_allowlist`,
+which runs the exact base-checker-versus-PR-tree invocation as a subprocess and
+proves the trusted-base property that the CI run cannot yet show.
 
 ### Trusted-base execution
 
