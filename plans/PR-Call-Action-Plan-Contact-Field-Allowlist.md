@@ -242,6 +242,6 @@ pre-existing: identical with the change stashed and unstashed.
 | File | LOC |
 |---|---:|
 | `atlas_brain/api/comms/call_actions.py` | 122 |
-| `plans/PR-Call-Action-Plan-Contact-Field-Allowlist.md` | 224 |
+| `plans/PR-Call-Action-Plan-Contact-Field-Allowlist.md` | 247 |
 | `tests/test_call_action_plan_contact_fields.py` | 294 |
-| **Total** | **640** |
+| **Total** | **663** |
