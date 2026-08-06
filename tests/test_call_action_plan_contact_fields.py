@@ -224,3 +224,71 @@ async def test_tenancy_only_payload_raises_skipped(provider: _RecordingProvider)
             RECORD, {"business_context_id": "churnsignals", "source": "forged"}
         )
     assert provider.calls == []
+
+
+# ---------------------------------------------------------------------------
+# Derived from the producer contract, not from the constant under test
+# ---------------------------------------------------------------------------
+
+# Read off atlas_brain/skills/call/call_extraction.md's output schema. Deriving
+# the pass-side expectation from `_PLAN_UPDATABLE_CONTACT_FIELDS` made the test
+# shrink with the constant: removing a legitimate field kept it green while
+# silently breaking real updates.
+PRODUCER_FIELDS = {
+    "customer_name": "full_name",
+    "customer_phone": "phone",
+    "customer_email": "email",
+    "address": "address",
+}
+
+
+@pytest.mark.parametrize("produced,canonical", sorted(PRODUCER_FIELDS.items()))
+@pytest.mark.asyncio
+async def test_producer_field_names_reach_the_provider(
+    provider: _RecordingProvider, produced: str, canonical: str
+) -> None:
+    """`update_contact` has no parameter schema in action_planning.md.
+
+    The plan is written by an LLM that has just been shown the extracted data,
+    so `{"customer_email": ...}` is the likely shape. Rejecting it would make
+    the guard silently break every legitimate update.
+    """
+    await call_actions._exec_update_contact(RECORD, {produced: "value"})
+    assert provider.calls, f"{produced} was rejected; real updates would be dropped"
+    _, updates = provider.calls[0]
+    assert updates == {canonical: "value"}
+
+
+@pytest.mark.asyncio
+async def test_full_extracted_payload_is_applied(provider: _RecordingProvider) -> None:
+    """The whole realistic producer payload, not one field at a time."""
+    await call_actions._exec_update_contact(
+        RECORD,
+        {
+            "customer_name": "Bob",
+            "customer_phone": "217-555-0100",
+            "customer_email": "bob@example.com",
+            "address": "1 Main St",
+        },
+    )
+    _, updates = provider.calls[0]
+    assert updates == {
+        "full_name": "Bob",
+        "phone": "217-555-0100",
+        "email": "bob@example.com",
+        "address": "1 Main St",
+    }
+
+
+@pytest.mark.asyncio
+async def test_aliases_do_not_smuggle_forbidden_fields(
+    provider: _RecordingProvider,
+) -> None:
+    """An alias must not become a side door into tenancy or provenance."""
+    for produced in ("customer_business_context_id", "customer_source", "source"):
+        provider.calls.clear()
+        await call_actions._exec_update_contact(
+            RECORD, {"customer_email": "a@b.com", produced: "x"}
+        )
+        _, updates = provider.calls[0]
+        assert set(updates) == {"email"}, f"{produced} must not be admitted"

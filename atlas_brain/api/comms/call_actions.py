@@ -649,10 +649,14 @@ async def approve_plan(transcript_id: UUID):
         except Exception as e:
             logger.warning("Failed to log plan approval interaction: %s", e)
 
-    # Persist plan status + results
+    # Persist plan status + results. A plan whose only outcomes were skips did
+    # not execute: recording "executed" would make a retry answer "Plan already
+    # executed" while nothing had happened.
+    executed_any = any(r["status"] == "ok" for r in results)
+    plan_status = "executed" if executed_any else "skipped"
     try:
         repo = get_call_transcript_repo()
-        await repo.update_plan_status(transcript_id, "executed", results)
+        await repo.update_plan_status(transcript_id, plan_status, results)
     except Exception as e:
         logger.error("Failed to persist plan status for %s: %s", transcript_id, e)
 
@@ -663,7 +667,15 @@ async def approve_plan(transcript_id: UUID):
         logger.warning("Plan execution notification failed: %s", e)
 
     ok_count = sum(1 for r in results if r["status"] == "ok")
-    fail_count = len(results) - ok_count
+    # Counted explicitly rather than as len(results) - ok_count, which billed
+    # every skip as a failure.
+    fail_count = sum(1 for r in results if r["status"] == "error")
+    skip_count = sum(1 for r in results if r["status"] == "skipped")
+    if skip_count:
+        logger.info(
+            "Plan execution for %s: %d action(s) skipped without writing",
+            transcript_id, skip_count,
+        )
     if fail_count:
         failed_names = [r["action"] for r in results if r["status"] == "error"]
         logger.warning(
@@ -866,6 +878,22 @@ async def _exec_sms(
 #                        lifecycle. Owned by the funnel transition service
 #                        (see crm_provider.py's EOM transition guards).
 #   tags                 free-form and used for segmentation downstream.
+# The producer's vocabulary. `call_extraction.md` emits customer_name,
+# customer_phone, customer_email and address, and `action_planning.md` gives
+# `update_contact` no parameter schema -- so a plan naming the extracted fields
+# is not merely possible, it is the likely shape. Without this mapping the
+# allow-list would silently reject every legitimate update, which is the
+# false-negative side of the same guard.
+_PLAN_FIELD_ALIASES = {
+    "customer_name": "full_name",
+    "name": "full_name",
+    "customer_phone": "phone",
+    "customer_email": "email",
+    "customer_address": "address",
+    "zip_code": "zip",
+    "postal_code": "zip",
+}
+
 _PLAN_UPDATABLE_CONTACT_FIELDS = frozenset({
     "full_name",
     "first_name",
@@ -892,12 +920,15 @@ async def _exec_update_contact(record: dict, params: dict) -> str:
     if not params:
         return "Skipped: no update params"
 
-    allowed = {
-        key: value
-        for key, value in params.items()
-        if key in _PLAN_UPDATABLE_CONTACT_FIELDS
-    }
-    rejected = sorted(set(params) - set(allowed))
+    allowed: dict = {}
+    rejected: list = []
+    for key, value in params.items():
+        canonical = _PLAN_FIELD_ALIASES.get(key, key)
+        if canonical in _PLAN_UPDATABLE_CONTACT_FIELDS:
+            allowed[canonical] = value
+        else:
+            rejected.append(key)
+    rejected = sorted(rejected)
     if rejected:
         logger.warning(
             "Dropped non-call-outcome field(s) from plan contact update "
@@ -1006,7 +1037,7 @@ async def _notify_plan_executed(
     actions = f"view, View Transcript, {api_url}/api/v1/comms/call-actions/{transcript_id}/view"
 
     headers = {
-        "Title": f"{business_name}: Plan Executed",
+        "Title": f"{business_name}: Plan {'Executed' if ok else 'Not Executed'}",
         "Priority": "default",
         "Tags": "white_check_mark" if not failed else "warning",
         "Actions": actions,

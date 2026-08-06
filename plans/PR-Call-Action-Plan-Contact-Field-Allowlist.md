@@ -70,9 +70,9 @@ Slice phase: production hardening
 
 ### Files touched
 
-- `atlas_brain/api/comms/call_actions.py` (modified: one executor, one constant, one new exception class, the approve_plan result loop, and the notification summary)
-- `tests/test_call_action_plan_contact_fields.py` (new)
-- `plans/PR-Call-Action-Plan-Contact-Field-Allowlist.md` (new)
+- `atlas_brain/api/comms/call_actions.py`
+- `plans/PR-Call-Action-Plan-Contact-Field-Allowlist.md`
+- `tests/test_call_action_plan_contact_fields.py`
 
 ### Review Contract
 
@@ -157,6 +157,29 @@ rather than a return string.
   non-members proven rejected (property tests); rejected-only payloads proven to
   raise rather than write (criterion 4); both pre-existing skip branches pinned.
 
+### Producer vocabulary
+
+`call_extraction.md` emits `customer_name`, `customer_phone`, `customer_email`,
+and `address`, and `action_planning.md` gives `update_contact` **no parameter
+schema**. A plan naming the extracted fields is therefore the likely shape, not
+an edge case. Without `_PLAN_FIELD_ALIASES` the allow-list would have silently
+rejected every legitimate update -- the false-negative side of the same guard,
+and worse than the hole it closes because it fails quietly during normal use.
+
+Aliases map producer names onto canonical contact fields only. They cannot
+introduce a new writable field: the canonical name is still checked against the
+frozenset, so `customer_source` or `customer_business_context_id` are rejected
+exactly like their bare forms.
+
+### Plan-level outcome
+
+A plan whose only outcomes were skips is persisted as `skipped`, not
+`executed`. Recording `executed` made a retry answer "Plan already executed"
+while nothing had happened, and `fail_count` was computed as
+`len(results) - ok_count`, billing every skip as a failure. Both are now
+counted explicitly, and the notification title reads "Plan Not Executed" when
+nothing ran.
+
 ## Mechanism
 
 The executor now builds `allowed` by intersecting the plan's params with the
@@ -218,7 +241,7 @@ pre-existing: identical with the change stashed and unstashed.
 
 | File | LOC |
 |---|---:|
-| `atlas_brain/api/comms/call_actions.py` | 95 |
-| `tests/test_call_action_plan_contact_fields.py` | 250 |
-| `plans/PR-Call-Action-Plan-Contact-Field-Allowlist.md` | 190 |
-| **Total** | **560** |
+| `atlas_brain/api/comms/call_actions.py` | 122 |
+| `plans/PR-Call-Action-Plan-Contact-Field-Allowlist.md` | 224 |
+| `tests/test_call_action_plan_contact_fields.py` | 294 |
+| **Total** | **640** |
