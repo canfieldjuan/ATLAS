@@ -50,6 +50,20 @@ Slice phase: workflow/process
    its first step, or it is rejected exactly as before.
 3. `tests/test_audit_workflow_security_posture.py` passes unchanged.
 
+Affected surfaces: `ALLOWED_PULL_REQUEST_TARGET_JOBS` in
+`scripts/audit_workflow_security_posture.py`, and by consequence which
+`pull_request_target` jobs the auditor will admit. No workflow, no guard-shape
+check, no other allowlist entry, and no runtime code is touched.
+
+Risk areas: the entry is two bare strings with no cross-check against a real
+workflow, so a typo would merge green and silently leave the intended gate
+unenrolled -- probed by constructing a fixture under the enrolled identity and
+by corrupting the job name to confirm the test fails. The second risk is that
+enrolment could be read as permission rather than eligibility; probed by
+asserting the same identity without the guard shape still errors. Blast radius
+is otherwise one tuple in a frozenset that only widens which pairs are eligible
+for an unchanged check.
+
 - Reviewer rules triggered: R1, R2, R10, R12.
 
 R2 and R10 are the path triggers the rule pack assigns to gate-predicate
@@ -132,17 +146,23 @@ $ python scripts/audit_workflow_security_posture.py
 (exit 0)
 
 $ python -m pytest tests/test_audit_workflow_security_posture.py -q
-19 passed
+21 passed
 ```
 
-Plus an inert-entry check: the auditor run against a temporary workflow
-directory omitting `contact_write_boundary.yml` also exits 0.
+Plus two checks the commands above do not show:
+
+- Inert-entry: the auditor run against a temporary workflow directory omitting
+  the enrolled filename also exits 0, so the entry does nothing until the
+  workflow lands.
+- Typo-injection: corrupting the enrolled job name makes
+  `test_contact_write_boundary_identity_is_allowlisted` fail, so that test is
+  not vacuous.
 
 ## Estimated diff size
 
 | File | LOC |
 |---|---:|
-| `plans/PR-Workflow-Allowlist-Bootstrap.md` | 148 |
+| `plans/PR-Workflow-Allowlist-Bootstrap.md` | 168 |
 | `scripts/audit_workflow_security_posture.py` | 1 |
 | `tests/test_audit_workflow_security_posture.py` | 52 |
-| **Total** | **201** |
+| **Total** | **221** |
