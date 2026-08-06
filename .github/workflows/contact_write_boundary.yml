@@ -1,0 +1,44 @@
+name: Contact Write Boundary
+
+# Fails when a new SQL write to the `contacts` table appears outside the
+# approved provider module (Website#108, Slice 0A under #107/#105).
+#
+# Deliberately NOT path-filtered. The violation this gate exists to catch is a
+# brand-new module adding its own `INSERT INTO contacts`, and a new file matches
+# no pre-existing path filter. Wiring this into the path-filtered
+# atlas_eom_lead_pipeline_checks.yml would produce a guard that stays silent on
+# exactly its motivating case. The detector is stdlib-only and scans the tree in
+# a couple of seconds, so running it on every PR costs nothing worth optimizing.
+
+on:
+  pull_request:
+  push:
+    branches:
+      - main
+
+permissions:
+  contents: read
+
+jobs:
+  contact-write-boundary:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Setup Python
+        uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6.3.0
+        with:
+          python-version: "3.11"
+
+      - name: Contact write-boundary check
+        run: |
+          python scripts/check_contact_write_boundary.py \
+            --baseline tests/contact_write_boundary/baseline.json
+
+      - name: Detector self-tests
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install pytest
+          python -m pytest tests/test_contact_write_boundary.py -q

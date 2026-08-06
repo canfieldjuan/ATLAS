@@ -1,0 +1,32 @@
+{
+  "_comment": "Every SQL write to `contacts` in production code. INSERTs outside atlas_brain/services/crm_provider.py always fail the build and are never silenced by this file. `writer_inventory` is the drift record: a diff here means a contact write site was added, moved, or removed. `known_writes` holds non-blocking UPDATE/DELETE sites tolerated outside the allow-listed modules while legacy writers are converged.",
+  "insert_allowed": [
+    "atlas_brain/services/crm_provider.py"
+  ],
+  "mutation_allowed": [
+    "atlas_brain/services/crm_provider.py",
+    "scripts/backfill_business_context.py",
+    "scripts/import_eom_customers_live.py",
+    "scripts/sync_eom_portal_customers.py"
+  ],
+  "writer_inventory": [
+    "atlas_brain/services/crm_provider.py::INSERT::INSERT INTO contacts ( id, full_name, email, phone, addres",
+    "atlas_brain/services/crm_provider.py::INSERT::INSERT INTO contacts ( id, full_name, first_name, last_name, email",
+    "atlas_brain/services/crm_provider.py::UPDATE::UPDATE contacts AS contact SET business_context_id = $3, updated_at",
+    "atlas_brain/services/crm_provider.py::UPDATE::UPDATE contacts SET",
+    "atlas_brain/services/crm_provider.py::UPDATE::UPDATE contacts SET business_context_id = $2, updated_at",
+    "atlas_brain/services/crm_provider.py::UPDATE::UPDATE contacts SET business_context_id = $2, updated_at = NOW() W",
+    "atlas_brain/services/crm_provider.py::UPDATE::UPDATE contacts SET contact_type = 'customer', lead_stage = NULL, updated_at =",
+    "atlas_brain/services/crm_provider.py::UPDATE::UPDATE contacts SET lead_stage = $3, updated_at = NOW() WHERE i",
+    "atlas_brain/services/crm_provider.py::UPDATE::UPDATE contacts SET lead_stage = $3, updated_at = NOW() WHERE i",
+    "atlas_brain/services/crm_provider.py::UPDATE::UPDATE contacts SET lead_stage = 'lost', updated_at = NOW() WHE",
+    "atlas_brain/services/crm_provider.py::UPDATE::UPDATE contacts SET status = 'archived', updated_at = NOW() WHERE id = $1",
+    "scripts/backfill_business_context.py::UPDATE::UPDATE contacts SET business_context_id = $2, updated_at = NOW() WHERE bus",
+    "scripts/backfill_business_context.py::UPDATE::UPDATE contacts c SET business_context_id = $1, updated_at = NOW() WHERE c.b",
+    "scripts/import_eom_customers_live.py::UPDATE::UPDATE contacts SET",
+    "scripts/import_eom_customers_live.py::UPDATE::UPDATE contacts SET business_context_id = $2, updated_at = NOW() WHERE",
+    "scripts/sync_eom_portal_customers.py::UPDATE::UPDATE contacts SET",
+    "scripts/sync_eom_portal_customers.py::UPDATE::UPDATE contacts SET status = 'inactive', tags = $2, updated_at = NOW()"
+  ],
+  "known_writes": []
+}
