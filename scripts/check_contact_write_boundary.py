@@ -37,6 +37,7 @@ import ast
 import json
 import re
 import sys
+from collections import Counter
 from dataclasses import dataclass, asdict
 from pathlib import Path
 
@@ -739,10 +740,14 @@ def main(argv=None) -> int:
     inventory_drift: dict = {"added": [], "removed": [], "missing_baseline": False}
     if inventory_path.exists():
         committed = json.loads(inventory_path.read_text(encoding="utf-8"))
-        recorded = set(committed.get("writer_inventory", []))
-        current = set(build_baseline(findings, unanalyzable)["writer_inventory"])
-        inventory_drift["added"] = sorted(current - recorded)
-        inventory_drift["removed"] = sorted(recorded - current)
+        # Multisets, not sets. Two byte-for-byte identical writes on different
+        # lines share a key, so set arithmetic reports no drift when one is
+        # added or removed -- the third and last variant of "a collapse lost
+        # the information the comparison needed".
+        recorded = Counter(committed.get("writer_inventory", []))
+        current = Counter(build_baseline(findings, unanalyzable)["writer_inventory"])
+        inventory_drift["added"] = sorted((current - recorded).elements())
+        inventory_drift["removed"] = sorted((recorded - current).elements())
     elif not args.update_baseline:
         # Fail closed. Skipping the comparison when the file is absent made
         # deleting the baseline a one-line way to switch inventory enforcement

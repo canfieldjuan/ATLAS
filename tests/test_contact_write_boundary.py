@@ -865,3 +865,51 @@ def test_driver_write_to_another_table_is_not_flagged(tmp_path: Path) -> None:
     blocking, new_mutations = _classify(tmp_path)
     assert blocking == []
     assert new_mutations == []
+
+
+# ---------------------------------------------------------------------------
+# Round 8: inventory multiplicity
+# ---------------------------------------------------------------------------
+
+def _seed_provider(tmp_path: Path, source: str) -> Path:
+    provider = tmp_path / "atlas_brain" / "services" / "crm_provider.py"
+    provider.parent.mkdir(parents=True, exist_ok=True)
+    provider.write_text(source, encoding="utf-8")
+    _seed_inventory(tmp_path)
+    return provider
+
+
+_DUPLICATE_WRITES = (
+    'A = "INSERT INTO contacts (a) VALUES ($1)"\n'
+    'B = "INSERT INTO contacts (a) VALUES ($1)"\n'
+)
+
+
+def test_adding_a_byte_for_byte_duplicate_writer_is_drift(tmp_path: Path) -> None:
+    """Two identical writes on different lines share a baseline key.
+
+    Set arithmetic reported no drift for either direction, so an approved
+    module could grow an extra INSERT silently. The comparison is a multiset.
+    """
+    provider = _seed_provider(tmp_path, _DUPLICATE_WRITES)
+    assert MOD.main(["--root", str(tmp_path)]) == 0
+
+    provider.write_text(
+        _DUPLICATE_WRITES + 'C = "INSERT INTO contacts (a) VALUES ($1)"\n',
+        encoding="utf-8",
+    )
+    assert MOD.main(["--root", str(tmp_path)]) == 1
+
+
+def test_removing_one_of_two_identical_writers_is_drift(tmp_path: Path) -> None:
+    provider = _seed_provider(tmp_path, _DUPLICATE_WRITES)
+    provider.write_text(
+        'A = "INSERT INTO contacts (a) VALUES ($1)"\n', encoding="utf-8"
+    )
+    assert MOD.main(["--root", str(tmp_path)]) == 1
+
+
+def test_unchanged_duplicate_writers_are_not_drift(tmp_path: Path) -> None:
+    """The multiset must not report drift against an unchanged tree."""
+    _seed_provider(tmp_path, _DUPLICATE_WRITES)
+    assert MOD.main(["--root", str(tmp_path)]) == 0
