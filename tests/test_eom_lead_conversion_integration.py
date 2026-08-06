@@ -3768,7 +3768,7 @@ async def test_mark_lead_lost_records_reason_is_idempotent_and_reopens():
                     "new",
                     "lost",
                     f"lost-old-{uuid.uuid4().hex}",
-                    "2026-01-01T00:00:00+00:00",
+                    datetime(2026, 1, 1, tzinfo=timezone.utc),
                 ),
                 (
                     uuid.UUID("11111111-1111-1111-1111-111111111111"),
@@ -3777,7 +3777,7 @@ async def test_mark_lead_lost_records_reason_is_idempotent_and_reopens():
                     "lost",
                     "new",
                     f"reopen-old-{uuid.uuid4().hex}",
-                    "2026-01-02T00:00:00+00:00",
+                    datetime(2026, 1, 2, tzinfo=timezone.utc),
                 ),
                 (
                     uuid.UUID("22222222-2222-2222-2222-222222222222"),
@@ -3786,7 +3786,7 @@ async def test_mark_lead_lost_records_reason_is_idempotent_and_reopens():
                     "new",
                     "estimate_booked",
                     f"estimate-{uuid.uuid4().hex}",
-                    "2026-01-03T00:00:00+00:00",
+                    datetime(2026, 1, 3, tzinfo=timezone.utc),
                 ),
                 (
                     uuid.UUID("00000000-0000-0000-0000-000000000001"),
@@ -3795,7 +3795,7 @@ async def test_mark_lead_lost_records_reason_is_idempotent_and_reopens():
                     "estimate_booked",
                     "lost",
                     f"lost-current-{uuid.uuid4().hex}",
-                    "2026-01-04T00:00:00+00:00",
+                    datetime(2026, 1, 4, tzinfo=timezone.utc),
                 ),
             ],
         )

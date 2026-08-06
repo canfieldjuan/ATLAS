@@ -16,6 +16,13 @@ audit summary proves there are no duplicate `atlas_contact_id` groups, so this
 slice deliberately does not add the tracker unique index or onboarding
 completion endpoint.
 
+Diff-budget override: review feedback made this slice exceed the 400-LOC soft
+cap, but the overage is indivisible from the lost/reopen boundary being fixed.
+The code change, the shared restorable-stage source, the two-cycle chronology
+regression, and the missing/unsafe evidence rejection proofs all validate one
+transactional lifecycle seam; splitting them would publish either behavior
+without its required proof or proof without the behavior it guards.
+
 ### Problem-derived contract
 
 - Root cause: `reopen_eom_lead` treats every reopen as `lost -> new`, even
@@ -187,7 +194,7 @@ inside this slice and covered here.
 |---|---:|
 | `atlas_brain/eom_api/funnel.py` | 2 |
 | `atlas_brain/services/crm_provider.py` | 76 |
-| `plans/PR-EOM-Lead-Reopen-Stage.md` | 186 |
+| `plans/PR-EOM-Lead-Reopen-Stage.md` | 200 |
 | `tests/test_eom_lead_conversion.py` | 8 |
 | `tests/test_eom_lead_conversion_integration.py` | 177 |
-| **Total** | **449** |
+| **Total** | **463** |
