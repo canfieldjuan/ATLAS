@@ -844,7 +844,7 @@ jobs:
     # Asserting only "some error exists" let either one carry the test, so
     # deleting the OIDC branch kept it green -- verified by deleting it.
     # Each branch is therefore asserted by its own message.
-    assert any("id-token value is not a scalar" in f.detail for f in errors), errors
+    assert any('id-token must be the string "write" or "none"' in f.detail for f in errors), errors
     assert any("trusted-base guard shape" in f.detail for f in errors), errors
 
 
@@ -960,7 +960,7 @@ jobs:
     errors = [f for f in findings if f.level == "ERROR"]
 
     assert len(errors) == 1, errors
-    assert "workflow-scope id-token value is not a scalar" in errors[0].detail
+    assert 'workflow-scope id-token must be the string "write" or "none"' in errors[0].detail
 
 
 @pytest.mark.parametrize(
@@ -985,3 +985,41 @@ def test_id_token_vocabulary_is_closed(value: str, expected: str) -> None:
     """
     auditor = load_auditor()
     assert auditor._permissions_oidc_state({"id-token": value}) == expected
+
+
+
+@pytest.mark.parametrize("value", ["read", "WRITE", "${{ inputs.scope }}", ""])
+def test_unsupported_scalar_id_token_reports_the_vocabulary_not_the_shape(
+    tmp_path: Path, value: str
+) -> None:
+    """An unsupported scalar must not be described as a non-scalar.
+
+    `read` and `WRITE` are perfectly well-formed scalars. Reporting them as
+    "not a scalar" sent the operator looking for malformed YAML when the actual
+    problem was the vocabulary, which is the more expensive kind of wrong
+    message: it is confidently specific and points the wrong way.
+    """
+    auditor = load_auditor()
+    workflow = _write_workflow(
+        tmp_path,
+        "ordinary.yml",
+        f"""
+name: Ordinary
+on:
+  workflow_dispatch:
+permissions:
+  contents: read
+  id-token: "{value}"
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0
+""",
+    )
+
+    errors = [f for f in auditor.audit_workflow(workflow) if f.level == "ERROR"]
+
+    assert len(errors) == 1, errors
+    assert 'must be the string "write" or "none"' in errors[0].detail
+    assert "not a scalar" not in errors[0].detail

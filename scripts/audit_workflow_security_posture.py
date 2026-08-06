@@ -337,7 +337,7 @@ def audit_workflow(path: Path) -> list[Finding]:
     events = _event_names(workflow.get(True, workflow.get("on")))
     workflow_oidc_state = _permissions_oidc_state(workflow.get("permissions"))
     if workflow_oidc_state == OIDC_INVALID:
-        findings.append(Finding("ERROR", str(path), "workflow-scope id-token value is not a scalar and cannot be evaluated"))
+        findings.append(Finding("ERROR", str(path), 'workflow-scope id-token must be the string "write" or "none"'))
     elif workflow_oidc_state == OIDC_WRITE:
         findings.append(Finding("ERROR", str(path), "grants workflow-scope id-token: write or write-all without an allowlist rationale"))
 
@@ -353,7 +353,7 @@ def audit_workflow(path: Path) -> list[Finding]:
             # Never reaches the allowlist. The allowlist permits a reviewed
             # value on a reviewed job; a shape this auditor cannot evaluate is
             # by definition not that value.
-            findings.append(Finding("ERROR", str(path), f"job {job_name} id-token value is not a scalar and cannot be evaluated"))
+            findings.append(Finding("ERROR", str(path), f'job {job_name} id-token must be the string "write" or "none"'))
         elif job_oidc_state == OIDC_WRITE:
             if _is_allowed_oidc_job(path, job_name, job):
                 findings.append(Finding("WARN", str(path), f"job {job_name} allowed id-token: write: Claude Code action is owner-gated"))

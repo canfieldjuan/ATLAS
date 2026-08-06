@@ -91,6 +91,13 @@ Slice phase: production hardening
    rejected.
 3. The workflow-scope invalid branch has a fixture that fails if and only if
    that branch stops firing.
+5. The INVALID diagnostic is true for every cause. Widening INVALID to cover
+   unsupported scalars made the inherited wording ("is not a scalar") false for
+   `read` and `WRITE`, which are perfectly well-formed scalars -- a confidently
+   specific message pointing at malformed YAML when the real problem was
+   vocabulary. Both messages now read `id-token must be the string "write" or
+   "none"`, which is accurate for a list, a mapping, and an unsupported scalar
+   alike.
 4. The combined fixture asserts both branches by message, not by error count.
 
 Affected surfaces: `_permissions_oidc_state` only. No workflow, no allowlist
@@ -172,7 +179,7 @@ Parked hardening: none.
 
 ```
 $ python -m pytest tests/test_audit_workflow_security_posture.py -q
-75 passed
+79 passed
 
 $ python scripts/audit_workflow_security_posture.py
 (exit 0 -- the only real id-token in the tree is claude.yml's `write`)
@@ -194,7 +201,7 @@ WRITE                    none        invalid
 
 | File | LOC |
 |---|---:|
-| `plans/PR-OIDC-Closed-Vocabulary.md` | 200 |
-| `scripts/audit_workflow_security_posture.py` | 11 |
-| `tests/test_audit_workflow_security_posture.py` | 71 |
-| **Total** | **282** |
+| `plans/PR-OIDC-Closed-Vocabulary.md` | 207 |
+| `scripts/audit_workflow_security_posture.py` | 15 |
+| `tests/test_audit_workflow_security_posture.py` | 109 |
+| **Total** | **331** |
