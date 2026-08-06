@@ -406,6 +406,34 @@ def test_eom_lead_disposition_operation_key_index_covers_lost_and_reopen():
     assert "ALTER TABLE" not in upper
 
 
+def test_eom_lead_lifecycle_sequence_is_db_owned_and_writer_compatible():
+    migration = (
+        Path(__file__).resolve().parent.parent
+        / "atlas_brain"
+        / "storage"
+        / "migrations"
+        / "363_eom_lead_lifecycle_sequence.sql"
+    ).read_text()
+    upper = migration.upper()
+
+    assert "CREATE SEQUENCE IF NOT EXISTS eom_lead_lifecycle_events_sequence_seq" in migration
+    assert "ADD COLUMN IF NOT EXISTS lifecycle_sequence BIGINT" in migration
+    assert (
+        "ALTER COLUMN lifecycle_sequence SET DEFAULT "
+        "nextval('eom_lead_lifecycle_events_sequence_seq'::regclass)"
+        in migration
+    )
+    assert (
+        "OWNED BY eom_lead_lifecycle_events.lifecycle_sequence"
+        in migration
+    )
+    assert "compatible with old app writers" in migration
+    assert "Rollback evidence:" in migration
+    assert "UPDATE eom_lead_lifecycle_events" not in migration
+    assert "DELETE FROM eom_lead_lifecycle_events" not in migration
+    assert "DROP TABLE" not in upper
+
+
 def test_eom_onboarding_email_drafts_migration_is_additive_and_single_send_safe():
     migration = (
         Path(__file__).resolve().parent.parent

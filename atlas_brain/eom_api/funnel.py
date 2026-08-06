@@ -517,7 +517,7 @@ async def reopen_lead(
     actor: dict[str, object] = Depends(require_eom_funnel_actor),
     crm: Any = Depends(_crm_dependency),
 ) -> JSONResponse:
-    """Return a previously-lost lead to the active review queue (stage `new`)."""
+    """Return a previously-lost lead to its pre-loss active stage."""
     try:
         result = await reopen_eom_lead(
             crm,

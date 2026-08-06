@@ -52,6 +52,7 @@ class _CRM:
         self.interaction_logs: list[dict[str, object]] = []
         self.lost_calls: list[dict[str, object]] = []
         self.reopen_calls: list[dict[str, object]] = []
+        self.reopen_stage = "new"
 
     @asynccontextmanager
     async def eom_estimate_booking_execution_lock(self, *, booking_key: str):
@@ -73,7 +74,7 @@ class _CRM:
         self.reopen_calls.append(kwargs)
         return {
             "contact_id": kwargs["contact_id"],
-            "lead_stage": "new",
+            "lead_stage": self.reopen_stage,
             "status": "active",
             "idempotent": False,
         }
@@ -3330,8 +3331,9 @@ async def test_private_mark_lead_lost_blank_note_becomes_null():
 
 
 @pytest.mark.asyncio
-async def test_private_reopen_lead_transitions_back_to_new():
+async def test_private_reopen_lead_surfaces_restored_stage():
     crm = _CRM()
+    crm.reopen_stage = "estimate_booked"
     app = _app(crm, _enabled_config())
     contact_id = uuid4()
     op_key = f"office-reopen-{uuid4().hex}"
@@ -3347,7 +3349,7 @@ async def test_private_reopen_lead_transitions_back_to_new():
     assert response.status_code == 201
     body = response.json()
     assert body["success"] is True
-    assert body["lead_stage"] == "new"
+    assert body["lead_stage"] == "estimate_booked"
     assert crm.reopen_calls[0]["contact_id"] == str(contact_id)
     assert crm.reopen_calls[0]["operation_key"] == op_key
     assert crm.reopen_calls[0]["actor_id"] == 1
