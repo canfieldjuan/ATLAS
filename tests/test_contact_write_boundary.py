@@ -1138,3 +1138,23 @@ def test_authoritative_test_root_still_exempts(tmp_path: Path) -> None:
     blocking, new_mutations = _classify(tmp_path)
     assert blocking == []
     assert new_mutations == []
+
+
+def test_each_match_reports_its_own_source_line(tmp_path: Path) -> None:
+    """A multi-line literal must not report every match at its opening line.
+
+    Beyond readability, the (operation, line, snippet) dedup key depended on
+    surrounding text happening to differ; with a shared line the two statements
+    below could collapse and under-count the inventory.
+    """
+    _write(
+        tmp_path,
+        "atlas_brain/services/crm_provider.py",
+        'SQL = """\n'
+        "    INSERT INTO contacts (a) VALUES ($1);\n"
+        "    INSERT INTO contacts (a) VALUES ($1);\n"
+        '"""\n',
+    )
+    findings, _ = MOD.scan_tree(tmp_path)
+    lines = sorted(f.line for f in findings if f.operation == "INSERT")
+    assert lines == [2, 3], f"expected the statements' own lines, got {lines}"

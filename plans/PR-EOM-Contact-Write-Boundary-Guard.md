@@ -86,7 +86,7 @@ Slice phase: workflow/process
    outside it is reported non-blocking while legacy writers are converged.
 2. Add `tests/contact_write_boundary/baseline.json`: the committed writer
    inventory (17 production write sites today).
-3. Add `tests/test_contact_write_boundary.py`: 64 tests, including planted
+3. Add `tests/test_contact_write_boundary.py`: 65 tests, including planted
    violations that must fail the gate and false-positive pins that must not.
 5. Record the gate in `ci/gates.yml` as `ci_blocking_not_required`; promoting it
    to a branch-required context is an operator action.
@@ -398,7 +398,7 @@ fewer.
 | `ci/gates.yml` | 8 |
 | `plans/PR-EOM-Contact-Write-Boundary-Guard.md` | 404 |
 | `scripts/audit_workflow_security_posture.py` | 1 |
-| `scripts/check_contact_write_boundary.py` | 852 |
+| `scripts/check_contact_write_boundary.py` | 859 |
 | `tests/contact_write_boundary/baseline.json` | 86 |
-| `tests/test_contact_write_boundary.py` | 1140 |
-| **Total** | **2675** |
+| `tests/test_contact_write_boundary.py` | 1160 |
+| **Total** | **2702** |

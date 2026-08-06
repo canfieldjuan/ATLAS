@@ -410,7 +410,14 @@ def scan_file(path: Path, root: Path) -> tuple:
                 start = max(0, match.start() - 10)
                 finding = Finding(
                     path=rel,
-                    line=lineno,
+                    # The statement's own line, not the literal's opening line.
+                    # A 30-line SQL block otherwise reports every match at its
+                    # first line, which is both unhelpful to read and makes the
+                    # (operation, line, snippet) dedup depend on surrounding
+                    # text happening to differ. Offsets inside a folded
+                    # concatenation are approximate; inside a plain literal,
+                    # which is where the repo's SQL lives, they are exact.
+                    line=lineno + value.count("\n", 0, match.start()),
                     operation=refined,
                     snippet=_normalize(value[start:match.end() + 60]),
                 )
