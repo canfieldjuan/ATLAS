@@ -1000,3 +1000,38 @@ def test_trusted_base_invocation_ignores_a_widened_pr_allowlist(
     assert self_result.returncode == 0, (
         "fixture is not demonstrating the difference between base and PR checkers"
     )
+
+
+def test_blocking_context_has_exactly_one_producer() -> None:
+    """`contact-write-boundary` must be emitted only by the trusted event.
+
+    Registering `pull_request` alongside `pull_request_target` on one workflow
+    made GitHub emit two check runs of that name per update -- the
+    ordinary-event copy skipped by the job guard. Atlas's readiness consumers
+    pick the latest run by name and count `skipped` as green
+    (`scripts/pr_watcher.py`, `scripts/watch_owned_pr.sh`), so the skipped copy
+    could mask a failed enforcement run and report a forbidden writer as
+    merge-ready.
+    """
+    import yaml
+
+    workflows = ROOT / ".github" / "workflows"
+    producers: dict[str, list[str]] = {}
+    for path in workflows.glob("*.yml"):
+        spec = yaml.safe_load(path.read_text(encoding="utf-8"))
+        if not isinstance(spec, dict):
+            continue
+        # PyYAML parses the bare `on:` key as the boolean True.
+        triggers = spec.get("on", spec.get(True)) or {}
+        trigger_names = set(triggers) if isinstance(triggers, dict) else {triggers}
+        for job_name in (spec.get("jobs") or {}):
+            producers.setdefault(job_name, []).extend(sorted(trigger_names))
+
+    assert producers.get("contact-write-boundary") == ["pull_request_target"], (
+        "the blocking context must have exactly one producer, the trusted "
+        f"event; found {producers.get('contact-write-boundary')}"
+    )
+    # The advisory job must never share the blocking name.
+    assert "contact-write-boundary" not in producers.get(
+        "contact-write-boundary-selfcheck", []
+    )

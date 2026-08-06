@@ -52,7 +52,7 @@ Slice phase: workflow/process
    outside it is reported non-blocking while legacy writers are converged.
 2. Add `tests/contact_write_boundary/baseline.json`: the committed writer
    inventory (17 production write sites today).
-3. Add `tests/test_contact_write_boundary.py`: 57 tests, including planted
+3. Add `tests/test_contact_write_boundary.py`: 58 tests, including planted
    violations that must fail the gate and false-positive pins that must not.
 5. Record the gate in `ci/gates.yml` as `ci_blocking_not_required`; promoting it
    to a branch-required context is an operator action.
@@ -64,7 +64,8 @@ Slice phase: workflow/process
 - `scripts/check_contact_write_boundary.py` (new)
 - `tests/test_contact_write_boundary.py` (new)
 - `tests/contact_write_boundary/baseline.json` (new)
-- `.github/workflows/contact_write_boundary.yml` (new)
+- `.github/workflows/contact_write_boundary.yml` (new: enforcement, pull_request_target only)
+- `.github/workflows/contact_write_boundary_selfcheck.yml` (new: advisory + post-merge)
 - `scripts/audit_workflow_security_posture.py` (modified: one allowlist entry)
 - `plans/PR-EOM-Contact-Write-Boundary-Guard.md` (new)
 - `ci/gates.yml` (modified: one registry entry)
@@ -150,14 +151,24 @@ it exists only for the duration of the probe.
   and trusted-base execution) and R13/R14 (class-level guard behaviour) from
   the workflow and classification changes.
 
+**One producer per context.** The enforcement workflow registers
+`pull_request_target` only. Registering the ordinary event on the same workflow
+made GitHub emit two check runs named `contact-write-boundary` per update -- the
+ordinary-event copy skipped by the job guard -- and Atlas's readiness consumers
+pick the latest run by name and count `skipped` as green
+(`scripts/pr_watcher.py:459-503`, `scripts/watch_owned_pr.sh:217-225`). The
+skipped copy could therefore mask a failed enforcement run. Advisory and
+post-merge jobs live in `.github/workflows/contact_write_boundary_selfcheck.yml` under distinct
+names, and `::test_blocking_context_has_exactly_one_producer` pins the property.
+
 **Bootstrap, stated plainly:** `pull_request_target` resolves the workflow from
 the base branch, so on this PR -- which introduces the file -- GitHub has no
 base definition and the enforcement job **cannot run in CI**. This PR therefore
 does not, and cannot, demonstrate a green `contact-write-boundary` context.
 Enforcement begins on the first PR opened after this merges. Two things stand in
-for it here: an advisory `contact-write-boundary-selfcheck` job on the ordinary
-`pull_request` event (PR-owned code, deliberately not enrolled in
-`ci/gates.yml`), and
+for it here: an advisory `contact-write-boundary-selfcheck` job in a
+**separate workflow file** on the ordinary `pull_request` event (PR-owned code,
+deliberately not enrolled in `ci/gates.yml`), and
 `tests/test_contact_write_boundary.py::test_trusted_base_invocation_ignores_a_widened_pr_allowlist`,
 which runs the exact base-checker-versus-PR-tree invocation as a subprocess and
 proves the trusted-base property that the CI run cannot yet show.
