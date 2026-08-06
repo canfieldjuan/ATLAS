@@ -26,6 +26,7 @@ REQUIRED_STATUS_CONTEXTS = (
     "pr-body-contract",
     "Gitleaks PR secret scan",
     "Gitleaks baseline growth guard",
+    "unit-gate",
 )
 
 REQUIRED_STATUS_WORKFLOW_PATHS = (
@@ -37,6 +38,7 @@ REQUIRED_STATUS_WORKFLOW_PATHS = (
     ".github/workflows/session_lane.yml",
     ".github/workflows/gitleaks_baseline_growth_guard.yml",
     ".github/workflows/security_guardrails.yml",
+    ".github/workflows/unit_gate.yml",
     "ci/gates.yml",
 )
 
@@ -171,6 +173,7 @@ def test_required_status_check_audit_accepts_contexts_and_checks_shapes() -> Non
             {"context": "review-contract"},
             {"context": "Gitleaks PR secret scan"},
             {"context": "Gitleaks baseline growth guard"},
+            {"context": "unit-gate"},
         ],
     }
 
@@ -553,7 +556,12 @@ def test_required_status_check_audit_rejects_wrong_check_source() -> None:
     payload = {
         "checks": [
             {"context": context, "app_id": checker.GITHUB_ACTIONS_APP_ID}
-            for context in REQUIRED_STATUS_CONTEXTS[:-2]
+            for context in REQUIRED_STATUS_CONTEXTS
+            if context
+            not in {
+                "Gitleaks PR secret scan",
+                "Gitleaks baseline growth guard",
+            }
         ] + [
             {"context": "Gitleaks PR secret scan", "app_id": -1},
             {"context": "Gitleaks baseline growth guard", "app_id": None},
@@ -586,6 +594,7 @@ def test_required_status_check_audit_fails_when_target_contexts_missing() -> Non
         "pr-body-contract",
         "Gitleaks PR secret scan",
         "Gitleaks baseline growth guard",
+        "unit-gate",
     ]
 
 
@@ -610,5 +619,6 @@ def test_required_status_check_audit_fails_current_live_payload_until_enrolled()
         "session-lane",
         "review-contract",
         "pr-body-contract",
+        "unit-gate",
     ]
     assert all(failure.reason == "missing required check" for failure in failures)

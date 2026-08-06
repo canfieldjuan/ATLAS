@@ -8,9 +8,9 @@ name: Unit Gate
 # selector is absent or returns FULL, and runs the baseline growth guard only when
 # no changed file is reachable from a test.
 #
-# Visible CI, not branch-required: the 2026-08-04 enrollment audit keeps this
-# check outside branch protection until the docs/security selector coverage gap
-# and other recorded blockers are closed.
+# Branch-required as of the 2026-08-05 enrollment recheck: the governance-doc
+# selector blocker from the 2026-08-04 audit was closed in #2290, so the gate is
+# now part of the hard merge contract.
 
 permissions:
   contents: read

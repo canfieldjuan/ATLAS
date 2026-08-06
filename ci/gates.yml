@@ -85,7 +85,7 @@ gates:
   - id: unit-gate
     name: Unit Gate
     context: unit-gate
-    enforcement: ci_blocking_not_required
+    enforcement: branch_required
     trusted_base: false
     workflow: .github/workflows/unit_gate.yml
     local_command: null
