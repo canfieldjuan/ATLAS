@@ -4,6 +4,8 @@ import importlib.util
 import sys
 from pathlib import Path
 
+import yaml
+
 
 SCRIPT = Path(__file__).resolve().parents[1] / "scripts" / "audit_workflow_security_posture.py"
 
@@ -529,3 +531,87 @@ jobs:
     assert [f for f in findings if f.level == "ERROR"], (
         "an enrolled job without the trusted-base guard shape must still error"
     )
+
+
+def test_enrolled_job_with_write_permission_is_rejected(tmp_path: Path) -> None:
+    """A trusted-base job runs with the BASE repository's token.
+
+    Granting it a write scope hands that token to a job whose purpose is to
+    read PR-authored content. Enrolment must not make that shape admissible.
+    """
+    auditor = load_auditor()
+    workflow = _write_workflow(
+        tmp_path,
+        "contact_write_boundary.yml",
+        """
+name: Contact Write Boundary
+on:
+  pull_request_target:
+permissions:
+  contents: write
+jobs:
+  contact-write-boundary:
+    if: github.event_name == 'pull_request_target'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0
+        with:
+          ref: ${{ github.event.pull_request.base.sha }}
+""",
+    )
+
+    findings = auditor.audit_workflow(workflow)
+    assert [f for f in findings if f.level == "ERROR"], (
+        "a write scope on an enrolled trusted-base job must not be admitted"
+    )
+
+
+def test_enrolled_job_with_job_level_write_permission_is_rejected(
+    tmp_path: Path,
+) -> None:
+    """Job-level permissions override the workflow block, so check both."""
+    auditor = load_auditor()
+    workflow = _write_workflow(
+        tmp_path,
+        "contact_write_boundary.yml",
+        """
+name: Contact Write Boundary
+on:
+  pull_request_target:
+permissions:
+  contents: read
+jobs:
+  contact-write-boundary:
+    if: github.event_name == 'pull_request_target'
+    permissions:
+      pull-requests: write
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0
+        with:
+          ref: ${{ github.event.pull_request.base.sha }}
+""",
+    )
+
+    findings = auditor.audit_workflow(workflow)
+    assert [f for f in findings if f.level == "ERROR"], (
+        "a job-level write scope must not be admitted"
+    )
+
+
+def test_every_currently_enrolled_job_declares_read_only_permissions() -> None:
+    """The new rule rejects nothing that exists today.
+
+    Pinned so that adding a write scope to any enrolled gate is a deliberate,
+    visibly failing change rather than a silent widening.
+    """
+    auditor = load_auditor()
+    workflows = Path(__file__).resolve().parents[1] / ".github" / "workflows"
+    for filename, job_name in sorted(auditor.ALLOWED_PULL_REQUEST_TARGET_JOBS):
+        path = workflows / filename
+        if not path.exists():
+            continue  # arrives in a later PR
+        document = yaml.safe_load(path.read_text(encoding="utf-8"))
+        job = (document.get("jobs") or {}).get(job_name) or {}
+        effective = job.get("permissions", document.get("permissions"))
+        assert not auditor._grants_write(effective), (filename, job_name, effective)

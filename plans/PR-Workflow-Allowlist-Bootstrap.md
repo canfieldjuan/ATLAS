@@ -31,8 +31,10 @@ with a red required check.
 Ownership lane: workflow-security-posture
 Slice phase: workflow/process
 
-1. Add `("contact_write_boundary.yml", "contact-write-boundary")` to
-   `ALLOWED_PULL_REQUEST_TARGET_JOBS`.
+1. Add the enrolment tuple to `ALLOWED_PULL_REQUEST_TARGET_JOBS`.
+2. Reject any enrolled `pull_request_target` job that declares a write scope.
+   Every currently enrolled job already declares read-only permissions, so this
+   rejects nothing that exists and closes the gap for everything enrolled later.
 
 ### Files touched
 
@@ -79,11 +81,21 @@ Dispositioning the two hooks it implies:
   `permissions: contents: read` and fetches the PR tree with
   `persist-credentials: false`, so the elevated context never reaches PR-authored
   content -- verified in ATLAS #2302 rather than asserted here.
-- **Workflow-permissions boundary.** Enrolment does not relax any other check.
-  The auditor's OIDC and write-permission rules apply to the enrolled job
-  exactly as before, and `test_unapproved_pull_request_target_is_error` plus
-  `test_contact_write_boundary_enrolment_still_requires_the_guard_shape` pin
-  that membership is necessary but not sufficient.
+- **Workflow-permissions boundary.** Tightened here rather than merely
+  preserved. A trusted-base job runs with the base repository's token, so a
+  write scope hands that token to a job whose purpose is reading PR-authored
+  content. `_grants_write` now rejects any write scope other than `id-token`,
+  which keeps its own separate allowlist. Verified safe before adding: all eight
+  previously enrolled jobs already declare read-only permissions, pinned by
+  `test_every_currently_enrolled_job_declares_read_only_permissions`, so the
+  rule rejects nothing that exists today.
+- **Execution boundary after the base checkout: out of scope, tracked in ATLAS
+  #2307.** The predicate returns admitted after step 0 and never inspects later
+  steps, so an enrolled job could check out the PR head and execute it. That is
+  a pre-existing property affecting all eight prior entries, and the naive fix
+  would reject the correct design -- ATLAS #2302 fetches the PR tree
+  deliberately so a base-owned checker can read it as data. Tightening it needs
+  its own review rather than riding along in an enrolment.
 
 R2 and R10 are the path triggers the rule pack assigns to gate-predicate
 scripts, which is what `scripts/audit_workflow_security_posture.py` is: R2 is
@@ -108,8 +120,9 @@ and nothing else.
   pair; every other absent pair keeps failing exactly as before, which
   `test_unapproved_pull_request_target_is_error` pins.
 - **Membership is necessary, not sufficient.** An enrolled pair must still
-  present an event-name `if` guard and a SHA-pinned checkout of
-  `github.event.pull_request.base.sha` as its first step, or it is rejected.
+  present an event-name `if` guard, a SHA-pinned checkout of
+  `github.event.pull_request.base.sha` as its first step, and **no write
+  scope**, or it is rejected.
   `test_contact_write_boundary_enrolment_still_requires_the_guard_shape` proves
   that for the pair added here, so the entry widens eligibility rather than
   granting permission.
@@ -181,7 +194,7 @@ Plus two checks the commands above do not show:
 
 | File | LOC |
 |---|---:|
-| `plans/PR-Workflow-Allowlist-Bootstrap.md` | 187 |
-| `scripts/audit_workflow_security_posture.py` | 1 |
-| `tests/test_audit_workflow_security_posture.py` | 52 |
-| **Total** | **240** |
+| `plans/PR-Workflow-Allowlist-Bootstrap.md` | 200 |
+| `scripts/audit_workflow_security_posture.py` | 37 |
+| `tests/test_audit_workflow_security_posture.py` | 138 |
+| **Total** | **375** |

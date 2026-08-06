@@ -168,6 +168,35 @@ def _job_runs_on_pull_request_target(job: dict[str, Any]) -> bool:
     return "pull_request_target" not in condition
 
 
+def _grants_write(permissions: Any) -> bool:
+    """Whether a permissions block grants any write scope.
+
+    `id-token` is excluded because OIDC has its own separate allowlist and
+    check; every other write scope on a `pull_request_target` job hands a
+    write-capable base-context token to a job that reads PR-authored content.
+    """
+    if permissions == "write-all":
+        return True
+    if not isinstance(permissions, dict):
+        return False
+    return any(
+        value == "write" for key, value in permissions.items() if key != "id-token"
+    )
+
+
+def _effective_permissions(job: dict[str, Any], workflow_text: str) -> Any:
+    """Job-level permissions if declared, else the workflow-level block."""
+    if "permissions" in job:
+        return job.get("permissions")
+    try:
+        document = yaml.safe_load(workflow_text)
+    except yaml.YAMLError:
+        return None
+    if isinstance(document, dict):
+        return document.get("permissions")
+    return None
+
+
 def _is_allowed_pull_request_target_job(
     path: Path,
     job_name: str,
@@ -178,6 +207,13 @@ def _is_allowed_pull_request_target_job(
         return False
     if (path.name, job_name) == REVIEW_CONTRACT_PREADMISSION_JOB:
         return _review_contract_workflow_text_is_allowed(workflow_text)
+    # A trusted-base job runs with the BASE repository's token. Granting it a
+    # write scope hands that token to a job whose whole purpose is to read
+    # PR-authored content. Every currently enrolled job already declares
+    # read-only permissions, so this rejects nothing that exists today and
+    # closes the gap for everything enrolled later.
+    if _grants_write(_effective_permissions(job, workflow_text)):
+        return False
     if job.get("if") != "github.event_name == 'pull_request_target'":
         return False
     steps = _iter_steps(job)
