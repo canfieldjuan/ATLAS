@@ -214,6 +214,8 @@ Parked hardening: none against the predicate above.
 - Passed: focused provider/MCP guard set — 10 passed:
   `python -m pytest tests/test_crm_read_scoping.py::test_create_contact_non_eom_default_stamps tests/test_crm_read_scoping.py::test_create_contact_default_eom_guard_message tests/test_crm_read_scoping.py::test_create_contact_explicit_eom_guard_message tests/test_crm_read_scoping.py::test_create_contact_explicit_context_wins tests/test_crm_read_scoping.py::test_create_contact_non_merging_mode_admits_fresh_eom_backend_miss tests/test_crm_read_scoping.py::test_create_contact_non_eom_miss_still_inserts tests/test_leads_intake.py::test_create_contact_does_not_match_foreign_context_after_eom_miss tests/test_leads_intake.py::test_create_contact_dedupe_claims_null_context_contact tests/test_leads_intake.py::test_create_contact_dedupe_same_tenant_match_reused tests/test_leads_intake.py::test_provider_prefers_same_tenant_over_null_context -q --tb=short -rfE`.
 - Passed: `python -m pytest tests/test_leads_intake.py tests/test_crm_read_scoping.py -q --tb=short -rfE` — 119 passed, 1 torch/pynvml warning.
+- Passed: selected unit-gate simulation for this PR's changed test files:
+  `python scripts/check_unit_gate.py --baseline tests/unit_gate_baseline.txt --base-baseline <(git show origin/main:tests/unit_gate_baseline.txt) --selected-files "$task_selected" --pytest-args tests/test_leads_intake.py tests/test_crm_read_scoping.py -m "not integration and not e2e" --continue-on-collection-errors -rfE --tb=no -q -p no:cacheprovider`.
 - Passed: `git diff --check`.
 - Passed: `python scripts/check_deployed_config_probing.py --base origin/main`.
 - Previous adjacent observation: `python -m pytest tests/test_eom_lead_ingress.py tests/test_mcp_servers.py -q --tb=short -rfE` failed 6 tests in Email/Twilio/Calendar MCP expectations (`TestEmailMCPTools.test_send_email_provider_error`, `TestIMAPEmailProvider.test_list_messages_calls_executor`, `TestIMAPEmailProvider.test_get_message_calls_executor`, `TestTwilioMCPTools.test_make_call_twilio_error`, `TestCalendarMCPTools.test_list_calendars`, `TestCalendarMCPTools.test_list_events`). CRM MCP subset passed before this review-comment patch; this PR does not touch those modules.
@@ -223,7 +225,7 @@ Parked hardening: none against the predicate above.
 | File | LOC |
 |---|---:|
 | `atlas_brain/mcp/crm_server.py` | 15 |
-| `plans/PR-EOM-Canonical-CRM-Boundary.md` | 229 |
+| `plans/PR-EOM-Canonical-CRM-Boundary.md` | 231 |
 | `tests/test_crm_read_scoping.py` | 84 |
 | `tests/test_leads_intake.py` | 12 |
-| **Total** | **340** |
+| **Total** | **342** |
