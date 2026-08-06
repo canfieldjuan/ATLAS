@@ -180,6 +180,15 @@ while nothing had happened, and `fail_count` was computed as
 counted explicitly, and the notification title reads "Plan Not Executed" when
 nothing ran.
 
+### Value shape
+
+Every allow-listed column is VARCHAR or TEXT. A producer-supplied dict, list,
+or bool is not a value the column can hold: admitting one stores a stringified
+object or raises at the driver mid-plan. Values must be strings and are bounded
+per column, mirroring `migrations/035_contacts.sql`. Oversized values are
+rejected rather than truncated, because truncation silently stores a corrupted
+value.
+
 ### Null is not a value
 
 `call_extraction.md` emits `null` for anything the caller did not mention, so a
@@ -243,10 +252,10 @@ Parked hardening: none.
 
 ```
 $ python -m pytest tests/test_call_action_plan_contact_fields.py -q
-32 passed
+40 passed
 
 $ python -m pytest tests/test_call_intelligence.py tests/test_call_action_plan_contact_fields.py -q
-62 passed
+70 passed
 
 $ python -m py_compile atlas_brain/api/comms/call_actions.py
 (no output)
@@ -260,7 +269,7 @@ pre-existing: identical with the change stashed and unstashed.
 
 | File | LOC |
 |---|---:|
-| `atlas_brain/api/comms/call_actions.py` | 170 |
-| `plans/PR-Call-Action-Plan-Contact-Field-Allowlist.md` | 266 |
-| `tests/test_call_action_plan_contact_fields.py` | 377 |
-| **Total** | **813** |
+| `atlas_brain/api/comms/call_actions.py` | 196 |
+| `plans/PR-Call-Action-Plan-Contact-Field-Allowlist.md` | 275 |
+| `tests/test_call_action_plan_contact_fields.py` | 484 |
+| **Total** | **955** |

@@ -13,6 +13,7 @@ still reach the provider, and forbidden fields must not.
 from __future__ import annotations
 
 import logging
+from uuid import UUID
 
 import pytest
 
@@ -41,6 +42,10 @@ def provider(monkeypatch: pytest.MonkeyPatch) -> _RecordingProvider:
 
 
 RECORD = {"contact_id": "11111111-1111-1111-1111-111111111111"}
+
+
+async def _noop(*_args, **_kwargs):
+    return None
 
 
 # ---------------------------------------------------------------------------
@@ -137,16 +142,16 @@ async def test_dropped_fields_are_logged_not_silent(
 
 @pytest.mark.asyncio
 async def test_no_linked_contact_is_still_skipped(provider: _RecordingProvider) -> None:
-    result = await call_actions._exec_update_contact({}, {"email": "a@b.com"})
+    with pytest.raises(call_actions.PlanActionSkipped):
+        await call_actions._exec_update_contact({}, {"email": "a@b.com"})
     assert provider.calls == []
-    assert result == "Skipped: no linked contact"
 
 
 @pytest.mark.asyncio
 async def test_empty_params_is_still_skipped(provider: _RecordingProvider) -> None:
-    result = await call_actions._exec_update_contact(RECORD, {})
+    with pytest.raises(call_actions.PlanActionSkipped):
+        await call_actions._exec_update_contact(RECORD, {})
     assert provider.calls == []
-    assert result == "Skipped: no update params"
 
 
 # ---------------------------------------------------------------------------
@@ -364,14 +369,116 @@ async def test_rejected_key_rendering_is_length_bounded(
     assert "more" in many
 
 
-def test_plan_status_is_skipped_only_when_nothing_was_attempted() -> None:
-    """"skipped" sits outside the idempotency guard, so it must not mean
-    "everything failed" -- an errored action may still have taken effect."""
-    def status_for(results):
-        statuses = {r["status"] for r in results}
-        return "skipped" if statuses == {"skipped"} else "executed"
+@pytest.mark.asyncio
+async def test_approve_plan_persists_skipped_when_only_skips_occurred(
+    monkeypatch: pytest.MonkeyPatch, provider: _RecordingProvider
+) -> None:
+    """Drive the real endpoint, not a copy of its expression.
 
-    assert status_for([{"status": "skipped"}]) == "skipped"
-    assert status_for([{"status": "error"}]) == "executed"
-    assert status_for([{"status": "skipped"}, {"status": "error"}]) == "executed"
-    assert status_for([{"status": "ok"}, {"status": "skipped"}]) == "executed"
+    The first version of this test defined a local `status_for` mirroring the
+    production line, so it stayed green if the exception catch stopped
+    producing `skipped` or persistence reverted to `executed`. It asserted
+    that I had written the expression twice, nothing more.
+    """
+    recorded: dict = {}
+
+    class _Repo:
+        async def update_plan_status(self, transcript_id, status, results):
+            recorded["status"] = status
+            recorded["results"] = results
+
+    async def _fake_record(_transcript_id):
+        return {
+            "plan_status": "pending",
+            "contact_id": None,
+            "proposed_actions": [
+                {"action": "update_contact", "params": {"business_context_id": "x"}}
+            ],
+            "extracted_data": {},
+            "business_context_id": "",
+        }
+
+    monkeypatch.setattr(call_actions, "_get_transcript_or_404", _fake_record)
+    monkeypatch.setattr(call_actions, "get_call_transcript_repo", lambda: _Repo())
+    monkeypatch.setattr(call_actions, "_notify_plan_executed", _noop)
+    monkeypatch.setattr(call_actions.settings.alerts, "ntfy_enabled", False, raising=False)
+
+    await call_actions.approve_plan(UUID("22222222-2222-2222-2222-222222222222"))
+
+    assert recorded["status"] == "skipped", (
+        "a plan whose only outcome was a skip must not persist as executed"
+    )
+    assert [r["status"] for r in recorded["results"]] == ["skipped"]
+
+
+@pytest.mark.asyncio
+async def test_approve_plan_persists_executed_when_an_action_errored(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """An errored action may still have taken effect, so the plan must stay
+    non-retryable rather than landing in the unguarded `skipped` state."""
+    recorded: dict = {}
+
+    class _Repo:
+        async def update_plan_status(self, transcript_id, status, results):
+            recorded["status"] = status
+
+    async def _fake_record(_transcript_id):
+        return {
+            "plan_status": "pending",
+            "contact_id": None,
+            "proposed_actions": [{"action": "send_email", "params": {}}],
+            "extracted_data": {},
+            "business_context_id": "",
+        }
+
+    async def _boom(*_args, **_kwargs):
+        raise RuntimeError("provider timeout after accepting the send")
+
+    monkeypatch.setattr(call_actions, "_get_transcript_or_404", _fake_record)
+    monkeypatch.setattr(call_actions, "get_call_transcript_repo", lambda: _Repo())
+    monkeypatch.setattr(call_actions, "_exec_email", _boom)
+    monkeypatch.setattr(call_actions, "_notify_plan_executed", _noop)
+    monkeypatch.setattr(call_actions.settings.alerts, "ntfy_enabled", False, raising=False)
+
+    await call_actions.approve_plan(UUID("33333333-3333-3333-3333-333333333333"))
+
+    assert recorded["status"] == "executed", (
+        "an all-errors plan must not become retryable"
+    )
+
+
+# ---------------------------------------------------------------------------
+# Value shape
+# ---------------------------------------------------------------------------
+
+@pytest.mark.parametrize(
+    "bad_value",
+    [{"value": "a@b.com"}, ["a@b.com"], True, 42, 3.5, "x" * 5000],
+)
+@pytest.mark.asyncio
+async def test_malformed_values_never_reach_the_provider(
+    provider: _RecordingProvider, bad_value
+) -> None:
+    """Every allow-listed column is VARCHAR or TEXT.
+
+    A dict is not an email and a bool is not a name; admitting either stores a
+    stringified object or raises at the driver mid-plan.
+    """
+    await call_actions._exec_update_contact(
+        RECORD, {"customer_email": bad_value, "customer_phone": "217-555-0100"}
+    )
+    _, updates = provider.calls[0]
+    assert updates == {"phone": "217-555-0100"}
+
+
+@pytest.mark.asyncio
+async def test_oversized_value_is_rejected_not_truncated(
+    provider: _RecordingProvider,
+) -> None:
+    """Truncating would silently store a corrupted value."""
+    await call_actions._exec_update_contact(
+        RECORD, {"customer_phone": "9" * 200, "customer_email": "a@b.com"}
+    )
+    _, updates = provider.calls[0]
+    assert updates == {"email": "a@b.com"}

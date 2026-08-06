@@ -920,18 +920,23 @@ _PLAN_FIELD_ALIASES = {
     "postal_code": "zip",
 }
 
-_PLAN_UPDATABLE_CONTACT_FIELDS = frozenset({
-    "full_name",
-    "first_name",
-    "last_name",
-    "email",
-    "phone",
-    "address",
-    "city",
-    "state",
-    "zip",
-    "notes",
-})
+# Field -> max length, mirroring migrations/035_contacts.sql. Every one of these
+# columns is VARCHAR or TEXT, so a producer-supplied dict, list, or bool is not
+# a value the column can hold; admitting one either raises at the driver or
+# stores a stringified object. Lengths are enforced here rather than discovered
+# as a database error mid-plan.
+_PLAN_UPDATABLE_CONTACT_FIELDS: dict = {
+    "full_name": 256,
+    "first_name": 128,
+    "last_name": 128,
+    "email": 256,
+    "phone": 32,
+    "address": 2000,
+    "city": 128,
+    "state": 64,
+    "zip": 16,
+    "notes": 4000,
+}
 
 
 async def _exec_update_contact(record: dict, params: dict) -> str:
@@ -942,17 +947,26 @@ async def _exec_update_contact(record: dict, params: dict) -> str:
     """
     contact_id = record.get("contact_id")
     if not contact_id:
-        return "Skipped: no linked contact"
+        raise PlanActionSkipped("no linked contact")
     if not params:
-        return "Skipped: no update params"
+        raise PlanActionSkipped("no update params")
 
     allowed: dict = {}
     rejected: list = []
     empty: list = []
+    malformed: list = []
     for key, value in params.items():
         canonical = _PLAN_FIELD_ALIASES.get(key, key)
         if canonical not in _PLAN_UPDATABLE_CONTACT_FIELDS:
             rejected.append(key)
+            continue
+        # Only text reaches a text column. A bool is not a name, and a dict is
+        # not an email; both would otherwise be stringified into the row.
+        if not isinstance(value, str):
+            malformed.append(key)
+            continue
+        if len(value) > _PLAN_UPDATABLE_CONTACT_FIELDS[canonical]:
+            malformed.append(key)
             continue
         # `call_extraction.md` emits null for anything the caller did not
         # mention, and a plan that copies the extracted payload therefore
@@ -966,12 +980,19 @@ async def _exec_update_contact(record: dict, params: dict) -> str:
         allowed[canonical] = value
     rejected = sorted(rejected)
     empty = sorted(empty)
+    malformed = sorted(malformed)
     if rejected:
         logger.warning(
             "Dropped non-call-outcome field(s) from plan contact update "
             "for contact %s: %s",
             contact_id,
             _render_keys(rejected),
+        )
+    if malformed:
+        logger.warning(
+            "Dropped malformed value(s) in plan contact update for contact %s: %s",
+            contact_id,
+            _render_keys(malformed),
         )
     if empty:
         logger.info(
@@ -984,6 +1005,7 @@ async def _exec_update_contact(record: dict, params: dict) -> str:
             "no updatable contact fields"
             + (f" (dropped: {_render_keys(rejected)})" if rejected else "")
             + (f" (empty: {_render_keys(empty)})" if empty else "")
+            + (f" (malformed: {_render_keys(malformed)})" if malformed else "")
         )
 
     from ...services.crm_provider import get_crm_provider
