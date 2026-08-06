@@ -153,6 +153,11 @@ class EOMLeadReviewResponse(BaseModel):
         default=None,
         serialization_alias="nextCursor",
     )
+    # What this deployment actually serves, so a caller can disable a control
+    # instead of shipping a button that 404s. Website (Vercel) and tracker
+    # (Render) auto-deploy from main; Atlas deploys by hand, so callers
+    # routinely run ahead of it. See ATLAS #2275 and website #112.
+    capabilities: list[str] = Field(default_factory=list)
 
 
 class EOMOnboardingDraftEditRequest(BaseModel):
@@ -302,6 +307,72 @@ def _approval_key_dependency(
     return key
 
 
+# Capability name -> the (method, path) that must be registered for this
+# deployment to advertise it.
+#
+# Names are an explicit ENUMERATION -- a route cannot join by existing or by
+# being named a certain way. Membership in the advertised set is DERIVED from
+# the router's registered routes, so the manifest cannot claim a capability
+# this build does not serve: that claim is the exact failure this slice exists
+# to prevent, and a hand-maintained list would drift the moment a route moved.
+#
+# Out-of-set default is OMIT: an unregistered route is simply absent, and a
+# caller that treats absence as "disable the control" fails closed.
+_CAPABILITY_ROUTES: dict[str, tuple[str, str]] = {
+    "lead.estimate_booking": (
+        "POST",
+        "/eom-funnel/leads/{contact_id}/estimate-bookings",
+    ),
+    "lead.first_clean_booking": (
+        "POST",
+        "/eom-funnel/leads/{contact_id}/first-clean-bookings",
+    ),
+    "lead.customer_handoff": ("POST", "/eom-funnel/customer-handoffs"),
+    "lead.lost": ("POST", "/eom-funnel/leads/{contact_id}/lost"),
+    "lead.reopen": ("POST", "/eom-funnel/leads/{contact_id}/reopen"),
+    "onboarding.draft.list": ("GET", "/eom-funnel/onboarding-drafts"),
+    "onboarding.draft.edit": ("PATCH", "/eom-funnel/onboarding-drafts/{draft_id}"),
+    "onboarding.draft.approve_send": (
+        "POST",
+        "/eom-funnel/onboarding-drafts/{draft_id}/approve-send",
+    ),
+    "onboarding.draft.revoke": (
+        "POST",
+        "/eom-funnel/onboarding-drafts/{draft_id}/revoke",
+    ),
+    "onboarding.draft.confirm_sent": (
+        "POST",
+        "/eom-funnel/onboarding-drafts/{draft_id}/confirm-sent",
+    ),
+}
+
+_served_capabilities_cache: tuple[str, ...] | None = None
+
+
+def served_capabilities() -> tuple[str, ...]:
+    """Capability names this build serves, derived from registered routes.
+
+    Computed on first call rather than at import: the routes are registered by
+    decorators further down this module, so an import-time constant would read
+    a partially-populated router and silently under-report.
+    """
+    global _served_capabilities_cache
+    if _served_capabilities_cache is None:
+        registered = {
+            (method, route.path)
+            for route in router.routes
+            for method in (getattr(route, "methods", None) or ())
+        }
+        _served_capabilities_cache = tuple(
+            sorted(
+                name
+                for name, signature in _CAPABILITY_ROUTES.items()
+                if signature in registered
+            )
+        )
+    return _served_capabilities_cache
+
+
 @router.get(
     "/leads",
     response_model=EOMLeadReviewResponse,
@@ -347,6 +418,7 @@ async def list_eom_lead_review_items(
         cursor=cursor,
         has_more=has_more,
         next_cursor=next_cursor,
+        capabilities=list(served_capabilities()),
     )
 
 
