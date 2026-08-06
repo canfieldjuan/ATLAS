@@ -134,7 +134,12 @@ def _in_dynamic_scope(rel: str) -> bool:
 # things that could actually execute.
 PATTERNS = {
     "INSERT": re.compile(
-        r"\binsert\s+into\s+" + TABLE + r"\s*(?:\(|select\b|values\b|default\b|overriding\b)",
+        r"\binsert\s+into\s+" + TABLE
+        # Optional alias: `INSERT INTO contacts AS c (...)` is valid and was a
+        # live bypass. `AS` is required for the alias form so that a bare
+        # following keyword cannot be mistaken for one.
+        + r"(?:\s+as\s+[a-z_][a-z0-9_]*)?"
+        + r"\s*(?:\(|select\b|values\b|default\b|overriding\b)",
         re.IGNORECASE | re.DOTALL,
     ),
     # INSERT is not the only way a row reaches the table. MERGE can insert,

@@ -1035,3 +1035,40 @@ def test_blocking_context_has_exactly_one_producer() -> None:
     assert "contact-write-boundary" not in producers.get(
         "contact-write-boundary-selfcheck", []
     )
+
+
+# ---------------------------------------------------------------------------
+# Round 13: alias form, statement position
+# ---------------------------------------------------------------------------
+
+def test_insert_with_table_alias_is_detected(tmp_path: Path) -> None:
+    """`INSERT INTO contacts AS c (...)` is valid PostgreSQL and was a bypass."""
+    _write(
+        tmp_path,
+        "atlas_brain/services/aliased.py",
+        'SQL = "INSERT INTO contacts AS c (full_name) VALUES ($1)"\n',
+    )
+    blocking, _ = _classify(tmp_path)
+    assert [f.operation for f in blocking] == ["INSERT"]
+
+
+def test_statement_opening_a_cte_body_is_detected(tmp_path: Path) -> None:
+    """CTE-bodied writes are real writes.
+
+    Pinned because an attempt to suppress prose false positives by requiring a
+    statement-start position silently dropped exactly these: the provider opens
+    CTE bodies with `WITH v AS (\\n  UPDATE contacts ...`. That attempt was
+    reverted; see ATLAS #2304 for the prose false positive it was chasing.
+    """
+    _write(
+        tmp_path,
+        "atlas_brain/services/cte.py",
+        'SQL = """\n'
+        '    WITH visible AS (\n'
+        '        UPDATE contacts SET business_context_id = $2 RETURNING *\n'
+        '    )\n'
+        '    SELECT 1\n'
+        '"""\n',
+    )
+    _, new_mutations = _classify(tmp_path)
+    assert [f.operation for f in new_mutations] == ["UPDATE"]
