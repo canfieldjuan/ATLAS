@@ -21,13 +21,16 @@ cause B below.
 
 ### Why this slice is over the 400-LOC target
 
-534 added lines, of which **57 are production code**:
+Over the cap, and roughly **nine tenths of it is not behaviour**. Per-file
+figures live in **Estimated diff size** at the bottom of this document and
+nowhere else -- `scripts/sync_pr_plan.py` regenerates that table from the real
+diff, so restating the numbers here would just create a second copy that drifts
+out of agreement with the first. (It already did once: this section carried a
+hand-typed total that was stale within two commits while the synced table below
+was correct.)
 
-| File | LOC | What it is |
-|---|---:|---|
-| `plans/PR-Workflow-Allowlist-Bootstrap.md` | 252 | this document, required by the plan contract |
-| `tests/test_audit_workflow_security_posture.py` | 222 | boundary table + three end-to-end fixtures |
-| `scripts/audit_workflow_security_posture.py` | 57 | the actual change |
+The shape, which does not drift: one file of production code, one test file
+several times its size, and a plan document about as large as the tests.
 
 The production delta is not splittable, and the honest reason is narrower than
 "all of it is necessary":
@@ -42,8 +45,8 @@ The production delta is not splittable, and the honest reason is narrower than
   predicate whose entire value is where it says no, so it needs both error
   directions plus the shapes it cannot evaluate statically. That is one 12-row
   table and three fixtures; there is no smaller honest version.
-- **The plan doc is contract machinery**, not slice content: 47% of the diff and
-  0% of the behaviour.
+- **The plan doc is contract machinery**, not slice content: roughly half the
+  diff and none of the behaviour.
 
 What I will not claim: that this was always going to be one indivisible unit.
 The first version of this PR was the enrolment tuple alone, comfortably under the
@@ -278,7 +281,7 @@ Plus two checks the commands above do not show:
 
 | File | LOC |
 |---|---:|
-| `plans/PR-Workflow-Allowlist-Bootstrap.md` | 284 |
+| `plans/PR-Workflow-Allowlist-Bootstrap.md` | 287 |
 | `scripts/audit_workflow_security_posture.py` | 60 |
 | `tests/test_audit_workflow_security_posture.py` | 222 |
-| **Total** | **566** |
+| **Total** | **569** |
