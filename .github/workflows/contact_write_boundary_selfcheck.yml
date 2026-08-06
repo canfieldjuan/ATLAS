@@ -48,7 +48,10 @@ jobs:
         run: |
           set -euo pipefail
           python -m pip install --upgrade pip
-          python -m pip install pytest pytest-asyncio
+          # pyyaml: test_blocking_context_has_exactly_one_producer parses the
+          # workflow files. pytest-asyncio: tests/conftest.py imports it for any
+          # test under tests/, even a stdlib-only one.
+          python -m pip install pytest pytest-asyncio pyyaml
           python -m pytest tests/test_contact_write_boundary.py -q
 
   contact-write-boundary-main:
@@ -74,5 +77,8 @@ jobs:
         run: |
           set -euo pipefail
           python -m pip install --upgrade pip
-          python -m pip install pytest pytest-asyncio
+          # pyyaml: test_blocking_context_has_exactly_one_producer parses the
+          # workflow files. pytest-asyncio: tests/conftest.py imports it for any
+          # test under tests/, even a stdlib-only one.
+          python -m pip install pytest pytest-asyncio pyyaml
           python -m pytest tests/test_contact_write_boundary.py -q
