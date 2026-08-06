@@ -113,6 +113,7 @@ run_check "MCP port assignments" "$python_bin" "$script_root/scripts/audit_mcp_p
 run_check "MCP tool-name inventories" "$python_bin" "$script_root/scripts/audit_mcp_tool_names_match_docs.py"
 run_check "Extracted manifest sync" "$python_bin" "$script_root/scripts/audit_extracted_manifests.py"
 run_check "UI test:* CI enrollment" "$python_bin" "$script_root/scripts/audit_ui_test_enrollment.py"
+run_check "PR-side docs/test consistency" "$python_bin" "$script_root/scripts/audit_pr_side_docs_test_consistency.py" --repo-root "$repo_root"
 run_check "PR watcher safety" "$python_bin" "$script_root/scripts/audit_pr_watcher_safety.py" --repo-root "$repo_root"
 plan_admission_args=("$script_root/scripts/audit_pr_plan_presence.py" "$base_ref")
 if [ -n "$current_pr_author" ]; then

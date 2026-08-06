@@ -25,6 +25,19 @@ Fresh evidence on 2026-08-05:
   to gate docs/tests can still be observed only after merge unless a safe
   data-only consistency probe is added.
 
+## 2026-08-05 Pre-push Audit Probe Slice
+
+This follow-up adds the safe data-only probe named above. The probe runs from
+trusted base code inside `pre-push-audit`, reads the PR worktree as data, and
+checks that `ci/gates.yml` branch-required entries agree with
+`docs/SECURITY_GUARDRAILS.md`, the branch-protection workflow trigger paths,
+and `tests/test_security_guardrails_workflow.py`.
+
+This slice does not promote `pre-push-audit` to `branch_required`. It only
+closes the stale docs/test consistency blocker so a later enrollment recheck can
+decide whether the now-better signal should become a hard branch-protection
+context.
+
 ## 2026-08-04 Initial Decision
 
 Initial decision on 2026-08-04: keep `pre-push-audit` and `unit-gate` at
