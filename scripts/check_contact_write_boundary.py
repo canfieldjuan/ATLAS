@@ -484,7 +484,16 @@ def _blank_sql_noise(sql: str) -> str:
                 tag = match.group(0)
                 close = sql.find(tag, i + len(tag))
                 j = (close + len(tag)) if close != -1 else n
-                out.append(blank(sql[i:j]))
+                body = sql[i + len(tag): max(i + len(tag), j - len(tag))]
+                # A dollar-quoted body is NOT reliably inert. PostgreSQL runs
+                # `DO $$ BEGIN INSERT INTO contacts ...; END $$;` and function
+                # bodies the same way, and the migration runner submits the
+                # whole file. Blanking these hid a real writer and exited 0, so
+                # the body is lexed recursively and left visible: fail closed.
+                # The cost is that SQL quoted as documentation inside a dollar
+                # body reads as executable, which is the safe direction for a
+                # guard.
+                out.append(blank(tag) + _blank_sql_noise(body) + blank(tag))
                 i = j
                 continue
 
@@ -629,6 +638,17 @@ def main(argv=None) -> int:
     )
     ap.add_argument("--root", default=str(ROOT), help="Repository root to scan.")
     ap.add_argument("--baseline", default=None, help="Path to the baseline JSON file.")
+    ap.add_argument(
+        "--inventory-baseline",
+        default=None,
+        help=(
+            "Baseline whose writer_inventory is compared against the scanned "
+            "tree. Defaults to <root>/tests/contact_write_boundary/baseline.json. "
+            "Kept separate from --baseline so trusted-base runs can take POLICY "
+            "from the base revision while still requiring the scanned tree to "
+            "keep its own inventory honest."
+        ),
+    )
     ap.add_argument("--update-baseline", action="store_true",
                     help="Rewrite the baseline from the current tree.")
     ap.add_argument("--json", action="store_true", help="Emit findings as JSON.")
@@ -651,6 +671,24 @@ def main(argv=None) -> int:
     if args.baseline and Path(args.baseline).exists():
         baseline = json.loads(Path(args.baseline).read_text(encoding="utf-8"))
 
+    # Inventory drift. classify() only reads known_writes, so without this a PR
+    # could add a third INSERT inside the allow-listed provider module, or
+    # delete an inventoried writer, and still exit 0 -- the drift record the
+    # plan promises would never actually be checked.
+    inventory_path = Path(
+        args.inventory_baseline
+        or (root / "tests" / "contact_write_boundary" / "baseline.json")
+    )
+    inventory_drift: dict = {"added": [], "removed": []}
+    if inventory_path.exists():
+        committed = json.loads(inventory_path.read_text(encoding="utf-8"))
+        recorded = set(committed.get("writer_inventory", []))
+        current = set(build_baseline(findings, unanalyzable)["writer_inventory"])
+        inventory_drift = {
+            "added": sorted(current - recorded),
+            "removed": sorted(recorded - current),
+        }
+
     blocking, new_mutations = classify(findings, baseline)
     known_unanalyzable = set(baseline.get("unanalyzable", []))
     new_unanalyzable = [u for u in unanalyzable if u not in known_unanalyzable]
@@ -661,10 +699,11 @@ def main(argv=None) -> int:
                 "blocking": [asdict(f) for f in blocking],
                 "new_mutations": [asdict(f) for f in new_mutations],
                 "unanalyzable": new_unanalyzable,
+                "inventory_drift": inventory_drift,
             },
             indent=2,
         ))
-        return 1 if (blocking or new_unanalyzable) else 0
+        return 1 if (blocking or new_unanalyzable or any(inventory_drift.values())) else 0
 
     print("contact write-boundary check")
     print("-" * 60)
@@ -702,11 +741,24 @@ def main(argv=None) -> int:
             "`unanalyzable` list with a reason if it is a deliberate fixture."
         )
 
-    if not blocking and not new_mutations and not new_unanalyzable:
+    if any(inventory_drift.values()):
+        print("\nBLOCKING: the committed writer inventory does not match the tree.\n")
+        for entry in inventory_drift["added"]:
+            print(f"  + {entry}")
+        for entry in inventory_drift["removed"]:
+            print(f"  - {entry}")
+        print(
+            "\nEvery contact write site is recorded so that adding, moving, or\n"
+            "removing one is a reviewable diff rather than a silent change.\n"
+            "Refresh it and review the delta as part of the change:\n"
+            f"  python {SELF_PATH} --baseline {inventory_path} --update-baseline"
+        )
+
+    if not blocking and not new_mutations and not new_unanalyzable and not any(inventory_drift.values()):
         total = len([f for f in findings if not _is_test_path(f.path)])
         print(f"OK - {total} contact write(s), all inside approved modules or baselined.")
 
-    return 1 if (blocking or new_unanalyzable) else 0
+    return 1 if (blocking or new_unanalyzable or any(inventory_drift.values())) else 0
 
 
 if __name__ == "__main__":

@@ -61,13 +61,15 @@ jobs:
           else
             TARGET=base
           fi
-          # Baseline comes from the base revision too: a PR must not be able to
-          # baseline away its own finding. INSERT is never silenceable by the
-          # baseline in any case, but the non-blocking inventory should also be
-          # judged against trusted content.
+          # POLICY (allow-list, blocking classes) comes from the base revision
+          # so a PR cannot widen it. The INVENTORY is checked against the
+          # scanned tree's own baseline, so adding or removing a write site
+          # must appear as a reviewable baseline diff in the same PR rather
+          # than deadlocking on a base file that only updates at merge.
           python base/scripts/check_contact_write_boundary.py \
             --root "$TARGET" \
-            --baseline base/tests/contact_write_boundary/baseline.json
+            --baseline base/tests/contact_write_boundary/baseline.json \
+            --inventory-baseline "$TARGET/tests/contact_write_boundary/baseline.json"
 
       - name: Detector self-tests (base checker, base fixtures)
         run: |

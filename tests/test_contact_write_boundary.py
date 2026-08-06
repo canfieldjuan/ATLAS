@@ -605,3 +605,101 @@ def test_select_before_insert_does_not_report_phantom_select_into(tmp_path: Path
     )
     blocking, _ = _classify(tmp_path)
     assert [f.operation for f in blocking] == ["INSERT"]
+
+
+# ---------------------------------------------------------------------------
+# Round 5: executable dollar bodies, inventory enforcement
+# ---------------------------------------------------------------------------
+
+def test_do_block_body_is_executable_sql(tmp_path: Path) -> None:
+    """`DO $$ ... $$` runs its body; blanking it hid a real writer.
+
+    The migration runner submits each file's complete SQL text, so an INSERT
+    inside a DO block reaches the database exactly like a top-level one.
+    """
+    _write(
+        tmp_path,
+        "atlas_brain/storage/migrations/910_do.sql",
+        "DO $$ BEGIN INSERT INTO contacts (full_name) VALUES ('x'); END $$;\n",
+    )
+    blocking, _ = _classify(tmp_path)
+    assert [f.operation for f in blocking] == ["INSERT"]
+
+
+def test_function_body_is_executable_sql(tmp_path: Path) -> None:
+    _write(
+        tmp_path,
+        "atlas_brain/storage/migrations/911_func.sql",
+        "CREATE FUNCTION f() RETURNS void AS $body$ BEGIN "
+        "INSERT INTO contacts (full_name) VALUES ('y'); END $body$ LANGUAGE plpgsql;\n",
+    )
+    blocking, _ = _classify(tmp_path)
+    assert [f.operation for f in blocking] == ["INSERT"]
+
+
+def test_literal_inside_a_dollar_body_stays_inert(tmp_path: Path) -> None:
+    """Recursing into the body must still blank literals nested in it."""
+    _write(
+        tmp_path,
+        "atlas_brain/storage/migrations/912_notice.sql",
+        "DO $$ BEGIN RAISE NOTICE 'INSERT INTO contacts is documented here'; END $$;\n",
+    )
+    blocking, new_mutations = _classify(tmp_path)
+    assert blocking == []
+    assert new_mutations == []
+
+
+def test_new_write_in_the_allowed_module_fails_without_a_baseline_update(
+    tmp_path: Path,
+) -> None:
+    """classify() alone cannot see this: the module is allow-listed.
+
+    Without an inventory comparison a PR could add a third INSERT inside
+    crm_provider.py, or delete an inventoried writer, and still exit 0 -- the
+    drift record would never actually be checked.
+    """
+    import json as _json
+
+    provider = tmp_path / "atlas_brain" / "services" / "crm_provider.py"
+    provider.parent.mkdir(parents=True, exist_ok=True)
+    provider.write_text(
+        'A = "INSERT INTO contacts (a) VALUES ($1)"\n'
+        'B = "INSERT INTO contacts (b) VALUES ($1)"\n',
+        encoding="utf-8",
+    )
+    baseline_dir = tmp_path / "tests" / "contact_write_boundary"
+    baseline_dir.mkdir(parents=True, exist_ok=True)
+    findings, unanalyzable = MOD.scan_tree(tmp_path)
+    (baseline_dir / "baseline.json").write_text(
+        _json.dumps(MOD.build_baseline(findings, unanalyzable)), encoding="utf-8"
+    )
+    assert MOD.main(["--root", str(tmp_path)]) == 0
+
+    provider.write_text(
+        provider.read_text() + 'C = "INSERT INTO contacts (c) VALUES ($1)"\n',
+        encoding="utf-8",
+    )
+    assert MOD.main(["--root", str(tmp_path)]) == 1, (
+        "a new write inside the allow-listed module must not pass silently"
+    )
+
+
+def test_removing_an_inventoried_writer_also_fails(tmp_path: Path) -> None:
+    import json as _json
+
+    provider = tmp_path / "atlas_brain" / "services" / "crm_provider.py"
+    provider.parent.mkdir(parents=True, exist_ok=True)
+    provider.write_text(
+        'A = "INSERT INTO contacts (a) VALUES ($1)"\n'
+        'B = "INSERT INTO contacts (b) VALUES ($1)"\n',
+        encoding="utf-8",
+    )
+    baseline_dir = tmp_path / "tests" / "contact_write_boundary"
+    baseline_dir.mkdir(parents=True, exist_ok=True)
+    findings, unanalyzable = MOD.scan_tree(tmp_path)
+    (baseline_dir / "baseline.json").write_text(
+        _json.dumps(MOD.build_baseline(findings, unanalyzable)), encoding="utf-8"
+    )
+
+    provider.write_text('A = "INSERT INTO contacts (a) VALUES ($1)"\n', encoding="utf-8")
+    assert MOD.main(["--root", str(tmp_path)]) == 1

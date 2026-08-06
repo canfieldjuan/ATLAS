@@ -52,7 +52,7 @@ Slice phase: workflow/process
    outside it is reported non-blocking while legacy writers are converged.
 2. Add `tests/contact_write_boundary/baseline.json`: the committed writer
    inventory (17 production write sites today).
-3. Add `tests/test_contact_write_boundary.py`: 39 tests, including planted
+3. Add `tests/test_contact_write_boundary.py`: 44 tests, including planted
    violations that must fail the gate and false-positive pins that must not.
 5. Record the gate in `ci/gates.yml` as `ci_blocking_not_required`; promoting it
    to a branch-required context is an operator action.
