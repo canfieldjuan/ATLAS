@@ -477,3 +477,55 @@ def test_gate_job_name_in_wrong_file_is_error(tmp_path: Path) -> None:
         f.level == "ERROR" and "trusted-base guard shape" in f.detail
         for f in findings
     )
+
+
+def test_contact_write_boundary_identity_is_allowlisted(tmp_path: Path) -> None:
+    """The enrolled (file, job) pair must match the real workflow exactly.
+
+    The entry is two strings. Nothing else in this suite constructs
+    `contact_write_boundary.yml` with the `contact-write-boundary` job, so a
+    typo in either would merge green and silently leave the workflow
+    unenrolled -- the gate it authorises would then fail its own audit for a
+    reason nobody would connect to this change.
+    """
+    auditor = load_auditor()
+    workflow = _write_workflow(
+        tmp_path,
+        "contact_write_boundary.yml",
+        _trusted_gate_workflow("contact-write-boundary"),
+    )
+
+    findings = auditor.audit_workflow(workflow)
+    assert not [f for f in findings if f.level == "ERROR"], findings
+    assert any("allowed pull_request_target" in f.detail for f in findings)
+
+
+def test_contact_write_boundary_enrolment_still_requires_the_guard_shape(
+    tmp_path: Path,
+) -> None:
+    """Enrolment widens eligibility, not permission.
+
+    The same identity without the event-name guard and base-SHA checkout must
+    still be rejected, or the allowlist entry would be a bypass rather than an
+    admission record.
+    """
+    auditor = load_auditor()
+    workflow = _write_workflow(
+        tmp_path,
+        "contact_write_boundary.yml",
+        """
+name: Contact Write Boundary
+on:
+  pull_request_target:
+jobs:
+  contact-write-boundary:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0
+""",
+    )
+
+    findings = auditor.audit_workflow(workflow)
+    assert [f for f in findings if f.level == "ERROR"], (
+        "an enrolled job without the trusted-base guard shape must still error"
+    )

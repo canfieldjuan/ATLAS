@@ -38,6 +38,7 @@ Slice phase: workflow/process
 
 - `plans/PR-Workflow-Allowlist-Bootstrap.md`
 - `scripts/audit_workflow_security_posture.py`
+- `tests/test_audit_workflow_security_posture.py`
 
 ### Review Contract
 
@@ -59,6 +60,36 @@ passing unchanged, plus the inert-entry check; R10 by the change being one tuple
 in an already-reviewed frozenset rather than new logic. R12 because this is
 workflow security posture. R1 because the change must be exactly the enrolment
 and nothing else.
+
+**Guard-class closure declaration**
+
+- **Member set:** `ALLOWED_PULL_REQUEST_TARGET_JOBS`, a frozenset of
+  `(workflow filename, job name)` pairs.
+- **Set is CLOSED.** Membership is an explicit literal enumeration in
+  `scripts/audit_workflow_security_posture.py`, not derived from the workflow
+  tree, a naming convention, or a marker inside a workflow. A workflow cannot
+  join by existing, by being named a certain way, or by declaring anything about
+  itself; a human edits this frozenset on the trusted branch.
+- **Out-of-set default: REJECT.** Any `pull_request_target` job whose
+  `(file, job)` pair is absent produces an ERROR and exits 1. This PR adds one
+  pair; every other absent pair keeps failing exactly as before, which
+  `test_unapproved_pull_request_target_is_error` pins.
+- **Membership is necessary, not sufficient.** An enrolled pair must still
+  present an event-name `if` guard and a SHA-pinned checkout of
+  `github.event.pull_request.base.sha` as its first step, or it is rejected.
+  `test_contact_write_boundary_enrolment_still_requires_the_guard_shape` proves
+  that for the pair added here, so the entry widens eligibility rather than
+  granting permission.
+- **Identity is load-bearing and tested.** The pair is two strings with no
+  cross-check against reality, so a typo in either would merge green and leave
+  the workflow unenrolled.
+  `test_contact_write_boundary_identity_is_allowlisted` constructs a fixture
+  workflow under the enrolled filename, carrying the `contact-write-boundary`
+  job, and asserts admission; corrupting either string makes it fail. The real
+  workflow arrives in ATLAS #2302 -- it deliberately does not exist in this
+  tree, which is why the identity needs a test rather than a file reference.
+- **Both sides covered:** correct identity plus correct shape is admitted;
+  correct identity with wrong shape errors; absent identity errors.
 
 ### Boundary-change enumeration
 
@@ -111,6 +142,7 @@ directory omitting `contact_write_boundary.yml` also exits 0.
 
 | File | LOC |
 |---|---:|
-| `plans/PR-Workflow-Allowlist-Bootstrap.md` | 116 |
+| `plans/PR-Workflow-Allowlist-Bootstrap.md` | 148 |
 | `scripts/audit_workflow_security_posture.py` | 1 |
-| **Total** | **117** |
+| `tests/test_audit_workflow_security_posture.py` | 52 |
+| **Total** | **201** |
