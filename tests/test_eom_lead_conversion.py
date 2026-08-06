@@ -558,6 +558,7 @@ async def test_full_atlas_app_serves_public_intake_and_private_handoff_together(
         "cursor": None,
         "hasMore": False,
         "nextCursor": None,
+        "capabilities": list(funnel_mod.served_capabilities()),
     }
     assert crm.review_calls == [
         {"limit": 101, "cursor_created_at": None, "cursor_contact_id": None}
@@ -622,6 +623,7 @@ async def test_private_lead_review_returns_only_the_closed_projection():
         "cursor": None,
         "hasMore": True,
         "nextCursor": expected_cursor,
+        "capabilities": list(funnel_mod.served_capabilities()),
     }
     assert crm.review_calls == [
         {"limit": 2, "cursor_created_at": None, "cursor_contact_id": None}
@@ -653,6 +655,7 @@ async def test_private_lead_review_forwards_keyset_cursor_for_continuation():
         "cursor": cursor,
         "hasMore": False,
         "nextCursor": None,
+        "capabilities": list(funnel_mod.served_capabilities()),
     }
     assert crm.review_calls == [
         {
