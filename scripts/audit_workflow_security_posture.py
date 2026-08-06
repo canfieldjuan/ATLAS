@@ -29,6 +29,7 @@ ALLOWED_PULL_REQUEST_TARGET_JOBS = frozenset(
         ("session_lane.yml", "session-lane"),
         ("plan_admission.yml", "plan-admission"),
         ("review_contract.yml", "review-contract"),
+        ("contact_write_boundary.yml", "contact-write-boundary"),
     }
 )
 REVIEW_CONTRACT_PREADMISSION_JOB = ("review_contract.yml", "review-contract")

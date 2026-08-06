@@ -65,6 +65,7 @@ Slice phase: workflow/process
 - `tests/test_contact_write_boundary.py` (new)
 - `tests/contact_write_boundary/baseline.json` (new)
 - `.github/workflows/contact_write_boundary.yml` (new)
+- `scripts/audit_workflow_security_posture.py` (modified: one allowlist entry)
 - `plans/PR-EOM-Contact-Write-Boundary-Guard.md` (new)
 - `ci/gates.yml` (modified: one registry entry)
 
@@ -146,6 +147,16 @@ green context. Demonstrated:
 base checker vs hostile PR tree -> EXIT=1, flags atlas_brain/services/evil.py
 PR   checker vs the same tree   -> EXIT=0, evil.py not flagged
 ```
+
+The job shape is the one audited by
+`scripts/audit_workflow_security_posture.py`: an event-name `if` guard, a
+SHA-pinned first-step checkout of `github.event.pull_request.base.sha`, and
+explicit enrollment in `ALLOWED_PULL_REQUEST_TARGET_JOBS`. Post-merge runs are a
+separate `push`-guarded job mirroring `pre_push_audit.yml`, so neither job can
+execute on the wrong event and neither needs a conditional checkout ref.
+Enrolling a `pull_request_target` job is a deliberate, audited decision, which
+is why it is a visible one-line diff to the auditor rather than a workflow-local
+setting.
 
 The baseline is also read from base, so a PR cannot baseline away its own
 finding. `ci/gates.yml` now records `trusted_base: true`, which it can only do

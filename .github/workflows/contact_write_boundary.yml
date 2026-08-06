@@ -13,6 +13,13 @@ name: Contact Write Boundary
 # diff and publish a green `contact-write-boundary` context. Same reasoning and
 # same shape as diff_budget.yml.
 #
+# The PR job below matches the shape audited by
+# scripts/audit_workflow_security_posture.py: an event-name `if` guard, a
+# SHA-pinned FIRST step checking out `github.event.pull_request.base.sha`, and
+# explicit enrollment in ALLOWED_PULL_REQUEST_TARGET_JOBS. Post-merge runs live
+# in a separate `push`-guarded job, mirroring pre_push_audit.yml, so neither job
+# can execute on the wrong event and neither needs a conditional checkout ref.
+#
 # Never add a step here that executes PR-ref content. The PR checkout is read
 # by the base checker; it is never run.
 #
@@ -31,17 +38,17 @@ permissions:
 
 jobs:
   contact-write-boundary:
+    if: github.event_name == 'pull_request_target'
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
       - name: Checkout trusted base (the checker)
         uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
         with:
-          ref: ${{ github.event_name == 'pull_request_target' && github.event.pull_request.base.sha || github.sha }}
+          ref: ${{ github.event.pull_request.base.sha }}
           path: base
 
       - name: Checkout PR tree (scanned as data, never executed)
-        if: github.event_name == 'pull_request_target'
         uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
         with:
           ref: ${{ github.event.pull_request.head.sha }}
@@ -56,20 +63,15 @@ jobs:
       - name: Contact write-boundary check (base checker vs PR tree)
         run: |
           set -euo pipefail
-          if [ "${{ github.event_name }}" = "pull_request_target" ]; then
-            TARGET=pr
-          else
-            TARGET=base
-          fi
           # POLICY (allow-list, blocking classes) comes from the base revision
           # so a PR cannot widen it. The INVENTORY is checked against the
           # scanned tree's own baseline, so adding or removing a write site
           # must appear as a reviewable baseline diff in the same PR rather
           # than deadlocking on a base file that only updates at merge.
           python base/scripts/check_contact_write_boundary.py \
-            --root "$TARGET" \
+            --root pr \
             --baseline base/tests/contact_write_boundary/baseline.json \
-            --inventory-baseline "$TARGET/tests/contact_write_boundary/baseline.json"
+            --inventory-baseline pr/tests/contact_write_boundary/baseline.json
 
       - name: Detector self-tests (base checker, base fixtures)
         run: |
@@ -79,4 +81,30 @@ jobs:
           # for any test under tests/ even though this detector is stdlib-only.
           python -m pip install pytest pytest-asyncio
           cd base
+          python -m pytest tests/test_contact_write_boundary.py -q
+
+  contact-write-boundary-main:
+    if: github.event_name == 'push'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Checkout
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+
+      - name: Setup Python
+        uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6.3.0
+        with:
+          python-version: "3.11"
+
+      - name: Contact write-boundary check
+        run: |
+          set -euo pipefail
+          python scripts/check_contact_write_boundary.py \
+            --baseline tests/contact_write_boundary/baseline.json
+
+      - name: Detector self-tests
+        run: |
+          set -euo pipefail
+          python -m pip install --upgrade pip
+          python -m pip install pytest pytest-asyncio
           python -m pytest tests/test_contact_write_boundary.py -q
