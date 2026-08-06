@@ -491,27 +491,27 @@ def _provider_with(matches):
 
 
 @pytest.mark.asyncio
-async def test_create_contact_dedupe_skips_foreign_tenant_matches_up_front():
+async def test_create_contact_rejects_fresh_eom_contact_after_foreign_miss():
     """Cross-tenant regression: a stamped create must never resolve to a
-    contact that belongs to a DIFFERENT business context."""
+    contact that belongs to a DIFFERENT business context. A remaining EOM miss
+    must use the EOM ingress/funnel contract, not generic contact creation."""
     provider = _provider_with(
         [{"id": "b2b-1", "business_context_id": "churnsignals"}]
     )
-    # No compatible match -> falls through to the insert path, which needs a
-    # pool; patch it to observe the outcome.
     import atlas_brain.storage.database as db_mod
     pool = MagicMock()
     pool.fetchrow = AsyncMock(return_value={"id": "new-eom"})
     orig = db_mod.get_db_pool
     db_mod.get_db_pool = lambda: pool
     try:
-        result = await provider.create_contact(
-            {"full_name": "Jane", "email": "jane@example.com",
-             "business_context_id": "effingham_maids"}
-        )
+        with pytest.raises(ValueError, match="EOM ingress"):
+            await provider.create_contact(
+                {"full_name": "Jane", "email": "jane@example.com",
+                 "business_context_id": "effingham_maids"}
+            )
     finally:
         db_mod.get_db_pool = orig
-    assert result["id"] == "new-eom"  # created fresh, foreign row untouched
+    pool.fetchrow.assert_not_awaited()
     provider.update_contact.assert_not_awaited()
 
 

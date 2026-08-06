@@ -551,6 +551,8 @@ async def create_contact(
         }
         contact = await _provider().create_contact(data)
         return json.dumps({"success": True, "contact": contact}, default=str)
+    except ValueError as exc:
+        return json.dumps({"success": False, "error": str(exc)})
     except Exception as exc:
         logger.exception("create_contact error")
         return json.dumps({"success": False, "error": "Internal error"})
