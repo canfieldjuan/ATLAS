@@ -54,6 +54,17 @@ async def require_eom_funnel_data_store(
                       AND attname = 'lead_stage'
                       AND NOT attisdropped
                 ) AS contacts_required_columns_ready,
+                -- Reopen orders lost-stage evidence by migration 363's
+                -- database-owned append sequence. Serving without it would turn
+                -- the first reopen request into undefined_column after startup.
+                readiness_relations.lifecycle_rel IS NOT NULL
+                AND EXISTS (
+                    SELECT 1
+                    FROM pg_attribute
+                    WHERE attrelid = readiness_relations.lifecycle_rel
+                      AND attname = 'lifecycle_sequence'
+                      AND NOT attisdropped
+                ) AS lifecycle_required_columns_ready,
                 -- First-clean completion inserts the onboarding draft in the
                 -- same transaction as the won transition; admitting the funnel
                 -- without migration 360 would let Calendar creation succeed
@@ -95,6 +106,7 @@ async def require_eom_funnel_data_store(
            AND readiness_relations.handoff_rel IS NOT NULL
            AND readiness_relations.onboarding_drafts_rel IS NOT NULL
            AND readiness_columns.contacts_required_columns_ready
+           AND readiness_columns.lifecycle_required_columns_ready
            AND readiness_columns.onboarding_drafts_required_columns_ready
            AND EXISTS (
                SELECT 1
