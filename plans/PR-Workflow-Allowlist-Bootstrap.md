@@ -19,6 +19,38 @@ red required check -- plus the one precondition that adding an entry would
 otherwise widen: an enrolled job must prove its token is read-only. See root
 cause B below.
 
+### Why this slice is over the 400-LOC target
+
+534 added lines, of which **57 are production code**:
+
+| File | LOC | What it is |
+|---|---:|---|
+| `plans/PR-Workflow-Allowlist-Bootstrap.md` | 252 | this document, required by the plan contract |
+| `tests/test_audit_workflow_security_posture.py` | 222 | boundary table + three end-to-end fixtures |
+| `scripts/audit_workflow_security_posture.py` | 57 | the actual change |
+
+The production delta is not splittable, and the honest reason is narrower than
+"all of it is necessary":
+
+- **The tuple and the precondition are one decision.** This PR enrols a ninth
+  identity into an admission predicate that fails open on omitted permissions.
+  Shipping the enrolment alone widens that hole by exactly the job being added.
+  Shipping the precondition alone hardens a gate nothing is yet passing through,
+  and still leaves ATLAS #2302 unable to go green. Neither half is independently
+  correct.
+- **The test weight is the point, not padding.** The production change is a
+  predicate whose entire value is where it says no, so it needs both error
+  directions plus the shapes it cannot evaluate statically. That is one 12-row
+  table and three fixtures; there is no smaller honest version.
+- **The plan doc is contract machinery**, not slice content: 47% of the diff and
+  0% of the behaviour.
+
+What I will not claim: that this was always going to be one indivisible unit.
+The first version of this PR was the enrolment tuple alone, comfortably under the
+cap. The growth came from Codex's R3, which was correct. So the overage is real
+review-driven scope that became indivisible once the fail-open was found -- not a
+slice that was sized this way from the start.
+
 ### Problem-derived contract
 
 This slice has two root causes, because enrolling a ninth job surfaced a
@@ -246,7 +278,7 @@ Plus two checks the commands above do not show:
 
 | File | LOC |
 |---|---:|
-| `plans/PR-Workflow-Allowlist-Bootstrap.md` | 252 |
+| `plans/PR-Workflow-Allowlist-Bootstrap.md` | 284 |
 | `scripts/audit_workflow_security_posture.py` | 60 |
 | `tests/test_audit_workflow_security_posture.py` | 222 |
-| **Total** | **534** |
+| **Total** | **566** |
