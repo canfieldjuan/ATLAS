@@ -65,11 +65,19 @@ fail-open in the admission predicate that the previous eight silently relied on.
 - Root cause B (permission boundary): admission never checked the token the
   admitted job would receive. An enrolled `pull_request_target` job that
   declared a write scope -- or that declared no `permissions` block at all, and
-  so inherited a repository/organisation default that is write-capable and is
-  configured outside this repository -- was admitted. That hands a
-  write-capable base-context token to a job whose entire purpose is reading
-  PR-authored content. Adding an entry without closing this would widen the
-  hole by one more identity.
+  so inherited whatever the repository default happens to be -- was admitted.
+  A write scope there hands a write-capable base-context token to a job whose
+  entire purpose is reading PR-authored content.
+
+  **Severity, corrected downward after checking the deployment.** This
+  repository's default is `read` (evidence and source recorded under
+  Boundary-change enumeration), so the omitted-permissions path was **not**
+  live-exploitable. An earlier revision of this document asserted the default
+  was write-capable; that was an assumption, and it was wrong. What remains is
+  a genuine fail-open in the predicate, defended because the setting is
+  mutable outside this repository and outside review, with nothing that would
+  fail a build if it flipped. The declared-write half of B is unconditionally
+  real and needs no such caveat.
 - Correct fix must touch/change: `ALLOWED_PULL_REQUEST_TARGET_JOBS` (A), and
   the admission predicate in `_is_allowed_pull_request_target_job` gaining an
   explicit-read-only-permissions precondition (B), merged ahead of the workflow
@@ -114,7 +122,15 @@ Slice phase: workflow/process
    `test_every_currently_enrolled_job_declares_read_only_permissions` resolves
    each enrolled pair against the real workflow tree and asserts the predicate
    admits it, and fails if that loop ever checks zero workflows.
-4. `tests/test_audit_workflow_security_posture.py` passes. Three positive
+4. Every guard-shape branch is independently proven to fire. The rejection
+   fixtures now carry read-only permissions and violate exactly one element each
+   (missing `if`, unpinned checkout, wrong checkout ref, no steps), with a
+   full-shape control proving the builder is not producing something
+   universally rejected. Before this, those fixtures omitted `permissions`, so
+   the new precondition rejected them first and both tests stayed green with the
+   event-name and checkout checks deleted -- verified by deleting both and
+   watching the suite still pass.
+5. `tests/test_audit_workflow_security_posture.py` passes. Three positive
    fixtures were amended, not weakened: they omitted `permissions` entirely
    while every real workflow they model declares an explicit read-only block, so
    they were asserting admission for a shape that no longer exists in the repo.
@@ -134,7 +150,7 @@ asserting the same identity without the guard shape still errors. Blast radius
 is otherwise one tuple in a frozenset that only widens which pairs are eligible
 for an unchanged check.
 
-- Reviewer rules triggered: R1, R2, R3, R10, R12.
+- Reviewer rules triggered: R1, R2, R3, R10, R12, R13.
 
 R3 (security/permission decisions) applies because this tuple governs which job
 identity may run under `pull_request_target`, and that event is privileged.
@@ -218,14 +234,86 @@ enrolment and the permission precondition that enrolment would otherwise widen
 - **Both sides covered:** correct identity plus correct shape is admitted;
   correct identity with wrong shape errors; absent identity errors.
 
+**Guard-class closure declaration -- `_READ_ONLY_PERMISSION_VALUES`**
+
+A second, separate member set, because it decides admission independently of the
+identity allowlist above.
+
+- **Member set:** `_READ_ONLY_PERMISSION_VALUES = {"read", "none"}` -- the scope
+  values that count as granting no write.
+- **Set is CLOSED and ENUMERATED**, from GitHub's own documented vocabulary for
+  a `permissions` scope value, which is exactly `read` / `write` / `none`. It is
+  not derived from the workflow tree and nothing joins by appearing there.
+- **Out-of-set default: REJECT.** The predicate is `all(value in <set>)`, so any
+  value that is not literally `read` or `none` fails the check. That is the
+  point: it covers `write` (the known bad value) and equally covers values this
+  auditor cannot evaluate statically -- an unresolved `${{ }}` expression, a
+  YAML-coerced `True`, a typo like `raed`. A "does it say write" formulation
+  would have admitted all three.
+- **`id-token` is excluded by key, not by value**, because OIDC has its own
+  separate allowlist and check (`_permissions_write_oidc`,
+  `ALLOWED_ID_TOKEN_JOB`). Excluding it here would otherwise double-govern one
+  scope from two places that can disagree.
+- **Two non-dict shapes are handled before the set is consulted:** `read-all`
+  admits (explicit and provably read-only), everything else non-dict rejects --
+  which is what makes `write-all`, a bare scalar, and an omitted block (`None`)
+  all fail closed.
+- **Both sides covered:** `test_permissions_read_only_predicate_boundaries` is a
+  12-row table over exactly these cases, six admitting and six rejecting.
+
 ### Boundary-change enumeration
 
-- Boundary path/seam: `pull_request_target` adoption admission.
-- Replaced-path behaviours: one additional (file, job) pair becomes eligible for
-  the trusted-base guard-shape check. No existing pair changes.
-- Guard-relevant fields: `ALLOWED_PULL_REQUEST_TARGET_JOBS` only.
-- Caller x input shape: auditor x workflow tree, with and without the named
-  workflow present.
+- Boundary path/seam: `pull_request_target` adoption admission, in
+  `_is_allowed_pull_request_target_job`.
+- Replaced-path behaviours, two of them:
+  1. One additional (file, job) pair becomes eligible for the trusted-base
+     guard-shape check. No existing pair changes.
+  2. **Admission now depends on effective permissions for every non-canonical
+     allowlisted pair** -- that is all eight prior entries plus the new one. The
+     `.github/workflows/review_contract.yml` / `review-contract` pair is
+     unaffected, because it
+     returns earlier through the canonical-text comparison and never reaches
+     this branch.
+- Guard-relevant fields: `ALLOWED_PULL_REQUEST_TARGET_JOBS`, plus the workflow
+  block `permissions` and the job block `permissions`, and the **precedence
+  between them** -- job-level wins when the key is present, otherwise the
+  workflow block is used. Presence, not truthiness: a job declaring
+  `permissions: {}` overrides a permissive workflow block rather than falling
+  back to it.
+- Caller x input shape:
+  - auditor x workflow tree, with and without the named workflow present
+    (inert-entry check);
+  - job-level permissions present x workflow-level absent;
+  - job-level absent x workflow-level present (the shape all eight prior entries
+    actually use);
+  - both absent (rejects -- `test_enrolled_job_omitting_permissions_entirely_is_rejected`);
+  - both present and disagreeing (job wins --
+    `test_enrolled_job_with_job_level_write_permission_is_rejected` puts a write
+    scope on the job under a read-only workflow block and asserts rejection).
+
+**Deployed default-config evidence (the omitted-permissions path).** Recorded
+rather than left as "configured externally", and it corrects this PR's own
+framing:
+
+- Value, read today: `default_workflow_permissions: "read"`,
+  `can_approve_pull_request_reviews: false`.
+- Source: `GET /repos/canfieldjuan/ATLAS/actions/permissions/workflow`, i.e.
+  Settings -> Actions -> General -> Workflow permissions.
+- No policy layer above it: `canfieldjuan` is a **User** account, not an
+  organization, so there is no org-level default that could override or tighten
+  the repository setting.
+- **Consequence, stated against interest:** the omitted-permissions path was
+  **not** live-exploitable on this repository. Root cause B as first written
+  said an omitted block "inherits a write-capable default"; on the deployed
+  configuration it inherits a read-only one. The fail-open was real in the
+  predicate and absent in the deployment.
+- Why the guard is still correct: the value is a repository setting, changeable
+  in one click, outside this repository, outside code review, and with no
+  mechanism that would fail a build if it flipped. `read` has been GitHub's
+  default for new repositories only since 2023; older repositories and any
+  future fork or transfer can carry `write`. The guard makes admission depend on
+  something the PR states explicitly rather than on a mutable setting nobody
+  reviews -- defence in depth, not an exploited hole.
 
 **Reachability proof:** `python scripts/audit_workflow_security_posture.py`
 exits 0 on this tree, and exits 0 against a temporary workflow directory that
@@ -281,7 +369,7 @@ Plus two checks the commands above do not show:
 
 | File | LOC |
 |---|---:|
-| `plans/PR-Workflow-Allowlist-Bootstrap.md` | 287 |
+| `plans/PR-Workflow-Allowlist-Bootstrap.md` | 375 |
 | `scripts/audit_workflow_security_posture.py` | 60 |
-| `tests/test_audit_workflow_security_posture.py` | 222 |
-| **Total** | **569** |
+| `tests/test_audit_workflow_security_posture.py` | 302 |
+| **Total** | **737** |

@@ -453,31 +453,75 @@ def test_review_contract_preadmission_rejects_noncanonical_workflow(tmp_path: Pa
     assert any(f.level == "ERROR" and "pull_request_target" in f.detail for f in findings)
 
 
-def test_allowlisted_gate_without_guard_shape_is_still_error(tmp_path: Path) -> None:
-    """Allowlisting is necessary but not sufficient: an allowlisted gate
-    that drops the if-guard or the pinned base-SHA checkout fails."""
-    auditor = load_auditor()
-    workflow = _write_workflow(
-        tmp_path,
-        "diff_budget.yml",
-        """
-name: Gate
-on:
-  pull_request_target:
-jobs:
-  diff-budget:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0
-        with:
-          ref: ${{ github.event.pull_request.base.sha }}
-""",
+def _gate_workflow_missing(part: str) -> str:
+    """A trusted-base gate that is correct except for exactly one element.
+
+    Permissions are always present and read-only. Otherwise the permissions
+    precondition rejects the fixture first and the guard-shape branch under test
+    is never reached, so the test would pass with that branch deleted.
+    """
+    if_line = (
+        "" if part == "if" else "    if: github.event_name == 'pull_request_target'\n"
     )
+    if part == "steps":
+        steps = "    steps: []\n"
+    else:
+        ref = "v7" if part == "pin" else "9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0"
+        with_ref = (
+            "${{ github.event.pull_request.head.sha }}"
+            if part == "ref"
+            else "${{ github.event.pull_request.base.sha }}"
+        )
+        steps = (
+            "    steps:\n"
+            f"      - uses: actions/checkout@{ref}\n"
+            "        with:\n"
+            f"          ref: {with_ref}\n"
+        )
+    return (
+        "\nname: Gate\non:\n  pull_request_target:\n"
+        "permissions:\n  contents: read\n  pull-requests: read\n"
+        "jobs:\n  diff-budget:\n" + if_line + "    runs-on: ubuntu-latest\n" + steps
+    )
+
+
+@pytest.mark.parametrize("part", ["if", "pin", "ref", "steps"])
+def test_allowlisted_gate_without_guard_shape_is_still_error(
+    tmp_path: Path, part: str
+) -> None:
+    """Allowlisting is necessary but not sufficient.
+
+    One parameter per guard-shape element, each violated on its own with the
+    other elements correct, so every branch is independently proven to fire.
+    Previously this was a single fixture that omitted `permissions`; once the
+    permissions precondition landed it rejected the fixture before any
+    guard-shape check ran, and the test stayed green with both checks deleted.
+    """
+    auditor = load_auditor()
+    workflow = _write_workflow(tmp_path, "diff_budget.yml", _gate_workflow_missing(part))
+
     findings = auditor.audit_workflow(workflow)
+
     assert any(
         f.level == "ERROR" and "trusted-base guard shape" in f.detail
         for f in findings
-    )
+    ), part
+
+
+def test_allowlisted_gate_with_the_full_guard_shape_is_admitted(tmp_path: Path) -> None:
+    """The control for the parametrized rejections above.
+
+    Without this, every parameter could be passing because the fixture builder
+    produces something universally rejected rather than because the specific
+    element under test is missing.
+    """
+    auditor = load_auditor()
+    workflow = _write_workflow(tmp_path, "diff_budget.yml", _gate_workflow_missing("none"))
+
+    findings = auditor.audit_workflow(workflow)
+
+    assert not [f for f in findings if f.level == "ERROR"], findings
+    assert any("allowed pull_request_target" in f.detail for f in findings)
 
 
 def test_gate_job_name_in_wrong_file_is_error(tmp_path: Path) -> None:
@@ -518,9 +562,13 @@ def test_contact_write_boundary_enrolment_still_requires_the_guard_shape(
 ) -> None:
     """Enrolment widens eligibility, not permission.
 
-    The same identity without the event-name guard and base-SHA checkout must
-    still be rejected, or the allowlist entry would be a bypass rather than an
-    admission record.
+    The enrolled identity without the event-name guard must still be rejected,
+    or the allowlist entry would be a bypass rather than an admission record.
+
+    Permissions are read-only here on purpose. The fixture originally omitted
+    them, and once the permissions precondition landed it rejected this workflow
+    before the guard-shape checks ran -- so the test passed for the wrong reason
+    and stayed green with those checks deleted.
     """
     auditor = load_auditor()
     workflow = _write_workflow(
@@ -530,17 +578,21 @@ def test_contact_write_boundary_enrolment_still_requires_the_guard_shape(
 name: Contact Write Boundary
 on:
   pull_request_target:
+permissions:
+  contents: read
 jobs:
   contact-write-boundary:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0
+        with:
+          ref: ${{ github.event.pull_request.base.sha }}
 """,
     )
 
     findings = auditor.audit_workflow(workflow)
     assert [f for f in findings if f.level == "ERROR"], (
-        "an enrolled job without the trusted-base guard shape must still error"
+        "an enrolled job without the event-name guard must still error"
     )
 
 
