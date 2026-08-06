@@ -3742,70 +3742,81 @@ async def test_mark_lead_lost_records_reason_is_idempotent_and_reopens():
         assert new_contact["lead_stage"] == "new"
 
         # Committed transition generation, not UUID or transaction-start
-        # timestamp ordering, owns the latest loss. The stale loss
-        # intentionally has the lexically larger UUID and newer timestamps;
-        # ordering by id DESC or by NOW()-backed timestamps would restore this
-        # lead to new instead of estimate_booked.
+        # timestamp ordering, owns the latest loss. Exercise the real mark-lost
+        # writer for both loss cycles, then skew the first loss to have the
+        # newer timestamp so ordering by NOW()-backed timestamps would restore
+        # this lead to new instead of estimate_booked.
         chronological_id = uuid.uuid4()
-        await _insert_contact(
-            conn, contact_id=chronological_id, lead_stage="estimate_booked"
+        await _insert_contact(conn, contact_id=chronological_id, lead_stage="new")
+        stale_loss_key = f"lost-old-{uuid.uuid4().hex}"
+        await provider.mark_eom_lead_lost(
+            contact_id=str(chronological_id),
+            reason_code="spam",
+            note=None,
+            operation_key=stale_loss_key,
+            actor_id=1,
+            actor_name="Juan Canfield",
+        )
+        await provider.reopen_eom_lead(
+            contact_id=str(chronological_id),
+            operation_key=f"reopen-old-{uuid.uuid4().hex}",
+            actor_id=1,
+            actor_name="Juan Canfield",
         )
         await conn.execute(
-            "UPDATE contacts SET lead_stage = 'lost' WHERE id = $1",
-            chronological_id,
-        )
-        await conn.executemany(
             """
             INSERT INTO eom_lead_lifecycle_events (
-                id, contact_id, event_type, from_stage, to_stage, actor,
-                source, operation_key, occurred_at, created_at, metadata
-            )
-            VALUES ($1::uuid, $2, $3, $4, $5, 'employee:1:Juan Canfield',
-                    'eom_office', $6, $7::timestamptz, $7::timestamptz,
-                    jsonb_build_object('transition_generation', $8::bigint))
+                contact_id, event_type, from_stage, to_stage, actor, source,
+                operation_key
+            ) VALUES ($1, 'estimate_booked', 'new', 'estimate_booked',
+                      'employee:1:Juan Canfield', 'eom_office', $2)
             """,
-            [
-                (
-                    uuid.UUID("ffffffff-ffff-ffff-ffff-ffffffffffff"),
-                    chronological_id,
-                    "lead_lost",
-                    "new",
-                    "lost",
-                    f"lost-old-{uuid.uuid4().hex}",
-                    datetime(2026, 1, 4, tzinfo=timezone.utc),
-                    1,
-                ),
-                (
-                    uuid.UUID("11111111-1111-1111-1111-111111111111"),
-                    chronological_id,
-                    "lead_reopened",
-                    "lost",
-                    "new",
-                    f"reopen-old-{uuid.uuid4().hex}",
-                    datetime(2026, 1, 2, tzinfo=timezone.utc),
-                    2,
-                ),
-                (
-                    uuid.UUID("22222222-2222-2222-2222-222222222222"),
-                    chronological_id,
-                    "estimate_booked",
-                    "new",
-                    "estimate_booked",
-                    f"estimate-{uuid.uuid4().hex}",
-                    datetime(2026, 1, 3, tzinfo=timezone.utc),
-                    3,
-                ),
-                (
-                    uuid.UUID("00000000-0000-0000-0000-000000000001"),
-                    chronological_id,
-                    "lead_lost",
-                    "estimate_booked",
-                    "lost",
-                    f"lost-current-{uuid.uuid4().hex}",
-                    datetime(2026, 1, 1, tzinfo=timezone.utc),
-                    4,
-                ),
-            ],
+            chronological_id,
+            f"estimate-{uuid.uuid4().hex}",
+        )
+        await conn.execute(
+            "UPDATE contacts SET lead_stage = 'estimate_booked' WHERE id = $1",
+            chronological_id,
+        )
+        current_loss_key = f"lost-current-{uuid.uuid4().hex}"
+        await provider.mark_eom_lead_lost(
+            contact_id=str(chronological_id),
+            reason_code="declined_after_estimate",
+            note=None,
+            operation_key=current_loss_key,
+            actor_id=1,
+            actor_name="Juan Canfield",
+        )
+        generations = await conn.fetch(
+            """
+            SELECT from_stage, metadata->>'transition_generation' AS generation
+            FROM eom_lead_lifecycle_events
+            WHERE contact_id = $1 AND event_type = 'lead_lost'
+            ORDER BY (metadata->>'transition_generation')::bigint
+            """,
+            chronological_id,
+        )
+        assert [(row["from_stage"], row["generation"]) for row in generations] == [
+            ("new", "1"),
+            ("estimate_booked", "2"),
+        ]
+        await conn.execute(
+            """
+            UPDATE eom_lead_lifecycle_events
+            SET occurred_at = CASE operation_key
+                    WHEN $2 THEN '2026-01-04T00:00:00Z'::timestamptz
+                    WHEN $3 THEN '2026-01-01T00:00:00Z'::timestamptz
+                END,
+                created_at = CASE operation_key
+                    WHEN $2 THEN '2026-01-04T00:00:00Z'::timestamptz
+                    WHEN $3 THEN '2026-01-01T00:00:00Z'::timestamptz
+                END
+            WHERE contact_id = $1
+              AND operation_key IN ($2, $3)
+            """,
+            chronological_id,
+            stale_loss_key,
+            current_loss_key,
         )
         reopened_chronological = await provider.reopen_eom_lead(
             contact_id=str(chronological_id),

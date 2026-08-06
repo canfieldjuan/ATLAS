@@ -21,10 +21,7 @@ cap, but the overage is indivisible from the lost/reopen boundary being fixed.
 The code change, the shared restorable-stage source, the committed-generation
 ordering proof, and the missing/unsafe evidence rejection proofs all validate
 one transactional lifecycle seam; splitting them would publish either behavior
-without its required proof or proof without the behavior it guards. The
-unit-gate baseline shrink is mechanical ratchet cleanup required by CI after
-unrelated known-failing B2B review tests began passing; it changes no runtime
-behavior.
+without its required proof or proof without the behavior it guards.
 
 ### Problem-derived contract
 
@@ -47,9 +44,7 @@ behavior.
 - Verification cleanup must touch/change: pre-existing ruff findings in files
   touched by this slice may be mechanically cleaned only when they do not alter
   runtime behavior, so the focused lint command can prove the changed files are
-  clean. CI-mandated unit-gate baseline shrink may remove only stale known
-  failures that the current gate reports as passing, with focused proof that
-  those exact tests pass.
+  clean.
 - Must not change: do not change mark-lost admission (`won` remains excluded;
   #2292 owns draft/calendar teardown), do not change the reason-code vocabulary
   or website/tracker request shape, do not weaken idempotency/cross-contact key
@@ -73,8 +68,6 @@ Slice phase: vertical slice
 4. Mechanically clean pre-existing lint-only issues in touched files if required
    by the focused verification command; no behavior may change outside the
    reopen path.
-5. Mechanically shrink `tests/unit_gate_baseline.txt` only for stale entries
-   that the current remote unit-gate reports as passing.
 
 ### Review Contract
 
@@ -102,8 +95,6 @@ Slice phase: vertical slice
   - Any non-reopen edits are lint-only cleanups that remove unused locals or
     unnecessary syntax without changing SQL text, branch conditions, or runtime
     state.
-  - Any unit-gate baseline edit only removes stale passing baseline nodes and
-    does not alter tests or runtime code.
 - Reachability proof: the real private funnel entrypoint
   `POST /api/v1/eom-funnel/leads/{contact_id}/reopen` is exercised through the
   ASGI route test, and the observable output is the JSON `lead_stage`; the CRM
@@ -112,8 +103,7 @@ Slice phase: vertical slice
 - Affected surfaces: `atlas_brain/services/crm_provider.py`
   (`reopen_eom_lead` only), the private route fake/test expectations in
   `tests/test_eom_lead_conversion.py`, and the lost/reopen real-Postgres tests
-  in `tests/test_eom_lead_conversion_integration.py`. `tests/unit_gate_baseline.txt`
-  is touched only for CI ratchet cleanup of stale passing baseline nodes.
+  in `tests/test_eom_lead_conversion_integration.py`.
 - Risk areas: lifecycle replay correctness, restoring unsafe/stale stages,
   keeping the `won` teardown deferral intact, and preserving existing
   idempotency/cross-contact guard behavior.
@@ -160,7 +150,6 @@ fallback changes; otherwise write "N/A - no guard/config boundary change."
 - `plans/PR-EOM-Lead-Reopen-Stage.md`
 - `tests/test_eom_lead_conversion.py`
 - `tests/test_eom_lead_conversion_integration.py`
-- `tests/unit_gate_baseline.txt`
 
 ## Mechanism
 
@@ -205,7 +194,6 @@ rejection, and stage-set closure are all inside this slice and covered here.
 
 - `python -m py_compile atlas_brain/eom_api/funnel.py atlas_brain/services/crm_provider.py tests/test_eom_lead_conversion.py tests/test_eom_lead_conversion_integration.py` — PASS.
 - `python -m pytest tests/test_eom_lead_conversion.py tests/test_eom_lead_conversion_integration.py -k "lost or reopen" -q -rs` — PASS locally: 4 passed, 2 skipped, 212 deselected. The skipped tests are real-Postgres integration tests gated on `ATLAS_MIGRATION_TEST_DATABASE_URL`; CI supplies the database lane.
-- `python -m pytest tests/test_b2b_reviews_import.py::test_import_b2b_reviews_canonicalizes_same_source_item_across_vendors tests/test_b2b_reviews_import.py::test_import_b2b_reviews_dedupes_same_request_semantic_duplicates tests/test_b2b_reviews_import.py::test_import_b2b_reviews_dedupes_same_text_with_different_ids tests/test_b2b_reviews_import.py::test_import_b2b_reviews_marks_cross_source_duplicates tests/test_b2b_reviews_import.py::test_import_b2b_reviews_sanitizes_synthetic_reviewer_title tests/test_b2b_reviews_import.py::test_import_b2b_reviews_skips_existing_semantic_identity -q` — PASS locally: 6 passed.
 - `python -m ruff check atlas_brain/eom_api/funnel.py atlas_brain/services/crm_provider.py tests/test_eom_lead_conversion.py tests/test_eom_lead_conversion_integration.py` — PASS.
 - `git diff --check` — PASS.
 
@@ -215,8 +203,7 @@ rejection, and stage-set closure are all inside this slice and covered here.
 |---|---:|
 | `atlas_brain/eom_api/funnel.py` | 2 |
 | `atlas_brain/services/crm_provider.py` | 108 |
-| `plans/PR-EOM-Lead-Reopen-Stage.md` | 222 |
+| `plans/PR-EOM-Lead-Reopen-Stage.md` | 209 |
 | `tests/test_eom_lead_conversion.py` | 8 |
-| `tests/test_eom_lead_conversion_integration.py` | 185 |
-| `tests/unit_gate_baseline.txt` | 6 |
-| **Total** | **531** |
+| `tests/test_eom_lead_conversion_integration.py` | 196 |
+| **Total** | **523** |
