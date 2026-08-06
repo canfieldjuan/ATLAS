@@ -621,8 +621,14 @@ def _write_fixture_repo(
     (repo / "scripts").mkdir(parents=True)
     if real_local_review:
         copytree(REPO_ROOT / "scripts", repo / "scripts", dirs_exist_ok=True, ignore=ignore_patterns("__pycache__"))
+        copytree(REPO_ROOT / "ci", repo / "ci", dirs_exist_ok=True, ignore=ignore_patterns("__pycache__"))
         copytree(REPO_ROOT / "docs", repo / "docs", dirs_exist_ok=True, ignore=ignore_patterns("__pycache__"))
         copytree(REPO_ROOT / ".github", repo / ".github", dirs_exist_ok=True, ignore=ignore_patterns("__pycache__"))
+        (repo / "tests").mkdir(exist_ok=True)
+        copy2(
+            REPO_ROOT / "tests" / "test_security_guardrails_workflow.py",
+            repo / "tests" / "test_security_guardrails_workflow.py",
+        )
         copytree(REPO_ROOT / "extracted", repo / "extracted", dirs_exist_ok=True, ignore=ignore_patterns("__pycache__"))
         for package_root in REPO_ROOT.glob("extracted_*"):
             if package_root.is_dir():

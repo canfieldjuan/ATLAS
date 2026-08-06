@@ -58,6 +58,7 @@ def test_pre_push_audit_runs_plan_auditors_for_touched_plan(tmp_path):
     assert result.returncode == 0, result.stdout + result.stderr
     assert "Plan shape: plans/PR-Wrapper-Smoke.md" in result.stdout
     assert "Plan admission" in result.stdout
+    assert "PR-side docs/test consistency" in result.stdout
     assert "required branch-added plan: plans/PR-Wrapper-Smoke.md" in result.stdout
     assert "Plan files touched: plans/PR-Wrapper-Smoke.md" in result.stdout
     assert "Plan diff size: plans/PR-Wrapper-Smoke.md" in result.stdout
@@ -108,7 +109,7 @@ def test_pre_push_audit_explicitly_allows_markdown_only_diff(tmp_path):
     _git(repo, "update-ref", "refs/remotes/origin/main", "HEAD")
     _git(repo, "symbolic-ref", "refs/remotes/origin/HEAD", "refs/remotes/origin/main")
 
-    (repo / "docs").mkdir()
+    (repo / "docs").mkdir(exist_ok=True)
     (repo / "docs" / "example.md").write_text("# docs only\n", encoding="utf-8")
     _git(repo, "add", "docs/example.md")
     _git(repo, "commit", "-m", "docs change")
@@ -207,9 +208,11 @@ def _write_fixture_repo(repo: Path) -> None:
         "audit_plan_doc.py",
         "audit_plan_doc_files_touched.py",
         "audit_plan_doc_diff_size.py",
+        "audit_pr_side_docs_test_consistency.py",
         "audit_pr_plan_presence.py",
         "audit_pr_watcher_safety.py",
         "audit_ui_test_enrollment.py",
+        "check_required_status_checks.py",
         "pre_push_audit.sh",
     ):
         (repo / "scripts" / name).write_text(
@@ -220,6 +223,63 @@ def _write_fixture_repo(repo: Path) -> None:
     _write_config(repo / "atlas_brain" / "config.py")
     _write_mcp_servers(repo / "atlas_brain" / "mcp")
     _write_manifest(repo / "extracted_fixture" / "manifest.json")
+    _write_pr_side_consistency_fixture(repo)
+
+
+def _write_pr_side_consistency_fixture(repo: Path) -> None:
+    (repo / "ci").mkdir(parents=True)
+    (repo / "docs").mkdir(exist_ok=True)
+    (repo / ".github" / "workflows").mkdir(parents=True)
+    (repo / "tests").mkdir(exist_ok=True)
+    (repo / "ci" / "gates.yml").write_text(
+        """gates:
+  - id: live-reconciliation
+    name: AI reconciliation live
+    context: live-reconciliation
+    enforcement: branch_required
+    trusted_base: true
+    workflow: .github/workflows/ai_reconciliation_live.yml
+    local_command: null
+""",
+        encoding="utf-8",
+    )
+    (repo / ".github" / "workflows" / "ai_reconciliation_live.yml").write_text(
+        "name: AI Reconciliation Live fixture\n",
+        encoding="utf-8",
+    )
+    (repo / "docs" / "SECURITY_GUARDRAILS.md").write_text(
+        """# Security Guardrails
+
+Target branch protection for `main` is derived from `ci/gates.yml` entries
+marked `branch_required`: `live-reconciliation`, all pinned to the GitHub
+Actions app source.
+""",
+        encoding="utf-8",
+    )
+    (repo / ".github" / "workflows" / "branch_protection_required_checks.yml").write_text(
+        """on:
+  push:
+    branches:
+      - main
+    paths:
+      - ".github/workflows/ai_reconciliation_live.yml"
+      - ".github/workflows/branch_protection_required_checks.yml"
+      - "ci/gates.yml"
+      - "docs/SECURITY_GUARDRAILS.md"
+      - "scripts/check_required_status_checks.py"
+      - "tests/test_security_guardrails_workflow.py"
+""",
+        encoding="utf-8",
+    )
+    (repo / "tests" / "test_security_guardrails_workflow.py").write_text(
+        """REQUIRED_STATUS_CONTEXTS = ("live-reconciliation",)
+REQUIRED_STATUS_WORKFLOW_PATHS = (
+    ".github/workflows/ai_reconciliation_live.yml",
+    "ci/gates.yml",
+)
+""",
+        encoding="utf-8",
+    )
 
 
 def _write_claude_md(path: Path) -> None:
