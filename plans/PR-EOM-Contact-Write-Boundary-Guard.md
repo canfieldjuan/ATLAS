@@ -52,8 +52,10 @@ Slice phase: workflow/process
    outside it is reported non-blocking while legacy writers are converged.
 2. Add `tests/contact_write_boundary/baseline.json`: the committed writer
    inventory (17 production write sites today).
-3. Add `tests/test_contact_write_boundary.py`: 16 tests, including planted
+3. Add `tests/test_contact_write_boundary.py`: 23 tests, including planted
    violations that must fail the gate and false-positive pins that must not.
+5. Record the gate in `ci/gates.yml` as `ci_blocking_not_required`; promoting it
+   to a branch-required context is an operator action.
 4. Wire the gate into a **dedicated, deliberately unfiltered** workflow,
    `.github/workflows/contact_write_boundary.yml`.
 
@@ -64,6 +66,7 @@ Slice phase: workflow/process
 - `tests/contact_write_boundary/baseline.json` (new)
 - `.github/workflows/contact_write_boundary.yml` (new)
 - `plans/PR-EOM-Contact-Write-Boundary-Guard.md` (new)
+- `ci/gates.yml` (modified: one registry entry)
 
 ### Review Contract
 
@@ -157,9 +160,25 @@ keyword adjacent to the table name:
 ```
 
 Requiring the trailing `SET` is what separates a real statement from the English
-sentence "Create/update contacts in the Atlas CRM." `TABLE` uses `\bcontacts\b`
-with an optional `public.` qualifier, so `contact_interactions` and
-`contacts_archive` do not match.
+sentence "Create/update contacts in the Atlas CRM." `TABLE` accepts a quoted
+identifier (`"contacts"`) and an optional `public.` qualifier, so
+`contact_interactions` and `contacts_archive` still do not match.
+
+**Constant folding.** Scanning each `ast.Constant` alone misses SQL assembled
+across literals, so `+` chains and f-strings are folded before matching:
+`"INSERT INTO " + "contacts (...)"` is one statement at runtime and is now one
+finding. Operands that cannot be folded (a variable table name) become a
+sentinel `HOLE` rather than a space -- a space is indistinguishable from real
+whitespace and made the rule stop firing entirely. Constants consumed by a fold
+are not yielded again, so a resolved statement is never also reported as
+unresolvable.
+
+**Runtime targets.** `"INSERT INTO " + table` cannot be cleared by reading the
+literal, so it is reported as `DYNAMIC`. This is blocking only inside
+`DYNAMIC_SCOPE` (the CRM-plausible paths); the repo has 18 pre-existing
+`INSERT INTO {table}` sites in unrelated importers and a generic migration
+runner, and failing the build on those is how a gate earns a reputation for
+noise and gets switched off.
 
 The detector skips itself: it necessarily contains the patterns it searches for,
 in its own diagnostic strings.
@@ -246,11 +265,12 @@ fewer.
 | File | LOC |
 |---|---:|
 | `.github/workflows/contact_write_boundary.yml` | 44 |
+| `ci/gates.yml` | 8 |
 | `plans/PR-EOM-Contact-Write-Boundary-Guard.md` | 231 |
-| `scripts/check_contact_write_boundary.py` | 294 |
-| `tests/contact_write_boundary/baseline.json` | 32 |
-| `tests/test_contact_write_boundary.py` | 262 |
-| **Total** | **863** |
+| `scripts/check_contact_write_boundary.py` | 420 |
+| `tests/contact_write_boundary/baseline.json` | 42 |
+| `tests/test_contact_write_boundary.py` | 447 |
+| **Total** | **1184** |
 
 Over the 400 LOC soft cap. 262 lines are the test file and 231 the plan, so the
 executable surface is ~370. The tests are the deliverable this slice is *for*: a

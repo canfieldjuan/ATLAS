@@ -83,6 +83,76 @@ def test_fstring_built_update_is_detected(tmp_path: Path) -> None:
     assert [f.operation for f in new_mutations] == ["UPDATE"]
 
 
+def test_concatenated_sql_is_detected(tmp_path: Path) -> None:
+    """`"INSERT INTO " + "contacts (...)"` is one statement at runtime.
+
+    Scanning each ast.Constant in isolation missed this; the recognizer now
+    constant-folds `+` chains and f-strings before matching.
+    """
+    _write(
+        tmp_path,
+        "scripts/split_sql.py",
+        'SQL = "INSERT INTO " + "contacts (full_name) VALUES ($1)"\n',
+    )
+    blocking, _ = _classify(tmp_path)
+    assert [f.operation for f in blocking] == ["INSERT"]
+
+
+def test_quoted_table_identifier_is_detected(tmp_path: Path) -> None:
+    """`INSERT INTO "contacts" (...)` is valid SQL and must not evade."""
+    _write(
+        tmp_path,
+        "scripts/quoted.py",
+        'SQL = \'INSERT INTO "contacts" (full_name) VALUES ($1)\'\n',
+    )
+    blocking, _ = _classify(tmp_path)
+    assert [f.operation for f in blocking] == ["INSERT"]
+
+
+def test_runtime_built_table_name_is_blocking_in_scope(tmp_path: Path) -> None:
+    """`"INSERT INTO " + table` cannot be cleared by reading the literal."""
+    _write(
+        tmp_path,
+        "atlas_brain/services/dynamic.py",
+        'def q(table):\n    return "INSERT INTO " + table + " (full_name) VALUES ($1)"\n',
+    )
+    blocking, _ = _classify(tmp_path)
+    assert any(f.operation == "DYNAMIC" for f in blocking)
+
+
+def test_runtime_built_table_name_outside_scope_is_not_blocking(tmp_path: Path) -> None:
+    """Unrelated subsystems parameterize their own tables by design.
+
+    The repo has 18 such sites (podcast/campaign/reddit importers, a generic
+    migration runner). Failing the build on those is how a gate gets a
+    reputation for noise and gets switched off.
+    """
+    _write(
+        tmp_path,
+        "extracted_content_pipeline/importer.py",
+        'def q(table):\n    return "INSERT INTO " + table + " (a) VALUES ($1)"\n',
+    )
+    blocking, new_mutations = _classify(tmp_path)
+    assert blocking == []
+    assert [f.operation for f in new_mutations] == ["DYNAMIC"]
+
+
+def test_lowercase_prose_ending_in_update_is_not_dynamic(tmp_path: Path) -> None:
+    """Regression pin for a case-insensitive rule that flagged nine files.
+
+    "DRY RUN: Would update" is English. SQL keywords in this codebase are
+    uppercase, which is what separates the two without inventing a parser.
+    """
+    _write(
+        tmp_path,
+        "scripts/chatty.py",
+        'A = "DRY RUN: Would update"\nB = "would update"\nC = ", update"\n',
+    )
+    blocking, new_mutations = _classify(tmp_path)
+    assert blocking == []
+    assert new_mutations == []
+
+
 def test_schema_qualified_and_delete_are_detected(tmp_path: Path) -> None:
     _write(
         tmp_path,
@@ -165,10 +235,40 @@ def test_tests_directory_is_exempt(tmp_path: Path) -> None:
     assert new_mutations == []
 
 
-def test_unparsable_file_does_not_crash_the_gate(tmp_path: Path) -> None:
+def test_unparsable_file_is_reported_not_silently_skipped(tmp_path: Path) -> None:
+    """A file the gate cannot parse must not be reported as clean.
+
+    The first draft returned `[]` for unreadable/unparsable files, which meant a
+    bypass hiding behind a syntax error would leave the gate saying OK. Silence
+    is not evidence of absence. The repo's maturity sweep flagged both swallowed
+    excepts, and it was right to.
+    """
     _write(tmp_path, "scripts/broken.py", "def (:\n")
-    blocking, _ = _classify(tmp_path)
-    assert blocking == []
+    _write(tmp_path, "scripts/fine.py", "VALUE = 1\n")
+
+    findings, unanalyzable = MOD.scan_tree(tmp_path)
+    assert findings == []
+    assert len(unanalyzable) == 1
+    assert "scripts/broken.py" in unanalyzable[0]
+    assert "unparsable" in unanalyzable[0]
+
+
+def test_unparsable_file_fails_the_build(tmp_path: Path) -> None:
+    _write(tmp_path, "scripts/broken.py", "def (:\n")
+    assert MOD.main(["--root", str(tmp_path)]) == 1
+
+
+def test_known_unanalyzable_file_can_be_baselined(tmp_path: Path) -> None:
+    """A deliberate fixture may be recorded, but only explicitly."""
+    _write(tmp_path, "scripts/broken.py", "def (:\n")
+    findings, unanalyzable = MOD.scan_tree(tmp_path)
+    baseline_path = tmp_path / "baseline.json"
+    baseline_path.write_text(
+        json.dumps(MOD.build_baseline(findings, unanalyzable)), encoding="utf-8"
+    )
+    assert MOD.main(
+        ["--root", str(tmp_path), "--baseline", str(baseline_path)]
+    ) == 0
 
 
 # ---------------------------------------------------------------------------
@@ -214,8 +314,13 @@ def test_insert_is_never_silenced_by_the_baseline(tmp_path: Path) -> None:
 # ---------------------------------------------------------------------------
 
 def test_repository_is_currently_clean() -> None:
-    """The tree must pass its own gate."""
-    assert MOD.main(["--root", str(ROOT)]) == 0
+    """The tree must pass its own gate, with the committed baseline.
+
+    The baseline is part of the contract, not an optional flag: it records the
+    18 pre-existing dynamic-target sites in unrelated subsystems.
+    """
+    baseline = ROOT / "tests" / "contact_write_boundary" / "baseline.json"
+    assert MOD.main(["--root", str(ROOT), "--baseline", str(baseline)]) == 0
 
 
 def test_repository_has_exactly_the_known_insert_sites() -> None:
