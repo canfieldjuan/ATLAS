@@ -160,9 +160,10 @@ data:
   direct `on.push.paths` node, and must not contain negative path triggers that
   effectively remove audited paths.
 - `tests/test_security_guardrails_workflow.py` must carry literal
-  `REQUIRED_STATUS_CONTEXTS` and `REQUIRED_STATUS_WORKFLOW_PATHS` tuples that
-  match the derived registry tuple without any later or nested mutation or
-  runtime rebinding.
+  `REQUIRED_STATUS_CONTEXTS` and `REQUIRED_STATUS_WORKFLOW_PATHS` tuples as
+  exactly one unconditional module-level assignment each, matching the derived
+  registry tuple without any later or nested assignment, mutation, or runtime
+  rebinding.
 - Every workflow path named by `ci/gates.yml`, required or advisory, must stay
   inside the PR tree and exist as a regular file.
 
@@ -189,7 +190,7 @@ Parked hardening: none.
 ## Verification
 
 - `python scripts/audit_pr_side_docs_test_consistency.py` - passed.
-- `python -m pytest tests/test_open_pr_wrapper.py tests/test_audit_pr_side_docs_test_consistency.py tests/test_pre_push_audit_workflow.py tests/test_pre_push_audit.py tests/test_security_guardrails_workflow.py -q` - 134 passed.
+- `python -m pytest tests/test_open_pr_wrapper.py tests/test_audit_pr_side_docs_test_consistency.py tests/test_pre_push_audit_workflow.py tests/test_pre_push_audit.py tests/test_security_guardrails_workflow.py -q` - 135 passed.
 - `python scripts/maturity_sweep.py scripts --tests-root tests --baseline tests/maturity_sweep/baseline_scripts.json --min-score 8 --sensitive-glob 'scripts/**'` - passed.
 
 ## Estimated diff size
@@ -201,11 +202,11 @@ Parked hardening: none.
 | `docs/audits/agents-mechanical-enforcement-audit-2026-07-29.md` | 9 |
 | `docs/audits/required-workflow-enrollment-audit-2026-08-04.md` | 13 |
 | `docs/ci_cd_autonomous_coding_map.md` | 6 |
-| `plans/PR-Pre-Push-Audit-Doc-Test-Probe.md` | 211 |
-| `scripts/audit_pr_side_docs_test_consistency.py` | 420 |
+| `plans/PR-Pre-Push-Audit-Doc-Test-Probe.md` | 212 |
+| `scripts/audit_pr_side_docs_test_consistency.py` | 433 |
 | `scripts/pre_push_audit.sh` | 1 |
-| `tests/test_audit_pr_side_docs_test_consistency.py` | 479 |
+| `tests/test_audit_pr_side_docs_test_consistency.py` | 506 |
 | `tests/test_open_pr_wrapper.py` | 6 |
 | `tests/test_pre_push_audit.py` | 57 |
 | `tests/test_pre_push_audit_workflow.py` | 6 |
-| **Total** | **1220** |
+| **Total** | **1261** |

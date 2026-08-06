@@ -372,6 +372,33 @@ def test_audit_raises_when_test_context_tuple_is_mutated_in_nested_block(tmp_pat
         auditor.audit_repo(tmp_path)
 
 
+def test_audit_raises_when_test_context_tuple_is_assigned_in_nested_block(
+    tmp_path: Path,
+) -> None:
+    _write_fixture(tmp_path)
+    test_path = tmp_path / "tests" / "test_security_guardrails_workflow.py"
+    test_path.write_text(
+        "\n".join(
+            [
+                "if False:",
+                '    REQUIRED_STATUS_CONTEXTS = ("live-reconciliation", "unit-gate")',
+                "REQUIRED_STATUS_WORKFLOW_PATHS = (",
+                '    ".github/workflows/ai_reconciliation_live.yml",',
+                '    ".github/workflows/unit_gate.yml",',
+                '    "ci/gates.yml",',
+                ")",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(
+        auditor.AuditFailure,
+        match="runtime binding for REQUIRED_STATUS_CONTEXTS",
+    ):
+        auditor.audit_repo(tmp_path)
+
+
 def test_audit_raises_when_test_context_constant_is_rebound_by_loop(tmp_path: Path) -> None:
     _write_fixture(tmp_path)
     test_path = tmp_path / "tests" / "test_security_guardrails_workflow.py"

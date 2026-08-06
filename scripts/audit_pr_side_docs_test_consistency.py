@@ -91,8 +91,9 @@ def _literal_assignment_tuple(source: str, name: str) -> tuple[str, ...]:
     except SyntaxError as exc:
         raise AuditFailure(f"{SECURITY_GUARDRAILS_TEST}: invalid Python syntax") from exc
 
-    matches: list[ast.expr] = []
-    for node in ast.walk(tree):
+    matches: list[ast.expr | None] = []
+    module_assignments: set[ast.AST] = set()
+    for node in tree.body:
         if isinstance(node, ast.Assign) and any(
             _target_contains_name(target, name) for target in node.targets
         ):
@@ -101,10 +102,22 @@ def _literal_assignment_tuple(source: str, name: str) -> tuple[str, ...]:
             ):
                 raise AuditFailure(f"{SECURITY_GUARDRAILS_TEST}: runtime binding for {name}")
             matches.append(node.value)
+            module_assignments.add(node)
         elif isinstance(node, ast.AnnAssign) and _target_contains_name(node.target, name):
             if not (isinstance(node.target, ast.Name) and node.target.id == name):
                 raise AuditFailure(f"{SECURITY_GUARDRAILS_TEST}: runtime binding for {name}")
             matches.append(node.value)
+            module_assignments.add(node)
+
+    for node in ast.walk(tree):
+        if node in module_assignments:
+            continue
+        if isinstance(node, ast.Assign) and any(
+            _target_contains_name(target, name) for target in node.targets
+        ):
+            raise AuditFailure(f"{SECURITY_GUARDRAILS_TEST}: runtime binding for {name}")
+        elif isinstance(node, ast.AnnAssign) and _target_contains_name(node.target, name):
+            raise AuditFailure(f"{SECURITY_GUARDRAILS_TEST}: runtime binding for {name}")
         elif isinstance(node, ast.AugAssign) and _target_contains_name(node.target, name):
             raise AuditFailure(f"{SECURITY_GUARDRAILS_TEST}: mutating assignment for {name}")
         elif isinstance(node, (ast.For, ast.AsyncFor)) and _target_contains_name(
