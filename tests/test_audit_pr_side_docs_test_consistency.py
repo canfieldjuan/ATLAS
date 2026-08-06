@@ -281,6 +281,36 @@ def test_audit_raises_when_push_mapping_is_not_directly_under_on(tmp_path: Path)
         auditor.audit_repo(tmp_path)
 
 
+def test_audit_raises_when_push_branches_exclude_main(tmp_path: Path) -> None:
+    _write_fixture(tmp_path)
+    workflow = tmp_path / ".github" / "workflows" / "branch_protection_required_checks.yml"
+    workflow.write_text(
+        workflow.read_text(encoding="utf-8").replace(
+            "    branches:\n      - main",
+            "    branches-ignore:\n      - main",
+        ),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(auditor.AuditFailure, match="branches-ignore must not exclude main"):
+        auditor.audit_repo(tmp_path)
+
+
+def test_audit_raises_when_push_branches_do_not_include_main(tmp_path: Path) -> None:
+    _write_fixture(tmp_path)
+    workflow = tmp_path / ".github" / "workflows" / "branch_protection_required_checks.yml"
+    workflow.write_text(
+        workflow.read_text(encoding="utf-8").replace(
+            "    branches:\n      - main",
+            "    branches:\n      - release",
+        ),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(auditor.AuditFailure, match="branches must include main"):
+        auditor.audit_repo(tmp_path)
+
+
 def test_audit_fails_when_test_context_tuple_is_stale(tmp_path: Path) -> None:
     _write_fixture(tmp_path, test_contexts=("live-reconciliation",))
 
@@ -405,6 +435,31 @@ def test_audit_raises_when_test_context_constant_is_rebound_by_loop(tmp_path: Pa
     test_path.write_text(
         test_path.read_text(encoding="utf-8")
         + '\nfor REQUIRED_STATUS_CONTEXTS in [("shadow-required",)]:\n    pass\n',
+        encoding="utf-8",
+    )
+
+    with pytest.raises(
+        auditor.AuditFailure,
+        match="runtime binding for REQUIRED_STATUS_CONTEXTS",
+    ):
+        auditor.audit_repo(tmp_path)
+
+
+@pytest.mark.parametrize(
+    "pattern_source",
+    [
+        'match ("shadow-required",):\n    case REQUIRED_STATUS_CONTEXTS:\n        pass\n',
+        'match {"contexts": ("shadow-required",)}:\n    case {"contexts": _, **REQUIRED_STATUS_CONTEXTS}:\n        pass\n',
+    ],
+)
+def test_audit_raises_when_test_context_constant_is_rebound_by_pattern_capture(
+    tmp_path: Path,
+    pattern_source: str,
+) -> None:
+    _write_fixture(tmp_path)
+    test_path = tmp_path / "tests" / "test_security_guardrails_workflow.py"
+    test_path.write_text(
+        test_path.read_text(encoding="utf-8") + "\n" + pattern_source,
         encoding="utf-8",
     )
 

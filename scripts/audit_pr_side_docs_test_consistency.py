@@ -85,6 +85,14 @@ def _alias_binds_name(alias: ast.alias, name: str) -> bool:
     return bound_name == name
 
 
+def _pattern_binds_name(node: ast.AST, name: str) -> bool:
+    if isinstance(node, (ast.MatchAs, ast.MatchStar)):
+        return node.name == name
+    if isinstance(node, ast.MatchMapping):
+        return node.rest == name
+    return False
+
+
 def _literal_assignment_tuple(source: str, name: str) -> tuple[str, ...]:
     try:
         tree = ast.parse(source)
@@ -145,6 +153,8 @@ def _literal_assignment_tuple(source: str, name: str) -> tuple[str, ...]:
         elif isinstance(node, (ast.Import, ast.ImportFrom)) and any(
             _alias_binds_name(alias, name) for alias in node.names
         ):
+            raise AuditFailure(f"{SECURITY_GUARDRAILS_TEST}: runtime binding for {name}")
+        elif _pattern_binds_name(node, name):
             raise AuditFailure(f"{SECURITY_GUARDRAILS_TEST}: runtime binding for {name}")
 
     if not matches:
@@ -210,6 +220,30 @@ def _decode_workflow_path(raw_value: str, *, relative: Path, lineno: int) -> str
     return value
 
 
+def _collect_direct_sequence(
+    parsed: list[tuple[int, int, str]],
+    parent_index: int,
+    *,
+    label: str,
+    relative: Path,
+) -> tuple[str, ...]:
+    parent_indent = parsed[parent_index][0]
+    values: list[str] = []
+    item_indent: int | None = None
+    for index in range(parent_index + 1, len(parsed)):
+        indent, lineno, text = parsed[index]
+        if indent <= parent_indent:
+            break
+        if item_indent is None:
+            item_indent = indent
+        elif indent != item_indent:
+            raise AuditFailure(f"{relative}:{lineno}: nested {label} entries are unsupported")
+        if not text.startswith("- "):
+            raise AuditFailure(f"{relative}:{lineno}: unsupported {label} entry")
+        values.append(_decode_workflow_path(text[2:], relative=relative, lineno=lineno))
+    return tuple(values)
+
+
 def _workflow_push_paths(
     source: str,
     relative: Path = BRANCH_PROTECTION_WORKFLOW,
@@ -269,35 +303,65 @@ def _workflow_push_paths(
         raise AuditFailure(f"{relative}: on.push mapping is empty")
 
     paths_index: int | None = None
+    branches_index: int | None = None
+    branches_ignore_index: int | None = None
     for index in range(push_index + 1, len(parsed)):
         indent, _lineno, text = parsed[index]
         if indent <= push_indent:
             break
+        if text in {"paths:", "branches:", "branches-ignore:"} and indent != direct_child_indent:
+            raise AuditFailure(f"{relative}: on.push.{text[:-1]} must be a direct child")
         if text == "paths:":
             if indent != direct_child_indent:
                 raise AuditFailure(f"{relative}: on.push.paths must be a direct child")
             if paths_index is not None:
                 raise AuditFailure(f"{relative}: multiple on.push.paths mappings")
             paths_index = index
+        elif text == "branches:":
+            if branches_index is not None:
+                raise AuditFailure(f"{relative}: multiple on.push.branches mappings")
+            branches_index = index
+        elif text == "branches-ignore:":
+            if branches_ignore_index is not None:
+                raise AuditFailure(f"{relative}: multiple on.push.branches-ignore mappings")
+            branches_ignore_index = index
     if paths_index is None:
         raise AuditFailure(f"{relative}: missing on.push.paths mapping")
 
-    paths_indent = parsed[paths_index][0]
-    paths: list[str] = []
-    item_indent: int | None = None
-    for index in range(paths_index + 1, len(parsed)):
-        indent, lineno, text = parsed[index]
-        if indent <= paths_indent:
-            break
-        if item_indent is None:
-            item_indent = indent
-        elif indent != item_indent:
-            raise AuditFailure(f"{relative}:{lineno}: nested on.push.paths entries are unsupported")
-        if not text.startswith("- "):
-            raise AuditFailure(f"{relative}:{lineno}: unsupported on.push.paths entry")
-        paths.append(_decode_workflow_path(text[2:], relative=relative, lineno=lineno))
+    paths = _collect_direct_sequence(
+        parsed,
+        paths_index,
+        label="on.push.paths",
+        relative=relative,
+    )
     if not paths:
         raise AuditFailure(f"{relative}: on.push.paths is empty")
+    branches = (
+        _collect_direct_sequence(
+            parsed,
+            branches_index,
+            label="on.push.branches",
+            relative=relative,
+        )
+        if branches_index is not None
+        else ()
+    )
+    branches_ignore = (
+        _collect_direct_sequence(
+            parsed,
+            branches_ignore_index,
+            label="on.push.branches-ignore",
+            relative=relative,
+        )
+        if branches_ignore_index is not None
+        else ()
+    )
+    if branches and branches_ignore:
+        raise AuditFailure(f"{relative}: on.push cannot define both branches and branches-ignore")
+    if branches and "main" not in branches:
+        raise AuditFailure(f"{relative}: on.push.branches must include main")
+    if "main" in branches_ignore:
+        raise AuditFailure(f"{relative}: on.push.branches-ignore must not exclude main")
     return tuple(paths)
 
 
