@@ -68,15 +68,21 @@ SKIP_DIRS = {
 
 # Tests legitimately contain SQL fixtures and assertions about SQL.
 #
-# Exemption is by LOCATION, never by basename. `Path(rel).name.startswith("test_")`
-# exempted 13 real production modules that merely happen to be named that way --
-# `scripts/test_adapter_live.py`, `atlas_brain/test_token_tracking.py`,
-# `scripts/debug/test_*.py` and others -- so any of them could have carried a
-# contact write straight past the gate. A file is a test only if it lives under
-# a `tests/` directory.
+# Exemption is by AUTHORITATIVE ROOT, and this rule has been wrong twice.
+# First it keyed on basename, which exempted 13 real production modules merely
+# named `test_*.py` (`scripts/test_adapter_live.py`,
+# `atlas_brain/test_token_tracking.py`, several `scripts/debug/test_*.py`).
+# Replacing that with "any ancestor directory named tests" then exempted any
+# nested `tests/` dir, so `atlas_brain/services/tests/evil.py` passed.
+#
+# The repo has exactly one test root -- `tests/` -- so the rule names it.
+# Adding a second root is a deliberate, reviewable edit here, not something a
+# new directory grants itself.
+TEST_ROOTS = ("tests/",)
+
+
 def _is_test_path(rel: str) -> bool:
-    parts = Path(rel).parts
-    return "tests" in parts[:-1]
+    return rel.startswith(TEST_ROOTS)
 
 
 # The table name may be schema-qualified and may be a quoted identifier:

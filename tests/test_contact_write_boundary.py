@@ -1110,3 +1110,31 @@ def test_a_second_write_in_an_existing_literal_is_drift(tmp_path: Path) -> None:
         encoding="utf-8",
     )
     assert MOD.main(["--root", str(tmp_path)]) == 1
+
+
+def test_nested_tests_directory_does_not_exempt(tmp_path: Path) -> None:
+    """Only the authoritative `tests/` root exempts.
+
+    This rule has been wrong twice: first keyed on basename, which exempted 13
+    real production modules named `test_*.py`; then on "any ancestor directory
+    named tests", which exempted `atlas_brain/services/tests/evil.py`.
+    """
+    _write(
+        tmp_path,
+        "atlas_brain/services/tests/evil.py",
+        'SQL = "INSERT INTO contacts (full_name) VALUES ($1)"\n',
+    )
+    blocking, _ = _classify(tmp_path)
+    assert [f.path for f in blocking] == ["atlas_brain/services/tests/evil.py"]
+
+
+def test_authoritative_test_root_still_exempts(tmp_path: Path) -> None:
+    """Both sides: real fixtures under tests/ must stay exempt, at any depth."""
+    _write(
+        tmp_path,
+        "tests/fixtures/deep/sample.py",
+        'SQL = "INSERT INTO contacts (full_name) VALUES ($1)"\n',
+    )
+    blocking, new_mutations = _classify(tmp_path)
+    assert blocking == []
+    assert new_mutations == []

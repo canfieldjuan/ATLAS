@@ -86,7 +86,7 @@ Slice phase: workflow/process
    outside it is reported non-blocking while legacy writers are converged.
 2. Add `tests/contact_write_boundary/baseline.json`: the committed writer
    inventory (17 production write sites today).
-3. Add `tests/test_contact_write_boundary.py`: 62 tests, including planted
+3. Add `tests/test_contact_write_boundary.py`: 64 tests, including planted
    violations that must fail the gate and false-positive pins that must not.
 5. Record the gate in `ci/gates.yml` as `ci_blocking_not_required`; promoting it
    to a branch-required context is an operator action.
@@ -132,12 +132,17 @@ Affected surfaces: CI only. Risk areas: false positives that would train
 reviewers to bypass the gate (covered by criteria 3–4); a vacuous baseline that
 detects no drift (criterion 5).
 
-- Reviewer rules triggered: R2, R10.
+- Reviewer rules triggered: R1, R2, R10, R12, R13, R14.
 
 R2 (test evidence / failure-branch fixtures per AGENTS.md 3h-3i) and R10
 (maintainability) are the triggers `docs/REVIEWER_RULES.md` assigns to gate
 predicates and evaluator scripts, which is what
-`scripts/check_contact_write_boundary.py` is. R2 is satisfied by the planted-violation fixtures rather than by
+`scripts/check_contact_write_boundary.py` is. The slice has since grown a CI
+surface and class-level guard behaviour, which adds R12 (workflow/CI security
+posture: trusted-base execution, the allowlist enrolment, one producer per
+context), R13 and R14 (guard-class closure over the operation set and the
+allow-list), and R1 (requirements match, for the plan-versus-implementation
+consistency this declaration is part of). R2 is satisfied by the planted-violation fixtures rather than by
 clean-tree runs: criteria 1-2 prove bad input fails, criteria 3-4 prove good
 input passes, so both error directions are probed. R10 is satisfied by the
 allow-list living in one reviewable constant pair rather than in scattered
@@ -391,9 +396,9 @@ fewer.
 | `.github/workflows/contact_write_boundary.yml` | 100 |
 | `.github/workflows/contact_write_boundary_selfcheck.yml` | 84 |
 | `ci/gates.yml` | 8 |
-| `plans/PR-EOM-Contact-Write-Boundary-Guard.md` | 399 |
+| `plans/PR-EOM-Contact-Write-Boundary-Guard.md` | 404 |
 | `scripts/audit_workflow_security_posture.py` | 1 |
-| `scripts/check_contact_write_boundary.py` | 846 |
+| `scripts/check_contact_write_boundary.py` | 852 |
 | `tests/contact_write_boundary/baseline.json` | 86 |
-| `tests/test_contact_write_boundary.py` | 1112 |
-| **Total** | **2636** |
+| `tests/test_contact_write_boundary.py` | 1140 |
+| **Total** | **2675** |
