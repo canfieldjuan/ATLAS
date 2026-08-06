@@ -122,6 +122,7 @@ async def _prepare_schema(
         "353_eom_customer_handoffs.sql",
         "360_eom_onboarding_email_drafts.sql",
         "361_eom_onboarding_draft_actor_bigint.sql",
+        "363_eom_lead_lifecycle_sequence.sql",
     )
     if apply_privilege_migration:
         await _provision_nocodb_login(conn)
@@ -3674,7 +3675,6 @@ async def test_mark_lead_lost_records_reason_is_idempotent_and_reopens():
         metadata = _metadata_dict(row["metadata"])
         assert metadata["lost_reason_code"] == "declined_after_estimate"
         assert metadata["lost_by_employee_id"] == 1
-        assert metadata["transition_generation"] == 1
 
         # replay under the same key: idempotent, no second lifecycle row
         replay = await provider.mark_eom_lead_lost(
@@ -3741,14 +3741,55 @@ async def test_mark_lead_lost_records_reason_is_idempotent_and_reopens():
         new_contact, _, _ = await _contact_state(conn, new_id)
         assert new_contact["lead_stage"] == "new"
 
-        # Committed transition generation, not UUID or transaction-start
-        # timestamp ordering, owns the latest loss. Exercise the real mark-lost
-        # writer for both loss cycles, then skew the first loss to have the
-        # newer timestamp so ordering by NOW()-backed timestamps would restore
-        # this lead to new instead of estimate_booked.
+        # The database-owned lifecycle sequence, not transaction-start timestamp
+        # ordering, owns the latest loss. Exercise the real mark-lost writer for
+        # both loss cycles, but install an insert-time test trigger that gives
+        # the stale loss the newer timestamps. A timestamp-ordered reopen would
+        # restore this lead to new instead of estimate_booked.
         chronological_id = uuid.uuid4()
         await _insert_contact(conn, contact_id=chronological_id, lead_stage="new")
         stale_loss_key = f"lost-old-{uuid.uuid4().hex}"
+        current_loss_key = f"lost-current-{uuid.uuid4().hex}"
+        await conn.execute(
+            """
+            CREATE OR REPLACE FUNCTION set_test_loss_clock()
+            RETURNS TRIGGER
+            LANGUAGE plpgsql
+            AS $$
+            BEGIN
+                IF NEW.operation_key = current_setting(
+                    'atlas.test.stale_loss_key', true
+                ) THEN
+                    NEW.occurred_at = '2026-01-04T00:00:00Z'::timestamptz;
+                    NEW.created_at = '2026-01-04T00:00:00Z'::timestamptz;
+                ELSIF NEW.operation_key = current_setting(
+                    'atlas.test.current_loss_key', true
+                ) THEN
+                    NEW.occurred_at = '2026-01-01T00:00:00Z'::timestamptz;
+                    NEW.created_at = '2026-01-01T00:00:00Z'::timestamptz;
+                END IF;
+                RETURN NEW;
+            END;
+            $$;
+            """
+        )
+        await conn.execute(
+            """
+            CREATE TRIGGER trg_set_test_loss_clock
+                BEFORE INSERT ON eom_lead_lifecycle_events
+                FOR EACH ROW
+                WHEN (NEW.event_type = 'lead_lost')
+                EXECUTE FUNCTION set_test_loss_clock()
+            """
+        )
+        await conn.execute(
+            "SELECT set_config('atlas.test.stale_loss_key', $1, false)",
+            stale_loss_key,
+        )
+        await conn.execute(
+            "SELECT set_config('atlas.test.current_loss_key', $1, false)",
+            current_loss_key,
+        )
         await provider.mark_eom_lead_lost(
             contact_id=str(chronological_id),
             reason_code="spam",
@@ -3778,7 +3819,6 @@ async def test_mark_lead_lost_records_reason_is_idempotent_and_reopens():
             "UPDATE contacts SET lead_stage = 'estimate_booked' WHERE id = $1",
             chronological_id,
         )
-        current_loss_key = f"lost-current-{uuid.uuid4().hex}"
         await provider.mark_eom_lead_lost(
             contact_id=str(chronological_id),
             reason_code="declined_after_estimate",
@@ -3787,37 +3827,24 @@ async def test_mark_lead_lost_records_reason_is_idempotent_and_reopens():
             actor_id=1,
             actor_name="Juan Canfield",
         )
-        generations = await conn.fetch(
+        sequence_rows = await conn.fetch(
             """
-            SELECT from_stage, metadata->>'transition_generation' AS generation
+            SELECT from_stage, lifecycle_sequence, occurred_at
             FROM eom_lead_lifecycle_events
             WHERE contact_id = $1 AND event_type = 'lead_lost'
-            ORDER BY (metadata->>'transition_generation')::bigint
+            ORDER BY lifecycle_sequence
             """,
             chronological_id,
         )
-        assert [(row["from_stage"], row["generation"]) for row in generations] == [
-            ("new", "1"),
-            ("estimate_booked", "2"),
+        assert [row["from_stage"] for row in sequence_rows] == [
+            "new",
+            "estimate_booked",
         ]
-        await conn.execute(
-            """
-            UPDATE eom_lead_lifecycle_events
-            SET occurred_at = CASE operation_key
-                    WHEN $2 THEN '2026-01-04T00:00:00Z'::timestamptz
-                    WHEN $3 THEN '2026-01-01T00:00:00Z'::timestamptz
-                END,
-                created_at = CASE operation_key
-                    WHEN $2 THEN '2026-01-04T00:00:00Z'::timestamptz
-                    WHEN $3 THEN '2026-01-01T00:00:00Z'::timestamptz
-                END
-            WHERE contact_id = $1
-              AND operation_key IN ($2, $3)
-            """,
-            chronological_id,
-            stale_loss_key,
-            current_loss_key,
+        assert (
+            sequence_rows[0]["lifecycle_sequence"]
+            < sequence_rows[1]["lifecycle_sequence"]
         )
+        assert sequence_rows[0]["occurred_at"] > sequence_rows[1]["occurred_at"]
         reopened_chronological = await provider.reopen_eom_lead(
             contact_id=str(chronological_id),
             operation_key=f"office-reopen-{uuid.uuid4().hex}",

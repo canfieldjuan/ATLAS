@@ -3643,22 +3643,6 @@ class DatabaseCRMProvider:
             )
             if updated is None:
                 raise RuntimeError("EOM lead changed during mark-lost")
-            transition_generation = await conn.fetchval(
-                """
-                SELECT COALESCE(
-                    MAX(
-                        CASE
-                            WHEN metadata->>'transition_generation' ~ '^[0-9]+$'
-                            THEN (metadata->>'transition_generation')::bigint
-                        END
-                    ),
-                    0
-                ) + 1
-                FROM eom_lead_lifecycle_events
-                WHERE contact_id = $1
-                """,
-                contact_id,
-            )
             await conn.execute(
                 """
                 INSERT INTO eom_lead_lifecycle_events (
@@ -3668,8 +3652,7 @@ class DatabaseCRMProvider:
                 VALUES ($1, 'lead_lost', $2, 'lost', $3, 'eom_office', $4, $5,
                         jsonb_build_object(
                             'lost_reason_code', $6::text,
-                            'lost_by_employee_id', $7::bigint,
-                            'transition_generation', $8::bigint
+                            'lost_by_employee_id', $7::bigint
                         ))
                 """,
                 contact_id,
@@ -3679,7 +3662,6 @@ class DatabaseCRMProvider:
                 note,
                 reason_code,
                 actor_id,
-                int(transition_generation),
             )
             return _result(from_stage, idempotent=False)
 
@@ -3792,17 +3774,14 @@ class DatabaseCRMProvider:
                 FROM (
                     SELECT
                         from_stage,
-                        CASE
-                            WHEN metadata->>'transition_generation' ~ '^[0-9]+$'
-                            THEN (metadata->>'transition_generation')::bigint
-                        END AS transition_generation,
+                        lifecycle_sequence,
                         occurred_at,
                         created_at
                     FROM eom_lead_lifecycle_events
                     WHERE contact_id = $1
                       AND event_type = 'lead_lost'
                 ) AS lead_lost
-                ORDER BY transition_generation DESC NULLS LAST,
+                ORDER BY lifecycle_sequence DESC NULLS LAST,
                          occurred_at DESC,
                          created_at DESC
                 LIMIT 1
