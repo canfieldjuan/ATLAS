@@ -91,9 +91,9 @@ trying to pass.
 drift from that expected set; the audit workflow reports that drift when its
 read token is configured. `unit-gate` was promoted after the #2290 selector
 coverage fix. `pre-push-audit` remains a visible CI signal, not a
-branch-required context, until the trusted-base PR-side docs/test consistency
-blocker recorded in `docs/audits/required-workflow-enrollment-audit-2026-08-04.md`
-is closed.
+branch-required context. Its trusted-base PR-side docs/test consistency blocker
+now has a data-only probe; a later enrollment recheck must decide whether that
+improved signal should become branch-required.
 
 ### PR secret and product gates
 

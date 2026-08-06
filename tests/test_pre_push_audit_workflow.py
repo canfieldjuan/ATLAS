@@ -57,6 +57,12 @@ def test_pre_push_audit_workflow_enrolls_plan_doc_audit_tests() -> None:
     assert "tests/test_audit_plan_doc.py" in text
 
 
+def test_pre_push_audit_workflow_enrolls_pr_side_docs_test_consistency_tests() -> None:
+    text = WORKFLOW.read_text(encoding="utf-8")
+
+    assert text.count("tests/test_audit_pr_side_docs_test_consistency.py") == 2
+
+
 def test_pre_push_audit_workflow_enrolls_plan_admission_and_body_gate_tests() -> None:
     text = WORKFLOW.read_text(encoding="utf-8")
 
