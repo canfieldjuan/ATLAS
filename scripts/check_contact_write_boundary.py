@@ -393,27 +393,31 @@ def scan_file(path: Path, root: Path) -> tuple:
         # missed the first and falsely blocked the second.
         value = _blank_sql_noise(raw_value)
         for operation, pattern in PATTERNS.items():
-            match = pattern.search(value)
-            if not match:
-                continue
-            refined = _refine_operation(operation, value, match.start())
-            start = max(0, match.start() - 10)
-            finding = Finding(
-                path=rel,
-                line=lineno,
-                operation=refined,
-                snippet=_normalize(value[start:match.end() + 60]),
-            )
+            # finditer, not search: one literal can hold several statements, and
+            # reporting only the first under-counts the inventory. A second
+            # write added inside an existing literal in an allow-listed module
+            # would then never surface as drift -- the same hole the multiset
+            # comparison closed for identical keys. scan_sql_file already did
+            # this; the Python path did not.
+            for match in pattern.finditer(value):
+                refined = _refine_operation(operation, value, match.start())
+                start = max(0, match.start() - 10)
+                finding = Finding(
+                    path=rel,
+                    line=lineno,
+                    operation=refined,
+                    snippet=_normalize(value[start:match.end() + 60]),
+                )
             # Dedup on (operation, line, snippet). key() omits the line, which
             # collapsed two distinct statements sharing a normalized snippet and
             # dropped one of the provider's nine UPDATEs. (operation, line)
             # alone then collapsed two distinct writes on ONE line. The triple
             # keeps genuinely different writes while still folding the duplicate
             # a folded expression and its child constant would otherwise emit.
-            dedup = (finding.operation, finding.line, finding.snippet)
-            if dedup not in seen:
-                seen.add(dedup)
-                findings.append(finding)
+                dedup = (finding.operation, finding.line, finding.snippet)
+                if dedup not in seen:
+                    seen.add(dedup)
+                    findings.append(finding)
 
         # A write whose target is built at runtime cannot be cleared by reading
         # the literal. Report it so a reviewer resolves it, rather than letting

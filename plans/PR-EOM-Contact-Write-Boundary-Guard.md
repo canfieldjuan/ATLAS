@@ -52,7 +52,7 @@ Slice phase: workflow/process
    outside it is reported non-blocking while legacy writers are converged.
 2. Add `tests/contact_write_boundary/baseline.json`: the committed writer
    inventory (17 production write sites today).
-3. Add `tests/test_contact_write_boundary.py`: 60 tests, including planted
+3. Add `tests/test_contact_write_boundary.py`: 62 tests, including planted
    violations that must fail the gate and false-positive pins that must not.
 5. Record the gate in `ci/gates.yml` as `ci_blocking_not_required`; promoting it
    to a branch-required context is an operator action.
@@ -61,14 +61,14 @@ Slice phase: workflow/process
 
 ### Files touched
 
-- `scripts/check_contact_write_boundary.py` (new)
-- `tests/test_contact_write_boundary.py` (new)
-- `tests/contact_write_boundary/baseline.json` (new)
-- `.github/workflows/contact_write_boundary.yml` (new: enforcement, pull_request_target only)
-- `.github/workflows/contact_write_boundary_selfcheck.yml` (new: advisory + post-merge)
-- `scripts/audit_workflow_security_posture.py` (modified: one allowlist entry)
-- `plans/PR-EOM-Contact-Write-Boundary-Guard.md` (new)
-- `ci/gates.yml` (modified: one registry entry)
+- `.github/workflows/contact_write_boundary.yml`
+- `.github/workflows/contact_write_boundary_selfcheck.yml`
+- `ci/gates.yml`
+- `plans/PR-EOM-Contact-Write-Boundary-Guard.md`
+- `scripts/audit_workflow_security_posture.py`
+- `scripts/check_contact_write_boundary.py`
+- `tests/contact_write_boundary/baseline.json`
+- `tests/test_contact_write_boundary.py`
 
 ### Review Contract
 
@@ -354,17 +354,12 @@ fewer.
 
 | File | LOC |
 |---|---:|
-| `.github/workflows/contact_write_boundary.yml` | 44 |
+| `.github/workflows/contact_write_boundary.yml` | 95 |
+| `.github/workflows/contact_write_boundary_selfcheck.yml` | 84 |
 | `ci/gates.yml` | 8 |
-| `plans/PR-EOM-Contact-Write-Boundary-Guard.md` | 231 |
-| `scripts/check_contact_write_boundary.py` | 520 |
-| `tests/contact_write_boundary/baseline.json` | 42 |
-| `tests/test_contact_write_boundary.py` | 600 |
-| **Total** | **1720** |
-
-Over the 400 LOC soft cap. 262 lines are the test file and 231 the plan, so the
-executable surface is ~370. The tests are the deliverable this slice is *for*: a
-detector without planted-violation fixtures is the dead-detector failure mode
-`tests/test_maturity_sweep.py` exists to prevent, so splitting them into a
-follow-up would ship an unproven gate. A `Diff-budget override:` line is carried
-in the PR body.
+| `plans/PR-EOM-Contact-Write-Boundary-Guard.md` | 365 |
+| `scripts/audit_workflow_security_posture.py` | 1 |
+| `scripts/check_contact_write_boundary.py` | 846 |
+| `tests/contact_write_boundary/baseline.json` | 86 |
+| `tests/test_contact_write_boundary.py` | 1112 |
+| **Total** | **2597** |

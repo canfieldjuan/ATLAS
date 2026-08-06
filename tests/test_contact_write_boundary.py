@@ -1072,3 +1072,41 @@ def test_statement_opening_a_cte_body_is_detected(tmp_path: Path) -> None:
     )
     _, new_mutations = _classify(tmp_path)
     assert [f.operation for f in new_mutations] == ["UPDATE"]
+
+
+def test_every_write_in_one_literal_is_counted(tmp_path: Path) -> None:
+    """One literal can hold several statements.
+
+    `scan_file` used `search`, reporting only the first match per pattern, so a
+    second write added inside an existing literal in an allow-listed module
+    would never surface as inventory drift -- the same hole the multiset
+    comparison closed for identical keys. `scan_sql_file` already iterated.
+    """
+    _write(
+        tmp_path,
+        "atlas_brain/services/crm_provider.py",
+        'SQL = """\n'
+        "    INSERT INTO contacts (a) VALUES ($1);\n"
+        "    INSERT INTO contacts (b) VALUES ($2);\n"
+        '"""\n',
+    )
+    findings, _ = MOD.scan_tree(tmp_path)
+    assert len([f for f in findings if f.operation == "INSERT"]) == 2
+
+
+def test_a_second_write_in_an_existing_literal_is_drift(tmp_path: Path) -> None:
+    """The reason the count matters: it is what makes drift observable."""
+    provider = _seed_provider(
+        tmp_path,
+        'SQL = """\n    INSERT INTO contacts (a) VALUES ($1);\n"""\n',
+    )
+    assert MOD.main(["--root", str(tmp_path)]) == 0
+
+    provider.write_text(
+        'SQL = """\n'
+        "    INSERT INTO contacts (a) VALUES ($1);\n"
+        "    INSERT INTO contacts (b) VALUES ($2);\n"
+        '"""\n',
+        encoding="utf-8",
+    )
+    assert MOD.main(["--root", str(tmp_path)]) == 1
