@@ -359,17 +359,97 @@ def scan(root: Path) -> list:
     return findings
 
 
-SQL_LINE_COMMENT = re.compile(r"--[^\n]*")
-SQL_BLOCK_COMMENT = re.compile(r"/\*.*?\*/", re.DOTALL)
+def _strip_sql_comments(sql: str) -> str:
+    """Blank out SQL comments without consuming string literals.
+
+    A regex cannot do this. `--` inside a literal is data, not a comment, and
+    a naive `--[^\n]*` strips the rest of the line -- so
+    `SELECT 'harmless -- '; INSERT INTO contacts (...)` hid a real INSERT from
+    this gate completely. Comments are replaced with spaces rather than removed
+    so byte offsets, and therefore reported line numbers, stay correct.
+
+    Handles single-quoted strings (with '' escapes), dollar-quoted bodies, and
+    double-quoted identifiers, which is the set PostgreSQL actually uses.
+    """
+    out = []
+    i = 0
+    n = len(sql)
+    while i < n:
+        ch = sql[i]
+        nxt = sql[i + 1] if i + 1 < n else ""
+
+        if ch == "-" and nxt == "-":
+            while i < n and sql[i] != "\n":
+                out.append(" ")
+                i += 1
+            continue
+
+        if ch == "/" and nxt == "*":
+            depth = 1  # PostgreSQL block comments nest
+            out.append("  ")
+            i += 2
+            while i < n and depth:
+                if sql.startswith("/*", i):
+                    depth += 1
+                    out.append("  ")
+                    i += 2
+                elif sql.startswith("*/", i):
+                    depth -= 1
+                    out.append("  ")
+                    i += 2
+                else:
+                    out.append("\n" if sql[i] == "\n" else " ")
+                    i += 1
+            continue
+
+        if ch == "'":
+            out.append(ch)
+            i += 1
+            while i < n:
+                if sql[i] == "'" and sql[i + 1:i + 2] == "'":
+                    out.append("''")
+                    i += 2
+                    continue
+                out.append(sql[i])
+                if sql[i] == "'":
+                    i += 1
+                    break
+                i += 1
+            continue
+
+        if ch == '"':
+            out.append(ch)
+            i += 1
+            while i < n:
+                out.append(sql[i])
+                if sql[i] == '"':
+                    i += 1
+                    break
+                i += 1
+            continue
+
+        if ch == "$":
+            match = re.match(r"\$[A-Za-z_]*\$", sql[i:])
+            if match:
+                tag = match.group(0)
+                end = sql.find(tag, i + len(tag))
+                stop = (end + len(tag)) if end != -1 else n
+                out.append(sql[i:stop])
+                i = stop
+                continue
+
+        out.append(ch)
+        i += 1
+    return "".join(out)
 
 
 def scan_sql_file(path: Path, root: Path) -> tuple:
     """Scan a .sql file. Migrations are executable SQL, not commentary.
 
     Python is not the only way a statement reaches the database: a migration or
-    data-fix script writes rows directly. Comments are stripped first so that a
-    documented rollback recipe -- migration 358 carries a commented
-    `UPDATE contacts SET ...` -- is not read as a live statement.
+    data-fix script writes rows directly. Comments are stripped with a
+    string-aware tokenizer first, so a documented rollback recipe is ignored
+    while a `--` inside a literal cannot swallow a real statement.
     """
     rel = path.relative_to(root).as_posix()
     try:
@@ -377,8 +457,7 @@ def scan_sql_file(path: Path, root: Path) -> tuple:
     except (OSError, UnicodeDecodeError) as exc:
         return [], f"{rel}: unreadable ({type(exc).__name__})"
 
-    stripped = SQL_BLOCK_COMMENT.sub(" ", source)
-    stripped = SQL_LINE_COMMENT.sub(" ", stripped)
+    stripped = _strip_sql_comments(source)
 
     findings, seen = [], set()
     for operation, pattern in PATTERNS.items():

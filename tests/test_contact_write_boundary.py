@@ -197,6 +197,56 @@ def test_sql_comments_are_not_executable(tmp_path: Path) -> None:
     assert new_mutations == []
 
 
+def test_dashes_inside_a_string_literal_cannot_hide_a_write(tmp_path: Path) -> None:
+    """`--` inside a literal is data, not a comment.
+
+    The first draft stripped comments with `--[^\\n]*`, so
+    `SELECT 'harmless -- '; INSERT INTO contacts (...)` on one line hid a real
+    INSERT from the gate entirely. A regex cannot tokenize SQL.
+    """
+    _write(
+        tmp_path,
+        "atlas_brain/storage/migrations/900_evade.sql",
+        "SELECT 'harmless -- '; INSERT INTO contacts (full_name) VALUES ('hidden');\n",
+    )
+    blocking, _ = _classify(tmp_path)
+    assert [f.operation for f in blocking if f.operation == "INSERT"] == ["INSERT"]
+
+
+def test_escaped_quote_inside_literal_is_handled(tmp_path: Path) -> None:
+    _write(
+        tmp_path,
+        "atlas_brain/storage/migrations/901_escape.sql",
+        "INSERT INTO contacts (full_name) VALUES ('O''Brien -- x');\n",
+    )
+    blocking, _ = _classify(tmp_path)
+    assert any(f.operation == "INSERT" for f in blocking)
+
+
+def test_dollar_quoted_body_does_not_swallow_following_statements(tmp_path: Path) -> None:
+    _write(
+        tmp_path,
+        "atlas_brain/storage/migrations/902_dollar.sql",
+        "DO $$ BEGIN PERFORM 1; END $$;\n"
+        "INSERT INTO contacts (full_name) VALUES ('y');\n",
+    )
+    blocking, _ = _classify(tmp_path)
+    assert any(f.operation == "INSERT" for f in blocking)
+
+
+def test_nested_block_comment_is_fully_stripped(tmp_path: Path) -> None:
+    """PostgreSQL block comments nest; a non-nesting stripper ends early."""
+    _write(
+        tmp_path,
+        "atlas_brain/storage/migrations/903_nested.sql",
+        "/* outer /* inner */ INSERT INTO contacts (full_name) VALUES ('x'); */\n"
+        "SELECT 1;\n",
+    )
+    blocking, new_mutations = _classify(tmp_path)
+    assert blocking == []
+    assert new_mutations == []
+
+
 def test_production_module_named_test_is_not_exempt(tmp_path: Path) -> None:
     """Exemption is by location, never by basename.
 
