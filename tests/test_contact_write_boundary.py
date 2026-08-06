@@ -60,6 +60,24 @@ def test_planted_insert_outside_provider_is_blocking(tmp_path: Path) -> None:
     assert blocking[0].operation == "INSERT"
 
 
+def _seed_inventory(tmp_path: Path) -> Path:
+    """Write an inventory baseline matching the current tree.
+
+    Without one, `main()` fails closed on the missing file, and an exit-code
+    test would pass for that reason instead of the one it names.
+    """
+    import json as _json
+
+    baseline_dir = tmp_path / "tests" / "contact_write_boundary"
+    baseline_dir.mkdir(parents=True, exist_ok=True)
+    path = baseline_dir / "baseline.json"
+    findings, unanalyzable = MOD.scan_tree(tmp_path)
+    path.write_text(
+        _json.dumps(MOD.build_baseline(findings, unanalyzable)), encoding="utf-8"
+    )
+    return path
+
+
 def test_planted_insert_makes_main_exit_nonzero(tmp_path: Path) -> None:
     """The CI contract is the exit code, not the finding list."""
     _write(
@@ -67,6 +85,7 @@ def test_planted_insert_makes_main_exit_nonzero(tmp_path: Path) -> None:
         "scripts/sneaky_import.py",
         'SQL = "INSERT INTO contacts (full_name) VALUES ($1)"\n',
     )
+    _seed_inventory(tmp_path)
     exit_code = MOD.main(["--root", str(tmp_path)])
     assert exit_code == 1, "planted INSERT did not fail the build"
 
@@ -402,6 +421,7 @@ def test_unparsable_file_is_reported_not_silently_skipped(tmp_path: Path) -> Non
 
 def test_unparsable_file_fails_the_build(tmp_path: Path) -> None:
     _write(tmp_path, "scripts/broken.py", "def (:\n")
+    _seed_inventory(tmp_path)
     assert MOD.main(["--root", str(tmp_path)]) == 1
 
 
@@ -413,8 +433,15 @@ def test_known_unanalyzable_file_can_be_baselined(tmp_path: Path) -> None:
     baseline_path.write_text(
         json.dumps(MOD.build_baseline(findings, unanalyzable)), encoding="utf-8"
     )
+    # The inventory baseline is passed explicitly: it defaults to
+    # <root>/tests/contact_write_boundary/baseline.json, which this fixture tree
+    # does not have, and a missing inventory now fails closed by design.
     assert MOD.main(
-        ["--root", str(tmp_path), "--baseline", str(baseline_path)]
+        [
+            "--root", str(tmp_path),
+            "--baseline", str(baseline_path),
+            "--inventory-baseline", str(baseline_path),
+        ]
     ) == 0
 
 
@@ -703,3 +730,66 @@ def test_removing_an_inventoried_writer_also_fails(tmp_path: Path) -> None:
 
     provider.write_text('A = "INSERT INTO contacts (a) VALUES ($1)"\n', encoding="utf-8")
     assert MOD.main(["--root", str(tmp_path)]) == 1
+
+
+# ---------------------------------------------------------------------------
+# Round 6: EXECUTE, missing baseline, same-line writes
+# ---------------------------------------------------------------------------
+
+def test_execute_of_a_literal_is_executable_sql(tmp_path: Path) -> None:
+    """`EXECUTE 'INSERT INTO contacts ...'` runs the literal.
+
+    Round 4 taught the lexer that literals are inert data, which is right
+    everywhere except EXECUTE position, where the literal *is* the statement.
+    """
+    _write(
+        tmp_path,
+        "atlas_brain/storage/migrations/913_execute.sql",
+        "DO $$ BEGIN EXECUTE 'INSERT INTO contacts (full_name) VALUES (''x'')'; "
+        "END $$;\n",
+    )
+    blocking, _ = _classify(tmp_path)
+    assert [f.operation for f in blocking] == ["INSERT"]
+
+
+def test_literal_not_in_execute_position_stays_inert(tmp_path: Path) -> None:
+    """The EXECUTE rule must not re-break the round-4 fix."""
+    _write(
+        tmp_path,
+        "atlas_brain/storage/migrations/914_inert.sql",
+        "SELECT 'Example only: INSERT INTO contacts (full_name) VALUES (''x'')';\n",
+    )
+    blocking, new_mutations = _classify(tmp_path)
+    assert blocking == []
+    assert new_mutations == []
+
+
+def test_missing_inventory_baseline_fails_closed(tmp_path: Path) -> None:
+    """Deleting the baseline must not switch inventory enforcement off.
+
+    Skipping the comparison when the file is absent made removal a one-line
+    way to disable the check, in the same diff as the writer it would surface.
+    """
+    _write(
+        tmp_path,
+        "atlas_brain/services/crm_provider.py",
+        'A = "INSERT INTO contacts (a) VALUES ($1)"\n',
+    )
+    assert MOD.main(["--root", str(tmp_path)]) == 1
+
+
+def test_two_distinct_writes_on_one_line_are_both_kept(tmp_path: Path) -> None:
+    """Dedup keys on (operation, line, snippet).
+
+    (operation, line) alone collapsed two different statements sharing a line,
+    which is the mirror of the earlier bug where the snippet-only key collapsed
+    two statements sharing a snippet.
+    """
+    _write(
+        tmp_path,
+        "atlas_brain/services/same_line.py",
+        'A, B = "INSERT INTO contacts (a) VALUES ($1)", '
+        '"INSERT INTO contacts (b) VALUES ($1)"\n',
+    )
+    findings, _ = MOD.scan_tree(tmp_path)
+    assert len([f for f in findings if f.operation == "INSERT"]) == 2

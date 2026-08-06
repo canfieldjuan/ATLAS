@@ -357,13 +357,13 @@ def scan_file(path: Path, root: Path) -> tuple:
                 operation=refined,
                 snippet=_normalize(value[start:match.end() + 60]),
             )
-            # Dedup by (operation, line), NOT by key(): key() omits the line so
-            # the baseline stays stable across unrelated edits, but two distinct
-            # statements can normalize to the same 120-char snippet. Keying the
-            # per-file dedup on key() silently dropped one of the provider's
-            # nine UPDATEs, under-reporting the very inventory this gate exists
-            # to pin.
-            dedup = (finding.operation, finding.line)
+            # Dedup on (operation, line, snippet). key() omits the line, which
+            # collapsed two distinct statements sharing a normalized snippet and
+            # dropped one of the provider's nine UPDATEs. (operation, line)
+            # alone then collapsed two distinct writes on ONE line. The triple
+            # keeps genuinely different writes while still folding the duplicate
+            # a folded expression and its child constant would otherwise emit.
+            dedup = (finding.operation, finding.line, finding.snippet)
             if dedup not in seen:
                 seen.add(dedup)
                 findings.append(finding)
@@ -378,7 +378,7 @@ def scan_file(path: Path, root: Path) -> tuple:
                 operation="DYNAMIC",
                 snippet=_normalize(value[-90:]),
             )
-            dedup = (finding.operation, finding.line)
+            dedup = (finding.operation, finding.line, finding.snippet)
             if dedup not in seen:
                 seen.add(dedup)
                 findings.append(finding)
@@ -389,6 +389,10 @@ def scan(root: Path) -> list:
     """Findings only. Callers needing analyzability use scan_tree()."""
     findings, _unanalyzable = scan_tree(root)
     return findings
+
+
+# EXECUTE immediately preceding a literal, allowing INTO/USING-free simple form.
+_EXECUTE_BEFORE = re.compile(r"\bexecute\s*$", re.IGNORECASE)
 
 
 def _blank_sql_noise(sql: str) -> str:
@@ -474,7 +478,15 @@ def _blank_sql_noise(sql: str) -> str:
                     j += 1
                     break
                 j += 1
-            out.append("'" + blank(sql[i + 1:max(i + 1, j - 1)]) + "'")
+            body = sql[i + 1:max(i + 1, j - 1)]
+            # `EXECUTE 'INSERT INTO contacts ...'` runs the literal. Treating
+            # every literal as inert data hid exactly that, so a literal in
+            # EXECUTE position is lexed as code instead. Doubled quotes inside
+            # it are unescaped first, since that is how the SQL was written.
+            if _EXECUTE_BEFORE.search("".join(out)):
+                out.append("'" + _blank_sql_noise(body.replace("''", " '")) + "'")
+            else:
+                out.append("'" + blank(body) + "'")
             i = j
             continue
 
@@ -540,7 +552,7 @@ def scan_sql_file(path: Path, root: Path) -> tuple:
                 operation=refined,
                 snippet=_normalize(stripped[start:match.end() + 60]),
             )
-            dedup = (finding.operation, finding.line)
+            dedup = (finding.operation, finding.line, finding.snippet)
             if dedup not in seen:
                 seen.add(dedup)
                 findings.append(finding)
@@ -679,15 +691,18 @@ def main(argv=None) -> int:
         args.inventory_baseline
         or (root / "tests" / "contact_write_boundary" / "baseline.json")
     )
-    inventory_drift: dict = {"added": [], "removed": []}
+    inventory_drift: dict = {"added": [], "removed": [], "missing_baseline": False}
     if inventory_path.exists():
         committed = json.loads(inventory_path.read_text(encoding="utf-8"))
         recorded = set(committed.get("writer_inventory", []))
         current = set(build_baseline(findings, unanalyzable)["writer_inventory"])
-        inventory_drift = {
-            "added": sorted(current - recorded),
-            "removed": sorted(recorded - current),
-        }
+        inventory_drift["added"] = sorted(current - recorded)
+        inventory_drift["removed"] = sorted(recorded - current)
+    elif not args.update_baseline:
+        # Fail closed. Skipping the comparison when the file is absent made
+        # deleting the baseline a one-line way to switch inventory enforcement
+        # off, in the same diff as the writer it would have surfaced.
+        inventory_drift["missing_baseline"] = True
 
     blocking, new_mutations = classify(findings, baseline)
     known_unanalyzable = set(baseline.get("unanalyzable", []))
@@ -741,7 +756,14 @@ def main(argv=None) -> int:
             "`unanalyzable` list with a reason if it is a deliberate fixture."
         )
 
-    if any(inventory_drift.values()):
+    if inventory_drift.get("missing_baseline"):
+        print(
+            f"\nBLOCKING: no writer inventory at {inventory_path}.\n\n"
+            "  The inventory is the record of every contact write site. A tree\n"
+            "  without one cannot be checked for drift, so its absence is treated\n"
+            "  as a failure rather than as nothing to do.\n"
+        )
+    elif any(inventory_drift.values()):
         print("\nBLOCKING: the committed writer inventory does not match the tree.\n")
         for entry in inventory_drift["added"]:
             print(f"  + {entry}")
