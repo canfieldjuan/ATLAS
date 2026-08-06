@@ -491,14 +491,14 @@ def _provider_with(matches):
 
 
 @pytest.mark.asyncio
-async def test_create_contact_dedupe_skips_foreign_tenant_matches_up_front():
+async def test_create_contact_does_not_match_foreign_context_after_eom_miss():
     """Cross-tenant regression: a stamped create must never resolve to a
-    contact that belongs to a DIFFERENT business context."""
+    contact that belongs to a DIFFERENT business context. Provider callers that
+    still own live EOM backfill/import jobs keep the existing fresh-insert path
+    until those entry points move behind the canonical EOM service."""
     provider = _provider_with(
         [{"id": "b2b-1", "business_context_id": "churnsignals"}]
     )
-    # No compatible match -> falls through to the insert path, which needs a
-    # pool; patch it to observe the outcome.
     import atlas_brain.storage.database as db_mod
     pool = MagicMock()
     pool.fetchrow = AsyncMock(return_value={"id": "new-eom"})
@@ -511,7 +511,9 @@ async def test_create_contact_dedupe_skips_foreign_tenant_matches_up_front():
         )
     finally:
         db_mod.get_db_pool = orig
-    assert result["id"] == "new-eom"  # created fresh, foreign row untouched
+    assert result["id"] == "new-eom"
+    assert result["_was_created"] is True
+    pool.fetchrow.assert_awaited_once()
     provider.update_contact.assert_not_awaited()
 
 

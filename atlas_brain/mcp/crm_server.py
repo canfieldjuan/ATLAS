@@ -533,6 +533,7 @@ async def create_contact(
     """
     try:
         parts = full_name.strip().split(" ", 1)
+        effective_business_context_id = business_context_id or _default_context()
         data: dict = {
             "full_name": full_name,
             "first_name": parts[0] if parts else None,
@@ -543,14 +544,26 @@ async def create_contact(
             "city": city,
             "state": state,
             "zip": zip_code,
-            "business_context_id": business_context_id or _default_context(),
+            "business_context_id": effective_business_context_id,
             "contact_type": contact_type,
             "notes": notes,
             "source": source,
             "tags": tags or [],
         }
+        from ..services.eom_lead_ingress import EOM_BUSINESS_CONTEXT_ID
+
+        if str(effective_business_context_id or "").strip() == EOM_BUSINESS_CONTEXT_ID:
+            return json.dumps({
+                "success": False,
+                "error": (
+                    "New EOM contacts must be created through the EOM ingress "
+                    "or funnel transition service"
+                ),
+            })
         contact = await _provider().create_contact(data)
         return json.dumps({"success": True, "contact": contact}, default=str)
+    except ValueError as exc:
+        return json.dumps({"success": False, "error": str(exc)})
     except Exception as exc:
         logger.exception("create_contact error")
         return json.dumps({"success": False, "error": "Internal error"})
