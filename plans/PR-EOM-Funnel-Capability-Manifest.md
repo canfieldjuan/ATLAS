@@ -17,14 +17,16 @@ enforced Atlas -> tracker -> website ordering.
 
 ### Why this slice is over the 400-LOC target
 
-497 added lines, of which **75 are production code**:
+Over the cap, and under an eighth of it is behaviour. Per-file figures live in
+**Estimated diff size** at the bottom of this document and nowhere else --
+`scripts/sync_pr_plan.py` regenerates that table from the real diff, so
+restating them here would create a second copy that drifts out of agreement
+with the first. It did exactly that on the sibling PR (#2305), where a
+hand-typed total went stale within two commits while the generated table stayed
+correct.
 
-| File | LOC | What it is |
-|---|---:|---|
-| `plans/PR-EOM-Funnel-Capability-Manifest.md` | 214 | this document, required by the plan contract |
-| `tests/test_eom_funnel_capability_manifest.py` | 205 | both-directions boundary probe + degradation case |
-| `atlas_brain/eom_api/funnel.py` | 75 | the actual change |
-| `tests/test_eom_lead_conversion.py` | 3 | the new key on three existing envelope assertions |
+The shape, which does not drift: one production file, a test file roughly three
+times its size, and a plan document about as large as the tests.
 
 The production change is one field, one map, and one derivation. Splitting it
 would ship a response field that nothing populates, or a derivation with nothing
@@ -270,7 +272,7 @@ consumer-side behaviour is specified and tested in the tracker half.
 | File | LOC |
 |---|---:|
 | `atlas_brain/eom_api/funnel.py` | 72 |
-| `plans/PR-EOM-Funnel-Capability-Manifest.md` | 276 |
+| `plans/PR-EOM-Funnel-Capability-Manifest.md` | 278 |
 | `tests/test_eom_funnel_capability_manifest.py` | 215 |
 | `tests/test_eom_lead_conversion.py` | 3 |
-| **Total** | **566** |
+| **Total** | **568** |
