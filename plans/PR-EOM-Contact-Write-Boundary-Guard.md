@@ -52,7 +52,7 @@ Slice phase: workflow/process
    outside it is reported non-blocking while legacy writers are converged.
 2. Add `tests/contact_write_boundary/baseline.json`: the committed writer
    inventory (17 production write sites today).
-3. Add `tests/test_contact_write_boundary.py`: 29 tests, including planted
+3. Add `tests/test_contact_write_boundary.py`: 39 tests, including planted
    violations that must fail the gate and false-positive pins that must not.
 5. Record the gate in `ci/gates.yml` as `ci_blocking_not_required`; promoting it
    to a branch-required context is an operator action.
@@ -132,6 +132,24 @@ operation patterns. Closure: all three write operations (INSERT/UPDATE/DELETE)
 are matched; both allow-list membership outcomes are tested; both error
 directions are tested; the baseline path is tested for silence-on-known and
 report-on-new; INSERT is proven non-silenceable.
+
+### Trusted-base execution
+
+The workflow runs on `pull_request_target`, checks the **checker** out from the
+base SHA, and checks the PR tree out separately as data. The first version ran
+the PR's own copy of the checker against itself, which made the gate
+self-defeating: a PR adding a forbidden writer could widen `INSERT_ALLOWED`,
+weaken `classify()`, or rewrite the self-tests in the same diff and publish a
+green context. Demonstrated:
+
+```
+base checker vs hostile PR tree -> EXIT=1, flags atlas_brain/services/evil.py
+PR   checker vs the same tree   -> EXIT=0, evil.py not flagged
+```
+
+The baseline is also read from base, so a PR cannot baseline away its own
+finding. `ci/gates.yml` now records `trusted_base: true`, which it can only do
+truthfully because of this change. No step executes PR-ref content.
 
 ### Why a new workflow instead of the existing EOM pipeline job
 
@@ -292,7 +310,7 @@ fewer.
 | `scripts/check_contact_write_boundary.py` | 520 |
 | `tests/contact_write_boundary/baseline.json` | 42 |
 | `tests/test_contact_write_boundary.py` | 600 |
-| **Total** | **1470** |
+| **Total** | **1720** |
 
 Over the 400 LOC soft cap. 262 lines are the test file and 231 the plan, so the
 executable surface is ~370. The tests are the deliverable this slice is *for*: a

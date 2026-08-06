@@ -162,7 +162,11 @@ def test_every_row_creation_form_is_blocking(tmp_path: Path) -> None:
     _write(
         tmp_path,
         "atlas_brain/services/other_writes.py",
-        'A = "MERGE INTO contacts USING staging ON contacts.id = staging.id"\n'
+        # The MERGE carries an insert branch: an update-only MERGE creates no
+        # rows and is deliberately non-blocking (see
+        # test_merge_without_insert_branch_is_not_a_create).
+        'A = "MERGE INTO contacts USING staging ON contacts.id = staging.id '
+        'WHEN NOT MATCHED THEN INSERT (full_name) VALUES (staging.name)"\n'
         'B = "COPY contacts (full_name) FROM STDIN"\n'
         'C = "SELECT full_name INTO contacts FROM staging"\n',
     )
@@ -518,3 +522,86 @@ def test_baseline_inventory_is_not_vacuous() -> None:
     updates = [entry for entry in inventory if "::UPDATE::" in entry]
     assert len(inserts) == 2, "expected both provider INSERT sites in the inventory"
     assert len(updates) >= 10, "expected the known UPDATE surface in the inventory"
+
+
+# ---------------------------------------------------------------------------
+# Round 4: literal-vs-executable lexing, TRUNCATE, MERGE branches
+# ---------------------------------------------------------------------------
+
+def test_escape_string_does_not_erase_following_statements(tmp_path: Path) -> None:
+    r"""`E'it\'s'` closes at the backslash-escaped quote in a naive lexer.
+
+    The previous lexer then treated the rest of the line as a comment and
+    erased a real INSERT, exiting 0.
+    """
+    _write(
+        tmp_path,
+        "atlas_brain/storage/migrations/904_escape.sql",
+        "SELECT E'it\\'s -- still literal'; "
+        "INSERT INTO contacts (full_name) VALUES ('x');\n",
+    )
+    blocking, _ = _classify(tmp_path)
+    assert any(f.operation == "INSERT" for f in blocking)
+
+
+def test_sql_quoted_as_data_is_not_executable(tmp_path: Path) -> None:
+    """Literal contents are data. Reading them invents statements.
+
+    `SELECT 'Example only: INSERT INTO contacts (...)'` was reported as a
+    blocking write, which would red the build over a doc string in a migration.
+    """
+    _write(
+        tmp_path,
+        "atlas_brain/storage/migrations/905_inert.sql",
+        "SELECT 'Example only: INSERT INTO contacts (full_name) VALUES (''x'')';\n",
+    )
+    blocking, new_mutations = _classify(tmp_path)
+    assert blocking == []
+    assert new_mutations == []
+
+
+def test_truncate_surfaces_in_the_inventory(tmp_path: Path) -> None:
+    """TRUNCATE deletes every row without the provider or the audit ledger."""
+    _write(
+        tmp_path,
+        "atlas_brain/storage/migrations/906_truncate.sql",
+        "TRUNCATE TABLE contacts;\n",
+    )
+    blocking, new_mutations = _classify(tmp_path)
+    assert [f.operation for f in new_mutations] == ["TRUNCATE"]
+    assert blocking == [], "classified with the deferred UPDATE/DELETE policy"
+
+
+def test_merge_without_insert_branch_is_not_a_create(tmp_path: Path) -> None:
+    """An update-only MERGE creates no rows, so it must not red the build."""
+    _write(
+        tmp_path,
+        "atlas_brain/storage/migrations/907_merge_update.sql",
+        "MERGE INTO contacts USING staging s ON s.id = contacts.id "
+        "WHEN MATCHED THEN UPDATE SET full_name = s.name;\n",
+    )
+    blocking, new_mutations = _classify(tmp_path)
+    assert blocking == []
+    assert [f.operation for f in new_mutations] == ["MERGE_UPDATE"]
+
+
+def test_merge_with_insert_branch_is_blocking(tmp_path: Path) -> None:
+    _write(
+        tmp_path,
+        "atlas_brain/storage/migrations/908_merge_insert.sql",
+        "MERGE INTO contacts USING staging s ON s.id = contacts.id "
+        "WHEN NOT MATCHED THEN INSERT (full_name) VALUES (s.name);\n",
+    )
+    blocking, _ = _classify(tmp_path)
+    assert [f.operation for f in blocking] == ["MERGE"]
+
+
+def test_select_before_insert_does_not_report_phantom_select_into(tmp_path: Path) -> None:
+    """`SELECT 1; INSERT INTO contacts (...)` is one write, not two."""
+    _write(
+        tmp_path,
+        "atlas_brain/storage/migrations/909_two_statements.sql",
+        "SELECT 1;\nINSERT INTO contacts (full_name) VALUES ('x');\n",
+    )
+    blocking, _ = _classify(tmp_path)
+    assert [f.operation for f in blocking] == ["INSERT"]

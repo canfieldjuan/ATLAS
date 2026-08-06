@@ -145,8 +145,20 @@ PATTERNS = {
         re.IGNORECASE | re.DOTALL,
     ),
     "SELECT_INTO": re.compile(
-        # The optional qualifiers below are PostgreSQL SELECT INTO syntax.
-        r"\bselect\b.*?\binto\s+(?:temp\s+|temporary\s+|unlogged\s+)?" + TABLE,
+        # The optional qualifiers are PostgreSQL SELECT INTO syntax. The inner
+        # guard stops this matching the INTO of a following INSERT: without it,
+        # "SELECT 1; INSERT INTO contacts (...)" reported a phantom SELECT_INTO
+        # alongside the real INSERT.
+        r"\bselect\b(?:(?!\binsert\b|;).)*?\binto\s+"
+        r"(?:temp\s+|temporary\s+|unlogged\s+)?" + TABLE,
+        re.IGNORECASE | re.DOTALL,
+    ),
+    # TRUNCATE deletes every row without touching the provider or the lifecycle
+    # ledger. Classified with the mutations rather than the creates, so it
+    # surfaces in the inventory under this slice's deferred UPDATE/DELETE policy
+    # instead of reading as a clean tree.
+    "TRUNCATE": re.compile(
+        r"\btruncate\s+(?:table\s+)?(?:only\s+)?" + TABLE,
         re.IGNORECASE | re.DOTALL,
     ),
     "UPDATE": re.compile(
@@ -158,6 +170,25 @@ PATTERNS = {
         re.IGNORECASE | re.DOTALL,
     ),
 }
+
+
+_MERGE_INSERT_BRANCH = re.compile(
+    r"when\s+not\s+matched(?:(?!;).)*?\binsert\b", re.IGNORECASE | re.DOTALL
+)
+
+
+def _refine_operation(operation: str, haystack: str, start: int) -> str:
+    """Narrow an operation using the statement body following the match.
+
+    A `MERGE INTO contacts ... WHEN MATCHED THEN UPDATE` with no insert branch
+    creates no rows, so classifying it as a create would red the build for a
+    mutation this slice deliberately leaves non-blocking.
+    """
+    if operation != "MERGE":
+        return operation
+    end = haystack.find(";", start)
+    body = haystack[start: end if end != -1 else len(haystack)]
+    return "MERGE" if _MERGE_INSERT_BRANCH.search(body) else "MERGE_UPDATE"
 
 
 @dataclass(frozen=True, order=True)
@@ -318,11 +349,12 @@ def scan_file(path: Path, root: Path) -> tuple:
             match = pattern.search(value)
             if not match:
                 continue
+            refined = _refine_operation(operation, value, match.start())
             start = max(0, match.start() - 10)
             finding = Finding(
                 path=rel,
                 line=lineno,
-                operation=operation,
+                operation=refined,
                 snippet=_normalize(value[start:match.end() + 60]),
             )
             # Dedup by (operation, line), NOT by key(): key() omits the line so
@@ -359,87 +391,115 @@ def scan(root: Path) -> list:
     return findings
 
 
-def _strip_sql_comments(sql: str) -> str:
-    """Blank out SQL comments without consuming string literals.
+def _blank_sql_noise(sql: str) -> str:
+    """Blank comments AND string-literal bodies, preserving byte offsets.
 
-    A regex cannot do this. `--` inside a literal is data, not a comment, and
-    a naive `--[^\n]*` strips the rest of the line -- so
-    `SELECT 'harmless -- '; INSERT INTO contacts (...)` hid a real INSERT from
-    this gate completely. Comments are replaced with spaces rather than removed
-    so byte offsets, and therefore reported line numbers, stay correct.
+    Two failure directions, both reproduced before this was written:
 
-    Handles single-quoted strings (with '' escapes), dollar-quoted bodies, and
-    double-quoted identifiers, which is the set PostgreSQL actually uses.
+    * A comment stripper that does not understand literals erases real code.
+      ``SELECT E'it\\'s -- still literal'; INSERT INTO contacts (...)`` ended
+      with the INSERT treated as comment text, and the gate exited 0.
+    * A scanner that reads literal *contents* invents statements that never
+      execute. ``SELECT 'Example only: INSERT INTO contacts (...)'`` was
+      reported as a blocking write.
+
+    Both are fixed by the same pass: literal bodies become spaces, so SQL
+    quoted as data is inert and SQL outside quotes is still visible. Everything
+    is replaced in place (newlines preserved) so reported line numbers stay
+    correct.
+
+    Handles PostgreSQL line and nested block comments, single-quoted strings
+    with '' escapes, ``E''`` escape strings where a backslash escapes the
+    delimiter, and tagged dollar quotes. Double-quoted identifiers are kept
+    intact, because ``INSERT INTO "contacts"`` is a real target rather than data.
     """
-    out = []
+    out: list[str] = []
     i = 0
     n = len(sql)
+
+    def blank(text: str) -> str:
+        return "".join("\n" if ch == "\n" else " " for ch in text)
+
     while i < n:
         ch = sql[i]
         nxt = sql[i + 1] if i + 1 < n else ""
 
         if ch == "-" and nxt == "-":
-            while i < n and sql[i] != "\n":
-                out.append(" ")
-                i += 1
+            j = sql.find("\n", i)
+            j = n if j == -1 else j
+            out.append(blank(sql[i:j]))
+            i = j
             continue
 
         if ch == "/" and nxt == "*":
-            depth = 1  # PostgreSQL block comments nest
-            out.append("  ")
-            i += 2
-            while i < n and depth:
-                if sql.startswith("/*", i):
+            depth, j = 1, i + 2
+            while j < n and depth:
+                if sql.startswith("/*", j):
                     depth += 1
-                    out.append("  ")
-                    i += 2
-                elif sql.startswith("*/", i):
+                    j += 2
+                elif sql.startswith("*/", j):
                     depth -= 1
-                    out.append("  ")
-                    i += 2
+                    j += 2
                 else:
-                    out.append("\n" if sql[i] == "\n" else " ")
-                    i += 1
+                    j += 1
+            out.append(blank(sql[i:j]))
+            i = j
+            continue
+
+        # E'...' escape string: a backslash escapes the closing quote.
+        if ch in "eE" and nxt == "'" and (i == 0 or not (sql[i - 1].isalnum() or sql[i - 1] == "_")):
+            j = i + 2
+            while j < n:
+                if sql[j] == "\\" and j + 1 < n:
+                    j += 2
+                    continue
+                if sql[j] == "'":
+                    if sql[j + 1:j + 2] == "'":
+                        j += 2
+                        continue
+                    j += 1
+                    break
+                j += 1
+            out.append(sql[i:i + 1] + "'" + blank(sql[i + 2:max(i + 2, j - 1)]) + "'")
+            i = j
             continue
 
         if ch == "'":
-            out.append(ch)
-            i += 1
-            while i < n:
-                if sql[i] == "'" and sql[i + 1:i + 2] == "'":
-                    out.append("''")
-                    i += 2
-                    continue
-                out.append(sql[i])
-                if sql[i] == "'":
-                    i += 1
+            j = i + 1
+            while j < n:
+                if sql[j] == "'":
+                    if sql[j + 1:j + 2] == "'":
+                        j += 2
+                        continue
+                    j += 1
                     break
-                i += 1
-            continue
-
-        if ch == '"':
-            out.append(ch)
-            i += 1
-            while i < n:
-                out.append(sql[i])
-                if sql[i] == '"':
-                    i += 1
-                    break
-                i += 1
+                j += 1
+            out.append("'" + blank(sql[i + 1:max(i + 1, j - 1)]) + "'")
+            i = j
             continue
 
         if ch == "$":
             match = re.match(r"\$[A-Za-z_]*\$", sql[i:])
             if match:
                 tag = match.group(0)
-                end = sql.find(tag, i + len(tag))
-                stop = (end + len(tag)) if end != -1 else n
-                out.append(sql[i:stop])
-                i = stop
+                close = sql.find(tag, i + len(tag))
+                j = (close + len(tag)) if close != -1 else n
+                out.append(blank(sql[i:j]))
+                i = j
                 continue
+
+        if ch == '"':
+            j = i + 1
+            while j < n and sql[j] != '"':
+                j += 1
+            j = min(j + 1, n)
+            out.append(sql[i:j])
+            i = j
+            continue
 
         out.append(ch)
         i += 1
+
     return "".join(out)
 
 
@@ -457,17 +517,18 @@ def scan_sql_file(path: Path, root: Path) -> tuple:
     except (OSError, UnicodeDecodeError) as exc:
         return [], f"{rel}: unreadable ({type(exc).__name__})"
 
-    stripped = _strip_sql_comments(source)
+    stripped = _blank_sql_noise(source)
 
     findings, seen = [], set()
     for operation, pattern in PATTERNS.items():
         for match in pattern.finditer(stripped):
+            refined = _refine_operation(operation, stripped, match.start())
             line = stripped.count("\n", 0, match.start()) + 1
             start = max(0, match.start() - 10)
             finding = Finding(
                 path=rel,
                 line=line,
-                operation=operation,
+                operation=refined,
                 snippet=_normalize(stripped[start:match.end() + 60]),
             )
             dedup = (finding.operation, finding.line)

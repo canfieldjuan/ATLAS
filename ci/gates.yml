@@ -22,7 +22,7 @@ gates:
     name: Contact write boundary
     context: contact-write-boundary
     enforcement: ci_blocking_not_required
-    trusted_base: false
+    trusted_base: true
     workflow: .github/workflows/contact_write_boundary.yml
     local_command: python scripts/check_contact_write_boundary.py --baseline tests/contact_write_boundary/baseline.json
 
