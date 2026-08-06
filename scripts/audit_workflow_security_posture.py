@@ -29,6 +29,7 @@ ALLOWED_PULL_REQUEST_TARGET_JOBS = frozenset(
         ("session_lane.yml", "session-lane"),
         ("plan_admission.yml", "plan-admission"),
         ("review_contract.yml", "review-contract"),
+        ("contact_write_boundary.yml", "contact-write-boundary"),
     }
 )
 REVIEW_CONTRACT_PREADMISSION_JOB = ("review_contract.yml", "review-contract")
@@ -167,16 +168,73 @@ def _job_runs_on_pull_request_target(job: dict[str, Any]) -> bool:
     return "pull_request_target" not in condition
 
 
+_READ_ONLY_PERMISSION_VALUES = frozenset({"read", "none"})
+
+
+def _permissions_are_explicitly_read_only(permissions: Any) -> bool:
+    """Whether a permissions block is present AND provably grants no write.
+
+    Stated positively and fail-closed on purpose. An enrolled
+    `pull_request_target` job that omits `permissions` at both workflow and job
+    scope does not get a read-only token -- it inherits the repository or
+    organization default for `GITHUB_TOKEN`, which is write-capable on older
+    repositories and is settable outside this file. Absence is therefore not
+    evidence of read-only, so only an explicit block admits the job.
+
+    `id-token` is excluded because OIDC has its own separate allowlist and
+    check; every other write scope on a `pull_request_target` job hands a
+    write-capable base-context token to a job that reads PR-authored content.
+
+    Anything that is not an explicit read-only shape is rejected, including
+    `write-all`, a bare scalar, and a scope whose value is an unresolved
+    `${{ }}` expression this auditor cannot evaluate statically.
+    """
+    if permissions == "read-all":
+        return True
+    if not isinstance(permissions, dict):
+        return False
+    return all(
+        value in _READ_ONLY_PERMISSION_VALUES
+        for key, value in permissions.items()
+        if key != "id-token"
+    )
+
+
+def _effective_permissions(job: dict[str, Any], workflow: dict[str, Any]) -> Any:
+    """Job-level permissions if declared, else the workflow-level block.
+
+    Takes the already-parsed workflow rather than its text on purpose. Parsing
+    a second time here would need an `except yaml.YAMLError` whose only possible
+    answer is a silent `None`, and would let the two parses disagree about the
+    document this decision is made from.
+    """
+    if "permissions" in job:
+        return job.get("permissions")
+    return workflow.get("permissions")
+
+
 def _is_allowed_pull_request_target_job(
     path: Path,
     job_name: str,
     job: dict[str, Any],
     workflow_text: str,
+    workflow: dict[str, Any],
 ) -> bool:
     if (path.name, job_name) not in ALLOWED_PULL_REQUEST_TARGET_JOBS:
         return False
     if (path.name, job_name) == REVIEW_CONTRACT_PREADMISSION_JOB:
         return _review_contract_workflow_text_is_allowed(workflow_text)
+    # A trusted-base job runs with the BASE repository's token. Granting it a
+    # write scope hands that token to a job whose whole purpose is to read
+    # PR-authored content. Every currently enrolled job already declares
+    # read-only permissions, so this rejects nothing that exists today and
+    # closes the gap for everything enrolled later. Omitting the block entirely
+    # is rejected too: it inherits a repo/org default that is write-capable and
+    # is changed outside this repository, so it cannot be read as read-only.
+    if not _permissions_are_explicitly_read_only(
+        _effective_permissions(job, workflow)
+    ):
+        return False
     if job.get("if") != "github.event_name == 'pull_request_target'":
         return False
     steps = _iter_steps(job)
@@ -232,7 +290,7 @@ def audit_workflow(path: Path) -> list[Finding]:
 
     for job_name, job in _iter_jobs(workflow):
         if "pull_request_target" in events and _job_runs_on_pull_request_target(job):
-            if _is_allowed_pull_request_target_job(path, job_name, job, workflow_text):
+            if _is_allowed_pull_request_target_job(path, job_name, job, workflow_text, workflow):
                 findings.append(Finding("WARN", str(path), f"job {job_name} allowed pull_request_target: trusted-base checkout guard"))
             else:
                 findings.append(Finding("ERROR", str(path), f"job {job_name} can run on pull_request_target without the approved trusted-base guard shape"))

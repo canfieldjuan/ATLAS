@@ -20,6 +20,17 @@ A finding is written as `Rxx (LEVEL) file:line - issue - required fix`.
 **Blockers must cite `file:line`.** A bare "LGTM" with no rule matrix and no
 independent verification is worse than no comment.
 
+**Review Contract boundary wins.** The reviewer may test the changed code,
+direct callers/tests/artifacts, required CI, and the acceptance criteria in the
+PR's Review Contract. A new edge case, polish concern, or hardening idea outside
+that boundary is not BLOCKER/MAJOR unless it proves the current diff violates
+the Review Contract, breaks existing behavior, red CI, security/privacy/money
+safety, data correctness, material reachable
+correctness/backward-compatibility/performance, or an explicitly claimed
+mechanism. Otherwise mark it NIT or `waived-out-of-scope`, and require the
+builder to park it in `Deferred` / `HARDENING.md` instead of pushing another
+fix.
+
 **BLOCKER requires a concrete failure path**: the specific input, sequence, or
 state that produces the harm, established by the reviewer. "This could break" is
 not one. Without a failure path the finding is MAJOR at most -- downgrade it, do
@@ -38,7 +49,9 @@ Three carve-outs, because a missing-evidence finding is not a speculative one:
   or not anyone has yet found the bypass -- "no one has exploited it" is not
   evidence it is safe. The unifying test is simple: if what is missing is the
   *evidence*, the absence is the failure path; only a speculative claim about
-  code you have read needs an input sequence.
+  code you have read needs an input sequence. This carve-out applies only to
+  proof required by the changed paths and Review Contract; it does not promote a
+  newly imagined adjacent hardening probe into a merge blocker.
 - **Established, not necessarily published.** For **any category
   `SECURITY.md` routes privately** -- it names exploitable vulnerabilities,
   exposed credentials, authentication bypasses, payment or billing issues, data
@@ -246,6 +259,12 @@ practical, use multiple unseen fixtures plus a short explanation of the
 generalized mechanism. Generated or unseen cases must be diverse enough to
 exercise the class, not trivial near-duplicates that satisfy the easy path.
 
+R13 closes the defect class named by the Review Contract or review finding; it
+does not license an expanding search over adjacent classes. Once the named class
+is structurally fixed or explicitly waived, any newly discovered adjacent
+edge-case/hardening/polish concern must be parked unless it satisfies the Review
+Contract boundary rule above.
+
 **Open-category exception (evidence-gate, do not enumerate).** When the class is
 an *open semantic category* the guard cannot enumerate on either side (person
 names, senders, intent, language, is-junk), neither a denylist nor a
@@ -281,6 +300,12 @@ Before LGTM on any PR whose change is a guard, validator, cap, classifier,
 gate, sanitizer, denylist, parser admission rule, or safety checker, run a
 boundary probe and state `boundary-probe: <what applied + result>` in the
 review.
+
+Probe the boundary this PR declares or changes; do not turn the probe into a
+whole-module hardening sweep. Adjacent probe ideas that do not falsify the
+Review Contract, existing behavior, CI, safety, data correctness, material
+reachable correctness/backward-compatibility/performance, or claimed mechanism
+are parked, not blocking.
 
 A guard usually fails on its second side. Check both sides:
 

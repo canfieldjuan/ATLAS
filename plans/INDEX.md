@@ -1,6 +1,6 @@
 # Plan archive index
 
-1511 archived plan doc(s). Merged plan docs are moved under `archive/` and listed below; once the archive sweep has run, the `plans/` root holds only in-flight slices.
+1513 archived plan doc(s). Merged plan docs are moved under `archive/` and listed below; once the archive sweep has run, the `plans/` root holds only in-flight slices.
 
 - [PR-ASR-Pip-Audit-Egg-Fragment](archive/PR-ASR-Pip-Audit-Egg-Fragment.md) - lane: security/workflow | phase: Production hardening
 - [PR-ASR-Requirements-Audit-Pin](archive/PR-ASR-Requirements-Audit-Pin.md) - lane: security/workflow | phase: Production hardening
@@ -1317,6 +1317,7 @@
 - [PR-Plans-Check-Wiring](archive/PR-Plans-Check-Wiring.md) - lane: governance/plans-archive | phase: Workflow/process
 - [PR-Post-575-Extraction-State-Closeout](archive/PR-Post-575-Extraction-State-Closeout.md)
 - [PR-Post-586-Content-Ops-Closeout](archive/PR-Post-586-Content-Ops-Closeout.md)
+- [PR-Pre-Push-Audit-Doc-Test-Probe](archive/PR-Pre-Push-Audit-Doc-Test-Probe.md) - lane: dev-workflow/pre-push-audit-doc-test-probe | phase: Workflow/process
 - [PR-Pre-Push-Audit-Httpx](archive/PR-Pre-Push-Audit-Httpx.md) - lane: mcp/local-model-qualification | phase: workflow/process
 - [PR-Pre-Push-Caller-Hints-Timeout](archive/PR-Pre-Push-Caller-Hints-Timeout.md) - lane: workflow/pre-push-audit-performance | phase: Workflow/process
 - [PR-Problem-Derived-Fix-Contract](archive/PR-Problem-Derived-Fix-Contract.md) - lane: workflow-process | phase: Workflow/process
@@ -1405,6 +1406,7 @@
 - [PR-Reviewer-Boundary-Probe-Contract](archive/PR-Reviewer-Boundary-Probe-Contract.md) - lane: workflow/process | phase: Workflow/process
 - [PR-Reviewer-Codebase-Verification-Rule](archive/PR-Reviewer-Codebase-Verification-Rule.md) - lane: workflow/process | phase: Workflow/process
 - [PR-Reviewer-Convergence-Attestation](archive/PR-Reviewer-Convergence-Attestation.md) - lane: dev-workflow/process-gate-enrollment | phase: Workflow/process
+- [PR-Reviewer-Edge-Stop-Boundary](archive/PR-Reviewer-Edge-Stop-Boundary.md) - lane: reviewer-boundary/workflow-process | phase: Workflow/process
 - [PR-Reviewer-Merge-Gate-Claude-Review-Status](archive/PR-Reviewer-Merge-Gate-Claude-Review-Status.md) - lane: dev-workflow/reviewer-merge-gate | phase: Workflow/process
 - [PR-Reviewer-Miss-Metrics](archive/PR-Reviewer-Miss-Metrics.md) - lane: dev-workflow/review-contract | phase: Workflow/process
 - [PR-Reviewer-Path-Trigger-Audit](archive/PR-Reviewer-Path-Trigger-Audit.md) - lane: dev-workflow/review-contract | phase: Workflow/process

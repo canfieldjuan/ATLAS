@@ -35,6 +35,38 @@ from ...storage.repositories.call_transcript import get_call_transcript_repo
 
 logger = logging.getLogger("atlas.api.comms.call_actions")
 
+
+def _render_keys(keys: list) -> str:
+    """Render plan-supplied key names safely for logs, results, and ntfy.
+
+    These names come from LLM-produced JSON, so a transcript can yield a key
+    containing control characters. Joining one verbatim emits a forged
+    multiline log record, and the same string is copied into the persisted
+    result and the notification body.
+    """
+    rendered = []
+    for key in keys[:_MAX_RENDERED_KEYS]:
+        text = str(key)[:_MAX_RENDERED_KEY_LEN]
+        rendered.append("".join(ch if ch.isprintable() else "?" for ch in text))
+    if len(keys) > _MAX_RENDERED_KEYS:
+        rendered.append(f"... +{len(keys) - _MAX_RENDERED_KEYS} more")
+    return ", ".join(rendered)
+
+
+_MAX_RENDERED_KEYS = 12
+_MAX_RENDERED_KEY_LEN = 64
+
+
+class PlanActionSkipped(Exception):
+    """A plan action performed no work and must not be audited as executed.
+
+    approve_plan records any non-raising executor return as status "ok", which
+    counts it in `executed`, names it in the CRM interaction summary, persists
+    the plan as executed, and lists it under "Completed" in the notification.
+    For a rejected-only contact update that would permanently report an
+    attempted tenancy or provenance mutation as a completed action.
+    """
+
 router = APIRouter(prefix="/call-actions", tags=["call-actions"])
 
 
@@ -617,6 +649,9 @@ async def approve_plan(transcript_id: UUID):
             )
             results.append({"action": atype, "status": "ok", "detail": result})
             logger.info("Plan action OK: %s for %s", atype, transcript_id)
+        except PlanActionSkipped as e:
+            results.append({"action": atype, "status": "skipped", "detail": str(e)})
+            logger.info("Plan action SKIPPED: %s for %s: %s", atype, transcript_id, e)
         except Exception as e:
             results.append({"action": atype, "status": "error", "detail": str(e)})
             logger.error("Plan action FAIL: %s for %s: %s", atype, transcript_id, e)
@@ -635,21 +670,40 @@ async def approve_plan(transcript_id: UUID):
         except Exception as e:
             logger.warning("Failed to log plan approval interaction: %s", e)
 
-    # Persist plan status + results
+    # Persist plan status + results. A plan whose only outcomes were skips did
+    # not execute: recording "executed" would make a retry answer "Plan already
+    # executed" while nothing had happened.
+    # "skipped" is deliberately outside the idempotency guard above, so it must
+    # mean "nothing was attempted", not "everything failed". An action that
+    # errored may still have taken effect -- an email send that timed out after
+    # the provider accepted it -- so an errored plan stays "executed" and
+    # non-retryable rather than inviting a duplicate send.
+    statuses = {r["status"] for r in results}
+    plan_status = "skipped" if statuses == {"skipped"} else "executed"
     try:
         repo = get_call_transcript_repo()
-        await repo.update_plan_status(transcript_id, "executed", results)
+        await repo.update_plan_status(transcript_id, plan_status, results)
     except Exception as e:
         logger.error("Failed to persist plan status for %s: %s", transcript_id, e)
 
     # Send completion notification
     try:
-        await _notify_plan_executed(transcript_id, results, biz_name, data)
+        await _notify_plan_executed(
+            transcript_id, results, biz_name, data, plan_status=plan_status
+        )
     except Exception as e:
         logger.warning("Plan execution notification failed: %s", e)
 
     ok_count = sum(1 for r in results if r["status"] == "ok")
-    fail_count = len(results) - ok_count
+    # Counted explicitly rather than as len(results) - ok_count, which billed
+    # every skip as a failure.
+    fail_count = sum(1 for r in results if r["status"] == "error")
+    skip_count = sum(1 for r in results if r["status"] == "skipped")
+    if skip_count:
+        logger.info(
+            "Plan execution for %s: %d action(s) skipped without writing",
+            transcript_id, skip_count,
+        )
     if fail_count:
         failed_names = [r["action"] for r in results if r["status"] == "error"]
         logger.warning(
@@ -780,11 +834,11 @@ async def _exec_email(
     """Draft and send a confirmation email."""
     to_email = data.get("customer_email")
     if not to_email:
-        return "Skipped: no customer email"
+        raise PlanActionSkipped("no customer email")
 
     content = await _generate_draft("email", record, biz_name)
     if not content:
-        return "Skipped: LLM draft generation failed"
+        raise PlanActionSkipped("email draft generation failed")
 
     # Save draft for audit
     repo = get_call_transcript_repo()
@@ -805,7 +859,10 @@ async def _exec_email(
     msg = EmailMessage(to=to_email, subject=subject, body_text=body)
     sent = await asyncio.wait_for(svc.send_email(msg), timeout=30.0)
     if not sent:
-        return "Email send failed"
+        # Deliberately an error, not a PlanActionSkipped. The provider was
+        # called, so the send may have partially taken effect; "skipped" would
+        # make the plan retryable and invite a duplicate email.
+        raise RuntimeError("email send failed")
     return f"Email sent to {to_email}"
 
 
@@ -815,12 +872,12 @@ async def _exec_sms(
     """Draft and send a confirmation SMS."""
     to_number = data.get("customer_phone") or record.get("from_number")
     if not to_number:
-        return "Skipped: no customer phone"
+        raise PlanActionSkipped("no customer phone")
 
     biz_name = _get_business_name(record)
     content = await _generate_draft("sms", record, biz_name)
     if not content:
-        return "Skipped: LLM draft generation failed"
+        raise PlanActionSkipped("sms draft generation failed")
 
     repo = get_call_transcript_repo()
     await repo.save_draft(transcript_id, "sms", content)
@@ -837,17 +894,179 @@ async def _exec_sms(
     return f"SMS sent to {to_number}"
 
 
+# Contact fields a phone call can legitimately teach us. The action plan is
+# LLM-proposed from a transcript, so its params are untrusted input reaching a
+# privileged write; the executor decides what a call outcome is allowed to be,
+# rather than inheriting whatever the provider's broader update surface accepts.
+#
+# Deliberately excluded, and why:
+#   business_context_id  tenancy. A call outcome never re-tenants a contact.
+#                        DatabaseCRMProvider blocks this for EOM contacts, but
+#                        not for other tenants, so the executor must.
+#   source, source_ref   provenance. The record of how a contact reached the
+#                        CRM is set once at creation and is not a call outcome.
+#   contact_type, status, lead_stage, lead_owner, next_follow_up_at
+#                        lifecycle. Owned by the funnel transition service
+#                        (see crm_provider.py's EOM transition guards).
+#   tags                 free-form and used for segmentation downstream.
+# The producer's vocabulary. `call_extraction.md` emits customer_name,
+# customer_phone, customer_email and address, and `action_planning.md` gives
+# `update_contact` no parameter schema -- so a plan naming the extracted fields
+# is not merely possible, it is the likely shape. Without this mapping the
+# allow-list would silently reject every legitimate update, which is the
+# false-negative side of the same guard.
+_PLAN_FIELD_ALIASES = {
+    "customer_name": "full_name",
+    "name": "full_name",
+    "customer_phone": "phone",
+    "customer_email": "email",
+    "customer_address": "address",
+    "zip_code": "zip",
+    "postal_code": "zip",
+}
+
+# Field -> max length, mirroring migrations/035_contacts.sql. Every one of these
+# columns is VARCHAR or TEXT, so a producer-supplied dict, list, or bool is not
+# a value the column can hold; admitting one either raises at the driver or
+# stores a stringified object. Lengths are enforced here rather than discovered
+# as a database error mid-plan.
+_PLAN_UPDATABLE_CONTACT_FIELDS: dict = {
+    "full_name": 256,
+    "first_name": 128,
+    "last_name": 128,
+    "email": 256,
+    "phone": 32,
+    "address": 2000,
+    "city": 128,
+    "state": 64,
+    "zip": 16,
+    "notes": 4000,
+}
+
+
 async def _exec_update_contact(record: dict, params: dict) -> str:
-    """Update CRM contact with new info from the plan."""
+    """Update CRM contact with new info from the plan.
+
+    Only call-derived fields are applied. Anything else the plan proposed is
+    dropped and logged rather than silently forwarded.
+    """
     contact_id = record.get("contact_id")
     if not contact_id:
-        return "Skipped: no linked contact"
+        raise PlanActionSkipped("no linked contact")
     if not params:
-        return "Skipped: no update params"
+        raise PlanActionSkipped("no update params")
+
+    # Keyed by canonical field, holding every source key that resolved to it.
+    # The alias map is many-to-one (`customer_email` and `email` both mean
+    # `email`), so a plan can carry two source keys for one column. Writing them
+    # as they arrive would let the later JSON member win silently, and the
+    # planner is fed BOTH the existing CRM contact and the newly extracted call
+    # data -- so the collision is reachable exactly when a caller supplies
+    # updated details, which is when getting it wrong is worst.
+    candidates: dict[str, list[tuple[str, str]]] = {}
+    rejected: list = []
+    empty: list = []
+    malformed: list = []
+    for key, value in params.items():
+        canonical = _PLAN_FIELD_ALIASES.get(key, key)
+        if canonical not in _PLAN_UPDATABLE_CONTACT_FIELDS:
+            rejected.append(key)
+            continue
+        # Null first. `call_extraction.md` emits null for anything the caller
+        # did not mention, so sparse call data is ordinary, not malformed --
+        # classifying it as malformed made the null branch below unreachable
+        # and logged routine calls at WARNING.
+        if value is None:
+            empty.append(key)
+            continue
+        # Only text reaches a text column. A bool is not a name, and a dict is
+        # not an email; both would otherwise be stringified into the row.
+        if not isinstance(value, str):
+            malformed.append(key)
+            continue
+        if len(value) > _PLAN_UPDATABLE_CONTACT_FIELDS[canonical]:
+            malformed.append(key)
+            continue
+        # `call_extraction.md` emits null for anything the caller did not
+        # mention, and a plan that copies the extracted payload therefore
+        # carries nulls for most fields. Writing those through would blank
+        # existing CRM data: a call that mentioned only a phone number would
+        # erase the contact's email. A call can teach us a value; it cannot
+        # teach us that a value is absent.
+        if not value.strip():
+            empty.append(key)
+            continue
+        candidates.setdefault(canonical, []).append((key, value))
+
+    # Resolve aliases to one value per column. Identical duplicates are fine --
+    # `{"email": "a@b.c", "customer_email": "a@b.c"}` says one thing twice.
+    # Differing values are dropped entirely rather than resolved by picking one:
+    # nothing here can tell the stale or hallucinated value from the correct
+    # one, and this writes to a live CRM row. Fail closed.
+    allowed: dict = {}
+    conflicting: list = []
+    for canonical, entries in candidates.items():
+        values = {value for _, value in entries}
+        if len(values) != 1:
+            # `!= 1` rather than `> 1`: an empty group cannot occur (a canonical
+            # only appears here because something appended to it), but treating
+            # it as a conflict means the impossible case also fails closed
+            # instead of raising. Unpacking rather than indexing makes the
+            # single-element expectation explicit at the point it is relied on.
+            conflicting.extend(key for key, _ in entries)
+            continue
+        (value,) = values
+        allowed[canonical] = value
+
+    rejected = sorted(rejected)
+    empty = sorted(empty)
+    malformed = sorted(malformed)
+    conflicting = sorted(conflicting)
+    if conflicting:
+        logger.warning(
+            "Dropped conflicting alias(es) in plan contact update for contact "
+            "%s -- two source keys gave different values for one field: %s",
+            contact_id,
+            _render_keys(conflicting),
+        )
+    if rejected:
+        logger.warning(
+            "Dropped non-call-outcome field(s) from plan contact update "
+            "for contact %s: %s",
+            contact_id,
+            _render_keys(rejected),
+        )
+    if malformed:
+        logger.warning(
+            "Dropped malformed value(s) in plan contact update for contact %s: %s",
+            contact_id,
+            _render_keys(malformed),
+        )
+    if empty:
+        logger.info(
+            "Ignored empty value(s) in plan contact update for contact %s: %s",
+            contact_id,
+            _render_keys(empty),
+        )
+    if not allowed:
+        raise PlanActionSkipped(
+            "no updatable contact fields"
+            + (f" (dropped: {_render_keys(rejected)})" if rejected else "")
+            + (f" (empty: {_render_keys(empty)})" if empty else "")
+            + (f" (malformed: {_render_keys(malformed)})" if malformed else "")
+            + (f" (conflicting: {_render_keys(conflicting)})" if conflicting else "")
+        )
 
     from ...services.crm_provider import get_crm_provider
-    await get_crm_provider().update_contact(str(contact_id), params)
-    return f"Contact {contact_id} updated"
+    await get_crm_provider().update_contact(str(contact_id), allowed)
+
+    applied = ", ".join(sorted(allowed))
+    if rejected:
+        return (
+            f"Contact {contact_id} updated ({applied}; "
+            f"dropped: {_render_keys(rejected)})"
+        )
+    return f"Contact {contact_id} updated ({applied})"
 
 
 async def _exec_callback(record: dict, extracted_data: dict, params: dict) -> str:
@@ -905,6 +1124,7 @@ async def _notify_plan_executed(
     results: list[dict],
     business_name: str,
     extracted_data: dict,
+    plan_status: str = "executed",
 ) -> None:
     """Send ntfy notification summarizing plan execution results."""
     if not settings.alerts.ntfy_enabled:
@@ -913,6 +1133,7 @@ async def _notify_plan_executed(
     customer = extracted_data.get("customer_name") or "Customer"
     ok = [r for r in results if r["status"] == "ok"]
     failed = [r for r in results if r["status"] == "error"]
+    skipped = [r for r in results if r["status"] == "skipped"]
 
     lines = [f"Customer: {customer}"]
     if ok:
@@ -924,12 +1145,26 @@ async def _notify_plan_executed(
         for r in failed:
             lines.append(f"  {r['action'].replace('_', ' ').title()}: {r['detail']}")
 
+    if skipped:
+        # Listed separately so an attempted-but-refused action is visible to the
+        # operator rather than absent from a notification headed "Completed".
+        lines.append(f"Skipped ({len(skipped)}):")
+        for r in skipped:
+            lines.append(f"  {r['action'].replace('_', ' ').title()}: {r['detail']}")
+
     message = "\n".join(lines)
     api_url = _api_url()
     actions = f"view, View Transcript, {api_url}/api/v1/comms/call-actions/{transcript_id}/view"
 
     headers = {
-        "Title": f"{business_name}: Plan Executed",
+        # Mirrors the persisted terminal state, not whether any action
+        # succeeded. An all-errors plan is persisted "executed" and is NOT
+        # retryable, so telling the operator "Not Executed" invites a manual
+        # redo of a send that may already have gone out.
+        "Title": (
+            f"{business_name}: Plan "
+            f"{'Not Executed' if plan_status == 'skipped' else 'Executed'}"
+        ),
         "Priority": "default",
         "Tags": "white_check_mark" if not failed else "warning",
         "Actions": actions,

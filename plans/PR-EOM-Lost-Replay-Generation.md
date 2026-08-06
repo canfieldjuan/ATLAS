@@ -28,15 +28,14 @@ This slice is over the 400-LOC target because the production guard and the CI
 proof are not independently shippable. The replay fix changed the real
 lost/reopen lifecycle surface and therefore had to ship with real-Postgres
 coverage proving stale lost replay, stale reopen replay, immediate same-key
-retry, and legacy unsequenced replay ownership in the same PR. After the
-baseline shrink made `tests/test_b2b_reviews_import.py` execute in the required
-unit gate, that test module failed only because its imports crossed eager
-package-level API/autonomous side effects unrelated to the B2B assertions.
-Leaving that isolation for a separate PR would keep this PR red and unmergeable,
-while shrinking the baseline without isolating the now-passing tests would be an
-unverified CI-only behavior change. The B2B edits are therefore limited to test
-import isolation needed to satisfy the gate for this exact head; no B2B runtime
-code or behavior moves.
+retry, legacy unsequenced replay ownership, and the held-out transition-shape
+matrix requested by review in the same PR. After the current Unit Gate exercised
+`tests/test_b2b_reviews_import.py`, that test module failed only because its
+imports crossed eager package-level API/autonomous side effects unrelated to
+the B2B assertions. Leaving that isolation for a separate PR would keep this PR
+red and unmergeable. The B2B edits are therefore limited to test import
+isolation needed to satisfy the gate for this exact head; no B2B runtime code or
+behavior moves.
 
 ### Problem-derived contract
 
@@ -61,9 +60,8 @@ code or behavior moves.
   taxonomy, email/onboarding draft behavior, estimate/first-clean booking,
   customer/site handoff, `won` admission, calendar side effects, migration
   schema, provider insert/create semantics, tracker/website code, customer-
-  visible copy, or unrelated CI behavior. CI ratchet maintenance is limited to
-  removing stale `tests/unit_gate_baseline.txt` entries that the unit gate
-  itself proved now pass.
+  visible copy, or unrelated CI behavior outside the B2B test import-isolation
+  repair needed for this head's Unit Gate.
 
 ## Scope (this PR)
 
@@ -115,7 +113,7 @@ Slice phase: production hardening
   superseded replay keys and unchanged contact/lifecycle state after rejection.
 - Affected surfaces: `DatabaseCRMProvider` lost/reopen replay branches, the
   EOM lead conversion integration tests, B2B review import test isolation for
-  the stale unit-gate baseline shrink, this plan, and PR-body evidence.
+  the Unit Gate, this plan, and PR-body evidence.
 - Risk areas: stale idempotency success, lifecycle order correctness across
   mixed legacy/sequenced rows, idempotent retry compatibility, and avoiding new
   customer/site/email/calendar side effects.
@@ -162,7 +160,6 @@ fallback changes; otherwise write "N/A - no guard/config boundary change."
 - `tests/test_b2b_reviews_import.py`
 - `tests/test_eom_lead_conversion.py`
 - `tests/test_eom_lead_conversion_integration.py`
-- `tests/unit_gate_baseline.txt`
 
 ## Mechanism
 
@@ -259,7 +256,7 @@ Parked hardening: none against the predicate above.
 - Passed:
   `python -m pytest tests/test_eom_lead_conversion.py::test_disposition_replay_supersession_uses_lifecycle_sequence tests/test_eom_lead_conversion.py::test_disposition_replay_supersession_checks_legacy_rows_by_other_id tests/test_eom_lead_conversion.py::test_disposition_replay_supersession_admits_legacy_reopen_pair -q` — 3 passed.
 - Skipped locally:
-  `python -m pytest tests/test_eom_lead_conversion_integration.py -k "lost or reopen or legacy_reopen" -q -rs` — 3 skipped because `ATLAS_MIGRATION_TEST_DATABASE_URL` is not configured in this shell; CI supplies the real-Postgres lane.
+  `python -m pytest tests/test_eom_lead_conversion_integration.py::test_legacy_disposition_replay_rejects_held_out_transition_shapes -q -rs` — skipped because `ATLAS_MIGRATION_TEST_DATABASE_URL` is not configured in this shell; CI supplies the real-Postgres lane.
 - Passed:
   `python -m ruff check atlas_brain/services/crm_provider.py tests/test_eom_lead_conversion.py tests/test_eom_lead_conversion_integration.py`.
 - Passed:
@@ -267,9 +264,7 @@ Parked hardening: none against the predicate above.
 - Passed:
   `<python3.11 temp env>/bin/python -m pytest tests/test_b2b_reviews_import.py -m "not integration and not e2e" --continue-on-collection-errors -rfE --tb=short -q -p no:cacheprovider` — 6 passed.
 - Passed:
-  `python scripts/check_unit_gate.py --baseline tests/unit_gate_baseline.txt --base-baseline <origin/main baseline temp file> --selected-files <temp selected file containing tests/test_b2b_reviews_import.py> --pytest-args tests/test_b2b_reviews_import.py -m "not integration and not e2e" --continue-on-collection-errors -rfE --tb=no -q -p no:cacheprovider`.
-- Local-only / not applied:
-  `python scripts/check_unit_gate.py --baseline tests/unit_gate_baseline.txt --base-baseline <merge-base baseline temp file>` found no regressions, but local Python 3.13 reported 20 additional stale baseline entries not reported by CI's Python 3.11 run; this PR intentionally does not shrink unrelated local-environment-only entries.
+  `python scripts/sync_pr_plan.py plans/PR-EOM-Lost-Replay-Generation.md 9629361 --check`.
 - Passed: `git diff --check`.
 
 ## Estimated diff size
@@ -277,9 +272,8 @@ Parked hardening: none against the predicate above.
 | File | LOC |
 |---|---:|
 | `atlas_brain/services/crm_provider.py` | 128 |
-| `plans/PR-EOM-Lost-Replay-Generation.md` | 285 |
+| `plans/PR-EOM-Lost-Replay-Generation.md` | 279 |
 | `tests/test_b2b_reviews_import.py` | 188 |
 | `tests/test_eom_lead_conversion.py` | 145 |
-| `tests/test_eom_lead_conversion_integration.py` | 384 |
-| `tests/unit_gate_baseline.txt` | 6 |
-| **Total** | **1136** |
+| `tests/test_eom_lead_conversion_integration.py` | 619 |
+| **Total** | **1359** |

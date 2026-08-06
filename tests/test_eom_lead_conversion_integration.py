@@ -4525,3 +4525,238 @@ async def test_legacy_reopen_replay_accepts_pre_sequence_loss_reopen_pair():
     finally:
         await conn.execute(f'DROP SCHEMA IF EXISTS "{schema}" CASCADE')
         await conn.close()
+
+
+@pytest.mark.asyncio
+async def test_legacy_disposition_replay_rejects_held_out_transition_shapes():
+    database_url = _database_url_or_skip()
+    schema = f"atlas_eom_legacy_disposition_shapes_{uuid.uuid4().hex}"
+    conn = await asyncpg.connect(database_url)
+    try:
+        await _prepare_schema(
+            conn,
+            schema,
+            apply_privilege_migration=False,
+            apply_lifecycle_sequence_migration=False,
+        )
+        await conn.execute(
+            (MIGRATIONS / "363_eom_lead_lifecycle_sequence.sql").read_text()
+        )
+        provider = DatabaseCRMProvider(pool=conn)
+
+        async def insert_legacy_lost(
+            *,
+            contact_id: uuid.UUID,
+            from_stage: str,
+            to_stage: str,
+            operation_key: str,
+        ) -> None:
+            await conn.execute(
+                """
+                INSERT INTO eom_lead_lifecycle_events (
+                    contact_id, event_type, from_stage, to_stage, actor, source,
+                    operation_key, metadata, lifecycle_sequence
+                ) VALUES (
+                    $1, 'lead_lost', $2, $3, 'employee:1:Juan Canfield',
+                    'eom_office', $4, jsonb_build_object('lost_reason_code', 'spam'), NULL
+                )
+                """,
+                contact_id,
+                from_stage,
+                to_stage,
+                operation_key,
+            )
+
+        async def insert_legacy_reopened(
+            *,
+            contact_id: uuid.UUID,
+            from_stage: str,
+            to_stage: str,
+            operation_key: str,
+        ) -> None:
+            await conn.execute(
+                """
+                INSERT INTO eom_lead_lifecycle_events (
+                    contact_id, event_type, from_stage, to_stage, actor, source,
+                    operation_key, lifecycle_sequence
+                ) VALUES (
+                    $1, 'lead_reopened', $2, $3,
+                    'employee:1:Juan Canfield', 'eom_office', $4, NULL
+                )
+                """,
+                contact_id,
+                from_stage,
+                to_stage,
+                operation_key,
+            )
+
+        async def assert_lost_replay_rejected(from_stage: str, to_stage: str) -> None:
+            contact_id = uuid.uuid4()
+            operation_key = f"legacy-lost-shape-{uuid.uuid4().hex}"
+            await _insert_contact(conn, contact_id=contact_id, lead_stage="new")
+            await conn.execute(
+                "UPDATE contacts SET lead_stage = 'lost' WHERE id = $1",
+                contact_id,
+            )
+            await insert_legacy_lost(
+                contact_id=contact_id,
+                from_stage=from_stage,
+                to_stage=to_stage,
+                operation_key=operation_key,
+            )
+
+            with pytest.raises(
+                EOMLeadConversionError, match="lost operation was superseded"
+            ):
+                await provider.mark_eom_lead_lost(
+                    contact_id=str(contact_id),
+                    reason_code="spam",
+                    note=None,
+                    operation_key=operation_key,
+                    actor_id=1,
+                    actor_name="Juan Canfield",
+                )
+
+        async def assert_reopen_replay_rejected(
+            *,
+            loss_from_stage: str,
+            loss_to_stage: str,
+            reopen_from_stage: str,
+            reopen_to_stage: str,
+            current_stage: str,
+        ) -> None:
+            contact_id = uuid.uuid4()
+            lost_key = f"legacy-lost-shape-{uuid.uuid4().hex}"
+            reopen_key = f"legacy-reopen-shape-{uuid.uuid4().hex}"
+            await _insert_contact(conn, contact_id=contact_id, lead_stage="new")
+            await insert_legacy_lost(
+                contact_id=contact_id,
+                from_stage=loss_from_stage,
+                to_stage=loss_to_stage,
+                operation_key=lost_key,
+            )
+            await insert_legacy_reopened(
+                contact_id=contact_id,
+                from_stage=reopen_from_stage,
+                to_stage=reopen_to_stage,
+                operation_key=reopen_key,
+            )
+            await conn.execute(
+                "UPDATE contacts SET lead_stage = $2 WHERE id = $1",
+                contact_id,
+                current_stage,
+            )
+
+            with pytest.raises(
+                EOMLeadConversionError, match="reopen operation was superseded"
+            ):
+                await provider.reopen_eom_lead(
+                    contact_id=str(contact_id),
+                    operation_key=reopen_key,
+                    actor_id=1,
+                    actor_name="Juan Canfield",
+                )
+
+        # Held-out valid legacy loss shape: the earlier tests use `new -> lost`.
+        valid_loss_id = uuid.uuid4()
+        valid_loss_key = f"legacy-valid-lost-shape-{uuid.uuid4().hex}"
+        await _insert_contact(conn, contact_id=valid_loss_id, lead_stage="new")
+        await conn.execute(
+            "UPDATE contacts SET lead_stage = 'lost' WHERE id = $1",
+            valid_loss_id,
+        )
+        await insert_legacy_lost(
+            contact_id=valid_loss_id,
+            from_stage="estimate_booked",
+            to_stage="lost",
+            operation_key=valid_loss_key,
+        )
+        valid_loss = await provider.mark_eom_lead_lost(
+            contact_id=str(valid_loss_id),
+            reason_code="spam",
+            note=None,
+            operation_key=valid_loss_key,
+            actor_id=1,
+            actor_name="Juan Canfield",
+        )
+        assert valid_loss["idempotent"] is True
+
+        # Held-out valid legacy reopen shape: the earlier tests use `lost -> new`.
+        valid_reopen_id = uuid.uuid4()
+        valid_reopen_lost_key = f"legacy-valid-reopen-lost-{uuid.uuid4().hex}"
+        valid_reopen_key = f"legacy-valid-reopen-shape-{uuid.uuid4().hex}"
+        await _insert_contact(conn, contact_id=valid_reopen_id, lead_stage="new")
+        await insert_legacy_lost(
+            contact_id=valid_reopen_id,
+            from_stage="estimate_booked",
+            to_stage="lost",
+            operation_key=valid_reopen_lost_key,
+        )
+        await insert_legacy_reopened(
+            contact_id=valid_reopen_id,
+            from_stage="lost",
+            to_stage="estimate_booked",
+            operation_key=valid_reopen_key,
+        )
+        await conn.execute(
+            "UPDATE contacts SET lead_stage = 'estimate_booked' WHERE id = $1",
+            valid_reopen_id,
+        )
+        valid_reopen = await provider.reopen_eom_lead(
+            contact_id=str(valid_reopen_id),
+            operation_key=valid_reopen_key,
+            actor_id=1,
+            actor_name="Juan Canfield",
+        )
+        assert valid_reopen["idempotent"] is True
+        assert valid_reopen["lead_stage"] == "estimate_booked"
+
+        for from_stage, to_stage in (
+            ("won", "lost"),
+            ("lost", "lost"),
+            ("new", "estimate_booked"),
+            ("estimate_booked", "new"),
+        ):
+            await assert_lost_replay_rejected(from_stage, to_stage)
+
+        for replay_shape in (
+            {
+                "loss_from_stage": "new",
+                "loss_to_stage": "lost",
+                "reopen_from_stage": "estimate_booked",
+                "reopen_to_stage": "new",
+                "current_stage": "new",
+            },
+            {
+                "loss_from_stage": "estimate_booked",
+                "loss_to_stage": "lost",
+                "reopen_from_stage": "lost",
+                "reopen_to_stage": "new",
+                "current_stage": "new",
+            },
+            {
+                "loss_from_stage": "new",
+                "loss_to_stage": "estimate_booked",
+                "reopen_from_stage": "lost",
+                "reopen_to_stage": "new",
+                "current_stage": "new",
+            },
+            {
+                "loss_from_stage": "new",
+                "loss_to_stage": "lost",
+                "reopen_from_stage": "lost",
+                "reopen_to_stage": "won",
+                "current_stage": "won",
+            },
+            {
+                "loss_from_stage": "estimate_booked",
+                "loss_to_stage": "lost",
+                "reopen_from_stage": "new",
+                "reopen_to_stage": "estimate_booked",
+                "current_stage": "estimate_booked",
+            },
+        ):
+            await assert_reopen_replay_rejected(**replay_shape)
+    finally:
+        await conn.execute(f'DROP SCHEMA IF EXISTS "{schema}" CASCADE')
+        await conn.close()

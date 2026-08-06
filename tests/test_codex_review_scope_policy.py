@@ -33,6 +33,9 @@ def test_fixture_scenarios_cover_operator_requested_review_shapes():
         "nit_suppression",
         "material_one_line_nit",
         "in_scope_pattern_concern",
+        "adjacent_edge_after_contract_met",
+        "adjacent_security_failure_blocks",
+        "adjacent_material_performance_failure_blocks",
     }
 
 
@@ -45,7 +48,7 @@ def test_cli_self_test_reports_pass_count():
         stderr=subprocess.PIPE,
     )
     assert proc.returncode == 0, proc.stderr
-    assert "OK: 10 Codex review scope fixtures passed" in proc.stdout
+    assert "OK: 13 Codex review scope fixtures passed" in proc.stdout
 
 
 def test_cli_requires_self_test(monkeypatch):
@@ -72,3 +75,5 @@ def test_active_docs_remove_second_reviewer_gate():
     assert "WAIVE_OUT_OF_SCOPE" in agents
     assert "WAIVE_SPECULATIVE" in agents
     assert "FILE_NIT" in agents
+    assert "Reviewer novelty stop" in agents
+    assert "Review Contract boundary wins" in rules
