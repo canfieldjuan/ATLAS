@@ -353,8 +353,14 @@ $ python scripts/audit_workflow_security_posture.py
 (exit 0)
 
 $ python -m pytest tests/test_audit_workflow_security_posture.py -q
-37 passed
+41 passed
 ```
+
+Measured at `0000f8fac`. The count moved 24 -> 37 -> 41 across this PR's
+review rounds as reject-side coverage was added: the 12-row permissions
+boundary table, then the four guard-shape parameters and their full-shape
+control. Recording the head SHA alongside the number so a reviewer can tell
+a stale figure from a disagreement.
 
 Plus two checks the commands above do not show:
 
@@ -369,7 +375,7 @@ Plus two checks the commands above do not show:
 
 | File | LOC |
 |---|---:|
-| `plans/PR-Workflow-Allowlist-Bootstrap.md` | 375 |
+| `plans/PR-Workflow-Allowlist-Bootstrap.md` | 381 |
 | `scripts/audit_workflow_security_posture.py` | 60 |
 | `tests/test_audit_workflow_security_posture.py` | 302 |
-| **Total** | **737** |
+| **Total** | **743** |
