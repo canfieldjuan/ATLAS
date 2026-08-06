@@ -4,6 +4,7 @@ import importlib.util
 import sys
 from pathlib import Path
 
+import pytest
 import yaml
 
 
@@ -63,6 +64,9 @@ def test_approved_gitleaks_baseline_workflow_pull_request_target_is_allowed(tmp_
 name: Security
 on:
   pull_request_target:
+permissions:
+  contents: read
+  pull-requests: read
 jobs:
   gitleaks-baseline-guard:
     if: github.event_name == 'pull_request_target'
@@ -381,10 +385,17 @@ jobs:
 
 
 def _trusted_gate_workflow(job: str) -> str:
+    # Declares permissions explicitly because every real enrolled gate does and
+    # because an omitted block is no longer admissible: it would inherit a
+    # write-capable repo/org default. See
+    # test_enrolled_job_omitting_permissions_entirely_is_rejected.
     return f"""
 name: Gate
 on:
   pull_request_target:
+permissions:
+  contents: read
+  pull-requests: read
 jobs:
   {job}:
     if: github.event_name == 'pull_request_target'
@@ -599,19 +610,92 @@ jobs:
     )
 
 
+def test_enrolled_job_omitting_permissions_entirely_is_rejected(
+    tmp_path: Path,
+) -> None:
+    """Absence of a permissions block is not evidence of read-only.
+
+    With no block at either scope the job inherits the repository/organization
+    default for `GITHUB_TOKEN`, which is write-capable on older repositories and
+    is configured outside this repository entirely. The predicate must fail
+    closed rather than read the omission as safe.
+    """
+    auditor = load_auditor()
+    workflow = _write_workflow(
+        tmp_path,
+        "contact_write_boundary.yml",
+        """
+name: Contact Write Boundary
+on:
+  pull_request_target:
+jobs:
+  contact-write-boundary:
+    if: github.event_name == 'pull_request_target'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0
+        with:
+          ref: ${{ github.event.pull_request.base.sha }}
+""",
+    )
+
+    findings = auditor.audit_workflow(workflow)
+    assert [f for f in findings if f.level == "ERROR"], (
+        "an enrolled trusted-base job with no permissions block must not be admitted"
+    )
+
+
+@pytest.mark.parametrize(
+    "permissions, expected",
+    [
+        ({"contents": "read"}, True),
+        ({"contents": "read", "pull-requests": "read"}, True),
+        ({"contents": "none"}, True),
+        ({}, True),
+        ("read-all", True),
+        ({"contents": "read", "id-token": "write"}, True),
+        (None, False),
+        ("write-all", False),
+        ({"contents": "write"}, False),
+        ({"contents": "read", "pull-requests": "write"}, False),
+        ("read", False),
+        ({"contents": "${{ inputs.scope }}"}, False),
+    ],
+)
+def test_permissions_read_only_predicate_boundaries(
+    permissions: object, expected: bool
+) -> None:
+    """Both sides of the guard, including the shapes it cannot evaluate.
+
+    The `${{ }}` and bare-scalar rows matter most: an unresolved expression is
+    not statically provable as read-only, so it must land on the reject side
+    rather than falling through an `isinstance` check into admission.
+    """
+    auditor = load_auditor()
+    assert auditor._permissions_are_explicitly_read_only(permissions) is expected
+
+
 def test_every_currently_enrolled_job_declares_read_only_permissions() -> None:
     """The new rule rejects nothing that exists today.
 
-    Pinned so that adding a write scope to any enrolled gate is a deliberate,
-    visibly failing change rather than a silent widening.
+    Pinned so that adding a write scope to any enrolled gate -- or dropping its
+    permissions block so it silently inherits the repo default -- is a
+    deliberate, visibly failing change rather than a silent widening.
     """
     auditor = load_auditor()
     workflows = Path(__file__).resolve().parents[1] / ".github" / "workflows"
+    checked = 0
     for filename, job_name in sorted(auditor.ALLOWED_PULL_REQUEST_TARGET_JOBS):
         path = workflows / filename
         if not path.exists():
             continue  # arrives in a later PR
         document = yaml.safe_load(path.read_text(encoding="utf-8"))
         job = (document.get("jobs") or {}).get(job_name) or {}
-        effective = job.get("permissions", document.get("permissions"))
-        assert not auditor._grants_write(effective), (filename, job_name, effective)
+        effective = auditor._effective_permissions(job, document)
+        assert auditor._permissions_are_explicitly_read_only(effective), (
+            filename,
+            job_name,
+            effective,
+        )
+        checked += 1
+    assert checked, "no enrolled workflow was actually checked"
