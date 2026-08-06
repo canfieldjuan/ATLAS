@@ -94,7 +94,9 @@ Slice phase: production hardening
 
 - `atlas_brain/api/comms/call_actions.py`
 - `plans/PR-Call-Action-Plan-Contact-Field-Allowlist.md`
+- `tests/maturity_sweep/baseline_atlas_brain_api.json`
 - `tests/test_call_action_plan_contact_fields.py`
+- `tests/unit_gate_baseline.txt`
 
 ### Review Contract
 
@@ -295,6 +297,51 @@ privilege escalation reachable through the existing unauthenticated surface.
 
 Parked hardening: none.
 
+
+## CI baseline changes in this PR
+
+Two baselines move here. Both are recorded rather than silently swept, because
+`--update-baseline` on either lane would have picked up unrelated files.
+
+**1. `tests/unit_gate_baseline.txt` -- six entries REMOVED (the ratchet tightening).**
+
+The unit gate failed with `regressions=0; newly-passing=6`. This PR introduced no
+regressions; six nodes listed as known-failures now pass, and the gate requires a
+known-failures list to shrink when that happens. All six are in
+`tests/test_b2b_reviews_import.py` and are unrelated to this PR's subject -- they
+were fixed on `main`; this is simply the PR that ran the gate afterwards.
+
+Verified rather than trusted: the file was run three consecutive times locally,
+`6 passed` each time, before removing the entries. Removing a baseline entry for
+a *flaky* test would convert a steady red into an intermittent one, which is
+worse than leaving it.
+
+**2. `tests/maturity_sweep/baseline_atlas_brain_api.json` -- one entry raised,
+`call_actions.py` 6 -> 40 (`INTERNAL_MOCK` 0 -> 10).**
+
+This one IS caused by this PR, and it is accepted rather than fixed. The ten
+findings are all this PR's tests using `monkeypatch.setattr` on first-party
+targets. Disposition per target:
+
+- `_exec_email`, `_notify_plan_executed` -- **must** be stubbed. Executing them
+  in a test sends real email and fires real operator notifications. Not
+  negotiable regardless of what the detector prefers.
+- `get_call_transcript_repo`, `_get_transcript_or_404` -- no injection seam
+  exists. `call_actions.py` contains no `Depends()` at all; the routes call
+  `get_call_transcript_repo()` directly as a module-level import, so
+  monkeypatching is the only way to test without a live database.
+- `settings.alerts.ntfy_enabled` -- configuration, not logic.
+
+The detector is right that this shape is worse than dependency injection. The
+honest answer is that converting this module to DI is a real improvement and is
+not a field-allow-list fix; doing it here would be exactly the scope creep this
+arc has been trying to avoid. **Deferred: see ATLAS #2304.**
+
+The entry was grafted rather than regenerated: a blanket `--update-baseline` on
+this lane also rewrote `invoicing/auth.py`, `leads.py`, `ollama_compat.py`, and
+`presence.py`, none of which this PR touches. Only the `call_actions.py` key
+differs from the base revision.
+
 ## Verification
 
 ```
@@ -317,6 +364,8 @@ pre-existing: identical with the change stashed and unstashed.
 | File | LOC |
 |---|---:|
 | `atlas_brain/api/comms/call_actions.py` | 215 |
-| `plans/PR-Call-Action-Plan-Contact-Field-Allowlist.md` | 322 |
+| `plans/PR-Call-Action-Plan-Contact-Field-Allowlist.md` | 371 |
+| `tests/maturity_sweep/baseline_atlas_brain_api.json` | 4 |
 | `tests/test_call_action_plan_contact_fields.py` | 552 |
-| **Total** | **1089** |
+| `tests/unit_gate_baseline.txt` | 6 |
+| **Total** | **1148** |
