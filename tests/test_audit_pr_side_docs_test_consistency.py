@@ -696,6 +696,74 @@ def test_audit_fails_when_registry_workflow_path_is_missing(tmp_path: Path) -> N
     )
 
 
+def test_audit_fails_when_registry_workflow_path_names_docs_file(
+    tmp_path: Path,
+) -> None:
+    _write_fixture(tmp_path)
+    replacements = (
+        tmp_path / "ci" / "gates.yml",
+        tmp_path / ".github" / "workflows" / "branch_protection_required_checks.yml",
+        tmp_path / "tests" / "test_security_guardrails_workflow.py",
+    )
+    for path in replacements:
+        path.write_text(
+            path.read_text(encoding="utf-8").replace(
+                ".github/workflows/unit_gate.yml",
+                "docs/SECURITY_GUARDRAILS.md",
+            ),
+            encoding="utf-8",
+        )
+
+    failures = auditor.audit_repo(tmp_path)
+
+    assert (
+        "ci/gates.yml: registry workflow path(s) must be regular workflow files under .github/workflows: docs/SECURITY_GUARDRAILS.md"
+        in failures
+    )
+
+
+def test_audit_fails_when_registry_workflow_path_has_non_workflow_suffix(
+    tmp_path: Path,
+) -> None:
+    _write_fixture(tmp_path)
+    replacement = ".github/workflows/unit_gate.txt"
+    (tmp_path / replacement).write_text("name: not a workflow\n", encoding="utf-8")
+    replacements = (
+        tmp_path / "ci" / "gates.yml",
+        tmp_path / ".github" / "workflows" / "branch_protection_required_checks.yml",
+        tmp_path / "tests" / "test_security_guardrails_workflow.py",
+    )
+    for path in replacements:
+        path.write_text(
+            path.read_text(encoding="utf-8").replace(
+                ".github/workflows/unit_gate.yml",
+                replacement,
+            ),
+            encoding="utf-8",
+        )
+
+    failures = auditor.audit_repo(tmp_path)
+
+    assert (
+        "ci/gates.yml: registry workflow path(s) must be regular workflow files under .github/workflows: .github/workflows/unit_gate.txt"
+        in failures
+    )
+
+
+def test_audit_fails_when_registry_workflow_path_is_symlink(tmp_path: Path) -> None:
+    _write_fixture(tmp_path)
+    workflow = tmp_path / ".github" / "workflows" / "unit_gate.yml"
+    workflow.unlink()
+    workflow.symlink_to("ai_reconciliation_live.yml")
+
+    failures = auditor.audit_repo(tmp_path)
+
+    assert (
+        "ci/gates.yml: registry workflow path(s) must be regular workflow files under .github/workflows: .github/workflows/unit_gate.yml"
+        in failures
+    )
+
+
 def test_audit_fails_when_non_required_registry_workflow_path_is_missing(
     tmp_path: Path,
 ) -> None:

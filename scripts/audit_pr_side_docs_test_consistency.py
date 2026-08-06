@@ -31,6 +31,7 @@ EXTRA_BRANCH_PROTECTION_TRIGGER_PATHS = (
     "scripts/check_required_status_checks.py",
     "tests/test_security_guardrails_workflow.py",
 )
+WORKFLOW_FILE_SUFFIXES = {".yaml", ".yml"}
 DOC_BRANCH_REQUIRED_RE = re.compile(
     r"Target branch protection for `main` is derived from `ci/gates\.yml` entries"
     r"\s+marked `branch_required`:\s*(?P<contexts>.*?)\s+all pinned to the "
@@ -604,6 +605,23 @@ def _invalid_repo_relative_paths(repo_root: Path, paths: tuple[str, ...]) -> lis
     return invalid
 
 
+def _invalid_workflow_files(repo_root: Path, paths: tuple[str, ...]) -> list[str]:
+    invalid: list[str] = []
+    for path in paths:
+        candidate = Path(path)
+        if (
+            len(candidate.parts) != 3
+            or candidate.parts[:2] != (".github", "workflows")
+            or candidate.suffix not in WORKFLOW_FILE_SUFFIXES
+        ):
+            invalid.append(path)
+            continue
+        full_path = repo_root / candidate
+        if full_path.is_symlink() or not full_path.is_file():
+            invalid.append(path)
+    return invalid
+
+
 def _missing_regular_files(repo_root: Path, paths: tuple[str, ...]) -> list[str]:
     missing: list[str] = []
     for path in paths:
@@ -621,6 +639,13 @@ def audit_repo(repo_root: Path = REPO_ROOT) -> list[str]:
         failures.append(
             f"{GATE_REGISTRY}: registry workflow path(s) must stay inside the PR tree: "
             f"{_format_missing(invalid_registry_workflows)}"
+        )
+
+    invalid_workflow_files = _invalid_workflow_files(repo_root, all_workflows)
+    if invalid_workflow_files:
+        failures.append(
+            f"{GATE_REGISTRY}: registry workflow path(s) must be regular workflow files "
+            f"under .github/workflows: {_format_missing(invalid_workflow_files)}"
         )
 
     missing_registry_workflows = _missing_regular_files(repo_root, all_workflows)

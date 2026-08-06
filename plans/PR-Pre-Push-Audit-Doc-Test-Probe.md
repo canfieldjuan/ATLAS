@@ -61,7 +61,8 @@ Slice phase: Workflow/process
   - The checker fails when a required workflow path is later excluded by a
     negative `on.push.paths` trigger.
   - The checker fails when `ci/gates.yml` points any registry gate at a
-    workflow path that is missing from the PR tree.
+    workflow path that is missing from the PR tree or is not an actual
+    non-symlink workflow file under `.github/workflows`.
   - The checker rejects absolute, traversal, or otherwise repo-escaping
     registry workflow paths.
   - The checker fails when `tests/test_security_guardrails_workflow.py`
@@ -178,7 +179,8 @@ data:
   capture, direct runtime rebinding, or direct/aliased/attribute indirect
   namespace write.
 - Every workflow path named by `ci/gates.yml`, required or advisory, must stay
-  inside the PR tree and exist as a regular file.
+  inside the PR tree and exist as a non-symlink YAML workflow file directly
+  under `.github/workflows`.
 
 `scripts/pre_push_audit.sh` calls the checker with `--repo-root "$repo_root"`,
 so `pull_request_target` CI executes trusted code while inspecting the
@@ -203,7 +205,7 @@ Parked hardening: none.
 ## Verification
 
 - `python scripts/audit_pr_side_docs_test_consistency.py` - passed.
-- `python -m pytest tests/test_open_pr_wrapper.py tests/test_audit_pr_side_docs_test_consistency.py tests/test_pre_push_audit_workflow.py tests/test_pre_push_audit.py tests/test_security_guardrails_workflow.py -q` - 155 passed.
+- `python -m pytest tests/test_open_pr_wrapper.py tests/test_audit_pr_side_docs_test_consistency.py tests/test_pre_push_audit_workflow.py tests/test_pre_push_audit.py tests/test_security_guardrails_workflow.py -q` - 158 passed.
 - `python scripts/maturity_sweep.py scripts --tests-root tests --baseline tests/maturity_sweep/baseline_scripts.json --min-score 8 --sensitive-glob 'scripts/**'` - passed.
 
 ## Estimated diff size
@@ -215,11 +217,11 @@ Parked hardening: none.
 | `docs/audits/agents-mechanical-enforcement-audit-2026-07-29.md` | 9 |
 | `docs/audits/required-workflow-enrollment-audit-2026-08-04.md` | 13 |
 | `docs/ci_cd_autonomous_coding_map.md` | 6 |
-| `plans/PR-Pre-Push-Audit-Doc-Test-Probe.md` | 225 |
-| `scripts/audit_pr_side_docs_test_consistency.py` | 719 |
+| `plans/PR-Pre-Push-Audit-Doc-Test-Probe.md` | 227 |
+| `scripts/audit_pr_side_docs_test_consistency.py` | 744 |
 | `scripts/pre_push_audit.sh` | 1 |
-| `tests/test_audit_pr_side_docs_test_consistency.py` | 758 |
+| `tests/test_audit_pr_side_docs_test_consistency.py` | 826 |
 | `tests/test_open_pr_wrapper.py` | 6 |
 | `tests/test_pre_push_audit.py` | 62 |
 | `tests/test_pre_push_audit_workflow.py` | 6 |
-| **Total** | **1817** |
+| **Total** | **1912** |
