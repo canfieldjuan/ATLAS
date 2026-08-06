@@ -837,17 +837,70 @@ async def _exec_sms(
     return f"SMS sent to {to_number}"
 
 
+# Contact fields a phone call can legitimately teach us. The action plan is
+# LLM-proposed from a transcript, so its params are untrusted input reaching a
+# privileged write; the executor decides what a call outcome is allowed to be,
+# rather than inheriting whatever the provider's broader update surface accepts.
+#
+# Deliberately excluded, and why:
+#   business_context_id  tenancy. A call outcome never re-tenants a contact.
+#                        DatabaseCRMProvider blocks this for EOM contacts, but
+#                        not for other tenants, so the executor must.
+#   source, source_ref   provenance. The record of how a contact reached the
+#                        CRM is set once at creation and is not a call outcome.
+#   contact_type, status, lead_stage, lead_owner, next_follow_up_at
+#                        lifecycle. Owned by the funnel transition service
+#                        (see crm_provider.py's EOM transition guards).
+#   tags                 free-form and used for segmentation downstream.
+_PLAN_UPDATABLE_CONTACT_FIELDS = frozenset({
+    "full_name",
+    "first_name",
+    "last_name",
+    "email",
+    "phone",
+    "address",
+    "city",
+    "state",
+    "zip",
+    "notes",
+})
+
+
 async def _exec_update_contact(record: dict, params: dict) -> str:
-    """Update CRM contact with new info from the plan."""
+    """Update CRM contact with new info from the plan.
+
+    Only call-derived fields are applied. Anything else the plan proposed is
+    dropped and logged rather than silently forwarded.
+    """
     contact_id = record.get("contact_id")
     if not contact_id:
         return "Skipped: no linked contact"
     if not params:
         return "Skipped: no update params"
 
+    allowed = {
+        key: value
+        for key, value in params.items()
+        if key in _PLAN_UPDATABLE_CONTACT_FIELDS
+    }
+    rejected = sorted(set(params) - set(allowed))
+    if rejected:
+        logger.warning(
+            "Dropped non-call-outcome field(s) from plan contact update "
+            "for contact %s: %s",
+            contact_id,
+            ", ".join(rejected),
+        )
+    if not allowed:
+        return f"Skipped: no updatable contact fields (dropped: {', '.join(rejected)})"
+
     from ...services.crm_provider import get_crm_provider
-    await get_crm_provider().update_contact(str(contact_id), params)
-    return f"Contact {contact_id} updated"
+    await get_crm_provider().update_contact(str(contact_id), allowed)
+
+    applied = ", ".join(sorted(allowed))
+    if rejected:
+        return f"Contact {contact_id} updated ({applied}; dropped: {', '.join(rejected)})"
+    return f"Contact {contact_id} updated ({applied})"
 
 
 async def _exec_callback(record: dict, extracted_data: dict, params: dict) -> str:
