@@ -411,9 +411,9 @@ pre-existing: identical with the change stashed and unstashed.
 
 | File | LOC |
 |---|---:|
-| `atlas_brain/api/comms/call_actions.py` | 259 |
+| `atlas_brain/api/comms/call_actions.py` | 265 |
 | `plans/PR-Call-Action-Plan-Contact-Field-Allowlist.md` | 419 |
 | `tests/maturity_sweep/baseline_atlas_brain_api.json` | 4 |
 | `tests/test_call_action_plan_contact_fields.py` | 664 |
 | `tests/unit_gate_baseline.txt` | 6 |
-| **Total** | **1352** |
+| **Total** | **1358** |
