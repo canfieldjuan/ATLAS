@@ -64,7 +64,26 @@ asserting the same identity without the guard shape still errors. Blast radius
 is otherwise one tuple in a frozenset that only widens which pairs are eligible
 for an unchanged check.
 
-- Reviewer rules triggered: R1, R2, R10, R12.
+- Reviewer rules triggered: R1, R2, R3, R10, R12.
+
+R3 (security/permission decisions) applies because this tuple governs which job
+identity may run under `pull_request_target`, and that event is privileged.
+Dispositioning the two hooks it implies:
+
+- **Base-context token.** A `pull_request_target` job runs with the base
+  repository's `GITHUB_TOKEN` and secrets access, evaluated from the base ref.
+  That is the security consequence of enrolment and the reason the guard shape
+  exists. This PR does not change what that token can do; it changes which
+  identity may reach it, and only for a job that must still check out the base
+  SHA as its first step. The job being enrolled declares
+  `permissions: contents: read` and fetches the PR tree with
+  `persist-credentials: false`, so the elevated context never reaches PR-authored
+  content -- verified in ATLAS #2302 rather than asserted here.
+- **Workflow-permissions boundary.** Enrolment does not relax any other check.
+  The auditor's OIDC and write-permission rules apply to the enrolled job
+  exactly as before, and `test_unapproved_pull_request_target_is_error` plus
+  `test_contact_write_boundary_enrolment_still_requires_the_guard_shape` pin
+  that membership is necessary but not sufficient.
 
 R2 and R10 are the path triggers the rule pack assigns to gate-predicate
 scripts, which is what `scripts/audit_workflow_security_posture.py` is: R2 is
@@ -162,7 +181,7 @@ Plus two checks the commands above do not show:
 
 | File | LOC |
 |---|---:|
-| `plans/PR-Workflow-Allowlist-Bootstrap.md` | 168 |
+| `plans/PR-Workflow-Allowlist-Bootstrap.md` | 187 |
 | `scripts/audit_workflow_security_posture.py` | 1 |
 | `tests/test_audit_workflow_security_posture.py` | 52 |
-| **Total** | **221** |
+| **Total** | **240** |
