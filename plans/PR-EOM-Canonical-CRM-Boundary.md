@@ -51,8 +51,6 @@ Slice phase: production hardening
 2. Preserve the shared provider create path for existing backend/import jobs
    until the follow-up deprecation/migration slice routes or retires each
    legacy EOM writer.
-3. Shrink the unit-gate baseline for the six unrelated B2B review-import nodes
-   that now pass in CI.
 
 ### Review Contract
 
@@ -87,8 +85,8 @@ Slice phase: production hardening
   tool function is invoked in unit tests with default-EOM and explicit-EOM
   effective contexts, and the returned JSON is the observable unsuccessful MCP
   response. This PR adds no new HTTP route or product UI.
-- Affected surfaces: CRM MCP `create_contact`, focused provider/MCP tests,
-  this plan, and the unit-gate baseline ratchet file.
+- Affected surfaces: CRM MCP `create_contact`, focused provider/MCP tests, and
+  this plan.
 - Risk areas: EOM lifecycle bypass from generic operator tooling, default-tenant
   MCP behavior, live backend/import writer compatibility, legacy claim
   compatibility, non-EOM CRM backwards compatibility, and error-message
@@ -163,7 +161,6 @@ fallback changes; otherwise write "N/A - no guard/config boundary change."
 - `plans/PR-EOM-Canonical-CRM-Boundary.md`
 - `tests/test_crm_read_scoping.py`
 - `tests/test_leads_intake.py`
-- `tests/unit_gate_baseline.txt`
 
 ## Mechanism
 
@@ -188,8 +185,6 @@ safe.
 - This PR intentionally does not add a broad source/provenance/audit framework
   for every historical ingestion script. That is the larger #105 Slice 0+
   contract and needs its own entry-path inventory.
-- This PR intentionally removes stale unit-gate baseline rows reported by CI as
-  newly passing. It does not modify those B2B review-import tests or code.
 
 ## Deferred
 
@@ -219,9 +214,6 @@ Parked hardening: none against the predicate above.
 - Passed: focused provider/MCP guard set — 10 passed:
   `python -m pytest tests/test_crm_read_scoping.py::test_create_contact_non_eom_default_stamps tests/test_crm_read_scoping.py::test_create_contact_default_eom_guard_message tests/test_crm_read_scoping.py::test_create_contact_explicit_eom_guard_message tests/test_crm_read_scoping.py::test_create_contact_explicit_context_wins tests/test_crm_read_scoping.py::test_create_contact_non_merging_mode_admits_fresh_eom_backend_miss tests/test_crm_read_scoping.py::test_create_contact_non_eom_miss_still_inserts tests/test_leads_intake.py::test_create_contact_does_not_match_foreign_context_after_eom_miss tests/test_leads_intake.py::test_create_contact_dedupe_claims_null_context_contact tests/test_leads_intake.py::test_create_contact_dedupe_same_tenant_match_reused tests/test_leads_intake.py::test_provider_prefers_same_tenant_over_null_context -q --tb=short -rfE`.
 - Passed: `python -m pytest tests/test_leads_intake.py tests/test_crm_read_scoping.py -q --tb=short -rfE` — 119 passed, 1 torch/pynvml warning.
-- Passed: six removed unit-gate baseline nodes:
-  `python -m pytest tests/test_b2b_reviews_import.py::test_import_b2b_reviews_canonicalizes_same_source_item_across_vendors tests/test_b2b_reviews_import.py::test_import_b2b_reviews_dedupes_same_request_semantic_duplicates tests/test_b2b_reviews_import.py::test_import_b2b_reviews_dedupes_same_text_with_different_ids tests/test_b2b_reviews_import.py::test_import_b2b_reviews_marks_cross_source_duplicates tests/test_b2b_reviews_import.py::test_import_b2b_reviews_sanitizes_synthetic_reviewer_title tests/test_b2b_reviews_import.py::test_import_b2b_reviews_skips_existing_semantic_identity -q --tb=short -rfE` — 6 passed, 1 torch/pynvml warning.
-- Passed: `python scripts/check_unit_gate.py --baseline tests/unit_gate_baseline.txt --base-baseline <(git show origin/main:tests/unit_gate_baseline.txt) --selected-files "$task_selected" --pytest-args tests/test_b2b_reviews_import.py -m "not integration and not e2e" --continue-on-collection-errors -rfE --tb=no -q -p no:cacheprovider`.
 - Passed: `git diff --check`.
 - Passed: `python scripts/check_deployed_config_probing.py --base origin/main`.
 - Previous adjacent observation: `python -m pytest tests/test_eom_lead_ingress.py tests/test_mcp_servers.py -q --tb=short -rfE` failed 6 tests in Email/Twilio/Calendar MCP expectations (`TestEmailMCPTools.test_send_email_provider_error`, `TestIMAPEmailProvider.test_list_messages_calls_executor`, `TestIMAPEmailProvider.test_get_message_calls_executor`, `TestTwilioMCPTools.test_make_call_twilio_error`, `TestCalendarMCPTools.test_list_calendars`, `TestCalendarMCPTools.test_list_events`). CRM MCP subset passed before this review-comment patch; this PR does not touch those modules.
@@ -230,9 +222,8 @@ Parked hardening: none against the predicate above.
 
 | File | LOC |
 |---|---:|
-| `atlas_brain/mcp/crm_server.py` | 14 |
-| `plans/PR-EOM-Canonical-CRM-Boundary.md` | 221 |
-| `tests/test_crm_read_scoping.py` | 77 |
-| `tests/test_leads_intake.py` | 19 |
-| `tests/unit_gate_baseline.txt` | -6 |
-| **Total** | **~325** |
+| `atlas_brain/mcp/crm_server.py` | 15 |
+| `plans/PR-EOM-Canonical-CRM-Boundary.md` | 229 |
+| `tests/test_crm_read_scoping.py` | 84 |
+| `tests/test_leads_intake.py` | 12 |
+| **Total** | **340** |
