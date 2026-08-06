@@ -2012,6 +2012,42 @@ async def test_enabled_shared_guard_requires_bigint_draft_approver_column():
 
 
 @pytest.mark.asyncio
+async def test_enabled_shared_guard_requires_lifecycle_sequence_column():
+    """A canonical store with migration 362 but not 363 must fail readiness."""
+    from atlas_brain.eom_api.funnel_store import require_eom_funnel_data_store
+
+    database_url = _database_url_or_skip()
+    schema = f"atlas_eom_conversion_lifecycle_sequence_{uuid.uuid4().hex}"
+    conn = await asyncpg.connect(database_url)
+    try:
+        await _prepare_schema(conn, schema)
+
+        class _Pool:
+            is_initialized = True
+
+            async def fetchval(self, query: str) -> bool:
+                return bool(await conn.fetchval(query))
+
+        config = type("Config", (), {"api_enabled": True})()
+        await require_eom_funnel_data_store(
+            config, database_enabled=True, get_db_pool_fn=lambda: _Pool()
+        )
+
+        await conn.execute(
+            "ALTER TABLE eom_lead_lifecycle_events DROP COLUMN lifecycle_sequence"
+        )
+        with pytest.raises(
+            RuntimeError, match="CRM lifecycle and handoff schema"
+        ):
+            await require_eom_funnel_data_store(
+                config, database_enabled=True, get_db_pool_fn=lambda: _Pool()
+            )
+    finally:
+        await conn.execute(f'DROP SCHEMA IF EXISTS "{schema}" CASCADE')
+        await conn.close()
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize(
     "missing_column",
     ("business_context_id", "contact_type", "lead_stage"),
@@ -3852,6 +3888,51 @@ async def test_mark_lead_lost_records_reason_is_idempotent_and_reopens():
             actor_name="Juan Canfield",
         )
         assert reopened_chronological["lead_stage"] == "estimate_booked"
+
+        legacy_ambiguous_id = uuid.uuid4()
+        await _insert_contact(conn, contact_id=legacy_ambiguous_id, lead_stage="new")
+        await conn.execute(
+            "UPDATE contacts SET lead_stage = 'lost' WHERE id = $1",
+            legacy_ambiguous_id,
+        )
+        await conn.executemany(
+            """
+            INSERT INTO eom_lead_lifecycle_events (
+                contact_id, event_type, from_stage, to_stage, actor, source,
+                operation_key, occurred_at, created_at, lifecycle_sequence
+            )
+            VALUES ($1, 'lead_lost', $2, 'lost',
+                    'employee:1:Juan Canfield', 'eom_office', $3,
+                    $4::timestamptz, $4::timestamptz, NULL)
+            """,
+            [
+                (
+                    legacy_ambiguous_id,
+                    "new",
+                    f"legacy-lost-new-{uuid.uuid4().hex}",
+                    datetime(2026, 1, 4, tzinfo=timezone.utc),
+                ),
+                (
+                    legacy_ambiguous_id,
+                    "estimate_booked",
+                    f"legacy-lost-estimate-{uuid.uuid4().hex}",
+                    datetime(2026, 1, 1, tzinfo=timezone.utc),
+                ),
+            ],
+        )
+        with pytest.raises(
+            EOMLeadConversionError, match="requires chronology reconciliation"
+        ):
+            await provider.reopen_eom_lead(
+                contact_id=str(legacy_ambiguous_id),
+                operation_key=f"office-reopen-{uuid.uuid4().hex}",
+                actor_id=1,
+                actor_name="Juan Canfield",
+            )
+        legacy_ambiguous_contact, _, _ = await _contact_state(
+            conn, legacy_ambiguous_id
+        )
+        assert legacy_ambiguous_contact["lead_stage"] == "lost"
     finally:
         await conn.execute(f'DROP SCHEMA IF EXISTS "{schema}" CASCADE')
         await conn.close()

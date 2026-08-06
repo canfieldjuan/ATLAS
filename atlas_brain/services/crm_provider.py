@@ -3770,13 +3770,19 @@ class DatabaseCRMProvider:
                 )
             latest_loss = await conn.fetchrow(
                 """
-                SELECT from_stage
+                SELECT from_stage, legacy_loss_count, sequenced_loss_count
                 FROM (
                     SELECT
                         from_stage,
                         lifecycle_sequence,
                         occurred_at,
-                        created_at
+                        created_at,
+                        COUNT(*) FILTER (
+                            WHERE lifecycle_sequence IS NULL
+                        ) OVER () AS legacy_loss_count,
+                        COUNT(*) FILTER (
+                            WHERE lifecycle_sequence IS NOT NULL
+                        ) OVER () AS sequenced_loss_count
                     FROM eom_lead_lifecycle_events
                     WHERE contact_id = $1
                       AND event_type = 'lead_lost'
@@ -3791,6 +3797,17 @@ class DatabaseCRMProvider:
             if latest_loss is None:
                 raise EOMLeadConversionError(
                     409, "EOM lead has no lost-stage evidence to reopen"
+                )
+            if (
+                int(latest_loss["sequenced_loss_count"] or 0) == 0
+                and int(latest_loss["legacy_loss_count"] or 0) > 1
+            ):
+                # More than one pre-migration loss row has no safe chronology;
+                # a single legacy row is unambiguous, and sequenced rows were
+                # written after migration 363's database default landed.
+                raise EOMLeadConversionError(
+                    409,
+                    "EOM lead lost-stage evidence requires chronology reconciliation",
                 )
             restored_stage = str(latest_loss["from_stage"] or "")
             if restored_stage not in _EOM_LOST_RESTORABLE_STAGES:

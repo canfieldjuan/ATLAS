@@ -19,9 +19,10 @@ completion endpoint.
 Diff-budget override: review feedback made this slice exceed the 400-LOC soft
 cap, but the overage is indivisible from the lost/reopen boundary being fixed.
 The code change, the shared restorable-stage source, the database-owned lifecycle
-ordering proof, and the missing/unsafe evidence rejection proofs all validate
-one transactional lifecycle seam; splitting them would publish either behavior
-without its required proof or proof without the behavior it guards.
+ordering proof, the readiness guard, and the missing/unsafe/ambiguous evidence
+rejection proofs all validate one transactional lifecycle seam; splitting them
+would publish either behavior without its required proof or proof without the
+behavior it guards.
 
 ### Problem-derived contract
 
@@ -40,7 +41,9 @@ without its required proof or proof without the behavior it guards.
   stage, and write the `lead_reopened` lifecycle event with `to_stage` equal to
   the restored stage. The private funnel route/service response must surface
   that stage, and tests must prove both the route response and the real-Postgres
-  transaction for at least `estimate_booked` and `new`.
+  transaction for at least `estimate_booked` and `new`. Startup readiness must
+  refuse enabled funnel service on schemas that do not have the lifecycle
+  sequence column needed by reopen.
 - Verification cleanup must touch/change: pre-existing ruff findings in files
   touched by this slice may be mechanically cleaned only when they do not alter
   runtime behavior, so the focused lint command can prove the changed files are
@@ -68,7 +71,11 @@ Slice phase: vertical slice
 4. Add a forward-only lifecycle sequence migration so rolling deploy/rollback
    app versions that omit the new field still receive the ordering key from the
    database.
-5. Mechanically clean pre-existing lint-only issues in touched files if required
+5. Fail closed instead of timestamp-guessing when a lead has multiple legacy
+   pre-migration loss rows and no sequenced loss evidence.
+6. Require migration 363's `lifecycle_sequence` column in the enabled funnel
+   readiness guard and operator runbook.
+7. Mechanically clean pre-existing lint-only issues in touched files if required
    by the focused verification command; no behavior may change outside the
    reopen path.
 
@@ -87,8 +94,13 @@ Slice phase: vertical slice
   - A two-cycle ledger regression proves the latest loss is selected by
     `lifecycle_sequence`, not random UUID sort order or PostgreSQL `NOW()`
     transaction-start timestamps.
+  - Multiple legacy `lead_lost` rows with no `lifecycle_sequence` are rejected
+    as chronology-ambiguous instead of reopening to a guessed stage.
   - Missing lost-stage evidence and unsafe lost-stage evidence both return 409
     without changing the contact or appending a `lead_reopened` lifecycle row.
+  - The enabled funnel readiness guard checks `lifecycle_sequence` before
+    serving the reopen route, and the enablement runbook names migration 363 as
+    required deployment state.
   - A replay of the same reopen key remains idempotent only while the lead is
     still at the stage that key restored; if the lead is lost again, the
     existing 409 replay guard still fires.
@@ -106,11 +118,13 @@ Slice phase: vertical slice
   The migration-shape test proves the database-owned ordering default is present
   and writer-compatible.
 - Affected surfaces: `atlas_brain/services/crm_provider.py`
-  (`reopen_eom_lead` only), the private route fake/test expectations in
-  `tests/test_eom_lead_conversion.py`, and the lost/reopen real-Postgres tests
-  in `tests/test_eom_lead_conversion_integration.py`; migration proof touches
-  `atlas_brain/storage/migrations/363_eom_lead_lifecycle_sequence.sql` and
-  `tests/test_migrations_runner.py`.
+  (`reopen_eom_lead` only), `atlas_brain/eom_api/funnel_store.py` readiness,
+  the private route fake/test expectations in `tests/test_eom_lead_conversion.py`,
+  and the lost/reopen real-Postgres tests in
+  `tests/test_eom_lead_conversion_integration.py`; migration/deployment proof
+  touches `atlas_brain/storage/migrations/363_eom_lead_lifecycle_sequence.sql`,
+  `tests/test_migrations_runner.py`, `tests/test_eom_render_profile.py`, and
+  `docs/EOM_FUNNEL_ENABLEMENT_RUNBOOK.md`.
 - Risk areas: lifecycle replay correctness, restoring unsafe/stale stages,
   keeping the `won` teardown deferral intact, and preserving existing
   idempotency/cross-contact guard behavior.
@@ -156,11 +170,14 @@ fallback changes; otherwise write "N/A - no guard/config boundary change."
 ### Files touched
 
 - `atlas_brain/eom_api/funnel.py`
+- `atlas_brain/eom_api/funnel_store.py`
 - `atlas_brain/services/crm_provider.py`
 - `atlas_brain/storage/migrations/363_eom_lead_lifecycle_sequence.sql`
+- `docs/EOM_FUNNEL_ENABLEMENT_RUNBOOK.md`
 - `plans/PR-EOM-Lead-Reopen-Stage.md`
 - `tests/test_eom_lead_conversion.py`
 - `tests/test_eom_lead_conversion_integration.py`
+- `tests/test_eom_render_profile.py`
 - `tests/test_migrations_runner.py`
 
 ## Mechanism
@@ -172,11 +189,13 @@ primary-key ordering and not PostgreSQL `NOW()` timestamps. Migration 363 adds
 that sequence as a table default, so old app binaries that omit the column and
 new app binaries that omit the column both receive the same ordering field once
 the migration lands. Rows that predate the migration still fall back to the
-existing timestamps. The selected row's `from_stage` is the stage the loss
-operation displaced. Reopen updates `contacts.lead_stage` from `lost` to that
-restored stage and records `lead_reopened` with `to_stage` equal to the same
-value. Idempotent replays validate against that same restored stage before
-returning 200.
+existing timestamps only when there is a single unsequenced `lead_lost` row; if
+there are multiple unsequenced legacy losses and no sequenced loss evidence,
+reopen returns 409 for chronology reconciliation instead of guessing. The
+selected row's `from_stage` is the stage the loss operation displaced. Reopen
+updates `contacts.lead_stage` from `lost` to that restored stage and records
+`lead_reopened` with `to_stage` equal to the same value. Idempotent replays
+validate against that same restored stage before returning 200.
 
 ## Intentional
 
@@ -205,10 +224,10 @@ and stage-set closure are all inside this slice and covered here.
 
 ## Verification
 
-- `python -m py_compile atlas_brain/eom_api/funnel.py atlas_brain/services/crm_provider.py tests/test_eom_lead_conversion.py tests/test_eom_lead_conversion_integration.py tests/test_migrations_runner.py` — PASS.
-- `python -m pytest tests/test_eom_lead_conversion.py tests/test_eom_lead_conversion_integration.py -k "lost or reopen" -q -rs` — PASS locally: 4 passed, 2 skipped, 212 deselected. The skipped tests are real-Postgres integration tests gated on `ATLAS_MIGRATION_TEST_DATABASE_URL`; CI supplies the database lane.
-- `python -m pytest tests/test_migrations_runner.py::test_eom_lead_lifecycle_sequence_is_db_owned_and_writer_compatible -q` — PASS.
-- `python -m ruff check atlas_brain/eom_api/funnel.py atlas_brain/services/crm_provider.py tests/test_eom_lead_conversion.py tests/test_eom_lead_conversion_integration.py tests/test_migrations_runner.py` — PASS.
+- `python -m py_compile atlas_brain/eom_api/funnel.py atlas_brain/eom_api/funnel_store.py atlas_brain/services/crm_provider.py tests/test_eom_lead_conversion.py tests/test_eom_lead_conversion_integration.py tests/test_eom_render_profile.py tests/test_migrations_runner.py` — PASS.
+- `python -m pytest tests/test_eom_lead_conversion.py tests/test_eom_lead_conversion_integration.py -k "lost or reopen or lifecycle_sequence" -q -rs` — PASS locally: 4 passed, 3 skipped, 212 deselected. The skipped tests are real-Postgres integration tests gated on `ATLAS_MIGRATION_TEST_DATABASE_URL`; CI supplies the database lane.
+- `python -m pytest tests/test_migrations_runner.py::test_eom_lead_lifecycle_sequence_is_db_owned_and_writer_compatible tests/test_eom_render_profile.py::test_shared_eom_funnel_datastore_guard_keeps_missing_relations_in_verdict -q` — PASS.
+- `python -m ruff check atlas_brain/eom_api/funnel.py atlas_brain/eom_api/funnel_store.py atlas_brain/services/crm_provider.py tests/test_eom_lead_conversion.py tests/test_eom_lead_conversion_integration.py tests/test_eom_render_profile.py tests/test_migrations_runner.py` — PASS.
 - `git diff --check` — PASS.
 
 ## Estimated diff size
@@ -216,10 +235,13 @@ and stage-set closure are all inside this slice and covered here.
 | File | LOC |
 |---|---:|
 | `atlas_brain/eom_api/funnel.py` | 2 |
-| `atlas_brain/services/crm_provider.py` | 85 |
+| `atlas_brain/eom_api/funnel_store.py` | 12 |
+| `atlas_brain/services/crm_provider.py` | 102 |
 | `atlas_brain/storage/migrations/363_eom_lead_lifecycle_sequence.sql` | 29 |
-| `plans/PR-EOM-Lead-Reopen-Stage.md` | 225 |
+| `docs/EOM_FUNNEL_ENABLEMENT_RUNBOOK.md` | 11 |
+| `plans/PR-EOM-Lead-Reopen-Stage.md` | 247 |
 | `tests/test_eom_lead_conversion.py` | 8 |
-| `tests/test_eom_lead_conversion_integration.py` | 223 |
+| `tests/test_eom_lead_conversion_integration.py` | 304 |
+| `tests/test_eom_render_profile.py` | 7 |
 | `tests/test_migrations_runner.py` | 28 |
-| **Total** | **600** |
+| **Total** | **750** |

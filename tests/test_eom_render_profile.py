@@ -764,8 +764,10 @@ def test_shared_eom_funnel_datastore_guard_keeps_missing_relations_in_verdict():
         in pool.query
     )
     assert "contacts_required_columns_ready" in pool.query
+    assert "lifecycle_required_columns_ready" in pool.query
     assert "onboarding_drafts_required_columns_ready" in pool.query
     assert "WHEN NOT readiness_columns.contacts_required_columns_ready THEN FALSE" in pool.query
+    assert "AND readiness_columns.lifecycle_required_columns_ready" in pool.query
     assert "WHEN readiness_relations.handoff_rel IS NULL THEN FALSE" in pool.query
 
 
@@ -1019,10 +1021,7 @@ def test_eom_receivables_runtime_config_rejects_raw_token_env_before_projection(
     from pydantic import ValidationError
 
     from atlas_brain.eom_api import auth
-    from atlas_brain.eom_api.config import (
-        EOMInvoicingConfig,
-        RAW_RECEIVABLES_SERVICE_TOKEN_ENV,
-    )
+    from atlas_brain.eom_api.config import EOMInvoicingConfig
 
     generated = auth.generate_receivables_service_token()
     monkeypatch.setenv("ATLAS_INVOICING_RECEIVABLES_API_ENABLED", api_enabled)
