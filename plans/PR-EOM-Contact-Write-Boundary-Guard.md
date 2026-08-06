@@ -24,6 +24,40 @@ promises a DB-level uniqueness net "migration 037 should add" that was never
 built; this slice adds the enforcement that *was* buildable, at the code layer,
 without pretending to be the one that was not.
 
+### Why this slice is 2,597 lines
+
+Six times the 400-LOC soft cap, and the honest answer has two parts.
+
+**The part that is genuinely indivisible.** Review surfaced ten ways the gate
+did not actually gate, and shipping the checker without any one of them would
+have meant merging a guard that does not guard:
+
+- it ran the PR's own copy of the checker, so a PR could widen `INSERT_ALLOWED`
+  and pass itself;
+- after moving to `pull_request_target` the workflow was absent from base, so
+  the check did not run at all;
+- both events then emitted the same context, and a skipped run masked a failed
+  one;
+- `.sql` files were never scanned; `DO $$ ... $$` bodies and `EXECUTE` literals
+  hid writers; `copy_records_to_table("contacts", ...)` writes rows with no SQL
+  text; `INSERT INTO contacts AS c` evaded the pattern; a basename rule
+  exempted 13 real production modules; and unreadable files reported clean.
+
+Each is a fail-open, each was found only after the preceding fix landed, and
+none is separable into a follow-up without shipping a gate that is known not to
+work. The 1,112-line test file is the deliverable for a guard: planted-violation
+fixtures per shape are what distinguish this from a detector that matches
+nothing, which is the failure `tests/test_maturity_sweep.py` exists to pin.
+
+**The part that is my process failure.** For the first eleven rounds I fixed
+every review finding as it arrived instead of triaging by blast radius, which is
+what the defer-hardening rule exists to prevent. Some of what is in this diff
+should have been recorded and deferred. Triage is now applied -- fail-opens and
+checks that cannot run are fixed, everything else goes to ATLAS #2304, and two
+findings have been waived that way. That correction came too late to keep this
+slice small, and the honest accounting is that the size is part indivisibility
+and part scope drift I allowed.
+
 ### Problem-derived contract
 
 - **Root cause:** the canonical-boundary decision is enforced only by convention.
@@ -354,12 +388,12 @@ fewer.
 
 | File | LOC |
 |---|---:|
-| `.github/workflows/contact_write_boundary.yml` | 95 |
+| `.github/workflows/contact_write_boundary.yml` | 100 |
 | `.github/workflows/contact_write_boundary_selfcheck.yml` | 84 |
 | `ci/gates.yml` | 8 |
-| `plans/PR-EOM-Contact-Write-Boundary-Guard.md` | 365 |
+| `plans/PR-EOM-Contact-Write-Boundary-Guard.md` | 399 |
 | `scripts/audit_workflow_security_posture.py` | 1 |
 | `scripts/check_contact_write_boundary.py` | 846 |
 | `tests/contact_write_boundary/baseline.json` | 86 |
 | `tests/test_contact_write_boundary.py` | 1112 |
-| **Total** | **2597** |
+| **Total** | **2636** |

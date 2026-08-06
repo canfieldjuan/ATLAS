@@ -39,7 +39,12 @@ name: Contact Write Boundary
 # under different job names, so this context has exactly one producer.
 on:
   pull_request_target:
-    types: [opened, synchronize, reopened, ready_for_review]
+    # `edited` is required, not optional: retargeting a PR emits it, and
+    # without it a green run produced against an older or weaker base stays
+    # attached to the unchanged head SHA. pr_watcher then reads that stale
+    # verdict as current. diff_budget.yml carries `edited` for the same class
+    # of reason.
+    types: [opened, synchronize, reopened, ready_for_review, edited]
 
 permissions:
   contents: read
