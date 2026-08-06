@@ -43,6 +43,8 @@ MATERIAL_IMPACTS = frozenset(
         "customer_output",
         "data_loss",
         "migration",
+        "backward_compatibility",
+        "performance",
         "privacy",
         "security",
     }
@@ -153,7 +155,62 @@ FIXTURES: tuple[Fixture, ...] = (
         },
         MAJOR,
     ),
+    Fixture(
+        "adjacent_edge_after_contract_met",
+        {
+            "in_scope": True,
+            "adjacent_to_scope": True,
+            "hardening": True,
+            "impact": "correctness",
+            "missing_mandatory_proof": True,
+            "concrete_failure_path": False,
+            "review_contract_met": True,
+        },
+        WAIVE_OUT_OF_SCOPE,
+    ),
+    Fixture(
+        "adjacent_security_failure_blocks",
+        {
+            "in_scope": True,
+            "adjacent_to_scope": True,
+            "impact": "security",
+            "concrete_failure_path": True,
+            "material": True,
+        },
+        BLOCKER,
+    ),
+    Fixture(
+        "adjacent_material_performance_failure_blocks",
+        {
+            "in_scope": True,
+            "adjacent_to_scope": True,
+            "impact": "performance",
+            "concrete_failure_path": True,
+            "material": True,
+        },
+        BLOCKER,
+    ),
 )
+
+
+def falsifies_current_boundary(finding: Mapping[str, object]) -> bool:
+    """Return whether an adjacent finding is still inside the blocking boundary."""
+
+    if finding.get("invalidates_review_contract"):
+        return True
+    if finding.get("breaks_existing_behavior"):
+        return True
+    if finding.get("red_ci"):
+        return True
+    if finding.get("explicitly_claimed_mechanism_false"):
+        return True
+
+    impact = str(finding.get("impact", ""))
+    return bool(
+        finding.get("concrete_failure_path")
+        and impact in MATERIAL_IMPACTS
+        and finding.get("material") is not False
+    )
 
 
 def classify_finding(finding: Mapping[str, object]) -> str:
@@ -171,13 +228,14 @@ def classify_finding(finding: Mapping[str, object]) -> str:
         return WAIVE_NIT
     if finding.get("in_scope") is False:
         return WAIVE_OUT_OF_SCOPE
+    if finding.get("adjacent_to_scope") and not falsifies_current_boundary(finding):
+        return WAIVE_OUT_OF_SCOPE
     if finding.get("missing_mandatory_proof"):
         return BLOCKER
 
-    impact = str(finding.get("impact", ""))
     if (
         finding.get("concrete_failure_path")
-        and impact in MATERIAL_IMPACTS
+        and str(finding.get("impact", "")) in MATERIAL_IMPACTS
         and finding.get("material") is not False
     ):
         return BLOCKER
