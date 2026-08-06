@@ -45,7 +45,8 @@ ROOT = Path(__file__).resolve().parents[1]
 # Modules permitted to contain SQL writes against `contacts`.
 # Keep this list as short as the codebase allows; every entry is a place a
 # future bypass can hide legitimately.
-INSERT_ALLOWED = ("atlas_brain/services/crm_provider.py",)
+PROVIDER_MODULE = "atlas_brain/services/crm_provider.py"
+INSERT_ALLOWED = (PROVIDER_MODULE,)
 
 # UPDATE/DELETE are recorded but not blocking in this slice: legitimate
 # operator scripts still carry their own guarded updates, and converging them
@@ -65,8 +66,16 @@ SKIP_DIRS = {
 }
 
 # Tests legitimately contain SQL fixtures and assertions about SQL.
+#
+# Exemption is by LOCATION, never by basename. `Path(rel).name.startswith("test_")`
+# exempted 13 real production modules that merely happen to be named that way --
+# `scripts/test_adapter_live.py`, `atlas_brain/test_token_tracking.py`,
+# `scripts/debug/test_*.py` and others -- so any of them could have carried a
+# contact write straight past the gate. A file is a test only if it lives under
+# a `tests/` directory.
 def _is_test_path(rel: str) -> bool:
-    return rel.startswith("tests/") or "/tests/" in rel or Path(rel).name.startswith("test_")
+    parts = Path(rel).parts
+    return "tests" in parts[:-1]
 
 
 # The table name may be schema-qualified and may be a quoted identifier:
@@ -91,7 +100,8 @@ TABLE = r"(?:(?:public|\"public\")\s*\.\s*)?(?:contacts\b|\"contacts\")"
 HOLE = "\x00"
 
 DYNAMIC_TARGET = re.compile(
-    r"(?:INSERT\s+INTO|DELETE\s+FROM)\s*(?:" + HOLE + r"|$)"
+    r"(?:INSERT\s+INTO|DELETE\s+FROM|MERGE\s+INTO|UPDATE|COPY)\s*" + HOLE
+    + r"|(?:INSERT\s+INTO|DELETE\s+FROM|MERGE\s+INTO)\s*$"
 )
 
 # Runtime-built table names only matter where a `contacts` write is plausible.
@@ -124,6 +134,19 @@ def _in_dynamic_scope(rel: str) -> bool:
 PATTERNS = {
     "INSERT": re.compile(
         r"\binsert\s+into\s+" + TABLE + r"\s*(?:\(|select\b|values\b|default\b|overriding\b)",
+        re.IGNORECASE | re.DOTALL,
+    ),
+    # INSERT is not the only way a row reaches the table. MERGE can insert,
+    # COPY bulk-loads, and SELECT ... INTO creates and fills. All three write
+    # rows while skipping the provider, so all three are treated as creates.
+    "MERGE": re.compile(r"\bmerge\s+into\s+" + TABLE, re.IGNORECASE | re.DOTALL),
+    "COPY": re.compile(
+        r"\bcopy\s+" + TABLE + r"(?:\s*\([^)]*\))?\s+from\b",
+        re.IGNORECASE | re.DOTALL,
+    ),
+    "SELECT_INTO": re.compile(
+        # The optional qualifiers below are PostgreSQL SELECT INTO syntax.
+        r"\bselect\b.*?\binto\s+(?:temp\s+|temporary\s+|unlogged\s+)?" + TABLE,
         re.IGNORECASE | re.DOTALL,
     ),
     "UPDATE": re.compile(
@@ -166,7 +189,7 @@ def _iter_python_files(root: Path):
 
 
 def _folded_value(node: ast.AST):
-    """Best-effort constant-fold a string expression, or None.
+    """Constant-fold a string expression where the value is statically known.
 
     Scanning each `ast.Constant` in isolation misses SQL assembled across
     literals: `"INSERT INTO " + "contacts (...)"` and
@@ -199,6 +222,27 @@ def _folded_value(node: ast.AST):
     return None
 
 
+def _docstring_nodes(tree: ast.AST) -> set:
+    """Ids of Constant nodes that are docstrings.
+
+    A docstring is prose about code, never a statement the database executes.
+    Scanning them produced the `import_calendar_contacts.py` false positive and
+    would keep producing more as the pattern set widens.
+    """
+    ids = set()
+    for node in ast.walk(tree):
+        if not isinstance(node, (ast.Module, ast.ClassDef, ast.FunctionDef, ast.AsyncFunctionDef)):
+            continue
+        first = next(iter(getattr(node, "body", None) or []), None)
+        if (
+            isinstance(first, ast.Expr)
+            and isinstance(first.value, ast.Constant)
+            and isinstance(first.value.value, str)
+        ):
+            ids.add(id(first.value))
+    return ids
+
+
 def _string_literals(tree: ast.AST):
     """Yield (value, lineno) for each *outermost* string expression.
 
@@ -209,7 +253,7 @@ def _string_literals(tree: ast.AST):
     target. Reporting a resolved statement as unresolvable is the kind of
     self-contradiction that makes reviewers stop reading gate output.
     """
-    consumed = set()
+    consumed = set(_docstring_nodes(tree))
     folded_nodes = []
     for node in ast.walk(tree):
         if isinstance(node, (ast.JoinedStr, ast.BinOp)):
@@ -281,8 +325,15 @@ def scan_file(path: Path, root: Path) -> tuple:
                 operation=operation,
                 snippet=_normalize(value[start:match.end() + 60]),
             )
-            if finding.key() not in seen:
-                seen.add(finding.key())
+            # Dedup by (operation, line), NOT by key(): key() omits the line so
+            # the baseline stays stable across unrelated edits, but two distinct
+            # statements can normalize to the same 120-char snippet. Keying the
+            # per-file dedup on key() silently dropped one of the provider's
+            # nine UPDATEs, under-reporting the very inventory this gate exists
+            # to pin.
+            dedup = (finding.operation, finding.line)
+            if dedup not in seen:
+                seen.add(dedup)
                 findings.append(finding)
 
         # A write whose target is built at runtime cannot be cleared by reading
@@ -295,15 +346,64 @@ def scan_file(path: Path, root: Path) -> tuple:
                 operation="DYNAMIC",
                 snippet=_normalize(value[-90:]),
             )
-            if finding.key() not in seen:
-                seen.add(finding.key())
+            dedup = (finding.operation, finding.line)
+            if dedup not in seen:
+                seen.add(dedup)
                 findings.append(finding)
     return findings, None
 
 
 def scan(root: Path) -> list:
     """Findings only. Callers needing analyzability use scan_tree()."""
-    return scan_tree(root)[0]
+    findings, _unanalyzable = scan_tree(root)
+    return findings
+
+
+SQL_LINE_COMMENT = re.compile(r"--[^\n]*")
+SQL_BLOCK_COMMENT = re.compile(r"/\*.*?\*/", re.DOTALL)
+
+
+def scan_sql_file(path: Path, root: Path) -> tuple:
+    """Scan a .sql file. Migrations are executable SQL, not commentary.
+
+    Python is not the only way a statement reaches the database: a migration or
+    data-fix script writes rows directly. Comments are stripped first so that a
+    documented rollback recipe -- migration 358 carries a commented
+    `UPDATE contacts SET ...` -- is not read as a live statement.
+    """
+    rel = path.relative_to(root).as_posix()
+    try:
+        source = path.read_text(encoding="utf-8")
+    except (OSError, UnicodeDecodeError) as exc:
+        return [], f"{rel}: unreadable ({type(exc).__name__})"
+
+    stripped = SQL_BLOCK_COMMENT.sub(" ", source)
+    stripped = SQL_LINE_COMMENT.sub(" ", stripped)
+
+    findings, seen = [], set()
+    for operation, pattern in PATTERNS.items():
+        for match in pattern.finditer(stripped):
+            line = stripped.count("\n", 0, match.start()) + 1
+            start = max(0, match.start() - 10)
+            finding = Finding(
+                path=rel,
+                line=line,
+                operation=operation,
+                snippet=_normalize(stripped[start:match.end() + 60]),
+            )
+            dedup = (finding.operation, finding.line)
+            if dedup not in seen:
+                seen.add(dedup)
+                findings.append(finding)
+    return findings, None
+
+
+def _iter_sql_files(root: Path):
+    for path in sorted(root.rglob("*.sql")):
+        rel = path.relative_to(root)
+        if any(part in SKIP_DIRS for part in rel.parts):
+            continue
+        yield path
 
 
 def scan_tree(root: Path) -> tuple:
@@ -314,11 +414,21 @@ def scan_tree(root: Path) -> tuple:
         findings.extend(file_findings)
         if reason:
             unanalyzable.append(reason)
+    for path in _iter_sql_files(root):
+        file_findings, reason = scan_sql_file(path, root)
+        findings.extend(file_findings)
+        if reason:
+            unanalyzable.append(reason)
     return sorted(findings), sorted(unanalyzable)
 
 
+# Every statement form that can put a row into `contacts`. These share INSERT's
+# stricter allow-list; UPDATE/DELETE remain the softer, still-converging set.
+CREATE_OPERATIONS = ("INSERT", "MERGE", "COPY", "SELECT_INTO", "DYNAMIC")
+
+
 def is_allowed(finding: Finding) -> bool:
-    if finding.operation in ("INSERT", "DYNAMIC"):
+    if finding.operation in CREATE_OPERATIONS:
         return finding.path in INSERT_ALLOWED
     return finding.path in MUTATION_ALLOWED
 
@@ -332,7 +442,7 @@ def classify(findings: list, baseline: dict) -> tuple:
             continue
         if is_allowed(finding):
             continue
-        if finding.operation == "INSERT":
+        if finding.operation in ("INSERT", "MERGE", "COPY", "SELECT_INTO"):
             blocking.append(finding)
         elif finding.operation == "DYNAMIC":
             if _in_dynamic_scope(finding.path) and finding.key() not in known:
@@ -426,7 +536,7 @@ def main(argv=None) -> int:
             print(f"    {f.snippet}")
         print(
             "\nEvery contact insert must go through "
-            f"{INSERT_ALLOWED[0]}, so that tenant stamping, provenance,\n"
+            f"{PROVIDER_MODULE}, so that tenant stamping, provenance,\n"
             "normalization, and the lifecycle audit ledger cannot be skipped.\n"
             "Route the write through the provider (or the EOM ingress/funnel service\n"
             "layered on top of it) rather than adding a second insert site."

@@ -153,6 +153,99 @@ def test_lowercase_prose_ending_in_update_is_not_dynamic(tmp_path: Path) -> None
     assert new_mutations == []
 
 
+def test_every_row_creation_form_is_blocking(tmp_path: Path) -> None:
+    """INSERT is not the only way a row reaches the table.
+
+    MERGE can insert, COPY bulk-loads, and SELECT ... INTO creates and fills.
+    All three write rows while skipping the provider.
+    """
+    _write(
+        tmp_path,
+        "atlas_brain/services/other_writes.py",
+        'A = "MERGE INTO contacts USING staging ON contacts.id = staging.id"\n'
+        'B = "COPY contacts (full_name) FROM STDIN"\n'
+        'C = "SELECT full_name INTO contacts FROM staging"\n',
+    )
+    blocking, _ = _classify(tmp_path)
+    assert {f.operation for f in blocking} == {"MERGE", "COPY", "SELECT_INTO"}
+
+
+def test_sql_migration_files_are_scanned(tmp_path: Path) -> None:
+    """Python is not the only way a statement reaches the database."""
+    _write(
+        tmp_path,
+        "atlas_brain/storage/migrations/999_backfill.sql",
+        "INSERT INTO contacts (full_name) SELECT name FROM legacy;\n",
+    )
+    blocking, _ = _classify(tmp_path)
+    assert [f.path for f in blocking] == [
+        "atlas_brain/storage/migrations/999_backfill.sql"
+    ]
+
+
+def test_sql_comments_are_not_executable(tmp_path: Path) -> None:
+    """Migration 358 documents a rollback recipe in a comment; it is not a write."""
+    _write(
+        tmp_path,
+        "atlas_brain/storage/migrations/998_notes.sql",
+        "-- UPDATE contacts SET lead_stage = 'estimate_booked';\n"
+        "/* INSERT INTO contacts (full_name) VALUES ('x'); */\n"
+        "CREATE INDEX idx_demo ON contacts (email);\n",
+    )
+    blocking, new_mutations = _classify(tmp_path)
+    assert blocking == []
+    assert new_mutations == []
+
+
+def test_production_module_named_test_is_not_exempt(tmp_path: Path) -> None:
+    """Exemption is by location, never by basename.
+
+    13 real production modules start with `test_` outside any tests directory
+    (`scripts/test_adapter_live.py`, `atlas_brain/test_token_tracking.py`, ...).
+    A basename rule let every one of them carry a write past the gate.
+    """
+    _write(
+        tmp_path,
+        "scripts/test_adapter_live.py",
+        'SQL = "INSERT INTO contacts (full_name) VALUES ($1)"\n',
+    )
+    blocking, _ = _classify(tmp_path)
+    assert [f.path for f in blocking] == ["scripts/test_adapter_live.py"]
+
+
+def test_docstrings_are_not_executable_sql(tmp_path: Path) -> None:
+    """Prose about code is not a statement the database runs."""
+    _write(
+        tmp_path,
+        "atlas_brain/services/documented.py",
+        '"""Module that will INSERT INTO contacts (full_name) VALUES ($1)."""\n'
+        'def f():\n'
+        '    """Helper that runs UPDATE contacts SET full_name = $1."""\n'
+        '    return 1\n',
+    )
+    blocking, new_mutations = _classify(tmp_path)
+    assert blocking == []
+    assert new_mutations == []
+
+
+def test_two_statements_with_identical_snippets_are_both_counted(tmp_path: Path) -> None:
+    """Per-file dedup keys on (operation, line), not on the snippet.
+
+    Keying on the baseline key (which omits the line) silently collapsed one of
+    the provider's nine UPDATE statements, under-reporting the inventory this
+    gate exists to pin.
+    """
+    _write(
+        tmp_path,
+        "atlas_brain/services/twice.py",
+        'A = "UPDATE contacts SET updated_at = NOW() WHERE id = $1"\n'
+        'B = "UPDATE contacts SET updated_at = NOW() WHERE id = $1"\n',
+    )
+    findings, _ = MOD.scan_tree(tmp_path)
+    updates = [f for f in findings if f.operation == "UPDATE"]
+    assert len(updates) == 2, "identical statements on different lines both count"
+
+
 def test_schema_qualified_and_delete_are_detected(tmp_path: Path) -> None:
     _write(
         tmp_path,
@@ -334,6 +427,16 @@ def test_repository_has_exactly_the_known_insert_sites() -> None:
     ]
     assert {f.path for f in inserts} == {"atlas_brain/services/crm_provider.py"}
     assert len(inserts) == 2, f"expected 2 provider INSERT sites, found {len(inserts)}"
+
+    # Ground truth: `grep -c 'UPDATE contacts' crm_provider.py` == 9. Pinning
+    # the count catches a recognizer regression that silently drops one.
+    provider_updates = [
+        f for f in findings
+        if f.operation == "UPDATE" and f.path == "atlas_brain/services/crm_provider.py"
+    ]
+    assert len(provider_updates) == 9, (
+        f"expected 9 provider UPDATE statements, found {len(provider_updates)}"
+    )
 
 
 def test_baseline_file_matches_the_tree() -> None:

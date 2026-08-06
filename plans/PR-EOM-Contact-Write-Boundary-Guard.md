@@ -52,7 +52,7 @@ Slice phase: workflow/process
    outside it is reported non-blocking while legacy writers are converged.
 2. Add `tests/contact_write_boundary/baseline.json`: the committed writer
    inventory (17 production write sites today).
-3. Add `tests/test_contact_write_boundary.py`: 23 tests, including planted
+3. Add `tests/test_contact_write_boundary.py`: 29 tests, including planted
    violations that must fail the gate and false-positive pins that must not.
 5. Record the gate in `ci/gates.yml` as `ci_blocking_not_required`; promoting it
    to a branch-required context is an operator action.
@@ -173,6 +173,25 @@ whitespace and made the rule stop firing entirely. Constants consumed by a fold
 are not yielded again, so a resolved statement is never also reported as
 unresolvable.
 
+**Every row-creation form.** INSERT is not the only way a row reaches the table:
+`MERGE INTO`, `COPY ... FROM`, and `SELECT ... INTO` all write rows while
+skipping the provider, so all are treated as creates under the stricter
+allow-list.
+
+**`.sql` files are scanned too.** Python is not the only path to the database; a
+migration or data-fix script executes SQL directly. Comments are stripped first
+so migration 358's documented rollback recipe (a commented `UPDATE contacts`) is
+not read as a live statement.
+
+**Exemption is by location, never basename.** `Path(rel).name.startswith("test_")`
+exempted 13 real production modules -- `scripts/test_adapter_live.py`,
+`atlas_brain/test_token_tracking.py`, several `scripts/debug/test_*.py` -- any of
+which could have carried a write past the gate. A file is a test only if it sits
+under a `tests/` directory.
+
+**Docstrings are excluded.** Prose about code is not a statement the database
+runs, and scanning it produced the original false positive.
+
 **Runtime targets.** `"INSERT INTO " + table` cannot be cleared by reading the
 literal, so it is reported as `DYNAMIC`. This is blocking only inside
 `DYNAMIC_SCOPE` (the CRM-plausible paths); the repo has 18 pre-existing
@@ -232,26 +251,29 @@ OK - 17 contact write(s), all inside approved modules or baselined.
 (exit 0)
 ```
 
-Planted-violation transcript — the reachability proof, run against the real
-working tree rather than a fixture:
+Planted-violation transcript -- the reachability proof. Copy-pasteable and run
+against the real working tree, not a fixture:
 
 ```
-$ cat > atlas_brain/services/PLANTED_BYPASS_PROBE <<'PY'
+$ cat > atlas_brain/services/_planted_bypass_probe.py <<'EOF'
 async def create_contact_directly(conn, name):
     await conn.execute(
         "INSERT INTO contacts (id, full_name) VALUES (gen_random_uuid(), $1)", name
     )
-PY
+EOF
 $ python scripts/check_contact_write_boundary.py --baseline tests/contact_write_boundary/baseline.json
+contact write-boundary check
+------------------------------------------------------------
 BLOCKING: INSERT INTO contacts outside the approved provider module.
-  atlas_brain/services/<planted probe module>:3
-    INSERT INTO contacts (id, full_name) VALUES (gen_random_uuid(), $1)
-EXIT CODE = 1
 
-$ rm atlas_brain/services/<planted probe module>
+  atlas_brain/services/_planted_bypass_probe.py:3
+    INSERT INTO contacts (id, full_name) VALUES (gen_random_uuid(), $1)
+EXIT=1
+
+$ rm atlas_brain/services/_planted_bypass_probe.py
 $ python scripts/check_contact_write_boundary.py --baseline tests/contact_write_boundary/baseline.json
-OK - 17 contact write(s), all inside approved modules or baselined.
-EXIT CODE = 0
+OK - 43 contact write(s), all inside approved modules or baselined.
+EXIT=0
 ```
 
 Detector output cross-checked against the independent code investigation
@@ -267,10 +289,10 @@ fewer.
 | `.github/workflows/contact_write_boundary.yml` | 44 |
 | `ci/gates.yml` | 8 |
 | `plans/PR-EOM-Contact-Write-Boundary-Guard.md` | 231 |
-| `scripts/check_contact_write_boundary.py` | 420 |
+| `scripts/check_contact_write_boundary.py` | 520 |
 | `tests/contact_write_boundary/baseline.json` | 42 |
-| `tests/test_contact_write_boundary.py` | 447 |
-| **Total** | **1184** |
+| `tests/test_contact_write_boundary.py` | 600 |
+| **Total** | **1470** |
 
 Over the 400 LOC soft cap. 262 lines are the test file and 231 the plan, so the
 executable surface is ~370. The tests are the deliverable this slice is *for*: a
