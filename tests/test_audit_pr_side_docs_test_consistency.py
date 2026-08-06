@@ -296,6 +296,21 @@ def test_audit_raises_when_push_branches_exclude_main(tmp_path: Path) -> None:
         auditor.audit_repo(tmp_path)
 
 
+def test_audit_raises_when_flow_style_push_branches_exclude_main(tmp_path: Path) -> None:
+    _write_fixture(tmp_path)
+    workflow = tmp_path / ".github" / "workflows" / "branch_protection_required_checks.yml"
+    workflow.write_text(
+        workflow.read_text(encoding="utf-8").replace(
+            "    branches:\n      - main",
+            "    branches-ignore: [main]",
+        ),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(auditor.AuditFailure, match="branches-ignore must not exclude main"):
+        auditor.audit_repo(tmp_path)
+
+
 def test_audit_raises_when_push_branches_do_not_include_main(tmp_path: Path) -> None:
     _write_fixture(tmp_path)
     workflow = tmp_path / ".github" / "workflows" / "branch_protection_required_checks.yml"
@@ -460,6 +475,24 @@ def test_audit_raises_when_test_context_constant_is_rebound_by_pattern_capture(
     test_path = tmp_path / "tests" / "test_security_guardrails_workflow.py"
     test_path.write_text(
         test_path.read_text(encoding="utf-8") + "\n" + pattern_source,
+        encoding="utf-8",
+    )
+
+    with pytest.raises(
+        auditor.AuditFailure,
+        match="runtime binding for REQUIRED_STATUS_CONTEXTS",
+    ):
+        auditor.audit_repo(tmp_path)
+
+
+def test_audit_raises_when_test_context_constant_is_rebound_indirectly(
+    tmp_path: Path,
+) -> None:
+    _write_fixture(tmp_path)
+    test_path = tmp_path / "tests" / "test_security_guardrails_workflow.py"
+    test_path.write_text(
+        test_path.read_text(encoding="utf-8")
+        + '\nglobals()["REQUIRED_STATUS_CONTEXTS"] = ("shadow-required",)\n',
         encoding="utf-8",
     )
 

@@ -71,10 +71,14 @@ Slice phase: Workflow/process
     so branch-time runtime effects cannot bypass the PR-side data probe.
   - The checker rejects runtime binding forms for audited test constants,
     including loop/import/function/class/delete/walrus/exception/with targets.
+  - The checker rejects indirect namespace writes to audited test constants,
+    including `globals()["..."]` assignment forms.
   - The checker requires audited test constants to stay literal tuples so the
     PR-side audit matches the push-to-main runtime equality check.
   - The checker rejects `push` mappings that are nested under another
     `on` child instead of being the direct `on.push` trigger.
+  - The checker parses block-style and flow-style branch filters before
+    accepting that the effective `on.push` trigger admits `main`.
   - The checker's CLI entrypoint is covered for synchronized OK output and a
     representative failure output/exit-code path.
   - `tests/test_open_pr_wrapper.py` real-local-review fixtures include the
@@ -163,7 +167,7 @@ data:
   `REQUIRED_STATUS_CONTEXTS` and `REQUIRED_STATUS_WORKFLOW_PATHS` tuples as
   exactly one unconditional module-level assignment each, matching the derived
   registry tuple without any later or nested assignment, mutation, pattern
-  capture, or runtime rebinding.
+  capture, direct runtime rebinding, or indirect namespace write.
 - Every workflow path named by `ci/gates.yml`, required or advisory, must stay
   inside the PR tree and exist as a regular file.
 
@@ -190,7 +194,7 @@ Parked hardening: none.
 ## Verification
 
 - `python scripts/audit_pr_side_docs_test_consistency.py` - passed.
-- `python -m pytest tests/test_open_pr_wrapper.py tests/test_audit_pr_side_docs_test_consistency.py tests/test_pre_push_audit_workflow.py tests/test_pre_push_audit.py tests/test_security_guardrails_workflow.py -q` - 139 passed.
+- `python -m pytest tests/test_open_pr_wrapper.py tests/test_audit_pr_side_docs_test_consistency.py tests/test_pre_push_audit_workflow.py tests/test_pre_push_audit.py tests/test_security_guardrails_workflow.py -q` - 141 passed.
 - `python scripts/maturity_sweep.py scripts --tests-root tests --baseline tests/maturity_sweep/baseline_scripts.json --min-score 8 --sensitive-glob 'scripts/**'` - passed.
 
 ## Estimated diff size
@@ -202,11 +206,11 @@ Parked hardening: none.
 | `docs/audits/agents-mechanical-enforcement-audit-2026-07-29.md` | 9 |
 | `docs/audits/required-workflow-enrollment-audit-2026-08-04.md` | 13 |
 | `docs/ci_cd_autonomous_coding_map.md` | 6 |
-| `plans/PR-Pre-Push-Audit-Doc-Test-Probe.md` | 212 |
-| `scripts/audit_pr_side_docs_test_consistency.py` | 497 |
+| `plans/PR-Pre-Push-Audit-Doc-Test-Probe.md` | 216 |
+| `scripts/audit_pr_side_docs_test_consistency.py` | 638 |
 | `scripts/pre_push_audit.sh` | 1 |
-| `tests/test_audit_pr_side_docs_test_consistency.py` | 561 |
+| `tests/test_audit_pr_side_docs_test_consistency.py` | 594 |
 | `tests/test_open_pr_wrapper.py` | 6 |
 | `tests/test_pre_push_audit.py` | 57 |
 | `tests/test_pre_push_audit_workflow.py` | 6 |
-| **Total** | **1380** |
+| **Total** | **1558** |

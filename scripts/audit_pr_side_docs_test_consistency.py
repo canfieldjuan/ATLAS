@@ -93,6 +93,56 @@ def _pattern_binds_name(node: ast.AST, name: str) -> bool:
     return False
 
 
+def _literal_string(node: ast.AST) -> str | None:
+    return node.value if isinstance(node, ast.Constant) and isinstance(node.value, str) else None
+
+
+def _is_namespace_expr(node: ast.AST) -> bool:
+    if isinstance(node, ast.Call) and isinstance(node.func, ast.Name):
+        return node.func.id in {"globals", "locals", "vars"}
+    if isinstance(node, ast.Attribute) and node.attr == "__dict__":
+        return True
+    return False
+
+
+def _subscript_binds_name(node: ast.AST, name: str) -> bool:
+    if not isinstance(node, ast.Subscript):
+        return False
+    return _is_namespace_expr(node.value) and _literal_string(node.slice) == name
+
+
+def _target_indirectly_binds_name(target: ast.AST | None, name: str) -> bool:
+    if target is None:
+        return False
+    return any(_subscript_binds_name(node, name) for node in ast.walk(target))
+
+
+def _dict_literal_has_key(node: ast.AST, name: str) -> bool:
+    if not isinstance(node, ast.Dict):
+        return False
+    return any(_literal_string(key) == name for key in node.keys if key is not None)
+
+
+def _call_indirectly_binds_name(node: ast.AST, name: str) -> bool:
+    if not isinstance(node, ast.Call):
+        return False
+    if isinstance(node.func, ast.Name):
+        if node.func.id in {"setattr", "delattr"} and len(node.args) >= 2:
+            return _literal_string(node.args[1]) == name
+        if node.func.id in {"exec", "eval"}:
+            return any(name in value for arg in node.args if (value := _literal_string(arg)))
+        return False
+    if not isinstance(node.func, ast.Attribute) or not _is_namespace_expr(node.func.value):
+        return False
+    if node.func.attr in {"__setitem__", "setdefault", "pop"} and node.args:
+        return _literal_string(node.args[0]) == name
+    if node.func.attr == "update":
+        return any(keyword.arg == name for keyword in node.keywords) or any(
+            _dict_literal_has_key(arg, name) for arg in node.args
+        )
+    return False
+
+
 def _literal_assignment_tuple(source: str, name: str) -> tuple[str, ...]:
     try:
         tree = ast.parse(source)
@@ -124,10 +174,22 @@ def _literal_assignment_tuple(source: str, name: str) -> tuple[str, ...]:
             _target_contains_name(target, name) for target in node.targets
         ):
             raise AuditFailure(f"{SECURITY_GUARDRAILS_TEST}: runtime binding for {name}")
+        elif isinstance(node, ast.Assign) and any(
+            _target_indirectly_binds_name(target, name) for target in node.targets
+        ):
+            raise AuditFailure(f"{SECURITY_GUARDRAILS_TEST}: runtime binding for {name}")
         elif isinstance(node, ast.AnnAssign) and _target_contains_name(node.target, name):
+            raise AuditFailure(f"{SECURITY_GUARDRAILS_TEST}: runtime binding for {name}")
+        elif isinstance(node, ast.AnnAssign) and _target_indirectly_binds_name(
+            node.target, name
+        ):
             raise AuditFailure(f"{SECURITY_GUARDRAILS_TEST}: runtime binding for {name}")
         elif isinstance(node, ast.AugAssign) and _target_contains_name(node.target, name):
             raise AuditFailure(f"{SECURITY_GUARDRAILS_TEST}: mutating assignment for {name}")
+        elif isinstance(node, ast.AugAssign) and _target_indirectly_binds_name(
+            node.target, name
+        ):
+            raise AuditFailure(f"{SECURITY_GUARDRAILS_TEST}: runtime binding for {name}")
         elif isinstance(node, (ast.For, ast.AsyncFor)) and _target_contains_name(
             node.target, name
         ):
@@ -155,6 +217,8 @@ def _literal_assignment_tuple(source: str, name: str) -> tuple[str, ...]:
         ):
             raise AuditFailure(f"{SECURITY_GUARDRAILS_TEST}: runtime binding for {name}")
         elif _pattern_binds_name(node, name):
+            raise AuditFailure(f"{SECURITY_GUARDRAILS_TEST}: runtime binding for {name}")
+        elif _call_indirectly_binds_name(node, name):
             raise AuditFailure(f"{SECURITY_GUARDRAILS_TEST}: runtime binding for {name}")
 
     if not matches:
@@ -220,13 +284,83 @@ def _decode_workflow_path(raw_value: str, *, relative: Path, lineno: int) -> str
     return value
 
 
+def _mapping_entry(text: str) -> tuple[str, str] | None:
+    if text.startswith("- ") or ":" not in text:
+        return None
+    key, value = text.split(":", 1)
+    return key.strip(), value.strip()
+
+
+def _split_flow_sequence_items(raw_value: str, *, relative: Path, lineno: int) -> tuple[str, ...]:
+    items: list[str] = []
+    current: list[str] = []
+    quote: str | None = None
+    escaped = False
+    for char in raw_value:
+        if quote is not None:
+            current.append(char)
+            if quote == '"' and escaped:
+                escaped = False
+                continue
+            if quote == '"' and char == "\\":
+                escaped = True
+                continue
+            if char == quote:
+                quote = None
+            continue
+        if char in {"'", '"'}:
+            quote = char
+            current.append(char)
+            continue
+        if char == ",":
+            item = "".join(current).strip()
+            if item:
+                items.append(item)
+            current = []
+            continue
+        current.append(char)
+    if quote is not None:
+        raise AuditFailure(f"{relative}:{lineno}: malformed quoted scalar")
+    item = "".join(current).strip()
+    if item:
+        items.append(item)
+    return tuple(items)
+
+
+def _decode_flow_sequence(
+    raw_value: str,
+    *,
+    relative: Path,
+    lineno: int,
+    label: str,
+) -> tuple[str, ...]:
+    value = raw_value.strip()
+    if not (value.startswith("[") and value.endswith("]")):
+        raise AuditFailure(f"{relative}:{lineno}: unsupported {label} entry")
+    body = value[1:-1].strip()
+    if not body:
+        return ()
+    return tuple(
+        _decode_workflow_path(item.strip(), relative=relative, lineno=lineno)
+        for item in _split_flow_sequence_items(body, relative=relative, lineno=lineno)
+    )
+
+
 def _collect_direct_sequence(
     parsed: list[tuple[int, int, str]],
     parent_index: int,
     *,
     label: str,
     relative: Path,
+    inline_value: str = "",
 ) -> tuple[str, ...]:
+    if inline_value:
+        return _decode_flow_sequence(
+            inline_value,
+            relative=relative,
+            lineno=parsed[parent_index][1],
+            label=label,
+        )
     parent_indent = parsed[parent_index][0]
     values: list[str] = []
     item_indent: int | None = None
@@ -309,19 +443,24 @@ def _workflow_push_paths(
         indent, _lineno, text = parsed[index]
         if indent <= push_indent:
             break
-        if text in {"paths:", "branches:", "branches-ignore:"} and indent != direct_child_indent:
-            raise AuditFailure(f"{relative}: on.push.{text[:-1]} must be a direct child")
-        if text == "paths:":
+        entry = _mapping_entry(text)
+        key = entry[0] if entry is not None else None
+        value = entry[1] if entry is not None else ""
+        if key in {"paths", "branches", "branches-ignore"} and indent != direct_child_indent:
+            raise AuditFailure(f"{relative}: on.push.{key} must be a direct child")
+        if key == "paths":
             if indent != direct_child_indent:
                 raise AuditFailure(f"{relative}: on.push.paths must be a direct child")
+            if value:
+                raise AuditFailure(f"{relative}: on.push.paths must be a block scalar list")
             if paths_index is not None:
                 raise AuditFailure(f"{relative}: multiple on.push.paths mappings")
             paths_index = index
-        elif text == "branches:":
+        elif key == "branches":
             if branches_index is not None:
                 raise AuditFailure(f"{relative}: multiple on.push.branches mappings")
             branches_index = index
-        elif text == "branches-ignore:":
+        elif key == "branches-ignore":
             if branches_ignore_index is not None:
                 raise AuditFailure(f"{relative}: multiple on.push.branches-ignore mappings")
             branches_ignore_index = index
@@ -342,6 +481,7 @@ def _workflow_push_paths(
             branches_index,
             label="on.push.branches",
             relative=relative,
+            inline_value=_mapping_entry(parsed[branches_index][2])[1],
         )
         if branches_index is not None
         else ()
@@ -352,6 +492,7 @@ def _workflow_push_paths(
             branches_ignore_index,
             label="on.push.branches-ignore",
             relative=relative,
+            inline_value=_mapping_entry(parsed[branches_ignore_index][2])[1],
         )
         if branches_ignore_index is not None
         else ()
