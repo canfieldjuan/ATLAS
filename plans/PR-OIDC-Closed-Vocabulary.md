@@ -82,6 +82,7 @@ Slice phase: production hardening
 - `plans/PR-OIDC-Closed-Vocabulary.md`
 - `scripts/audit_workflow_security_posture.py`
 - `tests/test_audit_workflow_security_posture.py`
+- `tests/unit_gate_baseline.txt`
 
 ### Review Contract
 
@@ -166,6 +167,26 @@ An if/elif over a two-value vocabulary, replacing a binary comparison with an
 - **Case and whitespace variants reject.** YAML preserves both, and a config
   that GitHub would reject should not be silently forgiven by the auditor.
 
+## Also in this PR: restoring six unit-gate baseline entries
+
+Not related to the OIDC predicate, but it is blocking this PR and every other
+PR against `main`, so it is fixed here rather than filed.
+
+ATLAS #2303 removed six `tests/test_b2b_reviews_import.py` nodes from
+`tests/unit_gate_baseline.txt` on the grounds that they had started passing. The
+evidence for that was three runs of `pytest tests/test_b2b_reviews_import.py` --
+the file **in isolation**. The unit gate runs the whole `tests/` tree, and in
+that context they still fail, so the removal turned six known failures into six
+regressions.
+
+Because the baseline is on `main`, every PR opened against it inherits those six
+regressions. CI being down when #2303 merged is why this went unnoticed for
+hours: there was no unit-gate run to contradict it.
+
+Restored verbatim. The lesson recorded rather than just the fix: *passing in
+isolation is not evidence of passing in the suite*, and a known-failures list
+must only shrink on evidence gathered the way the gate gathers it.
+
 ## Deferred
 
 - The execution boundary after the base checkout: still ATLAS #2307.
@@ -201,7 +222,8 @@ WRITE                    none        invalid
 
 | File | LOC |
 |---|---:|
-| `plans/PR-OIDC-Closed-Vocabulary.md` | 207 |
+| `plans/PR-OIDC-Closed-Vocabulary.md` | 229 |
 | `scripts/audit_workflow_security_posture.py` | 15 |
 | `tests/test_audit_workflow_security_posture.py` | 109 |
-| **Total** | **331** |
+| `tests/unit_gate_baseline.txt` | 6 |
+| **Total** | **359** |
