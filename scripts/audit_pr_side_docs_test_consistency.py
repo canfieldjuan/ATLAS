@@ -99,8 +99,11 @@ def _literal_string(node: ast.AST) -> str | None:
 
 
 def _is_namespace_expr(node: ast.AST) -> bool:
-    if isinstance(node, ast.Call) and isinstance(node.func, ast.Name):
-        return node.func.id in {"globals", "locals", "vars"}
+    if isinstance(node, ast.Call):
+        if isinstance(node.func, ast.Name):
+            return node.func.id in {"globals", "locals", "vars"}
+        if isinstance(node.func, ast.Attribute):
+            return node.func.attr in {"globals", "locals", "vars"}
     if isinstance(node, ast.Attribute) and node.attr == "__dict__":
         return True
     return False
@@ -135,6 +138,8 @@ def _call_indirectly_binds_name(node: ast.AST, name: str) -> bool:
         if node.func.id in {"exec", "eval"}:
             return any(name in value for arg in node.args if (value := _literal_string(arg)))
         return False
+    if isinstance(node.func, ast.Attribute) and node.func.attr in {"globals", "locals", "vars"}:
+        return True
     if not isinstance(node.func, ast.Attribute) or not _is_namespace_expr(node.func.value):
         return False
     if node.func.attr in {"__setitem__", "setdefault", "pop"} and node.args:
@@ -287,7 +292,10 @@ def _decode_workflow_path(raw_value: str, *, relative: Path, lineno: int) -> str
     return value
 
 
-def _github_pattern_matches(pattern: str, ref_name: str) -> bool:
+def _github_pattern_matches(pattern: str, ref_name: str, *, relative: Path) -> bool:
+    unsupported = ("+", "?", "[", "]", "\\")
+    if any(token in pattern for token in unsupported):
+        raise AuditFailure(f"{relative}: unsupported on.push branch pattern syntax")
     return fnmatch.fnmatchcase(ref_name, pattern)
 
 
@@ -306,7 +314,7 @@ def _branch_patterns_admit_ref(
             raise AuditFailure(f"{relative}: empty on.push.branches pattern")
         if not negative:
             saw_positive = True
-        if _github_pattern_matches(effective_pattern, ref_name):
+        if _github_pattern_matches(effective_pattern, ref_name, relative=relative):
             admitted = not negative
     if not saw_positive:
         raise AuditFailure(f"{relative}: on.push.branches must include a positive pattern")
@@ -324,7 +332,7 @@ def _branch_ignore_patterns_exclude_ref(
             raise AuditFailure(
                 f"{relative}: negative on.push.branches-ignore patterns are unsupported"
             )
-        if _github_pattern_matches(pattern, ref_name):
+        if _github_pattern_matches(pattern, ref_name, relative=relative):
             return True
     return False
 

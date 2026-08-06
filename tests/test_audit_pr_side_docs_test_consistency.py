@@ -356,6 +356,60 @@ def test_audit_raises_when_push_branch_ignore_pattern_excludes_main(tmp_path: Pa
         auditor.audit_repo(tmp_path)
 
 
+@pytest.mark.parametrize(
+    "pattern",
+    [
+        "!m+ain",
+        "!ma?n",
+        "!m[ae]in",
+        r"!m\ain",
+    ],
+)
+def test_audit_raises_when_push_branch_pattern_uses_unsupported_github_glob(
+    tmp_path: Path,
+    pattern: str,
+) -> None:
+    _write_fixture(tmp_path)
+    workflow = tmp_path / ".github" / "workflows" / "branch_protection_required_checks.yml"
+    workflow.write_text(
+        workflow.read_text(encoding="utf-8").replace(
+            "    branches:\n      - main",
+            f"    branches: [main, '{pattern}']",
+        ),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(auditor.AuditFailure, match="unsupported on.push branch pattern syntax"):
+        auditor.audit_repo(tmp_path)
+
+
+@pytest.mark.parametrize(
+    "pattern",
+    [
+        "m+ain",
+        "ma?n",
+        "m[ae]in",
+        r"m\ain",
+    ],
+)
+def test_audit_raises_when_push_branch_ignore_pattern_uses_unsupported_github_glob(
+    tmp_path: Path,
+    pattern: str,
+) -> None:
+    _write_fixture(tmp_path)
+    workflow = tmp_path / ".github" / "workflows" / "branch_protection_required_checks.yml"
+    workflow.write_text(
+        workflow.read_text(encoding="utf-8").replace(
+            "    branches:\n      - main",
+            f"    branches-ignore: ['{pattern}']",
+        ),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(auditor.AuditFailure, match="unsupported on.push branch pattern syntax"):
+        auditor.audit_repo(tmp_path)
+
+
 def test_audit_fails_when_test_context_tuple_is_stale(tmp_path: Path) -> None:
     _write_fixture(tmp_path, test_contexts=("live-reconciliation",))
 
@@ -541,6 +595,24 @@ def test_audit_raises_when_test_context_constant_is_rebound_through_namespace_al
     test_path.write_text(
         test_path.read_text(encoding="utf-8")
         + '\nnamespace = globals()\nnamespace["REQUIRED_STATUS_CONTEXTS"] = ("shadow-required",)\n',
+        encoding="utf-8",
+    )
+
+    with pytest.raises(
+        auditor.AuditFailure,
+        match="runtime binding for REQUIRED_STATUS_CONTEXTS",
+    ):
+        auditor.audit_repo(tmp_path)
+
+
+def test_audit_raises_when_test_context_constant_is_rebound_through_namespace_attribute(
+    tmp_path: Path,
+) -> None:
+    _write_fixture(tmp_path)
+    test_path = tmp_path / "tests" / "test_security_guardrails_workflow.py"
+    test_path.write_text(
+        test_path.read_text(encoding="utf-8")
+        + '\nimport builtins\nbuiltins.globals()["REQUIRED_STATUS_CONTEXTS"] = ("shadow-required",)\n',
         encoding="utf-8",
     )
 
