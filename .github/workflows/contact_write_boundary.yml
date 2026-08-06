@@ -40,5 +40,7 @@ jobs:
       - name: Detector self-tests
         run: |
           python -m pip install --upgrade pip
-          python -m pip install pytest
+          # pytest-asyncio is required by tests/conftest.py, which pytest loads
+          # for any test under tests/ even though this detector is stdlib-only.
+          python -m pip install pytest pytest-asyncio
           python -m pytest tests/test_contact_write_boundary.py -q
