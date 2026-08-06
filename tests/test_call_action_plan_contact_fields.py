@@ -292,3 +292,86 @@ async def test_aliases_do_not_smuggle_forbidden_fields(
         )
         _, updates = provider.calls[0]
         assert set(updates) == {"email"}, f"{produced} must not be admitted"
+
+
+# ---------------------------------------------------------------------------
+# Null values, untrusted key rendering, plan-status semantics
+# ---------------------------------------------------------------------------
+
+@pytest.mark.asyncio
+async def test_null_values_never_blank_existing_contact_data(
+    provider: _RecordingProvider,
+) -> None:
+    """`call_extraction.md` emits null for anything not mentioned on the call.
+
+    A plan copying the extracted payload therefore carries nulls for most
+    fields. Writing them through would erase existing CRM data: a call that
+    mentioned only a phone number would blank the contact's email.
+    """
+    await call_actions._exec_update_contact(
+        RECORD,
+        {
+            "customer_phone": "217-555-0100",
+            "customer_email": None,
+            "customer_name": None,
+            "address": None,
+        },
+    )
+    _, updates = provider.calls[0]
+    assert updates == {"phone": "217-555-0100"}
+
+
+@pytest.mark.asyncio
+async def test_blank_strings_are_also_ignored(provider: _RecordingProvider) -> None:
+    await call_actions._exec_update_contact(
+        RECORD, {"customer_email": "   ", "customer_phone": "217-555-0100"}
+    )
+    _, updates = provider.calls[0]
+    assert updates == {"phone": "217-555-0100"}
+
+
+@pytest.mark.asyncio
+async def test_all_null_payload_writes_nothing(provider: _RecordingProvider) -> None:
+    with pytest.raises(call_actions.PlanActionSkipped):
+        await call_actions._exec_update_contact(
+            RECORD, {"customer_email": None, "customer_phone": None}
+        )
+    assert provider.calls == []
+
+
+@pytest.mark.asyncio
+async def test_control_characters_in_keys_cannot_forge_log_records(
+    provider: _RecordingProvider, caplog: pytest.LogCaptureFixture
+) -> None:
+    """Rejected key names are LLM-produced text reaching logs and ntfy."""
+    forged = "field\nERROR forged entry"
+    with caplog.at_level(logging.WARNING, logger="atlas.api.comms.call_actions"):
+        await call_actions._exec_update_contact(
+            RECORD, {"customer_email": "a@b.com", forged: "x"}
+        )
+    for record in caplog.records:
+        assert "\n" not in record.getMessage(), "newline survived into the log record"
+
+
+@pytest.mark.asyncio
+async def test_rejected_key_rendering_is_length_bounded(
+    provider: _RecordingProvider,
+) -> None:
+    long_key = "k" * 500
+    rendered = call_actions._render_keys([long_key])
+    assert len(rendered) <= call_actions._MAX_RENDERED_KEY_LEN
+    many = call_actions._render_keys([f"k{i}" for i in range(50)])
+    assert "more" in many
+
+
+def test_plan_status_is_skipped_only_when_nothing_was_attempted() -> None:
+    """"skipped" sits outside the idempotency guard, so it must not mean
+    "everything failed" -- an errored action may still have taken effect."""
+    def status_for(results):
+        statuses = {r["status"] for r in results}
+        return "skipped" if statuses == {"skipped"} else "executed"
+
+    assert status_for([{"status": "skipped"}]) == "skipped"
+    assert status_for([{"status": "error"}]) == "executed"
+    assert status_for([{"status": "skipped"}, {"status": "error"}]) == "executed"
+    assert status_for([{"status": "ok"}, {"status": "skipped"}]) == "executed"

@@ -36,6 +36,27 @@ from ...storage.repositories.call_transcript import get_call_transcript_repo
 logger = logging.getLogger("atlas.api.comms.call_actions")
 
 
+def _render_keys(keys: list) -> str:
+    """Render plan-supplied key names safely for logs, results, and ntfy.
+
+    These names come from LLM-produced JSON, so a transcript can yield a key
+    containing control characters. Joining one verbatim emits a forged
+    multiline log record, and the same string is copied into the persisted
+    result and the notification body.
+    """
+    rendered = []
+    for key in keys[:_MAX_RENDERED_KEYS]:
+        text = str(key)[:_MAX_RENDERED_KEY_LEN]
+        rendered.append("".join(ch if ch.isprintable() else "?" for ch in text))
+    if len(keys) > _MAX_RENDERED_KEYS:
+        rendered.append(f"... +{len(keys) - _MAX_RENDERED_KEYS} more")
+    return ", ".join(rendered)
+
+
+_MAX_RENDERED_KEYS = 12
+_MAX_RENDERED_KEY_LEN = 64
+
+
 class PlanActionSkipped(Exception):
     """A plan action performed no work and must not be audited as executed.
 
@@ -652,8 +673,13 @@ async def approve_plan(transcript_id: UUID):
     # Persist plan status + results. A plan whose only outcomes were skips did
     # not execute: recording "executed" would make a retry answer "Plan already
     # executed" while nothing had happened.
-    executed_any = any(r["status"] == "ok" for r in results)
-    plan_status = "executed" if executed_any else "skipped"
+    # "skipped" is deliberately outside the idempotency guard above, so it must
+    # mean "nothing was attempted", not "everything failed". An action that
+    # errored may still have taken effect -- an email send that timed out after
+    # the provider accepted it -- so an errored plan stays "executed" and
+    # non-retryable rather than inviting a duplicate send.
+    statuses = {r["status"] for r in results}
+    plan_status = "skipped" if statuses == {"skipped"} else "executed"
     try:
         repo = get_call_transcript_repo()
         await repo.update_plan_status(transcript_id, plan_status, results)
@@ -922,23 +948,42 @@ async def _exec_update_contact(record: dict, params: dict) -> str:
 
     allowed: dict = {}
     rejected: list = []
+    empty: list = []
     for key, value in params.items():
         canonical = _PLAN_FIELD_ALIASES.get(key, key)
-        if canonical in _PLAN_UPDATABLE_CONTACT_FIELDS:
-            allowed[canonical] = value
-        else:
+        if canonical not in _PLAN_UPDATABLE_CONTACT_FIELDS:
             rejected.append(key)
+            continue
+        # `call_extraction.md` emits null for anything the caller did not
+        # mention, and a plan that copies the extracted payload therefore
+        # carries nulls for most fields. Writing those through would blank
+        # existing CRM data: a call that mentioned only a phone number would
+        # erase the contact's email. A call can teach us a value; it cannot
+        # teach us that a value is absent.
+        if value is None or (isinstance(value, str) and not value.strip()):
+            empty.append(key)
+            continue
+        allowed[canonical] = value
     rejected = sorted(rejected)
+    empty = sorted(empty)
     if rejected:
         logger.warning(
             "Dropped non-call-outcome field(s) from plan contact update "
             "for contact %s: %s",
             contact_id,
-            ", ".join(rejected),
+            _render_keys(rejected),
+        )
+    if empty:
+        logger.info(
+            "Ignored empty value(s) in plan contact update for contact %s: %s",
+            contact_id,
+            _render_keys(empty),
         )
     if not allowed:
         raise PlanActionSkipped(
-            f"no updatable contact fields (dropped: {', '.join(rejected)})"
+            "no updatable contact fields"
+            + (f" (dropped: {_render_keys(rejected)})" if rejected else "")
+            + (f" (empty: {_render_keys(empty)})" if empty else "")
         )
 
     from ...services.crm_provider import get_crm_provider
@@ -946,7 +991,10 @@ async def _exec_update_contact(record: dict, params: dict) -> str:
 
     applied = ", ".join(sorted(allowed))
     if rejected:
-        return f"Contact {contact_id} updated ({applied}; dropped: {', '.join(rejected)})"
+        return (
+            f"Contact {contact_id} updated ({applied}; "
+            f"dropped: {_render_keys(rejected)})"
+        )
     return f"Contact {contact_id} updated ({applied})"
 
 

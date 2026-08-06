@@ -180,6 +180,25 @@ while nothing had happened, and `fail_count` was computed as
 counted explicitly, and the notification title reads "Plan Not Executed" when
 nothing ran.
 
+### Null is not a value
+
+`call_extraction.md` emits `null` for anything the caller did not mention, so a
+plan that copies the extracted payload carries nulls for most fields. Admitting
+them would write `email = NULL` over existing CRM data: a call that mentioned
+only a phone number would erase the contact's email. Null and blank values are
+ignored, and logged separately from rejected ones. **A call can teach us a
+value; it cannot teach us that a value is absent.**
+
+The alias mapping made this more likely rather than less, by accepting exactly
+the extracted field names that carry the nulls.
+
+### Untrusted key names in output sinks
+
+Rejected key names are LLM-produced JSON keys that flow into a log record, the
+persisted plan result, and the ntfy body. `_render_keys` strips non-printable
+characters, bounds each name, and caps the count, so a transcript cannot yield
+`"field\nERROR forged entry"` and forge a multiline log record.
+
 ## Mechanism
 
 The executor now builds `allowed` by intersecting the plan's params with the
@@ -224,10 +243,10 @@ Parked hardening: none.
 
 ```
 $ python -m pytest tests/test_call_action_plan_contact_fields.py -q
-16 passed
+32 passed
 
 $ python -m pytest tests/test_call_intelligence.py tests/test_call_action_plan_contact_fields.py -q
-46 passed
+62 passed
 
 $ python -m py_compile atlas_brain/api/comms/call_actions.py
 (no output)
@@ -241,7 +260,7 @@ pre-existing: identical with the change stashed and unstashed.
 
 | File | LOC |
 |---|---:|
-| `atlas_brain/api/comms/call_actions.py` | 122 |
-| `plans/PR-Call-Action-Plan-Contact-Field-Allowlist.md` | 247 |
-| `tests/test_call_action_plan_contact_fields.py` | 294 |
-| **Total** | **663** |
+| `atlas_brain/api/comms/call_actions.py` | 170 |
+| `plans/PR-Call-Action-Plan-Contact-Field-Allowlist.md` | 266 |
+| `tests/test_call_action_plan_contact_fields.py` | 377 |
+| **Total** | **813** |
