@@ -3674,6 +3674,7 @@ async def test_mark_lead_lost_records_reason_is_idempotent_and_reopens():
         metadata = _metadata_dict(row["metadata"])
         assert metadata["lost_reason_code"] == "declined_after_estimate"
         assert metadata["lost_by_employee_id"] == 1
+        assert metadata["transition_generation"] == 1
 
         # replay under the same key: idempotent, no second lifecycle row
         replay = await provider.mark_eom_lead_lost(
@@ -3740,9 +3741,11 @@ async def test_mark_lead_lost_records_reason_is_idempotent_and_reopens():
         new_contact, _, _ = await _contact_state(conn, new_id)
         assert new_contact["lead_stage"] == "new"
 
-        # Lifecycle chronology, not UUID ordering, owns the latest loss. The
-        # stale loss intentionally has the lexically larger UUID; ordering by
-        # id DESC would restore this lead to new instead of estimate_booked.
+        # Committed transition generation, not UUID or transaction-start
+        # timestamp ordering, owns the latest loss. The stale loss
+        # intentionally has the lexically larger UUID and newer timestamps;
+        # ordering by id DESC or by NOW()-backed timestamps would restore this
+        # lead to new instead of estimate_booked.
         chronological_id = uuid.uuid4()
         await _insert_contact(
             conn, contact_id=chronological_id, lead_stage="estimate_booked"
@@ -3755,10 +3758,11 @@ async def test_mark_lead_lost_records_reason_is_idempotent_and_reopens():
             """
             INSERT INTO eom_lead_lifecycle_events (
                 id, contact_id, event_type, from_stage, to_stage, actor,
-                source, operation_key, occurred_at, created_at
+                source, operation_key, occurred_at, created_at, metadata
             )
             VALUES ($1::uuid, $2, $3, $4, $5, 'employee:1:Juan Canfield',
-                    'eom_office', $6, $7::timestamptz, $7::timestamptz)
+                    'eom_office', $6, $7::timestamptz, $7::timestamptz,
+                    jsonb_build_object('transition_generation', $8::bigint))
             """,
             [
                 (
@@ -3768,7 +3772,8 @@ async def test_mark_lead_lost_records_reason_is_idempotent_and_reopens():
                     "new",
                     "lost",
                     f"lost-old-{uuid.uuid4().hex}",
-                    datetime(2026, 1, 1, tzinfo=timezone.utc),
+                    datetime(2026, 1, 4, tzinfo=timezone.utc),
+                    1,
                 ),
                 (
                     uuid.UUID("11111111-1111-1111-1111-111111111111"),
@@ -3778,6 +3783,7 @@ async def test_mark_lead_lost_records_reason_is_idempotent_and_reopens():
                     "new",
                     f"reopen-old-{uuid.uuid4().hex}",
                     datetime(2026, 1, 2, tzinfo=timezone.utc),
+                    2,
                 ),
                 (
                     uuid.UUID("22222222-2222-2222-2222-222222222222"),
@@ -3787,6 +3793,7 @@ async def test_mark_lead_lost_records_reason_is_idempotent_and_reopens():
                     "estimate_booked",
                     f"estimate-{uuid.uuid4().hex}",
                     datetime(2026, 1, 3, tzinfo=timezone.utc),
+                    3,
                 ),
                 (
                     uuid.UUID("00000000-0000-0000-0000-000000000001"),
@@ -3795,7 +3802,8 @@ async def test_mark_lead_lost_records_reason_is_idempotent_and_reopens():
                     "estimate_booked",
                     "lost",
                     f"lost-current-{uuid.uuid4().hex}",
-                    datetime(2026, 1, 4, tzinfo=timezone.utc),
+                    datetime(2026, 1, 1, tzinfo=timezone.utc),
+                    4,
                 ),
             ],
         )
