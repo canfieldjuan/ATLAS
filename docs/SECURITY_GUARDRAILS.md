@@ -104,6 +104,14 @@ guard shape. The workflow completed its #2104 burn-in and is now
 branch-required. It checks out trusted base code, materializes the PR head as git
 data, and runs the base-owned plan-admission auditor against that data worktree.
 
+The `pre-push-audit` workflow keeps its trusted-base split while checking one
+PR-side docs/test consistency contract as data: `ci/gates.yml` branch-required
+entries, `docs/SECURITY_GUARDRAILS.md`, the branch-protection workflow trigger
+paths, and `tests/test_security_guardrails_workflow.py` must agree before a PR
+can treat the local-review bundle as clean. This closes the stale
+required-status docs/test mismatch without executing PR-authored tests inside
+the `pull_request_target` job.
+
 The same auditor pre-admits a future
 `.github/workflows/review_contract.yml` / `review-contract` trusted-base
 producer only when the whole workflow file matches the canonical normalized YAML

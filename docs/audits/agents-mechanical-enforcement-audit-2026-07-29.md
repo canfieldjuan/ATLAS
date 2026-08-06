@@ -5,8 +5,9 @@
 The `unit-gate` enrollment blocker recorded on 2026-08-04 was closed by #2290.
 `unit-gate` is now a `ci/gates.yml` `branch_required` context and live branch
 protection requires it, pinned to the GitHub Actions app source. `pre-push-audit`
-remains `ci_blocking_not_required` until its trusted-base PR-side docs/test
-consistency blocker is closed.
+remains `ci_blocking_not_required`; its trusted-base PR-side docs/test
+consistency blocker now has a safe data-only probe and still needs a later
+enrollment recheck before any branch-required promotion.
 
 ## 2026-08-04 Update
 
@@ -112,8 +113,8 @@ branch protection may be superseded by the 2026-08-04 update above.
 2. `PR-Required-Workflow-Enrollment-Audit`: initial audit closed 2026-08-04 in
    `docs/audits/required-workflow-enrollment-audit-2026-08-04.md`; the
    2026-08-05 recheck promotes `unit-gate` after #2290 closed its selector
-   blocker. `pre-push-audit` remains visible-but-not-branch-required until its
-   trusted-base PR-side docs/test consistency blocker is closed.
+   blocker. `pre-push-audit` remains visible-but-not-branch-required while its
+   new trusted-base PR-side docs/test consistency probe burns in.
 3. `PR-PR-Mutation-Ownership-Wrapper`: wire `check_session_pr_ownership.py` into
    the PR mutation helpers, or downgrade the AGENTS wording to manual-only.
 4. `PR-Commit-Message-Contract-Gate`: validate canonical commit-message
