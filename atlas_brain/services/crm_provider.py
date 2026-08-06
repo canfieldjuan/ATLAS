@@ -753,7 +753,6 @@ class DatabaseCRMProvider:
         # but never a contact belonging to a DIFFERENT context
         # (PR #2152/#2153 review findings, R3/R4/R5).
         ctx = data.get("business_context_id")
-        from .eom_lead_ingress import EOM_BUSINESS_CONTEXT_ID
 
         def _ctx_compatible(candidate: dict[str, Any]) -> bool:
             if not ctx:
@@ -819,6 +818,8 @@ class DatabaseCRMProvider:
             return result
 
         if existing is not None:
+            from .eom_lead_ingress import EOM_BUSINESS_CONTEXT_ID
+
             existing_type = str(existing.get("contact_type") or "")
             incoming_type = str(data.get("contact_type") or "")
             # An EOM lead/customer type is a lifecycle decision, not inbound
@@ -868,12 +869,6 @@ class DatabaseCRMProvider:
             return result
 
         # --- no existing contact -- insert ---
-        if str(ctx or "").strip() == EOM_BUSINESS_CONTEXT_ID:
-            raise ValueError(
-                "New EOM contacts must be created through the EOM ingress "
-                "or funnel transition service"
-            )
-
         from ..storage.database import get_db_pool
 
         pool = get_db_pool()

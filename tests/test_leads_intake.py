@@ -491,10 +491,11 @@ def _provider_with(matches):
 
 
 @pytest.mark.asyncio
-async def test_create_contact_rejects_fresh_eom_contact_after_foreign_miss():
+async def test_create_contact_does_not_match_foreign_context_after_eom_miss():
     """Cross-tenant regression: a stamped create must never resolve to a
-    contact that belongs to a DIFFERENT business context. A remaining EOM miss
-    must use the EOM ingress/funnel contract, not generic contact creation."""
+    contact that belongs to a DIFFERENT business context. Provider callers that
+    still own live EOM backfill/import jobs keep the existing fresh-insert path
+    until those entry points move behind the canonical EOM service."""
     provider = _provider_with(
         [{"id": "b2b-1", "business_context_id": "churnsignals"}]
     )
@@ -504,14 +505,15 @@ async def test_create_contact_rejects_fresh_eom_contact_after_foreign_miss():
     orig = db_mod.get_db_pool
     db_mod.get_db_pool = lambda: pool
     try:
-        with pytest.raises(ValueError, match="EOM ingress"):
-            await provider.create_contact(
-                {"full_name": "Jane", "email": "jane@example.com",
-                 "business_context_id": "effingham_maids"}
-            )
+        result = await provider.create_contact(
+            {"full_name": "Jane", "email": "jane@example.com",
+             "business_context_id": "effingham_maids"}
+        )
     finally:
         db_mod.get_db_pool = orig
-    pool.fetchrow.assert_not_awaited()
+    assert result["id"] == "new-eom"
+    assert result["_was_created"] is True
+    pool.fetchrow.assert_awaited_once()
     provider.update_contact.assert_not_awaited()
 
 

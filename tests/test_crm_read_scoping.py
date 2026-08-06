@@ -201,26 +201,22 @@ async def test_guard_disabled_without_default(no_default, monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_create_contact_default_stamps(default_ctx, monkeypatch):
+async def test_create_contact_non_eom_default_stamps(monkeypatch):
+    from atlas_brain.config import settings
+
+    monkeypatch.setattr(settings.mcp, "crm_default_business_context", "churnsignals")
     provider = _provider_mock(monkeypatch)
     provider.create_contact = AsyncMock(return_value={"id": "new-1"})
     await crm_srv.create_contact(full_name="Jane")
     data = provider.create_contact.await_args.args[0]
-    assert data["business_context_id"] == EOM
+    assert data["business_context_id"] == "churnsignals"
 
 
 @pytest.mark.asyncio
 async def test_create_contact_default_eom_guard_message(default_ctx, monkeypatch):
     provider = _provider_mock(monkeypatch)
-    provider.create_contact = AsyncMock(
-        side_effect=ValueError(
-            "New EOM contacts must be created through the EOM ingress "
-            "or funnel transition service"
-        )
-    )
+    provider.create_contact = AsyncMock(return_value={"id": "should-not-create"})
     out = json.loads(await crm_srv.create_contact(full_name="Jane"))
-    data = provider.create_contact.await_args.args[0]
-    assert data["business_context_id"] == EOM
     assert out == {
         "success": False,
         "error": (
@@ -228,6 +224,22 @@ async def test_create_contact_default_eom_guard_message(default_ctx, monkeypatch
             "or funnel transition service"
         ),
     }
+    provider.create_contact.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_create_contact_explicit_eom_guard_message(no_default, monkeypatch):
+    provider = _provider_mock(monkeypatch)
+    provider.create_contact = AsyncMock(return_value={"id": "should-not-create"})
+    out = json.loads(
+        await crm_srv.create_contact(
+            full_name="Jane",
+            business_context_id=EOM,
+        )
+    )
+    assert out["success"] is False
+    assert "EOM ingress" in out["error"]
+    provider.create_contact.assert_not_awaited()
 
 
 @pytest.mark.asyncio
@@ -846,7 +858,7 @@ async def test_create_contact_non_merging_mode_returns_same_tenant_without_write
 
 
 @pytest.mark.asyncio
-async def test_create_contact_non_merging_mode_rejects_fresh_eom_default_miss():
+async def test_create_contact_non_merging_mode_admits_fresh_eom_backend_miss():
     from atlas_brain.services.crm_provider import DatabaseCRMProvider
     import atlas_brain.storage.database as database_mod
 
@@ -866,23 +878,24 @@ async def test_create_contact_non_merging_mode_rejects_fresh_eom_default_miss():
     database_mod._db_pool = pool
     try:
         p = _Provider()
-        with pytest.raises(ValueError, match="EOM ingress"):
-            await p.create_contact(
-                {
-                    "phone": "2175550000",
-                    "email": "new@example.com",
-                    "full_name": "New",
-                    "business_context_id": EOM,
-                },
-                merge_existing=False,
-            )
+        result = await p.create_contact(
+            {
+                "phone": "2175550000",
+                "email": "new@example.com",
+                "full_name": "New",
+                "business_context_id": EOM,
+            },
+            merge_existing=False,
+        )
     finally:
         database_mod._db_pool = previous_pool
+    assert result["id"] == "new-eom"
+    assert result["_was_created"] is True
     assert p.searches == [{
         "business_context_id": EOM,
         "email": "new@example.com",
     }]
-    pool.fetchrow.assert_not_awaited()
+    pool.fetchrow.assert_awaited_once()
 
 
 @pytest.mark.asyncio
