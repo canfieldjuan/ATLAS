@@ -585,7 +585,7 @@ class DatabaseCRMProvider:
                     )
                 if channel == "phone":
                     return await conn.fetchrow(
-                        f"""
+                        """
                         SELECT * FROM contacts
                         WHERE business_context_id = $1
                           AND status != 'archived'
@@ -599,7 +599,7 @@ class DatabaseCRMProvider:
                         value,
                     )
                 return await conn.fetchrow(
-                    f"""
+                    """
                     SELECT * FROM contacts
                     WHERE business_context_id = $1
                       AND status != 'archived'
@@ -2199,8 +2199,6 @@ class DatabaseCRMProvider:
             )
             request_for_key = None
             booked_for_key = None
-            failed_for_key = None
-            ambiguous_for_key = None
             for event in events:
                 if event["operation_key"] != booking_key:
                     continue
@@ -2208,10 +2206,6 @@ class DatabaseCRMProvider:
                     request_for_key = event
                 elif event["event_type"] == family.booked_event:
                     booked_for_key = event
-                elif event["event_type"] == family.failed_event:
-                    failed_for_key = event
-                elif event["event_type"] == family.ambiguous_event:
-                    ambiguous_for_key = event
             if (
                 request_for_key is None
                 or not self._eom_estimate_booking_payload_matches(
@@ -3678,14 +3672,16 @@ class DatabaseCRMProvider:
         actor_id: int,
         actor_name: str,
     ) -> dict[str, Any]:
-        """Return a previously-lost EOM lead to the active queue (stage `new`)."""
+        """Return a previously-lost EOM lead to its pre-loss active stage."""
         from .eom_lead_conversion import EOMLeadConversionError
         from .eom_lead_ingress import EOM_BUSINESS_CONTEXT_ID
 
-        def _result(*, idempotent: bool) -> dict[str, Any]:
+        restorable_stages = {"new", "estimate_booked"}
+
+        def _result(*, lead_stage: str, idempotent: bool) -> dict[str, Any]:
             return {
                 "contact_id": str(contact_id),
-                "lead_stage": "new",
+                "lead_stage": lead_stage,
                 "status": "active",
                 "idempotent": idempotent,
             }
@@ -3702,14 +3698,13 @@ class DatabaseCRMProvider:
                     "SELECT pg_advisory_xact_lock(hashtextextended($1, 0))",
                     lock_key,
                 )
-            replay = await conn.fetchval(
+            replay = await conn.fetchrow(
                 """
-                SELECT EXISTS (
-                    SELECT 1 FROM eom_lead_lifecycle_events
-                    WHERE contact_id = $1
-                      AND event_type = 'lead_reopened'
-                      AND operation_key = $2
-                )
+                SELECT to_stage
+                FROM eom_lead_lifecycle_events
+                WHERE contact_id = $1
+                  AND event_type = 'lead_reopened'
+                  AND operation_key = $2
                 """,
                 contact_id,
                 operation_key,
@@ -3744,20 +3739,21 @@ class DatabaseCRMProvider:
                 or contact["business_context_id"] != EOM_BUSINESS_CONTEXT_ID
             ):
                 raise EOMLeadConversionError(404, "EOM lead was not found")
-            if replay:
+            if replay is not None:
+                replay_stage = str(replay["to_stage"])
                 # A replay is only truthfully idempotent while the row is still
-                # the active lead at `new` this key produced. If it was lost
-                # again, finalized to a customer, or archived, reporting
-                # new/active would assert a state the row no longer has.
+                # the active lead at the stage this key restored. If it was
+                # lost again, finalized to a customer, or archived, reporting
+                # active would assert a state the row no longer has.
                 if not (
                     contact["contact_type"] == "lead"
-                    and contact["lead_stage"] == "new"
+                    and contact["lead_stage"] == replay_stage
                     and contact["status"] == "active"
                 ):
                     raise EOMLeadConversionError(
                         409, "EOM lead changed after this reopen"
                     )
-                return _result(idempotent=True)
+                return _result(lead_stage=replay_stage, idempotent=True)
             # Not a replay of this key: the lead must currently be lost. An
             # already-active lead reached under a *different* key is a conflict,
             # not a keyless no-op, so no operation_key is reported successful
@@ -3773,10 +3769,31 @@ class DatabaseCRMProvider:
                 raise EOMLeadConversionError(
                     409, "EOM lead must be active to reopen"
                 )
+            latest_loss = await conn.fetchrow(
+                """
+                SELECT from_stage
+                FROM eom_lead_lifecycle_events
+                WHERE contact_id = $1
+                  AND event_type = 'lead_lost'
+                ORDER BY id DESC
+                LIMIT 1
+                """,
+                contact_id,
+            )
+            if latest_loss is None:
+                raise EOMLeadConversionError(
+                    409, "EOM lead has no lost-stage evidence to reopen"
+                )
+            restored_stage = str(latest_loss["from_stage"] or "")
+            if restored_stage not in restorable_stages:
+                raise EOMLeadConversionError(
+                    409,
+                    "EOM lead lost-stage evidence cannot be safely restored",
+                )
             updated = await conn.fetchrow(
                 """
                 UPDATE contacts
-                SET lead_stage = 'new', updated_at = NOW()
+                SET lead_stage = $3, updated_at = NOW()
                 WHERE id = $1
                   AND business_context_id = $2
                   AND contact_type = 'lead'
@@ -3786,6 +3803,7 @@ class DatabaseCRMProvider:
                 """,
                 contact_id,
                 EOM_BUSINESS_CONTEXT_ID,
+                restored_stage,
             )
             if updated is None:
                 raise RuntimeError("EOM lead changed during reopen")
@@ -3795,15 +3813,16 @@ class DatabaseCRMProvider:
                     contact_id, event_type, from_stage, to_stage, actor,
                     source, operation_key, metadata
                 )
-                VALUES ($1, 'lead_reopened', 'lost', 'new', $2, 'eom_office', $3,
-                        jsonb_build_object('reopened_by_employee_id', $4::bigint))
+                VALUES ($1, 'lead_reopened', 'lost', $2, $3, 'eom_office', $4,
+                        jsonb_build_object('reopened_by_employee_id', $5::bigint))
                 """,
                 contact_id,
+                restored_stage,
                 f"employee:{actor_id}:{actor_name}",
                 operation_key,
                 actor_id,
             )
-            return _result(idempotent=False)
+            return _result(lead_stage=restored_stage, idempotent=False)
 
 
 # ---------------------------------------------------------------------------

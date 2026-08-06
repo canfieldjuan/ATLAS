@@ -18,9 +18,9 @@ from atlas_brain.services.eom_estimate_booking import (  # noqa: E402
     deterministic_eom_estimate_calendar_event_id,
     deterministic_eom_first_clean_calendar_event_id,
 )
-from atlas_brain.services.eom_lead_conversion import (
+from atlas_brain.services.eom_lead_conversion import (  # noqa: E402
     EOMLeadConversionError,
-)  # noqa: E402
+)
 
 ROOT = Path(__file__).resolve().parent.parent
 MIGRATIONS = ROOT / "atlas_brain" / "storage" / "migrations"
@@ -3694,7 +3694,9 @@ async def test_mark_lead_lost_records_reason_is_idempotent_and_reopens():
         )
         assert int(lost_count) == 1
 
-        # reopen returns the lead to the active queue at stage new
+        # reopen returns the lead to the active queue at the stage the loss
+        # displaced. For estimate_booked, that keeps the existing estimate
+        # booking evidence consistent with the active pipeline stage.
         reopen_key = f"office-reopen-{uuid.uuid4().hex}"
         reopened = await provider.reopen_eom_lead(
             contact_id=str(contact_id),
@@ -3703,17 +3705,40 @@ async def test_mark_lead_lost_records_reason_is_idempotent_and_reopens():
             actor_name="Juan Canfield",
         )
         assert reopened["idempotent"] is False
-        assert reopened["lead_stage"] == "new"
+        assert reopened["lead_stage"] == "estimate_booked"
         contact, _, _ = await _contact_state(conn, contact_id)
-        assert contact["lead_stage"] == "new"
-        reopened_count = await conn.fetchval(
+        assert contact["lead_stage"] == "estimate_booked"
+        reopened_row = await conn.fetchrow(
             """
-            SELECT COUNT(*) FROM eom_lead_lifecycle_events
+            SELECT from_stage, to_stage
+            FROM eom_lead_lifecycle_events
             WHERE contact_id = $1 AND event_type = 'lead_reopened'
             """,
             contact_id,
         )
-        assert int(reopened_count) == 1
+        assert reopened_row["from_stage"] == "lost"
+        assert reopened_row["to_stage"] == "estimate_booked"
+
+        # A lead that was lost from new still restores to new.
+        new_id = uuid.uuid4()
+        await _insert_contact(conn, contact_id=new_id, lead_stage="new")
+        await provider.mark_eom_lead_lost(
+            contact_id=str(new_id),
+            reason_code="spam",
+            note=None,
+            operation_key=f"office-lost-{uuid.uuid4().hex}",
+            actor_id=1,
+            actor_name="Juan Canfield",
+        )
+        reopened_new = await provider.reopen_eom_lead(
+            contact_id=str(new_id),
+            operation_key=f"office-reopen-{uuid.uuid4().hex}",
+            actor_id=1,
+            actor_name="Juan Canfield",
+        )
+        assert reopened_new["lead_stage"] == "new"
+        new_contact, _, _ = await _contact_state(conn, new_id)
+        assert new_contact["lead_stage"] == "new"
     finally:
         await conn.execute(f'DROP SCHEMA IF EXISTS "{schema}" CASCADE')
         await conn.close()
