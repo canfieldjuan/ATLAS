@@ -834,11 +834,11 @@ async def _exec_email(
     """Draft and send a confirmation email."""
     to_email = data.get("customer_email")
     if not to_email:
-        return "Skipped: no customer email"
+        raise PlanActionSkipped("no customer email")
 
     content = await _generate_draft("email", record, biz_name)
     if not content:
-        return "Skipped: LLM draft generation failed"
+        raise PlanActionSkipped("email draft generation failed")
 
     # Save draft for audit
     repo = get_call_transcript_repo()
@@ -859,7 +859,10 @@ async def _exec_email(
     msg = EmailMessage(to=to_email, subject=subject, body_text=body)
     sent = await asyncio.wait_for(svc.send_email(msg), timeout=30.0)
     if not sent:
-        return "Email send failed"
+        # Deliberately an error, not a PlanActionSkipped. The provider was
+        # called, so the send may have partially taken effect; "skipped" would
+        # make the plan retryable and invite a duplicate email.
+        raise RuntimeError("email send failed")
     return f"Email sent to {to_email}"
 
 
@@ -869,12 +872,12 @@ async def _exec_sms(
     """Draft and send a confirmation SMS."""
     to_number = data.get("customer_phone") or record.get("from_number")
     if not to_number:
-        return "Skipped: no customer phone"
+        raise PlanActionSkipped("no customer phone")
 
     biz_name = _get_business_name(record)
     content = await _generate_draft("sms", record, biz_name)
     if not content:
-        return "Skipped: LLM draft generation failed"
+        raise PlanActionSkipped("sms draft generation failed")
 
     repo = get_call_transcript_repo()
     await repo.save_draft(transcript_id, "sms", content)
@@ -953,7 +956,14 @@ async def _exec_update_contact(record: dict, params: dict) -> str:
     if not params:
         raise PlanActionSkipped("no update params")
 
-    allowed: dict = {}
+    # Keyed by canonical field, holding every source key that resolved to it.
+    # The alias map is many-to-one (`customer_email` and `email` both mean
+    # `email`), so a plan can carry two source keys for one column. Writing them
+    # as they arrive would let the later JSON member win silently, and the
+    # planner is fed BOTH the existing CRM contact and the newly extracted call
+    # data -- so the collision is reachable exactly when a caller supplies
+    # updated details, which is when getting it wrong is worst.
+    candidates: dict[str, list[tuple[str, str]]] = {}
     rejected: list = []
     empty: list = []
     malformed: list = []
@@ -986,10 +996,39 @@ async def _exec_update_contact(record: dict, params: dict) -> str:
         if not value.strip():
             empty.append(key)
             continue
+        candidates.setdefault(canonical, []).append((key, value))
+
+    # Resolve aliases to one value per column. Identical duplicates are fine --
+    # `{"email": "a@b.c", "customer_email": "a@b.c"}` says one thing twice.
+    # Differing values are dropped entirely rather than resolved by picking one:
+    # nothing here can tell the stale or hallucinated value from the correct
+    # one, and this writes to a live CRM row. Fail closed.
+    allowed: dict = {}
+    conflicting: list = []
+    for canonical, entries in candidates.items():
+        values = {value for _, value in entries}
+        if len(values) != 1:
+            # `!= 1` rather than `> 1`: an empty group cannot occur (a canonical
+            # only appears here because something appended to it), but treating
+            # it as a conflict means the impossible case also fails closed
+            # instead of raising. Unpacking rather than indexing makes the
+            # single-element expectation explicit at the point it is relied on.
+            conflicting.extend(key for key, _ in entries)
+            continue
+        (value,) = values
         allowed[canonical] = value
+
     rejected = sorted(rejected)
     empty = sorted(empty)
     malformed = sorted(malformed)
+    conflicting = sorted(conflicting)
+    if conflicting:
+        logger.warning(
+            "Dropped conflicting alias(es) in plan contact update for contact "
+            "%s -- two source keys gave different values for one field: %s",
+            contact_id,
+            _render_keys(conflicting),
+        )
     if rejected:
         logger.warning(
             "Dropped non-call-outcome field(s) from plan contact update "
@@ -1015,6 +1054,7 @@ async def _exec_update_contact(record: dict, params: dict) -> str:
             + (f" (dropped: {_render_keys(rejected)})" if rejected else "")
             + (f" (empty: {_render_keys(empty)})" if empty else "")
             + (f" (malformed: {_render_keys(malformed)})" if malformed else "")
+            + (f" (conflicting: {_render_keys(conflicting)})" if conflicting else "")
         )
 
     from ...services.crm_provider import get_crm_provider

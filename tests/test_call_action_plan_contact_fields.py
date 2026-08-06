@@ -13,6 +13,7 @@ still reach the provider, and forbidden fields must not.
 from __future__ import annotations
 
 import logging
+from pathlib import Path
 from uuid import UUID
 
 import pytest
@@ -550,3 +551,114 @@ async def test_notification_title_matches_the_persisted_state(
     assert titles and "Not Executed" not in titles[0], (
         f"an errored-but-terminal plan must not read as not executed: {titles}"
     )
+
+
+# --- Alias collision (Codex R3/R14 BLOCKER) --------------------------------
+#
+# `_PLAN_FIELD_ALIASES` is many-to-one: `customer_email` and `email` both mean
+# `email`. The planner is fed BOTH the existing CRM contact and the newly
+# extracted call data, so a plan can legitimately carry both keys -- which makes
+# a disagreement between them reachable exactly when a caller supplies updated
+# details.
+
+
+@pytest.mark.asyncio
+async def test_conflicting_alias_and_canonical_key_writes_neither(
+    provider: _RecordingProvider,
+) -> None:
+    """Differing values for one column must drop the column, not pick one.
+
+    Before this, `allowed[canonical] = value` let the later JSON member win, so
+    dict ordering decided which of two contradictory values reached a live CRM
+    row. Nothing here can tell the stale or hallucinated one from the correct
+    one, so the only safe answer is to write neither.
+    """
+    with pytest.raises(call_actions.PlanActionSkipped) as exc:
+        await call_actions._exec_update_contact(
+            RECORD,
+            {"email": "old@example.com", "customer_email": "new@example.com"},
+        )
+
+    assert provider.calls == []
+    assert "conflicting" in str(exc.value)
+
+
+@pytest.mark.asyncio
+async def test_conflicting_alias_is_dropped_but_other_fields_still_apply(
+    provider: _RecordingProvider,
+) -> None:
+    """The conflict is per-column, not per-payload.
+
+    A contradictory email must not discard an unambiguous phone number in the
+    same plan -- over-rejecting would make one bad field silently lose good data.
+    """
+    await call_actions._exec_update_contact(
+        RECORD,
+        {
+            "email": "old@example.com",
+            "customer_email": "new@example.com",
+            "customer_phone": "2175550100",
+        },
+    )
+
+    assert len(provider.calls) == 1
+    written = provider.calls[0][1]
+    assert written == {"phone": "2175550100"}
+    assert "email" not in written
+
+
+@pytest.mark.asyncio
+async def test_identical_duplicate_aliases_are_not_a_conflict(
+    provider: _RecordingProvider,
+) -> None:
+    """Saying one thing twice is not a disagreement.
+
+    The reject side must key on differing VALUES, not on two keys resolving to
+    one column, or an ordinary echo of the same address would drop it.
+    """
+    await call_actions._exec_update_contact(
+        RECORD,
+        {"email": "same@example.com", "customer_email": "same@example.com"},
+    )
+
+    assert len(provider.calls) == 1
+    assert provider.calls[0][1] == {"email": "same@example.com"}
+
+
+# --- Producer-contract drift (Codex R2/R14) --------------------------------
+
+
+def test_producer_fields_match_the_extraction_prompt() -> None:
+    """Bind this fixture to the real producer instead of trusting a copy.
+
+    `PRODUCER_FIELDS` was a hand-maintained literal transcribed from
+    `call_extraction.md`. If that prompt renames or drops a contact field, the
+    fixture and `_PLAN_FIELD_ALIASES` can drift apart while every test stays
+    green, and valid plan updates start being silently rejected.
+
+    This does not unify the schemas -- that is a real refactor across the
+    prompt, the executor, and these tests. It closes the part that actually
+    bites: silent drift. If the prompt changes, this fails and names the field.
+    """
+    prompt = (
+        Path(__file__).resolve().parents[1]
+        / "atlas_brain"
+        / "skills"
+        / "call"
+        / "call_extraction.md"
+    ).read_text(encoding="utf-8")
+
+    for produced in PRODUCER_FIELDS:
+        assert f'"{produced}"' in prompt, (
+            f"{produced} is in this test's PRODUCER_FIELDS but not in "
+            "call_extraction.md -- the prompt changed and the executor's alias "
+            "map probably needs to change with it"
+        )
+
+
+def test_every_producer_field_is_routed_by_the_alias_map_or_is_canonical() -> None:
+    """The other direction: a produced field the executor cannot place."""
+    for produced, canonical in PRODUCER_FIELDS.items():
+        resolved = call_actions._PLAN_FIELD_ALIASES.get(produced, produced)
+        assert resolved == canonical, (produced, resolved, canonical)
+        assert resolved in call_actions._PLAN_UPDATABLE_CONTACT_FIELDS

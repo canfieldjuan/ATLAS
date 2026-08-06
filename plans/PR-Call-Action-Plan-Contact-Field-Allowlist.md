@@ -342,14 +342,62 @@ this lane also rewrote `invoicing/auth.py`, `leads.py`, `ollama_compat.py`, and
 `presence.py`, none of which this PR touches. Only the `call_actions.py` key
 differs from the base revision.
 
+
+## Round-N findings addressed
+
+**Alias collision (R3/R14 BLOCKER).** `_PLAN_FIELD_ALIASES` is many-to-one, so a
+plan carrying both `email` and `customer_email` resolved both to one column and
+`allowed[canonical] = value` let the later JSON member win silently. The planner
+is fed the existing CRM contact *and* the newly extracted call data, so the
+collision is reachable exactly when a caller supplies updated details -- the case
+where writing the wrong one is worst. Now resolved per column: identical values
+are one statement made twice and are accepted; differing values drop the column
+entirely, because nothing available here distinguishes the stale or hallucinated
+value from the correct one and this writes to a live CRM row. Fail closed rather
+than guess. Mutation-probed: restoring last-writer-wins fails two of the three
+new tests.
+
+**Executor outcome normalisation (R6/R13).** Four no-work returns in `_exec_email`
+and `_exec_sms` were plain strings, so `approve_plan` recorded them as `ok`,
+counted them in the CRM interaction summary, listed them under "Completed" in the
+operator notification, and persisted the plan as terminal `executed`. They now
+raise `PlanActionSkipped`. Nothing was sent on those paths, so the resulting
+retryable `skipped` plan is correct.
+
+The failed-send path is deliberately NOT a skip. `send_email` returns `bool`
+(verified: `ResendEmailService.send_email(...) -> bool`), and `if not sent`
+previously returned the string `"Email send failed"` -- reporting a failed send
+as a completed action. It now raises `RuntimeError`, which records `error` and
+keeps the plan `executed` and non-retryable. Making it a skip would mark the plan
+retryable after the provider had already been called, which is how duplicate
+customer email gets sent.
+
+`_exec_sms` needs no equivalent change, checked rather than assumed:
+`TelephonyProvider.send_sms(to_number, from_number, body, ...) -> SMSMessage`
+returns an object and raises on failure, so failures already reach the generic
+handler as `error`. (The `send_sms(..., message=...)` signatures elsewhere in
+`atlas_brain/comms/real_services.py` belong to `SMSService`, a different
+abstraction, and are not what this call site uses -- worth stating because the
+mismatch looks like a bug until the provider type is resolved.)
+
+**Producer-contract drift (R2/R14).** `PRODUCER_FIELDS` remains a literal, but is
+no longer unbound: `test_producer_fields_match_the_extraction_prompt` reads
+`atlas_brain/skills/call/call_extraction.md` and fails if a field named here is
+absent there, and `test_every_producer_field_is_routed_by_the_alias_map_or_is_canonical`
+asserts each one resolves through `_PLAN_FIELD_ALIASES` into
+`_PLAN_UPDATABLE_CONTACT_FIELDS`. This does not unify the schemas -- that is a
+real refactor across prompt, executor, and tests, and is **deferred to ATLAS
+#2304**. It closes the part that actually bites: silent drift going unnoticed
+while every test stays green.
+
 ## Verification
 
 ```
 $ python -m pytest tests/test_call_action_plan_contact_fields.py -q
-40 passed
+47 passed
 
 $ python -m pytest tests/test_call_intelligence.py tests/test_call_action_plan_contact_fields.py -q
-70 passed
+77 passed
 
 $ python -m py_compile atlas_brain/api/comms/call_actions.py
 (no output)
@@ -363,9 +411,9 @@ pre-existing: identical with the change stashed and unstashed.
 
 | File | LOC |
 |---|---:|
-| `atlas_brain/api/comms/call_actions.py` | 215 |
-| `plans/PR-Call-Action-Plan-Contact-Field-Allowlist.md` | 371 |
+| `atlas_brain/api/comms/call_actions.py` | 259 |
+| `plans/PR-Call-Action-Plan-Contact-Field-Allowlist.md` | 419 |
 | `tests/maturity_sweep/baseline_atlas_brain_api.json` | 4 |
-| `tests/test_call_action_plan_contact_fields.py` | 552 |
+| `tests/test_call_action_plan_contact_fields.py` | 664 |
 | `tests/unit_gate_baseline.txt` | 6 |
-| **Total** | **1148** |
+| **Total** | **1352** |
