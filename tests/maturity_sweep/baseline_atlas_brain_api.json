@@ -148,9 +148,9 @@
   },
   "atlas_brain/api/comms/call_actions.py": {
     "counts": {
-      "NO_TEST_FILE": 1
+      "INTERNAL_MOCK": 10
     },
-    "score": 6
+    "score": 40
   },
   "atlas_brain/api/comms/management.py": {
     "counts": {
