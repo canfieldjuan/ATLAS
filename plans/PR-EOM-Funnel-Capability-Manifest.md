@@ -41,7 +41,7 @@ behaviour.
 
 Website #112 states the skew is currently live. **It is not, as of this PR.**
 Deploying `497d3155f` (ATLAS #2300) closed it: the running service's own
-`openapi.json` now lists `/api/v1/eom-funnel/leads/{contact_id}/lost` and
+served OpenAPI document now lists `/api/v1/eom-funnel/leads/{contact_id}/lost` and
 `.../reopen`.
 
 That resolves the *instance* and changes nothing about the *cause*. The deploy
@@ -111,10 +111,39 @@ leaking across a route change; probed by an autouse fixture that resets the
 cache and by computing lazily rather than at import, since the routes are
 registered by decorators below the definition.
 
-- Reviewer rules triggered: R1, R2, R9, R10.
+- Reviewer rules triggered: R1, R2, R5, R9, R10, R12, R14.
+
+R5 (backward compatibility) applies because this changes a public API response
+shape. The change is additive: `capabilities` is a new key with a default, every
+prior key keeps its name, type, and meaning, and the tracker's
+`_parse_atlas_lead_review_response` reads by `.get()` and ignores unknown keys.
+Not BREAKING, and pinned by
+`test_pre_manifest_caller_still_reads_every_field_it_knew` (asserts each key the
+old caller reads is still present) and
+`test_response_model_defaults_capabilities_for_a_caller_that_omits_it`
+(constructing the envelope without the field does not raise). The three existing
+envelope assertions stay exact-equality, so a silent rename or drop still fails.
 
 R9 (guard-shaped) applies: this is a declaration of what is allowed to be
 called, and it fails on its second side if it ever over-advertises.
+
+R12 (deployment safety and CI enrollment) applies because the ordering is
+load-bearing -- Atlas must be **deployed**, not merely merged, before the tracker
+half ships. Documented in Deployment compatibility above, with the rollback path
+stated: reverting past this commit removes the key, and a manifest-aware caller
+must read absence as "advertise nothing" and disable the gated controls, which is
+the same degradation path as an old Atlas. Disable path: there is no flag to turn
+off, because the field is inert until a caller reads it -- this PR ships a
+statement of fact and no behaviour change. CI enrollment verified rather than
+assumed: `tests/unit_gate_baseline.txt` is a known-**failures** list, not a test
+registry (the gate fails only on a node absent from it), so a new passing test
+file is collected by the repo-wide run and must not be added there --
+`tests/test_eom_lead_conversion.py` is likewise absent from it.
+
+R14 (verify against the codebase, not the PR story) applies universally. The
+concrete instance here: website #112 asserts the lost/reopen skew is live, and
+the running service's own served OpenAPI document contradicts it. Recorded above rather
+than inherited from the issue text.
 
 **boundary-probe:** both directions plus the forced-degradation case.
 Advertised-implies-registered
@@ -241,7 +270,7 @@ consumer-side behaviour is specified and tested in the tracker half.
 | File | LOC |
 |---|---:|
 | `atlas_brain/eom_api/funnel.py` | 72 |
-| `plans/PR-EOM-Funnel-Capability-Manifest.md` | 247 |
+| `plans/PR-EOM-Funnel-Capability-Manifest.md` | 276 |
 | `tests/test_eom_funnel_capability_manifest.py` | 215 |
 | `tests/test_eom_lead_conversion.py` | 3 |
-| **Total** | **537** |
+| **Total** | **566** |
