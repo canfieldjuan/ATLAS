@@ -110,11 +110,11 @@ async def test_tenancy_only_payload_writes_nothing(provider: _RecordingProvider)
     Otherwise the executor would issue an update whose sole effect is bumping
     updated_at, making an attempted tenancy rewrite look like a real edit.
     """
-    result = await call_actions._exec_update_contact(
-        RECORD, {"business_context_id": "churnsignals", "source": "forged"}
-    )
+    with pytest.raises(call_actions.PlanActionSkipped):
+        await call_actions._exec_update_contact(
+            RECORD, {"business_context_id": "churnsignals", "source": "forged"}
+        )
     assert provider.calls == []
-    assert "Skipped" in result
 
 
 @pytest.mark.asyncio
@@ -147,3 +147,80 @@ async def test_empty_params_is_still_skipped(provider: _RecordingProvider) -> No
     result = await call_actions._exec_update_contact(RECORD, {})
     assert provider.calls == []
     assert result == "Skipped: no update params"
+
+
+# ---------------------------------------------------------------------------
+# Class closure over an open key space
+# ---------------------------------------------------------------------------
+
+def _arbitrary_keys(count: int) -> list[str]:
+    """Deterministic pseudo-arbitrary keys spanning the shapes a producer emits.
+
+    `params` is producer-supplied JSON with an open key space, so enumerating a
+    handful of known-bad names proves nothing about the space. These cover
+    snake_case, dotted paths, dunders, SQL-ish names, unicode, and near-misses
+    of real allow-list members.
+    """
+    import hashlib
+
+    shapes = [
+        "field_{}", "nested.field_{}", "__dunder_{}__", "Field-{}", "  spaced_{}  ",
+        "contacts.{}", "email_{}", "{}_id", "ünïcode_{}", "SELECT_{}",
+        "business_context_id_{}", "source_{}",
+    ]
+    keys = []
+    for index in range(count):
+        digest = hashlib.sha256(str(index).encode()).hexdigest()[:6]
+        keys.append(shapes[index % len(shapes)].format(digest))
+    return keys
+
+
+@pytest.mark.asyncio
+async def test_arbitrary_unknown_keys_never_reach_the_provider(
+    provider: _RecordingProvider,
+) -> None:
+    """CLOSED / ENUMERATED / default-reject, proven over generated keys."""
+    params = {key: "value" for key in _arbitrary_keys(120)}
+    await call_actions._exec_update_contact(RECORD, {**params, "email": "a@b.com"})
+    _, updates = provider.calls[0]
+    assert set(updates) == {"email"}, (
+        "only enumerated allow-list members may reach the provider"
+    )
+
+
+@pytest.mark.asyncio
+async def test_mixed_payload_keeps_only_allowlist_members(
+    provider: _RecordingProvider,
+) -> None:
+    allowed = sorted(call_actions._PLAN_UPDATABLE_CONTACT_FIELDS)
+    params = {field: "v" for field in allowed}
+    params.update({key: "v" for key in _arbitrary_keys(60)})
+    await call_actions._exec_update_contact(RECORD, params)
+    _, updates = provider.calls[0]
+    assert set(updates) == set(allowed)
+
+
+@pytest.mark.asyncio
+async def test_only_unknown_keys_raises_skipped_not_success(
+    provider: _RecordingProvider,
+) -> None:
+    """A refused action must not be auditable as executed.
+
+    approve_plan records any non-raising return as status "ok", which counts it
+    in `executed`, names it in the CRM interaction summary, persists the plan as
+    executed, and lists it under "Completed" in the notification.
+    """
+    with pytest.raises(call_actions.PlanActionSkipped):
+        await call_actions._exec_update_contact(
+            RECORD, {key: "v" for key in _arbitrary_keys(10)}
+        )
+    assert provider.calls == []
+
+
+@pytest.mark.asyncio
+async def test_tenancy_only_payload_raises_skipped(provider: _RecordingProvider) -> None:
+    with pytest.raises(call_actions.PlanActionSkipped):
+        await call_actions._exec_update_contact(
+            RECORD, {"business_context_id": "churnsignals", "source": "forged"}
+        )
+    assert provider.calls == []

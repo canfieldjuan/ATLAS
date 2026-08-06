@@ -35,6 +35,17 @@ from ...storage.repositories.call_transcript import get_call_transcript_repo
 
 logger = logging.getLogger("atlas.api.comms.call_actions")
 
+
+class PlanActionSkipped(Exception):
+    """A plan action performed no work and must not be audited as executed.
+
+    approve_plan records any non-raising executor return as status "ok", which
+    counts it in `executed`, names it in the CRM interaction summary, persists
+    the plan as executed, and lists it under "Completed" in the notification.
+    For a rejected-only contact update that would permanently report an
+    attempted tenancy or provenance mutation as a completed action.
+    """
+
 router = APIRouter(prefix="/call-actions", tags=["call-actions"])
 
 
@@ -617,6 +628,9 @@ async def approve_plan(transcript_id: UUID):
             )
             results.append({"action": atype, "status": "ok", "detail": result})
             logger.info("Plan action OK: %s for %s", atype, transcript_id)
+        except PlanActionSkipped as e:
+            results.append({"action": atype, "status": "skipped", "detail": str(e)})
+            logger.info("Plan action SKIPPED: %s for %s: %s", atype, transcript_id, e)
         except Exception as e:
             results.append({"action": atype, "status": "error", "detail": str(e)})
             logger.error("Plan action FAIL: %s for %s: %s", atype, transcript_id, e)
@@ -892,7 +906,9 @@ async def _exec_update_contact(record: dict, params: dict) -> str:
             ", ".join(rejected),
         )
     if not allowed:
-        return f"Skipped: no updatable contact fields (dropped: {', '.join(rejected)})"
+        raise PlanActionSkipped(
+            f"no updatable contact fields (dropped: {', '.join(rejected)})"
+        )
 
     from ...services.crm_provider import get_crm_provider
     await get_crm_provider().update_contact(str(contact_id), allowed)
@@ -966,6 +982,7 @@ async def _notify_plan_executed(
     customer = extracted_data.get("customer_name") or "Customer"
     ok = [r for r in results if r["status"] == "ok"]
     failed = [r for r in results if r["status"] == "error"]
+    skipped = [r for r in results if r["status"] == "skipped"]
 
     lines = [f"Customer: {customer}"]
     if ok:
@@ -975,6 +992,13 @@ async def _notify_plan_executed(
     if failed:
         lines.append(f"Failed ({len(failed)}):")
         for r in failed:
+            lines.append(f"  {r['action'].replace('_', ' ').title()}: {r['detail']}")
+
+    if skipped:
+        # Listed separately so an attempted-but-refused action is visible to the
+        # operator rather than absent from a notification headed "Completed".
+        lines.append(f"Skipped ({len(skipped)}):")
+        for r in skipped:
             lines.append(f"  {r['action'].replace('_', ' ').title()}: {r['detail']}")
 
     message = "\n".join(lines)

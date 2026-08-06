@@ -70,7 +70,7 @@ Slice phase: production hardening
 
 ### Files touched
 
-- `atlas_brain/api/comms/call_actions.py` (modified: one executor + one constant)
+- `atlas_brain/api/comms/call_actions.py` (modified: one executor, one constant, one new exception class, the approve_plan result loop, and the notification summary)
 - `tests/test_call_action_plan_contact_fields.py` (new)
 - `plans/PR-Call-Action-Plan-Contact-Field-Allowlist.md` (new)
 
@@ -85,9 +85,12 @@ Slice phase: production hardening
    `business_context_id`, `source`, `source_ref`, `contact_type`, `status`,
    `lead_stage`, `lead_owner`, `next_follow_up_at`, `tags`, `id` --
    `::test_forbidden_field_never_reaches_the_provider`.
-4. A payload of only forbidden fields performs no write, so an attempted
-   tenancy rewrite cannot masquerade as a real edit by bumping `updated_at` --
-   `::test_tenancy_only_payload_writes_nothing`.
+4. A payload of only forbidden fields performs no write **and raises
+   `PlanActionSkipped`**, so `approve_plan` records it as `skipped` rather than
+   counting it in `executed`, naming it in the CRM interaction summary,
+   persisting the plan as executed, and listing it under "Completed" in the
+   notification -- `::test_tenancy_only_payload_raises_skipped`,
+   `::test_only_unknown_keys_raises_skipped_not_success`.
 5. Dropped fields are logged, because silently discarding a privileged field is
    its own failure mode -- `::test_dropped_fields_are_logged_not_silent`.
 6. Pre-existing skip behavior is unchanged --
@@ -129,11 +132,30 @@ because the failure-branch fixtures are the evidence.
 provider actually received, so the observable state is the provider call itself
 rather than a return string.
 
-**Guard-class closure declaration:** the decision-driving member set is
-`_PLAN_UPDATABLE_CONTACT_FIELDS`. Closure: every member is proven accepted
-(criterion 2); ten non-members spanning tenancy, provenance, lifecycle,
-segmentation, and identity are proven rejected (criterion 3); the empty-result
-case is covered (criterion 4); both pre-existing skip branches are pinned.
+**Guard-class closure declaration**
+
+- **Member set:** `_PLAN_UPDATABLE_CONTACT_FIELDS` (ten call-derived fields).
+- **Key space:** **OPEN.** `params` is producer-supplied JSON from an LLM plan,
+  so the set of keys that can arrive is unbounded. Enumerating known-bad names
+  therefore proves nothing about the space, which is why criterion 3 alone was
+  insufficient evidence.
+- **Membership:** **ENUMERATED**, not derived. The set is a literal frozenset
+  read by a single `in` test, so it cannot drift with schema changes.
+- **Out-of-set default:** **REJECT**, and the rejection is loud. Unknown keys
+  are dropped, logged at WARNING, and -- when nothing survives -- the executor
+  raises `PlanActionSkipped` so the action is not audited as executed. Safety
+  rationale: a new `contacts` column must not become writable from a transcript
+  merely by existing, and a refused write must not be indistinguishable from a
+  performed one in the audit trail.
+- **Property evidence:** `::test_arbitrary_unknown_keys_never_reach_the_provider`
+  generates 120 keys spanning snake_case, dotted paths, dunders, whitespace
+  padding, unicode, SQL-ish names, and near-misses of real members
+  (`email_<hash>`, `business_context_id_<hash>`), asserting only enumerated
+  members reach the provider. `::test_mixed_payload_keeps_only_allowlist_members`
+  repeats it with every allow-list member present.
+- **Both sides:** every member proven accepted (criterion 2); arbitrary
+  non-members proven rejected (property tests); rejected-only payloads proven to
+  raise rather than write (criterion 4); both pre-existing skip branches pinned.
 
 ## Mechanism
 
@@ -196,7 +218,7 @@ pre-existing: identical with the change stashed and unstashed.
 
 | File | LOC |
 |---|---:|
-| `atlas_brain/api/comms/call_actions.py` | 62 |
-| `tests/test_call_action_plan_contact_fields.py` | 155 |
+| `atlas_brain/api/comms/call_actions.py` | 95 |
+| `tests/test_call_action_plan_contact_fields.py` | 250 |
 | `plans/PR-Call-Action-Plan-Contact-Field-Allowlist.md` | 190 |
-| **Total** | **407** |
+| **Total** | **560** |
