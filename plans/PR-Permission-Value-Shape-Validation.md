@@ -53,8 +53,10 @@ Slice phase: production hardening
 
 1. Validate shape first in `_permissions_are_explicitly_read_only`: a non-string
    key or non-string value returns False before anything else is considered.
-2. `_permissions_write_oidc` treats a non-string `id-token` value as a write
-   request rather than as absence, because it cannot be evaluated statically.
+2. `_permissions_oidc_state` replaces the OIDC boolean with a tri-state --
+   `none` / `write` / `invalid`. An unevaluable `id-token` value is `invalid`,
+   which is an ERROR at both workflow and job scope and is **never**
+   allowlistable.
 
 ### Files touched
 
@@ -65,9 +67,12 @@ Slice phase: production hardening
 ### Review Contract
 
 1. Every unevaluable shape reaches the reject verdict rather than raising.
-2. `{id-token: [write]}` is rejected by the admission predicate AND flagged by
+2. `{id-token: [write]}` is rejected by the admission predicate AND errors at
    the OIDC check -- both, since they are separate paths and either alone would
-   leave a gap.
+   leave a gap. Critically it errors even on the allowlisted
+   `.github/workflows/claude.yml` / `claude` job: the first attempt at this fix returned a plain boolean, so the
+   malformed value inherited that job's allowlist and downgraded to a WARN,
+   indistinguishable from the reviewed `id-token: write`.
 3. Legitimate shapes are unchanged: `{contents: read}`, `{}`, `read-all` admit;
    `write-all` rejects; `{id-token: write}` still admits at this predicate and
    is still caught by the OIDC allowlist.
@@ -103,8 +108,10 @@ Reject side: `{id-token: [write]}`, `{id-token: {a: b}}`, `{contents: [read]}`,
 `{5: read}`, and a mixed block whose second value is a list. Admit side:
 `{contents: read}`, `{}`, `read-all`, `{id-token: write}`, `{id-token: none}`.
 
-**Mutation-probe (run, not asserted):** removing the shape check makes 6 tests
-fail. Restored before commit.
+**Mutation-probe (run, not asserted), twice:** removing the shape check makes 6
+tests fail; separately, collapsing `OIDC_INVALID` back into `OIDC_WRITE` also
+makes 6 fail. Restored before commit both times. The second probe is the one
+that matters here -- it is the exact regression this round fixed.
 
 **Guard-class closure declaration -- amendment to #2305's**
 
@@ -141,9 +148,13 @@ Shape before meaning. Establish that a key and value are strings; then apply the
 
 ## Intentional
 
-- **Non-scalar `id-token` counts as a write request, not as absence.** The
-  conservative direction: an unevaluable OIDC value should reach the allowlist
-  rather than bypass it.
+- **`invalid` is its own state, not a flavour of `write`.** The first version
+  of this fix made a non-scalar `id-token` return the same boolean as a real
+  write request. That was still wrong, for a reason worth stating: the allowlist
+  exists to permit a REVIEWED value on a REVIEWED job, so routing an
+  unevaluable shape into it means permitting something nobody looked at. An
+  `invalid` value therefore errors regardless of allowlist membership, while a
+  valid `id-token: write` on the owner-gated Claude job keeps its WARN.
 - **Reject rather than raise.** Both fail the build, but a raise aborts the
   audit before later workflows are examined and gives a stack trace instead of
   a finding.
@@ -163,7 +174,7 @@ Parked hardening: none.
 
 ```
 $ python -m pytest tests/test_audit_workflow_security_posture.py -q
-52 passed
+66 passed
 
 $ python scripts/audit_workflow_security_posture.py
 (exit 0 -- nothing in the real workflow tree is newly rejected)
@@ -187,7 +198,7 @@ write-all              read_only=False oidc=True       unchanged
 
 | File | LOC |
 |---|---:|
-| `plans/PR-Permission-Value-Shape-Validation.md` | 193 |
-| `scripts/audit_workflow_security_posture.py` | 36 |
-| `tests/test_audit_workflow_security_posture.py` | 90 |
-| **Total** | **319** |
+| `plans/PR-Permission-Value-Shape-Validation.md` | 204 |
+| `scripts/audit_workflow_security_posture.py` | 72 |
+| `tests/test_audit_workflow_security_posture.py` | 169 |
+| **Total** | **445** |

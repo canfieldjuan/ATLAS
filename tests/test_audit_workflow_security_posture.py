@@ -841,3 +841,82 @@ jobs:
     assert [f for f in findings if f.level == "ERROR"], (
         "a list-valued id-token on an enrolled trusted-base job must not be admitted"
     )
+
+
+# --- OIDC tri-state: "unevaluable" must not be allowlistable -----------------
+#
+# Collapsing "requests write" and "cannot be evaluated" into one boolean let a
+# malformed value inherit the Claude job's allowlist and downgrade to a WARN,
+# indistinguishable from the reviewed `id-token: write`. The allowlist permits a
+# KNOWN value on a KNOWN job; a shape nobody can evaluate is not that value.
+
+
+def _claude_workflow(id_token_literal: str) -> str:
+    return f"""
+name: Claude
+on:
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  claude:
+    if: github.actor == github.repository_owner
+    runs-on: ubuntu-latest
+    permissions:
+      id-token: {id_token_literal}
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0
+"""
+
+
+@pytest.mark.parametrize(
+    "id_token_literal", ["\n        - write", "\n        a: b", "\n        - read"]
+)
+def test_malformed_id_token_errors_even_on_the_allowlisted_job(
+    tmp_path: Path, id_token_literal: str
+) -> None:
+    """The allowlisted identity must not launder an unevaluable value."""
+    auditor = load_auditor()
+    workflow = _write_workflow(tmp_path, "claude.yml", _claude_workflow(id_token_literal))
+
+    findings = auditor.audit_workflow(workflow)
+
+    assert [f for f in findings if f.level == "ERROR"], findings
+    assert not [
+        f for f in findings if f.level == "WARN" and "allowed id-token" in f.detail
+    ], "an unevaluable value must not be reported as an allowed one"
+
+
+def test_valid_id_token_write_on_the_allowlisted_job_is_still_only_a_warning(
+    tmp_path: Path,
+) -> None:
+    """The control. Without it, the parametrization above would also pass if the
+    fix simply errored on every id-token value, which would break the Claude
+    Code action outright."""
+    auditor = load_auditor()
+    workflow = _write_workflow(tmp_path, "claude.yml", _claude_workflow("write"))
+
+    findings = auditor.audit_workflow(workflow)
+
+    assert not [f for f in findings if f.level == "ERROR"], findings
+    assert any(f.level == "WARN" and "allowed id-token" in f.detail for f in findings)
+
+
+@pytest.mark.parametrize(
+    "permissions, expected",
+    [
+        ({"id-token": "write"}, "write"),
+        ({"id-token": "none"}, "none"),
+        ({"id-token": ["write"]}, "invalid"),
+        ({"id-token": {"a": "b"}}, "invalid"),
+        ({"id-token": True}, "invalid"),
+        ({"contents": "read"}, "none"),
+        ("write-all", "write"),
+        ("read-all", "none"),
+        (None, "none"),
+        ({}, "none"),
+    ],
+)
+def test_oidc_state_tri_state_boundaries(permissions: object, expected: str) -> None:
+    auditor = load_auditor()
+    assert auditor._permissions_oidc_state(permissions) == expected
