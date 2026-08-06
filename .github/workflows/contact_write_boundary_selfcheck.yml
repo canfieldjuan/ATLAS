@@ -1,0 +1,84 @@
+name: Contact Write Boundary (advisory)
+
+# Advisory and post-merge runs for the contact write-boundary checker.
+#
+# Deliberately a SEPARATE file from contact_write_boundary.yml so that the
+# registered, blocking `contact-write-boundary` context has exactly one
+# producer: the trusted `pull_request_target` job. When both events were
+# registered on one workflow, each update emitted two runs of that name -- the
+# ordinary-event copy skipped -- and Atlas's readiness consumers pick the
+# latest by name and count `skipped` as green, so the skipped copy could mask a
+# failed enforcement run.
+#
+# Neither job here is enrolled in ci/gates.yml. The self-check runs PR-owned
+# code and can be weakened by the PR it is checking; it exists so the gate
+# produces a signal on the PR that introduces it, before the trusted job has a
+# base definition to run from.
+
+on:
+  pull_request:
+  push:
+    branches:
+      - main
+
+permissions:
+  contents: read
+
+jobs:
+  contact-write-boundary-selfcheck:
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Checkout
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+
+      - name: Setup Python
+        uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6.3.0
+        with:
+          python-version: "3.11"
+
+      - name: Contact write-boundary self-check (advisory, PR-owned code)
+        run: |
+          set -euo pipefail
+          python scripts/check_contact_write_boundary.py \
+            --baseline tests/contact_write_boundary/baseline.json
+
+      - name: Detector self-tests
+        run: |
+          set -euo pipefail
+          python -m pip install --upgrade pip
+          # pyyaml: test_blocking_context_has_exactly_one_producer parses the
+          # workflow files. pytest-asyncio: tests/conftest.py imports it for any
+          # test under tests/, even a stdlib-only one.
+          python -m pip install pytest pytest-asyncio pyyaml
+          python -m pytest tests/test_contact_write_boundary.py -q
+
+  contact-write-boundary-main:
+    if: github.event_name == 'push'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Checkout
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+
+      - name: Setup Python
+        uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6.3.0
+        with:
+          python-version: "3.11"
+
+      - name: Contact write-boundary check
+        run: |
+          set -euo pipefail
+          python scripts/check_contact_write_boundary.py \
+            --baseline tests/contact_write_boundary/baseline.json
+
+      - name: Detector self-tests
+        run: |
+          set -euo pipefail
+          python -m pip install --upgrade pip
+          # pyyaml: test_blocking_context_has_exactly_one_producer parses the
+          # workflow files. pytest-asyncio: tests/conftest.py imports it for any
+          # test under tests/, even a stdlib-only one.
+          python -m pip install pytest pytest-asyncio pyyaml
+          python -m pytest tests/test_contact_write_boundary.py -q

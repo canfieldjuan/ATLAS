@@ -18,6 +18,14 @@ gates:
     workflow: .github/workflows/ai_reconciliation_live.yml
     local_command: null
 
+  - id: contact-write-boundary
+    name: Contact write boundary
+    context: contact-write-boundary
+    enforcement: ci_blocking_not_required
+    trusted_base: true
+    workflow: .github/workflows/contact_write_boundary.yml
+    local_command: python scripts/check_contact_write_boundary.py --baseline tests/contact_write_boundary/baseline.json
+
   - id: diff-budget
     name: Diff budget
     context: diff-budget

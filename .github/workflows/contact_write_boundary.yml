@@ -1,0 +1,100 @@
+name: Contact Write Boundary
+
+# Fails when a new SQL write to the `contacts` table appears outside the
+# approved provider module (Website#108, Slice 0A under #107/#105).
+#
+# Trusted-base execution. `pull_request_target` resolves THIS workflow file
+# from the base branch, and the checker plus its allow-list are checked out
+# from the base SHA. The PR tree is fetched separately and scanned as DATA.
+#
+# The first version ran the PR's own copy of the checker against itself, which
+# made the gate self-defeating: a PR adding a forbidden writer could widen
+# `INSERT_ALLOWED`, weaken `classify()`, or rewrite the self-tests in the same
+# diff and publish a green `contact-write-boundary` context. Same reasoning and
+# same shape as diff_budget.yml.
+#
+# The job below matches the shape audited by
+# scripts/audit_workflow_security_posture.py: an event-name `if` guard, a
+# SHA-pinned FIRST step checking out `github.event.pull_request.base.sha`, and
+# explicit enrollment in ALLOWED_PULL_REQUEST_TARGET_JOBS. Post-merge and advisory runs live in
+# contact_write_boundary_selfcheck.yml, so no job here can execute on a
+# non-trusted event and none needs a conditional checkout ref.
+#
+# Never add a step here that executes PR-ref content. The PR checkout is read
+# by the base checker; it is never run.
+#
+# Deliberately not path-filtered: the violation this catches is a brand-new
+# module adding its own INSERT, and a new file matches no pre-existing filter.
+
+# Triggered by pull_request_target ONLY. Registering the ordinary
+# `pull_request` event here as well made GitHub emit TWO check runs named
+# `contact-write-boundary` per update: the ordinary-event copy skipped by the
+# job guard, and the target-event copy doing enforcement. Atlas's readiness
+# consumers pick the latest run by name and count `skipped` as green
+# (scripts/pr_watcher.py `_latest_github_actions_check_runs`,
+# scripts/watch_owned_pr.sh), so the skipped copy could mask a FAILED
+# trusted-base run and report a forbidden writer merge-ready.
+#
+# The advisory and post-merge runs live in contact_write_boundary_selfcheck.yml
+# under different job names, so this context has exactly one producer.
+on:
+  pull_request_target:
+    # `edited` is required, not optional: retargeting a PR emits it, and
+    # without it a green run produced against an older or weaker base stays
+    # attached to the unchanged head SHA. pr_watcher then reads that stale
+    # verdict as current. diff_budget.yml carries `edited` for the same class
+    # of reason.
+    types: [opened, synchronize, reopened, ready_for_review, edited]
+
+permissions:
+  contents: read
+
+jobs:
+  contact-write-boundary:
+    if: github.event_name == 'pull_request_target'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Checkout trusted base (the checker)
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          ref: ${{ github.event.pull_request.base.sha }}
+          path: base
+
+      - name: Checkout PR tree (scanned as data, never executed)
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          path: pr
+          persist-credentials: false
+
+      - name: Setup Python
+        uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6.3.0
+        with:
+          python-version: "3.11"
+
+      - name: Contact write-boundary check (base checker vs PR tree)
+        run: |
+          set -euo pipefail
+          # POLICY (allow-list, blocking classes) comes from the base revision
+          # so a PR cannot widen it. The INVENTORY is checked against the
+          # scanned tree's own baseline, so adding or removing a write site
+          # must appear as a reviewable baseline diff in the same PR rather
+          # than deadlocking on a base file that only updates at merge.
+          python base/scripts/check_contact_write_boundary.py \
+            --root pr \
+            --baseline base/tests/contact_write_boundary/baseline.json \
+            --inventory-baseline pr/tests/contact_write_boundary/baseline.json
+
+      - name: Detector self-tests (base checker, base fixtures)
+        run: |
+          set -euo pipefail
+          python -m pip install --upgrade pip
+          # pytest-asyncio is required by tests/conftest.py, which pytest loads
+          # for any test under tests/ even though this detector is stdlib-only.
+          # pyyaml: test_blocking_context_has_exactly_one_producer parses the
+          # workflow files. pytest-asyncio: tests/conftest.py imports it for any
+          # test under tests/, even a stdlib-only one.
+          python -m pip install pytest pytest-asyncio pyyaml
+          cd base
+          python -m pytest tests/test_contact_write_boundary.py -q
