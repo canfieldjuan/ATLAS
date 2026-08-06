@@ -39,6 +39,13 @@ contract risks that are actually reachable from this PR.
   exhaustive R1-R14 matrix when a rule has no changed-path, direct-caller,
   acceptance-criterion, CI, security, data, migration, or deployment hook in
   this PR.
+- Stop at the Review Contract boundary. A new edge case, polish concern, or
+  hardening idea is BLOCKER/MAJOR only when it proves the current diff violates
+  the contract, breaks existing behavior, red CI, security/privacy/money safety,
+  data correctness, material reachable correctness/back-compat/performance, or
+  an explicitly claimed mechanism. Otherwise classify it as NIT or
+  `waived-out-of-scope`, park it in `Deferred` / `HARDENING.md`, and do not
+  require another push for it.
 - Hunt the rule categories: requirements match (R1), test evidence (R2),
   security/authorization (R3), data & migration safety (R4), backward compatibility
   (R5), error handling & observability (R6), performance (R7), concurrency &
@@ -324,6 +331,15 @@ levels:
 | **MAJOR** | Architectural / scope / pattern concern, **or a proven defect whose blast radius does not warrant blocking**. Strong recommendation but not auto-block. | Fix in this PR if the fix is small; otherwise discuss before deferring. |
 | **NIT** | Style, naming, comment polish. Skip-worthy. | Apply if 1-line; skip otherwise. The reviewer should mark NITs as skip-worthy explicitly. |
 | **LGTM** | All gates green, R14 verified, no remaining concerns. | Merge. |
+
+Reviewer novelty stop: after the builder fixes or waives the findings from the
+current review round, the next review may not introduce a new adjacent
+edge-case/hardening/polish demand as a merge blocker unless it cites the Review
+Contract criterion, CI/test failure, existing behavior, security/privacy/money
+safety, data-correctness issue, material reachable
+correctness/back-compat/performance defect introduced by the diff, or claimed
+mechanism it invalidates. Park adjacent-but-valid improvements as hardening; do
+not keep the PR open to explore the next possible probe.
 
 ### 2a. Reviewer's verification template
 
@@ -992,6 +1008,12 @@ claiming the fix complete:
 Hardcoding the reviewer's strings, values, paths, or exact examples is an R13
 failure (`docs/REVIEWER_RULES.md`). A fix that can pass only the visible review
 example is not done.
+
+This same-class proof closes the defect class named by the Review Contract or
+review finding. It is not permission to keep expanding the PR into newly
+discovered adjacent classes. Once the named class is structurally fixed or
+explicitly waived, park adjacent edge cases in `Deferred` / `HARDENING.md`
+unless they meet the reviewer novelty stop above.
 
 ---
 
