@@ -719,7 +719,7 @@ async def test_operator_contact_mutation_claims_legacy_contact_by_padded_email()
             full_name="Padded Email Legacy",
             contact_type="customer",
             lead_stage=None,
-            email=" Ada.Example@Example.COM ",
+            email="\tAda.Example@Example.COM\n",
             phone=None,
             source="legacy",
         )
@@ -787,7 +787,7 @@ async def test_operator_contact_mutation_rejects_explicit_id_identity_collision(
             full_name="Identity Owner",
             phone=claimed_value if field == "phone" else "2175550197",
             email=(
-                f" {claimed_value.upper()} "
+                f"\t{claimed_value.upper()}\n"
                 if field == "email"
                 else "owned@example.com"
             ),

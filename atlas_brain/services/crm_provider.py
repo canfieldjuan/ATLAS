@@ -58,6 +58,16 @@ _STORED_PHONE_IDENTITY_DIGITS_SQL = (
     "'g'"
     ")"
 )
+_STORED_EMAIL_IDENTITY_SQL = (
+    "LOWER("
+    "REGEXP_REPLACE("
+    "COALESCE(email, ''), "
+    "'(^[[:space:]]+|[[:space:]]+$)', "
+    "'', "
+    "'g'"
+    ")"
+    ")"
+)
 
 
 @dataclass(frozen=True)
@@ -1140,7 +1150,7 @@ class DatabaseCRMProvider:
                     WHERE $7::text IS NOT NULL
                       AND (business_context_id = $1 OR business_context_id IS NULL)
                       AND status != 'archived'
-                      AND LOWER(BTRIM(email)) = $7::text
+                      AND {_STORED_EMAIL_IDENTITY_SQL} = $7::text
                 )
                 SELECT contacts.*
                 FROM contacts
