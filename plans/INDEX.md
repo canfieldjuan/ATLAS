@@ -1,6 +1,6 @@
 # Plan archive index
 
-1513 archived plan doc(s). Merged plan docs are moved under `archive/` and listed below; once the archive sweep has run, the `plans/` root holds only in-flight slices.
+1514 archived plan doc(s). Merged plan docs are moved under `archive/` and listed below; once the archive sweep has run, the `plans/` root holds only in-flight slices.
 
 - [PR-ASR-Pip-Audit-Egg-Fragment](archive/PR-ASR-Pip-Audit-Egg-Fragment.md) - lane: security/workflow | phase: Production hardening
 - [PR-ASR-Requirements-Audit-Pin](archive/PR-ASR-Requirements-Audit-Pin.md) - lane: security/workflow | phase: Production hardening
@@ -1504,6 +1504,7 @@
 - [PR-Unit-Gate-Enrollment-Recheck](archive/PR-Unit-Gate-Enrollment-Recheck.md) - lane: dev-workflow/unit-gate-enrollment | phase: Workflow/process
 - [PR-Unit-Gate-Impacted-Selection](archive/PR-Unit-Gate-Impacted-Selection.md) - lane: ci-gates | phase: vertical slice
 - [PR-Unit-Gate-Selector-Absent-Fallback](archive/PR-Unit-Gate-Selector-Absent-Fallback.md) - lane: ci-gates | phase: Production hardening
+- [PR-Unit-Gate-Workflow-Posture-Owner](archive/PR-Unit-Gate-Workflow-Posture-Owner.md) - lane: ci/unit-gate-selector | phase: Workflow/process
 - [PR-Unit-Gate](archive/PR-Unit-Gate.md) - lane: ci-cd/enforcement-gaps | phase: workflow/process
 - [PR-Vertical-First-Product-Consent](archive/PR-Vertical-First-Product-Consent.md) - lane: workflow/product-discipline | phase: Workflow/process
 - [PR-Video-Stream-Processor-Python-3-13-Base-Image](archive/PR-Video-Stream-Processor-Python-3-13-Base-Image.md) - lane: video-processing/stream-worker-runtime | phase: Production hardening

@@ -139,10 +139,49 @@ def _action_ref(uses: str) -> tuple[str, str] | None:
     return action, ref
 
 
-def _permissions_write_oidc(permissions: Any) -> bool:
+OIDC_NONE = "none"
+OIDC_WRITE = "write"
+OIDC_INVALID = "invalid"
+
+
+def _permissions_oidc_state(permissions: Any) -> str:
+    """Tri-state, because "requests write" and "unevaluable" are not the same.
+
+    Collapsing them into one boolean was the bug: the allowlist exists to
+    permit a KNOWN request (`id-token: write` on the owner-gated Claude job),
+    and it silently absorbed shapes nobody could evaluate. An unevaluable value
+    must not be allowlistable at all -- there is no way to confirm the thing
+    being permitted is the thing that was reviewed.
+    """
     if permissions == "write-all":
-        return True
-    return isinstance(permissions, dict) and permissions.get("id-token") == "write"
+        return OIDC_WRITE
+    if not isinstance(permissions, dict):
+        return OIDC_NONE
+    if "id-token" not in permissions:
+        return OIDC_NONE
+    value = permissions["id-token"]
+    if not isinstance(value, str):
+        return OIDC_INVALID
+    # CLOSED vocabulary. GitHub accepts `write` or `none` for id-token, so
+    # anything else is a value this auditor cannot evaluate -- not an absence.
+    # Returning OIDC_NONE for the catch-all was a fail-open: `${{ inputs.x }}`,
+    # an empty string, and a case variant like `WRITE` all read as "no OIDC
+    # request" and skipped the allowlist entirely.
+    if value == "write":
+        return OIDC_WRITE
+    if value == "none":
+        return OIDC_NONE
+    return OIDC_INVALID
+
+
+def _permissions_write_oidc(permissions: Any) -> bool:
+    """Whether this block requests OIDC write, INCLUDING unevaluable shapes.
+
+    Retained for callers that only need "is this a write request at all".
+    Anything deciding whether the allowlist may apply must use
+    `_permissions_oidc_state` instead, so `invalid` stays distinguishable.
+    """
+    return _permissions_oidc_state(permissions) in (OIDC_WRITE, OIDC_INVALID)
 
 
 def _normalized_workflow_text(text: str) -> str:
@@ -193,11 +232,23 @@ def _permissions_are_explicitly_read_only(permissions: Any) -> bool:
         return True
     if not isinstance(permissions, dict):
         return False
-    return all(
-        value in _READ_ONLY_PERMISSION_VALUES
-        for key, value in permissions.items()
-        if key != "id-token"
-    )
+    for key, value in permissions.items():
+        # Shape BEFORE meaning, and before the id-token exclusion. Skipping
+        # id-token by key without checking its value let `{id-token: [write]}`
+        # through: this predicate saw no other key and returned True, while
+        # `_permissions_write_oidc` compared against the scalar "write" and
+        # missed the list. Both guards passed the same malformed block.
+        #
+        # A non-string value elsewhere was worse than wrong -- `["read"] in
+        # frozenset(...)` raises TypeError: unhashable type, so the auditor
+        # crashed instead of reaching a verdict.
+        if not isinstance(key, str) or not isinstance(value, str):
+            return False
+        if key == "id-token":
+            continue
+        if value not in _READ_ONLY_PERMISSION_VALUES:
+            return False
+    return True
 
 
 def _effective_permissions(job: dict[str, Any], workflow: dict[str, Any]) -> Any:
@@ -284,8 +335,10 @@ def audit_workflow(path: Path) -> list[Finding]:
     findings: list[Finding] = []
     name = path.name
     events = _event_names(workflow.get(True, workflow.get("on")))
-    workflow_oidc = _permissions_write_oidc(workflow.get("permissions"))
-    if workflow_oidc:
+    workflow_oidc_state = _permissions_oidc_state(workflow.get("permissions"))
+    if workflow_oidc_state == OIDC_INVALID:
+        findings.append(Finding("ERROR", str(path), 'workflow-scope id-token must be the string "write" or "none"'))
+    elif workflow_oidc_state == OIDC_WRITE:
         findings.append(Finding("ERROR", str(path), "grants workflow-scope id-token: write or write-all without an allowlist rationale"))
 
     for job_name, job in _iter_jobs(workflow):
@@ -295,7 +348,13 @@ def audit_workflow(path: Path) -> list[Finding]:
             else:
                 findings.append(Finding("ERROR", str(path), f"job {job_name} can run on pull_request_target without the approved trusted-base guard shape"))
 
-        if _permissions_write_oidc(job.get("permissions")):
+        job_oidc_state = _permissions_oidc_state(job.get("permissions"))
+        if job_oidc_state == OIDC_INVALID:
+            # Never reaches the allowlist. The allowlist permits a reviewed
+            # value on a reviewed job; a shape this auditor cannot evaluate is
+            # by definition not that value.
+            findings.append(Finding("ERROR", str(path), f'job {job_name} id-token must be the string "write" or "none"'))
+        elif job_oidc_state == OIDC_WRITE:
             if _is_allowed_oidc_job(path, job_name, job):
                 findings.append(Finding("WARN", str(path), f"job {job_name} allowed id-token: write: Claude Code action is owner-gated"))
             else:

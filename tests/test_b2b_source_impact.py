@@ -80,9 +80,18 @@ from atlas_brain.services.b2b.source_impact import (
 )
 
 _repo_root = Path(__file__).resolve().parents[1]
-_api_pkg = types.ModuleType("atlas_brain.api")
-_api_pkg.__path__ = [str(_repo_root / "atlas_brain" / "api")]
-sys.modules.setdefault("atlas_brain.api", _api_pkg)
+# Prefer the REAL package. This used to install a bare ModuleType stub
+# unconditionally at collection time and never restore it, which leaked into
+# every later test in the same session: the stub has no submodule attributes, so
+# anything resolving `atlas_brain.api.<sub>` by dotted string failed depending
+# purely on which files pytest happened to collect first. The stub survives only
+# as a fallback for environments where the real package cannot be imported.
+try:  # noqa: SIM105 - the fallback is the point
+    import atlas_brain.api  # noqa: F401
+except Exception:  # pragma: no cover - stripped environments only
+    _api_pkg = types.ModuleType("atlas_brain.api")
+    _api_pkg.__path__ = [str(_repo_root / "atlas_brain" / "api")]
+    sys.modules.setdefault("atlas_brain.api", _api_pkg)
 
 _dashboard_path = _repo_root / "atlas_brain" / "api" / "b2b_dashboard.py"
 _dashboard_spec = importlib.util.spec_from_file_location(

@@ -4354,38 +4354,36 @@ async def test_legacy_reopen_replay_accepts_pre_sequence_loss_reopen_pair():
             apply_privilege_migration=False,
             apply_lifecycle_sequence_migration=False,
         )
+        # Current provider code reads the column on replay, but this fixture must
+        # still prove the legacy/unsequenced producer shape. Add only the
+        # nullable column here, without migration 363's sequence/default, so the
+        # real provider can create pre-sequence lost/reopen rows with NULL
+        # lifecycle_sequence before the database-owned ordering migration lands.
+        await conn.execute(
+            "ALTER TABLE eom_lead_lifecycle_events ADD COLUMN lifecycle_sequence BIGINT"
+        )
+        legacy_provider = DatabaseCRMProvider(pool=conn)
         contact_id = uuid.uuid4()
         lost_key = f"legacy-lost-{uuid.uuid4().hex}"
         reopen_key = f"legacy-reopen-{uuid.uuid4().hex}"
         await _insert_contact(conn, contact_id=contact_id, lead_stage="new")
-        await conn.execute(
-            """
-            INSERT INTO eom_lead_lifecycle_events (
-                contact_id, event_type, from_stage, to_stage, actor, source,
-                operation_key
-            ) VALUES (
-                $1, 'lead_lost', 'new', 'lost',
-                'employee:1:Juan Canfield', 'eom_office', $2
-            )
-            """,
-            contact_id,
-            lost_key,
+        produced_loss = await legacy_provider.mark_eom_lead_lost(
+            contact_id=str(contact_id),
+            reason_code="spam",
+            note=None,
+            operation_key=lost_key,
+            actor_id=1,
+            actor_name="Juan Canfield",
         )
-        await conn.execute("UPDATE contacts SET lead_stage = 'lost' WHERE id = $1", contact_id)
-        await conn.execute(
-            """
-            INSERT INTO eom_lead_lifecycle_events (
-                contact_id, event_type, from_stage, to_stage, actor, source,
-                operation_key
-            ) VALUES (
-                $1, 'lead_reopened', 'lost', 'new',
-                'employee:1:Juan Canfield', 'eom_office', $2
-            )
-            """,
-            contact_id,
-            reopen_key,
+        assert produced_loss["idempotent"] is False
+        produced_reopen = await legacy_provider.reopen_eom_lead(
+            contact_id=str(contact_id),
+            operation_key=reopen_key,
+            actor_id=1,
+            actor_name="Juan Canfield",
         )
-        await conn.execute("UPDATE contacts SET lead_stage = 'new' WHERE id = $1", contact_id)
+        assert produced_reopen["idempotent"] is False
+        assert produced_reopen["lead_stage"] == "new"
         await conn.execute(
             (MIGRATIONS / "363_eom_lead_lifecycle_sequence.sql").read_text()
         )

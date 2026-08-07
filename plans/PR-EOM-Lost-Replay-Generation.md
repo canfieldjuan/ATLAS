@@ -256,7 +256,7 @@ Parked hardening: none against the predicate above.
 - Passed:
   `python -m pytest tests/test_eom_lead_conversion.py::test_disposition_replay_supersession_uses_lifecycle_sequence tests/test_eom_lead_conversion.py::test_disposition_replay_supersession_checks_legacy_rows_by_other_id tests/test_eom_lead_conversion.py::test_disposition_replay_supersession_admits_legacy_reopen_pair -q` — 3 passed.
 - Skipped locally:
-  `python -m pytest tests/test_eom_lead_conversion_integration.py::test_legacy_disposition_replay_rejects_held_out_transition_shapes -q -rs` — skipped because `ATLAS_MIGRATION_TEST_DATABASE_URL` is not configured in this shell; CI supplies the real-Postgres lane.
+  `python -m pytest tests/test_eom_lead_conversion_integration.py::test_legacy_reopen_replay_accepts_pre_sequence_loss_reopen_pair tests/test_eom_lead_conversion_integration.py::test_legacy_disposition_replay_rejects_held_out_transition_shapes -q -rs` — 2 skipped because `ATLAS_MIGRATION_TEST_DATABASE_URL` is not configured in this shell; CI supplies the real-Postgres lane.
 - Passed:
   `python -m ruff check atlas_brain/services/crm_provider.py tests/test_eom_lead_conversion.py tests/test_eom_lead_conversion_integration.py`.
 - Passed:
@@ -264,7 +264,7 @@ Parked hardening: none against the predicate above.
 - Passed:
   `<python3.11 temp env>/bin/python -m pytest tests/test_b2b_reviews_import.py -m "not integration and not e2e" --continue-on-collection-errors -rfE --tb=short -q -p no:cacheprovider` — 6 passed.
 - Passed:
-  `python scripts/sync_pr_plan.py plans/PR-EOM-Lost-Replay-Generation.md 9629361 --check`.
+  `python scripts/sync_pr_plan.py plans/PR-EOM-Lost-Replay-Generation.md origin/main --check`.
 - Passed: `git diff --check`.
 
 ## Estimated diff size
@@ -273,7 +273,7 @@ Parked hardening: none against the predicate above.
 |---|---:|
 | `atlas_brain/services/crm_provider.py` | 128 |
 | `plans/PR-EOM-Lost-Replay-Generation.md` | 279 |
-| `tests/test_b2b_reviews_import.py` | 188 |
+| `tests/test_b2b_reviews_import.py` | 207 |
 | `tests/test_eom_lead_conversion.py` | 145 |
-| `tests/test_eom_lead_conversion_integration.py` | 619 |
-| **Total** | **1359** |
+| `tests/test_eom_lead_conversion_integration.py` | 617 |
+| **Total** | **1376** |
