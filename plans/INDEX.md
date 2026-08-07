@@ -1,6 +1,6 @@
 # Plan archive index
 
-1515 archived plan doc(s). Merged plan docs are moved under `archive/` and listed below; once the archive sweep has run, the `plans/` root holds only in-flight slices.
+1516 archived plan doc(s). Merged plan docs are moved under `archive/` and listed below; once the archive sweep has run, the `plans/` root holds only in-flight slices.
 
 - [PR-ASR-Pip-Audit-Egg-Fragment](archive/PR-ASR-Pip-Audit-Egg-Fragment.md) - lane: security/workflow | phase: Production hardening
 - [PR-ASR-Requirements-Audit-Pin](archive/PR-ASR-Requirements-Audit-Pin.md) - lane: security/workflow | phase: Production hardening
@@ -1335,6 +1335,7 @@
 - [PR-Reachability-Proof-Review-Rule](archive/PR-Reachability-Proof-Review-Rule.md) - lane: workflow/process | phase: Workflow/process
 - [PR-React-Hooks-Patch-Web-Batch](archive/PR-React-Hooks-Patch-Web-Batch.md) - lane: security/dependencies | phase: Production hardening
 - [PR-Ready-Review-PR-Docs](archive/PR-Ready-Review-PR-Docs.md)
+- [PR-Ready-State-Gate](archive/PR-Ready-State-Gate.md) - lane: atlas-workflow/pr-enforcement | phase: Workflow/process
 - [PR-Real-Adapters-Deflection-Report-Fixtures](archive/PR-Real-Adapters-Deflection-Report-Fixtures.md) - lane: real-adapters/test-quality | phase: Workflow/process
 - [PR-Real-Snapshot-Customer-Wording](archive/PR-Real-Snapshot-Customer-Wording.md) - lane: portfolio-ui/faq-deflection | phase: Product polish
 - [PR-Real-Snapshot-Heading-Hierarchy](archive/PR-Real-Snapshot-Heading-Hierarchy.md) - lane: portfolio-ui/faq-deflection | phase: Product polish
