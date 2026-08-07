@@ -296,6 +296,21 @@ def test_rejected_atomic_reconciliation_is_an_error():
 def test_provider_create_race_uses_non_merging_mode_and_rejection_writes_nothing():
     class RaceCRM(StubCRM):
         async def create_contact(self, data, *, merge_existing=True):
+            # merge_existing=False is a deliberate, load-bearing workaround, not
+            # an oversight -- do NOT "fix" this assertion by flipping it. It is
+            # the portal-reconciliation RACE SEAM (crm_provider.create_contact
+            # docstring): resolve_contact already owns identity resolution across
+            # its full ladder BEFORE this call, so create_contact must be a
+            # race-safe clean insert, not a second resolver. merge_existing=True
+            # would re-run resolution and MERGE fields in the window between
+            # resolve and create, risking a cross-link to a concurrently-created
+            # row and overwriting fields the clean path leaves alone.
+            #
+            # NOT a matcher-strength workaround: the portal resolver's phone rung
+            # uses the SAME crm.search_contacts as the create path (via
+            # live._search_channel), so 0B's matcher work (ATLAS #2313) is
+            # orthogonal and does not obsolete this seam. Website #127 (D4),
+            # corrected after Codex R1/R14 on 2026-08-07.
             assert merge_existing is False
             self.created.append(data)
             return {
@@ -1006,3 +1021,24 @@ def test_demotion_failure_persists_partial_receipt_before_reraising(monkeypatch)
     assert receipt.changed == ["gone"]
     assert receipt.demotions[-1] == {"demoted": 1, "eligible": 2, "kept": 0}
     assert receipt.counts[-1]["errors"] == 1
+
+
+def test_demotable_sources_are_pinned_to_calendar_and_portal_only():
+    """Widening this set silently archives live customers (website #127).
+
+    ``demote_unmatched`` sets status='inactive' for EOM customers whose source
+    is in DEMOTABLE_SOURCES and who no longer appear in the portal roster. Only
+    This pins the set to make WIDENING it a visible, reviewed change (adding
+    'manual'/'web' would mass-archive live customers); it does not certify each
+    member unconditionally safe. Members are roster-authoritative provenance --
+    the portal roster is the authority on current membership, so absence means
+    churn: portal_sync (from the roster) and calendar_import (a booking is meant
+    to veto demotion, though that veto has a known 4-vs-12-month horizon gap,
+    website #138). NOT merely 'system-managed' -- email_backfill is
+    system-created (D2, ATLAS #2314) yet excluded, because a backfilled email is
+    not a roster-membership claim. Adding any value here -- 'manual', 'web',
+    'email_backfill' -- turns a routine sync into a mass archive, so this is
+    pinned exact. Changing it is a deliberate, separately-reviewed decision, not
+    a casual edit.
+    """
+    assert DEMOTABLE_SOURCES == ("calendar_import", "portal_sync")
