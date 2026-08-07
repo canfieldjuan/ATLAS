@@ -49,6 +49,11 @@ Slice phase: production hardening
 - `atlas_brain/mcp/crm_server.py`
 - `plans/PR-D1-MCP-Tenant-Required.md`
 - `tests/test_crm_read_scoping.py`
+- `tests/test_mcp_servers.py` (review fix: the pre-existing
+  test_create_contact_success called create_contact with no tenant and asserted
+  success; the D1 guard now refuses that, so the required Unit Gate could not
+  pass. Updated to supply an explicit non-EOM tenant. No new test logic, just a
+  valid tenant on the existing success-path assertion.)
 
 ### Review Contract
 
@@ -86,6 +91,43 @@ default-configured tenants create.
 weakening it to a truthiness check (dropping `.strip()`) fails the blank-tenant
 test.
 
+### Admission-closure declaration (R2/R3, open-input guard)
+
+`business_context_id` is free text, so this guard's admission class must be
+declared and proven, not left implicit. The guard owns exactly **one** axis --
+tenant **presence** -- and the decision is a total function of the resolved id:
+
+| resolved `business_context_id` | verdict | provider reached? |
+|---|---|---|
+| `None` / `""` / whitespace-only (`.strip() == ""`) | refuse: "required" | no |
+| `== EOM_BUSINESS_CONTEXT_ID` (after strip) | refuse: EOM-ingress | no |
+| any other non-blank string | **admit** (stamped verbatim) | yes |
+
+It **deliberately does not validate tenant existence.** Binding admission to the
+`business_contexts` source of truth (the reviewer's preferred fix) is non-viable
+today, verified against the live DB:
+
+- `business_contexts` exists but is **empty (0 rows)**;
+- there is **no FK** on `contacts.business_context_id` (`035_contacts.sql:27`,
+  bare `VARCHAR(64)`);
+- the real tenants (`effingham_maids` 706, `churnsignals` 1) exist only as
+  strings on `contacts`.
+
+So validating against the registry would return `None` for every real tenant and
+reject **all** creation, breaking prod. The safe behavior for an unrecognized id
+is therefore to **admit** it: it is stamped verbatim, is invisible to every
+tenant-scoped read (matches no real tenant -> orphan, not a cross-tenant leak),
+and is backfillable -- and admitting it **preserves pre-existing behavior**
+(before D1, `create_contact("garbage")` already produced a "garbage" row; D1 only
+adds the null/blank rejection). Closing the existence axis (seed the registry +
+add the FK, then gate on it) is filed as **#2318**.
+
+**Property proof:** `test_create_contact_tenant_admission_closure` drives 13
+grammar inputs (null, empty, several whitespace forms, the EOM id, a stripped EOM
+id, and assorted non-blank ids including an explicitly unknown one) and asserts
+the exact verdict + provider-reached state for each -- the closure above, proven
+rather than asserted in prose.
+
 ## Mechanism
 
 One typed-refusal branch inserted before the existing EOM guard.
@@ -113,20 +155,29 @@ Parked hardening: none.
 
 ```
 $ python -m pytest tests/test_crm_read_scoping.py -q
-76 passed
+89 passed            # 76 + the 13-case admission-closure property proof
+
+$ python scripts/check_unit_gate.py --baseline tests/unit_gate_baseline.txt \
+    --selected-files <CI selection> --pytest-args <9 impacted files> ...
+unit gate: 6 failing/errored node(s); baseline=6; regressions=0; newly-passing=0
+(exit 0 -- CI-scoped: the 6 in-scope failures are the baselined
+ Email/IMAP/Twilio/Calendar infra tests; my diff adds no regression)
 
 $ python scripts/check_contact_write_boundary.py --baseline ... --inventory-baseline ...
 (exit 0 -- no new contact write site)
 ```
 
 The 6 pre-existing `test_mcp_servers.py` failures (Email/IMAP/Twilio/Calendar
-tools) are unrelated to CRM and present on `main` before this change.
+tools) are unrelated to CRM and present on `main` before this change; they are in
+the unit-gate baseline. `test_create_contact_success` is *not* baselined and now
+passes with the supplied tenant.
 
 ## Estimated diff size
 
-| File | LOC |
+| File | LOC (added) |
 |---|---:|
-| `atlas_brain/mcp/crm_server.py` | 18 |
-| `plans/PR-D1-MCP-Tenant-Required.md` | 132 |
-| `tests/test_crm_read_scoping.py` | 84 |
-| **Total** | **234** |
+| `atlas_brain/mcp/crm_server.py` | 38 |
+| `plans/PR-D1-MCP-Tenant-Required.md` | 174 |
+| `tests/test_crm_read_scoping.py` | 136 |
+| `tests/test_mcp_servers.py` | 5 |
+| **Total** | **353** |

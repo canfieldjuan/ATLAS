@@ -1203,3 +1203,55 @@ async def test_create_contact_uses_configured_default_when_no_explicit_tenant(mo
 
     assert out["success"] is True
     assert provider.create_contact.await_args.args[0]["business_context_id"] == "churnsignals"
+
+
+# Grammar-derived property proof for the create_contact tenant-admission closure
+# (D1 review thread R2/R3). The guard owns ONE axis -- tenant PRESENCE -- and the
+# decision is a total function of the resolved id:
+#   blank (null / "" / any whitespace-only)  -> "required" refusal, provider unreached
+#   == EOM tenant                             -> EOM-ingress refusal, provider unreached
+#   any other non-blank string                -> ADMITTED (reaches provider verbatim)
+# The final row asserts the deliberately-open behavior: a non-blank-but-unknown
+# tenant is admitted, because existence is not validated here (empty registry +
+# no FK; deferred to #2318). This is the "safe behavior for unrecognized IDs"
+# the closure declares, proven rather than asserted in prose.
+_ADMISSION_GRAMMAR = [
+    (None, "missing"),
+    ("", "missing"),
+    ("   ", "missing"),
+    ("\t", "missing"),
+    ("\n", "missing"),
+    ("\t \n ", "missing"),
+    (EOM, "eom"),
+    ("  effingham_maids  ", "eom"),   # stripped id still resolves to the EOM tenant
+    ("churnsignals", "admit"),
+    ("a", "admit"),
+    ("x" * 64, "admit"),
+    ("unknown_tenant_xyz", "admit"),  # non-blank + unknown -> admitted (existence not gated)
+    ("  churnsignals  ", "admit"),
+]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("raw, verdict", _ADMISSION_GRAMMAR)
+async def test_create_contact_tenant_admission_closure(no_default, monkeypatch, raw, verdict):
+    provider = _provider_mock(monkeypatch)
+    provider.create_contact = AsyncMock(return_value={"id": "created"})
+
+    kwargs = {"full_name": "Grammar Probe"}
+    if raw is not None:
+        kwargs["business_context_id"] = raw
+    out = json.loads(await crm_srv.create_contact(**kwargs))
+
+    if verdict == "missing":
+        assert out["success"] is False
+        assert "business_context_id is required" in out["error"]
+        provider.create_contact.assert_not_awaited()
+    elif verdict == "eom":
+        assert out["success"] is False
+        assert "EOM ingress" in out["error"]
+        provider.create_contact.assert_not_awaited()
+    else:  # admit
+        assert out["success"] is True
+        provider.create_contact.assert_awaited_once()
+        assert provider.create_contact.await_args.args[0]["business_context_id"] == raw

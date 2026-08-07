@@ -558,6 +558,26 @@ async def create_contact(
         # produces an unclassified row. A missing tenant is a typed refusal, not
         # a silent default. This runs BEFORE the EOM guard below because a NULL
         # tenant is never the EOM tenant and would otherwise slip past it.
+        #
+        # Admission closure (the axis this guard owns): tenant PRESENCE.
+        #   reject  iff  str(x or "").strip() == ""      -> "required" refusal
+        #   reject  iff  the resolved id == EOM tenant    -> EOM-ingress refusal
+        #   admit   otherwise (reaches the provider)
+        # It deliberately does NOT validate tenant EXISTENCE. Binding admission
+        # to the `business_contexts` registry is non-viable today: that table is
+        # empty (0 rows) and there is no FK on contacts.business_context_id
+        # (035_contacts.sql:27), so the real tenants (effingham_maids,
+        # churnsignals) live only as strings on `contacts` -- validating against
+        # the registry would reject every real tenant and break all creates. A
+        # non-blank-but-unknown id therefore reaches the provider and is stamped
+        # verbatim; that row is invisible to every tenant-scoped read (matches no
+        # real tenant -> orphan, not a cross-tenant leak) and is backfillable.
+        # Admitting it also preserves pre-existing behavior -- before D1,
+        # create_contact("garbage") already produced a "garbage"-stamped row; D1
+        # only adds the null/blank rejection. Closing the existence axis (seed
+        # the registry + add the FK, then gate on it) is tracked in #2318. The
+        # property proof for this closure is
+        # test_create_contact_tenant_admission_closure.
         if not str(effective_business_context_id or "").strip():
             return json.dumps({
                 "success": False,
