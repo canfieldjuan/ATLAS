@@ -40,7 +40,8 @@ define the canonical mutation boundary.
     lifecycle metadata store that provenance;
   - normalize email/phone/blank values in one EOM helper path, use exact
     last-10 phone matching inside the EOM operator resolver, and preserve the
-    generic CRM API's existing short-phone substring lookup for other callers;
+    generic CRM API's existing phone substring compatibility for other callers,
+    including stored extension numbers;
   - record `contact_created` or `contact_updated` lifecycle evidence with the
     actor and operation key for every fresh create/update through the new path;
   - replay the same idempotency key as HTTP 200 with the same contact, and
@@ -137,8 +138,8 @@ seam in the enumeration; otherwise write "N/A - no boundary change."
   compatibility.
 - Replaced-path behaviors: no caller is replaced yet; this adds the canonical
   path future callers will use, applies exact normalized last-10 matching inside
-  the EOM operator resolver, and keeps the generic CRM API's partial substring
-  lookup for short phone fragments.
+  the EOM operator resolver, and keeps the generic CRM API's substring lookup
+  compatibility for phone fragments and stored extension-number shapes.
 - Guard-relevant fields: `contactId`, `contactType`, `fullName`, `email`,
   `phone`, `address`, `city`, `state`, `zip`, `notes`, `sourceChannel`,
   `sourceRef`, actor headers, and `Idempotency-Key`.
@@ -188,11 +189,28 @@ a create through the existing provider insert helper, then inserts a
 `contact_created` or `contact_updated` lifecycle row with actor/provenance
 metadata before the transaction commits.
 
+The admitted execution model is one database transaction per operator command.
+Before reading existing receipts or contact identities, the provider takes
+transaction-scoped advisory locks in sorted order across the operation key,
+explicit contact id when present, source-ref provenance key, and each normalized
+phone/email identity key. The phone/email lock namespace is shared with the
+atomic EOM inbound writer, so interleavings on the same admitted identity
+serialize before either writer can resolve or insert. Inside the transaction,
+idempotency is receipt-first: an existing lifecycle row for the same operation
+key and matching request fingerprint returns the recorded contact, while the
+same key with a different fingerprint fails before mutation. With no receipt,
+the provider resolves and locks source/provenance/phone/email contact rows with
+`FOR UPDATE`, rejects ambiguous or cross-contact identities, writes exactly one
+contact create/update, then writes exactly one lifecycle receipt before commit.
+The crash boundary is the transaction commit: a rollback leaves no partial
+contact/receipt pair, and a committed receipt makes later replays read-only.
+
 Phone normalization is shared with EOM inbound identity handling and strips only
 ASCII digits so Python and SQL normalize the same input class. The EOM operator
 resolver uses exact normalized last-10 equality. Generic provider phone search
-keeps its short-phone substring lookup for compatibility, while full phone
-inputs use the same normalized last-10 comparison.
+keeps substring lookup compatibility, including full phone inputs that appear
+inside a stored phone with extension digits, while still admitting normalized
+last-10 matches for ordinary stored numbers.
 
 ## Intentional
 
@@ -232,6 +250,12 @@ Parked hardening: none.
 
 - `python -m py_compile atlas_brain/eom_api/funnel.py atlas_brain/services/crm_provider.py atlas_brain/services/eom_lead_ingress.py atlas_brain/services/eom_crm_mutations.py tests/test_eom_lead_conversion.py tests/test_eom_lead_conversion_integration.py tests/test_tenant_stamping.py tests/test_migrations_runner.py tests/test_contact_write_boundary.py`
   -- passed.
+- `python -m py_compile atlas_brain/services/crm_provider.py tests/test_tenant_stamping.py tests/test_eom_lead_conversion_integration.py`
+  -- passed.
+- `python -m pytest tests/test_tenant_stamping.py::test_generic_contact_phone_search_preserves_full_phone_extension_lookup tests/test_tenant_stamping.py::test_generic_contact_phone_search_keeps_partial_phone_substring_lookup -q`
+  -- 2 passed.
+- `ATLAS_MIGRATION_TEST_DATABASE_URL=postgresql://atlas@127.0.0.1:5433/atlas python -m pytest tests/test_eom_lead_conversion_integration.py::test_operator_contact_mutation_claims_legacy_contact_by_padded_email 'tests/test_eom_lead_conversion_integration.py::test_operator_contact_mutation_rejects_explicit_id_identity_collision[email-owned@example.com-target@example.com]' -q`
+  -- 2 passed.
 - `python -m pytest tests/test_eom_lead_conversion.py tests/test_tenant_stamping.py tests/test_migrations_runner.py tests/test_contact_write_boundary.py -q`
   -- 293 passed, 1 skipped, 1 warning.
 - `ATLAS_MIGRATION_TEST_DATABASE_URL=postgresql://atlas@127.0.0.1:5433/atlas python -m pytest tests/test_eom_lead_conversion_integration.py -q -k "operator_contact_mutation or inbound_atomic_uses_ascii_phone_normalizer or share_phone_identity_lock"`
@@ -260,11 +284,11 @@ Parked hardening: none.
 | `atlas_brain/services/eom_crm_mutations.py` | 269 |
 | `atlas_brain/services/eom_lead_ingress.py` | 18 |
 | `atlas_brain/storage/migrations/364_eom_operator_contact_operation_key_index.sql` | 29 |
-| `plans/PR-EOM-Operator-Mutation-Contract.md` | 270 |
+| `plans/PR-EOM-Operator-Mutation-Contract.md` | 294 |
 | `tests/contact_write_boundary/baseline.json` | 1 |
 | `tests/test_contact_write_boundary.py` | 6 |
 | `tests/test_eom_lead_conversion.py` | 241 |
-| `tests/test_eom_lead_conversion_integration.py` | 532 |
+| `tests/test_eom_lead_conversion_integration.py` | 590 |
 | `tests/test_migrations_runner.py` | 45 |
-| `tests/test_tenant_stamping.py` | 50 |
-| **Total** | **2106** |
+| `tests/test_tenant_stamping.py` | 51 |
+| **Total** | **2189** |

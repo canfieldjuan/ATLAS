@@ -574,6 +574,56 @@ async def test_operator_and_inbound_contact_writers_share_phone_identity_lock():
 
 
 @pytest.mark.asyncio
+async def test_operator_contact_mutation_claims_legacy_contact_by_padded_email():
+    database_url = _database_url_or_skip()
+    schema = f"atlas_eom_operator_email_claim_{uuid.uuid4().hex}"
+    conn = await asyncpg.connect(database_url)
+    try:
+        await _prepare_schema(conn, schema, apply_privilege_migration=False)
+        provider = DatabaseCRMProvider(pool=conn)
+        contact_id = uuid.uuid4()
+        await _insert_contact(
+            conn,
+            contact_id=contact_id,
+            business_context_id=None,
+            full_name="Padded Email Legacy",
+            contact_type="customer",
+            lead_stage=None,
+            email=" Ada.Example@Example.COM ",
+            phone=None,
+            source="legacy",
+        )
+        command = EOMOperatorContactMutation.from_raw(
+            operation_key=f"operator-padded-email-{uuid.uuid4().hex}",
+            actor_id=8,
+            actor_name="Juan Canfield",
+            source_channel="time_tracker",
+            source_ref="customer:padded-email",
+            fields={"email": "ada.example@example.com", "notes": "claimed"},
+        )
+
+        updated = await mutate_eom_operator_contact(provider, command)
+
+        assert updated["operation"] == "contact_updated"
+        assert updated["contact_id"] == str(contact_id)
+        row = await conn.fetchrow("SELECT * FROM contacts WHERE id = $1", contact_id)
+        assert row["business_context_id"] == "effingham_maids"
+        assert row["email"] == "ada.example@example.com"
+        assert row["notes"] == "claimed"
+        assert await conn.fetchval("SELECT COUNT(*) FROM contacts") == 1
+        assert await conn.fetchval(
+            """
+            SELECT COUNT(*)
+            FROM eom_lead_lifecycle_events
+            WHERE contact_id = $1 AND event_type = 'contact_updated'
+            """,
+            contact_id,
+        ) == 1
+    finally:
+        await conn.close()
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize(
     ("field", "claimed_value", "original_value"),
     (
@@ -606,7 +656,11 @@ async def test_operator_contact_mutation_rejects_explicit_id_identity_collision(
             contact_id=owner_id,
             full_name="Identity Owner",
             phone=claimed_value if field == "phone" else "2175550197",
-            email=claimed_value if field == "email" else "owned@example.com",
+            email=(
+                f" {claimed_value.upper()} "
+                if field == "email"
+                else "owned@example.com"
+            ),
         )
         command = EOMOperatorContactMutation.from_raw(
             operation_key=f"operator-explicit-collision-{uuid.uuid4().hex}",
@@ -622,10 +676,14 @@ async def test_operator_contact_mutation_rejects_explicit_id_identity_collision(
             await mutate_eom_operator_contact(provider, command)
 
         assert exc_info.value.status_code == 409
-        target = await conn.fetchrow("SELECT phone, email FROM contacts WHERE id = $1", target_id)
-        owner = await conn.fetchrow("SELECT phone, email FROM contacts WHERE id = $1", owner_id)
+        target = await conn.fetchrow(
+            "SELECT phone, email FROM contacts WHERE id = $1", target_id
+        )
+        owner = await conn.fetchrow(
+            "SELECT phone, email FROM contacts WHERE id = $1", owner_id
+        )
         assert target[field] == original_value
-        assert owner[field] == claimed_value
+        assert owner[field].strip().lower() == claimed_value
         assert await conn.fetchval(
             """
             SELECT COUNT(*)

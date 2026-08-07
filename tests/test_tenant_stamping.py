@@ -155,7 +155,7 @@ def test_dict_style_writers_carry_context_key():
 
 
 @pytest.mark.asyncio
-async def test_generic_contact_phone_search_uses_exact_last10_for_full_phone(
+async def test_generic_contact_phone_search_preserves_full_phone_extension_lookup(
 ):
     from atlas_brain.services.crm_provider import DatabaseCRMProvider
 
@@ -172,12 +172,13 @@ async def test_generic_contact_phone_search_uses_exact_last10_for_full_phone(
 
     await DatabaseCRMProvider(pool=pool).search_contacts(phone="(217) 555-0100")
 
-    assert " LIKE " not in pool.query
+    assert " LIKE " in pool.query
     assert (
         "RIGHT(REGEXP_REPLACE(COALESCE(phone, ''), '[^0-9]', '', 'g'), 10)"
         in pool.query
     )
-    assert pool.params[0] == "2175550100"
+    assert pool.params[0] == "%2175550100%"
+    assert pool.params[1] == "2175550100"
 
 
 @pytest.mark.asyncio

@@ -1137,7 +1137,7 @@ class DatabaseCRMProvider:
                     FROM contacts
                     WHERE (business_context_id = $1 OR business_context_id IS NULL)
                       AND status != 'archived'
-                      AND LOWER(email) = $2
+                      AND LOWER(BTRIM(email)) = $2
                     FOR UPDATE
                     """,
                     EOM_BUSINESS_CONTEXT_ID,
@@ -1470,22 +1470,22 @@ class DatabaseCRMProvider:
             from .eom_lead_ingress import normalise_eom_phone_digits
 
             digits = normalise_eom_phone_digits(phone)
+            stored_digits = (
+                "REGEXP_REPLACE(COALESCE(phone, ''), '[^0-9]', '', 'g')"
+            )
             if not digits:
                 conditions.append("FALSE")
             elif len(digits) < 10:
-                conditions.append(
-                    "REGEXP_REPLACE(COALESCE(phone, ''), '[^0-9]', '', 'g') "
-                    f"LIKE ${idx}"
-                )
+                conditions.append(f"{stored_digits} LIKE ${idx}")
                 params.append(f"%{digits}%")
                 idx += 1
             else:
                 conditions.append(
-                    "RIGHT(REGEXP_REPLACE(COALESCE(phone, ''), '[^0-9]', '', 'g'), 10) "
-                    f"= RIGHT(${idx}, 10)"
+                    f"({stored_digits} LIKE ${idx} "
+                    f"OR RIGHT({stored_digits}, 10) = RIGHT(${idx + 1}, 10))"
                 )
-                params.append(digits)
-                idx += 1
+                params.extend((f"%{digits}%", digits))
+                idx += 2
         if email:
             conditions.append(f"LOWER(email) = LOWER(${idx})")
             params.append(email)
