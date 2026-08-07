@@ -1028,9 +1028,12 @@ def test_demotable_sources_are_pinned_to_calendar_and_portal_only():
 
     ``demote_unmatched`` sets status='inactive' for EOM customers whose source
     is in DEMOTABLE_SOURCES and who no longer appear in the portal roster. Only
-    system-managed provenance (calendar imports, portal sync) is safe to
-    auto-demote; a human-entered or web-form customer must never be archived by
-    an unrelated portal run. Adding any value here -- 'manual', 'web',
+    ROSTER-AUTHORITATIVE provenance is safe to auto-demote -- sources for which
+    the portal roster is the authority on current membership, so absence means
+    churn: portal_sync (from the roster) and calendar_import (roster-correlated;
+    a booking vetoes demotion). NOT merely 'system-managed' -- email_backfill is
+    system-created (D2, ATLAS #2314) yet excluded, because a backfilled email is
+    not a roster-membership claim. Adding any value here -- 'manual', 'web',
     'email_backfill' -- turns a routine sync into a mass archive, so this is
     pinned exact. Changing it is a deliberate, separately-reviewed decision, not
     a casual edit.

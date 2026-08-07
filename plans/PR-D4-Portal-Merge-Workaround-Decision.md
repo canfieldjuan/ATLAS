@@ -128,15 +128,28 @@ Risk areas: none material -- this adds guards to existing invariants.
 - **Member set:** `DEMOTABLE_SOURCES` in `scripts/sync_eom_portal_customers.py`,
   the contact `source` values a portal run may auto-archive.
 - **CLOSED and ENUMERATED**, a literal 2-tuple `("calendar_import",
-  "portal_sync")`. Not derived from data, a query, or a naming convention. Its
-  canonical source is the set of *system-managed* provenances: rows this
-  pipeline itself created, which it may therefore retire when they leave the
-  roster.
-- **Out-of-set default: NOT demotable (safe).** Any source outside the tuple --
-  `manual`, `web`, `email_backfill`, `phone_call` -- is a human- or
-  intake-authored customer and is never auto-archived by a portal run. The
-  demotion `UPDATE` filters `AND source = ANY($4)`, so an out-of-set row simply
-  does not match and is left active.
+  "portal_sync")`. Not derived from data, a query, or a naming convention.
+- **Canonical basis: roster-authoritative provenance**, NOT "system-managed."
+  The earlier draft said system-managed, which is wrong and self-contradictory:
+  the parent commit (D2, ATLAS #2314) routes the automated `email_backfill` task
+  through `resolve_or_create_eom_contact` to create EOM *customers*, so
+  `email_backfill` IS system-managed -- yet it is correctly excluded here. The
+  actual membership rule is narrower: a source belongs only if the portal roster
+  is the authority on that customer's current membership, so *absence from the
+  roster is a reliable churn signal*.
+  - `portal_sync`: created from the roster; absent -> churned. In.
+  - `calendar_import`: roster-correlated -- a live booking vetoes demotion
+    (`sync_eom_portal_customers.py:564`), so absence-from-roster plus
+    no-booking is a genuine churn signal. In.
+  - `email_backfill`: system-created, but a backfilled email address is not a
+    roster-membership claim; an active customer can be absent from the portal
+    system entirely. Absence is meaningless, so it must never be auto-archived.
+    Out -- despite being system-managed.
+  - `manual`, `web`, `phone_call`: human/intake-authored, no roster authority.
+    Out.
+- **Out-of-set default: NOT demotable (safe).** The demotion `UPDATE` filters
+  `AND source = ANY($4)`, so any source outside the tuple -- system-managed or
+  not -- simply does not match and is left active.
 - **Widening is the hazard, not narrowing.** Adding a value turns a routine sync
   into a mass archive of live customers, which is why the new test pins exact
   membership. Changing it is a deliberate, separately-reviewed decision.
@@ -181,6 +194,6 @@ $ git diff --stat origin/main -- scripts/sync_eom_portal_customers.py
 
 | File | LOC |
 |---|---:|
-| `plans/PR-D4-Portal-Merge-Workaround-Decision.md` | 186 |
+| `plans/PR-D4-Portal-Merge-Workaround-Decision.md` | 199 |
 | `tests/test_sync_eom_portal_customers.py` | 30 |
-| **Total** | **216** |
+| **Total** | **229** |
