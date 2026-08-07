@@ -232,6 +232,10 @@ last-10 matches for ordinary stored numbers.
 - Tracker customer creation migration: website #110 / Slice 0C after 0B is
   deployed live.
 - Legacy writer convergence/deprecation: website #111 and its D1-D5 children.
+- Legacy EOM writer identity-fence convergence, including the existing
+  `atlas_brain/autonomous/tasks/email_backfill.py:198` backfill caller that
+  still uses generic `find_or_create_contact`; this PR adds the Atlas operator
+  mutation contract and does not migrate existing autonomous/backfill callers.
 - Remaining #112 tracker/website capability-gating halves.
 - Provenance alerting and missing-provenance observability: website #113.
 - Additive source/provenance column split if a later slice needs queryable
@@ -314,11 +318,11 @@ Parked hardening: none.
 | `atlas_brain/services/eom_crm_mutations.py` | 282 |
 | `atlas_brain/services/eom_lead_ingress.py` | 18 |
 | `atlas_brain/storage/migrations/364_eom_operator_contact_operation_key_index.sql` | 29 |
-| `plans/PR-EOM-Operator-Mutation-Contract.md` | 324 |
+| `plans/PR-EOM-Operator-Mutation-Contract.md` | 328 |
 | `tests/contact_write_boundary/baseline.json` | 1 |
 | `tests/test_contact_write_boundary.py` | 6 |
 | `tests/test_eom_lead_conversion.py` | 258 |
 | `tests/test_eom_lead_conversion_integration.py` | 862 |
 | `tests/test_migrations_runner.py` | 45 |
 | `tests/test_tenant_stamping.py` | 76 |
-| **Total** | **2585** |
+| **Total** | **2589** |
