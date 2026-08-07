@@ -62,8 +62,10 @@ Slice phase: production hardening
 2. An existing contact is returned untouched: derived names never overwrite
    curated ones.
 3. The tenant comes from `EOM_BUSINESS_CONTEXT_ID`, never a caller literal.
-4. A legacy null-tenant contact is claimed, not duplicated, and a correctly
-   tenanted row wins over one merely unclassified.
+4. A legacy null-tenant contact is **claimed**, not merely deduplicated: the
+   legacy branch falls through to the provider, which performs the
+   compare-and-set tenant claim. Only an already-tenanted match short-circuits.
+   A correctly tenanted row still wins over one merely unclassified.
 5. The scheduler seed and the live disabled state are untouched. This migrates
    the code path; it does not turn the task on.
 
@@ -156,8 +158,8 @@ Live state confirmed unchanged: `email_backfill enabled=false` in
 | File | LOC |
 |---|---:|
 | `atlas_brain/autonomous/tasks/email_backfill.py` | 11 |
-| `atlas_brain/services/eom_lead_ingress.py` | 88 |
-| `plans/PR-D2-Email-Backfill-Boundary.md` | 163 |
-| `tests/test_eom_lead_ingress.py` | 118 |
+| `atlas_brain/services/eom_lead_ingress.py` | 94 |
+| `plans/PR-D2-Email-Backfill-Boundary.md` | 165 |
+| `tests/test_eom_lead_ingress.py` | 155 |
 | `tests/test_tenant_stamping.py` | 29 |
-| **Total** | **409** |
+| **Total** | **454** |

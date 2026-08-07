@@ -597,7 +597,10 @@ async def test_backfill_claims_a_legacy_untenanted_contact_rather_than_duplicati
         "email": "legacy@example.test",
         "business_context_id": None,
     }
-    crm = _crm(rows=[legacy])
+    crm = _crm(
+        rows=[legacy],
+        created={**legacy, "business_context_id": EOM_BUSINESS_CONTEXT_ID, "_was_created": False},
+    )
 
     result = await resolve_or_create_eom_contact(
         crm,
@@ -607,9 +610,14 @@ async def test_backfill_claims_a_legacy_untenanted_contact_rather_than_duplicati
         contact_type="customer",
     )
 
+    # Same row, now carrying the tenant. Returning it early would leave it
+    # unclaimed and invisible to later EOM-scoped reads while this task
+    # attaches interactions to it -- so the legacy branch must reach the
+    # provider, which performs the compare-and-set claim.
     assert result["id"] == legacy["id"]
-    assert result["_was_created"] is False
-    crm.find_or_create_contact.assert_not_awaited()
+    assert result["business_context_id"] == EOM_BUSINESS_CONTEXT_ID
+    crm.find_or_create_contact.assert_awaited()
+    assert crm.find_or_create_contact.await_args.kwargs["preserve_existing"] is True
 
 
 @pytest.mark.asyncio
@@ -638,3 +646,32 @@ async def test_backfill_prefers_the_tenanted_contact_over_a_legacy_one():
     )
 
     assert result["id"] == scoped["id"]
+
+
+@pytest.mark.asyncio
+async def test_backfill_does_not_touch_the_provider_for_an_already_tenanted_match():
+    """The early return still exists -- it is now narrowed to claimed rows.
+
+    Without this, routing legacy matches through the provider could quietly
+    become routing *every* match through it, reintroducing a write on the
+    common path.
+    """
+    tenanted = {
+        "id": str(uuid4()),
+        "full_name": "Already Ours",
+        "email": "ours@example.test",
+        "business_context_id": EOM_BUSINESS_CONTEXT_ID,
+    }
+    crm = _crm(rows=[tenanted])
+
+    result = await resolve_or_create_eom_contact(
+        crm,
+        full_name="Whoever",
+        email="ours@example.test",
+        source="email_backfill",
+        contact_type="customer",
+    )
+
+    assert result["id"] == tenanted["id"]
+    assert result["_was_created"] is False
+    crm.find_or_create_contact.assert_not_awaited()

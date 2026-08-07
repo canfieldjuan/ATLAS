@@ -234,7 +234,13 @@ async def resolve_or_create_eom_contact(
         existing = await resolve_eom_contact_readonly(crm, phone=phone_digits)
     if existing is None and normalized_email:
         existing = await resolve_eom_contact_readonly(crm, email=normalized_email)
-    if existing is not None:
+    # Return early ONLY for a row that already carries the tenant. A legacy
+    # NULL-context match must fall through to the provider, which performs the
+    # compare-and-set tenant claim (`crm_provider.claim_contact`) that this
+    # early return would otherwise skip -- leaving the row unclaimed while the
+    # caller attaches interactions to it, invisible to later EOM-scoped reads.
+    # `preserve_existing=True` still protects its fields on that path.
+    if existing is not None and existing.get("business_context_id") is not None:
         result = dict(existing)
         result["_was_created"] = False
         return result
