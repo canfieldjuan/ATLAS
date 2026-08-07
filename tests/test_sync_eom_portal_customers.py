@@ -296,6 +296,17 @@ def test_rejected_atomic_reconciliation_is_an_error():
 def test_provider_create_race_uses_non_merging_mode_and_rejection_writes_nothing():
     class RaceCRM(StubCRM):
         async def create_contact(self, data, *, merge_existing=True):
+            # merge_existing=False is a deliberate, load-bearing workaround, not
+            # an oversight -- do NOT "fix" this assertion by flipping it. Website
+            # #125/#127 (D4): the portal sync resolves identity itself across a
+            # five-rung ladder (portal_customer_id, atlasContactId, phone, email,
+            # address) BEFORE this call. The provider's create-path matcher sees
+            # only phone+email and its phone match is still substring
+            # (crm_provider.search_contacts ORs `LIKE '%last10%'`). Enabling
+            # merge here would both miss the id/address rungs and reintroduce
+            # substring false-positives. Re-evaluated against 0B (ATLAS #2313) on
+            # 2026-08-07: 0B added an exact clause but did not remove the
+            # substring one, so the reason for this workaround still holds.
             assert merge_existing is False
             self.created.append(data)
             return {
@@ -1006,3 +1017,18 @@ def test_demotion_failure_persists_partial_receipt_before_reraising(monkeypatch)
     assert receipt.changed == ["gone"]
     assert receipt.demotions[-1] == {"demoted": 1, "eligible": 2, "kept": 0}
     assert receipt.counts[-1]["errors"] == 1
+
+
+def test_demotable_sources_are_pinned_to_calendar_and_portal_only():
+    """Widening this set silently archives live customers (website #127).
+
+    ``demote_unmatched`` sets status='inactive' for EOM customers whose source
+    is in DEMOTABLE_SOURCES and who no longer appear in the portal roster. Only
+    system-managed provenance (calendar imports, portal sync) is safe to
+    auto-demote; a human-entered or web-form customer must never be archived by
+    an unrelated portal run. Adding any value here -- 'manual', 'web',
+    'email_backfill' -- turns a routine sync into a mass archive, so this is
+    pinned exact. Changing it is a deliberate, separately-reviewed decision, not
+    a casual edit.
+    """
+    assert DEMOTABLE_SOURCES == ("calendar_import", "portal_sync")
