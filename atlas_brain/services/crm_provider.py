@@ -133,6 +133,7 @@ _ALL_EOM_REQUESTED_EVENTS = frozenset(
     family.requested_event for family in _EOM_BOOKING_FAMILIES
 )
 _EOM_LOST_RESTORABLE_STAGES = ("new", "estimate_booked")
+_EOM_LOST_REPLAY_DISPOSITION_EVENTS = ("lead_lost", "lead_reopened")
 
 
 @asynccontextmanager
@@ -165,6 +166,90 @@ async def _transaction_connection(pool: Any):
     async with pool.acquire() as connection:
         async with connection.transaction():
             yield connection
+
+
+async def _eom_disposition_replay_was_superseded(
+    conn: Any,
+    *,
+    contact_id: str,
+    replay_event_type: str,
+    replay_event_id: Any,
+    replay_lifecycle_sequence: Any,
+) -> bool:
+    """Return whether a lost/reopen replay row no longer owns the lead state."""
+    if replay_lifecycle_sequence is not None:
+        return bool(
+            await conn.fetchval(
+                """
+                SELECT EXISTS (
+                    SELECT 1
+                    FROM eom_lead_lifecycle_events
+                    WHERE contact_id = $1
+                      AND event_type = ANY($2::varchar[])
+                      AND lifecycle_sequence IS NOT NULL
+                      AND lifecycle_sequence > $3
+                )
+                """,
+                contact_id,
+                list(_EOM_LOST_REPLAY_DISPOSITION_EVENTS),
+                int(replay_lifecycle_sequence),
+            )
+        )
+    if replay_event_type == "lead_reopened":
+        legacy_replay = await conn.fetchrow(
+            """
+            SELECT
+                COUNT(*) AS disposition_count,
+                COUNT(*) FILTER (
+                    WHERE event.id = $3
+                      AND event.event_type = 'lead_reopened'
+                      AND event.from_stage = 'lost'
+                      AND event.to_stage = ANY($4::varchar[])
+                      AND event.lifecycle_sequence IS NULL
+                ) AS replay_reopen_count,
+                COUNT(*) FILTER (
+                    WHERE event.id <> $3
+                      AND event.event_type = 'lead_lost'
+                      AND event.to_stage = 'lost'
+                      AND event.from_stage = replay.to_stage
+                      AND event.lifecycle_sequence IS NULL
+                ) AS legacy_loss_predecessor_count
+            FROM eom_lead_lifecycle_events AS event
+            LEFT JOIN eom_lead_lifecycle_events AS replay
+              ON replay.id = $3
+             AND replay.contact_id = $1
+             AND replay.event_type = 'lead_reopened'
+             AND replay.lifecycle_sequence IS NULL
+            WHERE event.contact_id = $1
+              AND event.event_type = ANY($2::varchar[])
+            """,
+            contact_id,
+            list(_EOM_LOST_REPLAY_DISPOSITION_EVENTS),
+            replay_event_id,
+            list(_EOM_LOST_RESTORABLE_STAGES),
+        )
+        return not (
+            legacy_replay is not None
+            and int(legacy_replay["disposition_count"] or 0) == 2
+            and int(legacy_replay["replay_reopen_count"] or 0) == 1
+            and int(legacy_replay["legacy_loss_predecessor_count"] or 0) == 1
+        )
+    return bool(
+        await conn.fetchval(
+            """
+            SELECT EXISTS (
+                SELECT 1
+                FROM eom_lead_lifecycle_events
+                WHERE contact_id = $1
+                  AND event_type = ANY($2::varchar[])
+                  AND id <> $3
+            )
+            """,
+            contact_id,
+            list(_EOM_LOST_REPLAY_DISPOSITION_EVENTS),
+            replay_event_id,
+        )
+    )
 
 
 def _normalize_interaction_text(value: Any) -> str:
@@ -3490,7 +3575,12 @@ class DatabaseCRMProvider:
                 )
             replay = await conn.fetchrow(
                 """
-                SELECT from_stage, metadata->>'lost_reason_code' AS reason_code
+                SELECT
+                    id,
+                    from_stage,
+                    to_stage,
+                    lifecycle_sequence,
+                    metadata->>'lost_reason_code' AS reason_code
                 FROM eom_lead_lifecycle_events
                 WHERE contact_id = $1
                   AND event_type = 'lead_lost'
@@ -3533,6 +3623,13 @@ class DatabaseCRMProvider:
             ):
                 raise EOMLeadConversionError(404, "EOM lead was not found")
             if replay is not None:
+                if (
+                    replay["from_stage"] not in _EOM_LOST_RESTORABLE_STAGES
+                    or replay["to_stage"] != "lost"
+                ):
+                    raise EOMLeadConversionError(
+                        409, "EOM lead lost operation was superseded"
+                    )
                 # A replay is only truthfully idempotent while the lead is still
                 # lost. If it was reopened after this key, reporting "lost"
                 # would assert a stage the row no longer has.
@@ -3542,6 +3639,16 @@ class DatabaseCRMProvider:
                 ):
                     raise EOMLeadConversionError(
                         409, "EOM lead was reopened after this operation"
+                    )
+                if await _eom_disposition_replay_was_superseded(
+                    conn,
+                    contact_id=contact_id,
+                    replay_event_type="lead_lost",
+                    replay_event_id=replay["id"],
+                    replay_lifecycle_sequence=replay["lifecycle_sequence"],
+                ):
+                    raise EOMLeadConversionError(
+                        409, "EOM lead lost operation was superseded"
                     )
                 return _result(
                     str(replay["from_stage"]),
@@ -3699,7 +3806,7 @@ class DatabaseCRMProvider:
                 )
             replay = await conn.fetchrow(
                 """
-                SELECT to_stage
+                SELECT id, from_stage, to_stage, lifecycle_sequence
                 FROM eom_lead_lifecycle_events
                 WHERE contact_id = $1
                   AND event_type = 'lead_reopened'
@@ -3740,6 +3847,13 @@ class DatabaseCRMProvider:
                 raise EOMLeadConversionError(404, "EOM lead was not found")
             if replay is not None:
                 replay_stage = str(replay["to_stage"])
+                if (
+                    replay["from_stage"] != "lost"
+                    or replay_stage not in _EOM_LOST_RESTORABLE_STAGES
+                ):
+                    raise EOMLeadConversionError(
+                        409, "EOM lead reopen operation was superseded"
+                    )
                 # A replay is only truthfully idempotent while the row is still
                 # the active lead at the stage this key restored. If it was
                 # lost again, finalized to a customer, or archived, reporting
@@ -3751,6 +3865,16 @@ class DatabaseCRMProvider:
                 ):
                     raise EOMLeadConversionError(
                         409, "EOM lead changed after this reopen"
+                    )
+                if await _eom_disposition_replay_was_superseded(
+                    conn,
+                    contact_id=contact_id,
+                    replay_event_type="lead_reopened",
+                    replay_event_id=replay["id"],
+                    replay_lifecycle_sequence=replay["lifecycle_sequence"],
+                ):
+                    raise EOMLeadConversionError(
+                        409, "EOM lead reopen operation was superseded"
                     )
                 return _result(lead_stage=replay_stage, idempotent=True)
             # Not a replay of this key: the lead must currently be lost. An
