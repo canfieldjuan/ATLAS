@@ -550,6 +550,24 @@ async def create_contact(
             "source": source,
             "tags": tags or [],
         }
+        # Tenant is required (website #124, D1). An agent-callable create must
+        # not mint a NULL-context contact under weaker rules than the CRM UI,
+        # which always writes a tenant. `_default_context()` returns None when
+        # no deployment default is configured (the live runtime sets none), so
+        # without this a create with no explicit business_context_id silently
+        # produces an unclassified row. A missing tenant is a typed refusal, not
+        # a silent default. This runs BEFORE the EOM guard below because a NULL
+        # tenant is never the EOM tenant and would otherwise slip past it.
+        if not str(effective_business_context_id or "").strip():
+            return json.dumps({
+                "success": False,
+                "error": (
+                    "business_context_id is required to create a contact; no "
+                    "deployment default is configured. Specify the tenant "
+                    "explicitly."
+                ),
+            })
+
         from ..services.eom_lead_ingress import EOM_BUSINESS_CONTEXT_ID
 
         if str(effective_business_context_id or "").strip() == EOM_BUSINESS_CONTEXT_ID:

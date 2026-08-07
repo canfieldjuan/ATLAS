@@ -1119,3 +1119,87 @@ async def test_list_contacts_uses_default(default_ctx, monkeypatch):
     await crm_srv.list_contacts()
     first = provider.list_contacts.await_args_list[0]
     assert first.kwargs["business_context_id"] == EOM
+
+
+# ---------------------------------------------------------------------------
+# D1 (website #124): tenant is required to create -- no silent NULL-context row
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_create_contact_refuses_when_no_tenant_resolvable(no_default, monkeypatch):
+    """The core D1 guarantee: an agent cannot mint a tenantless contact.
+
+    With no explicit business_context_id and no deployment default (the live
+    runtime configures none), `_default_context()` returns None. Before this
+    guard the provider was called with business_context_id=None, producing an
+    unclassified row under weaker rules than the CRM UI. Now it is a typed
+    refusal and the provider is never reached.
+    """
+    provider = _provider_mock(monkeypatch)
+    provider.create_contact = AsyncMock(return_value={"id": "should-not-exist"})
+
+    out = json.loads(await crm_srv.create_contact(full_name="Untenanted Agent Row"))
+
+    assert out["success"] is False
+    assert "business_context_id is required" in out["error"]
+    provider.create_contact.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_create_contact_with_explicit_tenant_still_creates(no_default, monkeypatch):
+    """The guard rejects only a missing tenant, not a supplied one.
+
+    An explicit business_context_id must still create even with no default
+    configured -- otherwise the guard would break every legitimate agent create.
+    """
+    provider = _provider_mock(monkeypatch)
+    provider.create_contact = AsyncMock(return_value={"id": "new-1"})
+
+    out = json.loads(
+        await crm_srv.create_contact(
+            full_name="B2B Prospect", business_context_id="churnsignals"
+        )
+    )
+
+    assert out["success"] is True
+    provider.create_contact.assert_awaited_once()
+    assert provider.create_contact.await_args.args[0]["business_context_id"] == "churnsignals"
+
+
+@pytest.mark.asyncio
+async def test_create_contact_blank_tenant_is_treated_as_missing(no_default, monkeypatch):
+    """A whitespace-only tenant is not a tenant.
+
+    Without this, `business_context_id="  "` would pass a truthiness check but
+    write an effectively-null tenant -- the same hole through a side door.
+    """
+    provider = _provider_mock(monkeypatch)
+    provider.create_contact = AsyncMock(return_value={"id": "should-not-exist"})
+
+    out = json.loads(
+        await crm_srv.create_contact(full_name="Whitespace", business_context_id="   ")
+    )
+
+    assert out["success"] is False
+    assert "business_context_id is required" in out["error"]
+    provider.create_contact.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_create_contact_uses_configured_default_when_no_explicit_tenant(monkeypatch):
+    """A configured default still satisfies the requirement.
+
+    The guard demands a *resolvable* tenant, not an explicit argument -- a
+    deployment default is a valid resolution, so this path is unchanged.
+    """
+    from atlas_brain.config import settings
+
+    monkeypatch.setattr(settings.mcp, "crm_default_business_context", "churnsignals")
+    provider = _provider_mock(monkeypatch)
+    provider.create_contact = AsyncMock(return_value={"id": "new-2"})
+
+    out = json.loads(await crm_srv.create_contact(full_name="Defaulted"))
+
+    assert out["success"] is True
+    assert provider.create_contact.await_args.args[0]["business_context_id"] == "churnsignals"
