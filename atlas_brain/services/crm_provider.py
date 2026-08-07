@@ -1476,10 +1476,11 @@ class DatabaseCRMProvider:
             else:
                 conditions.append(
                     f"({stored_digits} LIKE ${idx} "
-                    f"OR RIGHT({stored_digits}, 10) = RIGHT(${idx + 1}, 10))"
+                    f"OR {stored_digits} LIKE ${idx + 1} "
+                    f"OR RIGHT({stored_digits}, 10) = RIGHT(${idx + 2}, 10))"
                 )
-                params.extend((f"%{digits}%", digits))
-                idx += 2
+                params.extend((f"%{digits}%", f"%{digits[-10:]}%", digits))
+                idx += 3
         if email:
             conditions.append(f"LOWER(email) = LOWER(${idx})")
             params.append(email)

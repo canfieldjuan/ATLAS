@@ -178,7 +178,32 @@ async def test_generic_contact_phone_search_preserves_full_phone_extension_looku
         in pool.query
     )
     assert pool.params[0] == "%2175550100%"
-    assert pool.params[1] == "2175550100"
+    assert pool.params[1] == "%2175550100%"
+    assert pool.params[2] == "2175550100"
+
+
+@pytest.mark.asyncio
+async def test_generic_contact_phone_search_preserves_country_code_to_extension_lookup(
+):
+    from atlas_brain.services.crm_provider import DatabaseCRMProvider
+
+    class RecordingPool:
+        query = ""
+        params = ()
+
+        async def fetch(self, query, *params):
+            self.query = query
+            self.params = params
+            return []
+
+    pool = RecordingPool()
+
+    await DatabaseCRMProvider(pool=pool).search_contacts(phone="+1 217 555 0100")
+
+    assert " LIKE " in pool.query
+    assert pool.params[0] == "%12175550100%"
+    assert pool.params[1] == "%2175550100%"
+    assert pool.params[2] == "12175550100"
 
 
 @pytest.mark.asyncio
