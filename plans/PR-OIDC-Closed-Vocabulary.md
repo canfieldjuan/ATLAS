@@ -82,7 +82,7 @@ Slice phase: production hardening
 - `plans/PR-OIDC-Closed-Vocabulary.md`
 - `scripts/audit_workflow_security_posture.py`
 - `tests/test_audit_workflow_security_posture.py`
-- `tests/unit_gate_baseline.txt`
+- `tests/test_b2b_reviews_import.py`
 
 ### Review Contract
 
@@ -167,25 +167,40 @@ An if/elif over a two-value vocabulary, replacing a binary comparison with an
 - **Case and whitespace variants reject.** YAML preserves both, and a config
   that GitHub would reject should not be silently forgiven by the auditor.
 
-## Also in this PR: restoring six unit-gate baseline entries
+## Also in this PR: fixing six order-dependent tests
 
-Not related to the OIDC predicate, but it is blocking this PR and every other
-PR against `main`, so it is fixed here rather than filed.
+Unrelated to the OIDC predicate, but it blocks this PR and every other PR
+against `main`, so it is fixed here rather than filed.
 
 ATLAS #2303 removed six `tests/test_b2b_reviews_import.py` nodes from
-`tests/unit_gate_baseline.txt` on the grounds that they had started passing. The
-evidence for that was three runs of `pytest tests/test_b2b_reviews_import.py` --
-the file **in isolation**. The unit gate runs the whole `tests/` tree, and in
-that context they still fail, so the removal turned six known failures into six
-regressions.
+`tests/unit_gate_baseline.txt` on the evidence of three runs of
+`pytest tests/test_b2b_reviews_import.py` -- the file **in isolation**. The gate
+runs the whole `tests/` tree, where they still failed, so six known failures
+became six regressions on `main`.
 
-Because the baseline is on `main`, every PR opened against it inherits those six
-regressions. CI being down when #2303 merged is why this went unnoticed for
-hours: there was no unit-gate run to contradict it.
+The tests were genuinely broken, not merely unlucky. All eighteen
+`monkeypatch.setattr` calls targeted the module by dotted string
+(`"atlas_brain.api.b2b_reviews.X"`). pytest resolves that by walking attributes,
+which only succeeds if the submodule is already imported into its parent
+package -- true when the file runs alone, false under the full suite. Every
+failure was `module 'atlas_brain.api' has no attribute 'b2b_reviews'`: a
+patch-target resolution error, with the behaviour under test never reached.
 
-Restored verbatim. The lesson recorded rather than just the fix: *passing in
-isolation is not evidence of passing in the suite*, and a known-failures list
-must only shrink on evidence gathered the way the gate gathers it.
+Fixed by importing the module once and patching the object, which is
+order-independent by construction. **The baseline is untouched** -- byte-identical
+to `main` -- so the ratchet has nothing to reject.
+
+Two process notes, because the same mistake shape caused both delays:
+
+- `pytest <file>` cannot observe suite-order failures, so it was the wrong
+  instrument for deciding a node had stopped failing.
+- A first pass converted only 6 of the 18 calls, because the search pattern
+  `monkeypatch.setattr("` matches single-line calls and the other 12 put the
+  string on its own line.
+
+Both tools returned confident, clean-looking answers to questions they could not
+actually answer. Verification here is the full gate (`regressions=0`,
+149 failing nodes down from 155), never the isolated file.
 
 ## Deferred
 
@@ -222,8 +237,8 @@ WRITE                    none        invalid
 
 | File | LOC |
 |---|---:|
-| `plans/PR-OIDC-Closed-Vocabulary.md` | 229 |
+| `plans/PR-OIDC-Closed-Vocabulary.md` | 244 |
 | `scripts/audit_workflow_security_posture.py` | 15 |
 | `tests/test_audit_workflow_security_posture.py` | 109 |
-| `tests/unit_gate_baseline.txt` | 6 |
-| **Total** | **359** |
+| `tests/test_b2b_reviews_import.py` | 57 |
+| **Total** | **425** |
