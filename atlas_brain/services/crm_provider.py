@@ -45,6 +45,19 @@ _INTERACTION_DEDUPE_ANCHOR_KEYS = (
     "invoice_id",
     "external_id",
 )
+_STORED_PHONE_IDENTITY_DIGITS_SQL = (
+    "REGEXP_REPLACE("
+    "REGEXP_REPLACE("
+    "COALESCE(phone, ''), "
+    "'(^|[-[:space:],;#/()])(ext|extension|x)\\.?[[:space:]]*[0-9]+[[:space:]]*$', "
+    "'', "
+    "'i'"
+    "), "
+    "'[^0-9]', "
+    "'', "
+    "'g'"
+    ")"
+)
 
 
 @dataclass(frozen=True)
@@ -1093,7 +1106,7 @@ class DatabaseCRMProvider:
             phone = command.fields.get("phone")
             email = command.fields.get("email")
             rows = await conn.fetch(
-                """
+                f"""
                 WITH candidate_ids AS (
                     SELECT id
                     FROM contacts
@@ -1112,14 +1125,14 @@ class DatabaseCRMProvider:
                     FROM contacts
                     WHERE business_context_id = $1
                       AND status != 'archived'
-                      AND COALESCE(metadata -> $5, '{}'::jsonb) ? $3
+                      AND COALESCE(metadata -> $5, '{{}}'::jsonb) ? $3
                     UNION
                     SELECT id
                     FROM contacts
                     WHERE $6::text IS NOT NULL
                       AND (business_context_id = $1 OR business_context_id IS NULL)
                       AND status != 'archived'
-                      AND RIGHT(REGEXP_REPLACE(COALESCE(phone, ''), '[^0-9]', '', 'g'), 10)
+                      AND RIGHT({_STORED_PHONE_IDENTITY_DIGITS_SQL}, 10)
                           = RIGHT($6::text, 10)
                     UNION
                     SELECT id

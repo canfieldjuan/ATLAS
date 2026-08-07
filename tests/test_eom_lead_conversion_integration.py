@@ -931,6 +931,91 @@ async def test_operator_contact_mutation_rejects_ambiguous_exact_identity():
 
 
 @pytest.mark.asyncio
+async def test_operator_contact_mutation_matches_stored_phone_with_extension():
+    database_url = _database_url_or_skip()
+    schema = f"atlas_eom_operator_extension_match_{uuid.uuid4().hex}"
+    conn = await asyncpg.connect(database_url)
+    try:
+        await _prepare_schema(conn, schema, apply_privilege_migration=False)
+        provider = DatabaseCRMProvider(pool=conn)
+        contact_id = uuid.uuid4()
+        await _insert_contact(
+            conn,
+            contact_id=contact_id,
+            business_context_id=None,
+            full_name="Legacy Extension Match",
+            phone="2175550100 ext 123",
+            contact_type="customer",
+            lead_stage=None,
+        )
+        command = EOMOperatorContactMutation.from_raw(
+            operation_key=f"operator-extension-match-{uuid.uuid4().hex}",
+            actor_id=9,
+            actor_name="Juan Canfield",
+            source_channel="time_tracker",
+            source_ref="customer:extension-match",
+            fields={"phone": "217-555-0100", "email": "extension@example.com"},
+        )
+
+        result = await mutate_eom_operator_contact(provider, command)
+
+        assert result["contact_id"] == str(contact_id)
+        rows = await conn.fetch("SELECT id, phone, email FROM contacts ORDER BY id")
+        assert len(rows) == 1
+        assert rows[0]["id"] == contact_id
+        assert rows[0]["phone"] == "2175550100"
+        assert rows[0]["email"] == "extension@example.com"
+    finally:
+        await conn.close()
+
+
+@pytest.mark.asyncio
+async def test_operator_contact_mutation_does_not_match_extension_suffix():
+    database_url = _database_url_or_skip()
+    schema = f"atlas_eom_operator_extension_suffix_{uuid.uuid4().hex}"
+    conn = await asyncpg.connect(database_url)
+    try:
+        await _prepare_schema(conn, schema, apply_privilege_migration=False)
+        provider = DatabaseCRMProvider(pool=conn)
+        existing_id = uuid.uuid4()
+        await _insert_contact(
+            conn,
+            contact_id=existing_id,
+            business_context_id=None,
+            full_name="Legacy Extension Suffix",
+            phone="2175550100 ext 123",
+            email="legacy-extension@example.com",
+            contact_type="customer",
+            lead_stage=None,
+        )
+        command = EOMOperatorContactMutation.from_raw(
+            operation_key=f"operator-extension-suffix-{uuid.uuid4().hex}",
+            actor_id=9,
+            actor_name="Juan Canfield",
+            source_channel="time_tracker",
+            source_ref="customer:extension-suffix",
+            fields={
+                "full_name": "Extension Suffix New Contact",
+                "phone": "555-010-0123",
+                "email": "suffix@example.com",
+            },
+        )
+
+        result = await mutate_eom_operator_contact(provider, command)
+
+        assert result["contact_id"] != str(existing_id)
+        rows = await conn.fetch(
+            "SELECT id, phone, email FROM contacts ORDER BY email"
+        )
+        assert len(rows) == 2
+        legacy = next(row for row in rows if row["id"] == existing_id)
+        assert legacy["phone"] == "2175550100 ext 123"
+        assert legacy["email"] == "legacy-extension@example.com"
+    finally:
+        await conn.close()
+
+
+@pytest.mark.asyncio
 async def test_operator_contact_mutation_rejects_unsupported_existing_contact_type():
     database_url = _database_url_or_skip()
     schema = f"atlas_eom_operator_bad_type_{uuid.uuid4().hex}"
