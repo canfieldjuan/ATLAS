@@ -696,6 +696,63 @@ async def test_operator_contact_mutation_rejects_explicit_id_identity_collision(
 
 
 @pytest.mark.asyncio
+async def test_operator_contact_mutation_rejects_ambiguous_direct_provenance():
+    database_url = _database_url_or_skip()
+    schema = f"atlas_eom_operator_ambiguous_source_{uuid.uuid4().hex}"
+    conn = await asyncpg.connect(database_url)
+    try:
+        await _prepare_schema(conn, schema, apply_privilege_migration=False)
+        provider = DatabaseCRMProvider(pool=conn)
+        first_id = uuid.uuid4()
+        second_id = uuid.uuid4()
+        for contact_id, full_name in (
+            (first_id, "First Manual Customer"),
+            (second_id, "Second Manual Customer"),
+        ):
+            await _insert_contact(
+                conn,
+                contact_id=contact_id,
+                full_name=full_name,
+                contact_type="customer",
+                lead_stage=None,
+                source="manual",
+            )
+            await conn.execute(
+                """
+                UPDATE contacts
+                SET source_ref = 'time_tracker:customer:duplicate'
+                WHERE id = $1
+                """,
+                contact_id,
+            )
+        command = EOMOperatorContactMutation.from_raw(
+            operation_key=f"operator-ambiguous-source-{uuid.uuid4().hex}",
+            actor_id=9,
+            actor_name="Juan Canfield",
+            source_channel="time_tracker",
+            source_ref="customer:duplicate",
+            fields={"full_name": "Wrong Target"},
+        )
+
+        with pytest.raises(EOMOperatorContactMutationError) as exc_info:
+            await mutate_eom_operator_contact(provider, command)
+
+        assert exc_info.value.status_code == 409
+        assert await conn.fetchval(
+            "SELECT COUNT(*) FROM contacts WHERE full_name = 'Wrong Target'"
+        ) == 0
+        assert await conn.fetchval(
+            """
+            SELECT COUNT(*)
+            FROM eom_lead_lifecycle_events
+            WHERE event_type IN ('contact_created', 'contact_updated')
+            """
+        ) == 0
+    finally:
+        await conn.close()
+
+
+@pytest.mark.asyncio
 async def test_operator_contact_mutation_rejects_ambiguous_exact_identity():
     database_url = _database_url_or_skip()
     schema = f"atlas_eom_operator_ambiguous_{uuid.uuid4().hex}"

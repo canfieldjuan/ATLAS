@@ -256,6 +256,10 @@ Parked hardening: none.
   -- 2 passed.
 - `ATLAS_MIGRATION_TEST_DATABASE_URL=postgresql://atlas@127.0.0.1:5433/atlas python -m pytest tests/test_eom_lead_conversion_integration.py::test_operator_contact_mutation_claims_legacy_contact_by_padded_email 'tests/test_eom_lead_conversion_integration.py::test_operator_contact_mutation_rejects_explicit_id_identity_collision[email-owned@example.com-target@example.com]' -q`
   -- 2 passed.
+- `python -m py_compile atlas_brain/services/crm_provider.py tests/test_eom_lead_conversion_integration.py`
+  -- passed.
+- `ATLAS_MIGRATION_TEST_DATABASE_URL=postgresql://atlas@127.0.0.1:5433/atlas python -m pytest tests/test_eom_lead_conversion_integration.py::test_operator_contact_mutation_rejects_ambiguous_direct_provenance -q`
+  -- 1 passed.
 - `python -m pytest tests/test_eom_lead_conversion.py tests/test_tenant_stamping.py tests/test_migrations_runner.py tests/test_contact_write_boundary.py -q`
   -- 293 passed, 1 skipped, 1 warning.
 - `ATLAS_MIGRATION_TEST_DATABASE_URL=postgresql://atlas@127.0.0.1:5433/atlas python -m pytest tests/test_eom_lead_conversion_integration.py -q -k "operator_contact_mutation or inbound_atomic_uses_ascii_phone_normalizer or share_phone_identity_lock"`
@@ -280,15 +284,15 @@ Parked hardening: none.
 | File | LOC |
 |---|---:|
 | `atlas_brain/eom_api/funnel.py` | 130 |
-| `atlas_brain/services/crm_provider.py` | 515 |
+| `atlas_brain/services/crm_provider.py` | 514 |
 | `atlas_brain/services/eom_crm_mutations.py` | 269 |
 | `atlas_brain/services/eom_lead_ingress.py` | 18 |
 | `atlas_brain/storage/migrations/364_eom_operator_contact_operation_key_index.sql` | 29 |
-| `plans/PR-EOM-Operator-Mutation-Contract.md` | 294 |
+| `plans/PR-EOM-Operator-Mutation-Contract.md` | 298 |
 | `tests/contact_write_boundary/baseline.json` | 1 |
 | `tests/test_contact_write_boundary.py` | 6 |
 | `tests/test_eom_lead_conversion.py` | 241 |
-| `tests/test_eom_lead_conversion_integration.py` | 590 |
+| `tests/test_eom_lead_conversion_integration.py` | 647 |
 | `tests/test_migrations_runner.py` | 45 |
 | `tests/test_tenant_stamping.py` | 51 |
-| **Total** | **2189** |
+| **Total** | **2249** |

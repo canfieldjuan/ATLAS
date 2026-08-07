@@ -1081,7 +1081,7 @@ class DatabaseCRMProvider:
 
         async def _select_exact_matches(conn: Any) -> list[dict[str, Any]]:
             matches: list[dict[str, Any]] = []
-            source_match = await conn.fetchrow(
+            source_matches = await conn.fetch(
                 """
                 SELECT *
                 FROM contacts
@@ -1095,8 +1095,7 @@ class DatabaseCRMProvider:
                 command.contact_source,
                 command.contact_source_ref,
             )
-            if source_match is not None:
-                matches.append(dict(source_match))
+            matches.extend(dict(row) for row in source_matches)
             provenance_matches = await conn.fetch(
                 """
                 SELECT *
