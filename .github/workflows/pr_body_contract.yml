@@ -47,6 +47,7 @@ jobs:
           PR_NUMBER: ${{ github.event.pull_request.number }}
         run: |
           python3 scripts/audit_pr_body.py \
+            --require-wrapper-marker \
             --pr-author "$PR_AUTHOR" \
             --base-ref "origin/${BASE_REF}" \
             --head-ref "refs/remotes/origin/pr-${PR_NUMBER}" \

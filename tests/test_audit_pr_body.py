@@ -21,6 +21,7 @@ SPEC.loader.exec_module(audit_pr_body_module)
 
 audit_pr_body = audit_pr_body_module.audit_pr_body
 is_dependabot_author = audit_pr_body_module.is_dependabot_author
+OPEN_PR_WRAPPER_MARKER = audit_pr_body_module.OPEN_PR_WRAPPER_MARKER
 
 
 def _valid_body(plan: str = "plans/PR-Example.md") -> str:
@@ -70,6 +71,21 @@ def test_valid_body_passes(tmp_path: Path) -> None:
     root = _write_plan(tmp_path)
 
     assert audit_pr_body(_valid_body(), root=root) == []
+
+
+def test_wrapper_marker_requirement_rejects_unstamped_full_body(tmp_path: Path) -> None:
+    root = _write_plan(tmp_path)
+
+    failures = audit_pr_body(_valid_body(), root=root, require_wrapper_marker=True)
+
+    assert any("missing open PR wrapper marker" in failure for failure in failures)
+
+
+def test_wrapper_marker_requirement_accepts_stamped_full_body(tmp_path: Path) -> None:
+    root = _write_plan(tmp_path)
+    body = _valid_body() + f"\n\n{OPEN_PR_WRAPPER_MARKER}\n"
+
+    assert audit_pr_body(body, root=root, require_wrapper_marker=True) == []
 
 
 def test_empty_body_fails() -> None:
@@ -617,6 +633,7 @@ def test_dependabot_cli_exempts_invalid_body() -> None:
             [
                 sys.executable,
                 str(SCRIPT),
+                "--require-wrapper-marker",
                 "--pr-author",
                 "app/dependabot",
                 str(body_path),
@@ -666,6 +683,7 @@ def test_docs_only_marker_passes_for_markdown_only_human_diff(tmp_path: Path) ->
         [
             sys.executable,
             str(SCRIPT),
+            "--require-wrapper-marker",
             "--repo-root",
             str(repo),
             "--base-ref",

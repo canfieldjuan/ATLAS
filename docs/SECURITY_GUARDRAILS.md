@@ -71,8 +71,7 @@ marked `branch_required`: `live-reconciliation`, `diff-budget`,
 `plan-admission`, `session-lane`, `review-contract`, `pr-body-contract`,
 `Gitleaks PR secret scan`, `Gitleaks baseline growth guard`, and `unit-gate`,
 all pinned to the GitHub Actions app source instead of legacy bare context
-names. As of 2026-08-05, live GitHub settings contain every registry-required
-context pinned
+names. Live GitHub settings must contain every registry-required context pinned
 to the GitHub Actions app source. The checker intentionally proves required
 registry coverage and source pinning; it is not an exact-set audit for extra
 required contexts. Verification:
@@ -103,6 +102,12 @@ The same auditor admits
 guard shape. The workflow completed its #2104 burn-in and is now
 branch-required. It checks out trusted base code, materializes the PR head as git
 data, and runs the base-owned plan-admission auditor against that data worktree.
+
+The future `pr-ready-state` workflow is intentionally split from its
+trusted-base allowlist bootstrap. This slice teaches the workflow posture audit
+to recognize the eventual trusted-base job shape first; a follow-up can then add
+the new `pull_request_target` workflow and emit the context from `main` before
+live branch protection promotes it to `branch_required`.
 
 The `pre-push-audit` workflow keeps its trusted-base split while checking one
 PR-side docs/test consistency contract as data: `ci/gates.yml` branch-required
