@@ -39,21 +39,50 @@ different portal customer just created, and overwriting fields the clean-create
 path deliberately leaves alone.
 
 **Therefore matcher strength -- the thing 0B changed -- was never the deciding
-factor.** The seam exists because `resolve_contact` owns identity resolution
-upstream and `create_contact` should be a race-safe clean insert, not a second
-resolver. 0B is orthogonal to that and cannot obsolete it. Both the #127 premise
-and the provider docstring misattribute the reason to matcher strength; the
-decision is unaffected.
+factor.** 0B is orthogonal to a race-window seam and cannot obsolete it. Both
+the #127 premise and the provider docstring misattribute the reason to matcher
+strength.
 
-**Outcome: KEEP `merge_existing=False`** -- there is no benefit to enabling merge
-(resolve_contact already resolves identity) and a real race/overwrite risk to
-doing so.
+**The race window cuts both ways (correcting a second over-claim).** My first
+correction only weighed the harmful side. Codex R1/R14 is right that there is a
+benefit too:
+
+- *Same* phone-only customer, two overlapping runs that both clear
+  `resolve_contact` before either inserts: `merge_existing=False` skips phone and
+  inserts a **duplicate**; `merge_existing=True` re-finds the first row and
+  dedupes. Enabling merge helps here.
+- *Different* customers whose phones collide under the substring predicate:
+  `merge_existing=True` merges into the wrong row -- a silent **cross-link plus
+  field overwrite**; `merge_existing=False` inserts clean.
+
+So enabling merge is a real tradeoff, not "no benefit." It is kept anyway,
+weighed:
+
+1. **Asymmetric failure.** `merge_existing=False` fails toward a duplicate that
+   carries the *same* `portal_customer_id` -- detectable by a `COUNT(*)>1` query
+   and reconcilable. `merge_existing=True` fails toward a silent merge of two
+   distinct customers with data overwrite -- no count signal, hard to undo. For a
+   system of record, detectable-duplicate beats silent-wrong.
+2. **The duplicate is already mitigated** within a run (cached resolutions and
+   the shared-normalized-identity check, `sync_eom_portal_customers.py:249,263`);
+   it requires two *overlapping* runs to surface at all.
+3. **There is a better fix for the duplicate than flipping the seam**: a partial
+   unique index on `(business_context_id, metadata->>'portal_customer_id')`,
+   which `create_contact`'s own docstring already anticipates ("migration 037
+   should add a DB-level partial unique index"). That closes the duplicate
+   without taking on the cross-link risk. If same-customer duplicates ever become
+   real operationally, that index -- not `merge_existing=True` -- is the fix, and
+   it is filed as website #137 rather than done here.
+
+**Outcome: KEEP `merge_existing=False`**, as a weighed tradeoff. 0B does not
+change either side of it.
 
 ### Problem-derived contract
 
-- Root cause: the provider create-path matcher is narrower (phone+email) and
-  looser (substring phone) than the portal sync's own resolver; 0B did not
-  change that.
+- Root cause: `merge_existing=False` is a race-window seam, not a
+  matcher-strength workaround. `resolve_contact` owns identity resolution
+  upstream (same matcher as the create path), so `create_contact` is deliberately
+  a race-safe clean insert. 0B changed the matcher, which is orthogonal to that.
 - Correct resolution touches: the decision record (this PR + closing #127) and
   the durability of two currently-under-protected invariants -- the workaround
   flag and the demotion source list. No portal-sync behaviour changes.
@@ -152,6 +181,6 @@ $ git diff --stat origin/main -- scripts/sync_eom_portal_customers.py
 
 | File | LOC |
 |---|---:|
-| `plans/PR-D4-Portal-Merge-Workaround-Decision.md` | 157 |
+| `plans/PR-D4-Portal-Merge-Workaround-Decision.md` | 186 |
 | `tests/test_sync_eom_portal_customers.py` | 30 |
-| **Total** | **187** |
+| **Total** | **216** |
