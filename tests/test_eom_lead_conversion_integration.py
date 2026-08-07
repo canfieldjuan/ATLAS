@@ -352,6 +352,24 @@ async def test_operator_contact_mutation_creates_replays_and_records_actor():
             operation_key,
         ) == 1
 
+        crossed_actor = EOMOperatorContactMutation.from_raw(
+            operation_key=operation_key,
+            actor_id=9,
+            actor_name="Other Operator",
+            source_channel="time_tracker",
+            source_ref="customer:88",
+            contact_type="customer",
+            fields={
+                "full_name": "Operator Created",
+                "email": "operator@example.com",
+                "phone": "2175550100",
+                "address": "",
+            },
+        )
+        with pytest.raises(EOMOperatorContactMutationError) as exc_info:
+            await mutate_eom_operator_contact(provider, crossed_actor)
+        assert exc_info.value.status_code == 409
+
         conflict = EOMOperatorContactMutation.from_raw(
             operation_key=operation_key,
             actor_id=7,

@@ -86,9 +86,10 @@ Slice phase: vertical slice
   - [ ] A fresh update can edit ordinary identity/contact fields on an EOM
         contact and writes `contact_updated` lifecycle evidence with actor +
         operation key.
-  - [ ] Replaying the same idempotency key and same normalized payload returns
-        the same contact with `idempotent: true` and HTTP 200; replaying the key
-        with a different normalized payload returns a conflict.
+  - [ ] Replaying the same idempotency key, same authenticated actor, and same
+        normalized payload returns the same contact with `idempotent: true` and
+        HTTP 200; replaying the key with a different actor or normalized payload
+        returns a conflict.
   - [ ] Phone resolution uses exact normalized last-10 equality, not substring
         matching; ambiguous phone/email resolution fails closed.
   - [ ] Existing lead/customer lifecycle transition ownership is not widened:
@@ -197,8 +198,9 @@ phone/email identity key. The phone/email lock namespace is shared with the
 atomic EOM inbound writer, so interleavings on the same admitted identity
 serialize before either writer can resolve or insert. Inside the transaction,
 idempotency is receipt-first: an existing lifecycle row for the same operation
-key and matching request fingerprint returns the recorded contact, while the
-same key with a different fingerprint fails before mutation. With no receipt,
+key and matching actor-bound request fingerprint returns the recorded contact,
+while the same key with a different actor or payload fingerprint fails before
+mutation. With no receipt,
 the provider resolves and locks source/provenance/phone/email contact rows with
 `FOR UPDATE`, rejects ambiguous or cross-contact identities, writes exactly one
 contact create/update, then writes exactly one lifecycle receipt before commit.
@@ -236,6 +238,9 @@ last-10 matches for ordinary stored numbers.
   `atlas_brain/autonomous/tasks/email_backfill.py:198` backfill caller that
   still uses generic `find_or_create_contact`; this PR adds the Atlas operator
   mutation contract and does not migrate existing autonomous/backfill callers.
+- Normalized contact identity functional indexes for EOM phone/email lookups;
+  this is post-contract performance hardening, while this PR proves correctness
+  and idempotency for the new operator mutation route.
 - Remaining #112 tracker/website capability-gating halves.
 - Provenance alerting and missing-provenance observability: website #113.
 - Additive source/provenance column split if a later slice needs queryable
@@ -276,6 +281,10 @@ Parked hardening: none.
   -- passed.
 - `ATLAS_MIGRATION_TEST_DATABASE_URL=postgresql://atlas@127.0.0.1:5433/atlas python -m pytest tests/test_eom_lead_conversion_integration.py::test_operator_contact_mutation_crossed_identities_fail_without_deadlock -q`
   -- 1 passed.
+- `python -m py_compile atlas_brain/services/eom_crm_mutations.py tests/test_eom_lead_conversion_integration.py`
+  -- passed.
+- `ATLAS_MIGRATION_TEST_DATABASE_URL=postgresql://atlas@127.0.0.1:5433/atlas python -m pytest tests/test_eom_lead_conversion_integration.py::test_operator_contact_mutation_creates_replays_and_records_actor -q`
+  -- 1 passed.
 - `ATLAS_MIGRATION_TEST_DATABASE_URL=postgresql://atlas@127.0.0.1:5433/atlas python -m pytest tests/test_eom_lead_conversion_integration.py::test_operator_contact_mutation_rejects_explicit_id_identity_collision tests/test_eom_lead_conversion_integration.py::test_operator_contact_mutation_rejects_ambiguous_exact_identity tests/test_eom_lead_conversion_integration.py::test_operator_contact_mutation_rejects_ambiguous_direct_provenance -q`
   -- 4 passed.
 - `python -m py_compile atlas_brain/services/crm_provider.py tests/test_tenant_stamping.py`
@@ -315,14 +324,14 @@ Parked hardening: none.
 |---|---:|
 | `atlas_brain/eom_api/funnel.py` | 151 |
 | `atlas_brain/services/crm_provider.py` | 533 |
-| `atlas_brain/services/eom_crm_mutations.py` | 282 |
+| `atlas_brain/services/eom_crm_mutations.py` | 283 |
 | `atlas_brain/services/eom_lead_ingress.py` | 18 |
 | `atlas_brain/storage/migrations/364_eom_operator_contact_operation_key_index.sql` | 29 |
-| `plans/PR-EOM-Operator-Mutation-Contract.md` | 328 |
+| `plans/PR-EOM-Operator-Mutation-Contract.md` | 337 |
 | `tests/contact_write_boundary/baseline.json` | 1 |
 | `tests/test_contact_write_boundary.py` | 6 |
 | `tests/test_eom_lead_conversion.py` | 258 |
-| `tests/test_eom_lead_conversion_integration.py` | 862 |
+| `tests/test_eom_lead_conversion_integration.py` | 880 |
 | `tests/test_migrations_runner.py` | 45 |
 | `tests/test_tenant_stamping.py` | 76 |
-| **Total** | **2589** |
+| **Total** | **2617** |

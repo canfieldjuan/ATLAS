@@ -246,6 +246,7 @@ class EOMOperatorContactMutation:
     @property
     def request_fingerprint(self) -> str:
         payload = {
+            "actor_id": self.actor_id,
             "contact_id": self.contact_id,
             "contact_type": self.contact_type,
             "fields": dict(sorted(self.fields.items())),
