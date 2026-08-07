@@ -146,8 +146,24 @@ seam in the enumeration; otherwise write "N/A - no boundary change."
 - Guard-relevant fields: `contactId`, `contactType`, `fullName`, `email`,
   `phone`, `address`, `city`, `state`, `zip`, `notes`, `sourceChannel`,
   `sourceRef`, actor headers, and `Idempotency-Key`.
-- Caller x input shape: tracker/service caller sends camelCase JSON with one
-  operation key and actor headers; browser users do not call Atlas directly.
+- Caller x input shape:
+  - New tracker/service operator route caller sends camelCase JSON with one
+    operation key plus actor headers; browser users do not call Atlas directly.
+  - `atlas_brain/mcp/crm_server.py` generic CRM callers keep existing
+    `search_contacts` semantics: email and query lookup are unchanged, short
+    phone fragments keep substring lookup, and full/country-code phones gain an
+    additional normalized last-10 equality fallback without dropping submitted
+    digit substring compatibility.
+  - `atlas_brain/mcp/invoicing_server.py`, `atlas_brain/services/customer_context.py`,
+    `atlas_brain/tools/scheduling.py`, `scripts/import_eom_customers_live.py`, and
+    `atlas_brain/api/email_drafts.py` call the same generic provider search seam;
+    their input shapes are preserved by the generic substring-compatible phone
+    branch and unchanged email/query branches.
+  - Existing EOM inbound lead callers in scheduling, call intelligence, SMS
+    intelligence, and lead-pipeline tests now share the ASCII digit normalizer
+    and full-number preference rule: a full extracted phone wins, a full
+    transport phone backfills a fragment, and fragments stay fragments only
+    when no full phone is available.
 
 ### Deployed-config probing
 
@@ -335,11 +351,11 @@ Parked hardening: none.
 | `atlas_brain/services/eom_crm_mutations.py` | 287 |
 | `atlas_brain/services/eom_lead_ingress.py` | 18 |
 | `atlas_brain/storage/migrations/364_eom_operator_contact_operation_key_index.sql` | 29 |
-| `plans/PR-EOM-Operator-Mutation-Contract.md` | 345 |
+| `plans/PR-EOM-Operator-Mutation-Contract.md` | 361 |
 | `tests/contact_write_boundary/baseline.json` | 1 |
 | `tests/test_contact_write_boundary.py` | 6 |
 | `tests/test_eom_lead_conversion.py` | 259 |
 | `tests/test_eom_lead_conversion_integration.py` | 929 |
 | `tests/test_migrations_runner.py` | 45 |
 | `tests/test_tenant_stamping.py` | 76 |
-| **Total** | **2687** |
+| **Total** | **2703** |
