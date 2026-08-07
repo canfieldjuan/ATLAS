@@ -43,6 +43,27 @@ def preferred_eom_inbound_phone(extracted_phone: Any, transport_phone: Any) -> s
     return extracted or transport
 
 
+async def resolve_eom_contact_readonly(crm: Any, **channel: Any) -> Optional[dict[str, Any]]:
+    """Find an EOM contact by a single channel without mutating anything.
+
+    Lifted verbatim out of ``resolve_or_create_eom_inbound_lead`` so that every
+    EOM writer resolves identity the same way. Scoped tenant first, then the
+    claimable legacy population whose ``business_context_id`` is still NULL --
+    order matters: a legacy row must be claimed rather than duplicated, and a
+    correctly-tenanted row must win over one that merely has not been classified
+    yet.
+    """
+    scoped = await crm.search_contacts(
+        business_context_id=EOM_BUSINESS_CONTEXT_ID, **channel
+    )
+    if scoped:
+        return scoped[0]
+    legacy = await crm.search_contacts(
+        business_context_id_is_null=True, **channel
+    )
+    return legacy[0] if legacy else None
+
+
 async def resolve_or_create_eom_inbound_lead(
     crm: Any,
     *,
@@ -103,22 +124,11 @@ async def resolve_or_create_eom_inbound_lead(
             interaction=interaction,
         )
 
-    async def _resolve_readonly(**channel: Any) -> Optional[dict[str, Any]]:
-        scoped = await crm.search_contacts(
-            business_context_id=EOM_BUSINESS_CONTEXT_ID, **channel
-        )
-        if scoped:
-            return scoped[0]
-        legacy = await crm.search_contacts(
-            business_context_id_is_null=True, **channel
-        )
-        return legacy[0] if legacy else None
-
     existing: Optional[dict[str, Any]] = None
     if len(phone_digits) >= _MIN_MATCH_PHONE_DIGITS:
-        existing = await _resolve_readonly(phone=phone_digits)
+        existing = await resolve_eom_contact_readonly(crm, phone=phone_digits)
     if existing is None and normalized_email:
-        existing = await _resolve_readonly(email=normalized_email)
+        existing = await resolve_eom_contact_readonly(crm, email=normalized_email)
     if existing is not None:
         result = dict(existing)
         result["_was_created"] = False
@@ -186,3 +196,61 @@ async def resolve_or_create_eom_inbound_lead_and_log_interaction(
     if interaction is None:
         raise RuntimeError("EOM inbound interaction command returned no interaction")
     return result, interaction
+
+
+async def resolve_or_create_eom_contact(
+    crm: Any,
+    *,
+    full_name: str,
+    email: Optional[str] = None,
+    phone: Optional[str] = None,
+    source: str,
+    contact_type: str,
+) -> dict[str, Any]:
+    """Resolve an EOM contact by channel, or create one, never overwriting.
+
+    A sibling of ``resolve_or_create_eom_inbound_lead`` rather than a parameter
+    on it: that function is the website-form intake path and hardcodes
+    ``contact_type="lead"`` / ``lead_stage="new"``, which is right for an
+    inbound enquiry and wrong for a backfill of people who are already
+    customers. Widening it would put a revenue-carrying path at risk to serve a
+    dormant one.
+
+    What this shares with ingress -- and the reason the resolver was lifted to
+    module level -- is identity matching: scoped tenant first, then the
+    claimable legacy population. Duplicating that would recreate the drift this
+    boundary exists to remove.
+
+    ``preserve_existing=True`` is not optional here. Callers of this function
+    derive their fields (a display name inferred from an email local part, for
+    instance), and derived data must never overwrite a record a human curated.
+    An existing contact is returned untouched.
+    """
+    normalized_email = str(email or "").strip().lower()
+    phone_digits = normalise_eom_phone_digits(phone)
+
+    existing: Optional[dict[str, Any]] = None
+    if len(phone_digits) >= _MIN_MATCH_PHONE_DIGITS:
+        existing = await resolve_eom_contact_readonly(crm, phone=phone_digits)
+    if existing is None and normalized_email:
+        existing = await resolve_eom_contact_readonly(crm, email=normalized_email)
+    # Return early ONLY for a row that already carries the tenant. A legacy
+    # NULL-context match must fall through to the provider, which performs the
+    # compare-and-set tenant claim (`crm_provider.claim_contact`) that this
+    # early return would otherwise skip -- leaving the row unclaimed while the
+    # caller attaches interactions to it, invisible to later EOM-scoped reads.
+    # `preserve_existing=True` still protects its fields on that path.
+    if existing is not None and existing.get("business_context_id") is not None:
+        result = dict(existing)
+        result["_was_created"] = False
+        return result
+
+    return await crm.find_or_create_contact(
+        full_name=full_name.strip() or normalized_email or phone_digits or "Unknown",
+        phone=phone_digits if len(phone_digits) >= _MIN_MATCH_PHONE_DIGITS else None,
+        email=normalized_email or None,
+        business_context_id=EOM_BUSINESS_CONTEXT_ID,
+        contact_type=contact_type,
+        source=source,
+        preserve_existing=True,
+    )

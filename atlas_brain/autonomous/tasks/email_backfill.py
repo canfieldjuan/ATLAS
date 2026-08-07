@@ -20,6 +20,7 @@ import re
 from datetime import timezone
 from typing import Any
 
+from ...services.eom_lead_ingress import resolve_or_create_eom_contact
 from ...storage.database import get_db_pool
 from ...storage.models import ScheduledTask
 from .gmail_digest import _get_processed_message_ids
@@ -194,13 +195,17 @@ async def run(task: ScheduledTask) -> dict:
                 # No display name -- use email local part as name
                 recipient_name = recipient_email.split("@")[0].replace(".", " ").title()
 
-            # find_or_create_contact deduplicates by email
-            contact = await crm.find_or_create_contact(
+            # Through the EOM boundary, not straight at the provider. Two
+            # things this buys that the direct call did not: the tenant comes
+            # from the boundary rather than a literal, and preserve_existing
+            # stops a name inferred from an email local part (above) from
+            # overwriting one a human curated.
+            contact = await resolve_or_create_eom_contact(
+                crm,
                 full_name=recipient_name,
                 email=recipient_email,
                 source="email_backfill",
                 contact_type="customer",
-                business_context_id="effingham_maids",
             )
             if not contact.get("id"):
                 continue
