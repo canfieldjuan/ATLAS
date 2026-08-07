@@ -527,6 +527,7 @@ async def test_operator_contact_mutation_rejects_non_object_contact_metadata():
 @pytest.mark.parametrize(
     "source_metadata",
     (
+        None,
         ["time_tracker:customer:malformed-provenance"],
         {"time_tracker:customer:malformed-provenance": "not-a-record"},
     ),

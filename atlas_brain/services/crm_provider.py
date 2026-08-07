@@ -1096,19 +1096,20 @@ class DatabaseCRMProvider:
             target: Mapping[str, Any],
         ) -> tuple[dict[str, Any], bool]:
             metadata = _metadata_from_row(target.get("metadata"))
-            raw_sources = metadata.get(_EOM_OPERATOR_CONTACT_SOURCES_METADATA_KEY)
             source_record = {
                 "source": command.contact_source,
                 "source_channel": command.source_channel,
                 "source_ref": command.source_ref,
             }
-            if raw_sources is None:
+            if _EOM_OPERATOR_CONTACT_SOURCES_METADATA_KEY not in metadata:
                 sources = {}
-            elif not isinstance(raw_sources, Mapping):
-                raise EOMOperatorContactMutationError(
-                    409, "EOM operator contact provenance metadata must be an object"
-                )
             else:
+                raw_sources = metadata[_EOM_OPERATOR_CONTACT_SOURCES_METADATA_KEY]
+                if not isinstance(raw_sources, Mapping):
+                    raise EOMOperatorContactMutationError(
+                        409,
+                        "EOM operator contact provenance metadata must be an object",
+                    )
                 sources = {}
                 for key, record in raw_sources.items():
                     if not isinstance(key, str) or not isinstance(record, Mapping):
@@ -1209,10 +1210,7 @@ class DatabaseCRMProvider:
                   AND status != 'archived'
                   AND metadata ? $2
                   AND (
-                      (
-                          jsonb_typeof(metadata -> $2) != 'object'
-                          AND COALESCE(metadata -> $2, 'null'::jsonb) ? $3
-                      )
+                      jsonb_typeof(metadata -> $2) != 'object'
                       OR (
                           jsonb_typeof(metadata -> $2) = 'object'
                           AND (metadata -> $2) ? $3
