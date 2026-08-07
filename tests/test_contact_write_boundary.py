@@ -509,14 +509,14 @@ def test_repository_has_exactly_the_known_insert_sites() -> None:
     assert {f.path for f in inserts} == {"atlas_brain/services/crm_provider.py"}
     assert len(inserts) == 2, f"expected 2 provider INSERT sites, found {len(inserts)}"
 
-    # Ground truth: `grep -c 'UPDATE contacts' crm_provider.py` == 9. Pinning
+    # Ground truth: `grep -c 'UPDATE contacts' crm_provider.py` == 10. Pinning
     # the count catches a recognizer regression that silently drops one.
     provider_updates = [
         f for f in findings
         if f.operation == "UPDATE" and f.path == "atlas_brain/services/crm_provider.py"
     ]
-    assert len(provider_updates) == 9, (
-        f"expected 9 provider UPDATE statements, found {len(provider_updates)}"
+    assert len(provider_updates) == 10, (
+        f"expected 10 provider UPDATE statements, found {len(provider_updates)}"
     )
 
 

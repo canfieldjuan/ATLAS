@@ -13,6 +13,8 @@ import sys
 from pathlib import Path
 from unittest.mock import MagicMock
 
+import pytest
+
 REPO = Path(__file__).resolve().parent.parent
 
 _asyncpg_mock = MagicMock()
@@ -150,3 +152,51 @@ def test_dict_style_writers_carry_context_key():
     assert '"business_context_id": "churnsignals"' in intake
     calendar = (REPO / "scripts/import_calendar_contacts.py").read_text(encoding="utf-8")
     assert '"business_context_id": "effingham_maids"' in calendar
+
+
+@pytest.mark.asyncio
+async def test_generic_contact_phone_search_uses_exact_last10_for_full_phone(
+):
+    from atlas_brain.services.crm_provider import DatabaseCRMProvider
+
+    class RecordingPool:
+        query = ""
+        params = ()
+
+        async def fetch(self, query, *params):
+            self.query = query
+            self.params = params
+            return []
+
+    pool = RecordingPool()
+
+    await DatabaseCRMProvider(pool=pool).search_contacts(phone="(217) 555-0100")
+
+    assert " LIKE " not in pool.query
+    assert (
+        "RIGHT(REGEXP_REPLACE(COALESCE(phone, ''), '[^0-9]', '', 'g'), 10)"
+        in pool.query
+    )
+    assert pool.params[0] == "2175550100"
+
+
+@pytest.mark.asyncio
+async def test_generic_contact_phone_search_keeps_partial_phone_substring_lookup(
+):
+    from atlas_brain.services.crm_provider import DatabaseCRMProvider
+
+    class RecordingPool:
+        query = ""
+        params = ()
+
+        async def fetch(self, query, *params):
+            self.query = query
+            self.params = params
+            return []
+
+    pool = RecordingPool()
+
+    await DatabaseCRMProvider(pool=pool).search_contacts(phone="5550100")
+
+    assert "REGEXP_REPLACE(COALESCE(phone, ''), '[^0-9]', '', 'g') LIKE" in pool.query
+    assert pool.params[0] == "%5550100%"

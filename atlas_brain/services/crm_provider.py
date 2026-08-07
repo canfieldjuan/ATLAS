@@ -17,7 +17,6 @@ Usage:
 import json
 import logging
 import hashlib
-import re
 from contextlib import asynccontextmanager
 from dataclasses import dataclass
 from datetime import datetime, timezone
@@ -134,6 +133,11 @@ _ALL_EOM_REQUESTED_EVENTS = frozenset(
 )
 _EOM_LOST_RESTORABLE_STAGES = ("new", "estimate_booked")
 _EOM_LOST_REPLAY_DISPOSITION_EVENTS = ("lead_lost", "lead_reopened")
+_EOM_OPERATOR_CONTACT_SOURCES_METADATA_KEY = "eom_operator_contact_sources"
+
+
+def _eom_identity_lock_key(channel: str, value: str) -> str:
+    return f"eom-contact-identity:{channel}:{value}"
 
 
 @asynccontextmanager
@@ -413,8 +417,9 @@ class DatabaseCRMProvider:
         self._pool_override = pool
 
     def _get_pool(self) -> Any:
-        if self._pool_override is not None:
-            return self._pool_override
+        pool_override = getattr(self, "_pool_override", None)
+        if pool_override is not None:
+            return pool_override
         from ..storage.database import get_db_pool
 
         return get_db_pool()
@@ -510,10 +515,13 @@ class DatabaseCRMProvider:
         transaction.  A legacy row is returned untouched, never claimed or
         merged from extracted/web-form data.
         """
-        from .eom_lead_ingress import EOM_BUSINESS_CONTEXT_ID
+        from .eom_lead_ingress import (
+            EOM_BUSINESS_CONTEXT_ID,
+            normalise_eom_phone_digits,
+        )
 
         normalized_email = str(email or "").strip().lower()
-        phone_digits = re.sub(r"\D", "", str(phone or ""))
+        phone_digits = normalise_eom_phone_digits(phone)
         if len(phone_digits) < 10:
             phone_digits = ""
         normalized_source = str(source or "").strip()
@@ -526,9 +534,9 @@ class DatabaseCRMProvider:
             )
         lock_keys = []
         if phone_digits:
-            lock_keys.append(f"eom-inbound:phone:{phone_digits[-10:]}")
+            lock_keys.append(_eom_identity_lock_key("phone", phone_digits[-10:]))
         if normalized_email:
-            lock_keys.append(f"eom-inbound:email:{normalized_email}")
+            lock_keys.append(_eom_identity_lock_key("email", normalized_email))
         if normalized_relay_event_id:
             lock_keys.append(
                 f"eom-inbound:relay:{normalized_source}:{normalized_relay_event_id}"
@@ -800,6 +808,60 @@ class DatabaseCRMProvider:
                 )
         return result
 
+    async def _insert_contact_row(
+        self,
+        executor: Any,
+        data: Mapping[str, Any],
+    ) -> dict[str, Any]:
+        """Insert one contact through the provider-owned persistence site."""
+
+        contact_id = str(uuid4())
+        now = datetime.now(timezone.utc)
+        raw_email = data.get("email")
+        email = raw_email.lower() if raw_email else None
+        metadata_json = json.dumps(data.get("metadata", {}))
+
+        row = await executor.fetchrow(
+            """
+            INSERT INTO contacts (
+                id, full_name, first_name, last_name, email, phone,
+                address, city, state, zip, business_context_id,
+                contact_type, status, tags, notes, source, source_ref,
+                lead_stage, lead_owner, next_follow_up_at,
+                created_at, updated_at, metadata
+            ) VALUES (
+                $1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,
+                $18,$19,$20,$21,$22,$23::jsonb
+            ) RETURNING *
+            """,
+            contact_id,
+            data.get("full_name", ""),
+            data.get("first_name"),
+            data.get("last_name"),
+            email,
+            data.get("phone"),
+            data.get("address"),
+            data.get("city"),
+            data.get("state"),
+            data.get("zip"),
+            data.get("business_context_id"),
+            data.get("contact_type", "customer"),
+            data.get("status", "active"),
+            data.get("tags", []),
+            data.get("notes"),
+            data.get("source", "manual"),
+            data.get("source_ref"),
+            data.get("lead_stage"),
+            data.get("lead_owner"),
+            data.get("next_follow_up_at"),
+            now,
+            now,
+            metadata_json,
+        )
+        result = dict(row) if row else {}
+        result["_was_created"] = True
+        return result
+
     async def create_contact(
         self,
         data: dict[str, Any],
@@ -955,53 +1017,375 @@ class DatabaseCRMProvider:
             return result
 
         # --- no existing contact -- insert ---
-        from ..storage.database import get_db_pool
+        pool = self._get_pool()
+        return await self._insert_contact_row(pool, data)
 
-        pool = get_db_pool()
-        contact_id = str(uuid4())
-        now = datetime.now(timezone.utc)
-        metadata_json = json.dumps(data.get("metadata", {}))
+    async def mutate_eom_operator_contact_atomic(self, *, command: Any) -> dict[str, Any]:
+        """Create or edit one EOM contact under the operator mutation contract."""
 
-        row = await pool.fetchrow(
-            """
-            INSERT INTO contacts (
-                id, full_name, first_name, last_name, email, phone,
-                address, city, state, zip, business_context_id,
-                contact_type, status, tags, notes, source, source_ref,
-                lead_stage, lead_owner, next_follow_up_at,
-                created_at, updated_at, metadata
-            ) VALUES (
-                $1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,
-                $18,$19,$20,$21,$22,$23::jsonb
-            ) RETURNING *
-            """,
-            contact_id,
-            data.get("full_name", ""),
-            data.get("first_name"),
-            data.get("last_name"),
-            email,  # normalized lowercase
-            phone,
-            data.get("address"),
-            data.get("city"),
-            data.get("state"),
-            data.get("zip"),
-            data.get("business_context_id"),
-            data.get("contact_type", "customer"),
-            data.get("status", "active"),
-            data.get("tags", []),
-            data.get("notes"),
-            data.get("source", "manual"),
-            data.get("source_ref"),
-            data.get("lead_stage"),
-            data.get("lead_owner"),
-            data.get("next_follow_up_at"),
-            now,  # created_at ($21)
-            now,  # updated_at ($22) -- same value on insert
-            metadata_json,
+        from .eom_crm_mutations import (
+            EOM_OPERATOR_CONTACT_CREATED,
+            EOM_OPERATOR_CONTACT_EVENT_TYPES,
+            EOM_OPERATOR_CONTACT_TYPES,
+            EOM_OPERATOR_CONTACT_UPDATED,
+            EOM_BUSINESS_CONTEXT_ID,
+            EOMOperatorContactMutationError,
         )
-        result = dict(row) if row else {}
-        result["_was_created"] = True
-        return result
+
+        def _metadata_from_row(value: Any) -> dict[str, Any]:
+            if value is None:
+                return {}
+            if isinstance(value, str):
+                try:
+                    loaded = json.loads(value)
+                except json.JSONDecodeError:
+                    return {}
+                return loaded if isinstance(loaded, dict) else {}
+            return dict(value)
+
+        def _event_result(
+            *,
+            row: Mapping[str, Any],
+            event_type: str,
+            idempotent: bool,
+        ) -> dict[str, Any]:
+            return {
+                "contact_id": str(row["id"]),
+                "operation": event_type,
+                "idempotent": idempotent,
+                "contact": dict(row),
+            }
+
+        def _dedupe_rows_by_id(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
+            by_id: dict[str, dict[str, Any]] = {}
+            for row in rows:
+                by_id.setdefault(str(row["id"]), row)
+            return list(by_id.values())
+
+        def _operator_provenance_metadata(
+            target: Mapping[str, Any],
+        ) -> tuple[dict[str, Any], bool]:
+            metadata = _metadata_from_row(target.get("metadata"))
+            raw_sources = metadata.get(_EOM_OPERATOR_CONTACT_SOURCES_METADATA_KEY)
+            sources = dict(raw_sources) if isinstance(raw_sources, Mapping) else {}
+            source_record = {
+                "source": command.contact_source,
+                "source_channel": command.source_channel,
+                "source_ref": command.source_ref,
+            }
+            if sources.get(command.contact_source_ref) == source_record:
+                return metadata, False
+            sources[command.contact_source_ref] = source_record
+            metadata[_EOM_OPERATOR_CONTACT_SOURCES_METADATA_KEY] = sources
+            return metadata, True
+
+        async def _select_exact_matches(conn: Any) -> list[dict[str, Any]]:
+            matches: list[dict[str, Any]] = []
+            source_match = await conn.fetchrow(
+                """
+                SELECT *
+                FROM contacts
+                WHERE business_context_id = $1
+                  AND source = $2
+                  AND source_ref = $3
+                  AND status != 'archived'
+                FOR UPDATE
+                """,
+                EOM_BUSINESS_CONTEXT_ID,
+                command.contact_source,
+                command.contact_source_ref,
+            )
+            if source_match is not None:
+                matches.append(dict(source_match))
+            provenance_matches = await conn.fetch(
+                """
+                SELECT *
+                FROM contacts
+                WHERE business_context_id = $1
+                  AND status != 'archived'
+                  AND COALESCE(metadata -> $2, '{}'::jsonb) ? $3
+                FOR UPDATE
+                """,
+                EOM_BUSINESS_CONTEXT_ID,
+                _EOM_OPERATOR_CONTACT_SOURCES_METADATA_KEY,
+                command.contact_source_ref,
+            )
+            matches.extend(dict(row) for row in provenance_matches)
+
+            phone = command.fields.get("phone")
+            if phone:
+                phone_matches = await conn.fetch(
+                    """
+                    SELECT *
+                    FROM contacts
+                    WHERE (business_context_id = $1 OR business_context_id IS NULL)
+                      AND status != 'archived'
+                      AND RIGHT(REGEXP_REPLACE(COALESCE(phone, ''), '[^0-9]', '', 'g'), 10)
+                          = RIGHT($2, 10)
+                    FOR UPDATE
+                    """,
+                    EOM_BUSINESS_CONTEXT_ID,
+                    phone,
+                )
+                matches.extend(dict(row) for row in phone_matches)
+
+            email = command.fields.get("email")
+            if email:
+                email_matches = await conn.fetch(
+                    """
+                    SELECT *
+                    FROM contacts
+                    WHERE (business_context_id = $1 OR business_context_id IS NULL)
+                      AND status != 'archived'
+                      AND LOWER(email) = $2
+                    FOR UPDATE
+                    """,
+                    EOM_BUSINESS_CONTEXT_ID,
+                    email,
+                )
+                matches.extend(dict(row) for row in email_matches)
+            return matches
+
+        async def _assert_no_explicit_identity_collision(
+            conn: Any,
+            target: Mapping[str, Any],
+        ) -> None:
+            target_id = str(target["id"])
+            conflicts = [
+                row
+                for row in _dedupe_rows_by_id(await _select_exact_matches(conn))
+                if str(row["id"]) != target_id
+            ]
+            if conflicts:
+                raise EOMOperatorContactMutationError(
+                    409, "Operator contact identity belongs to another contact"
+                )
+
+        async def _resolve_target(conn: Any) -> dict[str, Any] | None:
+            if command.contact_id:
+                contact = await conn.fetchrow(
+                    """
+                    SELECT *
+                    FROM contacts
+                    WHERE id = $1
+                      AND (business_context_id = $2 OR business_context_id IS NULL)
+                    FOR UPDATE
+                    """,
+                    command.contact_id,
+                    EOM_BUSINESS_CONTEXT_ID,
+                )
+                if contact is None:
+                    raise EOMOperatorContactMutationError(
+                        404, "EOM contact was not found"
+                    )
+                row = dict(contact)
+                if row.get("status") == "archived":
+                    raise EOMOperatorContactMutationError(
+                        409, "Archived EOM contacts cannot be edited"
+                    )
+                await _assert_no_explicit_identity_collision(conn, row)
+                return row
+
+            matches = _dedupe_rows_by_id(await _select_exact_matches(conn))
+            if len(matches) > 1:
+                raise EOMOperatorContactMutationError(
+                    409, "Operator contact identity matched multiple contacts"
+                )
+            return matches[0] if matches else None
+
+        def _assert_contact_type_matches(target: Mapping[str, Any]) -> None:
+            stored_type = str(target.get("contact_type") or "")
+            if stored_type not in EOM_OPERATOR_CONTACT_TYPES:
+                raise EOMOperatorContactMutationError(
+                    409,
+                    "EOM operator contact updates require an existing lead or customer",
+                )
+            if command.contact_type is None:
+                return
+            if stored_type != command.contact_type:
+                raise EOMOperatorContactMutationError(
+                    409,
+                    "contactType changes require the EOM lifecycle transition service",
+                )
+
+        async def _update_existing(
+            conn: Any, target: Mapping[str, Any]
+        ) -> dict[str, Any]:
+            _assert_contact_type_matches(target)
+            updates = {
+                key: value
+                for key, value in command.fields.items()
+                if target.get(key) != value
+            }
+            if target.get("business_context_id") is None:
+                updates["business_context_id"] = EOM_BUSINESS_CONTEXT_ID
+            provenance_metadata, provenance_changed = _operator_provenance_metadata(target)
+            if provenance_changed:
+                updates["metadata"] = provenance_metadata
+            if not updates:
+                return dict(target)
+            updates["updated_at"] = datetime.now(timezone.utc)
+            params: list[Any] = [target["id"]]
+            set_parts: list[str] = []
+            for index, (key, value) in enumerate(updates.items(), start=2):
+                cast = "::jsonb" if key == "metadata" else ""
+                set_parts.append(f"{key} = ${index}{cast}")
+                params.append(
+                    json.dumps(value, sort_keys=True) if key == "metadata" else value
+                )
+            context_index = len(params) + 1
+            row = await conn.fetchrow(
+                f"""
+                UPDATE contacts
+                SET {', '.join(set_parts)}
+                WHERE id = $1
+                  AND (
+                      business_context_id = ${context_index}
+                      OR business_context_id IS NULL
+                  )
+                RETURNING *
+                """,
+                *params,
+                EOM_BUSINESS_CONTEXT_ID,
+            )
+            if row is None:
+                raise RuntimeError("EOM operator contact update lost its target row")
+            return dict(row)
+
+        async def _create_contact(conn: Any) -> dict[str, Any]:
+            full_name = command.fields.get("full_name")
+            if not full_name:
+                raise EOMOperatorContactMutationError(
+                    422, "fullName is required when no existing contact matches"
+                )
+            contact_type = command.contact_type or "customer"
+            data = {
+                **dict(command.fields),
+                "full_name": full_name,
+                "business_context_id": EOM_BUSINESS_CONTEXT_ID,
+                "contact_type": contact_type,
+                "status": "active",
+                "source": command.contact_source,
+                "source_ref": command.contact_source_ref,
+                "lead_stage": "new" if contact_type == "lead" else None,
+                "metadata": _operator_provenance_metadata({})[0],
+            }
+            return await self._insert_contact_row(conn, data)
+
+        async def _write_lifecycle_event(
+            conn: Any,
+            *,
+            contact: Mapping[str, Any],
+            event_type: str,
+            previous: Mapping[str, Any] | None,
+        ) -> None:
+            metadata = {
+                **command.lifecycle_metadata,
+                "contact_type": contact.get("contact_type"),
+            }
+            if previous is not None:
+                changed = sorted(
+                    key
+                    for key in command.fields
+                    if previous.get(key) != contact.get(key)
+                )
+                metadata["changed_fields"] = changed
+            await conn.execute(
+                """
+                INSERT INTO eom_lead_lifecycle_events (
+                    contact_id, event_type, from_stage, to_stage, actor,
+                    source, operation_key, metadata
+                )
+                VALUES ($1, $2, $3, $4, $5, 'eom_office', $6, $7::jsonb)
+                """,
+                contact["id"],
+                event_type,
+                previous.get("lead_stage") if previous is not None else None,
+                contact.get("lead_stage"),
+                f"employee:{command.actor_id}:{command.actor_name}",
+                command.operation_key,
+                json.dumps(metadata, sort_keys=True),
+            )
+
+        pool = self._get_pool()
+        async with _transaction_connection(pool) as conn:
+            lock_keys = {
+                f"eom-operator-contact:operation:{command.operation_key}",
+            }
+            if command.contact_id:
+                lock_keys.add(f"eom-operator-contact:contact:{command.contact_id}")
+            phone = command.fields.get("phone")
+            if phone:
+                lock_keys.add(_eom_identity_lock_key("phone", phone[-10:]))
+            email = command.fields.get("email")
+            if email:
+                lock_keys.add(_eom_identity_lock_key("email", email))
+            lock_keys.add(
+                f"eom-operator-contact:source:{command.contact_source_ref}"
+            )
+            for lock_key in sorted(lock_keys):
+                await conn.execute(
+                    "SELECT pg_advisory_xact_lock(hashtextextended($1, 0))",
+                    lock_key,
+                )
+
+            existing_events = await conn.fetch(
+                """
+                SELECT contact_id, event_type, metadata
+                FROM eom_lead_lifecycle_events
+                WHERE operation_key = $1
+                  AND event_type = ANY($2::varchar[])
+                FOR UPDATE
+                """,
+                command.operation_key,
+                list(EOM_OPERATOR_CONTACT_EVENT_TYPES),
+            )
+            if len(existing_events) > 1:
+                raise EOMOperatorContactMutationError(
+                    409, "Operator contact key has multiple receipts"
+                )
+            if existing_events:
+                event = existing_events[0]
+                metadata = _metadata_from_row(event["metadata"])
+                if metadata.get("request_fingerprint") != command.request_fingerprint:
+                    raise EOMOperatorContactMutationError(
+                        409,
+                        "Idempotency-Key already belongs to a different contact mutation",
+                    )
+                contact = await conn.fetchrow(
+                    "SELECT * FROM contacts WHERE id = $1",
+                    event["contact_id"],
+                )
+                if contact is None:
+                    raise EOMOperatorContactMutationError(
+                        409, "Operator contact receipt has no contact"
+                    )
+                return _event_result(
+                    row=contact,
+                    event_type=str(event["event_type"]),
+                    idempotent=True,
+                )
+
+            target = await _resolve_target(conn)
+            if target is None:
+                contact = await _create_contact(conn)
+                event_type = EOM_OPERATOR_CONTACT_CREATED
+                previous = None
+            else:
+                previous = dict(target)
+                contact = await _update_existing(conn, target)
+                event_type = EOM_OPERATOR_CONTACT_UPDATED
+            await _write_lifecycle_event(
+                conn,
+                contact=contact,
+                event_type=event_type,
+                previous=previous,
+            )
+            return _event_result(
+                row=contact,
+                event_type=event_type,
+                idempotent=False,
+            )
 
     async def find_or_create_contact(
         self,
@@ -1077,18 +1461,31 @@ class DatabaseCRMProvider:
         business_context_id_is_null: bool = False,
         limit: int = 20,
     ) -> list[dict[str, Any]]:
-        from ..storage.database import get_db_pool
-
-        pool = get_db_pool()
+        pool = self._get_pool()
         conditions: list[str] = ["status != 'archived'"]
         params: list[Any] = []
         idx = 1
 
         if phone:
-            digits = "".join(c for c in phone if c.isdigit())
-            conditions.append(f"REGEXP_REPLACE(phone, '[^0-9]', '', 'g') LIKE ${idx}")
-            params.append(f"%{digits[-10:]}%")
-            idx += 1
+            from .eom_lead_ingress import normalise_eom_phone_digits
+
+            digits = normalise_eom_phone_digits(phone)
+            if not digits:
+                conditions.append("FALSE")
+            elif len(digits) < 10:
+                conditions.append(
+                    "REGEXP_REPLACE(COALESCE(phone, ''), '[^0-9]', '', 'g') "
+                    f"LIKE ${idx}"
+                )
+                params.append(f"%{digits}%")
+                idx += 1
+            else:
+                conditions.append(
+                    "RIGHT(REGEXP_REPLACE(COALESCE(phone, ''), '[^0-9]', '', 'g'), 10) "
+                    f"= RIGHT(${idx}, 10)"
+                )
+                params.append(digits)
+                idx += 1
         if email:
             conditions.append(f"LOWER(email) = LOWER(${idx})")
             params.append(email)
