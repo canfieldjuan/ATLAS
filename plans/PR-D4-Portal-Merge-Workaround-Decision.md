@@ -4,28 +4,50 @@
 
 Website #127 (D4): re-evaluate the portal-sync `merge_existing=False` workaround
 now that 0B (ATLAS #2313) has landed, and either retire it or keep it with
-recorded evidence. **The outcome is keep** -- 0B did not close the gap.
+recorded evidence. **The outcome is keep** -- but not for the reason the
+issue assumed: matcher strength was never the deciding factor (see below).
 
-### The comparison (acceptance criterion 1), from code + live data
+### The comparison (acceptance criterion 1), corrected after review
 
-`scripts/sync_eom_portal_customers.py` calls `crm.create_contact(..., merge_existing=False)`
-only after its own `resolve_contact` returns no match. That resolver is a
-five-rung ladder: `portal_customer_id` -> `atlasContactId` -> phone -> email ->
-address. The provider's create-path matcher (`crm_provider.create_contact._resolve`)
-sees only **phone + email**, and its phone predicate in `search_contacts` is
-still substring: `... LIKE '%digits%' OR ... LIKE '%last10%' OR RIGHT(...)=RIGHT(...)`.
-0B added the exact `RIGHT(...)` clause but left the two `LIKE` clauses ORed in,
-so the matcher remains a superset that can false-positive, and it still ignores
-the portal-id/atlas-id/address rungs.
+My first draft claimed the provider phone matcher is "weaker" than the portal
+sync's resolver. **That is false, and Codex R1/R14 caught it.** The portal
+resolver's phone rung (`resolve_contact` -> `live._search_channel` at
+`scripts/import_eom_customers_live.py:529`) delegates to `crm.search_contacts`
+-- the same substring predicate as the provider create path, mirroring
+`create_contact._resolve`'s scoped-then-claimable order. Phone and email
+matching are identical between the two.
 
-Live check (706-row `contacts`): the substring predicate produces 0 false phone
-matches *today*, but that is a property of the current data, not the matcher --
-`LIKE '%last10%'` matches any two numbers sharing a 10-digit suffix, so the
-decision must not rest on today's data staying collision-free.
+The real differential is the merge MODE, which the code docstring already names
+"the portal-reconciliation race seam":
 
-Enabling `merge_existing=True` would therefore both **miss** three identity rungs
-the portal resolver already handled and **reintroduce** substring false-positives.
-Keep the workaround.
+- `merge_existing=False` (the seam): skips phone entirely, returns only a
+  same-tenant email match **without claiming a NULL-context row or merging any
+  field**, and otherwise creates fresh.
+- `merge_existing=True` (default): re-runs phone+email over scoped and claimable
+  pages, claims NULL-context legacy rows by CAS, and **merges non-null fields**
+  into whatever it matches.
+
+`resolve_contact` runs the full five-rung ladder (portal_customer_id,
+atlasContactId, phone, email, address -- the last three via the *same*
+`_search_channel`) **before** `create_contact` is ever reached. If it matched,
+the portal sync is on the update path; `create_contact` is reached only when
+resolution already found nothing. So in the common case the two modes are
+equivalent -- both re-query, find nothing, insert. They diverge only in the race
+window between resolve and create (a concurrent insert), where `merge_existing=
+True` would re-find and merge/claim it -- potentially cross-linking to a row a
+different portal customer just created, and overwriting fields the clean-create
+path deliberately leaves alone.
+
+**Therefore matcher strength -- the thing 0B changed -- was never the deciding
+factor.** The seam exists because `resolve_contact` owns identity resolution
+upstream and `create_contact` should be a race-safe clean insert, not a second
+resolver. 0B is orthogonal to that and cannot obsolete it. Both the #127 premise
+and the provider docstring misattribute the reason to matcher strength; the
+decision is unaffected.
+
+**Outcome: KEEP `merge_existing=False`** -- there is no benefit to enabling merge
+(resolve_contact already resolves identity) and a real race/overwrite risk to
+doing so.
 
 ### Problem-derived contract
 
@@ -72,6 +94,24 @@ Risk areas: none material -- this adds guards to existing invariants.
 
 - Reviewer rules triggered: R2, R14.
 
+**Guard-class closure declaration -- `DEMOTABLE_SOURCES`**
+
+- **Member set:** `DEMOTABLE_SOURCES` in `scripts/sync_eom_portal_customers.py`,
+  the contact `source` values a portal run may auto-archive.
+- **CLOSED and ENUMERATED**, a literal 2-tuple `("calendar_import",
+  "portal_sync")`. Not derived from data, a query, or a naming convention. Its
+  canonical source is the set of *system-managed* provenances: rows this
+  pipeline itself created, which it may therefore retire when they leave the
+  roster.
+- **Out-of-set default: NOT demotable (safe).** Any source outside the tuple --
+  `manual`, `web`, `email_backfill`, `phone_call` -- is a human- or
+  intake-authored customer and is never auto-archived by a portal run. The
+  demotion `UPDATE` filters `AND source = ANY($4)`, so an out-of-set row simply
+  does not match and is left active.
+- **Widening is the hazard, not narrowing.** Adding a value turns a routine sync
+  into a mass archive of live customers, which is why the new test pins exact
+  membership. Changing it is a deliberate, separately-reviewed decision.
+
 **Mutation-probe (run, not asserted):** widening `DEMOTABLE_SOURCES` fails the
 new guard; flipping `merge_existing` in the script fails the existing pin.
 
@@ -112,6 +152,6 @@ $ git diff --stat origin/main -- scripts/sync_eom_portal_customers.py
 
 | File | LOC |
 |---|---:|
-| `plans/PR-D4-Portal-Merge-Workaround-Decision.md` | 117 |
-| `tests/test_sync_eom_portal_customers.py` | 26 |
-| **Total** | **143** |
+| `plans/PR-D4-Portal-Merge-Workaround-Decision.md` | 157 |
+| `tests/test_sync_eom_portal_customers.py` | 30 |
+| **Total** | **187** |

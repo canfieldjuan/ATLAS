@@ -297,16 +297,20 @@ def test_provider_create_race_uses_non_merging_mode_and_rejection_writes_nothing
     class RaceCRM(StubCRM):
         async def create_contact(self, data, *, merge_existing=True):
             # merge_existing=False is a deliberate, load-bearing workaround, not
-            # an oversight -- do NOT "fix" this assertion by flipping it. Website
-            # #125/#127 (D4): the portal sync resolves identity itself across a
-            # five-rung ladder (portal_customer_id, atlasContactId, phone, email,
-            # address) BEFORE this call. The provider's create-path matcher sees
-            # only phone+email and its phone match is still substring
-            # (crm_provider.search_contacts ORs `LIKE '%last10%'`). Enabling
-            # merge here would both miss the id/address rungs and reintroduce
-            # substring false-positives. Re-evaluated against 0B (ATLAS #2313) on
-            # 2026-08-07: 0B added an exact clause but did not remove the
-            # substring one, so the reason for this workaround still holds.
+            # an oversight -- do NOT "fix" this assertion by flipping it. It is
+            # the portal-reconciliation RACE SEAM (crm_provider.create_contact
+            # docstring): resolve_contact already owns identity resolution across
+            # its full ladder BEFORE this call, so create_contact must be a
+            # race-safe clean insert, not a second resolver. merge_existing=True
+            # would re-run resolution and MERGE fields in the window between
+            # resolve and create, risking a cross-link to a concurrently-created
+            # row and overwriting fields the clean path leaves alone.
+            #
+            # NOT a matcher-strength workaround: the portal resolver's phone rung
+            # uses the SAME crm.search_contacts as the create path (via
+            # live._search_channel), so 0B's matcher work (ATLAS #2313) is
+            # orthogonal and does not obsolete this seam. Website #127 (D4),
+            # corrected after Codex R1/R14 on 2026-08-07.
             assert merge_existing is False
             self.created.append(data)
             return {
