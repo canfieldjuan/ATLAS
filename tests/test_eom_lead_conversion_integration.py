@@ -623,6 +623,87 @@ async def test_operator_and_inbound_contact_writers_share_phone_identity_lock():
 
 
 @pytest.mark.asyncio
+async def test_operator_contact_mutation_crossed_identities_fail_without_deadlock():
+    database_url = _database_url_or_skip()
+    schema = f"atlas_eom_operator_stable_row_locks_{uuid.uuid4().hex}"
+    setup = await asyncpg.connect(database_url)
+    pool = None
+    try:
+        await _prepare_schema(setup, schema, apply_privilege_migration=False)
+        first_id = uuid.uuid4()
+        second_id = uuid.uuid4()
+        await _insert_contact(
+            setup,
+            contact_id=first_id,
+            full_name="First Identity",
+            phone="2175550101",
+            email="first@example.com",
+            contact_type="customer",
+            lead_stage=None,
+        )
+        await _insert_contact(
+            setup,
+            contact_id=second_id,
+            full_name="Second Identity",
+            phone="2175550102",
+            email="second@example.com",
+            contact_type="customer",
+            lead_stage=None,
+        )
+        pool = await asyncpg.create_pool(
+            database_url,
+            min_size=2,
+            max_size=2,
+            server_settings={"search_path": f'"{schema}", public'},
+        )
+        provider = DatabaseCRMProvider(pool=pool)
+
+        first_command = EOMOperatorContactMutation.from_raw(
+            operation_key=f"operator-crossed-a-{uuid.uuid4().hex}",
+            actor_id=8,
+            actor_name="Juan Canfield",
+            source_channel="time_tracker",
+            source_ref="customer:crossed-a",
+            fields={"phone": "217-555-0101", "email": "second@example.com"},
+        )
+        second_command = EOMOperatorContactMutation.from_raw(
+            operation_key=f"operator-crossed-b-{uuid.uuid4().hex}",
+            actor_id=8,
+            actor_name="Juan Canfield",
+            source_channel="time_tracker",
+            source_ref="customer:crossed-b",
+            fields={"phone": "217-555-0102", "email": "first@example.com"},
+        )
+
+        results = await asyncio.wait_for(
+            asyncio.gather(
+                mutate_eom_operator_contact(provider, first_command),
+                mutate_eom_operator_contact(provider, second_command),
+                return_exceptions=True,
+            ),
+            timeout=5,
+        )
+
+        assert all(
+            isinstance(result, EOMOperatorContactMutationError)
+            and result.status_code == 409
+            for result in results
+        )
+        assert await setup.fetchval(
+            """
+            SELECT COUNT(*)
+            FROM eom_lead_lifecycle_events
+            WHERE event_type IN ('contact_created', 'contact_updated')
+            """
+        ) == 0
+    finally:
+        if pool is not None:
+            await pool.close()
+        await setup.execute(f'DROP SCHEMA IF EXISTS "{schema}" CASCADE')
+        await setup.close()
+
+
+@pytest.mark.asyncio
 async def test_operator_contact_mutation_claims_legacy_contact_by_padded_email():
     database_url = _database_url_or_skip()
     schema = f"atlas_eom_operator_email_claim_{uuid.uuid4().hex}"

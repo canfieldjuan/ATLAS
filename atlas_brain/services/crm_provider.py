@@ -1085,113 +1085,102 @@ class DatabaseCRMProvider:
             metadata[_EOM_OPERATOR_CONTACT_SOURCES_METADATA_KEY] = sources
             return metadata, True
 
-        async def _select_exact_matches(conn: Any) -> list[dict[str, Any]]:
-            matches: list[dict[str, Any]] = []
-            source_matches = await conn.fetch(
+        async def _select_exact_matches(
+            conn: Any,
+            *,
+            include_contact_id: Any | None = None,
+        ) -> list[dict[str, Any]]:
+            phone = command.fields.get("phone")
+            email = command.fields.get("email")
+            rows = await conn.fetch(
                 """
-                SELECT *
+                WITH candidate_ids AS (
+                    SELECT id
+                    FROM contacts
+                    WHERE $4::uuid IS NOT NULL
+                      AND id = $4::uuid
+                      AND (business_context_id = $1 OR business_context_id IS NULL)
+                    UNION
+                    SELECT id
+                    FROM contacts
+                    WHERE business_context_id = $1
+                      AND source = $2
+                      AND source_ref = $3
+                      AND status != 'archived'
+                    UNION
+                    SELECT id
+                    FROM contacts
+                    WHERE business_context_id = $1
+                      AND status != 'archived'
+                      AND COALESCE(metadata -> $5, '{}'::jsonb) ? $3
+                    UNION
+                    SELECT id
+                    FROM contacts
+                    WHERE $6::text IS NOT NULL
+                      AND (business_context_id = $1 OR business_context_id IS NULL)
+                      AND status != 'archived'
+                      AND RIGHT(REGEXP_REPLACE(COALESCE(phone, ''), '[^0-9]', '', 'g'), 10)
+                          = RIGHT($6::text, 10)
+                    UNION
+                    SELECT id
+                    FROM contacts
+                    WHERE $7::text IS NOT NULL
+                      AND (business_context_id = $1 OR business_context_id IS NULL)
+                      AND status != 'archived'
+                      AND LOWER(BTRIM(email)) = $7::text
+                )
+                SELECT contacts.*
                 FROM contacts
-                WHERE business_context_id = $1
-                  AND source = $2
-                  AND source_ref = $3
-                  AND status != 'archived'
+                JOIN candidate_ids ON candidate_ids.id = contacts.id
+                ORDER BY contacts.id
                 FOR UPDATE
                 """,
                 EOM_BUSINESS_CONTEXT_ID,
                 command.contact_source,
                 command.contact_source_ref,
-            )
-            matches.extend(dict(row) for row in source_matches)
-            provenance_matches = await conn.fetch(
-                """
-                SELECT *
-                FROM contacts
-                WHERE business_context_id = $1
-                  AND status != 'archived'
-                  AND COALESCE(metadata -> $2, '{}'::jsonb) ? $3
-                FOR UPDATE
-                """,
-                EOM_BUSINESS_CONTEXT_ID,
+                include_contact_id,
                 _EOM_OPERATOR_CONTACT_SOURCES_METADATA_KEY,
-                command.contact_source_ref,
+                phone,
+                email,
             )
-            matches.extend(dict(row) for row in provenance_matches)
-
-            phone = command.fields.get("phone")
-            if phone:
-                phone_matches = await conn.fetch(
-                    """
-                    SELECT *
-                    FROM contacts
-                    WHERE (business_context_id = $1 OR business_context_id IS NULL)
-                      AND status != 'archived'
-                      AND RIGHT(REGEXP_REPLACE(COALESCE(phone, ''), '[^0-9]', '', 'g'), 10)
-                          = RIGHT($2, 10)
-                    FOR UPDATE
-                    """,
-                    EOM_BUSINESS_CONTEXT_ID,
-                    phone,
-                )
-                matches.extend(dict(row) for row in phone_matches)
-
-            email = command.fields.get("email")
-            if email:
-                email_matches = await conn.fetch(
-                    """
-                    SELECT *
-                    FROM contacts
-                    WHERE (business_context_id = $1 OR business_context_id IS NULL)
-                      AND status != 'archived'
-                      AND LOWER(BTRIM(email)) = $2
-                    FOR UPDATE
-                    """,
-                    EOM_BUSINESS_CONTEXT_ID,
-                    email,
-                )
-                matches.extend(dict(row) for row in email_matches)
-            return matches
-
-        async def _assert_no_explicit_identity_collision(
-            conn: Any,
-            target: Mapping[str, Any],
-        ) -> None:
-            target_id = str(target["id"])
-            conflicts = [
-                row
-                for row in _dedupe_rows_by_id(await _select_exact_matches(conn))
-                if str(row["id"]) != target_id
-            ]
-            if conflicts:
-                raise EOMOperatorContactMutationError(
-                    409, "Operator contact identity belongs to another contact"
-                )
+            return [dict(row) for row in rows]
 
         async def _resolve_target(conn: Any) -> dict[str, Any] | None:
-            if command.contact_id:
-                contact = await conn.fetchrow(
-                    """
-                    SELECT *
-                    FROM contacts
-                    WHERE id = $1
-                      AND (business_context_id = $2 OR business_context_id IS NULL)
-                    FOR UPDATE
-                    """,
-                    command.contact_id,
-                    EOM_BUSINESS_CONTEXT_ID,
+            matches = _dedupe_rows_by_id(
+                await _select_exact_matches(
+                    conn,
+                    include_contact_id=command.contact_id,
                 )
-                if contact is None:
+            )
+            if command.contact_id:
+                target_id = str(command.contact_id)
+                row = next(
+                    (
+                        candidate
+                        for candidate in matches
+                        if str(candidate["id"]) == target_id
+                    ),
+                    None,
+                )
+                if row is None:
                     raise EOMOperatorContactMutationError(
                         404, "EOM contact was not found"
                     )
-                row = dict(contact)
                 if row.get("status") == "archived":
                     raise EOMOperatorContactMutationError(
                         409, "Archived EOM contacts cannot be edited"
                     )
-                await _assert_no_explicit_identity_collision(conn, row)
+                conflicts = [
+                    candidate
+                    for candidate in matches
+                    if str(candidate["id"]) != target_id
+                ]
+                if conflicts:
+                    raise EOMOperatorContactMutationError(
+                        409, "Operator contact identity belongs to another contact"
+                    )
                 return row
 
-            matches = _dedupe_rows_by_id(await _select_exact_matches(conn))
             if len(matches) > 1:
                 raise EOMOperatorContactMutationError(
                     409, "Operator contact identity matched multiple contacts"
