@@ -83,6 +83,7 @@ Slice phase: production hardening
 - `scripts/audit_workflow_security_posture.py`
 - `tests/test_audit_workflow_security_posture.py`
 - `tests/test_b2b_reviews_import.py`
+- `tests/test_b2b_source_impact.py`
 
 ### Review Contract
 
@@ -190,6 +191,14 @@ Fixed by importing the module once and patching the object, which is
 order-independent by construction. **The baseline is untouched** -- byte-identical
 to `main` -- so the ratchet has nothing to reject.
 
+The stub is fixed at its source, not worked around. `tests/test_b2b_source_impact.py`
+installed a bare `ModuleType` stub for `atlas_brain.api` at collection time and
+never restored it. An explicit import in the failing tests only made the suite
+pass because pytest collects `test_b2b_reviews_import.py` first alphabetically --
+that relocates the fragility rather than removing it. The stub is now a fallback
+that installs only if the real package cannot be imported, verified by running
+`test_b2b_source_impact.py` FIRST, the order that previously broke it.
+
 Two process notes, because the same mistake shape caused both delays:
 
 - `pytest <file>` cannot observe suite-order failures, so it was the wrong
@@ -215,7 +224,7 @@ Parked hardening: none.
 
 ```
 $ python -m pytest tests/test_audit_workflow_security_posture.py -q
-79 passed
+83 passed
 
 $ python scripts/audit_workflow_security_posture.py
 (exit 0 -- the only real id-token in the tree is claude.yml's `write`)
@@ -237,8 +246,9 @@ WRITE                    none        invalid
 
 | File | LOC |
 |---|---:|
-| `plans/PR-OIDC-Closed-Vocabulary.md` | 244 |
+| `plans/PR-OIDC-Closed-Vocabulary.md` | 254 |
 | `scripts/audit_workflow_security_posture.py` | 15 |
-| `tests/test_audit_workflow_security_posture.py` | 109 |
+| `tests/test_audit_workflow_security_posture.py` | 148 |
 | `tests/test_b2b_reviews_import.py` | 57 |
-| **Total** | **425** |
+| `tests/test_b2b_source_impact.py` | 15 |
+| **Total** | **489** |

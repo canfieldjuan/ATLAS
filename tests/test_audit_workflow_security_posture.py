@@ -1023,3 +1023,42 @@ jobs:
     assert len(errors) == 1, errors
     assert 'must be the string "write" or "none"' in errors[0].detail
     assert "not a scalar" not in errors[0].detail
+
+
+
+@pytest.mark.parametrize("value", ["read", "WRITE", "${{ inputs.scope }}", ""])
+def test_job_scope_unsupported_scalar_reports_the_vocabulary(
+    tmp_path: Path, value: str
+) -> None:
+    """The job-scope twin of the workflow-scope diagnostic test.
+
+    The workflow-scope case was covered; the job-scope one was not. Existing
+    job-scope tests use list/mapping values and assert only that some error
+    exists, so reverting the job message to the false "is not a scalar" wording
+    left every test green while the plan claimed both diagnostics were pinned.
+    """
+    auditor = load_auditor()
+    workflow = _write_workflow(
+        tmp_path,
+        "ordinary.yml",
+        f"""
+name: Ordinary
+on:
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    permissions:
+      id-token: "{value}"
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0
+""",
+    )
+
+    errors = [f for f in auditor.audit_workflow(workflow) if f.level == "ERROR"]
+
+    assert len(errors) == 1, errors
+    assert 'job build id-token must be the string "write" or "none"' in errors[0].detail
+    assert "not a scalar" not in errors[0].detail
