@@ -406,6 +406,51 @@ def test_eom_lead_disposition_operation_key_index_covers_lost_and_reopen():
     assert "ALTER TABLE" not in upper
 
 
+def test_eom_operator_contact_operation_key_index_covers_contact_mutations():
+    migration = (
+        Path(__file__).resolve().parent.parent
+        / "atlas_brain"
+        / "storage"
+        / "migrations"
+        / "364_eom_operator_contact_operation_key_index.sql"
+    ).read_text()
+    upper = migration.upper()
+
+    # Replay-safe pattern (same as 357/359/362): real drop preceding the
+    # recreate, no IF NOT EXISTS on the create.
+    assert "CREATE INDEX CONCURRENTLY IF NOT EXISTS" not in migration
+    assert (
+        migration.count(
+            "DROP INDEX CONCURRENTLY IF EXISTS "
+            "idx_eom_lead_lifecycle_operator_contact_operation_key"
+        )
+        >= 2
+    )  # rollback-evidence comment + the executable statement
+    assert (
+        "CREATE INDEX CONCURRENTLY "
+        "idx_eom_lead_lifecycle_operator_contact_operation_key" in migration
+    )
+    assert migration.index(
+        "DROP INDEX CONCURRENTLY IF EXISTS "
+        "idx_eom_lead_lifecycle_operator_contact_operation_key"
+    ) < migration.index(
+        "CREATE INDEX CONCURRENTLY "
+        "idx_eom_lead_lifecycle_operator_contact_operation_key"
+    )
+    # operation_key must lead so idempotent replay/conflict checks in the
+    # operator contact mutation path are index-backed, and the predicate must
+    # cover exactly the two operator contact receipt events.
+    assert "ON eom_lead_lifecycle_events (operation_key, contact_id, event_type)" in migration
+    assert "operation_key IS NOT NULL" in migration
+    assert "'contact_created'" in migration
+    assert "'contact_updated'" in migration
+    assert "'lead_lost'" not in migration
+    assert "'estimate_booked'" not in migration
+    assert "Rollback evidence:" in migration
+    assert "DROP TABLE" not in upper
+    assert "ALTER TABLE" not in upper
+
+
 def test_eom_lead_lifecycle_sequence_is_db_owned_and_writer_compatible():
     migration = (
         Path(__file__).resolve().parent.parent

@@ -15,8 +15,16 @@ EOM_BUSINESS_CONTEXT_ID = "effingham_maids"
 _MIN_MATCH_PHONE_DIGITS = 10
 
 
-def _normalised_phone(value: Any) -> str:
-    return re.sub(r"\D", "", str(value or ""))
+def normalise_eom_phone_digits(value: Any) -> str:
+    """Return the shared EOM phone identity digits.
+
+    EOM lead/customer matching uses ASCII digits-only phone identity and exact
+    normalized last-10 equality. Callers decide whether fewer than ten digits
+    are admissible for their boundary; the normalizer itself only strips
+    formatting. Non-ASCII digit glyphs are intentionally not canonicalized here
+    because the SQL resolvers use ``[^0-9]``.
+    """
+    return re.sub(r"[^0-9]", "", str(value or ""))
 
 
 def preferred_eom_inbound_phone(extracted_phone: Any, transport_phone: Any) -> str:
@@ -28,9 +36,9 @@ def preferred_eom_inbound_phone(extracted_phone: Any, transport_phone: Any) -> s
     """
     extracted = str(extracted_phone or "").strip()
     transport = str(transport_phone or "").strip()
-    if len(_normalised_phone(extracted)) >= _MIN_MATCH_PHONE_DIGITS:
+    if len(normalise_eom_phone_digits(extracted)) >= _MIN_MATCH_PHONE_DIGITS:
         return extracted
-    if len(_normalised_phone(transport)) >= _MIN_MATCH_PHONE_DIGITS:
+    if len(normalise_eom_phone_digits(transport)) >= _MIN_MATCH_PHONE_DIGITS:
         return transport
     return extracted or transport
 
@@ -57,7 +65,7 @@ async def resolve_or_create_eom_inbound_lead(
     """
 
     normalized_email = str(email or "").strip().lower()
-    phone_digits = _normalised_phone(phone)
+    phone_digits = normalise_eom_phone_digits(phone)
     normalized_source = str(source or "").strip()
     normalized_source_ref = str(source_ref or "").strip()
     normalized_relay_event_id = str(relay_event_id or "").strip()

@@ -6,6 +6,7 @@ import asyncio
 import json
 import os
 import uuid
+from contextlib import asynccontextmanager
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -13,13 +14,24 @@ import pytest
 
 asyncpg = pytest.importorskip("asyncpg")
 
-from atlas_brain.services.crm_provider import DatabaseCRMProvider  # noqa: E402
+from atlas_brain.services.crm_provider import (  # noqa: E402
+    DatabaseCRMProvider,
+    _eom_identity_lock_key,
+)
+from atlas_brain.services.eom_crm_mutations import (  # noqa: E402
+    EOMOperatorContactMutation,
+    EOMOperatorContactMutationError,
+    mutate_eom_operator_contact,
+)
 from atlas_brain.services.eom_estimate_booking import (  # noqa: E402
     deterministic_eom_estimate_calendar_event_id,
     deterministic_eom_first_clean_calendar_event_id,
 )
 from atlas_brain.services.eom_lead_conversion import (  # noqa: E402
     EOMLeadConversionError,
+)
+from atlas_brain.services.eom_lead_ingress import (  # noqa: E402
+    resolve_or_create_eom_inbound_lead,
 )
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -202,6 +214,1047 @@ def _metadata_dict(value):
     if isinstance(value, str):
         return json.loads(value)
     return dict(value or {})
+
+
+class _IdentityLockGateConnection:
+    """Hold the first shared identity lock while a second writer reaches it."""
+
+    def __init__(
+        self,
+        connection,
+        *,
+        lock_key: str,
+        first_locked: asyncio.Event,
+        second_waiting: asyncio.Event,
+        release_first: asyncio.Event,
+    ) -> None:
+        self._connection = connection
+        self._lock_key = lock_key
+        self._first_locked = first_locked
+        self._second_waiting = second_waiting
+        self._release_first = release_first
+
+    def __getattr__(self, name):
+        return getattr(self._connection, name)
+
+    async def execute(self, *args):
+        sql = str(args[0]) if args else ""
+        lock_key = str(args[1]) if len(args) > 1 else ""
+        if "pg_advisory_xact_lock" in sql and lock_key == self._lock_key:
+            if not self._first_locked.is_set():
+                result = await self._connection.execute(*args)
+                self._first_locked.set()
+                await self._release_first.wait()
+                return result
+            self._second_waiting.set()
+        return await self._connection.execute(*args)
+
+
+class _IdentityLockGatePool:
+    def __init__(
+        self,
+        pool,
+        *,
+        lock_key: str,
+        first_locked: asyncio.Event,
+        second_waiting: asyncio.Event,
+        release_first: asyncio.Event,
+    ) -> None:
+        self._pool = pool
+        self._lock_key = lock_key
+        self._first_locked = first_locked
+        self._second_waiting = second_waiting
+        self._release_first = release_first
+
+    @asynccontextmanager
+    async def transaction(self):
+        async with self._pool.acquire() as connection:
+            async with connection.transaction():
+                yield _IdentityLockGateConnection(
+                    connection,
+                    lock_key=self._lock_key,
+                    first_locked=self._first_locked,
+                    second_waiting=self._second_waiting,
+                    release_first=self._release_first,
+                )
+
+
+@pytest.mark.asyncio
+async def test_operator_contact_mutation_creates_replays_and_records_actor():
+    database_url = _database_url_or_skip()
+    schema = f"atlas_eom_operator_create_{uuid.uuid4().hex}"
+    conn = await asyncpg.connect(database_url)
+    try:
+        await _prepare_schema(conn, schema, apply_privilege_migration=False)
+        provider = DatabaseCRMProvider(pool=conn)
+        operation_key = f"operator-create-{uuid.uuid4().hex}"
+        command = EOMOperatorContactMutation.from_raw(
+            operation_key=operation_key,
+            actor_id=7,
+            actor_name="Mayra Canfield",
+            source_channel="time_tracker",
+            source_ref="customer:88",
+            contact_type="customer",
+            fields={
+                "full_name": "Operator Created",
+                "email": "OPERATOR@EXAMPLE.COM",
+                "phone": "(217) 555-0100",
+                "address": "",
+            },
+        )
+
+        created = await mutate_eom_operator_contact(provider, command)
+
+        assert created["operation"] == "contact_created"
+        assert created["idempotent"] is False
+        contact_id = uuid.UUID(created["contact_id"])
+        contact = await conn.fetchrow("SELECT * FROM contacts WHERE id = $1", contact_id)
+        assert contact["business_context_id"] == "effingham_maids"
+        assert contact["contact_type"] == "customer"
+        assert contact["lead_stage"] is None
+        assert contact["email"] == "operator@example.com"
+        assert contact["phone"] == "2175550100"
+        assert contact["address"] is None
+        assert contact["source"] == "manual"
+        assert contact["source_ref"] == "time_tracker:customer:88"
+        event = await conn.fetchrow(
+            """
+            SELECT actor, source, operation_key, metadata
+            FROM eom_lead_lifecycle_events
+            WHERE contact_id = $1 AND event_type = 'contact_created'
+            """,
+            contact_id,
+        )
+        assert event["actor"] == "employee:7:Mayra Canfield"
+        assert event["source"] == "eom_office"
+        assert event["operation_key"] == operation_key
+        metadata = _metadata_dict(event["metadata"])
+        assert metadata["source_channel"] == "time_tracker"
+        assert metadata["source_ref"] == "customer:88"
+        assert metadata["field_names"] == [
+            "address",
+            "email",
+            "full_name",
+            "phone",
+        ]
+
+        replay = await mutate_eom_operator_contact(provider, command)
+
+        assert replay["contact_id"] == str(contact_id)
+        assert replay["idempotent"] is True
+        assert await conn.fetchval("SELECT COUNT(*) FROM contacts") == 1
+        assert await conn.fetchval(
+            """
+            SELECT COUNT(*)
+            FROM eom_lead_lifecycle_events
+            WHERE event_type = 'contact_created' AND operation_key = $1
+            """,
+            operation_key,
+        ) == 1
+
+        crossed_actor = EOMOperatorContactMutation.from_raw(
+            operation_key=operation_key,
+            actor_id=9,
+            actor_name="Other Operator",
+            source_channel="time_tracker",
+            source_ref="customer:88",
+            contact_type="customer",
+            fields={
+                "full_name": "Operator Created",
+                "email": "operator@example.com",
+                "phone": "2175550100",
+                "address": "",
+            },
+        )
+        with pytest.raises(EOMOperatorContactMutationError) as exc_info:
+            await mutate_eom_operator_contact(provider, crossed_actor)
+        assert exc_info.value.status_code == 409
+
+        conflict = EOMOperatorContactMutation.from_raw(
+            operation_key=operation_key,
+            actor_id=7,
+            actor_name="Mayra Canfield",
+            source_channel="time_tracker",
+            source_ref="customer:88",
+            contact_type="customer",
+            fields={
+                "full_name": "Different Operator",
+                "email": "operator@example.com",
+            },
+        )
+        with pytest.raises(EOMOperatorContactMutationError) as exc_info:
+            await mutate_eom_operator_contact(provider, conflict)
+        assert exc_info.value.status_code == 409
+    finally:
+        await conn.close()
+
+
+@pytest.mark.asyncio
+async def test_operator_contact_mutation_updates_exact_match_and_claims_legacy():
+    database_url = _database_url_or_skip()
+    schema = f"atlas_eom_operator_update_{uuid.uuid4().hex}"
+    conn = await asyncpg.connect(database_url)
+    try:
+        await _prepare_schema(conn, schema, apply_privilege_migration=False)
+        provider = DatabaseCRMProvider(pool=conn)
+        contact_id = uuid.uuid4()
+        await conn.execute(
+            """
+            INSERT INTO contacts (
+                id, full_name, phone, business_context_id, contact_type, status, source
+            ) VALUES ($1, 'Legacy Match', '1 (217) 555-0100', NULL, 'customer', 'active', 'legacy')
+            """,
+            contact_id,
+        )
+        command = EOMOperatorContactMutation.from_raw(
+            operation_key=f"operator-update-{uuid.uuid4().hex}",
+            actor_id=8,
+            actor_name="Juan Canfield",
+            source_channel="time_tracker",
+            source_ref="customer:44",
+            fields={
+                "phone": "217-555-0100",
+                "email": "LEGACY.AFTER@EXAMPLE.COM",
+                "notes": "",
+            },
+        )
+
+        updated = await mutate_eom_operator_contact(provider, command)
+
+        assert updated["operation"] == "contact_updated"
+        assert updated["idempotent"] is False
+        assert updated["contact_id"] == str(contact_id)
+        row = await conn.fetchrow("SELECT * FROM contacts WHERE id = $1", contact_id)
+        assert row["business_context_id"] == "effingham_maids"
+        assert row["email"] == "legacy.after@example.com"
+        assert row["phone"] == "2175550100"
+        assert row["notes"] is None
+        assert row["source"] == "legacy"
+        metadata = _metadata_dict(row["metadata"])
+        assert metadata["eom_operator_contact_sources"] == {
+            "time_tracker:customer:44": {
+                "source": "manual",
+                "source_channel": "time_tracker",
+                "source_ref": "customer:44",
+            }
+        }
+        event = await conn.fetchrow(
+            """
+            SELECT actor, metadata
+            FROM eom_lead_lifecycle_events
+            WHERE contact_id = $1 AND event_type = 'contact_updated'
+            """,
+            contact_id,
+        )
+        assert event["actor"] == "employee:8:Juan Canfield"
+        metadata = _metadata_dict(event["metadata"])
+        assert metadata["field_names"] == ["email", "notes", "phone"]
+        assert metadata["changed_fields"] == ["email", "phone"]
+        assert metadata["source_ref"] == "customer:44"
+
+        source_ref_only = EOMOperatorContactMutation.from_raw(
+            operation_key=f"operator-source-ref-only-{uuid.uuid4().hex}",
+            actor_id=8,
+            actor_name="Juan Canfield",
+            source_channel="time_tracker",
+            source_ref="customer:44",
+            fields={"full_name": "Legacy Match Renamed"},
+        )
+
+        rediscovered = await mutate_eom_operator_contact(provider, source_ref_only)
+
+        assert rediscovered["operation"] == "contact_updated"
+        assert rediscovered["contact_id"] == str(contact_id)
+        assert await conn.fetchval("SELECT COUNT(*) FROM contacts") == 1
+        assert await conn.fetchval(
+            "SELECT full_name FROM contacts WHERE id = $1", contact_id
+        ) == "Legacy Match Renamed"
+        assert await conn.fetchval("SELECT COUNT(*) FROM contacts") == 1
+    finally:
+        await conn.close()
+
+
+@pytest.mark.asyncio
+async def test_operator_contact_mutation_rejects_non_object_contact_metadata():
+    database_url = _database_url_or_skip()
+    schema = f"atlas_eom_operator_non_object_metadata_{uuid.uuid4().hex}"
+    conn = await asyncpg.connect(database_url)
+    try:
+        await _prepare_schema(conn, schema, apply_privilege_migration=False)
+        provider = DatabaseCRMProvider(pool=conn)
+        contact_id = uuid.uuid4()
+        await _insert_contact(
+            conn,
+            contact_id=contact_id,
+            full_name="Legacy Metadata Shape",
+            phone="2175550100",
+            contact_type="customer",
+            lead_stage=None,
+            source="legacy",
+        )
+        await conn.execute(
+            "UPDATE contacts SET metadata = '[\"legacy\"]'::jsonb WHERE id = $1",
+            contact_id,
+        )
+        command = EOMOperatorContactMutation.from_raw(
+            operation_key=f"operator-non-object-metadata-{uuid.uuid4().hex}",
+            actor_id=8,
+            actor_name="Juan Canfield",
+            source_channel="time_tracker",
+            source_ref="customer:non-object-metadata",
+            fields={"phone": "217-555-0100", "notes": "must not overwrite metadata"},
+        )
+
+        with pytest.raises(EOMOperatorContactMutationError) as exc_info:
+            await mutate_eom_operator_contact(provider, command)
+
+        assert exc_info.value.status_code == 409
+        assert await conn.fetchval(
+            "SELECT metadata::text FROM contacts WHERE id = $1", contact_id
+        ) == '["legacy"]'
+        assert await conn.fetchval(
+            """
+            SELECT COUNT(*)
+            FROM eom_lead_lifecycle_events
+            WHERE event_type IN ('contact_created', 'contact_updated')
+            """
+        ) == 0
+    finally:
+        await conn.close()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "source_metadata",
+    (
+        None,
+        ["time_tracker:customer:malformed-provenance"],
+        {"time_tracker:customer:malformed-provenance": "not-a-record"},
+    ),
+)
+async def test_operator_contact_mutation_rejects_malformed_source_provenance(
+    source_metadata: object,
+):
+    database_url = _database_url_or_skip()
+    schema = f"atlas_eom_operator_bad_source_metadata_{uuid.uuid4().hex}"
+    conn = await asyncpg.connect(database_url)
+    try:
+        await _prepare_schema(conn, schema, apply_privilege_migration=False)
+        provider = DatabaseCRMProvider(pool=conn)
+        contact_id = uuid.uuid4()
+        metadata = {"eom_operator_contact_sources": source_metadata}
+        await _insert_contact(
+            conn,
+            contact_id=contact_id,
+            full_name="Malformed Source Metadata",
+            phone="2175550100",
+            contact_type="customer",
+            lead_stage=None,
+            source="legacy",
+        )
+        await conn.execute(
+            "UPDATE contacts SET metadata = $2::jsonb WHERE id = $1",
+            contact_id,
+            json.dumps(metadata, sort_keys=True),
+        )
+        command = EOMOperatorContactMutation.from_raw(
+            operation_key=f"operator-bad-source-metadata-{uuid.uuid4().hex}",
+            actor_id=8,
+            actor_name="Juan Canfield",
+            source_channel="time_tracker",
+            source_ref="customer:malformed-provenance",
+            fields={"full_name": "Must Not Mutate"},
+        )
+
+        with pytest.raises(EOMOperatorContactMutationError) as exc_info:
+            await mutate_eom_operator_contact(provider, command)
+
+        assert exc_info.value.status_code == 409
+        row = await conn.fetchrow(
+            "SELECT full_name, metadata::text FROM contacts WHERE id = $1", contact_id
+        )
+        assert row["full_name"] == "Malformed Source Metadata"
+        assert json.loads(row["metadata"]) == metadata
+        assert await conn.fetchval(
+            """
+            SELECT COUNT(*)
+            FROM eom_lead_lifecycle_events
+            WHERE event_type IN ('contact_created', 'contact_updated')
+            """
+        ) == 0
+    finally:
+        await conn.close()
+
+
+@pytest.mark.asyncio
+async def test_inbound_atomic_uses_ascii_phone_normalizer_for_relay_identity():
+    database_url = _database_url_or_skip()
+    schema = f"atlas_eom_inbound_unicode_phone_{uuid.uuid4().hex}"
+    conn = await asyncpg.connect(database_url)
+    try:
+        await _prepare_schema(conn, schema, apply_privilege_migration=False)
+        provider = DatabaseCRMProvider(pool=conn)
+
+        result = await resolve_or_create_eom_inbound_lead(
+            provider,
+            full_name="Unicode Phone",
+            phone="٢١٧٥٥٥٠١٠٠",
+            email=None,
+            address=None,
+            source="web",
+            source_ref="submitted-unicode-phone",
+            relay_event_id="relay-unicode-phone",
+        )
+
+        assert result["_was_created"] is True
+        row = await conn.fetchrow("SELECT phone, source, source_ref FROM contacts")
+        assert row["phone"] is None
+        assert row["source"] == "web"
+        assert row["source_ref"] == "relay-unicode-phone"
+        assert await conn.fetchval(
+            """
+            SELECT COUNT(*)
+            FROM eom_inbound_delivery_receipts
+            WHERE source = 'web' AND delivery_id = 'relay-unicode-phone'
+            """
+        ) == 1
+    finally:
+        await conn.close()
+
+
+@pytest.mark.asyncio
+async def test_operator_and_inbound_contact_writers_share_phone_identity_lock():
+    database_url = _database_url_or_skip()
+    schema = f"atlas_eom_cross_writer_lock_{uuid.uuid4().hex}"
+    setup = await asyncpg.connect(database_url)
+    pool = None
+    release_first = asyncio.Event()
+    try:
+        await _prepare_schema(setup, schema, apply_privilege_migration=False)
+        pool = await asyncpg.create_pool(
+            database_url,
+            min_size=2,
+            max_size=2,
+            server_settings={"search_path": f'"{schema}", public'},
+        )
+        first_locked = asyncio.Event()
+        second_waiting = asyncio.Event()
+        provider = DatabaseCRMProvider(
+            pool=_IdentityLockGatePool(
+                pool,
+                lock_key=_eom_identity_lock_key("phone", "2175550198"),
+                first_locked=first_locked,
+                second_waiting=second_waiting,
+                release_first=release_first,
+            )
+        )
+
+        async def operator_create():
+            command = EOMOperatorContactMutation.from_raw(
+                operation_key=f"operator-cross-writer-{uuid.uuid4().hex}",
+                actor_id=8,
+                actor_name="Juan Canfield",
+                source_channel="time_tracker",
+                source_ref="customer:98",
+                fields={
+                    "full_name": "Cross Writer Operator",
+                    "phone": "217-555-0198",
+                },
+            )
+            return await mutate_eom_operator_contact(provider, command)
+
+        async def inbound_create():
+            return await resolve_or_create_eom_inbound_lead(
+                provider,
+                full_name="Cross Writer Inbound",
+                phone="(217) 555-0198",
+                email=None,
+                address=None,
+                source="web",
+                source_ref="web-cross-writer",
+            )
+
+        operator_task = asyncio.create_task(operator_create())
+        await asyncio.wait_for(first_locked.wait(), timeout=2)
+        inbound_task = asyncio.create_task(inbound_create())
+        await asyncio.wait_for(second_waiting.wait(), timeout=2)
+        release_first.set()
+        operator_result, inbound_result = await asyncio.gather(
+            operator_task,
+            inbound_task,
+        )
+
+        assert operator_result["contact_id"] == str(inbound_result["id"])
+        async with pool.acquire() as check:
+            assert await check.fetchval("SELECT COUNT(*) FROM contacts") == 1
+            assert await check.fetchval(
+                """
+                SELECT COUNT(*)
+                FROM contacts
+                WHERE RIGHT(REGEXP_REPLACE(COALESCE(phone, ''), '[^0-9]', '', 'g'), 10)
+                    = '2175550198'
+                """
+            ) == 1
+    finally:
+        release_first.set()
+        if pool is not None:
+            await pool.close()
+        await setup.execute(f'DROP SCHEMA IF EXISTS "{schema}" CASCADE')
+        await setup.close()
+
+
+@pytest.mark.asyncio
+async def test_operator_contact_mutation_crossed_identities_fail_without_deadlock():
+    database_url = _database_url_or_skip()
+    schema = f"atlas_eom_operator_stable_row_locks_{uuid.uuid4().hex}"
+    setup = await asyncpg.connect(database_url)
+    pool = None
+    try:
+        await _prepare_schema(setup, schema, apply_privilege_migration=False)
+        first_id = uuid.uuid4()
+        second_id = uuid.uuid4()
+        await _insert_contact(
+            setup,
+            contact_id=first_id,
+            full_name="First Identity",
+            phone="2175550101",
+            email="first@example.com",
+            contact_type="customer",
+            lead_stage=None,
+        )
+        await _insert_contact(
+            setup,
+            contact_id=second_id,
+            full_name="Second Identity",
+            phone="2175550102",
+            email="second@example.com",
+            contact_type="customer",
+            lead_stage=None,
+        )
+        pool = await asyncpg.create_pool(
+            database_url,
+            min_size=2,
+            max_size=2,
+            server_settings={"search_path": f'"{schema}", public'},
+        )
+        provider = DatabaseCRMProvider(pool=pool)
+
+        first_command = EOMOperatorContactMutation.from_raw(
+            operation_key=f"operator-crossed-a-{uuid.uuid4().hex}",
+            actor_id=8,
+            actor_name="Juan Canfield",
+            source_channel="time_tracker",
+            source_ref="customer:crossed-a",
+            fields={"phone": "217-555-0101", "email": "second@example.com"},
+        )
+        second_command = EOMOperatorContactMutation.from_raw(
+            operation_key=f"operator-crossed-b-{uuid.uuid4().hex}",
+            actor_id=8,
+            actor_name="Juan Canfield",
+            source_channel="time_tracker",
+            source_ref="customer:crossed-b",
+            fields={"phone": "217-555-0102", "email": "first@example.com"},
+        )
+
+        results = await asyncio.wait_for(
+            asyncio.gather(
+                mutate_eom_operator_contact(provider, first_command),
+                mutate_eom_operator_contact(provider, second_command),
+                return_exceptions=True,
+            ),
+            timeout=5,
+        )
+
+        assert all(
+            isinstance(result, EOMOperatorContactMutationError)
+            and result.status_code == 409
+            for result in results
+        )
+        assert await setup.fetchval(
+            """
+            SELECT COUNT(*)
+            FROM eom_lead_lifecycle_events
+            WHERE event_type IN ('contact_created', 'contact_updated')
+            """
+        ) == 0
+    finally:
+        if pool is not None:
+            await pool.close()
+        await setup.execute(f'DROP SCHEMA IF EXISTS "{schema}" CASCADE')
+        await setup.close()
+
+
+@pytest.mark.asyncio
+async def test_operator_contact_mutation_claims_legacy_contact_by_padded_email():
+    database_url = _database_url_or_skip()
+    schema = f"atlas_eom_operator_email_claim_{uuid.uuid4().hex}"
+    conn = await asyncpg.connect(database_url)
+    try:
+        await _prepare_schema(conn, schema, apply_privilege_migration=False)
+        provider = DatabaseCRMProvider(pool=conn)
+        contact_id = uuid.uuid4()
+        await _insert_contact(
+            conn,
+            contact_id=contact_id,
+            business_context_id=None,
+            full_name="Padded Email Legacy",
+            contact_type="customer",
+            lead_stage=None,
+            email="\tAda.Example@Example.COM\n",
+            phone=None,
+            source="legacy",
+        )
+        command = EOMOperatorContactMutation.from_raw(
+            operation_key=f"operator-padded-email-{uuid.uuid4().hex}",
+            actor_id=8,
+            actor_name="Juan Canfield",
+            source_channel="time_tracker",
+            source_ref="customer:padded-email",
+            fields={"email": "ada.example@example.com", "notes": "claimed"},
+        )
+
+        updated = await mutate_eom_operator_contact(provider, command)
+
+        assert updated["operation"] == "contact_updated"
+        assert updated["contact_id"] == str(contact_id)
+        row = await conn.fetchrow("SELECT * FROM contacts WHERE id = $1", contact_id)
+        assert row["business_context_id"] == "effingham_maids"
+        assert row["email"] == "ada.example@example.com"
+        assert row["notes"] == "claimed"
+        assert await conn.fetchval("SELECT COUNT(*) FROM contacts") == 1
+        assert await conn.fetchval(
+            """
+            SELECT COUNT(*)
+            FROM eom_lead_lifecycle_events
+            WHERE contact_id = $1 AND event_type = 'contact_updated'
+            """,
+            contact_id,
+        ) == 1
+    finally:
+        await conn.close()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("field", "claimed_value", "original_value"),
+    (
+        ("phone", "217-555-0197", "217-555-0196"),
+        ("email", "owned@example.com", "target@example.com"),
+    ),
+)
+async def test_operator_contact_mutation_rejects_explicit_id_identity_collision(
+    field: str,
+    claimed_value: str,
+    original_value: str,
+):
+    database_url = _database_url_or_skip()
+    schema = f"atlas_eom_operator_identity_collision_{uuid.uuid4().hex}"
+    conn = await asyncpg.connect(database_url)
+    try:
+        await _prepare_schema(conn, schema, apply_privilege_migration=False)
+        provider = DatabaseCRMProvider(pool=conn)
+        target_id = uuid.uuid4()
+        owner_id = uuid.uuid4()
+        await _insert_contact(
+            conn,
+            contact_id=target_id,
+            full_name="Target Contact",
+            phone=original_value if field == "phone" else "2175550196",
+            email=original_value if field == "email" else "target@example.com",
+        )
+        await _insert_contact(
+            conn,
+            contact_id=owner_id,
+            full_name="Identity Owner",
+            phone=claimed_value if field == "phone" else "2175550197",
+            email=(
+                f"\t{claimed_value.upper()}\n"
+                if field == "email"
+                else "owned@example.com"
+            ),
+        )
+        command = EOMOperatorContactMutation.from_raw(
+            operation_key=f"operator-explicit-collision-{uuid.uuid4().hex}",
+            actor_id=8,
+            actor_name="Juan Canfield",
+            source_channel="time_tracker",
+            source_ref=f"customer:collision-{field}",
+            contact_id=str(target_id),
+            fields={field: claimed_value},
+        )
+
+        with pytest.raises(EOMOperatorContactMutationError) as exc_info:
+            await mutate_eom_operator_contact(provider, command)
+
+        assert exc_info.value.status_code == 409
+        target = await conn.fetchrow(
+            "SELECT phone, email FROM contacts WHERE id = $1", target_id
+        )
+        owner = await conn.fetchrow(
+            "SELECT phone, email FROM contacts WHERE id = $1", owner_id
+        )
+        assert target[field] == original_value
+        assert owner[field].strip().lower() == claimed_value
+        assert await conn.fetchval(
+            """
+            SELECT COUNT(*)
+            FROM eom_lead_lifecycle_events
+            WHERE event_type = 'contact_updated'
+            """
+        ) == 0
+    finally:
+        await conn.close()
+
+
+@pytest.mark.asyncio
+async def test_operator_contact_mutation_rejects_ambiguous_direct_provenance():
+    database_url = _database_url_or_skip()
+    schema = f"atlas_eom_operator_ambiguous_source_{uuid.uuid4().hex}"
+    conn = await asyncpg.connect(database_url)
+    try:
+        await _prepare_schema(conn, schema, apply_privilege_migration=False)
+        provider = DatabaseCRMProvider(pool=conn)
+        first_id = uuid.uuid4()
+        second_id = uuid.uuid4()
+        for contact_id, full_name in (
+            (first_id, "First Manual Customer"),
+            (second_id, "Second Manual Customer"),
+        ):
+            await _insert_contact(
+                conn,
+                contact_id=contact_id,
+                full_name=full_name,
+                contact_type="customer",
+                lead_stage=None,
+                source="manual",
+            )
+            await conn.execute(
+                """
+                UPDATE contacts
+                SET source_ref = 'time_tracker:customer:duplicate'
+                WHERE id = $1
+                """,
+                contact_id,
+            )
+        command = EOMOperatorContactMutation.from_raw(
+            operation_key=f"operator-ambiguous-source-{uuid.uuid4().hex}",
+            actor_id=9,
+            actor_name="Juan Canfield",
+            source_channel="time_tracker",
+            source_ref="customer:duplicate",
+            fields={"full_name": "Wrong Target"},
+        )
+
+        with pytest.raises(EOMOperatorContactMutationError) as exc_info:
+            await mutate_eom_operator_contact(provider, command)
+
+        assert exc_info.value.status_code == 409
+        assert await conn.fetchval(
+            "SELECT COUNT(*) FROM contacts WHERE full_name = 'Wrong Target'"
+        ) == 0
+        assert await conn.fetchval(
+            """
+            SELECT COUNT(*)
+            FROM eom_lead_lifecycle_events
+            WHERE event_type IN ('contact_created', 'contact_updated')
+            """
+        ) == 0
+    finally:
+        await conn.close()
+
+
+@pytest.mark.asyncio
+async def test_operator_contact_mutation_rejects_ambiguous_exact_identity():
+    database_url = _database_url_or_skip()
+    schema = f"atlas_eom_operator_ambiguous_{uuid.uuid4().hex}"
+    conn = await asyncpg.connect(database_url)
+    try:
+        await _prepare_schema(conn, schema, apply_privilege_migration=False)
+        provider = DatabaseCRMProvider(pool=conn)
+        await _insert_contact(
+            conn,
+            contact_id=uuid.uuid4(),
+            full_name="First Exact Phone",
+            phone="12175550100",
+            contact_type="customer",
+            lead_stage=None,
+        )
+        await _insert_contact(
+            conn,
+            contact_id=uuid.uuid4(),
+            full_name="Second Exact Phone",
+            phone="2175550100",
+            contact_type="customer",
+            lead_stage=None,
+        )
+        command = EOMOperatorContactMutation.from_raw(
+            operation_key=f"operator-ambiguous-{uuid.uuid4().hex}",
+            actor_id=9,
+            actor_name="Juan Canfield",
+            source_channel="time_tracker",
+            source_ref="customer:45",
+            fields={"phone": "(217) 555-0100", "email": "new@example.com"},
+        )
+
+        with pytest.raises(EOMOperatorContactMutationError) as exc_info:
+            await mutate_eom_operator_contact(provider, command)
+
+        assert exc_info.value.status_code == 409
+        assert await conn.fetchval(
+            """
+            SELECT COUNT(*)
+            FROM eom_lead_lifecycle_events
+            WHERE event_type IN ('contact_created', 'contact_updated')
+            """
+        ) == 0
+    finally:
+        await conn.close()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "stored_phone",
+    ("2175550100 ext 123", "2175550100x123", "fax2175550100"),
+)
+async def test_operator_contact_mutation_matches_stored_phone_with_extension(
+    stored_phone: str,
+):
+    database_url = _database_url_or_skip()
+    schema = f"atlas_eom_operator_extension_match_{uuid.uuid4().hex}"
+    conn = await asyncpg.connect(database_url)
+    try:
+        await _prepare_schema(conn, schema, apply_privilege_migration=False)
+        provider = DatabaseCRMProvider(pool=conn)
+        contact_id = uuid.uuid4()
+        await _insert_contact(
+            conn,
+            contact_id=contact_id,
+            business_context_id=None,
+            full_name="Legacy Extension Match",
+            phone=stored_phone,
+            contact_type="customer",
+            lead_stage=None,
+        )
+        command = EOMOperatorContactMutation.from_raw(
+            operation_key=f"operator-extension-match-{uuid.uuid4().hex}",
+            actor_id=9,
+            actor_name="Juan Canfield",
+            source_channel="time_tracker",
+            source_ref="customer:extension-match",
+            fields={"phone": "217-555-0100", "email": "extension@example.com"},
+        )
+
+        result = await mutate_eom_operator_contact(provider, command)
+
+        assert result["contact_id"] == str(contact_id)
+        rows = await conn.fetch("SELECT id, phone, email FROM contacts ORDER BY id")
+        assert len(rows) == 1
+        assert rows[0]["id"] == contact_id
+        assert rows[0]["phone"] == "2175550100"
+        assert rows[0]["email"] == "extension@example.com"
+    finally:
+        await conn.close()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "stored_phone",
+    ("2175550100 ext 123", "2175550100x123"),
+)
+async def test_operator_contact_mutation_does_not_match_extension_suffix(
+    stored_phone: str,
+):
+    database_url = _database_url_or_skip()
+    schema = f"atlas_eom_operator_extension_suffix_{uuid.uuid4().hex}"
+    conn = await asyncpg.connect(database_url)
+    try:
+        await _prepare_schema(conn, schema, apply_privilege_migration=False)
+        provider = DatabaseCRMProvider(pool=conn)
+        existing_id = uuid.uuid4()
+        await _insert_contact(
+            conn,
+            contact_id=existing_id,
+            business_context_id=None,
+            full_name="Legacy Extension Suffix",
+            phone=stored_phone,
+            email="legacy-extension@example.com",
+            contact_type="customer",
+            lead_stage=None,
+        )
+        command = EOMOperatorContactMutation.from_raw(
+            operation_key=f"operator-extension-suffix-{uuid.uuid4().hex}",
+            actor_id=9,
+            actor_name="Juan Canfield",
+            source_channel="time_tracker",
+            source_ref="customer:extension-suffix",
+            fields={
+                "full_name": "Extension Suffix New Contact",
+                "phone": "555-010-0123",
+                "email": "suffix@example.com",
+            },
+        )
+
+        result = await mutate_eom_operator_contact(provider, command)
+
+        assert result["contact_id"] != str(existing_id)
+        rows = await conn.fetch(
+            "SELECT id, phone, email FROM contacts ORDER BY email"
+        )
+        assert len(rows) == 2
+        legacy = next(row for row in rows if row["id"] == existing_id)
+        assert legacy["phone"] == stored_phone
+        assert legacy["email"] == "legacy-extension@example.com"
+    finally:
+        await conn.close()
+
+
+@pytest.mark.asyncio
+async def test_operator_contact_mutation_rejects_unsupported_existing_contact_type():
+    database_url = _database_url_or_skip()
+    schema = f"atlas_eom_operator_bad_type_{uuid.uuid4().hex}"
+    conn = await asyncpg.connect(database_url)
+    try:
+        await _prepare_schema(conn, schema, apply_privilege_migration=False)
+        provider = DatabaseCRMProvider(pool=conn)
+        contact_id = uuid.uuid4()
+        await _insert_contact(
+            conn,
+            contact_id=contact_id,
+            business_context_id=None,
+            full_name="Legacy Vendor",
+            contact_type="vendor",
+            lead_stage=None,
+            phone="2175550100",
+            email="vendor@example.com",
+        )
+        command = EOMOperatorContactMutation.from_raw(
+            operation_key=f"operator-bad-type-{uuid.uuid4().hex}",
+            actor_id=10,
+            actor_name="Juan Canfield",
+            source_channel="time_tracker",
+            source_ref="customer:46",
+            contact_id=str(contact_id),
+            fields={"phone": "217-555-0100", "notes": "not an EOM customer"},
+        )
+
+        with pytest.raises(EOMOperatorContactMutationError) as exc_info:
+            await mutate_eom_operator_contact(provider, command)
+
+        assert exc_info.value.status_code == 409
+        row = await conn.fetchrow("SELECT * FROM contacts WHERE id = $1", contact_id)
+        assert row["business_context_id"] is None
+        assert row["contact_type"] == "vendor"
+        assert row["phone"] == "2175550100"
+        assert row["notes"] is None
+        assert await conn.fetchval(
+            """
+            SELECT COUNT(*)
+            FROM eom_lead_lifecycle_events
+            WHERE event_type IN ('contact_created', 'contact_updated')
+            """
+        ) == 0
+    finally:
+        await conn.close()
+
+
+@pytest.mark.asyncio
+async def test_operator_contact_mutation_rejects_legacy_lead_without_stage():
+    database_url = _database_url_or_skip()
+    schema = f"atlas_eom_operator_bad_stage_{uuid.uuid4().hex}"
+    conn = await asyncpg.connect(database_url)
+    try:
+        await _prepare_schema(conn, schema, apply_privilege_migration=False)
+        provider = DatabaseCRMProvider(pool=conn)
+        contact_id = uuid.uuid4()
+        await _insert_contact(
+            conn,
+            contact_id=contact_id,
+            business_context_id=None,
+            full_name="Legacy Unstaged Lead",
+            contact_type="lead",
+            lead_stage=None,
+            phone="2175550100",
+            email="unstaged@example.com",
+        )
+        command = EOMOperatorContactMutation.from_raw(
+            operation_key=f"operator-bad-stage-{uuid.uuid4().hex}",
+            actor_id=10,
+            actor_name="Juan Canfield",
+            source_channel="time_tracker",
+            source_ref="lead:unstaged",
+            contact_id=str(contact_id),
+            fields={"phone": "217-555-0100", "notes": "needs funnel stage"},
+        )
+
+        with pytest.raises(EOMOperatorContactMutationError) as exc_info:
+            await mutate_eom_operator_contact(provider, command)
+
+        assert exc_info.value.status_code == 409
+        row = await conn.fetchrow("SELECT * FROM contacts WHERE id = $1", contact_id)
+        assert row["business_context_id"] is None
+        assert row["contact_type"] == "lead"
+        assert row["lead_stage"] is None
+        assert row["notes"] is None
+        assert await conn.fetchval(
+            """
+            SELECT COUNT(*)
+            FROM eom_lead_lifecycle_events
+            WHERE event_type IN ('contact_created', 'contact_updated')
+            """
+        ) == 0
+    finally:
+        await conn.close()
+
+
+@pytest.mark.asyncio
+async def test_operator_contact_mutation_rejects_inactive_legacy_lead():
+    database_url = _database_url_or_skip()
+    schema = f"atlas_eom_operator_inactive_lead_{uuid.uuid4().hex}"
+    conn = await asyncpg.connect(database_url)
+    try:
+        await _prepare_schema(conn, schema, apply_privilege_migration=False)
+        provider = DatabaseCRMProvider(pool=conn)
+        contact_id = uuid.uuid4()
+        await _insert_contact(
+            conn,
+            contact_id=contact_id,
+            business_context_id=None,
+            full_name="Inactive Legacy Lead",
+            contact_type="lead",
+            lead_stage="new",
+            status="inactive",
+            phone="2175550100",
+            email="inactive-lead@example.com",
+        )
+        command = EOMOperatorContactMutation.from_raw(
+            operation_key=f"operator-inactive-lead-{uuid.uuid4().hex}",
+            actor_id=10,
+            actor_name="Juan Canfield",
+            source_channel="time_tracker",
+            source_ref="lead:inactive",
+            contact_id=str(contact_id),
+            fields={"phone": "217-555-0100", "notes": "needs active status"},
+        )
+
+        with pytest.raises(EOMOperatorContactMutationError) as exc_info:
+            await mutate_eom_operator_contact(provider, command)
+
+        assert exc_info.value.status_code == 409
+        row = await conn.fetchrow("SELECT * FROM contacts WHERE id = $1", contact_id)
+        assert row["business_context_id"] is None
+        assert row["contact_type"] == "lead"
+        assert row["lead_stage"] == "new"
+        assert row["status"] == "inactive"
+        assert row["notes"] is None
+        assert await conn.fetchval(
+            """
+            SELECT COUNT(*)
+            FROM eom_lead_lifecycle_events
+            WHERE event_type IN ('contact_created', 'contact_updated')
+            """
+        ) == 0
+    finally:
+        await conn.close()
 
 
 @pytest.mark.asyncio

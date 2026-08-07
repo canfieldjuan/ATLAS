@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 from contextlib import asynccontextmanager
 from datetime import datetime, timedelta, timezone
 from types import SimpleNamespace
@@ -53,11 +54,45 @@ class _CRM:
         self.lost_calls: list[dict[str, object]] = []
         self.reopen_calls: list[dict[str, object]] = []
         self.reopen_stage = "new"
+        self.operator_contact_calls: list[object] = []
+        self.operator_contact_result: dict[str, object] | None = None
 
     @asynccontextmanager
     async def eom_estimate_booking_execution_lock(self, *, booking_key: str):
         self.execution_lock_keys.append(booking_key)
         yield
+
+    async def mutate_eom_operator_contact_atomic(self, *, command):
+        self.operator_contact_calls.append(command)
+        if self.operator_contact_result is not None:
+            return self.operator_contact_result
+        contact_id = command.contact_id or "4c0f1ee8-8063-4ba9-9e10-847e6c2a95ff"
+        operation = (
+            "contact_updated" if command.contact_id is not None else "contact_created"
+        )
+        return {
+            "contact_id": contact_id,
+            "operation": operation,
+            "idempotent": False,
+            "contact": {
+                "id": contact_id,
+                "full_name": command.fields.get("full_name") or "Stored Contact",
+                "email": command.fields.get("email"),
+                "phone": command.fields.get("phone"),
+                "address": command.fields.get("address"),
+                "city": command.fields.get("city"),
+                "state": command.fields.get("state"),
+                "zip": command.fields.get("zip"),
+                "notes": command.fields.get("notes"),
+                "contact_type": command.contact_type or "customer",
+                "lead_stage": "new" if command.contact_type == "lead" else None,
+                "status": "active",
+                "source": command.contact_source,
+                "source_ref": command.contact_source_ref,
+                "created_at": datetime(2026, 8, 6, 12, tzinfo=timezone.utc),
+                "updated_at": datetime(2026, 8, 6, 12, tzinfo=timezone.utc),
+            },
+        }
 
     async def mark_eom_lead_lost(self, **kwargs: object) -> dict[str, object]:
         self.lost_calls.append(kwargs)
@@ -494,6 +529,18 @@ def _booking_payload(**overrides) -> dict[str, object]:
     return payload
 
 
+def _operator_contact_payload(**overrides) -> dict[str, object]:
+    payload: dict[str, object] = {
+        "sourceChannel": "time_tracker",
+        "sourceRef": "customer:42",
+        "fullName": "Ada Operator",
+        "email": "ADA@EXAMPLE.COM",
+        "phone": "(217) 555-0100",
+    }
+    payload.update(overrides)
+    return payload
+
+
 @pytest.mark.asyncio
 async def test_full_atlas_app_serves_public_intake_and_private_handoff_together():
     """The actual full aggregate serves the tracker callback beside lead intake."""
@@ -565,6 +612,220 @@ async def test_full_atlas_app_serves_public_intake_and_private_handoff_together(
     ]
     assert response.status_code == 201
     assert crm.calls
+
+
+@pytest.mark.asyncio
+async def test_private_operator_contact_route_normalizes_and_delegates_create():
+    crm = _CRM()
+    app = _app(crm, _enabled_config())
+    operation_key = f"office-contact-{uuid4().hex}"
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=app), base_url="http://test"
+    ) as client:
+        response = await client.post(
+            "/eom-funnel/operator-contacts",
+            headers=_headers(approval_key=operation_key),
+            json=_operator_contact_payload(address="   ", contactType="lead"),
+        )
+
+    assert response.status_code == 201
+    body = response.json()
+    assert body["success"] is True
+    assert body["operation"] == "contact_created"
+    assert body["idempotent"] is False
+    assert body["contact"]["email"] == "ada@example.com"
+    assert body["contact"]["phone"] == "2175550100"
+    assert body["contact"]["address"] is None
+    assert body["contact"]["sourceRef"] == "time_tracker:customer:42"
+    command = crm.operator_contact_calls[0]
+    assert command.operation_key == operation_key
+    assert command.actor_id == 1
+    assert command.actor_name == "Juan Canfield"
+    assert command.contact_type == "lead"
+    assert dict(command.fields) == {
+        "full_name": "Ada Operator",
+        "email": "ada@example.com",
+        "phone": "2175550100",
+        "address": None,
+    }
+    assert len(command.request_fingerprint) == 64
+
+
+@pytest.mark.asyncio
+async def test_private_operator_contact_route_returns_200_for_idempotent_replay():
+    contact_id = str(uuid4())
+    crm = _CRM()
+    crm.operator_contact_result = {
+        "contact_id": contact_id,
+        "operation": "contact_updated",
+        "idempotent": True,
+        "contact": {
+            "id": contact_id,
+            "full_name": "Replay Contact",
+            "email": "replay@example.com",
+            "phone": "2175550101",
+            "address": None,
+            "city": None,
+            "state": None,
+            "zip": None,
+            "notes": None,
+            "contact_type": "customer",
+            "lead_stage": None,
+            "status": "active",
+            "source": "manual",
+            "source_ref": "time_tracker:customer:51",
+            "created_at": datetime(2026, 8, 6, 12, tzinfo=timezone.utc),
+            "updated_at": datetime(2026, 8, 6, 12, tzinfo=timezone.utc),
+        },
+    }
+    app = _app(crm, _enabled_config())
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=app), base_url="http://test"
+    ) as client:
+        response = await client.post(
+            "/eom-funnel/operator-contacts",
+            headers=_headers(approval_key=f"office-contact-{uuid4().hex}"),
+            json=_operator_contact_payload(
+                contactId=contact_id,
+                sourceRef="customer:51",
+                email="replay@example.com",
+            ),
+        )
+
+    assert response.status_code == 200
+    assert response.json()["idempotent"] is True
+    assert response.json()["contactId"] == contact_id
+    assert len(crm.operator_contact_calls) == 1
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("config", "headers", "expected_status"),
+    (
+        (EOMFunnelConfig(api_enabled=False), _headers(), 503),
+        (_enabled_config(), {**_headers(), "Authorization": ""}, 401),
+        (_enabled_config(), {**_headers(actor=" ")}, 422),
+        (_enabled_config(), {**_headers(approval_key="short")}, 422),
+    ),
+)
+async def test_private_operator_contact_rejects_boundary_failures_before_crm_call(
+    config: EOMFunnelConfig,
+    headers: dict[str, str],
+    expected_status: int,
+):
+    crm = _CRM()
+    app = _app(crm, config)
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=app), base_url="http://test"
+    ) as client:
+        response = await client.post(
+            "/eom-funnel/operator-contacts",
+            headers=headers,
+            json=_operator_contact_payload(),
+        )
+
+    assert response.status_code == expected_status
+    assert crm.operator_contact_calls == []
+
+
+@pytest.mark.asyncio
+async def test_private_operator_contact_rejects_unknown_source_channel_before_crm_call():
+    crm = _CRM()
+    app = _app(crm, _enabled_config())
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=app), base_url="http://test"
+    ) as client:
+        response = await client.post(
+            "/eom-funnel/operator-contacts",
+            headers=_headers(approval_key=f"office-contact-{uuid4().hex}"),
+            json=_operator_contact_payload(sourceChannel="random"),
+        )
+
+    assert response.status_code == 422
+    assert crm.operator_contact_calls == []
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "payload_updates",
+    (
+        {"email": "a@@b"},
+        {"email": "a b@example.com"},
+        {"email": "ada\noperator@example.com"},
+        {"email": f"{'a' * 65}@example.com"},
+        {"phone": "٢١٧٥٥٥٠١٠٠"},
+        {"phone": "2175550100 ext 123"},
+    ),
+)
+async def test_private_operator_contact_rejects_malformed_identity_before_crm_call(
+    payload_updates: dict[str, str],
+):
+    crm = _CRM()
+    app = _app(crm, _enabled_config())
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=app), base_url="http://test"
+    ) as client:
+        headers = {
+            **_headers(approval_key=f"office-contact-{uuid4().hex}"),
+            "Content-Type": "application/json",
+        }
+        response = await client.post(
+            "/eom-funnel/operator-contacts",
+            headers=headers,
+            content=json.dumps(_operator_contact_payload(**payload_updates)),
+        )
+
+    assert response.status_code == 422
+    assert crm.operator_contact_calls == []
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "payload_updates",
+    (
+        {"sourceRef": "customer:\x0042"},
+        {"sourceRef": "customer:\ud80042"},
+        {"fullName": "Ada\x00Operator"},
+        {"fullName": "Ada\ud800Operator"},
+        {"address": "100\x00Main"},
+        {"address": "100\ud800Main"},
+        {"city": "Effingham\x00"},
+        {"city": "Effingham\ud800"},
+        {"state": "I\x00L"},
+        {"state": "I\ud800L"},
+        {"zip": "624\x0001"},
+        {"zip": "624\ud80001"},
+        {"notes": "bring\x00supplies"},
+        {"notes": "bring\ud800supplies"},
+        {"contactType": "\ud800"},
+        {"unexpected\ud800": "value"},
+    ),
+)
+async def test_private_operator_contact_rejects_database_invalid_text_before_crm_call(
+    payload_updates: dict[str, str],
+):
+    crm = _CRM()
+    app = _app(crm, _enabled_config())
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=app), base_url="http://test"
+    ) as client:
+        headers = {
+            **_headers(approval_key=f"office-contact-{uuid4().hex}"),
+            "Content-Type": "application/json",
+        }
+        response = await client.post(
+            "/eom-funnel/operator-contacts",
+            headers=headers,
+            content=json.dumps(_operator_contact_payload(**payload_updates)),
+        )
+
+    assert response.status_code == 422
+    assert crm.operator_contact_calls == []
+
+
+def test_operator_contact_capability_is_derived_from_registered_route():
+    funnel_mod._served_capabilities_cache = None
+    assert "contact.operator_mutation" in funnel_mod.served_capabilities()
 
 
 @pytest.mark.asyncio

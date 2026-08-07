@@ -6,7 +6,7 @@ import base64
 import binascii
 import re
 from datetime import datetime
-from typing import Annotated, Any, Literal
+from typing import Annotated, Any, Literal, Mapping
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, Header, HTTPException, Query, Request, status
@@ -28,6 +28,11 @@ from ..services.eom_lead_conversion import (
     finalize_eom_customer_handoff,
     mark_eom_lead_lost,
     reopen_eom_lead,
+)
+from ..services.eom_crm_mutations import (
+    EOMOperatorContactMutation,
+    EOMOperatorContactMutationError,
+    mutate_eom_operator_contact,
 )
 from ..services.eom_onboarding_drafts import (
     EOMOnboardingDraftApproval,
@@ -57,6 +62,21 @@ _MAX_LEAD_REVIEW_LIMIT = 200
 # stricter or looser than an intake-submitted one.
 _RECIPIENT_EMAIL_PATTERN = re.compile(r"^[^@\s]+@[^@\s]+\.[^@\s]+$")
 _ONBOARDING_DRAFT_STATUSES = ("pending", "sending", "sent", "revoked")
+
+
+def _route_surrogates_to_safe_text(value: Any) -> Any:
+    if isinstance(value, str):
+        if any(0xD800 <= ord(char) <= 0xDFFF for char in value):
+            return "\x00"
+        return value
+    if isinstance(value, Mapping):
+        return {
+            _route_surrogates_to_safe_text(key): _route_surrogates_to_safe_text(item)
+            for key, item in value.items()
+        }
+    if isinstance(value, list):
+        return [_route_surrogates_to_safe_text(item) for item in value]
+    return value
 
 
 class EOMCustomerHandoffRequest(BaseModel):
@@ -122,6 +142,63 @@ class EOMLeadLostRequest(BaseModel):
         if isinstance(value, str):
             stripped = value.strip()
             return stripped or None
+        return value
+
+
+class EOMOperatorContactRequest(BaseModel):
+    """Authenticated operator-authored EOM contact create/update request."""
+
+    model_config = ConfigDict(extra="forbid", populate_by_name=True)
+
+    contact_id: UUID | None = Field(default=None, alias="contactId")
+    contact_type: Literal["lead", "customer"] | None = Field(
+        default=None,
+        alias="contactType",
+    )
+    full_name: Annotated[
+        str | None,
+        Field(default=None, min_length=1, max_length=256, alias="fullName"),
+    ]
+    email: Annotated[str | None, Field(default=None, max_length=256)]
+    phone: Annotated[str | None, Field(default=None, max_length=64)]
+    address: Annotated[str | None, Field(default=None, max_length=2000)]
+    city: Annotated[str | None, Field(default=None, max_length=128)]
+    state: Annotated[str | None, Field(default=None, max_length=64)]
+    zip: Annotated[str | None, Field(default=None, max_length=16)]
+    notes: Annotated[str | None, Field(default=None, max_length=4000)]
+    source_channel: Annotated[
+        str,
+        Field(min_length=1, max_length=64, alias="sourceChannel"),
+    ]
+    source_ref: Annotated[
+        str,
+        Field(min_length=1, max_length=220, alias="sourceRef"),
+    ]
+
+    @model_validator(mode="before")
+    @classmethod
+    def _sanitize_request_surrogates(cls, value: Any) -> Any:
+        return _route_surrogates_to_safe_text(value)
+
+    @field_validator(
+        "full_name",
+        "email",
+        "phone",
+        "address",
+        "city",
+        "state",
+        "zip",
+        "notes",
+        "source_channel",
+        "source_ref",
+        mode="before",
+    )
+    @classmethod
+    def _route_surrogates_to_domain_validation(cls, value: Any) -> Any:
+        if isinstance(value, str) and any(
+            0xD800 <= ord(char) <= 0xDFFF for char in value
+        ):
+            return "\x00"
         return value
 
 
@@ -328,6 +405,7 @@ _CAPABILITY_ROUTES: dict[str, tuple[str, str]] = {
         "/eom-funnel/leads/{contact_id}/first-clean-bookings",
     ),
     "lead.customer_handoff": ("POST", "/eom-funnel/customer-handoffs"),
+    "contact.operator_mutation": ("POST", "/eom-funnel/operator-contacts"),
     "lead.lost": ("POST", "/eom-funnel/leads/{contact_id}/lost"),
     "lead.reopen": ("POST", "/eom-funnel/leads/{contact_id}/reopen"),
     "onboarding.draft.list": ("GET", "/eom-funnel/onboarding-drafts"),
@@ -371,6 +449,97 @@ def served_capabilities() -> tuple[str, ...]:
             )
         )
     return _served_capabilities_cache
+
+
+def _operator_contact_fields(payload: EOMOperatorContactRequest) -> dict[str, Any]:
+    model_to_contact = {
+        "full_name": "full_name",
+        "email": "email",
+        "phone": "phone",
+        "address": "address",
+        "city": "city",
+        "state": "state",
+        "zip": "zip",
+        "notes": "notes",
+    }
+    return {
+        contact_field: getattr(payload, model_field)
+        for model_field, contact_field in model_to_contact.items()
+        if model_field in payload.model_fields_set
+    }
+
+
+def _contact_datetime(value: Any) -> str | None:
+    if value is None:
+        return None
+    if hasattr(value, "isoformat"):
+        return value.isoformat()
+    return str(value)
+
+
+def _operator_contact_item(contact: Mapping[str, Any]) -> dict[str, Any]:
+    return {
+        "contactId": str(contact["id"]),
+        "fullName": contact.get("full_name"),
+        "email": contact.get("email"),
+        "phone": contact.get("phone"),
+        "address": contact.get("address"),
+        "city": contact.get("city"),
+        "state": contact.get("state"),
+        "zip": contact.get("zip"),
+        "notes": contact.get("notes"),
+        "contactType": contact.get("contact_type"),
+        "leadStage": contact.get("lead_stage"),
+        "status": contact.get("status"),
+        "source": contact.get("source"),
+        "sourceRef": contact.get("source_ref"),
+        "createdAt": _contact_datetime(contact.get("created_at")),
+        "updatedAt": _contact_datetime(contact.get("updated_at")),
+    }
+
+
+@router.post(
+    "/operator-contacts",
+    status_code=status.HTTP_201_CREATED,
+    dependencies=[Depends(require_eom_funnel_api)],
+)
+async def mutate_operator_contact(
+    payload: EOMOperatorContactRequest,
+    operation_key: str = Depends(_approval_key_dependency),
+    actor: dict[str, object] = Depends(require_eom_funnel_actor),
+    crm: Any = Depends(_crm_dependency),
+) -> JSONResponse:
+    """Create or edit one EOM contact through the operator mutation boundary."""
+    try:
+        result = await mutate_eom_operator_contact(
+            crm,
+            EOMOperatorContactMutation.from_raw(
+                operation_key=operation_key,
+                actor_id=int(actor["id"]),
+                actor_name=str(actor["name"]),
+                source_channel=payload.source_channel,
+                source_ref=payload.source_ref,
+                fields=_operator_contact_fields(payload),
+                contact_id=str(payload.contact_id) if payload.contact_id else None,
+                contact_type=payload.contact_type,
+            ),
+        )
+    except EOMOperatorContactMutationError as exc:
+        raise HTTPException(status_code=exc.status_code, detail=str(exc)) from exc
+    return JSONResponse(
+        status_code=(
+            status.HTTP_200_OK
+            if bool(result.get("idempotent"))
+            else status.HTTP_201_CREATED
+        ),
+        content={
+            "success": True,
+            "contactId": result["contact_id"],
+            "operation": result["operation"],
+            "idempotent": bool(result.get("idempotent")),
+            "contact": _operator_contact_item(result["contact"]),
+        },
+    )
 
 
 @router.get(
