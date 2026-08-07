@@ -100,7 +100,6 @@ def test_source_tier_is_opt_in():
 WRITER_SITES = [
     # (file, callee substring, expected context expression substring)
     ("atlas_brain/tools/scheduling.py", "find_or_create_contact", "context.id"),
-    ("atlas_brain/autonomous/tasks/email_backfill.py", "find_or_create_contact", "effingham_maids"),
     ("atlas_brain/api/b2b_vendor_briefing.py", "find_or_create_contact", "churnsignals"),
     ("extracted_competitive_intelligence/api/b2b_vendor_briefing.py",
      "find_or_create_contact", "churnsignals"),
@@ -108,6 +107,14 @@ WRITER_SITES = [
 
 EOM_INBOUND_DELEGATES = [
     "atlas_brain/autonomous/tasks/gmail_digest.py",
+]
+
+# Writers that reach the EOM boundary through the non-inbound sibling. These
+# must NOT stamp the tenant themselves -- the boundary owns it -- so they are
+# deliberately absent from WRITER_SITES, and this list is what stops a direct
+# provider call quietly reappearing in them.
+EOM_BOUNDARY_DELEGATES = [
+    "atlas_brain/autonomous/tasks/email_backfill.py",
 ]
 
 
@@ -226,3 +233,23 @@ async def test_generic_contact_phone_search_keeps_partial_phone_substring_lookup
 
     assert "REGEXP_REPLACE(COALESCE(phone, ''), '[^0-9]', '', 'g') LIKE" in pool.query
     assert pool.params[0] == "%5550100%"
+def test_eom_boundary_delegates_do_not_write_through_the_provider_directly():
+    """The tenant must come from the boundary, never a caller literal.
+
+    email_backfill used to pass business_context_id="effingham_maids" straight
+    to find_or_create_contact with the default preserve_existing=False, so a
+    display name inferred from an email local part could merge over a curated
+    one. It now goes through resolve_or_create_eom_contact.
+    """
+    for path in EOM_BOUNDARY_DELEGATES:
+        calls = list(_calls_named(path, "resolve_or_create_eom_contact"))
+        assert calls, f"{path}: no EOM boundary resolver call found"
+        for call in calls:
+            kwargs = {keyword.arg: keyword for keyword in call.keywords}
+            assert {"source", "contact_type"} <= kwargs.keys(), path
+            assert "business_context_id" not in kwargs, (
+                f"{path}: the boundary owns the tenant; the caller must not pass it"
+            )
+        assert not list(_calls_named(path, "find_or_create_contact")), (
+            f"{path}: direct provider write reappeared, bypassing the boundary"
+        )

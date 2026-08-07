@@ -21,6 +21,7 @@ sys.modules.setdefault("asyncpg.exceptions", _asyncpg_exceptions)
 
 from atlas_brain.services.eom_lead_ingress import (  # noqa: E402
     EOM_BUSINESS_CONTEXT_ID,
+    resolve_or_create_eom_contact,
     resolve_or_create_eom_inbound_lead,
 )
 
@@ -520,3 +521,120 @@ def test_lifecycle_migration_records_create_once_in_contact_insert_transaction()
     assert "AFTER INSERT ON contacts" in migration
     assert "CREATE TRIGGER trg_record_eom_lead_created" in migration
     assert "ON CONFLICT (contact_id, event_type, operation_key)" in migration
+
+
+# --- D2: email_backfill through the EOM boundary (website #125) -------------
+#
+# email_backfill previously called crm.find_or_create_contact directly with a
+# hardcoded tenant literal and the default preserve_existing=False, so a name
+# derived from an email local part could merge over a curated one.
+
+
+@pytest.mark.asyncio
+async def test_backfill_returns_an_existing_eom_contact_untouched():
+    """The actual bug: derived data must never overwrite a curated record.
+
+    email_backfill infers a display name from the email local part, so a merge
+    here would replace a real customer's name with a guess.
+    """
+    existing = {
+        "id": str(uuid4()),
+        "full_name": "Margaret Ellsworth-Hayes",
+        "email": "m.hayes@example.test",
+        "business_context_id": EOM_BUSINESS_CONTEXT_ID,
+        "contact_type": "customer",
+    }
+    crm = _crm(rows=[existing])
+
+    result = await resolve_or_create_eom_contact(
+        crm,
+        full_name="M Hayes",  # what the local-part heuristic would produce
+        email="m.hayes@example.test",
+        source="email_backfill",
+        contact_type="customer",
+    )
+
+    assert result["full_name"] == "Margaret Ellsworth-Hayes"
+    assert result["_was_created"] is False
+    crm.find_or_create_contact.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_backfill_creates_with_tenant_from_the_boundary_and_customer_type():
+    """Tenant comes from the boundary constant, not a caller literal.
+
+    contact_type is honoured rather than forced to lead/new: these are people
+    who already bought, and mislabelling them would corrupt the funnel.
+    """
+    crm = _crm(created={"id": str(uuid4()), "_was_created": True})
+
+    await resolve_or_create_eom_contact(
+        crm,
+        full_name="New Person",
+        email="New.Person@Example.TEST",
+        source="email_backfill",
+        contact_type="customer",
+    )
+
+    kwargs = crm.find_or_create_contact.await_args.kwargs
+    assert kwargs["business_context_id"] == EOM_BUSINESS_CONTEXT_ID
+    assert kwargs["contact_type"] == "customer"
+    assert kwargs["source"] == "email_backfill"
+    assert kwargs["preserve_existing"] is True
+    assert kwargs["email"] == "new.person@example.test"
+
+
+@pytest.mark.asyncio
+async def test_backfill_claims_a_legacy_untenanted_contact_rather_than_duplicating():
+    """Legacy rows have business_context_id NULL and must be claimed, not forked.
+
+    Resolution order is the reason the resolver was lifted to module level and
+    shared with ingress instead of reimplemented here.
+    """
+    legacy = {
+        "id": str(uuid4()),
+        "full_name": "Legacy Customer",
+        "email": "legacy@example.test",
+        "business_context_id": None,
+    }
+    crm = _crm(rows=[legacy])
+
+    result = await resolve_or_create_eom_contact(
+        crm,
+        full_name="Legacy",
+        email="legacy@example.test",
+        source="email_backfill",
+        contact_type="customer",
+    )
+
+    assert result["id"] == legacy["id"]
+    assert result["_was_created"] is False
+    crm.find_or_create_contact.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_backfill_prefers_the_tenanted_contact_over_a_legacy_one():
+    """Scoped-before-legacy, the same precedence ingress relies on."""
+    scoped = {
+        "id": str(uuid4()),
+        "full_name": "Tenanted",
+        "email": "shared@example.test",
+        "business_context_id": EOM_BUSINESS_CONTEXT_ID,
+    }
+    legacy = {
+        "id": str(uuid4()),
+        "full_name": "Untenanted",
+        "email": "shared@example.test",
+        "business_context_id": None,
+    }
+    crm = _crm(rows=[legacy, scoped])
+
+    result = await resolve_or_create_eom_contact(
+        crm,
+        full_name="Whoever",
+        email="shared@example.test",
+        source="email_backfill",
+        contact_type="customer",
+    )
+
+    assert result["id"] == scoped["id"]
