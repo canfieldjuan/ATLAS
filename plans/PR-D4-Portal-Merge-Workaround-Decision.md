@@ -98,8 +98,9 @@ Ownership lane: eom-crm/lead-funnel
 Slice phase: production hardening
 
 1. Document, at the existing `merge_existing is False` assertion, *why* it is
-   load-bearing (five-axis-vs-two + substring, re-evaluated against 0B), so a
-   future reader cannot flip the flag and "fix" the test in one motion.
+   load-bearing -- the race-window merge behaviour (see the comparison above),
+   NOT matcher strength -- so a future reader cannot flip the flag and "fix" the
+   test in one motion.
 2. Add `test_demotable_sources_are_pinned_to_calendar_and_portal_only`. The
    demotion source list is the issue's highest-blast-radius element -- widening
    it silently archives live customers -- and was pinned by no test. This
@@ -124,7 +125,7 @@ Affected surfaces: one test file. No script, no provider, no schema.
 
 Risk areas: none material -- this adds guards to existing invariants.
 
-- Reviewer rules triggered: R2, R14.
+- Reviewer rules triggered: R1, R2, R13, R14. (R1: this decides whether the workaround satisfies website #127. R13: the guard-class closure declaration and the exact source-set assertion.)
 
 **Guard-class closure declaration -- `DEMOTABLE_SOURCES`**
 
@@ -141,9 +142,14 @@ Risk areas: none material -- this adds guards to existing invariants.
   is the authority on that customer's current membership, so *absence from the
   roster is a reliable churn signal*.
   - `portal_sync`: created from the roster; absent -> churned. In.
-  - `calendar_import`: roster-correlated -- a live booking vetoes demotion
-    (`sync_eom_portal_customers.py:564`), so absence-from-roster plus
-    no-booking is a genuine churn signal. In.
+  - `calendar_import`: roster-correlated -- a live booking is meant to veto
+    demotion (`sync_eom_portal_customers.py:564`), so absence-from-roster plus
+    no-booking should be churn. **Known gap (website #138):** the veto only
+    builds guard keys 4 months ahead while imports admit bookings 12 months
+    ahead, so a customer with a booking 5-12 months out can still be wrongly
+    demoted. In the set *as inherited from `main`*, not certified
+    unconditionally safe -- whether it should stay is the separate review #138
+    forces, and this PR does not change the set.
   - `email_backfill`: system-created, but a backfilled email address is not a
     roster-membership claim; an active customer can be absent from the portal
     system entirely. Absence is meaningless, so it must never be auto-archived.
@@ -153,6 +159,11 @@ Risk areas: none material -- this adds guards to existing invariants.
 - **Out-of-set default: NOT demotable (safe).** The demotion `UPDATE` filters
   `AND source = ANY($4)`, so any source outside the tuple -- system-managed or
   not -- simply does not match and is left active.
+- **What the guard certifies.** The pin exists to make *widening* the set a
+  visible, reviewed change (adding `manual`/`web` would mass-archive live
+  customers). It does NOT certify that every current member is bug-free:
+  `calendar_import`'s veto has the horizon gap above (#138). Widening is the
+  catastrophe this prevents; per-member correctness is tracked separately.
 - **Widening is the hazard, not narrowing.** Adding a value turns a routine sync
   into a mass archive of live customers, which is why the new test pins exact
   membership. Changing it is a deliberate, separately-reviewed decision.
@@ -197,6 +208,6 @@ $ git diff --stat origin/main -- scripts/sync_eom_portal_customers.py
 
 | File | LOC |
 |---|---:|
-| `plans/PR-D4-Portal-Merge-Workaround-Decision.md` | 202 |
-| `tests/test_sync_eom_portal_customers.py` | 33 |
-| **Total** | **235** |
+| `plans/PR-D4-Portal-Merge-Workaround-Decision.md` | 213 |
+| `tests/test_sync_eom_portal_customers.py` | 36 |
+| **Total** | **249** |
