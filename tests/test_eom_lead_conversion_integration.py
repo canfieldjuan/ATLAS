@@ -1083,6 +1083,55 @@ async def test_operator_contact_mutation_rejects_unsupported_existing_contact_ty
 
 
 @pytest.mark.asyncio
+async def test_operator_contact_mutation_rejects_legacy_lead_without_stage():
+    database_url = _database_url_or_skip()
+    schema = f"atlas_eom_operator_bad_stage_{uuid.uuid4().hex}"
+    conn = await asyncpg.connect(database_url)
+    try:
+        await _prepare_schema(conn, schema, apply_privilege_migration=False)
+        provider = DatabaseCRMProvider(pool=conn)
+        contact_id = uuid.uuid4()
+        await _insert_contact(
+            conn,
+            contact_id=contact_id,
+            business_context_id=None,
+            full_name="Legacy Unstaged Lead",
+            contact_type="lead",
+            lead_stage=None,
+            phone="2175550100",
+            email="unstaged@example.com",
+        )
+        command = EOMOperatorContactMutation.from_raw(
+            operation_key=f"operator-bad-stage-{uuid.uuid4().hex}",
+            actor_id=10,
+            actor_name="Juan Canfield",
+            source_channel="time_tracker",
+            source_ref="lead:unstaged",
+            contact_id=str(contact_id),
+            fields={"phone": "217-555-0100", "notes": "needs funnel stage"},
+        )
+
+        with pytest.raises(EOMOperatorContactMutationError) as exc_info:
+            await mutate_eom_operator_contact(provider, command)
+
+        assert exc_info.value.status_code == 409
+        row = await conn.fetchrow("SELECT * FROM contacts WHERE id = $1", contact_id)
+        assert row["business_context_id"] is None
+        assert row["contact_type"] == "lead"
+        assert row["lead_stage"] is None
+        assert row["notes"] is None
+        assert await conn.fetchval(
+            """
+            SELECT COUNT(*)
+            FROM eom_lead_lifecycle_events
+            WHERE event_type IN ('contact_created', 'contact_updated')
+            """
+        ) == 0
+    finally:
+        await conn.close()
+
+
+@pytest.mark.asyncio
 async def test_eom_lead_review_projection_is_closed_filtered_and_read_only():
     database_url = _database_url_or_skip()
     schema = f"atlas_eom_lead_review_{uuid.uuid4().hex}"

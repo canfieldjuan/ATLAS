@@ -752,6 +752,7 @@ async def test_private_operator_contact_rejects_unknown_source_channel_before_cr
         {"email": "a@@b"},
         {"email": "a b@example.com"},
         {"email": "ada\noperator@example.com"},
+        {"email": f"{'a' * 65}@example.com"},
         {"phone": "٢١٧٥٥٥٠١٠٠"},
         {"phone": "2175550100 ext 123"},
     ),

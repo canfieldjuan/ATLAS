@@ -92,6 +92,8 @@ Slice phase: vertical slice
         returns a conflict.
   - [ ] Phone resolution uses exact normalized last-10 equality, not substring
         matching; ambiguous phone/email resolution fails closed.
+  - [ ] Legacy lead rows must already have a supported EOM funnel stage before
+        this route can claim or edit them.
   - [ ] Existing lead/customer lifecycle transition ownership is not widened:
         updates through this route do not replace booking, handoff, lost, or
         reopen transitions.
@@ -275,6 +277,12 @@ Parked hardening: none.
   -- passed.
 - `python -m pytest tests/test_eom_lead_conversion.py::test_private_operator_contact_rejects_malformed_identity_before_crm_call tests/test_eom_lead_conversion.py::test_private_operator_contact_rejects_database_invalid_text_before_crm_call -q`
   -- 19 passed.
+- `python -m py_compile atlas_brain/services/eom_crm_mutations.py atlas_brain/services/crm_provider.py tests/test_eom_lead_conversion.py tests/test_eom_lead_conversion_integration.py`
+  -- passed.
+- `python -m pytest tests/test_eom_lead_conversion.py::test_private_operator_contact_rejects_malformed_identity_before_crm_call -q`
+  -- 6 passed.
+- `ATLAS_MIGRATION_TEST_DATABASE_URL=postgresql://atlas@127.0.0.1:5433/atlas python -m pytest tests/test_eom_lead_conversion_integration.py::test_operator_contact_mutation_rejects_legacy_lead_without_stage -q`
+  -- 1 passed.
 - `ATLAS_MIGRATION_TEST_DATABASE_URL=postgresql://atlas@127.0.0.1:5433/atlas python -m pytest tests/test_eom_lead_conversion_integration.py::test_operator_contact_mutation_rejects_non_object_contact_metadata -q`
   -- 1 passed.
 - `python -m py_compile atlas_brain/services/crm_provider.py tests/test_eom_lead_conversion_integration.py`
@@ -323,15 +331,15 @@ Parked hardening: none.
 | File | LOC |
 |---|---:|
 | `atlas_brain/eom_api/funnel.py` | 151 |
-| `atlas_brain/services/crm_provider.py` | 533 |
-| `atlas_brain/services/eom_crm_mutations.py` | 283 |
+| `atlas_brain/services/crm_provider.py` | 541 |
+| `atlas_brain/services/eom_crm_mutations.py` | 287 |
 | `atlas_brain/services/eom_lead_ingress.py` | 18 |
 | `atlas_brain/storage/migrations/364_eom_operator_contact_operation_key_index.sql` | 29 |
-| `plans/PR-EOM-Operator-Mutation-Contract.md` | 337 |
+| `plans/PR-EOM-Operator-Mutation-Contract.md` | 345 |
 | `tests/contact_write_boundary/baseline.json` | 1 |
 | `tests/test_contact_write_boundary.py` | 6 |
-| `tests/test_eom_lead_conversion.py` | 258 |
-| `tests/test_eom_lead_conversion_integration.py` | 880 |
+| `tests/test_eom_lead_conversion.py` | 259 |
+| `tests/test_eom_lead_conversion_integration.py` | 929 |
 | `tests/test_migrations_runner.py` | 45 |
 | `tests/test_tenant_stamping.py` | 76 |
-| **Total** | **2617** |
+| **Total** | **2687** |

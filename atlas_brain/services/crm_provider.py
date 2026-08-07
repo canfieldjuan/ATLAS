@@ -155,6 +155,7 @@ _ALL_EOM_REQUESTED_EVENTS = frozenset(
     family.requested_event for family in _EOM_BOOKING_FAMILIES
 )
 _EOM_LOST_RESTORABLE_STAGES = ("new", "estimate_booked")
+_EOM_ACTIVE_LEAD_STAGES = ("new", "estimate_booked", "won")
 _EOM_LOST_REPLAY_DISPOSITION_EVENTS = ("lead_lost", "lead_reopened")
 _EOM_OPERATOR_CONTACT_SOURCES_METADATA_KEY = "eom_operator_contact_sources"
 
@@ -1216,6 +1217,13 @@ class DatabaseCRMProvider:
                 raise EOMOperatorContactMutationError(
                     409,
                     "EOM operator contact updates require an existing lead or customer",
+                )
+            if (
+                stored_type == "lead"
+                and target.get("lead_stage") not in _EOM_ACTIVE_LEAD_STAGES
+            ):
+                raise EOMOperatorContactMutationError(
+                    409, "EOM operator lead updates require a supported lead stage"
                 )
             if command.contact_type is None:
                 return

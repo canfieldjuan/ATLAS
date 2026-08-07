@@ -52,6 +52,8 @@ _FIELD_LIMITS = {
     "zip": 16,
 }
 _EMAIL_MIN_LENGTH = 3
+_EMAIL_LOCAL_MAX_LENGTH = 64
+_EMAIL_DOMAIN_MAX_LENGTH = 255
 _SOURCE_REF_MAX_LENGTH = 220
 _CONTACT_SOURCE = "manual"
 _EMAIL_LOCAL_RE = re.compile(r"^[A-Za-z0-9.!#$%&'*+/=?^_`{|}~-]+$")
@@ -106,6 +108,8 @@ def _normalize_email(value: Any) -> str | None:
         not local
         or local.startswith(".")
         or local.endswith(".")
+        or len(local) > _EMAIL_LOCAL_MAX_LENGTH
+        or len(domain) > _EMAIL_DOMAIN_MAX_LENGTH
         or ".." in local
         or not _EMAIL_LOCAL_RE.fullmatch(local)
         or len(labels) < 2
