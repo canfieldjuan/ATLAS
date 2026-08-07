@@ -797,6 +797,8 @@ async def test_private_operator_contact_rejects_malformed_identity_before_crm_ca
         {"zip": "624\ud80001"},
         {"notes": "bring\x00supplies"},
         {"notes": "bring\ud800supplies"},
+        {"contactType": "\ud800"},
+        {"unexpected\ud800": "value"},
     ),
 )
 async def test_private_operator_contact_rejects_database_invalid_text_before_crm_call(

@@ -49,7 +49,7 @@ _STORED_PHONE_IDENTITY_DIGITS_SQL = (
     "REGEXP_REPLACE("
     "REGEXP_REPLACE("
     "COALESCE(phone, ''), "
-    "'(^|[-[:space:],;#/()])(ext|extension|x)\\.?[[:space:]]*[0-9]+[[:space:]]*$', "
+    "'(extension|ext|x)\\.?[[:space:]]*[0-9]+[[:space:]]*$', "
     "'', "
     "'i'"
     "), "
@@ -1224,6 +1224,10 @@ class DatabaseCRMProvider:
             ):
                 raise EOMOperatorContactMutationError(
                     409, "EOM operator lead updates require a supported lead stage"
+                )
+            if stored_type == "lead" and target.get("status") != "active":
+                raise EOMOperatorContactMutationError(
+                    409, "EOM operator lead updates require an active lead"
                 )
             if command.contact_type is None:
                 return

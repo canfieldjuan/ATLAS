@@ -64,6 +64,21 @@ _RECIPIENT_EMAIL_PATTERN = re.compile(r"^[^@\s]+@[^@\s]+\.[^@\s]+$")
 _ONBOARDING_DRAFT_STATUSES = ("pending", "sending", "sent", "revoked")
 
 
+def _route_surrogates_to_safe_text(value: Any) -> Any:
+    if isinstance(value, str):
+        if any(0xD800 <= ord(char) <= 0xDFFF for char in value):
+            return "\x00"
+        return value
+    if isinstance(value, Mapping):
+        return {
+            _route_surrogates_to_safe_text(key): _route_surrogates_to_safe_text(item)
+            for key, item in value.items()
+        }
+    if isinstance(value, list):
+        return [_route_surrogates_to_safe_text(item) for item in value]
+    return value
+
+
 class EOMCustomerHandoffRequest(BaseModel):
     """Tracker-owned customer/site IDs; never operational estimate details."""
 
@@ -159,6 +174,11 @@ class EOMOperatorContactRequest(BaseModel):
         str,
         Field(min_length=1, max_length=220, alias="sourceRef"),
     ]
+
+    @model_validator(mode="before")
+    @classmethod
+    def _sanitize_request_surrogates(cls, value: Any) -> Any:
+        return _route_surrogates_to_safe_text(value)
 
     @field_validator(
         "full_name",

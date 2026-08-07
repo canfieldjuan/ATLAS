@@ -949,7 +949,13 @@ async def test_operator_contact_mutation_rejects_ambiguous_exact_identity():
 
 
 @pytest.mark.asyncio
-async def test_operator_contact_mutation_matches_stored_phone_with_extension():
+@pytest.mark.parametrize(
+    "stored_phone",
+    ("2175550100 ext 123", "2175550100x123"),
+)
+async def test_operator_contact_mutation_matches_stored_phone_with_extension(
+    stored_phone: str,
+):
     database_url = _database_url_or_skip()
     schema = f"atlas_eom_operator_extension_match_{uuid.uuid4().hex}"
     conn = await asyncpg.connect(database_url)
@@ -962,7 +968,7 @@ async def test_operator_contact_mutation_matches_stored_phone_with_extension():
             contact_id=contact_id,
             business_context_id=None,
             full_name="Legacy Extension Match",
-            phone="2175550100 ext 123",
+            phone=stored_phone,
             contact_type="customer",
             lead_stage=None,
         )
@@ -988,7 +994,13 @@ async def test_operator_contact_mutation_matches_stored_phone_with_extension():
 
 
 @pytest.mark.asyncio
-async def test_operator_contact_mutation_does_not_match_extension_suffix():
+@pytest.mark.parametrize(
+    "stored_phone",
+    ("2175550100 ext 123", "2175550100x123"),
+)
+async def test_operator_contact_mutation_does_not_match_extension_suffix(
+    stored_phone: str,
+):
     database_url = _database_url_or_skip()
     schema = f"atlas_eom_operator_extension_suffix_{uuid.uuid4().hex}"
     conn = await asyncpg.connect(database_url)
@@ -1001,7 +1013,7 @@ async def test_operator_contact_mutation_does_not_match_extension_suffix():
             contact_id=existing_id,
             business_context_id=None,
             full_name="Legacy Extension Suffix",
-            phone="2175550100 ext 123",
+            phone=stored_phone,
             email="legacy-extension@example.com",
             contact_type="customer",
             lead_stage=None,
@@ -1027,7 +1039,7 @@ async def test_operator_contact_mutation_does_not_match_extension_suffix():
         )
         assert len(rows) == 2
         legacy = next(row for row in rows if row["id"] == existing_id)
-        assert legacy["phone"] == "2175550100 ext 123"
+        assert legacy["phone"] == stored_phone
         assert legacy["email"] == "legacy-extension@example.com"
     finally:
         await conn.close()
@@ -1119,6 +1131,57 @@ async def test_operator_contact_mutation_rejects_legacy_lead_without_stage():
         assert row["business_context_id"] is None
         assert row["contact_type"] == "lead"
         assert row["lead_stage"] is None
+        assert row["notes"] is None
+        assert await conn.fetchval(
+            """
+            SELECT COUNT(*)
+            FROM eom_lead_lifecycle_events
+            WHERE event_type IN ('contact_created', 'contact_updated')
+            """
+        ) == 0
+    finally:
+        await conn.close()
+
+
+@pytest.mark.asyncio
+async def test_operator_contact_mutation_rejects_inactive_legacy_lead():
+    database_url = _database_url_or_skip()
+    schema = f"atlas_eom_operator_inactive_lead_{uuid.uuid4().hex}"
+    conn = await asyncpg.connect(database_url)
+    try:
+        await _prepare_schema(conn, schema, apply_privilege_migration=False)
+        provider = DatabaseCRMProvider(pool=conn)
+        contact_id = uuid.uuid4()
+        await _insert_contact(
+            conn,
+            contact_id=contact_id,
+            business_context_id=None,
+            full_name="Inactive Legacy Lead",
+            contact_type="lead",
+            lead_stage="new",
+            status="inactive",
+            phone="2175550100",
+            email="inactive-lead@example.com",
+        )
+        command = EOMOperatorContactMutation.from_raw(
+            operation_key=f"operator-inactive-lead-{uuid.uuid4().hex}",
+            actor_id=10,
+            actor_name="Juan Canfield",
+            source_channel="time_tracker",
+            source_ref="lead:inactive",
+            contact_id=str(contact_id),
+            fields={"phone": "217-555-0100", "notes": "needs active status"},
+        )
+
+        with pytest.raises(EOMOperatorContactMutationError) as exc_info:
+            await mutate_eom_operator_contact(provider, command)
+
+        assert exc_info.value.status_code == 409
+        row = await conn.fetchrow("SELECT * FROM contacts WHERE id = $1", contact_id)
+        assert row["business_context_id"] is None
+        assert row["contact_type"] == "lead"
+        assert row["lead_stage"] == "new"
+        assert row["status"] == "inactive"
         assert row["notes"] is None
         assert await conn.fetchval(
             """
