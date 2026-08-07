@@ -101,6 +101,7 @@ class LeadIntakeRequest(BaseModel):
     name: str = Field(min_length=1, max_length=200)
     email: str = Field(default="", max_length=254)
     phone: str = Field(default="", max_length=32)
+    address: str = Field(default="", max_length=300)
     service: str = Field(default="", max_length=120)
     frequency: str = Field(default="", max_length=120)
     square_feet: str = Field(default="", max_length=40)
@@ -271,6 +272,7 @@ async def _process_lead_intake(
         # lost (PR #2153 round 4, R1/R6).
         "submitted_email": email,
         "submitted_phone": phone_digits,
+        "submitted_address": payload.address.strip(),
     }
     if attribution:
         metadata["attribution"] = attribution
@@ -283,7 +285,7 @@ async def _process_lead_intake(
         full_name=payload.name.strip(),
         email=email or None,
         phone=phone_digits if len(phone_digits) >= 10 else None,
-        address=None,
+        address=payload.address.strip() or None,
         source="web",
         source_ref="website_estimate_form",
         tags=["website", "estimate_request"],

@@ -128,6 +128,32 @@ async def test_contact_stamped_with_eom_tenant_and_web_source():
     assert kwargs["preserve_existing"] is True
     assert kwargs["email"] == "jane@example.com"
     assert kwargs["phone"] == "2175550100"  # digits-only normalization
+    assert kwargs["address"] is None  # base payload submits no address
+
+
+@pytest.mark.asyncio
+async def test_address_forwarded_to_crm_and_recorded_on_interaction():
+    crm, provider = _crm(), _email_provider()
+    await _process_lead_intake(
+        _payload(address="207 Santa Fe Ave, Effingham, IL 62401"),
+        crm=crm,
+        email_provider=provider,
+    )
+    assert (
+        crm.find_or_create_contact.call_args.kwargs["address"]
+        == "207 Santa Fe Ave, Effingham, IL 62401"
+    )
+    assert (
+        crm.log_interaction.call_args.kwargs["metadata"]["submitted_address"]
+        == "207 Santa Fe Ave, Effingham, IL 62401"
+    )
+
+
+@pytest.mark.asyncio
+async def test_blank_address_collapses_to_none_on_create():
+    crm, provider = _crm(), _email_provider()
+    await _process_lead_intake(_payload(address="   "), crm=crm, email_provider=provider)
+    assert crm.find_or_create_contact.call_args.kwargs["address"] is None
 
 
 # ---------------------------------------------------------------------------
