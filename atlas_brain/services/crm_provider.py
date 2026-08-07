@@ -49,8 +49,8 @@ _STORED_PHONE_IDENTITY_DIGITS_SQL = (
     "REGEXP_REPLACE("
     "REGEXP_REPLACE("
     "COALESCE(phone, ''), "
-    "'(extension|ext|x)\\.?[[:space:]]*[0-9]+[[:space:]]*$', "
-    "'', "
+    "'([0-9])[-[:space:],;#/()]*(extension|ext|x)\\.?[[:space:]]*[0-9]+[[:space:]]*$', "
+    "'\\1', "
     "'i'"
     "), "
     "'[^0-9]', "
@@ -1097,12 +1097,36 @@ class DatabaseCRMProvider:
         ) -> tuple[dict[str, Any], bool]:
             metadata = _metadata_from_row(target.get("metadata"))
             raw_sources = metadata.get(_EOM_OPERATOR_CONTACT_SOURCES_METADATA_KEY)
-            sources = dict(raw_sources) if isinstance(raw_sources, Mapping) else {}
             source_record = {
                 "source": command.contact_source,
                 "source_channel": command.source_channel,
                 "source_ref": command.source_ref,
             }
+            if raw_sources is None:
+                sources = {}
+            elif not isinstance(raw_sources, Mapping):
+                raise EOMOperatorContactMutationError(
+                    409, "EOM operator contact provenance metadata must be an object"
+                )
+            else:
+                sources = {}
+                for key, record in raw_sources.items():
+                    if not isinstance(key, str) or not isinstance(record, Mapping):
+                        raise EOMOperatorContactMutationError(
+                            409,
+                            "EOM operator contact provenance metadata must be an object",
+                        )
+                    if set(record) != {"source", "source_channel", "source_ref"}:
+                        raise EOMOperatorContactMutationError(
+                            409,
+                            "EOM operator contact provenance metadata must be an object",
+                        )
+                    if not all(isinstance(record[field], str) for field in record):
+                        raise EOMOperatorContactMutationError(
+                            409,
+                            "EOM operator contact provenance metadata must be an object",
+                        )
+                    sources[key] = dict(record)
             if sources.get(command.contact_source_ref) == source_record:
                 return metadata, False
             sources[command.contact_source_ref] = source_record
@@ -1136,7 +1160,12 @@ class DatabaseCRMProvider:
                     FROM contacts
                     WHERE business_context_id = $1
                       AND status != 'archived'
-                      AND COALESCE(metadata -> $5, '{{}}'::jsonb) ? $3
+                      AND jsonb_typeof(metadata -> $5) = 'object'
+                      AND metadata -> $5 -> $3 = jsonb_build_object(
+                          'source', $2::text,
+                          'source_channel', $8::text,
+                          'source_ref', $9::text
+                      )
                     UNION
                     SELECT id
                     FROM contacts
@@ -1166,10 +1195,50 @@ class DatabaseCRMProvider:
                 _EOM_OPERATOR_CONTACT_SOURCES_METADATA_KEY,
                 phone,
                 email,
+                command.source_channel,
+                command.source_ref,
             )
             return [dict(row) for row in rows]
 
+        async def _reject_malformed_source_provenance(conn: Any) -> None:
+            malformed = await conn.fetchrow(
+                """
+                SELECT id
+                FROM contacts
+                WHERE business_context_id = $1
+                  AND status != 'archived'
+                  AND metadata ? $2
+                  AND (
+                      (
+                          jsonb_typeof(metadata -> $2) != 'object'
+                          AND COALESCE(metadata -> $2, 'null'::jsonb) ? $3
+                      )
+                      OR (
+                          jsonb_typeof(metadata -> $2) = 'object'
+                          AND (metadata -> $2) ? $3
+                          AND metadata -> $2 -> $3 != jsonb_build_object(
+                              'source', $4::text,
+                              'source_channel', $5::text,
+                              'source_ref', $6::text
+                          )
+                      )
+                  )
+                LIMIT 1
+                """,
+                EOM_BUSINESS_CONTEXT_ID,
+                _EOM_OPERATOR_CONTACT_SOURCES_METADATA_KEY,
+                command.contact_source_ref,
+                command.contact_source,
+                command.source_channel,
+                command.source_ref,
+            )
+            if malformed is not None:
+                raise EOMOperatorContactMutationError(
+                    409, "EOM operator contact provenance metadata must be an object"
+                )
+
         async def _resolve_target(conn: Any) -> dict[str, Any] | None:
+            await _reject_malformed_source_provenance(conn)
             matches = _dedupe_rows_by_id(
                 await _select_exact_matches(
                     conn,

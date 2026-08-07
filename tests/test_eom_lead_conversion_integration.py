@@ -524,6 +524,68 @@ async def test_operator_contact_mutation_rejects_non_object_contact_metadata():
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "source_metadata",
+    (
+        ["time_tracker:customer:malformed-provenance"],
+        {"time_tracker:customer:malformed-provenance": "not-a-record"},
+    ),
+)
+async def test_operator_contact_mutation_rejects_malformed_source_provenance(
+    source_metadata: object,
+):
+    database_url = _database_url_or_skip()
+    schema = f"atlas_eom_operator_bad_source_metadata_{uuid.uuid4().hex}"
+    conn = await asyncpg.connect(database_url)
+    try:
+        await _prepare_schema(conn, schema, apply_privilege_migration=False)
+        provider = DatabaseCRMProvider(pool=conn)
+        contact_id = uuid.uuid4()
+        metadata = {"eom_operator_contact_sources": source_metadata}
+        await _insert_contact(
+            conn,
+            contact_id=contact_id,
+            full_name="Malformed Source Metadata",
+            phone="2175550100",
+            contact_type="customer",
+            lead_stage=None,
+            source="legacy",
+        )
+        await conn.execute(
+            "UPDATE contacts SET metadata = $2::jsonb WHERE id = $1",
+            contact_id,
+            json.dumps(metadata, sort_keys=True),
+        )
+        command = EOMOperatorContactMutation.from_raw(
+            operation_key=f"operator-bad-source-metadata-{uuid.uuid4().hex}",
+            actor_id=8,
+            actor_name="Juan Canfield",
+            source_channel="time_tracker",
+            source_ref="customer:malformed-provenance",
+            fields={"full_name": "Must Not Mutate"},
+        )
+
+        with pytest.raises(EOMOperatorContactMutationError) as exc_info:
+            await mutate_eom_operator_contact(provider, command)
+
+        assert exc_info.value.status_code == 409
+        row = await conn.fetchrow(
+            "SELECT full_name, metadata::text FROM contacts WHERE id = $1", contact_id
+        )
+        assert row["full_name"] == "Malformed Source Metadata"
+        assert json.loads(row["metadata"]) == metadata
+        assert await conn.fetchval(
+            """
+            SELECT COUNT(*)
+            FROM eom_lead_lifecycle_events
+            WHERE event_type IN ('contact_created', 'contact_updated')
+            """
+        ) == 0
+    finally:
+        await conn.close()
+
+
+@pytest.mark.asyncio
 async def test_inbound_atomic_uses_ascii_phone_normalizer_for_relay_identity():
     database_url = _database_url_or_skip()
     schema = f"atlas_eom_inbound_unicode_phone_{uuid.uuid4().hex}"
@@ -951,7 +1013,7 @@ async def test_operator_contact_mutation_rejects_ambiguous_exact_identity():
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
     "stored_phone",
-    ("2175550100 ext 123", "2175550100x123"),
+    ("2175550100 ext 123", "2175550100x123", "fax2175550100"),
 )
 async def test_operator_contact_mutation_matches_stored_phone_with_extension(
     stored_phone: str,
