@@ -28,8 +28,9 @@ The real differential is the merge MODE, which the code docstring already names
   into whatever it matches.
 
 `resolve_contact` runs the full five-rung ladder (portal_customer_id,
-atlasContactId, phone, email, address -- the last three via the *same*
-`_search_channel`) **before** `create_contact` is ever reached. If it matched,
+atlasContactId, phone, email, address -- phone and email via the *same*
+`_search_channel` as the create path, address via `resolve_by_address`) **before**
+`create_contact` is ever reached. If it matched,
 the portal sync is on the update path; `create_contact` is reached only when
 resolution already found nothing. So in the common case the two modes are
 equivalent -- both re-query, find nothing, insert. They diverge only in the race
@@ -67,12 +68,14 @@ weighed:
    the shared-normalized-identity check, `sync_eom_portal_customers.py:249,263`);
    it requires two *overlapping* runs to surface at all.
 3. **There is a better fix for the duplicate than flipping the seam**: a partial
-   unique index on `(business_context_id, metadata->>'portal_customer_id')`,
-   which `create_contact`'s own docstring already anticipates ("migration 037
-   should add a DB-level partial unique index"). That closes the duplicate
-   without taking on the cross-link risk. If same-customer duplicates ever become
-   real operationally, that index -- not `merge_existing=True` -- is the fix, and
-   it is filed as website #137 rather than done here.
+   unique index on `(business_context_id, metadata->>'portal_customer_id')`
+   closes the duplicate at the DB level without taking on the cross-link risk. If
+   same-customer duplicates ever become real operationally, that index -- not
+   `merge_existing=True` -- is the fix, filed as website #137 rather than done
+   here. (The `create_contact` docstring does gesture at a DB-level partial
+   unique index "for extra safety", but for phone/email dedup, and its "migration
+   037" pointer is stale -- 037 is `037_plan_status.sql` -- so the index stands
+   on its own merit, not on that reference.)
 
 **Outcome: KEEP `merge_existing=False`**, as a weighed tradeoff. 0B does not
 change either side of it.
@@ -194,6 +197,6 @@ $ git diff --stat origin/main -- scripts/sync_eom_portal_customers.py
 
 | File | LOC |
 |---|---:|
-| `plans/PR-D4-Portal-Merge-Workaround-Decision.md` | 199 |
-| `tests/test_sync_eom_portal_customers.py` | 30 |
-| **Total** | **229** |
+| `plans/PR-D4-Portal-Merge-Workaround-Decision.md` | 202 |
+| `tests/test_sync_eom_portal_customers.py` | 33 |
+| **Total** | **235** |
