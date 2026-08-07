@@ -19,6 +19,23 @@ tier. 0B's authenticated endpoint, idempotency ledger and receipts stay deferred
 until 0C has a remote caller for them -- building an endpoint with no consumer
 is what produced the unarbitrable review loops earlier in this arc.
 
+### Why this slice is over the 400-LOC target
+
+~438 added lines, of which the production behaviour change is small: one call
+swap in `email_backfill.py` and one new function in `eom_lead_ingress.py`. The
+lifted resolver is a **move**, not new code -- git counts it as added at module
+scope and removed from the closure, inflating the number by a block that already
+existed. The rest is tests (~183) and this required plan doc (~165).
+
+Not splittable. The three production pieces -- lift the shared resolver, add the
+sibling that uses it, migrate the caller to the sibling -- are one change: a
+caller pointing at a function that does not exist yet, or a function with no
+caller, is not an independently reviewable slice. The test weight is the point,
+not padding: this boundary's whole value is where it refuses to write (claim vs
+overwrite vs duplicate), so it needs both sides of each guarantee, and the
+BLOCKER round on the legacy-claim path is exactly why -- the missing assertion
+was a real hole, not ceremony.
+
 ### Problem-derived contract
 
 - Root cause: an EOM-tenant write outside the EOM boundary, so it inherits none
@@ -159,7 +176,7 @@ Live state confirmed unchanged: `email_backfill enabled=false` in
 |---|---:|
 | `atlas_brain/autonomous/tasks/email_backfill.py` | 11 |
 | `atlas_brain/services/eom_lead_ingress.py` | 94 |
-| `plans/PR-D2-Email-Backfill-Boundary.md` | 165 |
+| `plans/PR-D2-Email-Backfill-Boundary.md` | 182 |
 | `tests/test_eom_lead_ingress.py` | 155 |
 | `tests/test_tenant_stamping.py` | 29 |
-| **Total** | **454** |
+| **Total** | **471** |
