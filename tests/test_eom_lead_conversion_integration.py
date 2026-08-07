@@ -457,6 +457,55 @@ async def test_operator_contact_mutation_updates_exact_match_and_claims_legacy()
 
 
 @pytest.mark.asyncio
+async def test_operator_contact_mutation_rejects_non_object_contact_metadata():
+    database_url = _database_url_or_skip()
+    schema = f"atlas_eom_operator_non_object_metadata_{uuid.uuid4().hex}"
+    conn = await asyncpg.connect(database_url)
+    try:
+        await _prepare_schema(conn, schema, apply_privilege_migration=False)
+        provider = DatabaseCRMProvider(pool=conn)
+        contact_id = uuid.uuid4()
+        await _insert_contact(
+            conn,
+            contact_id=contact_id,
+            full_name="Legacy Metadata Shape",
+            phone="2175550100",
+            contact_type="customer",
+            lead_stage=None,
+            source="legacy",
+        )
+        await conn.execute(
+            "UPDATE contacts SET metadata = '[\"legacy\"]'::jsonb WHERE id = $1",
+            contact_id,
+        )
+        command = EOMOperatorContactMutation.from_raw(
+            operation_key=f"operator-non-object-metadata-{uuid.uuid4().hex}",
+            actor_id=8,
+            actor_name="Juan Canfield",
+            source_channel="time_tracker",
+            source_ref="customer:non-object-metadata",
+            fields={"phone": "217-555-0100", "notes": "must not overwrite metadata"},
+        )
+
+        with pytest.raises(EOMOperatorContactMutationError) as exc_info:
+            await mutate_eom_operator_contact(provider, command)
+
+        assert exc_info.value.status_code == 409
+        assert await conn.fetchval(
+            "SELECT metadata::text FROM contacts WHERE id = $1", contact_id
+        ) == '["legacy"]'
+        assert await conn.fetchval(
+            """
+            SELECT COUNT(*)
+            FROM eom_lead_lifecycle_events
+            WHERE event_type IN ('contact_created', 'contact_updated')
+            """
+        ) == 0
+    finally:
+        await conn.close()
+
+
+@pytest.mark.asyncio
 async def test_inbound_atomic_uses_ascii_phone_normalizer_for_relay_identity():
     database_url = _database_url_or_skip()
     schema = f"atlas_eom_inbound_unicode_phone_{uuid.uuid4().hex}"

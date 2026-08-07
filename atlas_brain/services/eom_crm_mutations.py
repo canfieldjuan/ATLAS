@@ -57,6 +57,10 @@ _CONTACT_SOURCE = "manual"
 _EMAIL_LOCAL_RE = re.compile(r"^[A-Za-z0-9.!#$%&'*+/=?^_`{|}~-]+$")
 _EMAIL_DOMAIN_LABEL_RE = re.compile(r"^[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?$")
 _DATABASE_INVALID_TEXT_CHARS = frozenset({"\x00"})
+_PHONE_EXTENSION_RE = re.compile(
+    r"(?:^|[\s,;#/()-])(?:ext|extension|x)\.?\s*\d+\s*$", re.I
+)
+_PHONE_ALLOWED_RE = re.compile(r"^[0-9\s()+.\-]*$")
 
 
 class EOMOperatorContactMutationError(Exception):
@@ -75,7 +79,10 @@ def _blank_to_none(value: Any) -> Any:
 
 
 def _reject_database_invalid_text(field: str, value: str) -> None:
-    if any(char in value for char in _DATABASE_INVALID_TEXT_CHARS):
+    if any(
+        char in _DATABASE_INVALID_TEXT_CHARS or 0xD800 <= ord(char) <= 0xDFFF
+        for char in value
+    ):
         raise EOMOperatorContactMutationError(422, f"{field} must be valid")
 
 
@@ -114,6 +121,12 @@ def _normalize_phone(value: Any) -> str | None:
         return None
     if not isinstance(normalized, str):
         raise EOMOperatorContactMutationError(422, "phone must be a string")
+    if _PHONE_EXTENSION_RE.search(normalized) or not _PHONE_ALLOWED_RE.fullmatch(
+        normalized
+    ):
+        raise EOMOperatorContactMutationError(
+            422, "phone must not include an extension"
+        )
     digits = normalise_eom_phone_digits(normalized)
     if len(digits) < 10:
         raise EOMOperatorContactMutationError(

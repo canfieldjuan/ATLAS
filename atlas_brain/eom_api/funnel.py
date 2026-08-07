@@ -160,6 +160,27 @@ class EOMOperatorContactRequest(BaseModel):
         Field(min_length=1, max_length=220, alias="sourceRef"),
     ]
 
+    @field_validator(
+        "full_name",
+        "email",
+        "phone",
+        "address",
+        "city",
+        "state",
+        "zip",
+        "notes",
+        "source_channel",
+        "source_ref",
+        mode="before",
+    )
+    @classmethod
+    def _route_surrogates_to_domain_validation(cls, value: Any) -> Any:
+        if isinstance(value, str) and any(
+            0xD800 <= ord(char) <= 0xDFFF for char in value
+        ):
+            return "\x00"
+        return value
+
 
 class EOMLeadReviewItem(BaseModel):
     """The only CRM identity data the office-review queue may expose."""

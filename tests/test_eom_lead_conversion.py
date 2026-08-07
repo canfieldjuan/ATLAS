@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 from contextlib import asynccontextmanager
 from datetime import datetime, timedelta, timezone
 from types import SimpleNamespace
@@ -752,6 +753,7 @@ async def test_private_operator_contact_rejects_unknown_source_channel_before_cr
         {"email": "a b@example.com"},
         {"email": "ada\noperator@example.com"},
         {"phone": "٢١٧٥٥٥٠١٠٠"},
+        {"phone": "2175550100 ext 123"},
     ),
 )
 async def test_private_operator_contact_rejects_malformed_identity_before_crm_call(
@@ -762,10 +764,14 @@ async def test_private_operator_contact_rejects_malformed_identity_before_crm_ca
     async with httpx.AsyncClient(
         transport=httpx.ASGITransport(app=app), base_url="http://test"
     ) as client:
+        headers = {
+            **_headers(approval_key=f"office-contact-{uuid4().hex}"),
+            "Content-Type": "application/json",
+        }
         response = await client.post(
             "/eom-funnel/operator-contacts",
-            headers=_headers(approval_key=f"office-contact-{uuid4().hex}"),
-            json=_operator_contact_payload(**payload_updates),
+            headers=headers,
+            content=json.dumps(_operator_contact_payload(**payload_updates)),
         )
 
     assert response.status_code == 422
@@ -777,15 +783,22 @@ async def test_private_operator_contact_rejects_malformed_identity_before_crm_ca
     "payload_updates",
     (
         {"sourceRef": "customer:\x0042"},
+        {"sourceRef": "customer:\ud80042"},
         {"fullName": "Ada\x00Operator"},
+        {"fullName": "Ada\ud800Operator"},
         {"address": "100\x00Main"},
+        {"address": "100\ud800Main"},
         {"city": "Effingham\x00"},
+        {"city": "Effingham\ud800"},
         {"state": "I\x00L"},
+        {"state": "I\ud800L"},
         {"zip": "624\x0001"},
+        {"zip": "624\ud80001"},
         {"notes": "bring\x00supplies"},
+        {"notes": "bring\ud800supplies"},
     ),
 )
-async def test_private_operator_contact_rejects_nul_text_before_crm_call(
+async def test_private_operator_contact_rejects_database_invalid_text_before_crm_call(
     payload_updates: dict[str, str],
 ):
     crm = _CRM()
@@ -793,10 +806,14 @@ async def test_private_operator_contact_rejects_nul_text_before_crm_call(
     async with httpx.AsyncClient(
         transport=httpx.ASGITransport(app=app), base_url="http://test"
     ) as client:
+        headers = {
+            **_headers(approval_key=f"office-contact-{uuid4().hex}"),
+            "Content-Type": "application/json",
+        }
         response = await client.post(
             "/eom-funnel/operator-contacts",
-            headers=_headers(approval_key=f"office-contact-{uuid4().hex}"),
-            json=_operator_contact_payload(**payload_updates),
+            headers=headers,
+            content=json.dumps(_operator_contact_payload(**payload_updates)),
         )
 
     assert response.status_code == 422

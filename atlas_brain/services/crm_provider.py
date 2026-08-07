@@ -1035,13 +1035,19 @@ class DatabaseCRMProvider:
         def _metadata_from_row(value: Any) -> dict[str, Any]:
             if value is None:
                 return {}
+            loaded: Any = value
             if isinstance(value, str):
                 try:
                     loaded = json.loads(value)
                 except json.JSONDecodeError:
-                    return {}
-                return loaded if isinstance(loaded, dict) else {}
-            return dict(value)
+                    raise EOMOperatorContactMutationError(
+                        409, "EOM operator contact metadata must be an object"
+                    )
+            if not isinstance(loaded, Mapping):
+                raise EOMOperatorContactMutationError(
+                    409, "EOM operator contact metadata must be an object"
+                )
+            return dict(loaded)
 
         def _event_result(
             *,

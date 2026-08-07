@@ -262,6 +262,12 @@ Parked hardening: none.
   -- 1 passed.
 - `python -m pytest tests/test_eom_lead_conversion.py tests/test_tenant_stamping.py tests/test_migrations_runner.py tests/test_contact_write_boundary.py -q`
   -- 293 passed, 1 skipped, 1 warning.
+- `python -m py_compile atlas_brain/eom_api/funnel.py atlas_brain/services/eom_crm_mutations.py atlas_brain/services/crm_provider.py tests/test_eom_lead_conversion.py tests/test_eom_lead_conversion_integration.py`
+  -- passed.
+- `python -m pytest tests/test_eom_lead_conversion.py::test_private_operator_contact_rejects_malformed_identity_before_crm_call tests/test_eom_lead_conversion.py::test_private_operator_contact_rejects_database_invalid_text_before_crm_call -q`
+  -- 19 passed.
+- `ATLAS_MIGRATION_TEST_DATABASE_URL=postgresql://atlas@127.0.0.1:5433/atlas python -m pytest tests/test_eom_lead_conversion_integration.py::test_operator_contact_mutation_rejects_non_object_contact_metadata -q`
+  -- 1 passed.
 - `ATLAS_MIGRATION_TEST_DATABASE_URL=postgresql://atlas@127.0.0.1:5433/atlas python -m pytest tests/test_eom_lead_conversion_integration.py -q -k "operator_contact_mutation or inbound_atomic_uses_ascii_phone_normalizer or share_phone_identity_lock"`
   -- 6 passed, 46 deselected.
 - `python -m pytest tests/test_crm_read_scoping.py tests/test_leads_intake.py tests/test_eom_lead_conversion.py tests/test_tenant_stamping.py tests/test_migrations_runner.py tests/test_contact_write_boundary.py -q`
@@ -283,16 +289,16 @@ Parked hardening: none.
 
 | File | LOC |
 |---|---:|
-| `atlas_brain/eom_api/funnel.py` | 130 |
-| `atlas_brain/services/crm_provider.py` | 514 |
-| `atlas_brain/services/eom_crm_mutations.py` | 269 |
+| `atlas_brain/eom_api/funnel.py` | 151 |
+| `atlas_brain/services/crm_provider.py` | 520 |
+| `atlas_brain/services/eom_crm_mutations.py` | 282 |
 | `atlas_brain/services/eom_lead_ingress.py` | 18 |
 | `atlas_brain/storage/migrations/364_eom_operator_contact_operation_key_index.sql` | 29 |
-| `plans/PR-EOM-Operator-Mutation-Contract.md` | 298 |
+| `plans/PR-EOM-Operator-Mutation-Contract.md` | 304 |
 | `tests/contact_write_boundary/baseline.json` | 1 |
 | `tests/test_contact_write_boundary.py` | 6 |
-| `tests/test_eom_lead_conversion.py` | 241 |
-| `tests/test_eom_lead_conversion_integration.py` | 647 |
+| `tests/test_eom_lead_conversion.py` | 258 |
+| `tests/test_eom_lead_conversion_integration.py` | 696 |
 | `tests/test_migrations_runner.py` | 45 |
 | `tests/test_tenant_stamping.py` | 51 |
-| **Total** | **2249** |
+| **Total** | **2361** |
