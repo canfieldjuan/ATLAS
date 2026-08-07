@@ -76,6 +76,9 @@ EXPLICIT_TEST_OWNERS: dict[str, tuple[str, ...]] = {
     ".github/workflows/ai_reconciliation_review_retrigger.yml": (
         "tests/test_check_ai_reconciliation_live.py",
     ),
+    ".github/workflows/pr_body_contract.yml": (
+        "tests/test_pr_body_contract_workflow.py",
+    ),
     ".github/workflows/unit_gate.yml": (
         "tests/test_check_unit_gate.py",
         "tests/test_select_impacted_tests.py",
