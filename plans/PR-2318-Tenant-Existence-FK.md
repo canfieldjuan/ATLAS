@@ -29,9 +29,10 @@ tenant.
 Ownership lane: eom-crm/lead-funnel
 Slice phase: production hardening
 
-1. `migrations/365_contacts_business_context_registry_fk.sql`: seed
-   `effingham_maids` + `churnsignals` as minimal registry rows (+ a dynamic
-   backstop for any other stamped tenant), then add the FK idempotently.
+1. `migrations/365_contacts_business_context_registry_fk.sql`: in ONE DO block that
+   holds `LOCK TABLE contacts IN SHARE MODE` (atomic on the autocommit runner),
+   seed `effingham_maids` + `churnsignals` + `personal` (every canonical
+   contact-writer context) plus a dynamic backstop, then add the FK idempotently.
 2. `crm_server.create_contact`: after the EOM guard, reject a tenant absent from
    the registry ONLY once migration 365 has run (the FK exists); degrade to
    presence-only before then / when the registry is unavailable (fail-safe).
@@ -91,8 +92,10 @@ fail, so the test is bound to the real enforcement.
 
 ## Mechanism
 
-A seed+FK migration (the enforcement) plus a fail-safe membership check in
-`create_contact` (the clean error). No read-path or other-tool change.
+A single DO-block migration -- `LOCK TABLE contacts IN SHARE MODE`, then seed,
+then the FK, atomic w.r.t. contact writes on the autocommit runner (the
+enforcement) -- plus a fail-safe membership check in `create_contact` (the clean
+error). No read-path or other-tool change.
 
 ## Intentional
 

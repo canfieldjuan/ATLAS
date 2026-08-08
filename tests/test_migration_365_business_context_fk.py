@@ -80,7 +80,10 @@ async def test_365_fresh_db_seeds_neutralized_registry_and_adds_scoped_fk() -> N
         await _apply(conn, MIG_365)
 
         ids = {r["id"] for r in await conn.fetch("SELECT id FROM business_contexts")}
-        assert {"effingham_maids", "churnsignals"} <= ids
+        # personal is seeded too: it is the atlas_comms ContextRouter fallback that
+        # inbound SMS resolves to, and the FK governs that writer -- without the seed
+        # the first unmatched SMS would FK-violate and drop the contact.
+        assert {"effingham_maids", "churnsignals", "personal"} <= ids
 
         # Voice-product config is NEUTRALIZED, not left to migration 040's active
         # defaults (Atlas voice, 9-5 hours, scheduling/SMS/messages ENABLED).
@@ -226,6 +229,57 @@ async def test_real_admission_check_gates_on_fk_not_table_occupancy(monkeypatch)
         loaded = {r["id"] for r in await repo.list_enabled()}
         assert "effingham_maids" not in loaded
         assert "churnsignals" not in loaded
+        assert "personal" not in loaded
         assert "some_voice_context" in loaded
     finally:
         await real_pool._pool.close()
+
+
+@pytest.mark.asyncio
+async def test_migration_share_lock_blocks_racing_contact_write() -> None:
+    """The migration runs seed + FK in ONE DO block holding `LOCK TABLE contacts IN
+    SHARE MODE`, so a concurrent contact write cannot commit a new tenant between the
+    seed snapshot and the FK add (the runner is autocommit; a DO block is its own
+    transaction). Prove that SHARE lock blocks a racing write."""
+    asyncpg = pytest.importorskip("asyncpg")
+    url = _database_url()
+    if not url:
+        pytest.skip("ATLAS_MIGRATION_TEST_DATABASE_URL not set")
+
+    # Structural: the migration acquires the SHARE lock inside its DO block.
+    assert "LOCK TABLE contacts IN SHARE MODE" in (MIGRATIONS_DIR / MIG_365).read_text()
+
+    holder = await asyncpg.connect(url)
+    writer = await asyncpg.connect(url)
+    try:
+        await _reset(holder)
+        await _prereqs(holder)
+
+        tr = holder.transaction()
+        await tr.start()
+        # Same lock the migration's DO block takes.
+        await holder.execute("LOCK TABLE contacts IN SHARE MODE")
+
+        # A concurrent contact write must now BLOCK; prove it is cancelled by the
+        # statement timeout rather than committing behind the migration's back.
+        await writer.execute("SET statement_timeout = '700ms'")
+        with pytest.raises(asyncpg.QueryCanceledError):
+            await writer.execute(
+                "INSERT INTO contacts (id, full_name, business_context_id) "
+                "VALUES ($1, 'Racer', 'sneaky_tenant')",
+                uuid.uuid4(),
+            )
+
+        await tr.rollback()  # release the lock
+
+        # With the lock gone the write proceeds (proves it was the lock, not a
+        # broken table). Use a seeded tenant so a later FK would still validate.
+        await writer.execute("SET statement_timeout = 0")
+        await writer.execute(
+            "INSERT INTO contacts (id, full_name, business_context_id) "
+            "VALUES ($1, 'AfterLock', 'effingham_maids')",
+            uuid.uuid4(),
+        )
+    finally:
+        await holder.close()
+        await writer.close()
