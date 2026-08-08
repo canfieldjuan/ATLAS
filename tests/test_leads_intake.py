@@ -367,6 +367,10 @@ async def test_successful_acknowledgement_records_tenant_history():
     assert kwargs["metadata"] == {
         "source": "website_estimate_form",
         "contact_id": "c-123",
+        # ATLAS #2320 slice A1: the acknowledgement variant is recorded as
+        # evidence. ``template_type`` stays "request_acknowledgement" because
+        # this slice still renders the single existing template.
+        "ack_variant": "residential",
     }
 
 

@@ -15,6 +15,44 @@ from .estimate_confirmation import (
     BUSINESS_WEBSITE,
 )
 
+# Acknowledgement variants (ATLAS #2320). A multi-location company is still a
+# commercial customer -- "multi-site" describes the shape of the request, not a
+# third customer type -- so this is a lead-time acknowledgement variant and
+# deliberately NOT a column on ``contacts``. ``contacts.contact_type`` already
+# means lifecycle (lead vs customer); a residential/commercial attribute on the
+# contact is a separate decision this feature does not force.
+ACK_VARIANT_RESIDENTIAL = "residential"
+ACK_VARIANT_COMMERCIAL_SINGLE_SITE = "commercial_single_site"
+ACK_VARIANT_COMMERCIAL_MULTI_SITE = "commercial_multi_site"
+ACK_VARIANT_GENERAL = "general"
+
+# Every value the website forms can submit maps explicitly. ``other`` is an
+# allowlisted form option, not an unknown, so it names ``general`` on purpose
+# rather than falling through. Anything unrecognised (including empty) also
+# resolves to ``general`` so a new form option can never crash intake or
+# silently pick residential copy.
+_ACK_VARIANT_BY_SERVICE = {
+    "residential": ACK_VARIANT_RESIDENTIAL,
+    "deep": ACK_VARIANT_RESIDENTIAL,
+    "move": ACK_VARIANT_RESIDENTIAL,
+    "commercial": ACK_VARIANT_COMMERCIAL_SINGLE_SITE,
+    "multi-location-commercial": ACK_VARIANT_COMMERCIAL_MULTI_SITE,
+    "other": ACK_VARIANT_GENERAL,
+}
+
+
+def classify_ack_variant(service: str) -> str:
+    """Return the acknowledgement variant for a submitted ``service`` value.
+
+    Deterministic and total: every input returns one of the four variants, and
+    an unrecognised value resolves to ``general``. Classification is decided
+    server-side from the submitted value; a browser-supplied template name is
+    never trusted.
+    """
+    normalized = (service or "").strip().lower()
+    return _ACK_VARIANT_BY_SERVICE.get(normalized, ACK_VARIANT_GENERAL)
+
+
 ACK_SUBJECT = "We received your estimate request - " + BUSINESS_NAME
 
 ACK_TEMPLATE = """Hi {client_name},

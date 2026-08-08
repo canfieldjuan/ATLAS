@@ -288,11 +288,21 @@ async def _process_lead_intake(
         }.items()
         if value.strip()
     }
+    # Recorded on the interaction so the segment a lead arrived as is evidence
+    # on the lead itself, not only on the email we happened to send. Adding a
+    # key here cannot shift interaction dedupe: the dedupe key reads only the
+    # fixed anchor allowlist and ``metadata["attribution"]``
+    # (``services/crm_provider.py`` ``_interaction_anchor`` /
+    # ``_interaction_attribution_identity``).
+    from ..templates.email import classify_ack_variant
+
+    ack_variant = classify_ack_variant(payload.service)
     metadata = {
         "service": payload.service,
         "frequency": payload.frequency,
         "square_feet": payload.square_feet,
         "source_page": payload.source_page,
+        "ack_variant": ack_variant,
         # Submitted channels are recorded even when an existing contact
         # is resolved read-only, so a new callback number/email is never
         # lost (PR #2153 round 4, R1/R6).
@@ -385,6 +395,7 @@ async def _process_lead_intake(
                             metadata={
                                 "source": "website_estimate_form",
                                 "contact_id": str(contact_id),
+                                "ack_variant": ack_variant,
                             },
                             business_context_id=EOM_BUSINESS_CONTEXT_ID,
                         )
