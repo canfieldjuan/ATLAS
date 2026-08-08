@@ -97,9 +97,12 @@ Slice phase: production hardening
   the intended enforcement). Crash/cancellation assumption: if the migration
   transaction aborts mid-block, the whole DO block rolls back -- seed and FK both
   absent -- leaving the DB re-runnable and idempotent; SHARE (not ACCESS EXCLUSIVE)
-  is deliberate so concurrent reads are never blocked. Exercised by
-  `test_migration_share_lock_blocks_racing_contact_write`. R14: reviewer verdict
-  discipline.)
+  is deliberate so concurrent reads are never blocked. Driven end-to-end (not a
+  hand-copied lock) by `test_migration_365_serializes_a_concurrent_writer`, which
+  runs the real migration against an uncommitted-insert writer and asserts, via
+  `pg_locks`, that the migration WAITS on a `ShareLock` on `contacts` before it can
+  seed -- so moving the lock below the seed or out of the DO block fails the test.
+  R14: reviewer verdict discipline.)
 
 **Admission-boundary enumeration (R1).** The decision seam is `create_contact`,
 immediately after the EOM guard and before the provider INSERT. Complete
@@ -180,8 +183,12 @@ $ python -m pytest tests/test_crm_read_scoping.py -q
 #   prepopulated-> seed-before-FK validates existing rows; the dynamic backstop
 #                 seeds a contacts-only tenant; unknown tenant is FK-rejected;
 #                 NULL tenant allowed; reapply is idempotent (no dup constraint);
-#   race       -> the DO block's SHARE lock cancels a concurrent contact INSERT
-#                 (statement_timeout), then admits it once the lock releases.
+#   race       -> the REAL migration is run against an uncommitted-insert writer;
+#                 pg_locks shows it WAITING on a ShareLock on contacts before it can
+#                 seed, then (writer committed) it completes, backstop-seeds the
+#                 raced tenant, and the FK lands with no orphan. Mutation-probed:
+#                 removing the LOCK makes it wait on ShareRowExclusiveLock at the
+#                 ALTER instead -> the test fails, so it is bound to the real lock.
 # 4 passed. The test SKIPS unless ATLAS_MIGRATION_TEST_DATABASE_URL is set (CI's
 # migration-tests service DB sets it); it never touches prod.
 ```
@@ -200,18 +207,31 @@ back:
 1. **Remove the FK** (restores D1 presence-only behavior; the runtime guard's
    fail-safe also degrades once the registry looks unavailable):
    `ALTER TABLE contacts DROP CONSTRAINT IF EXISTS contacts_business_context_id_fkey;`
-2. **Seed rows:** leave them. They are inert, neutralized registry rows
+2. **Reset the migration ledger** if you intend a later redeploy to re-apply 365.
+   The repository runner (`atlas_brain/storage/migrations`) records each applied
+   migration by name in `schema_migrations` and SKIPS any already recorded -- so
+   dropping only the FK would leave `365` recorded and the FK **permanently absent**
+   after the next deploy (`create_contact` would silently resume admitting unknown
+   tenants). Reset the ledger entry so 365 re-runs:
+   `DELETE FROM schema_migrations WHERE name = '365_contacts_business_context_registry_fk';`
+   Conversely, to STAY rolled back, leave this row in place so the runner does not
+   re-apply 365.
+3. **Seed rows:** leave them. They are inert, neutralized registry rows
    (`enabled=FALSE`, all voice/scheduling/SMS config NULL/FALSE) and harmless once
    the FK is gone. Do NOT blanket-`DELETE` `business_contexts` rows: the voice
    product may own rows there, and any contact still references its tenant. If a
    specific seed row must go, delete it only after confirming no `contacts` row
    references it and the voice product does not own it.
-3. **Verify:** `SELECT conname FROM pg_constraint WHERE conname =
-   'contacts_business_context_id_fkey';` returns no row, and `create_contact`
-   admits a previously-rejected tenant again.
+4. **Verify:** `SELECT conname FROM pg_constraint WHERE conname =
+   'contacts_business_context_id_fkey';` returns no row and `create_contact` admits a
+   previously-rejected tenant again; if you reset the ledger (step 2), also confirm
+   `SELECT 1 FROM schema_migrations WHERE name =
+   '365_contacts_business_context_registry_fk'` returns no row.
 
 The migration is idempotent and additive (seed + FK only), so a forward re-apply
-after rollback is safe.
+after rollback re-seeds and re-adds the FK cleanly -- but ONLY once the ledger row
+is reset (step 2). Without that reset the runner skips 365 and the FK never returns,
+so "drop the FK" alone is a one-way rollback.
 
 ## Estimated diff size
 
@@ -221,8 +241,8 @@ after rollback is safe.
 | `atlas_brain/mcp/crm_server.py` | 74 |
 | `atlas_brain/storage/migrations/365_contacts_business_context_registry_fk.sql` | 83 |
 | `atlas_brain/storage/repositories/business_context.py` | 42 |
-| `plans/PR-2318-Tenant-Existence-FK.md` | 228 |
+| `plans/PR-2318-Tenant-Existence-FK.md` | 248 |
 | `tests/maturity_sweep/baseline_atlas_brain_storage.json` | 11 |
 | `tests/test_crm_read_scoping.py` | 102 |
-| `tests/test_migration_365_business_context_fk.py` | 285 |
-| **Total** | **832** |
+| `tests/test_migration_365_business_context_fk.py` | 340 |
+| **Total** | **907** |

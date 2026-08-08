@@ -12,6 +12,7 @@ DB -- never prod.
 
 from __future__ import annotations
 
+import asyncio
 import os
 import uuid
 from pathlib import Path
@@ -236,50 +237,104 @@ async def test_real_admission_check_gates_on_fk_not_table_occupancy(monkeypatch)
 
 
 @pytest.mark.asyncio
-async def test_migration_share_lock_blocks_racing_contact_write() -> None:
-    """The migration runs seed + FK in ONE DO block holding `LOCK TABLE contacts IN
-    SHARE MODE`, so a concurrent contact write cannot commit a new tenant between the
-    seed snapshot and the FK add (the runner is autocommit; a DO block is its own
-    transaction). Prove that SHARE lock blocks a racing write."""
+async def test_migration_365_serializes_a_concurrent_writer() -> None:
+    """Drive the REAL migration 365 concurrently with an in-flight contact writer --
+    not a hand-copied lock. The DO block takes `LOCK TABLE contacts IN SHARE MODE`
+    FIRST; SHARE conflicts with the ROW EXCLUSIVE lock an uncommitted INSERT holds,
+    so the migration must WAIT for the writer instead of snapshotting tenants around
+    it. This exercises the protocol end to end:
+
+    * with a writer holding an uncommitted NEW-tenant insert, the real migration
+      blocks -- and pg_locks shows it waiting for a **ShareLock** on `contacts`, the
+      mode its first statement requests. A migration that moved the lock below the
+      seed or out of the DO block would not be waiting on a ShareLock here (it would
+      seed without blocking, then block/fail only at the ALTER), so the mode + timing
+      assertion fails for a faked protocol.
+    * once the writer commits, the migration completes: the dynamic backstop seeds
+      the now-committed tenant, the FK lands with no orphan, and an unseeded tenant
+      is subsequently rejected."""
     asyncpg = pytest.importorskip("asyncpg")
     url = _database_url()
     if not url:
         pytest.skip("ATLAS_MIGRATION_TEST_DATABASE_URL not set")
 
-    # Structural: the migration acquires the SHARE lock inside its DO block.
+    # Cheap structural complement (not the proof): the lock lives in the migration.
     assert "LOCK TABLE contacts IN SHARE MODE" in (MIGRATIONS_DIR / MIG_365).read_text()
 
-    holder = await asyncpg.connect(url)
-    writer = await asyncpg.connect(url)
+    setup = await asyncpg.connect(url)
     try:
-        await _reset(holder)
-        await _prereqs(holder)
+        await _reset(setup)
+        await _prereqs(setup)  # tables exist; 365 NOT applied yet -> no FK
+    finally:
+        await setup.close()
 
-        tr = holder.transaction()
-        await tr.start()
-        # Same lock the migration's DO block takes.
-        await holder.execute("LOCK TABLE contacts IN SHARE MODE")
+    writer = await asyncpg.connect(url)
+    migrator = await asyncpg.connect(url)
+    observer = await asyncpg.connect(url)
+    mig_task = None
+    try:
+        migrator_pid = await migrator.fetchval("SELECT pg_backend_pid()")
 
-        # A concurrent contact write must now BLOCK; prove it is cancelled by the
-        # statement timeout rather than committing behind the migration's back.
-        await writer.execute("SET statement_timeout = '700ms'")
-        with pytest.raises(asyncpg.QueryCanceledError):
-            await writer.execute(
-                "INSERT INTO contacts (id, full_name, business_context_id) "
-                "VALUES ($1, 'Racer', 'sneaky_tenant')",
-                uuid.uuid4(),
-            )
-
-        await tr.rollback()  # release the lock
-
-        # With the lock gone the write proceeds (proves it was the lock, not a
-        # broken table). Use a seeded tenant so a later FK would still validate.
-        await writer.execute("SET statement_timeout = 0")
+        # Writer holds an UNCOMMITTED insert of a brand-new tenant -> it owns a
+        # ROW EXCLUSIVE lock on contacts, which conflicts with the migration's SHARE.
+        wtx = writer.transaction()
+        await wtx.start()
         await writer.execute(
             "INSERT INTO contacts (id, full_name, business_context_id) "
-            "VALUES ($1, 'AfterLock', 'effingham_maids')",
+            "VALUES ($1, 'Racer', 'racer_tenant')",
             uuid.uuid4(),
         )
+
+        # Launch the ACTUAL migration file concurrently; it must block on its lock.
+        migration_sql = (MIGRATIONS_DIR / MIG_365).read_text()
+        mig_task = asyncio.create_task(migrator.execute(migration_sql))
+
+        # Poll pg_locks until the migrator is BLOCKED (granted=false) on contacts.
+        blocked = None
+        for _ in range(200):  # up to ~10s; the block is near-instant in practice
+            blocked = await observer.fetchrow(
+                "SELECT mode, granted FROM pg_locks "
+                "WHERE pid = $1 AND relation = 'contacts'::regclass "
+                "AND locktype = 'relation' AND NOT granted",
+                migrator_pid,
+            )
+            if blocked is not None:
+                break
+            if mig_task.done():
+                # Migration finished WITHOUT ever blocking on the writer -> it did not
+                # serialize against the in-flight write. Surface the real error if any.
+                await mig_task
+                raise AssertionError(
+                    "migration 365 completed without blocking on the in-flight writer "
+                    "-- its lock does not span the seed/FK against concurrent writes"
+                )
+            await asyncio.sleep(0.05)
+
+        assert blocked is not None, (
+            "migration 365 never blocked on a contacts lock while a writer was in flight"
+        )
+        # The first conflicting lock it waits for is the SHARE lock of its DO block,
+        # NOT the AccessExclusiveLock a lock-less migration would only reach at ALTER.
+        assert blocked["mode"] == "ShareLock", (
+            f"expected the migration to wait on ShareLock (LOCK TABLE ... IN SHARE "
+            f"MODE) before seeding; got {blocked['mode']} -- the lock is misplaced"
+        )
+
+        # Release the writer: its new tenant commits; the migration now proceeds.
+        await wtx.commit()
+        await asyncio.wait_for(mig_task, timeout=15)  # completes without error
+
+        # Final state: FK present; the raced tenant was captured by the backstop
+        # (no orphan, no FK violation); an unseeded tenant is now FK-rejected.
+        assert await _fk_on_contacts(migrator) is True
+        assert await migrator.fetchval(
+            "SELECT EXISTS (SELECT 1 FROM business_contexts WHERE id = 'racer_tenant')"
+        ) is True
+        with pytest.raises(asyncpg.ForeignKeyViolationError):
+            await _insert_contact(migrator, "never_seeded_tenant")
     finally:
-        await holder.close()
+        if mig_task is not None and not mig_task.done():
+            mig_task.cancel()
         await writer.close()
+        await migrator.close()
+        await observer.close()
