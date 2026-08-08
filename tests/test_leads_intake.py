@@ -14,6 +14,8 @@ from __future__ import annotations
 
 import json
 import sys
+from itertools import product
+from random import Random
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
@@ -612,17 +614,7 @@ def test_route_smoke_mounted_path_statuses():
     assert throttled.status_code == 429
 
 
-@pytest.mark.parametrize(
-    "address",
-    (
-        "\x00100 Main St",
-        "100\x00 Main St",
-        "100 Main St\x00",
-        "100\ud800 Main St",
-        "100 Main \udfffSt",
-    ),
-)
-def test_route_rejects_database_invalid_address_before_crm_write(address: str):
+def test_route_rejects_database_invalid_address_before_crm_write():
     from fastapi import FastAPI
     from fastapi.testclient import TestClient
 
@@ -644,19 +636,68 @@ def test_route_rejects_database_invalid_address_before_crm_write(address: str):
     app.dependency_overrides[leads_mod._daily_count_dependency] = lambda: fake_count
     app.dependency_overrides[leads_mod._ack_volume_dependency] = lambda: fake_volume
 
-    response = TestClient(app).post(
-        "/api/v1/leads/intake",
-        content=json.dumps({
-            "name": "Jane",
-            "email": "jane@example.com",
-            "address": address,
-        }),
-        headers={"Content-Type": "application/json"},
+    client = TestClient(app)
+    rng = Random(20260807)
+    valid_code_point_ranges = (
+        (0x20, 0x7F),
+        (0xA0, 0xD800),
+        (0xE000, 0x10000),
+        (0x10000, 0x110000),
     )
 
-    assert response.status_code == 422
-    crm.find_or_create_contact.assert_not_awaited()
-    crm.log_interaction.assert_not_awaited()
+    def generated_valid_character() -> str:
+        start, stop = rng.choice(valid_code_point_ranges)
+        return chr(rng.randrange(start, stop))
+
+    valid_addresses = [
+        "".join(generated_valid_character() for _ in range(rng.randint(1, 16)))
+        for _ in range(6)
+    ]
+
+    for address in valid_addresses:
+        response = client.post(
+            "/api/v1/leads/intake",
+            content=json.dumps({
+                "name": "Jane",
+                "email": "jane@example.com",
+                "address": address,
+            }),
+            headers={"Content-Type": "application/json"},
+        )
+        assert response.status_code == 200
+
+    writes_before_invalid_inputs = crm.find_or_create_contact.await_count
+    interactions_before_invalid_inputs = crm.log_interaction.await_count
+    surrogate_ranges = ((0xD800, 0xDC00), (0xDC00, 0xE000))
+    generated_surrogates = (
+        chr(rng.randrange(start, stop))
+        for start, stop in surrogate_ranges
+        for _ in range(4)
+    )
+    invalid_code_points = ("\x00", *generated_surrogates)
+    for valid_address, invalid_code_point in product(
+        valid_addresses,
+        invalid_code_points,
+    ):
+        for position in range(len(valid_address) + 1):
+            address = (
+                valid_address[:position]
+                + invalid_code_point
+                + valid_address[position:]
+            )
+            response = client.post(
+                "/api/v1/leads/intake",
+                content=json.dumps({
+                    "name": "Jane",
+                    "email": "jane@example.com",
+                    "address": address,
+                }),
+                headers={"Content-Type": "application/json"},
+            )
+            assert response.status_code == 422
+
+    assert crm.find_or_create_contact.await_count == writes_before_invalid_inputs
+    assert crm.log_interaction.await_count == interactions_before_invalid_inputs
 
 
 # ---------------------------------------------------------------------------

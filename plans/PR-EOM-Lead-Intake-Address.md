@@ -59,7 +59,7 @@ Slice phase: Vertical slice
     interaction logging — settled by
     `tests/test_leads_intake.py::test_route_rejects_database_invalid_address_before_crm_write`.
   - No behavior change to email-or-phone admission, honeypot, throttle, or ack
-    email — settled by the unchanged existing tests still green (54 total).
+    email — settled by the unchanged existing tests still green (50 total).
 - Reachability proof: `POST /api/v1/leads/intake` with `{"address": "..."}` ->
   on new-lead create, `contacts.address` is written (atomic insert in
   `atlas_brain/services/crm_provider.py`, INSERT column `address`); a post-deploy
@@ -100,9 +100,9 @@ strip-normalize on it.
   JSONB columns. Unpaired surrogates are first replaced with a safe invalid
   sentinel so FastAPI can serialize the resulting `422` response.
 - Class invariant: database-invalid text is rejected regardless of where the
-  invalid code point appears. The route regression samples leading, embedded,
-  and trailing NUL plus high and low unpaired surrogates and asserts zero CRM
-  writes.
+  invalid code point appears. The route regression generates valid free-text
+  surroundings, proves they are admitted, then inserts NUL plus high and low
+  unpaired surrogates at every position and asserts zero additional CRM writes.
 
 ### Deployed-config probing
 
@@ -150,7 +150,7 @@ Parked hardening: none.
 
 ## Verification
 
-- `python -m pytest tests/test_leads_intake.py -q` (54 passed);
+- `python -m pytest tests/test_leads_intake.py -q` (50 passed);
   `python -m py_compile atlas_brain/api/leads.py` (passed). Post-deploy:
   smoke `POST` with an address -> `success: true` and `contacts.address`
   populated on the new lead.
@@ -161,5 +161,5 @@ Parked hardening: none.
 |---|---:|
 | `atlas_brain/api/leads.py` | 32 |
 | `plans/PR-EOM-Lead-Intake-Address.md` | 165 |
-| `tests/test_leads_intake.py` | 74 |
-| **Total** | **271** |
+| `tests/test_leads_intake.py` | 115 |
+| **Total** | **312** |
