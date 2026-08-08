@@ -314,6 +314,11 @@ class TestCRMMCPTools:
                 full_name="Jane Smith",
                 phone="618-555-0100",
                 email="jane@example.com",
+                # D1 (#2317): create_contact now requires a resolvable tenant and
+                # crm_default_business_context defaults to None, so the success
+                # contract must supply an explicit non-EOM tenant. (EOM would hit
+                # the separate ingress refusal, not this success path.)
+                business_context_id="churnsignals",
             )
 
         data = json.loads(raw)
