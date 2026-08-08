@@ -9,13 +9,14 @@ an orphan row. D1 could not validate existence because `business_contexts` was
 empty and there was no FK -- validating then would have rejected every real
 tenant.
 
-**Diff-budget overage (939 LOC vs the 400 soft cap) -- why this slice is
+**Diff-budget overage (969 LOC vs the 400 soft cap) -- why this slice is
 indivisible.** Production code is ~116 LOC (guard 74 + repo `admission_check` 42);
-the migration is 83. The remaining ~740 is review-mandated *evidence for this exact
+the migration is 83. The remaining ~770 is review-mandated *evidence for this exact
 change*, not extra scope: the real-postgres test file (340) that proves seed-before-FK
 ordering, FK enforcement, neutralization, idempotence, and the concurrent-writer lock
 protocol; the generative membership unit tests (102); and this contract plan itself
-(280, incl. rollback + the R8 execution-model criterion). Splitting the migration from
+(308, incl. rollback + the R8 execution-model criterion + the affected-surfaces/risk
+declarations). Splitting the migration from
 its guard would ship enforcement without its DB root (or vice-versa) for a window;
 splitting either from its tests would orphan the acceptance evidence the reviewer
 required. Every LOC over the cap is the seed+FK+guard triple or the proof that it is
@@ -61,6 +62,33 @@ Slice phase: production hardening
 - `tests/test_migration_365_business_context_fk.py`
 
 ### Review Contract
+
+**Affected surfaces (in bounds for this review):**
+- **Runtime admission seam** -- `atlas_brain/mcp/crm_server.py::create_contact`, the
+  only tool that runs the existence net; its sole direct caller is the MCP CRM
+  server's create path. The presence/EOM guards and the read path are unchanged.
+- **Repository behavior** -- `atlas_brain/storage/repositories/business_context.py`
+  adds `admission_check`; no existing method's behavior changes.
+- **Database schema/data** -- migration `365_...sql` seeds `business_contexts` and
+  adds the `contacts.business_context_id` FK; no other table or migration is touched.
+- **CI** -- `.github/workflows/atlas_eom_lead_pipeline_checks.yml`, the postgres-backed
+  job that executes the migration test.
+
+**Risk areas:**
+- **Migration/data safety (R4/R8)** -- seed-before-FK ordering against prod's ~709
+  rows; the SHARE-lock DO block's concurrency invariant; idempotent re-apply.
+- **Backward compatibility (R5)** -- the new unknown-tenant refusal in `create_contact`.
+- **CI reachability (R12)** -- the postgres job must trigger on every file the
+  migration test touches, including its prerequisites 035 + 040.
+- **Deploy** -- applying 365 is a gated manual step (not done by merge); the runtime
+  net is fail-safe until the FK exists.
+
+**Reachability declaration (R12):** the migration test's prerequisites (035, 040) and
+subject (365), the test file itself, the guard, and the repository method are all in
+both path-filter blocks of `atlas_eom_lead_pipeline_checks.yml`, and the workflow
+triggers on changes to its own file -- so any change that could regress the seed /
+neutralization / FK behavior triggers the exact job that verifies it (no reachability
+gap).
 
 1. The FK is the durable enforcement: an unknown non-NULL tenant cannot be
    INSERTed. A NULL tenant is allowed by the FK (the D1 guard forbids NULL on the
@@ -269,12 +297,12 @@ so "drop the FK" alone is a one-way rollback.
 
 | File | LOC |
 |---|---:|
-| `.github/workflows/atlas_eom_lead_pipeline_checks.yml` | 7 |
+| `.github/workflows/atlas_eom_lead_pipeline_checks.yml` | 9 |
 | `atlas_brain/mcp/crm_server.py` | 74 |
 | `atlas_brain/storage/migrations/365_contacts_business_context_registry_fk.sql` | 83 |
 | `atlas_brain/storage/repositories/business_context.py` | 42 |
-| `plans/PR-2318-Tenant-Existence-FK.md` | 280 |
+| `plans/PR-2318-Tenant-Existence-FK.md` | 308 |
 | `tests/maturity_sweep/baseline_atlas_brain_storage.json` | 11 |
 | `tests/test_crm_read_scoping.py` | 102 |
 | `tests/test_migration_365_business_context_fk.py` | 340 |
-| **Total** | **939** |
+| **Total** | **969** |
