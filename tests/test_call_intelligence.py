@@ -621,7 +621,7 @@ class TestLinkToCrmUnresolvedContext:
     """
 
     @pytest.mark.asyncio
-    @pytest.mark.parametrize("bad_ctx", ["unknown", "", None])
+    @pytest.mark.parametrize("bad_ctx", ["unknown", "", None, "   ", "\t ", "  unknown  "])
     async def test_unresolved_context_skips_crm_write(self, bad_ctx):
         from atlas_brain.comms.call_intelligence import _link_to_crm
 

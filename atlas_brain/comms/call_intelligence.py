@@ -559,7 +559,7 @@ async def _link_to_crm(
     # before the write, and skip CRM linking cleanly (fail-open, matching this
     # pipeline's contract) rather than manufacture a mis-tenanted contact. Resolved
     # tenants -- EOM, personal, or any seeded/backstopped context -- proceed unchanged.
-    if not context_id or context_id == "unknown":
+    if not context_id or not context_id.strip() or context_id.strip() == "unknown":
         logger.info(
             "CRM link skipped for call %s: unresolved business context (%r)",
             call_sid,
