@@ -9,18 +9,19 @@ an orphan row. D1 could not validate existence because `business_contexts` was
 empty and there was no FK -- validating then would have rejected every real
 tenant.
 
-**Diff-budget overage (969 LOC vs the 400 soft cap) -- why this slice is
-indivisible.** Production code is ~116 LOC (guard 74 + repo `admission_check` 42);
-the migration is 83. The remaining ~770 is review-mandated *evidence for this exact
-change*, not extra scope: the real-postgres test file (340) that proves seed-before-FK
-ordering, FK enforcement, neutralization, idempotence, and the concurrent-writer lock
-protocol; the generative membership unit tests (102); and this contract plan itself
-(308, incl. rollback + the R8 execution-model criterion + the affected-surfaces/risk
-declarations). Splitting the migration from
-its guard would ship enforcement without its DB root (or vice-versa) for a window;
-splitting either from its tests would orphan the acceptance evidence the reviewer
-required. Every LOC over the cap is the seed+FK+guard triple or the proof that it is
-correct -- there is no independently-shippable sub-slice.
+**Diff-budget overage (1085 LOC vs the 400 soft cap) -- why this slice is
+indivisible.** Production code is ~132 LOC (MCP guard 74 + repo `admission_check` 42 +
+the call-recording `_link_to_crm` guard 16); the migration is 83. The remaining ~870 is
+review-mandated *evidence for this exact change*, not extra scope: the real-postgres
+test file (340) that proves seed-before-FK ordering, FK enforcement, neutralization,
+idempotence, and the concurrent-writer lock protocol; the generative membership unit
+tests (102); the call-recording guard's boundary-probe tests (80); and this contract
+plan itself (328, incl. rollback + the R8 execution-model criterion + the
+affected-surfaces/risk declarations). Splitting the migration from its guard would ship
+enforcement without its DB root (or vice-versa) for a window; splitting either from its
+tests would orphan the acceptance evidence the reviewer required. Every LOC over the cap
+is the seed+FK+guard triple (now incl. the recording-writer alignment) or the proof that
+it is correct -- there is no independently-shippable sub-slice.
 
 ### Problem-derived contract
 
@@ -53,11 +54,13 @@ Slice phase: production hardening
 ### Files touched
 
 - `.github/workflows/atlas_eom_lead_pipeline_checks.yml`
+- `atlas_brain/comms/call_intelligence.py`
 - `atlas_brain/mcp/crm_server.py`
 - `atlas_brain/storage/migrations/365_contacts_business_context_registry_fk.sql`
 - `atlas_brain/storage/repositories/business_context.py`
 - `plans/PR-2318-Tenant-Existence-FK.md`
 - `tests/maturity_sweep/baseline_atlas_brain_storage.json`
+- `tests/test_call_intelligence.py`
 - `tests/test_crm_read_scoping.py`
 - `tests/test_migration_365_business_context_fk.py`
 
@@ -69,6 +72,9 @@ Slice phase: production hardening
   server's create path. The presence/EOM guards and the read path are unchanged.
 - **Repository behavior** -- `atlas_brain/storage/repositories/business_context.py`
   adds `admission_check`; no existing method's behavior changes.
+- **Call-recording CRM link** -- `atlas_brain/comms/call_intelligence.py::_link_to_crm`
+  gains a pre-write guard that skips an unresolved (`"unknown"`/blank) call context;
+  resolved tenants are unaffected. The shared chokepoint guard is deferred (#2327).
 - **Database schema/data** -- migration `365_...sql` seeds `business_contexts` and
   adds the `contacts.business_context_id` FK; no other table or migration is touched.
 - **CI** -- `.github/workflows/atlas_eom_lead_pipeline_checks.yml`, the postgres-backed
@@ -106,7 +112,7 @@ gap).
    also the voice product's config table, but it is empty in prod and its config
    columns stay NULL here.
 
-- Reviewer rules triggered: R1, R2, R4, R5, R8, R14. (R1: enforce existence at the DB
+- Reviewer rules triggered: R1, R2, R4, R5, R8, R12, R13, R14. (R1: enforce existence at the DB
   root via the FK, not only a runtime string check. R2: the existence net is a
   membership guard; its closure is `admit iff FK-not-yet-present OR tenant in
   registry`, proven generatively by `test_existence_net_membership_property` over
@@ -142,6 +148,18 @@ gap).
   runs the real migration against an uncommitted-insert writer and asserts, via
   `pg_locks`, that the migration WAITS on a `ShareLock` on `contacts` before it can
   seed -- so moving the lock below the seed or out of the DO block fails the test.
+  R12 (CI reachability): the migration test's prerequisites (035, 040) and subject
+  (365), the test file, the guard, and the repository method are all in both
+  path-filter blocks of the postgres-backed workflow, which also triggers on its own
+  file -- so a change that could regress the seed/neutralization/FK behavior triggers
+  the job that verifies it (see the Reachability declaration above). R13 (contact-writer
+  consistency with the FK): the FK governs EVERY contacts writer, so the recording
+  path's "unknown" sentinel (assigned when a call's context can't be resolved) is now
+  rejected in `_link_to_crm` BEFORE `find_or_create_contact`, so an unattributable
+  call skips CRM linking cleanly instead of manufacturing a mis-tenanted contact that
+  would FK-violate; SMS resolves to the seeded `personal` context, and the shared
+  provider chokepoint's uniform guard is tracked in #2327. Covered by
+  `TestLinkToCrmUnresolvedContext` (unresolved -> skip; a resolved tenant -> writes).
   R14: reviewer verdict discipline.)
 
 **Admission-boundary enumeration (R1).** The decision seam is `create_contact`,
@@ -298,11 +316,13 @@ so "drop the FK" alone is a one-way rollback.
 | File | LOC |
 |---|---:|
 | `.github/workflows/atlas_eom_lead_pipeline_checks.yml` | 9 |
+| `atlas_brain/comms/call_intelligence.py` | 16 |
 | `atlas_brain/mcp/crm_server.py` | 74 |
 | `atlas_brain/storage/migrations/365_contacts_business_context_registry_fk.sql` | 83 |
 | `atlas_brain/storage/repositories/business_context.py` | 42 |
-| `plans/PR-2318-Tenant-Existence-FK.md` | 308 |
+| `plans/PR-2318-Tenant-Existence-FK.md` | 328 |
 | `tests/maturity_sweep/baseline_atlas_brain_storage.json` | 11 |
+| `tests/test_call_intelligence.py` | 80 |
 | `tests/test_crm_read_scoping.py` | 102 |
 | `tests/test_migration_365_business_context_fk.py` | 340 |
-| **Total** | **969** |
+| **Total** | **1085** |

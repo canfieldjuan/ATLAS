@@ -608,3 +608,83 @@ class TestPipeline:
             )
 
         mock_repo.update_status.assert_not_awaited()
+
+
+class TestLinkToCrmUnresolvedContext:
+    """_link_to_crm must not write a contact for an unresolvable call context.
+
+    _run_recording_processing assigns the "unknown" sentinel when the call or its
+    context can't be resolved. Once migration 365's FK
+    (contacts.business_context_id -> business_contexts.id) exists, creating a contact
+    under "unknown"/blank would FK-violate, so the guard skips CRM linking cleanly.
+    Boundary-probe both sides: unresolved -> skip; a resolved tenant -> proceeds.
+    """
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("bad_ctx", ["unknown", "", None])
+    async def test_unresolved_context_skips_crm_write(self, bad_ctx):
+        from atlas_brain.comms.call_intelligence import _link_to_crm
+
+        mock_pool = MagicMock()
+        mock_pool.is_initialized = True
+        mock_crm = AsyncMock()
+
+        with patch(
+            "atlas_brain.storage.database.get_db_pool", return_value=mock_pool
+        ), patch(
+            "atlas_brain.services.crm_provider.get_crm_provider", return_value=mock_crm
+        ):
+            result = await _link_to_crm(
+                repo=AsyncMock(),
+                transcript_id=uuid4(),
+                call_sid="call-xyz",
+                from_number="+12175551234",
+                context_id=bad_ctx,
+                extracted_data={"customer_phone": "+12175551234"},
+                summary="Inbound call",
+            )
+
+        assert result == (None, False)
+        # The write chokepoint was never reached -- no mis-tenanted contact created.
+        mock_crm.find_or_create_contact.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_resolved_context_proceeds_to_crm_write(self):
+        # A real seeded, non-EOM tenant ("personal") must pass the guard and reach
+        # the write -- proving the guard rejects only the unresolved sentinel, not
+        # every non-EOM context (mutation-probe: a guard that also blocked this
+        # would fail here).
+        from atlas_brain.comms.call_intelligence import _link_to_crm
+
+        mock_pool = MagicMock()
+        mock_pool.is_initialized = True
+        mock_crm = AsyncMock()
+        mock_crm.find_or_create_contact.return_value = {
+            "id": "c-1",
+            "_was_created": True,
+        }
+        mock_repo = AsyncMock()
+
+        with patch(
+            "atlas_brain.storage.database.get_db_pool", return_value=mock_pool
+        ), patch(
+            "atlas_brain.services.crm_provider.get_crm_provider", return_value=mock_crm
+        ):
+            contact_id, is_new = await _link_to_crm(
+                repo=mock_repo,
+                transcript_id=uuid4(),
+                call_sid="call-xyz",
+                from_number="+12175551234",
+                context_id="personal",
+                extracted_data={
+                    "customer_phone": "+12175551234",
+                    "customer_name": "Jane",
+                },
+                summary="Inbound call",
+            )
+
+        mock_crm.find_or_create_contact.assert_awaited_once()
+        _, kwargs = mock_crm.find_or_create_contact.call_args
+        assert kwargs["business_context_id"] == "personal"
+        assert contact_id == "c-1"
+        assert is_new is True
