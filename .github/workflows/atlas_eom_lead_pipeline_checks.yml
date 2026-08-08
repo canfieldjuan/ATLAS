@@ -19,6 +19,7 @@ on:
       - "atlas_brain/comms/call_intelligence.py"
       - "atlas_brain/comms/sms_intelligence.py"
       - "atlas_brain/mcp/crm_server.py"
+      - "atlas_brain/storage/repositories/business_context.py"
       - "atlas_brain/services/customer_context.py"
       - "atlas_brain/services/crm_provider.py"
       - "atlas_brain/services/email_provider.py"
@@ -41,6 +42,7 @@ on:
       - "atlas_brain/storage/repositories/scoped_mailbox_credential.py"
       - "atlas_brain/storage/migrations/012_appointments.sql"
       - "atlas_brain/storage/migrations/035_contacts.sql"
+      - "atlas_brain/storage/migrations/040_business_contexts.sql"
       - "atlas_brain/storage/migrations/256_contact_interaction_dedupe.sql"
       - "atlas_brain/storage/migrations/346_contact_lead_pipeline.sql"
       - "atlas_brain/storage/migrations/347_customer_service_tickets.sql"
@@ -59,6 +61,7 @@ on:
       - "atlas_brain/storage/migrations/361_eom_onboarding_draft_actor_bigint.sql"
       - "atlas_brain/tools/calendar.py"
       - "atlas_brain/tools/scheduling.py"
+      - "tests/test_call_intelligence.py"
       - "tests/test_crm_read_scoping.py"
       - "tests/test_eom_complaints_integration.py"
       - "tests/test_eom_contacts_api_tenant_scope.py"
@@ -74,6 +77,8 @@ on:
       - "tests/test_eom_sent_email_tenant_scope.py"
       - "tests/test_leads_intake.py"
       - "tests/test_migrations_runner.py"
+      - "tests/test_migration_365_business_context_fk.py"
+      - "atlas_brain/storage/migrations/365_contacts_business_context_registry_fk.sql"
   push:
     branches:
       - main
@@ -91,6 +96,7 @@ on:
       - "atlas_brain/comms/call_intelligence.py"
       - "atlas_brain/comms/sms_intelligence.py"
       - "atlas_brain/mcp/crm_server.py"
+      - "atlas_brain/storage/repositories/business_context.py"
       - "atlas_brain/services/customer_context.py"
       - "atlas_brain/services/crm_provider.py"
       - "atlas_brain/services/email_provider.py"
@@ -113,6 +119,7 @@ on:
       - "atlas_brain/storage/repositories/scoped_mailbox_credential.py"
       - "atlas_brain/storage/migrations/012_appointments.sql"
       - "atlas_brain/storage/migrations/035_contacts.sql"
+      - "atlas_brain/storage/migrations/040_business_contexts.sql"
       - "atlas_brain/storage/migrations/256_contact_interaction_dedupe.sql"
       - "atlas_brain/storage/migrations/346_contact_lead_pipeline.sql"
       - "atlas_brain/storage/migrations/347_customer_service_tickets.sql"
@@ -131,6 +138,7 @@ on:
       - "atlas_brain/storage/migrations/361_eom_onboarding_draft_actor_bigint.sql"
       - "atlas_brain/tools/calendar.py"
       - "atlas_brain/tools/scheduling.py"
+      - "tests/test_call_intelligence.py"
       - "tests/test_crm_read_scoping.py"
       - "tests/test_eom_complaints_integration.py"
       - "tests/test_eom_contacts_api_tenant_scope.py"
@@ -146,6 +154,8 @@ on:
       - "tests/test_eom_sent_email_tenant_scope.py"
       - "tests/test_leads_intake.py"
       - "tests/test_migrations_runner.py"
+      - "tests/test_migration_365_business_context_fk.py"
+      - "atlas_brain/storage/migrations/365_contacts_business_context_registry_fk.sql"
 
 jobs:
   eom-lead-pipeline:
@@ -185,6 +195,7 @@ jobs:
       - name: Run EOM lead pipeline checks
         run: |
           python -m pytest \
+            tests/test_call_intelligence.py \
             tests/test_crm_read_scoping.py \
             tests/test_eom_complaints_integration.py \
             tests/test_eom_contacts_api_tenant_scope.py \
@@ -199,4 +210,5 @@ jobs:
             tests/test_eom_sent_email_tenant_scope.py \
             tests/test_leads_intake.py \
             tests/test_migrations_runner.py \
+            tests/test_migration_365_business_context_fk.py \
             -q

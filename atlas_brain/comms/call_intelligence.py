@@ -551,6 +551,22 @@ async def _link_to_crm(
         logger.warning("CRM link skipped for call %s: DB pool not initialized", call_sid)
         return None, False
 
+    # An unresolved call context has no real tenant to attribute a contact to:
+    # _run_recording_processing assigns the "unknown" sentinel when the call or its
+    # context can't be resolved (and a blank context is equally unattributable).
+    # Once migration 365's FK (contacts.business_context_id -> business_contexts.id)
+    # exists, creating a contact under such a value would FK-violate; reject it here,
+    # before the write, and skip CRM linking cleanly (fail-open, matching this
+    # pipeline's contract) rather than manufacture a mis-tenanted contact. Resolved
+    # tenants -- EOM, personal, or any seeded/backstopped context -- proceed unchanged.
+    if not context_id or not context_id.strip() or context_id.strip() == "unknown":
+        logger.info(
+            "CRM link skipped for call %s: unresolved business context (%r)",
+            call_sid,
+            context_id,
+        )
+        return None, False
+
     email_addr = extracted_data.get("customer_email")
     name = extracted_data.get("customer_name")
     crm = get_crm_provider()
