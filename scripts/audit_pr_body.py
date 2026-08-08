@@ -57,6 +57,7 @@ REQUIRED_SECTIONS = (
     "Diff size",
 )
 DOCS_ONLY_RE = re.compile(r"^Docs-only:\s*true\s*$", re.IGNORECASE)
+OPEN_PR_WRAPPER_MARKER = "<!-- atlas-open-pr-wrapper: v1 -->"
 COMMAND_PREFIX_RE = re.compile(r"^\s*[-*]\s+command\s*:\s*\S", re.IGNORECASE)
 MECHANICAL_FIELD_RE = re.compile(
     r"(?P<prefix>^\s*[-*]\s+|\s+-\s+)"
@@ -92,6 +93,12 @@ def is_docs_only_body(body: str) -> bool:
 
     first_nonempty = next((line.strip() for line in body.splitlines() if line.strip()), "")
     return DOCS_ONLY_RE.fullmatch(first_nonempty) is not None
+
+
+def has_open_pr_wrapper_marker(body: str) -> bool:
+    """Return true when a full PR body carries the open wrapper stamp."""
+
+    return any(line.strip() == OPEN_PR_WRAPPER_MARKER for line in body.splitlines())
 
 
 def first_nonempty_raw_line_index(lines: list[str]) -> tuple[int, str] | None:
@@ -340,6 +347,7 @@ def audit_pr_body(
     *,
     root: Path = ROOT,
     plan_exists: Callable[[str], bool] | None = None,
+    require_wrapper_marker: bool = False,
 ) -> list[str]:
     """Return a list of contract failures (empty means the body passes)."""
 
@@ -354,6 +362,12 @@ def audit_pr_body(
     nonempty = [line.strip() for line in lines if line.strip()]
     if not nonempty:
         return ["PR body is empty"]
+
+    if require_wrapper_marker and not has_open_pr_wrapper_marker(body):
+        failures.append(
+            "missing open PR wrapper marker; publish full human PR bodies "
+            "through scripts/open_pr.sh"
+        )
 
     if raw_header_start is None:
         return ["PR body is empty"]
@@ -481,6 +495,14 @@ def main(argv: Sequence[str] | None = None) -> int:
             "trusted-base gates pass their fetched PR head"
         ),
     )
+    parser.add_argument(
+        "--require-wrapper-marker",
+        action="store_true",
+        help=(
+            "require the scripts/open_pr.sh marker on full human PR bodies; "
+            "docs-only and Dependabot bodies keep their separate exemptions"
+        ),
+    )
     parser.add_argument("body_file", help="path to a file holding the PR body")
     args = parser.parse_args(argv)
 
@@ -549,7 +571,12 @@ def main(argv: Sequence[str] | None = None) -> int:
         print("pr body audit: PASS (explicit Markdown-only body exemption)")
         return 0
 
-    failures = audit_pr_body(body, root=repo_root, plan_exists=plan_exists)
+    failures = audit_pr_body(
+        body,
+        root=repo_root,
+        plan_exists=plan_exists,
+        require_wrapper_marker=args.require_wrapper_marker,
+    )
     if failures:
         print("pr body audit: FAIL (AGENTS.md section 1b contract)")
         for failure in failures:

@@ -86,10 +86,12 @@ trying to pass.
 `branch_required` produce the default expected context set consumed by
 `scripts/check_required_status_checks.py`: `live-reconciliation`,
 `diff-budget`, `plan-admission`, `session-lane`, `review-contract`,
-`pr-body-contract`, `Gitleaks PR secret scan`, and
-`Gitleaks baseline growth guard`, and `unit-gate`. Live branch protection can
-drift from that expected set; the audit workflow reports that drift when its
-read token is configured. `unit-gate` was promoted after the #2290 selector
+`pr-body-contract`, `Gitleaks PR secret scan`, and `Gitleaks baseline growth
+guard`, and `unit-gate`. Live branch protection can drift from that expected set;
+the audit workflow reports that drift when its read token is configured.
+`pr-ready-state` remains a follow-up after its trusted-base allowlist bootstrap
+lands; promote it after the emitted context is visible. `unit-gate` was promoted
+after the #2290 selector
 coverage fix. `pre-push-audit` remains a visible CI signal, not a
 branch-required context. Its trusted-base PR-side docs/test consistency blocker
 now has a data-only probe; a later enrollment recheck must decide whether that

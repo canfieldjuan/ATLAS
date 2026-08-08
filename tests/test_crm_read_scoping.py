@@ -16,7 +16,10 @@ Semantics under test (plans/PR-EOM-Read-Scoping.md):
 from __future__ import annotations
 
 import ast
+import itertools
 import json
+import random
+import string
 import sys
 from datetime import datetime, timezone
 from pathlib import Path
@@ -34,6 +37,9 @@ sys.modules.setdefault("asyncpg", _asyncpg_mock)
 sys.modules.setdefault("asyncpg.exceptions", _asyncpg_exceptions)
 
 import atlas_brain.mcp.crm_server as crm_srv  # noqa: E402
+from atlas_brain.services.eom_lead_ingress import (  # noqa: E402
+    EOM_BUSINESS_CONTEXT_ID as _EOM_ID,
+)
 
 EOM = "effingham_maids"
 UUID = "12345678-1234-5678-1234-567812345678"
@@ -1119,3 +1125,183 @@ async def test_list_contacts_uses_default(default_ctx, monkeypatch):
     await crm_srv.list_contacts()
     first = provider.list_contacts.await_args_list[0]
     assert first.kwargs["business_context_id"] == EOM
+
+
+# ---------------------------------------------------------------------------
+# D1 (website #124): tenant is required to create -- no silent NULL-context row
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_create_contact_refuses_when_no_tenant_resolvable(no_default, monkeypatch):
+    """The core D1 guarantee: an agent cannot mint a tenantless contact.
+
+    With no explicit business_context_id and no deployment default (the live
+    runtime configures none), `_default_context()` returns None. Before this
+    guard the provider was called with business_context_id=None, producing an
+    unclassified row under weaker rules than the CRM UI. Now it is a typed
+    refusal and the provider is never reached.
+    """
+    provider = _provider_mock(monkeypatch)
+    provider.create_contact = AsyncMock(return_value={"id": "should-not-exist"})
+
+    out = json.loads(await crm_srv.create_contact(full_name="Untenanted Agent Row"))
+
+    assert out["success"] is False
+    assert "business_context_id is required" in out["error"]
+    provider.create_contact.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_create_contact_with_explicit_tenant_still_creates(no_default, monkeypatch):
+    """The guard rejects only a missing tenant, not a supplied one.
+
+    An explicit business_context_id must still create even with no default
+    configured -- otherwise the guard would break every legitimate agent create.
+    """
+    provider = _provider_mock(monkeypatch)
+    provider.create_contact = AsyncMock(return_value={"id": "new-1"})
+
+    out = json.loads(
+        await crm_srv.create_contact(
+            full_name="B2B Prospect", business_context_id="churnsignals"
+        )
+    )
+
+    assert out["success"] is True
+    provider.create_contact.assert_awaited_once()
+    assert provider.create_contact.await_args.args[0]["business_context_id"] == "churnsignals"
+
+
+@pytest.mark.asyncio
+async def test_create_contact_blank_tenant_is_treated_as_missing(no_default, monkeypatch):
+    """A whitespace-only tenant is not a tenant.
+
+    Without this, `business_context_id="  "` would pass a truthiness check but
+    write an effectively-null tenant -- the same hole through a side door.
+    """
+    provider = _provider_mock(monkeypatch)
+    provider.create_contact = AsyncMock(return_value={"id": "should-not-exist"})
+
+    out = json.loads(
+        await crm_srv.create_contact(full_name="Whitespace", business_context_id="   ")
+    )
+
+    assert out["success"] is False
+    assert "business_context_id is required" in out["error"]
+    provider.create_contact.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_create_contact_uses_configured_default_when_no_explicit_tenant(monkeypatch):
+    """A configured default still satisfies the requirement.
+
+    The guard demands a *resolvable* tenant, not an explicit argument -- a
+    deployment default is a valid resolution, so this path is unchanged.
+    """
+    from atlas_brain.config import settings
+
+    monkeypatch.setattr(settings.mcp, "crm_default_business_context", "churnsignals")
+    provider = _provider_mock(monkeypatch)
+    provider.create_contact = AsyncMock(return_value={"id": "new-2"})
+
+    out = json.loads(await crm_srv.create_contact(full_name="Defaulted"))
+
+    assert out["success"] is True
+    assert provider.create_contact.await_args.args[0]["business_context_id"] == "churnsignals"
+
+
+# Grammar-derived property proof for the create_contact tenant-admission closure
+# (D1 review threads R2/R3/R13). Per docs/GUARD_CLASS_CLOSURE.md section 3, the
+# acceptance gate for an open-input guard is a test that GENERATES inputs across
+# the grammar and asserts each against a SEMANTIC ORACLE derived from the spec --
+# NOT a fixed table of examples, and NOT the guard's own verdict. `hypothesis` is
+# not a repo dependency, so the generator below is a deterministic stdlib one
+# (fixed seed): it covers the blank class by systematic whitespace products and
+# the non-blank / EOM-near-miss classes by seeded sampling, so a regression on any
+# same-class input -- not just a listed one -- turns it red.
+#
+# The guard's input is a scalar string (the MCP tool signature), so section 3's
+# container-shape axis (list/tuple/set/nested/wrapped) does not apply; the
+# applicable axes are whitespace placement, casing, affixes, and length.
+
+_WS = (" ", "\t", "\n", "\r", "\x0b", "\x0c")
+
+
+def _spec_expected_verdict(raw):
+    """Semantic oracle from the spec (plan Review Contract), independent of the guard.
+
+    Spec: surrounding whitespace on a tenant id is insignificant; a
+    whitespace-only id is "no tenant" -> refuse (criterion 3); the EOM tenant is
+    routed to ingress -> refuse (criterion 4); every other non-blank id creates.
+    Derived from the contract, so it stays a real check even if the guard is
+    reimplemented.
+    """
+    stripped = str(raw or "").strip()
+    if stripped == "":
+        return "missing"
+    if stripped == _EOM_ID:
+        return "eom"
+    return "admit"
+
+
+def _generate_presence_grammar():
+    """Generate inputs across the presence grammar (deterministic; fixed seed)."""
+    rng = random.Random(20260807)
+    inputs = [None, ""]
+    # blank class -- systematic whitespace products (every combo up to length 2)
+    for n in (1, 2):
+        for combo in itertools.product(_WS, repeat=n):
+            inputs.append("".join(combo))
+    # blank class -- longer seeded whitespace runs
+    for _ in range(6):
+        inputs.append("".join(rng.choice(_WS) for _ in range(rng.randint(3, 8))))
+    # non-blank class -- seeded arbitrary ids (may contain internal whitespace),
+    # each forced to have at least one non-whitespace char
+    alphabet = string.ascii_letters + string.digits + "._-+@ \t"
+    for _ in range(90):
+        s = "".join(rng.choice(alphabet) for _ in range(rng.randint(1, 40)))
+        if s.strip() == "":
+            s = "x" + s
+        inputs.append(s)
+    # EOM class + near-misses (wrapping / casing / affixes)
+    inputs.append(_EOM_ID)
+    for _ in range(8):
+        lead = "".join(rng.choice(_WS) for _ in range(rng.randint(1, 4)))
+        tail = "".join(rng.choice(_WS) for _ in range(rng.randint(1, 4)))
+        inputs.append(lead + _EOM_ID + tail)
+    inputs.extend([
+        _EOM_ID.upper(), _EOM_ID.title(), _EOM_ID.capitalize(),   # casing -> admit
+        _EOM_ID[:-1], _EOM_ID + "_x", "x_" + _EOM_ID,             # sub/superstring -> admit
+    ])
+    return list(dict.fromkeys(inputs))  # dedupe, preserve order
+
+
+_PRESENCE_GRAMMAR = _generate_presence_grammar()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("raw", _PRESENCE_GRAMMAR)
+async def test_create_contact_tenant_admission_closure(no_default, monkeypatch, raw):
+    """Each generated input's actual verdict must equal the semantic oracle's."""
+    provider = _provider_mock(monkeypatch)
+    provider.create_contact = AsyncMock(return_value={"id": "created"})
+
+    kwargs = {"full_name": "Grammar Probe"}
+    if raw is not None:
+        kwargs["business_context_id"] = raw
+    out = json.loads(await crm_srv.create_contact(**kwargs))
+
+    expected = _spec_expected_verdict(raw)
+    if expected == "missing":
+        assert out["success"] is False
+        assert "business_context_id is required" in out["error"]
+        provider.create_contact.assert_not_awaited()
+    elif expected == "eom":
+        assert out["success"] is False
+        assert "EOM ingress" in out["error"]
+        provider.create_contact.assert_not_awaited()
+    else:  # admit
+        assert out["success"] is True
+        provider.create_contact.assert_awaited_once()
+        assert provider.create_contact.await_args.args[0]["business_context_id"] == raw

@@ -49,14 +49,24 @@ if [ "$#" -lt 1 ] || [ "${1:-}" = "--help" ] || [ "${1:-}" = "-h" ]; then
     exit 2
 fi
 
-body_file="$1"
+input_body_file="$1"
 shift
 
-if [ ! -f "$body_file" ]; then
-    echo "open_pr.sh: PR body file not found: $body_file" >&2
+if [ ! -f "$input_body_file" ]; then
+    echo "open_pr.sh: PR body file not found: $input_body_file" >&2
     echo "Create the body file first, then rerun this wrapper." >&2
     exit 2
 fi
+
+body_file="$input_body_file"
+open_pr_wrapper_marker="<!-- atlas-open-pr-wrapper: v1 -->"
+temporary_body_file=""
+cleanup_open_pr_body() {
+    if [ -n "$temporary_body_file" ]; then
+        rm -f "$temporary_body_file"
+    fi
+}
+trap cleanup_open_pr_body EXIT
 
 refresh_base_ref() {
     echo "Refreshing origin/main before PR body audit..."
@@ -265,6 +275,39 @@ body_hash() {
     git hash-object "$body_file"
 }
 
+body_uses_docs_only_marker() {
+    "$python_bin" - "$1" <<'PY'
+import re
+import sys
+from pathlib import Path
+
+body = Path(sys.argv[1]).read_text(encoding="utf-8", errors="replace")
+first = next((line.strip() for line in body.splitlines() if line.strip()), "")
+raise SystemExit(0 if re.fullmatch(r"Docs-only:\s*true", first, re.IGNORECASE) else 1)
+PY
+}
+
+body_has_open_pr_wrapper_marker() {
+    grep -Fxq "$open_pr_wrapper_marker" "$1"
+}
+
+body_author_is_dependabot() {
+    local author_lc="${ATLAS_CURRENT_PR_AUTHOR:-}"
+    author_lc="${author_lc,,}"
+    [ "$author_lc" = "dependabot[bot]" ] || [ "$author_lc" = "app/dependabot" ] || [ "$author_lc" = "dependabot" ]
+}
+
+prepare_publish_body() {
+    if body_author_is_dependabot || body_uses_docs_only_marker "$input_body_file" || body_has_open_pr_wrapper_marker "$input_body_file"; then
+        body_file="$input_body_file"
+        return 0
+    fi
+    temporary_body_file="$(mktemp "${TMPDIR:-/tmp}/atlas-open-pr-body.XXXXXX")"
+    cp "$input_body_file" "$temporary_body_file"
+    printf '\n%s\n' "$open_pr_wrapper_marker" >> "$temporary_body_file"
+    body_file="$temporary_body_file"
+}
+
 verify_body_hash() {
     local expected="$1" current
     current="$(body_hash)"
@@ -403,6 +446,7 @@ for arg in "$@"; do
     esac
 done
 reject_target_overrides "$@"
+prepare_publish_body
 
 branch="$(git branch --show-current)"
 if [ -z "$branch" ]; then
