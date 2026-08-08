@@ -438,6 +438,22 @@ def test_review_contract_preadmission_requires_canonical_workflow(tmp_path: Path
     assert any("allowed pull_request_target" in f.detail for f in findings)
 
 
+def test_review_contract_preadmission_canonical_matches_live_workflow() -> None:
+    auditor = load_auditor()
+    workflow = (
+        Path(__file__).resolve().parents[1]
+        / ".github"
+        / "workflows"
+        / "review_contract.yml"
+    ).read_text(encoding="utf-8")
+
+    assert auditor._normalized_workflow_text(
+        workflow
+    ) == auditor._normalized_workflow_text(
+        auditor.REVIEW_CONTRACT_CANONICAL_WORKFLOW
+    )
+
+
 def test_review_contract_preadmission_rejects_noncanonical_workflow(tmp_path: Path) -> None:
     auditor = load_auditor()
     workflow_text = auditor.REVIEW_CONTRACT_CANONICAL_WORKFLOW.replace(
