@@ -132,6 +132,17 @@ run_local_unit_gate_mirror() {
         unit_gate_env+=("-u" "$git_env_var")
     done < <(git rev-parse --local-env-vars)
 
+    if [ ! -f "$repo_root/scripts/check_unit_gate.py" ]; then
+        echo "scripts/check_unit_gate.py is absent from this PR head; local unit gate mirror cannot verify the required gate"
+        rm -rf "$tmp_dir"
+        return 1
+    fi
+    if [ ! -f "$script_root/scripts/check_unit_gate.py" ]; then
+        echo "trusted unit-gate checker unavailable; local unit gate mirror cannot verify the required gate"
+        rm -rf "$tmp_dir"
+        return 1
+    fi
+
     if merge_base="$(git merge-base "$base_ref" HEAD 2>/dev/null)"; then
         git show "${merge_base}:tests/unit_gate_baseline.txt" > "$base_baseline" 2>/dev/null || : > "$base_baseline"
     else
@@ -334,7 +345,7 @@ elif [ "$failures" -ne 0 ]; then
     echo
     echo "==> Local unit gate mirror"
     echo "    SKIP ($failures earlier local review check(s) failed)"
-elif [ -f "$script_root/scripts/check_unit_gate.py" ]; then
+elif [ -f "$script_root/scripts/check_unit_gate.py" ] || git cat-file -e "$base:scripts/check_unit_gate.py" 2>/dev/null; then
     run_check "Local unit gate mirror" run_local_unit_gate_mirror
 else
     echo

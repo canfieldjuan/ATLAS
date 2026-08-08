@@ -9,6 +9,11 @@ but that local bundle does not execute the same selector/check path as
 `.github/workflows/unit_gate.yml`, so GitHub becomes the first place a unit-gate
 failure is discovered.
 
+The final diff exceeds the 400 LOC target because two Codex blocker threads
+found uncovered fail-open paths in the admission gate itself. The added lines
+are the smallest paired code/test proof for those blockers: checker absence
+must fail locally, and checker failures must block every mirror dispatch mode.
+
 ### Problem-derived contract
 
 - Root cause: Local PR publication runs the pre-push/local-review mechanics but
@@ -19,8 +24,10 @@ failure is discovered.
   `tests/test_local_pr_review.py` must prove the mirror runs locally, fails
   closed, strips wrapper-only PR body/Git hook env from the unit-gate
   subprocess, propagates selector failures before dispatching the checker,
-  covers all three selector outcomes, and does not duplicate the separate
-  GitHub Actions `unit_gate` job.
+  propagates checker failures in all three dispatch modes, fails when the
+  checker is absent from a PR head whose base has the checker, covers all three
+  selector outcomes, and does not duplicate the separate GitHub Actions
+  `unit_gate` job.
 - Must not change: Do not alter `.github/workflows/unit_gate.yml`,
   `scripts/check_unit_gate.py`, `scripts/select_impacted_tests.py`, the unit
   baseline, product code, product shape, or review verdict policy.
@@ -32,8 +39,9 @@ Slice phase: Workflow/process
 
 1. Add a late-stage `Local unit gate mirror` step to `scripts/local_pr_review.sh`.
 2. Add focused local-review tests for selected-test execution, empty-selection
-   growth-only execution, `FULL` execution, selector failure propagation, and
-   GitHub Actions duplication avoidance.
+   growth-only execution, `FULL` execution, selector failure propagation,
+   checker failure propagation in all three dispatch modes, checker deletion,
+   and GitHub Actions duplication avoidance.
 
 ### Review Contract
 
@@ -48,6 +56,11 @@ Slice phase: Workflow/process
     the wrappers from opening/updating a PR as green.
   - A failing selector exits the mirror before any `check_unit_gate.py` dispatch,
     and the failure increments the local-review failure count.
+  - A failing `check_unit_gate.py` dispatch increments the local-review failure
+    count for selected, growth-only, and `FULL` modes.
+  - If the base branch has `scripts/check_unit_gate.py` and the PR head removes
+    or renames it, local review treats that as a failed mirror rather than a
+    successful skip.
   - The mirror unsets wrapper-only PR body environment and Git hook-local
     environment before running selector and unit-gate subprocesses, matching the
     standalone GitHub `unit_gate` job.
@@ -72,8 +85,9 @@ seam in the enumeration; otherwise write "N/A - no boundary change."
   on the local mirror of the branch-required unit gate.
 - Replaced-path behaviors: Previously local review could pass without any unit
   gate evidence; now it runs the mirror unless earlier local checks already
-  failed, the check script is absent, or GitHub Actions is already running the
-  dedicated unit-gate workflow.
+  failed, this branch lineage has no unit-gate checker at all, or GitHub
+  Actions is already running the dedicated unit-gate workflow. A PR-head removal
+  of a checker present on the base branch fails locally.
 - Guard-relevant fields: `base_ref`, `repo_root`, `script_root`,
   `GITHUB_ACTIONS`, `ATLAS_CURRENT_PR_BODY_FILE`, `ATLAS_CURRENT_PR_AUTHOR`,
   Git hook-local variables from `git rev-parse --local-env-vars`, selected test
@@ -93,8 +107,9 @@ fallback changes; otherwise write "N/A - no guard/config boundary change."
   local checks passed.
 - Explicit value probe: `GITHUB_ACTIONS=true` skips the mirror, leaving the
   dedicated CI `unit_gate` job as the required remote authority.
-- Absent value probe: If `scripts/check_unit_gate.py` is absent, local review
-  prints a skip instead of pretending to run the gate.
+- Absent value probe: If `scripts/check_unit_gate.py` is absent from this PR
+  head while the base branch has it, local review fails the mirror. Tiny fixture
+  repos that never had the checker still print a skip.
 - Default-session/default-context probe: Normal `push_pr.sh` / `open_pr.sh`
   local publication inherits the unset `GITHUB_ACTIONS` default and therefore
   runs the mirror.
@@ -124,6 +139,11 @@ Selector execution and checker dispatch record and return child exit codes
 explicitly; the function does not depend on Bash `errexit` because
 `run_check` invokes checks through an `if` condition.
 
+When the base branch carries `scripts/check_unit_gate.py`, the mirror runs even
+if the PR head removed that file and then fails before publication. That keeps
+the local admission path aligned with the required GitHub workflow, which would
+also fail on a missing checker.
+
 The call is deliberately late in local review. Cheap plan/body/drift/diff checks
 run first; if any failed, the mirror reports a skip because the PR is already
 blocked. When `GITHUB_ACTIONS=true`, the mirror also reports a skip so the
@@ -151,8 +171,8 @@ Parked hardening: none.
 
 ## Verification
 
-- `python -m pytest tests/test_local_pr_review.py -q` - 25 passed.
-- `GITHUB_ACTIONS=true python -m pytest tests/test_local_pr_review.py -q` - 25 passed.
+- `python -m pytest tests/test_local_pr_review.py -q` - 27 passed.
+- `GITHUB_ACTIONS=true python -m pytest tests/test_local_pr_review.py -q` - 27 passed.
 - `bash -n scripts/local_pr_review.sh` - passed.
 - Scoped CI-mode unit gate invocation for `tests/test_local_pr_review.py` -
   passed with zero regressions against the merge-base baseline.
@@ -164,7 +184,7 @@ Parked hardening: none.
 
 | File | LOC |
 |---|---:|
-| `plans/PR-Local-Unit-Gate-Mirror.md` | 170 |
-| `scripts/local_pr_review.sh` | 93 |
-| `tests/test_local_pr_review.py` | 126 |
-| **Total** | **389** |
+| `plans/PR-Local-Unit-Gate-Mirror.md` | 190 |
+| `scripts/local_pr_review.sh` | 104 |
+| `tests/test_local_pr_review.py` | 181 |
+| **Total** | **475** |

@@ -288,6 +288,44 @@ def test_local_pr_review_unit_gate_mirror_runs_full_selection(tmp_path: Path) ->
     assert "local PR review passed" in result.stdout
 
 
+def test_local_pr_review_unit_gate_mirror_checker_failures_block_every_mode(tmp_path: Path) -> None:
+    cases = {
+        "selected": (
+            "#!/usr/bin/env python3\nprint('tests/test_example.py')\n",
+            "running 1 impacted test file(s)",
+            "--selected-files",
+        ),
+        "growth_only": (
+            "#!/usr/bin/env python3\n",
+            "no test is reachable from the changed files; growth guard only",
+            "--growth-only",
+        ),
+        "full": (
+            "#!/usr/bin/env python3\nprint('FULL')\n",
+            "running the FULL suite (selection escalated)",
+            "--baseline tests/unit_gate_baseline.txt",
+        ),
+    }
+
+    for name, (selector_script, mode_message, args_fragment) in cases.items():
+        repo = tmp_path / name
+        _write_fixture_repo(repo)
+        _write_unit_gate_fixture(
+            repo,
+            selector_script=selector_script,
+            checker_script="#!/usr/bin/env python3\nimport sys\nprint('unit gate rejected: ' + ' '.join(sys.argv[1:]))\nsys.exit(9)\n",
+        )
+
+        result = _run(repo, ["bash", "scripts/local_pr_review.sh"], env={"GITHUB_ACTIONS": "false"})
+
+        assert result.returncode == 1, result.stdout + result.stderr
+        assert "Local unit gate mirror" in result.stdout
+        assert mode_message in result.stdout
+        assert args_fragment in result.stdout
+        assert "unit gate rejected:" in result.stdout
+        assert "1 local review check(s) failed" in result.stdout
+
+
 def test_local_pr_review_unit_gate_mirror_propagates_selector_failure(tmp_path: Path) -> None:
     repo = tmp_path / "repo"
     _write_fixture_repo(repo)
@@ -303,6 +341,23 @@ def test_local_pr_review_unit_gate_mirror_propagates_selector_failure(tmp_path: 
     assert "Local unit gate mirror" in result.stdout
     assert "selector failed while choosing local unit-gate tests" in result.stdout
     assert "unit gate should not run" not in result.stdout
+    assert "1 local review check(s) failed" in result.stdout
+
+
+def test_local_pr_review_unit_gate_mirror_fails_when_checker_was_removed(tmp_path: Path) -> None:
+    repo = tmp_path / "repo"
+    _write_fixture_repo(repo)
+    _write_unit_gate_fixture(repo, selector_script="#!/usr/bin/env python3\nprint('FULL')\n")
+    _git(repo, "update-ref", "refs/remotes/origin/main", "HEAD")
+    _git(repo, "rm", "scripts/check_unit_gate.py")
+    _git(repo, "commit", "-m", "remove unit gate checker")
+
+    result = _run(repo, ["bash", "scripts/local_pr_review.sh"], env={"GITHUB_ACTIONS": "false"})
+
+    assert result.returncode == 1
+    assert "Local unit gate mirror" in result.stdout
+    assert "scripts/check_unit_gate.py is absent from this PR head" in result.stdout
+    assert "SKIP (scripts/check_unit_gate.py not found)" not in result.stdout
     assert "1 local review check(s) failed" in result.stdout
 
 
