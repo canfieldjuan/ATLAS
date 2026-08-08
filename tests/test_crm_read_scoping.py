@@ -1304,22 +1304,28 @@ async def test_create_contact_tenant_admission_closure(no_default, monkeypatch, 
     else:  # admit
         assert out["success"] is True
         provider.create_contact.assert_awaited_once()
-        assert provider.create_contact.await_args.args[0]["business_context_id"] == raw
+        # The stamp is NORMALIZED (#2318): an admitted "  churnsignals  " persists
+        # as "churnsignals" so it matches the registry and the FK.
+        assert provider.create_contact.await_args.args[0]["business_context_id"] == raw.strip()
 
 
 # ---------------------------------------------------------------------------
 # #2318: tenant EXISTENCE net (fail-safe registry validation)
 # ---------------------------------------------------------------------------
 def _patch_registry(monkeypatch, ids):
-    """Patch the business-context registry to report `ids` as enabled tenants."""
+    """Patch the registry admission check to report `ids` as the complete tenant
+    set. Returns (populated, known) exactly like the real single-query check:
+    populated is true iff the registry has any row; known iff the id is a member."""
     from atlas_brain.storage.repositories.business_context import (
         BusinessContextRepository,
     )
 
-    async def _list_enabled(self):
-        return [{"id": i} for i in ids]
+    id_set = set(ids)
 
-    monkeypatch.setattr(BusinessContextRepository, "list_enabled", _list_enabled)
+    async def _admission_check(self, context_id):
+        return (bool(id_set), context_id in id_set)
+
+    monkeypatch.setattr(BusinessContextRepository, "admission_check", _admission_check)
 
 
 @pytest.mark.asyncio

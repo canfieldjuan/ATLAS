@@ -52,6 +52,38 @@ class BusinessContextRepository:
             logger.error("Failed to get business context %s: %s", context_id, e)
             raise DatabaseOperationError("get business context", e)
 
+    async def admission_check(self, context_id: str) -> tuple[bool, bool]:
+        """Return ``(registry_populated, tenant_known)`` in a single query.
+
+        Used by ``create_contact``'s tenant-existence net (#2318). This is a
+        COMPLETE-registry membership check -- independent of ``enabled`` and of
+        pagination -- unlike ``list_enabled`` (``WHERE enabled = TRUE LIMIT 100``),
+        which would treat a disabled or 101st tenant as nonexistent. The
+        ``populated`` flag drives the caller's pre-seed fail-safe: an empty
+        registry admits (the FK enforces existence once seeded).
+
+        Raises ``DatabaseUnavailableError`` when persistence is disabled; the
+        caller treats that as the fail-safe (admit) state.
+        """
+        pool = get_db_pool()
+        if not pool.is_initialized:
+            raise DatabaseUnavailableError("business context admission check")
+
+        try:
+            row = await pool.fetchrow(
+                "SELECT EXISTS (SELECT 1 FROM business_contexts) AS populated, "
+                "EXISTS (SELECT 1 FROM business_contexts WHERE id = $1) AS known",
+                context_id,
+            )
+            return (bool(row["populated"]), bool(row["known"]))
+        except DatabaseUnavailableError:
+            raise
+        except Exception as e:
+            logger.error(
+                "Failed business context admission check %s: %s", context_id, e
+            )
+            raise DatabaseOperationError("business context admission check", e)
+
     async def upsert(self, context_id: str, data: dict) -> dict:
         """Insert or update a business context."""
         pool = get_db_pool()

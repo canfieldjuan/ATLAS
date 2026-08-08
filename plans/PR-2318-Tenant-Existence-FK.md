@@ -39,8 +39,10 @@ Slice phase: production hardening
 ### Files touched
 
 - `atlas_brain/mcp/crm_server.py`
+- `atlas_brain/storage/repositories/business_context.py` (adds `admission_check`)
 - `atlas_brain/storage/migrations/365_contacts_business_context_registry_fk.sql`
 - `tests/test_crm_read_scoping.py`
+- `tests/test_migration_365_business_context_fk.py` (real-postgres apply check)
 - `plans/PR-2318-Tenant-Existence-FK.md`
 
 ### Review Contract
@@ -116,8 +118,16 @@ Parked hardening: none.
 $ python -m pytest tests/test_crm_read_scoping.py -q
 264 passed        # 231 D1 + 3 existence examples + 30 generative membership
 
-# migration 365 is applied to a real postgres by CI (test_migrations_runner.py +
-# the pg-backed lead-pipeline checks), validating the seed + FK on a fresh DB.
+# Real-postgres apply check for the migration (tests/test_migration_365_*).
+# Applied 040 + 035 + 365 to a throwaway postgres:16 container and asserted:
+#   fresh DB   -> seeds effingham_maids/churnsignals with voice config NEUTRALIZED
+#                 (scheduling_enabled/sms_enabled/take_messages FALSE; voice_name,
+#                 greeting, hours, timezone NULL) + FK present, scoped to contacts;
+#   prepopulated-> seed-before-FK validates existing rows; the dynamic backstop
+#                 seeds a contacts-only tenant; unknown tenant is FK-rejected;
+#                 NULL tenant allowed; reapply is idempotent (no dup constraint).
+# 2 passed. The test SKIPS unless ATLAS_MIGRATION_TEST_DATABASE_URL is set (CI's
+# migration-tests service DB sets it); it never touches prod.
 ```
 
 **Operator / deploy note:** applying migration 365 to the live Atlas DB (seed +
@@ -125,12 +135,36 @@ FK) is a gated deploy step, not done by this PR. On the live DB it seeds the two
 tenants and adds the FK against ~709 existing rows (all effingham_maids/
 churnsignals, zero NULL -- verified), which validates.
 
+## Rollback
+
+Reverting merging this PR removes the migration and the guard, but on a DB where
+migration 365 has already been APPLIED the FK and seed rows persist; to roll those
+back:
+
+1. **Remove the FK** (restores D1 presence-only behavior; the runtime guard's
+   fail-safe also degrades once the registry looks unavailable):
+   `ALTER TABLE contacts DROP CONSTRAINT IF EXISTS contacts_business_context_id_fkey;`
+2. **Seed rows:** leave them. They are inert, neutralized registry rows
+   (`enabled=TRUE`, all voice/scheduling/SMS config NULL/FALSE) and harmless once
+   the FK is gone. Do NOT blanket-`DELETE` `business_contexts` rows: the voice
+   product may own rows there, and any contact still references its tenant. If a
+   specific seed row must go, delete it only after confirming no `contacts` row
+   references it and the voice product does not own it.
+3. **Verify:** `SELECT conname FROM pg_constraint WHERE conname =
+   'contacts_business_context_id_fkey';` returns no row, and `create_contact`
+   admits a previously-rejected tenant again.
+
+The migration is idempotent and additive (seed + FK only), so a forward re-apply
+after rollback is safe.
+
 ## Estimated diff size
 
 | File | LOC (added) |
 |---|---:|
-| `atlas_brain/mcp/crm_server.py` | 39 |
-| `atlas_brain/storage/migrations/365_contacts_business_context_registry_fk.sql` | 49 |
-| `tests/test_crm_read_scoping.py` | 94 |
-| `plans/PR-2318-Tenant-Existence-FK.md` | 136 |
-| **Total** | **318** |
+| `atlas_brain/mcp/crm_server.py` | 57 |
+| `atlas_brain/storage/repositories/business_context.py` | 32 |
+| `atlas_brain/storage/migrations/365_contacts_business_context_registry_fk.sql` | 80 |
+| `tests/test_crm_read_scoping.py` | 101 |
+| `tests/test_migration_365_business_context_fk.py` | 151 |
+| `plans/PR-2318-Tenant-Existence-FK.md` | 168 |
+| **Total** | **589** |

@@ -598,22 +598,35 @@ async def create_contact(
         # that must be a REAL one. Migration 365 makes `business_contexts` the
         # enforced registry (seeds it + adds the FK), so the FK is the durable
         # enforcement; this is the clean typed refusal that fires before the INSERT.
-        # Fail-safe: enforce ONLY when the registry is populated. An empty or
-        # unavailable registry degrades to the D1 presence-only behavior, so this
-        # is safe to deploy in ANY order relative to migration 365 and never
-        # rejects a real tenant merely because the table has not been seeded yet.
-        try:
-            from ..storage.repositories.business_context import (
-                BusinessContextRepository,
-            )
-
-            known_contexts = await BusinessContextRepository().list_enabled()
-        except Exception:
-            known_contexts = []
         resolved_tenant = str(effective_business_context_id or "").strip()
-        if known_contexts and not any(
-            str(row.get("id")) == resolved_tenant for row in known_contexts
-        ):
+        from ..storage.repositories.business_context import BusinessContextRepository
+        from ..storage.exceptions import DatabaseUnavailableError
+
+        try:
+            # COMPLETE-registry membership -- NOT list_enabled(), which filters on
+            # `enabled` and LIMIT 100 and would hide a disabled or 101st tenant.
+            registry_populated, tenant_known = (
+                await BusinessContextRepository().admission_check(resolved_tenant)
+            )
+        except DatabaseUnavailableError:
+            # Expected pre-seed / persistence-disabled state -> fail-safe admit.
+            registry_populated, tenant_known = False, False
+        except Exception:
+            # Unexpected registry failure (permissions, outage, query regression):
+            # keep it OBSERVABLE, then admit -- the FK still enforces existence, so a
+            # genuinely unknown tenant is rejected at the INSERT regardless.
+            logger.warning(
+                "create_contact: tenant registry admission check failed; admitting "
+                "(the FK still enforces tenant existence)",
+                exc_info=True,
+            )
+            registry_populated, tenant_known = False, False
+
+        # Fail-safe: enforce ONLY when the registry is populated. An empty registry
+        # degrades to the D1 presence-only behavior, so this is safe to deploy in ANY
+        # order relative to migration 365 and never rejects a real tenant before the
+        # seed runs.
+        if registry_populated and not tenant_known:
             return json.dumps({
                 "success": False,
                 "error": (
@@ -622,6 +635,11 @@ async def create_contact(
                     "before creating contacts under it"
                 ),
             })
+
+        # Stamp the NORMALIZED tenant so the persisted value matches the registry and
+        # the FK: an admitted "  churnsignals  " must persist as "churnsignals", not
+        # be rejected by the FK (which compares the raw value) as an opaque error.
+        data["business_context_id"] = resolved_tenant
 
         contact = await _provider().create_contact(data)
         return json.dumps({"success": True, "contact": contact}, default=str)
