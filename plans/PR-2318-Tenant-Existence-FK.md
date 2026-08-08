@@ -9,6 +9,18 @@ an orphan row. D1 could not validate existence because `business_contexts` was
 empty and there was no FK -- validating then would have rejected every real
 tenant.
 
+**Diff-budget overage (939 LOC vs the 400 soft cap) -- why this slice is
+indivisible.** Production code is ~116 LOC (guard 74 + repo `admission_check` 42);
+the migration is 83. The remaining ~740 is review-mandated *evidence for this exact
+change*, not extra scope: the real-postgres test file (340) that proves seed-before-FK
+ordering, FK enforcement, neutralization, idempotence, and the concurrent-writer lock
+protocol; the generative membership unit tests (102); and this contract plan itself
+(280, incl. rollback + the R8 execution-model criterion). Splitting the migration from
+its guard would ship enforcement without its DB root (or vice-versa) for a window;
+splitting either from its tests would orphan the acceptance evidence the reviewer
+required. Every LOC over the cap is the seed+FK+guard triple or the proof that it is
+correct -- there is no independently-shippable sub-slice.
+
 ### Problem-derived contract
 
 - **Root cause.** `contacts.business_context_id` is a bare `VARCHAR(64)` with no
@@ -158,15 +170,35 @@ error). No read-path or other-tool change.
 
 ## Deferred
 
+**Parking predicate.** A finding is parked here iff it is a latent robustness gap
+that does NOT change the slice's behavior for any tenant present in prod -- verified
+read-only: `contacts.business_context_id` is `effingham_maids` (709) or
+`churnsignals` (1), with zero NULL/whitespace/non-canonical keys. Anything that
+alters a real tenant's behavior is NOT parked; it blocks. All three items below are
+tracked in **#2327**, each with an unlock condition.
+
+- **Legacy whitespace / non-canonical tenant-key normalization** (from the R5 P2
+  review thread). The backstop seeds each existing `contacts.business_context_id`
+  verbatim (so the FK validates existing rows), while `create_contact` now `btrim()`s
+  the tenant before `admission_check` + persist -- so a hypothetical legacy key like
+  `' acme '` would seed raw but be looked up trimmed, and a new create for it would be
+  FK-rejected. Non-triggering now (prod has only the two clean canonical keys above;
+  the canonical seed is hardcoded-clean). **Unlock (#2327):** the moment a whitespace
+  or non-canonical key is introduced, backfill `contacts.business_context_id =
+  btrim(...)` or seed both raw + trimmed forms in the backstop.
 - **Whether the tenant registry should be a table separate from the voice-assistant
   config** (`business_contexts` serves both). Not changed here: the code already
-  treats `business_contexts` as the registry, and a fresh table would fork the
-  source of truth. Filed as a design note for the operator rather than resolved in
-  this slice.
-- Renaming the backstop-seeded display names (id-as-name) for any non-primary
-  tenant.
+  treats it as the registry, and a fresh table would fork the source of truth.
+  **Unlock (#2327):** if the voice-config schema and the registry needs diverge enough
+  that shared columns cause friction, add a dedicated `tenant_registry` table and move
+  the FK to it.
+- **Backstop-seeded display names (id-as-name) for any non-primary tenant.**
+  **Unlock (#2327):** when a non-primary tenant becomes customer-visible and needs a
+  real display name.
 
-Parked hardening: none.
+Parked hardening: none. (The above are DEFERRED design/robustness items with unlock
+conditions, not parked hardening on the shipped code path -- the seed+FK+guard triple
+is fully implemented and tested here.)
 
 ## Verification
 
@@ -241,8 +273,8 @@ so "drop the FK" alone is a one-way rollback.
 | `atlas_brain/mcp/crm_server.py` | 74 |
 | `atlas_brain/storage/migrations/365_contacts_business_context_registry_fk.sql` | 83 |
 | `atlas_brain/storage/repositories/business_context.py` | 42 |
-| `plans/PR-2318-Tenant-Existence-FK.md` | 248 |
+| `plans/PR-2318-Tenant-Existence-FK.md` | 280 |
 | `tests/maturity_sweep/baseline_atlas_brain_storage.json` | 11 |
 | `tests/test_crm_read_scoping.py` | 102 |
 | `tests/test_migration_365_business_context_fk.py` | 340 |
-| **Total** | **907** |
+| **Total** | **939** |
