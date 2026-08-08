@@ -39,12 +39,12 @@ Slice phase: production hardening
 ### Files touched
 
 - `atlas_brain/mcp/crm_server.py`
-- `atlas_brain/storage/repositories/business_context.py` (adds `admission_check`)
+- `atlas_brain/storage/repositories/business_context.py` (adds the admission_check method)
 - `atlas_brain/storage/migrations/365_contacts_business_context_registry_fk.sql`
 - `tests/test_crm_read_scoping.py`
 - `tests/test_migration_365_business_context_fk.py` (real-postgres apply check)
 - `.github/workflows/atlas_eom_lead_pipeline_checks.yml` (enroll the pg test in a postgres-backed CI job)
-- `tests/maturity_sweep/baseline_atlas_brain_storage.json` (accept the intentional unit-test mock of `admission_check`; score 8 ≥ 8)
+- `tests/maturity_sweep/baseline_atlas_brain_storage.json` (accept the intentional unit-test mock of admission_check; score 8 >= 8)
 - `plans/PR-2318-Tenant-Existence-FK.md`
 
 ### Review Contract
