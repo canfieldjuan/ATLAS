@@ -53,14 +53,22 @@ class BusinessContextRepository:
             raise DatabaseOperationError("get business context", e)
 
     async def admission_check(self, context_id: str) -> tuple[bool, bool]:
-        """Return ``(registry_populated, tenant_known)`` in a single query.
+        """Return ``(registry_enforced, tenant_known)`` in a single query.
 
-        Used by ``create_contact``'s tenant-existence net (#2318). This is a
-        COMPLETE-registry membership check -- independent of ``enabled`` and of
-        pagination -- unlike ``list_enabled`` (``WHERE enabled = TRUE LIMIT 100``),
-        which would treat a disabled or 101st tenant as nonexistent. The
-        ``populated`` flag drives the caller's pre-seed fail-safe: an empty
-        registry admits (the FK enforces existence once seeded).
+        Used by ``create_contact``'s tenant-existence net (#2318).
+
+        ``registry_enforced`` is gated on **migration 365 having run**, detected by
+        the presence of the FK ``contacts_business_context_id_fkey`` on
+        ``contacts`` -- NOT on ``business_contexts`` being non-empty. That table
+        pre-exists for the voice product, so a stray voice row for an unrelated
+        context would otherwise flip enforcement on before 365 seeds the real
+        tenants and falsely reject them. Gating on the FK makes the runtime refusal
+        exactly mirror the durable DB enforcement: enforce iff the FK exists.
+
+        ``tenant_known`` is a COMPLETE-registry membership check -- independent of
+        ``enabled`` and of pagination -- unlike ``list_enabled``
+        (``WHERE enabled = TRUE LIMIT 100``), which would miss a disabled or 101st
+        tenant.
 
         Raises ``DatabaseUnavailableError`` when persistence is disabled; the
         caller treats that as the fail-safe (admit) state.
@@ -71,11 +79,13 @@ class BusinessContextRepository:
 
         try:
             row = await pool.fetchrow(
-                "SELECT EXISTS (SELECT 1 FROM business_contexts) AS populated, "
+                "SELECT EXISTS (SELECT 1 FROM pg_constraint "
+                "  WHERE conname = 'contacts_business_context_id_fkey' "
+                "  AND conrelid = 'contacts'::regclass) AS enforced, "
                 "EXISTS (SELECT 1 FROM business_contexts WHERE id = $1) AS known",
                 context_id,
             )
-            return (bool(row["populated"]), bool(row["known"]))
+            return (bool(row["enforced"]), bool(row["known"]))
         except DatabaseUnavailableError:
             raise
         except Exception as e:

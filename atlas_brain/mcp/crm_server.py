@@ -603,14 +603,17 @@ async def create_contact(
         from ..storage.exceptions import DatabaseUnavailableError
 
         try:
-            # COMPLETE-registry membership -- NOT list_enabled(), which filters on
-            # `enabled` and LIMIT 100 and would hide a disabled or 101st tenant.
-            registry_populated, tenant_known = (
+            # (enforced, known): `enforced` is gated on migration 365 having run
+            # (the FK exists) -- NOT on business_contexts being non-empty, since that
+            # voice-config table can hold an unrelated row before 365 seeds the real
+            # tenants. `known` is a COMPLETE-registry membership check (not
+            # list_enabled(), which filters on `enabled` and LIMIT 100).
+            registry_enforced, tenant_known = (
                 await BusinessContextRepository().admission_check(resolved_tenant)
             )
         except DatabaseUnavailableError:
             # Expected pre-seed / persistence-disabled state -> fail-safe admit.
-            registry_populated, tenant_known = False, False
+            registry_enforced, tenant_known = False, False
         except Exception:
             # Unexpected registry failure (permissions, outage, query regression):
             # keep it OBSERVABLE, then admit -- the FK still enforces existence, so a
@@ -620,13 +623,13 @@ async def create_contact(
                 "(the FK still enforces tenant existence)",
                 exc_info=True,
             )
-            registry_populated, tenant_known = False, False
+            registry_enforced, tenant_known = False, False
 
-        # Fail-safe: enforce ONLY when the registry is populated. An empty registry
-        # degrades to the D1 presence-only behavior, so this is safe to deploy in ANY
-        # order relative to migration 365 and never rejects a real tenant before the
-        # seed runs.
-        if registry_populated and not tenant_known:
+        # Fail-safe: enforce ONLY once migration 365 has run (the FK exists).
+        # Before then this degrades to the D1 presence-only behavior, so it is safe
+        # to deploy in ANY order relative to 365 and never rejects a real tenant
+        # before the seed lands -- and the runtime refusal exactly mirrors the FK.
+        if registry_enforced and not tenant_known:
             return json.dumps({
                 "success": False,
                 "error": (

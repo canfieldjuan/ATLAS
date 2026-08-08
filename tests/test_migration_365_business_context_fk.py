@@ -57,6 +57,17 @@ async def _fk_on_contacts(conn) -> bool:
     )
 
 
+async def _enforced_flag(conn) -> bool:
+    """Mirror the `enforced` half of BusinessContextRepository.admission_check:
+    the tenant-existence net is active iff migration 365 has run (the FK exists),
+    regardless of whether business_contexts already holds unrelated voice rows."""
+    return await conn.fetchval(
+        "SELECT EXISTS (SELECT 1 FROM pg_constraint "
+        "WHERE conname = 'contacts_business_context_id_fkey' "
+        "AND conrelid = 'contacts'::regclass)"
+    )
+
+
 async def _insert_contact(conn, tenant):
     await conn.execute(
         "INSERT INTO contacts (id, full_name, business_context_id) VALUES ($1, $2, $3)",
@@ -147,5 +158,37 @@ async def test_365_prepopulated_validates_enforces_and_is_idempotent() -> None:
             "WHERE conname = 'contacts_business_context_id_fkey' "
             "AND conrelid = 'contacts'::regclass"
         ) == 1
+    finally:
+        await conn.close()
+
+
+@pytest.mark.asyncio
+async def test_admission_readiness_gates_on_fk_not_table_occupancy() -> None:
+    """The guard must enforce iff migration 365 has run (the FK exists), NOT
+    whenever business_contexts is non-empty -- otherwise a pre-existing voice row
+    would flip enforcement on before 365 seeds the real tenants and falsely reject
+    them."""
+    asyncpg = pytest.importorskip("asyncpg")
+    url = _database_url()
+    if not url:
+        pytest.skip("ATLAS_MIGRATION_TEST_DATABASE_URL not set")
+
+    conn = await asyncpg.connect(url)
+    try:
+        await _reset(conn)
+        await _prereqs(conn)  # tables exist; 365 NOT applied -> no FK
+
+        # A stray, unrelated voice row makes the table non-empty but 365 has not run.
+        await conn.execute(
+            "INSERT INTO business_contexts (id, name, phone_numbers) "
+            "VALUES ('some_voice_context', 'Voice', '{}')"
+        )
+        assert await conn.fetchval("SELECT count(*) FROM business_contexts") >= 1
+        # Table occupied, but NOT enforced (no FK yet) -> guard would fail-safe admit.
+        assert await _enforced_flag(conn) is False
+
+        await _apply(conn, MIG_365)
+        # Now enforced (FK present) and the real tenants are seeded.
+        assert await _enforced_flag(conn) is True
     finally:
         await conn.close()

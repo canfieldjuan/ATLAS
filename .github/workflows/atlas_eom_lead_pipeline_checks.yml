@@ -74,6 +74,8 @@ on:
       - "tests/test_eom_sent_email_tenant_scope.py"
       - "tests/test_leads_intake.py"
       - "tests/test_migrations_runner.py"
+      - "tests/test_migration_365_business_context_fk.py"
+      - "atlas_brain/storage/migrations/365_contacts_business_context_registry_fk.sql"
   push:
     branches:
       - main
@@ -146,6 +148,8 @@ on:
       - "tests/test_eom_sent_email_tenant_scope.py"
       - "tests/test_leads_intake.py"
       - "tests/test_migrations_runner.py"
+      - "tests/test_migration_365_business_context_fk.py"
+      - "atlas_brain/storage/migrations/365_contacts_business_context_registry_fk.sql"
 
 jobs:
   eom-lead-pipeline:
@@ -199,4 +203,5 @@ jobs:
             tests/test_eom_sent_email_tenant_scope.py \
             tests/test_leads_intake.py \
             tests/test_migrations_runner.py \
+            tests/test_migration_365_business_context_fk.py \
             -q

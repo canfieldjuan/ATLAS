@@ -43,6 +43,8 @@ Slice phase: production hardening
 - `atlas_brain/storage/migrations/365_contacts_business_context_registry_fk.sql`
 - `tests/test_crm_read_scoping.py`
 - `tests/test_migration_365_business_context_fk.py` (real-postgres apply check)
+- `.github/workflows/atlas_eom_lead_pipeline_checks.yml` (enroll the pg test in a postgres-backed CI job)
+- `tests/maturity_sweep/baseline_atlas_brain_storage.json` (accept the intentional unit-test mock of `admission_check`; score 8 ≥ 8)
 - `plans/PR-2318-Tenant-Existence-FK.md`
 
 ### Review Contract
@@ -126,7 +128,7 @@ $ python -m pytest tests/test_crm_read_scoping.py -q
 #   prepopulated-> seed-before-FK validates existing rows; the dynamic backstop
 #                 seeds a contacts-only tenant; unknown tenant is FK-rejected;
 #                 NULL tenant allowed; reapply is idempotent (no dup constraint).
-# 2 passed. The test SKIPS unless ATLAS_MIGRATION_TEST_DATABASE_URL is set (CI's
+# 3 passed. The test SKIPS unless ATLAS_MIGRATION_TEST_DATABASE_URL is set (CI's
 # migration-tests service DB sets it); it never touches prod.
 ```
 
