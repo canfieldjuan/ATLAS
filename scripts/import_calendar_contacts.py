@@ -1,4 +1,12 @@
 """
+RETIRED (website #128 / D5) -- do not run. Running this script now exits with a
+deprecation error. It duplicated address-only records on every re-run because the
+CRM provider resolves on phone/email only, never address. Use
+scripts/import_eom_customers_live.py instead (it resolves by address and reads
+live Google Calendar). This module stays importable as a library -- its parse_ics
+and CustomerRecord are reused by the replacement -- so only the runnable command
+is retired.
+
 Import customer contacts from Google Calendar ICS exports.
 
 Parses all 4 Effingham Office Maids calendars, deduplicates by address
@@ -636,4 +644,17 @@ async def main():
 
 
 if __name__ == "__main__":
-    asyncio.run(main())
+    # RETIRED (website #128 / D5). This importer duplicated address-only records on
+    # every re-run because the CRM provider resolves on phone/email only, never
+    # address (defect pinned in tests/test_calendar_import_rerun.py). The runnable
+    # command is retired behind this error, NOT deleted: the module's parse_ics /
+    # CustomerRecord / import_records stay importable, and
+    # scripts/import_eom_customers_live.py imports this module as its extraction
+    # core. To restore the runnable path, revert this commit (re-enable the
+    # asyncio.run(main()) below).
+    raise SystemExit(
+        "scripts/import_calendar_contacts.py is retired: it duplicated address-only "
+        "records on every re-run. Use scripts/import_eom_customers_live.py instead "
+        "(it resolves by address and reads live Google Calendar)."
+    )
+    # asyncio.run(main())
