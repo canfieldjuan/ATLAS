@@ -25,6 +25,7 @@ ALLOWED_PULL_REQUEST_TARGET_JOBS = frozenset(
         ("diff_budget.yml", "diff-budget"),
         ("ai_reconciliation_live.yml", "live-reconciliation"),
         ("pr_body_contract.yml", "pr-body-contract"),
+        ("pr_ready_state.yml", "pr-ready-state"),
         ("pre_push_audit.yml", "pre-push-audit"),
         ("session_lane.yml", "session-lane"),
         ("plan_admission.yml", "plan-admission"),

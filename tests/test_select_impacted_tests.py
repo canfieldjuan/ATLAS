@@ -154,6 +154,10 @@ def test_global_files_escalate_to_full(tmp_path, path):
         ["tests/test_check_ai_reconciliation_live.py"],
     ),
     (
+        ".github/workflows/pr_body_contract.yml",
+        ["tests/test_pr_body_contract_workflow.py"],
+    ),
+    (
         ".github/workflows/unit_gate.yml",
         [
             "tests/test_check_unit_gate.py",

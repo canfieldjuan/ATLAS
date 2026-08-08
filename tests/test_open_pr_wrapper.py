@@ -16,6 +16,7 @@ AI_RECONCILIATION_SCRIPT = REPO_ROOT / "scripts" / "audit_ai_reconciliation.py"
 CHANGE_POLICY_SCRIPT = REPO_ROOT / "scripts" / "_pr_change_policy.py"
 LOCAL_REVIEW_SCRIPT = REPO_ROOT / "scripts" / "local_pr_review.sh"
 BRANCH_NAME_SCRIPT = REPO_ROOT / "scripts" / "check_pr_branch_name.py"
+OPEN_PR_WRAPPER_MARKER = "<!-- atlas-open-pr-wrapper: v1 -->"
 
 
 def test_open_pr_create_passes_body_via_stdin_not_path(tmp_path: Path) -> None:
@@ -27,9 +28,12 @@ def test_open_pr_create_passes_body_via_stdin_not_path(tmp_path: Path) -> None:
     assert log.read_text(encoding="utf-8").strip() == (
         "pr create --title Workflow wrapper --repo canfieldjuan/ATLAS --base main --body-file -"
     )
-    assert (repo / "local-review.log").read_text(encoding="utf-8").strip() == f"local_pr_review {body}"
+    assert (repo / "local-review.log").read_text(encoding="utf-8").strip().startswith(
+        "local_pr_review /tmp/atlas-open-pr-body."
+    )
     assert str(body) not in log.read_text(encoding="utf-8")
-    assert stdin_capture.read_text(encoding="utf-8") == body.read_text(encoding="utf-8")
+    assert stdin_capture.read_text(encoding="utf-8") == _stamped_body(body)
+    assert OPEN_PR_WRAPPER_MARKER not in body.read_text(encoding="utf-8")
 
 
 def test_open_pr_edit_passes_body_via_stdin_not_path(tmp_path: Path) -> None:
@@ -44,7 +48,7 @@ def test_open_pr_edit_passes_body_via_stdin_not_path(tmp_path: Path) -> None:
         f"--pr 17 --branch claude/pr-test --head-sha {_git_output(repo, 'rev-parse', 'HEAD')}"
     )
     assert str(body) not in log.read_text(encoding="utf-8")
-    assert stdin_capture.read_text(encoding="utf-8") == body.read_text(encoding="utf-8")
+    assert stdin_capture.read_text(encoding="utf-8") == _stamped_body(body)
 
 
 def test_open_pr_existing_pr_ownership_guard_failure_blocks_before_edit(tmp_path: Path) -> None:
@@ -163,7 +167,7 @@ def test_open_pr_forwards_draft_when_operator_consent_flag_is_set(tmp_path: Path
     assert log.read_text(encoding="utf-8").strip() == (
         "pr create --draft --title Draft wrapper --repo canfieldjuan/ATLAS --base main --body-file -"
     )
-    assert stdin_capture.read_text(encoding="utf-8") == body.read_text(encoding="utf-8")
+    assert stdin_capture.read_text(encoding="utf-8") == _stamped_body(body)
 
 
 def test_open_pr_forwards_draft_assignment_when_operator_consent_flag_is_set(tmp_path: Path) -> None:
@@ -176,7 +180,7 @@ def test_open_pr_forwards_draft_assignment_when_operator_consent_flag_is_set(tmp
     assert log.read_text(encoding="utf-8").strip() == (
         "pr create --draft=true --title Draft wrapper --repo canfieldjuan/ATLAS --base main --body-file -"
     )
-    assert stdin_capture.read_text(encoding="utf-8") == body.read_text(encoding="utf-8")
+    assert stdin_capture.read_text(encoding="utf-8") == _stamped_body(body)
 
 
 def test_open_pr_allows_value_shorthand_containing_d_without_consent(tmp_path: Path) -> None:
@@ -190,7 +194,7 @@ def test_open_pr_allows_value_shorthand_containing_d_without_consent(tmp_path: P
     assert log.read_text(encoding="utf-8").strip() == (
         "pr create -tdraft-note --repo canfieldjuan/ATLAS --base main --body-file -"
     )
-    assert stdin_capture.read_text(encoding="utf-8") == body.read_text(encoding="utf-8")
+    assert stdin_capture.read_text(encoding="utf-8") == _stamped_body(body)
 
 
 @pytest.mark.parametrize("args", [["--title", "--draft"], ["-t", "-d"]])
@@ -208,7 +212,7 @@ def test_open_pr_allows_draft_shaped_value_of_title_without_consent(
     assert log.read_text(encoding="utf-8").strip() == (
         f"pr create {' '.join(args)} --repo canfieldjuan/ATLAS --base main --body-file -"
     )
-    assert stdin_capture.read_text(encoding="utf-8") == body.read_text(encoding="utf-8")
+    assert stdin_capture.read_text(encoding="utf-8") == _stamped_body(body)
 
 
 def test_open_pr_disables_gh_prompts_so_interactive_draft_is_unreachable(tmp_path: Path) -> None:
@@ -429,7 +433,7 @@ def test_open_pr_accepts_normal_ssh_origin_url(tmp_path: Path) -> None:
     assert log.read_text(encoding="utf-8").strip() == (
         "pr create --title Workflow wrapper --repo canfieldjuan/ATLAS --base main --body-file -"
     )
-    assert stdin_capture.read_text(encoding="utf-8") == body.read_text(encoding="utf-8")
+    assert stdin_capture.read_text(encoding="utf-8") == _stamped_body(body)
 
 
 def test_open_pr_accepts_case_insensitive_repo_identity_after_create(tmp_path: Path) -> None:
@@ -443,7 +447,7 @@ def test_open_pr_accepts_case_insensitive_repo_identity_after_create(tmp_path: P
     assert log.read_text(encoding="utf-8").strip() == (
         "pr create --title Workflow wrapper --repo canfieldjuan/atlas --base main --body-file -"
     )
-    assert stdin_capture.read_text(encoding="utf-8") == body.read_text(encoding="utf-8")
+    assert stdin_capture.read_text(encoding="utf-8") == _stamped_body(body)
 
 
 def test_open_pr_rejects_unpublished_current_head_before_gh(tmp_path: Path) -> None:
@@ -495,7 +499,7 @@ def test_open_pr_reads_fetched_head_without_tracking_ref(tmp_path: Path) -> None
     assert log.read_text(encoding="utf-8").strip() == (
         "pr create --title Workflow wrapper --repo canfieldjuan/ATLAS --base main --body-file -"
     )
-    assert stdin_capture.read_text(encoding="utf-8") == body.read_text(encoding="utf-8")
+    assert stdin_capture.read_text(encoding="utf-8") == _stamped_body(body)
 
 
 def test_open_pr_rejects_local_review_failure_before_gh(tmp_path: Path) -> None:
@@ -609,6 +613,10 @@ def _run(repo: Path, env: dict[str, str], body: Path, *args: str) -> subprocess.
         capture_output=True,
         text=True,
     )
+
+
+def _stamped_body(body: Path) -> str:
+    return body.read_text(encoding="utf-8") + f"\n{OPEN_PR_WRAPPER_MARKER}\n"
 
 
 def _write_fixture_repo(
