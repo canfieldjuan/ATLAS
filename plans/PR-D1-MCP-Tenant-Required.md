@@ -163,7 +163,7 @@ Parked hardening: none.
 
 ```
 $ python -m pytest tests/test_crm_read_scoping.py -q
-89 passed            # 76 + the 13-case admission-closure property proof
+231 passed           # 76 + the ~155-case generated admission-closure property proof
 
 $ python scripts/check_unit_gate.py --baseline tests/unit_gate_baseline.txt \
     --selected-files <CI selection> --pytest-args <9 impacted files> ...
