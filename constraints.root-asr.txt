@@ -47,7 +47,7 @@ cuda-bindings==13.3.1
 cuda-pathfinder==1.5.6
 cuda-toolkit==13.0.2
 curated-tokenizers==0.0.9
-curated-transformers==0.1.1
+curated-transformers==2.0.1
 curl-cffi==0.15.0
 cymem==2.0.13
 cytoolz==1.1.0
