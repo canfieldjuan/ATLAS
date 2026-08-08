@@ -126,7 +126,7 @@ run_local_unit_gate_mirror() {
     tmp_dir="$(mktemp -d)"
     base_baseline="$tmp_dir/base_baseline.txt"
     selected="$tmp_dir/selected.txt"
-    unit_gate_env=(-u ATLAS_CURRENT_PR_BODY_FILE -u ATLAS_CURRENT_PR_AUTHOR)
+    unit_gate_env=(-u ATLAS_CURRENT_PR_BODY_FILE -u ATLAS_CURRENT_PR_AUTHOR -u PYTEST_ADDOPTS)
     while IFS= read -r git_env_var; do
         [ -z "$git_env_var" ] && continue
         unit_gate_env+=("-u" "$git_env_var")
@@ -156,8 +156,9 @@ run_local_unit_gate_mirror() {
         echo "trusted selector unavailable; running FULL"
         echo "FULL" > "$selected"
     else
-        # The unit gate workflow does not receive wrapper-only PR body env
-        # or Git hook-local env. Drop both so local pre-push mirrors CI.
+        # The unit gate workflow does not receive wrapper-only PR body env,
+        # Git hook-local env, or local pytest option overrides.
+        # Drop them so local pre-push mirrors CI.
         env "${unit_gate_env[@]}" \
             "$python_bin" "$script_root/scripts/select_impacted_tests.py" --base "$base_ref" > "$selected"
         status=$?
