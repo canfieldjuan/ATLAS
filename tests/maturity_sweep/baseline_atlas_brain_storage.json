@@ -8,9 +8,9 @@
   "atlas_brain/storage/database.py": {
     "counts": {
       "HAPPY_PATH_TESTS": 1,
-      "INTERNAL_MOCK": 42
+      "INTERNAL_MOCK": 44
     },
-    "score": 172
+    "score": 180
   },
   "atlas_brain/storage/models.py": {
     "counts": {
