@@ -126,11 +126,15 @@ run_local_unit_gate_mirror() {
     tmp_dir="$(mktemp -d)"
     base_baseline="$tmp_dir/base_baseline.txt"
     selected="$tmp_dir/selected.txt"
-    unit_gate_env=(-u ATLAS_CURRENT_PR_BODY_FILE -u ATLAS_CURRENT_PR_AUTHOR -u PYTEST_ADDOPTS)
+    unit_gate_env=(-u ATLAS_CURRENT_PR_BODY_FILE -u ATLAS_CURRENT_PR_AUTHOR)
     while IFS= read -r git_env_var; do
         [ -z "$git_env_var" ] && continue
         unit_gate_env+=("-u" "$git_env_var")
     done < <(git rev-parse --local-env-vars)
+    while IFS= read -r pytest_env_var; do
+        [ -z "$pytest_env_var" ] && continue
+        unit_gate_env+=("-u" "$pytest_env_var")
+    done < <(compgen -e PYTEST_)
 
     if [ ! -f "$repo_root/scripts/check_unit_gate.py" ]; then
         echo "scripts/check_unit_gate.py is absent from this PR head; local unit gate mirror cannot verify the required gate"

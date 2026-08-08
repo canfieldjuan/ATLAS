@@ -237,6 +237,7 @@ def test_local_pr_review_runs_local_unit_gate_mirror(tmp_path: Path) -> None:
             "print('body env=' + str(os.environ.get('ATLAS_CURRENT_PR_BODY_FILE')))\n"
             "print('git prefix env=' + str(os.environ.get('GIT_PREFIX')))\n"
             "print('pytest addopts env=' + str(os.environ.get('PYTEST_ADDOPTS')))\n"
+            "print('pytest disable plugins env=' + str(os.environ.get('PYTEST_DISABLE_PLUGIN_AUTOLOAD')))\n"
             "print('unit gate args=' + ' '.join(sys.argv[1:]))\n"
         ),
     )
@@ -249,6 +250,7 @@ def test_local_pr_review_runs_local_unit_gate_mirror(tmp_path: Path) -> None:
             "GIT_PREFIX": "from-hook/",
             "GITHUB_ACTIONS": "false",
             "PYTEST_ADDOPTS": "-k passing",
+            "PYTEST_DISABLE_PLUGIN_AUTOLOAD": "1",
         },
     )
 
@@ -257,6 +259,7 @@ def test_local_pr_review_runs_local_unit_gate_mirror(tmp_path: Path) -> None:
     assert "body env=None" in result.stdout
     assert "git prefix env=None" in result.stdout
     assert "pytest addopts env=None" in result.stdout
+    assert "pytest disable plugins env=None" in result.stdout
     assert "running 1 impacted test file(s)" in result.stdout
     assert "--selected-files" in result.stdout
     assert "tests/test_example.py -m not integration and not e2e" in result.stdout

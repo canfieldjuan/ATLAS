@@ -22,9 +22,9 @@ must fail locally, and checker failures must block every mirror dispatch mode.
 - Correct fix must touch/change: `scripts/local_pr_review.sh` must run a local
   mirror of the unit-gate selector/check flow before reporting success, and
   `tests/test_local_pr_review.py` must prove the mirror runs locally, fails
-  closed, strips wrapper-only PR body/Git hook env plus local pytest option
-  overrides from the unit-gate subprocess, propagates selector failures before
-  dispatching the checker,
+  closed, strips wrapper-only PR body/Git hook env plus local `PYTEST_*`
+  startup overrides from the unit-gate subprocess, propagates selector failures
+  before dispatching the checker,
   propagates checker failures in all three dispatch modes, fails when the
   checker is absent from a PR head whose base has the checker, covers all three
   selector outcomes, and does not duplicate the separate GitHub Actions
@@ -63,8 +63,8 @@ Slice phase: Workflow/process
     or renames it, local review treats that as a failed mirror rather than a
     successful skip.
   - The mirror unsets wrapper-only PR body environment, Git hook-local
-    environment, and local pytest option overrides before running selector and
-    unit-gate subprocesses, matching the standalone GitHub `unit_gate` job.
+    environment, and local `PYTEST_*` startup overrides before running selector
+    and unit-gate subprocesses, matching the standalone GitHub `unit_gate` job.
   - Under `GITHUB_ACTIONS=true`, `local_pr_review.sh` skips the mirror because
     `.github/workflows/unit_gate.yml` is already a separate required CI job.
 - Reachability proof: Real entrypoint is `bash scripts/local_pr_review.sh`; the
@@ -91,7 +91,7 @@ seam in the enumeration; otherwise write "N/A - no boundary change."
   of a checker present on the base branch fails locally.
 - Guard-relevant fields: `base_ref`, `repo_root`, `script_root`,
   `GITHUB_ACTIONS`, `ATLAS_CURRENT_PR_BODY_FILE`, `ATLAS_CURRENT_PR_AUTHOR`,
-  `PYTEST_ADDOPTS`, Git hook-local variables from
+  local `PYTEST_*` environment variables, Git hook-local variables from
   `git rev-parse --local-env-vars`, selected test file contents, and the
   merge-base baseline.
 - Caller x input shape: `scripts/push_pr.sh` and `scripts/open_pr.sh` call
@@ -133,10 +133,10 @@ using the same base-ref contract as the workflow, runs
 `scripts/select_impacted_tests.py --base <base-ref>` when the selector exists in
 the PR tree, and dispatches to `scripts/check_unit_gate.py` in the same three
 modes as `.github/workflows/unit_gate.yml`. The selector/check subprocesses run
-without `ATLAS_CURRENT_PR_BODY_FILE`, `ATLAS_CURRENT_PR_AUTHOR`,
-`PYTEST_ADDOPTS`, or Git hook-local variables so the local mirror matches the
-standalone CI unit-gate environment instead of the publication wrapper
-environment.
+without `ATLAS_CURRENT_PR_BODY_FILE`, `ATLAS_CURRENT_PR_AUTHOR`, local
+`PYTEST_*` startup variables, or Git hook-local variables so the local mirror
+matches the standalone CI unit-gate environment instead of the publication
+wrapper environment.
 
 Selector execution and checker dispatch record and return child exit codes
 explicitly; the function does not depend on Bash `errexit` because
@@ -188,6 +188,6 @@ Parked hardening: none.
 | File | LOC |
 |---|---:|
 | `plans/PR-Local-Unit-Gate-Mirror.md` | 193 |
-| `scripts/local_pr_review.sh` | 105 |
-| `tests/test_local_pr_review.py` | 184 |
-| **Total** | **482** |
+| `scripts/local_pr_review.sh` | 109 |
+| `tests/test_local_pr_review.py` | 187 |
+| **Total** | **489** |
