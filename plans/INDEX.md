@@ -1,6 +1,6 @@
 # Plan archive index
 
-1516 archived plan doc(s). Merged plan docs are moved under `archive/` and listed below; once the archive sweep has run, the `plans/` root holds only in-flight slices.
+1517 archived plan doc(s). Merged plan docs are moved under `archive/` and listed below; once the archive sweep has run, the `plans/` root holds only in-flight slices.
 
 - [PR-ASR-Pip-Audit-Egg-Fragment](archive/PR-ASR-Pip-Audit-Egg-Fragment.md) - lane: security/workflow | phase: Production hardening
 - [PR-ASR-Requirements-Audit-Pin](archive/PR-ASR-Requirements-Audit-Pin.md) - lane: security/workflow | phase: Production hardening
@@ -1267,6 +1267,7 @@
 - [PR-Local-MCP-Eval-Live-Runbook](archive/PR-Local-MCP-Eval-Live-Runbook.md) - lane: mcp/local-model-evals | phase: Functional validation
 - [PR-Local-MCP-Model-Eval-Harness](archive/PR-Local-MCP-Model-Eval-Harness.md) - lane: mcp/local-model-evals | phase: Vertical slice
 - [PR-Local-Model-MCP-Qualification-V2](archive/PR-Local-Model-MCP-Qualification-V2.md) - lane: mcp/local-model-qualification | phase: Functional validation
+- [PR-Local-Unit-Gate-Mirror](archive/PR-Local-Unit-Gate-Mirror.md) - lane: atlas-workflow/pr-enforcement | phase: Workflow/process
 - [PR-Long-Running-Hook-Split](archive/PR-Long-Running-Hook-Split.md) - lane: workflow/autonomous-ci-cd-map | phase: Workflow/process
 - [PR-Long-Running-Monitoring-Spec](archive/PR-Long-Running-Monitoring-Spec.md) - lane: workflow/autonomous-ci-cd-map | phase: Workflow/process
 - [PR-Long-Running-Watcher-Handoff](archive/PR-Long-Running-Watcher-Handoff.md) - lane: workflow/autonomous-ci-cd-map | phase: Workflow/process
