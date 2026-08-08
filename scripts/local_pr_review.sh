@@ -116,6 +116,99 @@ run_check() {
     fi
 }
 
+run_local_unit_gate_mirror() {
+    local tmp_dir
+    local base_baseline
+    local selected
+    local merge_base
+    local status
+    local -a unit_gate_env
+    tmp_dir="$(mktemp -d)"
+    base_baseline="$tmp_dir/base_baseline.txt"
+    selected="$tmp_dir/selected.txt"
+    unit_gate_env=(-u ATLAS_CURRENT_PR_BODY_FILE -u ATLAS_CURRENT_PR_AUTHOR)
+    while IFS= read -r git_env_var; do
+        [ -z "$git_env_var" ] && continue
+        unit_gate_env+=("-u" "$git_env_var")
+    done < <(git rev-parse --local-env-vars)
+    while IFS= read -r pytest_env_var; do
+        [ -z "$pytest_env_var" ] && continue
+        unit_gate_env+=("-u" "$pytest_env_var")
+    done < <(compgen -e PYTEST_)
+
+    if [ ! -f "$repo_root/scripts/check_unit_gate.py" ]; then
+        echo "scripts/check_unit_gate.py is absent from this PR head; local unit gate mirror cannot verify the required gate"
+        rm -rf "$tmp_dir"
+        return 1
+    fi
+    if [ ! -f "$script_root/scripts/check_unit_gate.py" ]; then
+        echo "trusted unit-gate checker unavailable; local unit gate mirror cannot verify the required gate"
+        rm -rf "$tmp_dir"
+        return 1
+    fi
+
+    if merge_base="$(git merge-base "$base_ref" HEAD 2>/dev/null)"; then
+        git show "${merge_base}:tests/unit_gate_baseline.txt" > "$base_baseline" 2>/dev/null || : > "$base_baseline"
+    else
+        git show "${base_ref}:tests/unit_gate_baseline.txt" > "$base_baseline" 2>/dev/null || : > "$base_baseline"
+    fi
+
+    if [ ! -f "$repo_root/scripts/select_impacted_tests.py" ]; then
+        echo "selector absent from this PR head; running FULL"
+        echo "FULL" > "$selected"
+    elif [ ! -f "$script_root/scripts/select_impacted_tests.py" ]; then
+        echo "trusted selector unavailable; running FULL"
+        echo "FULL" > "$selected"
+    else
+        # The unit gate workflow does not receive wrapper-only PR body env,
+        # Git hook-local env, or local pytest option overrides.
+        # Drop them so local pre-push mirrors CI.
+        env "${unit_gate_env[@]}" \
+            "$python_bin" "$script_root/scripts/select_impacted_tests.py" --base "$base_ref" > "$selected"
+        status=$?
+        if [ "$status" -ne 0 ]; then
+            echo "selector failed while choosing local unit-gate tests"
+            rm -rf "$tmp_dir"
+            return "$status"
+        fi
+    fi
+
+    echo "--- selection ---"
+    cat "$selected"
+
+    if [ "$(cat "$selected")" = "FULL" ]; then
+        echo "running the FULL suite (selection escalated)"
+        env "${unit_gate_env[@]}" \
+            "$python_bin" "$script_root/scripts/check_unit_gate.py" \
+            --baseline tests/unit_gate_baseline.txt \
+            --base-baseline "$base_baseline"
+        status=$?
+    elif [ ! -s "$selected" ]; then
+        echo "no test is reachable from the changed files; growth guard only"
+        env "${unit_gate_env[@]}" \
+            "$python_bin" "$script_root/scripts/check_unit_gate.py" \
+            --baseline tests/unit_gate_baseline.txt \
+            --base-baseline "$base_baseline" \
+            --growth-only
+        status=$?
+    else
+        mapfile -t selected_tests < "$selected"
+        echo "running ${#selected_tests[@]} impacted test file(s)"
+        env "${unit_gate_env[@]}" \
+            "$python_bin" "$script_root/scripts/check_unit_gate.py" \
+            --baseline tests/unit_gate_baseline.txt \
+            --base-baseline "$base_baseline" \
+            --selected-files "$selected" \
+            --pytest-args "${selected_tests[@]}" \
+                -m "not integration and not e2e" \
+                --continue-on-collection-errors -rfE --tb=no -q \
+                -p no:cacheprovider
+        status=$?
+    fi
+    rm -rf "$tmp_dir"
+    return "$status"
+}
+
 body_uses_docs_only_marker() {
     [ -n "$current_pr_body_file" ] || return 1
     [ -f "$current_pr_body_file" ] || return 1
@@ -248,6 +341,22 @@ else
 fi
 
 run_check "git diff --check" git diff --check
+
+if [ "${GITHUB_ACTIONS:-}" = "true" ]; then
+    echo
+    echo "==> Local unit gate mirror"
+    echo "    SKIP (GitHub Actions runs .github/workflows/unit_gate.yml as its own required check)"
+elif [ "$failures" -ne 0 ]; then
+    echo
+    echo "==> Local unit gate mirror"
+    echo "    SKIP ($failures earlier local review check(s) failed)"
+elif [ -f "$script_root/scripts/check_unit_gate.py" ] || git cat-file -e "$base:scripts/check_unit_gate.py" 2>/dev/null; then
+    run_check "Local unit gate mirror" run_local_unit_gate_mirror
+else
+    echo
+    echo "==> Local unit gate mirror"
+    echo "    SKIP (scripts/check_unit_gate.py not found)"
+fi
 
 # Advisory only: nudge to archive merged plan docs once the plans/ root grows
 # past the threshold. Never affects the failure count -- archive_plans.py check

@@ -224,6 +224,167 @@ def test_local_pr_review_forwards_pr_author_to_pre_push_audit(tmp_path: Path) ->
     assert "--pr-author dependabot[bot]" in result.stdout
 
 
+def test_local_pr_review_runs_local_unit_gate_mirror(tmp_path: Path) -> None:
+    repo = tmp_path / "repo"
+    _write_fixture_repo(repo)
+    _write_unit_gate_fixture(
+        repo,
+        selector_script="#!/usr/bin/env python3\nprint('tests/test_example.py')\n",
+        checker_script=(
+            "#!/usr/bin/env python3\n"
+            "import os\n"
+            "import sys\n"
+            "print('body env=' + str(os.environ.get('ATLAS_CURRENT_PR_BODY_FILE')))\n"
+            "print('git prefix env=' + str(os.environ.get('GIT_PREFIX')))\n"
+            "print('pytest addopts env=' + str(os.environ.get('PYTEST_ADDOPTS')))\n"
+            "print('pytest disable plugins env=' + str(os.environ.get('PYTEST_DISABLE_PLUGIN_AUTOLOAD')))\n"
+            "print('unit gate args=' + ' '.join(sys.argv[1:]))\n"
+        ),
+    )
+
+    result = _run(
+        repo,
+        ["bash", "scripts/local_pr_review.sh"],
+        env={
+            "ATLAS_CURRENT_PR_BODY_FILE": "/tmp/body-from-wrapper.md",
+            "GIT_PREFIX": "from-hook/",
+            "GITHUB_ACTIONS": "false",
+            "PYTEST_ADDOPTS": "-k passing",
+            "PYTEST_DISABLE_PLUGIN_AUTOLOAD": "1",
+        },
+    )
+
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert "Local unit gate mirror" in result.stdout
+    assert "body env=None" in result.stdout
+    assert "git prefix env=None" in result.stdout
+    assert "pytest addopts env=None" in result.stdout
+    assert "pytest disable plugins env=None" in result.stdout
+    assert "running 1 impacted test file(s)" in result.stdout
+    assert "--selected-files" in result.stdout
+    assert "tests/test_example.py -m not integration and not e2e" in result.stdout
+    assert "local PR review passed" in result.stdout
+
+
+def test_local_pr_review_unit_gate_mirror_runs_growth_only_for_empty_selection(tmp_path: Path) -> None:
+    repo = tmp_path / "repo"
+    _write_fixture_repo(repo)
+    _write_unit_gate_fixture(repo, selector_script="#!/usr/bin/env python3\n")
+
+    result = _run(repo, ["bash", "scripts/local_pr_review.sh"], env={"GITHUB_ACTIONS": "false"})
+
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert "no test is reachable from the changed files; growth guard only" in result.stdout
+    assert "--growth-only" in result.stdout
+    assert "--selected-files" not in result.stdout
+    assert "local PR review passed" in result.stdout
+
+
+def test_local_pr_review_unit_gate_mirror_runs_full_selection(tmp_path: Path) -> None:
+    repo = tmp_path / "repo"
+    _write_fixture_repo(repo)
+    _write_unit_gate_fixture(repo, selector_script="#!/usr/bin/env python3\nprint('FULL')\n")
+
+    result = _run(repo, ["bash", "scripts/local_pr_review.sh"], env={"GITHUB_ACTIONS": "false"})
+
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert "running the FULL suite (selection escalated)" in result.stdout
+    assert "--growth-only" not in result.stdout
+    assert "--selected-files" not in result.stdout
+    assert "local PR review passed" in result.stdout
+
+
+def test_local_pr_review_unit_gate_mirror_checker_failures_block_every_mode(tmp_path: Path) -> None:
+    cases = {
+        "selected": (
+            "#!/usr/bin/env python3\nprint('tests/test_example.py')\n",
+            "running 1 impacted test file(s)",
+            "--selected-files",
+        ),
+        "growth_only": (
+            "#!/usr/bin/env python3\n",
+            "no test is reachable from the changed files; growth guard only",
+            "--growth-only",
+        ),
+        "full": (
+            "#!/usr/bin/env python3\nprint('FULL')\n",
+            "running the FULL suite (selection escalated)",
+            "--baseline tests/unit_gate_baseline.txt",
+        ),
+    }
+
+    for name, (selector_script, mode_message, args_fragment) in cases.items():
+        repo = tmp_path / name
+        _write_fixture_repo(repo)
+        _write_unit_gate_fixture(
+            repo,
+            selector_script=selector_script,
+            checker_script="#!/usr/bin/env python3\nimport sys\nprint('unit gate rejected: ' + ' '.join(sys.argv[1:]))\nsys.exit(9)\n",
+        )
+
+        result = _run(repo, ["bash", "scripts/local_pr_review.sh"], env={"GITHUB_ACTIONS": "false"})
+
+        assert result.returncode == 1, result.stdout + result.stderr
+        assert "Local unit gate mirror" in result.stdout
+        assert mode_message in result.stdout
+        assert args_fragment in result.stdout
+        assert "unit gate rejected:" in result.stdout
+        assert "1 local review check(s) failed" in result.stdout
+
+
+def test_local_pr_review_unit_gate_mirror_propagates_selector_failure(tmp_path: Path) -> None:
+    repo = tmp_path / "repo"
+    _write_fixture_repo(repo)
+    _write_unit_gate_fixture(
+        repo,
+        selector_script="#!/usr/bin/env python3\nimport sys\nprint('selector failed')\nsys.exit(7)\n",
+        checker_script="#!/usr/bin/env python3\nprint('unit gate should not run')\n",
+    )
+
+    result = _run(repo, ["bash", "scripts/local_pr_review.sh"], env={"GITHUB_ACTIONS": "false"})
+
+    assert result.returncode == 1
+    assert "Local unit gate mirror" in result.stdout
+    assert "selector failed while choosing local unit-gate tests" in result.stdout
+    assert "unit gate should not run" not in result.stdout
+    assert "1 local review check(s) failed" in result.stdout
+
+
+def test_local_pr_review_unit_gate_mirror_fails_when_checker_was_removed(tmp_path: Path) -> None:
+    repo = tmp_path / "repo"
+    _write_fixture_repo(repo)
+    _write_unit_gate_fixture(repo, selector_script="#!/usr/bin/env python3\nprint('FULL')\n")
+    _git(repo, "update-ref", "refs/remotes/origin/main", "HEAD")
+    _git(repo, "rm", "scripts/check_unit_gate.py")
+    _git(repo, "commit", "-m", "remove unit gate checker")
+
+    result = _run(repo, ["bash", "scripts/local_pr_review.sh"], env={"GITHUB_ACTIONS": "false"})
+
+    assert result.returncode == 1
+    assert "Local unit gate mirror" in result.stdout
+    assert "scripts/check_unit_gate.py is absent from this PR head" in result.stdout
+    assert "SKIP (scripts/check_unit_gate.py not found)" not in result.stdout
+    assert "1 local review check(s) failed" in result.stdout
+
+
+def test_local_pr_review_skips_unit_gate_mirror_in_github_actions(tmp_path: Path) -> None:
+    repo = tmp_path / "repo"
+    _write_fixture_repo(repo)
+    _write_executable(
+        repo / "scripts" / "check_unit_gate.py",
+        "#!/usr/bin/env python3\nimport sys\nprint('should not run')\nsys.exit(1)\n",
+    )
+    _git(repo, "add", "scripts/check_unit_gate.py")
+    _git(repo, "commit", "-m", "add unit gate stub")
+
+    result = _run(repo, ["bash", "scripts/local_pr_review.sh"], env={"GITHUB_ACTIONS": "true"})
+
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert "SKIP (GitHub Actions runs .github/workflows/unit_gate.yml as its own required check)" in result.stdout
+    assert "should not run" not in result.stdout
+    assert "local PR review passed" in result.stdout
+
+
 def test_local_pr_review_env_pr_body_contract_fails_closed(tmp_path: Path) -> None:
     repo = tmp_path / "repo"
     _write_fixture_repo(repo)
@@ -568,6 +729,32 @@ def _write_fixture_repo(repo: Path) -> None:
     _git(repo, "remote", "add", "origin", str(repo))
     _git(repo, "update-ref", "refs/remotes/origin/main", "HEAD")
     _git(repo, "symbolic-ref", "refs/remotes/origin/HEAD", "refs/remotes/origin/main")
+
+
+def _write_unit_gate_fixture(
+    repo: Path,
+    *,
+    selector_script: str,
+    checker_script: str | None = None,
+) -> None:
+    _write_executable(repo / "scripts" / "select_impacted_tests.py", selector_script)
+    _write_executable(
+        repo / "scripts" / "check_unit_gate.py",
+        checker_script
+        or "#!/usr/bin/env python3\nimport sys\nprint('unit gate args=' + ' '.join(sys.argv[1:]))\n",
+    )
+    (repo / "tests").mkdir(exist_ok=True)
+    (repo / "tests" / "test_example.py").write_text("def test_example():\n    assert True\n", encoding="utf-8")
+    (repo / "tests" / "unit_gate_baseline.txt").write_text("", encoding="utf-8")
+    _git(
+        repo,
+        "add",
+        "scripts/select_impacted_tests.py",
+        "scripts/check_unit_gate.py",
+        "tests/test_example.py",
+        "tests/unit_gate_baseline.txt",
+    )
+    _git(repo, "commit", "-m", "add unit gate stubs")
 
 
 def _run(
