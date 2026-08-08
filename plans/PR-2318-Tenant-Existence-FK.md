@@ -39,14 +39,14 @@ Slice phase: production hardening
 
 ### Files touched
 
+- `.github/workflows/atlas_eom_lead_pipeline_checks.yml`
 - `atlas_brain/mcp/crm_server.py`
-- `atlas_brain/storage/repositories/business_context.py` (adds the admission_check method)
 - `atlas_brain/storage/migrations/365_contacts_business_context_registry_fk.sql`
-- `tests/test_crm_read_scoping.py`
-- `tests/test_migration_365_business_context_fk.py` (real-postgres apply check)
-- `.github/workflows/atlas_eom_lead_pipeline_checks.yml` (enroll the pg test in a postgres-backed CI job)
-- `tests/maturity_sweep/baseline_atlas_brain_storage.json` (accept the intentional unit-test mock of admission_check; score 8 >= 8)
+- `atlas_brain/storage/repositories/business_context.py`
 - `plans/PR-2318-Tenant-Existence-FK.md`
+- `tests/maturity_sweep/baseline_atlas_brain_storage.json`
+- `tests/test_crm_read_scoping.py`
+- `tests/test_migration_365_business_context_fk.py`
 
 ### Review Contract
 
@@ -66,7 +66,7 @@ Slice phase: production hardening
    also the voice product's config table, but it is empty in prod and its config
    columns stay NULL here.
 
-- Reviewer rules triggered: R1, R2, R4, R5, R14. (R1: enforce existence at the DB
+- Reviewer rules triggered: R1, R2, R4, R5, R8, R14. (R1: enforce existence at the DB
   root via the FK, not only a runtime string check. R2: the existence net is a
   membership guard; its closure is `admit iff FK-not-yet-present OR tenant in
   registry`, proven generatively by `test_existence_net_membership_property` over
@@ -80,7 +80,51 @@ Slice phase: production hardening
   when the registry is populated, where it previously returned a created contact.
   Deliberate; uses the tool's existing error convention; no persisted-data or
   wire-format compatibility impact, and the empty-registry fail-safe preserves
-  today's behavior until the seed runs. R14: reviewer verdict discipline.)
+  today's behavior until the seed runs. R8 (concurrency): the migration's
+  correctness under concurrent contact writes is a transaction-scoped invariant,
+  not a single prose example. Execution model: the migration runner is autocommit
+  and splits statements (so `CREATE INDEX CONCURRENTLY` can run), meaning each
+  top-level statement commits independently; wrapping the seed and the FK add in
+  one DO block makes them a single server-side transaction. Invariant across
+  admitted interleavings: `LOCK TABLE contacts IN SHARE MODE`, taken first in that
+  transaction, blocks every concurrent contact INSERT/UPDATE for the block's
+  duration, so the set of tenants visible to the seed's snapshot is exactly the set
+  present when the FK is added -- no writer can commit a new tenant between the
+  snapshot and the ALTER. Interleavings: a writer that committed BEFORE the lock is
+  captured by the dynamic backstop (`SELECT DISTINCT ... FROM contacts`); a writer
+  that arrives DURING the block is queued and resumes after COMMIT against the
+  now-present FK (a new tenant then correctly FK-fails at the app layer, which is
+  the intended enforcement). Crash/cancellation assumption: if the migration
+  transaction aborts mid-block, the whole DO block rolls back -- seed and FK both
+  absent -- leaving the DB re-runnable and idempotent; SHARE (not ACCESS EXCLUSIVE)
+  is deliberate so concurrent reads are never blocked. Exercised by
+  `test_migration_share_lock_blocks_racing_contact_write`. R14: reviewer verdict
+  discipline.)
+
+**Admission-boundary enumeration (R1).** The decision seam is `create_contact`,
+immediately after the EOM guard and before the provider INSERT. Complete
+enumeration by tenant-input shape (not just the example criteria below):
+
+- **explicit known tenant** (e.g. `effingham_maids`, `churnsignals`, `personal`, a
+  backstop-seeded id) -> admits; the normalized value is stamped so it matches the FK.
+- **explicit unknown non-blank tenant** (typo / injected sentinel) -> REPLACED
+  behavior: D1 admitted it (presence-only) and created an orphan row; now it is
+  rejected `{success:false, error}` once the FK exists, and fail-safe-admitted only
+  before the FK exists / when the registry is unavailable.
+- **blank or whitespace-only tenant** -> unchanged: the D1 presence guard rejects it
+  on the agent path; it never reaches the existence net.
+- **NULL / absent tenant** -> unchanged: D1 forbids NULL on the agent path, while the
+  FK itself permits NULL (so non-agent writers are not broken).
+- **default / resolved tenant** (context resolution or the EOM guard supplies the
+  value) -> evaluated as an explicit value at the seam; admitted iff it is in the
+  registry, on the same FK-readiness gate.
+
+Caller/input shape: the MCP `create_contact` tool is the only writer that runs this
+runtime seam; the other contact writers (inbound SMS, webhooks, lead-ingress) are
+governed by the FK directly at the DB -- which is why `personal` and the backstop
+tenants are seeded, so those writers are not silently dropped. No input shape reaches
+the provider INSERT without passing both the presence guard and, when enforced, the
+existence net.
 
 **boundary-probe:** FK present (365 ran) -> known tenant admits, unknown rejects;
 FK absent (pre-migration) -> fail-safe admits any tenant even with unrelated voice
@@ -129,13 +173,16 @@ $ python -m pytest tests/test_crm_read_scoping.py -q
 
 # Real-postgres apply check for the migration (tests/test_migration_365_*).
 # Applied 040 + 035 + 365 to a throwaway postgres:16 container and asserted:
-#   fresh DB   -> seeds effingham_maids/churnsignals with voice config NEUTRALIZED
-#                 (scheduling_enabled/sms_enabled/take_messages FALSE; voice_name,
-#                 greeting, hours, timezone NULL) + FK present, scoped to contacts;
+#   fresh DB   -> seeds effingham_maids/churnsignals/personal with voice config
+#                 NEUTRALIZED (scheduling_enabled/sms_enabled/take_messages FALSE;
+#                 voice_name, greeting, hours, timezone NULL) + FK present, scoped
+#                 to contacts; real list_enabled() excludes the enabled=FALSE seeds;
 #   prepopulated-> seed-before-FK validates existing rows; the dynamic backstop
 #                 seeds a contacts-only tenant; unknown tenant is FK-rejected;
-#                 NULL tenant allowed; reapply is idempotent (no dup constraint).
-# 3 passed. The test SKIPS unless ATLAS_MIGRATION_TEST_DATABASE_URL is set (CI's
+#                 NULL tenant allowed; reapply is idempotent (no dup constraint);
+#   race       -> the DO block's SHARE lock cancels a concurrent contact INSERT
+#                 (statement_timeout), then admits it once the lock releases.
+# 4 passed. The test SKIPS unless ATLAS_MIGRATION_TEST_DATABASE_URL is set (CI's
 # migration-tests service DB sets it); it never touches prod.
 ```
 
@@ -168,12 +215,14 @@ after rollback is safe.
 
 ## Estimated diff size
 
-| File | LOC (added) |
+| File | LOC |
 |---|---:|
-| `atlas_brain/mcp/crm_server.py` | 57 |
-| `atlas_brain/storage/repositories/business_context.py` | 32 |
-| `atlas_brain/storage/migrations/365_contacts_business_context_registry_fk.sql` | 80 |
-| `tests/test_crm_read_scoping.py` | 101 |
-| `tests/test_migration_365_business_context_fk.py` | 151 |
-| `plans/PR-2318-Tenant-Existence-FK.md` | 168 |
-| **Total** | **589** |
+| `.github/workflows/atlas_eom_lead_pipeline_checks.yml` | 7 |
+| `atlas_brain/mcp/crm_server.py` | 74 |
+| `atlas_brain/storage/migrations/365_contacts_business_context_registry_fk.sql` | 83 |
+| `atlas_brain/storage/repositories/business_context.py` | 42 |
+| `plans/PR-2318-Tenant-Existence-FK.md` | 228 |
+| `tests/maturity_sweep/baseline_atlas_brain_storage.json` | 11 |
+| `tests/test_crm_read_scoping.py` | 102 |
+| `tests/test_migration_365_business_context_fk.py` | 285 |
+| **Total** | **832** |
