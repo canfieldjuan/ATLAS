@@ -4,15 +4,6 @@
 # rejects any PR that GROWS this list (ratchet: it may only shrink).
 # Remediate failures, then remove them here. Regenerate the current failing set
 # with: scripts/check_unit_gate.py --update-baseline
-tests/security/test_asset_tracking.py::test_security_monitor_asset_observation
-tests/security/test_network_ids.py::TestSecurityMonitorPacketRouting::test_arp_packet_routes_to_arp_monitor
-tests/security/test_network_ids.py::TestSecurityMonitorPacketRouting::test_build_capture_filter_from_protocols
-tests/security/test_network_ids.py::TestSecurityMonitorPacketRouting::test_enforces_pcap_storage_limit
-tests/security/test_network_ids.py::TestSecurityMonitorPacketRouting::test_ip_packet_routes_to_port_scan_detector
-tests/security/test_network_ids.py::TestSecurityMonitorPacketRouting::test_ip_packet_routes_to_traffic_analyzer
-tests/security/test_network_ids.py::TestSecurityMonitorPacketRouting::test_writes_packet_when_pcap_writer_present
-tests/security/test_security_monitor.py::TestSecurityMonitor::test_monitor_disabled_by_default
-tests/security/test_security_monitor.py::TestSecurityMonitor::test_monitor_initialization
 tests/test_b2b_cache_strategy.py::test_exact_cache_strategies_reference_cache_namespace_and_helpers
 tests/test_b2b_crm_events.py::test_get_enrichment_stats_rejects_unauthenticated_before_db_touch
 tests/test_b2b_enrichment.py::test_enrich_rows_batch_item_metadata_includes_request_fingerprint

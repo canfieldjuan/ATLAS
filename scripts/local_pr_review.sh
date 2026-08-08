@@ -123,10 +123,20 @@ run_local_unit_gate_mirror() {
     local merge_base
     local status
     local -a unit_gate_env
+    local -a unit_gate_env_values
     tmp_dir="$(mktemp -d)"
     base_baseline="$tmp_dir/base_baseline.txt"
     selected="$tmp_dir/selected.txt"
     unit_gate_env=(-u ATLAS_CURRENT_PR_BODY_FILE -u ATLAS_CURRENT_PR_AUTHOR)
+    unit_gate_env_values=(
+        ATLAS_DB_CONNECTION_STRING=
+        ATLAS_DB_HOST=127.0.0.1
+        ATLAS_DB_PORT=1
+        ATLAS_DB_DATABASE=atlas
+        ATLAS_DB_USER=atlas
+        ATLAS_DB_PASSWORD=atlas_dev_password
+        ATLAS_DB_SOCKET_PATH=
+    )
     while IFS= read -r git_env_var; do
         [ -z "$git_env_var" ] && continue
         unit_gate_env+=("-u" "$git_env_var")
@@ -173,12 +183,18 @@ run_local_unit_gate_mirror() {
         fi
     fi
 
+    if [ -f "$repo_root/requirements.unit_gate.txt" ]; then
+        echo "installing unit-gate test dependencies from requirements.unit_gate.txt"
+        "$python_bin" -m pip install -r "$repo_root/requirements.unit_gate.txt"
+    fi
+
     echo "--- selection ---"
     cat "$selected"
 
     if [ "$(cat "$selected")" = "FULL" ]; then
         echo "running the FULL suite (selection escalated)"
         env "${unit_gate_env[@]}" \
+            "${unit_gate_env_values[@]}" \
             "$python_bin" "$script_root/scripts/check_unit_gate.py" \
             --baseline tests/unit_gate_baseline.txt \
             --base-baseline "$base_baseline"
@@ -186,6 +202,7 @@ run_local_unit_gate_mirror() {
     elif [ ! -s "$selected" ]; then
         echo "no test is reachable from the changed files; growth guard only"
         env "${unit_gate_env[@]}" \
+            "${unit_gate_env_values[@]}" \
             "$python_bin" "$script_root/scripts/check_unit_gate.py" \
             --baseline tests/unit_gate_baseline.txt \
             --base-baseline "$base_baseline" \
@@ -195,6 +212,7 @@ run_local_unit_gate_mirror() {
         mapfile -t selected_tests < "$selected"
         echo "running ${#selected_tests[@]} impacted test file(s)"
         env "${unit_gate_env[@]}" \
+            "${unit_gate_env_values[@]}" \
             "$python_bin" "$script_root/scripts/check_unit_gate.py" \
             --baseline tests/unit_gate_baseline.txt \
             --base-baseline "$base_baseline" \

@@ -27,6 +27,18 @@ jobs:
   unit-gate:
     runs-on: ubuntu-latest
     timeout-minutes: 30
+    env:
+      # Unit-gate baselines are only meaningful when the runner environment is
+      # stable. Do not let real developer or CI Postgres state decide whether
+      # live-DB tests are stale baseline entries; those remain baselined until a
+      # dedicated seeded database workflow can prove them.
+      ATLAS_DB_CONNECTION_STRING: ""
+      ATLAS_DB_HOST: 127.0.0.1
+      ATLAS_DB_PORT: "1"
+      ATLAS_DB_DATABASE: atlas
+      ATLAS_DB_USER: atlas
+      ATLAS_DB_PASSWORD: atlas_dev_password
+      ATLAS_DB_SOCKET_PATH: ""
     steps:
       - name: Checkout
         uses: actions/checkout@v7
@@ -52,6 +64,9 @@ jobs:
           # that produced it -- an unpinned pytest could shift collection or the
           # summary format and drift the ledger (matches requirements.content_ops_ci.txt).
           python -m pip install pytest==9.1.1 pytest-asyncio==1.4.0
+          # Test-only dependencies for nodes removed from the baseline. Keep
+          # them out of production requirements.txt.
+          python -m pip install -r requirements.unit_gate.txt
 
       - name: Resolve base-branch baseline (for the ratchet growth guard)
         env:
