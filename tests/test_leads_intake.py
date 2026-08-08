@@ -12,7 +12,10 @@ Covers the Review Contract in plans/PR-EOM-Lead-Intake.md:
 
 from __future__ import annotations
 
+import json
 import sys
+from itertools import product
+from random import Random
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
@@ -128,6 +131,32 @@ async def test_contact_stamped_with_eom_tenant_and_web_source():
     assert kwargs["preserve_existing"] is True
     assert kwargs["email"] == "jane@example.com"
     assert kwargs["phone"] == "2175550100"  # digits-only normalization
+    assert kwargs["address"] is None  # base payload submits no address
+
+
+@pytest.mark.asyncio
+async def test_address_forwarded_to_crm_and_recorded_on_interaction():
+    crm, provider = _crm(), _email_provider()
+    await _process_lead_intake(
+        _payload(address="207 Santa Fe Ave, Effingham, IL 62401"),
+        crm=crm,
+        email_provider=provider,
+    )
+    assert (
+        crm.find_or_create_contact.call_args.kwargs["address"]
+        == "207 Santa Fe Ave, Effingham, IL 62401"
+    )
+    assert (
+        crm.log_interaction.call_args.kwargs["metadata"]["submitted_address"]
+        == "207 Santa Fe Ave, Effingham, IL 62401"
+    )
+
+
+@pytest.mark.asyncio
+async def test_blank_address_collapses_to_none_on_create():
+    crm, provider = _crm(), _email_provider()
+    await _process_lead_intake(_payload(address="   "), crm=crm, email_provider=provider)
+    assert crm.find_or_create_contact.call_args.kwargs["address"] is None
 
 
 # ---------------------------------------------------------------------------
@@ -583,6 +612,92 @@ def test_route_smoke_mounted_path_statuses():
         "/api/v1/leads/intake", json={"name": "Jane", "email": "jane@example.com"}
     )
     assert throttled.status_code == 429
+
+
+def test_route_rejects_database_invalid_address_before_crm_write():
+    from fastapi import FastAPI
+    from fastapi.testclient import TestClient
+
+    import atlas_brain.api.leads as leads_mod
+
+    crm = _crm()
+
+    async def fake_count(email, phone):
+        return 0
+
+    async def fake_volume():
+        return 0
+
+    app = FastAPI()
+    app.include_router(leads_mod.router, prefix="/api/v1")
+    app.dependency_overrides[leads_mod._crm_dependency] = lambda: crm
+    app.dependency_overrides[leads_mod._email_dependency] = lambda: _email_provider()
+    app.dependency_overrides[leads_mod._email_history_dependency] = _email_history
+    app.dependency_overrides[leads_mod._daily_count_dependency] = lambda: fake_count
+    app.dependency_overrides[leads_mod._ack_volume_dependency] = lambda: fake_volume
+
+    client = TestClient(app)
+    rng = Random(20260807)
+    valid_code_point_ranges = (
+        (0x20, 0x7F),
+        (0xA0, 0xD800),
+        (0xE000, 0x10000),
+        (0x10000, 0x110000),
+    )
+
+    def generated_valid_character() -> str:
+        start, stop = rng.choice(valid_code_point_ranges)
+        return chr(rng.randrange(start, stop))
+
+    valid_addresses = [
+        "".join(generated_valid_character() for _ in range(rng.randint(1, 16)))
+        for _ in range(6)
+    ]
+
+    for address in valid_addresses:
+        response = client.post(
+            "/api/v1/leads/intake",
+            content=json.dumps({
+                "name": "Jane",
+                "email": "jane@example.com",
+                "address": address,
+            }),
+            headers={"Content-Type": "application/json"},
+        )
+        assert response.status_code == 200
+
+    writes_before_invalid_inputs = crm.find_or_create_contact.await_count
+    interactions_before_invalid_inputs = crm.log_interaction.await_count
+    surrogate_ranges = ((0xD800, 0xDC00), (0xDC00, 0xE000))
+    generated_surrogates = (
+        chr(rng.randrange(start, stop))
+        for start, stop in surrogate_ranges
+        for _ in range(4)
+    )
+    invalid_code_points = ("\x00", *generated_surrogates)
+    for valid_address, invalid_code_point in product(
+        valid_addresses,
+        invalid_code_points,
+    ):
+        for position in range(len(valid_address) + 1):
+            address = (
+                valid_address[:position]
+                + invalid_code_point
+                + valid_address[position:]
+            )
+            response = client.post(
+                "/api/v1/leads/intake",
+                content=json.dumps({
+                    "name": "Jane",
+                    "email": "jane@example.com",
+                    "address": address,
+                }),
+                headers={"Content-Type": "application/json"},
+            )
+            assert response.status_code == 422
+
+    assert crm.find_or_create_contact.await_count == writes_before_invalid_inputs
+    assert crm.log_interaction.await_count == interactions_before_invalid_inputs
 
 
 # ---------------------------------------------------------------------------
