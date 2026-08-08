@@ -85,10 +85,14 @@ async def test_365_fresh_db_seeds_neutralized_registry_and_adds_scoped_fk() -> N
         # Voice-product config is NEUTRALIZED, not left to migration 040's active
         # defaults (Atlas voice, 9-5 hours, scheduling/SMS/messages ENABLED).
         row = await conn.fetchrow(
-            "SELECT scheduling_enabled, sms_enabled, sms_auto_reply, take_messages, "
-            "voice_name, greeting, monday_open, timezone "
+            "SELECT enabled, scheduling_enabled, sms_enabled, sms_auto_reply, "
+            "take_messages, voice_name, greeting, monday_open, timezone "
             "FROM business_contexts WHERE id = 'effingham_maids'"
         )
+        # enabled = FALSE keeps the registry rows OUT of the voice loader
+        # (list_enabled filters on enabled = TRUE), so their NULL voice fields never
+        # reach the non-optional Pydantic model that would ValidationError the load.
+        assert row["enabled"] is False
         assert row["scheduling_enabled"] is False
         assert row["sms_enabled"] is False
         assert row["sms_auto_reply"] is False
@@ -97,6 +101,12 @@ async def test_365_fresh_db_seeds_neutralized_registry_and_adds_scoped_fk() -> N
         assert row["greeting"] is None
         assert row["monday_open"] is None
         assert row["timezone"] is None
+
+        # The voice loader's query (enabled = TRUE) returns NONE of the seed rows.
+        loader_visible = await conn.fetch(
+            "SELECT id FROM business_contexts WHERE enabled = TRUE"
+        )
+        assert loader_visible == []
 
         assert await _fk_on_contacts(conn) is True
     finally:
@@ -208,5 +218,14 @@ async def test_real_admission_check_gates_on_fk_not_table_occupancy(monkeypatch)
         enforced_u, known_u = await repo.admission_check("nonexistent_tenant")
         assert enforced_u is True
         assert known_u is False
+
+        # The voice loader (real list_enabled) must EXCLUDE the enabled=FALSE
+        # registry seeds -- otherwise their NULL voice fields abort the whole
+        # comms-startup registration -- while still returning a genuine enabled
+        # voice context (some_voice_context), proving the loader is not broken.
+        loaded = {r["id"] for r in await repo.list_enabled()}
+        assert "effingham_maids" not in loaded
+        assert "churnsignals" not in loaded
+        assert "some_voice_context" in loaded
     finally:
         await real_pool._pool.close()

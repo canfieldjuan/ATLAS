@@ -36,7 +36,12 @@ INSERT INTO business_contexts (
     sms_enabled, sms_auto_reply
 )
 SELECT
-    d.id, d.name, '{}'::text[], TRUE,
+    -- enabled = FALSE: these are registry-only rows. list_enabled() (the voice
+    -- loader in atlas_comms/service.py) filters on enabled = TRUE and would feed
+    -- these NULL voice/scheduling fields into non-optional Pydantic models,
+    -- ValidationError-ing the whole load. admission_check ignores `enabled` (it
+    -- uses the FK + membership), so the tenant registry still works with FALSE.
+    d.id, d.name, '{}'::text[], FALSE,
     NULL, NULL, NULL, NULL, NULL, NULL,
     NULL, NULL,
     NULL, NULL, NULL, NULL,

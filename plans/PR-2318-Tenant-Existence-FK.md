@@ -147,7 +147,7 @@ back:
    fail-safe also degrades once the registry looks unavailable):
    `ALTER TABLE contacts DROP CONSTRAINT IF EXISTS contacts_business_context_id_fkey;`
 2. **Seed rows:** leave them. They are inert, neutralized registry rows
-   (`enabled=TRUE`, all voice/scheduling/SMS config NULL/FALSE) and harmless once
+   (`enabled=FALSE`, all voice/scheduling/SMS config NULL/FALSE) and harmless once
    the FK is gone. Do NOT blanket-`DELETE` `business_contexts` rows: the voice
    product may own rows there, and any contact still references its tenant. If a
    specific seed row must go, delete it only after confirming no `contacts` row
