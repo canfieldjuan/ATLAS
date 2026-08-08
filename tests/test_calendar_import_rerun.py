@@ -18,6 +18,7 @@ script's behavior, not the stub's.
 
 from __future__ import annotations
 
+import subprocess
 import sys
 from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock
@@ -131,3 +132,32 @@ def test_module_stays_importable_as_a_library():
     assert hasattr(ics, "parse_ics")
     assert hasattr(ics, "CustomerRecord")
     assert hasattr(ics, "import_records")
+
+
+def test_running_the_script_as_a_command_is_retired():
+    """Review Contract criterion 1, executed: running the script as a command must
+    exit nonzero with a deprecation message that names the replacement.
+
+    This is the ONLY test that exercises the changed behavior end-to-end -- the
+    others call import_records directly or inspect symbols, so they would all still
+    pass if the guard were removed, moved to import time, returned success, or
+    stopped naming the replacement. Run it as a real subprocess so the assertion is
+    bound to the actual `__main__` exit, not an in-process re-import.
+    """
+    script = REPO / "scripts" / "import_calendar_contacts.py"
+    result = subprocess.run(
+        [sys.executable, str(script), "--dry-run"],
+        capture_output=True,
+        text=True,
+        cwd=str(REPO),
+    )
+    assert result.returncode != 0, (
+        f"the retired CLI must exit nonzero; got {result.returncode}\n"
+        f"stdout={result.stdout!r}\nstderr={result.stderr!r}"
+    )
+    combined = (result.stdout + result.stderr).lower()
+    assert "retired" in combined, f"missing deprecation wording; got {combined!r}"
+    assert "import_eom_customers_live" in combined, (
+        "the deprecation must name scripts/import_eom_customers_live.py as the "
+        f"replacement; got {combined!r}"
+    )

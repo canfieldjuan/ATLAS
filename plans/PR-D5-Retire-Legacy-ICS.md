@@ -79,17 +79,26 @@ import_eom_customers_live` check; (b) losing the defect evidence -> probed by th
 two rerun tests, which exercise the real `import_records` against a faithful
 phone/email-only provider stub.
 
-- Reviewer rules triggered: R1, R14. (R1: retire the dup-generating path at its
-  root -- the runnable entry -- rather than patching a symptom, and pin the root
-  defect by test first. R14: reviewer verdict discipline.)
+- Reviewer rules triggered: R1, R2, R14. (R1: retire the dup-generating path at
+  its root -- the runnable entry -- rather than patching a symptom, and pin the
+  root defect by test first. R2: the `__main__` retirement is a gate change; its
+  behavior is proven by an *executing* subprocess test
+  (`test_running_the_script_as_a_command_is_retired`) asserting the nonzero exit
+  and the replacement name, and boundary-probed on both sides. R14: reviewer
+  verdict discipline.)
 
-**boundary-probe:** both sides -- the runnable command refuses (exit 1), while the
+**boundary-probe:** both sides -- the runnable command refuses (subprocess test
+asserts exit != 0 + deprecation message naming the replacement), while the
 importable-library path still works (`parse_ics`/`CustomerRecord` present).
 
-**Mutation-probe (run, not asserted):** the pin test exercises the real
-`import_records`; a stub that (wrongly) resolved on address would make
-`test_address_only_record_duplicates_on_rerun` fail, so the test is bound to the
-real defect, not the stub's convenience.
+**Mutation-probe (run, not asserted):**
+1. Reverting the `__main__` guard to `asyncio.run(main())` makes
+   `test_running_the_script_as_a_command_is_retired` fail (the command runs main()
+   and exits without the deprecation message) -- so the test is bound to the
+   actual retirement behavior, not just the guard's presence.
+2. The pin test exercises the real `import_records`; a stub that (wrongly)
+   resolved on address would make `test_address_only_record_duplicates_on_rerun`
+   fail, so it is bound to the real defect, not the stub's convenience.
 
 ## Mechanism
 
@@ -122,10 +131,11 @@ Parked hardening: none.
 
 ```
 $ python -m pytest tests/test_calendar_import_rerun.py -q
-3 passed
+4 passed        # 2 rerun (defect) + library-importable + executing-CLI-retired
 
 $ python scripts/import_calendar_contacts.py --dry-run
 scripts/import_calendar_contacts.py is retired: ... (exit 1)
+# now also asserted by test_running_the_script_as_a_command_is_retired
 
 $ python -c "import sys; sys.path.insert(0,'scripts'); import import_eom_customers_live"
 (imports OK -- library reuse intact)
@@ -140,6 +150,6 @@ stay green.
 | File | LOC (added) |
 |---|---:|
 | `scripts/import_calendar_contacts.py` | 22 |
-| `tests/test_calendar_import_rerun.py` | 133 |
-| `plans/PR-D5-Retire-Legacy-ICS.md` | 145 |
-| **Total** | **300** |
+| `tests/test_calendar_import_rerun.py` | 163 |
+| `plans/PR-D5-Retire-Legacy-ICS.md` | 155 |
+| **Total** | **340** |
