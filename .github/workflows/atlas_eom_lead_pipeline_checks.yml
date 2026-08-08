@@ -61,6 +61,7 @@ on:
       - "atlas_brain/storage/migrations/361_eom_onboarding_draft_actor_bigint.sql"
       - "atlas_brain/tools/calendar.py"
       - "atlas_brain/tools/scheduling.py"
+      - "tests/test_call_intelligence.py"
       - "tests/test_crm_read_scoping.py"
       - "tests/test_eom_complaints_integration.py"
       - "tests/test_eom_contacts_api_tenant_scope.py"
@@ -137,6 +138,7 @@ on:
       - "atlas_brain/storage/migrations/361_eom_onboarding_draft_actor_bigint.sql"
       - "atlas_brain/tools/calendar.py"
       - "atlas_brain/tools/scheduling.py"
+      - "tests/test_call_intelligence.py"
       - "tests/test_crm_read_scoping.py"
       - "tests/test_eom_complaints_integration.py"
       - "tests/test_eom_contacts_api_tenant_scope.py"
@@ -193,6 +195,7 @@ jobs:
       - name: Run EOM lead pipeline checks
         run: |
           python -m pytest \
+            tests/test_call_intelligence.py \
             tests/test_crm_read_scoping.py \
             tests/test_eom_complaints_integration.py \
             tests/test_eom_contacts_api_tenant_scope.py \

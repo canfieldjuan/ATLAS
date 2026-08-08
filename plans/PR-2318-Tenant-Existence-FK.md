@@ -9,14 +9,14 @@ an orphan row. D1 could not validate existence because `business_contexts` was
 empty and there was no FK -- validating then would have rejected every real
 tenant.
 
-**Diff-budget overage (1085 LOC vs the 400 soft cap) -- why this slice is
+**Diff-budget overage (1094 LOC vs the 400 soft cap) -- why this slice is
 indivisible.** Production code is ~132 LOC (MCP guard 74 + repo `admission_check` 42 +
-the call-recording `_link_to_crm` guard 16); the migration is 83. The remaining ~870 is
+the call-recording `_link_to_crm` guard 16); the migration is 83. The remaining ~879 is
 review-mandated *evidence for this exact change*, not extra scope: the real-postgres
 test file (340) that proves seed-before-FK ordering, FK enforcement, neutralization,
 idempotence, and the concurrent-writer lock protocol; the generative membership unit
 tests (102); the call-recording guard's boundary-probe tests (80); and this contract
-plan itself (328, incl. rollback + the R8 execution-model criterion + the
+plan itself (334, incl. rollback + the R8 execution-model criterion + the
 affected-surfaces/risk declarations). Splitting the migration from its guard would ship
 enforcement without its DB root (or vice-versa) for a window; splitting either from its
 tests would orphan the acceptance evidence the reviewer required. Every LOC over the cap
@@ -94,7 +94,13 @@ subject (365), the test file itself, the guard, and the repository method are al
 both path-filter blocks of `atlas_eom_lead_pipeline_checks.yml`, and the workflow
 triggers on changes to its own file -- so any change that could regress the seed /
 neutralization / FK behavior triggers the exact job that verifies it (no reachability
-gap).
+gap). The recording-writer guard is enrolled the same way: `call_intelligence.py` is
+in both path-filter blocks and `tests/test_call_intelligence.py` is added to both the
+filters AND the explicit pytest command, so inverting the `_link_to_crm`
+unresolved-context rejection fails this required PR gate -- not only the schedule-only
+repo-wide backstop. (The per-area workflows run hand-maintained test lists, so a test
+no workflow enrolls can pass CI while never executing; this closes that gap for the
+guard.)
 
 1. The FK is the durable enforcement: an unknown non-NULL tenant cannot be
    INSERTed. A NULL tenant is allowed by the FK (the D1 guard forbids NULL on the
@@ -315,14 +321,14 @@ so "drop the FK" alone is a one-way rollback.
 
 | File | LOC |
 |---|---:|
-| `.github/workflows/atlas_eom_lead_pipeline_checks.yml` | 9 |
+| `.github/workflows/atlas_eom_lead_pipeline_checks.yml` | 12 |
 | `atlas_brain/comms/call_intelligence.py` | 16 |
 | `atlas_brain/mcp/crm_server.py` | 74 |
 | `atlas_brain/storage/migrations/365_contacts_business_context_registry_fk.sql` | 83 |
 | `atlas_brain/storage/repositories/business_context.py` | 42 |
-| `plans/PR-2318-Tenant-Existence-FK.md` | 328 |
+| `plans/PR-2318-Tenant-Existence-FK.md` | 334 |
 | `tests/maturity_sweep/baseline_atlas_brain_storage.json` | 11 |
 | `tests/test_call_intelligence.py` | 80 |
 | `tests/test_crm_read_scoping.py` | 102 |
 | `tests/test_migration_365_business_context_fk.py` | 340 |
-| **Total** | **1085** |
+| **Total** | **1094** |
