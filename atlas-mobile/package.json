@@ -18,7 +18,7 @@
     "expo-haptics": "~15.0.8",
     "expo-linking": "~8.0.11",
     "expo-router": "~6.0.24",
-    "expo-status-bar": "~3.0.9",
+    "expo-status-bar": "~57.0.1",
     "nativewind": "4.2.5",
     "react": "19.1.0",
     "react-dom": "19.1.0",
