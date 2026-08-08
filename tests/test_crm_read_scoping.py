@@ -1305,3 +1305,97 @@ async def test_create_contact_tenant_admission_closure(no_default, monkeypatch, 
         assert out["success"] is True
         provider.create_contact.assert_awaited_once()
         assert provider.create_contact.await_args.args[0]["business_context_id"] == raw
+
+
+# ---------------------------------------------------------------------------
+# #2318: tenant EXISTENCE net (fail-safe registry validation)
+# ---------------------------------------------------------------------------
+def _patch_registry(monkeypatch, ids):
+    """Patch the business-context registry to report `ids` as enabled tenants."""
+    from atlas_brain.storage.repositories.business_context import (
+        BusinessContextRepository,
+    )
+
+    async def _list_enabled(self):
+        return [{"id": i} for i in ids]
+
+    monkeypatch.setattr(BusinessContextRepository, "list_enabled", _list_enabled)
+
+
+@pytest.mark.asyncio
+async def test_create_contact_rejects_unknown_tenant_when_registry_populated(no_default, monkeypatch):
+    """A non-blank, non-EOM tenant absent from a POPULATED registry is refused
+    before the provider is reached (the FK from migration 365 is the durable
+    enforcement; this is the clean typed refusal)."""
+    _patch_registry(monkeypatch, ["churnsignals", "acme_co"])
+    provider = _provider_mock(monkeypatch)
+    provider.create_contact = AsyncMock(return_value={"id": "should-not-exist"})
+
+    out = json.loads(
+        await crm_srv.create_contact(full_name="Ghost", business_context_id="unknown_xyz")
+    )
+
+    assert out["success"] is False
+    assert "not a known tenant" in out["error"]
+    provider.create_contact.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_create_contact_admits_known_tenant_when_registry_populated(no_default, monkeypatch):
+    """A tenant present in the populated registry still creates."""
+    _patch_registry(monkeypatch, ["churnsignals", "acme_co"])
+    provider = _provider_mock(monkeypatch)
+    provider.create_contact = AsyncMock(return_value={"id": "new-1"})
+
+    out = json.loads(
+        await crm_srv.create_contact(full_name="Real", business_context_id="churnsignals")
+    )
+
+    assert out["success"] is True
+    provider.create_contact.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_create_contact_admits_unknown_tenant_when_registry_empty(no_default, monkeypatch):
+    """Fail-safe: an EMPTY registry degrades to D1 presence-only -- an unknown
+    tenant is still admitted, so deploying this guard before migration 365 seeds
+    the registry can never reject a real tenant."""
+    _patch_registry(monkeypatch, [])
+    provider = _provider_mock(monkeypatch)
+    provider.create_contact = AsyncMock(return_value={"id": "new-2"})
+
+    out = json.loads(
+        await crm_srv.create_contact(
+            full_name="Anything", business_context_id="brand_new_tenant"
+        )
+    )
+
+    assert out["success"] is True
+    provider.create_contact.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("seed_i", range(30))
+async def test_existence_net_membership_property(no_default, monkeypatch, seed_i):
+    """Generative proof of the existence net over (registry, candidate) pairs,
+    asserted against a semantic oracle -- admit iff the registry is empty OR the
+    candidate is a member. Generated, not a fixed table, so a regression on an
+    unlisted same-class pair reddens it (GUARD_CLASS_CLOSURE.md section 3)."""
+    rng = random.Random(2318 + seed_i)
+    registry_ids = [f"tenant_{n}" for n in range(rng.randint(0, 5))]
+    candidate = f"tenant_{rng.randint(0, 8)}"  # may or may not be in the registry
+    _patch_registry(monkeypatch, registry_ids)
+    provider = _provider_mock(monkeypatch)
+    provider.create_contact = AsyncMock(return_value={"id": "c"})
+
+    out = json.loads(
+        await crm_srv.create_contact(full_name="Probe", business_context_id=candidate)
+    )
+
+    should_admit = (not registry_ids) or (candidate in registry_ids)
+    assert out["success"] is should_admit
+    if should_admit:
+        provider.create_contact.assert_awaited_once()
+    else:
+        assert "not a known tenant" in out["error"]
+        provider.create_contact.assert_not_awaited()

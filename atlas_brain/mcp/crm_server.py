@@ -563,20 +563,14 @@ async def create_contact(
         #   reject  iff  str(x or "").strip() == ""      -> "required" refusal
         #   reject  iff  the resolved id == EOM tenant    -> EOM-ingress refusal
         #   admit   otherwise (reaches the provider)
-        # It deliberately does NOT validate tenant EXISTENCE. Binding admission
-        # to the `business_contexts` registry is non-viable today: that table is
-        # empty (0 rows) and there is no FK on contacts.business_context_id
-        # (035_contacts.sql:27), so the real tenants (effingham_maids,
-        # churnsignals) live only as strings on `contacts` -- validating against
-        # the registry would reject every real tenant and break all creates. A
-        # non-blank-but-unknown id therefore reaches the provider and is stamped
-        # verbatim; that row is invisible to every tenant-scoped read (matches no
-        # real tenant -> orphan, not a cross-tenant leak) and is backfillable.
-        # Admitting it also preserves pre-existing behavior -- before D1,
-        # create_contact("garbage") already produced a "garbage"-stamped row; D1
-        # only adds the null/blank rejection. Closing the existence axis (seed
-        # the registry + add the FK, then gate on it) is tracked in #2318. The
-        # property proof for this closure is
+        # This guard owns tenant PRESENCE. Tenant EXISTENCE (is it a REAL tenant?)
+        # is enforced separately below and, durably, by the FK
+        # contacts.business_context_id -> business_contexts.id added in migration
+        # 365 (#2318). D1 could not validate existence because business_contexts
+        # was empty and there was no FK -- validating then would have rejected
+        # every real tenant. The existence net below is fail-safe: it enforces only
+        # when the registry is populated, otherwise it degrades to this
+        # presence-only behavior. The presence closure's property proof is
         # test_create_contact_tenant_admission_closure.
         if not str(effective_business_context_id or "").strip():
             return json.dumps({
@@ -598,6 +592,37 @@ async def create_contact(
                     "or funnel transition service"
                 ),
             })
+
+        # Tenant EXISTENCE net (#2318). By here the tenant is non-blank (presence
+        # guard) and not the EOM tenant (EOM guard) -- a concrete non-EOM tenant
+        # that must be a REAL one. Migration 365 makes `business_contexts` the
+        # enforced registry (seeds it + adds the FK), so the FK is the durable
+        # enforcement; this is the clean typed refusal that fires before the INSERT.
+        # Fail-safe: enforce ONLY when the registry is populated. An empty or
+        # unavailable registry degrades to the D1 presence-only behavior, so this
+        # is safe to deploy in ANY order relative to migration 365 and never
+        # rejects a real tenant merely because the table has not been seeded yet.
+        try:
+            from ..storage.repositories.business_context import (
+                BusinessContextRepository,
+            )
+
+            known_contexts = await BusinessContextRepository().list_enabled()
+        except Exception:
+            known_contexts = []
+        resolved_tenant = str(effective_business_context_id or "").strip()
+        if known_contexts and not any(
+            str(row.get("id")) == resolved_tenant for row in known_contexts
+        ):
+            return json.dumps({
+                "success": False,
+                "error": (
+                    f"business_context_id '{resolved_tenant}' is not a known "
+                    "tenant; seed it in business_contexts (the tenant registry) "
+                    "before creating contacts under it"
+                ),
+            })
+
         contact = await _provider().create_contact(data)
         return json.dumps({"success": True, "contact": contact}, default=str)
     except ValueError as exc:
