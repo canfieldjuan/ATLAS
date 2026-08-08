@@ -3,6 +3,7 @@ from __future__ import annotations
 import os
 import stat
 import subprocess
+import sys
 from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
@@ -238,8 +239,30 @@ def test_local_pr_review_runs_local_unit_gate_mirror(tmp_path: Path) -> None:
             "print('git prefix env=' + str(os.environ.get('GIT_PREFIX')))\n"
             "print('pytest addopts env=' + str(os.environ.get('PYTEST_ADDOPTS')))\n"
             "print('pytest disable plugins env=' + str(os.environ.get('PYTEST_DISABLE_PLUGIN_AUTOLOAD')))\n"
+            "print('db connection env=' + str(os.environ.get('ATLAS_DB_CONNECTION_STRING')))\n"
+            "print('db host env=' + str(os.environ.get('ATLAS_DB_HOST')))\n"
+            "print('db port env=' + str(os.environ.get('ATLAS_DB_PORT')))\n"
+            "print('db database env=' + str(os.environ.get('ATLAS_DB_DATABASE')))\n"
+            "print('db user env=' + str(os.environ.get('ATLAS_DB_USER')))\n"
+            "print('db password env=' + str(os.environ.get('ATLAS_DB_PASSWORD')))\n"
+            "print('db socket env=' + str(os.environ.get('ATLAS_DB_SOCKET_PATH')))\n"
             "print('unit gate args=' + ' '.join(sys.argv[1:]))\n"
         ),
+    )
+    (repo / "requirements.unit_gate.txt").write_text("scapy==2.7.0\n", encoding="utf-8")
+    _git(repo, "add", "requirements.unit_gate.txt")
+    _git(repo, "commit", "-m", "add unit gate test requirements")
+    fake_python = tmp_path / "fake-python"
+    _write_executable(
+        fake_python,
+        "#!/usr/bin/env bash\n"
+        "set -euo pipefail\n"
+        "if [ \"${1:-}\" = \"-m\" ] && [ \"${2:-}\" = \"pip\" ]; then\n"
+        "  shift 2\n"
+        "  printf 'unit gate deps install=%s\\n' \"$*\"\n"
+        "  exit 0\n"
+        "fi\n"
+        f"exec {sys.executable!r} \"$@\"\n",
     )
 
     result = _run(
@@ -251,15 +274,26 @@ def test_local_pr_review_runs_local_unit_gate_mirror(tmp_path: Path) -> None:
             "GITHUB_ACTIONS": "false",
             "PYTEST_ADDOPTS": "-k passing",
             "PYTEST_DISABLE_PLUGIN_AUTOLOAD": "1",
+            "ATLAS_DB_SOCKET_PATH": "/tmp/dev-postgres.sock",
+            "PYTHON": str(fake_python),
         },
     )
 
+    stdout_lines = set(result.stdout.splitlines())
     assert result.returncode == 0, result.stdout + result.stderr
     assert "Local unit gate mirror" in result.stdout
-    assert "body env=None" in result.stdout
-    assert "git prefix env=None" in result.stdout
-    assert "pytest addopts env=None" in result.stdout
-    assert "pytest disable plugins env=None" in result.stdout
+    assert "unit gate deps install=install -r " + str(repo / "requirements.unit_gate.txt") in stdout_lines
+    assert "body env=None" in stdout_lines
+    assert "git prefix env=None" in stdout_lines
+    assert "pytest addopts env=None" in stdout_lines
+    assert "pytest disable plugins env=None" in stdout_lines
+    assert "db connection env=" in stdout_lines
+    assert "db host env=127.0.0.1" in stdout_lines
+    assert "db port env=1" in stdout_lines
+    assert "db database env=atlas" in stdout_lines
+    assert "db user env=atlas" in stdout_lines
+    assert "db password env=atlas_dev_password" in stdout_lines
+    assert "db socket env=" in stdout_lines
     assert "running 1 impacted test file(s)" in result.stdout
     assert "--selected-files" in result.stdout
     assert "tests/test_example.py -m not integration and not e2e" in result.stdout
