@@ -25,6 +25,16 @@ import yaml
 
 REPO = Path(__file__).resolve().parents[1]
 WORKFLOW = REPO / ".github/workflows/unit_gate.yml"
+UNIT_GATE_REQUIREMENTS = REPO / "requirements.unit_gate.txt"
+NO_POSTGRES_ENV = {
+    "ATLAS_DB_CONNECTION_STRING": "",
+    "ATLAS_DB_HOST": "127.0.0.1",
+    "ATLAS_DB_PORT": "1",
+    "ATLAS_DB_DATABASE": "atlas",
+    "ATLAS_DB_USER": "atlas",
+    "ATLAS_DB_PASSWORD": "atlas_dev_password",
+    "ATLAS_DB_SOCKET_PATH": "",
+}
 
 
 def _load(name: str):
@@ -46,6 +56,21 @@ def _select_step_script() -> str:
         if step.get("name") == "Select impacted tests":
             return step["run"]
     raise AssertionError("Select impacted tests step not found in unit_gate.yml")
+
+
+def test_workflow_pins_the_no_postgres_unit_gate_environment():
+    doc = yaml.safe_load(WORKFLOW.read_text(encoding="utf-8"))
+    assert doc["jobs"]["unit-gate"]["env"] == NO_POSTGRES_ENV
+
+
+def test_workflow_installs_shared_unit_gate_test_requirements():
+    doc = yaml.safe_load(WORKFLOW.read_text(encoding="utf-8"))
+    install_step = next(
+        step for step in doc["jobs"]["unit-gate"]["steps"]
+        if step.get("name") == "Install dependencies"
+    )
+    assert "python -m pip install -r requirements.unit_gate.txt" in install_step["run"]
+    assert "scapy==2.7.0" in UNIT_GATE_REQUIREMENTS.read_text(encoding="utf-8")
 
 
 def _run_select(tmp_path: Path, *, selector_present: bool) -> tuple[int, str]:

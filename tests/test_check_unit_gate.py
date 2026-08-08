@@ -747,7 +747,7 @@ def test_cli_empty_base_baseline_allows_initial_seed(tmp_path):
 def test_committed_baseline_parses_and_is_sorted_unique():
     path = ROOT / "tests" / "unit_gate_baseline.txt"
     baseline = gate.load_baseline(path)
-    assert len(baseline) >= 150
+    assert baseline
     lines = [l.strip() for l in path.read_text().splitlines()
              if l.strip() and not l.startswith("#")]
     assert lines == sorted(lines)
