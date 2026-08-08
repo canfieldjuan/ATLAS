@@ -12,6 +12,7 @@ Covers the Review Contract in plans/PR-EOM-Lead-Intake.md:
 
 from __future__ import annotations
 
+import json
 import sys
 from unittest.mock import AsyncMock, MagicMock
 
@@ -609,6 +610,53 @@ def test_route_smoke_mounted_path_statuses():
         "/api/v1/leads/intake", json={"name": "Jane", "email": "jane@example.com"}
     )
     assert throttled.status_code == 429
+
+
+@pytest.mark.parametrize(
+    "address",
+    (
+        "\x00100 Main St",
+        "100\x00 Main St",
+        "100 Main St\x00",
+        "100\ud800 Main St",
+        "100 Main \udfffSt",
+    ),
+)
+def test_route_rejects_database_invalid_address_before_crm_write(address: str):
+    from fastapi import FastAPI
+    from fastapi.testclient import TestClient
+
+    import atlas_brain.api.leads as leads_mod
+
+    crm = _crm()
+
+    async def fake_count(email, phone):
+        return 0
+
+    async def fake_volume():
+        return 0
+
+    app = FastAPI()
+    app.include_router(leads_mod.router, prefix="/api/v1")
+    app.dependency_overrides[leads_mod._crm_dependency] = lambda: crm
+    app.dependency_overrides[leads_mod._email_dependency] = lambda: _email_provider()
+    app.dependency_overrides[leads_mod._email_history_dependency] = _email_history
+    app.dependency_overrides[leads_mod._daily_count_dependency] = lambda: fake_count
+    app.dependency_overrides[leads_mod._ack_volume_dependency] = lambda: fake_volume
+
+    response = TestClient(app).post(
+        "/api/v1/leads/intake",
+        content=json.dumps({
+            "name": "Jane",
+            "email": "jane@example.com",
+            "address": address,
+        }),
+        headers={"Content-Type": "application/json"},
+    )
+
+    assert response.status_code == 422
+    crm.find_or_create_contact.assert_not_awaited()
+    crm.log_interaction.assert_not_awaited()
 
 
 # ---------------------------------------------------------------------------

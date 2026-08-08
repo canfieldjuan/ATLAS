@@ -20,8 +20,9 @@ exposes and persists it.
   `LeadIntakeRequest`; pass the submitted address (stripped, blank->None) to
   `resolve_or_create_eom_inbound_lead_and_log_interaction`; record it on the
   interaction metadata (`submitted_address`) so it survives even when an
-  existing contact is resolved read-only; add tests proving the passthrough and
-  the blank->None collapse.
+  existing contact is resolved read-only; reject text PostgreSQL cannot persist
+  at the public intake boundary; add tests proving the passthrough, blank->None
+  collapse, and zero-write malformed-input behavior.
 - Must not change: No DB schema/migration (`contacts.address` already exists);
   do not overwrite an existing contact's address (preserve-existing stays); do
   not make address required; do not change the email-or-phone admission rule,
@@ -37,7 +38,8 @@ Slice phase: Vertical slice
 1. Accept an optional `address` on the intake model and forward it to the CRM
    create + interaction metadata (was hardcoded `None`).
 2. Add regression tests: address forwarded to the CRM contact and recorded on
-   the interaction; blank/whitespace address collapses to `None`.
+   the interaction; blank/whitespace address collapses to `None`; database-invalid
+   address text returns `422` before any CRM write.
 
 ### Review Contract
 
@@ -53,8 +55,11 @@ Slice phase: Vertical slice
     `tests/test_leads_intake.py::test_blank_address_collapses_to_none_on_create`.
   - Base payload (no address) still passes `address=None` — settled by the added
     assertion in `test_contact_stamped_with_eom_tenant_and_web_source`.
+  - Database-invalid address text returns `422` before contact creation or
+    interaction logging — settled by
+    `tests/test_leads_intake.py::test_route_rejects_database_invalid_address_before_crm_write`.
   - No behavior change to email-or-phone admission, honeypot, throttle, or ack
-    email — settled by the unchanged existing tests still green (49 total).
+    email — settled by the unchanged existing tests still green (54 total).
 - Reachability proof: `POST /api/v1/leads/intake` with `{"address": "..."}` ->
   on new-lead create, `contacts.address` is written (atomic insert in
   `atlas_brain/services/crm_provider.py`, INSERT column `address`); a post-deploy
@@ -63,8 +68,8 @@ Slice phase: Vertical slice
   `_process_lead_intake`); the intake interaction-metadata contract
   (`submitted_address` added).
 - Risk areas: extra-field admission (model already ignores unknowns, so the
-  website-first deploy was safe); blank/whitespace handling; not overwriting an
-  existing contact's address.
+  website-first deploy was safe); blank/whitespace handling; PostgreSQL-invalid
+  text; not overwriting an existing contact's address.
 - Reviewer rules triggered: R1 (input admission/normalization), R2, R5, R6
   (contract/metadata shape).
 
@@ -79,7 +84,25 @@ strip-normalize on it.
   stripped submitted address, or `None` when empty.
 - Guard-relevant fields: `address` (optional, default `""`, max_length 300).
 - Caller x input shape: absent address -> `""` -> `None` (unchanged effective
-  behavior); present address -> stripped string; whitespace-only -> `None`.
+  behavior); present address -> validated, stripped string; whitespace-only ->
+  `None`; NUL-containing or non-UTF-8-encodable text -> `422` before CRM access.
+
+### Guard class-closure
+
+- Set status: **OPEN**. Address is free text, so possible inputs cannot be
+  enumerated.
+- Membership source: **DERIVED** at the `LeadIntakeRequest.address` validator
+  from Python's UTF-8 encoder and PostgreSQL's text constraint excluding NUL;
+  there is no authored address-character allowlist to drift.
+- Outside-set behavior: any value that is not affirmatively UTF-8 encodable or
+  contains a NUL byte is rejected with `422` before the CRM mutation path. This
+  is the safe side because admitted values are persisted to PostgreSQL text and
+  JSONB columns. Unpaired surrogates are first replaced with a safe invalid
+  sentinel so FastAPI can serialize the resulting `422` response.
+- Class invariant: database-invalid text is rejected regardless of where the
+  invalid code point appears. The route regression samples leading, embedded,
+  and trailing NUL plus high and low unpaired surrogates and asserts zero CRM
+  writes.
 
 ### Deployed-config probing
 
@@ -104,7 +127,10 @@ for new leads and leaves existing contacts unchanged. The stripped value is also
 added to the interaction metadata as `submitted_address`, mirroring
 `submitted_email`/`submitted_phone`, so a returning contact's newly-submitted
 address is recorded on the interaction even when the contact row is not
-overwritten.
+overwritten. Pre-validation routes unpaired surrogates to a safe invalid
+sentinel; the field validator then admits the address only when it is UTF-8
+encodable and contains no NUL byte, matching the downstream PostgreSQL text
+contract before any side effect can run.
 
 ## Intentional
 
@@ -124,8 +150,8 @@ Parked hardening: none.
 
 ## Verification
 
-- Pending before push: `pytest tests/test_leads_intake.py` (49 passed);
-  `atlas_brain/api/leads.py` compiles clean via python -m py_compile. Post-deploy:
+- `python -m pytest tests/test_leads_intake.py -q` (54 passed);
+  `python -m py_compile atlas_brain/api/leads.py` (passed). Post-deploy:
   smoke `POST` with an address -> `success: true` and `contacts.address`
   populated on the new lead.
 
@@ -133,7 +159,7 @@ Parked hardening: none.
 
 | File | LOC |
 |---|---:|
-| `atlas_brain/api/leads.py` | 4 |
-| `plans/PR-EOM-Lead-Intake-Address.md` | 139 |
-| `tests/test_leads_intake.py` | 26 |
-| **Total** | **169** |
+| `atlas_brain/api/leads.py` | 32 |
+| `plans/PR-EOM-Lead-Intake-Address.md` | 165 |
+| `tests/test_leads_intake.py` | 74 |
+| **Total** | **271** |

@@ -10,10 +10,11 @@ suppression via the contact_interactions dedupe key.
 
 import logging
 import re
+from collections.abc import Mapping
 from typing import Any, Optional
 
 from fastapi import APIRouter, Depends, HTTPException
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator, model_validator
 
 from ..services.eom_lead_ingress import (
     EOM_BUSINESS_CONTEXT_ID,
@@ -119,6 +120,31 @@ class LeadIntakeRequest(BaseModel):
     referrer: str = Field(default="", max_length=500)
     # Honeypot: hidden on the real form; humans leave it empty.
     website: str = Field(default="", max_length=300)
+
+    @model_validator(mode="before")
+    @classmethod
+    def _route_address_surrogates_to_validation(cls, value: Any) -> Any:
+        if not isinstance(value, Mapping):
+            return value
+        address = value.get("address")
+        if not isinstance(address, str):
+            return value
+        if not any(0xD800 <= ord(char) <= 0xDFFF for char in address):
+            return value
+        sanitized = dict(value)
+        sanitized["address"] = "\x00"
+        return sanitized
+
+    @field_validator("address")
+    @classmethod
+    def _reject_database_invalid_address(cls, value: str) -> str:
+        try:
+            encoded = value.encode("utf-8")
+        except UnicodeEncodeError as exc:
+            raise ValueError("address must be valid") from exc
+        if b"\x00" in encoded:
+            raise ValueError("address must be valid")
+        return value
 
 
 class LeadValidationError(ValueError):
