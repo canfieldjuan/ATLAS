@@ -16,7 +16,10 @@ Semantics under test (plans/PR-EOM-Read-Scoping.md):
 from __future__ import annotations
 
 import ast
+import itertools
 import json
+import random
+import string
 import sys
 from datetime import datetime, timezone
 from pathlib import Path
@@ -34,6 +37,9 @@ sys.modules.setdefault("asyncpg", _asyncpg_mock)
 sys.modules.setdefault("asyncpg.exceptions", _asyncpg_exceptions)
 
 import atlas_brain.mcp.crm_server as crm_srv  # noqa: E402
+from atlas_brain.services.eom_lead_ingress import (  # noqa: E402
+    EOM_BUSINESS_CONTEXT_ID as _EOM_ID,
+)
 
 EOM = "effingham_maids"
 UUID = "12345678-1234-5678-1234-567812345678"
@@ -1206,35 +1212,78 @@ async def test_create_contact_uses_configured_default_when_no_explicit_tenant(mo
 
 
 # Grammar-derived property proof for the create_contact tenant-admission closure
-# (D1 review thread R2/R3). The guard owns ONE axis -- tenant PRESENCE -- and the
-# decision is a total function of the resolved id:
-#   blank (null / "" / any whitespace-only)  -> "required" refusal, provider unreached
-#   == EOM tenant                             -> EOM-ingress refusal, provider unreached
-#   any other non-blank string                -> ADMITTED (reaches provider verbatim)
-# The final row asserts the deliberately-open behavior: a non-blank-but-unknown
-# tenant is admitted, because existence is not validated here (empty registry +
-# no FK; deferred to #2318). This is the "safe behavior for unrecognized IDs"
-# the closure declares, proven rather than asserted in prose.
-_ADMISSION_GRAMMAR = [
-    (None, "missing"),
-    ("", "missing"),
-    ("   ", "missing"),
-    ("\t", "missing"),
-    ("\n", "missing"),
-    ("\t \n ", "missing"),
-    (EOM, "eom"),
-    ("  effingham_maids  ", "eom"),   # stripped id still resolves to the EOM tenant
-    ("churnsignals", "admit"),
-    ("a", "admit"),
-    ("x" * 64, "admit"),
-    ("unknown_tenant_xyz", "admit"),  # non-blank + unknown -> admitted (existence not gated)
-    ("  churnsignals  ", "admit"),
-]
+# (D1 review threads R2/R3/R13). Per docs/GUARD_CLASS_CLOSURE.md section 3, the
+# acceptance gate for an open-input guard is a test that GENERATES inputs across
+# the grammar and asserts each against a SEMANTIC ORACLE derived from the spec --
+# NOT a fixed table of examples, and NOT the guard's own verdict. `hypothesis` is
+# not a repo dependency, so the generator below is a deterministic stdlib one
+# (fixed seed): it covers the blank class by systematic whitespace products and
+# the non-blank / EOM-near-miss classes by seeded sampling, so a regression on any
+# same-class input -- not just a listed one -- turns it red.
+#
+# The guard's input is a scalar string (the MCP tool signature), so section 3's
+# container-shape axis (list/tuple/set/nested/wrapped) does not apply; the
+# applicable axes are whitespace placement, casing, affixes, and length.
+
+_WS = (" ", "\t", "\n", "\r", "\x0b", "\x0c")
+
+
+def _spec_expected_verdict(raw):
+    """Semantic oracle from the spec (plan Review Contract), independent of the guard.
+
+    Spec: surrounding whitespace on a tenant id is insignificant; a
+    whitespace-only id is "no tenant" -> refuse (criterion 3); the EOM tenant is
+    routed to ingress -> refuse (criterion 4); every other non-blank id creates.
+    Derived from the contract, so it stays a real check even if the guard is
+    reimplemented.
+    """
+    stripped = str(raw or "").strip()
+    if stripped == "":
+        return "missing"
+    if stripped == _EOM_ID:
+        return "eom"
+    return "admit"
+
+
+def _generate_presence_grammar():
+    """Generate inputs across the presence grammar (deterministic; fixed seed)."""
+    rng = random.Random(20260807)
+    inputs = [None, ""]
+    # blank class -- systematic whitespace products (every combo up to length 2)
+    for n in (1, 2):
+        for combo in itertools.product(_WS, repeat=n):
+            inputs.append("".join(combo))
+    # blank class -- longer seeded whitespace runs
+    for _ in range(6):
+        inputs.append("".join(rng.choice(_WS) for _ in range(rng.randint(3, 8))))
+    # non-blank class -- seeded arbitrary ids (may contain internal whitespace),
+    # each forced to have at least one non-whitespace char
+    alphabet = string.ascii_letters + string.digits + "._-+@ \t"
+    for _ in range(90):
+        s = "".join(rng.choice(alphabet) for _ in range(rng.randint(1, 40)))
+        if s.strip() == "":
+            s = "x" + s
+        inputs.append(s)
+    # EOM class + near-misses (wrapping / casing / affixes)
+    inputs.append(_EOM_ID)
+    for _ in range(8):
+        lead = "".join(rng.choice(_WS) for _ in range(rng.randint(1, 4)))
+        tail = "".join(rng.choice(_WS) for _ in range(rng.randint(1, 4)))
+        inputs.append(lead + _EOM_ID + tail)
+    inputs.extend([
+        _EOM_ID.upper(), _EOM_ID.title(), _EOM_ID.capitalize(),   # casing -> admit
+        _EOM_ID[:-1], _EOM_ID + "_x", "x_" + _EOM_ID,             # sub/superstring -> admit
+    ])
+    return list(dict.fromkeys(inputs))  # dedupe, preserve order
+
+
+_PRESENCE_GRAMMAR = _generate_presence_grammar()
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("raw, verdict", _ADMISSION_GRAMMAR)
-async def test_create_contact_tenant_admission_closure(no_default, monkeypatch, raw, verdict):
+@pytest.mark.parametrize("raw", _PRESENCE_GRAMMAR)
+async def test_create_contact_tenant_admission_closure(no_default, monkeypatch, raw):
+    """Each generated input's actual verdict must equal the semantic oracle's."""
     provider = _provider_mock(monkeypatch)
     provider.create_contact = AsyncMock(return_value={"id": "created"})
 
@@ -1243,11 +1292,12 @@ async def test_create_contact_tenant_admission_closure(no_default, monkeypatch, 
         kwargs["business_context_id"] = raw
     out = json.loads(await crm_srv.create_contact(**kwargs))
 
-    if verdict == "missing":
+    expected = _spec_expected_verdict(raw)
+    if expected == "missing":
         assert out["success"] is False
         assert "business_context_id is required" in out["error"]
         provider.create_contact.assert_not_awaited()
-    elif verdict == "eom":
+    elif expected == "eom":
         assert out["success"] is False
         assert "EOM ingress" in out["error"]
         provider.create_contact.assert_not_awaited()

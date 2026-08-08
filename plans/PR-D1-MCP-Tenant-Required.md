@@ -122,11 +122,19 @@ and is backfillable -- and admitting it **preserves pre-existing behavior**
 adds the null/blank rejection). Closing the existence axis (seed the registry +
 add the FK, then gate on it) is filed as **#2318**.
 
-**Property proof:** `test_create_contact_tenant_admission_closure` drives 13
-grammar inputs (null, empty, several whitespace forms, the EOM id, a stripped EOM
-id, and assorted non-blank ids including an explicitly unknown one) and asserts
-the exact verdict + provider-reached state for each -- the closure above, proven
-rather than asserted in prose.
+**Property proof (GUARD_CLASS_CLOSURE.md section 3):**
+`test_create_contact_tenant_admission_closure` **generates** ~155 inputs across
+the presence grammar -- the blank class by systematic whitespace products (every
+combo up to length 2 + longer seeded runs), the non-blank and EOM-near-miss
+classes by seeded sampling (deterministic fixed seed) -- and asserts each against
+a **semantic oracle** (`_spec_expected_verdict`) derived from the Review Contract,
+not against the guard's own verdict and not from a fixed table. So a regression on
+any same-class input, not just a listed one, turns it red. `hypothesis` is not a
+repo dependency, hence the stdlib generator. The guard's input is a scalar string
+(the MCP tool signature), so section 3's container-shape axis does not apply; the
+covered axes are whitespace placement, casing, affixes, and length.
+Mutation-probed: dropping the guard's `.strip()` reddens 48 generated
+whitespace-class inputs.
 
 ## Mechanism
 
@@ -177,7 +185,7 @@ passes with the supplied tenant.
 | File | LOC (added) |
 |---|---:|
 | `atlas_brain/mcp/crm_server.py` | 38 |
-| `plans/PR-D1-MCP-Tenant-Required.md` | 174 |
-| `tests/test_crm_read_scoping.py` | 136 |
+| `plans/PR-D1-MCP-Tenant-Required.md` | 191 |
+| `tests/test_crm_read_scoping.py` | 186 |
 | `tests/test_mcp_servers.py` | 5 |
-| **Total** | **353** |
+| **Total** | **420** |
