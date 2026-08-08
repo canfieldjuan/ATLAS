@@ -32,9 +32,9 @@ Slice phase: production hardening
 1. `migrations/365_contacts_business_context_registry_fk.sql`: seed
    `effingham_maids` + `churnsignals` as minimal registry rows (+ a dynamic
    backstop for any other stamped tenant), then add the FK idempotently.
-2. `crm_server.create_contact`: after the EOM guard, reject a tenant absent from a
-   POPULATED registry; degrade to presence-only when the registry is empty/
-   unavailable (fail-safe).
+2. `crm_server.create_contact`: after the EOM guard, reject a tenant absent from
+   the registry ONLY once migration 365 has run (the FK exists); degrade to
+   presence-only before then / when the registry is unavailable (fail-safe).
 
 ### Files touched
 
@@ -54,18 +54,20 @@ Slice phase: production hardening
    agent path).
 2. The migration seeds BEFORE adding the FK, so existing rows validate; it is
    idempotent (ON CONFLICT DO NOTHING; FK add guarded by `pg_constraint`).
-3. The runtime existence net rejects an unknown tenant ONLY when the registry is
-   populated, and admits any tenant when it is empty -- so it is safe to deploy in
-   any order relative to migration 365 and never rejects a real tenant because the
-   table has not been seeded yet (this preserves D1's behavior on an empty DB and
-   in the unit tests, where the pool is not initialized).
+3. The runtime existence net enforces ONLY once migration 365 has run (the FK
+   `contacts_business_context_id_fkey` exists) -- NOT gated on table occupancy,
+   because `business_contexts` pre-exists for the voice product and may hold
+   unrelated rows. Before the FK exists it admits any tenant, so it is safe to
+   deploy in any order relative to 365, never rejects a real tenant before the seed
+   lands, and the runtime refusal exactly mirrors the FK (this preserves D1's
+   behavior pre-migration and in the unit tests, where the pool is not initialized).
 4. The seed is a REGISTRY seed, not voice-assistant config: `business_contexts` is
    also the voice product's config table, but it is empty in prod and its config
    columns stay NULL here.
 
 - Reviewer rules triggered: R1, R2, R4, R5, R14. (R1: enforce existence at the DB
   root via the FK, not only a runtime string check. R2: the existence net is a
-  membership guard; its closure is `admit iff registry-empty OR tenant in
+  membership guard; its closure is `admit iff FK-not-yet-present OR tenant in
   registry`, proven generatively by `test_existence_net_membership_property` over
   random (registry, candidate) pairs against a semantic oracle, plus three example
   tests. R4 (data & migration safety): migration 365 seeds `business_contexts` and
@@ -79,8 +81,9 @@ Slice phase: production hardening
   wire-format compatibility impact, and the empty-registry fail-safe preserves
   today's behavior until the seed runs. R14: reviewer verdict discipline.)
 
-**boundary-probe:** populated registry -> known tenant admits, unknown rejects;
-empty registry -> fail-safe admits (both error directions covered).
+**boundary-probe:** FK present (365 ran) -> known tenant admits, unknown rejects;
+FK absent (pre-migration) -> fail-safe admits any tenant even with unrelated voice
+rows present (both error directions covered).
 
 **Mutation-probe (run, not asserted):** forcing `known_contexts = []` (neutering
 the net) makes `test_create_contact_rejects_unknown_tenant_when_registry_populated`
@@ -95,8 +98,9 @@ A seed+FK migration (the enforcement) plus a fail-safe membership check in
 
 - **FK is the enforcement; the guard is the clean error.** The DB rejects an
   unknown tenant even if the runtime guard is bypassed.
-- **Fail-safe on empty registry.** Deploy order between the migration and the code
-  cannot break real tenants; seeding is what ACTIVATES the stricter check.
+- **Fail-safe until the FK exists.** The net enforces only once migration 365 adds
+  the FK, not on table occupancy; deploy order cannot break real tenants, and an
+  unrelated pre-existing voice row cannot trigger a false rejection.
 - **`business_contexts` as the registry.** The existing `BusinessContextRepository`
   already treats it as the tenant source of truth; introducing a second registry
   would create the drift this boundary exists to remove. Its voice-config role is
