@@ -8,6 +8,9 @@ clock promises beyond "within 24 hours", "estimate" never "quote", sell the
 team (separate areas at once) without per-size time claims.
 """
 
+from collections.abc import Callable
+from typing import NamedTuple
+
 from .estimate_confirmation import (
     BUSINESS_EMAIL,
     BUSINESS_NAME,
@@ -144,8 +147,9 @@ sites need more attention than others, and we'd rather know that up front.
 3. From there we'll work out which locations need a walk-through. Not \
 every site always does - it depends on how similar they are.
 
-4. Once we understand the locations and the schedules you need, we'll put \
-together a scope and email you an estimate for review.
+4. Once we understand the locations and the schedules you need, and we've \
+confirmed what we can cover, we'll put together a scope and email you an \
+estimate for review.
 
 5. Estimates are FREE and there is no obligation. If we're not the right \
 fit, we won't try to talk you into it.
@@ -172,35 +176,81 @@ Juan Canfield
 # free-text value, falls back to the cadence-free wording.
 #
 # Every member is consonant-initial, so the fixed article "a" is always
-# correct; `test_every_speakable_frequency_takes_the_article_a` enforces that
+# correct; `test_every_speakable_frequency_is_reviewed_for_the_article_a` enforces that
 # for any future member.
 SPEAKABLE_FREQUENCIES = frozenset(
     {"daily", "weekly", "bi-weekly", "monthly", "one-time"}
 )
 
-# The canonical template-selection surface: every acknowledgement variant maps
-# to exactly one template body. This is the single source of membership for
-# "which templates does this module route to", so the copy guards in
+
+class AckRoute(NamedTuple):
+    """Everything variant-specific about rendering one acknowledgement.
+
+    Body and request-line style travel together deliberately. They were briefly
+    two independent structures -- a template map plus a separate set of
+    "commercial" variants -- and that split had a real failure mode: adding a
+    third commercial variant to the template map but forgetting the set would
+    render the commercial BODY with the residential "Your request: <raw>" echo,
+    bypassing the cadence allowlist while every router and inventory test
+    stayed green. One tuple per variant makes that state unrepresentable.
+    """
+
+    template: str
+    request_line: Callable[[str, str], str]
+
+
+def _raw_echo_request_line(service: str, frequency: str) -> str:
+    """Residential/general: echo the submitted values verbatim, unchanged.
+
+    Frozen copy -- operator decision 2026-08-09, "leave it as is".
+    """
+    service = service if isinstance(service, str) else ""
+    frequency = frequency if isinstance(frequency, str) else ""
+    details = ", ".join(part for part in (service.strip(), frequency.strip()) if part)
+    return f"Your request: {details}.\n\n" if details else ""
+
+
+def _single_site_request_line(service: str, frequency: str) -> str:
+    return _commercial_request_line(frequency, multi_site=False)
+
+
+def _multi_site_request_line(service: str, frequency: str) -> str:
+    return _commercial_request_line(frequency, multi_site=True)
+
+
+# The canonical rendering surface: every acknowledgement variant maps to
+# exactly one (body, request-line style) pair. This is the single source of
+# membership for "what does this module route to", so the copy guards in
 # `tests/test_ack_commercial_templates.py` derive their inventory from it
 # rather than maintaining a parallel hand-written list that could silently fall
 # behind and let a new template bypass the dollar/terminology/turnaround
 # checks. `test_every_module_template_is_routed` fails closed if a
-# `*_TEMPLATE` constant is added here without being routed.
+# `*_TEMPLATE` constant is added without being routed, and
+# `test_every_variant_is_routed_to_a_template` fails if a variant is not.
 #
 # `general` shares the residential body on purpose: it covers the form's
 # "Other" option and anything unrecognised, which are not known to be
 # commercial, so those leads keep the copy they already receive.
-ACK_TEMPLATE_BY_VARIANT = {
-    ACK_VARIANT_RESIDENTIAL: ACK_TEMPLATE,
-    ACK_VARIANT_GENERAL: ACK_TEMPLATE,
-    ACK_VARIANT_COMMERCIAL_SINGLE_SITE: COMMERCIAL_SINGLE_SITE_TEMPLATE,
-    ACK_VARIANT_COMMERCIAL_MULTI_SITE: COMMERCIAL_MULTI_SITE_TEMPLATE,
+ACK_ROUTE_BY_VARIANT: dict[str, AckRoute] = {
+    ACK_VARIANT_RESIDENTIAL: AckRoute(ACK_TEMPLATE, _raw_echo_request_line),
+    ACK_VARIANT_GENERAL: AckRoute(ACK_TEMPLATE, _raw_echo_request_line),
+    ACK_VARIANT_COMMERCIAL_SINGLE_SITE: AckRoute(
+        COMMERCIAL_SINGLE_SITE_TEMPLATE, _single_site_request_line
+    ),
+    ACK_VARIANT_COMMERCIAL_MULTI_SITE: AckRoute(
+        COMMERCIAL_MULTI_SITE_TEMPLATE, _multi_site_request_line
+    ),
 }
 
-# The variants whose copy speaks the cadence in a sentence rather than echoing
-# the raw "Your request: …" line.
+# Derived views, never independently maintained. Kept as names because callers
+# and tests read them, but they cannot drift from the routing table above.
+ACK_TEMPLATE_BY_VARIANT = {
+    variant: route.template for variant, route in ACK_ROUTE_BY_VARIANT.items()
+}
 COMMERCIAL_ACK_VARIANTS = frozenset(
-    {ACK_VARIANT_COMMERCIAL_SINGLE_SITE, ACK_VARIANT_COMMERCIAL_MULTI_SITE}
+    variant
+    for variant, route in ACK_ROUTE_BY_VARIANT.items()
+    if route.request_line is not _raw_echo_request_line
 )
 
 
@@ -244,21 +294,13 @@ def format_request_acknowledgement(
     the lead sees their request was captured accurately; both are optional.
     """
     variant = classify_ack_variant(service)
-    template = ACK_TEMPLATE_BY_VARIANT.get(variant, ACK_TEMPLATE)
-
-    if variant in COMMERCIAL_ACK_VARIANTS:
-        request_line = _commercial_request_line(
-            frequency, multi_site=variant == ACK_VARIANT_COMMERCIAL_MULTI_SITE
-        )
-    else:
-        # residential AND general. `general` covers the form's "Other" option
-        # and anything unrecognised, where the request is not known to be
-        # commercial -- so it keeps exactly the copy those leads receive
-        # today rather than being pointed at unapproved wording.
-        details = ", ".join(
-            part for part in (service.strip(), frequency.strip()) if part
-        )
-        request_line = f"Your request: {details}.\n\n" if details else ""
+    # One lookup decides BOTH the body and how the request is echoed, so a
+    # variant can never get a commercial body with the residential echo.
+    # `general` is the fallback because a variant that is not known to be
+    # commercial must keep the copy those leads receive today.
+    route = ACK_ROUTE_BY_VARIANT.get(variant, ACK_ROUTE_BY_VARIANT[ACK_VARIANT_GENERAL])
+    template = route.template
+    request_line = route.request_line(service, frequency)
 
     body = template.format(
         client_name=client_name.strip() or "there",

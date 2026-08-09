@@ -118,10 +118,12 @@ Max files: 5
      `::test_only_approved_sentences_promise_24_hours` (an exact whitelist; see
      Mechanism for why it is not a keyword rule) and
      `::test_estimate_delivery_is_never_inside_the_24_hour_window`.
-  8. The multi-site email makes none of the promises #2320 forbids, including
-     promising a scope for every submitted location before serviceability is
-     established — settled by
-     `::test_multi_site_makes_none_of_the_promises_it_must_not_make`.
+  8. The multi-site email makes none of the promises #2320 forbids. The scope
+     and estimate are CONDITIONAL on confirming coverage ("and we've confirmed
+     what we can cover"), so a prospect whose sites are all outside the service
+     area is not told an estimate is coming — settled by
+     `::test_multi_site_makes_none_of_the_promises_it_must_not_make`, which
+     asserts both the absent promises and the present condition.
   10. The copy guards cannot be bypassed by adding a template or a variant —
      settled by `::test_the_guard_inventory_is_derived_from_the_router_not_hand_written`,
      `::test_every_module_template_is_routed`,
@@ -204,6 +206,27 @@ Closure declaration for the **cadence** set (`SPEAKABLE_FREQUENCIES`):
    non-strings, renders "You requested a commercial cleaning." Proved over
    free-text and injection-shaped inputs by
    `::test_unspeakable_frequency_falls_back_to_cadence_free_wording`.
+
+Closure declaration for the **rendering-route** table (`ACK_ROUTE_BY_VARIANT`):
+
+1. **Closed or open? — CLOSED**, one `AckRoute(template, request_line)` per
+   acknowledgement variant.
+2. **Where does membership come from? — ENUMERATED** here, and it is the ONLY
+   variant-keyed decision surface. `ACK_TEMPLATE_BY_VARIANT` and
+   `COMMERCIAL_ACK_VARIANTS` are now DERIVED views of it rather than
+   independently maintained structures. They briefly were independent, and that
+   split had a real failure mode found in review: a variant added to the
+   template map but omitted from the commercial set would render the commercial
+   BODY with the residential raw `Your request: <service>, <frequency>` echo,
+   bypassing the cadence allowlist while every router and inventory test stayed
+   green. Pairing body and request-line style in one tuple makes that state
+   unrepresentable.
+3. **Out-of-set behaviour — fall back to the `general` route**, which is the
+   residential body and the raw echo, i.e. exactly today's behaviour. Enforced
+   by `::test_cadence_style_is_bound_to_the_router_not_an_independent_set` and
+   `::test_every_routed_variant_renders_its_own_cadence_style`; verified by
+   injection (pointing the multi-site route at the residential echo fails 45
+   nodes).
 
 Closure declaration for the **guard-inventory** sets (`ALL_TEMPLATES`,
 `APPROVED_24_HOUR_SENTENCES`):
@@ -312,12 +335,12 @@ Parked hardening: none.
 
 All counts re-run at this head.
 
-- `python -m pytest tests/test_ack_commercial_templates.py -q` — **83 passed**
+- `python -m pytest tests/test_ack_commercial_templates.py -q` — **85 passed**
 - `python -m pytest tests/test_ack_commercial_templates.py
-  tests/test_ack_variant_classification.py -q` — **129 passed**
+  tests/test_ack_variant_classification.py -q` — **131 passed**
 - `python -m pytest tests/test_ack_commercial_templates.py
   tests/test_ack_variant_classification.py tests/test_leads_intake.py
-  tests/test_eom_sent_email_tenant_scope.py -q` — **213 passed, 1 skipped**
+  tests/test_eom_sent_email_tenant_scope.py -q` — **215 passed, 1 skipped**
   (the skip is the PostgreSQL test, run separately below).
 - **The PostgreSQL route test was RUN, not skipped** — a skipped test is not
   evidence. Pointing `ATLAS_MIGRATION_TEST_DATABASE_URL` at the local instance:
@@ -352,8 +375,8 @@ All counts re-run at this head.
 | File | LOC |
 |---|---:|
 | `.github/workflows/atlas_eom_lead_pipeline_checks.yml` | 5 |
-| `atlas_brain/templates/email/request_acknowledgement.py` | 164 |
-| `plans/PR-EOM-Ack-Commercial-Copy.md` | 359 |
-| `tests/test_ack_commercial_templates.py` | 441 |
+| `atlas_brain/templates/email/request_acknowledgement.py` | 206 |
+| `plans/PR-EOM-Ack-Commercial-Copy.md` | 382 |
+| `tests/test_ack_commercial_templates.py` | 494 |
 | `tests/test_ack_variant_classification.py` | 45 |
-| **Total** | **1014** |
+| **Total** | **1132** |

@@ -291,6 +291,11 @@ def test_multi_site_makes_none_of_the_promises_it_must_not_make():
     # site before coverage has been established (Codex #2340 R1).
     assert "for each one" not in body.lower()
     assert "for each of" not in body.lower()
+    # The scope/estimate outcome must be CONDITIONAL on confirming coverage,
+    # not merely silent about it: a prospect whose sites are all outside the
+    # service area must not be told an estimate is coming (Codex #2340 R1,
+    # round 2). Operator-approved wording, 2026-08-09.
+    assert "confirmed what we can cover" in body
 
 
 # Every sentence in which any variant may promise "24 hours", approved
@@ -439,3 +444,51 @@ async def test_intake_still_sends_the_original_copy_for_residential():
     sent_body = provider.send.await_args.kwargs["body"]
     assert "Mayra Canfield and Tina Gomez" in sent_body
     assert "Juan Canfield" not in sent_body
+
+
+# --- routing-surface closure (Codex #2340 R13) ----------------------------
+
+
+def test_cadence_style_is_bound_to_the_router_not_an_independent_set():
+    """A variant cannot get a commercial body with the residential echo.
+
+    The template and the request-line style live in ONE `AckRoute` tuple per
+    variant, so the state Codex described -- routed to a commercial template
+    but omitted from a separate "commercial variants" set, echoing raw
+    service/frequency text and bypassing the cadence allowlist -- is not
+    representable. `COMMERCIAL_ACK_VARIANTS` is derived, not maintained.
+    """
+    from atlas_brain.templates.email.request_acknowledgement import (
+        ACK_ROUTE_BY_VARIANT,
+        COMMERCIAL_ACK_VARIANTS,
+    )
+
+    assert set(ACK_TEMPLATE_BY_VARIANT) == set(ACK_ROUTE_BY_VARIANT)
+    for variant, route in ACK_ROUTE_BY_VARIANT.items():
+        commercial_body = route.template in {
+            COMMERCIAL_SINGLE_SITE_TEMPLATE,
+            COMMERCIAL_MULTI_SITE_TEMPLATE,
+        }
+        assert commercial_body == (variant in COMMERCIAL_ACK_VARIANTS), variant
+
+
+def test_every_routed_variant_renders_its_own_cadence_style():
+    """Rendered proof, not just structural: no commercial body carries the
+    residential raw echo, and no residential body carries the spoken cadence."""
+    from atlas_brain.templates.email.request_acknowledgement import (
+        ACK_ROUTE_BY_VARIANT,
+    )
+
+    for variant in ACK_ROUTE_BY_VARIANT:
+        _, body = format_request_acknowledgement(
+            "Acme", SERVICE_FOR_VARIANT[variant], "weekly"
+        )
+        if variant in (
+            ACK_VARIANT_COMMERCIAL_SINGLE_SITE,
+            ACK_VARIANT_COMMERCIAL_MULTI_SITE,
+        ):
+            assert "You requested" in body, variant
+            assert "Your request:" not in body, variant
+        else:
+            assert "Your request:" in body, variant
+            assert "You requested" not in body, variant
