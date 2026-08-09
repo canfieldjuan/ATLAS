@@ -85,10 +85,29 @@ seam in the enumeration; otherwise write "N/A - no boundary change."
   fix-loop audit.
 - Replaced-path behaviors: existing allowed-file admission remains, with a new
   prerequisite that an active constrained fix loop carry root-trace evidence.
-- Guard-relevant fields: `symptom`, `root_cause`, `source_trace`,
+- Guard-relevant fields: `activation_head`, `symptom`, `root_cause`, `source_trace`,
   `fix_strategy`, `upstream_files`, `symptom_only_reason`, `follow_up`.
-- Caller x input shape: `PreToolUse` JSON payloads for Edit/Write/MultiEdit and
-  Markdown PR-body fix-loop records.
+- Caller x input shape dispositions:
+  - `PreToolUse` Edit with `tool_input.file_path`: preserved for allowed
+    upstream source targets and support files; rejected for disallowed paths;
+    changed for downstream symptom targets, which are rejected until an upstream
+    source edit exists after `activation_head` or in staged/working/untracked
+    state.
+  - `PreToolUse` Write with `tool_input.file_path`: same admission rule as
+    Edit; changed so a newly-created untracked declared upstream source counts
+    as current-pass source work before downstream edits.
+  - `PreToolUse` MultiEdit with `tool_input.edits[].file_path`: preserved
+    fail-closed behavior where any outside-target edit denies the tool call;
+    changed so downstream targets in the batch still require activation-baseline
+    upstream source evidence.
+  - Markdown PR-body `fixed-in` preflight records: changed to require source
+    trace, normalized upstream file declarations, valid fix strategy, and at
+    least one changed upstream file for `upstream-root`.
+  - Markdown PR-body waiver/not-applicable preflight records: changed to require
+    the same source trace, upstream files, and fix strategy; symptom-only
+    records require reason plus follow-up.
+  - No baton / inactive baton / malformed baton / active baton with empty
+    allowed set: preserved fail-open, no edit denial.
 
 #### Closure Declaration
 
@@ -104,8 +123,9 @@ seam in the enumeration; otherwise write "N/A - no boundary change."
   machine/human baton or PR-body `Upstream files:` record for that root
   decision. For `upstream-root`, an unlisted downstream target cannot stand in
   for the declared source; the hook requires the source target first or an
-  already-changed upstream file, and the PR-body audit requires a changed
-  upstream file before certifying `fixed-in`.
+  upstream file changed after `activation_head` / staged / working / untracked,
+  and the PR-body audit requires a changed upstream file before certifying
+  `fixed-in`.
 - Support target set: CLOSED. Membership is the hook's explicit support paths
   and prefixes for tests, plans, Claude skill docs, and session-control docs.
   Unlisted allowed targets are treated as downstream symptom targets.
@@ -178,7 +198,7 @@ Parked hardening: none.
 ## Verification
 
 - `python -m pytest tests/test_fix_mode_hook.py tests/test_audit_fix_loop_disposition.py -q`
-  -- 59 passed.
+  -- 61 passed.
 - `ATLAS_SESSION_STATE_FILE=SESSION_STATE.codex-root-cause-trace.local.md bash scripts/local_pr_review.sh --current-pr-body-file tmp/pr-root-cause-trace-hook-body.md`
   -- passed. Local unit gate escalated to FULL because `.claude/hooks/check_edit_budget.py`
   is not mapped by the selector; result was 160 baseline failing/errored nodes,
@@ -188,15 +208,15 @@ Parked hardening: none.
 
 | File | LOC |
 |---|---:|
-| `.claude/hooks/check_edit_budget.py` | 129 |
-| `.claude/hooks/inject_fix_mode.py` | 7 |
-| `.claude/skills/fix-mode/SKILL.md` | 13 |
+| `.claude/hooks/check_edit_budget.py` | 130 |
+| `.claude/hooks/inject_fix_mode.py` | 8 |
+| `.claude/skills/fix-mode/SKILL.md` | 22 |
 | `AGENTS.md` | 13 |
-| `CLAUDE.md` | 12 |
-| `docs/SESSION_STATE_TEMPLATE.md` | 8 |
-| `plans/PR-Root-Cause-Trace-Hook.md` | 202 |
+| `CLAUDE.md` | 14 |
+| `docs/SESSION_STATE_TEMPLATE.md` | 9 |
+| `plans/PR-Root-Cause-Trace-Hook.md` | 222 |
 | `scripts/audit_fix_loop_disposition.py` | 65 |
 | `scripts/fix_loop_trace_contract.py` | 81 |
 | `tests/test_audit_fix_loop_disposition.py` | 307 |
-| `tests/test_fix_mode_hook.py` | 229 |
-| **Total** | **1066** |
+| `tests/test_fix_mode_hook.py` | 283 |
+| **Total** | **1154** |

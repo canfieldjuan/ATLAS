@@ -299,6 +299,60 @@ def test_upstream_root_allows_downstream_after_source_changed(tmp_path):
     assert _decision(result.stdout) is None
 
 
+def test_upstream_root_denies_downstream_when_source_changed_before_activation(tmp_path):
+    _git_fixture(tmp_path)
+    parser = tmp_path / "scripts" / "parser.py"
+    parser.write_text("def parse():\n    return 'pre baton'\n", encoding="utf-8")
+    subprocess.run(["git", "add", "scripts/parser.py"], cwd=tmp_path, check=True, capture_output=True)
+    subprocess.run(
+        ["git", "-c", "user.email=test@example.com", "-c", "user.name=Test", "commit", "-m", "pre baton"],
+        cwd=tmp_path,
+        check=True,
+        capture_output=True,
+    )
+    activation_head = subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=tmp_path, text=True).strip()
+    _write_baton(
+        tmp_path,
+        {
+            "active": True,
+            "allowed": ["scripts/*", "templates/*"],
+            "activation_head": activation_head,
+            **_root_trace(),
+        },
+    )
+
+    result = _run(CHECK_HOOK, _edit("templates/downstream.html"), tmp_path)
+
+    assert _decision(result.stdout) == "deny"
+
+
+def test_upstream_root_allows_downstream_after_source_commit_since_activation(tmp_path):
+    _git_fixture(tmp_path)
+    activation_head = subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=tmp_path, text=True).strip()
+    parser = tmp_path / "scripts" / "parser.py"
+    parser.write_text("def parse():\n    return 'post baton'\n", encoding="utf-8")
+    subprocess.run(["git", "add", "scripts/parser.py"], cwd=tmp_path, check=True, capture_output=True)
+    subprocess.run(
+        ["git", "-c", "user.email=test@example.com", "-c", "user.name=Test", "commit", "-m", "post baton"],
+        cwd=tmp_path,
+        check=True,
+        capture_output=True,
+    )
+    _write_baton(
+        tmp_path,
+        {
+            "active": True,
+            "allowed": ["scripts/*", "templates/*"],
+            "activation_head": activation_head,
+            **_root_trace(),
+        },
+    )
+
+    result = _run(CHECK_HOOK, _edit("templates/downstream.html"), tmp_path)
+
+    assert _decision(result.stdout) is None
+
+
 def test_upstream_root_normalizes_declared_upstream_paths(tmp_path):
     _write_baton(
         tmp_path,

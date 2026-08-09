@@ -135,14 +135,15 @@ def _is_support_path(path: str) -> bool:
     return path in _SUPPORT_PATHS or path.startswith(_SUPPORT_PREFIXES)
 
 
-def _changed_paths(project_dir: str, base_ref: str) -> set[str]:
+def _changed_paths(project_dir: str, base_ref: str | None) -> set[str]:
     changed: set[str] = set()
-    commands = (
-        ["git", "diff", "--name-only", f"{base_ref}...HEAD"],
+    commands = [
         ["git", "diff", "--name-only", "--cached"],
         ["git", "diff", "--name-only"],
         ["git", "ls-files", "--others", "--exclude-standard"],
-    )
+    ]
+    if base_ref:
+        commands.insert(0, ["git", "diff", "--name-only", f"{base_ref}...HEAD"])
     for command in commands:
         proc = subprocess.run(command, cwd=project_dir, capture_output=True, text=True, check=False)
         if proc.returncode != 0:
@@ -152,8 +153,8 @@ def _changed_paths(project_dir: str, base_ref: str) -> set[str]:
 
 
 def _upstream_source_is_changed(project_dir: str, baton: dict, upstream_files: set[str]) -> bool:
-    base_ref = str(baton.get("base_ref") or "origin/main")
-    return bool(_changed_paths(project_dir, base_ref).intersection(upstream_files))
+    activation_head = str(baton.get("activation_head") or "").strip() or None
+    return bool(_changed_paths(project_dir, activation_head).intersection(upstream_files))
 
 
 def main() -> int:

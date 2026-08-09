@@ -24,6 +24,7 @@ Write `.claude/fix-mode-state.json` with:
   "pr": "<#number from the open PR>",
   "branch": "<git rev-parse --abbrev-ref HEAD>",
   "latest_commit": "<git rev-parse --short HEAD>",
+  "activation_head": "<git rev-parse HEAD when fix mode is armed>",
   "allowed": ["scripts/*", "tests/test_x.py"],
   "max_files": 3,
   "symptom": "<failing check or review claim being addressed>",
@@ -39,9 +40,11 @@ Write `.claude/fix-mode-state.json` with:
 ```
 
 `allowed` entries are `fnmatch` globs against repo-relative paths. Set them to the
-failure source only, not "everything the symptom touches." Also mirror these
-fields into the `## PR Fix Mode` block of `SESSION_STATE.local.md` (the human
-baton).
+failure source only, not "everything the symptom touches." `activation_head`
+is the head SHA at the moment fix mode is armed; committed upstream-source
+changes count only after that baseline, while staged/working/untracked source
+edits still count as current-pass edits. Also mirror these fields into the
+`## PR Fix Mode` block of `SESSION_STATE.local.md` (the human baton).
 
 Root trace is mandatory for any active constrained fix-mode baton. The hook
 denies normal edits until `symptom`, `root_cause`, `source_trace`,

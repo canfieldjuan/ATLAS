@@ -76,6 +76,7 @@ Active: yes | no   (fill in only while iterating on red CI / review comments)
 PR: #<number or none>
 Branch: <branch>
 Latest commit: <sha at last push>
+Activation head: <sha when fix mode was armed>
 Allowed files (max N=<n>):
 - <path or glob -- the failure source, not everything the symptom touches>
 Symptom: <failing check or review claim being addressed>
