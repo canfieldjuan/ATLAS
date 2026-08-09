@@ -320,6 +320,35 @@ async def test_intake_history_and_scoped_context_are_tenant_exact(
             },
         }
 
+        # The other half of acceptance criterion 4, and the half the unit tests
+        # cannot reach. `_process_lead_intake` writes ONE metadata dict, but
+        # `resolve_or_create_eom_inbound_lead` splits on whether the CRM class
+        # exposes `resolve_or_create_eom_inbound_lead_atomic`
+        # (`services/eom_lead_ingress.py`): protocol fakes take the read-only
+        # `crm.log_interaction` fallback, while production takes the atomic
+        # transaction that persists through `_write_contact_interaction`. A
+        # MagicMock CRM therefore proves the fallback path only. This assertion
+        # runs against real PostgreSQL through the route, so it is the evidence
+        # that the derived variant reaches persisted `contact_interactions`
+        # state on the path production actually takes.
+        stored_interaction = await pool.fetchrow(
+            """
+            SELECT interaction_type, metadata
+            FROM contact_interactions
+            WHERE contact_id = $1
+              AND interaction_type = 'web_form'
+            ORDER BY created_at DESC
+            LIMIT 1
+            """,
+            contact["id"],
+        )
+        assert stored_interaction is not None
+        interaction_metadata = stored_interaction["metadata"]
+        if isinstance(interaction_metadata, str):
+            interaction_metadata = json.loads(interaction_metadata)
+        assert interaction_metadata["service"] == "office cleaning"
+        assert interaction_metadata["ack_variant"] == "general"
+
         now = datetime.now(timezone.utc)
         await pool.executemany(
             """

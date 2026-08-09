@@ -98,7 +98,19 @@ Slice phase: Vertical slice
      `service` — settled by
      `::test_variant_recorded_on_interaction_and_email_history` (asserts the
      `metadata` kwarg on the CRM `log_interaction` and email-history `create`
-     calls, parametrized over all seven inputs).
+     calls, parametrized over all seven inputs) **on the fallback path**, and by
+     `tests/test_eom_sent_email_tenant_scope.py::test_intake_history_and_scoped_context_are_tenant_exact`
+     **on the production path**. Both are required, because
+     `resolve_or_create_eom_inbound_lead`
+     (`atlas_brain/services/eom_lead_ingress.py:105-124`) splits on whether the
+     CRM **class** exposes `resolve_or_create_eom_inbound_lead_atomic`: a
+     protocol fake takes the read-only `crm.log_interaction` fallback, while
+     `DatabaseCRMProvider` takes the atomic transaction that persists via
+     `_write_contact_interaction` (`services/crm_provider.py:368-394`). A
+     MagicMock CRM therefore cannot settle this criterion for production, so
+     the enrolled PostgreSQL test selects the persisted
+     `contact_interactions.metadata` row and asserts `service` / `ack_variant`
+     on it directly.
   5. The variant is recorded even when no acknowledgement is sent — settled by
      `::test_variant_recorded_on_interaction_even_when_no_email_is_sent`
      (phone-only lead; `provider.send` not awaited).
@@ -198,6 +210,7 @@ mapping rather than a config default. The one setting this path already consults
 
 ### Files touched
 
+- `.github/workflows/atlas_eom_lead_pipeline_checks.yml`
 - `atlas_brain/api/leads.py`
 - `atlas_brain/templates/email/__init__.py`
 - `atlas_brain/templates/email/request_acknowledgement.py`
@@ -315,6 +328,24 @@ fixed-example suite and no longer matched the file.
   touches.
 - `python -m py_compile` on the three changed runtime modules — OK.
 - `git diff --check` — clean.
+- **Production path proven against real PostgreSQL, not a mock.**
+  `tests/test_eom_sent_email_tenant_scope.py` normally skips on this box, and a
+  skipped test is not evidence — so it was run for real by pointing
+  `ATLAS_MIGRATION_TEST_DATABASE_URL` at the local instance: **1 passed**. The
+  test builds a throwaway `atlas_eom_sent_email_<uuid>` schema and drops it in a
+  `finally`; before/after snapshots confirm no side effects — schema count
+  **129 → 129**, `contacts`/`contact_interactions`/`sent_emails` row counts
+  **710/2820/12 → 710/2820/12**, leftover test schemas **0**.
+  Negative probe on the new assertion: changing the expected interaction
+  `ack_variant` from `general` to `residential` makes it **fail**, and restoring
+  it passes — so the added assertion reads persisted state rather than passing
+  vacuously.
+- CI enrollment: `tests/test_ack_variant_classification.py` is now listed in the
+  gating `Run EOM lead pipeline checks` pytest invocation and in **both** path
+  filter blocks of `.github/workflows/atlas_eom_lead_pipeline_checks.yml`; the
+  file parses as valid YAML. Before this, the suite carrying the exhaustive
+  mapping and fallback proofs was not on any required per-PR gate, so a
+  classifier regression could have passed required CI.
 - Negative proof that the contract oracle actually bites, rather than only
   passing on good input. Three injections against the implementation, each
   reverted afterwards (baseline and restored state both **46 passed**):
@@ -333,11 +364,12 @@ fixed-example suite and no longer matched the file.
 
 | File | LOC |
 |---|---:|
+| `.github/workflows/atlas_eom_lead_pipeline_checks.yml` | 3 |
 | `atlas_brain/api/leads.py` | 19 |
 | `atlas_brain/templates/email/__init__.py` | 10 |
 | `atlas_brain/templates/email/request_acknowledgement.py` | 42 |
-| `plans/PR-EOM-Ack-Variant-Classify.md` | 343 |
+| `plans/PR-EOM-Ack-Variant-Classify.md` | 373 |
 | `tests/test_ack_variant_classification.py` | 332 |
-| `tests/test_eom_sent_email_tenant_scope.py` | 6 |
+| `tests/test_eom_sent_email_tenant_scope.py` | 35 |
 | `tests/test_leads_intake.py` | 6 |
-| **Total** | **758** |
+| **Total** | **820** |
