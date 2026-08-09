@@ -332,6 +332,35 @@ else
     echo "    SKIP (scripts/audit_ai_reconciliation.py not found)"
 fi
 
+if [ -n "$current_pr_body_file" ]; then
+    if [ -f "$script_root/scripts/audit_fix_loop_disposition.py" ]; then
+        run_check "Fix-loop disposition preflight" \
+            "$python_bin" "$script_root/scripts/audit_fix_loop_disposition.py" \
+                --repo-root "$repo_root" \
+                --base-ref "$base_ref" \
+                --current-pr-body-file "$current_pr_body_file"
+    else
+        echo
+        echo "==> Fix-loop disposition preflight"
+        echo "    SKIP (scripts/audit_fix_loop_disposition.py not found)"
+    fi
+fi
+
+if [ -f "$script_root/scripts/check_guard_class_closure.py" ]; then
+    guard_class_args=("$script_root/scripts/check_guard_class_closure.py" --base "$base_ref" --strict)
+    if [ -n "$current_pr_body_file" ]; then
+        run_check "Guard class-closure lint" env \
+            ATLAS_CURRENT_PR_BODY_FILE="$current_pr_body_file" \
+            "$python_bin" "${guard_class_args[@]}"
+    else
+        run_check "Guard class-closure lint" "$python_bin" "${guard_class_args[@]}"
+    fi
+else
+    echo
+    echo "==> Guard class-closure lint"
+    echo "    SKIP (scripts/check_guard_class_closure.py not found)"
+fi
+
 committed_plan_docs=$(
     git diff --name-only --diff-filter=AM "$base"...HEAD -- 'plans/PR-*.md' 2>/dev/null |
         sort -u |

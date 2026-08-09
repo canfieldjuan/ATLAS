@@ -1200,6 +1200,13 @@ in `AGENTS.md`; the highlights:
 - **Codex review reconciliation:** fix confirmed in-scope Codex findings, group
   duplicates, waive out-of-scope/speculative/NIT-only findings in the PR body,
   and resolve GitHub threads only after code/body evidence addresses them.
+- **Guard-class closure is a mechanical stop.** For any review-fix PR or any
+  diff that changes a guard / validator / sanitizer / classifier / gate /
+  denylist / parser-admission rule, run
+  `python scripts/check_guard_class_closure.py --base origin/main --strict`
+  before another push. A finding means stop patching the cited instance: add
+  the class-level closure proof required by `docs/GUARD_CLASS_CLOSURE.md`, or
+  put `guard-class-closure: waived` in the PR body with the explicit rationale.
 - **Code for reconstruction review.** While building, follow
   `docs/CODING_FOR_RECONSTRUCTION_REVIEW.md`: start from the correct-fix shape,
   keep the diff self-explaining, test real behavior, and make the PR body a
@@ -1467,6 +1474,13 @@ Compose files for sub-services:
   is correct** -- the root near a symptom is often a consequence of something
   coded wrong further up; if you stop short of the true upstream root, name it
   and the follow-up rather than patch downstream. See `AGENTS.md` §3k.
+- **Guard-class closure before another patch**: when the fix touches a guard /
+  validator / sanitizer / classifier / gate / denylist / parser-admission rule,
+  `python scripts/check_guard_class_closure.py --base origin/main --strict` is
+  the local stop sign. If it reports a finding, do not add another token, regex,
+  example fixture, or downstream filter just to satisfy the visible review
+  thread; close the class per `docs/GUARD_CLASS_CLOSURE.md` or explicitly waive
+  with `guard-class-closure: waived` and a rationale in the PR body.
 - **ASCII Python**: `scripts/check_ascii_python.sh` is part of CI.
   Non-ASCII characters in `.py` files break the gate. Use ASCII-only
   identifiers and string literals.

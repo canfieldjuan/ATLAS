@@ -1,6 +1,6 @@
 # Plan archive index
 
-1519 archived plan doc(s). Merged plan docs are moved under `archive/` and listed below; once the archive sweep has run, the `plans/` root holds only in-flight slices.
+1522 archived plan doc(s). Merged plan docs are moved under `archive/` and listed below; once the archive sweep has run, the `plans/` root holds only in-flight slices.
 
 - [PR-ASR-Pip-Audit-Egg-Fragment](archive/PR-ASR-Pip-Audit-Egg-Fragment.md) - lane: security/workflow | phase: Production hardening
 - [PR-ASR-Requirements-Audit-Pin](archive/PR-ASR-Requirements-Audit-Pin.md) - lane: security/workflow | phase: Production hardening
@@ -182,6 +182,7 @@
 - [PR-Blog-Strip-Generic-H2-Generator](archive/PR-Blog-Strip-Generic-H2-Generator.md)
 - [PR-Blog-Strip-Generic-H2-Posts](archive/PR-Blog-Strip-Generic-H2-Posts.md)
 - [PR-Blog-Topic-Per-Call](archive/PR-Blog-Topic-Per-Call.md)
+- [PR-Body-Update-Fast-Path](archive/PR-Body-Update-Fast-Path.md) - lane: workflow/pr-body-update-fast-path | phase: Workflow/process
 - [PR-Boundary-Change-Enumeration](archive/PR-Boundary-Change-Enumeration.md) - lane: dev-workflow/codification | phase: Workflow/process
 - [PR-Branch-Naming-Gate](archive/PR-Branch-Naming-Gate.md) - lane: dev-workflow/branch-naming | phase: Workflow/process
 - [PR-Brand-Voice-Json-Report](archive/PR-Brand-Voice-Json-Report.md) - lane: content-marketing/brand-voice-checks | phase: Vertical slice
@@ -1158,6 +1159,7 @@
 - [PR-FAQ-Source-ID-UI-Selection](archive/PR-FAQ-Source-ID-UI-Selection.md) - lane: content-ops/faq-output-ingestion | phase: Vertical slice
 - [PR-Fable5-Lessons-Index](archive/PR-Fable5-Lessons-Index.md) - lane: workflow/arc-lessons-index | phase: Workflow/process
 - [PR-FastAPI-0137-CI-Pin](archive/PR-FastAPI-0137-CI-Pin.md) - lane: content-ops/deflection-launch-readiness | phase: Production hardening
+- [PR-Fix-Loop-Disposition-Preflight](archive/PR-Fix-Loop-Disposition-Preflight.md) - lane: workflow/fix-loop-disposition | phase: Workflow/process
 - [PR-Fix-Mode-Claude-Code-Enforcement](archive/PR-Fix-Mode-Claude-Code-Enforcement.md) - lane: process/agent-guidance | phase: Production hardening
 - [PR-Fix-Mode-Doc-Layer](archive/PR-Fix-Mode-Doc-Layer.md) - lane: process/agent-guidance | phase: Production hardening
 - [PR-Followup-Contract-Hardening](archive/PR-Followup-Contract-Hardening.md) - lane: followup-workflow | phase: production hardening
@@ -1185,6 +1187,7 @@
 - [PR-Gitleaks-Baseline-Rotation-Escape-Hatch](archive/PR-Gitleaks-Baseline-Rotation-Escape-Hatch.md) - lane: security/workflow | phase: Production hardening
 - [PR-Graphiti-Python-3-14-Base-Image](archive/PR-Graphiti-Python-3-14-Base-Image.md) - lane: graphiti/runtime-image | phase: Production hardening
 - [PR-Guard-Class-Closure-CI-Lint](archive/PR-Guard-Class-Closure-CI-Lint.md) - lane: process/review-discipline | phase: Workflow/process
+- [PR-Guard-Class-Closure-Claude-Contract](archive/PR-Guard-Class-Closure-Claude-Contract.md) - lane: workflow/guard-class-closure-claude-contract | phase: Workflow/process
 - [PR-Guard-Class-Closure](archive/PR-Guard-Class-Closure.md) - lane: process/review-discipline | phase: Workflow/process
 - [PR-Hardening-Drain](archive/PR-Hardening-Drain.md) - lane: governance/hardening-drain | phase: Workflow/process
 - [PR-Incident-Response-Runbook](archive/PR-Incident-Response-Runbook.md) - lane: security/hardening-1656 | phase: Production hardening

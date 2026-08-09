@@ -524,10 +524,21 @@ rather than hand-formatting:
   open direct file paths. The shell redirect reads the file and `gh` receives
   the body on stdin. If the PR already exists, this wrapper updates only the
   body; use `gh pr edit` manually for title/base/label changes.
+- `bash scripts/update_pr_body.sh <pr-body-file>` — updates the body of the
+  already-open PR for the current branch when **only the PR body changed** after
+  the branch was already pushed/opened (for example AI reconciliation ledger,
+  verification receipt, deferred notes, or wrapper-marker repair). This helper
+  stamps the same hidden wrapper marker as `open_pr.sh`, runs the body,
+  AI-reconciliation, fix-loop disposition, live-reconciliation, ownership, and
+  head-identity checks that can be affected by a body-only edit, and publishes
+  through stdin. It intentionally does **not** run the full local review/unit
+  mirror; use `push_pr.sh` plus `open_pr.sh` when code or plan files changed.
 
 Flow: `bash scripts/new_pr_plan.sh` -> implement ->
 `python scripts/sync_pr_plan.py` -> `bash scripts/push_pr.sh` ->
 `bash scripts/open_pr.sh`.
+For body-only edits to an existing PR after that flow has already run, use
+`bash scripts/update_pr_body.sh` instead of raw `gh pr edit`.
 Do **not** run a separate manual `local_pr_review.sh` immediately before
 `push_pr.sh`; that duplicates the same mechanical bundle and burns context.
 Use manual local review for ad hoc triage or when you are not about to push.
@@ -1304,6 +1315,11 @@ the **allowed-files set**, and a **max-files budget**.
 - **One judgment pass, no auto-loop.** Codex findings are gate inputs you
   disposition deliberately (resolve or waive with a reason); there is no
   "address every comment" reflex (§4c).
+- **Disposition before edit.** When a PR body records any non-`no-findings`
+  AI reconciliation item, add a `## Fix-loop disposition preflight` section
+  before the next push. It must name the root decision, blocking predicate,
+  fix/waive disposition, allowed files, `Max files: N`, and parked hardening
+  target. The plan's Scope must declare the same `Max files: N`.
 - **The baton is the compaction handoff.** Keep the current failing
   check/comment, the last useful log finding, the next exact action, and
   do-not-redo notes current, so a post-compaction resume continues instead of
