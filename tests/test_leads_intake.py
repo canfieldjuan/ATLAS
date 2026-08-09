@@ -1316,7 +1316,7 @@ async def test_publish_skipped_when_ntfy_disabled(monkeypatch):
 async def test_publish_posts_to_configured_leads_topic(monkeypatch):
     from atlas_brain.config import settings
     monkeypatch.setattr(settings.alerts, "ntfy_enabled", True)
-    monkeypatch.setattr(settings.alerts, "ntfy_url", "https://ntfy.example/")  # trailing slash
+    monkeypatch.setattr(settings.alerts, "leads_ntfy_url", "https://ntfy.example/")  # trailing slash
     monkeypatch.setattr(settings.alerts, "leads_ntfy_topic", "eom-leads-abc")
     import httpx
 
@@ -1332,6 +1332,48 @@ async def test_publish_posts_to_configured_leads_topic(monkeypatch):
     assert sent["headers"]["Title"] == "New lead: Jane Doe"
     assert sent["headers"]["Priority"] == "high"
     assert sent["headers"]["Tags"] == "moneybag"
+
+
+@pytest.mark.asyncio
+async def test_publish_uses_pinned_leads_url_not_mutable_ntfy_url(monkeypatch):
+    """Lead PII must go to the PINNED leads_ntfy_url, never the runtime-mutable
+    alerts.ntfy_url (settable via the public PATCH /settings/notifications). An
+    attacker who redirects ntfy_url must not be able to capture lead PII/topic.
+    Regresses Codex #2332 R3."""
+    from atlas_brain.config import settings
+    monkeypatch.setattr(settings.alerts, "ntfy_enabled", True)
+    monkeypatch.setattr(settings.alerts, "ntfy_url", "https://attacker.example")  # mutable, MUST be ignored
+    monkeypatch.setattr(settings.alerts, "leads_ntfy_url", "https://pinned.example")
+    monkeypatch.setattr(settings.alerts, "leads_ntfy_topic", "eom-leads-abc")
+    import httpx
+
+    _FakeNtfyClient.posted = []
+    monkeypatch.setattr(httpx, "AsyncClient", _FakeNtfyClient)
+
+    await _publish_lead_ntfy("t", "b")
+
+    assert len(_FakeNtfyClient.posted) == 1
+    url = _FakeNtfyClient.posted[0]["url"]
+    assert url == "https://pinned.example/eom-leads-abc"
+    assert "attacker.example" not in url
+
+
+@pytest.mark.asyncio
+async def test_publish_skipped_when_no_pinned_leads_url(monkeypatch):
+    """If the pinned relay is blank, do NOT fall back to the mutable ntfy_url —
+    skip the push rather than risk sending PII to a redirectable destination."""
+    from atlas_brain.config import settings
+    monkeypatch.setattr(settings.alerts, "ntfy_enabled", True)
+    monkeypatch.setattr(settings.alerts, "ntfy_url", "https://attacker.example")
+    monkeypatch.setattr(settings.alerts, "leads_ntfy_url", "")
+    monkeypatch.setattr(settings.alerts, "leads_ntfy_topic", "eom-leads-abc")
+    import httpx
+
+    def _boom(*a, **k):
+        raise AssertionError("must not POST when no pinned leads URL is configured")
+
+    monkeypatch.setattr(httpx, "AsyncClient", _boom)
+    await _publish_lead_ntfy("t", "b")  # returns cleanly, no transport
 
 
 @pytest.mark.asyncio

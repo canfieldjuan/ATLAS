@@ -170,6 +170,13 @@ notifications off an adversarial burst that is already otherwise bounded.
   value is generated at deploy time and kept ONLY in the runtime `.env` (never
   committed; the topic string is the sole secret, so versioning it would leak
   lead PII to anyone with repo access).
+- Pinned destination: lead PII is sent to `leads_ntfy_url` (default
+  `https://ntfy.sh`), NOT to `ntfy_url`. `ntfy_url` is runtime-mutable via the
+  unauthenticated public `PATCH /api/v1/settings/notifications`
+  (`_NOTIFY_ALERTS_FIELDS`), so routing lead PII through it would let an attacker
+  redirect it. `leads_ntfy_url` is deliberately absent from that mutable set, so
+  the lead relay can only be set at deploy time; if it is blank the push is
+  skipped rather than falling back to the mutable URL.
 - Explicit value probe: topic set + enabled → posts to the topic
   (`::test_publish_posts_to_configured_leads_topic`).
 - Absent value probe: topic `""` → no HTTP client is even opened
@@ -188,6 +195,7 @@ notifications off an adversarial burst that is already otherwise bounded.
 - `atlas_brain/api/leads.py`
 - `atlas_brain/config.py`
 - `plans/PR-EOM-Lead-Ntfy.md`
+- `tests/conftest.py`
 - `tests/test_leads_intake.py`
 
 ## Mechanism
@@ -231,14 +239,20 @@ Tests inject a fake notifier to assert call/no-call without HTTP, and patch
 
 ## Deferred
 
-- None. (The topic subscription on the operator's phone + a real end-to-end lead
-  test are deploy-time steps, done after merge.)
+- The topic subscription on the operator's phone + a real end-to-end lead test
+  are deploy-time steps, done after merge.
+- PRE-EXISTING (out of this slice's scope, tracked separately): the public
+  `PATCH /api/v1/settings/notifications` mutates `alerts.ntfy_url` without
+  authentication, so it can already redirect the existing paid-deflection /
+  healthcheck alert destinations. This PR closes the vector for LEAD PII (pinned
+  `leads_ntfy_url`) but does not fix the settings-endpoint auth itself — filed as
+  a follow-up issue so the broader alert channels get the same protection.
 
 Parked hardening: none.
 
 ## Verification
 
-- `/.venv/bin/python -m pytest tests/test_leads_intake.py -q` → 76 passed,
+- `/.venv/bin/python -m pytest tests/test_leads_intake.py -q` → 80 passed,
   run against the runtime venv. Includes the Codex hardening rounds: ASCII-only
   Title safety, route-level delivery proof, the hourly notification cap, the
   direct-caller no-op, secret-topic log redaction, a true 5s wall-clock
@@ -255,8 +269,9 @@ Parked hardening: none.
 
 | File | LOC |
 |---|---:|
-| `atlas_brain/api/leads.py` | 206 |
-| `atlas_brain/config.py` | 1 |
-| `plans/PR-EOM-Lead-Ntfy.md` | 262 |
-| `tests/test_leads_intake.py` | 481 |
-| **Total** | **950** |
+| `atlas_brain/api/leads.py` | 213 |
+| `atlas_brain/config.py` | 2 |
+| `plans/PR-EOM-Lead-Ntfy.md` | 275 |
+| `tests/conftest.py` | 19 |
+| `tests/test_leads_intake.py` | 523 |
+| **Total** | **1032** |

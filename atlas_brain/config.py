@@ -814,6 +814,7 @@ class AlertsConfig(BaseSettings):
     ntfy_url: str = Field(default="http://localhost:8090", description="ntfy server URL (override: ATLAS_ALERTS__NTFY_URL)")
     ntfy_topic: str = Field(default="atlas-alerts", description="ntfy topic for alerts")
     leads_ntfy_topic: str = Field(default="", description="Dedicated ntfy topic for new website-lead push notifications; empty disables them (env: ATLAS_ALERTS_LEADS_NTFY_TOPIC)")
+    leads_ntfy_url: str = Field(default="https://ntfy.sh", description="PINNED relay for new-lead pushes. Separate from ntfy_url ON PURPOSE: ntfy_url is runtime-mutable via the public PATCH /api/v1/settings/notifications endpoint, so lead PII must not be sent through it — this field is NOT in the settings API's mutable set and can only be set at deploy time (env: ATLAS_ALERTS_LEADS_NTFY_URL)")
 
 
 class InboxMailboxBinding(BaseModel):

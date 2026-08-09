@@ -325,7 +325,14 @@ async def _publish_lead_ntfy(title: str, body: str) -> None:
 
         import httpx
 
-        url = f"{alerts.ntfy_url.rstrip('/')}/{topic}"
+        # Use the PINNED leads relay, never the runtime-mutable alerts.ntfy_url:
+        # ntfy_url is settable via the public PATCH /settings/notifications, so
+        # routing lead PII through it would let an attacker redirect it to a host
+        # they control (and thereby also learn the secret topic).
+        base_url = (alerts.leads_ntfy_url or "").strip()
+        if not base_url:
+            return  # no pinned relay configured — do not fall back to a mutable URL
+        url = f"{base_url.rstrip('/')}/{topic}"
         headers = {"Title": title, "Priority": "high", "Tags": "moneybag"}
 
         async def _post() -> int:
