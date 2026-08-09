@@ -124,16 +124,16 @@ Max files: 5
      area is not told an estimate is coming — settled by
      `::test_multi_site_makes_none_of_the_promises_it_must_not_make`, which
      asserts both the absent promises and the present condition.
-  10. The copy guards cannot be bypassed by adding a template or a variant —
-     settled by `::test_the_guard_inventory_is_derived_from_the_router_not_hand_written`,
-     `::test_every_module_template_is_routed`,
-     `::test_every_variant_is_routed_to_a_template` and
-     `::test_the_24_hour_whitelist_covers_every_routed_variant`.
   9. The commercial body is what intake actually sends and stores, not merely
      what the renderer returns — settled by
      `::test_intake_sends_the_commercial_body_for_commercial_services`, which
      asserts the `body` kwarg handed to the email provider and that the stored
      copy equals the sent copy.
+  10. The copy guards cannot be bypassed by adding a template or a variant —
+     settled by `::test_the_guard_inventory_is_derived_from_the_router_not_hand_written`,
+     `::test_every_module_template_is_routed`,
+     `::test_every_variant_is_routed_to_a_template` and
+     `::test_the_24_hour_whitelist_covers_every_routed_variant`.
 - Reachability proof: the entrypoint is
   `atlas_brain/api/leads.py::_process_lead_intake`, the coroutine
   `POST /api/v1/leads/intake` awaits. The observable state is the `body` kwarg
@@ -271,13 +271,28 @@ caller-supplied variant would create two independent derivations that could
 drift; deriving it here means the email sent and the variant recorded are the
 same computation on the same input.
 
-The cadence is echoed differently per variant. Residential keeps its raw
-`"Your request: <service>, <frequency>."` line untouched. The commercial
-variants speak it in a sentence — "You requested a weekly commercial cleaning."
-— which requires a value that reads naturally after "a". `custom` is a real
-website option but a placeholder for "we'll work it out on the call", and "a
-custom commercial cleaning" does not parse, so it is dropped exactly like a
-blank frequency via `_UNSPOKEN_FREQUENCIES`.
+Template body and cadence style are selected by a **single lookup** in
+`ACK_ROUTE_BY_VARIANT`, which maps each variant to one
+`AckRoute(template, request_line)`. Residential and `general` route to the raw
+`"Your request: <service>, <frequency>."` echo, unchanged; the two commercial
+variants route to their own body and to the spoken-cadence builder.
+`ACK_TEMPLATE_BY_VARIANT` and `COMMERCIAL_ACK_VARIANTS` are derived views of
+that table rather than independently maintained structures — an earlier
+revision kept them separate, and that split allowed a commercial body to be
+paired with the residential echo (see the rendering-route closure declaration).
+
+The cadence itself is filtered by an **allowlist**, `SPEAKABLE_FREQUENCIES` =
+`{daily, weekly, bi-weekly, monthly, one-time}`, and fails closed. An earlier
+revision used a denylist that excluded only `custom` and spoke everything else;
+because `frequency` is free text server-side (`leads.py`
+`Field(default="", max_length=120)`), that admitted arbitrary input and rendered
+"You requested **a every other week** commercial cleaning" into a customer-facing
+email. Any value outside the allowlist — the website's own `custom` option,
+blanks, free text, non-strings — now falls back to the cadence-free wording
+("You requested a commercial cleaning."). Article correctness is a second,
+separately reviewed list (`ARTICLE_A_FREQUENCIES`) because English article
+choice follows sound rather than spelling: "a one-time cleaning" is correct
+despite the leading vowel letter, so no spelling heuristic can decide it.
 
 The "within 24 hours" guard is an **exact whitelist of approved sentences**,
 not a keyword rule, and that is deliberate. The obvious keyword rule — no line
@@ -376,7 +391,7 @@ All counts re-run at this head.
 |---|---:|
 | `.github/workflows/atlas_eom_lead_pipeline_checks.yml` | 5 |
 | `atlas_brain/templates/email/request_acknowledgement.py` | 206 |
-| `plans/PR-EOM-Ack-Commercial-Copy.md` | 382 |
+| `plans/PR-EOM-Ack-Commercial-Copy.md` | 397 |
 | `tests/test_ack_commercial_templates.py` | 494 |
 | `tests/test_ack_variant_classification.py` | 45 |
-| **Total** | **1132** |
+| **Total** | **1147** |
