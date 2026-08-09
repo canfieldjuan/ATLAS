@@ -68,9 +68,25 @@ def test_classification_is_whitespace_and_case_insensitive(service, expected):
     assert classify_ack_variant(service) == expected
 
 
-def test_classifier_is_total_for_non_string_input():
-    """Intake passes a validated str, but the classifier must not raise."""
-    assert classify_ack_variant(None) == ACK_VARIANT_GENERAL
+@pytest.mark.parametrize(
+    "value",
+    [
+        # Falsy non-strings — these took the old `service or ""` path.
+        None, 0, 0.0, False, [], {}, set(), (),
+        # Truthy non-strings — these reached `.strip()` and raised
+        # AttributeError before the isinstance guard. Covering only the falsy
+        # half is what let the defect through.
+        1, True, 1.5, ["residential"], {"service": "commercial"}, {"commercial"},
+        ("commercial",), object(), b"commercial",
+    ],
+)
+def test_classifier_is_total_for_the_whole_non_string_class(value):
+    """Intake passes a validated str, but the classifier must never raise.
+
+    Acceptance criterion 2 promises every non-string resolves to ``general``,
+    so the guard covers the whole class rather than the falsy part of it.
+    """
+    assert classify_ack_variant(value) == ACK_VARIANT_GENERAL
 
 
 # --- recording ------------------------------------------------------------
@@ -105,6 +121,10 @@ async def test_variant_recorded_on_interaction_and_email_history(service, expect
 
     history_metadata = history.create.await_args.kwargs["metadata"]
     assert history_metadata["ack_variant"] == expected
+    # The raw submitted value rides along in BOTH evidence records, so a
+    # contact with several requests can be traced to the submission that
+    # produced a given email.
+    assert history_metadata["service"] == service
 
 
 @pytest.mark.asyncio
@@ -148,7 +168,7 @@ def test_all_variants_still_render_the_single_existing_template(service):
 def test_residential_render_is_byte_identical_to_pre_change_production():
     """Golden anchor: the residential email must not drift while variants land.
 
-    Captured from origin/main @ 92d3ba143 before this slice.
+    Captured from origin/main before this slice; unchanged across the rebase to 40bb24553.
     """
     subject, body = format_request_acknowledgement("Marie", "residential", "monthly")
 

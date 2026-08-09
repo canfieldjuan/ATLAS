@@ -395,6 +395,14 @@ async def _process_lead_intake(
                             metadata={
                                 "source": "website_estimate_form",
                                 "contact_id": str(contact_id),
+                                # Both evidence records keep the derived variant
+                                # next to the raw submitted value. Without the
+                                # raw value here, a contact with several
+                                # requests gives no way to tell which
+                                # submission produced a given email — and the
+                                # body text is not a durable substitute,
+                                # because A2/A3 replace the template.
+                                "service": payload.service,
                                 "ack_variant": ack_variant,
                             },
                             business_context_id=EOM_BUSINESS_CONTEXT_ID,

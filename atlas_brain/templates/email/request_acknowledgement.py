@@ -44,13 +44,17 @@ _ACK_VARIANT_BY_SERVICE = {
 def classify_ack_variant(service: str) -> str:
     """Return the acknowledgement variant for a submitted ``service`` value.
 
-    Deterministic and total: every input returns one of the four variants, and
-    an unrecognised value resolves to ``general``. Classification is decided
+    Deterministic and total: every input returns one of the four variants and
+    none raises. Intake supplies a validated ``str``, but the whole non-string
+    class is guarded rather than only the falsy part of it — a truthy
+    non-string (``1``, ``True``, a list, a dict) would otherwise reach
+    ``.strip()`` and raise ``AttributeError``. Classification is decided
     server-side from the submitted value; a browser-supplied template name is
     never trusted.
     """
-    normalized = (service or "").strip().lower()
-    return _ACK_VARIANT_BY_SERVICE.get(normalized, ACK_VARIANT_GENERAL)
+    if not isinstance(service, str):
+        return ACK_VARIANT_GENERAL
+    return _ACK_VARIANT_BY_SERVICE.get(service.strip().lower(), ACK_VARIANT_GENERAL)
 
 
 ACK_SUBJECT = "We received your estimate request - " + BUSINESS_NAME

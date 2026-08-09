@@ -19,6 +19,30 @@ multi-site a distinct workflow rather than a bigger commercial one.
 Tracking issue: #2320 (part of #2188). Website companion:
 `Effingham_Office_Maids_Website` #141 / PR #143.
 
+### Diff-budget overage — why this slice is indivisible
+
+This slice exceeds the 400 LOC soft cap. The **runtime change is 59 added
+lines** (11 in `leads.py`, 38 in `request_acknowledgement.py`, 10 re-exports).
+The remainder is not product surface: the mandatory `plans/PR-*.md` doc that
+AGENTS.md requires for any non-Markdown diff, and the test matrix the Review
+Contract commits to.
+
+Splitting was considered and rejected on each available seam:
+
+- **Classifier without recording** leaves a pure function no caller reaches —
+  dead code with no reachability proof, which R14/R2 would (correctly) reject.
+- **Recording without the classifier** has nothing to record.
+- **Either without the test matrix** removes the proof that makes the change
+  reviewable at all: a classifier's whole risk is the inputs it does not expect,
+  so all six form values, the full non-string class, both evidence records, the
+  no-send path, and the byte-identical residential golden are the minimum
+  evidence, not padding.
+
+The seam that *does* exist is copy versus classification, and this slice is
+already on the classification side of it — A2 and A3 carry the two new
+templates separately. So the 400-line cap is exceeded by required artifacts
+around a 59-line change, not by bundled scope.
+
 ### Problem-derived contract
 
 - Root cause: template selection does not exist. There is one `ACK_SUBJECT` and
@@ -63,12 +87,15 @@ Slice phase: Vertical slice
   2. Classification is total: unrecognised, empty, whitespace-only and
      non-string input resolve to `general` and never raise — settled by
      `::test_unrecognised_service_falls_back_to_general` and
-     `::test_classifier_is_total_for_non_string_input`.
+     `::test_classifier_is_total_for_the_whole_non_string_class`, which covers
+     truthy non-strings (`1`, `True`, list, dict, object, bytes) as well as the
+     falsy ones.
   3. Classification reads only the submitted value; no browser-supplied template
      name is consulted — `classify_ack_variant` takes a single `service: str`
      (`atlas_brain/templates/email/request_acknowledgement.py`) and `leads.py`
      passes `payload.service`, with no template field on `LeadIntakeRequest`.
-  4. The variant reaches both evidence records — settled by
+  4. Both evidence records carry the derived variant **and** the raw submitted
+     `service` — settled by
      `::test_variant_recorded_on_interaction_and_email_history` (asserts the
      `metadata` kwarg on the CRM `log_interaction` and email-history `create`
      calls, parametrized over all seven inputs).
@@ -85,8 +112,9 @@ Slice phase: Vertical slice
      `atlas_brain/services/crm_provider.py` `_interaction_anchor` /
      `_interaction_attribution_identity`.
   8. Caps, honeypot, Resend routing and failure isolation unchanged — settled by
-     `tests/test_leads_intake.py` passing unmodified except one assertion that
-     gains the new metadata key.
+     `tests/test_leads_intake.py` passing unmodified except the exact-shape
+     email-history assertion, which gains the two new metadata keys (`service`
+     and `ack_variant`).
 - Reachability proof: the real entrypoint is
   `atlas_brain/api/leads.py::_process_lead_intake`, the same coroutine the
   `POST /api/v1/leads/intake` route awaits. It is exercised directly in
@@ -122,9 +150,43 @@ This diff adds a classifier, so the enumeration applies.
   free-form from a `<select>`). Normalization is `strip().lower()`; the mapping
   is an exact-match dict, so no prefix, substring, or regex matching is involved.
 - Caller × input shape: one caller (`_process_lead_intake`) × six allowlisted
-  form values, plus empty, whitespace-only, unknown, mixed-case, padded, and
-  non-string — all enumerated in
+  form values, plus empty, whitespace-only, unknown, mixed-case, padded, and the
+  whole non-string class (truthy and falsy) — all enumerated in
   `tests/test_ack_variant_classification.py`.
+
+#### Closure declaration — `_ACK_VARIANT_BY_SERVICE`
+
+Per `docs/GUARD_CLASS_CLOSURE.md`, for the literal member set that controls the
+routing decision:
+
+1. **Is the set closed or open? — OPEN.** Membership is the set of `service`
+   values the website `<select>` elements can submit, and those live in a
+   different repository and deploy independently
+   (`canfieldjuan/Effingham_Office_Maids_Website`: `contact.html`,
+   `commercial-estimate.html`, `house-cleaning-estimate.html`,
+   `house-cleaning-services/index.html`). A new `<option>` can ship there
+   without any change here, so Atlas cannot enumerate membership
+   authoritatively — the six values below are a **sample taken at a point in
+   time**, not a closed universe.
+2. **Where does membership come from? — ENUMERATED.** The six members
+   (`residential`, `deep`, `move`, `commercial`, `multi-location-commercial`,
+   `other`) are fixed text in this change, read once out of the four form files
+   named above at website `origin/main`. Because they are fixed text, this code
+   **cannot detect drift** when the website adds or renames an option; the
+   out-of-set behaviour below is what absorbs that drift. `DERIVED` was
+   rejected: the source of truth is HTML in another repo with no runtime
+   contract Atlas can query, so recomputing per use is not available.
+3. **What happens to an input outside the set? — it resolves to `general`, and
+   `general` renders the existing template.** This covers *unlisted members of
+   the class* (a new website option) as well as true non-members (garbage,
+   non-strings), which is the drift case that matters. The direction is the safe
+   side for two reasons: a lead whose service Atlas does not recognise still
+   receives exactly the acknowledgement every lead receives today, so the
+   failure mode is "no new behaviour" rather than wrong expectations; and
+   routing an unknown value into commercial copy could promise a discovery call
+   and a written proposal to someone who asked for a house cleaning. Intake also
+   never fails on an unknown value — the classifier is total, so lead capture is
+   never at risk from a form change.
 
 ### Deployed-config probing
 
@@ -247,10 +309,10 @@ Parked hardening: none.
 
 | File | LOC |
 |---|---:|
-| `atlas_brain/api/leads.py` | 11 |
+| `atlas_brain/api/leads.py` | 19 |
 | `atlas_brain/templates/email/__init__.py` | 10 |
-| `atlas_brain/templates/email/request_acknowledgement.py` | 38 |
-| `plans/PR-EOM-Ack-Variant-Classify.md` | 256 |
-| `tests/test_ack_variant_classification.py` | 189 |
-| `tests/test_leads_intake.py` | 4 |
-| **Total** | **508** |
+| `atlas_brain/templates/email/request_acknowledgement.py` | 42 |
+| `plans/PR-EOM-Ack-Variant-Classify.md` | 318 |
+| `tests/test_ack_variant_classification.py` | 209 |
+| `tests/test_leads_intake.py` | 6 |
+| **Total** | **604** |
