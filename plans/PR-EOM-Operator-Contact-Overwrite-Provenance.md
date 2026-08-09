@@ -57,9 +57,12 @@ Max files: 4
      `tests/test_eom_lead_conversion_integration.py::test_operator_contact_records_the_identity_it_overwrote_on_a_phone_match`,
      which asserts `previous_values["full_name"] == "Cal Import Label"`. This
      reproduces the live 2026-08-08 case.
-  3. The body eom-timetracker sends is accepted, in both the full-identity and
-     name-only shapes — settled by
-     `tests/test_eom_lead_conversion.py::test_operator_contact_accepts_the_tracker_customer_create_body`.
+  3. Atlas accepts the two body shapes recorded in
+     `tests/test_eom_lead_conversion.py::test_operator_contact_accepts_the_tracker_customer_create_body`,
+     and rejects unknown keys. Deliberately scoped to what that test can settle:
+     the fixture is handwritten here, so it proves Atlas's acceptance of a
+     recorded shape, NOT that eom-timetracker still sends it. Pinning the two
+     repos to one shared artifact is filed, not claimed here.
   4. `contact_created` events carry neither `previous_values` nor
      `changed_fields` — settled by the direct absence assertions in
      `tests/test_eom_lead_conversion_integration.py::test_operator_contact_mutation_creates_replays_and_records_actor`.
