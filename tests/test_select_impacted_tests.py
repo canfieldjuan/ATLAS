@@ -187,8 +187,16 @@ def test_global_files_escalate_to_full(tmp_path, path):
         "scripts/audit_ai_reconciliation.py",
         [
             "tests/test_audit_ai_reconciliation.py",
+            "tests/test_audit_fix_loop_disposition.py",
             "tests/test_audit_pr_body.py",
             "tests/test_check_ai_reconciliation_live.py",
+        ],
+    ),
+    (
+        "scripts/audit_fix_loop_disposition.py",
+        [
+            "tests/test_audit_fix_loop_disposition.py",
+            "tests/test_local_pr_review.py",
         ],
     ),
     (
