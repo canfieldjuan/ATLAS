@@ -69,21 +69,84 @@ def test_config_enabled_does_not_defeat_the_guard(monkeypatch):
     assert "reminders_sent" not in result
 
 
-def test_run_touches_no_invoice_or_email_module_state():
-    """No repository handle and no transport is constructed while disabled.
+def test_run_touches_no_config_repository_or_transport():
+    """Fail-on-touch probes for ALL THREE boundaries the guard must precede.
 
-    Complements the ordering proof above: rather than patching the collaborators
-    to explode, assert the modules that own them were never even imported into
-    ``sys.modules`` by this call when they start absent.
+    The earlier version probed only ``invoice_pdf``, so it could not detect the
+    guard being moved below the config read or below ``get_invoice_repo`` -- and
+    the reason-string test cannot either, because a guard that fires late still
+    returns the same reason. That gap is what round 3 flagged.
+
+    ``run`` imports each collaborator INSIDE the function body, so absence from
+    ``sys.modules`` after the call is proof the line was never reached. This is a
+    touch probe with no mock of any first-party symbol: nothing is patched, so
+    it adds no INTERNAL_MOCK against the task (ATLAS #1877) and the maturity
+    ratchet stays green. Modules are restored afterwards so the probe cannot
+    disturb other tests in the session.
     """
-    for mod in (
-        "atlas_brain.services.invoice_pdf",
-    ):
-        sys.modules.pop(mod, None)
+    boundaries = (
+        "atlas_brain.config",                        # settings read
+        "atlas_brain.storage.repositories.invoice",  # overdue query
+        "atlas_brain.services.email_provider",       # transport
+        "atlas_brain.services.invoice_pdf",          # attachment render
+    )
+    saved = {m: sys.modules.get(m) for m in boundaries}
+    try:
+        for mod in boundaries:
+            sys.modules.pop(mod, None)
 
-    asyncio.run(task_mod.run(task=None))
+        result = asyncio.run(task_mod.run(task=None))
 
-    assert "atlas_brain.services.invoice_pdf" not in sys.modules
+        assert result == {"_skip_synthesis": task_mod._AUTOPILOT_DISABLED_REASON}
+        for mod in boundaries:
+            assert mod not in sys.modules, (
+                f"run() reached {mod} before the autopilot guard; the guard no "
+                "longer precedes every effectful boundary"
+            )
+    finally:
+        for mod, original in saved.items():
+            if original is not None:
+                sys.modules[mod] = original
+            else:
+                sys.modules.pop(mod, None)
+
+
+def test_guard_is_the_first_statement_of_run():
+    """Structural proof that nothing can execute before the guard.
+
+    The touch probes above prove the guard precedes the boundaries that exist
+    today. This proves it precedes ANY statement, including one added tomorrow,
+    by reading the parsed source: the first statement of ``run`` must be an
+    ``if _AUTOPILOT_DISABLED`` whose body returns. A reviewer asked for
+    fail-on-touch probes; those were added, but on their own they only cover the
+    collaborators someone thought to enumerate.
+    """
+    import ast
+    import inspect
+
+    tree = ast.parse(inspect.getsource(task_mod))
+    run_fn = next(
+        node for node in tree.body
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
+        and node.name == "run"
+    )
+    body = list(run_fn.body)
+    if (body and isinstance(body[0], ast.Expr)
+            and isinstance(body[0].value, ast.Constant)
+            and isinstance(body[0].value.value, str)):
+        body = body[1:]                     # skip the docstring
+
+    assert body, "run() has no body"
+    first = body[0]
+    assert isinstance(first, ast.If), (
+        f"the first statement of run() is {type(first).__name__}, not the guard"
+    )
+    assert isinstance(first.test, ast.Name) and first.test.id == "_AUTOPILOT_DISABLED", (
+        "the first statement of run() does not test _AUTOPILOT_DISABLED"
+    )
+    assert any(isinstance(n, ast.Return) for n in ast.walk(first)), (
+        "the guard does not return, so execution would continue past it"
+    )
 
 
 def test_config_default_is_fail_closed():

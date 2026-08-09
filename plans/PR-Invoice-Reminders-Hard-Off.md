@@ -6,6 +6,19 @@ On 2026-08-03 the autonomous task `invoice_payment_reminders` emailed 17 unautho
 
 Operator decision 2026-08-08 (Juan): no autonomous payment reminders at all, indefinitely — not merely "off in this environment". This slice makes that decision a property of the code rather than of one hand-maintained file.
 
+### Why this slice exceeds the 400-LOC budget and is indivisible
+
+The diff is over the soft cap. It is one safety invariant — a customer-email
+path held closed at three layers — plus the proof that it is closed. Production
+code is a small minority of it; the remainder is the plan doc the
+plan-admission gate itself mandates, the guard test module, the send-shape test
+edits and the CI enrollment.
+
+Splitting it lands either the guard with no permitted-side proof — which is
+exactly the P1 the automated reviewer raised on round 1 — or the proof with the
+10:00 cron still live in the interval. Neither half is shippable alone, and the
+incident this closes already happened once, to real customers.
+
 Audit of the current stop, verified against `main` @ `40bb24553` and the live ts.net DB:
 
 - `InvoicingConfig.reminders_enabled` ships `default=True` (`config.py:2438`) — absent config means ON.
@@ -38,7 +51,22 @@ Slice phase: production hardening
 ### Review Contract
 
 - Acceptance criteria:
-  1. `run()` returns at the autopilot gate, not a later one, while the guard is set — settled by `tests/test_invoice_payment_reminders_disabled.py::test_run_returns_at_the_autopilot_gate_not_a_later_one`, which calls `run()` with no patching and requires exactly `_AUTOPILOT_DISABLED_REASON`. Each gate returns a distinct `_skip_synthesis` string, so if the guard were removed or moved below the config read this call would answer `"Invoicing disabled"` — the exact-string assertion is the ordering proof. `::test_run_touches_no_invoice_or_email_module_state` adds that `atlas_brain.services.invoice_pdf` is not even imported by the call.
+  1. The guard precedes **every** effectful boundary — settled by two tests, and
+     demonstrated by mutation rather than asserted. `::test_run_touches_no_config_repository_or_transport`
+     empties `atlas_brain.config`, `...storage.repositories.invoice`,
+     `...services.email_provider` and `...services.invoice_pdf` from `sys.modules`,
+     runs `run()`, and requires all four to still be absent — `run` imports each
+     collaborator inside the function body, so absence proves the line was never
+     reached. `::test_guard_is_the_first_statement_of_run` parses the source and
+     requires the first statement of `run` (after the docstring) to be an
+     `if _AUTOPILOT_DISABLED` whose body returns, which covers boundaries nobody
+     has thought of yet. Neither patches a first-party symbol, so the maturity
+     ratchet stays green.
+     **Mutation evidence:** moving the guard below the config read and the
+     repository import fails both tests, while
+     `::test_run_returns_at_the_autopilot_gate_not_a_later_one` still passes —
+     which is precisely the gap round 3 identified: a guard that fires late
+     returns the same reason string.
   2. Setting `reminders_enabled=True` produces no send — settled by `::test_config_enabled_does_not_defeat_the_guard`, which opens **both** config gates on the settings object and still requires `_AUTOPILOT_DISABLED_REASON`, a reason only the guard can produce. This is the criterion the mock-free rewrite initially dropped: criterion 1 alone runs with invoicing disabled ambiently and so cannot distinguish the guard blocking from the master gate blocking.
   3. The config default is fail-closed — settled by `::test_config_default_is_fail_closed` asserting `InvoicingConfig.model_fields["reminders_enabled"].default is False`.
   4. A fresh database seeds the task disabled — settled by `::test_scheduler_seeds_the_task_disabled` asserting `TaskScheduler._DEFAULT_TASKS` has exactly one `invoice_payment_reminders` entry with `.get("enabled") is False` (explicitly False, not merely absent — absence is the defect).
@@ -99,10 +127,20 @@ The **seed default** stops the cron being registered at all on a fresh database.
 
 - The pre-existing `settings.invoicing.enabled` and `cfg.reminders_enabled` checks are retained beneath the new guard rather than deleted, so clearing the constant restores exactly the prior gating rather than a laxer one.
 - `_AUTOPILOT_DISABLED` is a plain module constant, not a config field or env var. Making it configurable would reintroduce the exact defect this slice removes.
-- The two existing send-shape tests are monkeypatched past the guard rather than deleted or skipped: they still hold `#2271`'s revived behaviour (PDF attachment, text-only fallback) to a standard, and deleting them would lose that contract.
+- The two existing send-shape tests call the extracted `_send_due_reminders` directly rather than being deleted or skipped: they still hold `#2271`'s revived behaviour (PDF attachment, text-only fallback) to a standard. They deliberately do **not** patch `_AUTOPILOT_DISABLED` — mocking the kill switch to test around it is what the maturity ratchet rejected.
 - The reason string names #2271 and the required sign-off so the log line and the API response are self-explaining at 10:00 on some future morning.
 
 ## Deferred
+
+**Parking predicate.** A finding is parked here iff it is adjacent work that
+does not weaken the guarantee this slice ships — that no autonomous reminder can
+be sent. Anything that could let a reminder out, or that leaves the guard
+unproven, blocks and is fixed in-slice; that is why all three automated-review
+rounds were fixed rather than deferred.
+
+**Parked hardening: none.** Nothing was found and set aside during
+implementation. The entries below are pre-existing follow-up issues, not
+hardening carried out of this slice, and no `HARDENING.md` entries are created.
 
 - #2270 (per-customer consolidation, no reminders on settled/"last" invoices, transactional bookkeeping) — not fixed here.
 - #2271 (owner approval gate in the `list_pending_drafts` / `approve_and_send` shape) — not built here. This slice is its precondition, not its substitute.
@@ -128,19 +166,19 @@ Mechanical verification. Result: pass.
 | `atlas_brain/autonomous/scheduler.py` | 12 |
 | `atlas_brain/autonomous/tasks/invoice_payment_reminders.py` | 68 |
 | `atlas_brain/config.py` | 25 |
-| `plans/PR-Invoice-Reminders-Hard-Off.md` | 146 |
-| `tests/test_invoice_payment_reminders_disabled.py` | 150 |
+| `plans/PR-Invoice-Reminders-Hard-Off.md` | 184 |
+| `tests/test_invoice_payment_reminders_disabled.py` | 213 |
 | `tests/test_monthly_invoice_generation.py` | 26 |
 | `tests/unit_gate_baseline.txt` | 2 |
-| **Total** | **452** |
+| **Total** | **553** |
 
 ## Cold diff reconstruction
 
-- `invoice_payment_reminders.py`: module docstring gains an AUTOPILOT DISABLED line; after the logger, a commented block records the incident, the three default-open layers, and the ordered re-enable preconditions, then defines `_AUTOPILOT_DISABLED = True` and `_AUTOPILOT_DISABLED_REASON`. In `run()`, the docstring gains a paragraph on guard ordering and the first statement becomes `if _AUTOPILOT_DISABLED:` → log + `return {"_skip_synthesis": _AUTOPILOT_DISABLED_REASON}`, placed above the existing `from ...config import settings`.
+- `invoice_payment_reminders.py`: module docstring gains an AUTOPILOT DISABLED line; after the logger, a commented block records the incident, the three default-open layers, and the ordered re-enable preconditions, then defines `_AUTOPILOT_DISABLED = True` and `_AUTOPILOT_DISABLED_REASON`. In `run()`, the docstring gains a paragraph on guard ordering and the first statement becomes `if _AUTOPILOT_DISABLED:` → log + `return {"_skip_synthesis": _AUTOPILOT_DISABLED_REASON}`. The rest of the original body is **extracted into `_send_due_reminders(task)`**, which `run` tail-calls when the guard is clear — a production seam the send-shape tests exercise directly so they need not patch the constant.
 - `config.py`: `reminders_enabled` default `True` → `False`, description gains "(default OFF; see #2271)", preceded by a comment explaining the fail-closed inversion.
 - `scheduler.py`: the `invoice_payment_reminders` entry in `_DEFAULT_TASKS` gains `"enabled": False`, a description suffix "(DISABLED pending #2271 approval gate)", and a leading comment noting the fresh-seed-only scope and the `enabled_config_key` asymmetry.
-- `tests/test_invoice_payment_reminders_disabled.py`: new module, 5 tests as enumerated in the Review Contract.
-- `tests/test_monthly_invoice_generation.py`: `monkeypatch.setattr(task_mod, "_AUTOPILOT_DISABLED", False)` added after the `task_mod` import in `test_payment_reminder_attaches_pdf` and `test_payment_reminder_falls_back_when_pdf_fails`, each with a comment pointing at the guard suite.
+- `tests/test_invoice_payment_reminders_disabled.py`: new module, **9 tests** as enumerated in the Review Contract — the kill-constant assertion, the reason-string ordering check, the config-cannot-defeat-the-guard check, the four-boundary `sys.modules` touch probe, the AST first-statement proof, the fail-closed config default, blank-value coercion, its garbage-value counterpart, and the disabled scheduler seed.
+- `tests/test_monthly_invoice_generation.py`: the two send-shape tests open both config gates via `monkeypatch.setattr(settings.invoicing, ...)` and call the **extracted, unguarded `task_mod._send_due_reminders`** directly. They do **not** patch `_AUTOPILOT_DISABLED`; doing so was a first-party mock of the kill switch itself and tripped the maturity ratchet on two lanes.
 - `.github/workflows/atlas_invoicing_checks.yml`: adds `atlas_brain/autonomous/scheduler.py`, `atlas_brain/autonomous/tasks/invoice_payment_reminders.py` and `tests/test_invoice_payment_reminders_disabled.py` to **both** the `pull_request` and `push` path filters (`atlas_brain/config.py` was already listed), plus two steps — `Run payment-reminder autopilot-disabled guard tests` (the new module) and `Run payment-reminder permitted-side tests` (`-k payment_reminder` on the existing file). R12 enrollment for both sides of the boundary.
 - `atlas_brain/config.py`: adds `_blank_reminders_value_means_disabled`, a `@field_validator("reminders_enabled", mode="before")` coercing blank/whitespace strings to `False`.
 - `tests/unit_gate_baseline.txt`: removes `test_payment_reminder_attaches_pdf` and `test_payment_reminder_falls_back_when_pdf_fails` (166 → 164 lines). Both genuinely pass now; the gate's exact-node shrink proof re-runs them.
