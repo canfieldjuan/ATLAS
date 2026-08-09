@@ -13,6 +13,11 @@ from .estimate_confirmation import (
 )
 
 from .request_acknowledgement import (
+    ACK_VARIANT_COMMERCIAL_MULTI_SITE,
+    ACK_VARIANT_COMMERCIAL_SINGLE_SITE,
+    ACK_VARIANT_GENERAL,
+    ACK_VARIANT_RESIDENTIAL,
+    classify_ack_variant,
     format_request_acknowledgement,
 )
 
@@ -37,6 +42,11 @@ __all__ = [
     "BUSINESS_WEBSITE",
     "format_business_email",
     "format_residential_email",
+    "ACK_VARIANT_RESIDENTIAL",
+    "ACK_VARIANT_COMMERCIAL_SINGLE_SITE",
+    "ACK_VARIANT_COMMERCIAL_MULTI_SITE",
+    "ACK_VARIANT_GENERAL",
+    "classify_ack_variant",
     "format_request_acknowledgement",
     "format_onboarding_welcome",
     "format_business_proposal",

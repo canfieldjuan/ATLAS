@@ -39,6 +39,7 @@ import import_calendar_contacts as ics  # noqa: E402  (reused extraction core)
 from eom_execution_receipt import EomExecutionReceipt, run_receipted  # noqa: E402
 
 EOM_CONTEXT_ID = "effingham_maids"
+DEFAULT_MONTHS_FORWARD = 12
 
 # The three booking calendars. Estimates is intentionally absent: it holds
 # leads, not customers, and the real-time intake endpoint owns leads now.
@@ -827,7 +828,7 @@ def main(argv=None):
         default="all",
     )
     parser.add_argument("--months-back", type=int, default=24)
-    parser.add_argument("--months-forward", type=int, default=12)
+    parser.add_argument("--months-forward", type=int, default=DEFAULT_MONTHS_FORWARD)
     parser.add_argument(
         "--receipt-dir",
         help="Private execution-receipt directory; required for live writes",
