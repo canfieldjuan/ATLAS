@@ -1386,6 +1386,21 @@ class DatabaseCRMProvider:
                     if previous.get(key) != contact.get(key)
                 )
                 metadata["changed_fields"] = changed
+                # The value that was overwritten, not just its field name.
+                #
+                # This boundary is create-OR-return: an operator create can
+                # resolve to an existing contact matched on phone or email and
+                # then overwrite its identity as operator intent. Recording only
+                # which fields moved makes that irreversible and unreviewable --
+                # there is no contact history table, so the prior value exists
+                # nowhere else the moment the UPDATE commits.
+                #
+                # Observed live on 2026-08-08: an office customer create matched
+                # a calendar_import contact by phone and rewrote its full_name,
+                # and the previous name could not be recovered from anything.
+                metadata["previous_values"] = {
+                    key: previous.get(key) for key in changed
+                }
             await conn.execute(
                 """
                 INSERT INTO eom_lead_lifecycle_events (
