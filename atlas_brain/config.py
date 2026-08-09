@@ -2435,7 +2435,7 @@ class InvoicingConfig(BaseSettings):
     )
     default_payment_terms_days: int = Field(default=30, ge=1, le=365, description="Default days until due")
     default_tax_rate: float = Field(default=0.0, ge=0.0, le=1.0, description="Default tax rate (0.0-1.0)")
-    # Fail-closed: an absent/blank env value must mean OFF. This shipped
+    # Fail-closed: an absent OR blank env value must mean OFF. This shipped
     # default=True, so the 2026-08-03 duplicate-dunning incident was held back
     # only by a hand-maintained ATLAS_INVOICING_REMINDERS_ENABLED=false line in
     # .env -- one fresh deploy or worktree cutover away from resuming. The
@@ -2443,6 +2443,22 @@ class InvoicingConfig(BaseSettings):
     # autonomous/tasks/invoice_payment_reminders.py; this default is the
     # second layer. See ATLAS #2270 / #2271.
     reminders_enabled: bool = Field(default=False, description="Master toggle for the payment-reminder cron task (default OFF; see #2271)")
+
+    @field_validator("reminders_enabled", mode="before")
+    @classmethod
+    def _blank_reminders_value_means_disabled(cls, value):
+        """Treat ``ATLAS_INVOICING_REMINDERS_ENABLED=`` as OFF, not a crash.
+
+        Pydantic's bool parser rejects ``""``, so an env template that renders
+        the key with an empty value raised ValidationError and took the whole
+        app down at import. That is both a startup hazard and a contradiction
+        of the fail-closed claim above, since a blank value is exactly the
+        shape a half-configured deployment produces. Coerce to the disabled
+        default instead; a blank toggle must never mean ON.
+        """
+        if isinstance(value, str) and not value.strip():
+            return False
+        return value
     reminder_intervals: list[int] = Field(
         default_factory=lambda: [7, 14, 30],
         description=(

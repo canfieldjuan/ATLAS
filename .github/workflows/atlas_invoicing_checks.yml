@@ -141,6 +141,17 @@ jobs:
             tests/test_invoice_payment_reminders_disabled.py \
             -q
 
+      # The permitted side of the guard. These two were accepted failures in
+      # tests/unit_gate_baseline.txt and were selected out of the step above by
+      # its -k filter, so nothing proved the guard is what blocks the send. They
+      # now open all three gates explicitly and are enrolled here as blocking.
+      - name: Run payment-reminder permitted-side tests
+        run: |
+          python -m pytest \
+            tests/test_monthly_invoice_generation.py \
+            -k "payment_reminder" \
+            -q
+
       - name: Run receivables ledger and repository tests
         run: |
           python -m pytest \

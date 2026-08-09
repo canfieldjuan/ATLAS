@@ -1046,7 +1046,17 @@ async def test_payment_reminder_attaches_pdf(monkeypatch):
     # guard is pinned by tests/test_invoice_payment_reminders_disabled.py. This
     # test documents the send SHAPE that must hold when #2271's approval gate
     # revives the path, so it opts past the guard deliberately and locally.
+    #
+    # All THREE gates must be opened, not just the new one. invoicing.enabled
+    # and reminders_enabled both default False, so clearing _AUTOPILOT_DISABLED
+    # alone still returns at the master gate and this test would pass its
+    # assertions vacuously never having reached FakeEmailProvider. Opening all
+    # three is what makes this the permitted-side proof for the guard.
+    from atlas_brain.config import settings
+
     monkeypatch.setattr(task_mod, "_AUTOPILOT_DISABLED", False)
+    monkeypatch.setattr(settings.invoicing, "enabled", True)
+    monkeypatch.setattr(settings.invoicing, "reminders_enabled", True)
 
     captured: dict = {}
 
@@ -1130,7 +1140,12 @@ async def test_payment_reminder_falls_back_when_pdf_fails(monkeypatch):
 
     # See the note on test_payment_reminder_attaches_pdf: the autopilot guard is
     # the shipped behaviour, this test pins the revived send shape behind it.
+    # All three gates are opened for the same reason given there.
+    from atlas_brain.config import settings
+
     monkeypatch.setattr(task_mod, "_AUTOPILOT_DISABLED", False)
+    monkeypatch.setattr(settings.invoicing, "enabled", True)
+    monkeypatch.setattr(settings.invoicing, "reminders_enabled", True)
 
     captured: dict = {}
 
