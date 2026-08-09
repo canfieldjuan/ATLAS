@@ -38,6 +38,7 @@ So a single `.env` line was the only thing between the incident and its recurren
 
 Ownership lane: eom-invoicing/reminder-autopilot-off
 Slice phase: production hardening
+Max files: 8
 
 1. Add `_AUTOPILOT_DISABLED` to `atlas_brain/autonomous/tasks/invoice_payment_reminders.py`, checked as the first statement of `run()` — before the `settings` import, the `get_invoice_repo()` query, and any `email_provider.send` — returning `{"_skip_synthesis": _AUTOPILOT_DISABLED_REASON}`.
 2. Flip `InvoicingConfig.reminders_enabled` from `default=True` to `default=False` so an absent or blank env value means OFF.
