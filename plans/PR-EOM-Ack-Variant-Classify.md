@@ -203,6 +203,7 @@ mapping rather than a config default. The one setting this path already consults
 - `atlas_brain/templates/email/request_acknowledgement.py`
 - `plans/PR-EOM-Ack-Variant-Classify.md`
 - `tests/test_ack_variant_classification.py`
+- `tests/test_eom_sent_email_tenant_scope.py`
 - `tests/test_leads_intake.py`
 
 ## Mechanism
@@ -313,6 +314,7 @@ Parked hardening: none.
 | `atlas_brain/templates/email/__init__.py` | 10 |
 | `atlas_brain/templates/email/request_acknowledgement.py` | 42 |
 | `plans/PR-EOM-Ack-Variant-Classify.md` | 318 |
-| `tests/test_ack_variant_classification.py` | 209 |
+| `tests/test_ack_variant_classification.py` | 283 |
+| `tests/test_eom_sent_email_tenant_scope.py` | 6 |
 | `tests/test_leads_intake.py` | 6 |
-| **Total** | **604** |
+| **Total** | **684** |

@@ -5,9 +5,15 @@ the one existing acknowledgement template, so the residential email must be
 byte-identical to what production sent before this change.
 """
 
+import random
+import string
+
 import pytest
 
 from atlas_brain.api.leads import _process_lead_intake
+from atlas_brain.templates.email.request_acknowledgement import (
+    _ACK_VARIANT_BY_SERVICE,
+)
 from atlas_brain.templates.email import (
     ACK_VARIANT_COMMERCIAL_MULTI_SITE,
     ACK_VARIANT_COMMERCIAL_SINGLE_SITE,
@@ -68,24 +74,92 @@ def test_classification_is_whitespace_and_case_insensitive(service, expected):
     assert classify_ack_variant(service) == expected
 
 
+def _generated_unrecognised_strings(rng, count):
+    """Yield arbitrary strings that are not one of the six known form values.
+
+    Grammar-derived rather than a fixed sample: the declared set is OPEN, so a
+    handful of literals cannot stand in for "any unrecognised string".
+    """
+    alphabet = (
+        string.ascii_letters + string.digits + " \t\n-_./\\'\"<>{}[]();:@#$%&*+=|~`^"
+        + "áéíóúñü汉字🧹​ "
+    )
+    known = set(_ACK_VARIANT_BY_SERVICE)
+    produced = 0
+    while produced < count:
+        candidate = "".join(rng.choice(alphabet) for _ in range(rng.randint(0, 40)))
+        if candidate.strip().lower() in known:
+            continue  # a generated collision with a real value is not a counter-example
+        produced += 1
+        yield candidate
+
+
+def _generated_non_strings(rng, count):
+    """Yield varied non-string shapes, including nested containers."""
+    atoms = [
+        None, True, False, 0, 1, -3, 0.0, 1.5, float("nan"), float("inf"),
+        b"commercial", bytearray(b"residential"), object(), Exception("x"),
+        range(2), iter([]), lambda: None, type, NotImplemented, Ellipsis,
+    ]
+    for _ in range(count):
+        shape = rng.randint(0, 5)
+        atom = rng.choice(atoms)
+        if shape == 0:
+            yield atom
+        elif shape == 1:
+            yield [atom]
+        elif shape == 2:
+            yield (atom,)
+        elif shape == 3:
+            yield {"service": atom}
+        elif shape == 4:
+            yield [[atom], {"nested": atom}]
+        else:
+            yield {rng.randint(0, 9): [atom]}
+
+
+def test_generated_unrecognised_strings_all_resolve_to_general():
+    """Property: any string outside the known set resolves to ``general``.
+
+    The set is declared OPEN (a website form option can appear without any
+    change here), so the guarantee has to hold for arbitrary strings, not for a
+    curated list of them.
+    """
+    rng = random.Random(20260808)  # seeded: reproducible, not flaky
+    checked = 0
+    for value in _generated_unrecognised_strings(rng, 500):
+        assert classify_ack_variant(value) == ACK_VARIANT_GENERAL, repr(value)
+        checked += 1
+    assert checked == 500
+
+
+def test_generated_non_strings_never_raise_and_resolve_to_general():
+    """Property: the whole non-string class resolves to ``general``.
+
+    Acceptance criterion 2 promises this for every non-string, so the proof is
+    generated over varied shapes — atoms, containers, nested containers — rather
+    than the fixed examples that previously let a truthy-non-string
+    ``AttributeError`` through.
+    """
+    rng = random.Random(20260808)
+    checked = 0
+    for value in _generated_non_strings(rng, 500):
+        assert classify_ack_variant(value) == ACK_VARIANT_GENERAL, repr(value)
+        checked += 1
+    assert checked == 500
+
+
 @pytest.mark.parametrize(
     "value",
     [
-        # Falsy non-strings — these took the old `service or ""` path.
-        None, 0, 0.0, False, [], {}, set(), (),
-        # Truthy non-strings — these reached `.strip()` and raised
-        # AttributeError before the isinstance guard. Covering only the falsy
-        # half is what let the defect through.
-        1, True, 1.5, ["residential"], {"service": "commercial"}, {"commercial"},
-        ("commercial",), object(), b"commercial",
+        # Retained as named regression anchors for the specific defect Codex
+        # found: the falsy half took the old `service or ""` path, while the
+        # truthy half reached `.strip()` and raised AttributeError.
+        None, 0, False, [], {},
+        1, True, 1.5, ["residential"], {"service": "commercial"}, b"commercial",
     ],
 )
 def test_classifier_is_total_for_the_whole_non_string_class(value):
-    """Intake passes a validated str, but the classifier must never raise.
-
-    Acceptance criterion 2 promises every non-string resolves to ``general``,
-    so the guard covers the whole class rather than the falsy part of it.
-    """
     assert classify_ack_variant(value) == ACK_VARIANT_GENERAL
 
 

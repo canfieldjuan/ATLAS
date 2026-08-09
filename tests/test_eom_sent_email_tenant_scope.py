@@ -311,6 +311,12 @@ async def test_intake_history_and_scoped_context_are_tenant_exact(
             "metadata": {
                 "source": "website_estimate_form",
                 "contact_id": str(contact["id"]),
+                # ATLAS #2320 slice A1: both evidence records carry the raw
+                # submitted service and the derived acknowledgement variant.
+                # "office cleaning" is not one of the six website form values,
+                # so it resolves to the general fallback.
+                "service": "office cleaning",
+                "ack_variant": "general",
             },
         }
 
