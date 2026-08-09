@@ -105,8 +105,13 @@ EXPLICIT_TEST_OWNERS: dict[str, tuple[str, ...]] = {
     ),
     "scripts/audit_ai_reconciliation.py": (
         "tests/test_audit_ai_reconciliation.py",
+        "tests/test_audit_fix_loop_disposition.py",
         "tests/test_audit_pr_body.py",
         "tests/test_check_ai_reconciliation_live.py",
+    ),
+    "scripts/audit_fix_loop_disposition.py": (
+        "tests/test_audit_fix_loop_disposition.py",
+        "tests/test_local_pr_review.py",
     ),
     "scripts/audit_pr_body.py": (
         "tests/test_audit_pr_body.py",
@@ -139,6 +144,9 @@ EXPLICIT_TEST_OWNERS: dict[str, tuple[str, ...]] = {
     ),
     "scripts/open_pr.sh": (
         "tests/test_open_pr_wrapper.py",
+    ),
+    "scripts/update_pr_body.sh": (
+        "tests/test_update_pr_body_wrapper.py",
     ),
     "scripts/pre_push_audit.sh": (
         "tests/test_pre_push_audit.py",
