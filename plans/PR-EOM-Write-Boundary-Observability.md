@@ -134,7 +134,8 @@ An unmeasured signal counts as breached. A monitor that reports clean while
 seeing nothing converts an outage into false assurance, which is the same
 silent-failure class this slice exists to close.
 
-Alerting copies `atlas-api-healthcheck.sh`: fire on the transition into breach,
+Alerting copies the installed atlas-api healthcheck (under `~/.local/bin`, not
+versioned in this repo): fire on the transition into breach,
 re-alert every N consecutive runs, one recovery notice.
 
 ## Intentional
@@ -158,7 +159,7 @@ re-alert every N consecutive runs, one recovery notice.
   whether those paths are ever exercised, which is the evidence #156 should be
   built with.
 - Website #158 (reconcile identity race) and #163 (shared request-body artifact).
-- Migrating the existing `atlas-api-healthcheck.sh` into the repo, which has the
+- Migrating the existing atlas-api healthcheck script into the repo; it has the
   same unversioned-ops-script weakness.
 
 Parked hardening: none.
