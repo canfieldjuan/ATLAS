@@ -234,6 +234,71 @@ def _summary_with_channels(payload: LeadIntakeRequest, email: str, phone_digits:
     return f"Callback: {channels}\n{summary}" if channels else summary
 
 
+def _format_phone_for_display(phone_digits: str) -> str:
+    """Pretty-print a US 10/11-digit number for the push; pass others through."""
+    if len(phone_digits) == 11 and phone_digits.startswith("1"):
+        phone_digits = phone_digits[1:]
+    if len(phone_digits) == 10:
+        return f"({phone_digits[0:3]}) {phone_digits[3:6]}-{phone_digits[6:10]}"
+    return phone_digits
+
+
+def _lead_push_body(payload: LeadIntakeRequest, email: str, phone_digits: str) -> str:
+    """Scannable body for the new-lead push: how to reach them, then what they
+    want, then where. Kept short so it reads at a glance on a phone."""
+    lines: list[str] = []
+    channels = [c for c in (
+        _format_phone_for_display(phone_digits) if phone_digits else "",
+        email,
+    ) if c]
+    if channels:
+        lines.append(" · ".join(channels))
+    service = payload.service.strip()
+    frequency = payload.frequency.strip()
+    detail = " · ".join(part for part in (service, frequency) if part)
+    if detail:
+        lines.append(detail)
+    address = payload.address.strip()
+    if address:
+        lines.append(address)
+    return "\n".join(lines) or "New website estimate request"
+
+
+async def _publish_lead_ntfy(title: str, body: str) -> None:
+    """Fire-and-forget push to the dedicated leads ntfy topic. Never raises: a
+    notification failure must not touch the already-captured lead."""
+    try:
+        from ..config import settings
+
+        alerts = settings.alerts
+        topic = (alerts.leads_ntfy_topic or "").strip()
+        if not alerts.ntfy_enabled or not topic:
+            return  # feature off (no topic configured) — silently skip
+
+        import httpx
+
+        url = f"{alerts.ntfy_url.rstrip('/')}/{topic}"
+        headers = {"Title": title, "Priority": "high", "Tags": "moneybag"}
+        async with httpx.AsyncClient(timeout=httpx.Timeout(5.0)) as client:
+            response = await client.post(url, content=body.encode("utf-8"), headers=headers)
+            response.raise_for_status()
+        logger.info("lead_intake: new-lead push sent to ntfy topic")
+    except Exception:
+        logger.exception("lead_intake: new-lead ntfy push failed (lead still captured)")
+
+
+async def _default_lead_notifier(
+    payload: LeadIntakeRequest, email: str, phone_digits: str
+) -> None:
+    """Build and send the new-lead push. Split from the transport so tests can
+    inject a fake notifier and assert on call/no-call without HTTP."""
+    name = payload.name.strip() or "Website visitor"
+    await _publish_lead_ntfy(
+        title=f"New lead: {name}",
+        body=_lead_push_body(payload, email, phone_digits),
+    )
+
+
 async def _process_lead_intake(
     payload: LeadIntakeRequest,
     crm: Any,
@@ -241,6 +306,7 @@ async def _process_lead_intake(
     daily_count: Optional[Any] = None,
     ack_volume: Optional[Any] = None,
     email_history: Optional[Any] = None,
+    lead_notifier: Optional[Any] = None,
 ) -> dict[str, Any]:
     """Core intake flow with injectable providers (unit-testable sans HTTP)."""
     if payload.website.strip():
@@ -326,6 +392,20 @@ async def _process_lead_intake(
     # log_interaction dedupes identical same-day rows and reports it via the
     # public "inserted" flag; a double-submit must not double-email the lead.
     freshly_logged = bool((interaction or {}).get("inserted", True))
+
+    # Instant operator heads-up on every NEW lead — independent of the ack
+    # email, so a phone-only lead (no email) still pushes. Guarded by
+    # freshly_logged so a same-day double-submit does not double-notify.
+    # Fire-and-forget: the notifier already swallows its own errors, and this
+    # extra guard ensures even an injected test notifier can never fail intake.
+    if freshly_logged:
+        notifier = lead_notifier or _default_lead_notifier
+        try:
+            await notifier(payload, email, phone_digits)
+        except Exception:
+            logger.exception(
+                "lead_intake: new-lead notification failed for contact %s", contact_id
+            )
 
     email_sent = False
     from ..config import settings as _settings
@@ -436,6 +516,10 @@ def _email_history_dependency() -> Any:
     return get_email_repo()
 
 
+def _notify_dependency() -> Any:
+    return _default_lead_notifier
+
+
 @router.post("/intake")
 async def lead_intake(
     payload: LeadIntakeRequest,
@@ -444,6 +528,7 @@ async def lead_intake(
     daily_count: Any = Depends(_daily_count_dependency),
     ack_volume: Any = Depends(_ack_volume_dependency),
     email_history: Any = Depends(_email_history_dependency),
+    lead_notifier: Any = Depends(_notify_dependency),
 ) -> dict[str, Any]:
     """Receive an estimate-form submission from the public website.
 
@@ -458,6 +543,7 @@ async def lead_intake(
             daily_count=daily_count,
             ack_volume=ack_volume,
             email_history=email_history,
+            lead_notifier=lead_notifier,
         )
     except LeadValidationError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc

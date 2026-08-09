@@ -813,6 +813,7 @@ class AlertsConfig(BaseSettings):
     ntfy_enabled: bool = Field(default=False, description="Enable ntfy push notifications")
     ntfy_url: str = Field(default="http://localhost:8090", description="ntfy server URL (override: ATLAS_ALERTS__NTFY_URL)")
     ntfy_topic: str = Field(default="atlas-alerts", description="ntfy topic for alerts")
+    leads_ntfy_topic: str = Field(default="", description="Dedicated ntfy topic for new website-lead push notifications; empty disables them (env: ATLAS_ALERTS_LEADS_NTFY_TOPIC)")
 
 
 class InboxMailboxBinding(BaseModel):

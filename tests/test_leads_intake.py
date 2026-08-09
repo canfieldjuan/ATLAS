@@ -33,7 +33,11 @@ from atlas_brain.api.leads import (  # noqa: E402
     LeadIntakeRequest,
     LeadRateLimitedError,
     LeadValidationError,
+    _default_lead_notifier,
+    _format_phone_for_display,
+    _lead_push_body,
     _process_lead_intake,
+    _publish_lead_ntfy,
     router,
 )
 from atlas_brain.templates.email.request_acknowledgement import (  # noqa: E402
@@ -1087,3 +1091,225 @@ async def test_forced_resend_routes_through_real_stack(monkeypatch):
     await comp.send(to=["x@example.com"], subject="s", body="b")
     gmail_transport.send.assert_awaited_once()
     assert len(_FakeHTTPClient.posted) == 1
+
+
+# ---------------------------------------------------------------------------
+# 9. New-lead ntfy push (dedicated eom-leads topic)
+#
+# Fires an instant operator heads-up on every NEW lead so real leads are not
+# lost in the email noise. Gated: only on a freshly-logged lead (never on a
+# honeypot or a same-day duplicate), and fire-and-forget (a push failure must
+# never fail the already-captured lead). The topic is empty by default, so the
+# transport stays off — and every other test in this module stays hermetic —
+# until an operator sets ATLAS_ALERTS_LEADS_NTFY_TOPIC.
+# ---------------------------------------------------------------------------
+
+
+class _FakeNtfyResponse:
+    def raise_for_status(self):
+        return None
+
+
+class _FakeNtfyClient:
+    """Async-context-manager stand-in for httpx.AsyncClient."""
+
+    posted: list = []
+
+    def __init__(self, *args, **kwargs):
+        pass
+
+    async def __aenter__(self):
+        return self
+
+    async def __aexit__(self, *exc):
+        return False
+
+    async def post(self, url, content=None, headers=None):
+        type(self).posted.append({"url": url, "content": content, "headers": headers})
+        return _FakeNtfyResponse()
+
+
+@pytest.mark.asyncio
+async def test_new_lead_fires_notification_with_channels():
+    crm, provider = _crm(), _email_provider()
+    notifier = AsyncMock()
+    payload = _payload()
+
+    await _process_lead_intake(
+        payload, crm=crm, email_provider=provider, lead_notifier=notifier
+    )
+
+    notifier.assert_awaited_once()
+    args = notifier.await_args.args
+    assert args[0] is payload
+    assert args[1] == "jane@example.com"  # normalized email
+    assert args[2] == "2175550100"        # digits-only phone
+
+
+@pytest.mark.asyncio
+async def test_honeypot_does_not_notify():
+    notifier = AsyncMock()
+    await _process_lead_intake(
+        _payload(website="http://spam.example"),
+        crm=_crm(), email_provider=_email_provider(), lead_notifier=notifier,
+    )
+    notifier.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_same_day_duplicate_does_not_notify():
+    """A duplicate is not a new lead: no second push (mirrors the no-second-
+    email guarantee)."""
+    notifier = AsyncMock()
+    await _process_lead_intake(
+        _payload(), crm=_crm(inserted=False),
+        email_provider=_email_provider(), lead_notifier=notifier,
+    )
+    notifier.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_phone_only_lead_still_notifies():
+    """The push is independent of the ack email, so a phone-only lead (no
+    email address, hence no acknowledgement) still reaches the operator."""
+    notifier = AsyncMock()
+    await _process_lead_intake(
+        _payload(email=""), crm=_crm(),
+        email_provider=_email_provider(), lead_notifier=notifier,
+    )
+    notifier.assert_awaited_once()
+    args = notifier.await_args.args
+    assert args[1] == ""
+    assert args[2] == "2175550100"
+
+
+@pytest.mark.asyncio
+async def test_notifier_failure_never_fails_request():
+    notifier = AsyncMock(side_effect=RuntimeError("ntfy unreachable"))
+    result = await _process_lead_intake(
+        _payload(), crm=_crm(),
+        email_provider=_email_provider(), lead_notifier=notifier,
+    )
+    assert result["success"] is True  # lead captured despite the push failing
+
+
+def test_format_phone_for_display():
+    assert _format_phone_for_display("2175550100") == "(217) 555-0100"
+    assert _format_phone_for_display("12175550100") == "(217) 555-0100"  # US +1
+    assert _format_phone_for_display("5550100") == "5550100"             # short: passthrough
+    assert _format_phone_for_display("") == ""
+
+
+def test_lead_push_body_layout_channels_service_address():
+    body = _lead_push_body(
+        _payload(address="207 Santa Fe Ave, Effingham, IL"),
+        "jane@example.com", "2175550100",
+    )
+    lines = body.split("\n")
+    assert lines[0] == "(217) 555-0100 · jane@example.com"
+    assert lines[1] == "residential · bi-weekly"
+    assert lines[2] == "207 Santa Fe Ave, Effingham, IL"
+
+
+def test_lead_push_body_phone_only_and_no_detail():
+    body = _lead_push_body(
+        _payload(email="", address="", service="", frequency=""), "", "2175550100"
+    )
+    assert body == "(217) 555-0100"
+
+
+@pytest.mark.asyncio
+async def test_publish_skipped_when_topic_unset(monkeypatch):
+    from atlas_brain.config import settings
+    monkeypatch.setattr(settings.alerts, "ntfy_enabled", True)
+    monkeypatch.setattr(settings.alerts, "leads_ntfy_topic", "")
+    import httpx
+
+    def _boom(*a, **k):
+        raise AssertionError("must not open an HTTP client when no topic is set")
+
+    monkeypatch.setattr(httpx, "AsyncClient", _boom)
+    await _publish_lead_ntfy("t", "b")  # returns cleanly, no transport
+
+
+@pytest.mark.asyncio
+async def test_publish_skipped_when_ntfy_disabled(monkeypatch):
+    from atlas_brain.config import settings
+    monkeypatch.setattr(settings.alerts, "ntfy_enabled", False)
+    monkeypatch.setattr(settings.alerts, "leads_ntfy_topic", "eom-leads-x")
+    import httpx
+
+    def _boom(*a, **k):
+        raise AssertionError("must not POST when ntfy is disabled")
+
+    monkeypatch.setattr(httpx, "AsyncClient", _boom)
+    await _publish_lead_ntfy("t", "b")
+
+
+@pytest.mark.asyncio
+async def test_publish_posts_to_configured_leads_topic(monkeypatch):
+    from atlas_brain.config import settings
+    monkeypatch.setattr(settings.alerts, "ntfy_enabled", True)
+    monkeypatch.setattr(settings.alerts, "ntfy_url", "https://ntfy.example/")  # trailing slash
+    monkeypatch.setattr(settings.alerts, "leads_ntfy_topic", "eom-leads-abc")
+    import httpx
+
+    _FakeNtfyClient.posted = []
+    monkeypatch.setattr(httpx, "AsyncClient", _FakeNtfyClient)
+
+    await _publish_lead_ntfy("New lead: Jane Doe", "body-here")
+
+    assert len(_FakeNtfyClient.posted) == 1
+    sent = _FakeNtfyClient.posted[0]
+    assert sent["url"] == "https://ntfy.example/eom-leads-abc"  # single-slash join
+    assert sent["content"] == b"body-here"
+    assert sent["headers"]["Title"] == "New lead: Jane Doe"
+    assert sent["headers"]["Priority"] == "high"
+    assert sent["headers"]["Tags"] == "moneybag"
+
+
+@pytest.mark.asyncio
+async def test_publish_swallows_transport_error(monkeypatch):
+    from atlas_brain.config import settings
+    monkeypatch.setattr(settings.alerts, "ntfy_enabled", True)
+    monkeypatch.setattr(settings.alerts, "leads_ntfy_topic", "eom-leads-abc")
+    import httpx
+
+    class _BoomClient(_FakeNtfyClient):
+        async def post(self, *a, **k):
+            raise RuntimeError("network down")
+
+    monkeypatch.setattr(httpx, "AsyncClient", _BoomClient)
+    await _publish_lead_ntfy("t", "b")  # must not raise
+
+
+@pytest.mark.asyncio
+async def test_default_notifier_builds_new_lead_title(monkeypatch):
+    import atlas_brain.api.leads as leads_mod
+
+    captured = {}
+
+    async def _fake_publish(title, body):
+        captured["title"] = title
+        captured["body"] = body
+
+    monkeypatch.setattr(leads_mod, "_publish_lead_ntfy", _fake_publish)
+    await leads_mod._default_lead_notifier(_payload(), "jane@example.com", "2175550100")
+
+    assert captured["title"] == "New lead: Jane Doe"
+    assert "jane@example.com" in captured["body"]
+
+
+@pytest.mark.asyncio
+async def test_default_notifier_falls_back_when_name_blank(monkeypatch):
+    import atlas_brain.api.leads as leads_mod
+
+    captured = {}
+
+    async def _fake_publish(title, body):
+        captured["title"] = title
+
+    monkeypatch.setattr(leads_mod, "_publish_lead_ntfy", _fake_publish)
+    # name has a min_length=1 constraint, so a lone space is the blank-ish edge
+    await leads_mod._default_lead_notifier(_payload(name=" "), "jane@example.com", "2175550100")
+    assert captured["title"] == "New lead: Website visitor"
