@@ -30,7 +30,7 @@ Write `.claude/fix-mode-state.json` with:
     "<path>": "<index/worktree fingerprint for that path when armed>"
   },
   "pending_upstream_edits": {},
-  "upstream_edit_receipts": [],
+  "upstream_edit_receipts": {},
   "allowed": ["scripts/*", "tests/test_x.py"],
   "max_files": 3,
   "symptom": "<failing check or review claim being addressed>",
@@ -54,7 +54,8 @@ in that list, `activation_dirty_fingerprints` records the matching index/worktre
 fingerprint; the path does not count as current-pass source work from that
 baseline alone. The pre-tool hook writes `pending_upstream_edits` for an
 admitted upstream-only edit attempt, and the post-tool hook promotes that record
-to `upstream_edit_receipts` only when the file fingerprint actually changes.
+to `upstream_edit_receipts` with the verified fingerprint only when the file
+fingerprint actually changes.
 Downstream edits use only committed/current changed paths and finalized receipts,
 never pending attempts. Also mirror these fields into the `## PR Fix Mode` block
 of `SESSION_STATE.local.md` (the human baton).

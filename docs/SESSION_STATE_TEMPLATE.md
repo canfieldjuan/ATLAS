@@ -84,7 +84,7 @@ Activation dirty fingerprints:
 Pending upstream edits:
 - <repo-relative upstream path admitted by the pre-tool hook but not yet verified, or none>
 Upstream edit receipts:
-- <repo-relative upstream path admitted by the hook in this fix pass, or none>
+- <repo-relative upstream path>: <post-tool verified fingerprint, or none>
 Allowed files (max N=<n>):
 - <path or glob -- the failure source, not everything the symptom touches>
 Symptom: <failing check or review claim being addressed>

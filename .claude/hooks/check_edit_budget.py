@@ -181,7 +181,22 @@ def _file_fingerprint(project_dir: str, path: str) -> str:
 
 
 def _receipt_set(value: object, project_dir: str) -> set[str]:
-    return _path_set(value, project_dir)
+    return set(_fingerprint_map(value, project_dir))
+
+
+def _valid_receipt_paths(baton: dict, project_dir: str) -> set[str]:
+    receipts = _fingerprint_map(baton.get("upstream_edit_receipts"), project_dir)
+    activation_dirty_paths = _path_set(baton.get("activation_dirty_paths"), project_dir)
+    activation_fingerprints = _fingerprint_map(baton.get("activation_dirty_fingerprints"), project_dir)
+    valid: set[str] = set()
+    for path, receipt_fingerprint in receipts.items():
+        current_fingerprint = _file_fingerprint(project_dir, path)
+        if current_fingerprint != receipt_fingerprint:
+            continue
+        if path in activation_dirty_paths and current_fingerprint == activation_fingerprints.get(path):
+            continue
+        valid.add(path)
+    return valid
 
 
 def _write_baton(path: str, baton: dict) -> None:
@@ -219,10 +234,21 @@ def _finalize_upstream_edit_receipts(
     }
     if not changed_targets:
         return
-    receipts = sorted(_receipt_set(baton.get("upstream_edit_receipts"), project_dir) | changed_targets)
+    activation_dirty_paths = _path_set(baton.get("activation_dirty_paths"), project_dir)
+    activation_fingerprints = _fingerprint_map(baton.get("activation_dirty_fingerprints"), project_dir)
+    receipts = _fingerprint_map(baton.get("upstream_edit_receipts"), project_dir)
+    for path in changed_targets:
+        current_fingerprint = _file_fingerprint(project_dir, path)
+        if path in activation_dirty_paths and current_fingerprint == activation_fingerprints.get(path):
+            receipts.pop(path, None)
+        else:
+            receipts[path] = current_fingerprint
     remaining_pending = {path: fingerprint for path, fingerprint in pending.items() if path not in changed_targets}
     updated = dict(baton)
-    updated["upstream_edit_receipts"] = receipts
+    if receipts:
+        updated["upstream_edit_receipts"] = dict(sorted(receipts.items()))
+    else:
+        updated.pop("upstream_edit_receipts", None)
     if remaining_pending:
         updated["pending_upstream_edits"] = dict(sorted(remaining_pending.items()))
     else:
@@ -299,7 +325,7 @@ def _changed_paths(project_dir: str, base_ref: str | None) -> set[str]:
 def _upstream_source_is_changed(project_dir: str, baton: dict, upstream_files: set[str]) -> bool:
     activation_head = str(baton.get("activation_head") or "").strip() or None
     activation_dirty_paths = _path_set(baton.get("activation_dirty_paths"), project_dir)
-    receipts = _receipt_set(baton.get("upstream_edit_receipts"), project_dir)
+    receipts = _valid_receipt_paths(baton, project_dir)
     current_pass_paths = _changed_paths(project_dir, activation_head).difference(activation_dirty_paths)
     current_pass_paths.update(receipts)
     return bool(current_pass_paths.intersection(upstream_files))

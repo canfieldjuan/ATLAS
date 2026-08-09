@@ -449,12 +449,45 @@ def test_upstream_root_allows_downstream_when_initially_dirty_source_changes_aga
     post_result = _run(CHECK_HOOK, _post_edit("scripts/parser.py"), tmp_path)
     assert _decision(post_result.stdout) is None
     state = json.loads((tmp_path / ".claude" / "fix-mode-state.json").read_text(encoding="utf-8"))
-    assert state["upstream_edit_receipts"] == ["scripts/parser.py"]
+    assert set(state["upstream_edit_receipts"]) == {"scripts/parser.py"}
+    assert state["upstream_edit_receipts"]["scripts/parser.py"] == _file_fingerprint(tmp_path, "scripts/parser.py")
     assert "pending_upstream_edits" not in state
 
     result = _run(CHECK_HOOK, _edit("templates/downstream.html"), tmp_path)
 
     assert _decision(result.stdout) is None
+
+
+def test_upstream_root_invalidates_receipt_when_source_reverts_to_activation_state(tmp_path):
+    _git_fixture(tmp_path)
+    parser = tmp_path / "scripts" / "parser.py"
+    activation_text = "def parse():\n    return 'pre baton dirty'\n"
+    parser.write_text(activation_text, encoding="utf-8")
+    activation_fingerprint = _file_fingerprint(tmp_path, "scripts/parser.py")
+    _write_baton(
+        tmp_path,
+        {
+            "active": True,
+            "allowed": ["scripts/*", "templates/*"],
+            **_root_trace(),
+            "activation_dirty_paths": ["scripts/parser.py"],
+            "activation_dirty_fingerprints": {"scripts/parser.py": activation_fingerprint},
+        },
+    )
+    assert _decision(_run(CHECK_HOOK, _edit("scripts/parser.py"), tmp_path).stdout) is None
+    parser.write_text("def parse():\n    return 'post baton dirty'\n", encoding="utf-8")
+    assert _decision(_run(CHECK_HOOK, _post_edit("scripts/parser.py"), tmp_path).stdout) is None
+    assert _decision(_run(CHECK_HOOK, _edit("templates/downstream.html"), tmp_path).stdout) is None
+
+    assert _decision(_run(CHECK_HOOK, _edit("scripts/parser.py"), tmp_path).stdout) is None
+    parser.write_text(activation_text, encoding="utf-8")
+    assert _decision(_run(CHECK_HOOK, _post_edit("scripts/parser.py"), tmp_path).stdout) is None
+    state = json.loads((tmp_path / ".claude" / "fix-mode-state.json").read_text(encoding="utf-8"))
+    assert "upstream_edit_receipts" not in state
+
+    result = _run(CHECK_HOOK, _edit("templates/downstream.html"), tmp_path)
+
+    assert _decision(result.stdout) == "deny"
 
 
 def test_upstream_root_does_not_record_receipt_when_admitted_source_edit_does_not_change_file(tmp_path):
@@ -679,7 +712,9 @@ def test_inject_emits_upstream_edit_receipts_when_active(tmp_path):
             "active": True,
             "pr": "#42",
             "allowed": ["scripts/*"],
-            "upstream_edit_receipts": ["scripts/parser.py"],
+            "upstream_edit_receipts": {
+                "scripts/parser.py": "index:none|worktree:missing",
+            },
             **_root_trace(),
         },
     )
