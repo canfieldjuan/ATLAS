@@ -1,6 +1,6 @@
 # Plan archive index
 
-1518 archived plan doc(s). Merged plan docs are moved under `archive/` and listed below; once the archive sweep has run, the `plans/` root holds only in-flight slices.
+1519 archived plan doc(s). Merged plan docs are moved under `archive/` and listed below; once the archive sweep has run, the `plans/` root holds only in-flight slices.
 
 - [PR-ASR-Pip-Audit-Egg-Fragment](archive/PR-ASR-Pip-Audit-Egg-Fragment.md) - lane: security/workflow | phase: Production hardening
 - [PR-ASR-Requirements-Audit-Pin](archive/PR-ASR-Requirements-Audit-Pin.md) - lane: security/workflow | phase: Production hardening
@@ -1439,6 +1439,7 @@
 - [PR-Session-Lane-PreAdmission](archive/PR-Session-Lane-PreAdmission.md) - lane: dev-workflow/process-gate-enrollment | phase: Workflow/process
 - [PR-Session-Lane-Producer](archive/PR-Session-Lane-Producer.md) - lane: dev-workflow/process-gate-enrollment | phase: Workflow/process
 - [PR-Set-Valued-Closure](archive/PR-Set-Valued-Closure.md) - lane: dev-workflow/set-valued-closure | phase: Workflow/process
+- [PR-Skip-Delete-Push-Review](archive/PR-Skip-Delete-Push-Review.md) - lane: atlas-workflow/pr-enforcement | phase: Workflow/process
 - [PR-Spark-Routing-Light-Enforcement](archive/PR-Spark-Routing-Light-Enforcement.md) - lane: workflow/process | phase: Workflow/process
 - [PR-Spark-Subagent-Routing-Docs](archive/PR-Spark-Subagent-Routing-Docs.md) - lane: workflow/process | phase: Workflow/process
 - [PR-Stale-Base-Push-Guard](archive/PR-Stale-Base-Push-Guard.md) - lane: workflow/process | phase: Workflow/process
