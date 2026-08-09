@@ -98,6 +98,94 @@ def test_valid_fixed_in_preflight_requires_matching_plan_budget(tmp_path: Path) 
     ) == []
 
 
+def test_fixed_in_requires_source_trace_fields(tmp_path: Path) -> None:
+    aud = load_auditor()
+    _write_plan(tmp_path, max_files=1)
+    body = _body(
+        ai="- Parser guard -- fixed-in: scripts/parser.py",
+        predicate="contract",
+        disposition="fixed-in",
+        max_files=1,
+        include_trace=False,
+    )
+
+    errors = aud.audit_body(body, repo_root=tmp_path, changed_file_set={"scripts/parser.py"})
+
+    assert any("missing '- Source Trace: ...'" in error for error in errors)
+    assert any("missing '- Upstream Files: ...'" in error for error in errors)
+    assert any("missing '- Fix Strategy: ...'" in error for error in errors)
+
+
+def test_upstream_root_must_touch_declared_upstream_file(tmp_path: Path) -> None:
+    aud = load_auditor()
+    _write_plan(tmp_path, max_files=2)
+    body = _body(
+        ai="- Parser guard -- fixed-in: scripts/downstream.py",
+        predicate="contract",
+        disposition="fixed-in",
+        max_files=2,
+        allowed_files="scripts/downstream.py, tests/test_parser.py, scripts/parser.py",
+        upstream_files="scripts/parser.py",
+    )
+
+    errors = aud.audit_body(
+        body,
+        repo_root=tmp_path,
+        changed_file_set={"scripts/downstream.py", "tests/test_parser.py"},
+    )
+
+    assert any("fixed-in upstream-root must change at least one declared upstream file" in error for error in errors)
+
+
+def test_source_trace_must_show_chain_to_source(tmp_path: Path) -> None:
+    aud = load_auditor()
+    _write_plan(tmp_path, max_files=1)
+    body = _body(
+        ai="- Parser guard -- fixed-in: scripts/parser.py",
+        predicate="contract",
+        disposition="fixed-in",
+        max_files=1,
+        source_trace="Parser guard",
+    )
+
+    errors = aud.audit_body(body, repo_root=tmp_path, changed_file_set={"scripts/parser.py"})
+
+    assert any("source trace must name the chain from symptom -> upstream source" in error for error in errors)
+
+
+def test_symptom_only_strategy_requires_reason_and_followup(tmp_path: Path) -> None:
+    aud = load_auditor()
+    _write_plan(tmp_path, max_files=1)
+    body = _body(
+        ai="- Parser guard -- fixed-in: scripts/parser.py",
+        predicate="contract",
+        disposition="fixed-in",
+        max_files=1,
+        fix_strategy="symptom-only-deferred",
+    )
+
+    errors = aud.audit_body(body, repo_root=tmp_path, changed_file_set={"scripts/parser.py"})
+
+    assert any("symptom-only-deferred requires '- Symptom-Only Reason: ...'" in error for error in errors)
+    assert any("symptom-only-deferred requires '- Follow-Up: ...'" in error for error in errors)
+
+
+def test_symptom_only_strategy_passes_with_reason_and_followup(tmp_path: Path) -> None:
+    aud = load_auditor()
+    _write_plan(tmp_path, max_files=1)
+    body = _body(
+        ai="- Parser guard -- fixed-in: scripts/parser.py",
+        predicate="contract",
+        disposition="fixed-in",
+        max_files=1,
+        fix_strategy="symptom-only-deferred",
+        symptom_only_reason="true upstream parser is owned by another active lane",
+        follow_up="HARDENING.md ROOT-TRACE-1",
+    )
+
+    assert aud.audit_body(body, repo_root=tmp_path, changed_file_set={"scripts/parser.py"}) == []
+
+
 def test_waived_hardening_preflight_uses_not_blocking(tmp_path: Path) -> None:
     aud = load_auditor()
     _write_plan(tmp_path, max_files=1)
@@ -229,6 +317,9 @@ def test_internal_separators_do_not_truncate_distinct_roots(tmp_path: Path) -> N
             "",
             "## Fix-loop disposition preflight",
             "- Root decision: Cache",
+            "- Source trace: review claim -> cache parser branch -> cache source",
+            "- Upstream files: scripts/parser.py",
+            "- Fix strategy: upstream-root",
             "- Blocking predicate: contract",
             "- Disposition: fixed-in",
             "- Allowed files: scripts/parser.py",
@@ -256,6 +347,9 @@ def test_multiple_ai_roots_pass_with_multiple_preflight_records(tmp_path: Path) 
             "",
             "## Fix-loop disposition preflight",
             "- Root decision: Parser guard",
+            "- Source trace: review claim -> parser branch -> admission source",
+            "- Upstream files: scripts/parser.py",
+            "- Fix strategy: upstream-root",
             "- Blocking predicate: contract",
             "- Disposition: fixed-in",
             "- Allowed files: scripts/parser.py",
@@ -286,12 +380,18 @@ def test_per_root_allowed_files_are_validated_as_a_union(tmp_path: Path) -> None
             "",
             "## Fix-loop disposition preflight",
             "- Root decision: Parser guard",
+            "- Source trace: review claim -> parser branch -> admission source",
+            "- Upstream files: scripts/parser.py",
+            "- Fix strategy: upstream-root",
             "- Blocking predicate: contract",
             "- Disposition: fixed-in",
             "- Allowed files: scripts/parser.py",
             "- Max files: 2",
             "- Parked hardening: none",
             "- Root decision: Renderer guard",
+            "- Source trace: review claim -> renderer branch -> render source",
+            "- Upstream files: scripts/renderer.py",
+            "- Fix strategy: upstream-root",
             "- Blocking predicate: contract",
             "- Disposition: fixed-in",
             "- Allowed files: scripts/renderer.py",
@@ -320,6 +420,9 @@ def test_star_and_numbered_reconciliation_bullets_are_validated(tmp_path: Path) 
             "",
             "## Fix-loop disposition preflight",
             "- Root decision: Parser guard",
+            "- Source trace: review claim -> parser branch -> admission source",
+            "- Upstream files: scripts/parser.py",
+            "- Fix strategy: upstream-root",
             "- Blocking predicate: contract",
             "- Disposition: fixed-in",
             "- Allowed files: scripts/parser.py",
@@ -350,6 +453,9 @@ def test_inconsistent_preflight_budgets_fail(tmp_path: Path) -> None:
             "",
             "## Fix-loop disposition preflight",
             "- Root decision: Parser guard",
+            "- Source trace: review claim -> parser branch -> admission source",
+            "- Upstream files: scripts/parser.py",
+            "- Fix strategy: upstream-root",
             "- Blocking predicate: contract",
             "- Disposition: fixed-in",
             "- Allowed files: scripts/parser.py",
@@ -482,19 +588,47 @@ def _write_plan(root: Path, *, max_files: int) -> None:
     )
 
 
-def _body(*, ai: str, predicate: str, disposition: str, max_files: int, root: str = "Parser guard") -> str:
-    return "\n".join(
+def _body(
+    *,
+    ai: str,
+    predicate: str,
+    disposition: str,
+    max_files: int,
+    root: str = "Parser guard",
+    allowed_files: str = "scripts/parser.py, tests/test_parser.py",
+    include_trace: bool = True,
+    source_trace: str = "review claim -> parser branch -> admission source",
+    upstream_files: str = "scripts/parser.py",
+    fix_strategy: str = "upstream-root",
+    symptom_only_reason: str | None = None,
+    follow_up: str | None = None,
+) -> str:
+    lines = [
+        "Plan: plans/PR-Example.md",
+        "",
+        "## AI reconciliation",
+        ai,
+        "",
+        "## Fix-loop disposition preflight",
+        f"- Root decision: {root}",
+    ]
+    if include_trace:
+        lines.extend(
+            [
+                f"- Source trace: {source_trace}",
+                f"- Upstream files: {upstream_files}",
+                f"- Fix strategy: {fix_strategy}",
+            ]
+        )
+        if symptom_only_reason is not None:
+            lines.append(f"- Symptom-only reason: {symptom_only_reason}")
+        if follow_up is not None:
+            lines.append(f"- Follow-up: {follow_up}")
+    lines.extend(
         [
-            "Plan: plans/PR-Example.md",
-            "",
-            "## AI reconciliation",
-            ai,
-            "",
-            "## Fix-loop disposition preflight",
-            f"- Root decision: {root}",
             f"- Blocking predicate: {predicate}",
             f"- Disposition: {disposition}",
-            "- Allowed files: scripts/parser.py, tests/test_parser.py",
+            f"- Allowed files: {allowed_files}",
             f"- Max files: {max_files}",
             "- Parked hardening: none",
             "",
@@ -502,3 +636,4 @@ def _body(*, ai: str, predicate: str, disposition: str, max_files: int, root: st
             "- pending",
         ]
     )
+    return "\n".join(lines)

@@ -26,6 +26,11 @@ Write `.claude/fix-mode-state.json` with:
   "latest_commit": "<git rev-parse --short HEAD>",
   "allowed": ["scripts/*", "tests/test_x.py"],
   "max_files": 3,
+  "symptom": "<failing check or review claim being addressed>",
+  "root_cause": "<upstream defect, not the visible leaf symptom>",
+  "source_trace": "<symptom -> intermediate cause -> upstream source>",
+  "fix_strategy": "upstream-root",
+  "upstream_files": ["<repo-relative file(s) where the source is fixed>"],
   "failing_check": "<the red check / review thread>",
   "last_finding": "<the line that localized it>",
   "next_action": "<one sentence>",
@@ -37,6 +42,14 @@ Write `.claude/fix-mode-state.json` with:
 failure source only, not "everything the symptom touches." Also mirror these
 fields into the `## PR Fix Mode` block of `SESSION_STATE.local.md` (the human
 baton).
+
+Root trace is mandatory for any active constrained fix-mode baton. The hook
+denies normal edits until `symptom`, `root_cause`, `source_trace`,
+`fix_strategy`, and `upstream_files` are populated. Use
+`"fix_strategy": "upstream-root"` by default. If a temporary symptom-only change
+is truly unavoidable, use `"fix_strategy": "symptom-only-deferred"` and also
+populate `symptom_only_reason` plus `follow_up`; that admission must be mirrored
+in the PR body's `## Fix-loop disposition preflight`.
 
 ## Widen (root-cause decision)
 

@@ -37,6 +37,16 @@ def _write_baton(project_dir: Path, baton: dict) -> None:
     (state_dir / "fix-mode-state.json").write_text(json.dumps(baton), encoding="utf-8")
 
 
+def _root_trace() -> dict:
+    return {
+        "symptom": "Codex says parser.py accepts malformed x",
+        "root_cause": "parser admission grammar does not reject x before callers branch",
+        "source_trace": "review claim -> parser accepts x -> admission grammar lacks x rejection",
+        "fix_strategy": "upstream-root",
+        "upstream_files": ["scripts/parser.py"],
+    }
+
+
 def _edit(file_path: str) -> dict:
     return {"tool_name": "Edit", "tool_input": {"file_path": file_path}}
 
@@ -76,14 +86,14 @@ def test_active_empty_allowed_does_not_block(tmp_path):
 
 
 def test_edit_inside_allowed_is_allowed(tmp_path):
-    _write_baton(tmp_path, {"active": True, "allowed": ["scripts/*"]})
+    _write_baton(tmp_path, {"active": True, "allowed": ["scripts/*"], **_root_trace()})
     result = _run(CHECK_HOOK, _edit("scripts/audit_x.py"), tmp_path)
     assert result.returncode == 0
     assert _decision(result.stdout) is None
 
 
 def test_edit_outside_allowed_is_denied(tmp_path):
-    _write_baton(tmp_path, {"active": True, "allowed": ["scripts/*"]})
+    _write_baton(tmp_path, {"active": True, "allowed": ["scripts/*"], **_root_trace()})
     result = _run(CHECK_HOOK, _edit("tests/foo.py"), tmp_path)
     assert result.returncode == 0
     assert _decision(result.stdout) == "deny"
@@ -91,7 +101,7 @@ def test_edit_outside_allowed_is_denied(tmp_path):
 
 
 def test_multiedit_any_outside_target_is_denied(tmp_path):
-    _write_baton(tmp_path, {"active": True, "allowed": ["scripts/*"]})
+    _write_baton(tmp_path, {"active": True, "allowed": ["scripts/*"], **_root_trace()})
     payload = {
         "tool_name": "MultiEdit",
         "tool_input": {
@@ -106,7 +116,7 @@ def test_multiedit_any_outside_target_is_denied(tmp_path):
 
 
 def test_absolute_path_is_relativized_before_match(tmp_path):
-    _write_baton(tmp_path, {"active": True, "allowed": ["scripts/*"]})
+    _write_baton(tmp_path, {"active": True, "allowed": ["scripts/*"], **_root_trace()})
     abs_target = str(tmp_path / "scripts" / "audit_x.py")
     result = _run(CHECK_HOOK, _edit(abs_target), tmp_path)
     assert _decision(result.stdout) is None
@@ -115,7 +125,7 @@ def test_absolute_path_is_relativized_before_match(tmp_path):
 def test_traversal_path_cannot_bypass_allowed_set(tmp_path):
     # `scripts/../tests/foo.py` matches `scripts/*` by raw fnmatch but resolves
     # to `tests/foo.py`; normalization must catch the escape and deny it.
-    _write_baton(tmp_path, {"active": True, "allowed": ["scripts/*"]})
+    _write_baton(tmp_path, {"active": True, "allowed": ["scripts/*"], **_root_trace()})
     result = _run(CHECK_HOOK, _edit("scripts/../tests/foo.py"), tmp_path)
     assert _decision(result.stdout) == "deny"
 
@@ -135,16 +145,58 @@ def test_session_state_file_is_always_editable(tmp_path):
     assert _decision(result.stdout) is None
 
 
+def test_active_fix_mode_denies_edit_without_root_trace(tmp_path):
+    _write_baton(tmp_path, {"active": True, "allowed": ["scripts/*"]})
+    result = _run(CHECK_HOOK, _edit("scripts/parser.py"), tmp_path)
+
+    assert result.returncode == 0
+    assert _decision(result.stdout) == "deny"
+    assert "root-cause trace is incomplete" in result.stdout
+    assert "symptom, root_cause, source_trace" in result.stdout
+
+
+def test_symptom_only_strategy_requires_reason_and_followup(tmp_path):
+    baton = {
+        "active": True,
+        "allowed": ["scripts/*"],
+        **_root_trace(),
+        "fix_strategy": "symptom-only-deferred",
+    }
+    _write_baton(tmp_path, baton)
+
+    result = _run(CHECK_HOOK, _edit("scripts/parser.py"), tmp_path)
+
+    assert _decision(result.stdout) == "deny"
+    assert "symptom-only-deferred requires symptom_only_reason, follow_up" in result.stdout
+
+
+def test_symptom_only_strategy_allows_with_reason_and_followup(tmp_path):
+    baton = {
+        "active": True,
+        "allowed": ["scripts/*"],
+        **_root_trace(),
+        "fix_strategy": "symptom-only-deferred",
+        "symptom_only_reason": "upstream shared parser is owned by another active lane",
+        "follow_up": "HARDENING.md ROOT-TRACE-1",
+    }
+    _write_baton(tmp_path, baton)
+
+    result = _run(CHECK_HOOK, _edit("scripts/parser.py"), tmp_path)
+
+    assert _decision(result.stdout) is None
+
+
 def test_inject_emits_context_when_active(tmp_path):
     _write_baton(
         tmp_path,
-        {"active": True, "pr": "#42", "allowed": ["scripts/*"], "next_action": "fix foo"},
+        {"active": True, "pr": "#42", "allowed": ["scripts/*"], "next_action": "fix foo", **_root_trace()},
     )
     result = _run(INJECT_HOOK, {"hook_event_name": "SessionStart", "source": "compact"}, tmp_path)
     assert result.returncode == 0
     ctx = json.loads(result.stdout)["hookSpecificOutput"]["additionalContext"]
     assert "PR Fix Mode is ACTIVE" in ctx
     assert "#42" in ctx
+    assert "Source trace" in ctx
 
 
 def test_inject_silent_when_no_baton(tmp_path):

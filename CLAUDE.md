@@ -1474,6 +1474,12 @@ Compose files for sub-services:
   is correct** -- the root near a symptom is often a consequence of something
   coded wrong further up; if you stop short of the true upstream root, name it
   and the follow-up rather than patch downstream. See `AGENTS.md` §3k.
+- **Fix-mode root trace is enforced by hook**: when `.claude/fix-mode-state.json`
+  is active with an `allowed` set, the PreToolUse hook denies normal edits until
+  the baton names `symptom`, `root_cause`, `source_trace`, `fix_strategy`, and
+  `upstream_files`. Use `upstream-root` unless you explicitly declare
+  `symptom-only-deferred` with `symptom_only_reason` and `follow_up`; mirror the
+  same source trace in the PR body's `## Fix-loop disposition preflight`.
 - **Guard-class closure before another patch**: when the fix touches a guard /
   validator / sanitizer / classifier / gate / denylist / parser-admission rule,
   `python scripts/check_guard_class_closure.py --base origin/main --strict` is

@@ -20,6 +20,9 @@ import json
 import os
 import sys
 
+_REQUIRED_ROOT_TRACE_FIELDS = ("symptom", "root_cause", "source_trace", "fix_strategy", "upstream_files")
+_FIX_STRATEGIES = {"upstream-root", "symptom-only-deferred"}
+
 
 def _project_dir() -> str:
     return os.environ.get("CLAUDE_PROJECT_DIR") or os.getcwd()
@@ -74,6 +77,44 @@ def _deny(reason: str) -> None:
     )
 
 
+def _has_text(value: object) -> bool:
+    return isinstance(value, str) and value.strip().lower() not in {"", "none", "n/a", "na", "tbd"}
+
+
+def _has_string_list(value: object) -> bool:
+    return isinstance(value, list) and any(_has_text(item) for item in value)
+
+
+def _root_trace_errors(baton: dict) -> list[str]:
+    missing: list[str] = []
+    for field in _REQUIRED_ROOT_TRACE_FIELDS:
+        value = baton.get(field)
+        if field == "upstream_files":
+            if not _has_string_list(value):
+                missing.append(field)
+        elif not _has_text(value):
+            missing.append(field)
+    if missing:
+        return ["missing " + ", ".join(missing)]
+
+    strategy = str(baton.get("fix_strategy", "")).strip().lower()
+    if strategy not in _FIX_STRATEGIES:
+        return [
+            "fix_strategy must be one of "
+            + ", ".join(sorted(_FIX_STRATEGIES))
+            + f", got {strategy!r}"
+        ]
+    if strategy == "symptom-only-deferred":
+        symptom_missing = [
+            field
+            for field in ("symptom_only_reason", "follow_up")
+            if not _has_text(baton.get(field))
+        ]
+        if symptom_missing:
+            return ["symptom-only-deferred requires " + ", ".join(symptom_missing)]
+    return []
+
+
 def main() -> int:
     try:
         payload = json.load(sys.stdin)
@@ -99,10 +140,28 @@ def main() -> int:
         if not isinstance(tool_input, dict):
             return 0
 
-        for target in _targets(tool_input):
+        targets = _targets(tool_input)
+        normal_targets = []
+        for target in targets:
             rel = _relativize(target, project_dir)
             if rel in _ALWAYS_ALLOWED:
                 continue  # control files stay editable so /fix-mode off + widen work
+            normal_targets.append(rel)
+        if not normal_targets:
+            return 0
+
+        trace_errors = _root_trace_errors(baton)
+        if trace_errors:
+            _deny(
+                "fix-mode root-cause trace is incomplete ("
+                + "; ".join(trace_errors)
+                + "). Fill symptom, root_cause, source_trace, fix_strategy, "
+                "and upstream_files before editing; symptom-only-deferred also "
+                "requires symptom_only_reason and follow_up (AGENTS.md 3k)."
+            )
+            return 0
+
+        for rel in normal_targets:
             if not any(fnmatch.fnmatch(rel, str(pat)) for pat in allowed):
                 _deny(
                     f"{rel} is outside the fix-mode allowed set "
