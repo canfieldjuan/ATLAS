@@ -293,6 +293,11 @@ Tests inject a fake notifier to assert call/no-call without HTTP, and patch
   `leads_ntfy_url`) but does not fix the settings-endpoint auth itself — filed as
   a follow-up issue so the broader alert channels get the same protection.
 
+- The topic is the sole credential; code enforces a length/charset floor but
+  cannot verify cryptographic randomness. Authenticated ntfy access tokens
+  (so the topic is not the sole secret; also fixes the sibling alert channels)
+  are deferred to #2335.
+
 Parked hardening: none.
 
 ## Verification
