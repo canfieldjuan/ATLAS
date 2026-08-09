@@ -287,9 +287,19 @@ Parked hardening: none.
 
 ## Verification
 
-- `python -m pytest tests/test_ack_variant_classification.py -q` — **32 passed**
+Counts below are from re-runs at head `c9f58a546`, i.e. after the generated
+property tests and the contract-oracle equality test were added. The earlier
+numbers in this section (32 / 82) described the original fixed-example suite and
+no longer matched the file.
+
+- `python -m pytest tests/test_ack_variant_classification.py -q` — **45 passed**
 - `python -m pytest tests/test_leads_intake.py tests/test_ack_variant_classification.py -q`
-  — **82 passed**
+  — **95 passed**
+- `python -m pytest tests/test_ack_variant_classification.py tests/test_leads_intake.py
+  tests/test_eom_sent_email_tenant_scope.py -q` — **95 passed, 1 skipped**. The skip
+  is `test_eom_sent_email_tenant_scope.py`, which needs a database and is skipped on
+  this box; it RUNS in the enrolled `eom-lead-pipeline` workflow, where it is green
+  at this head. A locally-skipped test is not treated here as a passing one.
 - Golden render: all eight service values rendered before and after are
   **byte-identical**, sha256
   `23199591b0e5ea13e999db364005c376e1c5c70fd69cf4f66106e8eb6667f7bc` on both
@@ -305,6 +315,13 @@ Parked hardening: none.
   touches.
 - `python -m py_compile` on the three changed runtime modules — OK.
 - `git diff --check` — clean.
+- Negative proof that the contract oracle actually bites, rather than only
+  passing on good input: injecting an unintended member
+  (`"office-cleaning": ACK_VARIANT_RESIDENTIAL`) into `_ACK_VARIANT_BY_SERVICE`
+  makes the suite **fail** (1 failed), and reverting restores **45 passed**. A
+  member set whose test only proves the contracted values map correctly cannot
+  detect an added member, which is the case that would silently re-point a real
+  submission.
 
 ## Estimated diff size
 
@@ -313,8 +330,8 @@ Parked hardening: none.
 | `atlas_brain/api/leads.py` | 19 |
 | `atlas_brain/templates/email/__init__.py` | 10 |
 | `atlas_brain/templates/email/request_acknowledgement.py` | 42 |
-| `plans/PR-EOM-Ack-Variant-Classify.md` | 320 |
+| `plans/PR-EOM-Ack-Variant-Classify.md` | 337 |
 | `tests/test_ack_variant_classification.py` | 305 |
 | `tests/test_eom_sent_email_tenant_scope.py` | 6 |
 | `tests/test_leads_intake.py` | 6 |
-| **Total** | **708** |
+| **Total** | **725** |
