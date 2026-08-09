@@ -66,6 +66,9 @@ TEST_FREE_SUFFIXES = {".md"}
 # deliberately small and auditable: unknown workflows, registries, and scripts
 # still escalate to FULL.
 EXPLICIT_TEST_OWNERS: dict[str, tuple[str, ...]] = {
+    "CLAUDE.md": (
+        "tests/test_claude_guard_class_contract.py",
+    ),
     ".github/workflows/branch_protection_required_checks.yml": (
         "tests/test_security_guardrails_workflow.py",
     ),
@@ -125,6 +128,11 @@ EXPLICIT_TEST_OWNERS: dict[str, tuple[str, ...]] = {
     ),
     "scripts/check_ai_reconciliation_live.py": (
         "tests/test_check_ai_reconciliation_live.py",
+    ),
+    "scripts/check_guard_class_closure.py": (
+        "tests/test_check_guard_class_closure.py",
+        "tests/test_local_pr_review.py",
+        "tests/test_select_impacted_tests.py",
     ),
     "scripts/check_required_status_checks.py": (
         "tests/test_security_guardrails_workflow.py",
