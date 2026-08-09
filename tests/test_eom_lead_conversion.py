@@ -828,6 +828,73 @@ def test_operator_contact_capability_is_derived_from_registered_route():
     assert "contact.operator_mutation" in funnel_mod.served_capabilities()
 
 
+# The exact bodies the time tracker sends when an office user creates a
+# Customer (eom-timetracker `_atlas_operator_contact_body`, slice 0C /
+# website #110). Pinned here because `extra="forbid"` makes any drift on
+# either side a silent production 422 that no single-repo test would catch:
+# the tracker's own tests prove what it SENDS, and only this proves Atlas
+# still ACCEPTS it.
+_TRACKER_CUSTOMER_CREATE_BODIES = [
+    pytest.param(
+        {
+            "full_name": "ZZ Tracker Customer",
+            "email": "tracker@example.test",
+            "phone": "217-555-0142",
+            "contact_type": "customer",
+            "source_channel": "time_tracker",
+            "source_ref": "6f5f1d2c-9a1e-4f27-9a3e-2f0b7c1d8e45",
+        },
+        id="all-identity-fields",
+    ),
+    pytest.param(
+        # A Customer with no phone or email on file. The tracker omits blank
+        # fields rather than sending nulls, because Atlas applies what it
+        # receives as operator intent and a null would CLEAR that value on a
+        # contact matched by another key.
+        {
+            "full_name": "ZZ Name Only Customer",
+            "contact_type": "customer",
+            "source_channel": "time_tracker",
+            "source_ref": "0f0e0d0c-0b0a-4909-8807-060504030201",
+        },
+        id="name-only",
+    ),
+]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("body", _TRACKER_CUSTOMER_CREATE_BODIES)
+async def test_operator_contact_accepts_the_tracker_customer_create_body(body):
+    crm = _CRM()
+    app = _app(crm, _enabled_config())
+    operation_key = f"office-contact-{uuid4().hex}"
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=app), base_url="http://test"
+    ) as client:
+        response = await client.post(
+            "/eom-funnel/operator-contacts",
+            headers=_headers(approval_key=operation_key),
+            json=body,
+        )
+
+    assert response.status_code == 201, response.text
+    assert response.json()["success"] is True
+    # The tracker reads `contactId` off this response and stores it as
+    # `customers.atlas_contact_id`; without it there is no canonical link.
+    assert response.json()["contactId"]
+
+    command = crm.operator_contact_calls[0]
+    assert command.source_channel == "time_tracker"
+    assert command.contact_type == "customer"
+    assert command.contact_source_ref == f"time_tracker:{body['source_ref']}"
+    # Only the fields the tracker actually sent become operator intent.
+    assert set(command.fields) == {
+        key
+        for key in ("full_name", "email", "phone")
+        if key in body
+    }
+
+
 @pytest.mark.asyncio
 async def test_private_lead_review_returns_only_the_closed_projection():
     first_contact_id = uuid4()

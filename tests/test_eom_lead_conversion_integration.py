@@ -450,6 +450,13 @@ async def test_operator_contact_mutation_updates_exact_match_and_claims_legacy()
         metadata = _metadata_dict(event["metadata"])
         assert metadata["field_names"] == ["email", "notes", "phone"]
         assert metadata["changed_fields"] == ["email", "phone"]
+        # What was overwritten, not merely which fields moved. There is no
+        # contact history table, so the event is the only place the prior value
+        # survives the UPDATE.
+        assert metadata["previous_values"] == {
+            "email": None,
+            "phone": "1 (217) 555-0100",
+        }
         assert metadata["source_ref"] == "customer:44"
 
         source_ref_only = EOMOperatorContactMutation.from_raw(
@@ -5810,4 +5817,62 @@ async def test_legacy_disposition_replay_rejects_held_out_transition_shapes():
             await assert_reopen_replay_rejected(**replay_shape)
     finally:
         await conn.execute(f'DROP SCHEMA IF EXISTS "{schema}" CASCADE')
+        await conn.close()
+
+
+@pytest.mark.asyncio
+async def test_operator_contact_records_the_identity_it_overwrote_on_a_phone_match():
+    """An operator CREATE can silently rewrite an existing contact's identity.
+
+    Reproduces a live 2026-08-08 case: an office customer create carrying no
+    contact id matched a calendar_import contact on phone and overwrote its
+    full_name. The prior name could not be recovered from anything afterwards,
+    which is what this event has to prevent.
+    """
+    database_url = _database_url_or_skip()
+    schema = f"atlas_eom_operator_overwrite_{uuid.uuid4().hex}"
+    conn = await asyncpg.connect(database_url)
+    try:
+        await _prepare_schema(conn, schema, apply_privilege_migration=False)
+        provider = DatabaseCRMProvider(pool=conn)
+        contact_id = uuid.uuid4()
+        await conn.execute(
+            """
+            INSERT INTO contacts (
+                id, full_name, phone, business_context_id, contact_type,
+                status, source
+            ) VALUES (
+                $1, 'Cal Import Label', '217-555-0142', 'effingham_maids',
+                'customer', 'active', 'calendar_import'
+            )
+            """,
+            contact_id,
+        )
+
+        # No contact_id: a create that resolves to the existing row by phone.
+        command = EOMOperatorContactMutation.from_raw(
+            operation_key=f"operator-overwrite-{uuid.uuid4().hex}",
+            actor_id=1,
+            actor_name="Juan Canfield",
+            source_channel="time_tracker",
+            source_ref=str(uuid.uuid4()),
+            fields={"full_name": "Canonical Person", "phone": "217-555-0142"},
+        )
+        result = await mutate_eom_operator_contact(provider, command)
+
+        assert result["operation"] == "contact_updated"
+        assert result["contact_id"] == str(contact_id)
+
+        event = await conn.fetchrow(
+            """
+            SELECT metadata
+            FROM eom_lead_lifecycle_events
+            WHERE contact_id = $1 AND event_type = 'contact_updated'
+            """,
+            contact_id,
+        )
+        metadata = _metadata_dict(event["metadata"])
+        assert "full_name" in metadata["changed_fields"]
+        assert metadata["previous_values"]["full_name"] == "Cal Import Label"
+    finally:
         await conn.close()
