@@ -170,8 +170,8 @@ notifications off an adversarial burst that is already otherwise bounded.
   value is generated at deploy time and kept ONLY in the runtime `.env` (never
   committed; the topic string is the sole secret, so versioning it would leak
   lead PII to anyone with repo access).
-- Pinned destination: lead PII is sent to `leads_ntfy_url` (default
-  `https://ntfy.sh`), NOT to `ntfy_url`. `ntfy_url` is runtime-mutable via the
+- Pinned destination: lead PII is sent to `leads_ntfy_url` (default the public
+  ntfy.sh relay), NOT to `ntfy_url`. `ntfy_url` is runtime-mutable via the
   unauthenticated public `PATCH /api/v1/settings/notifications`
   (`_NOTIFY_ALERTS_FIELDS`), so routing lead PII through it would let an attacker
   redirect it. `leads_ntfy_url` is deliberately absent from that mutable set, so
@@ -271,7 +271,7 @@ Parked hardening: none.
 |---|---:|
 | `atlas_brain/api/leads.py` | 213 |
 | `atlas_brain/config.py` | 2 |
-| `plans/PR-EOM-Lead-Ntfy.md` | 275 |
+| `plans/PR-EOM-Lead-Ntfy.md` | 277 |
 | `tests/conftest.py` | 19 |
 | `tests/test_leads_intake.py` | 523 |
-| **Total** | **1032** |
+| **Total** | **1034** |
