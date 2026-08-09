@@ -79,6 +79,50 @@ if [ "${ATLAS_SKIP_LOCAL_PR_REVIEW:-}" = "1" ]; then
     exit 0
 fi
 
+if [ -t 0 ]; then
+    exec bash scripts/local_pr_review.sh
+fi
+
+delete_sha="0000000000000000000000000000000000000000"
+saw_ref_update=0
+saw_non_delete_ref_update=0
+
+is_object_name() {
+    [[ "$1" =~ ^[0-9a-fA-F]{40}$ ]]
+}
+
+is_remote_ref_name() {
+    [[ "$1" == refs/* ]] && git check-ref-format "$1" >/dev/null 2>&1
+}
+
+while IFS= read -r ref_update_line || [ -n "$ref_update_line" ]; do
+    if [ -z "$ref_update_line" ]; then
+        continue
+    fi
+    if [[ "$ref_update_line" =~ ^[[:space:]]+$ ]]; then
+        saw_ref_update=1
+        saw_non_delete_ref_update=1
+        continue
+    fi
+    read -r local_ref local_sha remote_ref remote_sha extra <<< "$ref_update_line"
+    saw_ref_update=1
+    if [ -z "${local_sha:-}" ] || [ -z "${remote_ref:-}" ] || [ -z "${remote_sha:-}" ] || [ -n "${extra:-}" ]; then
+        saw_non_delete_ref_update=1
+        continue
+    fi
+    if [ "${local_ref:-}" = "(delete)" ] && [ "${local_sha:-}" = "$delete_sha" ] &&
+        is_remote_ref_name "$remote_ref" && is_object_name "$remote_sha" &&
+        [ "$remote_sha" != "$delete_sha" ]; then
+        continue
+    fi
+    saw_non_delete_ref_update=1
+done
+
+if [ "$saw_ref_update" -eq 1 ] && [ "$saw_non_delete_ref_update" -eq 0 ]; then
+    echo "ATLAS local PR review hook skipped (delete-only push)."
+    exit 0
+fi
+
 exec bash scripts/local_pr_review.sh
 EOF
 
