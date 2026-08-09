@@ -337,6 +337,12 @@ async def test_operator_contact_mutation_creates_replays_and_records_actor():
             "full_name",
             "phone",
         ]
+        # A create overwrote nothing, so it must carry neither key. Asserted
+        # directly rather than left to the other assertions staying green: they
+        # would all still pass if a regression started attaching overwritten
+        # values to creates.
+        assert "previous_values" not in metadata
+        assert "changed_fields" not in metadata
 
         replay = await mutate_eom_operator_contact(provider, command)
 

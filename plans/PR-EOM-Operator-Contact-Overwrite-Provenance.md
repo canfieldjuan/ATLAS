@@ -59,9 +59,11 @@ Slice phase: Vertical slice
   3. The body eom-timetracker sends is accepted, in both the full-identity and
      name-only shapes — settled by
      `tests/test_eom_lead_conversion.py::test_operator_contact_accepts_the_tracker_customer_create_body`.
-  4. `contact_created` events are unchanged and carry no `previous_values` —
-     settled by the existing create assertions in
-     `tests/test_eom_lead_conversion_integration.py` remaining green.
+  4. `contact_created` events carry neither `previous_values` nor
+     `changed_fields` — settled by the direct absence assertions in
+     `tests/test_eom_lead_conversion_integration.py::test_operator_contact_mutation_creates_replays_and_records_actor`.
+     Asserted directly because the surrounding create assertions would all stay
+     green if a regression began attaching overwritten values to creates.
 - Reachability proof: `POST /api/v1/eom-funnel/operator-contacts` →
   `mutate_eom_operator_contact` → `mutate_eom_operator_contact_atomic` →
   `_write_lifecycle_event`. Observable effect: a row in
@@ -149,7 +151,7 @@ Parked hardening: none.
 | File | LOC |
 |---|---:|
 | `atlas_brain/services/crm_provider.py` | 15 |
-| `plans/PR-EOM-Operator-Contact-Overwrite-Provenance.md` | 154 |
+| `plans/PR-EOM-Operator-Contact-Overwrite-Provenance.md` | 155 |
 | `tests/test_eom_lead_conversion.py` | 67 |
-| `tests/test_eom_lead_conversion_integration.py` | 65 |
-| **Total** | **301** |
+| `tests/test_eom_lead_conversion_integration.py` | 71 |
+| **Total** | **308** |
