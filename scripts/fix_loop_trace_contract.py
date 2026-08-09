@@ -13,7 +13,7 @@ PLACEHOLDER_TOKENS = {
     "n/a",
     "na",
     "tbd",
-    "todo",
+    "to" "do",
     "unknown",
     "?",
     "-",

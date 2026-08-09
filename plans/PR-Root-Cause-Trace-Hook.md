@@ -43,7 +43,7 @@ Slice phase: Workflow/process
 2. Enforce the same source-trace fields in PR-body fix-loop dispositions and
    cover upstream-root, downstream-only, and symptom-only-deferred cases with
    synthetic tests.
-Max files: 11
+Max files: 12
 
 ### Review Contract
 
@@ -157,6 +157,7 @@ fallback changes; otherwise write "N/A - no guard/config boundary change."
 - `scripts/audit_fix_loop_disposition.py`
 - `scripts/fix_loop_trace_contract.py`
 - `tests/test_audit_fix_loop_disposition.py`
+- `tests/test_fix_loop_trace_contract.py`
 - `tests/test_fix_mode_hook.py`
 
 ## Mechanism
@@ -197,12 +198,10 @@ Parked hardening: none.
 
 ## Verification
 
-- `python -m pytest tests/test_fix_mode_hook.py tests/test_audit_fix_loop_disposition.py -q`
-  -- 61 passed.
-- `ATLAS_SESSION_STATE_FILE=SESSION_STATE.codex-root-cause-trace.local.md bash scripts/local_pr_review.sh --current-pr-body-file tmp/pr-root-cause-trace-hook-body.md`
-  -- passed. Local unit gate escalated to FULL because `.claude/hooks/check_edit_budget.py`
-  is not mapped by the selector; result was 160 baseline failing/errored nodes,
-  `regressions=0`, `newly-passing=0`.
+- `python -m pytest tests/test_fix_loop_trace_contract.py tests/test_fix_mode_hook.py tests/test_audit_fix_loop_disposition.py -q`
+  -- 70 passed.
+- `python scripts/maturity_sweep.py scripts --tests-root tests --baseline tests/maturity_sweep/baseline_scripts.json --min-score 8 --sensitive-glob 'scripts/**'`
+  -- passed; no new brittleness above baseline.
 
 ## Estimated diff size
 
@@ -218,5 +217,6 @@ Parked hardening: none.
 | `scripts/audit_fix_loop_disposition.py` | 65 |
 | `scripts/fix_loop_trace_contract.py` | 81 |
 | `tests/test_audit_fix_loop_disposition.py` | 307 |
+| `tests/test_fix_loop_trace_contract.py` | 60 |
 | `tests/test_fix_mode_hook.py` | 283 |
-| **Total** | **1154** |
+| **Total** | **1214** |
