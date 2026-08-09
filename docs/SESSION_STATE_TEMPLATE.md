@@ -81,6 +81,8 @@ Activation dirty paths:
 - <repo-relative staged/working/untracked path present when armed, or none>
 Activation dirty fingerprints:
 - <path>: <index/worktree fingerprint captured when armed, or none>
+Pending upstream edits:
+- <repo-relative upstream path admitted by the pre-tool hook but not yet verified, or none>
 Upstream edit receipts:
 - <repo-relative upstream path admitted by the hook in this fix pass, or none>
 Allowed files (max N=<n>):

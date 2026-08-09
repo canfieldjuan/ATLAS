@@ -43,7 +43,7 @@ Slice phase: Workflow/process
 2. Enforce the same source-trace fields in PR-body fix-loop dispositions and
    cover upstream-root, downstream-only, and symptom-only-deferred cases with
    synthetic tests.
-Max files: 13
+Max files: 14
 
 ### Review Contract
 
@@ -54,6 +54,8 @@ Max files: 13
   - `.claude/hooks/check_edit_budget.py` allows an in-budget edit when the baton
     names the symptom, root cause, source trace, fix strategy, and upstream
     files.
+  - `.claude/settings.json` runs the same hook at `PostToolUse` so upstream edit
+    receipts are promoted only after the file fingerprint changes.
   - Symptom-only fix strategy remains possible only with an explicit rationale
     and follow-up pointer in the baton and PR-body preflight.
   - `scripts/audit_fix_loop_disposition.py` rejects `fixed-in` PR-body records
@@ -61,13 +63,15 @@ Max files: 13
     files do not touch the declared upstream source.
   - Existing no-findings, waiver, allowed-file, and max-file fix-loop behavior
     remains intact.
-- Reachability proof: Hook entrypoint is the real Claude `PreToolUse` command
-  from `.claude/settings.json`; tests invoke that hook payload directly. Local
-  review entrypoint is `scripts/local_pr_review.sh`, which already calls
-  `scripts/audit_fix_loop_disposition.py` when a PR body file is supplied.
+- Reachability proof: Hook entrypoints are the real Claude `PreToolUse` and
+  `PostToolUse` commands from `.claude/settings.json`; tests invoke those hook
+  payloads directly. Local review entrypoint is `scripts/local_pr_review.sh`,
+  which already calls `scripts/audit_fix_loop_disposition.py` when a PR body file
+  is supplied.
 - Affected surfaces: `.claude/hooks/check_edit_budget.py`,
-  `.claude/hooks/inject_fix_mode.py`, `.claude/skills/fix-mode/SKILL.md`,
-  `AGENTS.md`, `CLAUDE.md`, `docs/SESSION_STATE_TEMPLATE.md`,
+  `.claude/hooks/inject_fix_mode.py`, `.claude/settings.json`,
+  `.claude/skills/fix-mode/SKILL.md`, `AGENTS.md`, `CLAUDE.md`,
+  `docs/SESSION_STATE_TEMPLATE.md`,
   `scripts/audit_fix_loop_disposition.py`,
   `scripts/fix_loop_trace_contract.py`, and focused tests.
 - Risk areas: hook false positives that lock Claude out of fix mode, stale
@@ -86,21 +90,25 @@ seam in the enumeration; otherwise write "N/A - no boundary change."
 - Replaced-path behaviors: existing allowed-file admission remains, with a new
   prerequisite that an active constrained fix loop carry root-trace evidence.
 - Guard-relevant fields: `activation_head`, `activation_dirty_paths`,
-  `activation_dirty_fingerprints`, `upstream_edit_receipts`, `symptom`,
-  `root_cause`, `source_trace`, `fix_strategy`, `upstream_files`,
-  `symptom_only_reason`, `follow_up`.
+  `activation_dirty_fingerprints`, `pending_upstream_edits`,
+  `upstream_edit_receipts`, `symptom`, `root_cause`, `source_trace`,
+  `fix_strategy`, `upstream_files`, `symptom_only_reason`, `follow_up`.
 - Caller x input shape dispositions:
   - `PreToolUse` Edit with `tool_input.file_path`: preserved for allowed
     upstream source targets and support files; rejected for disallowed paths;
     changed for downstream symptom targets, which are rejected until an upstream
     source edit exists after `activation_head`, is outside the
-    `activation_dirty_paths` baseline, or has an upstream edit receipt recorded
-    by a prior upstream-only hook admission.
+    `activation_dirty_paths` baseline, or has an upstream edit receipt promoted
+    by a successful post-tool fingerprint change.
   - `PreToolUse` Write with `tool_input.file_path`: same admission rule as
     Edit; changed so a newly-created untracked declared upstream source counts
     as current-pass source work before downstream edits only when it was absent
-    from `activation_dirty_paths` or has an upstream edit receipt recorded by a
-    prior upstream-only hook admission.
+    from `activation_dirty_paths` or has an upstream edit receipt promoted by a
+    successful post-tool fingerprint change.
+  - `PostToolUse` Edit/Write/MultiEdit with upstream-only targets: changed to
+    promote a pending upstream edit to `upstream_edit_receipts` only when the
+    target fingerprint differs from the pre-tool pending fingerprint; preserved
+    fail-open behavior and no denial output.
   - `PreToolUse` MultiEdit with `tool_input.edits[].file_path`: preserved
     fail-closed behavior where any outside-target edit denies the tool call;
     changed so downstream targets in the batch still require activation-baseline
@@ -129,9 +137,10 @@ seam in the enumeration; otherwise write "N/A - no boundary change."
   decision. For `upstream-root`, an unlisted downstream target cannot stand in
   for the declared source; the hook requires the source target first or an
   upstream file changed after `activation_head` and outside
-  `activation_dirty_paths`, or an `upstream_edit_receipts` entry from a prior
-  upstream-only hook admission. The PR-body audit requires a changed upstream
-  file before certifying `fixed-in`.
+  `activation_dirty_paths`, or an `upstream_edit_receipts` entry promoted by
+  post-tool fingerprint verification. Pending edit attempts do not unlock
+  downstream targets. The PR-body audit requires a changed upstream file before
+  certifying `fixed-in`.
 - Support target set: CLOSED. Membership is the hook's explicit support paths
   and prefixes for tests, plans, Claude skill docs, and session-control docs.
   Unlisted allowed targets are treated as downstream symptom targets.
@@ -142,7 +151,8 @@ Required for guard, validator, resolver, admission-boundary, or env/config
 fallback changes; otherwise write "N/A - no guard/config boundary change."
 
 - Deployed/default config values: `.claude/settings.json` keeps the existing
-  `PreToolUse` and `SessionStart` hook commands.
+  `PreToolUse` and `SessionStart` hook commands and adds the same hook command
+  for `PostToolUse` receipt finalization.
 - Explicit value probe: test an active baton with complete root-trace fields.
 - Absent value probe: test an active constrained baton missing root-trace fields.
 - Default-session/default-context probe: existing no/inactive/malformed baton
@@ -155,6 +165,7 @@ fallback changes; otherwise write "N/A - no guard/config boundary change."
 
 - `.claude/hooks/check_edit_budget.py`
 - `.claude/hooks/inject_fix_mode.py`
+- `.claude/settings.json`
 - `.claude/skills/fix-mode/SKILL.md`
 - `AGENTS.md`
 - `CLAUDE.md`
@@ -171,13 +182,20 @@ fallback changes; otherwise write "N/A - no guard/config boundary change."
 
 The Claude fix-mode baton becomes the pre-edit root-cause hook. When active
 with an `allowed` set, the hook requires a root trace before permitting normal
-edits. The trace fields are deliberately small and machine-readable:
+edits. For initially dirty upstream files, the pre-tool hook records only a
+pending fingerprint, and the post-tool hook promotes that pending entry to a
+receipt only if the file fingerprint changes. The trace fields are deliberately
+small and machine-readable:
 
 - `symptom`: the failing check or review claim being addressed.
 - `root_cause`: the upstream defect, not the visible leaf symptom.
 - `source_trace`: the chain from symptom to source.
 - `fix_strategy`: `upstream-root` or `symptom-only-deferred`.
 - `upstream_files`: repo-relative files where the upstream source is fixed.
+- `pending_upstream_edits`: pre-tool fingerprint records that do not authorize
+  downstream edits.
+- `upstream_edit_receipts`: post-tool verified source edits that can authorize
+  downstream edits.
 - `symptom_only_reason` and `follow_up`: required only for
   `symptom-only-deferred`.
 
@@ -206,7 +224,7 @@ Parked hardening: none.
 ## Verification
 
 - `python -m pytest tests/test_fix_loop_trace_contract.py tests/test_fix_mode_hook.py tests/test_audit_fix_loop_disposition.py -q`
-  -- 89 passed.
+  -- 91 passed.
 - `python -m pytest tests/test_update_pr_body_wrapper.py::test_update_wrapper_does_not_run_full_local_review tests/test_update_pr_body_wrapper.py::test_update_wrapper_ownership_guard_failure_blocks_before_edit tests/test_update_pr_body_wrapper.py::test_update_wrapper_rejects_head_drift_before_edit tests/test_update_pr_body_wrapper.py::test_update_wrapper_runs_live_reconciliation_with_publish_body tests/test_update_pr_body_wrapper.py::test_update_wrapper_stamps_full_body_before_publish -q`
   -- 5 passed.
 - `python scripts/maturity_sweep.py scripts --tests-root tests --baseline tests/maturity_sweep/baseline_scripts.json --min-score 8 --sensitive-glob 'scripts/**'`
@@ -216,17 +234,18 @@ Parked hardening: none.
 
 | File | LOC |
 |---|---:|
-| `.claude/hooks/check_edit_budget.py` | 224 |
-| `.claude/hooks/inject_fix_mode.py` | 11 |
-| `.claude/skills/fix-mode/SKILL.md` | 32 |
+| `.claude/hooks/check_edit_budget.py` | 314 |
+| `.claude/hooks/inject_fix_mode.py` | 12 |
+| `.claude/settings.json` | 11 |
+| `.claude/skills/fix-mode/SKILL.md` | 35 |
 | `AGENTS.md` | 13 |
 | `CLAUDE.md` | 16 |
-| `docs/SESSION_STATE_TEMPLATE.md` | 15 |
-| `plans/PR-Root-Cause-Trace-Hook.md` | 232 |
+| `docs/SESSION_STATE_TEMPLATE.md` | 17 |
+| `plans/PR-Root-Cause-Trace-Hook.md` | 251 |
 | `scripts/audit_fix_loop_disposition.py` | 66 |
 | `scripts/fix_loop_trace_contract.py` | 84 |
 | `tests/test_audit_fix_loop_disposition.py` | 344 |
 | `tests/test_fix_loop_trace_contract.py` | 76 |
-| `tests/test_fix_mode_hook.py` | 520 |
+| `tests/test_fix_mode_hook.py` | 579 |
 | `tests/test_update_pr_body_wrapper.py` | 1 |
-| **Total** | **1634** |
+| **Total** | **1819** |
