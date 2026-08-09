@@ -41,8 +41,9 @@ divisible feature code — the narrowest viable slice is code + its full proof.
   configurable + off-by-default via a dedicated topic so it does not fire in
   tests or environments that have not opted in. Add a `leads_ntfy_topic` field
   to `AlertsConfig` (env `ATLAS_ALERTS_LEADS_NTFY_TOPIC`), a fire-and-forget
-  publisher reusing the existing `ntfy_enabled`/`ntfy_url` alerts config, an
-  injectable notifier hook in `_process_lead_intake`, and tests.
+  publisher gated on DEPLOY-ONLY `leads_ntfy_topic` + `leads_ntfy_url` (never the
+  settings-API-mutable `ntfy_enabled`/`ntfy_url`), an injectable notifier hook in
+  `_process_lead_intake`, and tests.
 - Must not change: No DB schema/migration; no change to the CRM write, the
   honeypot drop, the throttle, the same-day dedupe, the acknowledgement-email
   behavior, tenant/source stamping, or CORS. No new dependency (httpx is already
@@ -55,6 +56,7 @@ divisible feature code — the narrowest viable slice is code + its full proof.
 
 Ownership lane: eom-crm/lead-notify
 Slice phase: Vertical slice
+Max files: 5
 
 1. Add `AlertsConfig.leads_ntfy_topic` (default `""`) and a fire-and-forget
    `_publish_lead_ntfy` + `_default_lead_notifier`; call the notifier from
@@ -78,12 +80,13 @@ Slice phase: Vertical slice
     `::test_phone_only_lead_still_notifies`.
   - A notifier that raises does not fail the intake (still `success: True`) —
     settled by `::test_notifier_failure_never_fails_request`.
-  - The transport posts to `"{ntfy_url}/{leads_ntfy_topic}"` with
-    `Title`/`Priority: high`/`Tags: moneybag` ONLY when `ntfy_enabled` is true
-    AND a topic is set; it is skipped otherwise — settled by
+  - The transport posts to `"{leads_ntfy_url}/{leads_ntfy_topic}"` with
+    `Title`/`Priority: high`/`Tags: moneybag` ONLY when BOTH deploy-only
+    `leads_ntfy_topic` and `leads_ntfy_url` are set; it is skipped otherwise —
+    settled by
     `::test_publish_posts_to_configured_leads_topic`,
     `::test_publish_skipped_when_topic_unset`,
-    `::test_publish_skipped_when_ntfy_disabled`, and swallows transport errors
+    `::test_leads_delivery_independent_of_mutable_settings`, and swallows transport errors
     (`::test_publish_swallows_transport_error`).
   - `ATLAS_ALERTS_LEADS_NTFY_TOPIC` populates `AlertsConfig.leads_ntfy_topic` —
     settled by the `env_prefix="ATLAS_ALERTS_"` on `AlertsConfig` (config.py:807)
@@ -220,8 +223,8 @@ channels under the #2335 follow-up.)
 - Explicit value probe: topic set + enabled → posts to the topic
   (`::test_publish_posts_to_configured_leads_topic`).
 - Absent value probe: topic `""` → no HTTP client is even opened
-  (`::test_publish_skipped_when_topic_unset`); `ntfy_enabled=false` → skipped
-  (`::test_publish_skipped_when_ntfy_disabled`). The empty default keeps every
+  (`::test_publish_skipped_when_topic_unset`); an attacker-flipped `ntfy_enabled`
+  is ignored (`::test_leads_delivery_independent_of_mutable_settings`). The empty default keeps every
   other test in the module hermetic (no network).
 - Default-session/default-context probe: N/A (no per-session context; global
   alerts config).
@@ -248,9 +251,9 @@ swallows any error. The route wires the real notifier via `_notify_dependency`
 (`_default_lead_notifier`), which builds a title (`New lead: <name>`) and a
 scannable body (`<phone> · <email>` / `<service> · <frequency>` / `<address>`)
 and calls `_publish_lead_ntfy`. That publisher reads `settings.alerts`, returns
-immediately unless `ntfy_enabled` is true and a `leads_ntfy_topic` is set, and
-otherwise POSTs the body to `"{ntfy_url}/{topic}"` with `Title`,
-`Priority: high`, and `Tags: moneybag` headers over a 5s-timeout httpx client.
+immediately unless the DEPLOY-ONLY `leads_ntfy_topic` and `leads_ntfy_url` are
+both set, and otherwise POSTs the body to `"{leads_ntfy_url}/{topic}"` with
+`Title`, `Priority: high`, and `Tags: moneybag` headers over a 5s-timeout httpx client.
 Tests inject a fake notifier to assert call/no-call without HTTP, and patch
 `httpx.AsyncClient` to assert the transport shape.
 
@@ -262,9 +265,8 @@ Tests inject a fake notifier to assert call/no-call without HTTP, and patch
   healthcheck and paid-deflection topics (the topic string is the only secret).
   Because the topic IS the secret, it is generated at deploy time and kept only
   in the runtime `.env` — never in a versioned plan or commit. If the operator
-  later wants lead PII off the public relay, the `ntfy_url` can point at a
-  self-hosted ntfy without any code change (the localhost default already
-  exists). Noted for the operator, not blocked.
+  later wants lead PII off the public relay, the pinned `leads_ntfy_url` can point
+  at a self-hosted ntfy without any code change. Noted for the operator, not blocked.
 - Await (not background task), bounded by a TRUE 5s wall-clock deadline
   (`asyncio.wait_for`, since httpx's own Timeout is per-phase): the intake path
   is an ASGI middleware where a detached task risks cancellation on request end,
@@ -309,9 +311,9 @@ Parked hardening: none.
 
 | File | LOC |
 |---|---:|
-| `atlas_brain/api/leads.py` | 258 |
+| `atlas_brain/api/leads.py` | 262 |
 | `atlas_brain/config.py` | 2 |
-| `plans/PR-EOM-Lead-Ntfy.md` | 317 |
+| `plans/PR-EOM-Lead-Ntfy.md` | 319 |
 | `tests/conftest.py` | 19 |
-| `tests/test_leads_intake.py` | 606 |
-| **Total** | **1202** |
+| `tests/test_leads_intake.py` | 644 |
+| **Total** | **1246** |

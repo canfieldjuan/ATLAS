@@ -349,7 +349,11 @@ async def _publish_lead_ntfy(title: str, body: str) -> None:
         async def _post() -> int:
             async with httpx.AsyncClient(timeout=httpx.Timeout(5.0)) as client:
                 response = await client.post(
-                    url, content=body.encode("utf-8"), headers=headers
+                    # errors="replace" so a name carrying a lone surrogate (a valid
+                    # Python/JSON str that is NOT UTF-8 encodable) can never raise
+                    # UnicodeEncodeError and silently drop the push — it becomes a
+                    # replacement char instead. Closes the body-encoding class.
+                    url, content=body.encode("utf-8", errors="replace"), headers=headers
                 )
             return response.status_code
 

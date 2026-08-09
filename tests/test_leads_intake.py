@@ -1272,23 +1272,61 @@ def test_lead_push_title_is_header_safe_for_all_inputs():
     reopen the header finding."""
     from types import SimpleNamespace
     rng = Random(20260809)
-    # Full codepoint space minus the surrogate block (0xD800-0xDFFF), which is
-    # not constructible in a str anyway.
+    # Full codepoint space INCLUDING lone surrogates (0xD800-0xDFFF): a JSON
+    # "\ud800" decodes to a lone surrogate that Pydantic accepts on the name
+    # field, so the class must cover it too (Codex #2332 R1/R2/R13).
     ranges = ((0x00, 0x20), (0x20, 0x7F), (0x7F, 0xA0),
-              (0xA0, 0x100), (0x100, 0xD800), (0xE000, 0x110000))
+              (0xA0, 0x100), (0x100, 0xD800), (0xD800, 0xE000), (0xE000, 0x110000))
 
     def rand_char() -> str:
         lo, hi = rng.choice(ranges)
         return chr(rng.randrange(lo, hi))
 
-    for _ in range(500):
+    for _ in range(600):
         name = "".join(rand_char() for _ in range(rng.randint(0, 50)))
-        # Test the pure builder over the whole class (a superset of what the
-        # LeadIntakeRequest model admits), via a lightweight name holder.
-        title = _lead_push_title(SimpleNamespace(name=name))
-        title.encode("ascii")  # transport-safe: must never raise for ANY input
-        assert "\n" not in title and "\r" not in title  # single line: no header injection
+        # Test the pure builders over the whole class (a superset of what the
+        # LeadIntakeRequest model admits), via a lightweight holder.
+        holder = SimpleNamespace(name=name, service="", frequency="", address="")
+        title = _lead_push_title(holder)
+        title.encode("ascii")  # header must never raise for ANY input
+        assert "\n" not in title and "\r" not in title  # single line: no injection
         assert title == "New lead" or title.startswith("New lead: ")
+        # the body must ALWAYS be sendable under the production encoding policy,
+        # even for lone surrogates that plain utf-8 would reject
+        _lead_push_body(holder, "", "").encode("utf-8", errors="replace")
+
+
+def test_model_rejects_lone_surrogate_name():
+    """Primary defense (admission): a lone-surrogate name is rejected by the
+    request model, so it never reaches the notifier via the public route."""
+    import pydantic
+    with pytest.raises(pydantic.ValidationError):
+        _payload(name="Jane " + chr(0xD800))
+
+
+@pytest.mark.asyncio
+async def test_publish_lone_surrogate_name_still_delivers(monkeypatch):
+    """Defense-in-depth (encode): even if a lone surrogate reached the body (a
+    valid Python/JSON str that plain utf-8 cannot encode), the push must NOT
+    raise UnicodeEncodeError and get swallowed into a silent no-push — the body
+    encodes with errors='replace' and delivers. Uses a bypass holder because the
+    model rejects such a name at admission. Regresses Codex #2332 R1/R2/R13."""
+    from types import SimpleNamespace
+    from atlas_brain.config import settings
+    monkeypatch.setattr(settings.alerts, "leads_ntfy_topic", "eom-leads-abc")
+    monkeypatch.setattr(settings.alerts, "leads_ntfy_url", "https://pinned.example")
+    import httpx
+
+    _FakeNtfyClient.posted = []
+    monkeypatch.setattr(httpx, "AsyncClient", _FakeNtfyClient)
+
+    holder = SimpleNamespace(
+        name="Jane " + chr(0xD800), service="", frequency="", address="",
+    )
+    await _default_lead_notifier(holder, "jane@example.com", "2175550100")
+
+    assert len(_FakeNtfyClient.posted) == 1  # delivered, not swallowed
+    assert isinstance(_FakeNtfyClient.posted[0]["content"], (bytes, bytearray))
 
 
 @pytest.mark.asyncio
