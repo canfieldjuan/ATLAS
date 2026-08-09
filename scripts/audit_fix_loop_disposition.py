@@ -114,7 +114,44 @@ def structural_preflight_section(section: str) -> str:
 
 
 def _placeholder(value: str) -> bool:
-    return value.strip().lower() in {"", "none", "n/a", "na", "tbd"}
+    return value.strip().lower() in {"", "none", "n/a", "na", "tbd", "todo", "unknown", "?", "-", "--", "..."}
+
+
+def _source_trace_is_valid(value: str) -> bool:
+    parts = [part.strip() for part in value.split("->")]
+    if len(parts) < 2:
+        return False
+    return all(not _placeholder(part) and re.search(r"[A-Za-z0-9]", part) for part in parts)
+
+
+def trace_contract_errors(fields: dict[str, str]) -> tuple[list[str], str, set[str]]:
+    errors: list[str] = []
+    for field in ("source trace", "upstream files", "fix strategy"):
+        if field not in fields:
+            errors.append(f"fix-loop disposition preflight: missing '- {field.title()}: ...'")
+    source_trace = fields.get("source trace", "")
+    if source_trace and not _source_trace_is_valid(source_trace):
+        errors.append(
+            "fix-loop disposition preflight: source trace must name the chain "
+            "from symptom -> upstream source with non-placeholder endpoints"
+        )
+    upstream_files = parse_allowed_files(fields.get("upstream files", ""))
+    if "upstream files" in fields and not upstream_files:
+        errors.append("fix-loop disposition preflight: upstream files must contain repo-relative paths")
+    strategy = fields.get("fix strategy", "").lower()
+    if strategy and strategy not in FIX_STRATEGIES:
+        errors.append(
+            "fix-loop disposition preflight: invalid fix strategy "
+            f"{strategy!r}; use one of {', '.join(FIX_STRATEGIES)}"
+        )
+    if strategy == "symptom-only-deferred":
+        for field in ("symptom-only reason", "follow-up"):
+            if _placeholder(fields.get(field, "")):
+                errors.append(
+                    "fix-loop disposition preflight: symptom-only-deferred requires "
+                    f"'- {field.title()}: ...'"
+                )
+    return errors, strategy, upstream_files
 
 
 def disposition_errors(fields: dict[str, str], *, changed_file_set: set[str] | None) -> list[str]:
@@ -131,6 +168,8 @@ def disposition_errors(fields: dict[str, str], *, changed_file_set: set[str] | N
     for field in required:
         if field not in fields:
             errors.append(f"fix-loop disposition preflight: missing '- {field.title()}: ...'")
+    trace_errors, strategy, upstream_files = trace_contract_errors(fields)
+    errors.extend(trace_errors)
 
     disposition = fields.get("disposition", "").lower()
     if disposition and disposition not in DISPOSITIONS:
@@ -173,37 +212,12 @@ def disposition_errors(fields: dict[str, str], *, changed_file_set: set[str] | N
         errors.append("fix-loop disposition preflight: root decision must name the reviewed defect class")
 
     if disposition == "fixed-in":
-        for field in ("source trace", "upstream files", "fix strategy"):
-            if field not in fields:
-                errors.append(f"fix-loop disposition preflight: missing '- {field.title()}: ...'")
-        strategy = fields.get("fix strategy", "").lower()
-        if strategy and strategy not in FIX_STRATEGIES:
-            errors.append(
-                "fix-loop disposition preflight: invalid fix strategy "
-                f"{strategy!r}; use one of {', '.join(FIX_STRATEGIES)}"
-            )
-        source_trace = fields.get("source trace", "")
-        if source_trace and (_placeholder(source_trace) or "->" not in source_trace):
-            errors.append(
-                "fix-loop disposition preflight: source trace must name the chain "
-                "from symptom -> upstream source"
-            )
-        upstream_files = parse_allowed_files(fields.get("upstream files", ""))
-        if "upstream files" in fields and not upstream_files:
-            errors.append("fix-loop disposition preflight: upstream files must contain repo-relative paths")
         if strategy == "upstream-root" and changed_file_set is not None and upstream_files:
             if not changed_file_set.intersection(upstream_files):
                 errors.append(
                     "fix-loop disposition preflight: fixed-in upstream-root must change at least one "
                     "declared upstream file"
                 )
-        if strategy == "symptom-only-deferred":
-            for field in ("symptom-only reason", "follow-up"):
-                if _placeholder(fields.get(field, "")):
-                    errors.append(
-                        "fix-loop disposition preflight: symptom-only-deferred requires "
-                        f"'- {field.title()}: ...'"
-                    )
 
     parked = fields.get("parked hardening", "")
     if parked.lower() in {"", "tbd"}:

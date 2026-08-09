@@ -78,6 +78,14 @@ Branch: <branch>
 Latest commit: <sha at last push>
 Allowed files (max N=<n>):
 - <path or glob -- the failure source, not everything the symptom touches>
+Symptom: <failing check or review claim being addressed>
+Root cause: <upstream defect, not the visible leaf symptom>
+Source trace: <symptom -> intermediate cause -> upstream source>
+Fix strategy: upstream-root | symptom-only-deferred
+Upstream files:
+- <repo-relative file where the upstream source is fixed>
+Symptom-only reason: <required only for symptom-only-deferred>
+Follow-up: <required only for symptom-only-deferred>
 Current failing check / comment: <e.g. live-reconciliation: copilot :194,:226>
 Last useful log finding: <the single line that localized it>
 Next exact action: <one sentence>

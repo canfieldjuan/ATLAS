@@ -43,7 +43,7 @@ Slice phase: Workflow/process
 2. Enforce the same source-trace fields in PR-body fix-loop dispositions and
    cover upstream-root, downstream-only, and symptom-only-deferred cases with
    synthetic tests.
-Max files: 9
+Max files: 10
 
 ### Review Contract
 
@@ -67,7 +67,8 @@ Max files: 9
   `scripts/audit_fix_loop_disposition.py` when a PR body file is supplied.
 - Affected surfaces: `.claude/hooks/check_edit_budget.py`,
   `.claude/hooks/inject_fix_mode.py`, `.claude/skills/fix-mode/SKILL.md`,
-  `CLAUDE.md`, `scripts/audit_fix_loop_disposition.py`, and focused tests.
+  `AGENTS.md`, `CLAUDE.md`, `docs/SESSION_STATE_TEMPLATE.md`,
+  `scripts/audit_fix_loop_disposition.py`, and focused tests.
 - Risk areas: hook false positives that lock Claude out of fix mode, stale
   baton shape after compaction, PR-body audit rejecting valid waivers, and
   downstream-only fixed-in records slipping through.
@@ -87,6 +88,26 @@ seam in the enumeration; otherwise write "N/A - no boundary change."
   `fix_strategy`, `upstream_files`, `symptom_only_reason`, `follow_up`.
 - Caller x input shape: `PreToolUse` JSON payloads for Edit/Write/MultiEdit and
   Markdown PR-body fix-loop records.
+
+#### Closure Declaration
+
+- Required trace-field set: CLOSED. Membership is the literal
+  `_REQUIRED_ROOT_TRACE_FIELDS` tuple in `.claude/hooks/check_edit_budget.py`
+  and the `trace_contract_errors` field checks in
+  `scripts/audit_fix_loop_disposition.py`; unlisted fields may exist but cannot
+  satisfy the required root-trace gate.
+- Fix strategy set: CLOSED. Membership is `upstream-root` and
+  `symptom-only-deferred`, defined in both hook/audit strategy inventories.
+  Any unlisted strategy is rejected before edit or before PR-body publication.
+- Upstream file set: OPEN per fix loop. Membership comes from the
+  machine/human baton or PR-body `Upstream files:` record for that root
+  decision. For `upstream-root`, an unlisted downstream target cannot stand in
+  for the declared source; the hook requires the source target first or an
+  already-changed upstream file, and the PR-body audit requires a changed
+  upstream file before certifying `fixed-in`.
+- Support target set: CLOSED. Membership is the hook's explicit support paths
+  and prefixes for tests, plans, Claude skill docs, and session-control docs.
+  Unlisted allowed targets are treated as downstream symptom targets.
 
 ### Deployed-config probing
 
@@ -110,6 +131,7 @@ fallback changes; otherwise write "N/A - no guard/config boundary change."
 - `.claude/skills/fix-mode/SKILL.md`
 - `AGENTS.md`
 - `CLAUDE.md`
+- `docs/SESSION_STATE_TEMPLATE.md`
 - `plans/PR-Root-Cause-Trace-Hook.md`
 - `scripts/audit_fix_loop_disposition.py`
 - `tests/test_audit_fix_loop_disposition.py`
@@ -154,7 +176,7 @@ Parked hardening: none.
 ## Verification
 
 - `python -m pytest tests/test_fix_mode_hook.py tests/test_audit_fix_loop_disposition.py -q`
-  -- 45 passed.
+  -- 50 passed.
 - `ATLAS_SESSION_STATE_FILE=SESSION_STATE.codex-root-cause-trace.local.md bash scripts/local_pr_review.sh --current-pr-body-file tmp/pr-root-cause-trace-hook-body.md`
   -- passed. Local unit gate escalated to FULL because `.claude/hooks/check_edit_budget.py`
   is not mapped by the selector; result was 160 baseline failing/errored nodes,
@@ -164,13 +186,14 @@ Parked hardening: none.
 
 | File | LOC |
 |---|---:|
-| `.claude/hooks/check_edit_budget.py` | 61 |
+| `.claude/hooks/check_edit_budget.py` | 110 |
 | `.claude/hooks/inject_fix_mode.py` | 7 |
 | `.claude/skills/fix-mode/SKILL.md` | 13 |
 | `AGENTS.md` | 13 |
-| `CLAUDE.md` | 6 |
-| `plans/PR-Root-Cause-Trace-Hook.md` | 176 |
-| `scripts/audit_fix_loop_disposition.py` | 46 |
-| `tests/test_audit_fix_loop_disposition.py` | 155 |
-| `tests/test_fix_mode_hook.py` | 64 |
-| **Total** | **541** |
+| `CLAUDE.md` | 12 |
+| `docs/SESSION_STATE_TEMPLATE.md` | 8 |
+| `plans/PR-Root-Cause-Trace-Hook.md` | 199 |
+| `scripts/audit_fix_loop_disposition.py` | 60 |
+| `tests/test_audit_fix_loop_disposition.py` | 239 |
+| `tests/test_fix_mode_hook.py` | 118 |
+| **Total** | **779** |

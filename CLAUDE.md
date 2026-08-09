@@ -1500,8 +1500,10 @@ When compacting this conversation, preserve verbatim (do not summarize away):
 - The active operator-assigned lane and the **owned active PR** (number, branch,
   latest pushed SHA) from this session's state file.
 - The full **PR Fix Mode** baton when a fix loop is active: allowed-files set +
-  max-files budget, current failing check/comment, last useful log finding, next
-  exact action, and do-not-redo notes.
+  max-files budget, symptom, root cause, source trace, fix strategy, upstream
+  files, symptom-only reason/follow-up when applicable, current failing
+  check/comment, last useful log finding, next exact action, and do-not-redo
+  notes.
 - For an explicitly assigned long-running coding task, the full **PR watcher**
   baton: owned PR number, branch, latest head SHA, last observed check/review
   state, next 30-minute poll time, and whether autonomous merge/next-slice

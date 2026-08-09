@@ -87,7 +87,7 @@ def test_active_empty_allowed_does_not_block(tmp_path):
 
 def test_edit_inside_allowed_is_allowed(tmp_path):
     _write_baton(tmp_path, {"active": True, "allowed": ["scripts/*"], **_root_trace()})
-    result = _run(CHECK_HOOK, _edit("scripts/audit_x.py"), tmp_path)
+    result = _run(CHECK_HOOK, _edit("scripts/parser.py"), tmp_path)
     assert result.returncode == 0
     assert _decision(result.stdout) is None
 
@@ -117,7 +117,7 @@ def test_multiedit_any_outside_target_is_denied(tmp_path):
 
 def test_absolute_path_is_relativized_before_match(tmp_path):
     _write_baton(tmp_path, {"active": True, "allowed": ["scripts/*"], **_root_trace()})
-    abs_target = str(tmp_path / "scripts" / "audit_x.py")
+    abs_target = str(tmp_path / "scripts" / "parser.py")
     result = _run(CHECK_HOOK, _edit(abs_target), tmp_path)
     assert _decision(result.stdout) is None
 
@@ -184,6 +184,56 @@ def test_symptom_only_strategy_allows_with_reason_and_followup(tmp_path):
     result = _run(CHECK_HOOK, _edit("scripts/parser.py"), tmp_path)
 
     assert _decision(result.stdout) is None
+
+
+def test_upstream_root_denies_downstream_before_source_changed(tmp_path):
+    _write_baton(
+        tmp_path,
+        {
+            "active": True,
+            "allowed": ["scripts/*", "templates/*"],
+            **_root_trace(),
+        },
+    )
+
+    result = _run(CHECK_HOOK, _edit("templates/downstream.html"), tmp_path)
+
+    assert _decision(result.stdout) == "deny"
+    assert "requires editing the declared upstream source" in result.stdout
+
+
+def test_upstream_root_allows_downstream_after_source_changed(tmp_path):
+    _git_fixture(tmp_path)
+    parser = tmp_path / "scripts" / "parser.py"
+    parser.write_text("def parse():\n    return 'fixed'\n", encoding="utf-8")
+    _write_baton(
+        tmp_path,
+        {
+            "active": True,
+            "allowed": ["scripts/*", "templates/*"],
+            **_root_trace(),
+        },
+    )
+
+    result = _run(CHECK_HOOK, _edit("templates/downstream.html"), tmp_path)
+
+    assert _decision(result.stdout) is None
+
+
+def _git_fixture(path: Path) -> None:
+    (path / "scripts").mkdir()
+    (path / "templates").mkdir()
+    (path / "scripts" / "parser.py").write_text("def parse():\n    return 'old'\n", encoding="utf-8")
+    (path / "templates" / "downstream.html").write_text("old\n", encoding="utf-8")
+    subprocess.run(["git", "init", "-b", "main"], cwd=path, check=True, capture_output=True)
+    subprocess.run(["git", "add", "."], cwd=path, check=True, capture_output=True)
+    subprocess.run(
+        ["git", "-c", "user.email=test@example.com", "-c", "user.name=Test", "commit", "-m", "base"],
+        cwd=path,
+        check=True,
+        capture_output=True,
+    )
+    subprocess.run(["git", "update-ref", "refs/remotes/origin/main", "HEAD"], cwd=path, check=True)
 
 
 def test_inject_emits_context_when_active(tmp_path):

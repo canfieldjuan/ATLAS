@@ -18,10 +18,13 @@ from __future__ import annotations
 import fnmatch
 import json
 import os
+import subprocess
 import sys
 
 _REQUIRED_ROOT_TRACE_FIELDS = ("symptom", "root_cause", "source_trace", "fix_strategy", "upstream_files")
 _FIX_STRATEGIES = {"upstream-root", "symptom-only-deferred"}
+_SUPPORT_PATHS = {"AGENTS.md", "CLAUDE.md", "docs/SESSION_STATE_TEMPLATE.md"}
+_SUPPORT_PREFIXES = ("tests/", "plans/", ".claude/skills/")
 
 
 def _project_dir() -> str:
@@ -85,6 +88,12 @@ def _has_string_list(value: object) -> bool:
     return isinstance(value, list) and any(_has_text(item) for item in value)
 
 
+def _string_list(value: object) -> list[str]:
+    if not isinstance(value, list):
+        return []
+    return [str(item).strip() for item in value if _has_text(item)]
+
+
 def _root_trace_errors(baton: dict) -> list[str]:
     missing: list[str] = []
     for field in _REQUIRED_ROOT_TRACE_FIELDS:
@@ -113,6 +122,30 @@ def _root_trace_errors(baton: dict) -> list[str]:
         if symptom_missing:
             return ["symptom-only-deferred requires " + ", ".join(symptom_missing)]
     return []
+
+
+def _is_support_path(path: str) -> bool:
+    return path in _SUPPORT_PATHS or path.startswith(_SUPPORT_PREFIXES)
+
+
+def _changed_paths(project_dir: str, base_ref: str) -> set[str]:
+    changed: set[str] = set()
+    commands = (
+        ["git", "diff", "--name-only", f"{base_ref}...HEAD"],
+        ["git", "diff", "--name-only", "--cached"],
+        ["git", "diff", "--name-only"],
+    )
+    for command in commands:
+        proc = subprocess.run(command, cwd=project_dir, capture_output=True, text=True, check=False)
+        if proc.returncode != 0:
+            continue
+        changed.update(line.strip() for line in proc.stdout.splitlines() if line.strip())
+    return changed
+
+
+def _upstream_source_is_changed(project_dir: str, baton: dict, upstream_files: set[str]) -> bool:
+    base_ref = str(baton.get("base_ref") or "origin/main")
+    return bool(_changed_paths(project_dir, base_ref).intersection(upstream_files))
 
 
 def main() -> int:
@@ -168,6 +201,22 @@ def main() -> int:
                     f"({', '.join(str(p) for p in allowed)}). Widen the baton's "
                     "allowed list with the upstream reason (AGENTS.md 3k/3l) "
                     "before editing it."
+                )
+                return 0
+        strategy = str(baton.get("fix_strategy", "")).strip().lower()
+        upstream_files = set(_string_list(baton.get("upstream_files")))
+        if strategy == "upstream-root":
+            downstream_targets = [
+                rel
+                for rel in normal_targets
+                if rel not in upstream_files and not _is_support_path(rel)
+            ]
+            if downstream_targets and not _upstream_source_is_changed(project_dir, baton, upstream_files):
+                _deny(
+                    "fix-mode upstream-root requires editing the declared upstream "
+                    "source before downstream symptom targets. Edit one of "
+                    f"{', '.join(sorted(upstream_files))} first, or change the "
+                    "baton to symptom-only-deferred with reason and follow_up."
                 )
                 return 0
         return 0

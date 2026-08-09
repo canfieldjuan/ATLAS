@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import itertools
 import importlib.util
 from pathlib import Path
 
@@ -116,6 +117,25 @@ def test_fixed_in_requires_source_trace_fields(tmp_path: Path) -> None:
     assert any("missing '- Fix Strategy: ...'" in error for error in errors)
 
 
+def test_waiver_requires_source_trace_fields(tmp_path: Path) -> None:
+    aud = load_auditor()
+    _write_plan(tmp_path, max_files=1)
+    body = _body(
+        ai="- Logging polish -- waived-nit: skip-worthy",
+        root="Logging polish",
+        predicate="not-blocking",
+        disposition="waived-nit",
+        max_files=1,
+        include_trace=False,
+    )
+
+    errors = aud.audit_body(body, repo_root=tmp_path, changed_file_set={"scripts/parser.py"})
+
+    assert any("missing '- Source Trace: ...'" in error for error in errors)
+    assert any("missing '- Upstream Files: ...'" in error for error in errors)
+    assert any("missing '- Fix Strategy: ...'" in error for error in errors)
+
+
 def test_upstream_root_must_touch_declared_upstream_file(tmp_path: Path) -> None:
     aud = load_auditor()
     _write_plan(tmp_path, max_files=2)
@@ -151,6 +171,55 @@ def test_source_trace_must_show_chain_to_source(tmp_path: Path) -> None:
     errors = aud.audit_body(body, repo_root=tmp_path, changed_file_set={"scripts/parser.py"})
 
     assert any("source trace must name the chain from symptom -> upstream source" in error for error in errors)
+
+
+def test_source_trace_rejects_placeholder_chain_endpoints(tmp_path: Path) -> None:
+    aud = load_auditor()
+    _write_plan(tmp_path, max_files=1)
+    body = _body(
+        ai="- Parser guard -- fixed-in: scripts/parser.py",
+        predicate="contract",
+        disposition="fixed-in",
+        max_files=1,
+        source_trace="TBD -> TBD",
+    )
+
+    errors = aud.audit_body(body, repo_root=tmp_path, changed_file_set={"scripts/parser.py"})
+
+    assert any("non-placeholder endpoints" in error for error in errors)
+
+
+def test_audit_fix_loop_disposition_source_trace_endpoint_grammar() -> None:
+    aud = load_auditor()
+    trace_tokens_by_expected = {
+        "review claim": True,
+        "parser branch": True,
+        "admission source": True,
+        "TBD": False,
+        "unknown": False,
+        "...": False,
+    }
+    trace_containers = {
+        "bare": lambda value: value,
+        "padded": lambda value: f"  {value}  ",
+    }
+    trace_families = {
+        "symptom": 0,
+        "middle": 1,
+        "source": 2,
+    }
+
+    for token, container, family in itertools.product(
+        trace_tokens_by_expected,
+        trace_containers,
+        trace_families,
+    ):
+        endpoints = ["review claim", "parser branch", "admission source"]
+        endpoints[trace_families[family]] = trace_containers[container](token)
+        trace = " -> ".join(endpoints)
+        spec_derived_oracle = trace_tokens_by_expected[token]
+
+        assert aud._source_trace_is_valid(trace) is spec_derived_oracle
 
 
 def test_symptom_only_strategy_requires_reason_and_followup(tmp_path: Path) -> None:
@@ -356,6 +425,11 @@ def test_multiple_ai_roots_pass_with_multiple_preflight_records(tmp_path: Path) 
             "- Max files: 1",
             "- Parked hardening: none",
             "- Root decision: Logging polish",
+            "- Source trace: review claim -> non-blocking polish -> parked outside this slice",
+            "- Upstream files: HARDENING.md",
+            "- Fix strategy: symptom-only-deferred",
+            "- Symptom-only reason: skip-worthy nit is not blocking this workflow gate",
+            "- Follow-up: waived-nit in AI reconciliation",
             "- Blocking predicate: not-blocking",
             "- Disposition: waived-nit",
             "- Allowed files: scripts/parser.py",
@@ -429,6 +503,11 @@ def test_star_and_numbered_reconciliation_bullets_are_validated(tmp_path: Path) 
             "- Max files: 1",
             "- Parked hardening: none",
             "- Root decision: Logging polish",
+            "- Source trace: review claim -> non-blocking polish -> parked outside this slice",
+            "- Upstream files: HARDENING.md",
+            "- Fix strategy: symptom-only-deferred",
+            "- Symptom-only reason: skip-worthy nit is not blocking this workflow gate",
+            "- Follow-up: waived-nit in AI reconciliation",
             "- Blocking predicate: not-blocking",
             "- Disposition: waived-nit",
             "- Allowed files: scripts/parser.py",
@@ -462,6 +541,11 @@ def test_inconsistent_preflight_budgets_fail(tmp_path: Path) -> None:
             "- Max files: 1",
             "- Parked hardening: none",
             "- Root decision: Logging polish",
+            "- Source trace: review claim -> non-blocking polish -> parked outside this slice",
+            "- Upstream files: HARDENING.md",
+            "- Fix strategy: symptom-only-deferred",
+            "- Symptom-only reason: skip-worthy nit is not blocking this workflow gate",
+            "- Follow-up: waived-nit in AI reconciliation",
             "- Blocking predicate: not-blocking",
             "- Disposition: waived-nit",
             "- Allowed files: scripts/parser.py",
