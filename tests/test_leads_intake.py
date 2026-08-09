@@ -1296,21 +1296,15 @@ def test_lead_push_title_is_header_safe_for_all_inputs():
         _lead_push_body(holder, "", "").encode("utf-8", errors="replace")
 
 
-def test_model_rejects_lone_surrogate_name():
-    """Primary defense (admission): a lone-surrogate name is rejected by the
-    request model, so it never reaches the notifier via the public route."""
-    import pydantic
-    with pytest.raises(pydantic.ValidationError):
-        _payload(name="Jane " + chr(0xD800))
-
-
 @pytest.mark.asyncio
 async def test_publish_lone_surrogate_name_still_delivers(monkeypatch):
-    """Defense-in-depth (encode): even if a lone surrogate reached the body (a
-    valid Python/JSON str that plain utf-8 cannot encode), the push must NOT
-    raise UnicodeEncodeError and get swallowed into a silent no-push — the body
-    encodes with errors='replace' and delivers. Uses a bypass holder because the
-    model rejects such a name at admission. Regresses Codex #2332 R1/R2/R13."""
+    """The name field accepts any str (only `address` has a surrogate validator),
+    so a lone surrogate CAN reach the publisher. It is a valid Python/JSON str
+    that plain utf-8 cannot encode, so the push must NOT raise UnicodeEncodeError
+    and get swallowed into a silent no-push — the body encodes with
+    errors='replace' and delivers. Feeds the publisher via a bypass holder so the
+    proof is independent of any Pydantic-version-specific admission behavior.
+    Regresses Codex #2332 R1/R2/R13."""
     from types import SimpleNamespace
     from atlas_brain.config import settings
     monkeypatch.setattr(settings.alerts, "leads_ntfy_topic", "eom-leads-abc")
