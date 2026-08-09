@@ -29,7 +29,14 @@ from fix_loop_trace_contract import (
     source_trace_is_valid,
 )
 
-_REQUIRED_ROOT_TRACE_FIELDS = ("symptom", "root_cause", "source_trace", "fix_strategy", "upstream_files")
+_REQUIRED_ROOT_TRACE_FIELDS = (
+    "activation_head",
+    "symptom",
+    "root_cause",
+    "source_trace",
+    "fix_strategy",
+    "upstream_files",
+)
 _FIX_STRATEGIES = {"upstream-root", "symptom-only-deferred"}
 _SUPPORT_PATHS = {"AGENTS.md", "CLAUDE.md", "docs/SESSION_STATE_TEMPLATE.md"}
 _SUPPORT_PREFIXES = ("tests/", "plans/", ".claude/skills/")
@@ -99,6 +106,13 @@ def _string_list(value: object) -> list[str]:
     return [str(item).strip() for item in value if _has_text(item)]
 
 
+def _path_set(value: object, project_dir: str) -> set[str]:
+    return {
+        _relativize(path, project_dir)
+        for path in _string_list(value)
+    }
+
+
 def _root_trace_errors(baton: dict) -> list[str]:
     missing: list[str] = []
     for field in _REQUIRED_ROOT_TRACE_FIELDS:
@@ -110,6 +124,8 @@ def _root_trace_errors(baton: dict) -> list[str]:
             missing.append(field)
     if missing:
         return ["missing " + ", ".join(missing)]
+    if not isinstance(baton.get("activation_dirty_paths"), list):
+        return ["activation_dirty_paths must snapshot staged/working/untracked paths when fix mode is armed"]
     if not source_trace_is_valid(baton.get("source_trace")):
         return ["source_trace must name the chain from symptom -> upstream source with non-placeholder endpoints"]
 
@@ -154,7 +170,9 @@ def _changed_paths(project_dir: str, base_ref: str | None) -> set[str]:
 
 def _upstream_source_is_changed(project_dir: str, baton: dict, upstream_files: set[str]) -> bool:
     activation_head = str(baton.get("activation_head") or "").strip() or None
-    return bool(_changed_paths(project_dir, activation_head).intersection(upstream_files))
+    activation_dirty_paths = _path_set(baton.get("activation_dirty_paths"), project_dir)
+    current_pass_paths = _changed_paths(project_dir, activation_head).difference(activation_dirty_paths)
+    return bool(current_pass_paths.intersection(upstream_files))
 
 
 def main() -> int:
@@ -213,10 +231,7 @@ def main() -> int:
                 )
                 return 0
         strategy = str(baton.get("fix_strategy", "")).strip().lower()
-        upstream_files = {
-            _relativize(path, project_dir)
-            for path in _string_list(baton.get("upstream_files"))
-        }
+        upstream_files = _path_set(baton.get("upstream_files"), project_dir)
         if strategy == "upstream-root":
             downstream_targets = [
                 rel

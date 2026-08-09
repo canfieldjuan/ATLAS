@@ -40,6 +40,9 @@ def trace_endpoint_is_valid(value: object) -> bool:
     normalized = " ".join(endpoint.lower().strip("<>{}[]()").split())
     if normalized in PLACEHOLDER_TOKENS or normalized in TEMPLATE_ENDPOINTS:
         return False
+    tokens = re.findall(r"\w+", normalized)
+    if any(token in PLACEHOLDER_TOKENS for token in tokens):
+        return False
     if endpoint.startswith(("<", "{")) or endpoint.endswith((">", "}")):
         return False
     return any(ch.isalnum() for ch in endpoint)

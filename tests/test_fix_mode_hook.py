@@ -40,6 +40,8 @@ def _write_baton(project_dir: Path, baton: dict) -> None:
 
 def _root_trace() -> dict:
     return {
+        "activation_head": "HEAD",
+        "activation_dirty_paths": [],
         "symptom": "Codex says parser.py accepts malformed x",
         "root_cause": "parser admission grammar does not reject x before callers branch",
         "source_trace": "review claim -> parser accepts x -> admission grammar lacks x rejection",
@@ -171,6 +173,21 @@ def test_active_fix_mode_denies_placeholder_source_trace(tmp_path):
     assert "source_trace must name the chain" in result.stdout
 
 
+def test_active_fix_mode_denies_embedded_placeholder_source_trace(tmp_path):
+    baton = {
+        "active": True,
+        "allowed": ["scripts/*"],
+        **_root_trace(),
+        "source_trace": "TBD symptom -> TBD upstream source",
+    }
+    _write_baton(tmp_path, baton)
+
+    result = _run(CHECK_HOOK, _edit("scripts/parser.py"), tmp_path)
+
+    assert _decision(result.stdout) == "deny"
+    assert "source_trace must name the chain" in result.stdout
+
+
 def test_active_fix_mode_denies_decorated_template_source_trace(tmp_path):
     baton = {
         "active": True,
@@ -196,6 +213,8 @@ def test_check_edit_budget_source_trace_endpoint_grammar(tmp_path):
         "症状": True,
         "admission source": True,
         "TBD": False,
+        "TBD symptom": False,
+        "TBD upstream source": False,
         "unknown": False,
         "<symptom": False,
         "intermediate cause": False,
@@ -281,18 +300,38 @@ def test_upstream_root_denies_downstream_before_source_changed(tmp_path):
     assert "requires editing the declared upstream source" in result.stdout
 
 
-def test_upstream_root_allows_downstream_after_source_changed(tmp_path):
+def test_upstream_root_denies_downstream_when_worktree_source_predates_activation(tmp_path):
     _git_fixture(tmp_path)
     parser = tmp_path / "scripts" / "parser.py"
-    parser.write_text("def parse():\n    return 'fixed'\n", encoding="utf-8")
+    parser.write_text("def parse():\n    return 'pre baton dirty'\n", encoding="utf-8")
     _write_baton(
         tmp_path,
         {
             "active": True,
             "allowed": ["scripts/*", "templates/*"],
             **_root_trace(),
+            "activation_dirty_paths": ["scripts/parser.py"],
         },
     )
+
+    result = _run(CHECK_HOOK, _edit("templates/downstream.html"), tmp_path)
+
+    assert _decision(result.stdout) == "deny"
+
+
+def test_upstream_root_allows_downstream_after_worktree_source_changed_since_activation(tmp_path):
+    _git_fixture(tmp_path)
+    _write_baton(
+        tmp_path,
+        {
+            "active": True,
+            "allowed": ["scripts/*", "templates/*"],
+            **_root_trace(),
+            "activation_dirty_paths": [],
+        },
+    )
+    parser = tmp_path / "scripts" / "parser.py"
+    parser.write_text("def parse():\n    return 'post baton dirty'\n", encoding="utf-8")
 
     result = _run(CHECK_HOOK, _edit("templates/downstream.html"), tmp_path)
 
@@ -316,8 +355,9 @@ def test_upstream_root_denies_downstream_when_source_changed_before_activation(t
         {
             "active": True,
             "allowed": ["scripts/*", "templates/*"],
-            "activation_head": activation_head,
             **_root_trace(),
+            "activation_head": activation_head,
+            "activation_dirty_paths": [],
         },
     )
 
@@ -343,8 +383,9 @@ def test_upstream_root_allows_downstream_after_source_commit_since_activation(tm
         {
             "active": True,
             "allowed": ["scripts/*", "templates/*"],
-            "activation_head": activation_head,
             **_root_trace(),
+            "activation_head": activation_head,
+            "activation_dirty_paths": [],
         },
     )
 
@@ -369,16 +410,34 @@ def test_upstream_root_normalizes_declared_upstream_paths(tmp_path):
     assert _decision(result.stdout) is None
 
 
-def test_upstream_root_allows_downstream_after_untracked_source_created(tmp_path):
+def test_upstream_root_denies_downstream_when_untracked_source_predates_activation(tmp_path):
+    _git_fixture(tmp_path)
+    (tmp_path / "scripts" / "new_parser.py").write_text("def parse():\n    return 'old dirty'\n", encoding="utf-8")
+    baton = {
+        "active": True,
+        "allowed": ["scripts/*", "templates/*"],
+        **_root_trace(),
+        "upstream_files": ["scripts/new_parser.py"],
+        "activation_dirty_paths": ["scripts/new_parser.py"],
+    }
+    _write_baton(tmp_path, baton)
+
+    result = _run(CHECK_HOOK, _edit("templates/downstream.html"), tmp_path)
+
+    assert _decision(result.stdout) == "deny"
+
+
+def test_upstream_root_allows_downstream_after_untracked_source_created_since_activation(tmp_path):
     _git_fixture(tmp_path)
     baton = {
         "active": True,
         "allowed": ["scripts/*", "templates/*"],
         **_root_trace(),
         "upstream_files": ["scripts/new_parser.py"],
+        "activation_dirty_paths": [],
     }
-    (tmp_path / "scripts" / "new_parser.py").write_text("def parse():\n    return 'new'\n", encoding="utf-8")
     _write_baton(tmp_path, baton)
+    (tmp_path / "scripts" / "new_parser.py").write_text("def parse():\n    return 'new'\n", encoding="utf-8")
 
     result = _run(CHECK_HOOK, _edit("templates/downstream.html"), tmp_path)
 

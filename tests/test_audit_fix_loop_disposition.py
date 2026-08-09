@@ -227,6 +227,8 @@ def test_fix_loop_trace_contract_source_trace_endpoint_grammar() -> None:
         "症状": True,
         "admission source": True,
         "TBD": False,
+        "TBD symptom": False,
+        "TBD upstream source": False,
         "unknown": False,
         "<symptom": False,
         "intermediate cause": False,

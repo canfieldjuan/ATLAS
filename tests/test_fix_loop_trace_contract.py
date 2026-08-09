@@ -30,6 +30,7 @@ def test_source_trace_accepts_filled_endpoint_chain(trace: str) -> None:
     "trace",
     [
         "TBD -> TBD",
+        "TBD symptom -> TBD upstream source",
         "<symptom -> intermediate cause -> upstream source>",
         "review claim",
     ],

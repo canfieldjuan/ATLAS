@@ -25,6 +25,7 @@ Write `.claude/fix-mode-state.json` with:
   "branch": "<git rev-parse --abbrev-ref HEAD>",
   "latest_commit": "<git rev-parse --short HEAD>",
   "activation_head": "<git rev-parse HEAD when fix mode is armed>",
+  "activation_dirty_paths": ["<staged/working/untracked paths present when armed>"],
   "allowed": ["scripts/*", "tests/test_x.py"],
   "max_files": 3,
   "symptom": "<failing check or review claim being addressed>",
@@ -41,10 +42,12 @@ Write `.claude/fix-mode-state.json` with:
 
 `allowed` entries are `fnmatch` globs against repo-relative paths. Set them to the
 failure source only, not "everything the symptom touches." `activation_head`
-is the head SHA at the moment fix mode is armed; committed upstream-source
-changes count only after that baseline, while staged/working/untracked source
-edits still count as current-pass edits. Also mirror these fields into the
-`## PR Fix Mode` block of `SESSION_STATE.local.md` (the human baton).
+is the head SHA at the moment fix mode is armed. `activation_dirty_paths` is the
+repo-relative snapshot from `git diff --name-only --cached`, `git diff --name-only`,
+and `git ls-files --others --exclude-standard` at the same moment; those paths do
+not count as current-pass source edits until they change again after activation.
+Also mirror these fields into the `## PR Fix Mode` block of `SESSION_STATE.local.md`
+(the human baton).
 
 Root trace is mandatory for any active constrained fix-mode baton. The hook
 denies normal edits until `symptom`, `root_cause`, `source_trace`,

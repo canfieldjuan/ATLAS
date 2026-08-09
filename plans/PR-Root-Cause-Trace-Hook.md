@@ -85,17 +85,19 @@ seam in the enumeration; otherwise write "N/A - no boundary change."
   fix-loop audit.
 - Replaced-path behaviors: existing allowed-file admission remains, with a new
   prerequisite that an active constrained fix loop carry root-trace evidence.
-- Guard-relevant fields: `activation_head`, `symptom`, `root_cause`, `source_trace`,
-  `fix_strategy`, `upstream_files`, `symptom_only_reason`, `follow_up`.
+- Guard-relevant fields: `activation_head`, `activation_dirty_paths`,
+  `symptom`, `root_cause`, `source_trace`, `fix_strategy`, `upstream_files`,
+  `symptom_only_reason`, `follow_up`.
 - Caller x input shape dispositions:
   - `PreToolUse` Edit with `tool_input.file_path`: preserved for allowed
     upstream source targets and support files; rejected for disallowed paths;
     changed for downstream symptom targets, which are rejected until an upstream
-    source edit exists after `activation_head` or in staged/working/untracked
-    state.
+    source edit exists after `activation_head` and outside
+    `activation_dirty_paths`.
   - `PreToolUse` Write with `tool_input.file_path`: same admission rule as
     Edit; changed so a newly-created untracked declared upstream source counts
-    as current-pass source work before downstream edits.
+    as current-pass source work before downstream edits only when it was absent
+    from `activation_dirty_paths`.
   - `PreToolUse` MultiEdit with `tool_input.edits[].file_path`: preserved
     fail-closed behavior where any outside-target edit denies the tool call;
     changed so downstream targets in the batch still require activation-baseline
@@ -123,9 +125,9 @@ seam in the enumeration; otherwise write "N/A - no boundary change."
   machine/human baton or PR-body `Upstream files:` record for that root
   decision. For `upstream-root`, an unlisted downstream target cannot stand in
   for the declared source; the hook requires the source target first or an
-  upstream file changed after `activation_head` / staged / working / untracked,
-  and the PR-body audit requires a changed upstream file before certifying
-  `fixed-in`.
+  upstream file changed after `activation_head` and outside
+  `activation_dirty_paths`, and the PR-body audit requires a changed upstream
+  file before certifying `fixed-in`.
 - Support target set: CLOSED. Membership is the hook's explicit support paths
   and prefixes for tests, plans, Claude skill docs, and session-control docs.
   Unlisted allowed targets are treated as downstream symptom targets.
@@ -199,7 +201,7 @@ Parked hardening: none.
 ## Verification
 
 - `python -m pytest tests/test_fix_loop_trace_contract.py tests/test_fix_mode_hook.py tests/test_audit_fix_loop_disposition.py -q`
-  -- 70 passed.
+  -- 74 passed.
 - `python scripts/maturity_sweep.py scripts --tests-root tests --baseline tests/maturity_sweep/baseline_scripts.json --min-score 8 --sensitive-glob 'scripts/**'`
   -- passed; no new brittleness above baseline.
 
@@ -207,16 +209,16 @@ Parked hardening: none.
 
 | File | LOC |
 |---|---:|
-| `.claude/hooks/check_edit_budget.py` | 130 |
-| `.claude/hooks/inject_fix_mode.py` | 8 |
-| `.claude/skills/fix-mode/SKILL.md` | 22 |
+| `.claude/hooks/check_edit_budget.py` | 145 |
+| `.claude/hooks/inject_fix_mode.py` | 9 |
+| `.claude/skills/fix-mode/SKILL.md` | 25 |
 | `AGENTS.md` | 13 |
 | `CLAUDE.md` | 14 |
-| `docs/SESSION_STATE_TEMPLATE.md` | 9 |
-| `plans/PR-Root-Cause-Trace-Hook.md` | 222 |
+| `docs/SESSION_STATE_TEMPLATE.md` | 11 |
+| `plans/PR-Root-Cause-Trace-Hook.md` | 224 |
 | `scripts/audit_fix_loop_disposition.py` | 65 |
-| `scripts/fix_loop_trace_contract.py` | 81 |
-| `tests/test_audit_fix_loop_disposition.py` | 307 |
-| `tests/test_fix_loop_trace_contract.py` | 60 |
-| `tests/test_fix_mode_hook.py` | 283 |
-| **Total** | **1214** |
+| `scripts/fix_loop_trace_contract.py` | 84 |
+| `tests/test_audit_fix_loop_disposition.py` | 309 |
+| `tests/test_fix_loop_trace_contract.py` | 61 |
+| `tests/test_fix_mode_hook.py` | 342 |
+| **Total** | **1302** |

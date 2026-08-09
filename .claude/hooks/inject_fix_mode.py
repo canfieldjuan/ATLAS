@@ -25,6 +25,7 @@ def _summary(baton: dict) -> str:
         ("Branch", baton.get("branch")),
         ("Latest commit", baton.get("latest_commit")),
         ("Activation head", baton.get("activation_head")),
+        ("Activation dirty paths", baton.get("activation_dirty_paths")),
         ("Allowed files", baton.get("allowed")),
         ("Max files", baton.get("max_files")),
         ("Symptom", baton.get("symptom")),
