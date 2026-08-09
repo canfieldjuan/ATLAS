@@ -560,7 +560,10 @@ async def sync_one(
     return outcome, contact_id
 
 
-async def fetch_calendar_guard_keys(months_back: int = 1, months_forward: int = 4):
+async def fetch_calendar_guard_keys(
+    months_back: int = 1,
+    months_forward: int = live.DEFAULT_MONTHS_FORWARD,
+):
     """Owner rule (2026-07-23): the CALENDAR VETOES DEMOTION. Live booking
     events (recent past through upcoming) yield phone/email/address/name keys;
     any demotion candidate matching one is a CURRENT customer regardless of
