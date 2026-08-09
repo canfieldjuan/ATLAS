@@ -1304,6 +1304,11 @@ the **allowed-files set**, and a **max-files budget**.
 - **One judgment pass, no auto-loop.** Codex findings are gate inputs you
   disposition deliberately (resolve or waive with a reason); there is no
   "address every comment" reflex (§4c).
+- **Disposition before edit.** When a PR body records any non-`no-findings`
+  AI reconciliation item, add a `## Fix-loop disposition preflight` section
+  before the next push. It must name the root decision, blocking predicate,
+  fix/waive disposition, allowed files, `Max files: N`, and parked hardening
+  target. The plan's Scope must declare the same `Max files: N`.
 - **The baton is the compaction handoff.** Keep the current failing
   check/comment, the last useful log finding, the next exact action, and
   do-not-redo notes current, so a post-compaction resume continues instead of

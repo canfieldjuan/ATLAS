@@ -71,6 +71,12 @@ def test_pre_push_audit_workflow_enrolls_plan_admission_and_body_gate_tests() ->
     assert text.count("tests/test_pr_body_contract_workflow.py") == 2
 
 
+def test_pre_push_audit_workflow_enrolls_fix_loop_disposition_tests() -> None:
+    text = WORKFLOW.read_text(encoding="utf-8")
+
+    assert text.count("tests/test_audit_fix_loop_disposition.py") == 2
+
+
 def test_pre_push_audit_workflow_enrolls_session_drift_tests() -> None:
     text = WORKFLOW.read_text(encoding="utf-8")
 

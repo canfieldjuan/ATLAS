@@ -146,6 +146,30 @@ def test_local_pr_review_runs_pr_body_contract_when_body_supplied(tmp_path: Path
     assert "local PR review passed" in result.stdout
 
 
+def test_local_pr_review_runs_fix_loop_disposition_when_body_supplied(tmp_path: Path) -> None:
+    repo = tmp_path / "repo"
+    _write_fixture_repo(repo)
+    body = tmp_path / "body.md"
+    body.write_text("PR body\n", encoding="utf-8")
+    _write_executable(
+        repo / "scripts" / "audit_fix_loop_disposition.py",
+        "#!/usr/bin/env python3\n"
+        "import sys\n"
+        "print('fix-loop args=' + ' '.join(sys.argv[1:]))\n",
+    )
+    _git(repo, "add", "scripts/audit_fix_loop_disposition.py")
+    _git(repo, "commit", "-m", "add fix-loop disposition audit")
+
+    result = _run(repo, ["bash", "scripts/local_pr_review.sh", "--current-pr-body-file", str(body)])
+
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert "Fix-loop disposition preflight" in result.stdout
+    assert f"--current-pr-body-file {body}" in result.stdout
+    assert f"--repo-root {repo}" in result.stdout
+    assert "--base-ref origin/main" in result.stdout
+    assert "local PR review passed" in result.stdout
+
+
 def test_local_pr_review_forwards_pr_author_to_body_contract(tmp_path: Path) -> None:
     repo = tmp_path / "repo"
     _write_fixture_repo(repo)

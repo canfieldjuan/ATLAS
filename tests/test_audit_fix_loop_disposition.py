@@ -1,0 +1,504 @@
+from __future__ import annotations
+
+import importlib.util
+from pathlib import Path
+
+import pytest
+
+SCRIPT = Path(__file__).resolve().parents[1] / "scripts" / "audit_fix_loop_disposition.py"
+
+
+def load_auditor():
+    spec = importlib.util.spec_from_file_location("audit_fix_loop_disposition", SCRIPT)
+    assert spec is not None
+    assert spec.loader is not None
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+def test_no_findings_needs_no_fix_loop_preflight(tmp_path: Path) -> None:
+    aud = load_auditor()
+    body = "## AI reconciliation\n- no-findings\n"
+
+    assert aud.audit_body(body, repo_root=tmp_path) == []
+
+
+def test_fixed_in_reconciliation_requires_preflight(tmp_path: Path) -> None:
+    aud = load_auditor()
+    body = (
+        "Plan: plans/PR-Example.md\n"
+        "\n"
+        "## AI reconciliation\n"
+        "- Parser guard -- fixed-in: scripts/parser.py and tests/test_parser.py\n"
+    )
+
+    errors = aud.audit_body(body, repo_root=tmp_path)
+
+    assert any("preflight missing" in error for error in errors)
+
+
+@pytest.mark.parametrize("fence", ["```", "~~~"])
+def test_fenced_preflight_example_is_not_a_record(tmp_path: Path, fence: str) -> None:
+    aud = load_auditor()
+    _write_plan(tmp_path, max_files=1)
+    body = "\n".join(
+        [
+            "Plan: plans/PR-Example.md",
+            "",
+            "## AI reconciliation",
+            "- Parser guard -- fixed-in: scripts/parser.py",
+            "",
+            "## Fix-loop disposition preflight",
+            fence,
+            "- Root decision: Parser guard",
+            "- Blocking predicate: contract",
+            "- Disposition: fixed-in",
+            "- Allowed files: scripts/parser.py",
+            "- Max files: 1",
+            "- Parked hardening: none",
+            fence,
+        ]
+    )
+
+    errors = aud.audit_body(body, repo_root=tmp_path, changed_file_set={"scripts/parser.py"})
+
+    assert any("no root decision records found" in error for error in errors)
+    assert any("missing preflight record for AI reconciliation root 'parser guard'" in error for error in errors)
+
+
+def test_canonical_ai_reconciliation_heading_requires_preflight(tmp_path: Path) -> None:
+    aud = load_auditor()
+    body = (
+        "Plan: plans/PR-Example.md\n"
+        "\n"
+        "### AI reconciliation\n"
+        "* Parser guard -- fixed-in: scripts/parser.py\n"
+    )
+
+    errors = aud.audit_body(body, repo_root=tmp_path)
+
+    assert any("preflight missing" in error for error in errors)
+
+
+def test_valid_fixed_in_preflight_requires_matching_plan_budget(tmp_path: Path) -> None:
+    aud = load_auditor()
+    _write_plan(tmp_path, max_files=2)
+    body = _body(
+        ai="- Parser guard -- fixed-in: scripts/parser.py and tests/test_parser.py",
+        predicate="contract",
+        disposition="fixed-in",
+        max_files=2,
+    )
+
+    assert aud.audit_body(
+        body,
+        repo_root=tmp_path,
+        changed_file_set={"scripts/parser.py", "tests/test_parser.py"},
+    ) == []
+
+
+def test_waived_hardening_preflight_uses_not_blocking(tmp_path: Path) -> None:
+    aud = load_auditor()
+    _write_plan(tmp_path, max_files=1)
+    body = _body(
+        ai="- Logging polish -- waived-out-of-scope: parked in HARDENING.md",
+        root="Logging polish",
+        predicate="not-blocking",
+        disposition="waived-out-of-scope",
+        max_files=1,
+    )
+
+    assert aud.audit_body(
+        body,
+        repo_root=tmp_path,
+        changed_file_set={"scripts/parser.py"},
+    ) == []
+
+
+def test_fixed_in_cannot_claim_not_blocking(tmp_path: Path) -> None:
+    aud = load_auditor()
+    _write_plan(tmp_path, max_files=1)
+    body = _body(
+        ai="- Parser guard -- fixed-in: scripts/parser.py",
+        predicate="not-blocking",
+        disposition="fixed-in",
+        max_files=1,
+    )
+
+    errors = aud.audit_body(body, repo_root=tmp_path)
+
+    assert any("fixed-in findings need a blocking predicate" in error for error in errors)
+
+
+def test_waiver_cannot_claim_blocking_predicate(tmp_path: Path) -> None:
+    aud = load_auditor()
+    _write_plan(tmp_path, max_files=1)
+    body = _body(
+        ai="- Logging polish -- waived-nit: skip-worthy",
+        root="Logging polish",
+        predicate="contract",
+        disposition="waived-nit",
+        max_files=1,
+    )
+
+    errors = aud.audit_body(body, repo_root=tmp_path)
+
+    assert any("waived findings must use blocking predicate 'not-blocking'" in error for error in errors)
+
+
+def test_body_budget_must_match_plan_scope_budget(tmp_path: Path) -> None:
+    aud = load_auditor()
+    _write_plan(tmp_path, max_files=2)
+    body = _body(
+        ai="- Parser guard -- fixed-in: scripts/parser.py",
+        predicate="contract",
+        disposition="fixed-in",
+        max_files=3,
+    )
+
+    errors = aud.audit_body(body, repo_root=tmp_path)
+
+    assert any("does not match plan Scope Max files 2" in error for error in errors)
+
+
+def test_allowed_files_must_cover_changed_files(tmp_path: Path) -> None:
+    aud = load_auditor()
+    _write_plan(tmp_path, max_files=2)
+    body = _body(
+        ai="- Parser guard -- fixed-in: scripts/parser.py",
+        predicate="contract",
+        disposition="fixed-in",
+        max_files=2,
+    )
+
+    errors = aud.audit_body(
+        body,
+        repo_root=tmp_path,
+        changed_file_set={"scripts/parser.py", "scripts/unlisted.py"},
+    )
+
+    assert any("changed files outside allowed set: scripts/unlisted.py" in error for error in errors)
+
+
+def test_preflight_disposition_must_match_ai_reconciliation(tmp_path: Path) -> None:
+    aud = load_auditor()
+    _write_plan(tmp_path, max_files=1)
+    body = _body(
+        ai="- Parser guard -- waived-nit: skip-worthy",
+        predicate="not-blocking",
+        disposition="waived-out-of-scope",
+        max_files=1,
+    )
+
+    errors = aud.audit_body(body, repo_root=tmp_path)
+
+    assert any("does not match AI reconciliation disposition 'waived-nit'" in error for error in errors)
+
+
+def test_each_ai_root_needs_its_own_preflight_record(tmp_path: Path) -> None:
+    aud = load_auditor()
+    _write_plan(tmp_path, max_files=1)
+    body = _body(
+        ai="\n".join(
+            [
+                "- Parser guard -- fixed-in: scripts/parser.py",
+                "- Logging polish -- waived-nit: skip-worthy",
+            ]
+        ),
+        predicate="contract",
+        disposition="fixed-in",
+        max_files=1,
+    )
+
+    errors = aud.audit_body(body, repo_root=tmp_path)
+
+    assert any("missing preflight record for AI reconciliation root 'logging polish'" in error for error in errors)
+
+
+def test_internal_separators_do_not_truncate_distinct_roots(tmp_path: Path) -> None:
+    aud = load_auditor()
+    _write_plan(tmp_path, max_files=1)
+    body = "\n".join(
+        [
+            "Plan: plans/PR-Example.md",
+            "",
+            "## AI reconciliation",
+            "- Cache -- parser bug -- fixed-in: scripts/parser.py",
+            "- Cache -- eviction bug -- fixed-in: scripts/parser.py",
+            "",
+            "## Fix-loop disposition preflight",
+            "- Root decision: Cache",
+            "- Blocking predicate: contract",
+            "- Disposition: fixed-in",
+            "- Allowed files: scripts/parser.py",
+            "- Max files: 1",
+            "- Parked hardening: none",
+        ]
+    )
+
+    errors = aud.audit_body(body, repo_root=tmp_path, changed_file_set={"scripts/parser.py"})
+
+    assert any("missing preflight record for AI reconciliation root 'cache parser bug'" in error for error in errors)
+    assert any("missing preflight record for AI reconciliation root 'cache eviction bug'" in error for error in errors)
+
+
+def test_multiple_ai_roots_pass_with_multiple_preflight_records(tmp_path: Path) -> None:
+    aud = load_auditor()
+    _write_plan(tmp_path, max_files=1)
+    body = "\n".join(
+        [
+            "Plan: plans/PR-Example.md",
+            "",
+            "## AI reconciliation",
+            "- Parser guard -- fixed-in: scripts/parser.py",
+            "- Logging polish -- waived-nit: skip-worthy",
+            "",
+            "## Fix-loop disposition preflight",
+            "- Root decision: Parser guard",
+            "- Blocking predicate: contract",
+            "- Disposition: fixed-in",
+            "- Allowed files: scripts/parser.py",
+            "- Max files: 1",
+            "- Parked hardening: none",
+            "- Root decision: Logging polish",
+            "- Blocking predicate: not-blocking",
+            "- Disposition: waived-nit",
+            "- Allowed files: scripts/parser.py",
+            "- Max files: 1",
+            "- Parked hardening: none",
+        ]
+    )
+
+    assert aud.audit_body(body, repo_root=tmp_path, changed_file_set={"scripts/parser.py"}) == []
+
+
+def test_per_root_allowed_files_are_validated_as_a_union(tmp_path: Path) -> None:
+    aud = load_auditor()
+    _write_plan(tmp_path, max_files=2)
+    body = "\n".join(
+        [
+            "Plan: plans/PR-Example.md",
+            "",
+            "## AI reconciliation",
+            "- Parser guard -- fixed-in: scripts/parser.py",
+            "- Renderer guard -- fixed-in: scripts/renderer.py",
+            "",
+            "## Fix-loop disposition preflight",
+            "- Root decision: Parser guard",
+            "- Blocking predicate: contract",
+            "- Disposition: fixed-in",
+            "- Allowed files: scripts/parser.py",
+            "- Max files: 2",
+            "- Parked hardening: none",
+            "- Root decision: Renderer guard",
+            "- Blocking predicate: contract",
+            "- Disposition: fixed-in",
+            "- Allowed files: scripts/renderer.py",
+            "- Max files: 2",
+            "- Parked hardening: none",
+        ]
+    )
+
+    assert aud.audit_body(
+        body,
+        repo_root=tmp_path,
+        changed_file_set={"scripts/parser.py", "scripts/renderer.py"},
+    ) == []
+
+
+def test_star_and_numbered_reconciliation_bullets_are_validated(tmp_path: Path) -> None:
+    aud = load_auditor()
+    _write_plan(tmp_path, max_files=1)
+    body = "\n".join(
+        [
+            "Plan: plans/PR-Example.md",
+            "",
+            "## AI reconciliation",
+            "* Parser guard -- fixed-in: scripts/parser.py",
+            "1. Logging polish -- waived-nit: skip-worthy",
+            "",
+            "## Fix-loop disposition preflight",
+            "- Root decision: Parser guard",
+            "- Blocking predicate: contract",
+            "- Disposition: fixed-in",
+            "- Allowed files: scripts/parser.py",
+            "- Max files: 1",
+            "- Parked hardening: none",
+            "- Root decision: Logging polish",
+            "- Blocking predicate: not-blocking",
+            "- Disposition: waived-nit",
+            "- Allowed files: scripts/parser.py",
+            "- Max files: 1",
+            "- Parked hardening: none",
+        ]
+    )
+
+    assert aud.audit_body(body, repo_root=tmp_path, changed_file_set={"scripts/parser.py"}) == []
+
+
+def test_inconsistent_preflight_budgets_fail(tmp_path: Path) -> None:
+    aud = load_auditor()
+    _write_plan(tmp_path, max_files=1)
+    body = "\n".join(
+        [
+            "Plan: plans/PR-Example.md",
+            "",
+            "## AI reconciliation",
+            "- Parser guard -- fixed-in: scripts/parser.py",
+            "- Logging polish -- waived-nit: skip-worthy",
+            "",
+            "## Fix-loop disposition preflight",
+            "- Root decision: Parser guard",
+            "- Blocking predicate: contract",
+            "- Disposition: fixed-in",
+            "- Allowed files: scripts/parser.py",
+            "- Max files: 1",
+            "- Parked hardening: none",
+            "- Root decision: Logging polish",
+            "- Blocking predicate: not-blocking",
+            "- Disposition: waived-nit",
+            "- Allowed files: scripts/parser.py",
+            "- Max files: 2",
+            "- Parked hardening: none",
+        ]
+    )
+
+    errors = aud.audit_body(body, repo_root=tmp_path, changed_file_set={"scripts/parser.py"})
+
+    assert any("all records must declare the same Max files value" in error for error in errors)
+    assert any("body Max files 2 does not match plan Scope Max files 1" in error for error in errors)
+
+
+def test_absolute_or_escaping_plan_path_is_rejected(tmp_path: Path) -> None:
+    aud = load_auditor()
+    _write_plan(tmp_path, max_files=1)
+    for plan_line in ("Plan: /tmp/PR-Example.md", "Plan: plans/../PR-Example.md"):
+        body = _body(
+            ai="- Parser guard -- fixed-in: scripts/parser.py",
+            predicate="contract",
+            disposition="fixed-in",
+            max_files=1,
+        ).replace("Plan: plans/PR-Example.md", plan_line)
+
+        errors = aud.audit_body(body, repo_root=tmp_path)
+
+        assert any("PR body must start with Plan: plans/PR-<Slice>.md" in error for error in errors)
+
+
+def test_symlinked_plan_path_is_rejected(tmp_path: Path) -> None:
+    aud = load_auditor()
+    target = tmp_path / "target.md"
+    target.write_text("# Target\n\n## Scope (this PR)\nMax files: 1\n", encoding="utf-8")
+    plan = tmp_path / "plans" / "PR-Example.md"
+    plan.parent.mkdir()
+    plan.symlink_to(target)
+    body = _body(
+        ai="- Parser guard -- fixed-in: scripts/parser.py",
+        predicate="contract",
+        disposition="fixed-in",
+        max_files=1,
+    )
+
+    errors = aud.audit_body(body, repo_root=tmp_path)
+
+    assert any("plan path must not be a symlink" in error for error in errors)
+
+
+def test_plan_scope_budget_is_required(tmp_path: Path) -> None:
+    aud = load_auditor()
+    plan = tmp_path / "plans" / "PR-Example.md"
+    plan.parent.mkdir()
+    plan.write_text("# PR-Example\n\n## Scope (this PR)\n\nNo budget.\n", encoding="utf-8")
+    body = _body(
+        ai="- Parser guard -- fixed-in: scripts/parser.py",
+        predicate="contract",
+        disposition="fixed-in",
+        max_files=1,
+    )
+
+    errors = aud.audit_body(body, repo_root=tmp_path)
+
+    assert any("plan Scope must declare Max files: N" in error for error in errors)
+
+
+def test_plan_scope_budget_rejects_malformed_value(tmp_path: Path) -> None:
+    aud = load_auditor()
+    plan = tmp_path / "plans" / "PR-Example.md"
+    plan.parent.mkdir()
+    plan.write_text("# PR-Example\n\n## Scope (this PR)\nMax files: many\n", encoding="utf-8")
+
+    with pytest.raises(ValueError, match="malformed Max files value"):
+        aud.plan_max_files(plan.read_text(encoding="utf-8"))
+
+
+def test_changed_files_raises_when_git_diff_fails(tmp_path: Path) -> None:
+    aud = load_auditor()
+
+    with pytest.raises(RuntimeError, match="git diff failed|Not a git repository"):
+        aud.changed_files("origin/main", repo_root=tmp_path)
+
+
+def test_cli_exit_codes(tmp_path: Path) -> None:
+    aud = load_auditor()
+    _write_plan(tmp_path, max_files=1)
+    ok = tmp_path / "ok.md"
+    ok.write_text(
+        _body(
+            ai="- Logging polish -- waived-out-of-scope: parked in HARDENING.md",
+            root="Logging polish",
+            predicate="not-blocking",
+            disposition="waived-out-of-scope",
+            max_files=1,
+        ),
+        encoding="utf-8",
+    )
+    bad = tmp_path / "bad.md"
+    bad.write_text("## AI reconciliation\n- Parser guard -- fixed-in: scripts/parser.py\n", encoding="utf-8")
+
+    assert aud.main(["--repo-root", str(tmp_path), "--current-pr-body-file", str(ok)]) == 0
+    assert aud.main(["--repo-root", str(tmp_path), "--current-pr-body-file", str(bad)]) == 1
+
+
+def _write_plan(root: Path, *, max_files: int) -> None:
+    plan = root / "plans" / "PR-Example.md"
+    plan.parent.mkdir()
+    plan.write_text(
+        "\n".join(
+            [
+                "# PR-Example",
+                "",
+                "## Scope (this PR)",
+                "",
+                "Ownership lane: workflow/fix-loop-disposition",
+                "Slice phase: Workflow/process",
+                f"Max files: {max_files}",
+                "",
+                "## Mechanism",
+                "Details.",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+
+def _body(*, ai: str, predicate: str, disposition: str, max_files: int, root: str = "Parser guard") -> str:
+    return "\n".join(
+        [
+            "Plan: plans/PR-Example.md",
+            "",
+            "## AI reconciliation",
+            ai,
+            "",
+            "## Fix-loop disposition preflight",
+            f"- Root decision: {root}",
+            f"- Blocking predicate: {predicate}",
+            f"- Disposition: {disposition}",
+            "- Allowed files: scripts/parser.py, tests/test_parser.py",
+            f"- Max files: {max_files}",
+            "- Parked hardening: none",
+            "",
+            "## Verification",
+            "- pending",
+        ]
+    )
