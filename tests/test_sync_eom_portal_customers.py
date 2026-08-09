@@ -814,6 +814,14 @@ def test_calendar_guard_uses_real_producer_for_email_and_cancellation(
         start=now + timedelta(days=300),
         end=now + timedelta(days=300, hours=1),
     )
+    outside_future = calendar_provider.CalendarEvent(
+        uid="outside-future",
+        summary="Outside Horizon Customer",
+        location="10 Future St, Effingham, IL",
+        description=" outside@example.com ",
+        start=now + timedelta(days=361),
+        end=now + timedelta(days=361, hours=1),
+    )
     older = calendar_provider.CalendarEvent(
         uid="older",
         summary="Cancelled Customer",
@@ -838,7 +846,7 @@ def test_calendar_guard_uses_real_producer_for_email_and_cancellation(
         async def list_events(self, *, start, end, calendar_id):
             self.calls.append(calendar_id)
             events = {
-                "commercial@test": [active, far_future],
+                "commercial@test": [active, far_future, outside_future],
                 "residential@test": [older],
                 "one-time@test": [cancellation],
             }[calendar_id]
@@ -857,6 +865,7 @@ def test_calendar_guard_uses_real_producer_for_email_and_cancellation(
     keys = asyncio.run(fetch_calendar_guard_keys())
 
     assert keys["emails"] == {"active@example.com", "future@example.com"}
+    assert "outside@example.com" not in keys["emails"]
     assert FakeGoogleCalendarProvider.calls == [
         "commercial@test", "residential@test", "one-time@test",
     ]
@@ -866,6 +875,8 @@ def test_calendar_guard_uses_real_producer_for_email_and_cancellation(
          "phone": None, "email": " ACTIVE@Example.COM ", "address": "X"},
         {"id": "future", "full_name": "Future CRM Name", "tags": [],
          "phone": None, "email": " future@example.com ", "address": "Future"},
+        {"id": "outside", "full_name": "Outside Horizon", "tags": [],
+         "phone": None, "email": " outside@example.com ", "address": "Outside"},
         {"id": "cancelled", "full_name": "Former CRM Name", "tags": [],
          "phone": None, "email": "stale@example.com", "address": "Y"},
         {"id": "gone", "full_name": "Moved Away", "tags": [],
@@ -874,9 +885,9 @@ def test_calendar_guard_uses_real_producer_for_email_and_cancellation(
     demoted, eligible = asyncio.run(
         demote_unmatched(pool, set(), apply=True, guard_keys=keys))
 
-    assert (demoted, eligible) == (2, 4)
+    assert (demoted, eligible) == (3, 5)
     assert [contact_id for contact_id, _ in pool.updates] == [
-        "cancelled", "gone",
+        "outside", "cancelled", "gone",
     ]
     assert "email" in pool.queries[0][0]
 

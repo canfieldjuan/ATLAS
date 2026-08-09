@@ -75,6 +75,25 @@ seam in the enumeration; otherwise write "N/A - no boundary change."
 - Caller x input shape: `run()` still calls `fetch_calendar_guard_keys()` with
   no explicit override; tests may still pass explicit `months_forward` values.
 
+### Closure declaration
+
+- Boundary inventory membership: CLOSED for this slice. The changed decision is
+  the future time window that feeds the existing demotion-veto guard; the
+  identity-key inventory remains the code-owned set already read by
+  `fetch_calendar_guard_keys()` and `on_calendar()`:
+  phone/email/address/name keys plus calendar event start/end/cancellation
+  state.
+- Membership source: DERIVED from the existing implementation at use time.
+  Calendar guard keys are emitted by `fetch_calendar_guard_keys()` from
+  `import_eom_customers_live` parsed records, and CRM row membership is consumed
+  by `on_calendar()`. This PR does not introduce an authored duplicate list of
+  customer identity channels.
+- Outside-set behavior: event dates outside the computed
+  `months_forward * 30` window produce no guard key and therefore do not veto
+  demotion. Calendar/CRM fields outside the existing identity-key set remain
+  non-participating, so they cannot silently widen the veto or demotable source
+  boundary.
+
 ### Deployed-config probing
 
 Required for guard, validator, resolver, admission-boundary, or env/config
@@ -118,6 +137,10 @@ guard keys and vetoes demotion.
 
 None.
 
+Parking predicate: this slice parks only hardening or polish that does not
+change whether default-import-horizon calendar bookings can veto portal-sync
+demotion and does not affect PR-shape, reconciliation, or CI gates.
+
 Parked hardening: none.
 
 ## Verification
@@ -129,8 +152,8 @@ Parked hardening: none.
 
 | File | LOC |
 |---|---:|
-| `plans/PR-EOM-Calendar-Demotion-Veto.md` | 136 |
+| `plans/PR-EOM-Calendar-Demotion-Veto.md` | 159 |
 | `scripts/import_eom_customers_live.py` | 3 |
 | `scripts/sync_eom_portal_customers.py` | 5 |
-| `tests/test_sync_eom_portal_customers.py` | 19 |
-| **Total** | **163** |
+| `tests/test_sync_eom_portal_customers.py` | 32 |
+| **Total** | **199** |
