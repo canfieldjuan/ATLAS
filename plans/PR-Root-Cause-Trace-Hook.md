@@ -50,7 +50,7 @@ Max files: 12
 - Acceptance criteria:
   - `.claude/hooks/check_edit_budget.py` denies normal edit/write targets when
     fix mode is active with an allowed set but the baton lacks root-trace
-    fields.
+    fields or carries copied producer-template placeholders.
   - `.claude/hooks/check_edit_budget.py` allows an in-budget edit when the baton
     names the symptom, root cause, source trace, fix strategy, and upstream
     files.
@@ -201,7 +201,7 @@ Parked hardening: none.
 ## Verification
 
 - `python -m pytest tests/test_fix_loop_trace_contract.py tests/test_fix_mode_hook.py tests/test_audit_fix_loop_disposition.py -q`
-  -- 74 passed.
+  -- 75 passed.
 - `python scripts/maturity_sweep.py scripts --tests-root tests --baseline tests/maturity_sweep/baseline_scripts.json --min-score 8 --sensitive-glob 'scripts/**'`
   -- passed; no new brittleness above baseline.
 
@@ -209,7 +209,7 @@ Parked hardening: none.
 
 | File | LOC |
 |---|---:|
-| `.claude/hooks/check_edit_budget.py` | 145 |
+| `.claude/hooks/check_edit_budget.py` | 170 |
 | `.claude/hooks/inject_fix_mode.py` | 9 |
 | `.claude/skills/fix-mode/SKILL.md` | 25 |
 | `AGENTS.md` | 13 |
@@ -220,5 +220,5 @@ Parked hardening: none.
 | `scripts/fix_loop_trace_contract.py` | 84 |
 | `tests/test_audit_fix_loop_disposition.py` | 309 |
 | `tests/test_fix_loop_trace_contract.py` | 61 |
-| `tests/test_fix_mode_hook.py` | 342 |
-| **Total** | **1302** |
+| `tests/test_fix_mode_hook.py` | 363 |
+| **Total** | **1348** |

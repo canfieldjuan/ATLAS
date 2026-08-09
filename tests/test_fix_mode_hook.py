@@ -206,6 +206,27 @@ def test_active_fix_mode_denies_decorated_template_source_trace(tmp_path):
     assert "source_trace must name the chain" in result.stdout
 
 
+def test_active_fix_mode_denies_producer_template_root_fields(tmp_path):
+    baton = {
+        "active": True,
+        "allowed": ["scripts/*"],
+        **_root_trace(),
+        "fix_strategy": "symptom-only-deferred",
+        "symptom_only_reason": "review finding is non-blocking",
+        "follow_up": "HARDENING.md ROOT-TRACE-2",
+        "symptom": "<failing check or review claim being addressed>",
+        "root_cause": "<upstream defect, not the visible leaf symptom>",
+        "upstream_files": ["<repo-relative file(s) where the source is fixed>"],
+    }
+    _write_baton(tmp_path, baton)
+
+    result = _run(CHECK_HOOK, _edit("scripts/parser.py"), tmp_path)
+
+    assert _decision(result.stdout) == "deny"
+    assert "root-cause trace is incomplete" in result.stdout
+    assert "symptom, root_cause, upstream_files" in result.stdout
+
+
 def test_check_edit_budget_source_trace_endpoint_grammar(tmp_path):
     trace_tokens_by_expected = {
         "review claim": True,

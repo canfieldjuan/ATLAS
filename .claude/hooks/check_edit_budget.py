@@ -27,6 +27,7 @@ from fix_loop_trace_contract import (
     is_placeholder_text,
     normalize_repo_path,
     source_trace_is_valid,
+    trace_endpoint_is_valid,
 )
 
 _REQUIRED_ROOT_TRACE_FIELDS = (
@@ -96,6 +97,10 @@ def _has_text(value: object) -> bool:
     return isinstance(value, str) and not is_placeholder_text(value)
 
 
+def _has_evidence_text(value: object) -> bool:
+    return _has_text(value) and trace_endpoint_is_valid(value)
+
+
 def _has_string_list(value: object) -> bool:
     return isinstance(value, list) and any(_has_text(item) for item in value)
 
@@ -107,18 +112,38 @@ def _string_list(value: object) -> list[str]:
 
 
 def _path_set(value: object, project_dir: str) -> set[str]:
-    return {
-        _relativize(path, project_dir)
-        for path in _string_list(value)
-    }
+    paths: set[str] = set()
+    for raw in _string_list(value):
+        stripped = raw.strip().strip("`")
+        if (
+            not stripped
+            or any(ch.isspace() for ch in stripped)
+            or stripped.startswith(("<", "{"))
+            or stripped.endswith((">", "}"))
+        ):
+            continue
+        normalized = _relativize(stripped, project_dir)
+        parts = Path(normalized).parts
+        if (
+            not normalized
+            or normalized in {".", ".."}
+            or ".." in parts
+            or normalized.startswith("../")
+        ):
+            continue
+        paths.add(normalized)
+    return paths
 
 
-def _root_trace_errors(baton: dict) -> list[str]:
+def _root_trace_errors(baton: dict, project_dir: str) -> list[str]:
     missing: list[str] = []
     for field in _REQUIRED_ROOT_TRACE_FIELDS:
         value = baton.get(field)
         if field == "upstream_files":
-            if not _has_string_list(value):
+            if not _path_set(value, project_dir):
+                missing.append(field)
+        elif field in {"symptom", "root_cause"}:
+            if not _has_evidence_text(value):
                 missing.append(field)
         elif not _has_text(value):
             missing.append(field)
@@ -210,7 +235,7 @@ def main() -> int:
         if not normal_targets:
             return 0
 
-        trace_errors = _root_trace_errors(baton)
+        trace_errors = _root_trace_errors(baton, project_dir)
         if trace_errors:
             _deny(
                 "fix-mode root-cause trace is incomplete ("
