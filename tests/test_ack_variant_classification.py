@@ -38,17 +38,38 @@ def _email_enabled(monkeypatch):
 
 # --- classifier -----------------------------------------------------------
 
+# Independent contract oracle. These are the six values the website forms can
+# submit, transcribed from the form markup
+# (Effingham_Office_Maids_Website: contact.html, commercial-estimate.html,
+# house-cleaning-estimate.html, house-cleaning-services/index.html) rather than
+# imported from the implementation. Everything below checks the implementation
+# against THIS, so an unintended entry added to `_ACK_VARIANT_BY_SERVICE`
+# (say `"office-cleaning": ACK_VARIANT_RESIDENTIAL`) fails the equality test
+# instead of being silently excluded from the generated inputs.
+CONTRACT_SERVICE_VARIANTS = {
+    "residential": ACK_VARIANT_RESIDENTIAL,
+    "deep": ACK_VARIANT_RESIDENTIAL,
+    "move": ACK_VARIANT_RESIDENTIAL,
+    "commercial": ACK_VARIANT_COMMERCIAL_SINGLE_SITE,
+    "multi-location-commercial": ACK_VARIANT_COMMERCIAL_MULTI_SITE,
+    "other": ACK_VARIANT_GENERAL,
+}
+
+
+def test_implementation_mapping_equals_the_contract_oracle():
+    """The implementation carries exactly the contracted members — no more.
+
+    Without this, an extra entry would both re-point a real submission and be
+    excluded from the generated unrecognised inputs, so nothing would fail.
+    """
+    assert _ACK_VARIANT_BY_SERVICE == CONTRACT_SERVICE_VARIANTS
+
+
 @pytest.mark.parametrize(
     ("service", "expected"),
-    [
-        # Every value the website forms can submit.
-        ("residential", ACK_VARIANT_RESIDENTIAL),
-        ("deep", ACK_VARIANT_RESIDENTIAL),
-        ("move", ACK_VARIANT_RESIDENTIAL),
-        ("commercial", ACK_VARIANT_COMMERCIAL_SINGLE_SITE),
-        ("multi-location-commercial", ACK_VARIANT_COMMERCIAL_MULTI_SITE),
-        ("other", ACK_VARIANT_GENERAL),
-    ],
+    # Driven by the contract oracle defined below, so the explicit cases and
+    # the generated ones can never disagree about what "recognised" means.
+    sorted(CONTRACT_SERVICE_VARIANTS.items()),
 )
 def test_every_submitted_service_maps_explicitly(service, expected):
     assert classify_ack_variant(service) == expected
@@ -75,16 +96,17 @@ def test_classification_is_whitespace_and_case_insensitive(service, expected):
 
 
 def _generated_unrecognised_strings(rng, count):
-    """Yield arbitrary strings that are not one of the six known form values.
+    """Yield arbitrary strings that are not one of the six contracted values.
 
     Grammar-derived rather than a fixed sample: the declared set is OPEN, so a
-    handful of literals cannot stand in for "any unrecognised string".
+    handful of literals cannot stand in for "any unrecognised string". The
+    exclusion consults the contract oracle, never the implementation.
     """
     alphabet = (
         string.ascii_letters + string.digits + " \t\n-_./\\'\"<>{}[]();:@#$%&*+=|~`^"
         + "áéíóúñü汉字🧹​ "
     )
-    known = set(_ACK_VARIANT_BY_SERVICE)
+    known = set(CONTRACT_SERVICE_VARIANTS)  # oracle, not the implementation
     produced = 0
     while produced < count:
         candidate = "".join(rng.choice(alphabet) for _ in range(rng.randint(0, 40)))

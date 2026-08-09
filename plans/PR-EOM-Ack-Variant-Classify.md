@@ -313,8 +313,8 @@ Parked hardening: none.
 | `atlas_brain/api/leads.py` | 19 |
 | `atlas_brain/templates/email/__init__.py` | 10 |
 | `atlas_brain/templates/email/request_acknowledgement.py` | 42 |
-| `plans/PR-EOM-Ack-Variant-Classify.md` | 318 |
-| `tests/test_ack_variant_classification.py` | 283 |
+| `plans/PR-EOM-Ack-Variant-Classify.md` | 320 |
+| `tests/test_ack_variant_classification.py` | 305 |
 | `tests/test_eom_sent_email_tenant_scope.py` | 6 |
 | `tests/test_leads_intake.py` | 6 |
-| **Total** | **684** |
+| **Total** | **708** |
