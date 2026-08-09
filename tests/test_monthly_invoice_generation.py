@@ -1042,6 +1042,12 @@ async def test_payment_reminder_attaches_pdf(monkeypatch):
     from atlas_brain.autonomous.tasks import invoice_payment_reminders as task_mod
     from atlas_brain.storage.models import ScheduledTask
 
+    # Autonomous reminders are hard-disabled in code (ATLAS #2270 / #2271); the
+    # guard is pinned by tests/test_invoice_payment_reminders_disabled.py. This
+    # test documents the send SHAPE that must hold when #2271's approval gate
+    # revives the path, so it opts past the guard deliberately and locally.
+    monkeypatch.setattr(task_mod, "_AUTOPILOT_DISABLED", False)
+
     captured: dict = {}
 
     class FakeEmailProvider:
@@ -1121,6 +1127,10 @@ async def test_payment_reminder_falls_back_when_pdf_fails(monkeypatch):
     """If PDF render fails, send text-only reminder (don't skip the customer)."""
     from atlas_brain.autonomous.tasks import invoice_payment_reminders as task_mod
     from atlas_brain.storage.models import ScheduledTask
+
+    # See the note on test_payment_reminder_attaches_pdf: the autopilot guard is
+    # the shipped behaviour, this test pins the revived send shape behind it.
+    monkeypatch.setattr(task_mod, "_AUTOPILOT_DISABLED", False)
 
     captured: dict = {}
 

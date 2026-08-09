@@ -543,12 +543,22 @@ class TaskScheduler:
             },
         },
         {
+            # Seeded DISABLED. This definition previously carried no "enabled"
+            # key, so `task_def.get("enabled", True)` below registered the
+            # 10:00 cron enabled on every fresh database -- which is how the
+            # 2026-08-03 duplicate-dunning incident had a schedule to fire on.
+            # Note this only governs FRESH seeding: the task is not
+            # `enabled_config_key`-managed, so `enabled_changed` is always
+            # False for it and an already-seeded row is never reconciled from
+            # here. The authoritative stop is _AUTOPILOT_DISABLED in
+            # tasks/invoice_payment_reminders.py. See ATLAS #2270 / #2271.
             "name": "invoice_payment_reminders",
-            "description": "Daily payment reminders for overdue invoices",
+            "description": "Daily payment reminders for overdue invoices (DISABLED pending #2271 approval gate)",
             "task_type": "builtin",
             "schedule_type": "cron",
             "cron_expression": "0 10 * * *",
             "timeout_seconds": 120,
+            "enabled": False,
             "metadata": {
                 "builtin_handler": "invoice_payment_reminders",
                 "synthesis_skill": "invoicing/payment_reminder",

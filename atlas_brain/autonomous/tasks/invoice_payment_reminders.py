@@ -1,8 +1,11 @@
 """
-Invoice payment reminder -- daily autonomous task.
+Invoice payment reminder -- daily autonomous task. AUTOPILOT DISABLED.
 
 Sends email reminders for overdue invoices, respecting max reminder count
 and interval between reminders. Returns results for LLM synthesis.
+
+This task is HARD-DISABLED in code and must not be re-enabled by a config
+or database edit alone -- see ``_AUTOPILOT_DISABLED`` below.
 """
 
 import logging
@@ -12,6 +15,44 @@ from typing import Optional
 from ...storage.models import ScheduledTask
 
 logger = logging.getLogger("atlas.autonomous.tasks.invoice_payment_reminders")
+
+# ---------------------------------------------------------------------------
+# OWNER DECISION 2026-08-08: no autonomous payment reminders, indefinitely.
+#
+# On 2026-08-03 this task emailed 17 unauthorised dunning messages to real
+# customers (Mid Illinois received four) in a single 10:00 run. Root cause was
+# the per-invoice fan-out plus the total absence of an approval gate; see
+# ATLAS #2270 (duplicate/extra reminders) and #2271 (approval-gated
+# consolidated send). Neither is fixed: ``run`` below still loops
+# ``for inv in overdue`` and calls ``email_provider.send`` once per invoice.
+#
+# Every other layer that was supposed to hold this closed defaults OPEN:
+#   * ``InvoicingConfig.reminders_enabled`` shipped ``default=True``.
+#   * The scheduler seed carried no ``enabled`` key, so ``.get("enabled", True)``
+#     registered the 10:00 cron enabled on any fresh database.
+#   * The task is not ``enabled_config_key``-managed, so the boot-time sync in
+#     ``scheduler._seed_default_tasks`` never reconciles its enabled flag.
+# The single thing preventing a send was one line in a hand-maintained ``.env``
+# -- one lost file, one fresh deploy, one worktree cutover away from resuming.
+#
+# This constant is that missing floor. It is checked before any repository
+# read or transport call, so neither ``ATLAS_INVOICING_REMINDERS_ENABLED=true``
+# nor an ``UPDATE scheduled_tasks SET enabled = true`` can produce an email.
+#
+# DO NOT flip this to False to "test" the task. Re-enabling requires, in order:
+#   1. #2270 fixed -- per-customer consolidation, no re-reminding settled
+#      invoices, transactional bookkeeping.
+#   2. #2271 fixed -- an explicit owner approval gate on the send, in the shape
+#      of the invoicing ``list_pending_drafts`` / ``approve_and_send`` pattern.
+#   3. Juan's explicit sign-off, recorded on #2271.
+# ---------------------------------------------------------------------------
+_AUTOPILOT_DISABLED = True
+
+_AUTOPILOT_DISABLED_REASON = (
+    "Autonomous payment reminders are disabled in code (owner decision "
+    "2026-08-08 after the 2026-08-03 duplicate-dunning incident). Re-enabling "
+    "requires the approval gate in ATLAS #2271 and Juan's sign-off."
+)
 
 
 def _should_send_reminder(
@@ -70,7 +111,20 @@ async def run(task: ScheduledTask) -> dict:
 
     Respects invoicing.reminder_max_count and invoicing.reminder_interval_days.
     Returns dict for synthesis, or _skip_synthesis when no reminders needed.
+
+    Returns immediately while ``_AUTOPILOT_DISABLED`` is set: the guard runs
+    before the config read, the overdue query, and any transport call, so no
+    customer email can be produced by this path regardless of config or of the
+    ``scheduled_tasks`` row's enabled flag.
     """
+    if _AUTOPILOT_DISABLED:
+        logger.info(
+            "invoice_payment_reminders invoked but autopilot is disabled in "
+            "code; no invoices read, no email sent. %s",
+            _AUTOPILOT_DISABLED_REASON,
+        )
+        return {"_skip_synthesis": _AUTOPILOT_DISABLED_REASON}
+
     from ...config import settings
 
     if not settings.invoicing.enabled:

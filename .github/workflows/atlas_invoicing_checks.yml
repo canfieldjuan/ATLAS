@@ -18,6 +18,8 @@ on:
       - "atlas_brain/api/invoicing/**"
       - "atlas_brain/config.py"
       - "atlas_brain/config_defaults.py"
+      - "atlas_brain/autonomous/scheduler.py"
+      - "atlas_brain/autonomous/tasks/invoice_payment_reminders.py"
       - "atlas_brain/eom_api/config.py"
       - "atlas_brain/eom_api/auth.py"
       - "atlas_brain/eom_api/funnel.py"
@@ -37,6 +39,7 @@ on:
       - "atlas_brain/templates/email/estimate_confirmation.py"
       - "tests/test_monthly_invoice_generation.py"
       - "tests/test_invoice_repository.py"
+      - "tests/test_invoice_payment_reminders_disabled.py"
       - "tests/test_receivables.py"
       - "tests/test_invoicing_readonly_mcp.py"
       - "tests/test_invoicing_readonly_oauth.py"
@@ -60,6 +63,8 @@ on:
       - "atlas_brain/api/invoicing/**"
       - "atlas_brain/config.py"
       - "atlas_brain/config_defaults.py"
+      - "atlas_brain/autonomous/scheduler.py"
+      - "atlas_brain/autonomous/tasks/invoice_payment_reminders.py"
       - "atlas_brain/eom_api/config.py"
       - "atlas_brain/eom_api/auth.py"
       - "atlas_brain/eom_api/funnel.py"
@@ -79,6 +84,7 @@ on:
       - "atlas_brain/templates/email/estimate_confirmation.py"
       - "tests/test_monthly_invoice_generation.py"
       - "tests/test_invoice_repository.py"
+      - "tests/test_invoice_payment_reminders_disabled.py"
       - "tests/test_receivables.py"
       - "tests/test_invoicing_readonly_mcp.py"
       - "tests/test_invoicing_readonly_oauth.py"
@@ -127,6 +133,12 @@ jobs:
           python -m pytest \
             tests/test_monthly_invoice_generation.py \
             -k "update_invoice_clears_needs_hours_when_line_items_are_billable or line_items_are_billable_requires_all_positive_quantities" \
+            -q
+
+      - name: Run payment-reminder autopilot-disabled guard tests
+        run: |
+          python -m pytest \
+            tests/test_invoice_payment_reminders_disabled.py \
             -q
 
       - name: Run receivables ledger and repository tests

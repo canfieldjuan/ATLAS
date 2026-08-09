@@ -2435,7 +2435,14 @@ class InvoicingConfig(BaseSettings):
     )
     default_payment_terms_days: int = Field(default=30, ge=1, le=365, description="Default days until due")
     default_tax_rate: float = Field(default=0.0, ge=0.0, le=1.0, description="Default tax rate (0.0-1.0)")
-    reminders_enabled: bool = Field(default=True, description="Master toggle for the payment-reminder cron task")
+    # Fail-closed: an absent/blank env value must mean OFF. This shipped
+    # default=True, so the 2026-08-03 duplicate-dunning incident was held back
+    # only by a hand-maintained ATLAS_INVOICING_REMINDERS_ENABLED=false line in
+    # .env -- one fresh deploy or worktree cutover away from resuming. The
+    # authoritative stop is _AUTOPILOT_DISABLED in
+    # autonomous/tasks/invoice_payment_reminders.py; this default is the
+    # second layer. See ATLAS #2270 / #2271.
+    reminders_enabled: bool = Field(default=False, description="Master toggle for the payment-reminder cron task (default OFF; see #2271)")
     reminder_intervals: list[int] = Field(
         default_factory=lambda: [7, 14, 30],
         description=(
