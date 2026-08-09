@@ -268,16 +268,14 @@ def _format_phone_for_display(phone_digits: str) -> str:
     return phone_digits
 
 
-def _header_value_safe(value: str) -> str:
-    """Make a string usable as an HTTP header value: single-line and latin-1
-    encodable. httpx (0.28) raises UnicodeEncodeError on any non-latin-1 header
-    value, so a valid name like "José" would otherwise crash the (swallowed)
-    push and the operator would silently get nothing. Drop control chars
-    (header-injection safe) and characters outside latin-1; the FULL, unmodified
-    name still rides the UTF-8 body below."""
-    return "".join(
-        ch for ch in value if 0x20 <= ord(ch) <= 0x7E or 0xA0 <= ord(ch) <= 0xFF
-    )
+def _header_value_ascii(value: str) -> str:
+    """Reduce a string to printable ASCII for safe HTTP-header use. Two reasons
+    to go all the way to ASCII rather than latin-1: httpx (0.28) raises
+    UnicodeEncodeError on non-latin-1 header values, AND ntfy decodes header
+    bytes as UTF-8, so a raw latin-1 byte (e.g. "é" -> 0xE9) would render as
+    mojibake. Control chars are dropped too (header-injection safe). The FULL,
+    unmodified name — any Unicode — still rides the UTF-8 body below."""
+    return "".join(ch for ch in value if 0x20 <= ord(ch) <= 0x7E)
 
 
 def _lead_push_body(payload: LeadIntakeRequest, email: str, phone_digits: str) -> str:
@@ -325,11 +323,15 @@ async def _publish_lead_ntfy(title: str, body: str) -> None:
 
 
 def _lead_push_title(payload: LeadIntakeRequest) -> str:
-    """Notification title (an HTTP header, so header-value-safe). Pure, tested
-    directly. The exact name — including any non-latin-1 characters dropped
-    here — is always present in the UTF-8 body."""
-    name = _header_value_safe(payload.name.strip()).strip()
-    return f"New lead: {name or 'Website visitor'}"
+    """Notification title (an HTTP header, kept strictly ASCII). Pure, tested
+    directly. Only a fully-ASCII name goes in the header; a name with any
+    non-ASCII character yields a clean generic title and shows in full in the
+    UTF-8 body, avoiding a truncated or mojibake header."""
+    name = payload.name.strip()
+    ascii_name = _header_value_ascii(name).strip()
+    if name and name.isascii() and ascii_name:
+        return f"New lead: {ascii_name}"
+    return "New lead"
 
 
 async def _default_lead_notifier(

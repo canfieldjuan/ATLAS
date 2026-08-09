@@ -1231,28 +1231,35 @@ def test_lead_push_body_phone_only_and_no_detail():
     assert body == "Jane Doe\n(217) 555-0100"
 
 
-def test_non_ascii_name_title_is_header_safe_body_keeps_exact_name():
-    """A valid non-ASCII name must not crash the (latin-1) HTTP Title header:
-    the title is latin-1 encodable (accents kept, non-latin-1 dropped) while the
-    exact original name survives in the UTF-8 body. Regresses Codex #2332 R1/R2
-    (httpx 0.28 raises UnicodeEncodeError on a non-latin-1 header value)."""
+def test_non_ascii_name_title_is_ascii_body_keeps_exact_name():
+    """A valid non-ASCII name must neither crash the HTTP Title header (httpx
+    0.28 raises on non-latin-1) nor render as mojibake on ntfy (which decodes
+    header bytes as UTF-8). So the title stays strictly ASCII — generic when the
+    name is not fully ASCII — while the exact original name rides the UTF-8 body.
+    Regresses Codex #2332 R1/R2/R13."""
     payload = _payload(name="José 王伟")
     title = _lead_push_title(payload)
-    title.encode("latin-1")  # would raise if a non-latin-1 char leaked into the header
-    assert title == "New lead: José"           # é kept (latin-1), CJK dropped
+    title.encode("ascii")  # would raise if any non-ASCII byte leaked into the header
+    assert title == "New lead"                 # generic: name is not fully ASCII
     body = _lead_push_body(payload, "jane@example.com", "2175550100")
     assert body.split("\n")[0] == "José 王伟"   # exact name preserved in the body
 
 
-def test_title_falls_back_when_name_is_all_non_latin1():
-    payload = _payload(name="王伟")
-    assert _lead_push_title(payload) == "New lead: Website visitor"
+def test_title_generic_when_name_not_fully_ascii():
+    assert _lead_push_title(_payload(name="王伟")) == "New lead"
+    assert _lead_push_title(_payload(name="José")) == "New lead"  # accents too
+
+
+def test_title_strips_control_chars_from_ascii_name():
+    # header-injection safe: a newline in an otherwise-ASCII name is removed
+    assert _lead_push_title(_payload(name="Jane\nBcc: x")) == "New lead: JaneBcc: x"
 
 
 @pytest.mark.asyncio
-async def test_publish_non_ascii_name_sends_latin1_header(monkeypatch):
-    """End-to-end: a non-ASCII lead name produces a header the transport accepts
-    (latin-1), so the push is actually delivered rather than silently swallowed."""
+async def test_publish_non_ascii_name_sends_ascii_header(monkeypatch):
+    """End-to-end: a non-ASCII lead name produces an ASCII Title header (accepted
+    by the transport, rendered correctly by ntfy) and the exact name in the body,
+    so the push is actually delivered rather than silently swallowed."""
     from atlas_brain.config import settings
     monkeypatch.setattr(settings.alerts, "ntfy_enabled", True)
     monkeypatch.setattr(settings.alerts, "leads_ntfy_topic", "eom-leads-abc")
@@ -1265,7 +1272,7 @@ async def test_publish_non_ascii_name_sends_latin1_header(monkeypatch):
 
     assert len(_FakeNtfyClient.posted) == 1
     sent = _FakeNtfyClient.posted[0]
-    sent["headers"]["Title"].encode("latin-1")  # transport-safe
+    sent["headers"]["Title"].encode("ascii")  # transport-safe + no mojibake
     assert "José 王伟".encode("utf-8") in sent["content"]  # exact name in the body
 
 
@@ -1342,7 +1349,7 @@ def test_lead_push_title_uses_name():
 def test_lead_push_title_falls_back_when_name_blank():
     from atlas_brain.api.leads import _lead_push_title
     # name has a min_length=1 constraint, so a lone space is the blank-ish edge
-    assert _lead_push_title(_payload(name=" ")) == "New lead: Website visitor"
+    assert _lead_push_title(_payload(name=" ")) == "New lead"
 
 
 @pytest.mark.asyncio

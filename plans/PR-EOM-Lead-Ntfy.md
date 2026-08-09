@@ -181,9 +181,10 @@ Parked hardening: none.
 ## Verification
 
 - `/.venv/bin/python -m pytest tests/test_leads_intake.py -q` → 73 passed,
-  run against the runtime venv. Includes the Codex round-2 hardening: header
-  latin-1 safety (non-ASCII name), route-level delivery proof, the hourly
-  notification cap, and the direct-caller no-op.
+  run against the runtime venv. Includes the Codex round-2 hardening: ASCII-only
+  Title safety (non-ASCII name → generic title + exact name in the UTF-8 body),
+  route-level delivery proof, the hourly notification cap, and the
+  direct-caller no-op.
 - `maturity_sweep.py atlas_brain/api --min-score 8` → ratchet gate passed
   (no new brittleness; no baseline change).
 - Config env wiring confirmed: `ATLAS_ALERTS_LEADS_NTFY_TOPIC=... AlertsConfig()`
@@ -196,8 +197,8 @@ Parked hardening: none.
 
 | File | LOC |
 |---|---:|
-| `atlas_brain/api/leads.py` | 156 |
+| `atlas_brain/api/leads.py` | 158 |
 | `atlas_brain/config.py` | 1 |
-| `plans/PR-EOM-Lead-Ntfy.md` | 203 |
-| `tests/test_leads_intake.py` | 385 |
-| **Total** | **745** |
+| `plans/PR-EOM-Lead-Ntfy.md` | 204 |
+| `tests/test_leads_intake.py` | 392 |
+| **Total** | **755** |
