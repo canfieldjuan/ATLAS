@@ -249,6 +249,22 @@ def test_active_fix_mode_denies_producer_template_root_fields(tmp_path):
     assert "symptom, root_cause, upstream_files" in result.stdout
 
 
+def test_active_fix_mode_allows_substantive_root_fields_with_sentinel_terms(tmp_path):
+    baton = {
+        "active": True,
+        "allowed": ["scripts/*"],
+        **_root_trace(),
+        "symptom": "unknown input reaches parser",
+        "root_cause": "parser maps None to the accepted default",
+        "source_trace": "unknown input reaches parser -> parser maps None to the accepted default",
+    }
+    _write_baton(tmp_path, baton)
+
+    result = _run(CHECK_HOOK, _edit("scripts/parser.py"), tmp_path)
+
+    assert _decision(result.stdout) is None
+
+
 def test_check_edit_budget_source_trace_endpoint_grammar(tmp_path):
     trace_tokens_by_expected = {
         "review claim": True,
@@ -327,6 +343,23 @@ def test_symptom_only_strategy_allows_with_reason_and_followup(tmp_path):
     assert _decision(result.stdout) is None
 
 
+def test_symptom_only_strategy_denies_decorated_template_reason_and_followup(tmp_path):
+    baton = {
+        "active": True,
+        "allowed": ["scripts/*"],
+        **_root_trace(),
+        "fix_strategy": "symptom-only-deferred",
+        "symptom_only_reason": "<required only for symptom-only-deferred>",
+        "follow_up": "<required only for symptom-only-deferred>",
+    }
+    _write_baton(tmp_path, baton)
+
+    result = _run(CHECK_HOOK, _edit("scripts/parser.py"), tmp_path)
+
+    assert _decision(result.stdout) == "deny"
+    assert "symptom-only-deferred requires symptom_only_reason, follow_up" in result.stdout
+
+
 def test_upstream_root_denies_downstream_before_source_changed(tmp_path):
     _write_baton(
         tmp_path,
@@ -364,6 +397,29 @@ def test_upstream_root_denies_downstream_when_worktree_source_predates_activatio
     assert _decision(result.stdout) == "deny"
 
 
+def test_upstream_root_denies_downstream_with_uncaptured_activation_fingerprint(tmp_path):
+    _git_fixture(tmp_path)
+    parser = tmp_path / "scripts" / "parser.py"
+    parser.write_text("def parse():\n    return 'pre baton dirty'\n", encoding="utf-8")
+    _write_baton(
+        tmp_path,
+        {
+            "active": True,
+            "allowed": ["scripts/*", "templates/*"],
+            **_root_trace(),
+            "activation_dirty_paths": ["scripts/parser.py"],
+            "activation_dirty_fingerprints": {
+                "scripts/parser.py": "<index/worktree fingerprint for that path when armed>"
+            },
+        },
+    )
+
+    result = _run(CHECK_HOOK, _edit("templates/downstream.html"), tmp_path)
+
+    assert _decision(result.stdout) == "deny"
+    assert "activation_dirty_fingerprints must snapshot file state" in result.stdout
+
+
 def test_upstream_root_allows_downstream_when_initially_dirty_source_changes_again(tmp_path):
     _git_fixture(tmp_path)
     parser = tmp_path / "scripts" / "parser.py"
@@ -379,11 +435,46 @@ def test_upstream_root_allows_downstream_when_initially_dirty_source_changes_aga
             "activation_dirty_fingerprints": {"scripts/parser.py": activation_fingerprint},
         },
     )
+    upstream_result = _run(CHECK_HOOK, _edit("scripts/parser.py"), tmp_path)
+    assert _decision(upstream_result.stdout) is None
+    state = json.loads((tmp_path / ".claude" / "fix-mode-state.json").read_text(encoding="utf-8"))
+    assert state["upstream_edit_receipts"] == ["scripts/parser.py"]
+
     parser.write_text("def parse():\n    return 'post baton dirty'\n", encoding="utf-8")
 
     result = _run(CHECK_HOOK, _edit("templates/downstream.html"), tmp_path)
 
     assert _decision(result.stdout) is None
+
+
+def test_upstream_root_denies_same_batch_downstream_when_only_source_target_is_present(tmp_path):
+    _git_fixture(tmp_path)
+    parser = tmp_path / "scripts" / "parser.py"
+    parser.write_text("def parse():\n    return 'pre baton dirty'\n", encoding="utf-8")
+    activation_fingerprint = _file_fingerprint(tmp_path, "scripts/parser.py")
+    _write_baton(
+        tmp_path,
+        {
+            "active": True,
+            "allowed": ["scripts/*", "templates/*"],
+            **_root_trace(),
+            "activation_dirty_paths": ["scripts/parser.py"],
+            "activation_dirty_fingerprints": {"scripts/parser.py": activation_fingerprint},
+        },
+    )
+    payload = {
+        "tool_name": "MultiEdit",
+        "tool_input": {
+            "edits": [
+                {"file_path": "scripts/parser.py"},
+                {"file_path": "templates/downstream.html"},
+            ]
+        },
+    }
+
+    result = _run(CHECK_HOOK, payload, tmp_path)
+
+    assert _decision(result.stdout) == "deny"
 
 
 def test_upstream_root_allows_downstream_after_worktree_source_changed_since_activation(tmp_path):
@@ -540,6 +631,24 @@ def test_inject_emits_context_when_active(tmp_path):
     assert "PR Fix Mode is ACTIVE" in ctx
     assert "#42" in ctx
     assert "Source trace" in ctx
+
+
+def test_inject_emits_upstream_edit_receipts_when_active(tmp_path):
+    _write_baton(
+        tmp_path,
+        {
+            "active": True,
+            "pr": "#42",
+            "allowed": ["scripts/*"],
+            "upstream_edit_receipts": ["scripts/parser.py"],
+            **_root_trace(),
+        },
+    )
+    result = _run(INJECT_HOOK, {"hook_event_name": "SessionStart", "source": "compact"}, tmp_path)
+    ctx = json.loads(result.stdout)["hookSpecificOutput"]["additionalContext"]
+
+    assert "Upstream edit receipts" in ctx
+    assert "scripts/parser.py" in ctx
 
 
 def test_inject_silent_when_no_baton(tmp_path):

@@ -22,6 +22,7 @@ from fix_loop_trace_contract import (
     is_placeholder_text,
     parse_repo_path_tokens,
     source_trace_is_valid,
+    trace_endpoint_is_valid,
 )
 
 DISPOSITIONS = (
@@ -139,7 +140,7 @@ def trace_contract_errors(fields: dict[str, str]) -> tuple[list[str], str, set[s
         )
     if strategy == "symptom-only-deferred":
         for field in ("symptom-only reason", "follow-up"):
-            if is_placeholder_text(fields.get(field, "")):
+            if not trace_endpoint_is_valid(fields.get(field, "")):
                 errors.append(
                     "fix-loop disposition preflight: symptom-only-deferred requires "
                     f"'- {field.title()}: ...'"

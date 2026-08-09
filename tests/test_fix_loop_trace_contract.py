@@ -19,6 +19,7 @@ SPEC.loader.exec_module(contract)
     "trace",
     [
         "review claim -> parser accepts x -> admission grammar",
+        "unknown input reaches parser -> parser maps None to accepted default",
         "症状 -> 根因",
     ],
 )
@@ -37,6 +38,20 @@ def test_source_trace_accepts_filled_endpoint_chain(trace: str) -> None:
 )
 def test_source_trace_rejects_invalid_placeholder_or_incomplete_chain(trace: str) -> None:
     assert not contract.source_trace_is_valid(trace)
+
+
+@pytest.mark.parametrize(
+    ("endpoint", "expected"),
+    [
+        ("unknown input reaches parser", True),
+        ("parser maps None to accepted default", True),
+        ("unknown", False),
+        ("TBD symptom", False),
+        ("todo parser branch", False),
+    ],
+)
+def test_trace_endpoint_allows_substantive_prose_with_sentinel_terms(endpoint: str, expected: bool) -> None:
+    assert contract.trace_endpoint_is_valid(endpoint) is expected
 
 
 def test_parse_repo_path_tokens_normalizes_valid_repo_paths() -> None:

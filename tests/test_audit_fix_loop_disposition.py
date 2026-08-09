@@ -219,6 +219,20 @@ def test_source_trace_accepts_unicode_endpoint_chain(tmp_path: Path) -> None:
     assert aud.audit_body(body, repo_root=tmp_path, changed_file_set={"scripts/parser.py"}) == []
 
 
+def test_source_trace_accepts_substantive_prose_with_sentinel_terms(tmp_path: Path) -> None:
+    aud = load_auditor()
+    _write_plan(tmp_path, max_files=1)
+    body = _body(
+        ai="- Parser guard -- fixed-in: scripts/parser.py",
+        predicate="contract",
+        disposition="fixed-in",
+        max_files=1,
+        source_trace="unknown input reaches parser -> parser maps None to accepted default",
+    )
+
+    assert aud.audit_body(body, repo_root=tmp_path, changed_file_set={"scripts/parser.py"}) == []
+
+
 def test_fix_loop_trace_contract_source_trace_endpoint_grammar() -> None:
     aud = load_auditor()
     trace_tokens_by_expected = {
@@ -226,6 +240,8 @@ def test_fix_loop_trace_contract_source_trace_endpoint_grammar() -> None:
         "parser branch": True,
         "症状": True,
         "admission source": True,
+        "unknown input reaches parser": True,
+        "parser maps None to accepted default": True,
         "TBD": False,
         "TBD symptom": False,
         "TBD upstream source": False,
@@ -301,6 +317,25 @@ def test_symptom_only_strategy_requires_reason_and_followup(tmp_path: Path) -> N
         disposition="fixed-in",
         max_files=1,
         fix_strategy="symptom-only-deferred",
+    )
+
+    errors = aud.audit_body(body, repo_root=tmp_path, changed_file_set={"scripts/parser.py"})
+
+    assert any("symptom-only-deferred requires '- Symptom-Only Reason: ...'" in error for error in errors)
+    assert any("symptom-only-deferred requires '- Follow-Up: ...'" in error for error in errors)
+
+
+def test_symptom_only_strategy_rejects_decorated_template_reason_and_followup(tmp_path: Path) -> None:
+    aud = load_auditor()
+    _write_plan(tmp_path, max_files=1)
+    body = _body(
+        ai="- Parser guard -- fixed-in: scripts/parser.py",
+        predicate="contract",
+        disposition="fixed-in",
+        max_files=1,
+        fix_strategy="symptom-only-deferred",
+        symptom_only_reason="<required only for symptom-only-deferred>",
+        follow_up="<required only for symptom-only-deferred>",
     )
 
     errors = aud.audit_body(body, repo_root=tmp_path, changed_file_set={"scripts/parser.py"})

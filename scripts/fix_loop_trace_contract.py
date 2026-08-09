@@ -41,7 +41,7 @@ def trace_endpoint_is_valid(value: object) -> bool:
     if normalized in PLACEHOLDER_TOKENS or normalized in TEMPLATE_ENDPOINTS:
         return False
     tokens = re.findall(r"\w+", normalized)
-    if any(token in PLACEHOLDER_TOKENS for token in tokens):
+    if tokens and tokens[0] in {"tbd", "todo"}:
         return False
     if endpoint.startswith(("<", "{")) or endpoint.endswith((">", "}")):
         return False

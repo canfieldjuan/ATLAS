@@ -1478,9 +1478,10 @@ Compose files for sub-services:
   is active with an `allowed` set, the PreToolUse hook denies normal edits until
   the baton names `symptom`, `root_cause`, `source_trace`, `fix_strategy`, and
   `upstream_files`. Record `activation_head`, `activation_dirty_paths`, and
-  `activation_dirty_fingerprints` when arming fix mode so committed and
-  noncommitted upstream-source changes count only after that baseline. Use
-  `upstream-root` unless you explicitly declare
+  `activation_dirty_fingerprints` when arming fix mode; preserve
+  `upstream_edit_receipts` after the hook records an upstream-only edit so
+  committed and noncommitted upstream-source changes count only after that
+  baseline or receipt. Use `upstream-root` unless you explicitly declare
   `symptom-only-deferred` with `symptom_only_reason` and `follow_up`; mirror the
   same source trace in the PR body's `## Fix-loop disposition preflight`.
 - **Guard-class closure before another patch**: when the fix touches a guard /

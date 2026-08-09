@@ -16,9 +16,9 @@ enforces the file-count budget; this hook only enforces the allowed *set*.
 from __future__ import annotations
 
 import fnmatch
-import hashlib
 import json
 import os
+import re
 import subprocess
 import sys
 from pathlib import Path
@@ -42,6 +42,9 @@ _REQUIRED_ROOT_TRACE_FIELDS = (
 _FIX_STRATEGIES = {"upstream-root", "symptom-only-deferred"}
 _SUPPORT_PATHS = {"AGENTS.md", "CLAUDE.md", "docs/SESSION_STATE_TEMPLATE.md"}
 _SUPPORT_PREFIXES = ("tests/", "plans/", ".claude/skills/")
+_FINGERPRINT_RE = re.compile(
+    r"^index:(?:[0-9a-f]{40}|none|unknown)\|worktree:(?:[0-9a-f]{64}|missing)$"
+)
 
 
 def _project_dir() -> str:
@@ -136,32 +139,6 @@ def _path_set(value: object, project_dir: str) -> set[str]:
     return paths
 
 
-def _file_sha(path: Path) -> str:
-    try:
-        return hashlib.sha256(path.read_bytes()).hexdigest()
-    except OSError:
-        return "missing"
-
-
-def _index_blob(project_dir: str, path: str) -> str:
-    proc = subprocess.run(
-        ["git", "ls-files", "-s", "--", path],
-        cwd=project_dir,
-        capture_output=True,
-        text=True,
-        check=False,
-    )
-    if proc.returncode != 0 or not proc.stdout.strip():
-        return "none"
-    first = proc.stdout.splitlines()[0].split()
-    return first[1] if len(first) > 1 else "unknown"
-
-
-def _file_fingerprint(project_dir: str, path: str) -> str:
-    rel = _relativize(path, project_dir)
-    return f"index:{_index_blob(project_dir, rel)}|worktree:{_file_sha(Path(project_dir) / rel)}"
-
-
 def _fingerprint_map(value: object, project_dir: str) -> dict[str, str]:
     if not isinstance(value, dict):
         return {}
@@ -171,9 +148,32 @@ def _fingerprint_map(value: object, project_dir: str) -> dict[str, str]:
             continue
         path = next(iter(_path_set([raw_path], project_dir)), "")
         fingerprint = raw_fingerprint.strip()
-        if path and fingerprint:
+        if path and _FINGERPRINT_RE.fullmatch(fingerprint):
             fingerprints[path] = fingerprint
     return fingerprints
+
+
+def _receipt_set(value: object, project_dir: str) -> set[str]:
+    return _path_set(value, project_dir)
+
+
+def _write_baton(path: str, baton: dict) -> None:
+    tmp_path = f"{path}.tmp"
+    with open(tmp_path, "w", encoding="utf-8") as handle:
+        json.dump(baton, handle, indent=2, sort_keys=True)
+        handle.write("\n")
+    os.replace(tmp_path, path)
+
+
+def _record_upstream_edit_receipts(baton_path: str, baton: dict, upstream_targets: set[str]) -> None:
+    if not upstream_targets:
+        return
+    receipts = sorted(_receipt_set(baton.get("upstream_edit_receipts"), _project_dir()) | upstream_targets)
+    if receipts == sorted(_receipt_set(baton.get("upstream_edit_receipts"), _project_dir())):
+        return
+    updated = dict(baton)
+    updated["upstream_edit_receipts"] = receipts
+    _write_baton(baton_path, updated)
 
 
 def _root_trace_errors(baton: dict, project_dir: str) -> list[str]:
@@ -214,7 +214,7 @@ def _root_trace_errors(baton: dict, project_dir: str) -> list[str]:
         symptom_missing = [
             field
             for field in ("symptom_only_reason", "follow_up")
-            if not _has_text(baton.get(field))
+            if not _has_evidence_text(baton.get(field))
         ]
         if symptom_missing:
             return ["symptom-only-deferred requires " + ", ".join(symptom_missing)]
@@ -245,13 +245,9 @@ def _changed_paths(project_dir: str, base_ref: str | None) -> set[str]:
 def _upstream_source_is_changed(project_dir: str, baton: dict, upstream_files: set[str]) -> bool:
     activation_head = str(baton.get("activation_head") or "").strip() or None
     activation_dirty_paths = _path_set(baton.get("activation_dirty_paths"), project_dir)
-    fingerprints = _fingerprint_map(baton.get("activation_dirty_fingerprints"), project_dir)
-    unchanged_dirty_paths = {
-        path
-        for path in activation_dirty_paths
-        if fingerprints.get(path) == _file_fingerprint(project_dir, path)
-    }
-    current_pass_paths = _changed_paths(project_dir, activation_head).difference(unchanged_dirty_paths)
+    receipts = _receipt_set(baton.get("upstream_edit_receipts"), project_dir)
+    current_pass_paths = _changed_paths(project_dir, activation_head).difference(activation_dirty_paths)
+    current_pass_paths.update(receipts)
     return bool(current_pass_paths.intersection(upstream_files))
 
 
@@ -313,6 +309,7 @@ def main() -> int:
         strategy = str(baton.get("fix_strategy", "")).strip().lower()
         upstream_files = _path_set(baton.get("upstream_files"), project_dir)
         if strategy == "upstream-root":
+            upstream_targets = {rel for rel in normal_targets if rel in upstream_files}
             downstream_targets = [
                 rel
                 for rel in normal_targets
@@ -326,6 +323,8 @@ def main() -> int:
                     "baton to symptom-only-deferred with reason and follow_up."
                 )
                 return 0
+            if upstream_targets and not downstream_targets:
+                _record_upstream_edit_receipts(baton_path, baton, upstream_targets)
         return 0
     except Exception:
         return 0  # never block on an unexpected hook error

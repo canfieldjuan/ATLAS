@@ -27,6 +27,7 @@ def _summary(baton: dict) -> str:
         ("Activation head", baton.get("activation_head")),
         ("Activation dirty paths", baton.get("activation_dirty_paths")),
         ("Activation dirty fingerprints", baton.get("activation_dirty_fingerprints")),
+        ("Upstream edit receipts", baton.get("upstream_edit_receipts")),
         ("Allowed files", baton.get("allowed")),
         ("Max files", baton.get("max_files")),
         ("Symptom", baton.get("symptom")),
