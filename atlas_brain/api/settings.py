@@ -10,14 +10,23 @@ import logging
 from pathlib import Path
 from typing import Optional
 
-from fastapi import APIRouter
+from fastapi import APIRouter, Depends
 from pydantic import BaseModel, Field
 
 from ..config import settings
+from .settings_auth import require_settings_admin
 
 logger = logging.getLogger("atlas.api.settings")
 
-router = APIRouter(prefix="/settings", tags=["Settings"])
+# Every /settings route (GET reads leak config; PATCH writes mutate destinations
+# and persist to .env.local) requires the deploy-time bearer token — the router
+# is reachable from the public Tailscale Funnel. Fail-closed: 503 until a token
+# is provisioned (#2335).
+router = APIRouter(
+    prefix="/settings",
+    tags=["Settings"],
+    dependencies=[Depends(require_settings_admin)],
+)
 
 # .env.local lives at the project root (same directory that main.py loads it from)
 _ENV_LOCAL_PATH = Path(__file__).parent.parent.parent / ".env.local"

@@ -4,6 +4,7 @@
 import { useState, useEffect, useCallback } from 'react';
 import { Save, RefreshCw, Plug, AlertCircle } from 'lucide-react';
 import clsx from 'clsx';
+import { settingsFetch } from './settingsApi';
 
 const API = '/api/v1/settings/integrations';
 
@@ -151,7 +152,7 @@ export function IntegrationSettingsForm() {
 
   const load = useCallback(async () => {
     try {
-      const r = await fetch(API);
+      const r = await settingsFetch(API);
       if (!r.ok) throw new Error(`HTTP ${r.status}`);
       setForm(await r.json());
     } catch (e) {
@@ -169,7 +170,7 @@ export function IntegrationSettingsForm() {
     setSaving(true);
     setStatus(null);
     try {
-      const r = await fetch(API, {
+      const r = await settingsFetch(API, {
         method: 'PATCH',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(form),

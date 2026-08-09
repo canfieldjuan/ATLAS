@@ -1,6 +1,7 @@
 import { useEffect, useState, useCallback } from 'react';
 import { X, Save, RotateCcw, Loader } from 'lucide-react';
 import clsx from 'clsx';
+import { settingsFetch } from './settingsApi';
 
 // ---------- types ----------
 
@@ -42,13 +43,13 @@ interface VoiceSettings {
 const API_BASE = '/api/v1/settings';
 
 async function fetchVoiceSettings(): Promise<VoiceSettings> {
-  const res = await fetch(`${API_BASE}/voice`);
+  const res = await settingsFetch(`${API_BASE}/voice`);
   if (!res.ok) throw new Error(`Failed to load settings: ${res.status} ${res.statusText}`);
   return res.json();
 }
 
 async function saveVoiceSettings(patch: Partial<VoiceSettings>): Promise<VoiceSettings> {
-  const res = await fetch(`${API_BASE}/voice`, {
+  const res = await settingsFetch(`${API_BASE}/voice`, {
     method: 'PATCH',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(patch),
