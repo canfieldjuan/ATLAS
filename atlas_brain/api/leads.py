@@ -102,6 +102,12 @@ GLOBAL_NOTIFY_HOURLY_CAP = 30
 # Wall-clock bound on the cap's COUNT query so a stalled/unindexed count cannot
 # hang the awaited intake route; on timeout the push fails closed (is skipped).
 _NOTIFY_VOLUME_TIMEOUT = 2.0
+# Fail-closed grammar for the ntfy topic before it is interpolated into the
+# request URL. ntfy topics are [-_A-Za-z0-9]; anything else (path separators,
+# spaces, query chars, control bytes) is rejected so a misconfigured topic can
+# never alter the URL path — the choke point for the whole URL-construction
+# class, not a per-character patch.
+_SAFE_NTFY_TOPIC_RE = re.compile(r"\A[A-Za-z0-9_-]{1,64}\Z")
 
 
 class LeadIntakeRequest(BaseModel):
@@ -320,6 +326,11 @@ async def _publish_lead_ntfy(title: str, body: str) -> None:
         topic = (alerts.leads_ntfy_topic or "").strip()
         if not alerts.ntfy_enabled or not topic:
             return  # feature off (no topic configured) — silently skip
+        if not _SAFE_NTFY_TOPIC_RE.match(topic):
+            # Fail closed: a topic that is not [-_A-Za-z0-9]{1,64} could alter the
+            # URL path. Never send lead PII to an unverifiable destination.
+            logger.warning("lead_intake: leads_ntfy_topic is not URL-safe; skipping push")
+            return
 
         import asyncio
 

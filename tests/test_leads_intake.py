@@ -1263,6 +1263,53 @@ def test_title_strips_control_chars_from_ascii_name():
     assert _lead_push_title(_payload(name="Jane\nBcc: x")) == "New lead: JaneBcc: x"
 
 
+def test_lead_push_title_is_header_safe_for_all_inputs():
+    """CLASS-closure (AGENTS.md 3k.1), not string-closure: for ANY name — every
+    codepoint family incl. C0/C1 control chars, CR/LF, latin-1 accents, CJK,
+    astral/emoji, and oversized — the Title is ALWAYS a single printable-ASCII
+    line the HTTP transport accepts. Generative, so it covers the class the
+    earlier "José"/"王伟" fixtures only sampled; no future unicode string can
+    reopen the header finding."""
+    from types import SimpleNamespace
+    rng = Random(20260809)
+    # Full codepoint space minus the surrogate block (0xD800-0xDFFF), which is
+    # not constructible in a str anyway.
+    ranges = ((0x00, 0x20), (0x20, 0x7F), (0x7F, 0xA0),
+              (0xA0, 0x100), (0x100, 0xD800), (0xE000, 0x110000))
+
+    def rand_char() -> str:
+        lo, hi = rng.choice(ranges)
+        return chr(rng.randrange(lo, hi))
+
+    for _ in range(500):
+        name = "".join(rand_char() for _ in range(rng.randint(0, 50)))
+        # Test the pure builder over the whole class (a superset of what the
+        # LeadIntakeRequest model admits), via a lightweight name holder.
+        title = _lead_push_title(SimpleNamespace(name=name))
+        title.encode("ascii")  # transport-safe: must never raise for ANY input
+        assert "\n" not in title and "\r" not in title  # single line: no header injection
+        assert title == "New lead" or title.startswith("New lead: ")
+
+
+@pytest.mark.asyncio
+async def test_publish_rejects_url_unsafe_topic(monkeypatch):
+    """Class-closure for URL construction: any topic that is not [-_A-Za-z0-9]{1,64}
+    (path separators, spaces, query chars, control bytes, oversize) fails closed
+    — no HTTP client is opened — so lead PII can never be sent to an unverifiable
+    destination built from a malformed topic."""
+    from atlas_brain.config import settings
+    monkeypatch.setattr(settings.alerts, "ntfy_enabled", True)
+    import httpx
+
+    def _boom(*a, **k):
+        raise AssertionError("must not open a client for a URL-unsafe topic")
+
+    monkeypatch.setattr(httpx, "AsyncClient", _boom)
+    for bad in ["a/b", "a b", "../evil", "topic?x=1", "a\nb", "a#frag", "x" * 65, "café"]:
+        monkeypatch.setattr(settings.alerts, "leads_ntfy_topic", bad)
+        await _publish_lead_ntfy("t", "b")  # returns cleanly, no transport
+
+
 @pytest.mark.asyncio
 async def test_publish_non_ascii_name_sends_ascii_header(monkeypatch):
     """End-to-end: a non-ASCII lead name produces an ASCII Title header (accepted

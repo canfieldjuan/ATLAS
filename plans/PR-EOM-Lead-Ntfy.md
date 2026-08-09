@@ -161,6 +161,22 @@ mirrors. A strict cap would need a serialized counter (a dedicated locked row or
 a token bucket) whose write contention is not justified to shave a handful of
 notifications off an adversarial burst that is already otherwise bounded.
 
+**Open-input guard closures (3k.1 — class-closure, not string-closure).** Two
+guards take open input and are closed at a choke point with a generative
+property test, so a new adversarial string cannot reopen either finding:
+- *Header safety* (free-text `name` → HTTP `Title`): the choke point
+  `_header_value_ascii` keeps only printable ASCII (fail-closed default: drop
+  anything else), so the Title is always a single ASCII line the transport
+  accepts and the exact name rides the UTF-8 body. Closed by
+  `test_lead_push_title_is_header_safe_for_all_inputs`, which generates 500 names
+  across every codepoint family (C0/C1, CR/LF, latin-1, CJK, astral) and asserts
+  the Title is always ASCII + single-line — not a fixture list of the reported
+  strings.
+- *URL construction* (`leads_ntfy_topic` → request URL path): the choke point
+  `_SAFE_NTFY_TOPIC_RE` (`[-_A-Za-z0-9]{1,64}`) rejects any topic that could
+  alter the path, failing closed (no HTTP client opened). Closed by
+  `test_publish_rejects_url_unsafe_topic`.
+
 ### Deployed-config probing
 
 - Deployed/default config values: field default `leads_ntfy_topic=""` (feature
@@ -252,7 +268,7 @@ Parked hardening: none.
 
 ## Verification
 
-- `/.venv/bin/python -m pytest tests/test_leads_intake.py -q` → 80 passed,
+- `/.venv/bin/python -m pytest tests/test_leads_intake.py -q` → 82 passed,
   run against the runtime venv. Includes the Codex hardening rounds: ASCII-only
   Title safety, route-level delivery proof, the hourly notification cap, the
   direct-caller no-op, secret-topic log redaction, a true 5s wall-clock
@@ -269,9 +285,9 @@ Parked hardening: none.
 
 | File | LOC |
 |---|---:|
-| `atlas_brain/api/leads.py` | 213 |
+| `atlas_brain/api/leads.py` | 224 |
 | `atlas_brain/config.py` | 2 |
-| `plans/PR-EOM-Lead-Ntfy.md` | 277 |
+| `plans/PR-EOM-Lead-Ntfy.md` | 293 |
 | `tests/conftest.py` | 19 |
-| `tests/test_leads_intake.py` | 523 |
-| **Total** | **1034** |
+| `tests/test_leads_intake.py` | 570 |
+| **Total** | **1108** |
