@@ -106,8 +106,13 @@ _NOTIFY_VOLUME_TIMEOUT = 2.0
 # request URL. ntfy topics are [-_A-Za-z0-9]; anything else (path separators,
 # spaces, query chars, control bytes) is rejected so a misconfigured topic can
 # never alter the URL path — the choke point for the whole URL-construction
-# class, not a per-character patch.
-_SAFE_NTFY_TOPIC_RE = re.compile(r"\A[A-Za-z0-9_-]{1,64}\Z")
+# class, not a per-character patch. The MINIMUM length is a credential-strength
+# floor: the topic is the sole secret protecting lead PII on the public relay,
+# so a short/guessable value (a descriptive topic with no random suffix) must
+# fail closed rather than expose PII to an unauthenticated subscriber. 20 chars
+# admits `eom-leads-<12-hex>` (the deploy convention) and rejects weak values.
+_MIN_NTFY_TOPIC_LEN = 20
+_SAFE_NTFY_TOPIC_RE = re.compile(rf"\A[A-Za-z0-9_-]{{{_MIN_NTFY_TOPIC_LEN},64}}\Z")
 
 
 class LeadIntakeRequest(BaseModel):

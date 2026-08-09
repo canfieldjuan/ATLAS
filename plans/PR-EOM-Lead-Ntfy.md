@@ -179,10 +179,13 @@ property test, so a new adversarial string cannot reopen either finding:
   across every codepoint family (C0/C1, CR/LF, latin-1, CJK, astral) and asserts
   the Title is always ASCII + single-line — not a fixture list of the reported
   strings.
-- *URL construction* (`leads_ntfy_topic` → request URL path): the choke point
-  `_SAFE_NTFY_TOPIC_RE` (`[-_A-Za-z0-9]{1,64}`) rejects any topic that could
-  alter the path, failing closed (no HTTP client opened). Closed by
-  `test_publish_rejects_url_unsafe_topic`.
+- *URL construction + credential strength* (`leads_ntfy_topic` → request URL
+  path): the choke point `_SAFE_NTFY_TOPIC_RE` (`[-_A-Za-z0-9]{20,64}`) rejects
+  any topic that could alter the path AND enforces a minimum-length entropy floor
+  — the topic is the sole credential protecting lead PII, so a short/guessable
+  value fails closed (no HTTP client opened) rather than exposing PII to an
+  unauthenticated subscriber. Closed by `test_publish_rejects_url_unsafe_topic`
+  (covers path-unsafe, over-long, AND low-entropy/short topics).
 
 **Config-trust closure (attacker-mutable fields).** The unauthenticated public
 `PATCH /api/v1/settings/notifications` can mutate every field in
@@ -311,9 +314,9 @@ Parked hardening: none.
 
 | File | LOC |
 |---|---:|
-| `atlas_brain/api/leads.py` | 262 |
+| `atlas_brain/api/leads.py` | 267 |
 | `atlas_brain/config.py` | 2 |
-| `plans/PR-EOM-Lead-Ntfy.md` | 319 |
+| `plans/PR-EOM-Lead-Ntfy.md` | 322 |
 | `tests/conftest.py` | 19 |
-| `tests/test_leads_intake.py` | 644 |
-| **Total** | **1246** |
+| `tests/test_leads_intake.py` | 642 |
+| **Total** | **1252** |

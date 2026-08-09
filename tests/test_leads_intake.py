@@ -1307,7 +1307,7 @@ async def test_publish_lone_surrogate_name_still_delivers(monkeypatch):
     Regresses Codex #2332 R1/R2/R13."""
     from types import SimpleNamespace
     from atlas_brain.config import settings
-    monkeypatch.setattr(settings.alerts, "leads_ntfy_topic", "eom-leads-abc")
+    monkeypatch.setattr(settings.alerts, "leads_ntfy_topic", "eom-leads-abc7e0e759f7bda")
     monkeypatch.setattr(settings.alerts, "leads_ntfy_url", "https://pinned.example")
     import httpx
 
@@ -1337,7 +1337,11 @@ async def test_publish_rejects_url_unsafe_topic(monkeypatch):
         raise AssertionError("must not open a client for a URL-unsafe topic")
 
     monkeypatch.setattr(httpx, "AsyncClient", _boom)
-    for bad in ["a/b", "a b", "../evil", "topic?x=1", "a\nb", "a#frag", "x" * 65, "café"]:
+    # includes low-entropy/short values (the topic is the sole credential, so a
+    # short/guessable value fails closed — Codex #2332 R3 entropy floor) and
+    # over-long/grammar-invalid values.
+    for bad in ["a/b", "a b", "../evil", "topic?x=1", "a\nb", "a#frag", "x" * 65,
+                "café", "eom-leads", "short", "x" * 19]:
         monkeypatch.setattr(settings.alerts, "leads_ntfy_topic", bad)
         await _publish_lead_ntfy("t", "b")  # returns cleanly, no transport
 
@@ -1349,7 +1353,7 @@ async def test_publish_non_ascii_name_sends_ascii_header(monkeypatch):
     so the push is actually delivered rather than silently swallowed."""
     from atlas_brain.config import settings
     monkeypatch.setattr(settings.alerts, "ntfy_enabled", True)
-    monkeypatch.setattr(settings.alerts, "leads_ntfy_topic", "eom-leads-abc")
+    monkeypatch.setattr(settings.alerts, "leads_ntfy_topic", "eom-leads-abc7e0e759f7bda")
     import httpx
 
     _FakeNtfyClient.posted = []
@@ -1386,7 +1390,7 @@ async def test_leads_delivery_independent_of_mutable_settings(monkeypatch):
     topic. Regresses Codex #2332 R3 (the enable gate + destination both)."""
     from atlas_brain.config import settings
     # deploy-only config (the real switch):
-    monkeypatch.setattr(settings.alerts, "leads_ntfy_topic", "eom-leads-pinned")
+    monkeypatch.setattr(settings.alerts, "leads_ntfy_topic", "eom-leads-pinned7e0e759f7bda")
     monkeypatch.setattr(settings.alerts, "leads_ntfy_url", "https://pinned.example")
     # hostile mutation of every settings-API-mutable alerts field:
     monkeypatch.setattr(settings.alerts, "ntfy_enabled", False)
@@ -1401,7 +1405,7 @@ async def test_leads_delivery_independent_of_mutable_settings(monkeypatch):
 
     assert len(_FakeNtfyClient.posted) == 1  # not disabled by ntfy_enabled=False
     url = _FakeNtfyClient.posted[0]["url"]
-    assert url == "https://pinned.example/eom-leads-pinned"  # not redirected
+    assert url == "https://pinned.example/eom-leads-pinned7e0e759f7bda"  # not redirected
     assert "attacker" not in url
 
 
@@ -1412,18 +1416,18 @@ def test_topic_redacted_from_httpx_logs(monkeypatch):
     import logging as _logging
     from atlas_brain.api.leads import _ensure_topic_log_redaction
     from atlas_brain.config import settings
-    monkeypatch.setattr(settings.alerts, "leads_ntfy_topic", "eom-leads-secret123")
+    monkeypatch.setattr(settings.alerts, "leads_ntfy_topic", "eom-leads-secret1237e0e759f")
 
     _ensure_topic_log_redaction()
     httpx_logger = _logging.getLogger("httpx")
     record = httpx_logger.makeRecord(
         "httpx", _logging.INFO, __file__, 1,
-        'HTTP Request: POST https://ntfy.sh/eom-leads-secret123 "HTTP/1.1 200 OK"',
+        'HTTP Request: POST https://ntfy.sh/eom-leads-secret1237e0e759f "HTTP/1.1 200 OK"',
         (), None,
     )
     # apply the logger's filters as the logging machinery would
     assert all(f.filter(record) for f in httpx_logger.filters)
-    assert "eom-leads-secret123" not in record.getMessage()
+    assert "eom-leads-secret1237e0e759f" not in record.getMessage()
     assert "<redacted-leads-topic>" in record.getMessage()
 
 
@@ -1432,7 +1436,7 @@ async def test_publish_posts_to_configured_leads_topic(monkeypatch):
     from atlas_brain.config import settings
     monkeypatch.setattr(settings.alerts, "ntfy_enabled", True)
     monkeypatch.setattr(settings.alerts, "leads_ntfy_url", "https://ntfy.example/")  # trailing slash
-    monkeypatch.setattr(settings.alerts, "leads_ntfy_topic", "eom-leads-abc")
+    monkeypatch.setattr(settings.alerts, "leads_ntfy_topic", "eom-leads-abc7e0e759f7bda")
     import httpx
 
     _FakeNtfyClient.posted = []
@@ -1442,7 +1446,7 @@ async def test_publish_posts_to_configured_leads_topic(monkeypatch):
 
     assert len(_FakeNtfyClient.posted) == 1
     sent = _FakeNtfyClient.posted[0]
-    assert sent["url"] == "https://ntfy.example/eom-leads-abc"  # single-slash join
+    assert sent["url"] == "https://ntfy.example/eom-leads-abc7e0e759f7bda"  # single-slash join
     assert sent["content"] == b"body-here"
     assert sent["headers"]["Title"] == "New lead: Jane Doe"
     assert sent["headers"]["Priority"] == "high"
@@ -1459,7 +1463,7 @@ async def test_publish_uses_pinned_leads_url_not_mutable_ntfy_url(monkeypatch):
     monkeypatch.setattr(settings.alerts, "ntfy_enabled", True)
     monkeypatch.setattr(settings.alerts, "ntfy_url", "https://attacker.example")  # mutable, MUST be ignored
     monkeypatch.setattr(settings.alerts, "leads_ntfy_url", "https://pinned.example")
-    monkeypatch.setattr(settings.alerts, "leads_ntfy_topic", "eom-leads-abc")
+    monkeypatch.setattr(settings.alerts, "leads_ntfy_topic", "eom-leads-abc7e0e759f7bda")
     import httpx
 
     _FakeNtfyClient.posted = []
@@ -1469,7 +1473,7 @@ async def test_publish_uses_pinned_leads_url_not_mutable_ntfy_url(monkeypatch):
 
     assert len(_FakeNtfyClient.posted) == 1
     url = _FakeNtfyClient.posted[0]["url"]
-    assert url == "https://pinned.example/eom-leads-abc"
+    assert url == "https://pinned.example/eom-leads-abc7e0e759f7bda"
     assert "attacker.example" not in url
 
 
@@ -1481,7 +1485,7 @@ async def test_publish_skipped_when_no_pinned_leads_url(monkeypatch):
     monkeypatch.setattr(settings.alerts, "ntfy_enabled", True)
     monkeypatch.setattr(settings.alerts, "ntfy_url", "https://attacker.example")
     monkeypatch.setattr(settings.alerts, "leads_ntfy_url", "")
-    monkeypatch.setattr(settings.alerts, "leads_ntfy_topic", "eom-leads-abc")
+    monkeypatch.setattr(settings.alerts, "leads_ntfy_topic", "eom-leads-abc7e0e759f7bda")
     import httpx
 
     def _boom(*a, **k):
@@ -1495,7 +1499,7 @@ async def test_publish_skipped_when_no_pinned_leads_url(monkeypatch):
 async def test_publish_swallows_transport_error(monkeypatch):
     from atlas_brain.config import settings
     monkeypatch.setattr(settings.alerts, "ntfy_enabled", True)
-    monkeypatch.setattr(settings.alerts, "leads_ntfy_topic", "eom-leads-abc")
+    monkeypatch.setattr(settings.alerts, "leads_ntfy_topic", "eom-leads-abc7e0e759f7bda")
     import httpx
 
     class _BoomClient(_FakeNtfyClient):
@@ -1524,7 +1528,7 @@ async def test_default_notifier_publishes_built_title_and_body(monkeypatch):
     Patches only the third-party httpx transport (not any first-party target)."""
     from atlas_brain.config import settings
     monkeypatch.setattr(settings.alerts, "ntfy_enabled", True)
-    monkeypatch.setattr(settings.alerts, "leads_ntfy_topic", "eom-leads-abc")
+    monkeypatch.setattr(settings.alerts, "leads_ntfy_topic", "eom-leads-abc7e0e759f7bda")
     import httpx
 
     _FakeNtfyClient.posted = []
@@ -1549,7 +1553,7 @@ def test_route_level_post_delivers_ntfy(monkeypatch):
     from atlas_brain.config import settings
 
     monkeypatch.setattr(settings.alerts, "ntfy_enabled", True)
-    monkeypatch.setattr(settings.alerts, "leads_ntfy_topic", "eom-leads-route")
+    monkeypatch.setattr(settings.alerts, "leads_ntfy_topic", "eom-leads-route7e0e759f7bda")
     import httpx
     _FakeNtfyClient.posted = []
     monkeypatch.setattr(httpx, "AsyncClient", _FakeNtfyClient)
@@ -1578,7 +1582,7 @@ def test_route_level_post_delivers_ntfy(monkeypatch):
     assert ok.status_code == 200 and ok.json()["success"] is True
     assert len(_FakeNtfyClient.posted) == 1
     sent = _FakeNtfyClient.posted[0]
-    assert sent["url"].endswith("/eom-leads-route")
+    assert sent["url"].endswith("/eom-leads-route7e0e759f7bda")
     assert sent["headers"]["Title"] == "New lead: Jane"
 
 
@@ -1587,7 +1591,7 @@ def _enable_leads_push(monkeypatch):
     the volume query is deliberately skipped when the feature is off."""
     from atlas_brain.config import settings
     monkeypatch.setattr(settings.alerts, "ntfy_enabled", True)
-    monkeypatch.setattr(settings.alerts, "leads_ntfy_topic", "eom-leads-cap")
+    monkeypatch.setattr(settings.alerts, "leads_ntfy_topic", "eom-leads-cap7e0e759f7bda")
 
 
 @pytest.mark.asyncio
@@ -1657,7 +1661,7 @@ async def test_publish_swallows_timeout(monkeypatch):
     import asyncio
     from atlas_brain.config import settings
     monkeypatch.setattr(settings.alerts, "ntfy_enabled", True)
-    monkeypatch.setattr(settings.alerts, "leads_ntfy_topic", "eom-leads-abc")
+    monkeypatch.setattr(settings.alerts, "leads_ntfy_topic", "eom-leads-abc7e0e759f7bda")
     import httpx
 
     class _HangClient(_FakeNtfyClient):
@@ -1676,7 +1680,7 @@ async def test_publish_treats_redirect_as_failure(monkeypatch, caplog):
     import logging
     from atlas_brain.config import settings
     monkeypatch.setattr(settings.alerts, "ntfy_enabled", True)
-    monkeypatch.setattr(settings.alerts, "leads_ntfy_topic", "eom-leads-abc")
+    monkeypatch.setattr(settings.alerts, "leads_ntfy_topic", "eom-leads-abc7e0e759f7bda")
     import httpx
 
     class _RedirectResponse:
@@ -1720,7 +1724,7 @@ async def test_direct_caller_without_notifier_does_not_notify(monkeypatch):
     from the deployed checkout) off the live topic. Regresses Codex #2332 R2/R12."""
     from atlas_brain.config import settings
     monkeypatch.setattr(settings.alerts, "ntfy_enabled", True)
-    monkeypatch.setattr(settings.alerts, "leads_ntfy_topic", "eom-leads-live")
+    monkeypatch.setattr(settings.alerts, "leads_ntfy_topic", "eom-leads-live7e0e759f7bda")
     import httpx
 
     def _boom(*a, **k):
