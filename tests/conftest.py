@@ -69,6 +69,25 @@ def pytest_collection_modifyitems(session, config, items):
             item.add_marker(integration)
 
 
+@pytest.fixture(autouse=True)
+def _disable_leads_ntfy_topic(monkeypatch):
+    """Repo-wide safety: keep the new-lead push OFF in EVERY test, regardless of
+    the checkout's .env, so no route-level test in any module can publish fake
+    lead PII to the live ntfy topic (the public intake route wires the production
+    notifier). Tests that exercise the transport re-enable it explicitly, and
+    their own monkeypatch — applied after this autouse — wins.
+    (Codex #2332 R2/R12: the per-file disable fixture did not cover route tests
+    such as test_eom_lead_pipeline_integration.py / test_eom_sent_email_tenant_scope.py.)
+    """
+    try:
+        from atlas_brain.config import settings
+    except Exception:
+        return
+    alerts = getattr(settings, "alerts", None)
+    if alerts is not None and hasattr(alerts, "leads_ntfy_topic"):
+        monkeypatch.setattr(alerts, "leads_ntfy_topic", "", raising=False)
+
+
 @pytest.fixture(scope="session")
 def event_loop():
     """Create event loop for the test session."""
