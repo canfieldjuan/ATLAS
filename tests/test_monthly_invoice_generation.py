@@ -1047,14 +1047,13 @@ async def test_payment_reminder_attaches_pdf(monkeypatch):
     # test documents the send SHAPE that must hold when #2271's approval gate
     # revives the path, so it opts past the guard deliberately and locally.
     #
-    # All THREE gates must be opened, not just the new one. invoicing.enabled
-    # and reminders_enabled both default False, so clearing _AUTOPILOT_DISABLED
-    # alone still returns at the master gate and this test would pass its
-    # assertions vacuously never having reached FakeEmailProvider. Opening all
-    # three is what makes this the permitted-side proof for the guard.
+    # Exercises _send_due_reminders directly rather than monkeypatching the
+    # kill switch back to False: patching _AUTOPILOT_DISABLED would be a
+    # first-party mock of the guard itself (ATLAS #1877). Both config gates
+    # still have to be opened -- they default False, so without this the test
+    # would return at the master gate and assert vacuously.
     from atlas_brain.config import settings
 
-    monkeypatch.setattr(task_mod, "_AUTOPILOT_DISABLED", False)
     monkeypatch.setattr(settings.invoicing, "enabled", True)
     monkeypatch.setattr(settings.invoicing, "reminders_enabled", True)
 
@@ -1119,7 +1118,7 @@ async def test_payment_reminder_attaches_pdf(monkeypatch):
         cron_expression="0 10 * * *",
     )
 
-    result = await task_mod.run(task)
+    result = await task_mod._send_due_reminders(task)
 
     assert result.get("reminders_sent") == 1
     assert captured.get("render_called_for") == "INV-2026-9001"
@@ -1138,12 +1137,10 @@ async def test_payment_reminder_falls_back_when_pdf_fails(monkeypatch):
     from atlas_brain.autonomous.tasks import invoice_payment_reminders as task_mod
     from atlas_brain.storage.models import ScheduledTask
 
-    # See the note on test_payment_reminder_attaches_pdf: the autopilot guard is
-    # the shipped behaviour, this test pins the revived send shape behind it.
-    # All three gates are opened for the same reason given there.
+    # See the note on test_payment_reminder_attaches_pdf: exercises
+    # _send_due_reminders directly, with both config gates opened.
     from atlas_brain.config import settings
 
-    monkeypatch.setattr(task_mod, "_AUTOPILOT_DISABLED", False)
     monkeypatch.setattr(settings.invoicing, "enabled", True)
     monkeypatch.setattr(settings.invoicing, "reminders_enabled", True)
 
@@ -1198,7 +1195,7 @@ async def test_payment_reminder_falls_back_when_pdf_fails(monkeypatch):
         cron_expression="0 10 * * *",
     )
 
-    result = await task_mod.run(task)
+    result = await task_mod._send_due_reminders(task)
 
     assert result.get("reminders_sent") == 1, "Reminder should still go out without attachment"
     assert captured.get("attachments") is None

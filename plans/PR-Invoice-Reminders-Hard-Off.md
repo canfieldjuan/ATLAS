@@ -32,7 +32,8 @@ Slice phase: production hardening
 4. Add `tests/test_invoice_payment_reminders_disabled.py` (7 tests) pinning all three layers, including that `reminders_enabled=True` still produces no send.
 5. Opt the two existing send-shape tests past the guard via `monkeypatch` so they keep documenting the behaviour #2271 must revive.
 6. Coerce a blank `ATLAS_INVOICING_REMINDERS_ENABLED` to `False` via a `mode="before"` field validator. Pydantic's bool parser rejects `""`, so an env template rendering the key empty raised `ValidationError` at import and took the app down — and made the field's fail-closed claim false for exactly the shape a half-configured deployment produces.
-7. Prove the guard's **permitted side** and enroll it: a test that opens all three gates and asserts the send happens, the two revived send-shape tests removed from `tests/unit_gate_baseline.txt`, and a blocking CI step running them.
+7. Prove the guard's **permitted side** and enroll it: the two revived send-shape tests open both config gates, are removed from `tests/unit_gate_baseline.txt`, and run in a blocking CI step.
+8. Extract the send body to `_send_due_reminders(task)` so `run()` is guard-plus-delegate. The send-shape tests call the unguarded function directly instead of monkeypatching `_AUTOPILOT_DISABLED` back to False — patching the kill switch was a first-party mock of the guard itself and tripped the maturity-sweep ratchet on two lanes (ATLAS #1877). The guard tests then need no mocks at all.
 
 ### Review Contract
 
@@ -44,7 +45,8 @@ Slice phase: production hardening
   5. The kill constant itself is present — settled by `::test_autopilot_disabled_flag_is_set`.
   6. No regression on the existing invoicing suite — settled by the base-vs-branch comparison in Verification below.
   7. A blank or whitespace-only `ATLAS_INVOICING_REMINDERS_ENABLED` yields `False` rather than `ValidationError`, and an explicit `true` still parses — settled by `::test_blank_env_value_means_disabled_not_a_crash`, which probes `""`, `"   "` and `"true"`.
-  8. **Permitted side:** with all three gates open the send actually happens, so the constant is provably the operative blocker and not an incidental one — settled by `::test_clearing_the_guard_restores_the_send`, which asserts no send with the guard set and exactly one send after clearing only the guard, against identical fixtures. `tests/test_monthly_invoice_generation.py -k payment_reminder` (3 tests) carries the same proof at the send-shape level and now runs as a blocking CI step.
+  9. **Ratchet:** the `atlas-brain-autonomous` and `atlas-brain-b2c-core-risk` maturity-sweep lanes pass with **no baseline edit** — settled by running both with the workflow's own arguments and sensitive globs, exit 0 each.
+  8. **Permitted side:** the underlying send path works when its config gates are open — settled by `tests/test_monthly_invoice_generation.py -k payment_reminder` (3 tests), which drive `_send_due_reminders` directly and assert the PDF attachment and text-only fallback. Ordering against the guard is settled separately by the exact-`_skip_synthesis`-string assertion in `::test_run_returns_at_the_autopilot_gate_not_a_later_one`, since each gate returns a distinct reason.
 - Reachability proof: real entrypoint is the scheduler's builtin dispatch of `invoice_payment_reminders` (`autonomous/tasks/__init__.py:30` → `run`) on the `0 10 * * *` cron. Observable effect: the run logs the disable reason and returns `_skip_synthesis`; no `sent_emails` row, no `contact_interactions` `invoice` row, no outbound message. The live `scheduled_tasks.enabled` flag was additionally set false on the ts.net host so the dispatch does not occur at all.
 - Affected surfaces: `atlas_brain/autonomous/tasks/invoice_payment_reminders.py`, `atlas_brain/config.py` (`InvoicingConfig.reminders_enabled` only), `atlas_brain/autonomous/scheduler.py` (`_DEFAULT_TASKS` entry only), `tests/test_monthly_invoice_generation.py` (two tests), new test module, `.github/workflows/atlas_invoicing_checks.yml` (path filters + one added step).
 - Risk areas: guard placement relative to side effects; the config default flip reaching an unintended consumer of `reminders_enabled`; the seed edit perturbing other `_DEFAULT_TASKS` entries or the seeding loop; the two monkeypatched tests silently disabling the guard for the rest of a session.
@@ -124,13 +126,13 @@ Mechanical verification. Result: pass.
 |---|---:|
 | `.github/workflows/atlas_invoicing_checks.yml` | 23 |
 | `atlas_brain/autonomous/scheduler.py` | 12 |
-| `atlas_brain/autonomous/tasks/invoice_payment_reminders.py` | 56 |
+| `atlas_brain/autonomous/tasks/invoice_payment_reminders.py` | 68 |
 | `atlas_brain/config.py` | 25 |
-| `plans/PR-Invoice-Reminders-Hard-Off.md` | 144 |
-| `tests/test_invoice_payment_reminders_disabled.py` | 174 |
-| `tests/test_monthly_invoice_generation.py` | 25 |
+| `plans/PR-Invoice-Reminders-Hard-Off.md` | 146 |
+| `tests/test_invoice_payment_reminders_disabled.py` | 124 |
+| `tests/test_monthly_invoice_generation.py` | 26 |
 | `tests/unit_gate_baseline.txt` | 2 |
-| **Total** | **461** |
+| **Total** | **426** |
 
 ## Cold diff reconstruction
 

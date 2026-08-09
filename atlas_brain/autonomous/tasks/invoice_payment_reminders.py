@@ -125,6 +125,18 @@ async def run(task: ScheduledTask) -> dict:
         )
         return {"_skip_synthesis": _AUTOPILOT_DISABLED_REASON}
 
+    return await _send_due_reminders(task)
+
+
+async def _send_due_reminders(task: ScheduledTask) -> dict:
+    """The reminder run itself, with no autopilot gate.
+
+    Split out of ``run`` so the guard cannot be tested around: the send-shape
+    tests exercise THIS function directly instead of monkeypatching
+    ``_AUTOPILOT_DISABLED`` back to False, which kept a first-party mock of the
+    kill switch alive in the suite (ATLAS #1877, mock the edge not internal
+    code). Nothing but ``run`` may call this while the autopilot is disabled.
+    """
     from ...config import settings
 
     if not settings.invoicing.enabled:
