@@ -57,8 +57,8 @@ Slice phase: production hardening
 - Risk areas: demotion safety window, cancellation precedence, calendar-provider
   query range, and avoiding accidental changes to import output or CRM write
   eligibility.
-- Reviewer rules triggered: R1 requirements match, R2 test evidence, R3 scope,
-  R7 data retention/customer state safety, R12 cross-repository issue linkage.
+- Reviewer rules triggered: R2 test evidence, R14 codebase verification and
+  boundary-probe for a guard-shaped change.
 
 ### Boundary-change enumeration
 
