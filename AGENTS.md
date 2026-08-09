@@ -524,10 +524,21 @@ rather than hand-formatting:
   open direct file paths. The shell redirect reads the file and `gh` receives
   the body on stdin. If the PR already exists, this wrapper updates only the
   body; use `gh pr edit` manually for title/base/label changes.
+- `bash scripts/update_pr_body.sh <pr-body-file>` — updates the body of the
+  already-open PR for the current branch when **only the PR body changed** after
+  the branch was already pushed/opened (for example AI reconciliation ledger,
+  verification receipt, deferred notes, or wrapper-marker repair). This helper
+  stamps the same hidden wrapper marker as `open_pr.sh`, runs the body,
+  AI-reconciliation, fix-loop disposition, live-reconciliation, ownership, and
+  head-identity checks that can be affected by a body-only edit, and publishes
+  through stdin. It intentionally does **not** run the full local review/unit
+  mirror; use `push_pr.sh` plus `open_pr.sh` when code or plan files changed.
 
 Flow: `bash scripts/new_pr_plan.sh` -> implement ->
 `python scripts/sync_pr_plan.py` -> `bash scripts/push_pr.sh` ->
 `bash scripts/open_pr.sh`.
+For body-only edits to an existing PR after that flow has already run, use
+`bash scripts/update_pr_body.sh` instead of raw `gh pr edit`.
 Do **not** run a separate manual `local_pr_review.sh` immediately before
 `push_pr.sh`; that duplicates the same mechanical bundle and burns context.
 Use manual local review for ad hoc triage or when you are not about to push.

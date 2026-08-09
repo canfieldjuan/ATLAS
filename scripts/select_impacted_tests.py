@@ -145,6 +145,9 @@ EXPLICIT_TEST_OWNERS: dict[str, tuple[str, ...]] = {
     "scripts/open_pr.sh": (
         "tests/test_open_pr_wrapper.py",
     ),
+    "scripts/update_pr_body.sh": (
+        "tests/test_update_pr_body_wrapper.py",
+    ),
     "scripts/pre_push_audit.sh": (
         "tests/test_pre_push_audit.py",
     ),
