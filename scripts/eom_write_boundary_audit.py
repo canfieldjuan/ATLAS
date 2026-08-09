@@ -1,0 +1,351 @@
+#!/usr/bin/env python3
+"""Alert when a write reaches EOM customer data without the canonical boundary.
+
+Slice 0F of the canonical write boundary (website #113, under #107 / #105).
+
+0C made cross-system customer creation durable and retryable. Nothing watched
+it, so a bypass -- a writer reaching the database without going through the
+domain tier, or a tracker customer minted with no Atlas contact -- stayed silent
+until somebody happened to run an audit by hand. That is how the original defect
+survived long enough to need a backfill.
+
+This runs on a timer and turns each of those into an alert.
+
+Deliberately standalone, in the same spirit as atlas-api-healthcheck.sh: it
+shells out to `psql` and the Render CLI rather than importing the application,
+so it keeps working when the application does not. It is the monitor; it must
+not share a failure mode with the thing it monitors.
+
+Not being able to READ a source is itself an alert. A monitor that goes quiet
+when it loses its data source is worse than no monitor, because it reports clean
+while seeing nothing -- the exact silent-failure class this slice exists to
+close.
+"""
+from __future__ import annotations
+
+import argparse
+import json
+import os
+import subprocess
+import sys
+from dataclasses import dataclass, field
+from pathlib import Path
+from typing import Callable, Sequence
+
+EOM_TENANT = "effingham_maids"
+
+# Every `source` value an EOM contact writer is allowed to emit. Derived from
+# the 2026-08-05 code sweep of every create path, not from whatever happens to
+# be in the table -- an allowlist built from observed data would bless a bypass
+# that had already run.
+KNOWN_EOM_SOURCES = (
+    "calendar_import",
+    "email_backfill",
+    "web",
+    "manual",
+    "manual_invoice_setup",
+    "phone_call",
+    "portal_sync",
+    "sms",
+    "booking",
+)
+
+# A reservation pending right after an Atlas failure is normal and retryable.
+# One still pending an hour later means nobody is coming back for it.
+STALE_RESERVATION_MINUTES = 60
+
+DEFAULT_STATE_DIR = Path(
+    os.environ.get("XDG_STATE_HOME", str(Path.home() / ".local/state"))
+) / "eom-write-boundary-audit"
+
+# Reuses the healthcheck's topic on purpose: both mean "something is wrong with
+# the EOM write path", and it needs no new phone subscription. Title and tags
+# keep them distinguishable.
+DEFAULT_NTFY_TOPIC = "eom-atlas-api-health-64ac52777bf9"
+DEFAULT_NTFY_URL = "https://ntfy.sh"
+DEFAULT_REALERT_EVERY = 24  # hourly cadence -> re-alert once a day while open
+
+TRACKER_DB_ID = "dpg-d723r3buibrs739nnpg0-a"
+
+
+@dataclass(frozen=True)
+class Signal:
+    """One boundary invariant, and what was actually measured for it."""
+
+    name: str
+    summary: str
+    threshold: int
+    count: int | None = None
+    error: str | None = None
+
+    @property
+    def unmeasured(self) -> bool:
+        return self.count is None
+
+    @property
+    def breached(self) -> bool:
+        # Unmeasured counts as breached: see the module docstring.
+        if self.unmeasured:
+            return True
+        return self.count > self.threshold
+
+    def describe(self) -> str:
+        if self.unmeasured:
+            return f"{self.name}: COULD NOT MEASURE ({self.error})"
+        return f"{self.name}: {self.count} (allowed {self.threshold}) -- {self.summary}"
+
+
+@dataclass
+class AuditResult:
+    signals: list[Signal] = field(default_factory=list)
+
+    @property
+    def breaches(self) -> list[Signal]:
+        return [signal for signal in self.signals if signal.breached]
+
+    @property
+    def ok(self) -> bool:
+        return not self.breaches
+
+    def report(self) -> str:
+        return "\n".join(signal.describe() for signal in self.signals)
+
+
+# --- queries -----------------------------------------------------------------
+
+
+def _atlas_sql() -> str:
+    sources = ", ".join(f"'{value}'" for value in KNOWN_EOM_SOURCES)
+    return f"""
+SELECT
+  (SELECT COUNT(*) FROM contacts
+     WHERE business_context_id = '{EOM_TENANT}'
+       AND (source IS NULL OR source NOT IN ({sources}))),
+  (SELECT COUNT(*) FROM contacts WHERE business_context_id IS NULL),
+  (SELECT COUNT(*) FROM contacts c
+     WHERE c.business_context_id = '{EOM_TENANT}'
+       AND c.metadata ? 'eom_operator_contact_sources'
+       AND NOT EXISTS (
+         SELECT 1 FROM eom_lead_lifecycle_events e WHERE e.contact_id = c.id))
+"""
+
+
+def _tracker_sql() -> str:
+    return (
+        "SELECT (SELECT COUNT(*) FROM customers WHERE atlas_contact_id IS NULL), "
+        "(SELECT COUNT(*) FROM eom_customer_atlas_reservations "
+        f"WHERE state = 'pending' AND updated_at < NOW() - INTERVAL '{STALE_RESERVATION_MINUTES} minutes')"
+    )
+
+
+def _run(command: Sequence[str], timeout: int = 90) -> tuple[str | None, str | None]:
+    try:
+        proc = subprocess.run(
+            command, capture_output=True, text=True, timeout=timeout, check=False
+        )
+    except FileNotFoundError as exc:
+        return None, f"{command[0]} not found: {exc}"
+    except subprocess.TimeoutExpired:
+        return None, f"{command[0]} timed out after {timeout}s"
+    if proc.returncode != 0:
+        detail = (proc.stderr or proc.stdout or "").strip().splitlines()
+        return None, f"{command[0]} exited {proc.returncode}: {detail[-1] if detail else 'no output'}"
+    return proc.stdout, None
+
+
+def _parse_counts(raw: str, expected: int) -> tuple[list[int] | None, str | None]:
+    """Read one delimited row of integers, refusing anything else.
+
+    Strict on purpose: a partially parsed row would silently become a low count,
+    which reads as healthy. Unparseable output must surface as unmeasured.
+    """
+    for line in (raw or "").splitlines():
+        candidate = line.strip()
+        if not candidate:
+            continue
+        parts = [part.strip() for part in candidate.split("|")]
+        if len(parts) != expected:
+            continue
+        try:
+            return [int(part) for part in parts], None
+        except ValueError:
+            continue
+    return None, "no parseable count row in output"
+
+
+def query_atlas(psql_bin: str, dsn: str) -> tuple[list[int] | None, str | None]:
+    raw, error = _run(
+        [psql_bin, dsn, "-A", "-t", "-F", "|", "-v", "ON_ERROR_STOP=1", "-c", _atlas_sql()]
+    )
+    if error:
+        return None, error
+    return _parse_counts(raw, 3)
+
+
+def query_tracker(render_bin: str, database_id: str) -> tuple[list[int] | None, str | None]:
+    raw, error = _run(
+        [
+            render_bin,
+            "psql",
+            database_id,
+            "--confirm",
+            "-o",
+            "text",
+            "-c",
+            _tracker_sql(),
+            "--",
+            "-A",
+            "-t",
+            "-F",
+            "|",
+        ],
+        timeout=120,
+    )
+    if error:
+        return None, error
+    return _parse_counts(raw, 2)
+
+
+def build_signals(
+    atlas: tuple[list[int] | None, str | None],
+    tracker: tuple[list[int] | None, str | None],
+) -> AuditResult:
+    atlas_counts, atlas_error = atlas
+    tracker_counts, tracker_error = tracker
+
+    def atlas_at(index: int) -> tuple[int | None, str | None]:
+        if atlas_counts is None:
+            return None, f"Atlas unreadable: {atlas_error}"
+        return atlas_counts[index], None
+
+    def tracker_at(index: int) -> tuple[int | None, str | None]:
+        if tracker_counts is None:
+            return None, f"tracker unreadable: {tracker_error}"
+        return tracker_counts[index], None
+
+    specs = [
+        ("atlas_unknown_source", "EOM contacts whose source no known writer emits", atlas_at(0)),
+        ("atlas_null_tenant", "contacts with no business context", atlas_at(1)),
+        (
+            "atlas_operator_provenance_without_event",
+            "operator-written contacts with no lifecycle event (wrote around the domain tier)",
+            atlas_at(2),
+        ),
+        (
+            "tracker_unlinked_customers",
+            "tracker customers Atlas has never heard of",
+            tracker_at(0),
+        ),
+        (
+            "tracker_stale_pending_reservations",
+            f"reservations pending over {STALE_RESERVATION_MINUTES}m with nobody retrying",
+            tracker_at(1),
+        ),
+    ]
+    return AuditResult(
+        signals=[
+            Signal(name=name, summary=summary, threshold=0, count=count, error=error)
+            for name, summary, (count, error) in specs
+        ]
+    )
+
+
+# --- alert state machine -----------------------------------------------------
+
+
+def decide_alert(previous: dict, breached: bool, realert_every: int) -> tuple[dict, str | None]:
+    """Return the next state and which alert to send, if any.
+
+    Mirrors atlas-api-healthcheck.sh: fire on the transition into breach,
+    re-alert every `realert_every` consecutive runs so an open problem is not
+    forgotten, and send exactly one recovery notice.
+    """
+    was_breached = bool(previous.get("breached"))
+    if not breached:
+        if was_breached:
+            return {"breached": False, "consecutive": 0}, "recovered"
+        return {"breached": False, "consecutive": 0}, None
+
+    consecutive = int(previous.get("consecutive", 0)) + 1 if was_breached else 1
+    state = {"breached": True, "consecutive": consecutive}
+    if consecutive == 1:
+        return state, "breach"
+    if realert_every > 0 and consecutive % realert_every == 0:
+        return state, "reminder"
+    return state, None
+
+
+def read_state(path: Path) -> dict:
+    try:
+        value = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return {}
+    return value if isinstance(value, dict) else {}
+
+
+def write_state(path: Path, state: dict) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(state), encoding="utf-8")
+
+
+def publish(ntfy_url: str, topic: str, title: str, body: str, priority: str, tags: str) -> None:
+    subprocess.run(
+        [
+            "curl", "-fsS", "-m", "10",
+            "-H", f"Title: {title}",
+            "-H", f"Priority: {priority}",
+            "-H", f"Tags: {tags}",
+            "-d", body,
+            f"{ntfy_url}/{topic}",
+        ],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+
+
+def main(argv: Sequence[str] | None = None, *, notifier: Callable[..., None] = publish) -> int:
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--atlas-dsn", default=os.environ.get("EOM_AUDIT_ATLAS_DSN", "postgresql://atlas:atlas@localhost:5433/atlas"))
+    parser.add_argument("--psql-bin", default=os.environ.get("EOM_AUDIT_PSQL_BIN", "psql"))
+    parser.add_argument("--render-bin", default=os.environ.get("EOM_AUDIT_RENDER_BIN", str(Path.home() / ".local/bin/render")))
+    parser.add_argument("--tracker-db-id", default=os.environ.get("EOM_AUDIT_TRACKER_DB_ID", TRACKER_DB_ID))
+    parser.add_argument("--state-dir", default=os.environ.get("EOM_AUDIT_STATE_DIR", str(DEFAULT_STATE_DIR)))
+    parser.add_argument("--ntfy-url", default=os.environ.get("EOM_AUDIT_NTFY_URL", DEFAULT_NTFY_URL))
+    parser.add_argument("--ntfy-topic", default=os.environ.get("EOM_AUDIT_NTFY_TOPIC", DEFAULT_NTFY_TOPIC))
+    parser.add_argument("--realert-every", type=int, default=int(os.environ.get("EOM_AUDIT_REALERT_EVERY", DEFAULT_REALERT_EVERY)))
+    parser.add_argument("--no-alert", action="store_true", help="measure and print without notifying")
+    args = parser.parse_args(argv)
+
+    result = build_signals(
+        query_atlas(args.psql_bin, args.atlas_dsn),
+        query_tracker(args.render_bin, args.tracker_db_id),
+    )
+    print(result.report())
+
+    state_path = Path(args.state_dir) / "state.json"
+    next_state, alert = decide_alert(read_state(state_path), not result.ok, args.realert_every)
+    write_state(state_path, next_state)
+
+    if alert and not args.no_alert:
+        if alert == "recovered":
+            notifier(
+                args.ntfy_url, args.ntfy_topic,
+                "EOM write boundary clean",
+                "Every write-boundary signal is back to zero.",
+                "default", "white_check_mark",
+            )
+        else:
+            detail = "\n".join(signal.describe() for signal in result.breaches)
+            notifier(
+                args.ntfy_url, args.ntfy_topic,
+                "EOM write boundary breached",
+                f"{detail}\n\n(run #{next_state['consecutive']} in breach)",
+                "urgent", "rotating_light,warning",
+            )
+
+    return 0 if result.ok else 1
+
+
+if __name__ == "__main__":
+    sys.exit(main())
