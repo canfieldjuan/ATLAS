@@ -23,6 +23,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import re
 import subprocess
 import sys
@@ -31,8 +32,9 @@ from pathlib import Path, PurePosixPath
 from typing import Iterable, Mapping, Sequence
 
 
-REPO_ROOT = Path(__file__).resolve().parent.parent
-CONFIG_PATH = REPO_ROOT / "scripts" / "guard_class_closure_config.json"
+TRUSTED_REPO_ROOT = Path(__file__).resolve().parent.parent
+INSPECTED_REPO_ROOT = Path(os.environ.get("ATLAS_AUDIT_REPO_ROOT", TRUSTED_REPO_ROOT)).resolve()
+CONFIG_PATH = TRUSTED_REPO_ROOT / "scripts" / "guard_class_closure_config.json"
 WAIVER_MARKER = "guard-class-closure: waived"
 
 # --- Guard-shape signals -----------------------------------------------------
@@ -80,11 +82,45 @@ _OPEN_INPUT_RE = re.compile(
 # A bare for-loop is NOT a property signal: a plain loop over a fixture list
 # is exactly the shape the lint exists to reject, and the old trailing-loop
 # alternative (no MULTILINE) was order-dependent noise in both directions.
-_PROPERTY_TEST_RE = re.compile(
+_ADVISORY_PROPERTY_TEST_RE = re.compile(
     r"@pytest\.mark\.parametrize"
     r"|itertools\.product|\bproduct\("
     r"|\bhypothesis\b|@given\b"
 )
+_STRICT_PROPERTY_TEST_RE = re.compile(
+    r"itertools\.product|\bproduct\("
+    r"|\bhypothesis\b|@given\b"
+)
+_STRICT_GENERATOR_RE = re.compile(r"itertools\.product|\bproduct\(|@given\b")
+_STRICT_ORACLE_RE = re.compile(
+    r"\b(?:[a-z0-9_]*oracle[a-z0-9_]*|expected|spec[-_ ]derived|contract[-_ ]derived|invariant)\b",
+    re.IGNORECASE,
+)
+_STRICT_AXIS_RE = re.compile(
+    r"\b(?P<axis>tokens?|values?|vocabular(?:y|ies)|containers?|wrappers?|famil(?:y|ies)|keys?)\b",
+    re.IGNORECASE,
+)
+_STRING_SCOPED_AXIS_ASSIGN_RE = re.compile(
+    r"(?m)^\+?\s*(?:tokens?|values?|containers?|wrappers?|famil(?:y|ies)|keys?|expected)"
+    r"\s*=\s*(?:"
+    r"\[[^\]\n]*(?:['\"]|True|False|\b\d+\b)[^\]\n]*\]"
+    r"|\([^\)\n]*(?:['\"]|True|False|\b\d+\b)[^\)\n]*\)"
+    r"|\{[^\}\n]*(?:['\"]|True|False|\b\d+\b)[^\}\n]*\}"
+    r"|['\"][^'\"]+['\"]|True|False|\d+"
+    r")\s*$",
+    re.IGNORECASE,
+)
+
+
+def _axis_category(raw: str) -> str:
+    value = raw.lower()
+    if value.startswith(("token", "value", "vocabular")):
+        return "token"
+    if value.startswith(("container", "wrapper")):
+        return "container"
+    if value.startswith(("famil", "key")):
+        return "key"
+    return value
 
 
 def _is_test_path(path: str) -> bool:
@@ -112,7 +148,7 @@ class Finding:
     reason: str
 
 
-def file_is_guard_shaped(path: str, added: str) -> bool:
+def file_is_guard_shaped(path: str, added: str, *, strict: bool = False) -> bool:
     """True if a non-test .py file's change looks like a guard over open input.
 
     Guard-shaped iff a guard path-name stem is present, OR the added lines show
@@ -126,16 +162,43 @@ def file_is_guard_shaped(path: str, added: str) -> bool:
     if any(stem in compact for stem in _GUARD_PATH_STEMS):
         return True
     has_verdict = _VERDICT_DEF_RE.search(added) is not None
+    if strict and has_verdict:
+        return True
     has_open_input = _OPEN_INPUT_RE.search(added) is not None
     return has_verdict and has_open_input
 
 
-def diff_has_property_test(test_added: Mapping[str, str]) -> bool:
+def diff_has_property_test(test_added: Mapping[str, str], *, strict: bool = False) -> bool:
     """True if any co-changed test file adds a property/generative test."""
-    return any(_PROPERTY_TEST_RE.search(added) for added in test_added.values())
+    if strict:
+        return any(strict_property_test_evidence(added) for added in test_added.values())
+    return any(_ADVISORY_PROPERTY_TEST_RE.search(added) for added in test_added.values())
 
 
-def guard_has_property_test(guard_path: str, test_added: Mapping[str, str]) -> bool:
+def strict_property_test_evidence(added: str) -> bool:
+    """True only for strict class-closure evidence, not generative-looking syntax.
+
+    Strict mode is a stop gate, so a product loop or Hypothesis import is not
+    enough by itself. The added test must show a generator, an independent oracle
+    / expected-verdict marker, and at least two grammar axes such as tokens,
+    containers/wrappers, or key families.
+    """
+    if _STRICT_GENERATOR_RE.search(added) is None:
+        return False
+    if _STRICT_ORACLE_RE.search(added) is None:
+        return False
+    if _STRING_SCOPED_AXIS_ASSIGN_RE.search(added) is not None:
+        return False
+    axes = {_axis_category(match.group("axis")) for match in _STRICT_AXIS_RE.finditer(added)}
+    return len(axes) >= 3
+
+
+def guard_has_property_test(
+    guard_path: str,
+    test_added: Mapping[str, str],
+    *,
+    strict: bool = False,
+) -> bool:
     """True if a property/generative test is tied to THIS guard.
 
     Evidence must both carry a property signal AND reference the guard's
@@ -144,7 +207,12 @@ def guard_has_property_test(guard_path: str, test_added: Mapping[str, str]) -> b
     """
     stem = PurePosixPath(guard_path).stem.lower()
     for test_path, added in test_added.items():
-        if not _PROPERTY_TEST_RE.search(added):
+        has_evidence = (
+            strict_property_test_evidence(added)
+            if strict
+            else _ADVISORY_PROPERTY_TEST_RE.search(added) is not None
+        )
+        if not has_evidence:
             continue
         if stem in test_path.lower() or stem in added.lower():
             return True
@@ -155,6 +223,7 @@ def scan_diff(
     added_by_file: Mapping[str, str],
     *,
     ignore_globs: Sequence[str] = (),
+    strict: bool = False,
 ) -> list[Finding]:
     """Pure core: given {path: added-lines}, return advisory findings.
 
@@ -169,11 +238,11 @@ def scan_diff(
             continue
         if any(PurePosixPath(path).match(glob) for glob in ignore_globs):
             continue
-        if not file_is_guard_shaped(path, added):
+        if not file_is_guard_shaped(path, added, strict=strict):
             continue
         # Evidence is per-guard: an unrelated property test in the same PR
         # must not suppress this guard's finding.
-        if guard_has_property_test(path, test_added):
+        if guard_has_property_test(path, test_added, strict=strict):
             continue
         findings.append(
             Finding(
@@ -194,7 +263,7 @@ def scan_diff(
 
 def _git(args: Sequence[str]) -> str:
     result = subprocess.run(
-        ["git", *args], cwd=REPO_ROOT, check=False, capture_output=True, text=True
+        ["git", *args], cwd=INSPECTED_REPO_ROOT, check=False, capture_output=True, text=True
     )
     if result.returncode != 0:
         raise SystemExit(f"git {' '.join(args)} failed: {result.stderr.strip()}")
@@ -245,7 +314,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     args = parser.parse_args(argv)
 
     added_by_file = changed_added_lines(args.base)
-    findings = scan_diff(added_by_file, ignore_globs=load_ignore_globs())
+    findings = scan_diff(added_by_file, ignore_globs=load_ignore_globs(), strict=args.strict)
 
     print("guard class-closure lint (advisory)")
     print("-" * 60)
