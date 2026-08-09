@@ -1,6 +1,6 @@
 # Plan archive index
 
-1519 archived plan doc(s). Merged plan docs are moved under `archive/` and listed below; once the archive sweep has run, the `plans/` root holds only in-flight slices.
+1520 archived plan doc(s). Merged plan docs are moved under `archive/` and listed below; once the archive sweep has run, the `plans/` root holds only in-flight slices.
 
 - [PR-ASR-Pip-Audit-Egg-Fragment](archive/PR-ASR-Pip-Audit-Egg-Fragment.md) - lane: security/workflow | phase: Production hardening
 - [PR-ASR-Requirements-Audit-Pin](archive/PR-ASR-Requirements-Audit-Pin.md) - lane: security/workflow | phase: Production hardening
@@ -1158,6 +1158,7 @@
 - [PR-FAQ-Source-ID-UI-Selection](archive/PR-FAQ-Source-ID-UI-Selection.md) - lane: content-ops/faq-output-ingestion | phase: Vertical slice
 - [PR-Fable5-Lessons-Index](archive/PR-Fable5-Lessons-Index.md) - lane: workflow/arc-lessons-index | phase: Workflow/process
 - [PR-FastAPI-0137-CI-Pin](archive/PR-FastAPI-0137-CI-Pin.md) - lane: content-ops/deflection-launch-readiness | phase: Production hardening
+- [PR-Fix-Loop-Disposition-Preflight](archive/PR-Fix-Loop-Disposition-Preflight.md) - lane: workflow/fix-loop-disposition | phase: Workflow/process
 - [PR-Fix-Mode-Claude-Code-Enforcement](archive/PR-Fix-Mode-Claude-Code-Enforcement.md) - lane: process/agent-guidance | phase: Production hardening
 - [PR-Fix-Mode-Doc-Layer](archive/PR-Fix-Mode-Doc-Layer.md) - lane: process/agent-guidance | phase: Production hardening
 - [PR-Followup-Contract-Hardening](archive/PR-Followup-Contract-Hardening.md) - lane: followup-workflow | phase: production hardening
