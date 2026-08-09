@@ -146,6 +146,62 @@ def test_local_pr_review_runs_pr_body_contract_when_body_supplied(tmp_path: Path
     assert "local PR review passed" in result.stdout
 
 
+def test_local_pr_review_runs_fix_loop_disposition_when_body_supplied(tmp_path: Path) -> None:
+    repo = tmp_path / "repo"
+    _write_fixture_repo(repo)
+    body = tmp_path / "body.md"
+    body.write_text("PR body\n", encoding="utf-8")
+    _write_executable(
+        repo / "scripts" / "audit_fix_loop_disposition.py",
+        "#!/usr/bin/env python3\n"
+        "import sys\n"
+        "print('fix-loop args=' + ' '.join(sys.argv[1:]))\n",
+    )
+    _git(repo, "add", "scripts/audit_fix_loop_disposition.py")
+    _git(repo, "commit", "-m", "add fix-loop disposition audit")
+
+    result = _run(repo, ["bash", "scripts/local_pr_review.sh", "--current-pr-body-file", str(body)])
+
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert "Fix-loop disposition preflight" in result.stdout
+    assert f"--current-pr-body-file {body}" in result.stdout
+    assert f"--repo-root {repo}" in result.stdout
+    assert "--base-ref origin/main" in result.stdout
+    assert "local PR review passed" in result.stdout
+
+
+def test_local_pr_review_blocks_unclosed_guard_class(tmp_path: Path) -> None:
+    repo = tmp_path / "repo"
+    _write_fixture_repo(repo)
+    _add_guard_shaped_change(repo)
+
+    result = _run(repo, ["bash", "scripts/local_pr_review.sh"])
+
+    assert result.returncode == 1
+    assert "Guard class-closure lint" in result.stdout
+    assert "guard-shaped change over open input with no co-changed property/generative test" in result.stdout
+    assert "1 local review check(s) failed" in result.stdout
+
+
+def test_local_pr_review_allows_guard_class_waiver_from_pr_body(tmp_path: Path) -> None:
+    repo = tmp_path / "repo"
+    _write_fixture_repo(repo)
+    _add_guard_shaped_change(repo)
+    body = tmp_path / "body.md"
+    body.write_text(
+        "guard-class-closure: waived\n\n"
+        "Reason: false-positive synthetic guard fixture for local review wiring.\n",
+        encoding="utf-8",
+    )
+
+    result = _run(repo, ["bash", "scripts/local_pr_review.sh", "--current-pr-body-file", str(body)])
+
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert "Guard class-closure lint" in result.stdout
+    assert "WAIVED: 'guard-class-closure: waived' present" in result.stdout
+    assert "local PR review passed" in result.stdout
+
+
 def test_local_pr_review_forwards_pr_author_to_body_contract(tmp_path: Path) -> None:
     repo = tmp_path / "repo"
     _write_fixture_repo(repo)
@@ -448,7 +504,11 @@ def test_local_pr_review_real_body_audit_honors_dependabot_exemption(
     repo = tmp_path / "repo"
     _write_fixture_repo(repo)
     body = tmp_path / "body.md"
-    body.write_text("Dependabot generated body without the Atlas plan contract.\n", encoding="utf-8")
+    body.write_text(
+        "Dependabot generated body without the Atlas plan contract.\n"
+        "guard-class-closure: waived\n",
+        encoding="utf-8",
+    )
     _write_executable(
         repo / "scripts" / "audit_pr_body.py",
         (REPO_ROOT / "scripts" / "audit_pr_body.py").read_text(encoding="utf-8"),
@@ -492,7 +552,11 @@ def test_local_pr_review_ai_reconciliation_honors_plain_dependabot_author(
     repo = tmp_path / "repo"
     _write_fixture_repo(repo)
     body = tmp_path / "body.md"
-    body.write_text("Dependabot generated body without Atlas reconciliation.\n", encoding="utf-8")
+    body.write_text(
+        "Dependabot generated body without Atlas reconciliation.\n"
+        "guard-class-closure: waived\n",
+        encoding="utf-8",
+    )
     _write_executable(
         repo / "scripts" / "audit_pr_body.py",
         (REPO_ROOT / "scripts" / "audit_pr_body.py").read_text(encoding="utf-8"),
@@ -637,6 +701,44 @@ def test_local_pr_review_trusted_script_root_does_not_execute_repo_scripts(tmp_p
     assert "repo pre-push should not run" not in result.stderr
 
 
+def test_local_pr_review_trusted_guard_checker_inspects_repo_root(tmp_path: Path) -> None:
+    repo = tmp_path / "repo"
+    _write_fixture_repo(repo)
+    _add_guard_shaped_change(repo)
+
+    trusted = tmp_path / "trusted"
+    (trusted / "scripts").mkdir(parents=True)
+    _write_executable(
+        trusted / "scripts" / "local_pr_review.sh",
+        (REPO_ROOT / "scripts" / "local_pr_review.sh").read_text(encoding="utf-8"),
+    )
+    _write_executable(
+        trusted / "scripts" / "check_guard_class_closure.py",
+        (REPO_ROOT / "scripts" / "check_guard_class_closure.py").read_text(encoding="utf-8"),
+    )
+    _write_executable(
+        trusted / "scripts" / "pre_push_audit.sh",
+        "#!/usr/bin/env bash\nset -euo pipefail\necho trusted pre-push ok\n",
+    )
+
+    result = _run(
+        tmp_path,
+        [
+            "bash",
+            str(trusted / "scripts" / "local_pr_review.sh"),
+            "--repo-root",
+            str(repo),
+            "--script-root",
+            str(trusted),
+        ],
+    )
+
+    assert result.returncode == 1
+    assert "Guard class-closure lint" in result.stdout
+    assert "extracted_content_pipeline/support_ticket_privacy.py" in result.stdout
+    assert "guard-shaped change over open input" in result.stdout
+
+
 def test_local_pr_review_body_audit_inspects_repo_root_plan_with_trusted_scripts(
     tmp_path: Path,
 ) -> None:
@@ -746,6 +848,10 @@ def _write_fixture_repo(repo: Path) -> None:
         (REPO_ROOT / "scripts" / "local_pr_review.sh").read_text(encoding="utf-8"),
     )
     _write_executable(
+        repo / "scripts" / "check_guard_class_closure.py",
+        (REPO_ROOT / "scripts" / "check_guard_class_closure.py").read_text(encoding="utf-8"),
+    )
+    _write_executable(
         repo / "scripts" / "pre_push_audit.sh",
         "#!/usr/bin/env bash\nset -euo pipefail\necho pre-push ok\n",
     )
@@ -763,6 +869,20 @@ def _write_fixture_repo(repo: Path) -> None:
     _git(repo, "remote", "add", "origin", str(repo))
     _git(repo, "update-ref", "refs/remotes/origin/main", "HEAD")
     _git(repo, "symbolic-ref", "refs/remotes/origin/HEAD", "refs/remotes/origin/main")
+
+
+def _add_guard_shaped_change(repo: Path) -> None:
+    guard = repo / "extracted_content_pipeline" / "support_ticket_privacy.py"
+    guard.parent.mkdir(parents=True, exist_ok=True)
+    guard.write_text(
+        "def is_private_marker(value):\n"
+        "    if isinstance(value, (str, dict)):\n"
+        "        return value.strip().lower() in {'not published'}\n"
+        "    return False\n",
+        encoding="utf-8",
+    )
+    _git(repo, "add", "extracted_content_pipeline/support_ticket_privacy.py")
+    _git(repo, "commit", "-m", "add guard-shaped symptom patch")
 
 
 def _write_unit_gate_fixture(
