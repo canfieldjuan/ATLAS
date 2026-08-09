@@ -99,6 +99,9 @@ GLOBAL_ACK_HOURLY_CAP = 20
 # operator's phone pushes per rolling hour. Leads are still captured past the
 # cap; only the notification is skipped.
 GLOBAL_NOTIFY_HOURLY_CAP = 30
+# Wall-clock bound on the cap's COUNT query so a stalled/unindexed count cannot
+# hang the awaited intake route; on timeout the push fails closed (is skipped).
+_NOTIFY_VOLUME_TIMEOUT = 2.0
 
 
 class LeadIntakeRequest(BaseModel):
@@ -333,8 +336,11 @@ async def _publish_lead_ntfy(title: str, body: str) -> None:
             return response.status_code
 
         status = await asyncio.wait_for(_post(), timeout=5.0)
-        if status >= 400:
-            # Do NOT surface the exception/URL here — it carries the secret topic.
+        if not 200 <= status < 300:
+            # Only 2xx is delivered. httpx does not follow redirects by default,
+            # so a 3xx (proxy/HTTP->HTTPS) means the push was NOT delivered —
+            # treat it as a failure, not a silent success. Never surface the
+            # exception/URL: it carries the secret topic.
             logger.warning("lead_intake: new-lead ntfy push returned HTTP %s", status)
             return
         logger.info("lead_intake: new-lead push sent to ntfy topic")
@@ -389,17 +395,19 @@ async def _maybe_notify_new_lead(
     contact_id: Any,
 ) -> None:
     """Fire the new-lead push behind a global hourly ceiling. One fire-and-forget
-    guard: a volume-check failure fails closed (skip the push, lead already
-    captured) and a notifier failure never propagates. The volume query runs
-    ONLY when pushes are enabled, so the disabled default does no extra DB work."""
+    guard: a volume-check failure OR timeout fails closed (skip the push, lead
+    already captured) and a notifier failure never propagates. The volume query
+    runs ONLY when pushes are enabled, so the disabled default does no extra DB
+    work, and it is itself time-bounded so a stalled/unindexed COUNT cannot hang
+    the awaited intake route ahead of the publish deadline."""
+    import asyncio
+
     try:
-        if (
-            notify_volume is not None
-            and _leads_push_configured()
-            and (await notify_volume()) > GLOBAL_NOTIFY_HOURLY_CAP
-        ):
-            logger.warning("lead_intake: notification volume cap hit; skipping push")
-            return
+        if notify_volume is not None and _leads_push_configured():
+            count = await asyncio.wait_for(notify_volume(), timeout=_NOTIFY_VOLUME_TIMEOUT)
+            if count > GLOBAL_NOTIFY_HOURLY_CAP:
+                logger.warning("lead_intake: notification volume cap hit; skipping push")
+                return
         await notifier(payload, email, phone_digits)
     except Exception:
         logger.exception(

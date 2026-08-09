@@ -12,6 +12,20 @@ dedicated ntfy topic the moment a new lead is captured, so a real lead surfaces
 outside the email noise. It mirrors the pattern already in production for the
 atlas-api healthcheck and paid-deflection alerts (private ntfy.sh topic).
 
+**Why this slice is indivisible (over the 400-line soft cap).** The executable
+change is ~90 LOC (`leads.py` + one config field); the rest is this plan and the
+test matrix. It cannot be split smaller without shipping something unsafe or
+unreviewable: the feature is a single guard-shaped emit path whose *correctness
+is the gate matrix* — fires-on-new-lead, silent on honeypot/duplicate,
+phone-only, notifier-failure-never-fails-intake, ASCII-only header, secret-topic
+log redaction, true 5s + volume-query deadlines, the hourly cap on both sides,
+and the disabled-path inertness. Landing the ~90 LOC without those tests would
+ship an untested public, PII-handling, abuse-exposed surface; landing the tests
+in a later PR would merge a guard whose second side is unproven. The plan doc is
+mandatory (AGENTS.md) and grew with each Codex review round's closure/ordering
+requirements. So the diff is dominated by the proof and the record, not by
+divisible feature code — the narrowest viable slice is code + its full proof.
+
 ### Problem-derived contract
 
 - Root cause: The lead-intake path (`_process_lead_intake` in
@@ -125,6 +139,28 @@ Enumerated gates (ALL must pass to emit; each is proven by a test):
   duplicate / honeypot / no-notifier / disabled / over-cap / volume-query-error /
   validation-or-throttle-error → no notify (fail-closed on the volume error).
 
+**Cap concurrent-execution model (3k.4).** The hourly ceiling is a **best-effort
+rate limiter, not an exact transactional counter**, and is intentionally so.
+Execution model: each request runs `_hourly_lead_notification_volume()` as an
+autonomous `READ COMMITTED` `COUNT` over committed `contact_interactions` rows,
+then decides independently — there is no row lock, `SELECT … FOR UPDATE`,
+advisory lock, or serializable snapshot shared across concurrent submissions, so
+counting and publishing are deliberately not atomic. Property-level invariant it
+guarantees: **the sustained push rate is bounded near the cap** — because every
+lead's interaction row is committed before its own COUNT runs (the CRM write is
+`await`ed first) and each subsequent request sees the accumulated rows, a
+*sustained* flood converges to ≤ cap/hour. What it explicitly does NOT guarantee:
+an exact per-hour count under a concurrent burst — up to `N-1` requests
+in-flight at the same instant can each read a pre-threshold count and all emit,
+overshooting by at most the momentary concurrency. That residual is accepted
+because (a) the harm of a few extra pushes is trivial — a phone buzz, never a
+security, billing, or data-integrity effect; (b) leads are low-volume and the
+per-identity daily throttle already caps single-identity bursts; and (c) this is
+the exact model of the sibling `GLOBAL_ACK_HOURLY_CAP` email ceiling this one
+mirrors. A strict cap would need a serialized counter (a dedicated locked row or
+a token bucket) whose write contention is not justified to shave a handful of
+notifications off an adversarial burst that is already otherwise bounded.
+
 ### Deployed-config probing
 
 - Deployed/default config values: field default `leads_ntfy_topic=""` (feature
@@ -219,8 +255,8 @@ Parked hardening: none.
 
 | File | LOC |
 |---|---:|
-| `atlas_brain/api/leads.py` | 198 |
+| `atlas_brain/api/leads.py` | 206 |
 | `atlas_brain/config.py` | 1 |
-| `plans/PR-EOM-Lead-Ntfy.md` | 226 |
-| `tests/test_leads_intake.py` | 437 |
-| **Total** | **862** |
+| `plans/PR-EOM-Lead-Ntfy.md` | 262 |
+| `tests/test_leads_intake.py` | 481 |
+| **Total** | **950** |

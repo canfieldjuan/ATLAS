@@ -1512,6 +1512,50 @@ async def test_publish_swallows_timeout(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_publish_treats_redirect_as_failure(monkeypatch, caplog):
+    """httpx does not follow redirects by default, so a 3xx means the push was
+    NOT delivered — it must be logged as a failure, not a silent success.
+    Regresses Codex #2332 R6."""
+    import logging
+    from atlas_brain.config import settings
+    monkeypatch.setattr(settings.alerts, "ntfy_enabled", True)
+    monkeypatch.setattr(settings.alerts, "leads_ntfy_topic", "eom-leads-abc")
+    import httpx
+
+    class _RedirectResponse:
+        status_code = 301
+
+    class _RedirectClient(_FakeNtfyClient):
+        async def post(self, url, content=None, headers=None):
+            return _RedirectResponse()
+
+    monkeypatch.setattr(httpx, "AsyncClient", _RedirectClient)
+    with caplog.at_level(logging.WARNING):
+        await _publish_lead_ntfy("t", "b")
+    assert any("returned HTTP 301" in r.getMessage() for r in caplog.records)
+
+
+@pytest.mark.asyncio
+async def test_notification_volume_timeout_fails_closed(monkeypatch):
+    """The volume query is wrapped in a wall-clock deadline; when it stalls past
+    the bound asyncio.wait_for raises TimeoutError, which must fail closed (skip
+    the push, lead still captured) so it cannot hang the awaited intake route.
+    Regresses Codex #2332 R1/R7."""
+    import asyncio
+    _enable_leads_push(monkeypatch)
+    notifier = AsyncMock()
+    # Simulate the deadline firing without a real wait: the bounded query raises
+    # the same TimeoutError asyncio.wait_for would raise on a stalled COUNT.
+    timed_out = AsyncMock(side_effect=asyncio.TimeoutError)
+    result = await _process_lead_intake(
+        _payload(), crm=_crm(), email_provider=_email_provider(),
+        lead_notifier=notifier, notify_volume=timed_out,
+    )
+    assert result["success"] is True
+    notifier.assert_not_awaited()  # timed-out volume check => fail closed
+
+
+@pytest.mark.asyncio
 async def test_direct_caller_without_notifier_does_not_notify(monkeypatch):
     """A direct _process_lead_intake caller that omits lead_notifier performs NO
     notification — even with the topic configured and the transport live, nothing
