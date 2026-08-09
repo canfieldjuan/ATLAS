@@ -90,6 +90,108 @@ The {business_name} Team
 """
 
 
+COMMERCIAL_SINGLE_SITE_TEMPLATE = """Hi {client_name},
+
+Thank you for requesting a free estimate from {business_name}
+
+My name is Juan Canfield and I'll be giving you a call shortly.
+
+{request_line}Here's what happens next:
+
+1. I will give you a call within 24 hours to ask a few questions about \
+your facility and to set up a time and day for a walk-through.
+
+2. We'll walk the space with you when you have some free time available. \
+We have a flexible schedule for walk-throughs and estimates.
+
+3. Tell us what areas are the most important to you. Which areas need the \
+most attention, anything that needs special handling, and how often you \
+want us on site.
+
+4. After the walk-through, we'll put together an estimate covering the \
+scope of work plus any details covered in the walk-through and email it to \
+you for review.
+
+5. Estimates are FREE and there is no obligation. If we're not the right \
+fit, we won't try to talk you into it.
+
+If you have any questions in the meantime call me at {business_phone}, or
+just reply to this email.
+
+Talk soon,
+Juan Canfield
+{business_name}
+{business_phone} | {business_email}
+{business_website}
+"""
+
+COMMERCIAL_MULTI_SITE_TEMPLATE = """Hi {client_name},
+
+Thank you for requesting a free estimate from {business_name}
+
+My name is Juan Canfield and I'll be giving you a call shortly.
+
+{request_line}Multi-location work takes a little more planning than a \
+single building, so here's what happens next:
+
+1. I will give you a call within 24 hours. That first call is to \
+understand the whole picture before we put any numbers to it.
+
+2. We'll go through your locations together - where they are, how they \
+differ from each other, and who we'd be working with at each one. Some \
+sites need more attention than others, and we'd rather know that up front.
+
+3. From there we'll work out which locations need a walk-through. Not \
+every site always does - it depends on how similar they are.
+
+4. Once we understand the locations and the schedules you need, we'll put \
+together a scope for each one and email you an estimate for review.
+
+5. Estimates are FREE and there is no obligation. If we're not the right \
+fit, we won't try to talk you into it.
+
+If you have any questions in the meantime call me at {business_phone}, or
+just reply to this email.
+
+Talk soon,
+Juan Canfield
+{business_name}
+{business_phone} | {business_email}
+{business_website}
+"""
+
+# "custom" is a real website form option, but it is a placeholder for "we'll
+# work it out on the call" rather than a cadence that can be read back in a
+# sentence -- "a custom commercial cleaning" does not parse as English. It is
+# therefore dropped exactly like a blank frequency, and the request line falls
+# back to its cadence-free wording.
+_UNSPOKEN_FREQUENCIES = frozenset({"custom"})
+
+
+def _spoken_frequency(frequency: str) -> str:
+    """Return the frequency only when it reads naturally inside a sentence."""
+    cleaned = frequency.strip()
+    if cleaned.lower() in _UNSPOKEN_FREQUENCIES:
+        return ""
+    return cleaned
+
+
+def _commercial_request_line(frequency: str, *, multi_site: bool) -> str:
+    """Echo the submitted cadence back in the commercial voice.
+
+    The residential template keeps its raw ``service, frequency`` echo
+    unchanged (operator decision, 2026-08-09: leave residential as is). The
+    commercial variants speak the cadence in a sentence instead, so the value
+    has to be one that reads naturally after "a".
+    """
+    spoken = _spoken_frequency(frequency)
+    if multi_site:
+        detail = f"{spoken} cleaning" if spoken else "cleaning"
+        return f"You requested {detail} for multiple locations.\n\n"
+    detail = f"a {spoken} commercial cleaning" if spoken else "a commercial cleaning"
+    return f"You requested {detail}.\n\n"
+
+
 def format_request_acknowledgement(
     client_name: str,
     service: str = "",
@@ -97,12 +199,34 @@ def format_request_acknowledgement(
 ) -> tuple[str, str]:
     """Render (subject, body) for the request acknowledgement.
 
+    The variant is derived here from ``service`` rather than accepted as an
+    argument, so the email a lead receives and the ``ack_variant`` intake
+    records cannot disagree: both call ``classify_ack_variant`` on the same
+    submitted value. Callers keep the existing signature.
+
     ``service``/``frequency`` echo the form selections back when present so
     the lead sees their request was captured accurately; both are optional.
     """
-    details = ", ".join(part for part in (service.strip(), frequency.strip()) if part)
-    request_line = f"Your request: {details}.\n\n" if details else ""
-    body = ACK_TEMPLATE.format(
+    variant = classify_ack_variant(service)
+
+    if variant == ACK_VARIANT_COMMERCIAL_SINGLE_SITE:
+        template = COMMERCIAL_SINGLE_SITE_TEMPLATE
+        request_line = _commercial_request_line(frequency, multi_site=False)
+    elif variant == ACK_VARIANT_COMMERCIAL_MULTI_SITE:
+        template = COMMERCIAL_MULTI_SITE_TEMPLATE
+        request_line = _commercial_request_line(frequency, multi_site=True)
+    else:
+        # residential AND general. `general` covers the form's "Other" option
+        # and anything unrecognised, where the request is not known to be
+        # commercial -- so it keeps exactly the copy those leads receive
+        # today rather than being pointed at unapproved wording.
+        template = ACK_TEMPLATE
+        details = ", ".join(
+            part for part in (service.strip(), frequency.strip()) if part
+        )
+        request_line = f"Your request: {details}.\n\n" if details else ""
+
+    body = template.format(
         client_name=client_name.strip() or "there",
         business_name=BUSINESS_NAME,
         business_phone=BUSINESS_PHONE,

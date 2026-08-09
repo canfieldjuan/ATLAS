@@ -30,6 +30,7 @@ on:
       - "atlas_brain/templates/email/__init__.py"
       - "atlas_brain/templates/email/estimate_confirmation.py"
       - "atlas_brain/templates/email/onboarding_welcome.py"
+      - "atlas_brain/templates/email/request_acknowledgement.py"
       - "atlas_brain/eom_api/config.py"
       - "atlas_brain/eom_api/auth.py"
       - "atlas_brain/eom_api/funnel.py"
@@ -61,6 +62,7 @@ on:
       - "atlas_brain/storage/migrations/361_eom_onboarding_draft_actor_bigint.sql"
       - "atlas_brain/tools/calendar.py"
       - "atlas_brain/tools/scheduling.py"
+      - "tests/test_ack_commercial_templates.py"
       - "tests/test_ack_variant_classification.py"
       - "tests/test_call_intelligence.py"
       - "tests/test_crm_read_scoping.py"
@@ -108,6 +110,7 @@ on:
       - "atlas_brain/templates/email/__init__.py"
       - "atlas_brain/templates/email/estimate_confirmation.py"
       - "atlas_brain/templates/email/onboarding_welcome.py"
+      - "atlas_brain/templates/email/request_acknowledgement.py"
       - "atlas_brain/eom_api/config.py"
       - "atlas_brain/eom_api/auth.py"
       - "atlas_brain/eom_api/funnel.py"
@@ -139,6 +142,7 @@ on:
       - "atlas_brain/storage/migrations/361_eom_onboarding_draft_actor_bigint.sql"
       - "atlas_brain/tools/calendar.py"
       - "atlas_brain/tools/scheduling.py"
+      - "tests/test_ack_commercial_templates.py"
       - "tests/test_ack_variant_classification.py"
       - "tests/test_call_intelligence.py"
       - "tests/test_crm_read_scoping.py"
@@ -197,6 +201,7 @@ jobs:
       - name: Run EOM lead pipeline checks
         run: |
           python -m pytest \
+            tests/test_ack_commercial_templates.py \
             tests/test_ack_variant_classification.py \
             tests/test_call_intelligence.py \
             tests/test_crm_read_scoping.py \
