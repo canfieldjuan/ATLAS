@@ -176,7 +176,7 @@ Parked hardening: none.
 ## Verification
 
 - `python -m pytest tests/test_fix_mode_hook.py tests/test_audit_fix_loop_disposition.py -q`
-  -- 50 passed.
+  -- 54 passed.
 - `ATLAS_SESSION_STATE_FILE=SESSION_STATE.codex-root-cause-trace.local.md bash scripts/local_pr_review.sh --current-pr-body-file tmp/pr-root-cause-trace-hook-body.md`
   -- passed. Local unit gate escalated to FULL because `.claude/hooks/check_edit_budget.py`
   is not mapped by the selector; result was 160 baseline failing/errored nodes,
@@ -186,7 +186,7 @@ Parked hardening: none.
 
 | File | LOC |
 |---|---:|
-| `.claude/hooks/check_edit_budget.py` | 110 |
+| `.claude/hooks/check_edit_budget.py` | 129 |
 | `.claude/hooks/inject_fix_mode.py` | 7 |
 | `.claude/skills/fix-mode/SKILL.md` | 13 |
 | `AGENTS.md` | 13 |
@@ -195,5 +195,5 @@ Parked hardening: none.
 | `plans/PR-Root-Cause-Trace-Hook.md` | 199 |
 | `scripts/audit_fix_loop_disposition.py` | 60 |
 | `tests/test_audit_fix_loop_disposition.py` | 239 |
-| `tests/test_fix_mode_hook.py` | 118 |
-| **Total** | **779** |
+| `tests/test_fix_mode_hook.py` | 207 |
+| **Total** | **887** |

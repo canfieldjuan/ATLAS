@@ -84,6 +84,19 @@ def _has_text(value: object) -> bool:
     return isinstance(value, str) and value.strip().lower() not in {"", "none", "n/a", "na", "tbd"}
 
 
+def _placeholder(value: str) -> bool:
+    return value.strip().lower() in {"", "none", "n/a", "na", "tbd", "todo", "unknown", "?", "-", "--", "..."}
+
+
+def _source_trace_is_valid(value: object) -> bool:
+    if not isinstance(value, str):
+        return False
+    parts = [part.strip() for part in value.split("->")]
+    if len(parts) < 2:
+        return False
+    return all(not _placeholder(part) and any(ch.isalnum() for ch in part) for part in parts)
+
+
 def _has_string_list(value: object) -> bool:
     return isinstance(value, list) and any(_has_text(item) for item in value)
 
@@ -105,6 +118,8 @@ def _root_trace_errors(baton: dict) -> list[str]:
             missing.append(field)
     if missing:
         return ["missing " + ", ".join(missing)]
+    if not _source_trace_is_valid(baton.get("source_trace")):
+        return ["source_trace must name the chain from symptom -> upstream source with non-placeholder endpoints"]
 
     strategy = str(baton.get("fix_strategy", "")).strip().lower()
     if strategy not in _FIX_STRATEGIES:
@@ -134,12 +149,13 @@ def _changed_paths(project_dir: str, base_ref: str) -> set[str]:
         ["git", "diff", "--name-only", f"{base_ref}...HEAD"],
         ["git", "diff", "--name-only", "--cached"],
         ["git", "diff", "--name-only"],
+        ["git", "ls-files", "--others", "--exclude-standard"],
     )
     for command in commands:
         proc = subprocess.run(command, cwd=project_dir, capture_output=True, text=True, check=False)
         if proc.returncode != 0:
             continue
-        changed.update(line.strip() for line in proc.stdout.splitlines() if line.strip())
+        changed.update(_relativize(line.strip(), project_dir) for line in proc.stdout.splitlines() if line.strip())
     return changed
 
 
@@ -204,7 +220,10 @@ def main() -> int:
                 )
                 return 0
         strategy = str(baton.get("fix_strategy", "")).strip().lower()
-        upstream_files = set(_string_list(baton.get("upstream_files")))
+        upstream_files = {
+            _relativize(path, project_dir)
+            for path in _string_list(baton.get("upstream_files"))
+        }
         if strategy == "upstream-root":
             downstream_targets = [
                 rel

@@ -8,6 +8,7 @@ fail-open: with no/inactive/malformed baton the PreToolUse hook never blocks.
 
 from __future__ import annotations
 
+import itertools
 import json
 import os
 import subprocess
@@ -155,6 +156,62 @@ def test_active_fix_mode_denies_edit_without_root_trace(tmp_path):
     assert "symptom, root_cause, source_trace" in result.stdout
 
 
+def test_active_fix_mode_denies_placeholder_source_trace(tmp_path):
+    baton = {
+        "active": True,
+        "allowed": ["scripts/*"],
+        **_root_trace(),
+        "source_trace": "TBD -> TBD",
+    }
+    _write_baton(tmp_path, baton)
+
+    result = _run(CHECK_HOOK, _edit("scripts/parser.py"), tmp_path)
+
+    assert _decision(result.stdout) == "deny"
+    assert "source_trace must name the chain" in result.stdout
+
+
+def test_check_edit_budget_source_trace_endpoint_grammar(tmp_path):
+    trace_tokens_by_expected = {
+        "review claim": True,
+        "parser branch": True,
+        "admission source": True,
+        "TBD": False,
+        "unknown": False,
+        "...": False,
+    }
+    trace_containers = {
+        "bare": lambda value: value,
+        "padded": lambda value: f"  {value}  ",
+    }
+    trace_families = {
+        "symptom": 0,
+        "middle": 1,
+        "source": 2,
+    }
+
+    for token, container, family in itertools.product(
+        trace_tokens_by_expected,
+        trace_containers,
+        trace_families,
+    ):
+        endpoints = ["review claim", "parser branch", "admission source"]
+        endpoints[trace_families[family]] = trace_containers[container](token)
+        source_trace = " -> ".join(endpoints)
+        spec_derived_oracle = trace_tokens_by_expected[token]
+        baton = {
+            "active": True,
+            "allowed": ["scripts/*"],
+            **_root_trace(),
+            "source_trace": source_trace,
+        }
+        _write_baton(tmp_path, baton)
+
+        result = _run(CHECK_HOOK, _edit("scripts/parser.py"), tmp_path)
+
+        assert (_decision(result.stdout) is None) is spec_derived_oracle
+
+
 def test_symptom_only_strategy_requires_reason_and_followup(tmp_path):
     baton = {
         "active": True,
@@ -214,6 +271,38 @@ def test_upstream_root_allows_downstream_after_source_changed(tmp_path):
             **_root_trace(),
         },
     )
+
+    result = _run(CHECK_HOOK, _edit("templates/downstream.html"), tmp_path)
+
+    assert _decision(result.stdout) is None
+
+
+def test_upstream_root_normalizes_declared_upstream_paths(tmp_path):
+    _write_baton(
+        tmp_path,
+        {
+            "active": True,
+            "allowed": ["scripts/*"],
+            **_root_trace(),
+            "upstream_files": ["./scripts\\parser.py"],
+        },
+    )
+
+    result = _run(CHECK_HOOK, _edit("scripts/parser.py"), tmp_path)
+
+    assert _decision(result.stdout) is None
+
+
+def test_upstream_root_allows_downstream_after_untracked_source_created(tmp_path):
+    _git_fixture(tmp_path)
+    baton = {
+        "active": True,
+        "allowed": ["scripts/*", "templates/*"],
+        **_root_trace(),
+        "upstream_files": ["scripts/new_parser.py"],
+    }
+    (tmp_path / "scripts" / "new_parser.py").write_text("def parse():\n    return 'new'\n", encoding="utf-8")
+    _write_baton(tmp_path, baton)
 
     result = _run(CHECK_HOOK, _edit("templates/downstream.html"), tmp_path)
 
