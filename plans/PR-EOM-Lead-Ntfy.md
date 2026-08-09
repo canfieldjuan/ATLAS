@@ -187,8 +187,8 @@ Parked hardening: none.
 
 | File | LOC |
 |---|---:|
-| `atlas_brain/api/leads.py` | 86 |
+| `atlas_brain/api/leads.py` | 90 |
 | `atlas_brain/config.py` | 1 |
 | `plans/PR-EOM-Lead-Ntfy.md` | 194 |
-| `tests/test_leads_intake.py` | 226 |
-| **Total** | **507** |
+| `tests/test_leads_intake.py` | 227 |
+| **Total** | **512** |

@@ -287,14 +287,18 @@ async def _publish_lead_ntfy(title: str, body: str) -> None:
         logger.exception("lead_intake: new-lead ntfy push failed (lead still captured)")
 
 
+def _lead_push_title(payload: LeadIntakeRequest) -> str:
+    """Notification title. Pure so it is tested directly, without mocking."""
+    return f"New lead: {payload.name.strip() or 'Website visitor'}"
+
+
 async def _default_lead_notifier(
     payload: LeadIntakeRequest, email: str, phone_digits: str
 ) -> None:
-    """Build and send the new-lead push. Split from the transport so tests can
-    inject a fake notifier and assert on call/no-call without HTTP."""
-    name = payload.name.strip() or "Website visitor"
+    """Build and send the new-lead push. The title/body builders are pure and
+    tested directly; this is thin glue over the transport."""
     await _publish_lead_ntfy(
-        title=f"New lead: {name}",
+        title=_lead_push_title(payload),
         body=_lead_push_body(payload, email, phone_digits),
     )
 

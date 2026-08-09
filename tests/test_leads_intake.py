@@ -36,6 +36,7 @@ from atlas_brain.api.leads import (  # noqa: E402
     _default_lead_notifier,
     _format_phone_for_display,
     _lead_push_body,
+    _lead_push_title,
     _process_lead_intake,
     _publish_lead_ntfy,
     router,
@@ -1283,33 +1284,33 @@ async def test_publish_swallows_transport_error(monkeypatch):
     await _publish_lead_ntfy("t", "b")  # must not raise
 
 
-@pytest.mark.asyncio
-async def test_default_notifier_builds_new_lead_title(monkeypatch):
-    import atlas_brain.api.leads as leads_mod
-
-    captured = {}
-
-    async def _fake_publish(title, body):
-        captured["title"] = title
-        captured["body"] = body
-
-    monkeypatch.setattr(leads_mod, "_publish_lead_ntfy", _fake_publish)
-    await leads_mod._default_lead_notifier(_payload(), "jane@example.com", "2175550100")
-
-    assert captured["title"] == "New lead: Jane Doe"
-    assert "jane@example.com" in captured["body"]
+def test_lead_push_title_uses_name():
+    from atlas_brain.api.leads import _lead_push_title
+    assert _lead_push_title(_payload()) == "New lead: Jane Doe"
 
 
-@pytest.mark.asyncio
-async def test_default_notifier_falls_back_when_name_blank(monkeypatch):
-    import atlas_brain.api.leads as leads_mod
-
-    captured = {}
-
-    async def _fake_publish(title, body):
-        captured["title"] = title
-
-    monkeypatch.setattr(leads_mod, "_publish_lead_ntfy", _fake_publish)
+def test_lead_push_title_falls_back_when_name_blank():
+    from atlas_brain.api.leads import _lead_push_title
     # name has a min_length=1 constraint, so a lone space is the blank-ish edge
-    await leads_mod._default_lead_notifier(_payload(name=" "), "jane@example.com", "2175550100")
-    assert captured["title"] == "New lead: Website visitor"
+    assert _lead_push_title(_payload(name=" ")) == "New lead: Website visitor"
+
+
+@pytest.mark.asyncio
+async def test_default_notifier_publishes_built_title_and_body(monkeypatch):
+    """End-to-end through the real transport gate: the default notifier feeds
+    the pure title/body builders into _publish_lead_ntfy, which posts them.
+    Patches only the third-party httpx transport (not any first-party target)."""
+    from atlas_brain.config import settings
+    monkeypatch.setattr(settings.alerts, "ntfy_enabled", True)
+    monkeypatch.setattr(settings.alerts, "leads_ntfy_topic", "eom-leads-abc")
+    import httpx
+
+    _FakeNtfyClient.posted = []
+    monkeypatch.setattr(httpx, "AsyncClient", _FakeNtfyClient)
+
+    await _default_lead_notifier(_payload(), "jane@example.com", "2175550100")
+
+    assert len(_FakeNtfyClient.posted) == 1
+    sent = _FakeNtfyClient.posted[0]
+    assert sent["headers"]["Title"] == "New lead: Jane Doe"
+    assert b"jane@example.com" in sent["content"]
