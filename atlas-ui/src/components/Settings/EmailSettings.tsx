@@ -1,7 +1,6 @@
 import { useEffect, useState, useCallback } from 'react';
 import { Save, RotateCcw, Loader } from 'lucide-react';
 import clsx from 'clsx';
-import { settingsFetch } from './settingsApi';
 
 // ---------- types ----------
 
@@ -41,13 +40,13 @@ export interface EmailSettings {
 const API_BASE = '/api/v1/settings';
 
 async function fetchEmailSettings(): Promise<EmailSettings> {
-  const res = await settingsFetch(`${API_BASE}/email`);
+  const res = await fetch(`${API_BASE}/email`);
   if (!res.ok) throw new Error(`Failed to load email settings: ${res.status} ${res.statusText}`);
   return res.json();
 }
 
 async function saveEmailSettings(patch: Partial<EmailSettings>): Promise<EmailSettings> {
-  const res = await settingsFetch(`${API_BASE}/email`, {
+  const res = await fetch(`${API_BASE}/email`, {
     method: 'PATCH',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(patch),

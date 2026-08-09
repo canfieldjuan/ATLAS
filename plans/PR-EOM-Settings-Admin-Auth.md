@@ -13,145 +13,164 @@ auth. Tracked as **#2335**.
 
 - **Root cause (not the symptom):** the reported symptom is "`ntfy_url` is
   attacker-mutable," but the root cause is that the **entire `/settings` router is an
-  unauthenticated mutation surface exposed on the public funnel**. There are SEVEN
-  unauthenticated PATCH handlers (voice/email/daily/intelligence/llm/notifications/
-  integrations), all persisting to `.env.local`, and multiple write **destination/host**
-  fields (`ntfy_url`, `imap_host`, `ollama_url`, `asr_url`, `ha_url`, `mqtt_host`,
-  `default_from`) plus DoS toggles (`alerts_enabled=false`). Fixing one field is a symptom
-  patch; the class is "the router has no auth."
-- **Fix at the most-upstream correct point:** a **router-level** auth dependency on the
-  `/settings` router closes all seven handlers, every field category, and the GET reads
-  (which leak `imap_host` etc.) at once — not one field or one endpoint at a time.
-- **Correct fix must touch/change:** add a fail-closed bearer service-token dependency
-  (mirroring the receivables API, `atlas_brain/api/invoicing/auth.py`), apply it
-  router-level in `atlas_brain/api/settings.py`, add the deploy-only digest config
-  (`ATLAS_SETTINGS_ADMIN_TOKEN_SHA256`), and update the only legitimate caller — the local
-  admin UI (`atlas-ui/src/components/Settings/*`) — to send the token. Fail-closed: no/blank/
-  malformed digest ⇒ 503 (unavailable), never open.
-- **Must not change:** no behavior of any settings handler's logic (only the auth gate);
-  no other router; the funnel config stays (narrowing it would break the intended MCP/OAuth/
-  Stripe surfaces — fix belongs in the app). The broader "topic is the sole secret /
-  authenticated ntfy tokens" work stays deferred in #2335.
+  unauthenticated mutation surface exposed on the public funnel** (7 PATCH handlers
+  persisting `ntfy_url`, `imap_host`, `ollama_url`, `asr_url`, `ha_url`, `mqtt_host`,
+  `default_from` + DoS toggles to `.env.local`). Fixing one field is a symptom patch; the
+  class is "the router has no auth."
+- **Secondary root cause (browser cannot hold a static secret):** `atlas_brain/main.py`
+  serves the built `atlas-ui/dist` as static files on the SAME public funnel origin, so any
+  build-time secret (a Vite `VITE_*` value) is inlined into publicly-fetchable JS. A bearer
+  the browser ships is therefore not a secret. The browser must instead **prove possession
+  of the token once and carry an opaque, JS-unreadable credential** (an HttpOnly cookie).
+- **Secondary root cause (placeholder digests):** a format-only digest check accepts a
+  placeholder-derived digest (`sha256("change-me")`), letting a lazy deploy silently
+  re-open the surface. The established `validate_generated_service_token_digest`
+  (`atlas_brain/eom_api/auth.py`) already rejects placeholders; the fix must reuse it.
+- **Correct fix must touch/change:** add a fail-closed digest-validated dependency applied
+  **router-level** on `atlas_brain/api/settings.py`, accepting **either** a bearer token
+  (CLI/API) **or** an HttpOnly signed **session cookie** (browser); add a login/logout
+  endpoint (`atlas_brain/api/settings_session.py`) that exchanges the token for that cookie
+  and is NOT itself behind the gate; wire both routers in `atlas_brain/api/__init__.py`; add
+  the deploy-only digest config (`ATLAS_SETTINGS_ADMIN_TOKEN_SHA256`). Fail-closed: no/blank/
+  malformed/placeholder digest ⇒ 503 (unavailable), never open.
+- **Must not change:** no behavior of any settings handler's logic (only the auth gate); no
+  other router; the funnel config; `atlas_brain/main.py`'s dist-serving mount; the
+  receivables/invoicing auth module (reuse its validator, don't modify it); the lead-ntfy
+  path (#2332). The browser **login form UI** ships as the immediate follow-up slice (split
+  at the Python/`.tsx` line); the broader "authenticated ntfy tokens" work stays deferred in
+  #2335.
 
 ## Scope (this PR)
 
 Ownership lane: eom-security/settings-auth
 Slice phase: Vertical slice
+Max files: 7
 
 1. Add `SettingsAdminConfig` (`ATLAS_SETTINGS_ADMIN_TOKEN_SHA256`, digest-only) + wire it
    into `Settings`.
-2. Add `require_settings_admin` (fail-closed bearer dep) and apply it router-level to the
+2. Add `require_settings_admin` (fail-closed; bearer OR signed session cookie) validating the
+   digest via `validate_generated_service_token_digest`, and apply it router-level to the
    `/settings` router.
-3. Update the local admin UI (a shared `settingsFetch` + the 7 Settings components) to send
-   the bearer token.
-4. Add the auth-gate test matrix (503 unconfigured/malformed, 401 no/bad bearer, pass on the
-   right token, every route gated).
+3. Add `atlas_brain/api/settings_session.py`: `POST/DELETE /settings/session` login/logout
+   (not behind the gate) that mints/clears the HttpOnly session cookie.
+4. Add the auth-gate + session test matrix.
 
 ### Review Contract
 
 - Acceptance criteria:
-  - Unconfigured/blank/malformed server digest ⇒ every `/settings` route returns **503**,
-    even with a valid-looking bearer (fail-closed) — settled by
-    `tests/test_settings_auth.py::test_unconfigured_digest_returns_503_even_with_a_bearer` +
-    `::test_malformed_server_digest_returns_503`.
-  - Configured but no/malformed bearer ⇒ **401** — `::test_configured_but_no_bearer_returns_401`
-    + `::test_configured_bad_authorization_returns_401`.
-  - Correct bearer ⇒ reaches the handler (**200** on GET) — `::test_correct_bearer_passes_the_gate`.
-  - A mutation (`PATCH`, repoint a destination) is blocked without the bearer — **401**,
-    no write — `::test_patch_mutation_is_blocked_without_a_bearer`.
-  - The gate is **router-level**, covering ALL `/settings/*` routes (≥7), not just
-    notifications — `::test_every_settings_route_is_gated`.
-  - Non-ascii bearer does not 500 — `::test_non_ascii_bearer_does_not_crash_returns_401`.
+  - Unconfigured/blank/**placeholder**/malformed server digest ⇒ every `/settings` route AND
+    the login endpoint return **503**, even with a valid-looking bearer (fail-closed) —
+    `tests/test_settings_auth.py::test_unconfigured_or_placeholder_or_malformed_digest_returns_503`.
+  - Configured but no/malformed credential ⇒ **401** —
+    `::test_configured_missing_credential_returns_401` +
+    `::test_configured_bad_authorization_returns_401`.
+  - Correct bearer ⇒ reaches the handler (**200**) — `::test_correct_bearer_passes_the_gate`.
+  - Login with the correct token ⇒ **200** + a **HttpOnly, Secure, SameSite=Strict** cookie
+    scoped to `/api/v1/settings` — `::test_login_with_bearer_sets_hardened_cookie` +
+    `::test_login_with_json_body_token_succeeds`.
+  - A valid session cookie authenticates the gate — `::test_valid_session_cookie_passes_the_gate`;
+    a tampered / expired / foreign-signed cookie ⇒ **401** —
+    `::test_tampered_session_cookie_is_invalid_returns_401`,
+    `::test_expired_session_cookie_is_invalid_returns_401`,
+    `::test_session_cookie_with_invalid_signature_is_rejected`.
+  - A mutation is blocked without a credential — **401** —
+    `::test_patch_mutation_blocked_when_credential_missing`.
+  - The gate is **router-level**, covering ALL `/settings/*` routes (≥7) —
+    `::test_every_settings_route_is_gated`.
+  - Non-ascii bearer does not 500 — `::test_non_ascii_bearer_is_invalid_returns_401`.
+  - Logout clears the cookie — `::test_logout_clears_the_cookie`.
 - Reachability proof: real entrypoint `PATCH/GET https://atlas-brain.tailc7bd29.ts.net/api/v1/settings/*`
   (public funnel → 127.0.0.1:8012). Observable effect: unauthenticated request → 401/503
   (was 200). Verified pre-fix with a live `GET → 200`.
 - Affected surfaces: `atlas_brain/api/settings.py` (router dep), `atlas_brain/api/settings_auth.py`
-  (new dep), `atlas_brain/config.py` (`SettingsAdminConfig`), the 7 `atlas-ui` Settings
-  components + `settingsApi.ts`.
-- Risk areas: (1) breaking the legitimate admin UI (mitigated — the UI now sends the token;
-  it is local-dev-only, never on the funnel); (2) fail-open on misconfiguration (guarded —
-  fail-closed 503); (3) timing/constant-time compare (uses `hmac.compare_digest`).
+  (guard + cookie crypto), `atlas_brain/api/settings_session.py` (login/logout),
+  `atlas_brain/api/__init__.py` (wiring), `atlas_brain/config.py` (`SettingsAdminConfig`).
+- Risk areas: (1) fail-open on misconfiguration (guarded — fail-closed 503 via the shared
+  validator, which also rejects placeholders); (2) session-cookie forgery (guarded — HMAC
+  signature keyed by the server-only digest, `hmac.compare_digest`, absolute expiry);
+  (3) CSRF on the cookie-authed mutations (guarded — `SameSite=Strict`; mutations stay
+  PATCH+JSON; no CORS widening); (4) timing (`hmac.compare_digest`).
 - Reviewer rules triggered: R1 (requirements match), R2 (test evidence), R3 (security/auth —
-  THE point), R5 (backward compatibility — the UI caller updated in lockstep), R9
-  (guard boundary probe — this IS an auth guard; both sides probed: valid-token→200,
-  no/wrong/non-ascii→401, unconfigured/malformed digest→503, PATCH-without-token→no write),
-  R11 (dependencies/config — new token env), R12 (deployment safety — token provisioning +
-  restart), R13 (defect class — the auth-gate closure below).
+  THE point), R5 (backward compatibility — the `/settings` routes now REQUIRE auth where they
+  were open; unauthenticated callers get 401/503, which is the intended break; CLI/API callers
+  keep working via the bearer path), R11 (dependencies/config — new token env), R12 (deployment
+  safety — token provisioning + restart), R13 (defect class — the auth-gate closure below).
 
 ### Boundary-change enumeration
 
 **Closure declaration (auth-gate inventory).** The set of routes that require the settings
-admin token is **CLOSED** and **code-owned (DERIVED** from a single router-level
+admin credential is **CLOSED** and **code-owned (DERIVED** from a single router-level
 `dependencies=[Depends(require_settings_admin)]` on the `/settings` router, not a
 per-endpoint list): membership is *every* route registered on that router (currently 14
-GET/PATCH across 7 sections), and any route added to the router in future inherits the gate
-automatically. **Outside-the-set default: deny.** A request that does not present a valid
-bearer, OR a server with no valid digest configured, is refused (401 / 503) — the router
-never serves an unauthenticated caller. The safe/expensive side is chosen deliberately: a
-missing token makes the admin API *unavailable* (503) rather than open, because the failure
-mode being prevented is exactly "config drift silently re-opens a public mutation surface."
-- Guard-relevant fields: `SettingsAdminConfig.token_sha256` (deploy-only digest; empty or
-  non-`[0-9a-f]{64}` ⇒ 503), the `Authorization` bearer header.
-- Caller × input shape: valid digest + correct bearer → allow; valid digest + missing/wrong/
-  non-bearer/non-ascii → 401; blank/malformed digest → 503 (any bearer).
+GET/PATCH across 7 sections), and any route added to it inherits the gate automatically. The
+login/logout router (`/settings/session`) is deliberately OUTSIDE the gate — you must be able
+to log in before you hold a session — but performs the identical fail-closed token check, so
+it is not an unauthenticated surface. **Outside-the-set default: deny.** A request without a
+valid bearer or session cookie, OR a server with no valid digest, is refused (401 / 503).
+The safe/expensive side is chosen deliberately: a missing/placeholder token makes the admin
+API *unavailable* (503) rather than open, because the failure mode being prevented is exactly
+"config drift silently re-opens a public mutation surface."
+- Guard-relevant fields: `SettingsAdminConfig.token_sha256` (deploy-only digest; empty /
+  non-`[0-9a-f]{64}` / placeholder ⇒ 503), the `Authorization` bearer header, the
+  `atlas_settings_admin_session` cookie.
+- Caller × input shape: valid digest + (correct bearer OR valid unexpired cookie) → allow;
+  valid digest + missing/wrong/non-bearer/non-ascii/tampered/expired/foreign-signed → 401;
+  blank/malformed/placeholder digest → 503 (any credential).
 
 ### Deployed-config probing
 
 - Deployed/default config values: `token_sha256` defaults to `""` ⇒ **fail-closed 503**.
   The deploy provisions `ATLAS_SETTINGS_ADMIN_TOKEN_SHA256` (SHA-256 of a raw token kept
-  only on the caller); the admin UI gets the raw token via `VITE_SETTINGS_ADMIN_TOKEN`.
+  only on the caller / operator).
 - Explicit value probe: configured digest + correct bearer → 200 (`::test_correct_bearer_passes_the_gate`).
-- Absent value probe: empty digest → 503 (`::test_unconfigured_digest_returns_503_even_with_a_bearer`).
-- Malformed value probe: non-SHA-256 digest → 503 (`::test_malformed_server_digest_returns_503`).
+- Absent/placeholder/malformed value probe: → 503
+  (`::test_unconfigured_or_placeholder_or_malformed_digest_returns_503`).
 - Side-effect ordering: auth is a router dependency, so it runs BEFORE any handler body —
   no settings mutation or `.env.local` write can occur before the auth decision.
 
 ### Files touched
 
-- `atlas-ui/src/components/Settings/DailyIntelligenceSettings.tsx`
-- `atlas-ui/src/components/Settings/EmailSettings.tsx`
-- `atlas-ui/src/components/Settings/IntegrationSettings.tsx`
-- `atlas-ui/src/components/Settings/LLMSettings.tsx`
-- `atlas-ui/src/components/Settings/NewsIntelligenceSettings.tsx`
-- `atlas-ui/src/components/Settings/NotificationSettings.tsx`
-- `atlas-ui/src/components/Settings/VoiceSettings.tsx`
-- `atlas-ui/src/components/Settings/settingsApi.ts`
+- `atlas_brain/api/__init__.py`
 - `atlas_brain/api/settings.py`
 - `atlas_brain/api/settings_auth.py`
+- `atlas_brain/api/settings_session.py`
 - `atlas_brain/config.py`
 - `plans/PR-EOM-Settings-Admin-Auth.md`
 - `tests/test_settings_auth.py`
 
 ## Mechanism
 
-`require_settings_admin` (`atlas_brain/api/settings_auth.py`) reads the deploy-only digest
-from `settings.settings_admin.token_sha256` via an overrideable dependency. If the digest is
-absent or not a lowercase 64-hex SHA-256 it raises 503 (fail-closed — a misconfigured server
-is unavailable, not open). Otherwise it requires an `Authorization: Bearer <token>` header,
-SHA-256s the presented token, and `hmac.compare_digest`s it against the configured digest;
-mismatch/missing/non-ascii ⇒ 401. It is attached with
-`APIRouter(prefix="/settings", dependencies=[Depends(require_settings_admin)])`, so it gates
-every route (reads and writes) before any handler runs. The admin UI's `settingsFetch`
-wrapper injects the bearer (from `VITE_SETTINGS_ADMIN_TOKEN`) into every settings request.
+`require_settings_admin` (`atlas_brain/api/settings_auth.py`) resolves the deploy-only digest
+from `settings.settings_admin.token_sha256` via an overrideable dependency and validates it
+with `validate_generated_service_token_digest` — empty/malformed/placeholder ⇒ 503
+(fail-closed). It then allows the request if a valid `atlas_settings_admin_session` cookie is
+present (HMAC signature keyed by a digest-derived key, absolute expiry, `hmac.compare_digest`)
+OR a valid `Authorization: Bearer <token>` is presented; otherwise 401. It is attached with
+`APIRouter(prefix="/settings", dependencies=[Depends(require_settings_admin)])`, gating every
+route before any handler runs. `settings_session.py` exposes `POST /settings/session` (verify
+the token, set the HttpOnly/Secure/SameSite=Strict cookie) and `DELETE /settings/session`
+(clear it), NOT behind the gate.
 
 ## Intentional
 
-- Service-token (bearer) auth, mirroring the sibling receivables API on the same funnel —
-  not SaaS/JWT user auth: this box is single-operator, and a deploy-time service token is the
-  established Atlas pattern for "public via funnel but must be authenticated."
+- Service-token auth on the same funnel as the sibling receivables API — not SaaS/JWT user
+  auth: this box is single-operator, and a deploy-time service token is the established
+  Atlas pattern for "public via funnel but must be authenticated."
+- Two credential shapes: a **bearer** for CLI/API callers, and an HttpOnly **session cookie**
+  for the browser admin UI (which is served from the same public origin, so it cannot embed
+  the raw token). The cookie is signed (not a stored session) — stateless, single-operator.
 - Router-level (not per-handler) so the whole class is closed and future routes inherit it.
-- Fail-closed to 503 when unconfigured (never open) — the whole point is that config drift
-  cannot re-open the surface.
-- The raw token lives in the local UI's env only; the UI is served on localhost dev servers,
-  never on the funnel, so the token is not publicly exposed.
+- Fail-closed to 503 when unconfigured/placeholder (never open) via the shared validator.
 
 ## Deferred
 
-- Broader hardening in **#2335**: authenticated ntfy *access tokens* so the alert **topic**
-  is no longer the sole secret (removes it from URL/logs, fixes the sibling healthcheck/
-  paid-deflection channels). Also optional defense-in-depth: move remaining destination
-  fields out of the mutable sets (mirroring `leads_ntfy_url`). Not required now — the
-  router-level auth already closes the exposure.
+- **Browser login-form UI (immediate follow-up slice):** the `.tsx` Settings components +
+  a shared credentialed fetch helper + a token-entry "unlock" form + surfacing 401/503 instead
+  of an endless loader (Codex review #3). Split from this PR at the Python/`.tsx` line so the
+  backend gate lands cleanly; deployed together with this PR so the admin UI never breaks.
+- **Broader hardening in #2335:** authenticated ntfy *access tokens* so the alert **topic**
+  is no longer the sole secret; optionally move remaining destination fields out of the
+  mutable sets (mirroring `leads_ntfy_url`).
 
 ## Parked hardening
 
@@ -159,29 +178,24 @@ wrapper injects the bearer (from `VITE_SETTINGS_ADMIN_TOKEN`) into every setting
 
 ## Verification
 
-- `/.venv/bin/python -m pytest tests/test_settings_auth.py -q` → 13 passed (auth matrix).
-- `maturity_sweep.py atlas_brain/api --min-score 8` → ratchet gate passed.
+- `.venv/bin/python -m pytest tests/test_settings_auth.py -q` → 22 passed (auth + session matrix).
+- `maturity_sweep.py atlas_brain/api --baseline ...` → ratchet gate passed (no new brittleness).
 - Pre-fix reachability proof: `curl https://atlas-brain.tailc7bd29.ts.net/api/v1/settings/notifications`
   → HTTP 200 (unauthenticated). Post-deploy: same request → 401.
 - Post-merge deploy: provision `ATLAS_SETTINGS_ADMIN_TOKEN_SHA256` in the runtime `.env`
-  (SHA-256 of a fresh raw token) + `VITE_SETTINGS_ADMIN_TOKEN` in the atlas-ui env; restart
-  `atlas-api.service`; re-verify the public GET now returns 401 and an authed request 200.
+  (SHA-256 of a fresh raw token); restart `atlas-api.service`; re-verify the public GET now
+  returns 401 and an authed request (bearer or a fresh session cookie) 200. Deploy together
+  with the follow-up UI login slice so the admin UI keeps working.
 
 ## Estimated diff size
 
 | File | LOC |
 |---|---:|
-| `atlas-ui/src/components/Settings/DailyIntelligenceSettings.tsx` | 5 |
-| `atlas-ui/src/components/Settings/EmailSettings.tsx` | 5 |
-| `atlas-ui/src/components/Settings/IntegrationSettings.tsx` | 5 |
-| `atlas-ui/src/components/Settings/LLMSettings.tsx` | 5 |
-| `atlas-ui/src/components/Settings/NewsIntelligenceSettings.tsx` | 5 |
-| `atlas-ui/src/components/Settings/NotificationSettings.tsx` | 5 |
-| `atlas-ui/src/components/Settings/VoiceSettings.tsx` | 5 |
-| `atlas-ui/src/components/Settings/settingsApi.ts` | 34 |
+| `atlas_brain/api/__init__.py` | 2 |
 | `atlas_brain/api/settings.py` | 13 |
-| `atlas_brain/api/settings_auth.py` | 56 |
+| `atlas_brain/api/settings_auth.py` | 160 |
+| `atlas_brain/api/settings_session.py` | 70 |
 | `atlas_brain/config.py` | 17 |
-| `plans/PR-EOM-Settings-Admin-Auth.md` | 187 |
-| `tests/test_settings_auth.py` | 110 |
-| **Total** | **452** |
+| `plans/PR-EOM-Settings-Admin-Auth.md` | 201 |
+| `tests/test_settings_auth.py` | 191 |
+| **Total** | **654** |

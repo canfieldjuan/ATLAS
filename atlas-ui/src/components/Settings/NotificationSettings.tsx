@@ -4,7 +4,6 @@
 import { useState, useEffect, useCallback } from 'react';
 import { Save, RefreshCw, Bell, AlertCircle } from 'lucide-react';
 import clsx from 'clsx';
-import { settingsFetch } from './settingsApi';
 
 const API = '/api/v1/settings/notifications';
 
@@ -150,7 +149,7 @@ export function NotificationSettingsForm() {
 
   const load = useCallback(async () => {
     try {
-      const r = await settingsFetch(API);
+      const r = await fetch(API);
       if (!r.ok) throw new Error(`HTTP ${r.status}`);
       setForm(await r.json());
     } catch (e) {
@@ -168,7 +167,7 @@ export function NotificationSettingsForm() {
     setSaving(true);
     setStatus(null);
     try {
-      const r = await settingsFetch(API, {
+      const r = await fetch(API, {
         method: 'PATCH',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(form),

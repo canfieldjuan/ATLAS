@@ -1,7 +1,6 @@
 import { useEffect, useState, useCallback } from 'react';
 import { Save, RotateCcw, Loader, Plus, Trash2, ChevronDown, ChevronUp } from 'lucide-react';
 import clsx from 'clsx';
-import { settingsFetch } from './settingsApi';
 
 // ---------- types ----------
 
@@ -66,13 +65,13 @@ export interface WatchlistEntry {
 const API_BASE = '/api/v1/settings';
 
 async function fetchIntelligenceSettings(): Promise<IntelligenceSettings> {
-  const res = await settingsFetch(`${API_BASE}/intelligence`);
+  const res = await fetch(`${API_BASE}/intelligence`);
   if (!res.ok) throw new Error(`Failed to load settings: ${res.status} ${res.statusText}`);
   return res.json();
 }
 
 async function saveIntelligenceSettings(patch: Partial<IntelligenceSettings>): Promise<IntelligenceSettings> {
-  const res = await settingsFetch(`${API_BASE}/intelligence`, {
+  const res = await fetch(`${API_BASE}/intelligence`, {
     method: 'PATCH',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(patch),

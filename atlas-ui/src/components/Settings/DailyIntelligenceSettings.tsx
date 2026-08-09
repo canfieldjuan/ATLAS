@@ -1,7 +1,6 @@
 import { useEffect, useState, useCallback } from 'react';
 import { Save, RotateCcw, Loader } from 'lucide-react';
 import clsx from 'clsx';
-import { settingsFetch } from './settingsApi';
 
 // ---------- types ----------
 
@@ -47,13 +46,13 @@ export interface DailySettings {
 const API_BASE = '/api/v1/settings';
 
 async function fetchDailySettings(): Promise<DailySettings> {
-  const res = await settingsFetch(`${API_BASE}/daily`);
+  const res = await fetch(`${API_BASE}/daily`);
   if (!res.ok) throw new Error(`Failed to load daily settings: ${res.status} ${res.statusText}`);
   return res.json();
 }
 
 async function saveDailySettings(patch: Partial<DailySettings>): Promise<DailySettings> {
-  const res = await settingsFetch(`${API_BASE}/daily`, {
+  const res = await fetch(`${API_BASE}/daily`, {
     method: 'PATCH',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(patch),
