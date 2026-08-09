@@ -323,9 +323,15 @@ async def _publish_lead_ntfy(title: str, body: str) -> None:
         from ..config import settings
 
         alerts = settings.alerts
+        # Depend ONLY on deploy-only leads_ntfy_* fields. Deliberately read NONE
+        # of ntfy_enabled/ntfy_url/ntfy_topic: all three are mutable via the
+        # unauthenticated public PATCH /settings/notifications, so an attacker
+        # could otherwise disable or redirect lead delivery. Presence of the
+        # pinned topic + relay IS the on-switch.
         topic = (alerts.leads_ntfy_topic or "").strip()
-        if not alerts.ntfy_enabled or not topic:
-            return  # feature off (no topic configured) — silently skip
+        base_url = (alerts.leads_ntfy_url or "").strip()
+        if not topic or not base_url:
+            return  # feature off (not configured) — silently skip
         if not _SAFE_NTFY_TOPIC_RE.match(topic):
             # Fail closed: a topic that is not [-_A-Za-z0-9]{1,64} could alter the
             # URL path. Never send lead PII to an unverifiable destination.
@@ -336,13 +342,7 @@ async def _publish_lead_ntfy(title: str, body: str) -> None:
 
         import httpx
 
-        # Use the PINNED leads relay, never the runtime-mutable alerts.ntfy_url:
-        # ntfy_url is settable via the public PATCH /settings/notifications, so
-        # routing lead PII through it would let an attacker redirect it to a host
-        # they control (and thereby also learn the secret topic).
-        base_url = (alerts.leads_ntfy_url or "").strip()
-        if not base_url:
-            return  # no pinned relay configured — do not fall back to a mutable URL
+        _ensure_topic_log_redaction()  # scrub the topic from httpx's own URL logs
         url = f"{base_url.rstrip('/')}/{topic}"
         headers = {"Title": title, "Priority": "high", "Tags": "moneybag"}
 
@@ -395,13 +395,47 @@ async def _default_lead_notifier(
 
 
 def _leads_push_configured() -> bool:
-    """Whether new-lead pushes are actually enabled (ntfy on + a topic set). Used
-    to keep the hourly-volume DB query entirely out of the disabled path, so the
-    off-by-default configuration stays inert (no extra COUNT/JOIN per lead)."""
+    """Whether new-lead pushes are enabled — a function ONLY of the deploy-only
+    leads_ntfy_topic + leads_ntfy_url, never of any field the public settings API
+    can mutate. Used to keep the hourly-volume DB query out of the disabled path
+    (inert when off) and to gate delivery on config an attacker cannot flip."""
     from ..config import settings
 
     alerts = settings.alerts
-    return bool(alerts.ntfy_enabled and (alerts.leads_ntfy_topic or "").strip())
+    return bool((alerts.leads_ntfy_topic or "").strip() and (alerts.leads_ntfy_url or "").strip())
+
+
+class _LeadsTopicLogRedactor(logging.Filter):
+    """Scrub the leads ntfy topic out of ANY log record. The topic is the sole
+    credential and httpx logs the full request URL at INFO, so class-closing
+    'the topic must never appear in a log' has to cover library logs we do not
+    own — sanitizing only this module's own log calls is instance-closure."""
+
+    def filter(self, record: logging.LogRecord) -> bool:
+        try:
+            from ..config import settings
+
+            topic = (settings.alerts.leads_ntfy_topic or "").strip()
+        except Exception:
+            return True
+        if topic:
+            message = record.getMessage()
+            if topic in message:
+                record.msg = message.replace(topic, "<redacted-leads-topic>")
+                record.args = ()
+        return True
+
+
+_topic_redactor_installed = False
+
+
+def _ensure_topic_log_redaction() -> None:
+    """Install the topic redactor on the httpx request logger exactly once."""
+    global _topic_redactor_installed
+    if _topic_redactor_installed:
+        return
+    logging.getLogger("httpx").addFilter(_LeadsTopicLogRedactor())
+    _topic_redactor_installed = True
 
 
 async def _maybe_notify_new_lead(

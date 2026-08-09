@@ -127,14 +127,18 @@ Enumerated gates (ALL must pass to emit; each is proven by a test):
    earlier; a same-day duplicate has `inserted=False`).
 2. `lead_notifier is not None` — the route wires the production notifier; a
    direct caller that omits it emits nothing.
-3. `_leads_push_configured()` — `ntfy_enabled` AND non-empty `leads_ntfy_topic`
-   (re-checked inside `_publish_lead_ntfy`); off ⇒ inert (no volume query, no POST).
+3. `_leads_push_configured()` — non-empty `leads_ntfy_topic` AND `leads_ntfy_url`,
+   both DEPLOY-ONLY (re-checked inside `_publish_lead_ntfy`); off ⇒ inert (no
+   volume query, no POST).
 4. `await notify_volume() <= GLOBAL_NOTIFY_HOURLY_CAP` — global hourly ceiling;
    over the cap (or a volume-query error) ⇒ skip (lead still captured).
 
-- Guard-relevant fields: `AlertsConfig.ntfy_enabled`, `AlertsConfig.leads_ntfy_topic`,
-  `freshly_logged` (from `interaction["inserted"]`), the injected `lead_notifier`,
-  and the hourly count from `notify_volume` / `_hourly_lead_notification_volume`.
+- Guard-relevant fields: `AlertsConfig.leads_ntfy_topic`, `AlertsConfig.leads_ntfy_url`
+  (both deploy-only), `freshly_logged` (from `interaction["inserted"]`), the
+  injected `lead_notifier`, and the hourly count from `notify_volume` /
+  `_hourly_lead_notification_volume`. The leads path reads NONE of
+  `ntfy_enabled`/`ntfy_url`/`ntfy_topic` — those are mutable via the public
+  settings API (see the config-trust closure below).
 - Caller x input shape: new lead (insert) + configured + under cap → notify;
   duplicate / honeypot / no-notifier / disabled / over-cap / volume-query-error /
   validation-or-throttle-error → no notify (fail-closed on the volume error).
@@ -176,6 +180,26 @@ property test, so a new adversarial string cannot reopen either finding:
   `_SAFE_NTFY_TOPIC_RE` (`[-_A-Za-z0-9]{1,64}`) rejects any topic that could
   alter the path, failing closed (no HTTP client opened). Closed by
   `test_publish_rejects_url_unsafe_topic`.
+
+**Config-trust closure (attacker-mutable fields).** The unauthenticated public
+`PATCH /api/v1/settings/notifications` can mutate every field in
+`_NOTIFY_ALERTS_FIELDS` (`ntfy_enabled`, `ntfy_url`, `ntfy_topic`, `alerts_*`).
+Class rule: **lead delivery must be a function of DEPLOY-ONLY config only** — it
+reads exactly `leads_ntfy_topic` + `leads_ntfy_url` (neither in that set) and
+reads none of the mutable fields, so an attacker can neither disable
+(`ntfy_enabled=false`) nor redirect (`ntfy_url`/`ntfy_topic`) a lead push. Closed
+by `test_leads_delivery_independent_of_mutable_settings` (flips all three mutable
+fields hostilely; the push still lands on the pinned relay + topic).
+
+**Secret-in-logs closure (the topic is a URL-path credential).** The topic is
+the sole credential and httpx logs the full request URL at INFO, so redacting
+only this module's own log calls is instance-closure. Class rule: **the topic
+must never appear in ANY log record**, including library logs we don't own. A
+`_LeadsTopicLogRedactor` filter on the `httpx` logger scrubs the topic from every
+record. Closed by `test_topic_redacted_from_httpx_logs`. (Deeper root — a
+topic-as-URL-secret is inherently loggable; a header-based ntfy access token
+would remove the credential from the URL entirely — noted for the shared alert
+channels under the #2335 follow-up.)
 
 ### Deployed-config probing
 
@@ -268,7 +292,7 @@ Parked hardening: none.
 
 ## Verification
 
-- `/.venv/bin/python -m pytest tests/test_leads_intake.py -q` → 82 passed,
+- `/.venv/bin/python -m pytest tests/test_leads_intake.py -q` → 83 passed,
   run against the runtime venv. Includes the Codex hardening rounds: ASCII-only
   Title safety, route-level delivery proof, the hourly notification cap, the
   direct-caller no-op, secret-topic log redaction, a true 5s wall-clock
@@ -285,9 +309,9 @@ Parked hardening: none.
 
 | File | LOC |
 |---|---:|
-| `atlas_brain/api/leads.py` | 224 |
+| `atlas_brain/api/leads.py` | 258 |
 | `atlas_brain/config.py` | 2 |
-| `plans/PR-EOM-Lead-Ntfy.md` | 293 |
+| `plans/PR-EOM-Lead-Ntfy.md` | 317 |
 | `tests/conftest.py` | 19 |
-| `tests/test_leads_intake.py` | 570 |
-| **Total** | **1108** |
+| `tests/test_leads_intake.py` | 606 |
+| **Total** | **1202** |

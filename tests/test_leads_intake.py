@@ -1346,17 +1346,53 @@ async def test_publish_skipped_when_topic_unset(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_publish_skipped_when_ntfy_disabled(monkeypatch):
+async def test_leads_delivery_independent_of_mutable_settings(monkeypatch):
+    """Class-closure: lead delivery depends ONLY on the deploy-only leads_ntfy_*
+    fields. Flipping EVERY field the public unauth PATCH /settings/notifications
+    can mutate (ntfy_enabled, ntfy_url, ntfy_topic) to a hostile value must
+    neither disable nor redirect the push — it still goes to the pinned relay +
+    topic. Regresses Codex #2332 R3 (the enable gate + destination both)."""
     from atlas_brain.config import settings
+    # deploy-only config (the real switch):
+    monkeypatch.setattr(settings.alerts, "leads_ntfy_topic", "eom-leads-pinned")
+    monkeypatch.setattr(settings.alerts, "leads_ntfy_url", "https://pinned.example")
+    # hostile mutation of every settings-API-mutable alerts field:
     monkeypatch.setattr(settings.alerts, "ntfy_enabled", False)
-    monkeypatch.setattr(settings.alerts, "leads_ntfy_topic", "eom-leads-x")
+    monkeypatch.setattr(settings.alerts, "ntfy_url", "https://attacker.example")
+    monkeypatch.setattr(settings.alerts, "ntfy_topic", "attacker-topic")
     import httpx
 
-    def _boom(*a, **k):
-        raise AssertionError("must not POST when ntfy is disabled")
+    _FakeNtfyClient.posted = []
+    monkeypatch.setattr(httpx, "AsyncClient", _FakeNtfyClient)
 
-    monkeypatch.setattr(httpx, "AsyncClient", _boom)
     await _publish_lead_ntfy("t", "b")
+
+    assert len(_FakeNtfyClient.posted) == 1  # not disabled by ntfy_enabled=False
+    url = _FakeNtfyClient.posted[0]["url"]
+    assert url == "https://pinned.example/eom-leads-pinned"  # not redirected
+    assert "attacker" not in url
+
+
+def test_topic_redacted_from_httpx_logs(monkeypatch):
+    """Class-closure for 'topic must never appear in a log': the installed filter
+    scrubs the topic from records on the httpx logger (which logs the full URL at
+    INFO), covering the library log we don't own. Regresses Codex #2332 R3."""
+    import logging as _logging
+    from atlas_brain.api.leads import _ensure_topic_log_redaction
+    from atlas_brain.config import settings
+    monkeypatch.setattr(settings.alerts, "leads_ntfy_topic", "eom-leads-secret123")
+
+    _ensure_topic_log_redaction()
+    httpx_logger = _logging.getLogger("httpx")
+    record = httpx_logger.makeRecord(
+        "httpx", _logging.INFO, __file__, 1,
+        'HTTP Request: POST https://ntfy.sh/eom-leads-secret123 "HTTP/1.1 200 OK"',
+        (), None,
+    )
+    # apply the logger's filters as the logging machinery would
+    assert all(f.filter(record) for f in httpx_logger.filters)
+    assert "eom-leads-secret123" not in record.getMessage()
+    assert "<redacted-leads-topic>" in record.getMessage()
 
 
 @pytest.mark.asyncio
