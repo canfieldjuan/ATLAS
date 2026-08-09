@@ -43,7 +43,7 @@ Slice phase: Workflow/process
 2. Enforce the same source-trace fields in PR-body fix-loop dispositions and
    cover upstream-root, downstream-only, and symptom-only-deferred cases with
    synthetic tests.
-Max files: 10
+Max files: 11
 
 ### Review Contract
 
@@ -68,7 +68,8 @@ Max files: 10
 - Affected surfaces: `.claude/hooks/check_edit_budget.py`,
   `.claude/hooks/inject_fix_mode.py`, `.claude/skills/fix-mode/SKILL.md`,
   `AGENTS.md`, `CLAUDE.md`, `docs/SESSION_STATE_TEMPLATE.md`,
-  `scripts/audit_fix_loop_disposition.py`, and focused tests.
+  `scripts/audit_fix_loop_disposition.py`,
+  `scripts/fix_loop_trace_contract.py`, and focused tests.
 - Risk areas: hook false positives that lock Claude out of fix mode, stale
   baton shape after compaction, PR-body audit rejecting valid waivers, and
   downstream-only fixed-in records slipping through.
@@ -134,6 +135,7 @@ fallback changes; otherwise write "N/A - no guard/config boundary change."
 - `docs/SESSION_STATE_TEMPLATE.md`
 - `plans/PR-Root-Cause-Trace-Hook.md`
 - `scripts/audit_fix_loop_disposition.py`
+- `scripts/fix_loop_trace_contract.py`
 - `tests/test_audit_fix_loop_disposition.py`
 - `tests/test_fix_mode_hook.py`
 
@@ -176,7 +178,7 @@ Parked hardening: none.
 ## Verification
 
 - `python -m pytest tests/test_fix_mode_hook.py tests/test_audit_fix_loop_disposition.py -q`
-  -- 54 passed.
+  -- 59 passed.
 - `ATLAS_SESSION_STATE_FILE=SESSION_STATE.codex-root-cause-trace.local.md bash scripts/local_pr_review.sh --current-pr-body-file tmp/pr-root-cause-trace-hook-body.md`
   -- passed. Local unit gate escalated to FULL because `.claude/hooks/check_edit_budget.py`
   is not mapped by the selector; result was 160 baseline failing/errored nodes,
@@ -192,8 +194,9 @@ Parked hardening: none.
 | `AGENTS.md` | 13 |
 | `CLAUDE.md` | 12 |
 | `docs/SESSION_STATE_TEMPLATE.md` | 8 |
-| `plans/PR-Root-Cause-Trace-Hook.md` | 199 |
-| `scripts/audit_fix_loop_disposition.py` | 60 |
-| `tests/test_audit_fix_loop_disposition.py` | 239 |
-| `tests/test_fix_mode_hook.py` | 207 |
-| **Total** | **887** |
+| `plans/PR-Root-Cause-Trace-Hook.md` | 202 |
+| `scripts/audit_fix_loop_disposition.py` | 65 |
+| `scripts/fix_loop_trace_contract.py` | 81 |
+| `tests/test_audit_fix_loop_disposition.py` | 307 |
+| `tests/test_fix_mode_hook.py` | 229 |
+| **Total** | **1066** |

@@ -171,13 +171,35 @@ def test_active_fix_mode_denies_placeholder_source_trace(tmp_path):
     assert "source_trace must name the chain" in result.stdout
 
 
+def test_active_fix_mode_denies_decorated_template_source_trace(tmp_path):
+    baton = {
+        "active": True,
+        "allowed": ["scripts/*"],
+        **_root_trace(),
+        "fix_strategy": "symptom-only-deferred",
+        "symptom_only_reason": "review finding is non-blocking",
+        "follow_up": "HARDENING.md ROOT-TRACE-2",
+        "source_trace": "<symptom -> intermediate cause -> upstream source>",
+    }
+    _write_baton(tmp_path, baton)
+
+    result = _run(CHECK_HOOK, _edit("scripts/parser.py"), tmp_path)
+
+    assert _decision(result.stdout) == "deny"
+    assert "source_trace must name the chain" in result.stdout
+
+
 def test_check_edit_budget_source_trace_endpoint_grammar(tmp_path):
     trace_tokens_by_expected = {
         "review claim": True,
         "parser branch": True,
+        "症状": True,
         "admission source": True,
         "TBD": False,
         "unknown": False,
+        "<symptom": False,
+        "intermediate cause": False,
+        "upstream source>": False,
         "...": False,
     }
     trace_containers = {

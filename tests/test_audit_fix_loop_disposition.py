@@ -189,14 +189,48 @@ def test_source_trace_rejects_placeholder_chain_endpoints(tmp_path: Path) -> Non
     assert any("non-placeholder endpoints" in error for error in errors)
 
 
-def test_audit_fix_loop_disposition_source_trace_endpoint_grammar() -> None:
+def test_source_trace_rejects_decorated_template_chain(tmp_path: Path) -> None:
+    aud = load_auditor()
+    _write_plan(tmp_path, max_files=1)
+    body = _body(
+        ai="- Parser guard -- fixed-in: scripts/parser.py",
+        predicate="contract",
+        disposition="fixed-in",
+        max_files=1,
+        source_trace="<symptom -> intermediate cause -> upstream source>",
+    )
+
+    errors = aud.audit_body(body, repo_root=tmp_path, changed_file_set={"scripts/parser.py"})
+
+    assert any("non-placeholder endpoints" in error for error in errors)
+
+
+def test_source_trace_accepts_unicode_endpoint_chain(tmp_path: Path) -> None:
+    aud = load_auditor()
+    _write_plan(tmp_path, max_files=1)
+    body = _body(
+        ai="- Parser guard -- fixed-in: scripts/parser.py",
+        predicate="contract",
+        disposition="fixed-in",
+        max_files=1,
+        source_trace="症状 -> 根因",
+    )
+
+    assert aud.audit_body(body, repo_root=tmp_path, changed_file_set={"scripts/parser.py"}) == []
+
+
+def test_fix_loop_trace_contract_source_trace_endpoint_grammar() -> None:
     aud = load_auditor()
     trace_tokens_by_expected = {
         "review claim": True,
         "parser branch": True,
+        "症状": True,
         "admission source": True,
         "TBD": False,
         "unknown": False,
+        "<symptom": False,
+        "intermediate cause": False,
+        "upstream source>": False,
         "...": False,
     }
     trace_containers = {
@@ -219,7 +253,41 @@ def test_audit_fix_loop_disposition_source_trace_endpoint_grammar() -> None:
         trace = " -> ".join(endpoints)
         spec_derived_oracle = trace_tokens_by_expected[token]
 
-        assert aud._source_trace_is_valid(trace) is spec_derived_oracle
+        assert aud.source_trace_is_valid(trace) is spec_derived_oracle
+
+
+def test_upstream_files_are_normalized_before_changed_file_match(tmp_path: Path) -> None:
+    aud = load_auditor()
+    _write_plan(tmp_path, max_files=1)
+    body = _body(
+        ai="- Parser guard -- fixed-in: scripts/parser.py",
+        predicate="contract",
+        disposition="fixed-in",
+        max_files=1,
+        upstream_files="./scripts\\parser.py",
+    )
+
+    assert aud.audit_body(body, repo_root=tmp_path, changed_file_set={"scripts/parser.py"}) == []
+
+
+def test_upstream_files_reject_placeholder_tokens(tmp_path: Path) -> None:
+    aud = load_auditor()
+    _write_plan(tmp_path, max_files=1)
+    body = _body(
+        ai="- Logging polish -- waived-nit: skip-worthy",
+        root="Logging polish",
+        predicate="not-blocking",
+        disposition="waived-nit",
+        max_files=1,
+        fix_strategy="symptom-only-deferred",
+        upstream_files="none",
+        symptom_only_reason="skip-worthy nit is not blocking this workflow gate",
+        follow_up="waived-nit in AI reconciliation",
+    )
+
+    errors = aud.audit_body(body, repo_root=tmp_path, changed_file_set={"scripts/parser.py"})
+
+    assert any("upstream files must contain repo-relative paths" in error for error in errors)
 
 
 def test_symptom_only_strategy_requires_reason_and_followup(tmp_path: Path) -> None:

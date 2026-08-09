@@ -20,6 +20,14 @@ import json
 import os
 import subprocess
 import sys
+from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "scripts"))
+from fix_loop_trace_contract import (
+    is_placeholder_text,
+    normalize_repo_path,
+    source_trace_is_valid,
+)
 
 _REQUIRED_ROOT_TRACE_FIELDS = ("symptom", "root_cause", "source_trace", "fix_strategy", "upstream_files")
 _FIX_STRATEGIES = {"upstream-root", "symptom-only-deferred"}
@@ -58,10 +66,7 @@ def _relativize(path: str, project_dir: str) -> str:
     makes Windows `\\` separators match `/`-based globs.
     """
     try:
-        candidate = path.replace("\\", "/")
-        if os.path.isabs(path) or os.path.isabs(candidate):
-            candidate = os.path.relpath(path, project_dir)
-        return os.path.normpath(candidate).replace("\\", "/")
+        return normalize_repo_path(path, project_dir)
     except ValueError:
         return path
 
@@ -81,20 +86,7 @@ def _deny(reason: str) -> None:
 
 
 def _has_text(value: object) -> bool:
-    return isinstance(value, str) and value.strip().lower() not in {"", "none", "n/a", "na", "tbd"}
-
-
-def _placeholder(value: str) -> bool:
-    return value.strip().lower() in {"", "none", "n/a", "na", "tbd", "todo", "unknown", "?", "-", "--", "..."}
-
-
-def _source_trace_is_valid(value: object) -> bool:
-    if not isinstance(value, str):
-        return False
-    parts = [part.strip() for part in value.split("->")]
-    if len(parts) < 2:
-        return False
-    return all(not _placeholder(part) and any(ch.isalnum() for ch in part) for part in parts)
+    return isinstance(value, str) and not is_placeholder_text(value)
 
 
 def _has_string_list(value: object) -> bool:
@@ -118,7 +110,7 @@ def _root_trace_errors(baton: dict) -> list[str]:
             missing.append(field)
     if missing:
         return ["missing " + ", ".join(missing)]
-    if not _source_trace_is_valid(baton.get("source_trace")):
+    if not source_trace_is_valid(baton.get("source_trace")):
         return ["source_trace must name the chain from symptom -> upstream source with non-placeholder endpoints"]
 
     strategy = str(baton.get("fix_strategy", "")).strip().lower()

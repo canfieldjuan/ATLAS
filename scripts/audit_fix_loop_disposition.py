@@ -18,6 +18,11 @@ from audit_ai_reconciliation import (
     extract_section as extract_ai_reconciliation_section,
 )
 from audit_pr_body import unfenced_lines
+from fix_loop_trace_contract import (
+    is_placeholder_text,
+    parse_repo_path_tokens,
+    source_trace_is_valid,
+)
 
 DISPOSITIONS = (
     "fixed-in",
@@ -51,7 +56,6 @@ PLAN_RE = re.compile(r"(?im)^\s*Plan:\s*(?P<path>plans/PR-[A-Za-z0-9._-]+\.md)\s
 FIELD_RE = re.compile(r"(?im)^\s*-\s*(?P<name>[A-Za-z][A-Za-z -]*):\s*(?P<value>\S.*)$")
 MAX_FILES_RE = re.compile(r"(?im)^\s*Max files:\s*(?P<value>\S.*?)\s*$")
 SCOPE_RE = re.compile(r"(?im)^##\s+Scope\b")
-PATH_TOKEN_RE = re.compile(r"`([^`\n]+)`|([^,\s]+)")
 
 
 class ReconciliationItem(NamedTuple):
@@ -113,24 +117,13 @@ def structural_preflight_section(section: str) -> str:
     return "\n".join(unfenced_lines(section))
 
 
-def _placeholder(value: str) -> bool:
-    return value.strip().lower() in {"", "none", "n/a", "na", "tbd", "todo", "unknown", "?", "-", "--", "..."}
-
-
-def _source_trace_is_valid(value: str) -> bool:
-    parts = [part.strip() for part in value.split("->")]
-    if len(parts) < 2:
-        return False
-    return all(not _placeholder(part) and re.search(r"[A-Za-z0-9]", part) for part in parts)
-
-
 def trace_contract_errors(fields: dict[str, str]) -> tuple[list[str], str, set[str]]:
     errors: list[str] = []
     for field in ("source trace", "upstream files", "fix strategy"):
         if field not in fields:
             errors.append(f"fix-loop disposition preflight: missing '- {field.title()}: ...'")
     source_trace = fields.get("source trace", "")
-    if source_trace and not _source_trace_is_valid(source_trace):
+    if source_trace and not source_trace_is_valid(source_trace):
         errors.append(
             "fix-loop disposition preflight: source trace must name the chain "
             "from symptom -> upstream source with non-placeholder endpoints"
@@ -146,7 +139,7 @@ def trace_contract_errors(fields: dict[str, str]) -> tuple[list[str], str, set[s
         )
     if strategy == "symptom-only-deferred":
         for field in ("symptom-only reason", "follow-up"):
-            if _placeholder(fields.get(field, "")):
+            if is_placeholder_text(fields.get(field, "")):
                 errors.append(
                     "fix-loop disposition preflight: symptom-only-deferred requires "
                     f"'- {field.title()}: ...'"
@@ -208,7 +201,7 @@ def disposition_errors(fields: dict[str, str], *, changed_file_set: set[str] | N
             )
 
     root = fields.get("root decision", "")
-    if root.lower() in {"none", "n/a", "na", "tbd"}:
+    if is_placeholder_text(root):
         errors.append("fix-loop disposition preflight: root decision must name the reviewed defect class")
 
     if disposition == "fixed-in":
@@ -257,13 +250,7 @@ def reconciliation_items(section: str | None) -> list[ReconciliationItem]:
 
 
 def parse_allowed_files(value: str) -> set[str]:
-    paths: set[str] = set()
-    for match in PATH_TOKEN_RE.finditer(value.replace(",", " ")):
-        raw = (match.group(1) or match.group(2) or "").strip().strip("`")
-        if not raw or raw.startswith("/") or ".." in Path(raw).parts:
-            continue
-        paths.add(raw)
-    return paths
+    return parse_repo_path_tokens(value)
 
 
 def plan_path_from_body(body: str, repo_root: Path) -> tuple[Path | None, str | None]:
