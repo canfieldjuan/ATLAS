@@ -145,7 +145,7 @@ sites need more attention than others, and we'd rather know that up front.
 every site always does - it depends on how similar they are.
 
 4. Once we understand the locations and the schedules you need, we'll put \
-together a scope for each one and email you an estimate for review.
+together a scope and email you an estimate for review.
 
 5. Estimates are FREE and there is no obligation. If we're not the right \
 fit, we won't try to talk you into it.
@@ -160,20 +160,56 @@ Juan Canfield
 {business_website}
 """
 
-# "custom" is a real website form option, but it is a placeholder for "we'll
-# work it out on the call" rather than a cadence that can be read back in a
-# sentence -- "a custom commercial cleaning" does not parse as English. It is
-# therefore dropped exactly like a blank frequency, and the request line falls
-# back to its cadence-free wording.
-_UNSPOKEN_FREQUENCIES = frozenset({"custom"})
+# Cadence values that may be spoken inside a sentence, as an ALLOWLIST.
+#
+# This deliberately fails closed. `frequency` is free text server-side --
+# `leads.py` declares `Field(default="", max_length=120)` -- so a denylist of
+# known-bad values does not hold: `frequency="every other week"` would render
+# "You requested a every other week commercial cleaning", which is broken
+# English in customer-facing copy. Only these values are interpolated after
+# "a"; everything else, including the website's own `custom` option (a
+# placeholder for "we'll work it out on the call", not a cadence) and any
+# free-text value, falls back to the cadence-free wording.
+#
+# Every member is consonant-initial, so the fixed article "a" is always
+# correct; `test_every_speakable_frequency_takes_the_article_a` enforces that
+# for any future member.
+SPEAKABLE_FREQUENCIES = frozenset(
+    {"daily", "weekly", "bi-weekly", "monthly", "one-time"}
+)
+
+# The canonical template-selection surface: every acknowledgement variant maps
+# to exactly one template body. This is the single source of membership for
+# "which templates does this module route to", so the copy guards in
+# `tests/test_ack_commercial_templates.py` derive their inventory from it
+# rather than maintaining a parallel hand-written list that could silently fall
+# behind and let a new template bypass the dollar/terminology/turnaround
+# checks. `test_every_module_template_is_routed` fails closed if a
+# `*_TEMPLATE` constant is added here without being routed.
+#
+# `general` shares the residential body on purpose: it covers the form's
+# "Other" option and anything unrecognised, which are not known to be
+# commercial, so those leads keep the copy they already receive.
+ACK_TEMPLATE_BY_VARIANT = {
+    ACK_VARIANT_RESIDENTIAL: ACK_TEMPLATE,
+    ACK_VARIANT_GENERAL: ACK_TEMPLATE,
+    ACK_VARIANT_COMMERCIAL_SINGLE_SITE: COMMERCIAL_SINGLE_SITE_TEMPLATE,
+    ACK_VARIANT_COMMERCIAL_MULTI_SITE: COMMERCIAL_MULTI_SITE_TEMPLATE,
+}
+
+# The variants whose copy speaks the cadence in a sentence rather than echoing
+# the raw "Your request: …" line.
+COMMERCIAL_ACK_VARIANTS = frozenset(
+    {ACK_VARIANT_COMMERCIAL_SINGLE_SITE, ACK_VARIANT_COMMERCIAL_MULTI_SITE}
+)
 
 
 def _spoken_frequency(frequency: str) -> str:
     """Return the frequency only when it reads naturally inside a sentence."""
-    cleaned = frequency.strip()
-    if cleaned.lower() in _UNSPOKEN_FREQUENCIES:
+    if not isinstance(frequency, str):
         return ""
-    return cleaned
+    cleaned = frequency.strip()
+    return cleaned.lower() if cleaned.lower() in SPEAKABLE_FREQUENCIES else ""
 
 
 def _commercial_request_line(frequency: str, *, multi_site: bool) -> str:
@@ -208,19 +244,17 @@ def format_request_acknowledgement(
     the lead sees their request was captured accurately; both are optional.
     """
     variant = classify_ack_variant(service)
+    template = ACK_TEMPLATE_BY_VARIANT.get(variant, ACK_TEMPLATE)
 
-    if variant == ACK_VARIANT_COMMERCIAL_SINGLE_SITE:
-        template = COMMERCIAL_SINGLE_SITE_TEMPLATE
-        request_line = _commercial_request_line(frequency, multi_site=False)
-    elif variant == ACK_VARIANT_COMMERCIAL_MULTI_SITE:
-        template = COMMERCIAL_MULTI_SITE_TEMPLATE
-        request_line = _commercial_request_line(frequency, multi_site=True)
+    if variant in COMMERCIAL_ACK_VARIANTS:
+        request_line = _commercial_request_line(
+            frequency, multi_site=variant == ACK_VARIANT_COMMERCIAL_MULTI_SITE
+        )
     else:
         # residential AND general. `general` covers the form's "Other" option
         # and anything unrecognised, where the request is not known to be
         # commercial -- so it keeps exactly the copy those leads receive
         # today rather than being pointed at unapproved wording.
-        template = ACK_TEMPLATE
         details = ", ".join(
             part for part in (service.strip(), frequency.strip()) if part
         )

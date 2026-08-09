@@ -17,6 +17,32 @@ This slice is the copy change A1 built the plumbing for: `commercial` and
 
 Tracking issue: #2320 (part of #2188). Predecessor: #2328.
 
+### Diff-budget overage — why this slice is indivisible
+
+This slice exceeds the 400 LOC soft cap. The runtime change is one module: two
+operator-authored template bodies plus the selection table and the cadence
+helpers. The remainder is the mandatory `plans/PR-*.md` doc that AGENTS.md
+requires for any non-Markdown diff, and the test matrix the Review Contract
+commits to.
+
+Splitting was considered and rejected on each available seam:
+
+- **Templates without selection** ships two constants nothing routes to — dead
+  copy with no reachability proof, which R14/R2 would correctly reject.
+- **Selection without templates** has nothing to select between.
+- **One commercial variant at a time** leaves the other still sending
+  residential copy to real leads, which is the live defect this slice exists to
+  stop. Both variants are reachable from the same form today.
+- **Either without the test matrix** removes the proof that makes a
+  customer-facing copy change reviewable: the copy guardrails (no dollar
+  figures, "estimate" never "quote", the 24-hour promise scoped to first
+  contact), the frozen residential anchor, and the free-text cadence
+  fail-closed behaviour are the minimum evidence, not padding.
+
+The seam that did exist — classification versus copy — is exactly where #2320
+was already split, and A1 (#2328) took the classification side. This slice is
+the other half of that split, not a bundle.
+
 ### Problem-derived contract
 
 - Root cause: `format_request_acknowledgement` selected no template. There was
@@ -67,12 +93,16 @@ Slice phase: Vertical slice
      structurally, not by convention: `format_request_acknowledgement` calls
      `classify_ack_variant(service)` itself rather than accepting a
      caller-supplied variant that could drift from the one intake records.
-  4. Every website frequency option renders well-formed English, including the
-     `custom` option and a blank — settled by
-     `::test_single_site_speaks_every_spoken_frequency`,
+  4. The cadence echo is well-formed for ANY submitted value, not just the
+     form's options. `frequency` is free text server-side, so an allowlist
+     decides what may be spoken and everything else falls back to cadence-free
+     wording — settled by `::test_single_site_speaks_every_spoken_frequency`,
      `::test_multi_site_speaks_every_spoken_frequency`,
-     `::test_unspoken_frequency_falls_back_to_cadence_free_wording` and
-     `::test_commercial_copy_never_double_spaces_or_dangles_the_cadence`.
+     `::test_implementation_allowlist_equals_the_contract`,
+     `::test_every_speakable_frequency_is_reviewed_for_the_article_a`,
+     `::test_unspeakable_frequency_falls_back_to_cadence_free_wording`,
+     `::test_commercial_copy_never_double_spaces_or_dangles_the_cadence` and
+     `::test_non_string_frequency_never_raises`.
   5. Residential and `general` are unchanged — settled by
      `tests/test_ack_variant_classification.py::test_residential_and_general_still_render_the_original_template`
      and the byte-identical anchor
@@ -87,8 +117,15 @@ Slice phase: Vertical slice
      `::test_only_approved_sentences_promise_24_hours` (an exact whitelist; see
      Mechanism for why it is not a keyword rule) and
      `::test_estimate_delivery_is_never_inside_the_24_hour_window`.
-  8. The multi-site email makes none of the promises #2320 forbids — settled by
+  8. The multi-site email makes none of the promises #2320 forbids, including
+     promising a scope for every submitted location before serviceability is
+     established — settled by
      `::test_multi_site_makes_none_of_the_promises_it_must_not_make`.
+  10. The copy guards cannot be bypassed by adding a template or a variant —
+     settled by `::test_the_guard_inventory_is_derived_from_the_router_not_hand_written`,
+     `::test_every_module_template_is_routed`,
+     `::test_every_variant_is_routed_to_a_template` and
+     `::test_the_24_hour_whitelist_covers_every_routed_variant`.
   9. The commercial body is what intake actually sends and stores, not merely
      what the renderer returns — settled by
      `::test_intake_sends_the_commercial_body_for_commercial_services`, which
@@ -146,6 +183,45 @@ Closure declaration for the variant set consumed here:
    production today, which is the safe direction: the failure mode of the
    `else` is "unchanged behaviour", never "a business-specific promise sent to
    someone whose request was not identified as commercial".
+
+Closure declaration for the **cadence** set (`SPEAKABLE_FREQUENCIES`):
+
+1. **Closed or open? — CLOSED**, and this is the fix for a real defect found in
+   review. `frequency` is free text server-side (`leads.py`
+   `Field(default="", max_length=120)`), so the first implementation's denylist
+   (exclude `custom`, speak everything else) admitted arbitrary input:
+   `frequency="every other week"` rendered "You requested a **every other
+   week** commercial cleaning" into a customer-facing email.
+2. **Where does membership come from? — ENUMERATED**, from the website form's
+   own options, and pinned to literals by
+   `tests/test_ack_commercial_templates.py::test_implementation_allowlist_equals_the_contract`.
+   Article correctness is a second, separately reviewed list
+   (`ARTICLE_A_FREQUENCIES`) because English article choice follows sound, not
+   spelling — "a one-time cleaning" is correct — so no heuristic can decide it.
+3. **Out-of-set behaviour — FAIL CLOSED to the cadence-free wording.** Any
+   value outside the allowlist, including the form's own `custom`, blanks and
+   non-strings, renders "You requested a commercial cleaning." Proved over
+   free-text and injection-shaped inputs by
+   `::test_unspeakable_frequency_falls_back_to_cadence_free_wording`.
+
+Closure declaration for the **guard-inventory** sets (`ALL_TEMPLATES`,
+`APPROVED_24_HOUR_SENTENCES`):
+
+1. **Closed or open? — CLOSED**, bounded by the routing table
+   `ACK_TEMPLATE_BY_VARIANT`.
+2. **Where does membership come from? — DERIVED**, not hand-written.
+   `ALL_TEMPLATES` is computed from `ACK_TEMPLATE_BY_VARIANT.values()`, and
+   `APPROVED_24_HOUR_SENTENCES` is keyed by variant with
+   `::test_the_24_hour_whitelist_covers_every_routed_variant` asserting its
+   keys equal the routing table's. A hand-maintained list could fall behind and
+   let a new template bypass the dollar / terminology / turnaround guards while
+   the suite stayed green.
+3. **Out-of-set behaviour — FAIL CLOSED in both directions.**
+   `::test_every_module_template_is_routed` fails if a `*_TEMPLATE` constant
+   exists in the module but is not routed (so it cannot escape the guards), and
+   `::test_every_variant_is_routed_to_a_template` fails if a variant has no
+   template. Verified by injection: adding an unrouted `ORPHAN_TEMPLATE`
+   containing a dollar figure and the word "quote" fails the suite.
 
 ### Deployed-config probing
 
@@ -235,12 +311,12 @@ Parked hardening: none.
 
 All counts re-run at this head.
 
-- `python -m pytest tests/test_ack_commercial_templates.py -q` — **51 passed**
+- `python -m pytest tests/test_ack_commercial_templates.py -q` — **83 passed**
 - `python -m pytest tests/test_ack_commercial_templates.py
-  tests/test_ack_variant_classification.py -q` — **97 passed**
+  tests/test_ack_variant_classification.py -q` — **129 passed**
 - `python -m pytest tests/test_ack_commercial_templates.py
   tests/test_ack_variant_classification.py tests/test_leads_intake.py
-  tests/test_eom_sent_email_tenant_scope.py -q` — **181 passed, 1 skipped**
+  tests/test_eom_sent_email_tenant_scope.py -q` — **213 passed, 1 skipped**
   (the skip is the PostgreSQL test, run separately below).
 - **The PostgreSQL route test was RUN, not skipped** — a skipped test is not
   evidence. Pointing `ATLAS_MIGRATION_TEST_DATABASE_URL` at the local instance:
@@ -275,8 +351,8 @@ All counts re-run at this head.
 | File | LOC |
 |---|---:|
 | `.github/workflows/atlas_eom_lead_pipeline_checks.yml` | 5 |
-| `atlas_brain/templates/email/request_acknowledgement.py` | 130 |
-| `plans/PR-EOM-Ack-Commercial-Copy.md` | 271 |
-| `tests/test_ack_commercial_templates.py` | 306 |
+| `atlas_brain/templates/email/request_acknowledgement.py` | 164 |
+| `plans/PR-EOM-Ack-Commercial-Copy.md` | 358 |
+| `tests/test_ack_commercial_templates.py` | 441 |
 | `tests/test_ack_variant_classification.py` | 45 |
-| **Total** | **757** |
+| **Total** | **1013** |
