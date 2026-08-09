@@ -37,6 +37,7 @@ direction.
 
 Ownership lane: eom-crm/lead-funnel
 Slice phase: Vertical slice
+Max files: 4
 
 1. Record `previous_values` — the pre-update value of each changed field — in
    the `contact_updated` lifecycle event metadata.
