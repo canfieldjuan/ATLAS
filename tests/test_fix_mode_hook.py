@@ -9,6 +9,7 @@ fail-open: with no/inactive/malformed baton the PreToolUse hook never blocks.
 from __future__ import annotations
 
 import itertools
+import hashlib
 import json
 import os
 import subprocess
@@ -58,6 +59,27 @@ def _decision(stdout: str) -> str | None:
     if not stdout.strip():
         return None
     return json.loads(stdout)["hookSpecificOutput"]["permissionDecision"]
+
+
+def _file_fingerprint(project_dir: Path, rel_path: str) -> str:
+    proc = subprocess.run(
+        ["git", "ls-files", "-s", "--", rel_path],
+        cwd=project_dir,
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+    if proc.returncode == 0 and proc.stdout.strip():
+        parts = proc.stdout.splitlines()[0].split()
+        index_blob = parts[1] if len(parts) > 1 else "unknown"
+    else:
+        index_blob = "none"
+    path = project_dir / rel_path
+    try:
+        worktree_hash = hashlib.sha256(path.read_bytes()).hexdigest()
+    except OSError:
+        worktree_hash = "missing"
+    return f"index:{index_blob}|worktree:{worktree_hash}"
 
 
 def test_no_baton_allows(tmp_path):
@@ -325,6 +347,7 @@ def test_upstream_root_denies_downstream_when_worktree_source_predates_activatio
     _git_fixture(tmp_path)
     parser = tmp_path / "scripts" / "parser.py"
     parser.write_text("def parse():\n    return 'pre baton dirty'\n", encoding="utf-8")
+    activation_fingerprint = _file_fingerprint(tmp_path, "scripts/parser.py")
     _write_baton(
         tmp_path,
         {
@@ -332,12 +355,35 @@ def test_upstream_root_denies_downstream_when_worktree_source_predates_activatio
             "allowed": ["scripts/*", "templates/*"],
             **_root_trace(),
             "activation_dirty_paths": ["scripts/parser.py"],
+            "activation_dirty_fingerprints": {"scripts/parser.py": activation_fingerprint},
         },
     )
 
     result = _run(CHECK_HOOK, _edit("templates/downstream.html"), tmp_path)
 
     assert _decision(result.stdout) == "deny"
+
+
+def test_upstream_root_allows_downstream_when_initially_dirty_source_changes_again(tmp_path):
+    _git_fixture(tmp_path)
+    parser = tmp_path / "scripts" / "parser.py"
+    parser.write_text("def parse():\n    return 'pre baton dirty'\n", encoding="utf-8")
+    activation_fingerprint = _file_fingerprint(tmp_path, "scripts/parser.py")
+    _write_baton(
+        tmp_path,
+        {
+            "active": True,
+            "allowed": ["scripts/*", "templates/*"],
+            **_root_trace(),
+            "activation_dirty_paths": ["scripts/parser.py"],
+            "activation_dirty_fingerprints": {"scripts/parser.py": activation_fingerprint},
+        },
+    )
+    parser.write_text("def parse():\n    return 'post baton dirty'\n", encoding="utf-8")
+
+    result = _run(CHECK_HOOK, _edit("templates/downstream.html"), tmp_path)
+
+    assert _decision(result.stdout) is None
 
 
 def test_upstream_root_allows_downstream_after_worktree_source_changed_since_activation(tmp_path):
@@ -434,12 +480,14 @@ def test_upstream_root_normalizes_declared_upstream_paths(tmp_path):
 def test_upstream_root_denies_downstream_when_untracked_source_predates_activation(tmp_path):
     _git_fixture(tmp_path)
     (tmp_path / "scripts" / "new_parser.py").write_text("def parse():\n    return 'old dirty'\n", encoding="utf-8")
+    activation_fingerprint = _file_fingerprint(tmp_path, "scripts/new_parser.py")
     baton = {
         "active": True,
         "allowed": ["scripts/*", "templates/*"],
         **_root_trace(),
         "upstream_files": ["scripts/new_parser.py"],
         "activation_dirty_paths": ["scripts/new_parser.py"],
+        "activation_dirty_fingerprints": {"scripts/new_parser.py": activation_fingerprint},
     }
     _write_baton(tmp_path, baton)
 

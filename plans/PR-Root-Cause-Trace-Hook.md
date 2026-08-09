@@ -43,7 +43,7 @@ Slice phase: Workflow/process
 2. Enforce the same source-trace fields in PR-body fix-loop dispositions and
    cover upstream-root, downstream-only, and symptom-only-deferred cases with
    synthetic tests.
-Max files: 12
+Max files: 13
 
 ### Review Contract
 
@@ -86,18 +86,18 @@ seam in the enumeration; otherwise write "N/A - no boundary change."
 - Replaced-path behaviors: existing allowed-file admission remains, with a new
   prerequisite that an active constrained fix loop carry root-trace evidence.
 - Guard-relevant fields: `activation_head`, `activation_dirty_paths`,
-  `symptom`, `root_cause`, `source_trace`, `fix_strategy`, `upstream_files`,
-  `symptom_only_reason`, `follow_up`.
+  `activation_dirty_fingerprints`, `symptom`, `root_cause`, `source_trace`,
+  `fix_strategy`, `upstream_files`, `symptom_only_reason`, `follow_up`.
 - Caller x input shape dispositions:
   - `PreToolUse` Edit with `tool_input.file_path`: preserved for allowed
     upstream source targets and support files; rejected for disallowed paths;
     changed for downstream symptom targets, which are rejected until an upstream
-    source edit exists after `activation_head` and outside
-    `activation_dirty_paths`.
+    source edit exists after `activation_head` and differs from the
+    `activation_dirty_fingerprints` snapshot.
   - `PreToolUse` Write with `tool_input.file_path`: same admission rule as
     Edit; changed so a newly-created untracked declared upstream source counts
     as current-pass source work before downstream edits only when it was absent
-    from `activation_dirty_paths`.
+    from `activation_dirty_paths` or its fingerprint changed after activation.
   - `PreToolUse` MultiEdit with `tool_input.edits[].file_path`: preserved
     fail-closed behavior where any outside-target edit denies the tool call;
     changed so downstream targets in the batch still require activation-baseline
@@ -125,9 +125,9 @@ seam in the enumeration; otherwise write "N/A - no boundary change."
   machine/human baton or PR-body `Upstream files:` record for that root
   decision. For `upstream-root`, an unlisted downstream target cannot stand in
   for the declared source; the hook requires the source target first or an
-  upstream file changed after `activation_head` and outside
-  `activation_dirty_paths`, and the PR-body audit requires a changed upstream
-  file before certifying `fixed-in`.
+  upstream file changed after `activation_head` and outside the unchanged
+  `activation_dirty_fingerprints` baseline, and the PR-body audit requires a
+  changed upstream file before certifying `fixed-in`.
 - Support target set: CLOSED. Membership is the hook's explicit support paths
   and prefixes for tests, plans, Claude skill docs, and session-control docs.
   Unlisted allowed targets are treated as downstream symptom targets.
@@ -161,6 +161,7 @@ fallback changes; otherwise write "N/A - no guard/config boundary change."
 - `tests/test_audit_fix_loop_disposition.py`
 - `tests/test_fix_loop_trace_contract.py`
 - `tests/test_fix_mode_hook.py`
+- `tests/test_update_pr_body_wrapper.py`
 
 ## Mechanism
 
@@ -201,7 +202,9 @@ Parked hardening: none.
 ## Verification
 
 - `python -m pytest tests/test_fix_loop_trace_contract.py tests/test_fix_mode_hook.py tests/test_audit_fix_loop_disposition.py -q`
-  -- 75 passed.
+  -- 76 passed.
+- `python -m pytest tests/test_update_pr_body_wrapper.py::test_update_wrapper_does_not_run_full_local_review tests/test_update_pr_body_wrapper.py::test_update_wrapper_ownership_guard_failure_blocks_before_edit tests/test_update_pr_body_wrapper.py::test_update_wrapper_rejects_head_drift_before_edit tests/test_update_pr_body_wrapper.py::test_update_wrapper_runs_live_reconciliation_with_publish_body tests/test_update_pr_body_wrapper.py::test_update_wrapper_stamps_full_body_before_publish -q`
+  -- 5 passed.
 - `python scripts/maturity_sweep.py scripts --tests-root tests --baseline tests/maturity_sweep/baseline_scripts.json --min-score 8 --sensitive-glob 'scripts/**'`
   -- passed; no new brittleness above baseline.
 
@@ -209,16 +212,17 @@ Parked hardening: none.
 
 | File | LOC |
 |---|---:|
-| `.claude/hooks/check_edit_budget.py` | 170 |
-| `.claude/hooks/inject_fix_mode.py` | 9 |
-| `.claude/skills/fix-mode/SKILL.md` | 25 |
+| `.claude/hooks/check_edit_budget.py` | 225 |
+| `.claude/hooks/inject_fix_mode.py` | 10 |
+| `.claude/skills/fix-mode/SKILL.md` | 30 |
 | `AGENTS.md` | 13 |
-| `CLAUDE.md` | 14 |
-| `docs/SESSION_STATE_TEMPLATE.md` | 11 |
-| `plans/PR-Root-Cause-Trace-Hook.md` | 224 |
+| `CLAUDE.md` | 15 |
+| `docs/SESSION_STATE_TEMPLATE.md` | 13 |
+| `plans/PR-Root-Cause-Trace-Hook.md` | 228 |
 | `scripts/audit_fix_loop_disposition.py` | 65 |
 | `scripts/fix_loop_trace_contract.py` | 84 |
 | `tests/test_audit_fix_loop_disposition.py` | 309 |
 | `tests/test_fix_loop_trace_contract.py` | 61 |
-| `tests/test_fix_mode_hook.py` | 363 |
-| **Total** | **1348** |
+| `tests/test_fix_mode_hook.py` | 411 |
+| `tests/test_update_pr_body_wrapper.py` | 1 |
+| **Total** | **1465** |

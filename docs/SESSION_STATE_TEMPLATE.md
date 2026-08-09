@@ -79,6 +79,8 @@ Latest commit: <sha at last push>
 Activation head: <sha when fix mode was armed>
 Activation dirty paths:
 - <repo-relative staged/working/untracked path present when armed, or none>
+Activation dirty fingerprints:
+- <path>: <index/worktree fingerprint captured when armed, or none>
 Allowed files (max N=<n>):
 - <path or glob -- the failure source, not everything the symptom touches>
 Symptom: <failing check or review claim being addressed>

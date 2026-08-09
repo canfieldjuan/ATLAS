@@ -16,6 +16,7 @@ enforces the file-count budget; this hook only enforces the allowed *set*.
 from __future__ import annotations
 
 import fnmatch
+import hashlib
 import json
 import os
 import subprocess
@@ -135,6 +136,46 @@ def _path_set(value: object, project_dir: str) -> set[str]:
     return paths
 
 
+def _file_sha(path: Path) -> str:
+    try:
+        return hashlib.sha256(path.read_bytes()).hexdigest()
+    except OSError:
+        return "missing"
+
+
+def _index_blob(project_dir: str, path: str) -> str:
+    proc = subprocess.run(
+        ["git", "ls-files", "-s", "--", path],
+        cwd=project_dir,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    if proc.returncode != 0 or not proc.stdout.strip():
+        return "none"
+    first = proc.stdout.splitlines()[0].split()
+    return first[1] if len(first) > 1 else "unknown"
+
+
+def _file_fingerprint(project_dir: str, path: str) -> str:
+    rel = _relativize(path, project_dir)
+    return f"index:{_index_blob(project_dir, rel)}|worktree:{_file_sha(Path(project_dir) / rel)}"
+
+
+def _fingerprint_map(value: object, project_dir: str) -> dict[str, str]:
+    if not isinstance(value, dict):
+        return {}
+    fingerprints: dict[str, str] = {}
+    for raw_path, raw_fingerprint in value.items():
+        if not isinstance(raw_path, str) or not isinstance(raw_fingerprint, str):
+            continue
+        path = next(iter(_path_set([raw_path], project_dir)), "")
+        fingerprint = raw_fingerprint.strip()
+        if path and fingerprint:
+            fingerprints[path] = fingerprint
+    return fingerprints
+
+
 def _root_trace_errors(baton: dict, project_dir: str) -> list[str]:
     missing: list[str] = []
     for field in _REQUIRED_ROOT_TRACE_FIELDS:
@@ -149,8 +190,16 @@ def _root_trace_errors(baton: dict, project_dir: str) -> list[str]:
             missing.append(field)
     if missing:
         return ["missing " + ", ".join(missing)]
+    activation_dirty_paths = _path_set(baton.get("activation_dirty_paths"), project_dir)
     if not isinstance(baton.get("activation_dirty_paths"), list):
         return ["activation_dirty_paths must snapshot staged/working/untracked paths when fix mode is armed"]
+    fingerprints = _fingerprint_map(baton.get("activation_dirty_fingerprints"), project_dir)
+    missing_fingerprints = sorted(path for path in activation_dirty_paths if path not in fingerprints)
+    if missing_fingerprints:
+        return [
+            "activation_dirty_fingerprints must snapshot file state for "
+            + ", ".join(missing_fingerprints)
+        ]
     if not source_trace_is_valid(baton.get("source_trace")):
         return ["source_trace must name the chain from symptom -> upstream source with non-placeholder endpoints"]
 
@@ -196,7 +245,13 @@ def _changed_paths(project_dir: str, base_ref: str | None) -> set[str]:
 def _upstream_source_is_changed(project_dir: str, baton: dict, upstream_files: set[str]) -> bool:
     activation_head = str(baton.get("activation_head") or "").strip() or None
     activation_dirty_paths = _path_set(baton.get("activation_dirty_paths"), project_dir)
-    current_pass_paths = _changed_paths(project_dir, activation_head).difference(activation_dirty_paths)
+    fingerprints = _fingerprint_map(baton.get("activation_dirty_fingerprints"), project_dir)
+    unchanged_dirty_paths = {
+        path
+        for path in activation_dirty_paths
+        if fingerprints.get(path) == _file_fingerprint(project_dir, path)
+    }
+    current_pass_paths = _changed_paths(project_dir, activation_head).difference(unchanged_dirty_paths)
     return bool(current_pass_paths.intersection(upstream_files))
 
 

@@ -1477,9 +1477,10 @@ Compose files for sub-services:
 - **Fix-mode root trace is enforced by hook**: when `.claude/fix-mode-state.json`
   is active with an `allowed` set, the PreToolUse hook denies normal edits until
   the baton names `symptom`, `root_cause`, `source_trace`, `fix_strategy`, and
-  `upstream_files`. Record `activation_head` and `activation_dirty_paths` when
-  arming fix mode so committed and noncommitted upstream-source changes count
-  only after that baseline. Use `upstream-root` unless you explicitly declare
+  `upstream_files`. Record `activation_head`, `activation_dirty_paths`, and
+  `activation_dirty_fingerprints` when arming fix mode so committed and
+  noncommitted upstream-source changes count only after that baseline. Use
+  `upstream-root` unless you explicitly declare
   `symptom-only-deferred` with `symptom_only_reason` and `follow_up`; mirror the
   same source trace in the PR body's `## Fix-loop disposition preflight`.
 - **Guard-class closure before another patch**: when the fix touches a guard /
@@ -1502,10 +1503,10 @@ When compacting this conversation, preserve verbatim (do not summarize away):
 - The active operator-assigned lane and the **owned active PR** (number, branch,
   latest pushed SHA) from this session's state file.
 - The full **PR Fix Mode** baton when a fix loop is active: allowed-files set +
-  max-files budget, activation head, activation dirty paths, symptom, root
-  cause, source trace, fix strategy, upstream files, symptom-only
-  reason/follow-up when applicable, current failing check/comment, last useful
-  log finding, next exact action, and do-not-redo notes.
+  max-files budget, activation head, activation dirty paths, activation dirty
+  fingerprints, symptom, root cause, source trace, fix strategy, upstream files,
+  symptom-only reason/follow-up when applicable, current failing check/comment,
+  last useful log finding, next exact action, and do-not-redo notes.
 - For an explicitly assigned long-running coding task, the full **PR watcher**
   baton: owned PR number, branch, latest head SHA, last observed check/review
   state, next 30-minute poll time, and whether autonomous merge/next-slice
