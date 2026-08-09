@@ -38,8 +38,8 @@ Slice phase: production hardening
 ### Review Contract
 
 - Acceptance criteria:
-  1. `run()` returns without reading config, querying invoices, or constructing an email provider while the guard is set — settled by `tests/test_invoice_payment_reminders_disabled.py::test_run_returns_before_reading_config_or_invoices`, which patches `get_invoice_repo` and `get_email_provider` to raise `AssertionError`, so the test fails loudly if the guard is ever moved below them.
-  2. Setting `reminders_enabled=True` produces no send — settled by `::test_enabling_config_does_not_defeat_the_guard` (same raise-on-call patches, with `settings.invoicing.enabled` and `.reminders_enabled` both True).
+  1. `run()` returns at the autopilot gate, not a later one, while the guard is set — settled by `tests/test_invoice_payment_reminders_disabled.py::test_run_returns_at_the_autopilot_gate_not_a_later_one`, which calls `run()` with no patching and requires exactly `_AUTOPILOT_DISABLED_REASON`. Each gate returns a distinct `_skip_synthesis` string, so if the guard were removed or moved below the config read this call would answer `"Invoicing disabled"` — the exact-string assertion is the ordering proof. `::test_run_touches_no_invoice_or_email_module_state` adds that `atlas_brain.services.invoice_pdf` is not even imported by the call.
+  2. Setting `reminders_enabled=True` produces no send — settled by `::test_config_enabled_does_not_defeat_the_guard`, which opens **both** config gates on the settings object and still requires `_AUTOPILOT_DISABLED_REASON`, a reason only the guard can produce. This is the criterion the mock-free rewrite initially dropped: criterion 1 alone runs with invoicing disabled ambiently and so cannot distinguish the guard blocking from the master gate blocking.
   3. The config default is fail-closed — settled by `::test_config_default_is_fail_closed` asserting `InvoicingConfig.model_fields["reminders_enabled"].default is False`.
   4. A fresh database seeds the task disabled — settled by `::test_scheduler_seeds_the_task_disabled` asserting `TaskScheduler._DEFAULT_TASKS` has exactly one `invoice_payment_reminders` entry with `.get("enabled") is False` (explicitly False, not merely absent — absence is the defect).
   5. The kill constant itself is present — settled by `::test_autopilot_disabled_flag_is_set`.
@@ -68,7 +68,7 @@ This diff changes an admission boundary (whether an outbound customer-email path
 ### Deployed-config probing
 
 - Deployed/default config values: `reminders_enabled` code default was `True`, now `False`. The ts.net host `.env:321` carries `ATLAS_INVOICING_REMINDERS_ENABLED=false`; env prefix is `ATLAS_INVOICING_` (`config.py` `InvoicingConfig.model_config`).
-- Explicit value probe: `reminders_enabled=True` explicitly set → no send (`::test_enabling_config_does_not_defeat_the_guard`). `false` → no send (unchanged behaviour, and now also the default).
+- Explicit value probe: `reminders_enabled=True` explicitly set → no send (`::test_config_enabled_does_not_defeat_the_guard`). `false` → no send (unchanged behaviour, and now also the default). A non-boolean value such as `ture` still raises rather than being coerced (`::test_garbage_env_value_still_raises`) — the blank-value forgiveness must not become a catch-all that hides a typo.
 - Absent value probe: env var removed entirely → `False` by the new default, so the pre-existing `cfg.reminders_enabled` gate also refuses. Before this slice the same absence meant ON; that inversion is the fix.
 - Blank/whitespace value probe: `ATLAS_INVOICING_REMINDERS_ENABLED=` and `="   "` → `False`. Before the validator both raised `ValidationError` and crashed startup; reproduced directly before fixing.
 - Default-session/default-context probe: a fresh database with no `scheduled_tasks` rows seeds this task `enabled=False` (`::test_scheduler_seeds_the_task_disabled`), so the cron is never registered rather than registered-and-refused.
@@ -113,7 +113,7 @@ The **seed default** stops the cron being registered at all on a fresh database.
 
 Mechanical verification. Result: pass.
 
-- New guard suite: `python -m pytest tests/test_invoice_payment_reminders_disabled.py -v` -> `7 passed`, covering acceptance criteria 1-5, 7 and 8.
+- New guard suite: `python -m pytest tests/test_invoice_payment_reminders_disabled.py -q` -> `8 passed`, covering acceptance criteria 1-5, 7 and 9. Every node named in this contract is asserted to exist by the run; the earlier revision cited two names that had been removed in the mock-free rewrite and failed collection.
 - Permitted side: `python -m pytest tests/test_monthly_invoice_generation.py -k payment_reminder -q` -> `3 passed, 40 deselected`. These two send-shape tests were RED before this round (accepted failures in the baseline) because they opened only the new guard while `invoicing.enabled` and `reminders_enabled` both default `False`; they now open all three gates and reach the fake transport.
 - Whole file: `python -m pytest tests/test_monthly_invoice_generation.py -q` -> `2 failed, 41 passed`, versus clean `main` @ `40bb24553` -> `4 failed, 39 passed`. Strictly better than base: the two `test_payment_reminder_*` failures are fixed; the two remaining `test_billing_month_*` failures are pre-existing on `main`, untouched by this diff, and stay in the baseline.
 - Blank-env reproduction, before the fix: `ATLAS_INVOICING_REMINDERS_ENABLED='' python -c "InvoicingConfig(_env_file=None)"` raised `pydantic_core._pydantic_core.ValidationError: Input should be a valid boolean ... input_value=''`. After the validator, `""`, `"   "` -> `False` and `"true"` -> `True`.
@@ -129,10 +129,10 @@ Mechanical verification. Result: pass.
 | `atlas_brain/autonomous/tasks/invoice_payment_reminders.py` | 68 |
 | `atlas_brain/config.py` | 25 |
 | `plans/PR-Invoice-Reminders-Hard-Off.md` | 146 |
-| `tests/test_invoice_payment_reminders_disabled.py` | 124 |
+| `tests/test_invoice_payment_reminders_disabled.py` | 150 |
 | `tests/test_monthly_invoice_generation.py` | 26 |
 | `tests/unit_gate_baseline.txt` | 2 |
-| **Total** | **426** |
+| **Total** | **452** |
 
 ## Cold diff reconstruction
 

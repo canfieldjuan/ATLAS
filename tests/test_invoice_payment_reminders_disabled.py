@@ -43,6 +43,32 @@ def test_run_returns_at_the_autopilot_gate_not_a_later_one():
     assert result["_skip_synthesis"] != "Invoicing disabled"
 
 
+def test_config_enabled_does_not_defeat_the_guard(monkeypatch):
+    """The headline property: config cannot re-open the send path.
+
+    ``ATLAS_INVOICING_REMINDERS_ENABLED=true`` -- or a deploy whose .env simply
+    lacks the false line -- must still produce nothing. The gate above runs with
+    invoicing disabled ambiently, so on its own it cannot distinguish "the guard
+    blocked" from "the master gate blocked"; this one opens BOTH config gates
+    and still requires the autopilot reason, which only the guard can produce.
+
+    Patches the settings object's attributes, not a module-level first-party
+    symbol, so it adds no INTERNAL_MOCK against the task (ATLAS #1877).
+    """
+    from atlas_brain.config import settings
+
+    monkeypatch.setattr(settings.invoicing, "enabled", True)
+    monkeypatch.setattr(settings.invoicing, "reminders_enabled", True)
+
+    result = asyncio.run(task_mod.run(task=None))
+
+    assert result == {"_skip_synthesis": task_mod._AUTOPILOT_DISABLED_REASON}
+    # With both config gates open, any of these would mean the guard did not fire.
+    assert result["_skip_synthesis"] != "Invoicing disabled"
+    assert "reminders_enabled=False" not in result["_skip_synthesis"]
+    assert "reminders_sent" not in result
+
+
 def test_run_touches_no_invoice_or_email_module_state():
     """No repository handle and no transport is constructed while disabled.
 
