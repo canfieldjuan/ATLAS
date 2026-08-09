@@ -87,26 +87,43 @@ Slice phase: Vertical slice
   honeypot (gated by `freshly_logged`, which honeypot returns before);
   (3) leaking PII to a public relay (see Intentional).
 - Reviewer rules triggered: R1 (requirements match), R2 (test evidence), R3
-  (security/auth — PII on the relay), R5 (backward compatibility — additive,
-  off by default), R6 (fail-safe: notification failure never fails intake),
-  R11 (dependencies/config — new alerts field), R12 (deployment safety — `.env`
-  topic add + service restart).
+  (security/auth — PII + secret topic on the relay), R5 (backward compatibility
+  — additive, off by default, inert when disabled), R6 (fail-safe: notification
+  failure never fails intake), R7 (latency — true 5s wall-clock deadline), R8
+  (resource/abuse — global hourly push ceiling), R11 (dependencies/config — new
+  alerts field), R12 (deployment safety — `.env` topic add + service restart),
+  R13 (defect class — the notification-gate closure declaration below).
 
 ### Boundary-change enumeration
 
-- Boundary path/seam: the notification gate in `_publish_lead_ntfy` —
-  `if not alerts.ntfy_enabled or not topic: return` — and the emit gate in
-  `_process_lead_intake` — `if freshly_logged:`.
-- Replaced-path behaviors: previously there was no operator notification at all;
-  the new gate adds one only on the freshly-logged + configured path. The
-  honeypot early-return (before `freshly_logged` is computed) and the duplicate
-  path (`freshly_logged=False`) keep their exact prior behavior (no notify).
-- Guard-relevant fields: `AlertsConfig.ntfy_enabled` (bool),
-  `AlertsConfig.leads_ntfy_topic` (str, empty = disabled), and the
-  `freshly_logged` flag from `interaction["inserted"]`.
-- Caller x input shape: new lead (insert) → notify; duplicate (no insert) → no
-  notify; honeypot (early return) → no notify; validation/throttle error (raise
-  before the CRM write) → no notify.
+**Closure declaration (notification-gate inventory).** The set of gates that
+decide whether a new-lead push is emitted is **CLOSED** and **code-owned
+(DERIVED** from the single emit path, not a literal list maintained here): it is
+exactly the conjunction of gates on `_process_lead_intake` →
+`_maybe_notify_new_lead` → `_default_lead_notifier` → `_publish_lead_ntfy`.
+Membership is every branch on that one path; there is no side channel that emits
+a push. **Outside-the-set default: no push.** Any input/condition that does not
+satisfy every "emit" case defaults to NOT emitting — the safe and cheap side: a
+missed push only loses a convenience signal (the lead is still captured; the ack
+email and CRM write are unaffected), whereas an over-emit risks phone-spam or a
+PII/secret-topic leak.
+
+Enumerated gates (ALL must pass to emit; each is proven by a test):
+1. `freshly_logged` — only a newly-inserted interaction (honeypot returns
+   earlier; a same-day duplicate has `inserted=False`).
+2. `lead_notifier is not None` — the route wires the production notifier; a
+   direct caller that omits it emits nothing.
+3. `_leads_push_configured()` — `ntfy_enabled` AND non-empty `leads_ntfy_topic`
+   (re-checked inside `_publish_lead_ntfy`); off ⇒ inert (no volume query, no POST).
+4. `await notify_volume() <= GLOBAL_NOTIFY_HOURLY_CAP` — global hourly ceiling;
+   over the cap (or a volume-query error) ⇒ skip (lead still captured).
+
+- Guard-relevant fields: `AlertsConfig.ntfy_enabled`, `AlertsConfig.leads_ntfy_topic`,
+  `freshly_logged` (from `interaction["inserted"]`), the injected `lead_notifier`,
+  and the hourly count from `notify_volume` / `_hourly_lead_notification_volume`.
+- Caller x input shape: new lead (insert) + configured + under cap → notify;
+  duplicate / honeypot / no-notifier / disabled / over-cap / volume-query-error /
+  validation-or-throttle-error → no notify (fail-closed on the volume error).
 
 ### Deployed-config probing
 
@@ -204,6 +221,6 @@ Parked hardening: none.
 |---|---:|
 | `atlas_brain/api/leads.py` | 198 |
 | `atlas_brain/config.py` | 1 |
-| `plans/PR-EOM-Lead-Ntfy.md` | 209 |
+| `plans/PR-EOM-Lead-Ntfy.md` | 226 |
 | `tests/test_leads_intake.py` | 437 |
-| **Total** | **845** |
+| **Total** | **862** |
