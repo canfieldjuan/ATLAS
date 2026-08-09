@@ -287,16 +287,16 @@ Parked hardening: none.
 
 ## Verification
 
-Counts below are from re-runs at head `c9f58a546`, i.e. after the generated
-property tests and the contract-oracle equality test were added. The earlier
-numbers in this section (32 / 82) described the original fixed-example suite and
-no longer matched the file.
+Counts below are re-run at the current head, after the generated property tests,
+the contract-oracle equality test, and the literal-pinned variant constants were
+added. The earlier numbers in this section (32 / 82) described the original
+fixed-example suite and no longer matched the file.
 
-- `python -m pytest tests/test_ack_variant_classification.py -q` — **45 passed**
+- `python -m pytest tests/test_ack_variant_classification.py -q` — **46 passed**
 - `python -m pytest tests/test_leads_intake.py tests/test_ack_variant_classification.py -q`
-  — **95 passed**
+  — **96 passed**
 - `python -m pytest tests/test_ack_variant_classification.py tests/test_leads_intake.py
-  tests/test_eom_sent_email_tenant_scope.py -q` — **95 passed, 1 skipped**. The skip
+  tests/test_eom_sent_email_tenant_scope.py -q` — **96 passed, 1 skipped**. The skip
   is `test_eom_sent_email_tenant_scope.py`, which needs a database and is skipped on
   this box; it RUNS in the enrolled `eom-lead-pipeline` workflow, where it is green
   at this head. A locally-skipped test is not treated here as a passing one.
@@ -316,12 +316,18 @@ no longer matched the file.
 - `python -m py_compile` on the three changed runtime modules — OK.
 - `git diff --check` — clean.
 - Negative proof that the contract oracle actually bites, rather than only
-  passing on good input: injecting an unintended member
-  (`"office-cleaning": ACK_VARIANT_RESIDENTIAL`) into `_ACK_VARIANT_BY_SERVICE`
-  makes the suite **fail** (1 failed), and reverting restores **45 passed**. A
-  member set whose test only proves the contracted values map correctly cannot
-  detect an added member, which is the case that would silently re-point a real
-  submission.
+  passing on good input. Three injections against the implementation, each
+  reverted afterwards (baseline and restored state both **46 passed**):
+  - Rename a variant **value** — `ACK_VARIANT_RESIDENTIAL = "resi"` — the case
+    where classifier and oracle would move together if the oracle referenced the
+    constants instead of literals: **10 failed**.
+  - Rename the multi-site value to `commercial_multisite`: **6 failed**.
+  - Add an unintended **member** — `"office-cleaning": ACK_VARIANT_RESIDENTIAL`:
+    **1 failed**.
+  The first two are output-contract drift (intake would persist a value that
+  violates acceptance criterion 1); the third is an added key that would
+  silently re-point a real submission. A member set whose test only proves the
+  contracted values map correctly detects neither.
 
 ## Estimated diff size
 
@@ -330,8 +336,8 @@ no longer matched the file.
 | `atlas_brain/api/leads.py` | 19 |
 | `atlas_brain/templates/email/__init__.py` | 10 |
 | `atlas_brain/templates/email/request_acknowledgement.py` | 42 |
-| `plans/PR-EOM-Ack-Variant-Classify.md` | 337 |
-| `tests/test_ack_variant_classification.py` | 305 |
+| `plans/PR-EOM-Ack-Variant-Classify.md` | 343 |
+| `tests/test_ack_variant_classification.py` | 332 |
 | `tests/test_eom_sent_email_tenant_scope.py` | 6 |
 | `tests/test_leads_intake.py` | 6 |
-| **Total** | **725** |
+| **Total** | **758** |

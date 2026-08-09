@@ -38,22 +38,49 @@ def _email_enabled(monkeypatch):
 
 # --- classifier -----------------------------------------------------------
 
-# Independent contract oracle. These are the six values the website forms can
-# submit, transcribed from the form markup
-# (Effingham_Office_Maids_Website: contact.html, commercial-estimate.html,
-# house-cleaning-estimate.html, house-cleaning-services/index.html) rather than
-# imported from the implementation. Everything below checks the implementation
-# against THIS, so an unintended entry added to `_ACK_VARIANT_BY_SERVICE`
-# (say `"office-cleaning": ACK_VARIANT_RESIDENTIAL`) fails the equality test
-# instead of being silently excluded from the generated inputs.
+# Independent contract oracle. Both halves of the contract are written here as
+# string LITERALS, never as references to the implementation's constants:
+#
+#   * the six inputs the website forms can submit, transcribed from the form
+#     markup (Effingham_Office_Maids_Website: contact.html,
+#     commercial-estimate.html, house-cleaning-estimate.html,
+#     house-cleaning-services/index.html), and
+#   * the four variant strings intake is contracted to persist.
+#
+# Naming the outputs by literal matters as much as naming the inputs. If the
+# oracle said `ACK_VARIANT_RESIDENTIAL` instead of `"residential"`, then editing
+# that constant would move the classifier and the oracle together — the suite
+# would stay green while intake persisted a value that violates acceptance
+# criterion 1. Written as literals, the oracle detects output-contract drift
+# (a renamed variant value) as well as added mapping keys.
+CONTRACT_RESIDENTIAL = "residential"
+CONTRACT_COMMERCIAL_SINGLE_SITE = "commercial_single_site"
+CONTRACT_COMMERCIAL_MULTI_SITE = "commercial_multi_site"
+CONTRACT_GENERAL = "general"
+
 CONTRACT_SERVICE_VARIANTS = {
-    "residential": ACK_VARIANT_RESIDENTIAL,
-    "deep": ACK_VARIANT_RESIDENTIAL,
-    "move": ACK_VARIANT_RESIDENTIAL,
-    "commercial": ACK_VARIANT_COMMERCIAL_SINGLE_SITE,
-    "multi-location-commercial": ACK_VARIANT_COMMERCIAL_MULTI_SITE,
-    "other": ACK_VARIANT_GENERAL,
+    "residential": CONTRACT_RESIDENTIAL,
+    "deep": CONTRACT_RESIDENTIAL,
+    "move": CONTRACT_RESIDENTIAL,
+    "commercial": CONTRACT_COMMERCIAL_SINGLE_SITE,
+    "multi-location-commercial": CONTRACT_COMMERCIAL_MULTI_SITE,
+    "other": CONTRACT_GENERAL,
 }
+
+
+def test_exported_variant_constants_equal_the_contracted_literals():
+    """The exported constants carry the contracted string VALUES.
+
+    These constants are what downstream code (and A2/A3 template selection)
+    will branch on, and their values are what intake persists into
+    ``contact_interactions.metadata`` / ``sent_emails.metadata``. Pinning them
+    to literals here is what makes every other assertion in this file a real
+    check rather than a comparison of the implementation against itself.
+    """
+    assert ACK_VARIANT_RESIDENTIAL == CONTRACT_RESIDENTIAL
+    assert ACK_VARIANT_COMMERCIAL_SINGLE_SITE == CONTRACT_COMMERCIAL_SINGLE_SITE
+    assert ACK_VARIANT_COMMERCIAL_MULTI_SITE == CONTRACT_COMMERCIAL_MULTI_SITE
+    assert ACK_VARIANT_GENERAL == CONTRACT_GENERAL
 
 
 def test_implementation_mapping_equals_the_contract_oracle():
@@ -67,8 +94,8 @@ def test_implementation_mapping_equals_the_contract_oracle():
 
 @pytest.mark.parametrize(
     ("service", "expected"),
-    # Driven by the contract oracle defined below, so the explicit cases and
-    # the generated ones can never disagree about what "recognised" means.
+    # Driven by the contract oracle above, so the explicit cases and the
+    # generated ones can never disagree about what "recognised" means.
     sorted(CONTRACT_SERVICE_VARIANTS.items()),
 )
 def test_every_submitted_service_maps_explicitly(service, expected):
@@ -80,15 +107,15 @@ def test_every_submitted_service_maps_explicitly(service, expected):
     ["", "   ", "unknown", "Residential Cleaning", "commercial-multi", "1; DROP TABLE"],
 )
 def test_unrecognised_service_falls_back_to_general(service):
-    assert classify_ack_variant(service) == ACK_VARIANT_GENERAL
+    assert classify_ack_variant(service) == CONTRACT_GENERAL
 
 
 @pytest.mark.parametrize(
     ("service", "expected"),
     [
-        ("  residential  ", ACK_VARIANT_RESIDENTIAL),
-        ("RESIDENTIAL", ACK_VARIANT_RESIDENTIAL),
-        ("Multi-Location-Commercial", ACK_VARIANT_COMMERCIAL_MULTI_SITE),
+        ("  residential  ", CONTRACT_RESIDENTIAL),
+        ("RESIDENTIAL", CONTRACT_RESIDENTIAL),
+        ("Multi-Location-Commercial", CONTRACT_COMMERCIAL_MULTI_SITE),
     ],
 )
 def test_classification_is_whitespace_and_case_insensitive(service, expected):
@@ -150,7 +177,7 @@ def test_generated_unrecognised_strings_all_resolve_to_general():
     rng = random.Random(20260808)  # seeded: reproducible, not flaky
     checked = 0
     for value in _generated_unrecognised_strings(rng, 500):
-        assert classify_ack_variant(value) == ACK_VARIANT_GENERAL, repr(value)
+        assert classify_ack_variant(value) == CONTRACT_GENERAL, repr(value)
         checked += 1
     assert checked == 500
 
@@ -166,7 +193,7 @@ def test_generated_non_strings_never_raise_and_resolve_to_general():
     rng = random.Random(20260808)
     checked = 0
     for value in _generated_non_strings(rng, 500):
-        assert classify_ack_variant(value) == ACK_VARIANT_GENERAL, repr(value)
+        assert classify_ack_variant(value) == CONTRACT_GENERAL, repr(value)
         checked += 1
     assert checked == 500
 
@@ -182,7 +209,7 @@ def test_generated_non_strings_never_raise_and_resolve_to_general():
     ],
 )
 def test_classifier_is_total_for_the_whole_non_string_class(value):
-    assert classify_ack_variant(value) == ACK_VARIANT_GENERAL
+    assert classify_ack_variant(value) == CONTRACT_GENERAL
 
 
 # --- recording ------------------------------------------------------------
@@ -191,13 +218,13 @@ def test_classifier_is_total_for_the_whole_non_string_class(value):
 @pytest.mark.parametrize(
     ("service", "expected"),
     [
-        ("residential", ACK_VARIANT_RESIDENTIAL),
-        ("deep", ACK_VARIANT_RESIDENTIAL),
-        ("move", ACK_VARIANT_RESIDENTIAL),
-        ("commercial", ACK_VARIANT_COMMERCIAL_SINGLE_SITE),
-        ("multi-location-commercial", ACK_VARIANT_COMMERCIAL_MULTI_SITE),
-        ("other", ACK_VARIANT_GENERAL),
-        ("", ACK_VARIANT_GENERAL),
+        ("residential", CONTRACT_RESIDENTIAL),
+        ("deep", CONTRACT_RESIDENTIAL),
+        ("move", CONTRACT_RESIDENTIAL),
+        ("commercial", CONTRACT_COMMERCIAL_SINGLE_SITE),
+        ("multi-location-commercial", CONTRACT_COMMERCIAL_MULTI_SITE),
+        ("other", CONTRACT_GENERAL),
+        ("", CONTRACT_GENERAL),
     ],
 )
 async def test_variant_recorded_on_interaction_and_email_history(service, expected):
@@ -237,7 +264,7 @@ async def test_variant_recorded_on_interaction_even_when_no_email_is_sent():
 
     provider.send.assert_not_awaited()
     metadata = crm.log_interaction.await_args.kwargs["metadata"]
-    assert metadata["ack_variant"] == ACK_VARIANT_COMMERCIAL_MULTI_SITE
+    assert metadata["ack_variant"] == CONTRACT_COMMERCIAL_MULTI_SITE
 
 
 # --- no copy change in this slice ----------------------------------------
