@@ -94,6 +94,11 @@ MAX_DAILY_SUBMISSIONS = 5
 # unsolicited-email blast radius when an abuser streams unique addresses.
 # Leads are still captured past the cap; only the outbound email is skipped.
 GLOBAL_ACK_HOURLY_CAP = 20
+# Global new-lead push ceiling (same unique-address abuse path): the per-identity
+# daily throttle does not stop a stream of DISTINCT identities, so cap the
+# operator's phone pushes per rolling hour. Leads are still captured past the
+# cap; only the notification is skipped.
+GLOBAL_NOTIFY_HOURLY_CAP = 30
 
 
 class LeadIntakeRequest(BaseModel):
@@ -202,6 +207,26 @@ async def _hourly_ack_volume() -> int:
     ) or 0
 
 
+async def _hourly_lead_notification_volume() -> int:
+    """Global count of web_form leads in the last hour (EOM-scoped), across ALL
+    channels — the ceiling for outbound new-lead pushes. Unlike the ack-volume
+    query this omits the email filter, so a phone-only flood is bounded too."""
+    from ..storage.database import get_db_pool
+
+    pool = get_db_pool()
+    return await pool.fetchval(
+        """
+        SELECT COUNT(*)
+        FROM contact_interactions ci
+        JOIN contacts c ON c.id = ci.contact_id
+        WHERE ci.interaction_type = 'web_form'
+          AND ci.occurred_at > NOW() - INTERVAL '1 hour'
+          AND (c.business_context_id = $1 OR c.business_context_id IS NULL)
+        """,
+        EOM_BUSINESS_CONTEXT_ID,
+    ) or 0
+
+
 def _build_summary(payload: LeadIntakeRequest) -> str:
     """Full, untruncated interaction summary (the gmail_digest path's 200-char
     truncation is one of the defects this endpoint exists to bypass)."""
@@ -243,10 +268,22 @@ def _format_phone_for_display(phone_digits: str) -> str:
     return phone_digits
 
 
+def _header_value_safe(value: str) -> str:
+    """Make a string usable as an HTTP header value: single-line and latin-1
+    encodable. httpx (0.28) raises UnicodeEncodeError on any non-latin-1 header
+    value, so a valid name like "José" would otherwise crash the (swallowed)
+    push and the operator would silently get nothing. Drop control chars
+    (header-injection safe) and characters outside latin-1; the FULL, unmodified
+    name still rides the UTF-8 body below."""
+    return "".join(
+        ch for ch in value if 0x20 <= ord(ch) <= 0x7E or 0xA0 <= ord(ch) <= 0xFF
+    )
+
+
 def _lead_push_body(payload: LeadIntakeRequest, email: str, phone_digits: str) -> str:
-    """Scannable body for the new-lead push: how to reach them, then what they
-    want, then where. Kept short so it reads at a glance on a phone."""
-    lines: list[str] = []
+    """Scannable body for the new-lead push: who (exact name, UTF-8), how to
+    reach them, what they want, then where. Kept short to read at a glance."""
+    lines: list[str] = [payload.name.strip() or "Website visitor"]
     channels = [c for c in (
         _format_phone_for_display(phone_digits) if phone_digits else "",
         email,
@@ -261,7 +298,7 @@ def _lead_push_body(payload: LeadIntakeRequest, email: str, phone_digits: str) -
     address = payload.address.strip()
     if address:
         lines.append(address)
-    return "\n".join(lines) or "New website estimate request"
+    return "\n".join(lines)
 
 
 async def _publish_lead_ntfy(title: str, body: str) -> None:
@@ -288,8 +325,11 @@ async def _publish_lead_ntfy(title: str, body: str) -> None:
 
 
 def _lead_push_title(payload: LeadIntakeRequest) -> str:
-    """Notification title. Pure so it is tested directly, without mocking."""
-    return f"New lead: {payload.name.strip() or 'Website visitor'}"
+    """Notification title (an HTTP header, so header-value-safe). Pure, tested
+    directly. The exact name — including any non-latin-1 characters dropped
+    here — is always present in the UTF-8 body."""
+    name = _header_value_safe(payload.name.strip()).strip()
+    return f"New lead: {name or 'Website visitor'}"
 
 
 async def _default_lead_notifier(
@@ -303,6 +343,28 @@ async def _default_lead_notifier(
     )
 
 
+async def _maybe_notify_new_lead(
+    notifier: Any,
+    notify_volume: Optional[Any],
+    payload: LeadIntakeRequest,
+    email: str,
+    phone_digits: str,
+    contact_id: Any,
+) -> None:
+    """Fire the new-lead push behind a global hourly ceiling. One fire-and-forget
+    guard: a volume-check failure fails closed (skip the push, lead already
+    captured) and a notifier failure never propagates."""
+    try:
+        if notify_volume is not None and (await notify_volume()) > GLOBAL_NOTIFY_HOURLY_CAP:
+            logger.warning("lead_intake: notification volume cap hit; skipping push")
+            return
+        await notifier(payload, email, phone_digits)
+    except Exception:
+        logger.exception(
+            "lead_intake: new-lead notification failed for contact %s", contact_id
+        )
+
+
 async def _process_lead_intake(
     payload: LeadIntakeRequest,
     crm: Any,
@@ -311,6 +373,7 @@ async def _process_lead_intake(
     ack_volume: Optional[Any] = None,
     email_history: Optional[Any] = None,
     lead_notifier: Optional[Any] = None,
+    notify_volume: Optional[Any] = None,
 ) -> dict[str, Any]:
     """Core intake flow with injectable providers (unit-testable sans HTTP)."""
     if payload.website.strip():
@@ -399,17 +462,14 @@ async def _process_lead_intake(
 
     # Instant operator heads-up on every NEW lead — independent of the ack
     # email, so a phone-only lead (no email) still pushes. Guarded by
-    # freshly_logged so a same-day double-submit does not double-notify.
-    # Fire-and-forget: the notifier already swallows its own errors, and this
-    # extra guard ensures even an injected test notifier can never fail intake.
-    if freshly_logged:
-        notifier = lead_notifier or _default_lead_notifier
-        try:
-            await notifier(payload, email, phone_digits)
-        except Exception:
-            logger.exception(
-                "lead_intake: new-lead notification failed for contact %s", contact_id
-            )
+    # freshly_logged so a same-day double-submit does not double-notify, and by
+    # a global hourly ceiling so a distinct-identity flood cannot spam the phone.
+    # The notifier is explicit (the route wires the production one); when absent
+    # the push is a no-op, so direct callers/tests never touch the live topic.
+    if freshly_logged and lead_notifier is not None:
+        await _maybe_notify_new_lead(
+            lead_notifier, notify_volume, payload, email, phone_digits, contact_id
+        )
 
     email_sent = False
     from ..config import settings as _settings
@@ -524,6 +584,10 @@ def _notify_dependency() -> Any:
     return _default_lead_notifier
 
 
+def _notify_volume_dependency() -> Any:
+    return _hourly_lead_notification_volume
+
+
 @router.post("/intake")
 async def lead_intake(
     payload: LeadIntakeRequest,
@@ -533,6 +597,7 @@ async def lead_intake(
     ack_volume: Any = Depends(_ack_volume_dependency),
     email_history: Any = Depends(_email_history_dependency),
     lead_notifier: Any = Depends(_notify_dependency),
+    notify_volume: Any = Depends(_notify_volume_dependency),
 ) -> dict[str, Any]:
     """Receive an estimate-form submission from the public website.
 
@@ -548,6 +613,7 @@ async def lead_intake(
             ack_volume=ack_volume,
             email_history=email_history,
             lead_notifier=lead_notifier,
+            notify_volume=notify_volume,
         )
     except LeadValidationError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc

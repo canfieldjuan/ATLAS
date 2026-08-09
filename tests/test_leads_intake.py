@@ -54,6 +54,17 @@ def _email_enabled(monkeypatch):
     monkeypatch.setattr(settings.email, "enabled", True)
 
 
+@pytest.fixture(autouse=True)
+def _leads_ntfy_off(monkeypatch):
+    """Force the new-lead push OFF for the whole module by default, regardless of
+    the checkout's .env, so running this suite from the deployed configuration
+    can never publish fake lead PII to the live topic (Codex #2332 R2/R12). Tests
+    that exercise the transport re-enable it explicitly, and their monkeypatch
+    (applied after this autouse) wins."""
+    from atlas_brain.config import settings
+    monkeypatch.setattr(settings.alerts, "leads_ntfy_topic", "")
+
+
 LONG_MESSAGE = (
     "We have a three-story home with a finished basement and two dogs. "
     "Mostly interested in the main floor and the upstairs bathrooms, the "
@@ -1201,22 +1212,61 @@ def test_format_phone_for_display():
     assert _format_phone_for_display("") == ""
 
 
-def test_lead_push_body_layout_channels_service_address():
+def test_lead_push_body_layout_name_channels_service_address():
     body = _lead_push_body(
         _payload(address="207 Santa Fe Ave, Effingham, IL"),
         "jane@example.com", "2175550100",
     )
     lines = body.split("\n")
-    assert lines[0] == "(217) 555-0100 · jane@example.com"
-    assert lines[1] == "residential · bi-weekly"
-    assert lines[2] == "207 Santa Fe Ave, Effingham, IL"
+    assert lines[0] == "Jane Doe"  # exact name leads the UTF-8 body
+    assert lines[1] == "(217) 555-0100 · jane@example.com"
+    assert lines[2] == "residential · bi-weekly"
+    assert lines[3] == "207 Santa Fe Ave, Effingham, IL"
 
 
 def test_lead_push_body_phone_only_and_no_detail():
     body = _lead_push_body(
         _payload(email="", address="", service="", frequency=""), "", "2175550100"
     )
-    assert body == "(217) 555-0100"
+    assert body == "Jane Doe\n(217) 555-0100"
+
+
+def test_non_ascii_name_title_is_header_safe_body_keeps_exact_name():
+    """A valid non-ASCII name must not crash the (latin-1) HTTP Title header:
+    the title is latin-1 encodable (accents kept, non-latin-1 dropped) while the
+    exact original name survives in the UTF-8 body. Regresses Codex #2332 R1/R2
+    (httpx 0.28 raises UnicodeEncodeError on a non-latin-1 header value)."""
+    payload = _payload(name="José 王伟")
+    title = _lead_push_title(payload)
+    title.encode("latin-1")  # would raise if a non-latin-1 char leaked into the header
+    assert title == "New lead: José"           # é kept (latin-1), CJK dropped
+    body = _lead_push_body(payload, "jane@example.com", "2175550100")
+    assert body.split("\n")[0] == "José 王伟"   # exact name preserved in the body
+
+
+def test_title_falls_back_when_name_is_all_non_latin1():
+    payload = _payload(name="王伟")
+    assert _lead_push_title(payload) == "New lead: Website visitor"
+
+
+@pytest.mark.asyncio
+async def test_publish_non_ascii_name_sends_latin1_header(monkeypatch):
+    """End-to-end: a non-ASCII lead name produces a header the transport accepts
+    (latin-1), so the push is actually delivered rather than silently swallowed."""
+    from atlas_brain.config import settings
+    monkeypatch.setattr(settings.alerts, "ntfy_enabled", True)
+    monkeypatch.setattr(settings.alerts, "leads_ntfy_topic", "eom-leads-abc")
+    import httpx
+
+    _FakeNtfyClient.posted = []
+    monkeypatch.setattr(httpx, "AsyncClient", _FakeNtfyClient)
+
+    await _default_lead_notifier(_payload(name="José 王伟"), "jane@example.com", "2175550100")
+
+    assert len(_FakeNtfyClient.posted) == 1
+    sent = _FakeNtfyClient.posted[0]
+    sent["headers"]["Title"].encode("latin-1")  # transport-safe
+    assert "José 王伟".encode("utf-8") in sent["content"]  # exact name in the body
 
 
 @pytest.mark.asyncio
@@ -1314,3 +1364,111 @@ async def test_default_notifier_publishes_built_title_and_body(monkeypatch):
     sent = _FakeNtfyClient.posted[0]
     assert sent["headers"]["Title"] == "New lead: Jane Doe"
     assert b"jane@example.com" in sent["content"]
+
+
+def test_route_level_post_delivers_ntfy(monkeypatch):
+    """POST /api/v1/leads/intake reaches the observable delivery effect: with the
+    REAL notifier dependency wired (not overridden), a successful intake emits an
+    ntfy POST to the configured topic. Only the third-party httpx transport is
+    faked. Regresses Codex #2332 R2 (no route-level delivery proof)."""
+    from fastapi import FastAPI
+    from fastapi.testclient import TestClient
+    import atlas_brain.api.leads as leads_mod
+    from atlas_brain.config import settings
+
+    monkeypatch.setattr(settings.alerts, "ntfy_enabled", True)
+    monkeypatch.setattr(settings.alerts, "leads_ntfy_topic", "eom-leads-route")
+    import httpx
+    _FakeNtfyClient.posted = []
+    monkeypatch.setattr(httpx, "AsyncClient", _FakeNtfyClient)
+
+    async def fake_count(email, phone):
+        return 0
+
+    async def fake_volume():
+        return 0
+
+    app = FastAPI()
+    app.include_router(leads_mod.router, prefix="/api/v1")
+    app.dependency_overrides[leads_mod._crm_dependency] = lambda: _crm()
+    app.dependency_overrides[leads_mod._email_dependency] = lambda: _email_provider()
+    app.dependency_overrides[leads_mod._email_history_dependency] = _email_history
+    app.dependency_overrides[leads_mod._daily_count_dependency] = lambda: fake_count
+    app.dependency_overrides[leads_mod._ack_volume_dependency] = lambda: fake_volume
+    app.dependency_overrides[leads_mod._notify_volume_dependency] = lambda: fake_volume
+    # _notify_dependency is intentionally NOT overridden: the real
+    # _default_lead_notifier runs, proving the route wires notifier -> transport.
+    client = TestClient(app)
+
+    ok = client.post(
+        "/api/v1/leads/intake", json={"name": "Jane", "email": "jane@example.com"}
+    )
+    assert ok.status_code == 200 and ok.json()["success"] is True
+    assert len(_FakeNtfyClient.posted) == 1
+    sent = _FakeNtfyClient.posted[0]
+    assert sent["url"].endswith("/eom-leads-route")
+    assert sent["headers"]["Title"] == "New lead: Jane"
+
+
+@pytest.mark.asyncio
+async def test_notification_volume_cap_skips_push_over_ceiling():
+    """A public flood of distinct identities cannot spam the phone: once the
+    hourly lead volume exceeds the ceiling the push is skipped (lead still
+    captured). Regresses Codex #2332 R3/R8."""
+    from atlas_brain.api.leads import GLOBAL_NOTIFY_HOURLY_CAP
+    notifier = AsyncMock()
+    over = AsyncMock(return_value=GLOBAL_NOTIFY_HOURLY_CAP + 1)
+    result = await _process_lead_intake(
+        _payload(), crm=_crm(), email_provider=_email_provider(),
+        lead_notifier=notifier, notify_volume=over,
+    )
+    assert result["success"] is True
+    notifier.assert_not_awaited()
+    over.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_notification_volume_under_cap_sends():
+    from atlas_brain.api.leads import GLOBAL_NOTIFY_HOURLY_CAP
+    notifier = AsyncMock()
+    at_cap = AsyncMock(return_value=GLOBAL_NOTIFY_HOURLY_CAP)  # == cap: still sends
+    await _process_lead_intake(
+        _payload(), crm=_crm(), email_provider=_email_provider(),
+        lead_notifier=notifier, notify_volume=at_cap,
+    )
+    notifier.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_notification_volume_check_failure_fails_closed():
+    """A broken volume query must not fail the captured lead, and must fail closed
+    (skip the push) rather than fire uncapped."""
+    notifier = AsyncMock()
+    boom = AsyncMock(side_effect=RuntimeError("db pool down"))
+    result = await _process_lead_intake(
+        _payload(), crm=_crm(), email_provider=_email_provider(),
+        lead_notifier=notifier, notify_volume=boom,
+    )
+    assert result["success"] is True
+    notifier.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_direct_caller_without_notifier_does_not_notify(monkeypatch):
+    """A direct _process_lead_intake caller that omits lead_notifier performs NO
+    notification — even with the topic configured and the transport live, nothing
+    is published. This is what keeps the rest of this module (and any caller run
+    from the deployed checkout) off the live topic. Regresses Codex #2332 R2/R12."""
+    from atlas_brain.config import settings
+    monkeypatch.setattr(settings.alerts, "ntfy_enabled", True)
+    monkeypatch.setattr(settings.alerts, "leads_ntfy_topic", "eom-leads-live")
+    import httpx
+
+    def _boom(*a, **k):
+        raise AssertionError("a notifier-less direct caller must not publish")
+
+    monkeypatch.setattr(httpx, "AsyncClient", _boom)
+    result = await _process_lead_intake(
+        _payload(), crm=_crm(), email_provider=_email_provider()
+    )
+    assert result["success"] is True

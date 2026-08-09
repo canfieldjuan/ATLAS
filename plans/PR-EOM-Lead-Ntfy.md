@@ -113,7 +113,10 @@ Slice phase: Vertical slice
 - Deployed/default config values: field default `leads_ntfy_topic=""` (feature
   OFF). Runtime `.env` already sets `ATLAS_ALERTS_NTFY_ENABLED=true` and points
   `ATLAS_ALERTS_NTFY_URL` at the public ntfy.sh server; this PR's deploy adds
-  `ATLAS_ALERTS_LEADS_NTFY_TOPIC=eom-leads-6a01fbd83c92`.
+  `ATLAS_ALERTS_LEADS_NTFY_TOPIC=eom-leads-<secret-suffix>` — the real topic
+  value is generated at deploy time and kept ONLY in the runtime `.env` (never
+  committed; the topic string is the sole secret, so versioning it would leak
+  lead PII to anyone with repo access).
 - Explicit value probe: topic set + enabled → posts to the topic
   (`::test_publish_posts_to_configured_leads_topic`).
 - Absent value probe: topic `""` → no HTTP client is even opened
@@ -153,12 +156,13 @@ Tests inject a fake notifier to assert call/no-call without HTTP, and patch
 ## Intentional
 
 - PII on a public relay: the push body carries lead name/phone/email/address to
-  ntfy.sh (a public server) on an unguessable random topic
-  (`eom-leads-6a01fbd83c92`). This matches the trust model already accepted for
-  the operator's healthcheck and paid-deflection topics (the topic string is the
-  only secret). Chosen for parity with the operator's existing setup; if the
-  operator later wants lead PII off the public relay, the `ntfy_url` can point at
-  a self-hosted ntfy without any code change (the localhost default already
+  ntfy.sh (a public server) on an unguessable random `eom-leads-<secret-suffix>`
+  topic. This matches the trust model already accepted for the operator's
+  healthcheck and paid-deflection topics (the topic string is the only secret).
+  Because the topic IS the secret, it is generated at deploy time and kept only
+  in the runtime `.env` — never in a versioned plan or commit. If the operator
+  later wants lead PII off the public relay, the `ntfy_url` can point at a
+  self-hosted ntfy without any code change (the localhost default already
   exists). Noted for the operator, not blocked.
 - Await (not background task): the notify is awaited, bounded by a 5s timeout,
   rather than detached — the intake path is an ASGI middleware where a detached
@@ -176,19 +180,24 @@ Parked hardening: none.
 
 ## Verification
 
-- `/.venv/bin/python -m pytest tests/test_leads_intake.py -q` → 64 passed
-  (48 prior + 16 new), run against the runtime venv.
+- `/.venv/bin/python -m pytest tests/test_leads_intake.py -q` → 73 passed,
+  run against the runtime venv. Includes the Codex round-2 hardening: header
+  latin-1 safety (non-ASCII name), route-level delivery proof, the hourly
+  notification cap, and the direct-caller no-op.
+- `maturity_sweep.py atlas_brain/api --min-score 8` → ratchet gate passed
+  (no new brittleness; no baseline change).
 - Config env wiring confirmed: `ATLAS_ALERTS_LEADS_NTFY_TOPIC=... AlertsConfig()`
   → `leads_ntfy_topic` populated.
-- Post-merge deploy: add the `.env` topic line, restart `atlas-api.service`,
-  subscribe the phone to the topic, submit a real test lead, confirm the push.
+- Post-merge deploy: add the `.env` topic line (deploy-only value), restart
+  `atlas-api.service`, subscribe the phone to the topic, submit a real test
+  lead, confirm the push.
 
 ## Estimated diff size
 
 | File | LOC |
 |---|---:|
-| `atlas_brain/api/leads.py` | 90 |
+| `atlas_brain/api/leads.py` | 156 |
 | `atlas_brain/config.py` | 1 |
-| `plans/PR-EOM-Lead-Ntfy.md` | 194 |
-| `tests/test_leads_intake.py` | 227 |
-| **Total** | **512** |
+| `plans/PR-EOM-Lead-Ntfy.md` | 203 |
+| `tests/test_leads_intake.py` | 385 |
+| **Total** | **745** |
