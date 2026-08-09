@@ -66,6 +66,7 @@ the other half of that split, not a bundle.
 
 Ownership lane: eom-crm/lead-ack-variant
 Slice phase: Vertical slice
+Max files: 5
 
 1. Add `COMMERCIAL_SINGLE_SITE_TEMPLATE` and `COMMERCIAL_MULTI_SITE_TEMPLATE`,
    both operator-authored.
@@ -352,7 +353,7 @@ All counts re-run at this head.
 |---|---:|
 | `.github/workflows/atlas_eom_lead_pipeline_checks.yml` | 5 |
 | `atlas_brain/templates/email/request_acknowledgement.py` | 164 |
-| `plans/PR-EOM-Ack-Commercial-Copy.md` | 358 |
+| `plans/PR-EOM-Ack-Commercial-Copy.md` | 359 |
 | `tests/test_ack_commercial_templates.py` | 441 |
 | `tests/test_ack_variant_classification.py` | 45 |
-| **Total** | **1013** |
+| **Total** | **1014** |
