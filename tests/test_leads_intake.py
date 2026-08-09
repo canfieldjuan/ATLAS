@@ -1124,6 +1124,8 @@ async def test_forced_resend_routes_through_real_stack(monkeypatch):
 
 
 class _FakeNtfyResponse:
+    status_code = 200
+
     def raise_for_status(self):
         return None
 
@@ -1423,11 +1425,20 @@ def test_route_level_post_delivers_ntfy(monkeypatch):
     assert sent["headers"]["Title"] == "New lead: Jane"
 
 
+def _enable_leads_push(monkeypatch):
+    """Turn the push feature ON (ntfy + a topic) so the hourly-volume gate runs;
+    the volume query is deliberately skipped when the feature is off."""
+    from atlas_brain.config import settings
+    monkeypatch.setattr(settings.alerts, "ntfy_enabled", True)
+    monkeypatch.setattr(settings.alerts, "leads_ntfy_topic", "eom-leads-cap")
+
+
 @pytest.mark.asyncio
-async def test_notification_volume_cap_skips_push_over_ceiling():
+async def test_notification_volume_cap_skips_push_over_ceiling(monkeypatch):
     """A public flood of distinct identities cannot spam the phone: once the
     hourly lead volume exceeds the ceiling the push is skipped (lead still
     captured). Regresses Codex #2332 R3/R8."""
+    _enable_leads_push(monkeypatch)
     from atlas_brain.api.leads import GLOBAL_NOTIFY_HOURLY_CAP
     notifier = AsyncMock()
     over = AsyncMock(return_value=GLOBAL_NOTIFY_HOURLY_CAP + 1)
@@ -1441,7 +1452,8 @@ async def test_notification_volume_cap_skips_push_over_ceiling():
 
 
 @pytest.mark.asyncio
-async def test_notification_volume_under_cap_sends():
+async def test_notification_volume_under_cap_sends(monkeypatch):
+    _enable_leads_push(monkeypatch)
     from atlas_brain.api.leads import GLOBAL_NOTIFY_HOURLY_CAP
     notifier = AsyncMock()
     at_cap = AsyncMock(return_value=GLOBAL_NOTIFY_HOURLY_CAP)  # == cap: still sends
@@ -1453,9 +1465,10 @@ async def test_notification_volume_under_cap_sends():
 
 
 @pytest.mark.asyncio
-async def test_notification_volume_check_failure_fails_closed():
+async def test_notification_volume_check_failure_fails_closed(monkeypatch):
     """A broken volume query must not fail the captured lead, and must fail closed
     (skip the push) rather than fire uncapped."""
+    _enable_leads_push(monkeypatch)
     notifier = AsyncMock()
     boom = AsyncMock(side_effect=RuntimeError("db pool down"))
     result = await _process_lead_intake(
@@ -1464,6 +1477,38 @@ async def test_notification_volume_check_failure_fails_closed():
     )
     assert result["success"] is True
     notifier.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_notification_disabled_skips_volume_query():
+    """When the push feature is OFF (no topic — the module default), the hourly
+    volume COUNT/JOIN must NOT run, so the disabled config stays inert (no extra
+    DB work per lead). Regresses Codex #2332 R5/R7."""
+    notify_volume = AsyncMock(return_value=0)
+    notifier = AsyncMock()  # a fake; the real one would no-op on the disabled config
+    await _process_lead_intake(
+        _payload(), crm=_crm(), email_provider=_email_provider(),
+        lead_notifier=notifier, notify_volume=notify_volume,
+    )
+    notify_volume.assert_not_awaited()  # query skipped while notifications are off
+
+
+@pytest.mark.asyncio
+async def test_publish_swallows_timeout(monkeypatch):
+    """The bounded publish must swallow a wall-clock timeout without raising and
+    without logging the URL. Regresses Codex #2332 R1/R7 (true 5s deadline)."""
+    import asyncio
+    from atlas_brain.config import settings
+    monkeypatch.setattr(settings.alerts, "ntfy_enabled", True)
+    monkeypatch.setattr(settings.alerts, "leads_ntfy_topic", "eom-leads-abc")
+    import httpx
+
+    class _HangClient(_FakeNtfyClient):
+        async def post(self, *a, **k):
+            raise asyncio.TimeoutError  # what asyncio.wait_for raises on deadline
+
+    monkeypatch.setattr(httpx, "AsyncClient", _HangClient)
+    await _publish_lead_ntfy("t", "b")  # must not raise
 
 
 @pytest.mark.asyncio

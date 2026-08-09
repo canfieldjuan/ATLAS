@@ -164,10 +164,15 @@ Tests inject a fake notifier to assert call/no-call without HTTP, and patch
   later wants lead PII off the public relay, the `ntfy_url` can point at a
   self-hosted ntfy without any code change (the localhost default already
   exists). Noted for the operator, not blocked.
-- Await (not background task): the notify is awaited, bounded by a 5s timeout,
-  rather than detached — the intake path is an ASGI middleware where a detached
-  task risks cancellation on request end, and the client does not wait on the
-  response body. Simpler and safe.
+- Await (not background task), bounded by a TRUE 5s wall-clock deadline
+  (`asyncio.wait_for`, since httpx's own Timeout is per-phase): the intake path
+  is an ASGI middleware where a detached task risks cancellation on request end,
+  and the client does not wait on the response body. Simpler and safe.
+- Failure logging never records the request URL or a raised transport error
+  verbatim — the URL embeds the topic, which is the only secret. On failure we
+  log a status code or the error class only.
+- The hourly-volume DB query runs ONLY when pushes are enabled, so the
+  off-by-default config stays inert (no extra COUNT/JOIN per lead).
 - `Priority: high` (4), not `urgent` (5): a lead deserves prominence but is not
   an emergency like the atlas-api DOWN alert.
 
@@ -180,11 +185,11 @@ Parked hardening: none.
 
 ## Verification
 
-- `/.venv/bin/python -m pytest tests/test_leads_intake.py -q` → 73 passed,
-  run against the runtime venv. Includes the Codex round-2 hardening: ASCII-only
-  Title safety (non-ASCII name → generic title + exact name in the UTF-8 body),
-  route-level delivery proof, the hourly notification cap, and the
-  direct-caller no-op.
+- `/.venv/bin/python -m pytest tests/test_leads_intake.py -q` → 76 passed,
+  run against the runtime venv. Includes the Codex hardening rounds: ASCII-only
+  Title safety, route-level delivery proof, the hourly notification cap, the
+  direct-caller no-op, secret-topic log redaction, a true 5s wall-clock
+  deadline, and skipping the volume query when notifications are disabled.
 - `maturity_sweep.py atlas_brain/api --min-score 8` → ratchet gate passed
   (no new brittleness; no baseline change).
 - Config env wiring confirmed: `ATLAS_ALERTS_LEADS_NTFY_TOPIC=... AlertsConfig()`
@@ -197,8 +202,8 @@ Parked hardening: none.
 
 | File | LOC |
 |---|---:|
-| `atlas_brain/api/leads.py` | 158 |
+| `atlas_brain/api/leads.py` | 198 |
 | `atlas_brain/config.py` | 1 |
-| `plans/PR-EOM-Lead-Ntfy.md` | 204 |
-| `tests/test_leads_intake.py` | 392 |
-| **Total** | **755** |
+| `plans/PR-EOM-Lead-Ntfy.md` | 209 |
+| `tests/test_leads_intake.py` | 437 |
+| **Total** | **845** |

@@ -301,7 +301,15 @@ def _lead_push_body(payload: LeadIntakeRequest, email: str, phone_digits: str) -
 
 async def _publish_lead_ntfy(title: str, body: str) -> None:
     """Fire-and-forget push to the dedicated leads ntfy topic. Never raises: a
-    notification failure must not touch the already-captured lead."""
+    notification failure must not touch the already-captured lead.
+
+    Two deliberate constraints:
+    - Bounded by a TRUE 5s wall-clock deadline via asyncio.wait_for. httpx's own
+      Timeout(5) is per-phase (connect/read/write each get 5s), so it alone
+      could keep the awaited intake route busy far longer.
+    - Never logs the request URL or a raised transport error verbatim: the URL
+      embeds the topic, which is the ONLY secret protecting lead PII on the
+      public relay. On failure we record a status code or the error class only."""
     try:
         from ..config import settings
 
@@ -310,16 +318,33 @@ async def _publish_lead_ntfy(title: str, body: str) -> None:
         if not alerts.ntfy_enabled or not topic:
             return  # feature off (no topic configured) — silently skip
 
+        import asyncio
+
         import httpx
 
         url = f"{alerts.ntfy_url.rstrip('/')}/{topic}"
         headers = {"Title": title, "Priority": "high", "Tags": "moneybag"}
-        async with httpx.AsyncClient(timeout=httpx.Timeout(5.0)) as client:
-            response = await client.post(url, content=body.encode("utf-8"), headers=headers)
-            response.raise_for_status()
+
+        async def _post() -> int:
+            async with httpx.AsyncClient(timeout=httpx.Timeout(5.0)) as client:
+                response = await client.post(
+                    url, content=body.encode("utf-8"), headers=headers
+                )
+            return response.status_code
+
+        status = await asyncio.wait_for(_post(), timeout=5.0)
+        if status >= 400:
+            # Do NOT surface the exception/URL here — it carries the secret topic.
+            logger.warning("lead_intake: new-lead ntfy push returned HTTP %s", status)
+            return
         logger.info("lead_intake: new-lead push sent to ntfy topic")
-    except Exception:
-        logger.exception("lead_intake: new-lead ntfy push failed (lead still captured)")
+    except Exception as exc:
+        # Log only the error CLASS: httpx/asyncio exception text can embed the
+        # request URL (and thus the secret topic).
+        logger.warning(
+            "lead_intake: new-lead ntfy push failed (%s); lead still captured",
+            type(exc).__name__,
+        )
 
 
 def _lead_push_title(payload: LeadIntakeRequest) -> str:
@@ -345,6 +370,16 @@ async def _default_lead_notifier(
     )
 
 
+def _leads_push_configured() -> bool:
+    """Whether new-lead pushes are actually enabled (ntfy on + a topic set). Used
+    to keep the hourly-volume DB query entirely out of the disabled path, so the
+    off-by-default configuration stays inert (no extra COUNT/JOIN per lead)."""
+    from ..config import settings
+
+    alerts = settings.alerts
+    return bool(alerts.ntfy_enabled and (alerts.leads_ntfy_topic or "").strip())
+
+
 async def _maybe_notify_new_lead(
     notifier: Any,
     notify_volume: Optional[Any],
@@ -355,9 +390,14 @@ async def _maybe_notify_new_lead(
 ) -> None:
     """Fire the new-lead push behind a global hourly ceiling. One fire-and-forget
     guard: a volume-check failure fails closed (skip the push, lead already
-    captured) and a notifier failure never propagates."""
+    captured) and a notifier failure never propagates. The volume query runs
+    ONLY when pushes are enabled, so the disabled default does no extra DB work."""
     try:
-        if notify_volume is not None and (await notify_volume()) > GLOBAL_NOTIFY_HOURLY_CAP:
+        if (
+            notify_volume is not None
+            and _leads_push_configured()
+            and (await notify_volume()) > GLOBAL_NOTIFY_HOURLY_CAP
+        ):
             logger.warning("lead_intake: notification volume cap hit; skipping push")
             return
         await notifier(payload, email, phone_digits)
