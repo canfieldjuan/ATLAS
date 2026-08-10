@@ -1,0 +1,203 @@
+"""Backfill EOM contacts.customer_type from tracker site evidence (Slice 1 / Req A).
+
+Migration 366 adds the column defaulting every row to ``unknown``. The evidence
+that resolves it already exists, but it lives in a DIFFERENT database: the
+tracker's ``locations.location_type``, human-entered per site, and the tracker's
+``customers.atlas_contact_id`` linking each account to its Atlas contact.
+
+**This script deliberately does not reach into the tracker.** It takes the
+mapping as input and applies it to Atlas. Two reasons: an Atlas maintenance
+script should not carry Render credentials for a second datastore, and a script
+whose input is a file can be tested end-to-end in CI, which one that dials out
+to production cannot.
+
+Produce the mapping from the tracker (read-only), then feed it here:
+
+    render psql <tracker-db> --confirm -c "\\copy (
+        SELECT c.atlas_contact_id,
+               CASE
+                 WHEN bool_and(l.location_type = 'Commercial')  THEN 'commercial'
+                 WHEN bool_and(l.location_type = 'Residential') THEN 'residential'
+               END AS customer_type,
+               'tracker.customer:' || c.id || ' sites=' || count(l.id) AS evidence
+          FROM customers c
+          JOIN locations l ON l.customer_id = c.id AND l.archived_at IS NULL
+         WHERE c.atlas_contact_id IS NOT NULL AND c.active
+         GROUP BY c.id, c.atlas_contact_id
+        HAVING bool_and(l.location_type = 'Commercial')
+            OR bool_and(l.location_type = 'Residential')
+    ) TO STDOUT WITH CSV HEADER" > customer_type_mapping.csv
+
+    python scripts/backfill_eom_customer_type.py customer_type_mapping.csv
+    python scripts/backfill_eom_customer_type.py customer_type_mapping.csv --apply
+
+The HAVING is the point: a customer whose sites disagree produces no row at all
+and therefore stays ``unknown``. Mixed-type accounts are a real possibility and
+guessing one would put a residential customer into commercial billing, or hide
+billing fields from a commercial one. Silence is the correct output for them.
+
+Safety properties, each enforced below rather than assumed:
+
+* **Dry run by default.** ``--apply`` writes; nothing else does.
+* **Tenant-scoped.** Only ``effingham_maids`` contacts are ever updated. A
+  mapping row naming a contact in another business context is refused, not
+  skipped quietly.
+* **Never overwrites a decision.** Only rows still ``unknown`` are touched, so
+  re-running is a no-op and an operator's later correction in the CRM survives a
+  second run of a stale mapping file.
+* **Every row accounted for.** Applied, already-set, unknown-contact,
+  wrong-tenant and rejected-value are each counted and printed. A row that does
+  nothing still appears in the report.
+"""
+
+import argparse
+import asyncio
+import csv
+import sys
+from collections import Counter
+from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+
+EOM_CONTEXT = "effingham_maids"
+# Bound to EOM_CUSTOMER_TYPES / chk_contacts_customer_type. 'unknown' is
+# deliberately NOT accepted from a mapping file: writing it changes nothing and
+# would only mask a mapping that failed to classify.
+APPLICABLE_TYPES = ("residential", "commercial")
+
+SQL_TARGET = """
+    SELECT id, business_context_id, customer_type
+      FROM contacts
+     WHERE id = $1::uuid
+"""
+
+SQL_APPLY = """
+    UPDATE contacts
+       SET customer_type = $2, updated_at = NOW()
+     WHERE id = $1::uuid
+       AND business_context_id = $3
+       AND customer_type = 'unknown'
+"""
+
+
+def read_mapping(path: Path) -> list[dict[str, str]]:
+    """Parse the mapping CSV, refusing malformed rows rather than skipping them."""
+    rows: list[dict[str, str]] = []
+    with path.open(newline="", encoding="utf-8") as handle:
+        reader = csv.DictReader(handle)
+        missing = {"atlas_contact_id", "customer_type"} - set(reader.fieldnames or [])
+        if missing:
+            raise SystemExit(f"mapping is missing column(s): {', '.join(sorted(missing))}")
+        for line_number, row in enumerate(reader, start=2):
+            contact_id = (row.get("atlas_contact_id") or "").strip()
+            customer_type = (row.get("customer_type") or "").strip().lower()
+            if not contact_id:
+                raise SystemExit(f"line {line_number}: atlas_contact_id is empty")
+            rows.append(
+                {
+                    "contact_id": contact_id,
+                    "customer_type": customer_type,
+                    "evidence": (row.get("evidence") or "").strip(),
+                    "line": str(line_number),
+                }
+            )
+    return rows
+
+
+async def run(mapping_path: Path, apply: bool) -> int:
+    from atlas_brain.storage.database import get_db_pool
+
+    rows = read_mapping(mapping_path)
+    pool = get_db_pool()
+    await pool.initialize()
+
+    tally: Counter[str] = Counter()
+    problems: list[str] = []
+
+    print(f"mode: {'APPLY' if apply else 'DRY RUN'}   mapping: {mapping_path}")
+    print(f"rows: {len(rows)}\n")
+
+    for row in rows:
+        contact_id = row["contact_id"]
+        customer_type = row["customer_type"]
+        label = f"line {row['line']} {contact_id}"
+
+        if customer_type not in APPLICABLE_TYPES:
+            tally["rejected-value"] += 1
+            problems.append(f"{label}: refusing customer_type={customer_type!r}")
+            continue
+
+        target = await pool.fetchrow(SQL_TARGET, contact_id)
+        if target is None:
+            tally["unknown-contact"] += 1
+            problems.append(f"{label}: no such contact")
+            continue
+        if target["business_context_id"] != EOM_CONTEXT:
+            tally["wrong-tenant"] += 1
+            problems.append(
+                f"{label}: business_context_id={target['business_context_id']!r}"
+            )
+            continue
+        if target["customer_type"] != "unknown":
+            tally["already-set"] += 1
+            if target["customer_type"] != customer_type:
+                problems.append(
+                    f"{label}: already {target['customer_type']!r}, "
+                    f"mapping says {customer_type!r} -- left alone"
+                )
+            continue
+
+        if apply:
+            await pool.execute(SQL_APPLY, contact_id, customer_type, EOM_CONTEXT)
+            tally["applied"] += 1
+        else:
+            tally["would-apply"] += 1
+        print(f"  {customer_type:<12} {contact_id}  {row['evidence']}")
+
+    print("\nsummary:")
+    for key in (
+        "applied",
+        "would-apply",
+        "already-set",
+        "unknown-contact",
+        "wrong-tenant",
+        "rejected-value",
+    ):
+        if tally[key]:
+            print(f"  {key}: {tally[key]}")
+
+    if problems:
+        print("\nneeds attention:")
+        for problem in problems:
+            print(f"  {problem}")
+
+    totals = await pool.fetch(
+        """
+        SELECT customer_type, COUNT(*) AS n
+          FROM contacts
+         WHERE business_context_id = $1
+         GROUP BY customer_type ORDER BY n DESC
+        """,
+        EOM_CONTEXT,
+    )
+    print("\nEOM contacts by customer_type:")
+    for row in totals:
+        print(f"  {row['customer_type']}: {row['n']}")
+
+    # A mapping row that resolved to nothing is a mapping worth looking at, so
+    # it is a non-zero exit even though nothing is broken in the database.
+    return 1 if problems else 0
+
+
+def main() -> int:
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("mapping", type=Path, help="CSV from the tracker query above")
+    parser.add_argument(
+        "--apply", action="store_true", help="write changes (default: dry run)"
+    )
+    args = parser.parse_args()
+    return asyncio.run(run(mapping_path=args.mapping, apply=args.apply))
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

@@ -50,6 +50,7 @@
     "extracted_content_pipeline/storage/migration_runner.py::DYNAMIC::TE SET checksum = EXCLUDED.checksum, applied_at = NOW()",
     "scripts/backfill_business_context.py::UPDATE::UPDATE contacts SET business_context_id = $2, updated_at = NOW() WHERE bus",
     "scripts/backfill_business_context.py::UPDATE::UPDATE contacts c SET business_context_id = $1, updated_at = NOW() WHERE c.b",
+    "scripts/backfill_eom_customer_type.py::UPDATE::UPDATE contacts SET customer_type = $2, updated_at = NOW() WHERE id = $1::",
     "scripts/import_eom_customers_live.py::UPDATE::UPDATE contacts SET business_context_id = $2, updated_at = NOW() WHERE",
     "scripts/import_eom_customers_live.py::UPDATE::UPDATE contacts SET {runtime value}, updated_at = NOW() WHERE id = $1 AND",
     "scripts/sync_eom_portal_customers.py::UPDATE::UPDATE contacts SET status = ' ', tags = $2, updated_at = NOW()",
@@ -81,7 +82,8 @@
     "extracted_content_pipeline/podcast_postgres.py::DYNAMIC::data, updated_at = NOW() RETURNING id",
     "extracted_content_pipeline/podcast_postgres_import.py::DYNAMIC::7, $8, $9, $10::jsonb, ' ' )",
     "extracted_content_pipeline/podcast_postgres_import.py::DYNAMIC::WHERE account_id = $1 AND episode_id = ANY($2::text[])",
-    "extracted_content_pipeline/storage/migration_runner.py::DYNAMIC::TE SET checksum = EXCLUDED.checksum, applied_at = NOW()"
+    "extracted_content_pipeline/storage/migration_runner.py::DYNAMIC::TE SET checksum = EXCLUDED.checksum, applied_at = NOW()",
+    "scripts/backfill_eom_customer_type.py::UPDATE::UPDATE contacts SET customer_type = $2, updated_at = NOW() WHERE id = $1::"
   ],
   "unanalyzable": []
 }

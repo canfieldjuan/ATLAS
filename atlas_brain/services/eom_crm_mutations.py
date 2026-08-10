@@ -33,6 +33,15 @@ EOM_OPERATOR_SOURCE_CHANNELS = (
     "manual_import",
 )
 EOM_OPERATOR_CONTACT_TYPES = ("lead", "customer")
+# Residential/commercial, on the account record. A DIFFERENT axis from
+# EOM_OPERATOR_CONTACT_TYPES above (lead vs customer) -- the two answer
+# unrelated questions and neither may be inferred from the other.
+#
+# Must stay identical to the chk_contacts_customer_type CHECK in migration 366.
+# The constraint is the enforcement; this tuple only decides what the boundary
+# will accept, so a value that passed here and failed there would surface as a
+# 500 instead of a 422.
+EOM_CUSTOMER_TYPES = ("residential", "commercial", "unknown")
 EOM_OPERATOR_CONTACT_FIELDS = (
     "full_name",
     "email",
@@ -42,6 +51,7 @@ EOM_OPERATOR_CONTACT_FIELDS = (
     "state",
     "zip",
     "notes",
+    "customer_type",
 )
 _FIELD_LIMITS = {
     "full_name": 256,
@@ -156,6 +166,30 @@ def _normalize_text_field(field: str, value: Any) -> str | None:
     return normalized
 
 
+def _normalize_customer_type(value: Any) -> str:
+    """Admit exactly the three account types, case-insensitively.
+
+    Case folding is not politeness: the evidence this field is populated from
+    is the tracker's ``locations.location_type``, which stores ``Residential``
+    and ``Commercial`` capitalised. Rejecting those would make the boundary
+    refuse the very values the backfill reads.
+
+    Blank is refused rather than treated as ``unknown``. Every other text field
+    here maps blank to NULL to mean "clear it", but this column is NOT NULL and
+    ``unknown`` is a real member of the set, so that mapping would let an empty
+    form field silently downgrade a commercial account to unknown -- a value
+    change disguised as a no-op. An operator who means unknown can say so.
+    """
+    if not isinstance(value, str):
+        raise EOMOperatorContactMutationError(422, "customerType must be a string")
+    candidate = value.strip().lower()
+    if not candidate:
+        raise EOMOperatorContactMutationError(422, "customerType must not be blank")
+    if candidate not in EOM_CUSTOMER_TYPES:
+        raise EOMOperatorContactMutationError(422, "customerType is not supported")
+    return candidate
+
+
 def _normalize_fields(fields: Mapping[str, Any]) -> dict[str, Any]:
     normalized: dict[str, Any] = {}
     for field, value in fields.items():
@@ -167,6 +201,8 @@ def _normalize_fields(fields: Mapping[str, Any]) -> dict[str, Any]:
             normalized[field] = _normalize_email(value)
         elif field == "phone":
             normalized[field] = _normalize_phone(value)
+        elif field == "customer_type":
+            normalized[field] = _normalize_customer_type(value)
         else:
             normalized[field] = _normalize_text_field(field, value)
     if not normalized:

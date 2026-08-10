@@ -851,11 +851,11 @@ class DatabaseCRMProvider:
                 id, full_name, first_name, last_name, email, phone,
                 address, city, state, zip, business_context_id,
                 contact_type, status, tags, notes, source, source_ref,
-                lead_stage, lead_owner, next_follow_up_at,
+                lead_stage, lead_owner, next_follow_up_at, customer_type,
                 created_at, updated_at, metadata
             ) VALUES (
                 $1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,
-                $18,$19,$20,$21,$22,$23::jsonb
+                $18,$19,$20,$21,$22,$23,$24::jsonb
             ) RETURNING *
             """,
             contact_id,
@@ -878,6 +878,12 @@ class DatabaseCRMProvider:
             data.get("lead_stage"),
             data.get("lead_owner"),
             data.get("next_follow_up_at"),
+            # Explicit, because this column list is explicit: the UPDATE path
+            # builds its SET clause from the caller's fields and so carries a
+            # new column for free, but an INSERT that simply omits one writes
+            # the column default and loses the caller's value silently. A
+            # create that specified 'commercial' would land as 'unknown'.
+            data.get("customer_type", "unknown"),
             now,
             now,
             metadata_json,
