@@ -253,6 +253,52 @@ def test_link_verification_is_advertised_in_the_capability_manifest():
 
 
 @pytest.mark.asyncio
+async def test_the_real_aggregate_serves_the_route_at_its_deployed_path():
+    """Prove reachability on the app that actually ships.
+
+    Every other test in this file mounts ``funnel_mod.router`` on a fresh
+    FastAPI instance, which proves the handler works but says nothing about
+    whether the deployed application mounts it. If the aggregate stopped
+    including the EOM funnel router, or mounted it under a different prefix,
+    all of them would stay green while the caller got a 404 from the one path
+    the review contract names. This calls the full deployed path instead.
+    """
+    from atlas_brain.main import app
+
+    live = uuid4()
+    dangling = uuid4()
+    crm = _CRM(known=[live])
+
+    original_overrides = dict(app.dependency_overrides)
+    app.dependency_overrides[funnel_mod._crm_dependency] = lambda: crm
+    app.dependency_overrides[auth_mod.get_eom_funnel_api_config] = lambda: (
+        EOMFunnelConfig(
+            api_enabled=True,
+            service_token_sha256=_SERVICE_TOKEN_SHA256,
+        )
+    )
+    try:
+        async with httpx.AsyncClient(
+            transport=httpx.ASGITransport(app=app), base_url="http://test"
+        ) as client:
+            response = await client.get(
+                "/api/v1/eom-funnel/known-contacts"
+                f"?contact_id={live}&contact_id={dangling}",
+                headers=_headers(),
+            )
+    finally:
+        app.dependency_overrides.clear()
+        app.dependency_overrides.update(original_overrides)
+
+    assert response.status_code == 200, (
+        "the deployed path must serve this route, not 404"
+    )
+    body = response.json()
+    assert body["knownContactIds"] == [str(live)]
+    assert str(dangling) not in body["knownContactIds"]
+
+
+@pytest.mark.asyncio
 async def test_tenant_scope_holds_against_real_postgres():
     """The scope claim is only worth what the SQL does, so prove it there.
 

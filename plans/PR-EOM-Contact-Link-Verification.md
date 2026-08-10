@@ -35,6 +35,7 @@ anyway.
 
 Ownership lane: eom-crm/lead-funnel
 Slice phase: Vertical slice
+Max files: 5
 
 1. Add `GET /eom-funnel/known-contacts`: given up to 100 `contact_id` query
    values, return the subset that names a live `effingham_maids` contact, and
@@ -190,7 +191,7 @@ Parked hardening: none.
 - Neighbouring EOM suites for regression —
   `test_eom_funnel_capability_manifest.py`, `test_eom_lead_conversion.py`,
   `test_eom_contacts_api_tenant_scope.py`, `test_crm_read_scoping.py`,
-  `test_eom_known_contacts.py`: **495 passed**.
+  `test_eom_link_verification.py`: **495 passed**.
 
 ## Estimated diff size
 
@@ -199,6 +200,6 @@ Parked hardening: none.
 | `.github/workflows/atlas_eom_lead_pipeline_checks.yml` | 3 |
 | `atlas_brain/eom_api/funnel.py` | 67 |
 | `atlas_brain/services/crm_provider.py` | 33 |
-| `plans/PR-EOM-Contact-Link-Verification.md` | 204 |
-| `tests/test_eom_link_verification.py` | 342 |
-| **Total** | **649** |
+| `plans/PR-EOM-Contact-Link-Verification.md` | 205 |
+| `tests/test_eom_link_verification.py` | 388 |
+| **Total** | **696** |
