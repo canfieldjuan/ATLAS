@@ -18,6 +18,12 @@ from audit_ai_reconciliation import (
     extract_section as extract_ai_reconciliation_section,
 )
 from audit_pr_body import unfenced_lines
+from fix_loop_trace_contract import (
+    is_placeholder_text,
+    parse_repo_path_tokens,
+    source_trace_is_valid,
+    trace_endpoint_is_valid,
+)
 
 DISPOSITIONS = (
     "fixed-in",
@@ -26,6 +32,10 @@ DISPOSITIONS = (
     "waived-speculative",
     "waived-nit",
     "not-applicable",
+)
+FIX_STRATEGIES = (
+    "upstream-root",
+    "symptom-only-deferred",
 )
 BLOCKING_PREDICATES = {
     "contract",
@@ -47,7 +57,6 @@ PLAN_RE = re.compile(r"(?im)^\s*Plan:\s*(?P<path>plans/PR-[A-Za-z0-9._-]+\.md)\s
 FIELD_RE = re.compile(r"(?im)^\s*-\s*(?P<name>[A-Za-z][A-Za-z -]*):\s*(?P<value>\S.*)$")
 MAX_FILES_RE = re.compile(r"(?im)^\s*Max files:\s*(?P<value>\S.*?)\s*$")
 SCOPE_RE = re.compile(r"(?im)^##\s+Scope\b")
-PATH_TOKEN_RE = re.compile(r"`([^`\n]+)`|([^,\s]+)")
 
 
 class ReconciliationItem(NamedTuple):
@@ -109,8 +118,39 @@ def structural_preflight_section(section: str) -> str:
     return "\n".join(unfenced_lines(section))
 
 
-def disposition_errors(fields: dict[str, str], *, changed_file_count: int | None) -> list[str]:
+def trace_contract_errors(fields: dict[str, str]) -> tuple[list[str], str, set[str]]:
     errors: list[str] = []
+    for field in ("source trace", "upstream files", "fix strategy"):
+        if field not in fields:
+            errors.append(f"fix-loop disposition preflight: missing '- {field.title()}: ...'")
+    source_trace = fields.get("source trace", "")
+    if source_trace and not source_trace_is_valid(source_trace):
+        errors.append(
+            "fix-loop disposition preflight: source trace must name the chain "
+            "from symptom -> upstream source with non-placeholder endpoints"
+        )
+    upstream_files = parse_allowed_files(fields.get("upstream files", ""))
+    if "upstream files" in fields and not upstream_files:
+        errors.append("fix-loop disposition preflight: upstream files must contain repo-relative paths")
+    strategy = fields.get("fix strategy", "").lower()
+    if strategy and strategy not in FIX_STRATEGIES:
+        errors.append(
+            "fix-loop disposition preflight: invalid fix strategy "
+            f"{strategy!r}; use one of {', '.join(FIX_STRATEGIES)}"
+        )
+    if strategy == "symptom-only-deferred":
+        for field in ("symptom-only reason", "follow-up"):
+            if not trace_endpoint_is_valid(fields.get(field, "")):
+                errors.append(
+                    "fix-loop disposition preflight: symptom-only-deferred requires "
+                    f"'- {field.title()}: ...'"
+                )
+    return errors, strategy, upstream_files
+
+
+def disposition_errors(fields: dict[str, str], *, changed_file_set: set[str] | None) -> list[str]:
+    errors: list[str] = []
+    changed_file_count = len(changed_file_set) if changed_file_set is not None else None
     required = (
         "root decision",
         "blocking predicate",
@@ -122,6 +162,8 @@ def disposition_errors(fields: dict[str, str], *, changed_file_count: int | None
     for field in required:
         if field not in fields:
             errors.append(f"fix-loop disposition preflight: missing '- {field.title()}: ...'")
+    trace_errors, strategy, upstream_files = trace_contract_errors(fields)
+    errors.extend(trace_errors)
 
     disposition = fields.get("disposition", "").lower()
     if disposition and disposition not in DISPOSITIONS:
@@ -160,8 +202,16 @@ def disposition_errors(fields: dict[str, str], *, changed_file_count: int | None
             )
 
     root = fields.get("root decision", "")
-    if root.lower() in {"none", "n/a", "na", "tbd"}:
+    if is_placeholder_text(root):
         errors.append("fix-loop disposition preflight: root decision must name the reviewed defect class")
+
+    if disposition == "fixed-in":
+        if strategy == "upstream-root" and changed_file_set is not None and upstream_files:
+            if not changed_file_set.intersection(upstream_files):
+                errors.append(
+                    "fix-loop disposition preflight: fixed-in upstream-root must change at least one "
+                    "declared upstream file"
+                )
 
     parked = fields.get("parked hardening", "")
     if parked.lower() in {"", "tbd"}:
@@ -201,13 +251,7 @@ def reconciliation_items(section: str | None) -> list[ReconciliationItem]:
 
 
 def parse_allowed_files(value: str) -> set[str]:
-    paths: set[str] = set()
-    for match in PATH_TOKEN_RE.finditer(value.replace(",", " ")):
-        raw = (match.group(1) or match.group(2) or "").strip().strip("`")
-        if not raw or raw.startswith("/") or ".." in Path(raw).parts:
-            continue
-        paths.add(raw)
-    return paths
+    return parse_repo_path_tokens(value)
 
 
 def plan_path_from_body(body: str, repo_root: Path) -> tuple[Path | None, str | None]:
@@ -304,7 +348,7 @@ def audit_body(body: str, *, repo_root: Path, base_ref: str | None = None, chang
         errors.extend(
             disposition_errors(
                 record.fields,
-                changed_file_count=len(changed_file_set) if changed_file_set is not None else None,
+                changed_file_set=changed_file_set,
             )
         )
         allowed_union.update(parse_allowed_files(record.fields.get("allowed files", "")))

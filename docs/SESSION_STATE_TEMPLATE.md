@@ -76,8 +76,27 @@ Active: yes | no   (fill in only while iterating on red CI / review comments)
 PR: #<number or none>
 Branch: <branch>
 Latest commit: <sha at last push>
+Activation head: <sha when fix mode was armed>
+Activation dirty paths:
+- <repo-relative staged/working/untracked path present when armed, or none>
+Activation dirty fingerprints:
+- <path>: <index/worktree fingerprint captured when armed, or none>
+Activation source fingerprints:
+- <upstream path>: <index/worktree fingerprint captured when armed, including clean/missing sources>
+Pending upstream edits:
+- <repo-relative upstream path admitted by the pre-tool hook but not yet verified, or none>
+Upstream edit receipts:
+- <repo-relative upstream path>: <post-tool verified fingerprint, or none>
 Allowed files (max N=<n>):
 - <path or glob -- the failure source, not everything the symptom touches>
+Symptom: <failing check or review claim being addressed>
+Root cause: <upstream defect, not the visible leaf symptom>
+Source trace: <symptom -> intermediate cause -> upstream source>
+Fix strategy: upstream-root | symptom-only-deferred
+Upstream files:
+- <repo-relative file where the upstream source is fixed>
+Symptom-only reason: <required only for symptom-only-deferred>
+Follow-up: <required only for symptom-only-deferred>
 Current failing check / comment: <e.g. live-reconciliation: copilot :194,:226>
 Last useful log finding: <the single line that localized it>
 Next exact action: <one sentence>

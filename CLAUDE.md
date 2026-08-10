@@ -1474,6 +1474,16 @@ Compose files for sub-services:
   is correct** -- the root near a symptom is often a consequence of something
   coded wrong further up; if you stop short of the true upstream root, name it
   and the follow-up rather than patch downstream. See `AGENTS.md` §3k.
+- **Fix-mode root trace is enforced by hook**: when `.claude/fix-mode-state.json`
+  is active with an `allowed` set, the PreToolUse hook denies normal edits until
+  the baton names `symptom`, `root_cause`, `source_trace`, `fix_strategy`, and
+  `upstream_files`. Record `activation_head`, `activation_dirty_paths`, and
+  `activation_dirty_fingerprints` when arming fix mode; preserve
+  `pending_upstream_edits` and `upstream_edit_receipts` so committed and
+  noncommitted upstream-source changes count only after the activation baseline
+  or a post-tool verified receipt. Use `upstream-root` unless you explicitly declare
+  `symptom-only-deferred` with `symptom_only_reason` and `follow_up`; mirror the
+  same source trace in the PR body's `## Fix-loop disposition preflight`.
 - **Guard-class closure before another patch**: when the fix touches a guard /
   validator / sanitizer / classifier / gate / denylist / parser-admission rule,
   `python scripts/check_guard_class_closure.py --base origin/main --strict` is
@@ -1494,8 +1504,11 @@ When compacting this conversation, preserve verbatim (do not summarize away):
 - The active operator-assigned lane and the **owned active PR** (number, branch,
   latest pushed SHA) from this session's state file.
 - The full **PR Fix Mode** baton when a fix loop is active: allowed-files set +
-  max-files budget, current failing check/comment, last useful log finding, next
-  exact action, and do-not-redo notes.
+  max-files budget, activation head, activation dirty paths, activation dirty
+  fingerprints, activation source fingerprints, pending upstream edits, upstream
+  edit receipts, symptom, root cause, source trace, fix strategy, upstream files,
+  symptom-only reason/follow-up when applicable, current failing check/comment,
+  last useful log finding, next exact action, and do-not-redo notes.
 - For an explicitly assigned long-running coding task, the full **PR watcher**
   baton: owned PR number, branch, latest head SHA, last observed check/review
   state, next 30-minute poll time, and whether autonomous merge/next-slice

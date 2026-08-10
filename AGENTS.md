@@ -1312,14 +1312,21 @@ the **allowed-files set**, and a **max-files budget**.
   upstream file, name the upstream reason in the baton and the plan **before**
   editing it (this is the §3k trace, not a drive-by). Do not silently grow the
   diff.
+- **Trace source before patching.** An active constrained fix-mode baton must
+  name the observed `symptom`, the upstream `root_cause`, a `source_trace`
+  from symptom to source, a `fix_strategy`, and the `upstream_files` where the
+  source is fixed. Use `upstream-root` by default. A `symptom-only-deferred`
+  strategy must also name `symptom_only_reason` and `follow_up`; without that
+  explicit admission, a downstream patch is rejected before edit.
 - **One judgment pass, no auto-loop.** Codex findings are gate inputs you
   disposition deliberately (resolve or waive with a reason); there is no
   "address every comment" reflex (§4c).
 - **Disposition before edit.** When a PR body records any non-`no-findings`
   AI reconciliation item, add a `## Fix-loop disposition preflight` section
-  before the next push. It must name the root decision, blocking predicate,
-  fix/waive disposition, allowed files, `Max files: N`, and parked hardening
-  target. The plan's Scope must declare the same `Max files: N`.
+  before the next push. It must name the root decision, source trace, upstream
+  files, fix strategy, blocking predicate, fix/waive disposition, allowed
+  files, `Max files: N`, and parked hardening target. The plan's Scope must
+  declare the same `Max files: N`.
 - **The baton is the compaction handoff.** Keep the current failing
   check/comment, the last useful log finding, the next exact action, and
   do-not-redo notes current, so a post-compaction resume continues instead of
