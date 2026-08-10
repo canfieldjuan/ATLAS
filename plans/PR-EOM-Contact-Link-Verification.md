@@ -92,8 +92,15 @@ and depends on this deploying first.
 - Risk areas: tenant leakage through an unscoped id lookup; disclosure beyond the
   id; unbounded id lists as a query-cost or URL-length vector; a capability that
   callers cannot discover; a new test file that silently never runs in CI.
-- Reviewer rules triggered: R1 (tenant scope), R2 (read-only boundary), R7
-  (input bounds), R9 (capability manifest), R14 (CI registration).
+- Reviewer rules triggered: R1 (requirements match), R2 (test evidence), R3
+  (security and authorization -- this route sits behind an explicit
+  authentication boundary and enforces tenant scope), R5 (backward
+  compatibility -- it adds a new request/response surface and a capability
+  manifest entry callers gate on), R7 (input bounds -- the 100-id cap and UUID
+  admission), R12 (deployment safety and CI enrollment -- the new test file is
+  enrolled in the EOM lead-pipeline workflow), R14 (verify against the
+  codebase). R9 is NOT triggered: it governs frontend behaviour, and an earlier
+  draft of this plan wrongly filed the capability manifest under it.
 
 ### Boundary-change enumeration
 
@@ -109,6 +116,37 @@ and depends on this deploying first.
   foreign-tenant id, duplicate ids, malformed id, empty list, 100 ids, 101 ids};
   unauthenticated caller and wrong-token caller x any id (both refused before the
   provider is reached).
+
+### Member-set closure: `_CAPABILITY_ROUTES`
+
+This PR adds `contact.link_verification` to `_CAPABILITY_ROUTES`, which is a
+decision-driving member set: callers gate control availability on the
+`capabilities` list the funnel returns, so membership decides what a caller will
+attempt.
+
+- **Open or closed:** CLOSED with respect to what a caller may rely on, and
+  append-only in practice. A capability name is a published contract; adding one
+  is additive and safe, renaming or removing one breaks callers that gate on it,
+  so removal requires a deprecation pass rather than an edit here.
+- **Where membership comes from:** the literal map in
+  `atlas_brain/eom_api/funnel.py`, intersected at runtime with the routes this
+  build actually registers (`served_capabilities()` reads `router.routes`). So a
+  name is served only if BOTH the map lists it and the route exists — the map
+  alone cannot advertise a capability this deployment does not serve. That
+  intersection is why the manifest is computed on first call rather than at
+  import: the decorators run later, and an import-time constant would silently
+  under-report.
+- **Unlisted routes:** a route with no entry in the map is simply never
+  advertised. It stays reachable to a caller that knows its path, so the map is
+  a discovery contract, not an authorization one — authorization is
+  `require_eom_funnel_api` + `require_eom_funnel_actor` on each route. Omission
+  degrades a caller to "cannot discover", never to "can call something it should
+  not".
+- **Drift policy:** a new EOM funnel route that callers must gate on adds its
+  name here in the same PR that adds the route. A route deliberately not
+  advertised (internal, or superseded) is left out and said so in its own plan.
+- **Enforced by:** `test_link_verification_is_advertised_in_the_capability_manifest`
+  fails if this entry is dropped while the route remains.
 
 ### Deployed-config probing
 
@@ -176,22 +214,36 @@ means the write boundary was bypassed.
   signal in the tracker audit that calls this route. Separate repo, separate PR,
   and it needs this deployed first. #167, #113 and #107 stay open until it lands.
 
+Parking predicate: hardening is parked when it protects a caller that does not
+exist yet, or an input shape this route cannot receive. Against that predicate,
+nothing is parked -- the only caller is the tracker consumer named above, and
+every input shape the route accepts (empty, over-cap, malformed, duplicate,
+cross-tenant, dangling) is covered by a test at this head.
+
 Parked hardening: none.
 
 ## Verification
 
-- `tests/test_eom_link_verification.py` — 14 tests, run against a throwaway
-  `postgres:16` with `ATLAS_MIGRATION_TEST_DATABASE_URL` set: **14 passed**.
+- `tests/test_eom_link_verification.py` — 15 tests, run against a throwaway
+  `postgres:16` with `ATLAS_MIGRATION_TEST_DATABASE_URL` set: **15 passed**.
+  Re-run at this head after adding the aggregate-reachability test; the earlier
+  14/495 receipt described the previous head and no longer substantiated it.
 - Negative controls, both run and both failing as required before restore:
   removing the tenant predicate from the provider query fails
   `test_tenant_scope_holds_against_real_postgres`; replacing the request-ordered
   intersection with `list(known_set)` fails
   `test_an_id_the_caller_never_submitted_is_never_returned`. Result: pass (each
-  control failed only its target test; restored source passes all 14).
+  control failed only its target test; restored source passes all 15).
 - Neighbouring EOM suites for regression —
   `test_eom_funnel_capability_manifest.py`, `test_eom_lead_conversion.py`,
   `test_eom_contacts_api_tenant_scope.py`, `test_crm_read_scoping.py`,
-  `test_eom_link_verification.py`: **495 passed**.
+  `test_eom_link_verification.py`: **496 passed**.
+- Reachability is proven on the deployed aggregate, not a harness:
+  `test_the_real_aggregate_serves_the_route_at_its_deployed_path` calls
+  `/api/v1/eom-funnel/known-contacts` on `atlas_brain.main.app`. Negative
+  control: replacing `router.include_router(eom_funnel_router)` with `pass`
+  fails ONLY that test (1 failed, 14 passed), which is the blind spot it
+  closes.
 
 ## Estimated diff size
 
@@ -200,6 +252,6 @@ Parked hardening: none.
 | `.github/workflows/atlas_eom_lead_pipeline_checks.yml` | 3 |
 | `atlas_brain/eom_api/funnel.py` | 67 |
 | `atlas_brain/services/crm_provider.py` | 33 |
-| `plans/PR-EOM-Contact-Link-Verification.md` | 205 |
+| `plans/PR-EOM-Contact-Link-Verification.md` | 257 |
 | `tests/test_eom_link_verification.py` | 388 |
-| **Total** | **696** |
+| **Total** | **748** |
