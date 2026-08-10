@@ -57,6 +57,11 @@ _RFC3339_DATETIME_PATTERN = re.compile(
 _MAX_SIGNED_BIGINT = 2**63 - 1
 _DEFAULT_LEAD_REVIEW_LIMIT = 100
 _MAX_LEAD_REVIEW_LIMIT = 200
+# Ids ride in the query string, so the cap is a URL-length budget rather than a
+# database one: 100 ids costs roughly 4.8 KB of `contact_id=<uuid>&`, comfortably
+# inside the 8 KB request line every proxy in front of this accepts. Callers with
+# more links to check page through them.
+_MAX_KNOWN_CONTACT_IDS = 100
 # Same conservative shape the public intake boundary accepts
 # (atlas_brain/api/leads.py), so an office-corrected recipient can never be
 # stricter or looser than an intake-submitted one.
@@ -235,6 +240,21 @@ class EOMLeadReviewResponse(BaseModel):
     # (Render) auto-deploy from main; Atlas deploys by hand, so callers
     # routinely run ahead of it. See ATLAS #2275 and website #112.
     capabilities: list[str] = Field(default_factory=list)
+
+
+class EOMKnownContactsResponse(BaseModel):
+    """Which of the submitted contact ids name a live EOM contact.
+
+    Deliberately id-only. A caller holding a stored contact id is asking
+    whether its link still resolves, and answering that needs no name, email,
+    or phone -- so none is disclosed.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    known_contact_ids: list[UUID] = Field(serialization_alias="knownContactIds")
+    checked: int
+    limit: Annotated[int, Field(ge=1, le=_MAX_KNOWN_CONTACT_IDS)]
 
 
 class EOMOnboardingDraftEditRequest(BaseModel):
@@ -422,6 +442,7 @@ _CAPABILITY_ROUTES: dict[str, tuple[str, str]] = {
         "POST",
         "/eom-funnel/onboarding-drafts/{draft_id}/confirm-sent",
     ),
+    "contact.link_verification": ("GET", "/eom-funnel/known-contacts"),
 }
 
 _served_capabilities_cache: tuple[str, ...] | None = None
@@ -588,6 +609,52 @@ async def list_eom_lead_review_items(
         has_more=has_more,
         next_cursor=next_cursor,
         capabilities=list(served_capabilities()),
+    )
+
+
+@router.get(
+    "/known-contacts",
+    response_model=EOMKnownContactsResponse,
+    dependencies=[Depends(require_eom_funnel_api)],
+)
+async def list_known_eom_contacts(
+    contact_id: Annotated[
+        list[UUID],
+        Query(min_length=1, max_length=_MAX_KNOWN_CONTACT_IDS),
+    ],
+    _actor: dict[str, object] = Depends(require_eom_funnel_actor),
+    crm: Any = Depends(_crm_dependency),
+) -> EOMKnownContactsResponse:
+    """Report which submitted contact ids still name a live EOM contact.
+
+    A system holding its own copy of a contact id -- the tracker's
+    ``customers.atlas_contact_id`` -- cannot tell a good link from a dangling
+    one on its own, so a link to a contact that no longer exists stays silent
+    until someone opens the record. This answers that question and nothing
+    else: an id comes back only when it names an ``effingham_maids`` contact.
+    Lifecycle is not part of the answer -- an archived or lost contact is still
+    a link that resolves.
+
+    An id that exists under a different tenant is reported the same way as one
+    that does not exist at all. The distinction would be more useful to the
+    caller and is deliberately withheld: this credential is scoped to EOM, and
+    confirming the existence of another tenant's contact would make this route
+    a cross-tenant existence oracle. Either answer means the same thing to the
+    caller anyway -- the link does not point at an EOM contact.
+
+    Reading this projection alters nothing.
+    """
+    requested = list(dict.fromkeys(contact_id))
+    known = await crm.list_known_eom_contact_ids(contact_ids=requested)
+    # Answer in terms of what was asked rather than echoing the provider's rows:
+    # an id the caller never submitted must never appear in the response, or the
+    # route would report a verdict the caller cannot attribute to a link it holds.
+    known_set = {UUID(str(value)) for value in known}
+    known_ids = [value for value in requested if value in known_set]
+    return EOMKnownContactsResponse(
+        known_contact_ids=known_ids,
+        checked=len(requested),
+        limit=_MAX_KNOWN_CONTACT_IDS,
     )
 
 
