@@ -45,6 +45,10 @@ from ..eom_api.auth import (
 # never authenticate even if its digest is configured. Mirrors the receivables
 # gate's request-time strength enforcement.
 _SETTINGS_TOKEN_PREFIX = "eomset_v1_"
+# Entropy floor on the random payload, matching the sibling funnel gate
+# (atlas_brain/eom_api/funnel_auth.py) — rejects correctly-shaped but low-entropy
+# tokens (e.g. a repeated-character payload) even if their digest is provisioned.
+_MIN_TOKEN_UNIQUE_CHARACTERS = 16
 _GENERATOR_REFERENCE = (
     "atlas_brain.api.settings_auth.generate_settings_admin_service_token()"
 )
@@ -116,6 +120,7 @@ def token_matches(provided: str, expected_digest: str) -> bool:
             service_name="Settings admin",
             generator_reference=_GENERATOR_REFERENCE,
             exact_random_length=True,
+            minimum_unique_characters=_MIN_TOKEN_UNIQUE_CHARACTERS,
         )
     except RuntimeError:
         return False

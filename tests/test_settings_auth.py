@@ -108,6 +108,16 @@ def test_nongenerated_token_is_invalid_even_if_its_digest_is_configured():
     assert c.post(SESSION, json={"token": weak}).status_code == 401
 
 
+def test_low_entropy_but_correctly_shaped_token_is_invalid():
+    """Entropy floor: a token with the right prefix + length but a low-unique-char
+    payload (e.g. a repeated character) is rejected even if its digest is provisioned."""
+    low_entropy = "eomset_v1_" + ("A" * 43)  # correct prefix + 43-char payload, 1 unique
+    low_digest = hashlib.sha256(low_entropy.encode("ascii")).hexdigest()
+    c = _client(low_digest)
+    assert c.get(NOTIF, headers={"Authorization": f"Bearer {low_entropy}"}).status_code == 401
+    assert c.post(SESSION, json={"token": low_entropy}).status_code == 401
+
+
 def test_patch_mutation_blocked_when_credential_missing():
     r = _client(DIGEST).patch(NOTIF, json={"ntfy_url": "https://attacker.example"})
     assert r.status_code == 401
@@ -202,24 +212,23 @@ def test_logout_clears_the_cookie():
 # ── router-level coverage ───────────────────────────────────────────────────
 
 def test_production_aggregate_wires_session_route_and_gates_settings():
-    """Regression guard: exercise the REAL `atlas_brain.api` aggregate, not an
-    ad-hoc app, so a dropped `include_router(settings_session_router)` or a lost
-    router dependency fails the test instead of passing silently."""
+    """Regression guard: introspect the REAL `atlas_brain.api` aggregate router
+    (no mounting / no HTTP, so it is order-independent in the full suite) — a
+    dropped `include_router(settings_session_router)` or a lost router dependency
+    fails the test instead of passing silently."""
     import importlib
     from starlette.routing import Route
+    from atlas_brain.api.settings_auth import require_settings_admin
 
     api = importlib.import_module("atlas_brain.api")
-    app = FastAPI()
-    app.include_router(api.router, prefix="/api/v1")
-    app.dependency_overrides[get_settings_admin_config] = (
-        lambda: SettingsAdminConfig(token_sha256="")
-    )
-    c = TestClient(app)
-    aggregate_paths = {r.path for r in api.router.routes if isinstance(r, Route)}
-    assert "/settings/session" in aggregate_paths  # session router is wired in
-    # gate is active through the production aggregate: unconfigured => 503, never 200
-    assert c.get("/api/v1/settings/notifications").status_code == 503
-    assert c.post("/api/v1/settings/session").status_code == 503
+    routes = [r for r in api.router.routes if isinstance(r, Route)]
+    paths = {r.path for r in routes}
+    assert "/settings/session" in paths  # session router is wired into the aggregate
+    gated = [r for r in routes if r.path.startswith("/settings/") and r.path != "/settings/session"]
+    assert gated, "no gated settings routes in the aggregate"
+    for r in gated:
+        dep_calls = [d.call for d in r.dependant.dependencies]
+        assert require_settings_admin in dep_calls, f"{r.path} missing require_settings_admin"
 
 
 def test_every_settings_route_is_gated():
