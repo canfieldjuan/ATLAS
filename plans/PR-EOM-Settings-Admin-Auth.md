@@ -87,7 +87,7 @@ Max files: 7
     — `::test_verify_settings_session_rejects_malformed_expiry` +
     `::test_session_cookie_with_ascii_malformed_expiry_returns_401`.
   - The PRODUCTION `atlas_brain.api` aggregate wires the session route AND gates the settings
-    routes — `::test_init_wires_the_session_router_into_the_aggregate`.
+    routes — `::test_production_aggregate_router_serves_the_session_route`.
 - Reachability proof: real entrypoint `PATCH/GET https://atlas-brain.tailc7bd29.ts.net/api/v1/settings/*`
   (public funnel → 127.0.0.1:8012). Observable effect: unauthenticated request → 401/503
   (was 200). Verified pre-fix with a live `GET → 200`.
@@ -224,5 +224,5 @@ multi-thousand-digit value overflows CPython's int-conversion limit — both are
 | `atlas_brain/api/settings_session.py` | 70 |
 | `atlas_brain/config.py` | 17 |
 | `plans/PR-EOM-Settings-Admin-Auth.md` | 228 |
-| `tests/test_settings_auth.py` | 247 |
-| **Total** | **781** |
+| `tests/test_settings_auth.py` | 252 |
+| **Total** | **786** |

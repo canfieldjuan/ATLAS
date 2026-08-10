@@ -220,20 +220,25 @@ def test_logout_clears_the_cookie():
 
 # ── router-level coverage ───────────────────────────────────────────────────
 
-def test_init_wires_the_session_router_into_the_aggregate():
-    """Regression guard: the api package __init__ must import AND include the
-    session router into the aggregate. Asserted against the __init__ SOURCE (not
-    the runtime router object), so it is immune to full-suite import-order/reload
-    pollution of the shared `atlas_brain.api.router`. Catches a dropped
-    `include_router(settings_session_router)` — the exact silent-pass Codex flagged.
-    The gate's runtime behavior on the settings routes is covered by the tests above."""
+def test_production_aggregate_router_serves_the_session_route():
+    """Regression guard: the REAL `atlas_brain.api` aggregate router — the one
+    `atlas_brain.main` mounts under /api/v1 — must actually register the session
+    route at runtime (a dropped or commented-out `include_router(
+    settings_session_router)` leaves it absent). Path membership on the live route
+    table, so a commented-out include cannot pass it; no dependency-identity
+    assertion (that was order-fragile in the full suite). The gate's behavior on
+    the settings routes is covered by the tests above."""
     import importlib
-    from pathlib import Path
+    from starlette.routing import Route
 
     api = importlib.import_module("atlas_brain.api")
-    src = Path(api.__file__).read_text(encoding="utf-8")
-    assert "from .settings_session import router as settings_session_router" in src
-    assert "include_router(settings_session_router)" in src
+    session_mod = importlib.import_module("atlas_brain.api.settings_session")
+    session_paths = {r.path for r in session_mod.router.routes if isinstance(r, Route)}
+    aggregate_paths = {r.path for r in api.router.routes if isinstance(r, Route)}
+    assert session_paths, "settings_session router registers no routes"
+    assert session_paths <= aggregate_paths, (
+        f"session routes {session_paths} not included in the aggregate"
+    )
 
 
 def test_every_settings_route_is_gated():
