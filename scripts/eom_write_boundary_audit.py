@@ -5,9 +5,12 @@ Slice 0F of the canonical write boundary (website #113, under #107 / #105).
 
 0C made cross-system customer creation durable and retryable. Nothing watched
 it, so a bypass -- a writer reaching the database without going through the
-domain tier, or a tracker customer minted with no Atlas contact -- stayed silent
-until somebody happened to run an audit by hand. That is how the original defect
-survived long enough to need a backfill.
+domain tier -- stayed silent until somebody happened to run an audit by hand.
+That is how the original defect survived long enough to need a backfill.
+
+Scope: the ATLAS side of website #113. The tracker-side signals need a
+cross-repo schema proof and a reconciliation of tracker links against Atlas
+records, which is its own slice; see the follow-up issue named in the plan.
 
 This runs on a timer and turns each of those into an alert.
 
@@ -62,9 +65,6 @@ KNOWN_EOM_SOURCES = (
     "booking",
 )
 
-# A reservation pending right after an Atlas failure is normal and retryable.
-# One still pending an hour later means nobody is coming back for it.
-STALE_RESERVATION_MINUTES = 60
 
 DEFAULT_STATE_DIR = Path(
     os.environ.get("XDG_STATE_HOME", str(Path.home() / ".local/state"))
@@ -79,7 +79,6 @@ DEFAULT_NTFY_TOPIC = ""
 DEFAULT_NTFY_URL = "https://ntfy.sh"
 DEFAULT_REALERT_EVERY = 24  # hourly cadence -> re-alert once a day while open
 
-TRACKER_DB_ID = "dpg-d723r3buibrs739nnpg0-a"
 
 
 @dataclass(frozen=True)
@@ -147,14 +146,6 @@ SELECT
 """
 
 
-def _tracker_sql() -> str:
-    return (
-        "SELECT (SELECT COUNT(*) FROM customers WHERE atlas_contact_id IS NULL), "
-        "(SELECT COUNT(*) FROM eom_customer_atlas_reservations "
-        f"WHERE state = 'pending' AND updated_at < NOW() - INTERVAL '{STALE_RESERVATION_MINUTES} minutes')"
-    )
-
-
 def _run(command: Sequence[str], timeout: int = 90) -> tuple[str | None, str | None]:
     if not command:
         raise ValueError("_run needs a command to execute")
@@ -218,64 +209,22 @@ def query_atlas(psql_bin: str, dsn: str) -> tuple[list[int] | None, str | None]:
     return _parse_counts(raw, 3)
 
 
-def query_tracker(render_bin: str, database_id: str) -> tuple[list[int] | None, str | None]:
-    raw, error = _run(
-        [
-            render_bin,
-            "psql",
-            database_id,
-            "--confirm",
-            "-o",
-            "text",
-            "-c",
-            _tracker_sql(),
-            "--",
-            "-A",
-            "-t",
-            "-F",
-            "|",
-        ],
-        timeout=120,
-    )
-    if error:
-        return None, error
-    return _parse_counts(raw, 2)
 
-
-def build_signals(
-    atlas: tuple[list[int] | None, str | None],
-    tracker: tuple[list[int] | None, str | None],
-) -> AuditResult:
+def build_signals(atlas: tuple[list[int] | None, str | None]) -> AuditResult:
     atlas_counts, atlas_error = atlas
-    tracker_counts, tracker_error = tracker
 
-    def atlas_at(index: int) -> tuple[int | None, str | None]:
+    def at(index: int) -> tuple[int | None, str | None]:
         if atlas_counts is None:
             return None, f"Atlas unreadable: {atlas_error}"
         return atlas_counts[index], None
 
-    def tracker_at(index: int) -> tuple[int | None, str | None]:
-        if tracker_counts is None:
-            return None, f"tracker unreadable: {tracker_error}"
-        return tracker_counts[index], None
-
     specs = [
-        ("atlas_unknown_source", "EOM contacts whose source no known writer emits", atlas_at(0)),
-        ("atlas_null_tenant", "contacts with no business context", atlas_at(1)),
+        ("atlas_unknown_source", "EOM contacts whose source no known writer emits", at(0)),
+        ("atlas_null_tenant", "contacts with no business context", at(1)),
         (
             "atlas_operator_provenance_without_event",
             "operator-written contacts with no lifecycle event (wrote around the domain tier)",
-            atlas_at(2),
-        ),
-        (
-            "tracker_unlinked_customers",
-            "tracker customers Atlas has never heard of",
-            tracker_at(0),
-        ),
-        (
-            "tracker_stale_pending_reservations",
-            f"reservations pending over {STALE_RESERVATION_MINUTES}m with nobody retrying",
-            tracker_at(1),
+            at(2),
         ),
     ]
     return AuditResult(
@@ -410,8 +359,6 @@ def main(argv: Sequence[str] | None = None, *, notifier: Callable[..., None] = p
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--atlas-dsn", default=os.environ.get("EOM_AUDIT_ATLAS_DSN", "postgresql://atlas:atlas@localhost:5433/atlas"))
     parser.add_argument("--psql-bin", default=os.environ.get("EOM_AUDIT_PSQL_BIN", "psql"))
-    parser.add_argument("--render-bin", default=os.environ.get("EOM_AUDIT_RENDER_BIN", str(Path.home() / ".local/bin/render")))
-    parser.add_argument("--tracker-db-id", default=os.environ.get("EOM_AUDIT_TRACKER_DB_ID", TRACKER_DB_ID))
     parser.add_argument("--state-dir", default=os.environ.get("EOM_AUDIT_STATE_DIR", str(DEFAULT_STATE_DIR)))
     parser.add_argument("--ntfy-url", default=os.environ.get("EOM_AUDIT_NTFY_URL", DEFAULT_NTFY_URL))
     parser.add_argument("--ntfy-topic", default=os.environ.get("EOM_AUDIT_NTFY_TOPIC", DEFAULT_NTFY_TOPIC))
@@ -420,10 +367,7 @@ def main(argv: Sequence[str] | None = None, *, notifier: Callable[..., None] = p
     args = parser.parse_args(argv)
     validate_settings(args.realert_every, args.ntfy_topic)
 
-    result = build_signals(
-        query_atlas(args.psql_bin, args.atlas_dsn),
-        query_tracker(args.render_bin, args.tracker_db_id),
-    )
+    result = build_signals(query_atlas(args.psql_bin, args.atlas_dsn))
     print(result.report())
 
     state_path = Path(args.state_dir) / "state.json"

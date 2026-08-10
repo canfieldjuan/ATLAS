@@ -37,11 +37,8 @@ from test_eom_lead_conversion_integration import (  # noqa: E402
 # --- signal evaluation -------------------------------------------------------
 
 
-def _signals(atlas=(0, 0, 0), tracker=(0, 0), atlas_error=None, tracker_error=None):
-    return audit.build_signals(
-        (list(atlas) if atlas is not None else None, atlas_error),
-        (list(tracker) if tracker is not None else None, tracker_error),
-    )
+def _signals(atlas=(0, 0, 0), atlas_error=None):
+    return audit.build_signals((list(atlas) if atlas is not None else None, atlas_error))
 
 
 def test_a_clean_reading_reports_ok():
@@ -51,17 +48,15 @@ def test_a_clean_reading_reports_ok():
 
 
 @pytest.mark.parametrize(
-    ("atlas", "tracker", "expected"),
+    ("atlas", "expected"),
     [
-        ((1, 0, 0), (0, 0), "atlas_unknown_source"),
-        ((0, 1, 0), (0, 0), "atlas_null_tenant"),
-        ((0, 0, 1), (0, 0), "atlas_operator_provenance_without_event"),
-        ((0, 0, 0), (1, 0), "tracker_unlinked_customers"),
-        ((0, 0, 0), (0, 1), "tracker_stale_pending_reservations"),
+        ((1, 0, 0), "atlas_unknown_source"),
+        ((0, 1, 0), "atlas_null_tenant"),
+        ((0, 0, 1), "atlas_operator_provenance_without_event"),
     ],
 )
-def test_each_signal_breaches_on_its_own_violation(atlas, tracker, expected):
-    result = _signals(atlas=atlas, tracker=tracker)
+def test_each_signal_breaches_on_its_own_violation(atlas, expected):
+    result = _signals(atlas=atlas)
     assert not result.ok
     assert [signal.name for signal in result.breaches] == [expected]
 
@@ -72,15 +67,11 @@ def test_an_unreadable_source_breaches_rather_than_reporting_clean():
     A monitor that reports clean while seeing nothing is worse than none: it
     converts an outage into false assurance.
     """
-    result = _signals(tracker=None, tracker_error="render CLI exited 1")
-    assert not result.ok
-    names = [signal.name for signal in result.breaches]
-    assert names == ["tracker_unlinked_customers", "tracker_stale_pending_reservations"]
-    assert all(signal.unmeasured for signal in result.breaches)
-    assert "render CLI exited 1" in result.report()
-
     atlas_down = _signals(atlas=None, atlas_error="psql not found")
+    assert not atlas_down.ok
     assert len(atlas_down.breaches) == 3
+    assert all(signal.unmeasured for signal in atlas_down.breaches)
+    assert "psql not found" in atlas_down.report()
 
 
 # --- output parsing ----------------------------------------------------------
@@ -140,18 +131,15 @@ def test_a_second_signal_breaching_is_not_hidden_by_the_first():
     assert alert == "breach"
 
     state, alert = audit.decide_alert(
-        state, ["atlas_unknown_source", "tracker_unlinked_customers"], realert_every=24
+        state, ["atlas_unknown_source", "atlas_null_tenant"], realert_every=24
     )
     assert alert == "changed", "a newly breached signal has to be announced"
-    assert state["breached_signals"] == [
-        "atlas_unknown_source",
-        "tracker_unlinked_customers",
-    ]
+    assert state["breached_signals"] == ["atlas_null_tenant", "atlas_unknown_source"]
 
     # One clearing while another remains is also news, and is not a recovery.
-    state, alert = audit.decide_alert(state, ["tracker_unlinked_customers"], realert_every=24)
+    state, alert = audit.decide_alert(state, ["atlas_null_tenant"], realert_every=24)
     assert alert == "changed"
-    assert state["breached_signals"] == ["tracker_unlinked_customers"]
+    assert state["breached_signals"] == ["atlas_null_tenant"]
 
 
 def test_a_legacy_state_file_alerts_rather_than_assuming_continuity():
@@ -206,7 +194,6 @@ def test_a_clean_run_from_cold_state_says_nothing():
 def test_main_alerts_on_breach_and_exits_non_zero(monkeypatch, tmp_path):
     sent: list[tuple] = []
     monkeypatch.setattr(audit, "query_atlas", lambda *a, **k: ([1, 0, 0], None))
-    monkeypatch.setattr(audit, "query_tracker", lambda *a, **k: ([0, 0], None))
 
     code = audit.main(
         ["--state-dir", str(tmp_path), "--ntfy-topic", "t"],
@@ -221,7 +208,6 @@ def test_main_alerts_on_breach_and_exits_non_zero(monkeypatch, tmp_path):
 def test_main_stays_silent_and_exits_zero_when_clean(monkeypatch, tmp_path):
     sent: list[tuple] = []
     monkeypatch.setattr(audit, "query_atlas", lambda *a, **k: ([0, 0, 0], None))
-    monkeypatch.setattr(audit, "query_tracker", lambda *a, **k: ([0, 0], None))
 
     code = audit.main(
         ["--state-dir", str(tmp_path), "--ntfy-topic", "t"],
@@ -239,7 +225,6 @@ def test_an_undelivered_alert_does_not_advance_state(monkeypatch, tmp_path):
     make impossible.
     """
     monkeypatch.setattr(audit, "query_atlas", lambda *a, **k: ([1, 0, 0], None))
-    monkeypatch.setattr(audit, "query_tracker", lambda *a, **k: ([0, 0], None))
     attempts: list[tuple] = []
 
     def _failing(*args):
@@ -332,7 +317,7 @@ async def test_the_atlas_query_detects_each_violation_and_ignores_clean_rows():
         assert error is None, error
         assert counts == [1, 1, 1]
 
-        result = audit.build_signals((counts, None), ([0, 0], None))
+        result = audit.build_signals((counts, None))
         assert {signal.name for signal in result.breaches} == {
             "atlas_unknown_source",
             "atlas_null_tenant",
@@ -395,79 +380,6 @@ async def test_an_unrelated_lifecycle_row_does_not_excuse_a_bypass():
         await conn.execute(f'DROP SCHEMA IF EXISTS "{schema}" CASCADE')
         await conn.close()
 
-
-@pytest.mark.asyncio
-async def test_the_tracker_sql_detects_each_violation_against_the_tracker_schema():
-    """The tracker predicates run against tracker-shaped tables, not injected counts.
-
-    Injecting `[1, 0]` into build_signals proves the plumbing, not the SQL: a
-    wrong column, state value, or stale-time predicate would ship undetected.
-    """
-    database_url = _database_url_or_skip()
-    schema = f"eom_wb_tracker_{uuid.uuid4().hex}"
-    conn = await asyncpg.connect(database_url)
-    try:
-        await conn.execute(f'CREATE SCHEMA "{schema}"')
-        await conn.execute(f'SET search_path TO "{schema}"')
-        # The columns the audit predicates read, matching eom-timetracker's
-        # backend/time_tracker_api.py schema for these two tables.
-        await conn.execute(
-            """
-            CREATE TABLE customers (
-                id SERIAL PRIMARY KEY,
-                name TEXT NOT NULL,
-                atlas_contact_id UUID,
-                active BOOLEAN NOT NULL DEFAULT TRUE
-            )
-            """
-        )
-        await conn.execute(
-            """
-            CREATE TABLE eom_customer_atlas_reservations (
-                id UUID PRIMARY KEY,
-                state VARCHAR(16) NOT NULL DEFAULT 'pending',
-                updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
-            )
-            """
-        )
-
-        async def counts() -> list[int]:
-            row = await conn.fetchrow(audit._tracker_sql())
-            return [row[0], row[1]]
-
-        # A linked customer and a fresh pending reservation are both fine.
-        await conn.execute(
-            "INSERT INTO customers (name, atlas_contact_id) VALUES ('Linked', $1)",
-            uuid.uuid4(),
-        )
-        await conn.execute(
-            "INSERT INTO eom_customer_atlas_reservations (id, state, updated_at) "
-            "VALUES ($1, 'pending', NOW())",
-            uuid.uuid4(),
-        )
-        assert await counts() == [0, 0], "healthy rows must not trip either signal"
-
-        # A finalized reservation, however old, is also fine.
-        await conn.execute(
-            "INSERT INTO eom_customer_atlas_reservations (id, state, updated_at) "
-            "VALUES ($1, 'finalized', NOW() - INTERVAL '3 days')",
-            uuid.uuid4(),
-        )
-        assert await counts() == [0, 0]
-
-        # Now one of each violation, planted independently.
-        await conn.execute("INSERT INTO customers (name) VALUES ('Atlas has never heard of me')")
-        assert await counts() == [1, 0]
-
-        await conn.execute(
-            "INSERT INTO eom_customer_atlas_reservations (id, state, updated_at) "
-            "VALUES ($1, 'pending', NOW() - INTERVAL '3 days')",
-            uuid.uuid4(),
-        )
-        assert await counts() == [1, 1]
-    finally:
-        await conn.execute(f'DROP SCHEMA IF EXISTS "{schema}" CASCADE')
-        await conn.close()
 
 
 # --- guard class-closure: generative property test over open input -----------
@@ -543,7 +455,6 @@ def test_a_dry_run_does_not_consume_the_alert(monkeypatch, tmp_path):
     be the reason it went quiet.
     """
     monkeypatch.setattr(audit, "query_atlas", lambda *a, **k: ([1, 0, 0], None))
-    monkeypatch.setattr(audit, "query_tracker", lambda *a, **k: ([0, 0], None))
 
     code = audit.main(
         ["--state-dir", str(tmp_path), "--ntfy-topic", "t", "--no-alert"],
