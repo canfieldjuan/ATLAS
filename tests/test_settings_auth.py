@@ -205,6 +205,14 @@ def test_verify_settings_session_rejects_malformed_expiry(exp):
     assert verify_settings_session(f"v1.{exp}.deadbeef", SIGNING_SECRET, DIGEST) is False
 
 
+@pytest.mark.parametrize("cookie", ["v1.1234567890.²", "v1.1234567890.dead²eef", "v1.1234567890.déadbeef"])
+def test_verify_rejects_non_ascii_mac_without_crashing(cookie):
+    """A non-ASCII MAC must be rejected (False), not raise TypeError in
+    hmac.compare_digest (which would surface as a 500 instead of fail-closed 401)."""
+    from atlas_brain.api.settings_auth import verify_settings_session
+    assert verify_settings_session(cookie, SIGNING_SECRET, DIGEST) is False
+
+
 def test_session_cookie_with_invalid_signature_is_rejected():
     """A cookie minted with a different signing secret must not authenticate here."""
     c = _client(DIGEST)

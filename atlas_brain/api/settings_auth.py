@@ -196,7 +196,14 @@ def verify_settings_session(
     """Return True iff ``cookie_value`` is a well-formed, unexpired signature under the
     INDEPENDENT signing secret AND bound to the current ``digest``. Empty/short secret =>
     never valid; a cookie minted against a different (rotated) digest => never valid."""
-    if len(signing_secret) < _MIN_SESSION_SECRET_LEN or not cookie_value:
+    # A valid cookie is entirely ASCII (version + digits + hex MAC). Reject any
+    # non-ASCII cookie up front: otherwise a non-ASCII MAC (e.g. "v1.<exp>.²")
+    # would raise TypeError in hmac.compare_digest below (500 instead of 401).
+    if (
+        len(signing_secret) < _MIN_SESSION_SECRET_LEN
+        or not cookie_value
+        or not cookie_value.isascii()
+    ):
         return False
     parts = cookie_value.split(".")
     if len(parts) != 3:
