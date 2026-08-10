@@ -163,10 +163,10 @@ def test_main_alerts_on_breach_and_exits_non_zero(monkeypatch, tmp_path):
     monkeypatch.setattr(audit, "query_tracker", lambda *a, **k: ([0, 0], None))
 
     code = audit.main(
-        ["--state-dir", str(tmp_path)],
-        notifier=lambda *args: sent.append(args),
+        ["--state-dir", str(tmp_path), "--ntfy-topic", "t"],
+        notifier=lambda *args: (sent.append(args), True)[1],
     )
-    assert code == 1
+    assert code == audit.EXIT_BREACH == 2, "a breach must not share exit 1 with a crash"
     assert len(sent) == 1
     assert "breached" in sent[0][2].lower()
     assert "atlas_unknown_source" in sent[0][3]
@@ -178,11 +178,42 @@ def test_main_stays_silent_and_exits_zero_when_clean(monkeypatch, tmp_path):
     monkeypatch.setattr(audit, "query_tracker", lambda *a, **k: ([0, 0], None))
 
     code = audit.main(
-        ["--state-dir", str(tmp_path)],
-        notifier=lambda *args: sent.append(args),
+        ["--state-dir", str(tmp_path), "--ntfy-topic", "t"],
+        notifier=lambda *args: (sent.append(args), True)[1],
     )
     assert code == 0
     assert sent == []
+
+
+def test_an_undelivered_alert_does_not_advance_state(monkeypatch, tmp_path):
+    """A failed push must not record the breach as notified.
+
+    Otherwise the re-alert interval swallows every following run and the
+    monitor has silently stopped alerting -- the failure this slice exists to
+    make impossible.
+    """
+    monkeypatch.setattr(audit, "query_atlas", lambda *a, **k: ([1, 0, 0], None))
+    monkeypatch.setattr(audit, "query_tracker", lambda *a, **k: ([0, 0], None))
+    attempts: list[tuple] = []
+
+    def _failing(*args):
+        attempts.append(args)
+        return False
+
+    for _ in range(3):
+        audit.main(["--state-dir", str(tmp_path), "--ntfy-topic", "t"], notifier=_failing)
+
+    # Every run retried the first-breach alert rather than falling silent.
+    assert len(attempts) == 3
+    assert not (tmp_path / "state.json").exists()
+
+    delivered: list[tuple] = []
+    audit.main(
+        ["--state-dir", str(tmp_path), "--ntfy-topic", "t"],
+        notifier=lambda *args: (delivered.append(args), True)[1],
+    )
+    assert len(delivered) == 1
+    assert audit.read_state(tmp_path / "state.json")[0]["consecutive"] == 1
 
 
 # --- the SQL itself, against the real schema ---------------------------------
@@ -261,6 +292,133 @@ async def test_the_atlas_query_detects_each_violation_and_ignores_clean_rows():
             "atlas_null_tenant",
             "atlas_operator_provenance_without_event",
         }
+    finally:
+        await conn.execute(f'DROP SCHEMA IF EXISTS "{schema}" CASCADE')
+        await conn.close()
+
+
+@pytest.mark.asyncio
+async def test_an_unrelated_lifecycle_row_does_not_excuse_a_bypass():
+    """A lead_created row must not be mistaken for operator-tier evidence.
+
+    Migration 351 gives every EOM lead a lifecycle row, so correlating on "any
+    row" would let a bypass that adds operator provenance to an existing
+    contact report clean -- the audit would be measuring the wrong invariant.
+    """
+    database_url = _database_url_or_skip()
+    schema = f"eom_wb_lifecycle_{uuid.uuid4().hex}"
+    conn = await asyncpg.connect(database_url)
+    try:
+        await _prepare_schema(conn, schema, apply_privilege_migration=False)
+        contact_id = await _seed_contact(
+            conn,
+            source="manual",
+            metadata='{"eom_operator_contact_sources": {"time_tracker:z": {}}}',
+        )
+        # The kind of row an ordinary lead already has, and which says nothing
+        # about the operator boundary.
+        await conn.execute(
+            """
+            INSERT INTO eom_lead_lifecycle_events (
+                contact_id, event_type, actor, source, operation_key, metadata
+            ) VALUES ($1, 'lead_created', 'system', 'eom_office', $2, '{}'::jsonb)
+            """,
+            contact_id,
+            f"op-{uuid.uuid4().hex}",
+        )
+
+        dsn = f"{database_url}?options={quote(f'-csearch_path={schema},public')}"
+        counts, error = audit.query_atlas(os.environ.get("EOM_AUDIT_PSQL_BIN", "psql"), dsn)
+        assert error is None, error
+        assert counts[2] == 1, "an unrelated lifecycle row must not excuse the bypass"
+
+        # Adding the operator event clears it.
+        await conn.execute(
+            """
+            INSERT INTO eom_lead_lifecycle_events (
+                contact_id, event_type, actor, source, operation_key, metadata
+            ) VALUES ($1, 'contact_updated', 'employee:1:Juan', 'eom_office', $2, '{}'::jsonb)
+            """,
+            contact_id,
+            f"op-{uuid.uuid4().hex}",
+        )
+        counts, error = audit.query_atlas(os.environ.get("EOM_AUDIT_PSQL_BIN", "psql"), dsn)
+        assert error is None, error
+        assert counts[2] == 0
+    finally:
+        await conn.execute(f'DROP SCHEMA IF EXISTS "{schema}" CASCADE')
+        await conn.close()
+
+
+@pytest.mark.asyncio
+async def test_the_tracker_sql_detects_each_violation_against_the_tracker_schema():
+    """The tracker predicates run against tracker-shaped tables, not injected counts.
+
+    Injecting `[1, 0]` into build_signals proves the plumbing, not the SQL: a
+    wrong column, state value, or stale-time predicate would ship undetected.
+    """
+    database_url = _database_url_or_skip()
+    schema = f"eom_wb_tracker_{uuid.uuid4().hex}"
+    conn = await asyncpg.connect(database_url)
+    try:
+        await conn.execute(f'CREATE SCHEMA "{schema}"')
+        await conn.execute(f'SET search_path TO "{schema}"')
+        # The columns the audit predicates read, matching eom-timetracker's
+        # backend/time_tracker_api.py schema for these two tables.
+        await conn.execute(
+            """
+            CREATE TABLE customers (
+                id SERIAL PRIMARY KEY,
+                name TEXT NOT NULL,
+                atlas_contact_id UUID,
+                active BOOLEAN NOT NULL DEFAULT TRUE
+            )
+            """
+        )
+        await conn.execute(
+            """
+            CREATE TABLE eom_customer_atlas_reservations (
+                id UUID PRIMARY KEY,
+                state VARCHAR(16) NOT NULL DEFAULT 'pending',
+                updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+            )
+            """
+        )
+
+        async def counts() -> list[int]:
+            row = await conn.fetchrow(audit._tracker_sql())
+            return [row[0], row[1]]
+
+        # A linked customer and a fresh pending reservation are both fine.
+        await conn.execute(
+            "INSERT INTO customers (name, atlas_contact_id) VALUES ('Linked', $1)",
+            uuid.uuid4(),
+        )
+        await conn.execute(
+            "INSERT INTO eom_customer_atlas_reservations (id, state, updated_at) "
+            "VALUES ($1, 'pending', NOW())",
+            uuid.uuid4(),
+        )
+        assert await counts() == [0, 0], "healthy rows must not trip either signal"
+
+        # A finalized reservation, however old, is also fine.
+        await conn.execute(
+            "INSERT INTO eom_customer_atlas_reservations (id, state, updated_at) "
+            "VALUES ($1, 'finalized', NOW() - INTERVAL '3 days')",
+            uuid.uuid4(),
+        )
+        assert await counts() == [0, 0]
+
+        # Now one of each violation, planted independently.
+        await conn.execute("INSERT INTO customers (name) VALUES ('Atlas has never heard of me')")
+        assert await counts() == [1, 0]
+
+        await conn.execute(
+            "INSERT INTO eom_customer_atlas_reservations (id, state, updated_at) "
+            "VALUES ($1, 'pending', NOW() - INTERVAL '3 days')",
+            uuid.uuid4(),
+        )
+        assert await counts() == [1, 1]
     finally:
         await conn.execute(f'DROP SCHEMA IF EXISTS "{schema}" CASCADE')
         await conn.close()

@@ -22,5 +22,15 @@ ExecStart=/usr/bin/python3 /home/juan-canfield/.local/bin/eom-write-boundary-aud
 # notify-send needs a display for the desktop popup; the ntfy push does not.
 Environment=DISPLAY=:0
 Environment=DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/1000/bus
-# Exits 1 on a breach, so the journal records it as well as the push.
-SuccessExitStatus=0 1
+# The ntfy topic is the channel credential, so it is supplied here at install
+# time and never committed. Written by the installer into a drop-in:
+#   systemctl --user edit eom-write-boundary-audit.service
+#   [Service]
+#   Environment=EOM_AUDIT_NTFY_TOPIC=<topic>
+# A blank topic makes the script exit non-zero rather than publish nowhere.
+
+# 2 is the script's measured-breach status; 1 is NOT accepted, because Python
+# also exits 1 for an uncaught exception. Accepting 1 would let a crashed
+# monitor -- an unwritable state dir, a bad env value, a missing notifier --
+# record Result=success and defeat failed-unit monitoring entirely.
+SuccessExitStatus=0 2

@@ -85,10 +85,10 @@ production table.
 ### Deployed-config probing
 
 - Deployed/default config values: Atlas DSN `postgresql://atlas:atlas@localhost:5433/atlas`;
-  tracker Render DB id `dpg-d723r3buibrs739nnpg0-a`; ntfy topic
-  `eom-atlas-api-health-64ac52777bf9` (the existing healthcheck topic, reused so
-  no new phone subscription is needed); re-alert every 24 runs at an hourly
-  cadence.
+  tracker Render DB id `dpg-d723r3buibrs739nnpg0-a`; ntfy topic supplied at deploy
+  time via `EOM_AUDIT_NTFY_TOPIC` with NO default in the repo, because on ntfy.sh
+  the topic name is the channel credential and this repository is public;
+  re-alert every 24 runs at an hourly cadence.
 - Explicit value probe: every setting is overridable by flag and by
   `EOM_AUDIT_*` env var; the tests drive `--state-dir` explicitly.
 - Absent value probe: with no state file, `decide_alert` treats the run as the
@@ -140,10 +140,9 @@ re-alert every N consecutive runs, one recovery notice.
 
 ## Intentional
 
-- Reuses the existing healthcheck ntfy topic rather than opening a new one, so
-  no new phone subscription is needed; Title and Tags keep the two
-  distinguishable. Easy to split later if drift alerts prove noisy against
-  outage alerts.
+- The ntfy topic is never committed. It is the channel credential, so it comes
+  from `EOM_AUDIT_NTFY_TOPIC` at deploy time and a blank value is refused rather
+  than publishing nowhere.
 - Hourly, not minutely. This is drift detection; `atlas-api-healthcheck.timer`
   already covers liveness at five minutes.
 - Reads the tracker through the Render CLI rather than adding an Atlas→tracker
@@ -168,7 +167,7 @@ Parked hardening: none.
 
 - Pending before push:
   - `pytest tests/test_eom_write_boundary_audit.py` against a throwaway
-    `postgres:16` (never the live `atlas` database) — Result: pass, 17 passed.
+    `postgres:16` (never the live `atlas` database) — Result: pass, 20 passed.
   - Negative control on the SQL: allowlist the seeded rogue writer and confirm
     the schema-backed test fails — Result: pass, failed with
     `assert [0, 1, 1] == [1, 1, 1]` as intended.

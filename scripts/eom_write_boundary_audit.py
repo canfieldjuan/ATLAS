@@ -34,6 +34,18 @@ from typing import Callable, Sequence
 
 EOM_TENANT = "effingham_maids"
 
+# The event types the operator mutation boundary writes
+# (atlas_brain/services/eom_crm_mutations.py::EOM_OPERATOR_CONTACT_EVENT_TYPES).
+# Correlating on these specifically, not on "any lifecycle row": an EOM lead
+# already carries a lead_created row from migration 351, so a bypass that adds
+# operator provenance to an existing contact would be excluded by a bare
+# NOT EXISTS and the audit would report zero.
+OPERATOR_EVENT_TYPES = ("contact_created", "contact_updated")
+
+# A measured breach, distinct from Python's exit 1 for an uncaught exception,
+# so the unit file can accept one without masking the other.
+EXIT_BREACH = 2
+
 # Every `source` value an EOM contact writer is allowed to emit. Derived from
 # the 2026-08-05 code sweep of every create path, not from whatever happens to
 # be in the table -- an allowlist built from observed data would bless a bypass
@@ -58,10 +70,12 @@ DEFAULT_STATE_DIR = Path(
     os.environ.get("XDG_STATE_HOME", str(Path.home() / ".local/state"))
 ) / "eom-write-boundary-audit"
 
-# Reuses the healthcheck's topic on purpose: both mean "something is wrong with
-# the EOM write path", and it needs no new phone subscription. Title and tags
-# keep them distinguishable.
-DEFAULT_NTFY_TOPIC = "eom-atlas-api-health-64ac52777bf9"
+# Deliberately NO default. On ntfy.sh the topic name IS the credential: anyone
+# who knows it can read the alerts or forge them. This repository is public, so
+# the topic is supplied at deploy time via EOM_AUDIT_NTFY_TOPIC and never
+# committed. A blank topic is refused by validate_settings rather than silently
+# publishing nowhere.
+DEFAULT_NTFY_TOPIC = ""
 DEFAULT_NTFY_URL = "https://ntfy.sh"
 DEFAULT_REALERT_EVERY = 24  # hourly cadence -> re-alert once a day while open
 
@@ -116,6 +130,7 @@ class AuditResult:
 
 def _atlas_sql() -> str:
     sources = ", ".join(f"'{value}'" for value in KNOWN_EOM_SOURCES)
+    operator_events = ", ".join(f"'{value}'" for value in OPERATOR_EVENT_TYPES)
     return f"""
 SELECT
   (SELECT COUNT(*) FROM contacts
@@ -126,7 +141,9 @@ SELECT
      WHERE c.business_context_id = '{EOM_TENANT}'
        AND c.metadata ? 'eom_operator_contact_sources'
        AND NOT EXISTS (
-         SELECT 1 FROM eom_lead_lifecycle_events e WHERE e.contact_id = c.id))
+         SELECT 1 FROM eom_lead_lifecycle_events e
+          WHERE e.contact_id = c.id
+            AND e.event_type IN ({operator_events})))
 """
 
 
@@ -319,8 +336,14 @@ def write_state(path: Path, state: dict) -> None:
     path.write_text(json.dumps(state), encoding="utf-8")
 
 
-def publish(ntfy_url: str, topic: str, title: str, body: str, priority: str, tags: str) -> None:
-    subprocess.run(
+def publish(ntfy_url: str, topic: str, title: str, body: str, priority: str, tags: str) -> bool:
+    """Push one alert. Returns whether it was actually delivered.
+
+    The return value is load-bearing: the caller must not record an alert as
+    sent when it was not, or the re-alert interval silently swallows the next
+    day of runs.
+    """
+    output, error = _run(
         [
             "curl", "-fsS", "-m", "10",
             "-H", f"Title: {title}",
@@ -329,10 +352,12 @@ def publish(ntfy_url: str, topic: str, title: str, body: str, priority: str, tag
             "-d", body,
             f"{ntfy_url}/{topic}",
         ],
-        capture_output=True,
-        text=True,
-        check=False,
+        timeout=20,
     )
+    if error:
+        print(f"WARNING alert delivery failed: {error}")
+        return False
+    return True
 
 
 def main(argv: Sequence[str] | None = None, *, notifier: Callable[..., None] = publish) -> int:
@@ -360,11 +385,20 @@ def main(argv: Sequence[str] | None = None, *, notifier: Callable[..., None] = p
     if state_warning:
         print(f"WARNING {state_warning}")
     next_state, alert = decide_alert(previous, not result.ok, args.realert_every)
-    write_state(state_path, next_state)
 
+    # State advances only once the alert it represents has actually been
+    # delivered. Persisting first would let a failed push record the breach as
+    # notified and then suppress every run until the re-alert interval comes
+    # round -- a monitor that has silently stopped alerting, which is the exact
+    # failure this slice exists to make impossible.
+    #
+    # Leaving the old state on a failed push means the next run recomputes the
+    # same transition and tries again. That is not an alert storm: nothing is
+    # reaching anyone while delivery is broken.
+    delivered = True
     if alert and not args.no_alert:
         if alert == "recovered":
-            notifier(
+            delivered = notifier(
                 args.ntfy_url, args.ntfy_topic,
                 "EOM write boundary clean",
                 "Every write-boundary signal is back to zero.",
@@ -372,14 +406,22 @@ def main(argv: Sequence[str] | None = None, *, notifier: Callable[..., None] = p
             )
         else:
             detail = "\n".join(signal.describe() for signal in result.breaches)
-            notifier(
+            delivered = notifier(
                 args.ntfy_url, args.ntfy_topic,
                 "EOM write boundary breached",
                 f"{detail}\n\n(run #{next_state['consecutive']} in breach)",
                 "urgent", "rotating_light,warning",
             )
 
-    return 0 if result.ok else 1
+    if delivered:
+        write_state(state_path, next_state)
+    else:
+        print("WARNING alert undelivered; state left unchanged so the next run retries")
+
+    # A measured breach exits 2, not 1. Python already exits 1 for an uncaught
+    # exception, so accepting 1 in the unit file would make a crashed monitor
+    # indistinguishable from a working one that found a problem.
+    return EXIT_BREACH if not result.ok else 0
 
 
 if __name__ == "__main__":
