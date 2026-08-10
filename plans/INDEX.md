@@ -1,6 +1,6 @@
 # Plan archive index
 
-1522 archived plan doc(s). Merged plan docs are moved under `archive/` and listed below; once the archive sweep has run, the `plans/` root holds only in-flight slices.
+1523 archived plan doc(s). Merged plan docs are moved under `archive/` and listed below; once the archive sweep has run, the `plans/` root holds only in-flight slices.
 
 - [PR-ASR-Pip-Audit-Egg-Fragment](archive/PR-ASR-Pip-Audit-Egg-Fragment.md) - lane: security/workflow | phase: Production hardening
 - [PR-ASR-Requirements-Audit-Pin](archive/PR-ASR-Requirements-Audit-Pin.md) - lane: security/workflow | phase: Production hardening
@@ -1501,6 +1501,7 @@
 - [PR-Support-Ticket-Smoke-Draft-Export-Ids](archive/PR-Support-Ticket-Smoke-Draft-Export-Ids.md) - lane: content-ops/support-ticket-input-provider | phase: Functional validation
 - [PR-Support-Ticket-Source-Context-Live-Validation](archive/PR-Support-Ticket-Source-Context-Live-Validation.md) - lane: content-ops/support-ticket-input-provider | phase: functional validation
 - [PR-Test-Collection-Fixes](archive/PR-Test-Collection-Fixes.md) - lane: ci/coverage | phase: Production hardening
+- [PR-Test-Git-Hermetic-Isolation](archive/PR-Test-Git-Hermetic-Isolation.md) - lane: local-pr-review-tooling | phase: production hardening
 - [PR-Track-Preflight-Dotenv-Fix](archive/PR-Track-Preflight-Dotenv-Fix.md) - lane: content-ops/deflection-tracking | phase: workflow/process
 - [PR-Trusted-Base-Gate-Execution](archive/PR-Trusted-Base-Gate-Execution.md) - lane: Workflow/process | phase: Vertical slice
 - [PR-Trusted-Base-Pre-Push-Audit](archive/PR-Trusted-Base-Pre-Push-Audit.md) - lane: workflow/process | phase: Vertical slice
