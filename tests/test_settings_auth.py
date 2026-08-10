@@ -320,6 +320,48 @@ def test_init_ast_includes_the_session_router():
     assert included, "__init__ does not include_router(settings_session_router)"
 
 
+def test_session_route_reachable_and_gated_via_fresh_app_subprocess():
+    """Exercise the REAL application wiring at runtime, but in a FRESH interpreter
+    (subprocess) so sibling tests cannot pollute the shared `atlas_brain.api.router`
+    (the in-process runtime/mount variants regressed the CI unit-gate for exactly
+    that reason). Imports the production aggregate, mounts it, and asserts over real
+    HTTP that the session route is served (not 404) AND the gate is active (503 when
+    unconfigured) — production reachability + gated behavior, deterministically."""
+    import subprocess
+    import sys
+    import textwrap
+    from pathlib import Path
+
+    repo_root = Path(__file__).resolve().parents[1]
+    script = textwrap.dedent(
+        """
+        import sys
+        from unittest.mock import MagicMock
+        _a = MagicMock(); _e = MagicMock()
+        _e.UndefinedTableError = type("U", (Exception,), {}); _a.exceptions = _e
+        sys.modules.setdefault("asyncpg", _a); sys.modules.setdefault("asyncpg.exceptions", _e)
+        import importlib
+        from fastapi import FastAPI
+        from fastapi.testclient import TestClient
+        api = importlib.import_module("atlas_brain.api")
+        from atlas_brain.api.settings_auth import get_settings_admin_config
+        from atlas_brain.config import SettingsAdminConfig
+        app = FastAPI(); app.include_router(api.router, prefix="/api/v1")
+        app.dependency_overrides[get_settings_admin_config] = lambda: SettingsAdminConfig(token_sha256="")
+        c = TestClient(app)
+        assert c.get("/api/v1/settings/session").status_code != 404, "session route not mounted"
+        assert c.get("/api/v1/settings/notifications").status_code == 503, "gate not active"
+        print("WIRING_OK")
+        """
+    )
+    proc = subprocess.run(
+        [sys.executable, "-c", script], cwd=str(repo_root), capture_output=True, text=True
+    )
+    assert proc.returncode == 0 and "WIRING_OK" in proc.stdout, (
+        f"rc={proc.returncode}\nstdout={proc.stdout}\nstderr={proc.stderr[-2000:]}"
+    )
+
+
 def test_every_settings_route_is_gated():
     """Router-level dependency covers ALL /settings/* routes, not just notifications."""
     from starlette.routing import Route
