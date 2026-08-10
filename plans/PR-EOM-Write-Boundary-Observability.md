@@ -36,7 +36,7 @@ against — and the window closes the first time a legacy writer fires.
 
 Ownership lane: eom-crm/lead-funnel
 Slice phase: Vertical slice
-Max files: 5
+Max files: 6
 
 1. Add `scripts/eom_write_boundary_audit.py`: five signals, transition-based
    alerting to the existing ntfy topic, non-zero exit on breach.
@@ -96,13 +96,16 @@ production table.
   first-breach case.
 - Default-session/default-context probe: unreadable-source handling is the
   default-context probe; it breaches rather than defaulting to clean.
-- Side-effect ordering: state is written before the notification is sent, so a
-  failed push cannot cause an alert storm on the next run.
+- Side-effect ordering: the notification is sent FIRST and state advances only
+  once delivery is confirmed, so a failed push is retried on the next run
+  instead of being recorded as sent. Not a storm: while delivery is broken
+  nothing reaches anyone.
 
 ### Files touched
 
 - `config/eom-write-boundary-audit.service`
 - `config/eom-write-boundary-audit.timer`
+- `.github/workflows/atlas_eom_lead_pipeline_checks.yml`
 - `plans/PR-EOM-Write-Boundary-Observability.md`
 - `scripts/eom_write_boundary_audit.py`
 - `tests/test_eom_write_boundary_audit.py`

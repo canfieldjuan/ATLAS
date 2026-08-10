@@ -122,22 +122,52 @@ def test_ambiguous_or_impossible_output_is_refused():
 
 
 def test_first_breach_alerts_then_stays_quiet_until_the_reminder():
-    state, alert = audit.decide_alert({}, breached=True, realert_every=3)
+    one = ["atlas_unknown_source"]
+    state, alert = audit.decide_alert({}, one, realert_every=3)
     assert alert == "breach"
-    assert state == {"breached": True, "consecutive": 1}
+    assert state == {"breached_signals": one, "consecutive": 1}
 
-    state, alert = audit.decide_alert(state, breached=True, realert_every=3)
+    state, alert = audit.decide_alert(state, one, realert_every=3)
     assert alert is None
-    state, alert = audit.decide_alert(state, breached=True, realert_every=3)
+    state, alert = audit.decide_alert(state, one, realert_every=3)
     assert alert == "reminder"
     assert state["consecutive"] == 3
 
 
+def test_a_second_signal_breaching_is_not_hidden_by_the_first():
+    """A new incident must not wait for the re-alert clock of an old one."""
+    state, alert = audit.decide_alert({}, ["atlas_unknown_source"], realert_every=24)
+    assert alert == "breach"
+
+    state, alert = audit.decide_alert(
+        state, ["atlas_unknown_source", "tracker_unlinked_customers"], realert_every=24
+    )
+    assert alert == "changed", "a newly breached signal has to be announced"
+    assert state["breached_signals"] == [
+        "atlas_unknown_source",
+        "tracker_unlinked_customers",
+    ]
+
+    # One clearing while another remains is also news, and is not a recovery.
+    state, alert = audit.decide_alert(state, ["tracker_unlinked_customers"], realert_every=24)
+    assert alert == "changed"
+    assert state["breached_signals"] == ["tracker_unlinked_customers"]
+
+
+def test_a_legacy_state_file_alerts_rather_than_assuming_continuity():
+    """Pre-set-aware state cannot prove the same signals; say so, do not guess."""
+    state, alert = audit.decide_alert(
+        {"breached": True, "consecutive": 5}, ["atlas_unknown_source"], realert_every=24
+    )
+    assert alert == "changed"
+    assert state["consecutive"] == 1
+
+
 def test_recovery_notifies_exactly_once():
-    state, _ = audit.decide_alert({}, breached=True, realert_every=3)
-    state, alert = audit.decide_alert(state, breached=False, realert_every=3)
+    state, _ = audit.decide_alert({}, ["atlas_null_tenant"], realert_every=3)
+    state, alert = audit.decide_alert(state, [], realert_every=3)
     assert alert == "recovered"
-    state, alert = audit.decide_alert(state, breached=False, realert_every=3)
+    state, alert = audit.decide_alert(state, [], realert_every=3)
     assert alert is None
 
 
@@ -168,9 +198,9 @@ def test_a_corrupt_state_file_is_reported_not_hidden(tmp_path):
 
 
 def test_a_clean_run_from_cold_state_says_nothing():
-    state, alert = audit.decide_alert({}, breached=False, realert_every=3)
+    state, alert = audit.decide_alert({}, [], realert_every=3)
     assert alert is None
-    assert state == {"breached": False, "consecutive": 0}
+    assert state == {"breached_signals": [], "consecutive": 0}
 
 
 def test_main_alerts_on_breach_and_exits_non_zero(monkeypatch, tmp_path):

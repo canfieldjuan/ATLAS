@@ -189,19 +189,23 @@ def _parse_counts(raw: str, expected: int) -> tuple[list[int] | None, str | None
     if len(rows) != 1:
         # Anything beyond a single row is ambiguous: taking the first would let
         # "0|0" followed by "1|1" report clean, and a trailing notice would be
-        # silently discarded. A monitor may not guess which row is the truth.
+        # silently discarded. Which row is authoritative is not for a monitor to
+        # decide, so it refuses instead.
         return None, f"expected exactly one output row, got {len(rows)}: {rows!r}"
-    parts = [part.strip() for part in rows[0].split("|")]
+    # Unpacked, not indexed: the single-row invariant is enforced by the check
+    # above and restated by the binding itself.
+    (row,) = rows
+    parts = [part.strip() for part in row.split("|")]
     if len(parts) != expected:
-        return None, f"expected {expected} counts, got {len(parts)} in {rows[0]!r}"
+        return None, f"expected {expected} counts, got {len(parts)} in {row!r}"
     try:
         counts = [int(part) for part in parts]
     except ValueError as exc:
-        return None, f"non-integer count in row {rows[0]!r}: {exc}"
+        return None, f"non-integer count in row {row!r}: {exc}"
     if any(count < 0 for count in counts):
         # COUNT(*) cannot be negative; a negative here means the output is not
-        # what we think it is.
-        return None, f"impossible negative count in {rows[0]!r}"
+        # the shape this reader was written for.
+        return None, f"impossible negative count in {row!r}"
     return counts, None
 
 
@@ -285,23 +289,53 @@ def build_signals(
 # --- alert state machine -----------------------------------------------------
 
 
-def decide_alert(previous: dict, breached: bool, realert_every: int) -> tuple[dict, str | None]:
+def _previous_breached(previous: dict) -> set[str] | None:
+    """The signal set the last run recorded, or None if it cannot be trusted.
+
+    A state file written before this became set-aware only says "breached", not
+    which signals. Returning None there makes the caller treat the current set
+    as changed, which alerts rather than assuming continuity -- the safe
+    direction for a monitor.
+    """
+    recorded = previous.get("breached_signals")
+    if isinstance(recorded, list):
+        return {str(name) for name in recorded}
+    if previous.get("breached"):
+        return None
+    return set()
+
+
+def decide_alert(
+    previous: dict, breached: Sequence[str], realert_every: int
+) -> tuple[dict, str | None]:
     """Return the next state and which alert to send, if any.
 
-    Mirrors atlas-api-healthcheck.sh: fire on the transition into breach,
-    re-alert every `realert_every` consecutive runs so an open problem is not
-    forgotten, and send exactly one recovery notice.
-    """
-    was_breached = bool(previous.get("breached"))
-    if not breached:
-        if was_breached:
-            return {"breached": False, "consecutive": 0}, "recovered"
-        return {"breached": False, "consecutive": 0}, None
+    Tracks WHICH signals are breached, not merely whether any is. Collapsing
+    them to one boolean means a second incident opening while a first is still
+    open produces no alert until the re-alert interval -- the monitor would sit
+    on a new problem for up to a day because an unrelated one was already
+    known.
 
-    consecutive = int(previous.get("consecutive", 0)) + 1 if was_breached else 1
-    state = {"breached": True, "consecutive": consecutive}
-    if consecutive == 1:
-        return state, "breach"
+    Otherwise it mirrors atlas-api-healthcheck.sh: fire on entering breach,
+    re-alert every `realert_every` consecutive runs, one recovery notice.
+    """
+    now = {str(name) for name in breached}
+    before = _previous_breached(previous)
+
+    if not now:
+        cleared = {"breached_signals": [], "consecutive": 0}
+        return cleared, ("recovered" if before is None or before else None)
+
+    if before is not None and not before:
+        return {"breached_signals": sorted(now), "consecutive": 1}, "breach"
+    if before is None or now != before:
+        # A different set of problems than last time: a new one opened, or one
+        # cleared while others remain. Either way it is news, and the reminder
+        # clock restarts against the current incident.
+        return {"breached_signals": sorted(now), "consecutive": 1}, "changed"
+
+    consecutive = int(previous.get("consecutive", 0)) + 1
+    state = {"breached_signals": sorted(now), "consecutive": consecutive}
     if realert_every > 0 and consecutive % realert_every == 0:
         return state, "reminder"
     return state, None
@@ -396,7 +430,9 @@ def main(argv: Sequence[str] | None = None, *, notifier: Callable[..., None] = p
     previous, state_warning = read_state(state_path)
     if state_warning:
         print(f"WARNING {state_warning}")
-    next_state, alert = decide_alert(previous, not result.ok, args.realert_every)
+    next_state, alert = decide_alert(
+        previous, [signal.name for signal in result.breaches], args.realert_every
+    )
 
     # State advances only once the alert it represents has actually been
     # delivered. Persisting first would let a failed push record the breach as
@@ -423,9 +459,14 @@ def main(argv: Sequence[str] | None = None, *, notifier: Callable[..., None] = p
             )
         else:
             detail = "\n".join(signal.describe() for signal in result.breaches)
+            headline = (
+                "EOM write boundary: signals changed"
+                if alert == "changed"
+                else "EOM write boundary breached"
+            )
             delivered = notifier(
                 args.ntfy_url, args.ntfy_topic,
-                "EOM write boundary breached",
+                headline,
                 f"{detail}\n\n(run #{next_state['consecutive']} in breach)",
                 "urgent", "rotating_light,warning",
             )
