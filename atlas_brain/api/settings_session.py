@@ -62,7 +62,9 @@ async def create_settings_session(
         value=mint_settings_session(signing_secret, expected_digest),
         max_age=SESSION_TTL_SECONDS,
         httponly=True,
-        secure=True,
+        # Secure unless the LOCAL-DEV opt-in is set (so the flow works over
+        # http://localhost via the Vite dev proxy); prod leaves it unset => Secure.
+        secure=not config.cookie_insecure,
         samesite="strict",
         path=SESSION_COOKIE_PATH,
     )

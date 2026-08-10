@@ -73,6 +73,7 @@ jobs:
               npm ls @react-native/metro-config @react-native/babel-plugin-codegen @react-native/codegen @react-native/js-polyfills react-native
               ;;
             atlas-ui)
+              npm run test
               npm run build
               ;;
           esac
