@@ -168,7 +168,7 @@ Parked hardening: none.
 
 - Pending before push:
   - `pytest tests/test_eom_write_boundary_audit.py` against a throwaway
-    `postgres:16` (never the live `atlas` database) — Result: pass, 15 passed.
+    `postgres:16` (never the live `atlas` database) — Result: pass, 17 passed.
   - Negative control on the SQL: allowlist the seeded rogue writer and confirm
     the schema-backed test fails — Result: pass, failed with
     `assert [0, 1, 1] == [1, 1, 1]` as intended.

@@ -125,6 +125,32 @@ def test_recovery_notifies_exactly_once():
     assert alert is None
 
 
+def test_a_configuration_that_could_never_alert_is_refused():
+    """A mistyped interval or blank topic must not leave a mute monitor running."""
+    with pytest.raises(ValueError, match="negative"):
+        audit.validate_settings(-1, "topic")
+    with pytest.raises(ValueError, match="blank"):
+        audit.validate_settings(24, "   ")
+    audit.validate_settings(0, "topic")  # 0 disables the reminder, deliberately
+
+
+def test_a_corrupt_state_file_is_reported_not_hidden(tmp_path):
+    """Losing alert memory is safe but must be said out loud."""
+    state_path = tmp_path / "state.json"
+    state_path.write_text("{not json", encoding="utf-8")
+    previous, warning = audit.read_state(state_path)
+    assert previous == {}
+    assert warning and "corrupt" in warning
+
+    state_path.write_text('["not", "an", "object"]', encoding="utf-8")
+    previous, warning = audit.read_state(state_path)
+    assert previous == {}
+    assert warning
+
+    missing, warning = audit.read_state(tmp_path / "absent.json")
+    assert missing == {} and warning is None, "a first run is not a warning"
+
+
 def test_a_clean_run_from_cold_state_says_nothing():
     state, alert = audit.decide_alert({}, breached=False, realert_every=3)
     assert alert is None

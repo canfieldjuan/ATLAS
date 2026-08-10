@@ -168,9 +168,12 @@ def _parse_counts(raw: str, expected: int) -> tuple[list[int] | None, str | None
             continue
         try:
             return [int(part) for part in parts], None
-        except ValueError:
-            continue
-    return None, "no parseable count row in output"
+        except ValueError as exc:
+            # Report which row failed rather than skipping to the next one. A
+            # silent skip could fall through to "no parseable row" and lose the
+            # only clue about why the query output changed shape.
+            return None, f"non-integer count in row {candidate!r}: {exc}"
+    return None, f"no row with {expected} delimited counts in output"
 
 
 def query_atlas(psql_bin: str, dsn: str) -> tuple[list[int] | None, str | None]:
@@ -275,12 +278,40 @@ def decide_alert(previous: dict, breached: bool, realert_every: int) -> tuple[di
     return state, None
 
 
-def read_state(path: Path) -> dict:
+def validate_settings(realert_every: int, ntfy_topic: str) -> None:
+    """Refuse a configuration that would quietly disable alerting.
+
+    Raises rather than defaulting: a mistyped interval or a blank topic would
+    otherwise leave the timer running and reporting success while no alert could
+    ever reach anyone -- a monitor that looks healthy and is not.
+    """
+    if realert_every < 0:
+        raise ValueError(f"realert-every must not be negative, got {realert_every}")
+    if not ntfy_topic.strip():
+        raise ValueError("ntfy topic must not be blank; nothing could be delivered")
+
+
+def read_state(path: Path) -> tuple[dict, str | None]:
+    """Load prior alert state, reporting rather than hiding a bad state file.
+
+    A missing file is the normal first run. A file that exists but cannot be
+    read is different: it means the alert cadence has lost its memory, so a
+    recovery notice may be skipped and a breach re-alerted. That is safe, but it
+    is not silent -- the caller surfaces it.
+    """
+    if not path.exists():
+        return {}, None
     try:
-        value = json.loads(path.read_text(encoding="utf-8"))
-    except (OSError, json.JSONDecodeError):
-        return {}
-    return value if isinstance(value, dict) else {}
+        raw = path.read_text(encoding="utf-8")
+    except OSError as exc:
+        return {}, f"alert state unreadable ({exc}); treating this as a first run"
+    try:
+        value = json.loads(raw)
+    except json.JSONDecodeError as exc:
+        return {}, f"alert state corrupt ({exc}); treating this as a first run"
+    if not isinstance(value, dict):
+        return {}, "alert state was not an object; treating this as a first run"
+    return value, None
 
 
 def write_state(path: Path, state: dict) -> None:
@@ -316,6 +347,7 @@ def main(argv: Sequence[str] | None = None, *, notifier: Callable[..., None] = p
     parser.add_argument("--realert-every", type=int, default=int(os.environ.get("EOM_AUDIT_REALERT_EVERY", DEFAULT_REALERT_EVERY)))
     parser.add_argument("--no-alert", action="store_true", help="measure and print without notifying")
     args = parser.parse_args(argv)
+    validate_settings(args.realert_every, args.ntfy_topic)
 
     result = build_signals(
         query_atlas(args.psql_bin, args.atlas_dsn),
@@ -324,7 +356,10 @@ def main(argv: Sequence[str] | None = None, *, notifier: Callable[..., None] = p
     print(result.report())
 
     state_path = Path(args.state_dir) / "state.json"
-    next_state, alert = decide_alert(read_state(state_path), not result.ok, args.realert_every)
+    previous, state_warning = read_state(state_path)
+    if state_warning:
+        print(f"WARNING {state_warning}")
+    next_state, alert = decide_alert(previous, not result.ok, args.realert_every)
     write_state(state_path, next_state)
 
     if alert and not args.no_alert:
