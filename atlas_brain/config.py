@@ -817,6 +817,24 @@ class AlertsConfig(BaseSettings):
     leads_ntfy_url: str = Field(default="https://ntfy.sh", description="PINNED relay for new-lead pushes. Separate from ntfy_url ON PURPOSE: ntfy_url is runtime-mutable via the public PATCH /api/v1/settings/notifications endpoint, so lead PII must not be sent through it — this field is NOT in the settings API's mutable set and can only be set at deploy time (env: ATLAS_ALERTS_LEADS_NTFY_URL)")
 
 
+class SettingsAdminConfig(BaseSettings):
+    """Fail-closed auth config for the /api/v1/settings admin router (#2335).
+
+    The settings router mutates alert/email/LLM/integration destinations and
+    persists to .env.local, and it is reachable from the public Tailscale Funnel.
+    It therefore requires a deploy-time bearer service token. Digest-only, like
+    the receivables API: provision only the SHA-256 digest here and keep the raw
+    token on the caller side. When no digest is configured the router is
+    UNAVAILABLE (503), never open.
+    """
+
+    model_config = SettingsConfigDict(env_prefix="ATLAS_SETTINGS_ADMIN_", env_file=ENV_FILES, extra="ignore")
+
+    token_sha256: str = Field(default="", description="Lowercase SHA-256 hex digest of the settings-admin bearer token; empty => the /settings router returns 503 (fail-closed). Provision via ATLAS_SETTINGS_ADMIN_TOKEN_SHA256; keep the raw token on the caller (env: ATLAS_SETTINGS_ADMIN_TOKEN_SHA256)")
+
+    session_secret: str = Field(default="", description="INDEPENDENT high-entropy server secret (>=32 chars) for signing settings-admin session cookies. Deliberately NOT derived from token_sha256, so a read-only disclosure of the digest alone cannot forge a session cookie. Empty/short => the cookie login path is unavailable (bearer still works). Field name is `session_secret` so env_prefix ATLAS_SETTINGS_ADMIN_ derives exactly the advertised env var ATLAS_SETTINGS_ADMIN_SESSION_SECRET; keep it server-side only")
+
+
 class InboxMailboxBinding(BaseModel):
     """One CRM business context's authorized inbox provider."""
 
@@ -5988,6 +6006,7 @@ class Settings(BaseSettings):
     tools: ToolsConfig = Field(default_factory=ToolsConfig)
     intent: IntentConfig = Field(default_factory=IntentConfig)
     alerts: AlertsConfig = Field(default_factory=AlertsConfig)
+    settings_admin: SettingsAdminConfig = Field(default_factory=SettingsAdminConfig)
     reminder: ReminderConfig = Field(default_factory=ReminderConfig)
     email: EmailConfig = Field(default_factory=EmailConfig)
     security: SecurityConfig = Field(default_factory=SecurityConfig)
