@@ -422,3 +422,69 @@ async def test_the_tracker_sql_detects_each_violation_against_the_tracker_schema
     finally:
         await conn.execute(f'DROP SCHEMA IF EXISTS "{schema}" CASCADE')
         await conn.close()
+
+
+# --- guard class-closure: generative property test over open input -----------
+#
+# `_parse_counts` is a guard over an OPEN input space: it admits or refuses
+# arbitrary text produced by an external command. Fixture cases would only prove
+# the listed inputs; the class stays open (docs/GUARD_CLASS_CLOSURE.md req 3).
+# So the test is derived from the grammar of that input -- tokens x containers x
+# families -- and checked against an oracle written from the SPEC, independently
+# of the implementation.
+
+_TOKENS = (
+    "0", "7", "-3", "+5", " 12 ",      # parse as int
+    "x", "", "1.5", "0x10", "None",    # do not
+)
+_PADDINGS = ("", " ", "\t")
+_PREFIXES = ("", "\n", "   \n", "junk\n", "1|2|3|4|5\n")
+_SUFFIXES = ("", "\n", "\ntrailing", "\n9|9")
+
+
+def _oracle(raw: str, expected: int) -> tuple[list[int] | None, bool]:
+    """The specification, restated independently of the implementation.
+
+    Spec: scan lines in order; the FIRST non-blank line whose '|'-split yields
+    exactly `expected` parts decides the outcome. If every part of that row
+    parses as an integer the counts are returned, otherwise the read fails.
+    A row of the wrong arity is not that row. No matching row is a failure.
+    """
+    for line in (raw or "").splitlines():
+        candidate = line.strip()
+        if not candidate:
+            continue
+        parts = [part.strip() for part in candidate.split("|")]
+        if len(parts) != expected:
+            continue
+        try:
+            return [int(part) for part in parts], False
+        except ValueError:
+            return None, True
+    return None, True
+
+
+@pytest.mark.parametrize("expected", (2, 3))
+def test_parse_counts_matches_its_spec_across_the_input_grammar(expected):
+    checked = 0
+    for arity in (expected - 1, expected, expected + 1):
+        if arity < 1:
+            continue
+        for token in _TOKENS:
+            for pad in _PADDINGS:
+                row = "|".join(f"{pad}{token}{pad}" for _ in range(arity))
+                for prefix in _PREFIXES:
+                    for suffix in _SUFFIXES:
+                        raw = f"{prefix}{row}{suffix}"
+                        counts, error = audit._parse_counts(raw, expected)
+                        want_counts, want_error = _oracle(raw, expected)
+
+                        assert counts == want_counts, raw
+                        assert bool(error) == want_error, raw
+                        # Invariants that must hold for every input in the class:
+                        # a returned reading is always complete, and a refusal
+                        # always says why. A short row must never become counts.
+                        assert counts is None or len(counts) == expected
+                        assert (counts is None) == bool(error)
+                        checked += 1
+    assert checked > 500, "the grammar product should be broad, not a fixture list"
