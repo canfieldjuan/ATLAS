@@ -34,6 +34,10 @@ against — and the window closes the first time a legacy writer fires.
 
 ## Scope (this PR)
 
+Ownership lane: eom-crm/lead-funnel
+Slice phase: Vertical slice
+Max files: 6
+
 **Split.** This PR carries the ATLAS half of #113 only. The two tracker-side
 signals were removed after three review rounds established that their blockers
 cannot be closed in this repository: the tracker's canonical schema lives in
@@ -41,11 +45,6 @@ eom-timetracker, no ATLAS CI job can reach the tracker database, and the linkage
 predicate needs a cross-datastore reconciliation rather than a NULL check. They
 are carried by Effingham_Office_Maids_Website#167, and #113 stays open until it
 lands.
-
-
-Ownership lane: eom-crm/lead-funnel
-Slice phase: Vertical slice
-Max files: 6
 
 1. Add `scripts/eom_write_boundary_audit.py`: the three Atlas-side signals,
    per-signal transition alerting, non-zero exit on breach.
@@ -196,8 +195,8 @@ Parked hardening: none.
 |---|---:|
 | `tests/test_eom_write_boundary_audit.py` | 471 |
 | `scripts/eom_write_boundary_audit.py` | 430 |
-| `plans/PR-EOM-Write-Boundary-Observability.md` | 194 |
+| `plans/PR-EOM-Write-Boundary-Observability.md` | 203 |
 | `config/eom-write-boundary-audit.service` | 36 |
 | `config/eom-write-boundary-audit.timer` | 13 |
 | `.github/workflows/atlas_eom_lead_pipeline_checks.yml` | 5 |
-| **Total** | **1149** |
+| **Total** | **1158** |
