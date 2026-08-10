@@ -129,6 +129,9 @@ run_local_unit_gate_mirror() {
     selected="$tmp_dir/selected.txt"
     unit_gate_env=(-u ATLAS_CURRENT_PR_BODY_FILE -u ATLAS_CURRENT_PR_AUTHOR)
     unit_gate_env_values=(
+        # A push performed by a gated test would otherwise re-enter the
+        # pre-push hook, which re-runs this script, which pushes again.
+        ATLAS_SKIP_LOCAL_PR_REVIEW=1
         ATLAS_DB_CONNECTION_STRING=
         ATLAS_DB_HOST=127.0.0.1
         ATLAS_DB_PORT=1

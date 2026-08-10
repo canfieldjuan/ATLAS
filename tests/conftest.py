@@ -23,6 +23,48 @@ os.environ.setdefault("ATLAS_DB_DATABASE", "atlas")
 os.environ.setdefault("ATLAS_DB_USER", "atlas")
 os.environ.setdefault("ATLAS_DB_PASSWORD", "atlas_dev_password")
 
+# Tests must never inherit the developer's git configuration. A global
+# core.hooksPath made the pre-push hook fire inside the throwaway repos tests
+# build, and that hook re-ran this suite, which pushed again -- unbounded
+# recursion that exhausted system memory. Assigned, not setdefault: hermetic
+# git is a guarantee, not a default a stale environment can override.
+os.environ["GIT_CONFIG_GLOBAL"] = os.devnull
+os.environ["GIT_CONFIG_SYSTEM"] = os.devnull
+# Closed source for env-delivered Git config controls. Exact names are the
+# complete non-numbered set this slice handles; prefixes cover Git's numbered
+# key/value pairs. Other GIT_CONFIG_* names stay unchanged unless a future proof
+# shows Git treats them as config injection.
+_GIT_CONFIG_INJECTION_ENV_NAMES = ("GIT_CONFIG_COUNT", "GIT_CONFIG_PARAMETERS")
+_GIT_CONFIG_INJECTION_ENV_PREFIXES = ("GIT_CONFIG_KEY_", "GIT_CONFIG_VALUE_")
+for name in list(os.environ):
+    if (
+        name in _GIT_CONFIG_INJECTION_ENV_NAMES
+        or name.startswith(_GIT_CONFIG_INJECTION_ENV_PREFIXES)
+    ):
+        os.environ.pop(name, None)
+
+# GIT_TEMPLATE_DIR is not config, but it can install a developer hook into every
+# fixture repo created by plain git init. Clear it with the inherited config
+# controls so throwaway repos cannot copy hook state before their first push.
+os.environ.pop("GIT_TEMPLATE_DIR", None)
+
+# Keep the recursion guard scripts/local_pr_review.sh exports into the unit
+# gate. A test that pushes into a repo carrying a managed pre-push hook would
+# otherwise re-enter review -> unit gate -> pytest and exhaust the machine, so
+# the guard is preserved by default rather than dropped suite-wide. The handful
+# of tests that assert the hook *runs* clear it per module (see
+# tests/test_install_local_pr_hook.py and tests/test_push_pr_wrapper.py), which
+# keeps every other test protected.
+os.environ.setdefault("ATLAS_SKIP_LOCAL_PR_REVIEW", "1")
+
+# Neutralizing global config also drops user.name/user.email. Most git fixtures
+# set an identity locally, but not all of them do, so supply one via env -- it
+# applies with no config file at all. setdefault so a fixture can still override.
+os.environ.setdefault("GIT_AUTHOR_NAME", "Atlas Test")
+os.environ.setdefault("GIT_AUTHOR_EMAIL", "test@example.invalid")
+os.environ.setdefault("GIT_COMMITTER_NAME", "Atlas Test")
+os.environ.setdefault("GIT_COMMITTER_EMAIL", "test@example.invalid")
+
 # The unit backstop installs asyncpg, so load the real driver before test module
 # collection. This prevents legacy import-time sys.modules.setdefault("asyncpg",
 # MagicMock()) helpers from poisoning later DB-fixture tests.
