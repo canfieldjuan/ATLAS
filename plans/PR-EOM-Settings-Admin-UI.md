@@ -78,6 +78,12 @@ Max files: 20
     on `need-login`, the not-configured banner on `unavailable`, the unreachable banner when
     the probe throws, logs in from the form to reveal the tabs, and returns to the login form
     on logout — settled by `src/components/Settings/SettingsModal.test.tsx`.
+  - Logout presents the login screen ONLY on a confirmed server-side cookie deletion:
+    `logoutSettings` returns `true` on 2xx and `false` on non-2xx/throw, and `SettingsModal`
+    keeps the session authed + shows a retryable "Couldn't lock" error when logout is not
+    confirmed (so the Lock control cannot lie while a valid cookie remains) — settled by
+    `settingsApi.test.ts` (logout true/false cases) and `SettingsModal.test.tsx`
+    (`stays authed and shows a retryable error when logout is not confirmed`).
   - The three Style-A forms render the load-error banner (not the infinite spinner) when the
     initial GET rejects OR returns 401 — settled by
     `src/components/Settings/SettingsForms.loaderError.test.tsx` (parametrized over
@@ -251,15 +257,15 @@ Parked hardening: none.
 | `atlas-ui/src/components/Settings/SettingsForms.loaderError.test.tsx` | 49 |
 | `atlas-ui/src/components/Settings/SettingsLogin.test.tsx` | 72 |
 | `atlas-ui/src/components/Settings/SettingsLogin.tsx` | 75 |
-| `atlas-ui/src/components/Settings/SettingsModal.test.tsx` | 87 |
-| `atlas-ui/src/components/Settings/SettingsModal.tsx` | 114 |
-| `atlas-ui/src/components/Settings/settingsApi.test.ts` | 97 |
-| `atlas-ui/src/components/Settings/settingsApi.ts` | 56 |
+| `atlas-ui/src/components/Settings/SettingsModal.test.tsx` | 100 |
+| `atlas-ui/src/components/Settings/SettingsModal.tsx` | 131 |
+| `atlas-ui/src/components/Settings/settingsApi.test.ts` | 102 |
+| `atlas-ui/src/components/Settings/settingsApi.ts` | 62 |
 | `atlas-ui/src/test/setup.ts` | 10 |
 | `atlas-ui/tsconfig.app.json` | 3 |
 | `atlas-ui/vitest.config.ts` | 16 |
 | `atlas_brain/api/settings_session.py` | 4 |
 | `atlas_brain/config.py` | 2 |
-| `plans/PR-EOM-Settings-Admin-UI.md` | 263 |
+| `plans/PR-EOM-Settings-Admin-UI.md` | 271 |
 | `tests/test_settings_auth.py` | 23 |
-| **Total** | **2165** |
+| **Total** | **2214** |

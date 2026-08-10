@@ -83,15 +83,20 @@ describe('settingsApi', () => {
   });
 
   describe('logoutSettings', () => {
-    it('DELETEs the session URL', async () => {
+    it('DELETEs the session URL and returns true on a confirmed 2xx deletion', async () => {
       (globalThis.fetch as ReturnType<typeof vi.fn>).mockResolvedValue(resp(200));
-      await logoutSettings();
+      expect(await logoutSettings()).toBe(true);
       expect(globalThis.fetch).toHaveBeenCalledWith(SESSION_URL, { method: 'DELETE' });
     });
 
-    it('swallows network errors (best-effort, resolves void)', async () => {
+    it('returns false on a non-2xx response (cookie not confirmed cleared)', async () => {
+      (globalThis.fetch as ReturnType<typeof vi.fn>).mockResolvedValue(resp(500));
+      expect(await logoutSettings()).toBe(false);
+    });
+
+    it('returns false on a network error (never throws)', async () => {
       (globalThis.fetch as ReturnType<typeof vi.fn>).mockRejectedValue(new Error('offline'));
-      await expect(logoutSettings()).resolves.toBeUndefined();
+      expect(await logoutSettings()).toBe(false);
     });
   });
 });

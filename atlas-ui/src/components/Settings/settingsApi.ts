@@ -33,12 +33,18 @@ export async function loginSettings(token: string): Promise<LoginResult> {
   }
 }
 
-/** Clear the session cookie (idempotent; needs no auth). */
-export async function logoutSettings(): Promise<void> {
+/**
+ * Clear the session cookie. Returns true ONLY on a confirmed 2xx deletion; a
+ * network error or non-2xx returns false. The caller must not present a
+ * logged-out state on false — the browser still holds a valid cookie (the
+ * server never expired it), so reopening would silently re-authenticate.
+ */
+export async function logoutSettings(): Promise<boolean> {
   try {
-    await fetch(SESSION_URL, { method: 'DELETE' });
+    const r = await fetch(SESSION_URL, { method: 'DELETE' });
+    return r.ok;
   } catch {
-    /* logout is best-effort */
+    return false;
   }
 }
 

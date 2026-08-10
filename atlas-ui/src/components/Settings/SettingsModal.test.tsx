@@ -75,13 +75,26 @@ describe('SettingsModal auth gate', () => {
     expect(await screen.findByText('Voice Pipeline')).toBeInTheDocument();
   });
 
-  it('logs out and returns to the login form', async () => {
-    routeFetch(200, 200); // probe → authed, DELETE → ok
+  it('logs out and returns to the login form when the server confirms deletion', async () => {
+    routeFetch(200, 200); // probe → authed, DELETE → 2xx (confirmed cleared)
     render(<SettingsModal onClose={() => {}} />);
 
     fireEvent.click(await screen.findByRole('button', { name: /lock/i }));
 
     expect(await screen.findByText('Unlock settings')).toBeInTheDocument();
     expect(screen.queryByText('Voice Pipeline')).not.toBeInTheDocument();
+  });
+
+  it('stays authed and shows a retryable error when logout is not confirmed', async () => {
+    routeFetch(200, 500); // probe → authed, DELETE → non-2xx (cookie NOT cleared)
+    render(<SettingsModal onClose={() => {}} />);
+
+    fireEvent.click(await screen.findByRole('button', { name: /lock/i }));
+
+    // The Lock did not clear the cookie, so we must not present a logged-out
+    // state: surface a retryable error and keep the tabs.
+    expect(await screen.findByText(/Couldn't lock/)).toBeInTheDocument();
+    expect(screen.getByText('Voice Pipeline')).toBeInTheDocument();
+    expect(screen.queryByText('Unlock settings')).not.toBeInTheDocument();
   });
 });

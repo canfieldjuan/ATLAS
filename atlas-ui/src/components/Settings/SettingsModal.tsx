@@ -38,6 +38,9 @@ export function SettingsModal({ onClose, initialTab = 'voice' }: SettingsModalPr
   const [activeTab, setActiveTab] = useState<Tab>(initialTab);
   // 'checking' until the initial auth probe resolves.
   const [auth, setAuth] = useState<AuthState | 'checking'>('checking');
+  // Set when a logout attempt did NOT confirm server-side cookie deletion, so
+  // we must not present a logged-out state while the cookie is still valid.
+  const [logoutError, setLogoutError] = useState(false);
 
   useEffect(() => {
     let active = true;
@@ -48,8 +51,12 @@ export function SettingsModal({ onClose, initialTab = 'voice' }: SettingsModalPr
   }, []);
 
   const handleLogout = async () => {
-    await logoutSettings();
-    setAuth('need-login');
+    setLogoutError(false);
+    // Only present the login screen once the server has confirmed it cleared
+    // the cookie; otherwise the session is still live and "Lock" would lie.
+    const cleared = await logoutSettings();
+    if (cleared) setAuth('need-login');
+    else setLogoutError(true);
   };
 
   return (
@@ -71,13 +78,23 @@ export function SettingsModal({ onClose, initialTab = 'voice' }: SettingsModalPr
           </div>
           <div className="flex items-center gap-1.5">
             {auth === 'authed' && (
-              <button
-                onClick={handleLogout}
-                title="Lock settings (clear session)"
-                className="flex items-center gap-1 px-2 py-1.5 rounded border border-cyan-500/20 hover:border-cyan-500/60 hover:bg-cyan-500/10 text-[10px] font-bold uppercase tracking-wider text-cyan-500 transition-all"
-              >
-                <LogOut size={12} /> Lock
-              </button>
+              <>
+                {logoutError && (
+                  <span
+                    className="flex items-center gap-1 text-[10px] font-semibold text-red-400"
+                    title="The session was not cleared on the server; try again."
+                  >
+                    <AlertCircle size={11} /> Couldn't lock — retry
+                  </span>
+                )}
+                <button
+                  onClick={handleLogout}
+                  title="Lock settings (clear session)"
+                  className="flex items-center gap-1 px-2 py-1.5 rounded border border-cyan-500/20 hover:border-cyan-500/60 hover:bg-cyan-500/10 text-[10px] font-bold uppercase tracking-wider text-cyan-500 transition-all"
+                >
+                  <LogOut size={12} /> Lock
+                </button>
+              </>
             )}
             <button
               onClick={onClose}
