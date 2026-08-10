@@ -183,21 +183,26 @@ def _parse_counts(raw: str, expected: int) -> tuple[list[int] | None, str | None
     Strict on purpose: a partially parsed row would silently become a low count,
     which reads as healthy. Unparseable output must surface as unmeasured.
     """
-    for line in (raw or "").splitlines():
-        candidate = line.strip()
-        if not candidate:
-            continue
-        parts = [part.strip() for part in candidate.split("|")]
-        if len(parts) != expected:
-            continue
-        try:
-            return [int(part) for part in parts], None
-        except ValueError as exc:
-            # Report which row failed rather than skipping to the next one. A
-            # silent skip could fall through to "no parseable row" and lose the
-            # only clue about why the query output changed shape.
-            return None, f"non-integer count in row {candidate!r}: {exc}"
-    return None, f"no row with {expected} delimited counts in output"
+    rows = [line.strip() for line in (raw or "").splitlines() if line.strip()]
+    if not rows:
+        return None, "query produced no output"
+    if len(rows) != 1:
+        # Anything beyond a single row is ambiguous: taking the first would let
+        # "0|0" followed by "1|1" report clean, and a trailing notice would be
+        # silently discarded. A monitor may not guess which row is the truth.
+        return None, f"expected exactly one output row, got {len(rows)}: {rows!r}"
+    parts = [part.strip() for part in rows[0].split("|")]
+    if len(parts) != expected:
+        return None, f"expected {expected} counts, got {len(parts)} in {rows[0]!r}"
+    try:
+        counts = [int(part) for part in parts]
+    except ValueError as exc:
+        return None, f"non-integer count in row {rows[0]!r}: {exc}"
+    if any(count < 0 for count in counts):
+        # COUNT(*) cannot be negative; a negative here means the output is not
+        # what we think it is.
+        return None, f"impossible negative count in {rows[0]!r}"
+    return counts, None
 
 
 def query_atlas(psql_bin: str, dsn: str) -> tuple[list[int] | None, str | None]:
@@ -402,7 +407,12 @@ def main(argv: Sequence[str] | None = None, *, notifier: Callable[..., None] = p
     # Leaving the old state on a failed push means the next run recomputes the
     # same transition and tries again. That is not an alert storm: nothing is
     # reaching anyone while delivery is broken.
-    delivered = True
+    # A dry run observes; it must not consume the alert. Leaving `delivered`
+    # true here would let `--no-alert` during a breach persist "already
+    # notified" and suppress the real alert for the whole re-alert window.
+    delivered = alert is None
+    if alert and args.no_alert:
+        print(f"WARNING --no-alert: {alert} not sent and state left unchanged")
     if alert and not args.no_alert:
         if alert == "recovered":
             delivered = notifier(

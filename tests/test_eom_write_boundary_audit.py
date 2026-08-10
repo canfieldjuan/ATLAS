@@ -103,6 +103,21 @@ def test_a_well_formed_row_parses():
     assert counts == [1, 2, 3]
 
 
+def test_ambiguous_or_impossible_output_is_refused():
+    """A monitor may not pick a row when the output disagrees with itself."""
+    counts, error = audit._parse_counts("0|0\n1|1\n", 2)
+    assert counts is None and "exactly one" in error
+
+    counts, error = audit._parse_counts("0|0\ntrailing notice\n", 2)
+    assert counts is None and error
+
+    counts, error = audit._parse_counts("-1|0\n", 2)
+    assert counts is None and "negative" in error
+
+    counts, error = audit._parse_counts("", 2)
+    assert counts is None and error
+
+
 # --- alert state machine -----------------------------------------------------
 
 
@@ -446,23 +461,24 @@ _SUFFIXES = ("", "\n", "\ntrailing", "\n9|9")
 def _oracle(raw: str, expected: int) -> tuple[list[int] | None, bool]:
     """The specification, restated independently of the implementation.
 
-    Spec: scan lines in order; the FIRST non-blank line whose '|'-split yields
-    exactly `expected` parts decides the outcome. If every part of that row
-    parses as an integer the counts are returned, otherwise the read fails.
-    A row of the wrong arity is not that row. No matching row is a failure.
+    Spec: the output must be exactly ONE non-blank row, that row must split into
+    exactly `expected` parts, every part must parse as an integer, and no count
+    may be negative. Anything else is a refusal -- a monitor may not guess which
+    of several rows is the truth, and COUNT(*) is never negative.
     """
-    for line in (raw or "").splitlines():
-        candidate = line.strip()
-        if not candidate:
-            continue
-        parts = [part.strip() for part in candidate.split("|")]
-        if len(parts) != expected:
-            continue
-        try:
-            return [int(part) for part in parts], False
-        except ValueError:
-            return None, True
-    return None, True
+    rows = [line.strip() for line in (raw or "").splitlines() if line.strip()]
+    if len(rows) != 1:
+        return None, True
+    parts = [part.strip() for part in rows[0].split("|")]
+    if len(parts) != expected:
+        return None, True
+    try:
+        counts = [int(part) for part in parts]
+    except ValueError:
+        return None, True
+    if any(count < 0 for count in counts):
+        return None, True
+    return counts, False
 
 
 @pytest.mark.parametrize("expected", (2, 3))
@@ -487,3 +503,28 @@ def test_parse_counts_matches_its_spec_across_the_input_grammar(expected):
         assert (counts is None) == bool(error)
         checked += 1
     assert checked > 500, "the grammar product should be broad, not a fixture list"
+
+
+def test_a_dry_run_does_not_consume_the_alert(monkeypatch, tmp_path):
+    """--no-alert observes; it must not spend the breach notification.
+
+    Persisting "already notified" from a dry run would suppress the real alert
+    for the whole re-alert window -- an operator checking on the monitor would
+    be the reason it went quiet.
+    """
+    monkeypatch.setattr(audit, "query_atlas", lambda *a, **k: ([1, 0, 0], None))
+    monkeypatch.setattr(audit, "query_tracker", lambda *a, **k: ([0, 0], None))
+
+    code = audit.main(
+        ["--state-dir", str(tmp_path), "--ntfy-topic", "t", "--no-alert"],
+        notifier=lambda *args: pytest.fail("--no-alert must not notify"),
+    )
+    assert code == audit.EXIT_BREACH
+    assert not (tmp_path / "state.json").exists(), "a dry run must leave state alone"
+
+    sent: list[tuple] = []
+    audit.main(
+        ["--state-dir", str(tmp_path), "--ntfy-topic", "t"],
+        notifier=lambda *args: (sent.append(args), True)[1],
+    )
+    assert len(sent) == 1, "the real run must still get its first-breach alert"
