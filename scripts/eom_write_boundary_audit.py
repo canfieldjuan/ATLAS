@@ -156,17 +156,24 @@ def _tracker_sql() -> str:
 
 
 def _run(command: Sequence[str], timeout: int = 90) -> tuple[str | None, str | None]:
+    if not command:
+        raise ValueError("_run needs a command to execute")
+    # Named once, without indexing: an empty command is a programmer error and
+    # already raised above, so the error strings below cannot be the thing that
+    # blows up while reporting why something else did.
+    executable = next(iter(command))
     try:
         proc = subprocess.run(
             command, capture_output=True, text=True, timeout=timeout, check=False
         )
     except FileNotFoundError as exc:
-        return None, f"{command[0]} not found: {exc}"
+        return None, f"{executable} not found: {exc}"
     except subprocess.TimeoutExpired:
-        return None, f"{command[0]} timed out after {timeout}s"
+        return None, f"{executable} timed out after {timeout}s"
     if proc.returncode != 0:
-        detail = (proc.stderr or proc.stdout or "").strip().splitlines()
-        return None, f"{command[0]} exited {proc.returncode}: {detail[-1] if detail else 'no output'}"
+        lines = (proc.stderr or proc.stdout or "").strip().splitlines()
+        detail = lines[-1] if lines else "no output"
+        return None, f"{executable} exited {proc.returncode}: {detail}"
     return proc.stdout, None
 
 
