@@ -238,6 +238,16 @@ def test_bearer_still_works_without_session_signing_secret():
     assert c.get(NOTIF, headers={"Authorization": f"Bearer {RAW_TOKEN}"}).status_code == 200
 
 
+def test_weak_same_length_session_secret_disables_the_cookie_path():
+    """A length-compliant but low-entropy signing secret (e.g. a repeated character)
+    is rejected by the entropy floor: the cookie/login path is unavailable (login 503,
+    cookies never verify) rather than usable with a guessable key — the bearer path
+    still works."""
+    c = _client(DIGEST, secret="a" * 40)  # 40 chars but only 1 unique
+    assert c.post(SESSION, headers={"Authorization": f"Bearer {RAW_TOKEN}"}).status_code == 503
+    assert c.get(NOTIF, headers={"Authorization": f"Bearer {RAW_TOKEN}"}).status_code == 200
+
+
 def test_config_loads_secrets_from_the_advertised_env_vars(monkeypatch):
     """Load through the REAL environment boundary: the field names + env_prefix must
     derive exactly the advertised env vars, so following the deploy docs populates the

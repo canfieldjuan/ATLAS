@@ -60,9 +60,12 @@ SESSION_COOKIE_NAME = "atlas_settings_admin_session"
 SESSION_COOKIE_PATH = "/api/v1/settings"
 SESSION_TTL_SECONDS = 12 * 60 * 60  # 12h operator session
 _SESSION_VERSION = "v1"
-# Minimum length for the INDEPENDENT cookie-signing secret. Below this the cookie
-# path is unavailable (bearer still works) — never a weak signing key.
+# Minimum length + unique-character floor for the INDEPENDENT cookie-signing
+# secret. Below either the cookie path is unavailable (bearer still works) — never
+# a weak/repeated signing key. The unique-char floor mirrors the token entropy
+# floor (_MIN_TOKEN_UNIQUE_CHARACTERS) so the secret is not weaker than the token.
 _MIN_SESSION_SECRET_LEN = 32
+_MIN_SESSION_SECRET_UNIQUE = 16
 
 
 def get_settings_admin_config() -> SettingsAdminConfig:
@@ -138,7 +141,9 @@ def resolve_session_signing_secret(config: SettingsAdminConfig) -> str:
     unavailable (bearer still works), and cookies can neither be minted nor verified.
     """
     secret = (config.session_secret or "").strip()
-    return secret if len(secret) >= _MIN_SESSION_SECRET_LEN else ""
+    if len(secret) < _MIN_SESSION_SECRET_LEN or len(set(secret)) < _MIN_SESSION_SECRET_UNIQUE:
+        return ""  # too short OR too low-entropy (e.g. a repeated-char value) => unusable
+    return secret
 
 
 def _session_signing_key(signing_secret: str) -> bytes:

@@ -230,9 +230,9 @@ multi-thousand-digit value overflows CPython's int-conversion limit — both are
 |---|---:|
 | `atlas_brain/api/__init__.py` | 2 |
 | `atlas_brain/api/settings.py` | 13 |
-| `atlas_brain/api/settings_auth.py` | 224 |
+| `atlas_brain/api/settings_auth.py` | 229 |
 | `atlas_brain/api/settings_session.py` | 77 |
 | `atlas_brain/config.py` | 19 |
 | `plans/PR-EOM-Settings-Admin-Auth.md` | 238 |
-| `tests/test_settings_auth.py` | 291 |
-| **Total** | **864** |
+| `tests/test_settings_auth.py` | 301 |
+| **Total** | **879** |
