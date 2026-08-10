@@ -19,6 +19,18 @@ zero; those signals are deferred, see the split note below.) #113 requires that 
 calibrated against the bug it is meant to catch" is the failure it guards
 against — and the window closes the first time a legacy writer fires.
 
+### Why this is one slice, over the 400-line target
+
+The diff is a monitor and the proof that it detects anything. Splitting those
+ships a detector whose detection is unverified, which is the failure the ratchet
+and review discipline exist to prevent -- and the script and its tests each
+exceed the target on their own, before the plan doc the PR gate itself mandates.
+
+The one genuine split has already been taken: the tracker-side signals came out
+entirely (Effingham_Office_Maids_Website#167) after three rounds showed their
+blockers were not closeable in this repository. What remains is the smallest
+thing that both alerts and can be shown to alert.
+
 ### Problem-derived contract
 
 - Root cause: the canonical write boundary has no runtime observer. Every
@@ -92,8 +104,13 @@ production table.
 
 ### Deployed-config probing
 
-- Deployed/default config values: Atlas DSN `postgresql://atlas:atlas@localhost:5433/atlas`;
-  ntfy topic supplied at deploy
+- Deployed/default config values: settings carry the repo's `ATLAS_` prefix
+  (`ATLAS_EOM_AUDIT_*`), matching how `scripts/` reads configuration; the strict
+  typed-settings rule in CLAUDE.md governs `atlas_brain/`, and binding this
+  monitor to the application's config module would give it the failure mode it
+  exists to avoid. Atlas DSN defaults to `postgresql://atlas:atlas@localhost:5433/atlas`
+  and is passed to `psql` by environment, never argv, because
+  `/proc/<pid>/cmdline` is world-readable; ntfy topic supplied at deploy
   time via `EOM_AUDIT_NTFY_TOPIC` with NO default in the repo, because on ntfy.sh
   the topic name is the channel credential and this repository is public;
   re-alert every 24 runs at an hourly cadence.
@@ -198,10 +215,10 @@ Parked hardening: none.
 
 | File | LOC |
 |---|---:|
-| `tests/test_eom_write_boundary_audit.py` | 490 |
-| `scripts/eom_write_boundary_audit.py` | 445 |
-| `plans/PR-EOM-Write-Boundary-Observability.md` | 207 |
+| `tests/test_eom_write_boundary_audit.py` | 553 |
+| `scripts/eom_write_boundary_audit.py` | 489 |
+| `plans/PR-EOM-Write-Boundary-Observability.md` | 224 |
 | `config/eom-write-boundary-audit.service` | 37 |
 | `config/eom-write-boundary-audit.timer` | 13 |
 | `.github/workflows/atlas_eom_lead_pipeline_checks.yml` | 5 |
-| **Total** | **1197** |
+| **Total** | **1321** |

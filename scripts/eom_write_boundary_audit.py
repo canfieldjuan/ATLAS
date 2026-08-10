@@ -27,6 +27,7 @@ close.
 from __future__ import annotations
 
 import argparse
+import fcntl
 import json
 import os
 import subprocess
@@ -34,6 +35,7 @@ import sys
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Callable, Sequence
+from urllib.parse import parse_qs, unquote, urlsplit
 
 EOM_TENANT = "effingham_maids"
 
@@ -78,7 +80,7 @@ DEFAULT_STATE_DIR = Path(
 
 # Deliberately NO default. On ntfy.sh the topic name IS the credential: anyone
 # who knows it can read the alerts or forge them. This repository is public, so
-# the topic is supplied at deploy time via EOM_AUDIT_NTFY_TOPIC and never
+# the topic is supplied at deploy time via ATLAS_EOM_AUDIT_NTFY_TOPIC and never
 # committed. A blank topic is refused by validate_settings rather than silently
 # publishing nowhere.
 DEFAULT_NTFY_TOPIC = ""
@@ -152,7 +154,38 @@ SELECT
 """
 
 
-def _run(command: Sequence[str], timeout: int = 90) -> tuple[str | None, str | None]:
+def psql_environment(dsn: str) -> dict[str, str]:
+    """Connection settings for a psql subprocess, passed by environment.
+
+    Never as an argument: /proc/<pid>/cmdline is world-readable on this
+    deployment, so a DSN in argv hands the database password to any local
+    account for the life of the process. /proc/<pid>/environ is readable only
+    by the owner, which is why libpq supports these variables at all.
+    """
+    parsed = urlsplit(dsn)
+    env = dict(os.environ)
+    if parsed.username:
+        env["PGUSER"] = unquote(parsed.username)
+    if parsed.password:
+        env["PGPASSWORD"] = unquote(parsed.password)
+    if parsed.hostname:
+        env["PGHOST"] = parsed.hostname
+    if parsed.port:
+        env["PGPORT"] = str(parsed.port)
+    database = parsed.path.lstrip("/")
+    if database:
+        env["PGDATABASE"] = database
+    query = parse_qs(parsed.query)
+    for key, variable in (("options", "PGOPTIONS"), ("sslmode", "PGSSLMODE")):
+        value = next(iter(query.get(key) or ()), None)
+        if value:
+            env[variable] = value
+    return env
+
+
+def _run(
+    command: Sequence[str], timeout: int = 90, env: dict[str, str] | None = None
+) -> tuple[str | None, str | None]:
     if not command:
         raise ValueError("_run needs a command to execute")
     # Named once, without indexing: an empty command is a programmer error and
@@ -161,7 +194,8 @@ def _run(command: Sequence[str], timeout: int = 90) -> tuple[str | None, str | N
     executable = next(iter(command))
     try:
         proc = subprocess.run(
-            command, capture_output=True, text=True, timeout=timeout, check=False
+            command, capture_output=True, text=True, timeout=timeout,
+            check=False, env=env
         )
     except FileNotFoundError as exc:
         return None, f"{executable} not found: {exc}"
@@ -208,7 +242,8 @@ def _parse_counts(raw: str, expected: int) -> tuple[list[int] | None, str | None
 
 def query_atlas(psql_bin: str, dsn: str) -> tuple[list[int] | None, str | None]:
     raw, error = _run(
-        [psql_bin, dsn, "-A", "-t", "-F", "|", "-v", "ON_ERROR_STOP=1", "-c", _atlas_sql()]
+        [psql_bin, "-A", "-t", "-F", "|", "-v", "ON_ERROR_STOP=1", "-c", _atlas_sql()],
+        env=psql_environment(dsn),
     )
     if error:
         return None, error
@@ -363,12 +398,12 @@ def publish(ntfy_url: str, topic: str, title: str, body: str, priority: str, tag
 
 def main(argv: Sequence[str] | None = None, *, notifier: Callable[..., None] = publish) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--atlas-dsn", default=os.environ.get("EOM_AUDIT_ATLAS_DSN", "postgresql://atlas:atlas@localhost:5433/atlas"))
-    parser.add_argument("--psql-bin", default=os.environ.get("EOM_AUDIT_PSQL_BIN", "psql"))
-    parser.add_argument("--state-dir", default=os.environ.get("EOM_AUDIT_STATE_DIR", str(DEFAULT_STATE_DIR)))
-    parser.add_argument("--ntfy-url", default=os.environ.get("EOM_AUDIT_NTFY_URL", DEFAULT_NTFY_URL))
-    parser.add_argument("--ntfy-topic", default=os.environ.get("EOM_AUDIT_NTFY_TOPIC", DEFAULT_NTFY_TOPIC))
-    parser.add_argument("--realert-every", type=int, default=int(os.environ.get("EOM_AUDIT_REALERT_EVERY", DEFAULT_REALERT_EVERY)))
+    parser.add_argument("--atlas-dsn", default=os.environ.get("ATLAS_EOM_AUDIT_ATLAS_DSN", "postgresql://atlas:atlas@localhost:5433/atlas"))
+    parser.add_argument("--psql-bin", default=os.environ.get("ATLAS_EOM_AUDIT_PSQL_BIN", "psql"))
+    parser.add_argument("--state-dir", default=os.environ.get("ATLAS_EOM_AUDIT_STATE_DIR", str(DEFAULT_STATE_DIR)))
+    parser.add_argument("--ntfy-url", default=os.environ.get("ATLAS_EOM_AUDIT_NTFY_URL", DEFAULT_NTFY_URL))
+    parser.add_argument("--ntfy-topic", default=os.environ.get("ATLAS_EOM_AUDIT_NTFY_TOPIC", DEFAULT_NTFY_TOPIC))
+    parser.add_argument("--realert-every", type=int, default=int(os.environ.get("ATLAS_EOM_AUDIT_REALERT_EVERY", DEFAULT_REALERT_EVERY)))
     parser.add_argument("--no-alert", action="store_true", help="measure and print without notifying")
     args = parser.parse_args(argv)
     validate_settings(args.realert_every, args.ntfy_topic)
@@ -377,6 +412,23 @@ def main(argv: Sequence[str] | None = None, *, notifier: Callable[..., None] = p
     print(result.report())
 
     state_path = Path(args.state_dir) / "state.json"
+    # One alert decision at a time. A manual run racing the hourly timer can
+    # otherwise both observe "not yet notified" for the same first breach and
+    # both publish, or interleave writes and lose the transition entirely.
+    state_path.parent.mkdir(parents=True, exist_ok=True)
+    lock_path = state_path.parent / "state.lock"
+    try:
+        lock = open(lock_path, "w", encoding="utf-8")
+    except OSError as exc:
+        # Without the lock two runs can both announce one transition. Refusing
+        # loudly beats alerting twice or losing the transition silently.
+        raise RuntimeError(f"cannot take the alert lock at {lock_path}: {exc}") from exc
+    with lock:
+        fcntl.flock(lock, fcntl.LOCK_EX)
+        return _decide_and_notify(args, result, state_path, notifier)
+
+
+def _decide_and_notify(args, result, state_path: Path, notifier: Callable[..., bool]) -> int:
     previous, state_warning = read_state(state_path)
     if state_warning:
         print(f"WARNING {state_warning}")

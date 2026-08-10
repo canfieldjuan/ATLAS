@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import importlib.util
 import itertools
+import time
 import os
 import sys
 import uuid
@@ -488,3 +489,65 @@ def test_a_dry_run_does_not_consume_the_alert(monkeypatch, tmp_path):
         notifier=lambda *args: (sent.append(args), True)[1],
     )
     assert len(sent) == 1, "the real run must still get its first-breach alert"
+
+
+def test_credentials_are_passed_by_environment_not_argv(monkeypatch):
+    """A DSN in argv hands the password to any local account via /proc."""
+    captured: dict = {}
+
+    def _fake_run(command, timeout=90, env=None):
+        captured["command"] = list(command)
+        captured["env"] = env or {}
+        return "0|0|0\n", None
+
+    monkeypatch.setattr(audit, "_run", _fake_run)
+    audit.query_atlas("psql", "postgresql://u:secret@h:5433/db?sslmode=require")
+
+    assert not any("secret" in part for part in captured["command"]), (
+        "the password must never appear in the process argument vector"
+    )
+    assert captured["env"]["PGPASSWORD"] == "secret"
+    assert captured["env"]["PGUSER"] == "u"
+    assert captured["env"]["PGHOST"] == "h"
+    assert captured["env"]["PGPORT"] == "5433"
+    assert captured["env"]["PGDATABASE"] == "db"
+    assert captured["env"]["PGSSLMODE"] == "require"
+
+
+def test_search_path_options_travel_as_pgoptions():
+    env = audit.psql_environment("postgresql://u@h/db?options=-csearch_path%3Dtmp%2Cpublic")
+    assert env["PGOPTIONS"] == "-csearch_path=tmp,public"
+
+
+def test_concurrent_runs_do_not_both_send_the_first_breach(monkeypatch, tmp_path):
+    """The hourly timer and a manual run must not both publish one transition."""
+    import multiprocessing
+
+    monkeypatch.setattr(audit, "query_atlas", lambda *a, **k: ([1, 0, 0], None))
+
+    def _child(queue):
+        sent = []
+
+        def _slow_notifier(*args):
+            # Hold the critical section open long enough that every process is
+            # inside it at once. Without the lock they all read "not yet
+            # notified" and all publish; the delay makes that deterministic
+            # rather than dependent on scheduling luck.
+            sent.append(args)
+            time.sleep(0.4)
+            return True
+
+        audit.main(
+            ["--state-dir", str(tmp_path), "--ntfy-topic", "t"],
+            notifier=_slow_notifier,
+        )
+        queue.put(len(sent))
+
+    queue = multiprocessing.Queue()
+    procs = [multiprocessing.Process(target=_child, args=(queue,)) for _ in range(4)]
+    for proc in procs:
+        proc.start()
+    for proc in procs:
+        proc.join(timeout=30)
+    total = sum(queue.get() for _ in procs)
+    assert total == 1, f"exactly one process may announce the first breach, got {total}"
