@@ -20,7 +20,7 @@ import hashlib
 from contextlib import asynccontextmanager
 from dataclasses import dataclass
 from datetime import datetime, timezone
-from typing import Any, Mapping, Optional
+from typing import Any, Mapping, Optional, Sequence
 from uuid import UUID, uuid4
 
 logger = logging.getLogger("atlas.services.crm_provider")
@@ -1918,6 +1918,37 @@ class DatabaseCRMProvider:
             *params,
         )
         return [dict(row) for row in rows]
+
+    async def list_known_eom_contact_ids(
+        self,
+        *,
+        contact_ids: Sequence[UUID],
+    ) -> list[UUID]:
+        """Return the subset of ``contact_ids`` that name a live EOM contact.
+
+        Answers link verification for systems that store an Atlas contact id of
+        their own. Tenant scope is part of the answer, not a filter applied
+        afterwards: an id belonging to another business context is simply not
+        in the result, so no caller can use this to probe outside EOM.
+
+        Archived and lost contacts still count as known. The question is
+        whether the link resolves, and a link to a contact that was closed is
+        intact -- it is a dangling or cross-tenant id that means the write
+        boundary was bypassed.
+        """
+        if not contact_ids:
+            return []
+        pool = self._get_pool()
+        rows = await pool.fetch(
+            """
+            SELECT c.id
+            FROM contacts AS c
+            WHERE c.business_context_id = 'effingham_maids'
+              AND c.id = ANY($1::uuid[])
+            """,
+            list(contact_ids),
+        )
+        return [row["id"] for row in rows]
 
     @staticmethod
     def _eom_estimate_booking_metadata(
