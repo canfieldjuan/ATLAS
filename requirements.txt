@@ -1,22 +1,22 @@
 # constraints-root-asr-sha256: 986ecbd0168a5cb1a3a934330fd08e7c13a20f263a37b0ff8c5d2b46c97da087
 -c constraints.root-asr.txt
 
-fastapi==0.139.0
-uvicorn[standard]==0.51.0
+fastapi==0.141.1
+uvicorn[standard]==0.52.1
 python-dotenv==1.2.2
 python-multipart==0.0.32
-pydantic-settings==2.14.2
+pydantic-settings==2.15.0
 psutil==7.2.2
 slowapi==0.1.10
 
 # ML / AI
-torch==2.12.1
+torch==2.13.0
 torchaudio==2.11.0  # newest existing release (torchaudio trails torch; no 2.12 pairing exists); sole importer asr_server.py installs requirements.asr.txt instead
 transformers==4.57.6
 accelerate==1.14.0
-bitsandbytes==0.49.2
+bitsandbytes==0.50.0
 Pillow==12.3.0
-sentence-transformers==5.6.0
+sentence-transformers==5.7.0
 opencv-python==5.0.0.93  # For video processing (SAM 3)
 sounddevice==0.5.5
 soundfile==0.14.0
@@ -37,11 +37,11 @@ asyncpg==0.31.0
 neo4j==6.2.0
 
 # Natural language parsing
-dateparser==1.4.1
+dateparser==1.4.2
 
 # Orchestration / Voice pipeline
 webrtcvad==2.0.10
-piper-tts==1.4.2
+piper-tts==1.6.0
 kokoro==0.9.4
 
 # Optional: For GGUF model support
@@ -52,44 +52,44 @@ kokoro==0.9.4
 rich==15.0.0
 
 # LangGraph for agent orchestration
-langgraph==1.2.9
-langchain-core==1.4.9
+langgraph==1.2.10
+langchain-core==1.5.3
 
 # Autonomous task scheduling
 apscheduler==3.11.3
 tzlocal==5.4.4
 
 # Email draft generation (Anthropic Claude)
-anthropic==0.116.0
+anthropic==0.120.2
 
 # Campaign email sending (Amazon SES)
-boto3==1.43.48
+boto3==1.43.66
 
 # MCP (Model Context Protocol) — CRM and Email MCP servers
 mcp==1.28.1
 jsonschema==4.26.0
 
 # External data producers (news feeds)
-feedparser==6.0.12
-trafilatura==2.1.0
+feedparser==6.0.14
+trafilatura==2.2.0
 
 # B2B review scraping (anti-detection HTTP client + HTML parsing)
-curl_cffi==0.15.0
+curl_cffi==0.16.0
 beautifulsoup4==4.15.0
 pytrends==4.9.2
-playwright==1.61.0
+playwright==1.62.0
 playwright-stealth==2.0.3
 
 # SaaS auth + billing
 bcrypt==5.0.0
 PyJWT==2.13.0
 cryptography==49.0.0  # Fernet for BYOK provider-key at-rest encryption (PR-D5)
-stripe==15.3.0
+stripe==15.4.0
 email-validator==2.3.0  # required by pydantic.EmailStr in api/b2b_tenant_dashboard.py and api/auth.py
 
 # PDF generation
 fpdf2==2.8.7
 
 # Blog rendering (admin + autonomous tasks)
-markdown==3.10.2
+markdown==3.10.3
 praw==8.0.2  # atlas_reddit read-only listening tool (S4, #1934); lazy-imported, tests never need it
