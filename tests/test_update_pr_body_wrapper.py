@@ -116,6 +116,7 @@ def _write_fixture_repo(tmp_path: Path) -> Path:
         "audit_fix_loop_disposition.py",
         "_pr_change_policy.py",
         "check_pr_branch_name.py",
+        "fix_loop_trace_contract.py",
     ):
         copy2(REPO_ROOT / "scripts" / name, scripts / name)
     (scripts / "check_session_pr_ownership.py").write_text(
