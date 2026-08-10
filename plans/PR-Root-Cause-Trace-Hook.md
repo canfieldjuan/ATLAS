@@ -91,9 +91,10 @@ seam in the enumeration; otherwise write "N/A - no boundary change."
 - Replaced-path behaviors: existing allowed-file admission remains, with a new
   prerequisite that an active constrained fix loop carry root-trace evidence.
 - Guard-relevant fields: `activation_head`, `activation_dirty_paths`,
-  `activation_dirty_fingerprints`, `pending_upstream_edits`,
-  `upstream_edit_receipts`, `symptom`, `root_cause`, `source_trace`,
-  `fix_strategy`, `upstream_files`, `symptom_only_reason`, `follow_up`.
+  `activation_dirty_fingerprints`, `activation_source_fingerprints`,
+  `pending_upstream_edits`, `upstream_edit_receipts`, `symptom`,
+  `root_cause`, `source_trace`, `fix_strategy`, `upstream_files`,
+  `symptom_only_reason`, `follow_up`.
 - Caller x input shape dispositions:
   - `PreToolUse` Edit with `tool_input.file_path`: preserved for allowed
     upstream source targets and support files; rejected for disallowed paths;
@@ -110,8 +111,9 @@ seam in the enumeration; otherwise write "N/A - no boundary change."
   - `PostToolUse` Edit/Write/MultiEdit with upstream-only targets: changed to
     promote a pending upstream edit to `upstream_edit_receipts` only when the
     target fingerprint differs from the pre-tool pending fingerprint; changed to
-    clear the receipt when a later edit restores the activation fingerprint;
-    preserved fail-open behavior and no denial output.
+    clear the receipt when a later edit restores the activation source
+    fingerprint for dirty, clean, or missing declared upstream sources; preserved
+    fail-open behavior and no denial output.
   - `PreToolUse` MultiEdit with `tool_input.edits[].file_path`: preserved
     fail-closed behavior where any outside-target edit denies the tool call;
     changed so downstream targets in the batch still require activation-baseline
@@ -141,10 +143,10 @@ seam in the enumeration; otherwise write "N/A - no boundary change."
   for the declared source; the hook requires the source target first or an
   upstream file changed after `activation_head` and outside
   `activation_dirty_paths`, or an `upstream_edit_receipts` entry promoted by
-  post-tool fingerprint verification and still matching current non-baseline file
-  state. Pending edit attempts and reverted receipts do not unlock downstream
-  targets. The PR-body audit requires a changed upstream file before certifying
-  `fixed-in`.
+  post-tool fingerprint verification and still matching current
+  non-activation-source-baseline file state. Pending edit attempts and reverted
+  receipts do not unlock downstream targets. The PR-body audit requires a
+  changed upstream file before certifying `fixed-in`.
 - Support target set: CLOSED. Membership is the hook's explicit support paths
   and prefixes for tests, plans, Claude skill docs, and session-control docs.
   Unlisted allowed targets are treated as downstream symptom targets.
@@ -190,14 +192,17 @@ edits. For initially dirty upstream files, the pre-tool hook records only a
 pending fingerprint, and the post-tool hook promotes that pending entry to a
 receipt only if the file fingerprint changes. Downstream receipt checks compare
 the stored receipt fingerprint to current file state and the activation
-fingerprint, so reverting the source back to its activation contents removes the
-receipt as proof. The trace fields are deliberately small and machine-readable:
+source fingerprint for every declared upstream file, so reverting a dirty,
+clean, or missing source back to its activation contents removes the receipt as
+proof. The trace fields are deliberately small and machine-readable:
 
 - `symptom`: the failing check or review claim being addressed.
 - `root_cause`: the upstream defect, not the visible leaf symptom.
 - `source_trace`: the chain from symptom to source.
 - `fix_strategy`: `upstream-root` or `symptom-only-deferred`.
 - `upstream_files`: repo-relative files where the upstream source is fixed.
+- `activation_source_fingerprints`: activation fingerprints for every declared
+  upstream source, including clean or missing files.
 - `pending_upstream_edits`: pre-tool fingerprint records that do not authorize
   downstream edits.
 - `upstream_edit_receipts`: post-tool verified source edit fingerprints that can
@@ -230,7 +235,7 @@ Parked hardening: none.
 ## Verification
 
 - `python -m pytest tests/test_fix_loop_trace_contract.py tests/test_fix_mode_hook.py tests/test_audit_fix_loop_disposition.py -q`
-  -- 92 passed.
+  -- 94 passed.
 - `python -m pytest tests/test_update_pr_body_wrapper.py::test_update_wrapper_does_not_run_full_local_review tests/test_update_pr_body_wrapper.py::test_update_wrapper_ownership_guard_failure_blocks_before_edit tests/test_update_pr_body_wrapper.py::test_update_wrapper_rejects_head_drift_before_edit tests/test_update_pr_body_wrapper.py::test_update_wrapper_runs_live_reconciliation_with_publish_body tests/test_update_pr_body_wrapper.py::test_update_wrapper_stamps_full_body_before_publish -q`
   -- 5 passed.
 - `python scripts/maturity_sweep.py scripts --tests-root tests --baseline tests/maturity_sweep/baseline_scripts.json --min-score 8 --sensitive-glob 'scripts/**'`
@@ -240,18 +245,18 @@ Parked hardening: none.
 
 | File | LOC |
 |---|---:|
-| `.claude/hooks/check_edit_budget.py` | 340 |
-| `.claude/hooks/inject_fix_mode.py` | 12 |
+| `.claude/hooks/check_edit_budget.py` | 354 |
+| `.claude/hooks/inject_fix_mode.py` | 13 |
 | `.claude/settings.json` | 11 |
-| `.claude/skills/fix-mode/SKILL.md` | 36 |
+| `.claude/skills/fix-mode/SKILL.md` | 42 |
 | `AGENTS.md` | 13 |
-| `CLAUDE.md` | 16 |
-| `docs/SESSION_STATE_TEMPLATE.md` | 17 |
-| `plans/PR-Root-Cause-Trace-Hook.md` | 257 |
+| `CLAUDE.md` | 17 |
+| `docs/SESSION_STATE_TEMPLATE.md` | 19 |
+| `plans/PR-Root-Cause-Trace-Hook.md` | 262 |
 | `scripts/audit_fix_loop_disposition.py` | 66 |
 | `scripts/fix_loop_trace_contract.py` | 84 |
 | `tests/test_audit_fix_loop_disposition.py` | 344 |
 | `tests/test_fix_loop_trace_contract.py` | 76 |
-| `tests/test_fix_mode_hook.py` | 614 |
+| `tests/test_fix_mode_hook.py` | 659 |
 | `tests/test_update_pr_body_wrapper.py` | 1 |
-| **Total** | **1887** |
+| **Total** | **1961** |

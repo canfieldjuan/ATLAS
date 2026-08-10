@@ -184,16 +184,22 @@ def _receipt_set(value: object, project_dir: str) -> set[str]:
     return set(_fingerprint_map(value, project_dir))
 
 
+def _activation_source_fingerprints(baton: dict, project_dir: str) -> dict[str, str]:
+    fingerprints = _fingerprint_map(baton.get("activation_source_fingerprints"), project_dir)
+    dirty_fingerprints = _fingerprint_map(baton.get("activation_dirty_fingerprints"), project_dir)
+    fingerprints.update(dirty_fingerprints)
+    return fingerprints
+
+
 def _valid_receipt_paths(baton: dict, project_dir: str) -> set[str]:
     receipts = _fingerprint_map(baton.get("upstream_edit_receipts"), project_dir)
-    activation_dirty_paths = _path_set(baton.get("activation_dirty_paths"), project_dir)
-    activation_fingerprints = _fingerprint_map(baton.get("activation_dirty_fingerprints"), project_dir)
+    activation_fingerprints = _activation_source_fingerprints(baton, project_dir)
     valid: set[str] = set()
     for path, receipt_fingerprint in receipts.items():
         current_fingerprint = _file_fingerprint(project_dir, path)
         if current_fingerprint != receipt_fingerprint:
             continue
-        if path in activation_dirty_paths and current_fingerprint == activation_fingerprints.get(path):
+        if current_fingerprint == activation_fingerprints.get(path):
             continue
         valid.add(path)
     return valid
@@ -234,12 +240,11 @@ def _finalize_upstream_edit_receipts(
     }
     if not changed_targets:
         return
-    activation_dirty_paths = _path_set(baton.get("activation_dirty_paths"), project_dir)
-    activation_fingerprints = _fingerprint_map(baton.get("activation_dirty_fingerprints"), project_dir)
+    activation_fingerprints = _activation_source_fingerprints(baton, project_dir)
     receipts = _fingerprint_map(baton.get("upstream_edit_receipts"), project_dir)
     for path in changed_targets:
         current_fingerprint = _file_fingerprint(project_dir, path)
-        if path in activation_dirty_paths and current_fingerprint == activation_fingerprints.get(path):
+        if current_fingerprint == activation_fingerprints.get(path):
             receipts.pop(path, None)
         else:
             receipts[path] = current_fingerprint
@@ -290,6 +295,15 @@ def _root_trace_errors(baton: dict, project_dir: str) -> list[str]:
             + ", ".join(sorted(_FIX_STRATEGIES))
             + f", got {strategy!r}"
         ]
+    upstream_files = _path_set(baton.get("upstream_files"), project_dir)
+    if strategy == "upstream-root":
+        source_fingerprints = _activation_source_fingerprints(baton, project_dir)
+        missing_sources = sorted(path for path in upstream_files if path not in source_fingerprints)
+        if missing_sources:
+            return [
+                "activation_source_fingerprints must snapshot declared upstream sources for "
+                + ", ".join(missing_sources)
+            ]
     if strategy == "symptom-only-deferred":
         symptom_missing = [
             field

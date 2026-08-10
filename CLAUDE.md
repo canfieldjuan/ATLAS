@@ -1505,7 +1505,8 @@ When compacting this conversation, preserve verbatim (do not summarize away):
   latest pushed SHA) from this session's state file.
 - The full **PR Fix Mode** baton when a fix loop is active: allowed-files set +
   max-files budget, activation head, activation dirty paths, activation dirty
-  fingerprints, symptom, root cause, source trace, fix strategy, upstream files,
+  fingerprints, activation source fingerprints, pending upstream edits, upstream
+  edit receipts, symptom, root cause, source trace, fix strategy, upstream files,
   symptom-only reason/follow-up when applicable, current failing check/comment,
   last useful log finding, next exact action, and do-not-redo notes.
 - For an explicitly assigned long-running coding task, the full **PR watcher**

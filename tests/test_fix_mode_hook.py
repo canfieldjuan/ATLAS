@@ -48,6 +48,7 @@ def _root_trace() -> dict:
         "source_trace": "review claim -> parser accepts x -> admission grammar lacks x rejection",
         "fix_strategy": "upstream-root",
         "upstream_files": ["scripts/parser.py"],
+        "activation_source_fingerprints": {"scripts/parser.py": "index:unknown|worktree:missing"},
     }
 
 
@@ -424,6 +425,17 @@ def test_upstream_root_denies_downstream_with_uncaptured_activation_fingerprint(
     assert "activation_dirty_fingerprints must snapshot file state" in result.stdout
 
 
+def test_upstream_root_denies_without_source_activation_fingerprint(tmp_path):
+    baton = {**_root_trace()}
+    del baton["activation_source_fingerprints"]
+    _write_baton(tmp_path, {"active": True, "allowed": ["scripts/*"], **baton})
+
+    result = _run(CHECK_HOOK, _edit("scripts/parser.py"), tmp_path)
+
+    assert _decision(result.stdout) == "deny"
+    assert "activation_source_fingerprints must snapshot declared upstream sources" in result.stdout
+
+
 def test_upstream_root_allows_downstream_when_initially_dirty_source_changes_again(tmp_path):
     _git_fixture(tmp_path)
     parser = tmp_path / "scripts" / "parser.py"
@@ -476,6 +488,37 @@ def test_upstream_root_invalidates_receipt_when_source_reverts_to_activation_sta
     )
     assert _decision(_run(CHECK_HOOK, _edit("scripts/parser.py"), tmp_path).stdout) is None
     parser.write_text("def parse():\n    return 'post baton dirty'\n", encoding="utf-8")
+    assert _decision(_run(CHECK_HOOK, _post_edit("scripts/parser.py"), tmp_path).stdout) is None
+    assert _decision(_run(CHECK_HOOK, _edit("templates/downstream.html"), tmp_path).stdout) is None
+
+    assert _decision(_run(CHECK_HOOK, _edit("scripts/parser.py"), tmp_path).stdout) is None
+    parser.write_text(activation_text, encoding="utf-8")
+    assert _decision(_run(CHECK_HOOK, _post_edit("scripts/parser.py"), tmp_path).stdout) is None
+    state = json.loads((tmp_path / ".claude" / "fix-mode-state.json").read_text(encoding="utf-8"))
+    assert "upstream_edit_receipts" not in state
+
+    result = _run(CHECK_HOOK, _edit("templates/downstream.html"), tmp_path)
+
+    assert _decision(result.stdout) == "deny"
+
+
+def test_upstream_root_invalidates_clean_source_receipt_when_reverted_to_activation_state(tmp_path):
+    _git_fixture(tmp_path)
+    parser = tmp_path / "scripts" / "parser.py"
+    activation_text = parser.read_text(encoding="utf-8")
+    activation_fingerprint = _file_fingerprint(tmp_path, "scripts/parser.py")
+    _write_baton(
+        tmp_path,
+        {
+            "active": True,
+            "allowed": ["scripts/*", "templates/*"],
+            **_root_trace(),
+            "activation_dirty_paths": [],
+            "activation_source_fingerprints": {"scripts/parser.py": activation_fingerprint},
+        },
+    )
+    assert _decision(_run(CHECK_HOOK, _edit("scripts/parser.py"), tmp_path).stdout) is None
+    parser.write_text("def parse():\n    return 'post baton clean source edit'\n", encoding="utf-8")
     assert _decision(_run(CHECK_HOOK, _post_edit("scripts/parser.py"), tmp_path).stdout) is None
     assert _decision(_run(CHECK_HOOK, _edit("templates/downstream.html"), tmp_path).stdout) is None
 
@@ -651,6 +694,7 @@ def test_upstream_root_denies_downstream_when_untracked_source_predates_activati
         "upstream_files": ["scripts/new_parser.py"],
         "activation_dirty_paths": ["scripts/new_parser.py"],
         "activation_dirty_fingerprints": {"scripts/new_parser.py": activation_fingerprint},
+        "activation_source_fingerprints": {"scripts/new_parser.py": activation_fingerprint},
     }
     _write_baton(tmp_path, baton)
 
@@ -667,6 +711,7 @@ def test_upstream_root_allows_downstream_after_untracked_source_created_since_ac
         **_root_trace(),
         "upstream_files": ["scripts/new_parser.py"],
         "activation_dirty_paths": [],
+        "activation_source_fingerprints": {"scripts/new_parser.py": "index:none|worktree:missing"},
     }
     _write_baton(tmp_path, baton)
     (tmp_path / "scripts" / "new_parser.py").write_text("def parse():\n    return 'new'\n", encoding="utf-8")

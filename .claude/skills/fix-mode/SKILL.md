@@ -29,6 +29,9 @@ Write `.claude/fix-mode-state.json` with:
   "activation_dirty_fingerprints": {
     "<path>": "<index/worktree fingerprint for that path when armed>"
   },
+  "activation_source_fingerprints": {
+    "<upstream path>": "<index/worktree fingerprint for each declared upstream source when armed>"
+  },
   "pending_upstream_edits": {},
   "upstream_edit_receipts": {},
   "allowed": ["scripts/*", "tests/test_x.py"],
@@ -52,10 +55,13 @@ repo-relative snapshot from `git diff --name-only --cached`, `git diff --name-on
 and `git ls-files --others --exclude-standard` at the same moment. For every path
 in that list, `activation_dirty_fingerprints` records the matching index/worktree
 fingerprint; the path does not count as current-pass source work from that
-baseline alone. The pre-tool hook writes `pending_upstream_edits` for an
-admitted upstream-only edit attempt, and the post-tool hook promotes that record
-to `upstream_edit_receipts` with the verified fingerprint only when the file
-fingerprint actually changes.
+baseline alone. For every declared upstream source, including clean or missing
+files, `activation_source_fingerprints` records the matching activation
+fingerprint; a post-tool receipt is discarded whenever the current fingerprint
+returns to that baseline. The pre-tool hook writes `pending_upstream_edits` for
+an admitted upstream-only edit attempt, and the post-tool hook promotes that
+record to `upstream_edit_receipts` with the verified fingerprint only when the
+file fingerprint actually changes.
 Downstream edits use only committed/current changed paths and finalized receipts,
 never pending attempts. Also mirror these fields into the `## PR Fix Mode` block
 of `SESSION_STATE.local.md` (the human baton).
