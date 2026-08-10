@@ -73,6 +73,11 @@ Max files: 7
     `::test_tampered_session_cookie_is_invalid_returns_401`,
     `::test_expired_session_cookie_is_invalid_returns_401`,
     `::test_session_cookie_with_invalid_signature_is_rejected`.
+  - **Digest disclosure cannot forge a cookie** (signing key is independent, not
+    digest-derived): a cookie signed with the token digest ⇒ **401** —
+    `::test_cookie_forged_from_the_digest_alone_is_rejected`. Missing signing secret ⇒ login
+    **503** but bearer still 200 — `::test_login_returns_503_when_session_signing_secret_missing`,
+    `::test_bearer_still_works_without_session_signing_secret`.
   - A mutation is blocked without a credential — **401** —
     `::test_patch_mutation_blocked_when_credential_missing`.
   - The gate is **router-level**, covering ALL `/settings/*` routes (≥7) —
@@ -96,7 +101,8 @@ Max files: 7
   `atlas_brain/api/__init__.py` (wiring), `atlas_brain/config.py` (`SettingsAdminConfig`).
 - Risk areas: (1) fail-open on misconfiguration (guarded — fail-closed 503 via the shared
   validator, which also rejects placeholders); (2) session-cookie forgery (guarded — HMAC
-  signature keyed by the server-only digest, `hmac.compare_digest`, absolute expiry);
+  signature keyed by an INDEPENDENT server secret, not the token digest, so digest disclosure
+  cannot forge; `hmac.compare_digest`, absolute expiry);
   (3) CSRF on the cookie-authed mutations (guarded — `SameSite=Strict`; mutations stay
   PATCH+JSON; no CORS widening); (4) timing (`hmac.compare_digest`).
 - Reviewer rules triggered: R1 (requirements match), R2 (test evidence), R3 (security/auth —
@@ -153,7 +159,9 @@ API *unavailable* (503) rather than open, because the failure mode being prevent
 from `settings.settings_admin.token_sha256` via an overrideable dependency and validates it
 with `validate_generated_service_token_digest` — empty/malformed/placeholder ⇒ 503
 (fail-closed). It then allows the request if a valid `atlas_settings_admin_session` cookie is
-present (HMAC signature keyed by a digest-derived key, absolute expiry, `hmac.compare_digest`)
+present (HMAC signature keyed by an INDEPENDENT server secret `ATLAS_SETTINGS_ADMIN_SESSION_SECRET`
+— NOT derived from the token digest, so a digest-only disclosure cannot forge a cookie —
+absolute expiry, `hmac.compare_digest`)
 OR a valid `Authorization: Bearer <token>` is presented; otherwise 401. It is attached with
 `APIRouter(prefix="/settings", dependencies=[Depends(require_settings_admin)])`, gating every
 route before any handler runs. `settings_session.py` exposes `POST /settings/session` (verify
@@ -203,7 +211,9 @@ multi-thousand-digit value overflows CPython's int-conversion limit — both are
 - `maturity_sweep.py atlas_brain/api --baseline ...` → ratchet gate passed (no new brittleness).
 - Pre-fix reachability proof: `curl https://atlas-brain.tailc7bd29.ts.net/api/v1/settings/notifications`
   → HTTP 200 (unauthenticated). Post-deploy: same request → 401.
-- Post-merge deploy: provision `ATLAS_SETTINGS_ADMIN_TOKEN_SHA256` in the runtime `.env`
+- Post-merge deploy: provision BOTH `ATLAS_SETTINGS_ADMIN_TOKEN_SHA256` (digest) and the
+  INDEPENDENT `ATLAS_SETTINGS_ADMIN_SESSION_SECRET` (from `generate_settings_admin_session_secret()`,
+  >=32 chars — required for the cookie/login path) in the runtime `.env`
   (the digest from `generate_settings_admin_service_token()`); restart `atlas-api.service`;
   re-verify the public GET now returns 401 and an authed request (bearer or a fresh session
   cookie) 200.
@@ -220,9 +230,9 @@ multi-thousand-digit value overflows CPython's int-conversion limit — both are
 |---|---:|
 | `atlas_brain/api/__init__.py` | 2 |
 | `atlas_brain/api/settings.py` | 13 |
-| `atlas_brain/api/settings_auth.py` | 204 |
-| `atlas_brain/api/settings_session.py` | 70 |
-| `atlas_brain/config.py` | 17 |
-| `plans/PR-EOM-Settings-Admin-Auth.md` | 228 |
-| `tests/test_settings_auth.py` | 252 |
-| **Total** | **786** |
+| `atlas_brain/api/settings_auth.py` | 224 |
+| `atlas_brain/api/settings_session.py` | 77 |
+| `atlas_brain/config.py` | 19 |
+| `plans/PR-EOM-Settings-Admin-Auth.md` | 238 |
+| `tests/test_settings_auth.py` | 280 |
+| **Total** | **853** |

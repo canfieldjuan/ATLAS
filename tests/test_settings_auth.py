@@ -34,6 +34,7 @@ session_mod = importlib.import_module("atlas_brain.api.settings_session")
 from atlas_brain.api.settings_auth import (  # noqa: E402
     SESSION_COOKIE_NAME,
     generate_settings_admin_service_token,
+    generate_settings_admin_session_secret,
     get_settings_admin_config,
     mint_settings_session,
 )
@@ -41,17 +42,19 @@ from atlas_brain.config import SettingsAdminConfig  # noqa: E402
 
 # A properly generated admin token (prefix + entropy) and its digest.
 RAW_TOKEN, DIGEST = generate_settings_admin_service_token()
+# An INDEPENDENT signing secret — deliberately NOT derived from DIGEST.
+SIGNING_SECRET = generate_settings_admin_session_secret()
 PLACEHOLDER_DIGEST = "0" * 64  # in the established _PLACEHOLDER_TOKEN_DIGESTS set
 NOTIF = "/api/v1/settings/notifications"
 SESSION = "/api/v1/settings/session"
 
 
-def _client(digest: str) -> TestClient:
+def _client(digest: str, secret: str = SIGNING_SECRET) -> TestClient:
     app = FastAPI()
     app.include_router(settings_mod.router, prefix="/api/v1")
     app.include_router(session_mod.router, prefix="/api/v1")
     app.dependency_overrides[get_settings_admin_config] = (
-        lambda: SettingsAdminConfig(token_sha256=digest)
+        lambda: SettingsAdminConfig(token_sha256=digest, session_signing_secret=secret)
     )
     return TestClient(app)
 
@@ -179,7 +182,7 @@ def test_tampered_session_cookie_is_invalid_returns_401():
 
 def test_expired_session_cookie_is_invalid_returns_401():
     c = _client(DIGEST)
-    expired = mint_settings_session(DIGEST, ttl_seconds=-10)  # exp in the past
+    expired = mint_settings_session(SIGNING_SECRET, ttl_seconds=-10)  # exp in the past
     r = c.get(NOTIF, headers={"Cookie": f"{SESSION_COOKIE_NAME}={expired}"})
     assert r.status_code == 401
 
@@ -199,15 +202,40 @@ def test_verify_settings_session_rejects_malformed_expiry(exp):
     rejects, and huge values overflow int() — all must be rejected (False), so
     the endpoint fails closed with 401 rather than raising a 500."""
     from atlas_brain.api.settings_auth import verify_settings_session
-    assert verify_settings_session(f"v1.{exp}.deadbeef", DIGEST) is False
+    assert verify_settings_session(f"v1.{exp}.deadbeef", SIGNING_SECRET) is False
 
 
 def test_session_cookie_with_invalid_signature_is_rejected():
-    """A cookie minted against a different digest must not authenticate here."""
+    """A cookie minted with a different signing secret must not authenticate here."""
     c = _client(DIGEST)
-    foreign = mint_settings_session("f" * 64)
+    foreign = mint_settings_session("z" * 40)  # a different (valid-length) secret
     r = c.get(NOTIF, headers={"Cookie": f"{SESSION_COOKIE_NAME}={foreign}"})
     assert r.status_code == 401
+
+
+def test_cookie_forged_from_the_digest_alone_is_rejected():
+    """A read-only disclosure of the token DIGEST must not enable cookie forgery:
+    the signing key is an INDEPENDENT secret, so a cookie signed with the digest
+    (all an attacker learns from a config/env leak) is rejected (401)."""
+    c = _client(DIGEST)
+    forged = mint_settings_session(DIGEST)  # attacker signs with the leaked digest
+    r = c.get(NOTIF, headers={"Cookie": f"{SESSION_COOKIE_NAME}={forged}"})
+    assert r.status_code == 401
+
+
+def test_login_returns_503_when_session_signing_secret_missing():
+    """Without an independent signing secret the login cannot mint a verifiable
+    cookie, so it is unavailable (503) rather than issuing a forgeable one."""
+    c = _client(DIGEST, secret="")
+    r = c.post(SESSION, headers={"Authorization": f"Bearer {RAW_TOKEN}"})
+    assert r.status_code == 503
+
+
+def test_bearer_still_works_without_session_signing_secret():
+    """The cookie path being unavailable (no signing secret) must not break the
+    bearer path — a valid bearer still authenticates."""
+    c = _client(DIGEST, secret="")
+    assert c.get(NOTIF, headers={"Authorization": f"Bearer {RAW_TOKEN}"}).status_code == 200
 
 
 def test_logout_clears_the_cookie():

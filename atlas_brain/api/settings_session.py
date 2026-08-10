@@ -26,6 +26,7 @@ from .settings_auth import (
     get_settings_admin_config,
     mint_settings_session,
     resolve_expected_digest,
+    resolve_session_signing_secret,
     token_matches,
 )
 
@@ -42,6 +43,12 @@ async def create_settings_session(
 ) -> Response:
     """Exchange the admin token (bearer or JSON ``{token}``) for a session cookie."""
     expected_digest = resolve_expected_digest(config)  # 503 if unconfigured/placeholder
+    signing_secret = resolve_session_signing_secret(config)
+    if not signing_secret:
+        # No independent signing secret => we cannot mint a verifiable cookie.
+        raise HTTPException(
+            status_code=503, detail="Settings admin session signing is not configured"
+        )
     presented = bearer_token(authorization) or (token.strip() if token else "")
     if not presented or not token_matches(presented, expected_digest):
         raise HTTPException(status_code=401, detail="Invalid settings admin token")
@@ -52,7 +59,7 @@ async def create_settings_session(
     )
     response.set_cookie(
         key=SESSION_COOKIE_NAME,
-        value=mint_settings_session(expected_digest),
+        value=mint_settings_session(signing_secret),
         max_age=SESSION_TTL_SECONDS,
         httponly=True,
         secure=True,

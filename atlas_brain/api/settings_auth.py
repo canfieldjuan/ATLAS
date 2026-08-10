@@ -60,6 +60,9 @@ SESSION_COOKIE_NAME = "atlas_settings_admin_session"
 SESSION_COOKIE_PATH = "/api/v1/settings"
 SESSION_TTL_SECONDS = 12 * 60 * 60  # 12h operator session
 _SESSION_VERSION = "v1"
+# Minimum length for the INDEPENDENT cookie-signing secret. Below this the cookie
+# path is unavailable (bearer still works) — never a weak signing key.
+_MIN_SESSION_SECRET_LEN = 32
 
 
 def get_settings_admin_config() -> SettingsAdminConfig:
@@ -128,43 +131,59 @@ def token_matches(provided: str, expected_digest: str) -> bool:
     return hmac.compare_digest(provided_digest, expected_digest)
 
 
-def _session_signing_key(expected_digest: str) -> bytes:
-    """Domain-separated signing key derived from the server-only digest.
+def resolve_session_signing_secret(config: SettingsAdminConfig) -> str:
+    """Return the INDEPENDENT cookie-signing secret if it meets the length floor.
 
-    The digest never leaves the server, so it is a safe HMAC key; deriving a
-    dedicated key keeps the session signature distinct from the raw digest.
+    Returns "" when unset/too short — in which case the session-cookie path is
+    unavailable (bearer still works), and cookies can neither be minted nor verified.
+    """
+    secret = (config.session_signing_secret or "").strip()
+    return secret if len(secret) >= _MIN_SESSION_SECRET_LEN else ""
+
+
+def _session_signing_key(signing_secret: str) -> bytes:
+    """Domain-separated HMAC key derived from the INDEPENDENT session secret.
+
+    Deliberately NOT derived from the token digest: a read-only disclosure of the
+    digest alone must not be sufficient to forge a session cookie.
     """
     return hmac.new(
-        expected_digest.encode("ascii"),
+        signing_secret.encode("utf-8"),
         b"atlas-settings-admin-session-v1",
         hashlib.sha256,
     ).digest()
 
 
-def _sign_session(expiry_epoch: int, expected_digest: str) -> str:
+def _sign_session(expiry_epoch: int, signing_secret: str) -> str:
     payload = f"{_SESSION_VERSION}.{expiry_epoch}"
     mac = hmac.new(
-        _session_signing_key(expected_digest), payload.encode("ascii"), hashlib.sha256
+        _session_signing_key(signing_secret), payload.encode("ascii"), hashlib.sha256
     ).hexdigest()
     return f"{payload}.{mac}"
 
 
+def generate_settings_admin_session_secret() -> str:
+    """Return a fresh high-entropy secret for ATLAS_SETTINGS_ADMIN_SESSION_SECRET."""
+    return secrets.token_urlsafe(32)
+
+
 def mint_settings_session(
-    expected_digest: str,
+    signing_secret: str,
     *,
     ttl_seconds: int = SESSION_TTL_SECONDS,
     now: float | None = None,
 ) -> str:
     """Return a signed session cookie value valid for ``ttl_seconds`` from now."""
     current = int(now if now is not None else time.time())
-    return _sign_session(current + ttl_seconds, expected_digest)
+    return _sign_session(current + ttl_seconds, signing_secret)
 
 
 def verify_settings_session(
-    cookie_value: str, expected_digest: str, *, now: float | None = None
+    cookie_value: str, signing_secret: str, *, now: float | None = None
 ) -> bool:
-    """Return True iff ``cookie_value`` is a well-formed, unexpired, valid signature."""
-    if not cookie_value:
+    """Return True iff ``cookie_value`` is a well-formed, unexpired signature under
+    the INDEPENDENT signing secret. An empty/short secret => never valid."""
+    if len(signing_secret) < _MIN_SESSION_SECRET_LEN or not cookie_value:
         return False
     parts = cookie_value.split(".")
     if len(parts) != 3:
@@ -180,7 +199,7 @@ def verify_settings_session(
     if not (exp_str.isascii() and exp_str.isdigit()) or len(exp_str) > 20:
         return False
     expiry_epoch = int(exp_str)
-    expected_value = _sign_session(expiry_epoch, expected_digest)
+    expected_value = _sign_session(expiry_epoch, signing_secret)
     if not hmac.compare_digest(cookie_value, expected_value):
         return False
     current = now if now is not None else time.time()
@@ -194,7 +213,8 @@ async def require_settings_admin(
 ) -> None:
     """Require a valid session cookie OR bearer token. Fail-closed on misconfig."""
     expected_digest = resolve_expected_digest(config)  # 503 if unconfigured/placeholder
-    if verify_settings_session(session_cookie, expected_digest):
+    signing_secret = resolve_session_signing_secret(config)
+    if signing_secret and verify_settings_session(session_cookie, signing_secret):
         return
     token = bearer_token(authorization)
     if token is not None and token_matches(token, expected_digest):
