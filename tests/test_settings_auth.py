@@ -33,13 +33,14 @@ settings_mod = importlib.import_module("atlas_brain.api.settings")
 session_mod = importlib.import_module("atlas_brain.api.settings_session")
 from atlas_brain.api.settings_auth import (  # noqa: E402
     SESSION_COOKIE_NAME,
+    generate_settings_admin_service_token,
     get_settings_admin_config,
     mint_settings_session,
 )
 from atlas_brain.config import SettingsAdminConfig  # noqa: E402
 
-RAW_TOKEN = "s3cret-admin-token-0123456789abcdef"
-DIGEST = hashlib.sha256(RAW_TOKEN.encode("ascii")).hexdigest()
+# A properly generated admin token (prefix + entropy) and its digest.
+RAW_TOKEN, DIGEST = generate_settings_admin_service_token()
 PLACEHOLDER_DIGEST = "0" * 64  # in the established _PLACEHOLDER_TOKEN_DIGESTS set
 NOTIF = "/api/v1/settings/notifications"
 SESSION = "/api/v1/settings/session"
@@ -94,6 +95,17 @@ def test_configured_bad_authorization_returns_401(header):
 def test_correct_bearer_passes_the_gate():
     r = _client(DIGEST).get(NOTIF, headers={"Authorization": f"Bearer {RAW_TOKEN}"})
     assert r.status_code == 200
+
+
+def test_nongenerated_token_is_invalid_even_if_its_digest_is_configured():
+    """Strength enforcement: a weak/non-generated token is rejected even when an
+    operator provisions its digest — it lacks the generated prefix/entropy, so it
+    can never match (401), and the same holds at the login endpoint."""
+    weak = "password123"
+    weak_digest = hashlib.sha256(weak.encode("ascii")).hexdigest()  # not a placeholder
+    c = _client(weak_digest)
+    assert c.get(NOTIF, headers={"Authorization": f"Bearer {weak}"}).status_code == 401
+    assert c.post(SESSION, json={"token": weak}).status_code == 401
 
 
 def test_patch_mutation_blocked_when_credential_missing():
@@ -162,6 +174,15 @@ def test_expired_session_cookie_is_invalid_returns_401():
     assert r.status_code == 401
 
 
+def test_session_cookie_with_oversized_expiry_is_invalid_returns_401():
+    """A cookie whose numeric expiry exceeds CPython's int() digit limit must be
+    rejected with 401, not crash the guard with a 500 (ValueError)."""
+    c = _client(DIGEST)
+    huge = "v1." + ("9" * 5000) + ".deadbeef"
+    r = c.get(NOTIF, headers={"Cookie": f"{SESSION_COOKIE_NAME}={huge}"})
+    assert r.status_code == 401
+
+
 def test_session_cookie_with_invalid_signature_is_rejected():
     """A cookie minted against a different digest must not authenticate here."""
     c = _client(DIGEST)
@@ -179,6 +200,27 @@ def test_logout_clears_the_cookie():
 
 
 # ── router-level coverage ───────────────────────────────────────────────────
+
+def test_production_aggregate_wires_session_route_and_gates_settings():
+    """Regression guard: exercise the REAL `atlas_brain.api` aggregate, not an
+    ad-hoc app, so a dropped `include_router(settings_session_router)` or a lost
+    router dependency fails the test instead of passing silently."""
+    import importlib
+    from starlette.routing import Route
+
+    api = importlib.import_module("atlas_brain.api")
+    app = FastAPI()
+    app.include_router(api.router, prefix="/api/v1")
+    app.dependency_overrides[get_settings_admin_config] = (
+        lambda: SettingsAdminConfig(token_sha256="")
+    )
+    c = TestClient(app)
+    aggregate_paths = {r.path for r in api.router.routes if isinstance(r, Route)}
+    assert "/settings/session" in aggregate_paths  # session router is wired in
+    # gate is active through the production aggregate: unconfigured => 503, never 200
+    assert c.get("/api/v1/settings/notifications").status_code == 503
+    assert c.post("/api/v1/settings/session").status_code == 503
+
 
 def test_every_settings_route_is_gated():
     """Router-level dependency covers ALL /settings/* routes, not just notifications."""

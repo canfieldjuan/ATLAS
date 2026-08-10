@@ -29,12 +29,25 @@ from __future__ import annotations
 
 import hashlib
 import hmac
+import secrets
 import time
 
 from fastapi import Cookie, Depends, Header, HTTPException
 
 from ..config import SettingsAdminConfig, settings
-from ..eom_api.auth import validate_generated_service_token_digest
+from ..eom_api.auth import (
+    validate_generated_service_token,
+    validate_generated_service_token_digest,
+)
+
+# The admin token must be a generated service token (prefix + entropy), not any
+# string whose digest happens to be provisioned — so a weak/guessable token can
+# never authenticate even if its digest is configured. Mirrors the receivables
+# gate's request-time strength enforcement.
+_SETTINGS_TOKEN_PREFIX = "eomset_v1_"
+_GENERATOR_REFERENCE = (
+    "atlas_brain.api.settings_auth.generate_settings_admin_service_token()"
+)
 
 # The browser carries this HttpOnly cookie instead of a bearer the JS could read.
 SESSION_COOKIE_NAME = "atlas_settings_admin_session"
@@ -77,13 +90,34 @@ def bearer_token(authorization: str) -> str | None:
     return provided.strip()
 
 
-def token_matches(provided: str, expected_digest: str) -> bool:
-    """Constant-time check that ``sha256(provided) == expected_digest``.
+def generate_settings_admin_service_token() -> tuple[str, str]:
+    """Return ``(raw_token, sha256_digest)`` for provisioning the admin token.
 
-    A non-ascii token can never match an ascii-hex digest, so reject it up front
-    rather than letting ``encode('ascii')`` raise.
+    Provision the digest as ``ATLAS_SETTINGS_ADMIN_TOKEN_SHA256`` and keep the raw
+    token on the caller/operator side.
     """
-    if not provided.isascii():
+    token = f"{_SETTINGS_TOKEN_PREFIX}{secrets.token_urlsafe(32)}"
+    return token, hashlib.sha256(token.encode("ascii")).hexdigest()
+
+
+def token_matches(provided: str, expected_digest: str) -> bool:
+    """Constant-time check that a GENERATED admin token hashes to the digest.
+
+    The presented token must first pass the generated-service-token format check
+    (prefix + fixed-length url-safe random payload) — so a weak, guessable, or
+    non-generated token can never match even if its digest were provisioned. A
+    non-ascii token fails the format check (charset), so we never reach the
+    ascii encode.
+    """
+    try:
+        validate_generated_service_token(
+            provided,
+            token_prefix=_SETTINGS_TOKEN_PREFIX,
+            service_name="Settings admin",
+            generator_reference=_GENERATOR_REFERENCE,
+            exact_random_length=True,
+        )
+    except RuntimeError:
         return False
     provided_digest = hashlib.sha256(provided.encode("ascii")).hexdigest()
     return hmac.compare_digest(provided_digest, expected_digest)
@@ -133,7 +167,10 @@ def verify_settings_session(
     version, exp_str, _mac = parts
     if version != _SESSION_VERSION:
         return False
-    if not exp_str.isdigit():  # non-numeric expiry is malformed, not an error to raise
+    # Bound the length BEFORE int(): a many-thousand-digit numeric string passes
+    # isdigit() but int() raises ValueError past CPython's conversion limit — a
+    # valid epoch is ~10 digits, so anything over 20 is malformed, not a 500.
+    if not exp_str.isdigit() or len(exp_str) > 20:
         return False
     expiry_epoch = int(exp_str)
     expected_value = _sign_session(expiry_epoch, expected_digest)

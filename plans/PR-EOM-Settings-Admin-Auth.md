@@ -79,6 +79,11 @@ Max files: 7
     `::test_every_settings_route_is_gated`.
   - Non-ascii bearer does not 500 — `::test_non_ascii_bearer_is_invalid_returns_401`.
   - Logout clears the cookie — `::test_logout_clears_the_cookie`.
+  - A weak/non-generated token is rejected even if its digest is provisioned (strength, not
+    just a denylist) — `::test_nongenerated_token_is_invalid_even_if_its_digest_is_configured`.
+  - An oversized cookie expiry does not 500 — `::test_session_cookie_with_oversized_expiry_is_invalid_returns_401`.
+  - The PRODUCTION `atlas_brain.api` aggregate wires the session route AND gates the settings
+    routes — `::test_production_aggregate_wires_session_route_and_gates_settings`.
 - Reachability proof: real entrypoint `PATCH/GET https://atlas-brain.tailc7bd29.ts.net/api/v1/settings/*`
   (public funnel → 127.0.0.1:8012). Observable effect: unauthenticated request → 401/503
   (was 200). Verified pre-fix with a live `GET → 200`.
@@ -151,6 +156,15 @@ route before any handler runs. `settings_session.py` exposes `POST /settings/ses
 the token, set the HttpOnly/Secure/SameSite=Strict cookie) and `DELETE /settings/session`
 (clear it), NOT behind the gate.
 
+**Token-strength enforcement (not just a denylist).** `token_matches` first runs the shared
+`validate_generated_service_token` (prefix `eomset_v1_` + fixed-length url-safe random payload)
+on the PRESENTED token, mirroring the receivables gate — so a weak/guessable/non-generated
+token can never match even if its digest were provisioned. `generate_settings_admin_service_token()`
+produces the `(raw_token, digest)` pair for provisioning. `verify_settings_session` bounds the
+cookie's numeric expiry length before integer conversion (a multi-thousand-digit value passes
+the digit check but overflows CPython's int-conversion limit — bounded to reject with 401,
+never 500).
+
 ## Intentional
 
 - Service-token auth on the same funnel as the sibling receivables API — not SaaS/JWT user
@@ -183,9 +197,15 @@ the token, set the HttpOnly/Secure/SameSite=Strict cookie) and `DELETE /settings
 - Pre-fix reachability proof: `curl https://atlas-brain.tailc7bd29.ts.net/api/v1/settings/notifications`
   → HTTP 200 (unauthenticated). Post-deploy: same request → 401.
 - Post-merge deploy: provision `ATLAS_SETTINGS_ADMIN_TOKEN_SHA256` in the runtime `.env`
-  (SHA-256 of a fresh raw token); restart `atlas-api.service`; re-verify the public GET now
-  returns 401 and an authed request (bearer or a fresh session cookie) 200. Deploy together
-  with the follow-up UI login slice so the admin UI keeps working.
+  (the digest from `generate_settings_admin_service_token()`); restart `atlas-api.service`;
+  re-verify the public GET now returns 401 and an authed request (bearer or a fresh session
+  cookie) 200.
+- **HARD co-deploy requirement (do NOT deploy this PR to prod alone):** once this router
+  dependency is live, the settings routes return 503 (digest unconfigured) or 401 (no browser
+  credential), so the admin Settings UI is unusable until the follow-up login-form slice
+  (**#2343**) ships. Deploy #2342 and #2343 together in the same window and provision the token
+  then. Merging #2342 alone is safe (no runtime effect until deployed); deploying it alone is
+  not. This is the intentional slice boundary (backend / `.tsx` split), tracked in #2343.
 
 ## Estimated diff size
 
@@ -193,9 +213,9 @@ the token, set the HttpOnly/Secure/SameSite=Strict cookie) and `DELETE /settings
 |---|---:|
 | `atlas_brain/api/__init__.py` | 2 |
 | `atlas_brain/api/settings.py` | 13 |
-| `atlas_brain/api/settings_auth.py` | 160 |
+| `atlas_brain/api/settings_auth.py` | 197 |
 | `atlas_brain/api/settings_session.py` | 70 |
 | `atlas_brain/config.py` | 17 |
-| `plans/PR-EOM-Settings-Admin-Auth.md` | 201 |
-| `tests/test_settings_auth.py` | 191 |
-| **Total** | **654** |
+| `plans/PR-EOM-Settings-Admin-Auth.md` | 221 |
+| `tests/test_settings_auth.py` | 233 |
+| **Total** | **753** |
