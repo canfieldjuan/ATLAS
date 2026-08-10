@@ -267,25 +267,54 @@ async def test_variant_recorded_on_interaction_even_when_no_email_is_sent():
     assert metadata["ack_variant"] == CONTRACT_COMMERCIAL_MULTI_SITE
 
 
-# --- no copy change in this slice ----------------------------------------
+# --- which template each variant renders ---------------------------------
 
-@pytest.mark.parametrize(
-    "service",
-    ["residential", "deep", "move", "commercial", "multi-location-commercial", "other", ""],
-)
-def test_all_variants_still_render_the_single_existing_template(service):
-    """A1 classifies and records only. Template selection arrives in A2/A3."""
+# A1's `test_all_variants_still_render_the_single_existing_template` asserted
+# that classification changed no copy. A2/A3 is precisely the slice that makes
+# that false for the two commercial variants, so it is replaced here rather
+# than relaxed: the residential/general half of the guarantee is kept intact
+# and the commercial half is inverted into a positive assertion.
+
+
+@pytest.mark.parametrize("service", ["residential", "deep", "move", "other", ""])
+def test_residential_and_general_still_render_the_original_template(service):
+    """Everything not known to be commercial keeps the copy it gets today.
+
+    `other` and unrecognised values classify as `general`. Those leads are not
+    known to be businesses, so they keep the existing template rather than
+    being pointed at the commercial copy.
+    """
     baseline_subject, baseline_body = format_request_acknowledgement(
         "Jane", "residential", "monthly"
     )
     subject, body = format_request_acknowledgement("Jane", service, "monthly")
 
     assert subject == baseline_subject
-    # Only the echoed "Your request:" line may differ between services.
+    # Only the echoed "Your request:" line may differ between these services.
     def _without_request_line(text: str) -> list[str]:
         return [line for line in text.splitlines() if not line.startswith("Your request:")]
 
     assert _without_request_line(body) == _without_request_line(baseline_body)
+
+
+@pytest.mark.parametrize(
+    ("service", "marker"),
+    [
+        ("commercial", "set up a time and day for a walk-through"),
+        ("multi-location-commercial", "for multiple locations"),
+    ],
+)
+def test_commercial_services_render_their_own_template(service, marker):
+    """The two commercial variants no longer render the residential copy."""
+    _, residential_body = format_request_acknowledgement("Jane", "residential", "monthly")
+    _, body = format_request_acknowledgement("Jane", service, "weekly")
+
+    assert marker in body
+    assert body != residential_body
+    # The specific residential promises that were wrong for a business.
+    assert "Mayra Canfield and Tina Gomez" not in body
+    assert "less than 20 minutes" not in body
+    assert "schedule your first cleaning right then" not in body
 
 
 def test_residential_render_is_byte_identical_to_pre_change_production():
