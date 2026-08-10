@@ -69,7 +69,7 @@ on:
       - "tests/test_crm_read_scoping.py"
       - "tests/test_eom_complaints_integration.py"
       - "tests/test_eom_contacts_api_tenant_scope.py"
-      - "tests/test_eom_known_contacts.py"
+      - "tests/test_eom_link_verification.py"
       - "tests/test_eom_lead_conversion.py"
       - "tests/test_eom_lead_conversion_integration.py"
       - "tests/test_eom_write_boundary_audit.py"
@@ -152,7 +152,7 @@ on:
       - "tests/test_crm_read_scoping.py"
       - "tests/test_eom_complaints_integration.py"
       - "tests/test_eom_contacts_api_tenant_scope.py"
-      - "tests/test_eom_known_contacts.py"
+      - "tests/test_eom_link_verification.py"
       - "tests/test_eom_lead_conversion.py"
       - "tests/test_eom_lead_conversion_integration.py"
       - "tests/test_eom_write_boundary_audit.py"
@@ -213,7 +213,7 @@ jobs:
             tests/test_crm_read_scoping.py \
             tests/test_eom_complaints_integration.py \
             tests/test_eom_contacts_api_tenant_scope.py \
-            tests/test_eom_known_contacts.py \
+            tests/test_eom_link_verification.py \
             tests/test_eom_lead_conversion.py \
             tests/test_eom_lead_conversion_integration.py \
             tests/test_eom_write_boundary_audit.py \

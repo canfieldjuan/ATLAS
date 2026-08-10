@@ -271,8 +271,6 @@ async def test_tenant_scope_holds_against_real_postgres():
     schema = f"atlas_eom_known_contacts_{uuid.uuid4().hex}"
     admin_conn = await asyncpg.connect(database_url)
     pool = None
-    db_mod = None
-    original_db_pool = None
     try:
         await admin_conn.execute(f'CREATE SCHEMA "{schema}"')
         await admin_conn.execute(f'SET search_path TO "{schema}", public')
@@ -292,11 +290,10 @@ async def test_tenant_scope_holds_against_real_postgres():
         pool = await asyncpg.create_pool(
             database_url, min_size=1, max_size=2, setup=set_search_path
         )
-
-        import atlas_brain.storage.database as db_mod
-
-        original_db_pool = db_mod._db_pool
-        db_mod._db_pool = _PoolAdapter(pool)
+        # Injected through the constructor, which exists for exactly this.
+        # Reaching into atlas_brain.storage.database._db_pool would test the
+        # same SQL while coupling this file to a private module attribute.
+        provider = DatabaseCRMProvider(pool=_PoolAdapter(pool))
 
         eom_row = await pool.fetchrow(
             """
@@ -314,7 +311,7 @@ async def test_tenant_scope_holds_against_real_postgres():
         )
         deleted_id = uuid4()
 
-        known = await DatabaseCRMProvider().list_known_eom_contact_ids(
+        known = await provider.list_known_eom_contact_ids(
             contact_ids=[eom_row["id"], foreign_row["id"], deleted_id]
         )
 
@@ -324,8 +321,6 @@ async def test_tenant_scope_holds_against_real_postgres():
         )
         assert deleted_id not in known
     finally:
-        if db_mod is not None:
-            db_mod._db_pool = original_db_pool
         if pool is not None:
             await pool.close()
         await admin_conn.execute(f'DROP SCHEMA IF EXISTS "{schema}" CASCADE')

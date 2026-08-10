@@ -51,7 +51,7 @@ and depends on this deploying first.
 
 - Acceptance criteria:
   - A dangling id is reported unknown and a live id is reported known — settled by
-    `tests/test_eom_known_contacts.py::test_a_dangling_link_is_reported_as_unknown`
+    `tests/test_eom_link_verification.py::test_a_dangling_link_is_reported_as_unknown`
     and `::test_a_live_contact_is_not_reported_as_dangling`.
   - A contact in another business context is never reported known, proven against
     real PostgreSQL rather than a stub — settled by
@@ -121,7 +121,7 @@ EOM funnel reads already use.
 - `atlas_brain/eom_api/funnel.py`
 - `atlas_brain/services/crm_provider.py`
 - `plans/PR-EOM-Contact-Link-Verification.md`
-- `tests/test_eom_known_contacts.py`
+- `tests/test_eom_link_verification.py`
 
 ## Mechanism
 
@@ -179,7 +179,7 @@ Parked hardening: none.
 
 ## Verification
 
-- `tests/test_eom_known_contacts.py` — 14 tests, run against a throwaway
+- `tests/test_eom_link_verification.py` — 14 tests, run against a throwaway
   `postgres:16` with `ATLAS_MIGRATION_TEST_DATABASE_URL` set: **14 passed**.
 - Negative controls, both run and both failing as required before restore:
   removing the tenant predicate from the provider query fails
@@ -200,5 +200,5 @@ Parked hardening: none.
 | `atlas_brain/eom_api/funnel.py` | 67 |
 | `atlas_brain/services/crm_provider.py` | 33 |
 | `plans/PR-EOM-Contact-Link-Verification.md` | 204 |
-| `tests/test_eom_known_contacts.py` | 347 |
-| **Total** | **654** |
+| `tests/test_eom_link_verification.py` | 342 |
+| **Total** | **649** |
