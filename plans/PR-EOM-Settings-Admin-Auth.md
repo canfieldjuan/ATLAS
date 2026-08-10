@@ -207,7 +207,8 @@ multi-thousand-digit value overflows CPython's int-conversion limit — both are
 
 ## Verification
 
-- `.venv/bin/python -m pytest tests/test_settings_auth.py -q` → 22 passed (auth + session matrix).
+- `.venv/bin/python -m pytest tests/test_settings_auth.py -q` → 44 passed at HEAD (auth +
+  session + token-strength/entropy + independent-key + rotation-invalidation + env-mapping matrix).
 - `maturity_sweep.py atlas_brain/api --baseline ...` → ratchet gate passed (no new brittleness).
 - Pre-fix reachability proof: `curl https://atlas-brain.tailc7bd29.ts.net/api/v1/settings/notifications`
   → HTTP 200 (unauthenticated). Post-deploy: same request → 401.
@@ -230,9 +231,9 @@ multi-thousand-digit value overflows CPython's int-conversion limit — both are
 |---|---:|
 | `atlas_brain/api/__init__.py` | 2 |
 | `atlas_brain/api/settings.py` | 13 |
-| `atlas_brain/api/settings_auth.py` | 229 |
+| `atlas_brain/api/settings_auth.py` | 237 |
 | `atlas_brain/api/settings_session.py` | 77 |
 | `atlas_brain/config.py` | 19 |
-| `plans/PR-EOM-Settings-Admin-Auth.md` | 238 |
-| `tests/test_settings_auth.py` | 301 |
-| **Total** | **879** |
+| `plans/PR-EOM-Settings-Admin-Auth.md` | 239 |
+| `tests/test_settings_auth.py` | 313 |
+| **Total** | **900** |

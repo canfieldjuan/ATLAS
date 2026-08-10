@@ -59,7 +59,7 @@ async def create_settings_session(
     )
     response.set_cookie(
         key=SESSION_COOKIE_NAME,
-        value=mint_settings_session(signing_secret),
+        value=mint_settings_session(signing_secret, expected_digest),
         max_age=SESSION_TTL_SECONDS,
         httponly=True,
         secure=True,

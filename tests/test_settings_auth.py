@@ -182,7 +182,7 @@ def test_tampered_session_cookie_is_invalid_returns_401():
 
 def test_expired_session_cookie_is_invalid_returns_401():
     c = _client(DIGEST)
-    expired = mint_settings_session(SIGNING_SECRET, ttl_seconds=-10)  # exp in the past
+    expired = mint_settings_session(SIGNING_SECRET, DIGEST, ttl_seconds=-10)  # exp in the past
     r = c.get(NOTIF, headers={"Cookie": f"{SESSION_COOKIE_NAME}={expired}"})
     assert r.status_code == 401
 
@@ -202,13 +202,13 @@ def test_verify_settings_session_rejects_malformed_expiry(exp):
     rejects, and huge values overflow int() — all must be rejected (False), so
     the endpoint fails closed with 401 rather than raising a 500."""
     from atlas_brain.api.settings_auth import verify_settings_session
-    assert verify_settings_session(f"v1.{exp}.deadbeef", SIGNING_SECRET) is False
+    assert verify_settings_session(f"v1.{exp}.deadbeef", SIGNING_SECRET, DIGEST) is False
 
 
 def test_session_cookie_with_invalid_signature_is_rejected():
     """A cookie minted with a different signing secret must not authenticate here."""
     c = _client(DIGEST)
-    foreign = mint_settings_session("z" * 40)  # a different (valid-length) secret
+    foreign = mint_settings_session("z" * 40, DIGEST)  # a different (valid-length) secret
     r = c.get(NOTIF, headers={"Cookie": f"{SESSION_COOKIE_NAME}={foreign}"})
     assert r.status_code == 401
 
@@ -218,9 +218,21 @@ def test_cookie_forged_from_the_digest_alone_is_rejected():
     the signing key is an INDEPENDENT secret, so a cookie signed with the digest
     (all an attacker learns from a config/env leak) is rejected (401)."""
     c = _client(DIGEST)
-    forged = mint_settings_session(DIGEST)  # attacker signs with the leaked digest
+    forged = mint_settings_session(DIGEST, DIGEST)  # attacker signs with the leaked digest
     r = c.get(NOTIF, headers={"Cookie": f"{SESSION_COOKIE_NAME}={forged}"})
     assert r.status_code == 401
+
+
+def test_rotating_the_admin_token_invalidates_existing_cookies():
+    """Rotating the bearer (new digest) invalidates cookies minted under the old one,
+    even if the independent signing secret is retained — the signature is bound to the
+    current digest. A fresh cookie under the new digest still authenticates."""
+    new_token, new_digest = generate_settings_admin_service_token()
+    old_cookie = mint_settings_session(SIGNING_SECRET, DIGEST)  # minted under the OLD digest
+    c = _client(new_digest, secret=SIGNING_SECRET)  # server rotated to the NEW digest
+    assert c.get(NOTIF, headers={"Cookie": f"{SESSION_COOKIE_NAME}={old_cookie}"}).status_code == 401
+    fresh = _cookie_from_login(c.post(SESSION, headers={"Authorization": f"Bearer {new_token}"}))
+    assert c.get(NOTIF, headers={"Cookie": f"{SESSION_COOKIE_NAME}={fresh}"}).status_code == 200
 
 
 def test_login_returns_503_when_session_signing_secret_missing():

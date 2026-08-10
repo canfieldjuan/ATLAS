@@ -159,10 +159,16 @@ def _session_signing_key(signing_secret: str) -> bytes:
     ).digest()
 
 
-def _sign_session(expiry_epoch: int, signing_secret: str) -> str:
+def _sign_session(expiry_epoch: int, signing_secret: str, digest: str) -> str:
+    # Bind the signature to the CURRENT token digest so rotating the admin token
+    # (which changes the digest) invalidates every previously-minted cookie, even
+    # if the independent signing secret is retained. The cookie itself stays
+    # ``v1.<exp>.<mac>`` — the digest is covered by the MAC, not exposed.
     payload = f"{_SESSION_VERSION}.{expiry_epoch}"
     mac = hmac.new(
-        _session_signing_key(signing_secret), payload.encode("ascii"), hashlib.sha256
+        _session_signing_key(signing_secret),
+        f"{payload}.{digest}".encode("ascii"),
+        hashlib.sha256,
     ).hexdigest()
     return f"{payload}.{mac}"
 
@@ -174,20 +180,22 @@ def generate_settings_admin_session_secret() -> str:
 
 def mint_settings_session(
     signing_secret: str,
+    digest: str,
     *,
     ttl_seconds: int = SESSION_TTL_SECONDS,
     now: float | None = None,
 ) -> str:
-    """Return a signed session cookie value valid for ``ttl_seconds`` from now."""
+    """Return a signed session cookie value valid for ``ttl_seconds``, bound to ``digest``."""
     current = int(now if now is not None else time.time())
-    return _sign_session(current + ttl_seconds, signing_secret)
+    return _sign_session(current + ttl_seconds, signing_secret, digest)
 
 
 def verify_settings_session(
-    cookie_value: str, signing_secret: str, *, now: float | None = None
+    cookie_value: str, signing_secret: str, digest: str, *, now: float | None = None
 ) -> bool:
-    """Return True iff ``cookie_value`` is a well-formed, unexpired signature under
-    the INDEPENDENT signing secret. An empty/short secret => never valid."""
+    """Return True iff ``cookie_value`` is a well-formed, unexpired signature under the
+    INDEPENDENT signing secret AND bound to the current ``digest``. Empty/short secret =>
+    never valid; a cookie minted against a different (rotated) digest => never valid."""
     if len(signing_secret) < _MIN_SESSION_SECRET_LEN or not cookie_value:
         return False
     parts = cookie_value.split(".")
@@ -204,7 +212,7 @@ def verify_settings_session(
     if not (exp_str.isascii() and exp_str.isdigit()) or len(exp_str) > 20:
         return False
     expiry_epoch = int(exp_str)
-    expected_value = _sign_session(expiry_epoch, signing_secret)
+    expected_value = _sign_session(expiry_epoch, signing_secret, digest)
     if not hmac.compare_digest(cookie_value, expected_value):
         return False
     current = now if now is not None else time.time()
@@ -219,7 +227,7 @@ async def require_settings_admin(
     """Require a valid session cookie OR bearer token. Fail-closed on misconfig."""
     expected_digest = resolve_expected_digest(config)  # 503 if unconfigured/placeholder
     signing_secret = resolve_session_signing_secret(config)
-    if signing_secret and verify_settings_session(session_cookie, signing_secret):
+    if signing_secret and verify_settings_session(session_cookie, signing_secret, expected_digest):
         return
     token = bearer_token(authorization)
     if token is not None and token_matches(token, expected_digest):
