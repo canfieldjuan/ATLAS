@@ -29,8 +29,9 @@ Environment=DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/1000/bus
 #   Environment=EOM_AUDIT_NTFY_TOPIC=<topic>
 # A blank topic makes the script exit non-zero rather than publish nowhere.
 
-# 2 is the script's measured-breach status; 1 is NOT accepted, because Python
-# also exits 1 for an uncaught exception. Accepting 1 would let a crashed
-# monitor -- an unwritable state dir, a bad env value, a missing notifier --
-# record Result=success and defeat failed-unit monitoring entirely.
+# 2 is the script's measured-breach status. 1 is NOT accepted (Python exits 1
+# for an uncaught exception, so accepting it would let a crashed monitor record
+# Result=success), and neither is 3, which the script returns when an alert
+# could not be delivered -- if the push never lands, failed-unit monitoring has
+# to be the thing that notices.
 SuccessExitStatus=0 2

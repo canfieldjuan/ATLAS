@@ -49,6 +49,12 @@ OPERATOR_EVENT_TYPES = ("contact_created", "contact_updated")
 # so the unit file can accept one without masking the other.
 EXIT_BREACH = 2
 
+# An alert that could not be delivered. Deliberately NOT in the unit's
+# SuccessExitStatus: the state is left for an hourly retry, but if the push
+# never lands, failed-unit monitoring must be the thing that notices. A
+# monitor whose own alerts are silently failing has to look broken.
+EXIT_UNDELIVERED = 3
+
 # Every `source` value an EOM contact writer is allowed to emit. Derived from
 # the 2026-08-05 code sweep of every create path, not from whatever happens to
 # be in the table -- an allowlist built from observed data would bless a bypass
@@ -390,10 +396,12 @@ def main(argv: Sequence[str] | None = None, *, notifier: Callable[..., None] = p
     # A dry run observes; it must not consume the alert. Leaving `delivered`
     # true here would let `--no-alert` during a breach persist "already
     # notified" and suppress the real alert for the whole re-alert window.
-    delivered = alert is None
+    attempted = False
+    delivered = False
     if alert and args.no_alert:
         print(f"WARNING --no-alert: {alert} not sent and state left unchanged")
-    if alert and not args.no_alert:
+    elif alert:
+        attempted = True
         if alert == "recovered":
             delivered = notifier(
                 args.ntfy_url, args.ntfy_topic,
@@ -415,10 +423,17 @@ def main(argv: Sequence[str] | None = None, *, notifier: Callable[..., None] = p
                 "urgent", "rotating_light,warning",
             )
 
-    if delivered:
+    # State advances only once the alert it represents has actually been
+    # delivered. Persisting first would let a failed push record the breach as
+    # notified and then suppress every run until the re-alert interval -- a
+    # monitor that has silently stopped alerting, which is the exact failure
+    # this slice exists to make impossible. A dry run does not advance it
+    # either: an operator checking on the monitor must not spend the alert.
+    if alert is None or delivered:
         write_state(state_path, next_state)
-    else:
+    if attempted and not delivered:
         print("WARNING alert undelivered; state left unchanged so the next run retries")
+        return EXIT_UNDELIVERED
 
     # A measured breach exits 2, not 1. Python already exits 1 for an uncaught
     # exception, so accepting 1 in the unit file would make a crashed monitor

@@ -232,7 +232,11 @@ def test_an_undelivered_alert_does_not_advance_state(monkeypatch, tmp_path):
         return False
 
     for _ in range(3):
-        audit.main(["--state-dir", str(tmp_path), "--ntfy-topic", "t"], notifier=_failing)
+        code = audit.main(["--state-dir", str(tmp_path), "--ntfy-topic", "t"], notifier=_failing)
+        assert code == audit.EXIT_UNDELIVERED, (
+            "an undelivered alert must fail the unit, or failed-unit monitoring "
+            "stays green while no push is landing"
+        )
 
     # Every run retried the first-breach alert rather than falling silent.
     assert len(attempts) == 3
@@ -248,6 +252,25 @@ def test_an_undelivered_alert_does_not_advance_state(monkeypatch, tmp_path):
 
 
 # --- the SQL itself, against the real schema ---------------------------------
+
+
+def _dsn_for_schema(database_url: str, schema: str) -> str:
+    """Point a psql subprocess at the disposable schema, keeping any existing DSN
+    parameters. Dropping them (or dropping the search_path when the DSN already
+    has a query string, as with ?sslmode=) would silently query the default
+    schema, and the test would then pass or fail on unrelated rows instead of
+    its own fixtures.
+    """
+    option = quote(f"-csearch_path={schema},public")
+    separator = "&" if "?" in database_url else "?"
+    return f"{database_url}{separator}options={option}"
+
+
+def test_the_schema_dsn_keeps_existing_parameters():
+    dsn = _dsn_for_schema("postgresql://u:p@h:5432/db?sslmode=require", "tmp_schema")
+    assert "sslmode=require" in dsn
+    assert "options=" in dsn and "tmp_schema" in dsn
+    assert dsn.count("?") == 1, "a second ? would make the options invisible to psql"
 
 
 async def _seed_contact(conn, **kwargs) -> uuid.UUID:
@@ -295,11 +318,7 @@ async def test_the_atlas_query_detects_each_violation_and_ignores_clean_rows():
             f"op-{uuid.uuid4().hex}",
         )
 
-        dsn = (
-            f"{database_url}?options={quote(f'-csearch_path={schema},public')}"
-            if "?" not in database_url
-            else database_url
-        )
+        dsn = _dsn_for_schema(database_url, schema)
         counts, error = audit.query_atlas(os.environ.get("EOM_AUDIT_PSQL_BIN", "psql"), dsn)
         assert error is None, error
         assert counts == [0, 0, 0], "a well-formed contact must not trip any signal"
@@ -358,7 +377,7 @@ async def test_an_unrelated_lifecycle_row_does_not_excuse_a_bypass():
             f"op-{uuid.uuid4().hex}",
         )
 
-        dsn = f"{database_url}?options={quote(f'-csearch_path={schema},public')}"
+        dsn = _dsn_for_schema(database_url, schema)
         counts, error = audit.query_atlas(os.environ.get("EOM_AUDIT_PSQL_BIN", "psql"), dsn)
         assert error is None, error
         assert counts[2] == 1, "an unrelated lifecycle row must not excuse the bypass"

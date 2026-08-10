@@ -14,8 +14,8 @@ the original defect survived long enough to need a backfill on 2026-08-09.
 
 The baseline is clean right now and was measured, not assumed, immediately
 before this was written: Atlas unknown-source 0 of 711 EOM contacts, null-tenant
-0, operator-provenance-without-event 0; tracker unlinked-customers 0,
-stale-pending-reservations 0. #113 requires that clean start — "a monitor
+0, operator-provenance-without-event 0. (The tracker-side baseline was also
+zero; those signals are deferred, see the split note below.) #113 requires that clean start — "a monitor
 calibrated against the bug it is meant to catch" is the failure it guards
 against — and the window closes the first time a legacy writer fires.
 
@@ -25,8 +25,8 @@ against — and the window closes the first time a legacy writer fires.
   invariant 0A–0C established is enforced only at the code paths that agreed to
   honor it; a write that arrives another way leaves no signal anyone sees.
 - Correct fix must touch/change: add a scheduled check over the two datastores
-  the invariants live in (Atlas `contacts` / `eom_lead_lifecycle_events`, tracker
-  `customers` / `eom_customer_atlas_reservations`), with alerting on breach and
+  the invariants live in (Atlas `contacts` / `eom_lead_lifecycle_events`), with
+  alerting on breach and
   a declared clean baseline at enablement.
 - Must not change: any write path. This slice observes only. No schema change,
   no migration, no change to the operator mutation boundary, the tracker saga, or
@@ -54,10 +54,10 @@ lands.
 ### Review Contract
 
 - Acceptance criteria:
-  1. Each of the five signals breaches on its own violation and on nothing else
+  1. Each of the three Atlas signals breaches on its own violation and on nothing else
      — settled by
      `tests/test_eom_write_boundary_audit.py::test_each_signal_breaches_on_its_own_violation`
-     (parametrized over all five) and `::test_a_clean_reading_reports_ok`.
+     (parametrized over all three) and `::test_a_clean_reading_reports_ok`.
   2. The Atlas SQL actually detects each violation against the real migrated
      schema, and a well-formed contact trips nothing — settled by
      `::test_the_atlas_query_detects_each_violation_and_ignores_clean_rows`,
@@ -73,14 +73,14 @@ lands.
      count — settled by
      `::test_partial_output_is_refused_rather_than_read_as_a_low_count`.
 - Reachability proof: systemd user timer → `eom-write-boundary-audit.service` →
-  `eom_write_boundary_audit.py` → `psql` against Atlas and `render psql` against
-  the tracker → ntfy push. Observable effect: a push notification and a non-zero
-  unit result. Verified by running the script against live production data
-  (read-only): all five signals reported 0, exit 0.
+  `eom_write_boundary_audit.py` → `psql` against Atlas → ntfy push. Observable
+  effect: a push notification and a non-zero unit result. Verified by running the
+  script against live production data (read-only): all three signals reported 0,
+  exit 0.
 - Affected surfaces: new script, new unit files, new test. No application module
   is imported or modified; nothing in `atlas_brain/` changes.
-- Risk areas: alert fatigue if a signal is noisy; the Render CLI losing auth and
-  blinding the tracker half; a partially parsed count reading as healthy.
+- Risk areas: alert fatigue if a signal is noisy; losing the Atlas datastore and
+  reporting clean; a partially parsed count reading as healthy.
 - Reviewer rules triggered: R1 (problem-derived contract), R2 (reachability),
   R5 (test evidence).
 
@@ -93,7 +93,7 @@ production table.
 ### Deployed-config probing
 
 - Deployed/default config values: Atlas DSN `postgresql://atlas:atlas@localhost:5433/atlas`;
-  tracker Render DB id `dpg-d723r3buibrs739nnpg0-a`; ntfy topic supplied at deploy
+  ntfy topic supplied at deploy
   time via `EOM_AUDIT_NTFY_TOPIC` with NO default in the repo, because on ntfy.sh
   the topic name is the channel credential and this repository is public;
   re-alert every 24 runs at an hourly cadence.
@@ -118,6 +118,16 @@ production table.
 - `scripts/eom_write_boundary_audit.py`
 - `tests/test_eom_write_boundary_audit.py`
 
+### Set-valued dependency declaration
+
+`KNOWN_EOM_SOURCES` is a **CLOSED** set: the `source` values EOM contact writers
+emit. Sourced from the 2026-08-05 code sweep of every create path that reaches
+`DatabaseCRMProvider`, not from the values observed in the table -- an allowlist
+built from observed data would bless a bypass that had already run. Out-of-set
+behaviour is to ALERT, which is the asymmetric-safe direction: a new legitimate
+writer produces one noisy alert and a one-line addition here, while an unknown
+writer is exactly what this signal exists to surface.
+
 ## Mechanism
 
 The script shells out to `psql` and the Render CLI rather than importing the
@@ -127,15 +137,13 @@ installed copy under `~/.local/bin` rather than from the runtime worktree —
 that worktree was deleted once (2026-07-31) and took the API down with it. A
 monitor living inside the thing it watches goes silent exactly when it is needed.
 
-Signals, all threshold 0:
+Signals (Atlas only in this PR), all threshold 0:
 
 | Signal | Catches |
 |---|---|
 | `atlas_unknown_source` | a writer emitting a `source` no known EOM writer produces |
 | `atlas_null_tenant` | an untenanted contact write |
 | `atlas_operator_provenance_without_event` | a row carrying operator provenance with no lifecycle event — i.e. written around the domain tier |
-| `tracker_unlinked_customers` | the primary defect recurring: a customer Atlas does not know |
-| `tracker_stale_pending_reservations` | a saga nobody came back for |
 
 The known-source allowlist is derived from the code sweep of every create path,
 not from the values present in the table: an allowlist built from observed data
@@ -156,9 +164,6 @@ re-alert every N consecutive runs, one recovery notice.
   than publishing nowhere.
 - Hourly, not minutely. This is drift detection; `atlas-api-healthcheck.timer`
   already covers liveness at five minutes.
-- Reads the tracker through the Render CLI rather than adding an Atlas→tracker
-  API credential. The credential would be a new authenticated surface on the
-  tracker for a read a local operator tool can already do.
 - Shell-outs over a database driver: fewer dependencies for a process whose job
   is to survive the failure of everything around it.
 
@@ -193,10 +198,10 @@ Parked hardening: none.
 
 | File | LOC |
 |---|---:|
-| `tests/test_eom_write_boundary_audit.py` | 471 |
-| `scripts/eom_write_boundary_audit.py` | 430 |
-| `plans/PR-EOM-Write-Boundary-Observability.md` | 203 |
-| `config/eom-write-boundary-audit.service` | 36 |
+| `tests/test_eom_write_boundary_audit.py` | 490 |
+| `scripts/eom_write_boundary_audit.py` | 445 |
+| `plans/PR-EOM-Write-Boundary-Observability.md` | 207 |
+| `config/eom-write-boundary-audit.service` | 37 |
 | `config/eom-write-boundary-audit.timer` | 13 |
 | `.github/workflows/atlas_eom_lead_pipeline_checks.yml` | 5 |
-| **Total** | **1158** |
+| **Total** | **1197** |
