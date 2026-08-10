@@ -78,7 +78,7 @@ lands.
   3. An unreadable datastore alerts rather than reporting clean — settled by
      `::test_an_unreadable_source_breaches_rather_than_reporting_clean`.
   4. Alerting fires on the transition into breach, stays quiet until the
-     re-alert interval, and sends exactly one recovery notice — settled by
+     re-alert interval, and notifies on recovery — settled by
      `::test_first_breach_alerts_then_stays_quiet_until_the_reminder` and
      `::test_recovery_notifies_exactly_once`.
   5. Partial or unparseable query output is refused rather than read as a low
@@ -111,11 +111,11 @@ production table.
   exists to avoid. Atlas DSN defaults to `postgresql://atlas:atlas@localhost:5433/atlas`
   and is passed to `psql` by environment, never argv, because
   `/proc/<pid>/cmdline` is world-readable; ntfy topic supplied at deploy
-  time via `EOM_AUDIT_NTFY_TOPIC` with NO default in the repo, because on ntfy.sh
+  time via `ATLAS_EOM_AUDIT_NTFY_TOPIC` with NO default in the repo, because on ntfy.sh
   the topic name is the channel credential and this repository is public;
   re-alert every 24 runs at an hourly cadence.
 - Explicit value probe: every setting is overridable by flag and by
-  `EOM_AUDIT_*` env var; the tests drive `--state-dir` explicitly.
+  `ATLAS_EOM_AUDIT_*` env var; the tests drive `--state-dir` explicitly.
 - Absent value probe: with no state file, `decide_alert` treats the run as the
   first — covered by `::test_a_clean_run_from_cold_state_says_nothing` and the
   first-breach case.
@@ -177,7 +177,7 @@ re-alert every N consecutive runs, one recovery notice.
 ## Intentional
 
 - The ntfy topic is never committed. It is the channel credential, so it comes
-  from `EOM_AUDIT_NTFY_TOPIC` at deploy time and a blank value is refused rather
+  from `ATLAS_EOM_AUDIT_NTFY_TOPIC` at deploy time and a blank value is refused rather
   than publishing nowhere.
 - Hourly, not minutely. This is drift detection; `atlas-api-healthcheck.timer`
   already covers liveness at five minutes.
@@ -215,10 +215,16 @@ Parked hardening: none.
 
 | File | LOC |
 |---|---:|
-| `tests/test_eom_write_boundary_audit.py` | 614 |
-| `scripts/eom_write_boundary_audit.py` | 508 |
+| `tests/test_eom_write_boundary_audit.py` | 636 |
+| `scripts/eom_write_boundary_audit.py` | 515 |
 | `plans/PR-EOM-Write-Boundary-Observability.md` | 224 |
 | `config/eom-write-boundary-audit.service` | 37 |
 | `config/eom-write-boundary-audit.timer` | 13 |
 | `.github/workflows/atlas_eom_lead_pipeline_checks.yml` | 5 |
-| **Total** | **1401** |
+| `plans/PR-Test-Git-Hermetic-Isolation.md` | 0 |
+| `scripts/local_pr_review.sh` | 0 |
+| `tests/conftest.py` | 0 |
+| `tests/test_install_local_pr_hook.py` | 0 |
+| `tests/test_local_pr_review.py` | 0 |
+| `tests/test_push_pr_wrapper.py` | 0 |
+| **Total** | **1430** |

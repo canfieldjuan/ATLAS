@@ -309,7 +309,14 @@ def decide_alert(
     known.
 
     Otherwise it mirrors atlas-api-healthcheck.sh: fire on entering breach,
-    re-alert every `realert_every` consecutive runs, one recovery notice.
+    re-alert every `realert_every` consecutive runs, and notify on recovery.
+
+    Delivery is AT LEAST ONCE, not exactly once. State advances only after ntfy
+    accepts the push, so a crash in between leaves the transition unrecorded and
+    the next run repeats it. That direction is deliberate: with two systems and
+    no shared transaction the choice is between a duplicate notice and a lost
+    one, and for a monitor a repeated alert is a nuisance while a missed one is
+    the failure the whole slice exists to prevent.
     """
     now = {str(name) for name in breached}
     before = _previous_breached(previous)

@@ -320,22 +320,33 @@ async def test_the_atlas_query_detects_each_violation_and_ignores_clean_rows():
         )
 
         dsn = _dsn_for_schema(database_url, schema)
-        counts, error = audit.query_atlas(os.environ.get("EOM_AUDIT_PSQL_BIN", "psql"), dsn)
+        counts, error = audit.query_atlas(os.environ.get("ATLAS_EOM_AUDIT_PSQL_BIN", "psql"), dsn)
         assert error is None, error
         assert counts == [0, 0, 0], "a well-formed contact must not trip any signal"
 
-        # Now one violation of each kind.
+        # Each violation is planted and measured on its own. Inserting all
+        # three and asserting [1, 1, 1] once would pass even if a predicate
+        # counted the wrong row, because the totals would still add up.
+        psql = os.environ.get("ATLAS_EOM_AUDIT_PSQL_BIN", "psql")
+
         await _seed_contact(conn, source="rogue_writer")
+        counts, error = audit.query_atlas(psql, dsn)
+        assert error is None, error
+        assert counts == [1, 0, 0], "only the unknown-source signal may move"
+
         await _seed_contact(conn, business_context_id=None)
+        counts, error = audit.query_atlas(psql, dsn)
+        assert error is None, error
+        assert counts == [1, 1, 0], "only the null-tenant signal may move"
+
         await _seed_contact(
             conn,
             source="manual",
             metadata='{"eom_operator_contact_sources": {"time_tracker:y": {}}}',
         )
-
-        counts, error = audit.query_atlas(os.environ.get("EOM_AUDIT_PSQL_BIN", "psql"), dsn)
+        counts, error = audit.query_atlas(psql, dsn)
         assert error is None, error
-        assert counts == [1, 1, 1]
+        assert counts == [1, 1, 1], "only the provenance signal may move"
 
         result = audit.build_signals((counts, None))
         assert {signal.name for signal in result.breaches} == {
@@ -379,7 +390,7 @@ async def test_an_unrelated_lifecycle_row_does_not_excuse_a_bypass():
         )
 
         dsn = _dsn_for_schema(database_url, schema)
-        counts, error = audit.query_atlas(os.environ.get("EOM_AUDIT_PSQL_BIN", "psql"), dsn)
+        counts, error = audit.query_atlas(os.environ.get("ATLAS_EOM_AUDIT_PSQL_BIN", "psql"), dsn)
         assert error is None, error
         assert counts[2] == 1, "an unrelated lifecycle row must not excuse the bypass"
 
@@ -393,7 +404,7 @@ async def test_an_unrelated_lifecycle_row_does_not_excuse_a_bypass():
             contact_id,
             f"op-{uuid.uuid4().hex}",
         )
-        counts, error = audit.query_atlas(os.environ.get("EOM_AUDIT_PSQL_BIN", "psql"), dsn)
+        counts, error = audit.query_atlas(os.environ.get("ATLAS_EOM_AUDIT_PSQL_BIN", "psql"), dsn)
         assert error is None, error
         assert counts[2] == 0
     finally:
@@ -547,9 +558,20 @@ def test_concurrent_runs_do_not_both_send_the_first_breach(monkeypatch, tmp_path
     procs = [multiprocessing.Process(target=_child, args=(queue,)) for _ in range(4)]
     for proc in procs:
         proc.start()
-    for proc in procs:
-        proc.join(timeout=30)
-    total = sum(queue.get() for _ in procs)
+    try:
+        for proc in procs:
+            proc.join(timeout=30)
+            assert proc.exitcode == 0, (
+                f"a child died before reporting (exitcode {proc.exitcode}); a hung "
+                "child would otherwise block this test forever on queue.get"
+            )
+        # Bounded: a lost result must fail the test, not hang it.
+        total = sum(queue.get(timeout=10) for _ in procs)
+    finally:
+        for proc in procs:
+            if proc.is_alive():
+                proc.terminate()
+                proc.join(timeout=5)
     assert total == 1, f"exactly one process may announce the first breach, got {total}"
 
 
