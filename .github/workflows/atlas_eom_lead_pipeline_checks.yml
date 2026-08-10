@@ -8,6 +8,7 @@ on:
     paths:
       - ".github/workflows/atlas_eom_lead_pipeline_checks.yml"
       - "docker-compose.yml"
+      - "scripts/eom_write_boundary_audit.py"
       - "atlas_brain/autonomous/tasks/gmail_digest.py"
       - "atlas_brain/config.py"
       - "atlas_brain/main.py"
@@ -70,6 +71,7 @@ on:
       - "tests/test_eom_contacts_api_tenant_scope.py"
       - "tests/test_eom_lead_conversion.py"
       - "tests/test_eom_lead_conversion_integration.py"
+      - "tests/test_eom_write_boundary_audit.py"
       - "tests/test_eom_lead_pipeline_integration.py"
       - "tests/test_eom_mailbox_context_binding.py"
       - "tests/test_eom_lead_ingress.py"
@@ -88,6 +90,7 @@ on:
     paths:
       - ".github/workflows/atlas_eom_lead_pipeline_checks.yml"
       - "docker-compose.yml"
+      - "scripts/eom_write_boundary_audit.py"
       - "atlas_brain/autonomous/tasks/gmail_digest.py"
       - "atlas_brain/config.py"
       - "atlas_brain/main.py"
@@ -150,6 +153,7 @@ on:
       - "tests/test_eom_contacts_api_tenant_scope.py"
       - "tests/test_eom_lead_conversion.py"
       - "tests/test_eom_lead_conversion_integration.py"
+      - "tests/test_eom_write_boundary_audit.py"
       - "tests/test_eom_lead_pipeline_integration.py"
       - "tests/test_eom_mailbox_context_binding.py"
       - "tests/test_eom_lead_ingress.py"
@@ -209,6 +213,7 @@ jobs:
             tests/test_eom_contacts_api_tenant_scope.py \
             tests/test_eom_lead_conversion.py \
             tests/test_eom_lead_conversion_integration.py \
+            tests/test_eom_write_boundary_audit.py \
             tests/test_eom_lead_pipeline_integration.py \
             tests/test_eom_mailbox_context_binding.py \
             tests/test_eom_lead_ingress.py \

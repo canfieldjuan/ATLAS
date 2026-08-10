@@ -1,0 +1,13 @@
+[Unit]
+Description=Run the EOM write-boundary audit hourly
+
+[Timer]
+# Drift detection, not liveness: atlas-api-healthcheck.timer already covers
+# liveness every 5 minutes. Hourly keeps a bypass discoverable the same day
+# without turning a slow-moving signal into noise.
+OnBootSec=10min
+OnUnitActiveSec=1h
+Persistent=true
+
+[Install]
+WantedBy=timers.target
