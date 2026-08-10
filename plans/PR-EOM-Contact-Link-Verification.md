@@ -20,6 +20,35 @@ The tracker cannot ask. `_atlas_funnel_read` is hard-locked to `/eom-funnel/lead
 (`backend/time_tracker_api.py:3376`), and no Atlas route answers contact existence
 anyway.
 
+### Why this slice is indivisible above the 400-LOC budget
+
+The diff is 748 LOC. The application change inside it is 100 LOC across two
+files: one route in `atlas_brain/eom_api/funnel.py` and one read method in
+`atlas_brain/services/crm_provider.py`. The remaining ~648 are the tests that
+prove it and the plan doc this gate itself mandates.
+
+There is no split that leaves both halves reviewable:
+
+- **Route without tests** merges a tenant-scoped read boundary whose scoping is
+  unproven. Tenant scope is the one claim here that stub tests structurally
+  cannot settle — every stubbed test in the file passes identically against a
+  scoped and an unscoped query — so `test_tenant_scope_holds_against_real_
+  postgres` is the only evidence that the predicate is in the SQL rather than
+  only in the docstring. Merging that unproven is the precise failure this
+  slice exists to remove.
+- **Tests without the route** is not a slice; it is a red suite.
+- **Route plus a thinner suite** drops exactly the cases that make this a
+  boundary rather than a query: the both-sides cap, the empty-request refusal,
+  the caller-attribution filter, the unauthenticated and wrong-token paths, and
+  the aggregate-reachability proof. Each is one test and each closes a distinct
+  way the route could pass review while being wrong.
+- **The plan doc is not optional** — the PR gate rejects a non-Markdown diff
+  that does not add exactly one, so its ~250 lines cannot be split off at all.
+
+What could have been split, and was: the tracker-side consumer of this route is
+a separate PR in eom-timetracker, and the stale-reservation half of #167 already
+shipped independently as eom-timetracker #155/#156.
+
 ### Problem-derived contract
 
 - Root cause: no read boundary exists for "does this contact id still resolve to a
@@ -252,6 +281,6 @@ Parked hardening: none.
 | `.github/workflows/atlas_eom_lead_pipeline_checks.yml` | 3 |
 | `atlas_brain/eom_api/funnel.py` | 67 |
 | `atlas_brain/services/crm_provider.py` | 33 |
-| `plans/PR-EOM-Contact-Link-Verification.md` | 257 |
+| `plans/PR-EOM-Contact-Link-Verification.md` | 286 |
 | `tests/test_eom_link_verification.py` | 388 |
-| **Total** | **748** |
+| **Total** | **777** |
