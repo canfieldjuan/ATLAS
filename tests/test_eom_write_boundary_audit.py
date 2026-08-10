@@ -8,6 +8,7 @@ survived in the first place.
 from __future__ import annotations
 
 import importlib.util
+import itertools
 import os
 import sys
 import uuid
@@ -466,25 +467,23 @@ def _oracle(raw: str, expected: int) -> tuple[list[int] | None, bool]:
 
 @pytest.mark.parametrize("expected", (2, 3))
 def test_parse_counts_matches_its_spec_across_the_input_grammar(expected):
+    """Walk the product of the grammar axes: tokens x containers x families."""
+    arities = [n for n in (expected - 1, expected, expected + 1) if n >= 1]
     checked = 0
-    for arity in (expected - 1, expected, expected + 1):
-        if arity < 1:
-            continue
-        for token in _TOKENS:
-            for pad in _PADDINGS:
-                row = "|".join(f"{pad}{token}{pad}" for _ in range(arity))
-                for prefix in _PREFIXES:
-                    for suffix in _SUFFIXES:
-                        raw = f"{prefix}{row}{suffix}"
-                        counts, error = audit._parse_counts(raw, expected)
-                        want_counts, want_error = _oracle(raw, expected)
+    for arity, token, pad, prefix, suffix in itertools.product(
+        arities, _TOKENS, _PADDINGS, _PREFIXES, _SUFFIXES
+    ):
+        row = "|".join(f"{pad}{token}{pad}" for _ in range(arity))
+        raw = f"{prefix}{row}{suffix}"
+        counts, error = audit._parse_counts(raw, expected)
+        want_counts, want_error = _oracle(raw, expected)
 
-                        assert counts == want_counts, raw
-                        assert bool(error) == want_error, raw
-                        # Invariants that must hold for every input in the class:
-                        # a returned reading is always complete, and a refusal
-                        # always says why. A short row must never become counts.
-                        assert counts is None or len(counts) == expected
-                        assert (counts is None) == bool(error)
-                        checked += 1
+        assert counts == want_counts, raw
+        assert bool(error) == want_error, raw
+        # Invariants that must hold for every input in the class: a returned
+        # reading is always complete, and a refusal always says why. A short
+        # row must never become counts.
+        assert counts is None or len(counts) == expected
+        assert (counts is None) == bool(error)
+        checked += 1
     assert checked > 500, "the grammar product should be broad, not a fixture list"
