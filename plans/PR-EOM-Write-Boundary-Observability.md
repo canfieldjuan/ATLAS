@@ -215,10 +215,10 @@ Parked hardening: none.
 
 | File | LOC |
 |---|---:|
-| `tests/test_eom_write_boundary_audit.py` | 553 |
-| `scripts/eom_write_boundary_audit.py` | 489 |
+| `tests/test_eom_write_boundary_audit.py` | 614 |
+| `scripts/eom_write_boundary_audit.py` | 508 |
 | `plans/PR-EOM-Write-Boundary-Observability.md` | 224 |
 | `config/eom-write-boundary-audit.service` | 37 |
 | `config/eom-write-boundary-audit.timer` | 13 |
 | `.github/workflows/atlas_eom_lead_pipeline_checks.yml` | 5 |
-| **Total** | **1321** |
+| **Total** | **1401** |

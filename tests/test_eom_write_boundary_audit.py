@@ -551,3 +551,64 @@ def test_concurrent_runs_do_not_both_send_the_first_breach(monkeypatch, tmp_path
         proc.join(timeout=30)
     total = sum(queue.get() for _ in procs)
     assert total == 1, f"exactly one process may announce the first breach, got {total}"
+
+
+def test_the_ntfy_topic_never_reaches_a_process_argument_vector(monkeypatch):
+    """The topic is the channel credential; argv is world-readable via /proc."""
+    spawned: list = []
+    monkeypatch.setattr(audit.subprocess, "run", lambda *a, **k: spawned.append(a))
+
+    sent: dict = {}
+
+    class _Response:
+        status = 200
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *exc):
+            return False
+
+    def _urlopen(request, timeout=None):
+        sent["url"] = request.full_url
+        sent["body"] = request.data
+        return _Response()
+
+    monkeypatch.setattr(audit.urllib.request, "urlopen", _urlopen)
+
+    assert audit.publish("https://ntfy.test", "secret-topic", "T", "B", "urgent", "x") is True
+    assert spawned == [], "publishing must not spawn a process that carries the topic"
+    assert "secret-topic" in sent["url"]
+
+
+def test_a_non_success_response_is_not_treated_as_delivered(monkeypatch):
+    class _Response:
+        status = 500
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *exc):
+            return False
+
+    monkeypatch.setattr(audit.urllib.request, "urlopen", lambda *a, **k: _Response())
+    assert audit.publish("https://ntfy.test", "t", "T", "B", "urgent", "x") is False
+
+
+def test_the_measurement_happens_inside_the_alert_lock(monkeypatch, tmp_path):
+    """A stale reading must not be able to overwrite a newer one's state.
+
+    If measuring sat outside the lock, a run that measured clean and paused
+    could later take the lock and cancel an alert another run had already sent.
+    """
+    order: list[str] = []
+    holder = tmp_path / "state.lock"
+
+    def _measuring(*args, **kwargs):
+        # If this runs before the lock exists, the lock cannot be covering it.
+        order.append("measured" if holder.exists() else "measured-unlocked")
+        return [0, 0, 0], None
+
+    monkeypatch.setattr(audit, "query_atlas", _measuring)
+    audit.main(["--state-dir", str(tmp_path), "--ntfy-topic", "t"], notifier=lambda *a: True)
+    assert order == ["measured"], f"measurement ran outside the lock: {order}"

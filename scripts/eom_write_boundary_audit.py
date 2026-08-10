@@ -35,6 +35,8 @@ import sys
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Callable, Sequence
+import urllib.error
+import urllib.request
 from urllib.parse import parse_qs, unquote, urlsplit
 
 EOM_TENANT = "effingham_maids"
@@ -375,25 +377,30 @@ def write_state(path: Path, state: dict) -> None:
 def publish(ntfy_url: str, topic: str, title: str, body: str, priority: str, tags: str) -> bool:
     """Push one alert. Returns whether it was actually delivered.
 
-    The return value is load-bearing: the caller must not record an alert as
+    Sent with urllib rather than a curl subprocess: the topic is the channel
+    credential, and an argument vector is world-readable through
+    /proc/<pid>/cmdline for the life of the process. Keeping the URL inside this
+    process is the only way it never appears there.
+
+    The return value is load-bearing -- the caller must not record an alert as
     sent when it was not, or the re-alert interval silently swallows the next
     day of runs.
     """
-    output, error = _run(
-        [
-            "curl", "-fsS", "-m", "10",
-            "-H", f"Title: {title}",
-            "-H", f"Priority: {priority}",
-            "-H", f"Tags: {tags}",
-            "-d", body,
-            f"{ntfy_url}/{topic}",
-        ],
-        timeout=20,
+    request = urllib.request.Request(
+        f"{ntfy_url.rstrip('/')}/{topic}",
+        data=body.encode("utf-8"),
+        headers={"Title": title, "Priority": priority, "Tags": tags},
+        method="POST",
     )
-    if error:
-        print(f"WARNING alert delivery failed: {error}")
+    try:
+        with urllib.request.urlopen(request, timeout=15) as response:
+            delivered = 200 <= int(response.status) < 300
+    except (urllib.error.URLError, OSError, ValueError) as exc:
+        print(f"WARNING alert delivery failed: {exc}")
         return False
-    return True
+    if not delivered:
+        print("WARNING alert delivery returned a non-success status")
+    return delivered
 
 
 def main(argv: Sequence[str] | None = None, *, notifier: Callable[..., None] = publish) -> int:
@@ -407,9 +414,6 @@ def main(argv: Sequence[str] | None = None, *, notifier: Callable[..., None] = p
     parser.add_argument("--no-alert", action="store_true", help="measure and print without notifying")
     args = parser.parse_args(argv)
     validate_settings(args.realert_every, args.ntfy_topic)
-
-    result = build_signals(query_atlas(args.psql_bin, args.atlas_dsn))
-    print(result.report())
 
     state_path = Path(args.state_dir) / "state.json"
     # One alert decision at a time. A manual run racing the hourly timer can
@@ -425,6 +429,13 @@ def main(argv: Sequence[str] | None = None, *, notifier: Callable[..., None] = p
         raise RuntimeError(f"cannot take the alert lock at {lock_path}: {exc}") from exc
     with lock:
         fcntl.flock(lock, fcntl.LOCK_EX)
+        # The MEASUREMENT is inside the lock, not just the transition. If run A
+        # measured clean, paused, and a bypass then appeared, run B could
+        # measure breach and publish first -- and A would afterwards take the
+        # lock and overwrite the state with its stale clean reading, cancelling
+        # the alert that had already gone out.
+        result = build_signals(query_atlas(args.psql_bin, args.atlas_dsn))
+        print(result.report())
         return _decide_and_notify(args, result, state_path, notifier)
 
 
