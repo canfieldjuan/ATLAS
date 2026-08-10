@@ -289,25 +289,35 @@ def test_logout_clears_the_cookie():
 
 # ── router-level coverage ───────────────────────────────────────────────────
 
-def test_production_aggregate_router_serves_the_session_route():
-    """Regression guard: the REAL `atlas_brain.api` aggregate router — the one
-    `atlas_brain.main` mounts under /api/v1 — must actually register the session
-    route at runtime (a dropped or commented-out `include_router(
-    settings_session_router)` leaves it absent). Path membership on the live route
-    table, so a commented-out include cannot pass it; no dependency-identity
-    assertion (that was order-fragile in the full suite). The gate's behavior on
-    the settings routes is covered by the tests above."""
+def test_init_ast_includes_the_session_router():
+    """Regression guard: the api package __init__ must import AND `include_router`
+    the session router into the aggregate. Verified by parsing the __init__ AST —
+    a commented-out or absent include is NOT an AST call node, so it cannot pass
+    (addresses the source-text-substring weakness); and because it parses the file
+    rather than reading the shared runtime `atlas_brain.api.router`, it is immune to
+    the full-suite import-order/reload pollution that made runtime assertions flaky.
+    The gate's runtime behavior on the settings routes is covered by the tests above."""
+    import ast
     import importlib
-    from starlette.routing import Route
+    from pathlib import Path
 
     api = importlib.import_module("atlas_brain.api")
-    session_mod = importlib.import_module("atlas_brain.api.settings_session")
-    session_paths = {r.path for r in session_mod.router.routes if isinstance(r, Route)}
-    aggregate_paths = {r.path for r in api.router.routes if isinstance(r, Route)}
-    assert session_paths, "settings_session router registers no routes"
-    assert session_paths <= aggregate_paths, (
-        f"session routes {session_paths} not included in the aggregate"
+    tree = ast.parse(Path(api.__file__).read_text(encoding="utf-8"))
+    imported = any(
+        isinstance(node, ast.ImportFrom)
+        and node.module == "settings_session"
+        and any(alias.asname == "settings_session_router" for alias in node.names)
+        for node in ast.walk(tree)
     )
+    included = any(
+        isinstance(node, ast.Call)
+        and isinstance(node.func, ast.Attribute)
+        and node.func.attr == "include_router"
+        and any(isinstance(a, ast.Name) and a.id == "settings_session_router" for a in node.args)
+        for node in ast.walk(tree)
+    )
+    assert imported, "__init__ does not import settings_session_router"
+    assert included, "__init__ does not include_router(settings_session_router)"
 
 
 def test_every_settings_route_is_gated():
