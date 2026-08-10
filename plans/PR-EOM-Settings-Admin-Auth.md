@@ -234,5 +234,5 @@ multi-thousand-digit value overflows CPython's int-conversion limit — both are
 | `atlas_brain/api/settings_session.py` | 77 |
 | `atlas_brain/config.py` | 19 |
 | `plans/PR-EOM-Settings-Admin-Auth.md` | 238 |
-| `tests/test_settings_auth.py` | 280 |
-| **Total** | **853** |
+| `tests/test_settings_auth.py` | 291 |
+| **Total** | **864** |

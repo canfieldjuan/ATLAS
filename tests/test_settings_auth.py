@@ -54,7 +54,7 @@ def _client(digest: str, secret: str = SIGNING_SECRET) -> TestClient:
     app.include_router(settings_mod.router, prefix="/api/v1")
     app.include_router(session_mod.router, prefix="/api/v1")
     app.dependency_overrides[get_settings_admin_config] = (
-        lambda: SettingsAdminConfig(token_sha256=digest, session_signing_secret=secret)
+        lambda: SettingsAdminConfig(token_sha256=digest, session_secret=secret)
     )
     return TestClient(app)
 
@@ -236,6 +236,17 @@ def test_bearer_still_works_without_session_signing_secret():
     bearer path — a valid bearer still authenticates."""
     c = _client(DIGEST, secret="")
     assert c.get(NOTIF, headers={"Authorization": f"Bearer {RAW_TOKEN}"}).status_code == 200
+
+
+def test_config_loads_secrets_from_the_advertised_env_vars(monkeypatch):
+    """Load through the REAL environment boundary: the field names + env_prefix must
+    derive exactly the advertised env vars, so following the deploy docs populates the
+    config (regression for the SESSION_SECRET vs SESSION_SIGNING_SECRET mismatch)."""
+    monkeypatch.setenv("ATLAS_SETTINGS_ADMIN_TOKEN_SHA256", "a" * 64)
+    monkeypatch.setenv("ATLAS_SETTINGS_ADMIN_SESSION_SECRET", "e" * 40)
+    cfg = SettingsAdminConfig()
+    assert cfg.token_sha256 == "a" * 64
+    assert cfg.session_secret == "e" * 40
 
 
 def test_logout_clears_the_cookie():

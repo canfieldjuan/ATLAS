@@ -137,7 +137,7 @@ def resolve_session_signing_secret(config: SettingsAdminConfig) -> str:
     Returns "" when unset/too short — in which case the session-cookie path is
     unavailable (bearer still works), and cookies can neither be minted nor verified.
     """
-    secret = (config.session_signing_secret or "").strip()
+    secret = (config.session_secret or "").strip()
     return secret if len(secret) >= _MIN_SESSION_SECRET_LEN else ""
 
 

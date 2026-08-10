@@ -832,7 +832,7 @@ class SettingsAdminConfig(BaseSettings):
 
     token_sha256: str = Field(default="", description="Lowercase SHA-256 hex digest of the settings-admin bearer token; empty => the /settings router returns 503 (fail-closed). Provision via ATLAS_SETTINGS_ADMIN_TOKEN_SHA256; keep the raw token on the caller (env: ATLAS_SETTINGS_ADMIN_TOKEN_SHA256)")
 
-    session_signing_secret: str = Field(default="", description="INDEPENDENT high-entropy server secret (>=32 chars) for signing settings-admin session cookies. Deliberately NOT derived from token_sha256, so a read-only disclosure of the digest alone cannot forge a session cookie. Empty/short => the cookie login path is unavailable (bearer still works). Provision via ATLAS_SETTINGS_ADMIN_SESSION_SECRET; keep it server-side only (env: ATLAS_SETTINGS_ADMIN_SESSION_SECRET)")
+    session_secret: str = Field(default="", description="INDEPENDENT high-entropy server secret (>=32 chars) for signing settings-admin session cookies. Deliberately NOT derived from token_sha256, so a read-only disclosure of the digest alone cannot forge a session cookie. Empty/short => the cookie login path is unavailable (bearer still works). Field name is `session_secret` so env_prefix ATLAS_SETTINGS_ADMIN_ derives exactly the advertised env var ATLAS_SETTINGS_ADMIN_SESSION_SECRET; keep it server-side only")
 
 
 class InboxMailboxBinding(BaseModel):
