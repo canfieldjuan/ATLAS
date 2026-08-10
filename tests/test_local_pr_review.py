@@ -6,6 +6,8 @@ import subprocess
 import sys
 from pathlib import Path
 
+import pytest
+
 REPO_ROOT = Path(__file__).resolve().parents[1]
 
 
@@ -803,6 +805,287 @@ def test_local_pr_review_skips_plans_advisory_when_absent(tmp_path: Path) -> Non
 
     assert result.returncode == 0, result.stdout + result.stderr
     assert "SKIP (scripts/archive_plans.py not found)" in result.stdout
+
+
+def test_local_pr_review_unit_gate_mirror_sets_recursion_guard(tmp_path: Path) -> None:
+    """The unit gate must run with ATLAS_SKIP_LOCAL_PR_REVIEW=1.
+
+    Without it, a push performed by a test inside the gated suite re-enters
+    the pre-push hook, which re-runs this script, which pushes again.
+    """
+    repo = tmp_path / "repo"
+    _write_fixture_repo(repo)
+    _write_unit_gate_fixture(
+        repo,
+        selector_script="#!/usr/bin/env python3\nprint('tests/test_example.py')\n",
+        checker_script=(
+            "#!/usr/bin/env python3\n"
+            "import os\n"
+            "print('skip local pr review env=' + str(os.environ.get('ATLAS_SKIP_LOCAL_PR_REVIEW')))\n"
+        ),
+    )
+
+    result = _run(
+        repo,
+        ["bash", "scripts/local_pr_review.sh"],
+        # Ambient "0" so a passing assertion can only come from the script
+        # setting the guard itself, never from an inherited value.
+        env={"GITHUB_ACTIONS": "false", "ATLAS_SKIP_LOCAL_PR_REVIEW": "0"},
+    )
+
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert "skip local pr review env=1" in result.stdout.splitlines()
+
+
+def test_conftest_preserves_the_recursion_guard() -> None:
+    """conftest must keep ATLAS_SKIP_LOCAL_PR_REVIEW set for the suite.
+
+    Dropping it would let a test that pushes into a repo with a managed
+    pre-push hook re-enter review -> unit gate -> pytest.
+    """
+    assert os.environ.get("ATLAS_SKIP_LOCAL_PR_REVIEW") == "1"
+
+
+def test_recursion_guard_survives_a_real_pytest_launch() -> None:
+    """Cover the checker -> pytest path, not just a stub that prints its env.
+
+    scripts/check_unit_gate.py launches pytest, which imports conftest. This
+    asserts the guard supplied by scripts/local_pr_review.sh is still set once
+    that import has happened -- the step a stub checker cannot exercise.
+    """
+    result = subprocess.run(
+        [
+            sys.executable,
+            "-m",
+            "pytest",
+            "tests/test_local_pr_review.py::test_conftest_preserves_the_recursion_guard",
+            "-p",
+            "no:cacheprovider",
+            "-q",
+            "--no-header",
+        ],
+        cwd=REPO_ROOT,
+        check=False,
+        capture_output=True,
+        text=True,
+        env={**os.environ, "ATLAS_SKIP_LOCAL_PR_REVIEW": "1"},
+    )
+
+    assert result.returncode == 0, result.stdout + result.stderr
+
+
+@pytest.mark.parametrize(
+    ("inherited_env", "marker_name"),
+    [
+        (
+            {
+                "GIT_CONFIG_COUNT": "1",
+                "GIT_CONFIG_KEY_0": "core.hooksPath",
+                "GIT_CONFIG_VALUE_0": "{hooks_dir}",
+            },
+            "command-scope-count-hook-ran.txt",
+        ),
+        (
+            {"GIT_CONFIG_PARAMETERS": "'core.hooksPath={hooks_dir}'"},
+            "command-scope-parameters-hook-ran.txt",
+        ),
+    ],
+)
+def test_command_scope_hooks_path_is_cleared_during_real_pytest_launch(
+    tmp_path: Path,
+    inherited_env: dict[str, str],
+    marker_name: str,
+) -> None:
+    """Cover Git's env-injected config, not only file-backed global config."""
+    _assert_inherited_hooks_path_is_cleared_by_inner_pytest(
+        tmp_path,
+        inherited_env,
+        marker_name=marker_name,
+    )
+
+
+def test_inherited_git_config_global_is_cleared_during_real_pytest_launch(tmp_path: Path) -> None:
+    """An inherited GIT_CONFIG_GLOBAL file must not reach test repos."""
+    config = tmp_path / "global.gitconfig"
+    _assert_inherited_hooks_path_is_cleared_by_inner_pytest(
+        tmp_path,
+        {"GIT_CONFIG_GLOBAL": str(config)},
+        config_path=config,
+        marker_name="global-env-hook-ran.txt",
+    )
+
+
+def test_inherited_git_config_system_is_cleared_during_real_pytest_launch(tmp_path: Path) -> None:
+    """An inherited GIT_CONFIG_SYSTEM file must not reach test repos."""
+    config = tmp_path / "system.gitconfig"
+    _assert_inherited_hooks_path_is_cleared_by_inner_pytest(
+        tmp_path,
+        {"GIT_CONFIG_SYSTEM": str(config)},
+        config_path=config,
+        marker_name="system-env-hook-ran.txt",
+    )
+
+
+def test_inherited_git_template_dir_is_cleared_during_real_pytest_launch(tmp_path: Path) -> None:
+    """An inherited Git template hook must not be copied into test repos."""
+    template_dir = tmp_path / "git-template"
+    hooks_dir = template_dir / "hooks"
+    hooks_dir.mkdir(parents=True)
+    marker = tmp_path / "template-hook-ran.txt"
+    _write_executable(
+        hooks_dir / "pre-push",
+        f"#!/usr/bin/env bash\necho ran > {marker}\nexit 1\n",
+    )
+
+    result = subprocess.run(
+        [
+            sys.executable,
+            "-m",
+            "pytest",
+            "tests/test_local_pr_review.py::test_tests_do_not_inherit_command_scope_hooks_path",
+            "-p",
+            "no:cacheprovider",
+            "-q",
+            "--no-header",
+        ],
+        cwd=REPO_ROOT,
+        check=False,
+        capture_output=True,
+        text=True,
+        env={
+            **os.environ,
+            "ATLAS_SKIP_LOCAL_PR_REVIEW": "1",
+            "GIT_TEMPLATE_DIR": str(template_dir),
+        },
+    )
+
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert not marker.exists(), "inherited Git template hook ran inside pytest"
+
+
+def _assert_inherited_hooks_path_is_cleared_by_inner_pytest(
+    tmp_path: Path,
+    inherited_env: dict[str, str],
+    *,
+    marker_name: str,
+    config_path: Path | None = None,
+) -> None:
+    hooks_dir = tmp_path / "command-scope-hooks"
+    hooks_dir.mkdir()
+    marker = tmp_path / marker_name
+    _write_executable(
+        hooks_dir / "pre-push",
+        f"#!/usr/bin/env bash\necho ran > {marker}\nexit 1\n",
+    )
+    if config_path is not None:
+        config_path.write_text(f"[core]\n\thooksPath = {hooks_dir}\n", encoding="utf-8")
+    resolved_env = {
+        name: value.replace("{hooks_dir}", str(hooks_dir))
+        for name, value in inherited_env.items()
+    }
+
+    result = subprocess.run(
+        [
+            sys.executable,
+            "-m",
+            "pytest",
+            "tests/test_local_pr_review.py::test_tests_do_not_inherit_command_scope_hooks_path",
+            "-p",
+            "no:cacheprovider",
+            "-q",
+            "--no-header",
+        ],
+        cwd=REPO_ROOT,
+        check=False,
+        capture_output=True,
+        text=True,
+        env={
+            **os.environ,
+            "ATLAS_SKIP_LOCAL_PR_REVIEW": "1",
+            **resolved_env,
+        },
+    )
+
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert not marker.exists(), "inherited pre-push hook ran inside pytest"
+
+
+def test_tests_do_not_inherit_command_scope_hooks_path(tmp_path: Path) -> None:
+    """A GIT_CONFIG_COUNT-injected hook must not reach test repos."""
+    repo = tmp_path / "repo"
+    _write_fixture_repo(repo)
+
+    result = _run(
+        repo,
+        ["git", "push", "-q", "origin", "HEAD:refs/heads/probe"],
+    )
+
+    assert result.returncode == 0, result.stdout + result.stderr
+
+
+def test_tests_do_not_inherit_a_global_hooks_path(tmp_path: Path) -> None:
+    """A globally configured hook must not fire inside a test's repo.
+
+    This reproduces the incident: core.hooksPath set in the user's global
+    config fired the pre-push hook inside throwaway test repos.
+    """
+    fake_home = tmp_path / "home"
+    fake_home.mkdir()
+    hooks_dir = tmp_path / "global-hooks"
+    hooks_dir.mkdir()
+    marker = tmp_path / "hook-ran.txt"
+    _write_executable(
+        hooks_dir / "pre-push",
+        f"#!/usr/bin/env bash\necho ran > {marker}\nexit 1\n",
+    )
+    (fake_home / ".gitconfig").write_text(
+        f"[core]\n\thooksPath = {hooks_dir}\n", encoding="utf-8"
+    )
+
+    repo = tmp_path / "repo"
+    _write_fixture_repo(repo)
+
+    result = _run(
+        repo,
+        ["git", "push", "-q", "origin", "HEAD:refs/heads/probe"],
+        env={"HOME": str(fake_home)},
+    )
+
+    assert not marker.exists(), "global pre-push hook ran inside a test repo"
+    assert result.returncode == 0, result.stdout + result.stderr
+
+
+def test_global_hooks_path_still_fires_when_not_isolated(tmp_path: Path) -> None:
+    """Second side of the guard: the isolation is what suppresses the hook.
+
+    Opting back in must still run it -- otherwise the test above could pass
+    for an unrelated reason and we would have proved nothing.
+    """
+    fake_home = tmp_path / "home"
+    fake_home.mkdir()
+    hooks_dir = tmp_path / "global-hooks"
+    hooks_dir.mkdir()
+    marker = tmp_path / "hook-ran.txt"
+    _write_executable(
+        hooks_dir / "pre-push",
+        f"#!/usr/bin/env bash\necho ran > {marker}\nexit 1\n",
+    )
+    global_config = fake_home / ".gitconfig"
+    global_config.write_text(
+        f"[core]\n\thooksPath = {hooks_dir}\n", encoding="utf-8"
+    )
+
+    repo = tmp_path / "repo"
+    _write_fixture_repo(repo)
+
+    result = _run(
+        repo,
+        ["git", "push", "-q", "origin", "HEAD:refs/heads/probe"],
+        env={"HOME": str(fake_home), "GIT_CONFIG_GLOBAL": str(global_config)},
+    )
+
+    assert marker.exists(), "hook did not run even when explicitly opted in"
+    assert result.returncode != 0
 
 
 def _valid_pr_body(plan: str) -> str:
