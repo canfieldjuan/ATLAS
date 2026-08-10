@@ -184,13 +184,22 @@ def test_expired_session_cookie_is_invalid_returns_401():
     assert r.status_code == 401
 
 
-def test_session_cookie_with_oversized_expiry_is_invalid_returns_401():
-    """A cookie whose numeric expiry exceeds CPython's int() digit limit must be
-    rejected with 401, not crash the guard with a 500 (ValueError)."""
+@pytest.mark.parametrize("exp", ["9" * 5000, "12.3", " 12", "0x1f"])
+def test_session_cookie_with_ascii_malformed_expiry_returns_401(exp):
+    """An ASCII-but-non-decimal or oversized expiry must 401 end-to-end, not 500."""
     c = _client(DIGEST)
-    huge = "v1." + ("9" * 5000) + ".deadbeef"
-    r = c.get(NOTIF, headers={"Cookie": f"{SESSION_COOKIE_NAME}={huge}"})
+    r = c.get(NOTIF, headers={"Cookie": f"{SESSION_COOKIE_NAME}=v1.{exp}.deadbeef"})
     assert r.status_code == 401
+
+
+@pytest.mark.parametrize("exp", ["9" * 5000, "²", "1²3", "٣", "12.3", " 12", "0x1f", "", "-1"])
+def test_verify_settings_session_rejects_malformed_expiry(exp):
+    """Guard the numeric-parse directly (httpx cannot send a non-ASCII cookie
+    header): str.isdigit() accepts non-ASCII digits like '²'/'٣' that int()
+    rejects, and huge values overflow int() — all must be rejected (False), so
+    the endpoint fails closed with 401 rather than raising a 500."""
+    from atlas_brain.api.settings_auth import verify_settings_session
+    assert verify_settings_session(f"v1.{exp}.deadbeef", DIGEST) is False
 
 
 def test_session_cookie_with_invalid_signature_is_rejected():

@@ -172,10 +172,12 @@ def verify_settings_session(
     version, exp_str, _mac = parts
     if version != _SESSION_VERSION:
         return False
-    # Bound the length BEFORE int(): a many-thousand-digit numeric string passes
-    # isdigit() but int() raises ValueError past CPython's conversion limit — a
-    # valid epoch is ~10 digits, so anything over 20 is malformed, not a 500.
-    if not exp_str.isdigit() or len(exp_str) > 20:
+    # Require ASCII decimal digits, bounded length, BEFORE int(). str.isdigit()
+    # alone accepts non-ASCII digit characters (e.g. "²") that int() rejects with
+    # ValueError, and a many-thousand-digit string overflows CPython's conversion
+    # limit — both would 500 instead of failing closed. isascii()+isdigit() admits
+    # only [0-9]; a valid epoch is ~10 digits, so cap at 20. Malformed => 401.
+    if not (exp_str.isascii() and exp_str.isdigit()) or len(exp_str) > 20:
         return False
     expiry_epoch = int(exp_str)
     expected_value = _sign_session(expiry_epoch, expected_digest)

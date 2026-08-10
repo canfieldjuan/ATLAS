@@ -83,7 +83,9 @@ Max files: 7
     just a denylist) — `::test_nongenerated_token_is_invalid_even_if_its_digest_is_configured`.
   - A correctly-shaped but low-entropy token (repeated-char payload) is rejected by the
     entropy floor — `::test_low_entropy_but_correctly_shaped_token_is_invalid`.
-  - An oversized cookie expiry does not 500 — `::test_session_cookie_with_oversized_expiry_is_invalid_returns_401`.
+  - A malformed cookie expiry (oversized, non-ASCII digit like `²`, non-decimal) does not 500
+    — `::test_verify_settings_session_rejects_malformed_expiry` +
+    `::test_session_cookie_with_ascii_malformed_expiry_returns_401`.
   - The PRODUCTION `atlas_brain.api` aggregate wires the session route AND gates the settings
     routes — `::test_production_aggregate_wires_session_route_and_gates_settings`.
 - Reachability proof: real entrypoint `PATCH/GET https://atlas-brain.tailc7bd29.ts.net/api/v1/settings/*`
@@ -164,10 +166,11 @@ the token, set the HttpOnly/Secure/SameSite=Strict cookie) and `DELETE /settings
 on the PRESENTED token, mirroring the receivables gate — so a weak/guessable/non-generated
 token (including a correctly-shaped repeated-character payload) can never match even if its
 digest were provisioned. `generate_settings_admin_service_token()`
-produces the `(raw_token, digest)` pair for provisioning. `verify_settings_session` bounds the
-cookie's numeric expiry length before integer conversion (a multi-thousand-digit value passes
-the digit check but overflows CPython's int-conversion limit — bounded to reject with 401,
-never 500).
+produces the `(raw_token, digest)` pair for provisioning. `verify_settings_session` requires the
+cookie's expiry to be ASCII decimal digits with a bounded length before integer conversion
+(`str.isdigit()` alone accepts non-ASCII digits like `²` that `int()` rejects, and a
+multi-thousand-digit value overflows CPython's int-conversion limit — both are rejected with
+401, never a 500).
 
 ## Intentional
 
@@ -217,9 +220,9 @@ never 500).
 |---|---:|
 | `atlas_brain/api/__init__.py` | 2 |
 | `atlas_brain/api/settings.py` | 13 |
-| `atlas_brain/api/settings_auth.py` | 202 |
+| `atlas_brain/api/settings_auth.py` | 204 |
 | `atlas_brain/api/settings_session.py` | 70 |
 | `atlas_brain/config.py` | 17 |
-| `plans/PR-EOM-Settings-Admin-Auth.md` | 225 |
-| `tests/test_settings_auth.py` | 242 |
-| **Total** | **771** |
+| `plans/PR-EOM-Settings-Admin-Auth.md` | 228 |
+| `tests/test_settings_auth.py` | 251 |
+| **Total** | **785** |
