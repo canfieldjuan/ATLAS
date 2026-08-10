@@ -221,5 +221,5 @@ never 500).
 | `atlas_brain/api/settings_session.py` | 70 |
 | `atlas_brain/config.py` | 17 |
 | `plans/PR-EOM-Settings-Admin-Auth.md` | 225 |
-| `tests/test_settings_auth.py` | 243 |
-| **Total** | **772** |
+| `tests/test_settings_auth.py` | 242 |
+| **Total** | **771** |
