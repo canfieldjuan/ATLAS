@@ -27,6 +27,38 @@ from ..config import settings
 
 logger = logging.getLogger("atlas.services.google_oauth")
 
+# Repo root, derived from this file's location rather than the process CWD.
+# `atlas_brain/services/google_oauth.py` -> parents[2] is the checkout root.
+_REPO_ROOT = Path(__file__).resolve().parents[2]
+
+
+def resolve_token_file_path(token_file_path: str) -> Path:
+    """Resolve the configured token-file path deterministically.
+
+    A RELATIVE path is anchored to the checkout containing this module, never
+    to the process working directory, so a `cd` (or a systemd `WorkingDirectory`
+    that differs from the checkout) can no longer move the credential.
+
+    SCOPE OF THIS GUARANTEE — read before relying on it. Anchoring is relative
+    to *this checkout*. When the service is deployed from a git worktree, the
+    module lives inside that worktree, so the anchor moves with the deployment:
+    a relative path still resolves under whichever worktree is deployed. That
+    is exactly how Calendar broke on 2026-08-05, when the runtime moved from
+    `worktrees/eom-receivables-runtime` (which had `data/google_tokens.json`
+    symlinked) to `worktrees/atlas-runtime-main` (which had no `data/` at all).
+
+    So this function makes resolution DETERMINISTIC, not deployment-stable. For
+    a multi-worktree deployment the durable fix is an ABSOLUTE
+    `ATLAS_TOOLS_GOOGLE_TOKEN_FILE` pointing at shared state outside any
+    worktree; absolute paths are honoured verbatim. `_load` warns with the
+    resolved path and that remedy whenever the file is absent, so the residual
+    hazard is loud and correctly diagnosed instead of silent.
+    """
+    path = Path(token_file_path).expanduser()
+    if path.is_absolute():
+        return path
+    return _REPO_ROOT / path
+
 
 @dataclass
 class GoogleCredentials:
@@ -35,6 +67,10 @@ class GoogleCredentials:
     client_id: str
     client_secret: str
     refresh_token: str
+    # Which source supplied `refresh_token`: "file" or "env". Carried so the
+    # caller can say WHICH credential Google rejected instead of blaming the
+    # token file the operator would then pointlessly regenerate.
+    refresh_token_source: str = "file"
 
 
 class GoogleTokenStore:
@@ -46,10 +82,16 @@ class GoogleTokenStore:
     """
 
     def __init__(self, token_file_path: str) -> None:
-        self._path = Path(token_file_path)
+        self._path = resolve_token_file_path(token_file_path)
         self._data: dict = {}
         self._lock = threading.Lock()
         self._loaded = False
+        self._file_present = False
+
+    @property
+    def token_file_path(self) -> Path:
+        """The resolved absolute path this store reads and writes."""
+        return self._path
 
     def _load(self) -> None:
         """Load tokens from file if it exists."""
@@ -59,10 +101,25 @@ class GoogleTokenStore:
             try:
                 with open(self._path) as f:
                     self._data = json.load(f)
+                self._file_present = True
                 logger.info("Loaded Google tokens from %s", self._path)
             except (json.JSONDecodeError, OSError) as e:
                 logger.warning("Failed to read token file %s: %s", self._path, e)
                 self._data = {}
+        else:
+            # Previously silent. An absent token file is the single most likely
+            # cause of a Google auth failure in this deployment, and saying so
+            # here is what distinguishes "the file is missing" from "Google
+            # rejected the credential" -- two problems with opposite fixes.
+            logger.warning(
+                "Google token file not found at %s; falling back to .env "
+                "config fields. If Google auth fails, the .env fallback is "
+                "what is being used, not this file. If this path sits inside a "
+                "git worktree, a deploy that switches worktrees will keep "
+                "moving it -- set an ABSOLUTE ATLAS_TOOLS_GOOGLE_TOKEN_FILE "
+                "pointing at shared state outside any worktree.",
+                self._path,
+            )
         self._loaded = True
 
     def _save(self) -> None:
@@ -118,10 +175,26 @@ class GoogleTokenStore:
             if not all([client_id, client_secret, refresh_token]):
                 return None
 
+            source = "file" if file_token else "env"
+            if source == "env":
+                # A cross-source substitution is exactly what turned a missing
+                # symlink into five days of "refresh token is INVALID": the
+                # file token was fine, but an older .env token silently took
+                # its place. Name the substitution when it happens.
+                logger.warning(
+                    "Google %s refresh token came from the .env fallback, not "
+                    "the token file %s. These can be DIFFERENT credentials; a "
+                    "stale fallback will be rejected by Google even when the "
+                    "token file is valid.",
+                    service,
+                    self._path,
+                )
+
             return GoogleCredentials(
                 client_id=client_id,
                 client_secret=client_secret,
                 refresh_token=refresh_token,
+                refresh_token_source=source,
             )
 
     def persist_refresh_token(self, service: str, new_token: str) -> None:
