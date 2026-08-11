@@ -104,11 +104,18 @@ def read_mapping(path: Path) -> list[dict[str, str]]:
     return rows
 
 
-async def run(mapping_path: Path, apply: bool) -> int:
-    from atlas_brain.storage.database import get_db_pool
+async def run(mapping_path: Path, apply: bool, pool: object | None = None) -> int:
+    """Apply the mapping. ``pool`` is injectable so a test can supply its own.
 
+    Patching ``atlas_brain.storage.database.get_db_pool`` would work too, and
+    would couple every test here to a private module attribute -- the same
+    reason the CRM provider takes a pool rather than reaching for the global.
+    """
     rows = read_mapping(mapping_path)
-    pool = get_db_pool()
+    if pool is None:
+        from atlas_brain.storage.database import get_db_pool
+
+        pool = get_db_pool()
     await pool.initialize()
 
     tally: Counter[str] = Counter()

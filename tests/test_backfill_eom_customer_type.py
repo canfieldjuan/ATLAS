@@ -71,7 +71,7 @@ async def _seed(pool, *, name: str, tenant: str = TENANT) -> str:
 
 
 @pytest.fixture
-async def db(monkeypatch):
+async def db():
     import os
 
     database_url = os.environ.get(DATABASE_URL_ENV)
@@ -99,11 +99,7 @@ async def db(monkeypatch):
         pool = await asyncpg.create_pool(
             database_url, min_size=1, max_size=2, setup=set_search_path
         )
-        adapter = _PoolAdapter(pool)
-        import atlas_brain.storage.database as db_mod
-
-        monkeypatch.setattr(db_mod, "get_db_pool", lambda: adapter)
-        yield adapter
+        yield _PoolAdapter(pool)
     finally:
         if pool is not None:
             await pool.close()
@@ -117,7 +113,7 @@ async def test_dry_run_reports_without_writing(db, tmp_path):
     contact_id = await _seed(db, name="Dry Run Co")
     mapping = _write_mapping(tmp_path, [(contact_id, "commercial", "sites=2")])
 
-    exit_code = await backfill.run(mapping_path=mapping, apply=False)
+    exit_code = await backfill.run(mapping_path=mapping, apply=False, pool=db)
 
     assert exit_code == 0
     stored = await db.fetchrow("SELECT customer_type FROM contacts WHERE id = $1::uuid", contact_id)
@@ -134,7 +130,7 @@ async def test_apply_writes_both_types(db, tmp_path):
         [(commercial, "commercial", "sites=1"), (residential, "residential", "sites=1")],
     )
 
-    exit_code = await backfill.run(mapping_path=mapping, apply=True)
+    exit_code = await backfill.run(mapping_path=mapping, apply=True, pool=db)
 
     assert exit_code == 0
     rows = {
@@ -150,7 +146,7 @@ async def test_rerunning_is_a_no_op_and_never_overwrites_a_decision(db, tmp_path
     """Idempotent, and an operator's later correction outlives a stale mapping."""
     contact_id = await _seed(db, name="Corrected Later")
     mapping = _write_mapping(tmp_path, [(contact_id, "commercial", "sites=1")])
-    await backfill.run(mapping_path=mapping, apply=True)
+    await backfill.run(mapping_path=mapping, apply=True, pool=db)
 
     # The operator fixes it in the CRM afterwards.
     await db.execute(
@@ -158,7 +154,7 @@ async def test_rerunning_is_a_no_op_and_never_overwrites_a_decision(db, tmp_path
         contact_id,
     )
 
-    exit_code = await backfill.run(mapping_path=mapping, apply=True)
+    exit_code = await backfill.run(mapping_path=mapping, apply=True, pool=db)
 
     stored = await db.fetchrow(
         "SELECT customer_type FROM contacts WHERE id = $1::uuid", contact_id
@@ -175,7 +171,7 @@ async def test_a_contact_in_another_tenant_is_refused(db, tmp_path):
     foreign = await _seed(db, name="Churnsignals Account", tenant=FOREIGN_TENANT)
     mapping = _write_mapping(tmp_path, [(foreign, "commercial", "sites=1")])
 
-    exit_code = await backfill.run(mapping_path=mapping, apply=True)
+    exit_code = await backfill.run(mapping_path=mapping, apply=True, pool=db)
 
     stored = await db.fetchrow(
         "SELECT customer_type FROM contacts WHERE id = $1::uuid", foreign
@@ -189,7 +185,7 @@ async def test_an_unknown_contact_id_is_reported_not_skipped(db, tmp_path):
     missing = str(uuid.uuid4())
     mapping = _write_mapping(tmp_path, [(missing, "residential", "sites=1")])
 
-    exit_code = await backfill.run(mapping_path=mapping, apply=True)
+    exit_code = await backfill.run(mapping_path=mapping, apply=True, pool=db)
 
     assert exit_code == 1
 
@@ -202,7 +198,7 @@ async def test_a_value_outside_the_set_is_refused(db, tmp_path):
         tmp_path, [(contact_id, "bogus", "sites=1"), (contact_id, "unknown", "sites=1")]
     )
 
-    exit_code = await backfill.run(mapping_path=mapping, apply=True)
+    exit_code = await backfill.run(mapping_path=mapping, apply=True, pool=db)
 
     stored = await db.fetchrow(
         "SELECT customer_type FROM contacts WHERE id = $1::uuid", contact_id
