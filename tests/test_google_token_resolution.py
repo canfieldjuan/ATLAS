@@ -31,7 +31,9 @@ from pathlib import Path
 import pytest
 
 from atlas_brain.services.google_oauth import (
+    DEFAULT_TOKEN_FILE,
     GoogleTokenStore,
+    locate_token_file,
     resolve_token_file_path,
 )
 
@@ -284,14 +286,13 @@ def test_cwd_change_no_longer_moves_the_credential(tmp_path, monkeypatch):
 
 
 def test_relative_path_still_moves_with_the_deployed_checkout(tmp_path):
-    """What this slice does NOT fix, asserted so the limit is recorded.
+    """WHY the default had to leave the repo, stated as a test.
 
-    Anchoring is relative to the checkout containing the module. When the
-    service is deployed FROM a git worktree, the module lives inside it, so a
-    relative path still resolves under whichever worktree is deployed — the
-    exact 2026-08-05 trigger. Only an ABSOLUTE configured path is deployment
-    stable. Stating this as a test keeps the residual hazard honest instead of
-    letting the plan imply a guarantee the code does not provide.
+    A relative path is anchored to the checkout containing the module, and the
+    deployed module lives inside the runtime worktree — so a relative path
+    still moves with the deployment. This is the reason `DEFAULT_TOKEN_FILE`
+    points outside the repo; see
+    `test_default_token_file_is_outside_every_worktree`.
     """
     worktree_a = tmp_path / "worktree-a"
     worktree_b = tmp_path / "worktree-b"
@@ -309,16 +310,16 @@ def test_relative_path_still_moves_with_the_deployed_checkout(tmp_path):
     assert resolve_token_file_path(str(shared)) == shared
 
 
-def test_missing_file_warning_names_the_absolute_path_remedy(tmp_path, caplog):
-    """The residual hazard must be actionable, not merely reported."""
+def test_missing_file_warning_names_the_stable_default(tmp_path, caplog):
+    """A missing file must be actionable: say where it SHOULD live."""
     store = GoogleTokenStore(str(tmp_path / "gone" / "google_tokens.json"))
 
     with caplog.at_level(logging.WARNING, logger="atlas.services.google_oauth"):
         store.get_credentials("calendar")
 
     joined = " ".join(r.getMessage() for r in caplog.records)
-    assert "ATLAS_TOOLS_GOOGLE_TOKEN_FILE" in joined
-    assert "absolute" in joined.lower()
+    assert DEFAULT_TOKEN_FILE in joined
+    assert "outside any git worktree" in joined
 
 
 def test_repo_root_derivation_points_at_a_real_checkout():
@@ -329,3 +330,115 @@ def test_repo_root_derivation_points_at_a_real_checkout():
     assert (root / "atlas_brain").is_dir()
     assert (root / "atlas_brain" / "services" / "google_oauth.py").is_file()
     assert os.path.samefile(root, REPO_ROOT)
+
+
+# --- what actually prevents recurrence -----------------------------------
+
+
+def test_default_token_file_is_outside_every_worktree():
+    """The fix. The default must not live under any checkout.
+
+    Every in-repo anchor — CWD, repo root, the setup script's PROJECT_ROOT —
+    moves when the deployed worktree moves, because the deployed code lives
+    inside that worktree. Only a path outside the repo survives a deploy.
+    """
+    resolved = resolve_token_file_path(DEFAULT_TOKEN_FILE)
+
+    assert resolved.is_absolute()
+    assert REPO_ROOT not in resolved.parents, resolved
+    assert "worktree" not in str(resolved)
+    assert resolved == Path.home() / ".config" / "atlas" / "google_tokens.json"
+
+
+def test_default_is_identical_from_any_checkout(tmp_path, monkeypatch):
+    """The 2026-08-05 scenario, now actually prevented.
+
+    Two different deployed checkouts, same config: the credential must resolve
+    to the SAME file. This is the assertion the earlier draft of this slice
+    could not honestly make.
+    """
+    for checkout in ("worktrees/old-runtime", "worktrees/new-runtime"):
+        d = tmp_path / checkout
+        d.mkdir(parents=True)
+        monkeypatch.chdir(d)
+        assert resolve_token_file_path(DEFAULT_TOKEN_FILE) == (
+            Path.home() / ".config" / "atlas" / "google_tokens.json"
+        )
+
+
+def test_legacy_in_repo_file_is_still_found_and_warns(tmp_path, caplog, monkeypatch):
+    """Upgrades must not break: an existing in-repo file keeps working."""
+    from atlas_brain.services import google_oauth
+
+    legacy = tmp_path / "checkout" / "data" / "google_tokens.json"
+    _write_token_file(legacy, calendar="legacy-token")
+    monkeypatch.setattr(google_oauth, "LEGACY_TOKEN_FILE", legacy)
+
+    absent_primary = tmp_path / "config" / "google_tokens.json"
+    with caplog.at_level(logging.WARNING, logger="atlas.services.google_oauth"):
+        chosen = locate_token_file(str(absent_primary))
+
+    assert chosen == legacy
+    joined = " ".join(r.getMessage() for r in caplog.records)
+    assert "LEGACY" in joined
+    assert "Migrate it" in joined
+
+
+def test_primary_wins_over_legacy_when_both_exist(tmp_path, monkeypatch):
+    """Once migrated, the stable copy is authoritative."""
+    from atlas_brain.services import google_oauth
+
+    legacy = tmp_path / "checkout" / "data" / "google_tokens.json"
+    primary = tmp_path / "config" / "google_tokens.json"
+    _write_token_file(legacy, calendar="legacy-token")
+    _write_token_file(primary, calendar="stable-token")
+    monkeypatch.setattr(google_oauth, "LEGACY_TOKEN_FILE", legacy)
+
+    assert locate_token_file(str(primary)) == primary
+    assert GoogleTokenStore(str(primary)).get_credentials("calendar").refresh_token == (
+        "stable-token"
+    )
+
+
+def test_first_write_lands_in_the_stable_location(tmp_path, monkeypatch):
+    """With nothing on disk anywhere, a fresh install must not recreate the
+    legacy in-repo file."""
+    from atlas_brain.services import google_oauth
+
+    monkeypatch.setattr(
+        google_oauth, "LEGACY_TOKEN_FILE", tmp_path / "checkout" / "data" / "nope.json"
+    )
+    primary = tmp_path / "config" / "google_tokens.json"
+
+    assert locate_token_file(str(primary)) == primary
+
+
+def test_setup_script_writes_where_the_service_reads():
+    """A re-auth must not deposit the credential somewhere the service ignores.
+
+    The setup script previously wrote to its own PROJECT_ROOT/data/, i.e. into
+    whichever worktree it was invoked from.
+    """
+    source = (REPO_ROOT / "scripts" / "setup_google_oauth.py").read_text()
+
+    assert "locate_token_file(" in source
+    assert 'PROJECT_ROOT / "data" / "google_tokens.json"' not in source
+
+
+def test_store_itself_uses_the_legacy_fallback(tmp_path, monkeypatch):
+    """Asserted THROUGH the store, not just the helper.
+
+    A test that only calls `locate_token_file` directly cannot notice the store
+    quietly going back to `resolve_token_file_path` and losing upgrade support.
+    """
+    from atlas_brain.services import google_oauth
+
+    legacy = tmp_path / "checkout" / "data" / "google_tokens.json"
+    _write_token_file(legacy, calendar="legacy-token")
+    monkeypatch.setattr(google_oauth, "LEGACY_TOKEN_FILE", legacy)
+
+    store = GoogleTokenStore(str(tmp_path / "config" / "google_tokens.json"))
+
+    assert store.token_file_path == legacy
+    creds = store.get_credentials("calendar")
+    assert creds is not None and creds.refresh_token == "legacy-token"

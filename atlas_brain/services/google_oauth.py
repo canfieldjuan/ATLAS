@@ -1,8 +1,9 @@
 """
 Persistent Google OAuth token store.
 
-Loads tokens from a JSON file (data/google_tokens.json by default),
-falls back to .env config fields. Automatically persists rotated
+Loads tokens from a JSON file (``~/.config/atlas/google_tokens.json`` by
+default — deliberately OUTSIDE the repo, see DEFAULT_TOKEN_FILE), falls back to
+the legacy in-repo path and then to .env config fields. Automatically persists rotated
 refresh tokens so the user never has to re-run the setup script
 after Google rotates a token.
 
@@ -31,6 +32,25 @@ logger = logging.getLogger("atlas.services.google_oauth")
 # `atlas_brain/services/google_oauth.py` -> parents[2] is the checkout root.
 _REPO_ROOT = Path(__file__).resolve().parents[2]
 
+# The credential lives OUTSIDE the repo. This is the whole fix.
+#
+# Anything anchored to a checkout — CWD, repo root, `PROJECT_ROOT` — moves when
+# the deployed git worktree moves, because the deployed code lives inside that
+# worktree. That is what severed Calendar for five days on 2026-08-05: the
+# runtime switched worktrees and the new one had no `data/`. Anchoring "better"
+# inside the repo cannot fix it; the credential has to stop living in the repo.
+#
+# `~/.config/atlas/` is already where this deployment keeps its other service
+# credentials (`eom-funnel.token`, `eom-receivables.token`,
+# `eom-settings-admin.token`), so this is the existing convention rather than a
+# new one.
+DEFAULT_TOKEN_FILE = "~/.config/atlas/google_tokens.json"
+
+# Where installs created before this change put the file. Still read, so an
+# existing deployment keeps working on upgrade, but it is the unstable location
+# and using it emits a migration warning.
+LEGACY_TOKEN_FILE = _REPO_ROOT / "data" / "google_tokens.json"
+
 
 def resolve_token_file_path(token_file_path: str) -> Path:
     """Resolve the configured token-file path deterministically.
@@ -39,25 +59,53 @@ def resolve_token_file_path(token_file_path: str) -> Path:
     to the process working directory, so a `cd` (or a systemd `WorkingDirectory`
     that differs from the checkout) can no longer move the credential.
 
-    SCOPE OF THIS GUARANTEE — read before relying on it. Anchoring is relative
-    to *this checkout*. When the service is deployed from a git worktree, the
-    module lives inside that worktree, so the anchor moves with the deployment:
-    a relative path still resolves under whichever worktree is deployed. That
-    is exactly how Calendar broke on 2026-08-05, when the runtime moved from
-    `worktrees/eom-receivables-runtime` (which had `data/google_tokens.json`
-    symlinked) to `worktrees/atlas-runtime-main` (which had no `data/` at all).
-
-    So this function makes resolution DETERMINISTIC, not deployment-stable. For
-    a multi-worktree deployment the durable fix is an ABSOLUTE
-    `ATLAS_TOOLS_GOOGLE_TOKEN_FILE` pointing at shared state outside any
-    worktree; absolute paths are honoured verbatim. `_load` warns with the
-    resolved path and that remedy whenever the file is absent, so the residual
-    hazard is loud and correctly diagnosed instead of silent.
+    NOTE ON SCOPE. This makes resolution deterministic, but a relative path is
+    still anchored INSIDE the checkout — and when the service is deployed from a
+    git worktree the module lives in that worktree, so a relative path still
+    moves with the deployment. Determinism alone therefore would NOT have
+    prevented the 2026-08-05 outage. What prevents it is `DEFAULT_TOKEN_FILE`
+    living outside the repo entirely; this function's job is only to honour
+    absolute and `~` paths verbatim so that default works.
     """
     path = Path(token_file_path).expanduser()
     if path.is_absolute():
         return path
     return _REPO_ROOT / path
+
+
+def locate_token_file(token_file_path: str) -> Path:
+    """Return the token file to use, preferring the deployment-stable location.
+
+    Order:
+      1. the configured/default path (``~/.config/atlas/google_tokens.json``
+         unless the operator overrode it) — outside every git worktree, so no
+         deploy can move it;
+      2. the legacy in-repo ``<checkout>/data/google_tokens.json``, so an
+         install created before this change keeps working on upgrade. Using it
+         warns, because that is the location a worktree switch severs.
+
+    When neither exists, the primary path is returned so a first write lands in
+    the stable location rather than re-creating the legacy one.
+    """
+    primary = resolve_token_file_path(token_file_path)
+    if primary.exists():
+        return primary
+
+    legacy = LEGACY_TOKEN_FILE
+    if legacy != primary and legacy.exists():
+        logger.warning(
+            "Google token file found at the LEGACY in-repo path %s. That path "
+            "lives inside a git worktree, so a deploy that switches worktrees "
+            "will sever it (this caused a five-day Calendar outage on "
+            "2026-08-05). Migrate it: mkdir -p %s && mv %s %s",
+            legacy,
+            primary.parent,
+            legacy,
+            primary,
+        )
+        return legacy
+
+    return primary
 
 
 @dataclass
@@ -82,7 +130,7 @@ class GoogleTokenStore:
     """
 
     def __init__(self, token_file_path: str) -> None:
-        self._path = resolve_token_file_path(token_file_path)
+        self._path = locate_token_file(token_file_path)
         self._data: dict = {}
         self._lock = threading.Lock()
         self._loaded = False
@@ -114,11 +162,12 @@ class GoogleTokenStore:
             logger.warning(
                 "Google token file not found at %s; falling back to .env "
                 "config fields. If Google auth fails, the .env fallback is "
-                "what is being used, not this file. If this path sits inside a "
-                "git worktree, a deploy that switches worktrees will keep "
-                "moving it -- set an ABSOLUTE ATLAS_TOOLS_GOOGLE_TOKEN_FILE "
-                "pointing at shared state outside any worktree.",
+                "what is being used, not this file. The default location is "
+                "%s, outside any git worktree; if this path is inside a "
+                "worktree it came from an override or a legacy install and a "
+                "deploy can sever it.",
                 self._path,
+                DEFAULT_TOKEN_FILE,
             )
         self._loaded = True
 

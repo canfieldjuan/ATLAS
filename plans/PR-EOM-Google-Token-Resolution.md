@@ -35,11 +35,22 @@ outage looked Calendar-specific and went unnoticed for five days. Calendar feeds
 `calendar_import`, the dominant CRM contact-entry path.
 
 Immediate production remediation (restoring the symlink) is already done and is
-NOT what this slice ships. This slice removes the SILENCE and the MISDIRECTION:
-the severing itself is prevented by configuring an absolute token path (an
-operator action this slice makes discoverable), while the code guarantees the
-failure is announced once, with the resolved path and the right remedy, instead
-of being invisible for days.
+NOT what this slice ships.
+
+**The fix is that the credential stops living in the repo.** Every in-repo
+anchor — the CWD, the checkout root, the setup script's `PROJECT_ROOT` — moves
+when the deployed worktree moves, because the deployed code lives inside that
+worktree. No amount of "resolve the relative path better" survives that; an
+earlier draft of this slice tried exactly that and would not have prevented the
+outage. `ToolsConfig.google_token_file` now defaults to
+`~/.config/atlas/google_tokens.json`, outside every checkout, which is already
+where this deployment keeps its other service credentials. A legacy in-repo file
+is still read so upgrades do not break, and using it warns with the migration
+command. The setup script writes through the same resolver, so a re-auth can no
+longer deposit the credential where the service never looks.
+
+On top of that, the slice removes the SILENCE and the MISDIRECTION that turned a
+severed credential into five undiagnosed days.
 
 ### Diff-budget overage — why this slice is indivisible
 
@@ -85,16 +96,22 @@ that prove each are the same fixtures.
 
 Ownership lane: eom-ops/google-token-resolution
 Slice phase: Vertical slice
-Max files: 4
+Max files: 6
 
-1. Add `resolve_token_file_path()`: relative paths anchor to the checkout
-   containing the module (derived from `__file__`, not CWD); absolute and `~`
-   paths are honoured verbatim.
-2. Log a WARNING naming the resolved path when the token file is absent.
-3. Carry `refresh_token_source` (`"file"` / `"env"`) on `GoogleCredentials`, and
-   WARN when the `.env` fallback supplies the token.
-4. Rewrite the Calendar rejection CRITICAL to name the source and the matching
-   remedy.
+1. Default the token file OUTSIDE the repo:
+   `DEFAULT_TOKEN_FILE = "~/.config/atlas/google_tokens.json"`. This is what
+   prevents recurrence.
+2. `locate_token_file()`: prefer the configured/default path; fall back to the
+   legacy in-repo `<checkout>/data/google_tokens.json` so upgrades keep working,
+   warning with the migration command when that fallback is used.
+3. `resolve_token_file_path()`: honour absolute and `~` paths verbatim; anchor
+   any remaining relative path to the checkout rather than the CWD.
+4. `scripts/setup_google_oauth.py` writes through the same resolver, so a
+   re-auth lands where the service reads.
+5. Log a WARNING naming the resolved path when the token file is absent.
+6. Carry `refresh_token_source` (`"file"` / `"env"`) on `GoogleCredentials`, and
+   WARN when the `.env` fallback supplies the token; the Calendar rejection
+   CRITICAL names the source and the matching remedy.
 
 ### Review Contract
 
@@ -102,19 +119,26 @@ Max files: 4
   1. A relative token path resolves identically from any CWD — settled by
      `tests/test_google_token_resolution.py::test_relative_path_is_identical_from_two_different_cwds`
      and `::test_relative_path_anchors_to_the_repo_root`.
-  2. The CWD no longer moves the credential — settled by
-     `::test_cwd_change_no_longer_moves_the_credential`. The LIMIT of that
-     guarantee is asserted too: a relative path still moves with the deployed
-     CHECKOUT, so only an absolute configured path is deployment stable —
-     `::test_relative_path_still_moves_with_the_deployed_checkout`. The missing
-     -file warning therefore names that remedy —
-     `::test_missing_file_warning_names_the_absolute_path_remedy`.
+  2. **Recurrence is prevented**: the default credential path is outside every
+     checkout and resolves identically from any deployed worktree — settled by
+     `::test_default_token_file_is_outside_every_worktree` and
+     `::test_default_is_identical_from_any_checkout`. WHY an in-repo anchor
+     cannot achieve this is itself asserted by
+     `::test_relative_path_still_moves_with_the_deployed_checkout`, and the CWD
+     half by `::test_cwd_change_no_longer_moves_the_credential`.
+  2b. Upgrades do not break and a re-auth lands where the service reads —
+     settled by `::test_legacy_in_repo_file_is_still_found_and_warns`,
+     `::test_store_itself_uses_the_legacy_fallback`,
+     `::test_primary_wins_over_legacy_when_both_exist`,
+     `::test_first_write_lands_in_the_stable_location` and
+     `::test_setup_script_writes_where_the_service_reads`.
   3. Absolute and `~` paths are unchanged — settled by
      `::test_absolute_path_is_honoured_unchanged` and
      `::test_user_home_shorthand_expands`.
   4. An absent token file is announced with its resolved path, and a present
      one does not warn — settled by
-     `::test_missing_token_file_is_logged_with_its_resolved_path` and
+     `::test_missing_token_file_is_logged_with_its_resolved_path`,
+     `::test_missing_file_warning_names_the_stable_default` and
      `::test_present_token_file_does_not_warn_about_absence`.
   5. A credential reports which source supplied it — settled by
      `::test_file_token_is_reported_as_coming_from_the_file`,
@@ -213,9 +237,11 @@ values were probed directly rather than assumed:
 
 ### Files touched
 
+- `atlas_brain/config.py`
 - `atlas_brain/services/google_oauth.py`
 - `atlas_brain/tools/calendar.py`
 - `plans/PR-EOM-Google-Token-Resolution.md`
+- `scripts/setup_google_oauth.py`
 - `tests/test_google_token_resolution.py`
 
 ## Mechanism
@@ -301,10 +327,10 @@ Parked hardening: none.
 
 All counts re-run at this head.
 
-- `python -m pytest tests/test_google_token_resolution.py -q` — **18 passed**
+- `python -m pytest tests/test_google_token_resolution.py -q` — **25 passed**
 - Every consumer of the changed store — `test_google_token_resolution.py`,
   `test_calendar_import_rerun.py`, `test_eom_live_calendar_import.py`,
-  `test_eom_scoped_gmail_credentials.py`, `test_leads_intake.py` — **165 passed, 1 skipped**
+  `test_eom_scoped_gmail_credentials.py`, `test_leads_intake.py` — **172 passed, 1 skipped**
 - **Negative probes**, each injected then reverted (restored state **18 passed**):
   | Injected defect | Result |
   |---|---|
@@ -312,14 +338,17 @@ All counts re-run at this head.
   | delete the missing-file warning (silent again) | 1 failed |
   | hardcode `source = "file"` (hide the substitution) | 1 failed |
   | wrong `parents[]` hop, as if the module moved | 3 failed |
-- **Deployed-layout check that corrected this plan.** Resolving
-  `parents[2]` for
-  `worktrees/atlas-runtime-main/atlas_brain/services/google_oauth.py` yields
+  | default moved back inside the repo (the original defect) | 2 failed |
+  | store bypasses the legacy fallback (breaks upgrades) | 1 failed |
+- **Deployed-layout check that redirected this slice.** Resolving `parents[2]`
+  for `worktrees/atlas-runtime-main/atlas_brain/services/google_oauth.py` yields
   `worktrees/atlas-runtime-main` — the very worktree whose `data/` was missing.
-  Anchoring alone therefore would NOT have prevented the outage; the plan and
-  the tests were corrected to claim only what the code delivers, and
-  `::test_relative_path_still_moves_with_the_deployed_checkout` records the
-  limit.
+  An in-repo anchor therefore could NOT have prevented the outage. That finding
+  is why the default moved out of the repo entirely rather than being
+  "anchored better"; `::test_relative_path_still_moves_with_the_deployed_checkout`
+  keeps the reasoning in the suite.
+- Default path resolves to `/home/juan-canfield/.config/atlas/google_tokens.json`
+  — outside every checkout, alongside the deployment's other service tokens.
 - `ruff check` on the two changed modules: **5 F841**, identical to the
   `origin/main` baseline (5) — none introduced, none on a touched line. The new
   test file is clean.
@@ -332,8 +361,10 @@ All counts re-run at this head.
 
 | File | LOC |
 |---|---:|
-| `atlas_brain/services/google_oauth.py` | 75 |
+| `atlas_brain/config.py` | 11 |
+| `atlas_brain/services/google_oauth.py` | 128 |
 | `atlas_brain/tools/calendar.py` | 24 |
-| `plans/PR-EOM-Google-Token-Resolution.md` | 339 |
-| `tests/test_google_token_resolution.py` | 331 |
-| **Total** | **769** |
+| `plans/PR-EOM-Google-Token-Resolution.md` | 366 |
+| `scripts/setup_google_oauth.py` | 15 |
+| `tests/test_google_token_resolution.py` | 444 |
+| **Total** | **988** |

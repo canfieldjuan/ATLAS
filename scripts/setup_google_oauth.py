@@ -46,10 +46,21 @@ REDIRECT_URI = "http://localhost:8085"
 AUTH_URL = "https://accounts.google.com/o/oauth2/v2/auth"
 TOKEN_URL = "https://oauth2.googleapis.com/token"
 
-# Resolve token file relative to project root
+# Write to the SAME location the running service reads. Previously this wrote
+# to PROJECT_ROOT/data/, i.e. inside whichever git worktree the script ran from
+# -- so a re-auth could deposit the credential somewhere the deployed service
+# never looks. Delegating to the service resolver keeps the two in lockstep.
 SCRIPT_DIR = Path(__file__).resolve().parent
 PROJECT_ROOT = SCRIPT_DIR.parent
-TOKEN_FILE = PROJECT_ROOT / "data" / "google_tokens.json"
+sys.path.insert(0, str(PROJECT_ROOT))
+from atlas_brain.services.google_oauth import (  # noqa: E402
+    DEFAULT_TOKEN_FILE,
+    locate_token_file,
+)
+
+TOKEN_FILE = locate_token_file(
+    os.environ.get("ATLAS_TOOLS_GOOGLE_TOKEN_FILE") or DEFAULT_TOKEN_FILE
+)
 
 
 def load_existing_tokens() -> dict:
