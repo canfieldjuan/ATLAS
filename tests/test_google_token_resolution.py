@@ -618,3 +618,44 @@ def test_both_calendar_callers_use_the_shared_remedy():
 
 
 # --- rotation must survive a migrated (symlinked) path --------------------
+
+
+def test_every_recovery_message_requires_a_restart(tmp_path, caplog, monkeypatch):
+    """Fixing the credential does nothing until the process restarts.
+
+    `_load()` sets `_loaded=True` permanently and the settings object captures
+    `.env` at import, so an operator who follows the guidance and restores the
+    file (or edits `.env`) sees no change and reasonably concludes the fix
+    failed — prolonging the outage (Codex #2355 R6).
+    """
+    from atlas_brain.services import google_oauth
+
+    # missing-file path
+    store = GoogleTokenStore(str(tmp_path / "gone" / "google_tokens.json"))
+    with caplog.at_level(logging.WARNING, logger="atlas.services.google_oauth"):
+        store.get_credentials("calendar")
+    assert "RESTART" in " ".join(r.getMessage() for r in caplog.records)
+
+    # .env-fallback path
+    caplog.clear()
+    monkeypatch.setattr(google_oauth.settings.tools, "calendar_client_id", "cid")
+    monkeypatch.setattr(google_oauth.settings.tools, "calendar_client_secret", "sec")
+    monkeypatch.setattr(google_oauth.settings.tools, "calendar_refresh_token", "envtok")
+    store2 = GoogleTokenStore(str(tmp_path / "also-gone" / "google_tokens.json"))
+    with caplog.at_level(logging.WARNING, logger="atlas.services.google_oauth"):
+        creds = store2.get_credentials("calendar")
+    assert creds is not None and creds.refresh_token_source == "env"
+    assert "RESTART" in " ".join(r.getMessage() for r in caplog.records)
+
+    # both rejection remedies
+    from atlas_brain.services.google_oauth import (
+        GoogleCredentials,
+        describe_credential_remedy,
+    )
+
+    for source in ("file", "env"):
+        remedy = describe_credential_remedy(
+            GoogleCredentials("i", "s", "t", refresh_token_source=source),
+            tmp_path / "tokens.json",
+        )
+        assert "RESTART" in remedy, source

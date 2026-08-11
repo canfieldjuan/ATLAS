@@ -415,8 +415,8 @@ All counts re-run at this head.
 |---|---:|
 | `atlas_brain/config.py` | 11 |
 | `atlas_brain/services/calendar_provider.py` | 10 |
-| `atlas_brain/services/google_oauth.py` | 221 |
+| `atlas_brain/services/google_oauth.py` | 230 |
 | `atlas_brain/tools/calendar.py` | 8 |
-| `plans/PR-EOM-Google-Token-Resolution.md` | 426 |
-| `tests/test_google_token_resolution.py` | 620 |
-| **Total** | **1296** |
+| `plans/PR-EOM-Google-Token-Resolution.md` | 422 |
+| `tests/test_google_token_resolution.py` | 661 |
+| **Total** | **1342** |

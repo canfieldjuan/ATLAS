@@ -147,11 +147,14 @@ def describe_credential_remedy(creds: Optional["GoogleCredentials"], path: Path)
             "The token came from the .env fallback "
             "(ATLAS_TOOLS_CALENDAR_REFRESH_TOKEN), NOT from "
             f"{path}. Re-running the setup script will not help: remove or "
-            "update that .env value, or restore the token file."
+            "update that .env value, or restore the token file. RESTART the "
+            "service afterwards -- the credential is cached for the life of "
+            "the process."
         )
     return (
         f"The token came from {path}. "
-        "Re-run: python scripts/setup_google_oauth.py"
+        "Re-run: python scripts/setup_google_oauth.py, then RESTART the "
+        "service -- the credential is cached for the life of the process."
     )
 
 
@@ -256,7 +259,11 @@ class GoogleTokenStore:
                 "Google token file not found at %s; falling back to .env "
                 "config fields. If Google auth fails, the .env fallback is "
                 "what is being used, not this file. The stable default is %s, "
-                "outside any git worktree. Legacy locations searched: %s.",
+                "outside any git worktree. Legacy locations searched: %s. "
+                "RESTART the service after any fix: this store caches its "
+                "loaded state and the settings object has already captured the "
+                ".env values, so restoring the file or editing .env has no "
+                "effect on a running process.",
                 self._path,
                 DEFAULT_TOKEN_FILE,
                 ", ".join(str(p) for p in LEGACY_TOKEN_FILES) or "(none)",
@@ -327,7 +334,9 @@ class GoogleTokenStore:
                     "Google %s refresh token came from the .env fallback, not "
                     "the token file %s. These can be DIFFERENT credentials; a "
                     "stale fallback will be rejected by Google even when the "
-                    "token file is valid.",
+                    "token file is valid. RESTART the service after changing "
+                    "either source -- both are cached for the life of the "
+                    "process.",
                     service,
                     self._path,
                 )
