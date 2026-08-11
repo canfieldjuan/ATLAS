@@ -17,7 +17,6 @@ Usage:
 """
 
 import json
-import os
 import logging
 import threading
 from dataclasses import dataclass
@@ -189,24 +188,13 @@ def locate_token_file(token_file_path: str, *, explicit: bool | None = None) -> 
         if legacy == primary or not legacy.exists():
             continue
         logger.warning(
-            "Google token file found at the LEGACY in-repo path %s. That path "
-            "lives inside a git checkout, so a deploy that switches worktrees "
-            "will sever it (this caused a five-day Calendar outage on "
-            "2026-08-05). Migrate it: mkdir -p %s && cp -L %s %s && "
-            "ln -sfn %s %s -- then restart the service. `cp -L` DEREFERENCES "
-            "the source (this entry is often a symlink into the repo, and `mv` "
-            "would move the link itself). The trailing `ln -sfn` leaves the "
-            "legacy path as a symlink to the stable file rather than deleting "
-            "it, which keeps two things safe: a rollback to pre-change code "
-            "still resolves the credential, and an already-running process "
-            "that cached the legacy path writes THROUGH the link instead of "
-            "recreating a divergent file.",
+            "Google token file found at the LEGACY in-repo path %s, not at the "
+            "stable default %s. That path lives inside a git checkout, so a "
+            "deploy that switches worktrees can sever it (this caused a "
+            "five-day Calendar outage on 2026-08-05). Moving it is an operator "
+            "action -- see ATLAS #2359 for the supported procedure.",
             legacy,
-            primary.parent,
-            legacy,
-            primary,
-            primary,
-            legacy,
+            DEFAULT_TOKEN_FILE,
         )
         return legacy
 
@@ -267,49 +255,24 @@ class GoogleTokenStore:
             logger.warning(
                 "Google token file not found at %s; falling back to .env "
                 "config fields. If Google auth fails, the .env fallback is "
-                "what is being used, not this file. The default location is "
-                "%s, outside any git worktree. Legacy locations searched: %s. "
-                "Credentials left inside a DIFFERENT (old) worktree are NOT "
-                "auto-discovered on purpose -- borrowing a credential from an "
-                "arbitrary sibling checkout could authenticate as the wrong "
-                "Google account -- so migrate it explicitly with: "
-                "cp -L <old>/data/google_tokens.json %s",
+                "what is being used, not this file. The stable default is %s, "
+                "outside any git worktree. Legacy locations searched: %s.",
                 self._path,
                 DEFAULT_TOKEN_FILE,
                 ", ".join(str(p) for p in LEGACY_TOKEN_FILES) or "(none)",
-                resolve_token_file_path(DEFAULT_TOKEN_FILE),
             )
         self._loaded = True
 
-    def _resolved_write_target(self) -> Path:
-        """Return the real file to write, dereferencing a symlinked path."""
-        try:
-            if self._path.is_symlink():
-                return Path(os.path.realpath(self._path))
-        except OSError:  # pragma: no cover - defensive
-            pass
-        return self._path
-
 
     def _save(self) -> None:
-        """Write current token data to file, following a symlinked path.
-
-        The atomic `tmp.replace(target)` is what makes a rotation crash-safe,
-        but `os.replace` on a SYMLINK replaces the link itself with a regular
-        file. During a migration the legacy path is deliberately left as a
-        symlink to the stable credential, so writing to the link path
-        unresolved would silently sever it and strand the stable copy stale
-        (Codex #2355 R8/R12, round 4). Resolving first means the atomic replace
-        lands on the real file and the symlink survives.
-        """
-        target = self._resolved_write_target()
-        target.parent.mkdir(parents=True, exist_ok=True)
-        tmp_path = target.with_suffix(".tmp")
+        """Write current token data to file."""
+        self._path.parent.mkdir(parents=True, exist_ok=True)
+        tmp_path = self._path.with_suffix(".tmp")
         try:
             with open(tmp_path, "w") as f:
                 json.dump(self._data, f, indent=2)
-            tmp_path.replace(target)
-            logger.info("Saved Google tokens to %s", target)
+            tmp_path.replace(self._path)
+            logger.info("Saved Google tokens to %s", self._path)
         except OSError as e:
             logger.error("Failed to write token file %s: %s", self._path, e)
             if tmp_path.exists():

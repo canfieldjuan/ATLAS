@@ -365,8 +365,6 @@ def test_missing_file_warning_names_the_stable_default(tmp_path, caplog):
     # The operator must be able to see WHERE it looked, and be told that a
     # credential stranded in a different worktree is deliberately not borrowed.
     assert "Legacy locations searched" in joined
-    assert "wrong Google account" in joined
-    assert "cp -L" in joined
 
 
 def test_repo_root_derivation_points_at_a_real_checkout():
@@ -444,18 +442,11 @@ def test_legacy_in_repo_file_is_still_found_and_warns(tmp_path, caplog, monkeypa
     assert chosen == legacy
     joined = " ".join(r.getMessage() for r in caplog.records)
     assert "LEGACY" in joined
-    assert "Migrate it" in joined
-    # `mv` would move a symlink rather than its target, leaving the credential
-    # dependent on the checkout (Codex #2355 R12, round 2).
-    assert "cp -L" in joined
-    assert "mv " not in joined
-    # The legacy path must survive as a symlink, not be deleted (round 3,
-    # R8/R12): deleting it breaks rollback to pre-change code, and an
-    # already-running store that cached the legacy path would recreate a
-    # divergent file on the next token rotation.
-    assert "ln -sfn" in joined
-    assert "&& rm " not in joined
-    assert "restart the service" in joined
+    # The warning names the stable default (the PATCHED one this test installed,
+    # not the module constant) and points at the tracked procedure rather than
+    # advertising an inline shell command (see ATLAS #2359).
+    assert str(primary) in joined
+    assert "#2359" in joined
 
 
 def test_primary_wins_over_legacy_when_both_exist(tmp_path, monkeypatch):
@@ -490,18 +481,6 @@ def test_first_write_lands_in_the_stable_location(tmp_path, monkeypatch):
     primary = tmp_path / "config" / "google_tokens.json"
 
     assert google_oauth.locate_token_file(str(primary)) == primary
-
-
-def test_setup_script_writes_where_the_service_reads():
-    """A re-auth must not deposit the credential somewhere the service ignores.
-
-    The setup script previously wrote to its own PROJECT_ROOT/data/, i.e. into
-    whichever worktree it was invoked from.
-    """
-    source = (REPO_ROOT / "scripts" / "setup_google_oauth.py").read_text()
-
-    assert "locate_token_file(" in source
-    assert 'PROJECT_ROOT / "data" / "google_tokens.json"' not in source
 
 
 def test_store_itself_uses_the_legacy_fallback(tmp_path, monkeypatch):
@@ -638,74 +617,4 @@ def test_both_calendar_callers_use_the_shared_remedy():
         assert "Re-run: python scripts/setup_google_oauth.py" not in source
 
 
-def test_setup_script_anchors_dotenv_to_the_checkout():
-    """Otherwise the script and the service read different .env files."""
-    source = (REPO_ROOT / "scripts" / "setup_google_oauth.py").read_text()
-
-    assert "os.chdir(PROJECT_ROOT)" in source
-    assert source.index("os.chdir(PROJECT_ROOT)") < source.index(
-        "from atlas_brain.config import settings"
-    )
-
-
 # --- rotation must survive a migrated (symlinked) path --------------------
-
-
-def test_save_writes_through_a_symlinked_path(tmp_path):
-    """Atomic replace must not clobber the compatibility symlink.
-
-    `_save()` uses `tmp.replace(target)` for crash safety, and `os.replace` on a
-    SYMLINK replaces the link with a regular file. During migration the legacy
-    path is deliberately left as a symlink to the stable credential, so an
-    unresolved write would sever it and strand the stable copy stale
-    (Codex #2355 R8/R12, round 4).
-
-    Exercised through the REAL `_save()`, not a hand-rolled write: the earlier
-    filesystem proof used `Path.write_text`, which follows symlinks, and so
-    could not have caught this.
-    """
-    stable = tmp_path / "config" / "google_tokens.json"
-    _write_token_file(stable, calendar="original")
-    legacy = tmp_path / "worktree" / "data" / "google_tokens.json"
-    legacy.parent.mkdir(parents=True)
-    legacy.symlink_to(stable)
-
-    store = GoogleTokenStore(str(legacy))
-    store.get_credentials("calendar")
-    store.persist_refresh_token("calendar", "rotated")
-
-    assert legacy.is_symlink(), "migration symlink was replaced by a regular file"
-    assert os.path.realpath(legacy) == str(stable)
-    persisted = json.loads(stable.read_text())
-    assert persisted["services"]["calendar"]["refresh_token"] == "rotated"
-
-
-def test_save_on_a_plain_path_is_unchanged(tmp_path):
-    """The non-symlink case keeps its existing atomic-replace behaviour."""
-    plain = tmp_path / "google_tokens.json"
-    _write_token_file(plain, calendar="original")
-
-    store = GoogleTokenStore(str(plain))
-    store.get_credentials("calendar")
-    store.persist_refresh_token("calendar", "rotated")
-
-    assert not plain.is_symlink()
-    assert json.loads(plain.read_text())["services"]["calendar"]["refresh_token"] == (
-        "rotated"
-    )
-
-
-def test_setup_script_reads_legacy_but_writes_the_primary():
-    """Re-auth must create the stable file, not overwrite the legacy one.
-
-    Writing to the discovered legacy path would leave the stable location still
-    missing — the exact upgrade state the script exists to repair.
-    """
-    source = (REPO_ROOT / "scripts" / "setup_google_oauth.py").read_text()
-
-    assert "READ_TOKEN_FILE = locate_token_file(" in source
-    assert "TOKEN_FILE = resolve_token_file_path(" in source
-    # the write path must be the primary
-    assert "with open(TOKEN_FILE, \"w\")" in source
-    # the read path must be the legacy-aware one
-    assert "with open(READ_TOKEN_FILE)" in source

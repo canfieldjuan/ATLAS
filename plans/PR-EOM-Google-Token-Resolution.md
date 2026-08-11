@@ -96,29 +96,31 @@ that prove each are the same fixtures.
 
 Ownership lane: eom-ops/google-token-resolution
 Slice phase: Vertical slice
-Max files: 8
+Max files: 6
 
 1. Default the token file OUTSIDE the repo:
    `DEFAULT_TOKEN_FILE`, pointing at the user's atlas config dir. This is what
-   prevents recurrence.
-2. `locate_token_file()`: prefer the configured/default path; for the DEFAULT
-   path only, fall back to legacy in-repo locations so upgrades keep working,
-   warning with the migration command. Legacy anchors include the SHARED repo
-   root (derived from the worktree `.git` file), because an upgrade usually
-   deploys a NEW worktree that has never held the credential.
+   prevents recurrence, and it needs no operator action.
+2. `locate_token_file()`: prefer the configured/default path; for the
+   UNCONFIGURED default only, fall back to legacy in-repo locations (current
+   checkout and shared repo root) so an existing install keeps working, warning
+   that the path is deploy-unstable and naming the tracked migration procedure.
 3. `resolve_token_file_path()`: honour absolute and `~` paths verbatim; anchor
    any remaining relative path to the checkout rather than the CWD.
-4. `scripts/setup_google_oauth.py` READS through legacy discovery (so an
-   upgrade reuses the existing client id/secret) but always WRITES the completed
-   authorization to the resolved PRIMARY path — writing to a discovered legacy
-   path would leave the stable location still missing, which is the exact
-   upgrade state the script exists to repair.
-5. Log a WARNING naming the resolved path when the token file is absent.
-6. Carry `refresh_token_source` (`"file"` / `"env"`) on `GoogleCredentials`, and
+4. Log a WARNING naming the resolved path, the stable default, and the legacy
+   locations searched when the token file is absent.
+5. Carry `refresh_token_source` (`"file"` / `"env"`) on `GoogleCredentials`, and
    WARN when the `.env` fallback supplies the token.
-7. Centralise the rejection remedy in `describe_credential_remedy()` and use it
-   in BOTH Calendar refresh paths — the tool client and the MCP provider — so a
-   fix in one does not leave the misdirection reachable through the other.
+6. Centralise the rejection remedy in `describe_credential_remedy()` and use it
+   in BOTH Calendar refresh paths — the tool client and the MCP provider.
+
+**Deliberately NOT in this slice** (tracked in ATLAS #2359): the migration
+procedure for an existing in-repo credential, symlink-safe rotation in
+`_save()`, and the `scripts/setup_google_oauth.py` read/write split. Each has
+sharp edges — `mv` not dereferencing, rollback, atomic-replace clobbering a
+symlink, a live-service TOCTOU — that are an operator procedure rather than a
+default-path fix. The operator's own credential is being migrated by hand under
+supervision.
 
 ### Review Contract
 
@@ -133,8 +135,8 @@ Max files: 8
      cannot achieve this is itself asserted by
      `::test_relative_path_still_moves_with_the_deployed_checkout`, and the CWD
      half by `::test_cwd_change_no_longer_moves_the_credential`.
-  2b. Upgrades do not break when the legacy credential is reachable from the
-     current checkout or the SHARED repo root — which covers this deployment,
+  2b. An existing install keeps working when the legacy credential is reachable
+     from the current checkout or the SHARED repo root — which covers this deployment,
      where the file lives at the shared root. A credential left as a regular
      file inside a DIFFERENT old worktree is a stated non-goal (see Intentional)
      and is surfaced by the enumerating warning rather than auto-borrowed.
@@ -151,46 +153,11 @@ Max files: 8
      happens to equal the default is still an override —
      `::test_explicit_override_equal_to_the_default_is_still_an_override` and
      `::test_provenance_comes_from_pydantic_fields_set`.
-  2f. The migration command DEREFERENCES a symlinked legacy entry (`cp -L`),
-     because the deployed legacy file is a symlink into the repo and `mv` would
-     move the link itself — settled by
-     `::test_legacy_in_repo_file_is_still_found_and_warns`, which asserts
-     `cp -L` is present and `mv ` is absent.
   2g. Tests can never read a live credential from this machine — the autouse
      `_isolate_credential_discovery` fixture neutralises legacy discovery and
      the `.env` fallback. Without it, a test passing an absent path falls
      through to the operator's real token file and prints refresh tokens into
      failure output.
-  2d. A re-auth reads the same config as the service and writes to the STABLE
-     path, never to a discovered legacy path — settled by
-     `::test_setup_script_writes_where_the_service_reads`,
-     `::test_setup_script_anchors_dotenv_to_the_checkout` and
-     `::test_setup_script_reads_legacy_but_writes_the_primary`.
-  2h. A token rotation through a migrated (symlinked) path lands in the stable
-     file and preserves the link — settled by
-     `::test_save_writes_through_a_symlinked_path`, with
-     `::test_save_on_a_plain_path_is_unchanged` holding the non-symlink case.
-  2e. EVERY Calendar refresh path reports the same remedy — settled by
-     `::test_both_calendar_callers_use_the_shared_remedy`.
-  3. Absolute and `~` paths are unchanged — settled by
-     `::test_absolute_path_is_honoured_unchanged` and
-     `::test_user_home_shorthand_expands`.
-  4. An absent token file is announced with its resolved path, and a present
-     one does not warn — settled by
-     `::test_missing_token_file_is_logged_with_its_resolved_path`,
-     `::test_missing_file_warning_names_the_stable_default` and
-     `::test_present_token_file_does_not_warn_about_absence`.
-  5. A credential reports which source supplied it — settled by
-     `::test_file_token_is_reported_as_coming_from_the_file`,
-     `::test_env_fallback_is_reported_and_warned` and
-     `::test_both_services_report_their_source`.
-  6. Precedence is unchanged: a token file still beats a different `.env` token
-     — settled by `::test_file_token_wins_over_a_different_env_token`.
-  7. No credential anywhere still returns `None` — settled by
-     `::test_no_credential_anywhere_returns_none`; an unknown service is still
-     rejected — `::test_unknown_service_is_rejected`.
-  8. The `parents[2]` root derivation is guarded against a future file move —
-     settled by `::test_repo_root_derivation_points_at_a_real_checkout`.
 - Reachability proof: `GoogleTokenStore` is constructed by
   `get_google_token_store()` and consumed by
   `atlas_brain/tools/calendar.py::_refresh_token` (`store.get_credentials("calendar")`),
@@ -238,20 +205,11 @@ Max files: 8
     in the stable file with no divergent copy. The procedure also says to
     restart the service so the cached path is refreshed.
 
-    CORRECTION TO AN EARLIER PROOF IN THIS PLAN. The filesystem check above was
-    first run with `Path.write_text`, which FOLLOWS a symlink — but `_save()`
-    persists rotations with `tmp.replace(target)`, and `os.replace` on a symlink
-    replaces the LINK with a regular file. The property was therefore
-    demonstrated with a different operation than production performs, and the
-    `ln -sfn` remedy did not actually hold. `_save()` now resolves a symlinked
-    path before the atomic replace, and
-    `::test_save_writes_through_a_symlinked_path` exercises the REAL `_save()`
-    via `persist_refresh_token`, asserting the link survives and the stable file
-    receives the rotation. Monitoring: the absent-file WARNING and
-    the `.env`-fallback WARNING are the observable signals that were missing
-    during the outage. CI enrollment: `tests/test_google_token_resolution.py`
-    runs under the required `unit-gate` check (confirmed present in the 221-file
-    impacted selection), so a regression here fails a required status.
+    NOTE: this slice no longer advertises a migration procedure. Moving an
+    existing in-repo credential — and making rotation safe across a
+    compatibility symlink — is tracked in ATLAS #2359, because `os.replace` on a
+    symlink replaces the link itself and a live service adds a path-level
+    TOCTOU. Those are operator-procedure concerns, not default-path concerns.
 
 ### Boundary-change enumeration
 
@@ -323,8 +281,6 @@ values were probed directly rather than assumed:
 - `atlas_brain/services/google_oauth.py`
 - `atlas_brain/tools/calendar.py`
 - `plans/PR-EOM-Google-Token-Resolution.md`
-- `pytest.ini`
-- `scripts/setup_google_oauth.py`
 - `tests/test_google_token_resolution.py`
 
 ## Mechanism
@@ -459,10 +415,8 @@ All counts re-run at this head.
 |---|---:|
 | `atlas_brain/config.py` | 11 |
 | `atlas_brain/services/calendar_provider.py` | 10 |
-| `atlas_brain/services/google_oauth.py` | 268 |
+| `atlas_brain/services/google_oauth.py` | 221 |
 | `atlas_brain/tools/calendar.py` | 8 |
-| `plans/PR-EOM-Google-Token-Resolution.md` | 468 |
-| `pytest.ini` | 1 |
-| `scripts/setup_google_oauth.py` | 35 |
-| `tests/test_google_token_resolution.py` | 711 |
-| **Total** | **1512** |
+| `plans/PR-EOM-Google-Token-Resolution.md` | 426 |
+| `tests/test_google_token_resolution.py` | 620 |
+| **Total** | **1296** |
