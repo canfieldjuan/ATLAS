@@ -53,6 +53,19 @@ async def require_eom_funnel_data_store(
                     WHERE attrelid = readiness_relations.contacts_rel
                       AND attname = 'lead_stage'
                       AND NOT attisdropped
+                )
+                -- The operator contact INSERT names customer_type explicitly
+                -- (migration 366). Startup catches a failed migration and
+                -- continues, so without this the funnel would be admitted
+                -- against a contacts table lacking the column and every
+                -- operator create would fail at the write instead of at the
+                -- readiness gate.
+                AND EXISTS (
+                    SELECT 1
+                    FROM pg_attribute
+                    WHERE attrelid = readiness_relations.contacts_rel
+                      AND attname = 'customer_type'
+                      AND NOT attisdropped
                 ) AS contacts_required_columns_ready,
                 -- Reopen orders lost-stage evidence by migration 363's
                 -- database-owned append sequence. Serving without it would turn

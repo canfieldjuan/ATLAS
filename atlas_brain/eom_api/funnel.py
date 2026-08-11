@@ -171,6 +171,15 @@ class EOMOperatorContactRequest(BaseModel):
     state: Annotated[str | None, Field(default=None, max_length=64)]
     zip: Annotated[str | None, Field(default=None, max_length=16)]
     notes: Annotated[str | None, Field(default=None, max_length=4000)]
+    # Bounded here, but the admitted VALUES are decided once in
+    # eom_crm_mutations.EOM_CUSTOMER_TYPES, which is bound to the
+    # chk_contacts_customer_type CHECK. A Literal here would be a third copy of
+    # that set and would reject the capitalised 'Residential'/'Commercial' the
+    # tracker actually stores, before the case-folding normalizer ever runs.
+    customer_type: Annotated[
+        str | None,
+        Field(default=None, max_length=32, alias="customerType"),
+    ]
     source_channel: Annotated[
         str,
         Field(min_length=1, max_length=64, alias="sourceChannel"),
@@ -243,16 +252,36 @@ class EOMLeadReviewResponse(BaseModel):
 
 
 class EOMKnownContactsResponse(BaseModel):
-    """Which of the submitted contact ids name a live EOM contact.
+    """Which of the submitted contact ids name a live EOM contact, and its type.
 
-    Deliberately id-only. A caller holding a stored contact id is asking
-    whether its link still resolves, and answering that needs no name, email,
-    or phone -- so none is disclosed.
+    Still not an identity read: no name, email, phone or address is disclosed.
+    A caller holding a stored contact id is asking whether its link resolves
+    and what kind of account it points at, and both answers are available
+    without any of that.
+
+    ``customerType`` was added deliberately rather than incidentally. This
+    route was introduced id-only, so widening it is a disclosure decision, not
+    a formatting one. It is included because: the value is not personal data,
+    it is a classification the operator themselves set; the credential is
+    already EOM-scoped, so no cross-tenant information is exposed; and the
+    alternative is a mirror that can never self-correct, which is the concrete
+    defect this closes (ATLAS #2357).
+
+    ``knownContactIds`` keeps its exact prior shape. The tracker's link audit
+    already consumes it, and changing a list of ids into a list of objects
+    would break that consumer for no gain -- so the types arrive alongside it
+    as a parallel mapping instead.
     """
 
     model_config = ConfigDict(extra="forbid")
 
     known_contact_ids: list[UUID] = Field(serialization_alias="knownContactIds")
+    # Keyed by the same ids, so a caller can answer "does it resolve" and
+    # "what is it" from one response. Only ever contains ids that appear in
+    # known_contact_ids above.
+    customer_types: dict[str, str] = Field(
+        default_factory=dict, serialization_alias="customerTypes"
+    )
     checked: int
     limit: Annotated[int, Field(ge=1, le=_MAX_KNOWN_CONTACT_IDS)]
 
@@ -482,6 +511,7 @@ def _operator_contact_fields(payload: EOMOperatorContactRequest) -> dict[str, An
         "state": "state",
         "zip": "zip",
         "notes": "notes",
+        "customer_type": "customer_type",
     }
     return {
         contact_field: getattr(payload, model_field)
@@ -510,6 +540,7 @@ def _operator_contact_item(contact: Mapping[str, Any]) -> dict[str, Any]:
         "zip": contact.get("zip"),
         "notes": contact.get("notes"),
         "contactType": contact.get("contact_type"),
+        "customerType": contact.get("customer_type"),
         "leadStage": contact.get("lead_stage"),
         "status": contact.get("status"),
         "source": contact.get("source"),
@@ -649,10 +680,17 @@ async def list_known_eom_contacts(
     # Answer in terms of what was asked rather than echoing the provider's rows:
     # an id the caller never submitted must never appear in the response, or the
     # route would report a verdict the caller cannot attribute to a link it holds.
-    known_set = {UUID(str(value)) for value in known}
-    known_ids = [value for value in requested if value in known_set]
+    # The same filter governs the types, so neither field can carry an id the
+    # other does not.
+    by_id = {UUID(str(row["id"])): row for row in known}
+    known_ids = [value for value in requested if value in by_id]
+    customer_types = {
+        str(value): str(by_id[value].get("customer_type") or "unknown")
+        for value in known_ids
+    }
     return EOMKnownContactsResponse(
         known_contact_ids=known_ids,
+        customer_types=customer_types,
         checked=len(requested),
         limit=_MAX_KNOWN_CONTACT_IDS,
     )

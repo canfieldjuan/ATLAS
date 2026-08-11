@@ -85,6 +85,11 @@ class _CRM:
                 "zip": command.fields.get("zip"),
                 "notes": command.fields.get("notes"),
                 "contact_type": command.contact_type or "customer",
+                # The real provider returns the stored row (RETURNING *), where
+                # an unspecified customer_type is the column default rather than
+                # NULL. Modelling that here keeps the fake honest about what the
+                # route actually echoes.
+                "customer_type": command.fields.get("customer_type", "unknown"),
                 "lead_stage": "new" if command.contact_type == "lead" else None,
                 "status": "active",
                 "source": command.contact_source,
@@ -3829,3 +3834,75 @@ async def test_private_reopen_lead_surfaces_restored_stage():
     assert crm.reopen_calls[0]["contact_id"] == str(contact_id)
     assert crm.reopen_calls[0]["operation_key"] == op_key
     assert crm.reopen_calls[0]["actor_id"] == 1
+
+
+@pytest.mark.asyncio
+async def test_operator_contact_route_carries_customer_type_end_to_end():
+    """The alias, the command, and the response -- through the real route.
+
+    Everything else proving customer_type constructs
+    `EOMOperatorContactMutation` directly, which skips exactly the layer that
+    can silently drop the field: Pydantic alias resolution and
+    `model_fields_set`. A `customerType` the model forbade, or an alias that
+    never reached `_operator_contact_fields`, would leave every one of those
+    tests green while the deployed endpoint ignored the value.
+    """
+    crm = _CRM()
+    app = _app(crm, _enabled_config())
+    payload = _operator_contact_payload(customerType="Commercial")
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=app), base_url="http://test"
+    ) as client:
+        response = await client.post(
+            "/eom-funnel/operator-contacts",
+            headers=_headers(approval_key=f"office-ctype-{uuid4().hex}"),
+            json=payload,
+        )
+
+    assert response.status_code == 201
+    # Reached the command, case-folded on the way.
+    command = crm.operator_contact_calls[0]
+    assert command.fields["customer_type"] == "commercial"
+    # And comes back out, which is what the tracker mirror will read.
+    assert response.json()["contact"]["customerType"] == "commercial"
+
+
+@pytest.mark.asyncio
+async def test_operator_contact_route_rejects_a_bad_customer_type_as_422():
+    """A caller sending nonsense gets a validation error, not a 500."""
+    crm = _CRM()
+    app = _app(crm, _enabled_config())
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=app), base_url="http://test"
+    ) as client:
+        response = await client.post(
+            "/eom-funnel/operator-contacts",
+            headers=_headers(approval_key=f"office-ctype-bad-{uuid4().hex}"),
+            json=_operator_contact_payload(customerType="bogus"),
+        )
+
+    assert response.status_code == 422
+    assert crm.operator_contact_calls == [], "the boundary must refuse before the provider"
+
+
+@pytest.mark.asyncio
+async def test_operator_contact_route_omits_customer_type_when_not_sent():
+    """An absent field must not be sent as a value, or every edit would reset it.
+
+    `_operator_contact_fields` filters on `model_fields_set`; if that filter
+    stopped working the default None would arrive as an explicit field and the
+    boundary would 422 every request that simply did not mention the type.
+    """
+    crm = _CRM()
+    app = _app(crm, _enabled_config())
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=app), base_url="http://test"
+    ) as client:
+        response = await client.post(
+            "/eom-funnel/operator-contacts",
+            headers=_headers(approval_key=f"office-ctype-absent-{uuid4().hex}"),
+            json=_operator_contact_payload(),
+        )
+
+    assert response.status_code == 201
+    assert "customer_type" not in crm.operator_contact_calls[0].fields

@@ -26,6 +26,8 @@ on:
       - "atlas_brain/services/email_provider.py"
       - "atlas_brain/services/eom_estimate_booking.py"
       - "atlas_brain/services/eom_lead_conversion.py"
+      - "atlas_brain/services/eom_crm_mutations.py"
+      - "scripts/check_contact_write_boundary.py"
       - "atlas_brain/services/eom_lead_ingress.py"
       - "atlas_brain/services/eom_onboarding_drafts.py"
       - "atlas_brain/templates/email/__init__.py"
@@ -69,6 +71,7 @@ on:
       - "tests/test_crm_read_scoping.py"
       - "tests/test_eom_complaints_integration.py"
       - "tests/test_eom_contacts_api_tenant_scope.py"
+      - "tests/test_backfill_eom_customer_type.py"
       - "tests/test_eom_link_verification.py"
       - "tests/test_eom_lead_conversion.py"
       - "tests/test_eom_lead_conversion_integration.py"
@@ -85,6 +88,8 @@ on:
       - "tests/test_migrations_runner.py"
       - "tests/test_migration_365_business_context_fk.py"
       - "atlas_brain/storage/migrations/365_contacts_business_context_registry_fk.sql"
+      - "atlas_brain/storage/migrations/366_contacts_customer_type.sql"
+      - "scripts/backfill_eom_customer_type.py"
   push:
     branches:
       - main
@@ -109,6 +114,8 @@ on:
       - "atlas_brain/services/email_provider.py"
       - "atlas_brain/services/eom_estimate_booking.py"
       - "atlas_brain/services/eom_lead_conversion.py"
+      - "atlas_brain/services/eom_crm_mutations.py"
+      - "scripts/check_contact_write_boundary.py"
       - "atlas_brain/services/eom_lead_ingress.py"
       - "atlas_brain/services/eom_onboarding_drafts.py"
       - "atlas_brain/templates/email/__init__.py"
@@ -152,6 +159,7 @@ on:
       - "tests/test_crm_read_scoping.py"
       - "tests/test_eom_complaints_integration.py"
       - "tests/test_eom_contacts_api_tenant_scope.py"
+      - "tests/test_backfill_eom_customer_type.py"
       - "tests/test_eom_link_verification.py"
       - "tests/test_eom_lead_conversion.py"
       - "tests/test_eom_lead_conversion_integration.py"
@@ -168,6 +176,8 @@ on:
       - "tests/test_migrations_runner.py"
       - "tests/test_migration_365_business_context_fk.py"
       - "atlas_brain/storage/migrations/365_contacts_business_context_registry_fk.sql"
+      - "atlas_brain/storage/migrations/366_contacts_customer_type.sql"
+      - "scripts/backfill_eom_customer_type.py"
 
 jobs:
   eom-lead-pipeline:
@@ -213,6 +223,7 @@ jobs:
             tests/test_crm_read_scoping.py \
             tests/test_eom_complaints_integration.py \
             tests/test_eom_contacts_api_tenant_scope.py \
+            tests/test_backfill_eom_customer_type.py \
             tests/test_eom_link_verification.py \
             tests/test_eom_lead_conversion.py \
             tests/test_eom_lead_conversion_integration.py \
