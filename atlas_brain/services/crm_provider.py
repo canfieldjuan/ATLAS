@@ -836,8 +836,25 @@ class DatabaseCRMProvider:
         self,
         executor: Any,
         data: Mapping[str, Any],
+        *,
+        customer_type: str | None = None,
     ) -> dict[str, Any]:
-        """Insert one contact through the provider-owned persistence site."""
+        """Insert one contact through the provider-owned persistence site.
+
+        ``customer_type`` is a KEYWORD, not a member of ``data``, and only the
+        operator mutation path passes it. It drives billing shape, so a generic
+        writer must not be able to set it by dropping a key into the dict: that
+        would bypass ``_normalize_customer_type``, the authenticated funnel
+        boundary, and the lifecycle event that records who changed it. Passing
+        it inside ``data`` is a programming error and is refused outright
+        rather than ignored, because silently dropping a caller's intent is how
+        this field would end up wrong without anyone noticing.
+        """
+        if "customer_type" in data:
+            raise ValueError(
+                "customer_type must be set through the operator mutation "
+                "boundary, not through a generic contact insert"
+            )
 
         contact_id = str(uuid4())
         now = datetime.now(timezone.utc)
@@ -856,9 +873,9 @@ class DatabaseCRMProvider:
         # which is correct because its intent cannot be honoured.
         optional_columns: list[str] = []
         optional_values: list[Any] = []
-        if "customer_type" in data:
+        if customer_type is not None:
             optional_columns.append("customer_type")
-            optional_values.append(data["customer_type"])
+            optional_values.append(customer_type)
 
         column_sql = ", ".join(optional_columns)
         if column_sql:
@@ -1380,8 +1397,11 @@ class DatabaseCRMProvider:
                     422, "fullName is required when no existing contact matches"
                 )
             contact_type = command.contact_type or "customer"
+            fields = dict(command.fields)
+            # Lifted out of the dict on purpose -- see _insert_contact_row.
+            operator_customer_type = fields.pop("customer_type", None)
             data = {
-                **dict(command.fields),
+                **fields,
                 "full_name": full_name,
                 "business_context_id": EOM_BUSINESS_CONTEXT_ID,
                 "contact_type": contact_type,
@@ -1391,7 +1411,9 @@ class DatabaseCRMProvider:
                 "lead_stage": "new" if contact_type == "lead" else None,
                 "metadata": _operator_provenance_metadata({})[0],
             }
-            return await self._insert_contact_row(conn, data)
+            return await self._insert_contact_row(
+                conn, data, customer_type=operator_customer_type
+            )
 
         async def _write_lifecycle_event(
             conn: Any,

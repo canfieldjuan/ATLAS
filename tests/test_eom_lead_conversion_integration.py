@@ -6170,9 +6170,60 @@ async def test_a_generic_contact_insert_still_works_without_migration_366():
                     "full_name": "Wants A Type",
                     "business_context_id": "effingham_maids",
                     "contact_type": "customer",
+                },
+                customer_type="commercial",
+            )
+    finally:
+        await conn.execute(f'DROP SCHEMA IF EXISTS "{schema}" CASCADE')
+        await conn.close()
+
+
+@pytest.mark.asyncio
+async def test_a_generic_create_cannot_set_customer_type():
+    """Only the operator boundary may classify an account.
+
+    customer_type drives billing shape. A generic writer dropping the key into
+    the insert dict would bypass _normalize_customer_type, the authenticated
+    funnel boundary, and the lifecycle event recording who changed it -- so the
+    field is a keyword the operator path passes, and its presence in `data` is
+    refused outright rather than ignored. Silently dropping it would be the
+    same class of silent loss this slice exists to remove.
+    """
+    database_url = _database_url_or_skip()
+    schema = f"atlas_eom_ctype_generic_{uuid.uuid4().hex}"
+    conn = await asyncpg.connect(database_url)
+    try:
+        await _prepare_schema(conn, schema, apply_privilege_migration=False)
+        provider = DatabaseCRMProvider(pool=conn)
+
+        with pytest.raises(ValueError, match="operator mutation"):
+            await provider._insert_contact_row(
+                conn,
+                {
+                    "full_name": "Sneaky Generic Writer",
+                    "business_context_id": "effingham_maids",
+                    "contact_type": "customer",
                     "customer_type": "commercial",
                 },
             )
+
+        # Nothing was written.
+        assert await conn.fetchval(
+            "SELECT COUNT(*) FROM contacts WHERE full_name = $1",
+            "Sneaky Generic Writer",
+        ) == 0
+
+        # The operator path still classifies, through its keyword.
+        row = await provider._insert_contact_row(
+            conn,
+            {
+                "full_name": "Operator Classified",
+                "business_context_id": "effingham_maids",
+                "contact_type": "customer",
+            },
+            customer_type="commercial",
+        )
+        assert row["customer_type"] == "commercial"
     finally:
         await conn.execute(f'DROP SCHEMA IF EXISTS "{schema}" CASCADE')
         await conn.close()
