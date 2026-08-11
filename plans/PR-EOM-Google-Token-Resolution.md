@@ -217,8 +217,17 @@ Max files: 8
     deployment that has not yet migrated its file keeps working unchanged;
     a deployment that has migrated is found by the new default. There is
     therefore no required deployment ordering and no window where the
-    credential is unreachable. Rollback is a plain revert — the legacy path is
-    exactly what pre-change code used. Monitoring: the absent-file WARNING and
+    credential is unreachable. Rollback is a plain revert, but ONLY because the
+    advertised migration ends in `ln -sfn <stable> <legacy>` rather than `rm`:
+    the legacy path survives as a symlink to the stable file, so pre-change code
+    still resolves the credential. Deleting it would have broken rollback and
+    also raced the running process — a store that cached the legacy path would
+    recreate a divergent file on the next token rotation. Verified on a real
+    filesystem: after the migration the stable path is a regular file, the
+    legacy path is a symlink to it, a pre-change read through the legacy path
+    returns the credential, and a rotation written through the legacy path lands
+    in the stable file with no divergent copy. The procedure also says to
+    restart the service so the cached path is refreshed. Monitoring: the absent-file WARNING and
     the `.env`-fallback WARNING are the observable signals that were missing
     during the outage. CI enrollment: `tests/test_google_token_resolution.py`
     runs under the required `unit-gate` check (confirmed present in the 221-file
@@ -430,10 +439,10 @@ All counts re-run at this head.
 |---|---:|
 | `atlas_brain/config.py` | 11 |
 | `atlas_brain/services/calendar_provider.py` | 10 |
-| `atlas_brain/services/google_oauth.py` | 231 |
+| `atlas_brain/services/google_oauth.py` | 237 |
 | `atlas_brain/tools/calendar.py` | 8 |
-| `plans/PR-EOM-Google-Token-Resolution.md` | 439 |
+| `plans/PR-EOM-Google-Token-Resolution.md` | 448 |
 | `pytest.ini` | 1 |
 | `scripts/setup_google_oauth.py` | 20 |
-| `tests/test_google_token_resolution.py` | 641 |
-| **Total** | **1361** |
+| `tests/test_google_token_resolution.py` | 648 |
+| **Total** | **1383** |

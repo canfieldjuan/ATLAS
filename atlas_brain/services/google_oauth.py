@@ -191,13 +191,19 @@ def locate_token_file(token_file_path: str, *, explicit: bool | None = None) -> 
             "Google token file found at the LEGACY in-repo path %s. That path "
             "lives inside a git checkout, so a deploy that switches worktrees "
             "will sever it (this caused a five-day Calendar outage on "
-            "2026-08-05). Migrate it: mkdir -p %s && cp -L %s %s && rm %s "
-            "-- `cp -L` DEREFERENCES the source: this legacy entry is often a "
-            "symlink into the repo, and `mv` would move the link itself, "
-            "leaving the credential still dependent on the checkout.",
+            "2026-08-05). Migrate it: mkdir -p %s && cp -L %s %s && "
+            "ln -sfn %s %s -- then restart the service. `cp -L` DEREFERENCES "
+            "the source (this entry is often a symlink into the repo, and `mv` "
+            "would move the link itself). The trailing `ln -sfn` leaves the "
+            "legacy path as a symlink to the stable file rather than deleting "
+            "it, which keeps two things safe: a rollback to pre-change code "
+            "still resolves the credential, and an already-running process "
+            "that cached the legacy path writes THROUGH the link instead of "
+            "recreating a divergent file.",
             legacy,
             primary.parent,
             legacy,
+            primary,
             primary,
             legacy,
         )

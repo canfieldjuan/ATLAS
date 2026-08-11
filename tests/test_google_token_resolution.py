@@ -449,6 +449,13 @@ def test_legacy_in_repo_file_is_still_found_and_warns(tmp_path, caplog, monkeypa
     # dependent on the checkout (Codex #2355 R12, round 2).
     assert "cp -L" in joined
     assert "mv " not in joined
+    # The legacy path must survive as a symlink, not be deleted (round 3,
+    # R8/R12): deleting it breaks rollback to pre-change code, and an
+    # already-running store that cached the legacy path would recreate a
+    # divergent file on the next token rotation.
+    assert "ln -sfn" in joined
+    assert "&& rm " not in joined
+    assert "restart the service" in joined
 
 
 def test_primary_wins_over_legacy_when_both_exist(tmp_path, monkeypatch):
