@@ -11,9 +11,16 @@ script should not carry Render credentials for a second datastore, and a script
 whose input is a file can be tested end-to-end in CI, which one that dials out
 to production cannot.
 
-Produce the mapping from the tracker (read-only), then feed it here:
+Produce the mapping from the tracker (read-only), then feed it here.
 
-    render psql <tracker-db> --confirm -c "\\copy (
+SQL ``COPY ... TO STDOUT``, deliberately NOT the ``\\copy`` meta-command: psql
+takes the entire remainder of the LINE as ``\\copy``'s arguments, so a
+multi-line ``\\copy (`` parses only the opening parenthesis and fails. ``COPY``
+is ordinary SQL, so ``-c`` accepts it across lines, and ``TO STDOUT`` needs no
+file-write privilege. Verified against the live tracker: this command emits a
+header plus one row per classified active customer.
+
+    render psql <tracker-db> --confirm -c "COPY (
         SELECT c.atlas_contact_id,
                CASE
                  WHEN bool_and(l.location_type = 'Commercial')  THEN 'commercial'

@@ -306,10 +306,10 @@ Parked hardening: none.
 | `atlas_brain/services/eom_crm_mutations.py` | 36 |
 | `atlas_brain/storage/migrations/366_contacts_customer_type.sql` | 67 |
 | `plans/PR-EOM-Customer-Type.md` | 315 |
-| `scripts/backfill_eom_customer_type.py` | 281 |
+| `scripts/backfill_eom_customer_type.py` | 288 |
 | `scripts/check_contact_write_boundary.py` | 1 |
 | `tests/contact_write_boundary/baseline.json` | 2 |
 | `tests/test_backfill_eom_customer_type.py` | 387 |
 | `tests/test_eom_lead_conversion.py` | 77 |
 | `tests/test_eom_lead_conversion_integration.py` | 294 |
-| **Total** | **1522** |
+| **Total** | **1529** |
