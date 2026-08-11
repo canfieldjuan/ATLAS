@@ -65,7 +65,7 @@ diff.
 
 Ownership lane: eom-crm/customer-type
 Slice phase: Vertical slice
-Max files: 12
+Max files: 13
 
 1. `customer_type` on the Atlas contact record, `residential | commercial |
    unknown`, defaulting to `unknown`, enforced by a CHECK constraint.
@@ -134,7 +134,8 @@ Customer selector with adaptive billing. Those are PR2 and PR3.
   authenticated funnel boundary and the backfill is tenant-scoped), R4 (data and
   migration safety -- additive migration plus a bulk UPDATE over live accounts),
   R5 (backward compatibility -- new request and response fields), R7 (input
-  bounds -- a closed value set), R12 (deployment safety and CI enrollment), R14
+  bounds -- a closed value set), R10 (maintainability -- this PR edits the
+  write-boundary checker's approved-writer allowlist), R12 (deployment safety and CI enrollment), R14
   (verify against the codebase).
 
 ### Boundary-change enumeration
@@ -184,6 +185,7 @@ the value set is a module constant bound to a database constraint.
 - `atlas_brain/storage/migrations/366_contacts_customer_type.sql`
 - `plans/PR-EOM-Customer-Type.md`
 - `scripts/backfill_eom_customer_type.py`
+- `scripts/check_contact_write_boundary.py`
 - `tests/contact_write_boundary/baseline.json`
 - `tests/test_backfill_eom_customer_type.py`
 - `tests/test_eom_lead_conversion.py`
@@ -300,13 +302,14 @@ Parked hardening: none.
 | `.github/workflows/atlas_eom_lead_pipeline_checks.yml` | 7 |
 | `atlas_brain/eom_api/funnel.py` | 11 |
 | `atlas_brain/eom_api/funnel_store.py` | 13 |
-| `atlas_brain/services/crm_provider.py` | 10 |
+| `atlas_brain/services/crm_provider.py` | 31 |
 | `atlas_brain/services/eom_crm_mutations.py` | 36 |
 | `atlas_brain/storage/migrations/366_contacts_customer_type.sql` | 67 |
-| `plans/PR-EOM-Customer-Type.md` | 310 |
-| `scripts/backfill_eom_customer_type.py` | 245 |
-| `tests/contact_write_boundary/baseline.json` | 4 |
-| `tests/test_backfill_eom_customer_type.py` | 320 |
+| `plans/PR-EOM-Customer-Type.md` | 312 |
+| `scripts/backfill_eom_customer_type.py` | 250 |
+| `scripts/check_contact_write_boundary.py` | 1 |
+| `tests/contact_write_boundary/baseline.json` | 2 |
+| `tests/test_backfill_eom_customer_type.py` | 343 |
 | `tests/test_eom_lead_conversion.py` | 77 |
-| `tests/test_eom_lead_conversion_integration.py` | 245 |
-| **Total** | **1345** |
+| `tests/test_eom_lead_conversion_integration.py` | 294 |
+| **Total** | **1444** |

@@ -111,7 +111,12 @@ def read_mapping(path: Path) -> list[dict[str, str]]:
             # ending the run with a partial backfill and no summary, which is
             # the one outcome an operator cannot act on.
             try:
-                uuid.UUID(contact_id)
+                # Store the CANONICAL form, not the caller's spelling. Python
+                # accepts spellings PostgreSQL does not -- `urn:uuid:<id>` and
+                # brace/dash variants all parse here and then fail on the
+                # `$1::uuid` cast mid-run, which is the very partial-backfill
+                # failure this validation was added to prevent.
+                contact_id = str(uuid.UUID(contact_id))
             except ValueError:
                 raise SystemExit(
                     f"line {line_number}: atlas_contact_id is not a UUID: {contact_id!r}"

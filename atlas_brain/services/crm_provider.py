@@ -845,17 +845,41 @@ class DatabaseCRMProvider:
         email = raw_email.lower() if raw_email else None
         metadata_json = json.dumps(data.get("metadata", {}))
 
+        # customer_type is named ONLY when the caller supplied it. This helper is
+        # shared by every contact writer -- the MCP create_contact tool and the
+        # inbound find_or_create_contact among them -- and startup deliberately
+        # continues after a failed migration. Naming the column unconditionally
+        # would turn a pending migration 366 into UndefinedColumnError for
+        # callers that never asked for the field, which is a regression they did
+        # not sign up for. Omitting it lets the column default apply, exactly as
+        # before this change; a caller that DOES pass it still fails loudly,
+        # which is correct because its intent cannot be honoured.
+        optional_columns: list[str] = []
+        optional_values: list[Any] = []
+        if "customer_type" in data:
+            optional_columns.append("customer_type")
+            optional_values.append(data["customer_type"])
+
+        column_sql = ", ".join(optional_columns)
+        if column_sql:
+            column_sql = ", " + column_sql
+        placeholder_sql = "".join(
+            f",${index}" for index in range(21, 21 + len(optional_values))
+        )
+        metadata_index = 23 + len(optional_values)
+
         row = await executor.fetchrow(
-            """
+            f"""
             INSERT INTO contacts (
                 id, full_name, first_name, last_name, email, phone,
                 address, city, state, zip, business_context_id,
                 contact_type, status, tags, notes, source, source_ref,
-                lead_stage, lead_owner, next_follow_up_at, customer_type,
+                lead_stage, lead_owner, next_follow_up_at{column_sql},
                 created_at, updated_at, metadata
             ) VALUES (
                 $1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,
-                $18,$19,$20,$21,$22,$23,$24::jsonb
+                $18,$19,$20{placeholder_sql},
+                ${metadata_index - 2},${metadata_index - 1},${metadata_index}::jsonb
             ) RETURNING *
             """,
             contact_id,
@@ -878,12 +902,7 @@ class DatabaseCRMProvider:
             data.get("lead_stage"),
             data.get("lead_owner"),
             data.get("next_follow_up_at"),
-            # Explicit, because this column list is explicit: the UPDATE path
-            # builds its SET clause from the caller's fields and so carries a
-            # new column for free, but an INSERT that simply omits one writes
-            # the column default and loses the caller's value silently. A
-            # create that specified 'commercial' would land as 'unknown'.
-            data.get("customer_type", "unknown"),
+            *optional_values,
             now,
             now,
             metadata_json,

@@ -6127,3 +6127,52 @@ async def test_funnel_readiness_refuses_a_contacts_table_without_customer_type()
     finally:
         await conn.execute(f'DROP SCHEMA IF EXISTS "{schema}" CASCADE')
         await conn.close()
+
+
+@pytest.mark.asyncio
+async def test_a_generic_contact_insert_still_works_without_migration_366():
+    """The shared insert helper must not regress callers that never asked.
+
+    `_insert_contact_row` is used by every contact writer -- the MCP
+    create_contact tool and inbound find_or_create_contact among them -- and
+    startup deliberately continues after a failed migration. Naming
+    customer_type unconditionally would turn a pending 366 into
+    UndefinedColumnError for those callers, a regression they did not sign up
+    for. Omitting the column when the caller did not supply it keeps them on
+    exactly the behaviour they had before this PR.
+    """
+    database_url = _database_url_or_skip()
+    schema = f"atlas_eom_ctype_pre366_{uuid.uuid4().hex}"
+    conn = await asyncpg.connect(database_url)
+    try:
+        await _prepare_schema(conn, schema, apply_privilege_migration=False)
+        # The state a pending or failed migration 366 leaves behind.
+        await conn.execute("ALTER TABLE contacts DROP COLUMN customer_type")
+        provider = DatabaseCRMProvider(pool=conn)
+
+        row = await provider._insert_contact_row(
+            conn,
+            {
+                "full_name": "Pre-366 Caller",
+                "business_context_id": "effingham_maids",
+                "contact_type": "customer",
+            },
+        )
+
+        assert row["full_name"] == "Pre-366 Caller"
+
+        # A caller that DOES specify the type still fails loudly, because its
+        # intent cannot be honoured against a table without the column.
+        with pytest.raises(asyncpg.exceptions.UndefinedColumnError):
+            await provider._insert_contact_row(
+                conn,
+                {
+                    "full_name": "Wants A Type",
+                    "business_context_id": "effingham_maids",
+                    "contact_type": "customer",
+                    "customer_type": "commercial",
+                },
+            )
+    finally:
+        await conn.execute(f'DROP SCHEMA IF EXISTS "{schema}" CASCADE')
+        await conn.close()

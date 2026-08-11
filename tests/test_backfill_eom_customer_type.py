@@ -318,3 +318,26 @@ async def test_a_row_that_changed_after_it_was_read_is_reported_not_counted(db, 
     )
     assert stored["customer_type"] == "residential", "the competing decision stands"
     assert exit_code == 1, "the conflict must be surfaced, not counted as applied"
+
+
+def test_a_python_accepted_uuid_spelling_is_canonicalised(tmp_path):
+    """Python parses spellings PostgreSQL will not accept.
+
+    `urn:uuid:<id>`, braces and the undashed form all satisfy `uuid.UUID` but
+    are rejected by the `$1::uuid` cast. Retaining the caller's spelling would
+    move the failure back into the apply loop, after earlier rows had already
+    committed -- the partial backfill the validation exists to prevent.
+    """
+    canonical = str(uuid.uuid4())
+    path = tmp_path / "spellings.csv"
+    path.write_text(
+        "atlas_contact_id,customer_type,evidence\n"
+        f"urn:uuid:{canonical},commercial,sites=1\n"
+        f"{{{canonical}}},residential,sites=1\n"
+        f"{canonical.replace('-', '')},commercial,sites=1\n",
+        encoding="utf-8",
+    )
+
+    rows = backfill.read_mapping(path)
+
+    assert [row["contact_id"] for row in rows] == [canonical, canonical, canonical]

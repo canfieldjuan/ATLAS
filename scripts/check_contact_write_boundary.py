@@ -56,6 +56,7 @@ INSERT_ALLOWED = (PROVIDER_MODULE,)
 MUTATION_ALLOWED = (
     "atlas_brain/services/crm_provider.py",
     "scripts/backfill_business_context.py",
+    "scripts/backfill_eom_customer_type.py",
     "scripts/import_eom_customers_live.py",
     "scripts/sync_eom_portal_customers.py",
 )
