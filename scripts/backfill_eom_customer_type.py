@@ -56,8 +56,13 @@ Safety properties, each enforced below rather than assumed:
   re-running is a no-op and an operator's later correction in the CRM survives a
   second run of a stale mapping file.
 * **Every row accounted for.** Applied, already-set, unknown-contact,
-  wrong-tenant and rejected-value are each counted and printed. A row that does
-  nothing still appears in the report.
+  wrong-tenant, conflict and rejected-value are each counted and printed. A row
+  that does nothing still appears in the report.
+* **Conflicting duplicate links are refused up front.** Two tracker customers
+  may share one Atlas contact, so the mapping can name the same contact twice.
+  Identical values are harmless; disagreeing ones would let row order decide a
+  billing-driving classification, so the whole mapping is rejected before any
+  write.
 """
 
 import argparse
@@ -128,6 +133,32 @@ def read_mapping(path: Path) -> list[dict[str, str]]:
                     "evidence": (row.get("evidence") or "").strip(),
                     "line": str(line_number),
                 }
+            )
+
+    # Two TRACKER customers can share one Atlas contact -- the query groups by
+    # tracker customer, and no unique index forbids the duplicate link yet.
+    # ("Mid Illinois Concrete" and "Mid Illinois Concrete - Pike & Raney" share
+    # one contact today; both are commercial, so they agree, but agreement is
+    # not guaranteed.) If they disagreed, the apply loop would commit whichever
+    # CSV row came first and report the other as already-set: an arbitrary
+    # billing-driving value decided by row order. Refuse the whole mapping
+    # instead, before anything is written.
+    by_contact: dict[str, dict[str, str]] = {}
+    for row in rows:
+        # Only rows that could actually be applied. A pair of unusable values
+        # is not a conflict worth a confusing error -- each is rejected on its
+        # own merits by the apply loop.
+        if row["customer_type"] not in APPLICABLE_TYPES:
+            continue
+        seen = by_contact.get(row["contact_id"])
+        if seen is None:
+            by_contact[row["contact_id"]] = row
+        elif seen["customer_type"] != row["customer_type"]:
+            raise SystemExit(
+                f"line {row['line']}: {row['contact_id']} is mapped to "
+                f"{row['customer_type']!r} but line {seen['line']} maps it to "
+                f"{seen['customer_type']!r}; resolve the duplicate tracker link "
+                f"before backfilling"
             )
     return rows
 

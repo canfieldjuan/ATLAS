@@ -332,8 +332,10 @@ def test_a_python_accepted_uuid_spelling_is_canonicalised(tmp_path):
     path = tmp_path / "spellings.csv"
     path.write_text(
         "atlas_contact_id,customer_type,evidence\n"
+        # Same type throughout: this test is about SPELLING, and differing
+        # types on one contact is a conflict the duplicate guard refuses.
         f"urn:uuid:{canonical},commercial,sites=1\n"
-        f"{{{canonical}}},residential,sites=1\n"
+        f"{{{canonical}}},commercial,sites=1\n"
         f"{canonical.replace('-', '')},commercial,sites=1\n",
         encoding="utf-8",
     )
@@ -341,3 +343,45 @@ def test_a_python_accepted_uuid_spelling_is_canonicalised(tmp_path):
     rows = backfill.read_mapping(path)
 
     assert [row["contact_id"] for row in rows] == [canonical, canonical, canonical]
+
+
+def test_a_contact_mapped_to_two_different_types_is_refused(tmp_path):
+    """Two tracker customers can share one Atlas contact; row order must not decide.
+
+    No unique index forbids the duplicate link yet, so the mapping can name the
+    same contact twice. If the values disagree the apply loop would commit
+    whichever row came first and report the other as already-set -- a
+    billing-driving classification chosen by CSV ordering.
+    """
+    shared = str(uuid.uuid4())
+    path = tmp_path / "conflict.csv"
+    path.write_text(
+        "atlas_contact_id,customer_type,evidence\n"
+        f"{shared},commercial,tracker.customer:1\n"
+        f"{shared},residential,tracker.customer:2\n",
+        encoding="utf-8",
+    )
+
+    with pytest.raises(SystemExit):
+        backfill.read_mapping(path)
+
+
+def test_a_contact_mapped_twice_to_the_SAME_type_is_accepted(tmp_path):
+    """The live case: two tracker customers, one contact, both commercial.
+
+    Refusing agreement as well as conflict would block the backfill on a
+    duplicate that says nothing contradictory -- Mid Illinois Concrete and its
+    Pike & Raney split are exactly this shape today.
+    """
+    shared = str(uuid.uuid4())
+    path = tmp_path / "agree.csv"
+    path.write_text(
+        "atlas_contact_id,customer_type,evidence\n"
+        f"{shared},commercial,tracker.customer:1\n"
+        f"{shared},commercial,tracker.customer:2\n",
+        encoding="utf-8",
+    )
+
+    rows = backfill.read_mapping(path)
+
+    assert [row["customer_type"] for row in rows] == ["commercial", "commercial"]
