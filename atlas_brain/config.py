@@ -841,6 +841,8 @@ class SettingsAdminConfig(BaseSettings):
 
     session_secret: str = Field(default="", description="INDEPENDENT high-entropy server secret (>=32 chars) for signing settings-admin session cookies. Deliberately NOT derived from token_sha256, so a read-only disclosure of the digest alone cannot forge a session cookie. Empty/short => the cookie login path is unavailable (bearer still works). Field name is `session_secret` so env_prefix ATLAS_SETTINGS_ADMIN_ derives exactly the advertised env var ATLAS_SETTINGS_ADMIN_SESSION_SECRET; keep it server-side only")
 
+    cookie_insecure: bool = Field(default=False, description="LOCAL DEV ONLY: drop the Secure flag on the session cookie so the login flow works over http://localhost (the Vite dev proxy). Default False (Secure ON) — MUST stay unset in prod, where the funnel is HTTPS. env: ATLAS_SETTINGS_ADMIN_COOKIE_INSECURE")
+
 
 class InboxMailboxBinding(BaseModel):
     """One CRM business context's authorized inbox provider."""
