@@ -54,6 +54,7 @@ import argparse
 import asyncio
 import csv
 import sys
+import uuid
 from collections import Counter
 from pathlib import Path
 
@@ -77,6 +78,7 @@ SQL_APPLY = """
      WHERE id = $1::uuid
        AND business_context_id = $3
        AND customer_type = 'unknown'
+ RETURNING id
 """
 
 
@@ -93,6 +95,17 @@ def read_mapping(path: Path) -> list[dict[str, str]]:
             customer_type = (row.get("customer_type") or "").strip().lower()
             if not contact_id:
                 raise SystemExit(f"line {line_number}: atlas_contact_id is empty")
+            # Parsed here, before any write happens. The apply loop commits per
+            # row, so a malformed id discovered mid-run would raise on the
+            # `$1::uuid` cast after earlier rows had already been committed --
+            # ending the run with a partial backfill and no summary, which is
+            # the one outcome an operator cannot act on.
+            try:
+                uuid.UUID(contact_id)
+            except ValueError:
+                raise SystemExit(
+                    f"line {line_number}: atlas_contact_id is not a UUID: {contact_id!r}"
+                ) from None
             rows.append(
                 {
                     "contact_id": contact_id,
@@ -155,7 +168,18 @@ async def run(mapping_path: Path, apply: bool, pool: object | None = None) -> in
             continue
 
         if apply:
-            await pool.execute(SQL_APPLY, contact_id, customer_type, EOM_CONTEXT)
+            # RETURNING, not execute(): the row was read a moment ago and the
+            # UPDATE is guarded, so another writer classifying or re-tenanting
+            # it in between yields zero rows. Counting that as "applied" would
+            # report a change the database refused -- the guards would still
+            # protect the data, but the report would be a lie.
+            changed = await pool.fetchrow(SQL_APPLY, contact_id, customer_type, EOM_CONTEXT)
+            if changed is None:
+                tally["conflict"] += 1
+                problems.append(
+                    f"{label}: nothing updated -- the row changed after it was read"
+                )
+                continue
             tally["applied"] += 1
         else:
             tally["would-apply"] += 1
@@ -166,6 +190,7 @@ async def run(mapping_path: Path, apply: bool, pool: object | None = None) -> in
         "applied",
         "would-apply",
         "already-set",
+        "conflict",
         "unknown-contact",
         "wrong-tenant",
         "rejected-value",

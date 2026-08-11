@@ -5919,6 +5919,7 @@ async def test_operator_create_persists_customer_type_rather_than_defaulting():
         )
         assert contact["customer_type"] == "commercial"
     finally:
+        await conn.execute(f'DROP SCHEMA IF EXISTS "{schema}" CASCADE')
         await conn.close()
 
 
@@ -5950,6 +5951,7 @@ async def test_operator_create_without_a_type_is_unknown_not_guessed():
             "a company-shaped name must not be guessed into 'commercial'"
         )
     finally:
+        await conn.execute(f'DROP SCHEMA IF EXISTS "{schema}" CASCADE')
         await conn.close()
 
 
@@ -6012,6 +6014,7 @@ async def test_operator_update_changes_customer_type_and_audits_the_old_value():
         assert "customer_type" in metadata["changed_fields"]
         assert metadata["previous_values"]["customer_type"] == "residential"
     finally:
+        await conn.execute(f'DROP SCHEMA IF EXISTS "{schema}" CASCADE')
         await conn.close()
 
 
@@ -6045,6 +6048,7 @@ async def test_the_database_refuses_a_customer_type_outside_the_set():
                 "UPDATE contacts SET customer_type = 'bogus' WHERE id = $1", row["id"]
             )
     finally:
+        await conn.execute(f'DROP SCHEMA IF EXISTS "{schema}" CASCADE')
         await conn.close()
 
 

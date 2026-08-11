@@ -250,3 +250,71 @@ async def test_the_apply_statement_itself_refuses_wrong_tenant_and_already_set(d
         "SELECT customer_type FROM contacts WHERE id = $1::uuid", fresh
     )
     assert stored["customer_type"] == "commercial"
+
+
+def test_a_malformed_contact_id_is_refused_before_any_write(tmp_path):
+    """Parsed up front, because the apply loop commits per row.
+
+    A malformed id discovered mid-run raises on the `$1::uuid` cast after
+    earlier rows have already committed, ending the run with a partial backfill
+    and no summary -- the one outcome an operator cannot act on.
+    """
+    path = tmp_path / "bad-id.csv"
+    path.write_text(
+        "atlas_contact_id,customer_type,evidence\n"
+        f"{uuid.uuid4()},commercial,sites=1\n"
+        "not-a-uuid,residential,sites=1\n",
+        encoding="utf-8",
+    )
+
+    with pytest.raises(SystemExit):
+        backfill.read_mapping(path)
+
+
+@pytest.mark.asyncio
+async def test_a_row_that_changed_after_it_was_read_is_reported_not_counted(db, tmp_path):
+    """`UPDATE 0` must not be reported as applied.
+
+    The row is read, then updated under guards. If another writer classifies or
+    re-tenants it in between, the UPDATE matches nothing -- the data is safe,
+    but a report claiming it was applied would be a lie.
+    """
+    contact_id = await _seed(db, name="Raced Co")
+    mapping = _write_mapping(tmp_path, [(contact_id, "commercial", "sites=1")])
+
+    class _RacingPool:
+        """Classifies the row between the SELECT and the UPDATE, once."""
+
+        def __init__(self, inner):
+            self._inner = inner
+            self._raced = False
+
+        async def initialize(self):
+            return None
+
+        async def fetch(self, query, *args):
+            return await self._inner.fetch(query, *args)
+
+        async def execute(self, query, *args):
+            return await self._inner.execute(query, *args)
+
+        async def fetchrow(self, query, *args):
+            row = await self._inner.fetchrow(query, *args)
+            if not self._raced and "SELECT" in query:
+                self._raced = True
+                await self._inner.execute(
+                    "UPDATE contacts SET customer_type = 'residential' "
+                    "WHERE id = $1::uuid",
+                    contact_id,
+                )
+            return row
+
+    exit_code = await backfill.run(
+        mapping_path=mapping, apply=True, pool=_RacingPool(db)
+    )
+
+    stored = await db.fetchrow(
+        "SELECT customer_type FROM contacts WHERE id = $1::uuid", contact_id
+    )
+    assert stored["customer_type"] == "residential", "the competing decision stands"
+    assert exit_code == 1, "the conflict must be surfaced, not counted as applied"

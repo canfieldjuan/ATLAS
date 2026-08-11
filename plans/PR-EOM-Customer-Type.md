@@ -65,7 +65,7 @@ diff.
 
 Ownership lane: eom-crm/customer-type
 Slice phase: Vertical slice
-Max files: 10
+Max files: 11
 
 1. `customer_type` on the Atlas contact record, `residential | commercial |
    unknown`, defaulting to `unknown`, enforced by a CHECK constraint.
@@ -185,6 +185,7 @@ the value set is a module constant bound to a database constraint.
 - `scripts/backfill_eom_customer_type.py`
 - `tests/contact_write_boundary/baseline.json`
 - `tests/test_backfill_eom_customer_type.py`
+- `tests/test_eom_lead_conversion.py`
 - `tests/test_eom_lead_conversion_integration.py`
 
 ## Mechanism
@@ -279,9 +280,10 @@ Parked hardening: none.
 | `atlas_brain/services/crm_provider.py` | 10 |
 | `atlas_brain/services/eom_crm_mutations.py` | 36 |
 | `atlas_brain/storage/migrations/366_contacts_customer_type.sql` | 45 |
-| `plans/PR-EOM-Customer-Type.md` | 277 |
-| `scripts/backfill_eom_customer_type.py` | 203 |
+| `plans/PR-EOM-Customer-Type.md` | 287 |
+| `scripts/backfill_eom_customer_type.py` | 235 |
 | `tests/contact_write_boundary/baseline.json` | 4 |
-| `tests/test_backfill_eom_customer_type.py` | 256 |
-| `tests/test_eom_lead_conversion_integration.py` | 194 |
-| **Total** | **1043** |
+| `tests/test_backfill_eom_customer_type.py` | 320 |
+| `tests/test_eom_lead_conversion.py` | 77 |
+| `tests/test_eom_lead_conversion_integration.py` | 198 |
+| **Total** | **1230** |
