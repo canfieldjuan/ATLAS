@@ -715,8 +715,15 @@ class ToolsConfig(BaseSettings):
 
     # Google OAuth token file (shared by Calendar + Gmail)
     google_token_file: str = Field(
-        default="data/google_tokens.json",
-        description="Path to persistent Google OAuth token file",
+        default="~/.config/atlas/google_tokens.json",
+        description=(
+            "Path to the persistent Google OAuth token file. Defaults OUTSIDE "
+            "the repo on purpose: the API's WorkingDirectory is the deployed "
+            "git worktree, so any in-repo path is severed when the runtime "
+            "switches worktrees (five-day Calendar outage, 2026-08-05). The "
+            "legacy in-repo data/google_tokens.json is still read for upgrades "
+            "and warns to migrate (env: ATLAS_TOOLS_GOOGLE_TOKEN_FILE)"
+        ),
     )
 
     # Calendar tool (Google Calendar)

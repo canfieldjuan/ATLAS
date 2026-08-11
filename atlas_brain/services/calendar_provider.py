@@ -145,9 +145,15 @@ class GoogleCalendarProvider:
                 },
             )
             if resp.status_code in (400, 401):
+                # Same remedy as the tool client: a fix applied to only one
+                # Calendar refresh path leaves the misdirection reachable
+                # through the other (Codex #2355 R13).
+                from .google_oauth import describe_credential_remedy
+
                 raise RuntimeError(
-                    f"Google Calendar refresh token rejected (HTTP {resp.status_code}). "
-                    "Re-run: python scripts/setup_google_oauth.py"
+                    "Google Calendar refresh token was REJECTED by Google "
+                    f"(HTTP {resp.status_code}). "
+                    + describe_credential_remedy(creds, store.token_file_path)
                 )
             resp.raise_for_status()
             token_data = resp.json()

@@ -241,10 +241,14 @@ class CalendarTool:
 
             response = await client.post(TOKEN_URL, data=data)
             if response.status_code in (400, 401):
+                # Remedy text is centralised in google_oauth so every Calendar
+                # refresh path reports the same thing (Codex #2355 R13).
+                from ..services.google_oauth import describe_credential_remedy
+
                 logger.critical(
-                    "Calendar refresh token is INVALID (HTTP %d). "
-                    "Re-run: python scripts/setup_google_oauth.py",
+                    "Calendar refresh token was REJECTED by Google (HTTP %d). %s",
                     response.status_code,
+                    describe_credential_remedy(creds, store.token_file_path),
                 )
                 raise CalendarAuthError(
                     f"Refresh token rejected (HTTP {response.status_code}). "
