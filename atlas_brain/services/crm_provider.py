@@ -949,6 +949,18 @@ class DatabaseCRMProvider:
         substring matcher is weaker than the portal sync's normalized resolver.
         The default preserves every existing caller's claim-and-merge behavior.
         """
+        # Refused HERE, at the public entry, not at the private insert.
+        # create_contact returns through a dedup/merge branch that never reaches
+        # _insert_contact_row, so a guard sited at the insert lets a matched
+        # contact report success while the classification is silently dropped.
+        # customer_type drives billing shape and belongs to the authenticated
+        # operator boundary alone; refusing it at every door is the only
+        # placement that holds for all of them.
+        if "customer_type" in data:
+            raise ValueError(
+                "customer_type must be set through the operator mutation "
+                "boundary, not through a generic contact create"
+            )
         pipeline_fields = ("lead_stage", "lead_owner", "next_follow_up_at")
         if (
             any(data.get(field) is not None for field in pipeline_fields)
@@ -1561,6 +1573,11 @@ class DatabaseCRMProvider:
 
         Returns the contact dict (existing or newly created).
         """
+        if "customer_type" in extra:
+            raise ValueError(
+                "customer_type must be set through the operator mutation "
+                "boundary, not through find_or_create_contact"
+            )
         data: dict[str, Any] = {"full_name": full_name}
         if phone:
             data["phone"] = phone

@@ -6196,6 +6196,7 @@ async def test_a_generic_create_cannot_set_customer_type():
         await _prepare_schema(conn, schema, apply_privilege_migration=False)
         provider = DatabaseCRMProvider(pool=conn)
 
+        # The private insert refuses...
         with pytest.raises(ValueError, match="operator mutation"):
             await provider._insert_contact_row(
                 conn,
@@ -6206,6 +6207,39 @@ async def test_a_generic_create_cannot_set_customer_type():
                     "customer_type": "commercial",
                 },
             )
+
+        # ...and so does the PUBLIC door, which is the one that matters:
+        # create_contact returns through a dedup/merge branch that never
+        # reaches the insert, so a contact matched by phone or email would
+        # otherwise report success while the classification was dropped.
+        await provider._insert_contact_row(
+            conn,
+            {
+                "full_name": "Already Here",
+                "phone": "2175550190",
+                "business_context_id": "effingham_maids",
+                "contact_type": "customer",
+            },
+        )
+        with pytest.raises(ValueError, match="operator mutation"):
+            await provider.create_contact(
+                {
+                    "full_name": "Already Here",
+                    "phone": "2175550190",
+                    "business_context_id": "effingham_maids",
+                    "contact_type": "customer",
+                    "customer_type": "commercial",
+                }
+            )
+        with pytest.raises(ValueError, match="operator mutation"):
+            await provider.find_or_create_contact(
+                "Already Here",
+                phone="2175550190",
+                customer_type="commercial",
+            )
+        assert await conn.fetchval(
+            "SELECT customer_type FROM contacts WHERE full_name = $1", "Already Here"
+        ) == "unknown", "the matched contact must not be classified"
 
         # Nothing was written.
         assert await conn.fetchval(

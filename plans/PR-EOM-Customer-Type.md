@@ -299,10 +299,10 @@ Parked hardening: none.
 
 | File | LOC |
 |---|---:|
-| `.github/workflows/atlas_eom_lead_pipeline_checks.yml` | 7 |
+| `.github/workflows/atlas_eom_lead_pipeline_checks.yml` | 11 |
 | `atlas_brain/eom_api/funnel.py` | 11 |
 | `atlas_brain/eom_api/funnel_store.py` | 13 |
-| `atlas_brain/services/crm_provider.py` | 59 |
+| `atlas_brain/services/crm_provider.py` | 76 |
 | `atlas_brain/services/eom_crm_mutations.py` | 36 |
 | `atlas_brain/storage/migrations/366_contacts_customer_type.sql` | 67 |
 | `plans/PR-EOM-Customer-Type.md` | 315 |
@@ -311,5 +311,5 @@ Parked hardening: none.
 | `tests/contact_write_boundary/baseline.json` | 2 |
 | `tests/test_backfill_eom_customer_type.py` | 387 |
 | `tests/test_eom_lead_conversion.py` | 77 |
-| `tests/test_eom_lead_conversion_integration.py` | 345 |
-| **Total** | **1608** |
+| `tests/test_eom_lead_conversion_integration.py` | 379 |
+| **Total** | **1663** |
