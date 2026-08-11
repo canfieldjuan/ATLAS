@@ -108,8 +108,11 @@ Max files: 8
    deploys a NEW worktree that has never held the credential.
 3. `resolve_token_file_path()`: honour absolute and `~` paths verbatim; anchor
    any remaining relative path to the checkout rather than the CWD.
-4. `scripts/setup_google_oauth.py` writes through the same resolver, so a
-   re-auth lands where the service reads.
+4. `scripts/setup_google_oauth.py` READS through legacy discovery (so an
+   upgrade reuses the existing client id/secret) but always WRITES the completed
+   authorization to the resolved PRIMARY path — writing to a discovered legacy
+   path would leave the stable location still missing, which is the exact
+   upgrade state the script exists to repair.
 5. Log a WARNING naming the resolved path when the token file is absent.
 6. Carry `refresh_token_source` (`"file"` / `"env"`) on `GoogleCredentials`, and
    WARN when the `.env` fallback supplies the token.
@@ -158,9 +161,15 @@ Max files: 8
      the `.env` fallback. Without it, a test passing an absent path falls
      through to the operator's real token file and prints refresh tokens into
      failure output.
-  2d. A re-auth lands where the service reads, and reads the same config —
-     settled by `::test_setup_script_writes_where_the_service_reads` and
-     `::test_setup_script_anchors_dotenv_to_the_checkout`.
+  2d. A re-auth reads the same config as the service and writes to the STABLE
+     path, never to a discovered legacy path — settled by
+     `::test_setup_script_writes_where_the_service_reads`,
+     `::test_setup_script_anchors_dotenv_to_the_checkout` and
+     `::test_setup_script_reads_legacy_but_writes_the_primary`.
+  2h. A token rotation through a migrated (symlinked) path lands in the stable
+     file and preserves the link — settled by
+     `::test_save_writes_through_a_symlinked_path`, with
+     `::test_save_on_a_plain_path_is_unchanged` holding the non-symlink case.
   2e. EVERY Calendar refresh path reports the same remedy — settled by
      `::test_both_calendar_callers_use_the_shared_remedy`.
   3. Absolute and `~` paths are unchanged — settled by
@@ -227,7 +236,18 @@ Max files: 8
     legacy path is a symlink to it, a pre-change read through the legacy path
     returns the credential, and a rotation written through the legacy path lands
     in the stable file with no divergent copy. The procedure also says to
-    restart the service so the cached path is refreshed. Monitoring: the absent-file WARNING and
+    restart the service so the cached path is refreshed.
+
+    CORRECTION TO AN EARLIER PROOF IN THIS PLAN. The filesystem check above was
+    first run with `Path.write_text`, which FOLLOWS a symlink — but `_save()`
+    persists rotations with `tmp.replace(target)`, and `os.replace` on a symlink
+    replaces the LINK with a regular file. The property was therefore
+    demonstrated with a different operation than production performs, and the
+    `ln -sfn` remedy did not actually hold. `_save()` now resolves a symlinked
+    path before the atomic replace, and
+    `::test_save_writes_through_a_symlinked_path` exercises the REAL `_save()`
+    via `persist_refresh_token`, asserting the link survives and the stable file
+    receives the rotation. Monitoring: the absent-file WARNING and
     the `.env`-fallback WARNING are the observable signals that were missing
     during the outage. CI enrollment: `tests/test_google_token_resolution.py`
     runs under the required `unit-gate` check (confirmed present in the 221-file
@@ -439,10 +459,10 @@ All counts re-run at this head.
 |---|---:|
 | `atlas_brain/config.py` | 11 |
 | `atlas_brain/services/calendar_provider.py` | 10 |
-| `atlas_brain/services/google_oauth.py` | 237 |
+| `atlas_brain/services/google_oauth.py` | 268 |
 | `atlas_brain/tools/calendar.py` | 8 |
-| `plans/PR-EOM-Google-Token-Resolution.md` | 448 |
+| `plans/PR-EOM-Google-Token-Resolution.md` | 468 |
 | `pytest.ini` | 1 |
-| `scripts/setup_google_oauth.py` | 20 |
-| `tests/test_google_token_resolution.py` | 648 |
-| **Total** | **1383** |
+| `scripts/setup_google_oauth.py` | 35 |
+| `tests/test_google_token_resolution.py` | 711 |
+| **Total** | **1512** |

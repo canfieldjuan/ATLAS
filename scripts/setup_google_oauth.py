@@ -60,19 +60,28 @@ sys.path.insert(0, str(PROJECT_ROOT))
 # both resolve the same configuration (Codex #2355 R11).
 os.chdir(PROJECT_ROOT)
 from atlas_brain.config import settings  # noqa: E402
-from atlas_brain.services.google_oauth import locate_token_file  # noqa: E402
+from atlas_brain.services.google_oauth import (  # noqa: E402
+    locate_token_file,
+    resolve_token_file_path,
+)
 
-# Read through the settings system, not raw os.environ (R11): the env var,
-# .env files and the default all resolve in one place, so the script and the
-# service can never disagree about where the credential lives.
-TOKEN_FILE = locate_token_file(settings.tools.google_token_file)
+# READ and WRITE are deliberately different paths (R1/R12).
+#
+# READ_TOKEN_FILE follows legacy discovery so an upgrade can reuse the client
+# id/secret already on disk. But WRITING there would overwrite the legacy
+# in-repo file and leave the stable location still missing -- which is the exact
+# upgrade state this script exists to repair, and a later worktree switch could
+# strand the freshly authorized token all over again. The completed
+# authorization therefore always lands on the resolved PRIMARY path.
+READ_TOKEN_FILE = locate_token_file(settings.tools.google_token_file)
+TOKEN_FILE = resolve_token_file_path(settings.tools.google_token_file)
 
 
 def load_existing_tokens() -> dict:
     """Load existing token file if present."""
-    if TOKEN_FILE.exists():
+    if READ_TOKEN_FILE.exists():
         try:
-            with open(TOKEN_FILE) as f:
+            with open(READ_TOKEN_FILE) as f:
                 return json.load(f)
         except (json.JSONDecodeError, OSError):
             pass
@@ -168,7 +177,7 @@ def main():
     existing_client_id = existing.get("client_id", "")
 
     if existing_client_id:
-        print(f"Existing token file found: {TOKEN_FILE}")
+        print(f"Existing token file found: {READ_TOKEN_FILE}")
         print(f"Client ID: {existing_client_id[:30]}...")
         print()
         reuse = input("Reuse existing Client ID/Secret? [Y/n]: ").strip().lower()

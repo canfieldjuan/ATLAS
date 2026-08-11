@@ -646,3 +646,66 @@ def test_setup_script_anchors_dotenv_to_the_checkout():
     assert source.index("os.chdir(PROJECT_ROOT)") < source.index(
         "from atlas_brain.config import settings"
     )
+
+
+# --- rotation must survive a migrated (symlinked) path --------------------
+
+
+def test_save_writes_through_a_symlinked_path(tmp_path):
+    """Atomic replace must not clobber the compatibility symlink.
+
+    `_save()` uses `tmp.replace(target)` for crash safety, and `os.replace` on a
+    SYMLINK replaces the link with a regular file. During migration the legacy
+    path is deliberately left as a symlink to the stable credential, so an
+    unresolved write would sever it and strand the stable copy stale
+    (Codex #2355 R8/R12, round 4).
+
+    Exercised through the REAL `_save()`, not a hand-rolled write: the earlier
+    filesystem proof used `Path.write_text`, which follows symlinks, and so
+    could not have caught this.
+    """
+    stable = tmp_path / "config" / "google_tokens.json"
+    _write_token_file(stable, calendar="original")
+    legacy = tmp_path / "worktree" / "data" / "google_tokens.json"
+    legacy.parent.mkdir(parents=True)
+    legacy.symlink_to(stable)
+
+    store = GoogleTokenStore(str(legacy))
+    store.get_credentials("calendar")
+    store.persist_refresh_token("calendar", "rotated")
+
+    assert legacy.is_symlink(), "migration symlink was replaced by a regular file"
+    assert os.path.realpath(legacy) == str(stable)
+    persisted = json.loads(stable.read_text())
+    assert persisted["services"]["calendar"]["refresh_token"] == "rotated"
+
+
+def test_save_on_a_plain_path_is_unchanged(tmp_path):
+    """The non-symlink case keeps its existing atomic-replace behaviour."""
+    plain = tmp_path / "google_tokens.json"
+    _write_token_file(plain, calendar="original")
+
+    store = GoogleTokenStore(str(plain))
+    store.get_credentials("calendar")
+    store.persist_refresh_token("calendar", "rotated")
+
+    assert not plain.is_symlink()
+    assert json.loads(plain.read_text())["services"]["calendar"]["refresh_token"] == (
+        "rotated"
+    )
+
+
+def test_setup_script_reads_legacy_but_writes_the_primary():
+    """Re-auth must create the stable file, not overwrite the legacy one.
+
+    Writing to the discovered legacy path would leave the stable location still
+    missing — the exact upgrade state the script exists to repair.
+    """
+    source = (REPO_ROOT / "scripts" / "setup_google_oauth.py").read_text()
+
+    assert "READ_TOKEN_FILE = locate_token_file(" in source
+    assert "TOKEN_FILE = resolve_token_file_path(" in source
+    # the write path must be the primary
+    assert "with open(TOKEN_FILE, \"w\")" in source
+    # the read path must be the legacy-aware one
+    assert "with open(READ_TOKEN_FILE)" in source

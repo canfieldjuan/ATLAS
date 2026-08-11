@@ -17,6 +17,7 @@ Usage:
 """
 
 import json
+import os
 import logging
 import threading
 from dataclasses import dataclass
@@ -280,15 +281,35 @@ class GoogleTokenStore:
             )
         self._loaded = True
 
+    def _resolved_write_target(self) -> Path:
+        """Return the real file to write, dereferencing a symlinked path."""
+        try:
+            if self._path.is_symlink():
+                return Path(os.path.realpath(self._path))
+        except OSError:  # pragma: no cover - defensive
+            pass
+        return self._path
+
+
     def _save(self) -> None:
-        """Write current token data to file."""
-        self._path.parent.mkdir(parents=True, exist_ok=True)
-        tmp_path = self._path.with_suffix(".tmp")
+        """Write current token data to file, following a symlinked path.
+
+        The atomic `tmp.replace(target)` is what makes a rotation crash-safe,
+        but `os.replace` on a SYMLINK replaces the link itself with a regular
+        file. During a migration the legacy path is deliberately left as a
+        symlink to the stable credential, so writing to the link path
+        unresolved would silently sever it and strand the stable copy stale
+        (Codex #2355 R8/R12, round 4). Resolving first means the atomic replace
+        lands on the real file and the symlink survives.
+        """
+        target = self._resolved_write_target()
+        target.parent.mkdir(parents=True, exist_ok=True)
+        tmp_path = target.with_suffix(".tmp")
         try:
             with open(tmp_path, "w") as f:
                 json.dump(self._data, f, indent=2)
-            tmp_path.replace(self._path)
-            logger.info("Saved Google tokens to %s", self._path)
+            tmp_path.replace(target)
+            logger.info("Saved Google tokens to %s", target)
         except OSError as e:
             logger.error("Failed to write token file %s: %s", self._path, e)
             if tmp_path.exists():
