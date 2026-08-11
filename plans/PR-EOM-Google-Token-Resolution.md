@@ -96,7 +96,7 @@ that prove each are the same fixtures.
 
 Ownership lane: eom-ops/google-token-resolution
 Slice phase: Vertical slice
-Max files: 7
+Max files: 8
 
 1. Default the token file OUTSIDE the repo:
    `DEFAULT_TOKEN_FILE`, pointing at the user's atlas config dir. This is what
