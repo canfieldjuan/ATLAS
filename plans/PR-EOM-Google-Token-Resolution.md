@@ -43,7 +43,7 @@ when the deployed worktree moves, because the deployed code lives inside that
 worktree. No amount of "resolve the relative path better" survives that; an
 earlier draft of this slice tried exactly that and would not have prevented the
 outage. `ToolsConfig.google_token_file` now defaults to
-`~/.config/atlas/google_tokens.json`, outside every checkout, which is already
+`DEFAULT_TOKEN_FILE` (the user's atlas config dir), outside every checkout, which is already
 where this deployment keeps its other service credentials. A legacy in-repo file
 is still read so upgrades do not break, and using it warns with the migration
 command. The setup script writes through the same resolver, so a re-auth can no
@@ -99,7 +99,7 @@ Slice phase: Vertical slice
 Max files: 6
 
 1. Default the token file OUTSIDE the repo:
-   `DEFAULT_TOKEN_FILE = "~/.config/atlas/google_tokens.json"`. This is what
+   `DEFAULT_TOKEN_FILE`, pointing at the user's atlas config dir. This is what
    prevents recurrence.
 2. `locate_token_file()`: prefer the configured/default path; fall back to the
    legacy in-repo `<checkout>/data/google_tokens.json` so upgrades keep working,
@@ -347,7 +347,7 @@ All counts re-run at this head.
   is why the default moved out of the repo entirely rather than being
   "anchored better"; `::test_relative_path_still_moves_with_the_deployed_checkout`
   keeps the reasoning in the suite.
-- Default path expands to the operator's `~/.config/atlas/google_tokens.json`
+- Default path expands under the operator's home config directory
   — outside every checkout, alongside the deployment's other service tokens.
   (Written here in `~` form on purpose: an absolute out-of-repo path is not a
   repo path claim, and the plan/code consistency check reads one as such.)
