@@ -135,6 +135,9 @@ async def _prepare_schema(
         "353_eom_customer_handoffs.sql",
         "360_eom_onboarding_email_drafts.sql",
         "361_eom_onboarding_draft_actor_bigint.sql",
+        # The provider's contact INSERT names customer_type explicitly, so the
+        # column has to exist for any operator write in these tests.
+        "366_contacts_customer_type.sql",
     ]
     if apply_lifecycle_sequence_migration:
         migration_names.append("363_eom_lead_lifecycle_sequence.sql")
@@ -5881,4 +5884,380 @@ async def test_operator_contact_records_the_identity_it_overwrote_on_a_phone_mat
         assert "full_name" in metadata["changed_fields"]
         assert metadata["previous_values"]["full_name"] == "Cal Import Label"
     finally:
+        await conn.close()
+
+
+@pytest.mark.asyncio
+async def test_operator_create_persists_customer_type_rather_than_defaulting():
+    """A create that states a type must store it, not silently fall back.
+
+    The provider's contact INSERT names its columns explicitly, so a column the
+    statement omits is written from its DEFAULT and the caller's value is lost
+    with no error. 'commercial' landing as 'unknown' is exactly the silent
+    downgrade this slice exists to make impossible.
+    """
+    database_url = _database_url_or_skip()
+    schema = f"atlas_eom_ctype_create_{uuid.uuid4().hex}"
+    conn = await asyncpg.connect(database_url)
+    try:
+        await _prepare_schema(conn, schema, apply_privilege_migration=False)
+        provider = DatabaseCRMProvider(pool=conn)
+        command = EOMOperatorContactMutation.from_raw(
+            operation_key=f"ctype-create-{uuid.uuid4().hex}",
+            actor_id=7,
+            actor_name="Mayra Canfield",
+            source_channel="time_tracker",
+            source_ref="customer:401",
+            contact_type="customer",
+            fields={"full_name": "Commercial Create", "customer_type": "commercial"},
+        )
+
+        created = await mutate_eom_operator_contact(provider, command)
+
+        contact = await conn.fetchrow(
+            "SELECT * FROM contacts WHERE id = $1", uuid.UUID(created["contact_id"])
+        )
+        assert contact["customer_type"] == "commercial"
+    finally:
+        await conn.execute(f'DROP SCHEMA IF EXISTS "{schema}" CASCADE')
+        await conn.close()
+
+
+@pytest.mark.asyncio
+async def test_operator_create_without_a_type_is_unknown_not_guessed():
+    """Silence means unknown. The boundary must not infer a type."""
+    database_url = _database_url_or_skip()
+    schema = f"atlas_eom_ctype_absent_{uuid.uuid4().hex}"
+    conn = await asyncpg.connect(database_url)
+    try:
+        await _prepare_schema(conn, schema, apply_privilege_migration=False)
+        provider = DatabaseCRMProvider(pool=conn)
+        command = EOMOperatorContactMutation.from_raw(
+            operation_key=f"ctype-absent-{uuid.uuid4().hex}",
+            actor_id=7,
+            actor_name="Mayra Canfield",
+            source_channel="time_tracker",
+            source_ref="customer:402",
+            contact_type="customer",
+            fields={"full_name": "AKRA Builders LLC"},
+        )
+
+        created = await mutate_eom_operator_contact(provider, command)
+
+        contact = await conn.fetchrow(
+            "SELECT * FROM contacts WHERE id = $1", uuid.UUID(created["contact_id"])
+        )
+        assert contact["customer_type"] == "unknown", (
+            "a company-shaped name must not be guessed into 'commercial'"
+        )
+    finally:
+        await conn.execute(f'DROP SCHEMA IF EXISTS "{schema}" CASCADE')
+        await conn.close()
+
+
+@pytest.mark.asyncio
+async def test_operator_update_changes_customer_type_and_audits_the_old_value():
+    """Both directions of the change, and the prior value recorded.
+
+    There is no contact history table, so if the lifecycle event does not carry
+    previous_values the overwritten type exists nowhere once the UPDATE commits.
+    """
+    database_url = _database_url_or_skip()
+    schema = f"atlas_eom_ctype_update_{uuid.uuid4().hex}"
+    conn = await asyncpg.connect(database_url)
+    try:
+        await _prepare_schema(conn, schema, apply_privilege_migration=False)
+        provider = DatabaseCRMProvider(pool=conn)
+        created = await mutate_eom_operator_contact(
+            provider,
+            EOMOperatorContactMutation.from_raw(
+                operation_key=f"ctype-seed-{uuid.uuid4().hex}",
+                actor_id=7,
+                actor_name="Mayra Canfield",
+                source_channel="time_tracker",
+                source_ref="customer:403",
+                contact_type="customer",
+                fields={"full_name": "Type Flip", "customer_type": "residential"},
+            ),
+        )
+        contact_id = created["contact_id"]
+
+        updated = await mutate_eom_operator_contact(
+            provider,
+            EOMOperatorContactMutation.from_raw(
+                operation_key=f"ctype-flip-{uuid.uuid4().hex}",
+                actor_id=7,
+                actor_name="Mayra Canfield",
+                source_channel="time_tracker",
+                source_ref="customer:403",
+                contact_id=contact_id,
+                contact_type="customer",
+                fields={"customer_type": "commercial"},
+            ),
+        )
+
+        assert updated["operation"] == "contact_updated"
+        contact = await conn.fetchrow(
+            "SELECT * FROM contacts WHERE id = $1", uuid.UUID(contact_id)
+        )
+        assert contact["customer_type"] == "commercial"
+
+        event = await conn.fetchrow(
+            """
+            SELECT metadata FROM eom_lead_lifecycle_events
+            WHERE contact_id = $1 AND event_type = 'contact_updated'
+            ORDER BY created_at DESC LIMIT 1
+            """,
+            uuid.UUID(contact_id),
+        )
+        metadata = _metadata_dict(event["metadata"])
+        assert "customer_type" in metadata["changed_fields"]
+        assert metadata["previous_values"]["customer_type"] == "residential"
+    finally:
+        await conn.execute(f'DROP SCHEMA IF EXISTS "{schema}" CASCADE')
+        await conn.close()
+
+
+@pytest.mark.asyncio
+async def test_the_database_refuses_a_customer_type_outside_the_set():
+    """The constraint is the enforcement; the boundary is only the front door.
+
+    Application validation can be bypassed by a future writer. This asserts
+    Postgres itself rejects the value, which is why the CHECK exists.
+    """
+    database_url = _database_url_or_skip()
+    schema = f"atlas_eom_ctype_check_{uuid.uuid4().hex}"
+    conn = await asyncpg.connect(database_url)
+    try:
+        await _prepare_schema(conn, schema, apply_privilege_migration=False)
+        row = await conn.fetchrow(
+            """
+            INSERT INTO contacts (full_name, business_context_id)
+            VALUES ('Check Probe', 'effingham_maids') RETURNING id
+            """
+        )
+        for accepted in ("residential", "commercial", "unknown"):
+            await conn.execute(
+                "UPDATE contacts SET customer_type = $2 WHERE id = $1",
+                row["id"],
+                accepted,
+            )
+
+        with pytest.raises(asyncpg.exceptions.CheckViolationError):
+            await conn.execute(
+                "UPDATE contacts SET customer_type = 'bogus' WHERE id = $1", row["id"]
+            )
+    finally:
+        await conn.execute(f'DROP SCHEMA IF EXISTS "{schema}" CASCADE')
+        await conn.close()
+
+
+def test_the_boundary_refuses_a_bad_customer_type_before_the_database_sees_it():
+    """422 from the contract, not a 500 from the CHECK.
+
+    The constraint is the durable enforcement, but a value that only the
+    database rejects reaches the caller as a server error instead of a
+    validation error. Both layers must agree on the same set.
+    """
+    def _command(value):
+        return EOMOperatorContactMutation.from_raw(
+            operation_key=f"ctype-guard-{uuid.uuid4().hex}",
+            actor_id=7,
+            actor_name="Mayra Canfield",
+            source_channel="time_tracker",
+            source_ref="customer:404",
+            contact_type="customer",
+            fields={"full_name": "Guard Probe", "customer_type": value},
+        )
+
+    # The tracker stores these capitalised; refusing them would make the
+    # boundary reject the exact values the backfill reads.
+    assert _command("Residential").fields["customer_type"] == "residential"
+    assert _command("  COMMERCIAL  ").fields["customer_type"] == "commercial"
+    assert _command("unknown").fields["customer_type"] == "unknown"
+
+    for rejected in ("bogus", "", "   ", None, 3):
+        with pytest.raises(EOMOperatorContactMutationError) as caught:
+            _command(rejected)
+        assert caught.value.status_code == 422
+
+
+@pytest.mark.asyncio
+async def test_funnel_readiness_refuses_a_contacts_table_without_customer_type():
+    """Migration 366 is a readiness precondition, not merely a nice-to-have.
+
+    Startup catches a failed migration and continues into the readiness guard.
+    The provider's contact INSERT names customer_type explicitly, so admitting
+    the funnel against a table missing that column would move the failure from
+    the gate -- where it is one controlled error -- to every operator create,
+    which would raise undefined_column at the write.
+    """
+    from atlas_brain.eom_api.funnel_store import require_eom_funnel_data_store
+
+    database_url = _database_url_or_skip()
+    schema = f"atlas_eom_ctype_readiness_{uuid.uuid4().hex}"
+    conn = await asyncpg.connect(database_url)
+    try:
+        # Privilege migration applied (the default), because that is the
+        # arrangement the readiness query accepts -- see
+        # test_privilege_migration_satisfies_the_enabled_full_app_startup_guard.
+        await _prepare_schema(conn, schema)
+
+        class _Pool:
+            is_initialized = True
+
+            async def fetchval(self, query: str) -> bool:
+                return bool(await conn.fetchval(query))
+
+        # Ready while the column is present...
+        await require_eom_funnel_data_store(
+            type("Config", (), {"api_enabled": True})(),
+            database_enabled=True,
+            get_db_pool_fn=lambda: _Pool(),
+        )
+
+        # ...and refused once it is gone, which is the state a failed 366 leaves.
+        await conn.execute("ALTER TABLE contacts DROP COLUMN customer_type")
+        with pytest.raises(RuntimeError, match="CRM lifecycle and handoff schema"):
+            await require_eom_funnel_data_store(
+                type("Config", (), {"api_enabled": True})(),
+                database_enabled=True,
+                get_db_pool_fn=lambda: _Pool(),
+            )
+    finally:
+        await conn.execute(f'DROP SCHEMA IF EXISTS "{schema}" CASCADE')
+        await conn.close()
+
+
+@pytest.mark.asyncio
+async def test_a_generic_contact_insert_still_works_without_migration_366():
+    """The shared insert helper must not regress callers that never asked.
+
+    `_insert_contact_row` is used by every contact writer -- the MCP
+    create_contact tool and inbound find_or_create_contact among them -- and
+    startup deliberately continues after a failed migration. Naming
+    customer_type unconditionally would turn a pending 366 into
+    UndefinedColumnError for those callers, a regression they did not sign up
+    for. Omitting the column when the caller did not supply it keeps them on
+    exactly the behaviour they had before this PR.
+    """
+    database_url = _database_url_or_skip()
+    schema = f"atlas_eom_ctype_pre366_{uuid.uuid4().hex}"
+    conn = await asyncpg.connect(database_url)
+    try:
+        await _prepare_schema(conn, schema, apply_privilege_migration=False)
+        # The state a pending or failed migration 366 leaves behind.
+        await conn.execute("ALTER TABLE contacts DROP COLUMN customer_type")
+        provider = DatabaseCRMProvider(pool=conn)
+
+        row = await provider._insert_contact_row(
+            conn,
+            {
+                "full_name": "Pre-366 Caller",
+                "business_context_id": "effingham_maids",
+                "contact_type": "customer",
+            },
+        )
+
+        assert row["full_name"] == "Pre-366 Caller"
+
+        # A caller that DOES specify the type still fails loudly, because its
+        # intent cannot be honoured against a table without the column.
+        with pytest.raises(asyncpg.exceptions.UndefinedColumnError):
+            await provider._insert_contact_row(
+                conn,
+                {
+                    "full_name": "Wants A Type",
+                    "business_context_id": "effingham_maids",
+                    "contact_type": "customer",
+                },
+                customer_type="commercial",
+            )
+    finally:
+        await conn.execute(f'DROP SCHEMA IF EXISTS "{schema}" CASCADE')
+        await conn.close()
+
+
+@pytest.mark.asyncio
+async def test_a_generic_create_cannot_set_customer_type():
+    """Only the operator boundary may classify an account.
+
+    customer_type drives billing shape. A generic writer dropping the key into
+    the insert dict would bypass _normalize_customer_type, the authenticated
+    funnel boundary, and the lifecycle event recording who changed it -- so the
+    field is a keyword the operator path passes, and its presence in `data` is
+    refused outright rather than ignored. Silently dropping it would be the
+    same class of silent loss this slice exists to remove.
+    """
+    database_url = _database_url_or_skip()
+    schema = f"atlas_eom_ctype_generic_{uuid.uuid4().hex}"
+    conn = await asyncpg.connect(database_url)
+    try:
+        await _prepare_schema(conn, schema, apply_privilege_migration=False)
+        provider = DatabaseCRMProvider(pool=conn)
+
+        # The private insert refuses...
+        with pytest.raises(ValueError, match="operator mutation"):
+            await provider._insert_contact_row(
+                conn,
+                {
+                    "full_name": "Sneaky Generic Writer",
+                    "business_context_id": "effingham_maids",
+                    "contact_type": "customer",
+                    "customer_type": "commercial",
+                },
+            )
+
+        # ...and so does the PUBLIC door, which is the one that matters:
+        # create_contact returns through a dedup/merge branch that never
+        # reaches the insert, so a contact matched by phone or email would
+        # otherwise report success while the classification was dropped.
+        await provider._insert_contact_row(
+            conn,
+            {
+                "full_name": "Already Here",
+                "phone": "2175550190",
+                "business_context_id": "effingham_maids",
+                "contact_type": "customer",
+            },
+        )
+        with pytest.raises(ValueError, match="operator mutation"):
+            await provider.create_contact(
+                {
+                    "full_name": "Already Here",
+                    "phone": "2175550190",
+                    "business_context_id": "effingham_maids",
+                    "contact_type": "customer",
+                    "customer_type": "commercial",
+                }
+            )
+        with pytest.raises(ValueError, match="operator mutation"):
+            await provider.find_or_create_contact(
+                "Already Here",
+                phone="2175550190",
+                customer_type="commercial",
+            )
+        assert await conn.fetchval(
+            "SELECT customer_type FROM contacts WHERE full_name = $1", "Already Here"
+        ) == "unknown", "the matched contact must not be classified"
+
+        # Nothing was written.
+        assert await conn.fetchval(
+            "SELECT COUNT(*) FROM contacts WHERE full_name = $1",
+            "Sneaky Generic Writer",
+        ) == 0
+
+        # The operator path still classifies, through its keyword.
+        row = await provider._insert_contact_row(
+            conn,
+            {
+                "full_name": "Operator Classified",
+                "business_context_id": "effingham_maids",
+                "contact_type": "customer",
+            },
+            customer_type="commercial",
+        )
+        assert row["customer_type"] == "commercial"
+    finally:
+        await conn.execute(f'DROP SCHEMA IF EXISTS "{schema}" CASCADE')
         await conn.close()

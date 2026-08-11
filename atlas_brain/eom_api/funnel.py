@@ -171,6 +171,15 @@ class EOMOperatorContactRequest(BaseModel):
     state: Annotated[str | None, Field(default=None, max_length=64)]
     zip: Annotated[str | None, Field(default=None, max_length=16)]
     notes: Annotated[str | None, Field(default=None, max_length=4000)]
+    # Bounded here, but the admitted VALUES are decided once in
+    # eom_crm_mutations.EOM_CUSTOMER_TYPES, which is bound to the
+    # chk_contacts_customer_type CHECK. A Literal here would be a third copy of
+    # that set and would reject the capitalised 'Residential'/'Commercial' the
+    # tracker actually stores, before the case-folding normalizer ever runs.
+    customer_type: Annotated[
+        str | None,
+        Field(default=None, max_length=32, alias="customerType"),
+    ]
     source_channel: Annotated[
         str,
         Field(min_length=1, max_length=64, alias="sourceChannel"),
@@ -482,6 +491,7 @@ def _operator_contact_fields(payload: EOMOperatorContactRequest) -> dict[str, An
         "state": "state",
         "zip": "zip",
         "notes": "notes",
+        "customer_type": "customer_type",
     }
     return {
         contact_field: getattr(payload, model_field)
@@ -510,6 +520,7 @@ def _operator_contact_item(contact: Mapping[str, Any]) -> dict[str, Any]:
         "zip": contact.get("zip"),
         "notes": contact.get("notes"),
         "contactType": contact.get("contact_type"),
+        "customerType": contact.get("customer_type"),
         "leadStage": contact.get("lead_stage"),
         "status": contact.get("status"),
         "source": contact.get("source"),
