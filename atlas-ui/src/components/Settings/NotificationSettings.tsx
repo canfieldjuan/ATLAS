@@ -183,6 +183,17 @@ export function NotificationSettingsForm() {
   };
 
   if (!form) {
+    if (status && !status.ok) {
+      // Surface a load failure (e.g. a 401/503 after the session expires) instead
+      // of spinning forever with the error hidden in the unrendered footer.
+      return (
+        <div className="flex-1 flex items-center justify-center px-6">
+          <div className="flex items-center gap-1.5 bg-red-900/20 border border-red-500/30 rounded px-3 py-2 text-sm text-red-400">
+            <AlertCircle size={14} className="shrink-0" /> {status.msg}
+          </div>
+        </div>
+      );
+    }
     return (
       <div className="flex-1 flex items-center justify-center text-cyan-600 text-xs">
         <RefreshCw size={14} className="animate-spin mr-2" /> Loading…

@@ -4,8 +4,8 @@
  * Opens as a full modal overlay.  Each tab hosts its own form which manages
  * its own load/save lifecycle independently.
  */
-import { useState } from 'react';
-import { X, Mic, Mail, Brain, Newspaper, Cpu, Bell, Plug } from 'lucide-react';
+import { useEffect, useState } from 'react';
+import { X, Mic, Mail, Brain, Newspaper, Cpu, Bell, Plug, LogOut, Loader, AlertCircle } from 'lucide-react';
 import clsx from 'clsx';
 import { VoiceSettingsForm } from './VoiceSettings';
 import { EmailSettingsForm } from './EmailSettings';
@@ -14,6 +14,8 @@ import { IntelligenceSettingsForm } from './NewsIntelligenceSettings';
 import { LLMSettingsForm } from './LLMSettings';
 import { NotificationSettingsForm } from './NotificationSettings';
 import { IntegrationSettingsForm } from './IntegrationSettings';
+import { SettingsLogin } from './SettingsLogin';
+import { probeSettingsAuth, logoutSettings, type AuthState } from './settingsApi';
 
 type Tab = 'voice' | 'email' | 'daily' | 'intelligence' | 'llm' | 'notifications' | 'integrations';
 
@@ -34,6 +36,28 @@ interface SettingsModalProps {
 
 export function SettingsModal({ onClose, initialTab = 'voice' }: SettingsModalProps) {
   const [activeTab, setActiveTab] = useState<Tab>(initialTab);
+  // 'checking' until the initial auth probe resolves.
+  const [auth, setAuth] = useState<AuthState | 'checking'>('checking');
+  // Set when a logout attempt did NOT confirm server-side cookie deletion, so
+  // we must not present a logged-out state while the cookie is still valid.
+  const [logoutError, setLogoutError] = useState(false);
+
+  useEffect(() => {
+    let active = true;
+    probeSettingsAuth().then((state) => active && setAuth(state));
+    return () => {
+      active = false;
+    };
+  }, []);
+
+  const handleLogout = async () => {
+    setLogoutError(false);
+    // Only present the login screen once the server has confirmed it cleared
+    // the cookie; otherwise the session is still live and "Lock" would lie.
+    const cleared = await logoutSettings();
+    if (cleared) setAuth('need-login');
+    else setLogoutError(true);
+  };
 
   return (
     /* backdrop */
@@ -52,42 +76,85 @@ export function SettingsModal({ onClose, initialTab = 'voice' }: SettingsModalPr
               Changes apply immediately · restart may be required for some settings
             </p>
           </div>
-          <button
-            onClick={onClose}
-            className="p-1.5 rounded border border-cyan-500/20 hover:border-cyan-500/60 hover:bg-cyan-500/10 transition-all"
-          >
-            <X size={14} className="text-cyan-500" />
-          </button>
-        </div>
-
-        {/* tabs */}
-        <div className="flex border-b border-cyan-500/20 shrink-0 px-5">
-          {TABS.map((tab) => (
+          <div className="flex items-center gap-1.5">
+            {auth === 'authed' && (
+              <>
+                {logoutError && (
+                  <span
+                    className="flex items-center gap-1 text-[10px] font-semibold text-red-400"
+                    title="The session was not cleared on the server; try again."
+                  >
+                    <AlertCircle size={11} /> Couldn't lock — retry
+                  </span>
+                )}
+                <button
+                  onClick={handleLogout}
+                  title="Lock settings (clear session)"
+                  className="flex items-center gap-1 px-2 py-1.5 rounded border border-cyan-500/20 hover:border-cyan-500/60 hover:bg-cyan-500/10 text-[10px] font-bold uppercase tracking-wider text-cyan-500 transition-all"
+                >
+                  <LogOut size={12} /> Lock
+                </button>
+              </>
+            )}
             <button
-              key={tab.id}
-              onClick={() => setActiveTab(tab.id)}
-              className={clsx(
-                'flex items-center gap-1.5 px-3 py-2 text-xs font-bold uppercase tracking-wider border-b-2 transition-all -mb-px',
-                activeTab === tab.id
-                  ? 'border-cyan-400 text-cyan-300'
-                  : 'border-transparent text-cyan-700 hover:text-cyan-500',
-              )}
+              onClick={onClose}
+              className="p-1.5 rounded border border-cyan-500/20 hover:border-cyan-500/60 hover:bg-cyan-500/10 transition-all"
             >
-              {tab.icon}
-              {tab.label}
+              <X size={14} className="text-cyan-500" />
             </button>
-          ))}
+          </div>
         </div>
 
-        {/* tab content — flex-1 so the form footer sticks to the bottom */}
+        {/* tabs — only once authenticated */}
+        {auth === 'authed' && (
+          <div className="flex border-b border-cyan-500/20 shrink-0 px-5">
+            {TABS.map((tab) => (
+              <button
+                key={tab.id}
+                onClick={() => setActiveTab(tab.id)}
+                className={clsx(
+                  'flex items-center gap-1.5 px-3 py-2 text-xs font-bold uppercase tracking-wider border-b-2 transition-all -mb-px',
+                  activeTab === tab.id
+                    ? 'border-cyan-400 text-cyan-300'
+                    : 'border-transparent text-cyan-700 hover:text-cyan-500',
+                )}
+              >
+                {tab.icon}
+                {tab.label}
+              </button>
+            ))}
+          </div>
+        )}
+
+        {/* body — auth gate, then the tab content */}
         <div className="flex-1 min-h-0 flex flex-col">
-          {activeTab === 'voice'         && <VoiceSettingsForm />}
-          {activeTab === 'email'         && <EmailSettingsForm />}
-          {activeTab === 'daily'         && <DailySettingsForm />}
-          {activeTab === 'intelligence'  && <IntelligenceSettingsForm />}
-          {activeTab === 'llm'           && <LLMSettingsForm />}
-          {activeTab === 'notifications' && <NotificationSettingsForm />}
-          {activeTab === 'integrations'  && <IntegrationSettingsForm />}
+          {auth === 'checking' && (
+            <div className="flex-1 flex items-center justify-center text-cyan-600 text-xs">
+              <Loader size={14} className="animate-spin mr-2" /> Checking access…
+            </div>
+          )}
+          {(auth === 'unavailable' || auth === 'error') && (
+            <div className="flex-1 flex items-center justify-center px-6">
+              <div className="flex items-center gap-1.5 bg-red-900/20 border border-red-500/30 rounded px-3 py-2 text-sm text-red-400">
+                <AlertCircle size={14} className="shrink-0" />
+                {auth === 'unavailable'
+                  ? 'Settings admin is not configured on the server.'
+                  : 'Could not reach the settings admin API.'}
+              </div>
+            </div>
+          )}
+          {auth === 'need-login' && <SettingsLogin onAuthed={() => setAuth('authed')} />}
+          {auth === 'authed' && (
+            <>
+              {activeTab === 'voice'         && <VoiceSettingsForm />}
+              {activeTab === 'email'         && <EmailSettingsForm />}
+              {activeTab === 'daily'         && <DailySettingsForm />}
+              {activeTab === 'intelligence'  && <IntelligenceSettingsForm />}
+              {activeTab === 'llm'           && <LLMSettingsForm />}
+              {activeTab === 'notifications' && <NotificationSettingsForm />}
+              {activeTab === 'integrations'  && <IntegrationSettingsForm />}
+            </>
+          )}
         </div>
       </div>
 

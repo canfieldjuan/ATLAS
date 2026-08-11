@@ -49,12 +49,14 @@ NOTIF = "/api/v1/settings/notifications"
 SESSION = "/api/v1/settings/session"
 
 
-def _client(digest: str, secret: str = SIGNING_SECRET) -> TestClient:
+def _client(
+    digest: str, secret: str = SIGNING_SECRET, cookie_insecure: bool = False
+) -> TestClient:
     app = FastAPI()
     app.include_router(settings_mod.router, prefix="/api/v1")
     app.include_router(session_mod.router, prefix="/api/v1")
-    app.dependency_overrides[get_settings_admin_config] = (
-        lambda: SettingsAdminConfig(token_sha256=digest, session_secret=secret)
+    app.dependency_overrides[get_settings_admin_config] = lambda: SettingsAdminConfig(
+        token_sha256=digest, session_secret=secret, cookie_insecure=cookie_insecure
     )
     return TestClient(app)
 
@@ -151,6 +153,21 @@ def test_login_with_bearer_sets_hardened_cookie():
     assert "secure" in set_cookie
     assert "samesite=strict" in set_cookie
     assert "path=/api/v1/settings" in set_cookie
+
+
+def test_cookie_insecure_flag_drops_secure_for_local_dev_only():
+    """The LOCAL-DEV opt-in drops Secure so the flow works over http://localhost;
+    HttpOnly + SameSite=Strict are always kept, and the default keeps Secure."""
+    insecure = _client(DIGEST, cookie_insecure=True).post(
+        SESSION, headers={"Authorization": f"Bearer {RAW_TOKEN}"}
+    ).headers.get("set-cookie", "").lower()
+    assert "secure" not in insecure
+    assert "httponly" in insecure and "samesite=strict" in insecure
+    # default (flag off) still hardens the cookie with Secure
+    default = _client(DIGEST).post(
+        SESSION, headers={"Authorization": f"Bearer {RAW_TOKEN}"}
+    ).headers.get("set-cookie", "").lower()
+    assert "secure" in default
 
 
 def test_login_with_json_body_token_succeeds():
