@@ -53,6 +53,12 @@ TOKEN_URL = "https://oauth2.googleapis.com/token"
 SCRIPT_DIR = Path(__file__).resolve().parent
 PROJECT_ROOT = SCRIPT_DIR.parent
 sys.path.insert(0, str(PROJECT_ROOT))
+# ToolsConfig loads .env / .env.local RELATIVE TO THE PROCESS CWD, so invoking
+# this script by absolute path from another directory would read different
+# config than the running service -- and a re-auth would then write a file the
+# service ignores. Anchor the CWD to the checkout before importing settings so
+# both resolve the same configuration (Codex #2355 R11).
+os.chdir(PROJECT_ROOT)
 from atlas_brain.config import settings  # noqa: E402
 from atlas_brain.services.google_oauth import locate_token_file  # noqa: E402
 

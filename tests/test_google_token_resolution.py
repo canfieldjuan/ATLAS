@@ -366,17 +366,26 @@ def test_default_is_identical_from_any_checkout(tmp_path, monkeypatch):
         )
 
 
+def _default_with_legacy(monkeypatch, tmp_path, *, token="legacy-token"):
+    """Point the DEFAULT at an absent path and stage a legacy file."""
+    from atlas_brain.services import google_oauth
+
+    primary = tmp_path / "config" / "google_tokens.json"
+    legacy = tmp_path / "checkout" / "data" / "google_tokens.json"
+    _write_token_file(legacy, calendar=token)
+    monkeypatch.setattr(google_oauth, "DEFAULT_TOKEN_FILE", str(primary))
+    monkeypatch.setattr(google_oauth, "LEGACY_TOKEN_FILES", (legacy,))
+    return primary, legacy
+
+
 def test_legacy_in_repo_file_is_still_found_and_warns(tmp_path, caplog, monkeypatch):
     """Upgrades must not break: an existing in-repo file keeps working."""
     from atlas_brain.services import google_oauth
 
-    legacy = tmp_path / "checkout" / "data" / "google_tokens.json"
-    _write_token_file(legacy, calendar="legacy-token")
-    monkeypatch.setattr(google_oauth, "LEGACY_TOKEN_FILE", legacy)
+    primary, legacy = _default_with_legacy(monkeypatch, tmp_path)
 
-    absent_primary = tmp_path / "config" / "google_tokens.json"
     with caplog.at_level(logging.WARNING, logger="atlas.services.google_oauth"):
-        chosen = locate_token_file(str(absent_primary))
+        chosen = google_oauth.locate_token_file(str(primary))
 
     assert chosen == legacy
     joined = " ".join(r.getMessage() for r in caplog.records)
@@ -431,14 +440,87 @@ def test_store_itself_uses_the_legacy_fallback(tmp_path, monkeypatch):
     A test that only calls `locate_token_file` directly cannot notice the store
     quietly going back to `resolve_token_file_path` and losing upgrade support.
     """
-    from atlas_brain.services import google_oauth
+    primary, legacy = _default_with_legacy(monkeypatch, tmp_path)
 
-    legacy = tmp_path / "checkout" / "data" / "google_tokens.json"
-    _write_token_file(legacy, calendar="legacy-token")
-    monkeypatch.setattr(google_oauth, "LEGACY_TOKEN_FILE", legacy)
-
-    store = GoogleTokenStore(str(tmp_path / "config" / "google_tokens.json"))
+    store = GoogleTokenStore(str(primary))
 
     assert store.token_file_path == legacy
     creds = store.get_credentials("calendar")
     assert creds is not None and creds.refresh_token == "legacy-token"
+
+
+def test_explicit_override_never_borrows_a_legacy_credential(tmp_path, monkeypatch):
+    """An absent EXPLICIT path must not silently load an unrelated account.
+
+    Legacy discovery is an upgrade aid for the default path. If an operator
+    points ATLAS_TOOLS_GOOGLE_TOKEN_FILE at account B and that file is briefly
+    missing, borrowing account A's legacy credential would send Calendar and
+    Gmail at the wrong Google account (Codex #2355 R11).
+    """
+    from atlas_brain.services import google_oauth
+
+    legacy = tmp_path / "checkout" / "data" / "google_tokens.json"
+    _write_token_file(legacy, calendar="account-a-token")
+    monkeypatch.setattr(google_oauth, "LEGACY_TOKEN_FILES", (legacy,))
+
+    explicit_absent = tmp_path / "account-b" / "google_tokens.json"
+    chosen = google_oauth.locate_token_file(str(explicit_absent))
+
+    assert chosen == explicit_absent
+    assert chosen != legacy
+    assert GoogleTokenStore(str(explicit_absent)).token_file_path == explicit_absent
+
+
+def test_legacy_anchor_includes_the_shared_repo_root(tmp_path):
+    """An upgrade that deploys a NEW worktree must still find the old file.
+
+    A legacy path anchored only to the current checkout looks inside the new
+    worktree, which has never held the credential — exactly the upgrade that
+    caused the outage (Codex #2355 R12).
+    """
+    from atlas_brain.services import google_oauth
+
+    roots = {p.parent.parent for p in google_oauth.LEGACY_TOKEN_FILES}
+    assert google_oauth._shared_repo_root() in roots
+
+
+def test_shared_repo_root_resolves_through_a_worktree_gitfile(tmp_path):
+    """`.git` as a FILE (a linked worktree) must resolve to the shared root."""
+    from atlas_brain.services import google_oauth
+
+    shared = tmp_path / "MainRepo"
+    worktree = shared / "worktrees" / "runtime"
+    worktree.mkdir(parents=True)
+    (worktree / ".git").write_text(
+        f"gitdir: {shared}/.git/worktrees/runtime\n"
+    )
+
+    monkeypatch_root = worktree
+    original = google_oauth._REPO_ROOT
+    try:
+        google_oauth._REPO_ROOT = monkeypatch_root
+        assert google_oauth._shared_repo_root() == shared
+    finally:
+        google_oauth._REPO_ROOT = original
+
+
+def test_both_calendar_callers_use_the_shared_remedy():
+    """A remedy fixed in one refresh path leaves the other misdirecting."""
+    tool = (REPO_ROOT / "atlas_brain" / "tools" / "calendar.py").read_text()
+    provider = (
+        REPO_ROOT / "atlas_brain" / "services" / "calendar_provider.py"
+    ).read_text()
+
+    for source in (tool, provider):
+        assert "describe_credential_remedy" in source
+        assert "Re-run: python scripts/setup_google_oauth.py" not in source
+
+
+def test_setup_script_anchors_dotenv_to_the_checkout():
+    """Otherwise the script and the service read different .env files."""
+    source = (REPO_ROOT / "scripts" / "setup_google_oauth.py").read_text()
+
+    assert "os.chdir(PROJECT_ROOT)" in source
+    assert source.index("os.chdir(PROJECT_ROOT)") < source.index(
+        "from atlas_brain.config import settings"
+    )

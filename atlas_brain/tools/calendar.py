@@ -241,30 +241,14 @@ class CalendarTool:
 
             response = await client.post(TOKEN_URL, data=data)
             if response.status_code in (400, 401):
-                # Name WHICH credential Google rejected. When the refresh token
-                # came from the .env fallback, re-running the setup script
-                # rewrites the token FILE and changes nothing -- the stale .env
-                # value keeps winning until it is removed. Telling the operator
-                # to re-auth in that case sends them at the wrong fix.
-                source = getattr(creds, "refresh_token_source", "file")
-                if source == "env":
-                    remedy = (
-                        "The token came from the .env fallback "
-                        "(ATLAS_TOOLS_CALENDAR_REFRESH_TOKEN), NOT from %s. "
-                        "Re-running the setup script will not help: remove or "
-                        "update that .env value, or restore the token file."
-                        % store.token_file_path
-                    )
-                else:
-                    remedy = (
-                        "The token came from %s. "
-                        "Re-run: python scripts/setup_google_oauth.py"
-                        % store.token_file_path
-                    )
+                # Remedy text is centralised in google_oauth so every Calendar
+                # refresh path reports the same thing (Codex #2355 R13).
+                from ..services.google_oauth import describe_credential_remedy
+
                 logger.critical(
                     "Calendar refresh token was REJECTED by Google (HTTP %d). %s",
                     response.status_code,
-                    remedy,
+                    describe_credential_remedy(creds, store.token_file_path),
                 )
                 raise CalendarAuthError(
                     f"Refresh token rejected (HTTP {response.status_code}). "

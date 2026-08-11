@@ -46,10 +46,48 @@ _REPO_ROOT = Path(__file__).resolve().parents[2]
 # new one.
 DEFAULT_TOKEN_FILE = "~/.config/atlas/google_tokens.json"
 
-# Where installs created before this change put the file. Still read, so an
-# existing deployment keeps working on upgrade, but it is the unstable location
-# and using it emits a migration warning.
-LEGACY_TOKEN_FILE = _REPO_ROOT / "data" / "google_tokens.json"
+def _shared_repo_root() -> Path:
+    """Return the root shared by every git worktree of this checkout.
+
+    For a linked worktree, `<checkout>/.git` is a FILE containing
+    `gitdir: <common>/.git/worktrees/<name>`; the shared root is that common
+    dir's parent. For an ordinary checkout `.git` is a directory and the
+    checkout IS the shared root.
+
+    This matters for legacy discovery: an upgrade typically means deploying a
+    NEW worktree, so a legacy path anchored to the new checkout looks in a
+    directory that has never held the credential. Anchoring to the shared root
+    finds the file the previous deployment actually wrote.
+    """
+    git_marker = _REPO_ROOT / ".git"
+    try:
+        if git_marker.is_file():
+            text = git_marker.read_text(encoding="utf-8", errors="replace").strip()
+            if text.startswith("gitdir:"):
+                gitdir = Path(text.split(":", 1)[1].strip())
+                # <common>/.git/worktrees/<name> -> <common>
+                if gitdir.parent.name == "worktrees":
+                    common = gitdir.parent.parent
+                    return common.parent if common.name == ".git" else common
+    except OSError:
+        pass
+    return _REPO_ROOT
+
+
+# Where installs created before this change put the file. Both anchors are
+# checked: the current checkout (an in-place upgrade) and the shared repo root
+# (an upgrade that deploys a NEW worktree, which is the common case here and
+# the one that caused the outage). Using either emits a migration warning.
+LEGACY_TOKEN_FILES = tuple(
+    dict.fromkeys(
+        [
+            _REPO_ROOT / "data" / "google_tokens.json",
+            _shared_repo_root() / "data" / "google_tokens.json",
+        ]
+    )
+)
+# Retained for callers/tests that referenced the single-path name.
+LEGACY_TOKEN_FILE = LEGACY_TOKEN_FILES[0]
 
 
 def resolve_token_file_path(token_file_path: str) -> Path:
@@ -73,6 +111,37 @@ def resolve_token_file_path(token_file_path: str) -> Path:
     return _REPO_ROOT / path
 
 
+def _is_default_token_path(token_file_path: str) -> bool:
+    """True when the caller did not override the token path.
+
+    Compared after expansion so `~/.config/...` and its absolute form agree.
+    """
+    return resolve_token_file_path(token_file_path) == resolve_token_file_path(
+        DEFAULT_TOKEN_FILE
+    )
+
+
+def describe_credential_remedy(creds: Optional["GoogleCredentials"], path: Path) -> str:
+    """Return the operator remedy for a credential Google rejected.
+
+    Centralised because EVERY Calendar refresh path needs it: the tool client
+    and the MCP provider both refresh, and a remedy fixed in only one of them
+    leaves the original misdirection reachable (Codex #2355 R13).
+    """
+    source = getattr(creds, "refresh_token_source", "file")
+    if source == "env":
+        return (
+            "The token came from the .env fallback "
+            "(ATLAS_TOOLS_CALENDAR_REFRESH_TOKEN), NOT from "
+            f"{path}. Re-running the setup script will not help: remove or "
+            "update that .env value, or restore the token file."
+        )
+    return (
+        f"The token came from {path}. "
+        "Re-run: python scripts/setup_google_oauth.py"
+    )
+
+
 def locate_token_file(token_file_path: str) -> Path:
     """Return the token file to use, preferring the deployment-stable location.
 
@@ -91,11 +160,20 @@ def locate_token_file(token_file_path: str) -> Path:
     if primary.exists():
         return primary
 
-    legacy = LEGACY_TOKEN_FILE
-    if legacy != primary and legacy.exists():
+    # Legacy discovery is an UPGRADE aid for the default path only. An explicit
+    # operator override names a specific credential -- possibly a different
+    # Google account -- and a temporarily absent override must never silently
+    # borrow an unrelated legacy file, which could point Calendar/Gmail at the
+    # wrong account. An absent explicit path stays absent.
+    if not _is_default_token_path(token_file_path):
+        return primary
+
+    for legacy in LEGACY_TOKEN_FILES:
+        if legacy == primary or not legacy.exists():
+            continue
         logger.warning(
             "Google token file found at the LEGACY in-repo path %s. That path "
-            "lives inside a git worktree, so a deploy that switches worktrees "
+            "lives inside a git checkout, so a deploy that switches worktrees "
             "will sever it (this caused a five-day Calendar outage on "
             "2026-08-05). Migrate it: mkdir -p %s && mv %s %s",
             legacy,

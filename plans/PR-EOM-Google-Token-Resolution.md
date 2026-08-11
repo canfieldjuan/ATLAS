@@ -96,22 +96,26 @@ that prove each are the same fixtures.
 
 Ownership lane: eom-ops/google-token-resolution
 Slice phase: Vertical slice
-Max files: 6
+Max files: 7
 
 1. Default the token file OUTSIDE the repo:
    `DEFAULT_TOKEN_FILE`, pointing at the user's atlas config dir. This is what
    prevents recurrence.
-2. `locate_token_file()`: prefer the configured/default path; fall back to the
-   legacy in-repo `<checkout>/data/google_tokens.json` so upgrades keep working,
-   warning with the migration command when that fallback is used.
+2. `locate_token_file()`: prefer the configured/default path; for the DEFAULT
+   path only, fall back to legacy in-repo locations so upgrades keep working,
+   warning with the migration command. Legacy anchors include the SHARED repo
+   root (derived from the worktree `.git` file), because an upgrade usually
+   deploys a NEW worktree that has never held the credential.
 3. `resolve_token_file_path()`: honour absolute and `~` paths verbatim; anchor
    any remaining relative path to the checkout rather than the CWD.
 4. `scripts/setup_google_oauth.py` writes through the same resolver, so a
    re-auth lands where the service reads.
 5. Log a WARNING naming the resolved path when the token file is absent.
 6. Carry `refresh_token_source` (`"file"` / `"env"`) on `GoogleCredentials`, and
-   WARN when the `.env` fallback supplies the token; the Calendar rejection
-   CRITICAL names the source and the matching remedy.
+   WARN when the `.env` fallback supplies the token.
+7. Centralise the rejection remedy in `describe_credential_remedy()` and use it
+   in BOTH Calendar refresh paths — the tool client and the MCP provider — so a
+   fix in one does not leave the misdirection reachable through the other.
 
 ### Review Contract
 
@@ -126,12 +130,21 @@ Max files: 6
      cannot achieve this is itself asserted by
      `::test_relative_path_still_moves_with_the_deployed_checkout`, and the CWD
      half by `::test_cwd_change_no_longer_moves_the_credential`.
-  2b. Upgrades do not break and a re-auth lands where the service reads —
-     settled by `::test_legacy_in_repo_file_is_still_found_and_warns`,
+  2b. Upgrades do not break, including the upgrade that deploys a NEW worktree
+     — settled by `::test_legacy_in_repo_file_is_still_found_and_warns`,
      `::test_store_itself_uses_the_legacy_fallback`,
-     `::test_primary_wins_over_legacy_when_both_exist`,
-     `::test_first_write_lands_in_the_stable_location` and
-     `::test_setup_script_writes_where_the_service_reads`.
+     `::test_legacy_anchor_includes_the_shared_repo_root`,
+     `::test_shared_repo_root_resolves_through_a_worktree_gitfile`,
+     `::test_primary_wins_over_legacy_when_both_exist` and
+     `::test_first_write_lands_in_the_stable_location`.
+  2c. An absent EXPLICIT override never borrows an unrelated legacy credential,
+     so Calendar/Gmail cannot be pointed at the wrong Google account — settled
+     by `::test_explicit_override_never_borrows_a_legacy_credential`.
+  2d. A re-auth lands where the service reads, and reads the same config —
+     settled by `::test_setup_script_writes_where_the_service_reads` and
+     `::test_setup_script_anchors_dotenv_to_the_checkout`.
+  2e. EVERY Calendar refresh path reports the same remedy — settled by
+     `::test_both_calendar_callers_use_the_shared_remedy`.
   3. Absolute and `~` paths are unchanged — settled by
      `::test_absolute_path_is_honoured_unchanged` and
      `::test_user_home_shorthand_expands`.
@@ -158,7 +171,9 @@ Max files: 6
   resolved `token_file_path`, the emitted log records, and
   `GoogleCredentials.refresh_token_source`.
 - Affected surfaces: Google credential resolution for Calendar and Gmail; the
-  Calendar auth-failure log line; no HTTP route, no schema, no migration.
+  auth-failure message in BOTH Calendar refresh paths (`atlas_brain/tools/calendar.py` and
+  `atlas_brain/services/calendar_provider.py`); the setup script's config context. No HTTP
+  route, no schema, no migration.
 - Risk areas: changing the resolved path could point a working deployment at a
   different file. Mitigated but NOT eliminated: absolute paths are untouched,
   and for a checkout whose CWD already equals its root the resolved path is
@@ -257,6 +272,7 @@ values were probed directly rather than assumed:
 ### Files touched
 
 - `atlas_brain/config.py`
+- `atlas_brain/services/calendar_provider.py`
 - `atlas_brain/services/google_oauth.py`
 - `atlas_brain/tools/calendar.py`
 - `plans/PR-EOM-Google-Token-Resolution.md`
@@ -383,9 +399,10 @@ All counts re-run at this head.
 | File | LOC |
 |---|---:|
 | `atlas_brain/config.py` | 11 |
-| `atlas_brain/services/google_oauth.py` | 128 |
-| `atlas_brain/tools/calendar.py` | 24 |
-| `plans/PR-EOM-Google-Token-Resolution.md` | 391 |
-| `scripts/setup_google_oauth.py` | 14 |
-| `tests/test_google_token_resolution.py` | 444 |
-| **Total** | **1012** |
+| `atlas_brain/services/calendar_provider.py` | 10 |
+| `atlas_brain/services/google_oauth.py` | 206 |
+| `atlas_brain/tools/calendar.py` | 8 |
+| `plans/PR-EOM-Google-Token-Resolution.md` | 408 |
+| `scripts/setup_google_oauth.py` | 20 |
+| `tests/test_google_token_resolution.py` | 526 |
+| **Total** | **1189** |
