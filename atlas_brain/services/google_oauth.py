@@ -93,8 +93,6 @@ def legacy_token_candidates() -> tuple[Path, ...]:
 
 
 LEGACY_TOKEN_FILES = legacy_token_candidates()
-# Retained for callers/tests that referenced the single-path name.
-LEGACY_TOKEN_FILE = LEGACY_TOKEN_FILES[0]
 
 
 def resolve_token_file_path(token_file_path: str) -> Path:

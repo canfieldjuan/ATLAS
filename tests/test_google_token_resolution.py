@@ -457,7 +457,11 @@ def test_primary_wins_over_legacy_when_both_exist(tmp_path, monkeypatch):
     primary = tmp_path / "config" / "google_tokens.json"
     _write_token_file(legacy, calendar="legacy-token")
     _write_token_file(primary, calendar="stable-token")
-    monkeypatch.setattr(google_oauth, "LEGACY_TOKEN_FILE", legacy)
+    # MUST patch the plural set the resolver actually reads. Patching the
+    # singular alias left `legacy` out of the candidate list entirely, so this
+    # test passed even when the resolver preferred legacy over an existing
+    # primary -- i.e. it proved nothing (Codex #2355 R2, round 7).
+    monkeypatch.setattr(google_oauth, "LEGACY_TOKEN_FILES", (legacy,))
 
     assert locate_token_file(str(primary)) == primary
     assert GoogleTokenStore(str(primary)).get_credentials("calendar").refresh_token == (
