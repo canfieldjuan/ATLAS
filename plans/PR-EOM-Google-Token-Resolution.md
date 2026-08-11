@@ -168,9 +168,28 @@ Max files: 6
   Also: leaking a credential value into logs
   (mitigated: only paths, service names and the literal source word are logged);
   breaking the `.env` fallback for deployments with no token file.
-- Reviewer rules triggered: R1, R14. R1 for the operator-facing behaviour
-  change in a failure path. R14 declared deliberately: `resolve_token_file_path`
-  is an admission/normalisation boundary for a filesystem path.
+- Reviewer rules triggered: R1, R11, R12, R14. R11/R12 from the path trigger
+  `atlas_brain/config.py`. R1 for the operator-facing behaviour change in a
+  failure path. R14 declared deliberately: `resolve_token_file_path` is an
+  admission/normalisation boundary for a filesystem path.
+  - **R11 (dependencies and config):** no new dependency. One config default
+    changes, justified above: the previous default put a credential inside the
+    deployed git worktree, which is what severed it. Config is read through the
+    settings system, not raw `os.environ` — `scripts/setup_google_oauth.py`
+    now reads `settings.tools.google_token_file` rather than reaching for the
+    env var directly, so the script and the service resolve the same value from
+    the same place.
+  - **R12 (deployment safety and CI enrollment):** shipping is safe in either
+    order and needs no flag. The legacy in-repo path is still read, so a
+    deployment that has not yet migrated its file keeps working unchanged;
+    a deployment that has migrated is found by the new default. There is
+    therefore no required deployment ordering and no window where the
+    credential is unreachable. Rollback is a plain revert — the legacy path is
+    exactly what pre-change code used. Monitoring: the absent-file WARNING and
+    the `.env`-fallback WARNING are the observable signals that were missing
+    during the outage. CI enrollment: `tests/test_google_token_resolution.py`
+    runs under the required `unit-gate` check (confirmed present in the 221-file
+    impacted selection), so a regression here fails a required status.
 
 ### Boundary-change enumeration
 
@@ -366,7 +385,7 @@ All counts re-run at this head.
 | `atlas_brain/config.py` | 11 |
 | `atlas_brain/services/google_oauth.py` | 128 |
 | `atlas_brain/tools/calendar.py` | 24 |
-| `plans/PR-EOM-Google-Token-Resolution.md` | 372 |
-| `scripts/setup_google_oauth.py` | 15 |
+| `plans/PR-EOM-Google-Token-Resolution.md` | 391 |
+| `scripts/setup_google_oauth.py` | 14 |
 | `tests/test_google_token_resolution.py` | 444 |
-| **Total** | **994** |
+| **Total** | **1012** |

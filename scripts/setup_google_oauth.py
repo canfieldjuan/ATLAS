@@ -53,14 +53,13 @@ TOKEN_URL = "https://oauth2.googleapis.com/token"
 SCRIPT_DIR = Path(__file__).resolve().parent
 PROJECT_ROOT = SCRIPT_DIR.parent
 sys.path.insert(0, str(PROJECT_ROOT))
-from atlas_brain.services.google_oauth import (  # noqa: E402
-    DEFAULT_TOKEN_FILE,
-    locate_token_file,
-)
+from atlas_brain.config import settings  # noqa: E402
+from atlas_brain.services.google_oauth import locate_token_file  # noqa: E402
 
-TOKEN_FILE = locate_token_file(
-    os.environ.get("ATLAS_TOOLS_GOOGLE_TOKEN_FILE") or DEFAULT_TOKEN_FILE
-)
+# Read through the settings system, not raw os.environ (R11): the env var,
+# .env files and the default all resolve in one place, so the script and the
+# service can never disagree about where the credential lives.
+TOKEN_FILE = locate_token_file(settings.tools.google_token_file)
 
 
 def load_existing_tokens() -> dict:
