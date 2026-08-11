@@ -16,11 +16,16 @@ Three defects, three properties asserted here:
   3. a credential taken from the `.env` fallback must be reported as such, so
      the remedy names the right file.
 
-What this does NOT claim: anchoring is relative to the checkout containing the
-module, so when the service is deployed FROM a worktree a relative path still
-moves with that worktree. Only an ABSOLUTE configured path is deployment
-stable. `test_relative_path_still_moves_with_the_deployed_checkout` asserts that
-limit rather than leaving it implied.
+The fix is that `DEFAULT_TOKEN_FILE` lives OUTSIDE the repo. Anchoring a
+relative path "better" cannot work, because the deployed module lives inside the
+deployed worktree — `test_relative_path_still_moves_with_the_deployed_checkout`
+asserts that, so the reasoning stays in the suite.
+
+Deliberate non-goal: credentials stranded in a DIFFERENT (old) worktree are not
+auto-discovered. Scanning sibling checkouts could authenticate as an arbitrary
+stale Google account, which is the same hazard as borrowing a legacy credential
+for an explicit override. The missing-file warning enumerates every path
+searched and gives an explicit `cp -L` migration command instead.
 """
 
 import json
@@ -40,12 +45,47 @@ from atlas_brain.services.google_oauth import (
 REPO_ROOT = Path(__file__).resolve().parents[1]
 
 
+def pytest_configure(config):  # pragma: no cover - marker registration
+    config.addinivalue_line(
+        "markers", "real_provenance: exercise the real provenance function"
+    )
+
+
 def _bound_settings():
     """Return the exact `settings` object `google_oauth` reads at call time."""
     from atlas_brain.services import google_oauth
 
     return google_oauth.settings
 
+
+
+
+@pytest.fixture(autouse=True)
+def _isolate_credential_discovery(monkeypatch, tmp_path_factory, request):
+    """Never let a test reach a REAL credential on this machine.
+
+    Legacy discovery deliberately searches the shared repo root, so without
+    this fixture a test passing an absent tmp path falls through to the
+    operator's live `data/google_tokens.json` — which both makes assertions
+    depend on machine state and prints real refresh tokens into failure output.
+    Tests that want legacy behaviour opt back in via `_default_with_legacy`.
+    """
+    from atlas_brain.services import google_oauth
+
+    nowhere = tmp_path_factory.mktemp("no-legacy") / "google_tokens.json"
+    monkeypatch.setattr(google_oauth, "LEGACY_TOKEN_FILES", (nowhere,))
+    # A test that exercises the provenance function itself must see the real
+    # one, not this stub.
+    if request.node.get_closest_marker("real_provenance") is None:
+        monkeypatch.setattr(
+            google_oauth, "token_path_was_explicitly_configured", lambda: False
+        )
+    monkeypatch.setattr(
+        google_oauth.settings.tools, "calendar_refresh_token", None, raising=False
+    )
+    monkeypatch.setattr(
+        google_oauth.settings.tools, "gmail_refresh_token", None, raising=False
+    )
 
 
 def _write_token_file(path: Path, *, calendar: str = "", gmail: str = "") -> None:
@@ -118,7 +158,9 @@ def test_store_exposes_the_resolved_path(tmp_path, monkeypatch):
     monkeypatch.chdir(tmp_path)
     store = GoogleTokenStore("data/google_tokens.json")
 
-    assert store.token_file_path == REPO_ROOT / "data" / "google_tokens.json"
+    assert store.token_file_path == resolve_token_file_path(
+        "data/google_tokens.json"
+    )
 
 
 # --- 2. an absent file must be announced ----------------------------------
@@ -320,6 +362,11 @@ def test_missing_file_warning_names_the_stable_default(tmp_path, caplog):
     joined = " ".join(r.getMessage() for r in caplog.records)
     assert DEFAULT_TOKEN_FILE in joined
     assert "outside any git worktree" in joined
+    # The operator must be able to see WHERE it looked, and be told that a
+    # credential stranded in a different worktree is deliberately not borrowed.
+    assert "Legacy locations searched" in joined
+    assert "wrong Google account" in joined
+    assert "cp -L" in joined
 
 
 def test_repo_root_derivation_points_at_a_real_checkout():
@@ -366,8 +413,12 @@ def test_default_is_identical_from_any_checkout(tmp_path, monkeypatch):
         )
 
 
-def _default_with_legacy(monkeypatch, tmp_path, *, token="legacy-token"):
-    """Point the DEFAULT at an absent path and stage a legacy file."""
+def _default_with_legacy(monkeypatch, tmp_path, *, token="legacy-token", explicit=False):
+    """Point the DEFAULT at an absent path and stage a legacy file.
+
+    `explicit` drives PROVENANCE (was the setting actually supplied?), which is
+    what gates legacy discovery — not the path's value.
+    """
     from atlas_brain.services import google_oauth
 
     primary = tmp_path / "config" / "google_tokens.json"
@@ -375,6 +426,9 @@ def _default_with_legacy(monkeypatch, tmp_path, *, token="legacy-token"):
     _write_token_file(legacy, calendar=token)
     monkeypatch.setattr(google_oauth, "DEFAULT_TOKEN_FILE", str(primary))
     monkeypatch.setattr(google_oauth, "LEGACY_TOKEN_FILES", (legacy,))
+    monkeypatch.setattr(
+        google_oauth, "token_path_was_explicitly_configured", lambda: explicit
+    )
     return primary, legacy
 
 
@@ -391,6 +445,10 @@ def test_legacy_in_repo_file_is_still_found_and_warns(tmp_path, caplog, monkeypa
     joined = " ".join(r.getMessage() for r in caplog.records)
     assert "LEGACY" in joined
     assert "Migrate it" in joined
+    # `mv` would move a symlink rather than its target, leaving the credential
+    # dependent on the checkout (Codex #2355 R12, round 2).
+    assert "cp -L" in joined
+    assert "mv " not in joined
 
 
 def test_primary_wins_over_legacy_when_both_exist(tmp_path, monkeypatch):
@@ -415,11 +473,16 @@ def test_first_write_lands_in_the_stable_location(tmp_path, monkeypatch):
     from atlas_brain.services import google_oauth
 
     monkeypatch.setattr(
-        google_oauth, "LEGACY_TOKEN_FILE", tmp_path / "checkout" / "data" / "nope.json"
+        google_oauth,
+        "LEGACY_TOKEN_FILES",
+        (tmp_path / "checkout" / "data" / "nope.json",),
+    )
+    monkeypatch.setattr(
+        google_oauth, "token_path_was_explicitly_configured", lambda: False
     )
     primary = tmp_path / "config" / "google_tokens.json"
 
-    assert locate_token_file(str(primary)) == primary
+    assert google_oauth.locate_token_file(str(primary)) == primary
 
 
 def test_setup_script_writes_where_the_service_reads():
@@ -462,6 +525,9 @@ def test_explicit_override_never_borrows_a_legacy_credential(tmp_path, monkeypat
     legacy = tmp_path / "checkout" / "data" / "google_tokens.json"
     _write_token_file(legacy, calendar="account-a-token")
     monkeypatch.setattr(google_oauth, "LEGACY_TOKEN_FILES", (legacy,))
+    monkeypatch.setattr(
+        google_oauth, "token_path_was_explicitly_configured", lambda: True
+    )
 
     explicit_absent = tmp_path / "account-b" / "google_tokens.json"
     chosen = google_oauth.locate_token_file(str(explicit_absent))
@@ -469,6 +535,53 @@ def test_explicit_override_never_borrows_a_legacy_credential(tmp_path, monkeypat
     assert chosen == explicit_absent
     assert chosen != legacy
     assert GoogleTokenStore(str(explicit_absent)).token_file_path == explicit_absent
+
+
+def test_explicit_override_equal_to_the_default_is_still_an_override(
+    tmp_path, monkeypatch
+):
+    """Provenance, not value equality (Codex #2355 R11, round 2).
+
+    Setting ATLAS_TOOLS_GOOGLE_TOKEN_FILE to the same absolute path the default
+    expands to is still an explicit choice of credential; classifying it as
+    "no override" would permit borrowing an unrelated legacy account.
+    """
+    from atlas_brain.services import google_oauth
+
+    legacy = tmp_path / "checkout" / "data" / "google_tokens.json"
+    _write_token_file(legacy, calendar="account-a-token")
+    same_as_default = tmp_path / "config" / "google_tokens.json"
+    monkeypatch.setattr(google_oauth, "DEFAULT_TOKEN_FILE", str(same_as_default))
+    monkeypatch.setattr(google_oauth, "LEGACY_TOKEN_FILES", (legacy,))
+    monkeypatch.setattr(
+        google_oauth, "token_path_was_explicitly_configured", lambda: True
+    )
+
+    assert google_oauth.locate_token_file(str(same_as_default)) == same_as_default
+
+
+@pytest.mark.real_provenance
+def test_provenance_comes_from_pydantic_fields_set(monkeypatch):
+    """The provenance signal is the settings object's own record.
+
+    `model_fields_set` is a read-only pydantic property, so the settings object
+    is stubbed rather than mutated.
+    """
+    from atlas_brain.services import google_oauth
+
+    class _Tools:
+        def __init__(self, fields):
+            self.model_fields_set = fields
+
+    class _Settings:
+        def __init__(self, fields):
+            self.tools = _Tools(fields)
+
+    monkeypatch.setattr(google_oauth, "settings", _Settings({"google_token_file"}))
+    assert google_oauth.token_path_was_explicitly_configured() is True
+
+    monkeypatch.setattr(google_oauth, "settings", _Settings(set()))
+    assert google_oauth.token_path_was_explicitly_configured() is False
 
 
 def test_legacy_anchor_includes_the_shared_repo_root(tmp_path):
@@ -480,7 +593,9 @@ def test_legacy_anchor_includes_the_shared_repo_root(tmp_path):
     """
     from atlas_brain.services import google_oauth
 
-    roots = {p.parent.parent for p in google_oauth.LEGACY_TOKEN_FILES}
+    # Use the derivation, not the module constant: the autouse isolation
+    # fixture neutralises the constant so tests never reach a live credential.
+    roots = {p.parent.parent for p in google_oauth.legacy_token_candidates()}
     assert google_oauth._shared_repo_root() in roots
 
 

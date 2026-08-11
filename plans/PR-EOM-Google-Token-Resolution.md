@@ -81,9 +81,9 @@ that prove each are the same fixtures.
   wrong one.
 - Correct fix must touch/change: path resolution in
   `atlas_brain/services/google_oauth.py` so a relative path is anchored to the
-  checkout rather than the CWD — and, because that anchor still travels with a
-  deployed worktree, an operator-facing warning that names the absolute-path
-  remedy; `_load()` so an absent file is announced with
+  checkout rather than the CWD; the DEFAULT moved outside the repo entirely,
+  because that anchor still travels with a deployed worktree; an operator-facing
+  warning that names the stable default and every path searched; `_load()` so an absent file is announced with
   its resolved path; `get_credentials()` so the credential carries which source
   supplied it; and the rejection log in `atlas_brain/tools/calendar.py` so the
   remedy names the file that actually supplied the rejected token.
@@ -130,8 +130,12 @@ Max files: 7
      cannot achieve this is itself asserted by
      `::test_relative_path_still_moves_with_the_deployed_checkout`, and the CWD
      half by `::test_cwd_change_no_longer_moves_the_credential`.
-  2b. Upgrades do not break, including the upgrade that deploys a NEW worktree
-     — settled by `::test_legacy_in_repo_file_is_still_found_and_warns`,
+  2b. Upgrades do not break when the legacy credential is reachable from the
+     current checkout or the SHARED repo root — which covers this deployment,
+     where the file lives at the shared root. A credential left as a regular
+     file inside a DIFFERENT old worktree is a stated non-goal (see Intentional)
+     and is surfaced by the enumerating warning rather than auto-borrowed.
+     Settled by `::test_legacy_in_repo_file_is_still_found_and_warns`,
      `::test_store_itself_uses_the_legacy_fallback`,
      `::test_legacy_anchor_includes_the_shared_repo_root`,
      `::test_shared_repo_root_resolves_through_a_worktree_gitfile`,
@@ -139,7 +143,21 @@ Max files: 7
      `::test_first_write_lands_in_the_stable_location`.
   2c. An absent EXPLICIT override never borrows an unrelated legacy credential,
      so Calendar/Gmail cannot be pointed at the wrong Google account — settled
-     by `::test_explicit_override_never_borrows_a_legacy_credential`.
+     by `::test_explicit_override_never_borrows_a_legacy_credential`. The
+     decision is made on PROVENANCE, not value equality, so an override that
+     happens to equal the default is still an override —
+     `::test_explicit_override_equal_to_the_default_is_still_an_override` and
+     `::test_provenance_comes_from_pydantic_fields_set`.
+  2f. The migration command DEREFERENCES a symlinked legacy entry (`cp -L`),
+     because the deployed legacy file is a symlink into the repo and `mv` would
+     move the link itself — settled by
+     `::test_legacy_in_repo_file_is_still_found_and_warns`, which asserts
+     `cp -L` is present and `mv ` is absent.
+  2g. Tests can never read a live credential from this machine — the autouse
+     `_isolate_credential_discovery` fixture neutralises legacy discovery and
+     the `.env` fallback. Without it, a test passing an absent path falls
+     through to the operator's real token file and prints refresh tokens into
+     failure output.
   2d. A re-auth lands where the service reads, and reads the same config —
      settled by `::test_setup_script_writes_where_the_service_reads` and
      `::test_setup_script_anchors_dotenv_to_the_checkout`.
@@ -276,6 +294,7 @@ values were probed directly rather than assumed:
 - `atlas_brain/services/google_oauth.py`
 - `atlas_brain/tools/calendar.py`
 - `plans/PR-EOM-Google-Token-Resolution.md`
+- `pytest.ini`
 - `scripts/setup_google_oauth.py`
 - `tests/test_google_token_resolution.py`
 
@@ -326,6 +345,17 @@ credential's validity is Google's verdict about one specific value, not a
 property of the token file.
 
 ## Intentional
+
+- **Credentials stranded in a DIFFERENT (old) worktree are deliberately not
+  auto-discovered.** Scanning sibling checkouts for a credential file could
+  authenticate as an arbitrary stale Google account — the same hazard that made
+  borrowing a legacy file for an explicit override a BLOCKER. Instead the
+  missing-file warning enumerates every path searched and gives the explicit
+  `cp -L` command, so the operator migrates deliberately. This is a bounded,
+  stated non-goal rather than an oversight.
+- **Legacy discovery is gated on PROVENANCE, not on the path's value.** pydantic
+  records supplied fields in `model_fields_set`; an operator who sets the token
+  path to the same string as the default has still chosen a credential.
 
 - **Precedence is unchanged.** The token file still wins over `.env`. This slice
   makes the substitution visible; it does not re-rank the sources.
@@ -400,9 +430,10 @@ All counts re-run at this head.
 |---|---:|
 | `atlas_brain/config.py` | 11 |
 | `atlas_brain/services/calendar_provider.py` | 10 |
-| `atlas_brain/services/google_oauth.py` | 206 |
+| `atlas_brain/services/google_oauth.py` | 231 |
 | `atlas_brain/tools/calendar.py` | 8 |
-| `plans/PR-EOM-Google-Token-Resolution.md` | 408 |
+| `plans/PR-EOM-Google-Token-Resolution.md` | 439 |
+| `pytest.ini` | 1 |
 | `scripts/setup_google_oauth.py` | 20 |
-| `tests/test_google_token_resolution.py` | 526 |
-| **Total** | **1189** |
+| `tests/test_google_token_resolution.py` | 641 |
+| **Total** | **1361** |

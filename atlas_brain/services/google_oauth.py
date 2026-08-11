@@ -78,14 +78,21 @@ def _shared_repo_root() -> Path:
 # checked: the current checkout (an in-place upgrade) and the shared repo root
 # (an upgrade that deploys a NEW worktree, which is the common case here and
 # the one that caused the outage). Using either emits a migration warning.
-LEGACY_TOKEN_FILES = tuple(
-    dict.fromkeys(
-        [
-            _REPO_ROOT / "data" / "google_tokens.json",
-            _shared_repo_root() / "data" / "google_tokens.json",
-        ]
+def legacy_token_candidates() -> tuple[Path, ...]:
+    """Legacy locations to search, in order. Exposed so tests can assert the
+    real derivation without depending on the module constant, which test
+    fixtures deliberately neutralise to avoid touching live credentials."""
+    return tuple(
+        dict.fromkeys(
+            [
+                _REPO_ROOT / "data" / "google_tokens.json",
+                _shared_repo_root() / "data" / "google_tokens.json",
+            ]
+        )
     )
-)
+
+
+LEGACY_TOKEN_FILES = legacy_token_candidates()
 # Retained for callers/tests that referenced the single-path name.
 LEGACY_TOKEN_FILE = LEGACY_TOKEN_FILES[0]
 
@@ -111,14 +118,20 @@ def resolve_token_file_path(token_file_path: str) -> Path:
     return _REPO_ROOT / path
 
 
-def _is_default_token_path(token_file_path: str) -> bool:
-    """True when the caller did not override the token path.
+def token_path_was_explicitly_configured() -> bool:
+    """True when the operator actually supplied the token path.
 
-    Compared after expansion so `~/.config/...` and its absolute form agree.
+    Provenance, not value equality. An operator who explicitly sets
+    ATLAS_TOOLS_GOOGLE_TOKEN_FILE to the same absolute path the default happens
+    to expand to has still named a specific credential, and a value comparison
+    would misread that as "no override" and permit borrowing an unrelated
+    legacy file (Codex #2355 R11, round 2). pydantic records which fields were
+    supplied in `model_fields_set`, which is the actual provenance signal.
     """
-    return resolve_token_file_path(token_file_path) == resolve_token_file_path(
-        DEFAULT_TOKEN_FILE
-    )
+    try:
+        return "google_token_file" in settings.tools.model_fields_set
+    except Exception:  # pragma: no cover - defensive: never block auth on this
+        return False
 
 
 def describe_credential_remedy(creds: Optional["GoogleCredentials"], path: Path) -> str:
@@ -142,7 +155,7 @@ def describe_credential_remedy(creds: Optional["GoogleCredentials"], path: Path)
     )
 
 
-def locate_token_file(token_file_path: str) -> Path:
+def locate_token_file(token_file_path: str, *, explicit: bool | None = None) -> Path:
     """Return the token file to use, preferring the deployment-stable location.
 
     Order:
@@ -160,12 +173,15 @@ def locate_token_file(token_file_path: str) -> Path:
     if primary.exists():
         return primary
 
-    # Legacy discovery is an UPGRADE aid for the default path only. An explicit
-    # operator override names a specific credential -- possibly a different
-    # Google account -- and a temporarily absent override must never silently
-    # borrow an unrelated legacy file, which could point Calendar/Gmail at the
-    # wrong account. An absent explicit path stays absent.
-    if not _is_default_token_path(token_file_path):
+    # Legacy discovery is an UPGRADE aid for the UNCONFIGURED default only. An
+    # explicit operator override names a specific credential -- possibly a
+    # different Google account -- and a temporarily absent override must never
+    # silently borrow an unrelated legacy file, which could point Calendar and
+    # Gmail at the wrong account. Decided on provenance, so an override that
+    # merely equals the default value is still treated as an override.
+    if explicit is None:
+        explicit = token_path_was_explicitly_configured()
+    if explicit:
         return primary
 
     for legacy in LEGACY_TOKEN_FILES:
@@ -175,11 +191,15 @@ def locate_token_file(token_file_path: str) -> Path:
             "Google token file found at the LEGACY in-repo path %s. That path "
             "lives inside a git checkout, so a deploy that switches worktrees "
             "will sever it (this caused a five-day Calendar outage on "
-            "2026-08-05). Migrate it: mkdir -p %s && mv %s %s",
+            "2026-08-05). Migrate it: mkdir -p %s && cp -L %s %s && rm %s "
+            "-- `cp -L` DEREFERENCES the source: this legacy entry is often a "
+            "symlink into the repo, and `mv` would move the link itself, "
+            "leaving the credential still dependent on the checkout.",
             legacy,
             primary.parent,
             legacy,
             primary,
+            legacy,
         )
         return legacy
 
@@ -241,11 +261,16 @@ class GoogleTokenStore:
                 "Google token file not found at %s; falling back to .env "
                 "config fields. If Google auth fails, the .env fallback is "
                 "what is being used, not this file. The default location is "
-                "%s, outside any git worktree; if this path is inside a "
-                "worktree it came from an override or a legacy install and a "
-                "deploy can sever it.",
+                "%s, outside any git worktree. Legacy locations searched: %s. "
+                "Credentials left inside a DIFFERENT (old) worktree are NOT "
+                "auto-discovered on purpose -- borrowing a credential from an "
+                "arbitrary sibling checkout could authenticate as the wrong "
+                "Google account -- so migrate it explicitly with: "
+                "cp -L <old>/data/google_tokens.json %s",
                 self._path,
                 DEFAULT_TOKEN_FILE,
+                ", ".join(str(p) for p in LEGACY_TOKEN_FILES) or "(none)",
+                resolve_token_file_path(DEFAULT_TOKEN_FILE),
             )
         self._loaded = True
 
