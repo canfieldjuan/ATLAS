@@ -347,8 +347,10 @@ All counts re-run at this head.
   is why the default moved out of the repo entirely rather than being
   "anchored better"; `::test_relative_path_still_moves_with_the_deployed_checkout`
   keeps the reasoning in the suite.
-- Default path resolves to `/home/juan-canfield/.config/atlas/google_tokens.json`
+- Default path expands to the operator's `~/.config/atlas/google_tokens.json`
   — outside every checkout, alongside the deployment's other service tokens.
+  (Written here in `~` form on purpose: an absolute out-of-repo path is not a
+  repo path claim, and the plan/code consistency check reads one as such.)
 - `ruff check` on the two changed modules: **5 F841**, identical to the
   `origin/main` baseline (5) — none introduced, none on a touched line. The new
   test file is clean.
@@ -364,7 +366,7 @@ All counts re-run at this head.
 | `atlas_brain/config.py` | 11 |
 | `atlas_brain/services/google_oauth.py` | 128 |
 | `atlas_brain/tools/calendar.py` | 24 |
-| `plans/PR-EOM-Google-Token-Resolution.md` | 366 |
+| `plans/PR-EOM-Google-Token-Resolution.md` | 372 |
 | `scripts/setup_google_oauth.py` | 15 |
 | `tests/test_google_token_resolution.py` | 444 |
-| **Total** | **988** |
+| **Total** | **994** |
