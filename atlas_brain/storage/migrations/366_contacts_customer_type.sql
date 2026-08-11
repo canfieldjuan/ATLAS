@@ -27,6 +27,28 @@
 -- boundary change ships, so no row can exist that the CHECK would reject in the
 -- window between the two statements. If one somehow did, ADD CONSTRAINT
 -- validates existing rows and would abort loudly rather than admit it.
+--
+-- ROLLBACK: revert the CODE, keep the COLUMN. In that order, and permanently.
+--
+-- The column is additive and nullable-free with a default, so an older build
+-- that never mentions customer_type reads and writes contacts unchanged --
+-- every INSERT it issues simply takes the default. There is therefore no
+-- reason to drop it, and two reasons not to:
+--
+--  * Dropping it destroys the classification. There is no contact history
+--    table, so once the column is gone the residential/commercial decisions --
+--    the backfill's, and every one an operator has made since -- exist
+--    nowhere and must be rebuilt by hand.
+--  * Dropping it while ANY instance still runs this release breaks that
+--    instance immediately: the provider's contact INSERT names the column
+--    explicitly, so every operator contact create raises undefined_column.
+--
+-- If the column genuinely must go (it should not), take the code out of
+-- service first, then `ALTER TABLE contacts DROP CONSTRAINT
+-- chk_contacts_customer_type, DROP COLUMN customer_type;` -- never the reverse
+-- order. Re-running this migration afterwards restores the column but NOT the
+-- classifications; those are only recoverable by re-running the backfill,
+-- which reconstructs the tracker-derived values and nothing else.
 ALTER TABLE contacts
     ADD COLUMN IF NOT EXISTS customer_type VARCHAR(16) NOT NULL DEFAULT 'unknown';
 

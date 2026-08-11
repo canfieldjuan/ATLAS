@@ -24,8 +24,9 @@ Produce the mapping from the tracker (read-only), then feed it here:
           JOIN locations l ON l.customer_id = c.id AND l.archived_at IS NULL
          WHERE c.atlas_contact_id IS NOT NULL AND c.active
          GROUP BY c.id, c.atlas_contact_id
-        HAVING bool_and(l.location_type = 'Commercial')
-            OR bool_and(l.location_type = 'Residential')
+        HAVING count(*) FILTER (WHERE l.location_type IS NULL) = 0
+           AND (bool_and(l.location_type = 'Commercial')
+             OR bool_and(l.location_type = 'Residential'))
     ) TO STDOUT WITH CSV HEADER" > customer_type_mapping.csv
 
     python scripts/backfill_eom_customer_type.py customer_type_mapping.csv
@@ -35,6 +36,15 @@ The HAVING is the point: a customer whose sites disagree produces no row at all
 and therefore stays ``unknown``. Mixed-type accounts are a real possibility and
 guessing one would put a residential customer into commercial billing, or hide
 billing fields from a commercial one. Silence is the correct output for them.
+
+The explicit NULL count is load-bearing and not defensive noise. ``bool_and``
+IGNORES NULL inputs, so ``bool_and(location_type = 'Commercial')`` returns TRUE
+for a customer with one Commercial site and one untyped site -- a confident
+classification drawn from partial evidence, which is exactly the outcome this
+script exists to avoid. Verified: ``bool_and`` over ``('Commercial', NULL)``
+evaluates to ``true``. Live data currently has zero untyped sites on active
+customers, so nothing is misclassified today; the guard is there for the first
+site somebody adds without a type.
 
 Safety properties, each enforced below rather than assumed:
 

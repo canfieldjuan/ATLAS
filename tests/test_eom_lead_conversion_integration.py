@@ -6080,3 +6080,50 @@ def test_the_boundary_refuses_a_bad_customer_type_before_the_database_sees_it():
         with pytest.raises(EOMOperatorContactMutationError) as caught:
             _command(rejected)
         assert caught.value.status_code == 422
+
+
+@pytest.mark.asyncio
+async def test_funnel_readiness_refuses_a_contacts_table_without_customer_type():
+    """Migration 366 is a readiness precondition, not merely a nice-to-have.
+
+    Startup catches a failed migration and continues into the readiness guard.
+    The provider's contact INSERT names customer_type explicitly, so admitting
+    the funnel against a table missing that column would move the failure from
+    the gate -- where it is one controlled error -- to every operator create,
+    which would raise undefined_column at the write.
+    """
+    from atlas_brain.eom_api.funnel_store import require_eom_funnel_data_store
+
+    database_url = _database_url_or_skip()
+    schema = f"atlas_eom_ctype_readiness_{uuid.uuid4().hex}"
+    conn = await asyncpg.connect(database_url)
+    try:
+        # Privilege migration applied (the default), because that is the
+        # arrangement the readiness query accepts -- see
+        # test_privilege_migration_satisfies_the_enabled_full_app_startup_guard.
+        await _prepare_schema(conn, schema)
+
+        class _Pool:
+            is_initialized = True
+
+            async def fetchval(self, query: str) -> bool:
+                return bool(await conn.fetchval(query))
+
+        # Ready while the column is present...
+        await require_eom_funnel_data_store(
+            type("Config", (), {"api_enabled": True})(),
+            database_enabled=True,
+            get_db_pool_fn=lambda: _Pool(),
+        )
+
+        # ...and refused once it is gone, which is the state a failed 366 leaves.
+        await conn.execute("ALTER TABLE contacts DROP COLUMN customer_type")
+        with pytest.raises(RuntimeError, match="CRM lifecycle and handoff schema"):
+            await require_eom_funnel_data_store(
+                type("Config", (), {"api_enabled": True})(),
+                database_enabled=True,
+                get_db_pool_fn=lambda: _Pool(),
+            )
+    finally:
+        await conn.execute(f'DROP SCHEMA IF EXISTS "{schema}" CASCADE')
+        await conn.close()

@@ -65,7 +65,7 @@ diff.
 
 Ownership lane: eom-crm/customer-type
 Slice phase: Vertical slice
-Max files: 11
+Max files: 12
 
 1. `customer_type` on the Atlas contact record, `residential | commercial |
    unknown`, defaulting to `unknown`, enforced by a CHECK constraint.
@@ -178,6 +178,7 @@ the value set is a module constant bound to a database constraint.
 
 - `.github/workflows/atlas_eom_lead_pipeline_checks.yml`
 - `atlas_brain/eom_api/funnel.py`
+- `atlas_brain/eom_api/funnel_store.py`
 - `atlas_brain/services/crm_provider.py`
 - `atlas_brain/services/eom_crm_mutations.py`
 - `atlas_brain/storage/migrations/366_contacts_customer_type.sql`
@@ -216,6 +217,27 @@ datastore, and a file-driven script can be proven end-to-end in CI, which one
 that dials production cannot. The tracker query that produces the mapping is in
 the script's docstring; its `HAVING` clause emits nothing for a customer whose
 sites disagree, so mixed-type accounts stay `unknown` rather than being guessed.
+
+## Rollback
+
+Revert the CODE, keep the COLUMN, in that order and permanently.
+
+The column is additive with a default, so an older build that never mentions
+`customer_type` reads and writes contacts unchanged. Dropping it would destroy
+every classification (there is no contact history table, so the backfill's
+decisions and every operator edit since would exist nowhere), and dropping it
+while any instance still runs this release breaks that instance immediately --
+the provider's contact INSERT names the column, so operator creates raise
+undefined_column.
+
+If the column genuinely must go: take the code out of service FIRST, then drop
+the constraint and column. Re-running migration 366 restores the column but not
+the classifications; only re-running the backfill rebuilds the tracker-derived
+subset.
+
+Ordering relative to the backfill: the backfill only ever writes rows that are
+still `unknown`, so it is safe to re-run after a re-migration and will not
+disturb decisions made in the CRM afterwards.
 
 ## Intentional
 
@@ -277,13 +299,14 @@ Parked hardening: none.
 |---|---:|
 | `.github/workflows/atlas_eom_lead_pipeline_checks.yml` | 7 |
 | `atlas_brain/eom_api/funnel.py` | 11 |
+| `atlas_brain/eom_api/funnel_store.py` | 13 |
 | `atlas_brain/services/crm_provider.py` | 10 |
 | `atlas_brain/services/eom_crm_mutations.py` | 36 |
-| `atlas_brain/storage/migrations/366_contacts_customer_type.sql` | 45 |
-| `plans/PR-EOM-Customer-Type.md` | 287 |
-| `scripts/backfill_eom_customer_type.py` | 235 |
+| `atlas_brain/storage/migrations/366_contacts_customer_type.sql` | 67 |
+| `plans/PR-EOM-Customer-Type.md` | 310 |
+| `scripts/backfill_eom_customer_type.py` | 245 |
 | `tests/contact_write_boundary/baseline.json` | 4 |
 | `tests/test_backfill_eom_customer_type.py` | 320 |
 | `tests/test_eom_lead_conversion.py` | 77 |
-| `tests/test_eom_lead_conversion_integration.py` | 198 |
-| **Total** | **1230** |
+| `tests/test_eom_lead_conversion_integration.py` | 245 |
+| **Total** | **1345** |
