@@ -8,6 +8,7 @@ one question and no more: which submitted ids name a live EOM contact.
 
 from __future__ import annotations
 
+import json
 import os
 import uuid
 from pathlib import Path
@@ -35,15 +36,25 @@ _SERVICE_TOKEN_SHA256 = _GENERATED_SERVICE_TOKEN.sha256
 class _CRM:
     """Stands in for the EOM tenant slice of the contacts table."""
 
-    def __init__(self, *, known: list[UUID] | None = None) -> None:
+    def __init__(
+        self,
+        *,
+        known: list[UUID] | None = None,
+        types: dict[UUID, str] | None = None,
+    ) -> None:
         self.known = known or []
+        self.types = types or {}
         self.calls: list[list[UUID]] = []
 
     async def list_known_eom_contact_ids(
         self, *, contact_ids: list[UUID]
-    ) -> list[UUID]:
+    ) -> list[dict]:
         self.calls.append(list(contact_ids))
-        return [value for value in self.known if value in set(contact_ids)]
+        return [
+            {"id": value, "customer_type": self.types.get(value, "unknown")}
+            for value in self.known
+            if value in set(contact_ids)
+        ]
 
 
 def _app(crm: _CRM) -> FastAPI:
@@ -134,9 +145,12 @@ async def test_an_id_the_caller_never_submitted_is_never_returned():
     class _LeakyCRM(_CRM):
         async def list_known_eom_contact_ids(
             self, *, contact_ids: list[UUID]
-        ) -> list[UUID]:
+        ) -> list[dict]:
             self.calls.append(list(contact_ids))
-            return [asked, never_asked]
+            return [
+                {"id": asked, "customer_type": "commercial"},
+                {"id": never_asked, "customer_type": "commercial"},
+            ]
 
     response = await _get(_LeakyCRM(), f"?contact_id={asked}")
 
@@ -154,6 +168,7 @@ async def test_repeated_ids_are_asked_once_and_answered_once():
     assert response.status_code == 200
     assert response.json() == {
         "knownContactIds": [str(live)],
+        "customerTypes": {str(live): "unknown"},
         "checked": 1,
         "limit": funnel_mod._MAX_KNOWN_CONTACT_IDS,
     }
@@ -244,7 +259,14 @@ async def test_the_route_discloses_no_contact_data_beyond_the_id():
 
     response = await _get(crm, f"?contact_id={live}")
 
-    assert set(response.json()) == {"knownContactIds", "checked", "limit"}
+    body = response.json()
+    assert set(body) == {"knownContactIds", "customerTypes", "checked", "limit"}
+    # The point of this test is that no IDENTITY data is disclosed. customerType
+    # is an operator-set classification, not personal data; name/email/phone/
+    # address must still never appear anywhere in the payload.
+    rendered = json.dumps(body)
+    for leaked in ("fullName", "email", "phone", "address", "notes"):
+        assert leaked not in rendered
 
 
 def test_link_verification_is_advertised_in_the_capability_manifest():
@@ -327,6 +349,8 @@ async def test_tenant_scope_holds_against_real_postgres():
             "012_appointments.sql",
             "030_call_transcripts.sql",
             "035_contacts.sql",
+            # The provider now selects customer_type, so this schema needs it.
+            "366_contacts_customer_type.sql",
         ):
             await admin_conn.execute((MIGRATIONS / name).read_text())
 
@@ -361,6 +385,7 @@ async def test_tenant_scope_holds_against_real_postgres():
             contact_ids=[eom_row["id"], foreign_row["id"], deleted_id]
         )
 
+        known = {row["id"] for row in known} if known and isinstance(known[0], dict) else set(known)
         assert eom_row["id"] in known, "a live EOM contact must resolve"
         assert foreign_row["id"] not in known, (
             "another tenant's contact must read exactly like a missing one"
@@ -386,3 +411,125 @@ class _PoolAdapter:
 
     async def execute(self, query, *args):
         return await self._pool.execute(query, *args)
+
+
+@pytest.mark.asyncio
+async def test_the_route_reports_the_type_for_each_known_contact():
+    """The point of ATLAS #2357: a mirror that can refresh itself."""
+    commercial = uuid4()
+    residential = uuid4()
+    crm = _CRM(
+        known=[commercial, residential],
+        types={commercial: "commercial", residential: "residential"},
+    )
+
+    response = await _get(
+        crm, f"?contact_id={commercial}&contact_id={residential}"
+    )
+
+    assert response.status_code == 200
+    assert response.json()["customerTypes"] == {
+        str(commercial): "commercial",
+        str(residential): "residential",
+    }
+
+
+@pytest.mark.asyncio
+async def test_a_dangling_id_gets_no_type_at_all():
+    """No id, no type. A caller must not read a classification for a link that
+    does not resolve -- that would be worse than silence, because it looks
+    like an answer."""
+    live = uuid4()
+    dangling = uuid4()
+    crm = _CRM(known=[live], types={live: "commercial"})
+
+    body = (await _get(crm, f"?contact_id={live}&contact_id={dangling}")).json()
+
+    assert str(dangling) not in body["customerTypes"]
+    assert set(body["customerTypes"]) == set(body["knownContactIds"])
+
+
+@pytest.mark.asyncio
+async def test_types_never_carry_an_id_the_caller_did_not_submit():
+    """The attribution filter governs both fields, not just the id list."""
+    asked = uuid4()
+    never_asked = uuid4()
+
+    class _LeakyCRM(_CRM):
+        async def list_known_eom_contact_ids(self, *, contact_ids):
+            self.calls.append(list(contact_ids))
+            return [
+                {"id": asked, "customer_type": "commercial"},
+                {"id": never_asked, "customer_type": "residential"},
+            ]
+
+    body = (await _get(_LeakyCRM(), f"?contact_id={asked}")).json()
+
+    assert body["knownContactIds"] == [str(asked)]
+    assert body["customerTypes"] == {str(asked): "commercial"}
+
+
+@pytest.mark.asyncio
+async def test_the_type_read_is_tenant_scoped_against_real_postgres():
+    """The tenant claim, proven where it is enforced.
+
+    Every other test here stubs the provider, so none can tell a tenant-scoped
+    query from an unscoped one. Widening this route to carry a classification
+    makes that claim matter more, not less: a leak would now disclose another
+    tenant's account type, not merely the fact that an id exists.
+    """
+    asyncpg = pytest.importorskip("asyncpg")
+    database_url = os.environ.get(DATABASE_URL_ENV)
+    if not database_url:
+        pytest.skip(f"{DATABASE_URL_ENV} is not configured")
+
+    from atlas_brain.services.crm_provider import DatabaseCRMProvider
+
+    schema = f"atlas_eom_type_read_{uuid.uuid4().hex}"
+    admin_conn = await asyncpg.connect(database_url)
+    pool = None
+    try:
+        await admin_conn.execute(f'CREATE SCHEMA "{schema}"')
+        await admin_conn.execute(f'SET search_path TO "{schema}", public')
+        await admin_conn.execute("CREATE TABLE appointments (id UUID PRIMARY KEY)")
+        await admin_conn.execute("CREATE TABLE call_transcripts (id UUID PRIMARY KEY)")
+        for name in ("035_contacts.sql", "366_contacts_customer_type.sql"):
+            await admin_conn.execute((MIGRATIONS / name).read_text())
+
+        async def set_search_path(connection):
+            await connection.execute(f'SET search_path TO "{schema}", public')
+
+        pool = await asyncpg.create_pool(
+            database_url, min_size=1, max_size=2, setup=set_search_path
+        )
+        provider = DatabaseCRMProvider(pool=_PoolAdapter(pool))
+
+        eom = await pool.fetchrow(
+            """
+            INSERT INTO contacts (full_name, business_context_id, customer_type)
+            VALUES ('EOM Commercial', $1, 'commercial') RETURNING id
+            """,
+            TENANT,
+        )
+        foreign = await pool.fetchrow(
+            """
+            INSERT INTO contacts (full_name, business_context_id, customer_type)
+            VALUES ('Churnsignals Co', $1, 'commercial') RETURNING id
+            """,
+            FOREIGN_TENANT,
+        )
+
+        rows = await provider.list_known_eom_contact_ids(
+            contact_ids=[eom["id"], foreign["id"]]
+        )
+
+        by_id = {row["id"]: row["customer_type"] for row in rows}
+        assert by_id.get(eom["id"]) == "commercial"
+        assert foreign["id"] not in by_id, (
+            "another tenant's type must not be readable through this route"
+        )
+    finally:
+        if pool is not None:
+            await pool.close()
+        await admin_conn.execute(f'DROP SCHEMA IF EXISTS "{schema}" CASCADE')
+        await admin_conn.close()

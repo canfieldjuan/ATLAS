@@ -1987,7 +1987,7 @@ class DatabaseCRMProvider:
         self,
         *,
         contact_ids: Sequence[UUID],
-    ) -> list[UUID]:
+    ) -> list[dict[str, Any]]:
         """Return the subset of ``contact_ids`` that name a live EOM contact.
 
         Answers link verification for systems that store an Atlas contact id of
@@ -1999,20 +1999,27 @@ class DatabaseCRMProvider:
         whether the link resolves, and a link to a contact that was closed is
         intact -- it is a dangling or cross-tenant id that means the write
         boundary was bypassed.
+
+        Returns rows of ``{id, customer_type}`` rather than bare ids so a
+        caller mirroring the classification can refresh it from the same
+        tenant-scoped read (ATLAS #2357). The tenant predicate is unchanged and
+        still part of the query, so a contact in another business context is
+        absent here exactly as before -- it cannot leak a type it never
+        returns an id for.
         """
         if not contact_ids:
             return []
         pool = self._get_pool()
         rows = await pool.fetch(
             """
-            SELECT c.id
+            SELECT c.id, c.customer_type
             FROM contacts AS c
             WHERE c.business_context_id = 'effingham_maids'
               AND c.id = ANY($1::uuid[])
             """,
             list(contact_ids),
         )
-        return [row["id"] for row in rows]
+        return [dict(row) for row in rows]
 
     @staticmethod
     def _eom_estimate_booking_metadata(
