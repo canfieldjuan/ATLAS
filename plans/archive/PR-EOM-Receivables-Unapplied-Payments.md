@@ -1,0 +1,112 @@
+# PR-EOM-Receivables-Unapplied-Payments
+
+Issue: #2362
+
+## Why this slice exists
+
+ATLAS must record an EOM canonical-customer payment without an invoice; provider models/service otherwise require an allocation.
+
+The 782-LOC diff exceeds the 400-LOC target because 640 LOC are inseparable
+regression and real-entrypoint proof for this one transactional admission seam:
+empty-allocation creation, idempotent replay, tenant/customer eligibility,
+concurrent archival, and the mounted API all protect the same financial write.
+Splitting that evidence into a later PR would deploy the widened payment boundary
+without the proof that makes it safe; the production-code delta remains limited to
+the two route models and the receivables service.
+
+### Problem-derived contract
+
+- Root cause: initial creation and the shared normalizer required at least one allocation.
+- Correct fix: keep the default guard while allowing only contextual EOM creation.
+- Must not change: adjustments, MCP, invoice lifecycle, migrations, email, or UI.
+
+## Scope (this PR)
+
+Ownership lane: eom/receivables
+Slice phase: Vertical slice
+Max files: 5
+
+Admit missing/empty allocations only through two EOM routes, create an active canonical customer's payment/event without invoice work, and preserve legacy contracts.
+
+### Review Contract
+
+- Acceptance: EOM route accepts omitted/[]; active EOM customer gets one payment/event, zero allocated cents, full unapplied cents, no invoice writes; unknown/foreign/lead/inactive contacts fail before insert.
+- Real-Postgres evidence exercises foreign, lead, and inactive rows through the
+  production SQL and proves each leaves no payment or event.
+- Default service callers, adjustments, and legacy MCP/invoice callers remain strict;
+  only both EOM routes explicitly opt into `allow_unapplied`.
+- Reachability: tracker targets Funnel full `main:app`; full/slim routes have parity.
+  An authenticated request through that mounted route covers omitted allocations.
+  The no-invoice query uses the slim profile's contact fields only: EOM context,
+  customer type, and active status. No flag, migration, credential, UI, or email changes.
+- Reviewer rules triggered: R1, R2, R3, R4, R5, R8, R11, R12, R14; R2 tests both cardinalities and R3 scopes zero-allocation lookup to active `effingham_maids` customers.
+- R8: same-key transactions take global-event then source/key advisory locks; winner
+  inserts one parent/event, waiter rechecks and returns matching original (or conflicts).
+  On the no-invoice path, `FOR SHARE` holds the active canonical-customer
+  eligibility predicate until the payment commits, so an archive/update cannot
+  race that validation. Real-Postgres samples both behaviors; locks plus the
+  parent idempotency index carry the invariant.
+
+### Boundary-change enumeration
+
+- Only POST create widens `allocations` to omitted/[] or existing one-to-100 rows;
+  adjustments/non-routed callers remain one-to-100. No-invoice creation share-locks
+  an active EOM customer by context/type/status, then skips invoice locks/recalculation.
+
+### Deployed-config probing
+
+- Read-only evidence: full `main:app` is live, tracker targets Funnel `/api/v1`, and slim Render remains an undeployed disabled candidate.
+
+### Files touched
+
+- `atlas_brain/api/invoicing/receivables.py`
+- `atlas_brain/eom_api/receivables.py`
+- `atlas_brain/services/receivables.py`
+- `plans/PR-EOM-Receivables-Unapplied-Payments.md`
+- `tests/test_receivables.py`
+
+## Mechanism
+
+Routes pass the EOM context into a default-strict service; only an active canonical
+customer can take the zero-allocation branch, and that eligibility remains locked
+through the transaction.
+
+## Intentional
+
+- Provider-only, additive behavior; no schema, UI, receipt, Gmail, or live financial-data operation.
+- The slim profile does not own lead-pipeline migrations, so this payment boundary
+  deliberately does not query lead-pipeline columns; `contact_type='customer'`
+  is the customer-versus-lead eligibility boundary.
+
+## Deferred
+
+Parking predicate: park any new work that does not change initial EOM
+allocation-free payment admission, its required financial-safety proof, or this
+provider slice's independent deployability.
+
+Parked hardening: #2363 H-01 (legacy invoice float-money audit) and H-06
+(full/slim provider-model structural deduplication). #2362 owns later tracker,
+Website, receipts, ledger, billing, Gmail, sent-mail, and Square slices. No
+schema or UI expansion belongs here.
+
+## Verification
+
+- `pytest -q tests/test_receivables.py`: 65 passed, 8 skipped. The optional
+  PostgreSQL cases require `ATLAS_RECEIVABLES_TEST_DATABASE_URL`; absent it,
+  they skip without accessing live financial data.
+- `pytest -q tests/test_eom_render_profile.py --disable-warnings`: 61 passed.
+- Command: ruff check atlas_brain/api/invoicing/receivables.py atlas_brain/eom_api/receivables.py atlas_brain/services/receivables.py tests/test_receivables.py. Result: passed.
+- `python scripts/sync_pr_plan.py --check plans/PR-EOM-Receivables-Unapplied-Payments.md origin/main`, `python scripts/audit_plan_doc.py plans/PR-EOM-Receivables-Unapplied-Payments.md`, `python scripts/audit_plan_code_consistency.py --base-ref origin/main plans/PR-EOM-Receivables-Unapplied-Payments.md`, `python scripts/check_boundary_change_enumeration.py --base origin/main --strict`, and `python scripts/check_deployed_config_probing.py --base origin/main --strict`: passed.
+- The required `scripts/push_pr.sh` local review gate passed and its impacted
+  test selector conservatively ran the full unit suite; no live financial write.
+
+## Estimated diff size
+
+| File | LOC |
+|---|---:|
+| `atlas_brain/api/invoicing/receivables.py` | 5 |
+| `atlas_brain/eom_api/receivables.py` | 5 |
+| `atlas_brain/services/receivables.py` | 41 |
+| `plans/PR-EOM-Receivables-Unapplied-Payments.md` | 112 |
+| `tests/test_receivables.py` | 640 |
+| **Total** | **803** |

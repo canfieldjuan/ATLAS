@@ -89,6 +89,7 @@ on:
       - "tests/test_migration_365_business_context_fk.py"
       - "atlas_brain/storage/migrations/365_contacts_business_context_registry_fk.sql"
       - "atlas_brain/storage/migrations/366_contacts_customer_type.sql"
+      - "atlas_brain/storage/migrations/367_contacts_customer_type_revision.sql"
       - "scripts/backfill_eom_customer_type.py"
   push:
     branches:
@@ -177,6 +178,7 @@ on:
       - "tests/test_migration_365_business_context_fk.py"
       - "atlas_brain/storage/migrations/365_contacts_business_context_registry_fk.sql"
       - "atlas_brain/storage/migrations/366_contacts_customer_type.sql"
+      - "atlas_brain/storage/migrations/367_contacts_customer_type_revision.sql"
       - "scripts/backfill_eom_customer_type.py"
 
 jobs:

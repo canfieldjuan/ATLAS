@@ -66,6 +66,18 @@ async def require_eom_funnel_data_store(
                     WHERE attrelid = readiness_relations.contacts_rel
                       AND attname = 'customer_type'
                       AND NOT attisdropped
+                )
+                -- known-contacts publishes the database-owned source revision
+                -- for customer_type (migration 367). A partially migrated
+                -- store would otherwise pass startup then fail only when a
+                -- tracker refresh asks the provider to read it.
+                AND EXISTS (
+                    SELECT 1
+                    FROM pg_attribute
+                    WHERE attrelid = readiness_relations.contacts_rel
+                      AND attname = 'customer_type_revision'
+                      AND NOT attisdropped
+                      AND atttypid = 'bigint'::regtype
                 ) AS contacts_required_columns_ready,
                 -- Reopen orders lost-stage evidence by migration 363's
                 -- database-owned append sequence. Serving without it would turn
