@@ -23,7 +23,7 @@ from ..services.receivables import (
 )
 from ..storage.exceptions import DatabaseUnavailableError
 from .auth import require_actor, require_receivables_api
-from .funnel_database import get_eom_funnel_crm_provider
+from .funnel_database import get_eom_funnel_crm_provider, get_eom_funnel_db_pool
 
 _DATABASE_UNAVAILABLE_ERRORS = (
     DatabaseUnavailableError,
@@ -202,6 +202,25 @@ def _billing_crm_dependency(request: Request) -> Any:
     provider_factory = getattr(request.app.state, "eom_funnel_crm_provider", None)
     if callable(provider_factory):
         return provider_factory()
+    # Fail closed, and say why. Startup deliberately does NOT raise when
+    # receivables runs without a funnel DSN -- that would stop a profile which
+    # never touches billing recipients from booting -- so the cost is borne
+    # here, by the routes that actually need the pool. Falling through would be
+    # worse than a 503: DatabaseCRMProvider._get_pool() defaults to the global
+    # pool, which is the wrong database and would answer with silence rather
+    # than an error.
+    if not get_eom_funnel_db_pool().is_initialized:
+        raise HTTPException(
+            status_code=503,
+            detail={
+                "code": "billing_recipients_unavailable",
+                "message": (
+                    "The canonical EOM contact pool is not configured; set "
+                    "ATLAS_EOM_FUNNEL_DB_CONNECTION_STRING to use billing "
+                    "recipients."
+                ),
+            },
+        )
     return get_eom_funnel_crm_provider()
 
 

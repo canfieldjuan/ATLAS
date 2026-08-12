@@ -215,10 +215,10 @@ Parked hardening: none.
 | File | LOC |
 |---|---:|
 | `.github/workflows/atlas_invoicing_checks.yml` | 3 |
-| `atlas_brain/eom_api/funnel_database.py` | 14 |
-| `atlas_brain/eom_api/receivables.py` | 55 |
-| `atlas_brain/main_eom.py` | 5 |
+| `atlas_brain/eom_api/funnel_database.py` | 26 |
+| `atlas_brain/eom_api/receivables.py` | 74 |
+| `atlas_brain/main_eom.py` | 8 |
 | `atlas_brain/services/crm_provider.py` | 157 |
 | `plans/PR-EOM-Billing-Recipients.md` | 224 |
 | `tests/test_eom_billing_recipients.py` | 287 |
-| **Total** | **745** |
+| **Total** | **779** |

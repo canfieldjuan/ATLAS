@@ -156,8 +156,20 @@ async def init_eom_funnel_database(config: EOMFunnelConfig | None = None) -> Non
     from .config import invoicing_settings
 
     resolved = config or funnel_settings
-    if not resolved.api_enabled and not invoicing_settings.receivables_api_enabled:
+    if resolved.api_enabled:
+        pool = get_eom_funnel_db_pool(resolved)
+        await pool.initialize()
         return
+    # Receivables needs this pool for billing recipients, but only when the
+    # deployment actually configured one. Raising here would stop a profile
+    # that runs receivables without billing recipients from booting at all --
+    # a worse failure than the gap being closed. The routes that need the pool
+    # fail closed instead.
+    if invoicing_settings.receivables_api_enabled and resolved.db_connection_string.strip():
+        pool = get_eom_funnel_db_pool(resolved)
+        await pool.initialize()
+        return
+    return
     pool = get_eom_funnel_db_pool(resolved)
     await pool.initialize()
 
