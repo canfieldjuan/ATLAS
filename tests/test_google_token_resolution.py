@@ -562,6 +562,9 @@ def test_provenance_comes_from_pydantic_fields_set(monkeypatch):
     class _Tools:
         def __init__(self, fields):
             self.model_fields_set = fields
+            # Provenance now requires a non-blank value as well as the field
+            # being set, so the stub must carry one (ATLAS #2359 slice 1).
+            self.google_token_file = "/srv/creds/google_tokens.json"
 
     class _Settings:
         def __init__(self, fields):
@@ -663,3 +666,118 @@ def test_every_recovery_message_requires_a_restart(tmp_path, caplog, monkeypatch
             tmp_path / "tokens.json",
         )
         assert "RESTART" in remedy, source
+
+
+# --- ATLAS #2359 slice 1: configured-path validation ----------------------
+
+
+@pytest.mark.parametrize("blank", ["", "   ", "\t", "\n  "])
+def test_blank_configured_path_falls_back_to_the_default(blank):
+    """A set-but-EMPTY setting names no file, so it must not become a path.
+
+    `Path("")` is `.`, which resolved to the repo ROOT DIRECTORY: the service
+    would try to read a directory, and the setup script would bind it as its
+    write target and fail with IsADirectoryError only AFTER completing OAuth.
+    """
+    resolved = resolve_token_file_path(blank)
+
+    assert resolved == resolve_token_file_path(DEFAULT_TOKEN_FILE)
+    assert not resolved.is_dir(), resolved
+    assert resolved != REPO_ROOT
+
+
+def test_non_string_configured_path_falls_back_to_the_default():
+    """Defence in depth: a non-string setting must not reach `Path()`."""
+    assert resolve_token_file_path(None) == resolve_token_file_path(  # type: ignore[arg-type]
+        DEFAULT_TOKEN_FILE
+    )
+
+
+def test_store_with_a_blank_path_never_targets_a_directory():
+    store = GoogleTokenStore("")
+
+    assert store.token_file_path == resolve_token_file_path(DEFAULT_TOKEN_FILE)
+    assert not store.token_file_path.is_dir()
+
+
+@pytest.mark.real_provenance
+@pytest.mark.parametrize("blank", ["", "   "])
+def test_blank_setting_is_not_an_explicit_override(monkeypatch, blank):
+    """Provenance must agree with resolution.
+
+    If a blank value were treated as an override, legacy discovery would be
+    suppressed for a setting that names nothing — the operator would get
+    neither their file nor the upgrade path.
+    """
+    from atlas_brain.services import google_oauth
+
+    class _Tools:
+        model_fields_set = {"google_token_file"}
+        google_token_file = blank
+
+    class _Settings:
+        tools = _Tools()
+
+    monkeypatch.setattr(google_oauth, "settings", _Settings())
+    assert google_oauth.token_path_was_explicitly_configured() is False
+
+
+@pytest.mark.real_provenance
+def test_a_real_value_is_still_an_explicit_override(monkeypatch):
+    from atlas_brain.services import google_oauth
+
+    class _Tools:
+        model_fields_set = {"google_token_file"}
+        google_token_file = "/srv/creds/google_tokens.json"
+
+    class _Settings:
+        tools = _Tools()
+
+    monkeypatch.setattr(google_oauth, "settings", _Settings())
+    assert google_oauth.token_path_was_explicitly_configured() is True
+
+
+# --- ATLAS #2359 slice 1: the remedy must match what is actually read -----
+
+
+def test_explicit_override_recovery_names_that_path_not_the_default(
+    tmp_path, caplog, monkeypatch
+):
+    """Under an override the remedy must not send the operator elsewhere.
+
+    Legacy discovery does not run and the stable default is not consulted, so
+    naming either would point at a file this process will never read —
+    prolonging the outage the message exists to shorten.
+    """
+    from atlas_brain.services import google_oauth
+
+    monkeypatch.setattr(
+        google_oauth, "token_path_was_explicitly_configured", lambda: True
+    )
+    explicit = tmp_path / "account-b" / "google_tokens.json"
+    store = GoogleTokenStore(str(explicit))
+
+    with caplog.at_level(logging.WARNING, logger="atlas.services.google_oauth"):
+        store.get_credentials("calendar")
+
+    joined = " ".join(r.getMessage() for r in caplog.records)
+    assert str(explicit) in joined
+    assert "EXPLICIT" in joined
+    # must NOT claim a search that did not happen, nor name an ignored file
+    assert "Legacy locations searched" not in joined
+    assert DEFAULT_TOKEN_FILE not in joined
+    assert "RESTART" in joined
+
+
+def test_default_path_recovery_still_names_default_and_legacy(tmp_path, caplog):
+    """The unconfigured branch is unchanged."""
+    store = GoogleTokenStore(str(tmp_path / "gone" / "google_tokens.json"))
+
+    with caplog.at_level(logging.WARNING, logger="atlas.services.google_oauth"):
+        store.get_credentials("calendar")
+
+    joined = " ".join(r.getMessage() for r in caplog.records)
+    assert DEFAULT_TOKEN_FILE in joined
+    assert "Legacy locations searched" in joined
+    assert "EXPLICIT" not in joined
+    assert "RESTART" in joined

@@ -110,7 +110,15 @@ def resolve_token_file_path(token_file_path: str) -> Path:
     living outside the repo entirely; this function's job is only to honour
     absolute and `~` paths verbatim so that default works.
     """
-    path = Path(token_file_path).expanduser()
+    # An explicitly-set-but-EMPTY setting names no file. `Path("")` is `.`,
+    # which resolves to the repo ROOT DIRECTORY -- the service would then try to
+    # read a directory, and the setup script would bind it as its write target
+    # and fail with IsADirectoryError only AFTER completing OAuth. Treat blank
+    # as "not configured" and fall back to the stable default.
+    raw = token_file_path if isinstance(token_file_path, str) else ""
+    if not raw.strip():
+        raw = DEFAULT_TOKEN_FILE
+    path = Path(raw.strip()).expanduser()
     if path.is_absolute():
         return path
     return _REPO_ROOT / path
@@ -127,7 +135,13 @@ def token_path_was_explicitly_configured() -> bool:
     supplied in `model_fields_set`, which is the actual provenance signal.
     """
     try:
-        return "google_token_file" in settings.tools.model_fields_set
+        if "google_token_file" not in settings.tools.model_fields_set:
+            return False
+        # Set-but-blank names no credential, so it cannot be an override. This
+        # keeps provenance consistent with resolution, which treats blank as
+        # "use the default".
+        configured = settings.tools.google_token_file
+        return bool(isinstance(configured, str) and configured.strip())
     except Exception:  # pragma: no cover - defensive: never block auth on this
         return False
 
@@ -253,19 +267,39 @@ class GoogleTokenStore:
             # cause of a Google auth failure in this deployment, and saying so
             # here is what distinguishes "the file is missing" from "Google
             # rejected the credential" -- two problems with opposite fixes.
-            logger.warning(
-                "Google token file not found at %s; falling back to .env "
-                "config fields. If Google auth fails, the .env fallback is "
-                "what is being used, not this file. The stable default is %s, "
-                "outside any git worktree. Legacy locations searched: %s. "
-                "RESTART the service after any fix: this store caches its "
-                "loaded state and the settings object has already captured the "
-                ".env values, so restoring the file or editing .env has no "
-                "effect on a running process.",
-                self._path,
-                DEFAULT_TOKEN_FILE,
-                ", ".join(str(p) for p in LEGACY_TOKEN_FILES) or "(none)",
-            )
+            # The remedy MUST match what this process will actually read.
+            # Under an explicit override, legacy discovery does not run and the
+            # stable default is irrelevant -- naming it would send the operator
+            # to a file the service ignores, prolonging the outage.
+            if token_path_was_explicitly_configured():
+                logger.warning(
+                    "Google token file not found at %s; falling back to .env "
+                    "config fields. If Google auth fails, the .env fallback is "
+                    "what is being used, not this file. This path is an "
+                    "EXPLICIT ATLAS_TOOLS_GOOGLE_TOKEN_FILE override, so "
+                    "legacy locations are deliberately NOT searched and the "
+                    "stable default is not consulted -- restore the credential "
+                    "at this exact path, or change the override. RESTART the "
+                    "service after any fix: this store caches its loaded state "
+                    "and the settings object has already captured the .env "
+                    "values, so restoring the file or editing .env has no "
+                    "effect on a running process.",
+                    self._path,
+                )
+            else:
+                logger.warning(
+                    "Google token file not found at %s; falling back to .env "
+                    "config fields. If Google auth fails, the .env fallback is "
+                    "what is being used, not this file. The stable default is "
+                    "%s, outside any git worktree. Legacy locations searched: "
+                    "%s. RESTART the service after any fix: this store caches "
+                    "its loaded state and the settings object has already "
+                    "captured the .env values, so restoring the file or "
+                    "editing .env has no effect on a running process.",
+                    self._path,
+                    DEFAULT_TOKEN_FILE,
+                    ", ".join(str(p) for p in LEGACY_TOKEN_FILES) or "(none)",
+                )
         self._loaded = True
 
 
