@@ -501,6 +501,8 @@ class ReceivablesService:
         source: str = "eom_admin",
         metadata: Optional[dict[str, Any]] = None,
         enforce_api_methods: bool = True,
+        allow_unapplied: bool = False,
+        unapplied_contact_context_id: Optional[str] = None,
     ) -> dict[str, Any]:
         """Create one receipt and all of its allocations atomically."""
         outcome = await self.create_payment_with_outcome(
@@ -517,6 +519,8 @@ class ReceivablesService:
             source=source,
             metadata=metadata,
             enforce_api_methods=enforce_api_methods,
+            allow_unapplied=allow_unapplied,
+            unapplied_contact_context_id=unapplied_contact_context_id,
         )
         return outcome.payment
 
@@ -536,6 +540,8 @@ class ReceivablesService:
         source: str = "eom_admin",
         metadata: Optional[dict[str, Any]] = None,
         enforce_api_methods: bool = True,
+        allow_unapplied: bool = False,
+        unapplied_contact_context_id: Optional[str] = None,
     ) -> PaymentCreationOutcome:
         """Create a receipt and report whether this call replayed its first write."""
         total = money(total_amount)
@@ -556,8 +562,14 @@ class ReceivablesService:
             raise ReceivablesValidationError(
                 "Idempotency key must contain 1 to 128 characters"
             )
+        if allow_unapplied and not unapplied_contact_context_id:
+            raise ReceivablesValidationError(
+                "Unapplied payments require a canonical customer context"
+            )
 
-        normalized = self._normalize_allocations(allocations)
+        normalized = self._normalize_allocations(
+            allocations, allow_empty=allow_unapplied
+        )
         allocated_total = sum((item["amount"] for item in normalized), Decimal("0"))
         if allocated_total > total:
             raise ReceivablesValidationError(
@@ -605,6 +617,7 @@ class ReceivablesService:
                 conn,
                 contact_id=contact_id,
                 allocations=normalized,
+                unapplied_contact_context_id=unapplied_contact_context_id,
             )
             # A same-key create can arrive while the first transaction is still
             # holding these invoice locks. Reconcile again after the wait, before
@@ -1302,8 +1315,12 @@ class ReceivablesService:
     @staticmethod
     def _normalize_allocations(
         allocations: list[dict[str, Any]],
+        *,
+        allow_empty: bool = False,
     ) -> list[dict[str, Any]]:
         if not allocations:
+            if allow_empty and allocations == []:
+                return []
             raise ReceivablesValidationError(
                 "At least one invoice allocation is required"
             )
@@ -1335,9 +1352,31 @@ class ReceivablesService:
         allocations: list[dict[str, Any]],
         current_allocations: Optional[dict[str, Decimal]] = None,
         additional_invoice_ids: Optional[Iterable[UUID]] = None,
+        unapplied_contact_context_id: Optional[str] = None,
     ) -> list[Any]:
         allocated_ids = {item["invoice_id"] for item in allocations}
         invoice_ids = sorted(allocated_ids.union(additional_invoice_ids or []), key=str)
+        if not invoice_ids:
+            if contact_id is None:
+                raise ReceivablesValidationError(
+                    "A customer is required when a payment has no invoice allocations"
+                )
+            contact = await conn.fetchrow(
+                """
+                SELECT id
+                FROM contacts
+                WHERE id = $1
+                  AND business_context_id = $2
+                  AND contact_type = 'customer'
+                  AND status = 'active'
+                FOR SHARE
+                """,
+                contact_id,
+                unapplied_contact_context_id,
+            )
+            if not contact:
+                raise ReceivablesNotFoundError("Customer not found")
+            return []
         rows = await conn.fetch(
             """
             SELECT id, invoice_number, contact_id, status, amount_due

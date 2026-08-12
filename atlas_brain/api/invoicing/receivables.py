@@ -21,6 +21,7 @@ from ...services.receivables import (
     ReceivablesValidationError,
     get_receivables_service,
 )
+from ...services.eom_lead_ingress import EOM_BUSINESS_CONTEXT_ID
 from ...storage.exceptions import DatabaseUnavailableError
 from .auth import require_actor, require_receivables_api
 
@@ -80,7 +81,7 @@ class CreatePaymentRequest(BaseModel):
     received_date: date
     reference: Optional[str] = Field(default=None, max_length=256)
     notes: Optional[str] = None
-    allocations: list[AllocationRequest] = Field(min_length=1, max_length=100)
+    allocations: list[AllocationRequest] = Field(default_factory=list, max_length=100)
 
 
 class AdjustAllocationsRequest(BaseModel):
@@ -222,6 +223,8 @@ async def create_payment(
             allocations=_allocations(body.allocations),
             recorded_by=actor,
             idempotency_key=idempotency_key,
+            allow_unapplied=True,
+            unapplied_contact_context_id=EOM_BUSINESS_CONTEXT_ID,
         )
     )
 
