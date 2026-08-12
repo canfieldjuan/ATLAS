@@ -36,18 +36,33 @@ from atlas_brain.storage.exceptions import DatabaseUnavailableError
 
 
 class _CreatePaymentConnection:
-    def __init__(self, invoices: list[dict]) -> None:
+    def __init__(
+        self, invoices: list[dict], contact_ids: list[UUID] | None = None
+    ) -> None:
         self.invoices = invoices
+        self.contact_ids = set(contact_ids or [])
+        self.contact_lock_count = 0
         self.parent_args = None
+        self.parent_insert_count = 0
         self.allocations: list[dict] = []
+        self.fetches: list[tuple[str, tuple]] = []
         self.executions: list[tuple[str, tuple]] = []
 
     async def fetchrow(self, query: str, *args):
         if "WHERE source = $1 AND idempotency_key = $2" in query:
+            if self.parent_args is not None:
+                return {
+                    "id": self.parent_args[0],
+                    "request_fingerprint": self.parent_args[10],
+                }
             return None
+        if "FROM contacts" in query:
+            self.contact_lock_count += 1
+            return {"id": args[0]} if args[0] in self.contact_ids else None
         if "FROM payment_events" in query:
             return None
         if "INSERT INTO customer_payments" in query:
+            self.parent_insert_count += 1
             self.parent_args = args
             return {"id": args[0]}
         if "SELECT cp.*, pdi.batch_id" in query:
@@ -77,6 +92,7 @@ class _CreatePaymentConnection:
         return None
 
     async def fetch(self, query: str, *args):
+        self.fetches.append((query, args))
         if "FROM invoices" in query and "ORDER BY id FOR UPDATE" in query:
             selected = {str(item) for item in args[0]}
             return [row for row in self.invoices if str(row["id"]) in selected]
@@ -105,8 +121,10 @@ class _CreatePaymentConnection:
 class _CreatePaymentPool:
     is_initialized = True
 
-    def __init__(self, invoices: list[dict]) -> None:
-        self.conn = _CreatePaymentConnection(invoices)
+    def __init__(
+        self, invoices: list[dict], contact_ids: list[UUID] | None = None
+    ) -> None:
+        self.conn = _CreatePaymentConnection(invoices, contact_ids)
         self.transaction_count = 0
 
     @asynccontextmanager
@@ -180,6 +198,71 @@ async def test_create_payment_records_multi_invoice_receipt_in_one_transaction()
         if "INSERT INTO payment_events" in query
     )
     assert event[8] == "payment-create-1"
+
+
+@pytest.mark.asyncio
+async def test_create_payment_records_unapplied_receipt_and_replays_without_invoice_side_effects():
+    contact_id = uuid4()
+    pool = _CreatePaymentPool([], [contact_id])
+    service = ReceivablesService(pool)
+    create_args = {
+        "contact_id": contact_id,
+        "payer_name": "Residential Customer",
+        "total_amount": Decimal("125.00"),
+        "payment_method": "check",
+        "received_date": date(2026, 8, 12),
+        "allocations": [],
+        "idempotency_key": "unapplied-payment-create-1",
+        "recorded_by": "Juan Canfield",
+    }
+
+    first = await service.create_payment_with_outcome(**create_args)
+    replay = await service.create_payment_with_outcome(**create_args)
+
+    assert first.replayed is False
+    assert replay.replayed is True
+    assert first.payment["id"] == replay.payment["id"]
+    assert first.payment["status"] == "received"
+    assert first.payment["allocated_amount_cents"] == 0
+    assert first.payment["unapplied_amount_cents"] == 12_500
+    assert first.payment["allocations"] == []
+    assert pool.transaction_count == 2
+    assert pool.conn.parent_insert_count == 1
+    assert pool.conn.contact_lock_count == 1
+    assert not any("FROM invoices" in query for query, _args in pool.conn.fetches)
+    assert not any(
+        "INSERT INTO invoice_payments" in query or "WITH totals AS" in query
+        for query, _args in pool.conn.executions
+    )
+    events = [
+        args
+        for query, args in pool.conn.executions
+        if "INSERT INTO payment_events" in query
+    ]
+    assert len(events) == 1
+    assert json.loads(events[0][10]) == {"allocated_amount": "0"}
+
+
+@pytest.mark.asyncio
+async def test_create_unapplied_payment_requires_existing_customer_before_insert():
+    pool = _CreatePaymentPool([])
+
+    with pytest.raises(ReceivablesNotFoundError, match="Customer not found"):
+        await ReceivablesService(pool).create_payment(
+            contact_id=uuid4(),
+            payer_name="Residential Customer",
+            total_amount=Decimal("125.00"),
+            payment_method="check",
+            received_date=date(2026, 8, 12),
+            allocations=[],
+            idempotency_key="unapplied-payment-unknown-customer",
+        )
+
+    assert pool.transaction_count == 1
+    assert pool.conn.contact_lock_count == 1
+    assert pool.conn.parent_args is None
+    assert not pool.conn.executions
+    assert not any("FROM invoices" in query for query, _args in pool.conn.fetches)
 
 
 @pytest.mark.asyncio
@@ -290,6 +373,14 @@ def test_money_rejects_nan_and_duplicate_invoice_allocations():
                 {"invoice_id": invoice_id, "amount": "2.00"},
             ]
         )
+
+
+def test_empty_allocations_require_explicit_initial_creation_opt_in():
+    assert ReceivablesService._normalize_allocations([], allow_empty=True) == []
+    with pytest.raises(ReceivablesValidationError, match="At least one"):
+        ReceivablesService._normalize_allocations([])
+    with pytest.raises(ReceivablesValidationError, match="At least one"):
+        ReceivablesService._normalize_allocations(None, allow_empty=True)
 
 
 def test_idempotency_key_reuse_with_different_request_conflicts():
@@ -1165,8 +1256,53 @@ async def test_real_postgres_receivables_lifecycle_and_concurrent_replays():
                 (invoice_ids[3], "INV-E2E-4", contact_id, Decimal("10")),
             ],
         )
+        unapplied_contact_id = uuid4()
+        await observer.execute(
+            "INSERT INTO contacts (id) VALUES ($1)", unapplied_contact_id
+        )
         service_a = ReceivablesService(_SingleConnectionPool(conn_a, schema))
         service_b = ReceivablesService(_SingleConnectionPool(conn_b, schema))
+        unapplied_args = {
+            "contact_id": unapplied_contact_id,
+            "payer_name": "Residential Customer",
+            "total_amount": Decimal("125"),
+            "payment_method": "check",
+            "received_date": date.today(),
+            "allocations": [],
+            "idempotency_key": "e2e-unapplied-payment-create",
+        }
+        unapplied_outcomes = await asyncio.gather(
+            service_a.create_payment_with_outcome(**unapplied_args),
+            service_b.create_payment_with_outcome(**unapplied_args),
+        )
+        assert sorted(outcome.replayed for outcome in unapplied_outcomes) == [
+            False,
+            True,
+        ]
+        unapplied_first, unapplied_replay = (
+            outcome.payment for outcome in unapplied_outcomes
+        )
+        assert unapplied_first["id"] == unapplied_replay["id"]
+        assert unapplied_first["status"] == "received"
+        assert unapplied_first["allocated_amount_cents"] == 0
+        assert unapplied_first["unapplied_amount_cents"] == 12_500
+        assert (
+            await observer.fetchval(
+                """
+                SELECT COUNT(*)
+                FROM customer_payments
+                WHERE idempotency_key = 'e2e-unapplied-payment-create'
+                """
+            )
+            == 1
+        )
+        assert (
+            await observer.fetchval(
+                "SELECT COUNT(*) FROM invoice_payments WHERE payment_id = $1",
+                UUID(unapplied_first["id"]),
+            )
+            == 0
+        )
         create_args = {
             "contact_id": contact_id,
             "payer_name": "Acme",
@@ -2215,6 +2351,10 @@ def test_full_invoicing_mcp_http_refuses_to_start_without_strong_auth():
 
 def test_payment_http_models_reject_coercive_cent_values():
     from atlas_brain.api.invoicing.receivables import CreatePaymentRequest
+    from atlas_brain.eom_api.receivables import AdjustAllocationsRequest
+    from atlas_brain.eom_api.receivables import (
+        CreatePaymentRequest as EOMCreatePaymentRequest,
+    )
 
     base = {
         "contact_id": str(uuid4()),
@@ -2226,6 +2366,20 @@ def test_payment_http_models_reject_coercive_cent_values():
         "allocations": [{"invoice_id": str(uuid4()), "amount_cents": 100}],
     }
     assert CreatePaymentRequest.model_validate(base).total_amount_cents == 100
+    assert (
+        EOMCreatePaymentRequest.model_validate(
+            {key: value for key, value in base.items() if key != "allocations"}
+        ).allocations
+        == []
+    )
+    assert (
+        EOMCreatePaymentRequest.model_validate({**base, "allocations": []}).allocations
+        == []
+    )
+    with pytest.raises(ValueError):
+        AdjustAllocationsRequest.model_validate(
+            {"allocations": [], "reason": "Cannot leave adjustment empty"}
+        )
 
     for invalid in (True, False, 100.0, 100.5, "100", 0, -1):
         with pytest.raises(ValueError):
@@ -2239,6 +2393,44 @@ def test_payment_http_models_reject_coercive_cent_values():
                     ],
                 }
             )
+
+
+@pytest.mark.asyncio
+async def test_eom_payment_route_forwards_omitted_allocations_as_empty_list():
+    from atlas_brain.eom_api.receivables import CreatePaymentRequest
+    from atlas_brain.eom_api.receivables import create_payment
+
+    class _RecordingService:
+        def __init__(self) -> None:
+            self.kwargs = None
+
+        async def create_payment(self, **kwargs):
+            self.kwargs = kwargs
+            return {"id": "payment-1"}
+
+    body = CreatePaymentRequest.model_validate(
+        {
+            "contact_id": str(uuid4()),
+            "payer_name": "Residential Customer",
+            "total_amount_cents": 12_500,
+            "payment_method": "check",
+            "received_date": "2026-08-12",
+            "reference": "1001",
+        }
+    )
+    service = _RecordingService()
+
+    result = await create_payment(
+        body,
+        actor="Juan Canfield",
+        idempotency_key="route-unapplied-payment-1",
+        service=service,
+    )
+
+    assert result == {"id": "payment-1"}
+    assert service.kwargs["allocations"] == []
+    assert service.kwargs["recorded_by"] == "Juan Canfield"
+    assert service.kwargs["idempotency_key"] == "route-unapplied-payment-1"
 
 
 def test_multi_invoice_mcp_is_registered_with_bounded_strict_schema():

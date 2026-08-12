@@ -80,7 +80,7 @@ class CreatePaymentRequest(BaseModel):
     received_date: date
     reference: Optional[str] = Field(default=None, max_length=256)
     notes: Optional[str] = None
-    allocations: list[AllocationRequest] = Field(min_length=1, max_length=100)
+    allocations: list[AllocationRequest] = Field(default_factory=list, max_length=100)
 
 
 class AdjustAllocationsRequest(BaseModel):

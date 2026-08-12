@@ -557,7 +557,7 @@ class ReceivablesService:
                 "Idempotency key must contain 1 to 128 characters"
             )
 
-        normalized = self._normalize_allocations(allocations)
+        normalized = self._normalize_allocations(allocations, allow_empty=True)
         allocated_total = sum((item["amount"] for item in normalized), Decimal("0"))
         if allocated_total > total:
             raise ReceivablesValidationError(
@@ -1302,8 +1302,12 @@ class ReceivablesService:
     @staticmethod
     def _normalize_allocations(
         allocations: list[dict[str, Any]],
+        *,
+        allow_empty: bool = False,
     ) -> list[dict[str, Any]]:
         if not allocations:
+            if allow_empty and allocations == []:
+                return []
             raise ReceivablesValidationError(
                 "At least one invoice allocation is required"
             )
@@ -1338,6 +1342,23 @@ class ReceivablesService:
     ) -> list[Any]:
         allocated_ids = {item["invoice_id"] for item in allocations}
         invoice_ids = sorted(allocated_ids.union(additional_invoice_ids or []), key=str)
+        if not invoice_ids:
+            if contact_id is None:
+                raise ReceivablesValidationError(
+                    "A customer is required when a payment has no invoice allocations"
+                )
+            contact = await conn.fetchrow(
+                """
+                SELECT id
+                FROM contacts
+                WHERE id = $1
+                FOR KEY SHARE
+                """,
+                contact_id,
+            )
+            if not contact:
+                raise ReceivablesNotFoundError("Customer not found")
+            return []
         rows = await conn.fetch(
             """
             SELECT id, invoice_number, contact_id, status, amount_due
