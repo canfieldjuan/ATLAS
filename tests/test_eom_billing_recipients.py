@@ -764,3 +764,134 @@ async def test_readiness_separates_unconfigured_from_unavailable(
             await routes.ready()
         assert excinfo.value.status_code == 503
         assert excinfo.value.detail["code"] == "billing_recipients_unavailable"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "stored, expected",
+    [
+        # SQL btrim strips none of these; the canonical validator strips all.
+        (" ap@example.com ", "ap@example.com"),
+        (" ap@example.com", "ap@example.com"),
+        ("　ap@example.com　", "ap@example.com"),
+        # Case is part of the canonical form too.
+        ("AP@Example.COM", "ap@example.com"),
+        ("  AP@Example.COM  ", "ap@example.com"),
+        ("ap@example.com", "ap@example.com"),
+    ],
+)
+async def test_the_projection_returns_the_canonical_address_not_the_column(
+    stored, expected,
+):
+    """Eligible must mean "and here is the address that works".
+
+    `btrim(email, $3)` strips only the ASCII blanks it is given, while the
+    canonical validator strips Unicode edge whitespace AND lowercases. Asking
+    the validator for a verdict and then emitting the column reports a contact
+    eligible while handing back an address nothing can send to -- and returns
+    `AP@Example.COM` where the canonical write path stores `ap@example.com`.
+    """
+    from atlas_brain.services import crm_provider as svc
+
+    contact_id = uuid4()
+
+    class _Pool:
+        is_initialized = True
+
+        async def fetchrow(self, query, *args):
+            return {
+                "id": contact_id,
+                "full_name": "Accounts Payable",
+                "status": "active",
+                "contact_type": "customer",
+                # What SQL btrim would actually have returned.
+                "email": stored.strip(" \t\r\n\x0b\x0c"),
+            }
+
+    verdict = await svc.DatabaseCRMProvider(pool=_Pool()).get_billing_recipient(
+        contact_id
+    )
+    assert verdict["eligible"] is True
+    assert verdict["email"] == expected, (
+        f"stored {stored!r} was reported eligible as {verdict['email']!r}, "
+        f"which is not the canonical form"
+    )
+
+
+@pytest.mark.asyncio
+async def test_the_list_pages_until_the_requested_limit_is_filled():
+    """Rejected rows must not displace eligible ones ordered after them.
+
+    A single SQL LIMIT reads N candidates, not N recipients: 500 malformed rows
+    followed by one valid recipient returned an empty list for limit=1.
+    """
+    from atlas_brain.services import crm_provider as svc
+
+    page_size = svc.BILLING_RECIPIENT_PAGE_SIZE
+    # One page of unusable addresses, then a single valid one after them.
+    corpus = [
+        {"id": uuid4(), "full_name": f"AP {i:04d}", "email": "not-an-address"}
+        for i in range(page_size)
+    ]
+    corpus.append(
+        {"id": uuid4(), "full_name": "ZZ Valid", "email": "ap@example.com"}
+    )
+    fetches = []
+
+    class _Pool:
+        is_initialized = True
+
+        async def fetch(self, query, *args):
+            fetches.append(args)
+            limit = args[-1]
+            # Emulate the keyset predicate the query builds.
+            if "(full_name, id) >" in query:
+                cursor_name, cursor_id = args[-3], args[-2]
+                remaining = [
+                    row for row in corpus
+                    if (row["full_name"], str(row["id"]))
+                    > (cursor_name, str(cursor_id))
+                ]
+            else:
+                remaining = corpus
+            return remaining[:limit]
+
+    listed = await svc.DatabaseCRMProvider(pool=_Pool()).list_billing_recipients(
+        limit=1
+    )
+
+    assert len(fetches) > 1, (
+        "the scan stopped after one page, so rejected rows displaced the "
+        "eligible one behind them"
+    )
+    assert [item["email"] for item in listed] == ["ap@example.com"]
+    assert all(item["eligible"] is True for item in listed)
+
+
+@pytest.mark.asyncio
+async def test_the_list_stops_at_the_scan_cap_and_says_so(caplog):
+    """A bounded scan must announce truncation rather than look complete."""
+    from atlas_brain.services import crm_provider as svc
+
+    page_size = svc.BILLING_RECIPIENT_PAGE_SIZE
+
+    class _Pool:
+        is_initialized = True
+
+        async def fetch(self, query, *args):
+            # Endless candidates, none of them usable.
+            limit = args[-1]
+            return [
+                {"id": uuid4(), "full_name": f"AP {i:06d}", "email": "nope"}
+                for i in range(min(limit, page_size))
+            ]
+
+    with caplog.at_level("WARNING"):
+        listed = await svc.DatabaseCRMProvider(
+            pool=_Pool()
+        ).list_billing_recipients(limit=1)
+
+    assert listed == []
+    assert any("scan cap reached" in record.message for record in caplog.records), (
+        "the scan truncated silently, which reads as 'no eligible recipients'"
+    )

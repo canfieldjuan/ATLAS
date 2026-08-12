@@ -232,13 +232,27 @@ line, or error path can betray it.
 inactive ones, because the column carries no CHECK constraint and enumerating
 would silently admit any future status.
 
-Address usability is decided by the **canonical** validator
-(`is_valid_contact_email`, exported from `eom_crm_mutations`), not by a second
-expression of the grammar. The SQL regex this replaced admitted `a@b..com` and
-`a@.b.com`, which the canonical write path rejects — so the routes could offer
-a recipient that path would refuse. The list now prefilters coarsely in SQL and
-narrows in Python, fetching to the hard cap before applying the caller's limit
-so eligible rows cannot be displaced by ones the validator then rejects.
+Address usability AND representation are decided by the **canonical**
+normalizer (`normalize_contact_email`, exported from `eom_crm_mutations`), not
+by a second expression of the grammar. The SQL regex this replaced admitted
+`a@b..com` and `a@.b.com`, which the canonical write path rejects.
+
+The normalizer returns the address rather than a verdict, because splitting the
+two reintroduces the drift: `btrim(email, $3)` strips only the ASCII blanks it
+is handed, while the validator also strips Unicode edge whitespace and
+lowercases. A verdict-plus-column design reported ` ap@example.com `
+eligible while returning an address nothing can send to, and emitted
+`AP@Example.COM` where the canonical write path stores `ap@example.com`.
+
+The list **pages** until the caller's limit is filled with eligible rows. A
+single SQL `LIMIT` reads N candidates, not N recipients, so rejected rows
+displace eligible ones ordered after them — 500 malformed rows followed by one
+valid recipient returned an empty list for `limit=1`. Paging is keyset on
+`(full_name, id)` rather than `OFFSET`, because a concurrent write under an
+offset can skip or repeat a row. The scan is bounded at
+`BILLING_RECIPIENT_MAX_PAGES` (20 x 500 = 10k candidates, far beyond the real
+EOM contact count) and **logs a warning when that cap truncates the result**,
+since a silently short list reads as "no eligible recipients".
 
 ## Intentional
 
@@ -322,9 +336,9 @@ Parked hardening: none.
 | `atlas_brain/eom_api/funnel_database.py` | 58 |
 | `atlas_brain/eom_api/receivables.py` | 119 |
 | `atlas_brain/main_eom.py` | 8 |
-| `atlas_brain/services/crm_provider.py` | 186 |
-| `atlas_brain/services/eom_crm_mutations.py` | 14 |
-| `plans/PR-EOM-Billing-Recipients.md` | 331 |
-| `tests/test_eom_billing_recipients.py` | 766 |
+| `atlas_brain/services/crm_provider.py` | 241 |
+| `atlas_brain/services/eom_crm_mutations.py` | 27 |
+| `plans/PR-EOM-Billing-Recipients.md` | 344 |
+| `tests/test_eom_billing_recipients.py` | 897 |
 | `tests/test_eom_render_profile.py` | 5 |
-| **Total** | **1490** |
+| **Total** | **1702** |

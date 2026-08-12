@@ -437,6 +437,10 @@ async def _write_contact_interaction(
 # Billing recipients (EOM Slice 1A)
 # --------------------------------------------------------------------------
 
+BILLING_RECIPIENT_PAGE_SIZE = 500
+# Bounds the scan when eligible rows are sparse. 20 x 500 = 10k
+# candidates, far beyond the real EOM contact count.
+BILLING_RECIPIENT_MAX_PAGES = 20
 BILLING_RECIPIENT_ELIGIBLE_STATUS = "active"
 
 # Whitespace that makes an address unusable. btrim's one-argument form strips
@@ -462,17 +466,24 @@ BILLING_RECIPIENT_ELIGIBLE_CONTACT_TYPE = "customer"
 BILLING_RECIPIENT_REASONS = ("not_found", "inactive", "no_email")
 
 
-def _billing_recipient_projection(row: Any) -> dict[str, Any]:
+def _billing_recipient_projection(row: Any, email: str) -> dict[str, Any]:
     """Build the five-field public object from an ALREADY-ELIGIBLE row.
 
     Eligibility is decided before this is called, never after. Constructing a
     full contact response and blanking fields on the way out would make "never
     a partial row" depend on every failure branch remembering to redact.
+
+    ``email`` is passed in as the CANONICAL form rather than read off the row:
+    validity and representation are one decision, and the stored column is not
+    the answer to either. SQL ``btrim`` leaves Unicode edge whitespace and does
+    not lowercase, so emitting the column would report
+    ``\u00a0ap@example.com\u00a0`` eligible while returning an address nothing
+    can send to.
     """
     return {
         "contactId": str(row["id"]),
         "displayName": row["full_name"],
-        "email": row["email"],
+        "email": email,
         "eligible": True,
         "reason": None,
     }
@@ -2057,46 +2068,89 @@ class DatabaseCRMProvider:
         where money-related mail goes has to see the address. It stays a narrow
         billing projection -- no phone, address, notes, tags, source, lifecycle.
         """
-        from .eom_crm_mutations import is_valid_contact_email
+        from .eom_crm_mutations import normalize_contact_email
         from .eom_lead_ingress import EOM_BUSINESS_CONTEXT_ID
 
         pool = self._get_pool()
-        conditions = [
+        requested = max(1, min(limit, 500))
+        base_conditions = [
             "business_context_id = $1",
             "status = $2",
             "contact_type = $4",
             "email IS NOT NULL",
         ]
-        args: list[Any] = [
+        base_args: list[Any] = [
             EOM_BUSINESS_CONTEXT_ID,
             BILLING_RECIPIENT_ELIGIBLE_STATUS,
             BILLING_RECIPIENT_BLANK_CHARS,
             BILLING_RECIPIENT_ELIGIBLE_CONTACT_TYPE,
         ]
         if search and search.strip():
-            args.append(f"%{search.strip()}%")
-            conditions.append(
-                f"(full_name ILIKE ${len(args)} OR email ILIKE ${len(args)})"
+            base_args.append(f"%{search.strip()}%")
+            base_conditions.append(
+                f"(full_name ILIKE ${len(base_args)} OR email ILIKE ${len(base_args)})"
             )
-        # Fetch to the hard cap and narrow afterwards: the address grammar is
-        # decided in Python, so limiting in SQL first could drop eligible rows
-        # to make room for ones the canonical validator then rejects.
-        requested = max(1, min(limit, 500))
-        args.append(500)
-        rows = await pool.fetch(
-            f"""
-            SELECT id, full_name, btrim(email, $3) AS email
-            FROM contacts
-            WHERE {' AND '.join(conditions)}
-            ORDER BY full_name, id
-            LIMIT ${len(args)}
-            """,
-            *args,
-        )
-        eligible = [row for row in rows if is_valid_contact_email(row["email"])]
-        return [
-            _billing_recipient_projection(row) for row in eligible[:requested]
-        ]
+
+        # Page until `requested` ELIGIBLE rows are found, not until `requested`
+        # candidates have been read. The address grammar is decided in Python,
+        # so a single SQL LIMIT lets rejected rows displace eligible ones
+        # ordered after them -- 500 malformed rows followed by one valid
+        # recipient would return an empty list for limit=1.
+        #
+        # Keyset, not OFFSET: the scan is ordered by (full_name, id) and a
+        # concurrent write under an OFFSET can skip or repeat a row.
+        results: list[dict[str, Any]] = []
+        cursor_name: str | None = None
+        cursor_id: Any = None
+        pages = 0
+        while len(results) < requested and pages < BILLING_RECIPIENT_MAX_PAGES:
+            pages += 1
+            conditions = list(base_conditions)
+            args = list(base_args)
+            if cursor_name is not None:
+                args.extend([cursor_name, cursor_id])
+                conditions.append(
+                    f"(full_name, id) > (${len(args) - 1}, ${len(args)})"
+                )
+            args.append(BILLING_RECIPIENT_PAGE_SIZE)
+            rows = await pool.fetch(
+                f"""
+                SELECT id, full_name, btrim(email, $3) AS email
+                FROM contacts
+                WHERE {' AND '.join(conditions)}
+                ORDER BY full_name, id
+                LIMIT ${len(args)}
+                """,
+                *args,
+            )
+            if not rows:
+                break
+            for row in rows:
+                canonical_email = normalize_contact_email(row["email"])
+                if canonical_email is None:
+                    continue
+                results.append(
+                    _billing_recipient_projection(row, canonical_email)
+                )
+                if len(results) == requested:
+                    break
+            last = rows[-1]
+            cursor_name, cursor_id = last["full_name"], last["id"]
+            if len(rows) < BILLING_RECIPIENT_PAGE_SIZE:
+                break  # candidates exhausted
+
+        if len(results) < requested and pages >= BILLING_RECIPIENT_MAX_PAGES:
+            # Never truncate silently. Hitting this means the eligible rows are
+            # sparser than the scan budget, which is a data-quality signal, not
+            # a normal result.
+            logger.warning(
+                "billing recipients: scan cap reached after %d pages with "
+                "%d/%d eligible found; result is truncated",
+                pages,
+                len(results),
+                requested,
+            )
+        return results
 
     async def billing_recipients_schema_ready(self) -> bool:
         """True when both billing-recipient queries could actually run.
@@ -2132,7 +2186,7 @@ class DatabaseCRMProvider:
         returns no row and is reported not_found, identical to one that does not
         exist, so no later branch or log can betray the difference.
         """
-        from .eom_crm_mutations import is_valid_contact_email
+        from .eom_crm_mutations import normalize_contact_email
         from .eom_lead_ingress import EOM_BUSINESS_CONTEXT_ID
 
         pool = self._get_pool()
@@ -2165,9 +2219,10 @@ class DatabaseCRMProvider:
         # admitted `a@b..com` and `a@.b.com`, which the canonical validator
         # rejects -- so a caller could be offered a recipient the canonical
         # write path would refuse.
-        if not is_valid_contact_email(row["email"]):
+        canonical_email = normalize_contact_email(row["email"])
+        if canonical_email is None:
             return _billing_recipient_refusal(contact_id, "no_email")
-        return _billing_recipient_projection(row)
+        return _billing_recipient_projection(row, canonical_email)
 
     async def list_known_eom_contact_ids(
         self,
