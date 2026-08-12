@@ -470,6 +470,21 @@ class GoogleTokenStore:
         Returns dict with per-service status.
         """
         with self._lock:
+            if self._path_problem is not None:
+                # Health MUST agree with behaviour. get_credentials() fails
+                # closed on an unusable configured path, so reporting
+                # `configured: true` here -- which it did while an .env token
+                # remained populated -- would tell monitoring that Google OAuth
+                # is fine while every operational request returns None
+                # (Codex #2360 R1/R2/R6).
+                return {
+                    "token_file": str(self._path),
+                    "file_exists": False,
+                    "path_problem": self._path_problem,
+                    "calendar": {"configured": False, "source": None},
+                    "gmail": {"configured": False, "source": None},
+                }
+
             self._load()
             result = {"token_file": str(self._path), "file_exists": self._path.exists()}
 

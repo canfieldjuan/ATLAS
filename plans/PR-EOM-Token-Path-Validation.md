@@ -176,10 +176,16 @@ Closure declaration for the **configured-path** input set:
 
 Closure declaration for the **provenance** decision:
 
-1. **Closed or open? — CLOSED**: configured-and-non-blank, or not.
+1. **Closed or open? — CLOSED**: the field was supplied, or it was not.
+   Provenance is deliberately independent of the VALUE. A set-but-blank setting
+   is configured-and-INVALID, never unconfigured — that separation is the whole
+   point, because an empty env var is what a failed secret mount looks like and
+   reclassifying it would re-admit legacy discovery exactly then.
 2. **Where does membership come from? — DERIVED** from
-   `settings.tools.model_fields_set` plus a non-blank check, in one function, so
-   provenance cannot disagree with resolution about what "configured" means.
+   `settings.tools.model_fields_set` alone. Validity is a separate question,
+   answered by `configured_token_path_problem()`, so path RESOLUTION (which
+   always yields a usable `Path`) and path ACCEPTABILITY (which can refuse)
+   never have to agree on one overloaded notion of "configured".
 3. **Out-of-set behaviour — fail to NOT-configured.** Any exception reading the
    settings object returns `False`, so a settings problem degrades to legacy
    discovery rather than blocking authentication.
@@ -208,11 +214,14 @@ sees it. That is the whole of defect 1 — the previous code's failure was that
 `Path("")` is a legal path (`.`) rather than an error, so nothing downstream had
 a reason to complain until a read or write hit a directory.
 
-`token_path_was_explicitly_configured` gained the same non-blank test. Provenance
-and resolution have to agree: if resolution treats blank as "use the default",
-provenance must not treat it as an override, or a setting that names nothing
-would suppress legacy discovery and leave an upgrading install with neither its
-file nor the fallback.
+`token_path_was_explicitly_configured` deliberately does NOT inspect the value —
+it reports only whether the field was supplied. An earlier revision of this
+slice added a non-blank test there, which was wrong: it reclassified a blank
+override as unconfigured and so re-admitted legacy discovery exactly when a
+secret mount or deployment substitution had failed, risking authentication as a
+stale unrelated account. Validity is now a separate concern
+(`configured_token_path_problem`), so resolution can always return a usable
+`Path` while acceptability can still refuse.
 
 The `_load` warning is now two messages selected by provenance rather than one
 message that was only true on one branch. This matters because the two branches
@@ -254,10 +263,10 @@ Parked hardening: ATLAS #2359.
 
 All counts re-run at this head.
 
-- `python -m pytest tests/test_google_token_resolution.py -q` — **44 passed**
+- `python -m pytest tests/test_google_token_resolution.py -q` — **45 passed**
 - Every consumer of the changed store — `test_google_token_resolution.py`,
   `test_calendar_import_rerun.py`, `test_eom_live_calendar_import.py`,
-  `test_eom_scoped_gmail_credentials.py`, `test_leads_intake.py` — **191 passed, 1 skipped**
+  `test_eom_scoped_gmail_credentials.py`, `test_leads_intake.py` — **192 passed, 1 skipped**
 - **Both defects reproduced against this head BEFORE fixing**, quoted verbatim
   in "Why this slice exists": `resolve_token_file_path('')` returned the repo
   root and the stdlib `Path.is_dir` predicate was `True`; the override-branch warning named the stable
@@ -272,17 +281,24 @@ All counts re-run at this head.
   | whitespace stripped from nonblank paths again | 2 failed |
   | blank reclassified as unconfigured (the design I had wrong) | 2 failed |
   | recovery message stops branching on provenance | 1 failed |
+  | `get_status` stops honouring the invalid path | 2 failed |
 - `ruff check` on the changed module and test file: findings identical to the
   `origin/main` baseline; none introduced.
 - `python -m py_compile` on the changed module — OK.
 - `git diff --check` — clean.
+- **HERMETICITY proved in a clean checkout.** `data/` has ZERO tracked files, so
+  a `data/..` alias resolves to nothing on a fresh clone — a test relying on it
+  passed here only because this worktree has an untracked `data/`. The suite was
+  re-run in a fresh `origin/main` worktree with no untracked `data/`: **45
+  passed**. The non-hermetic case was removed; the traversal shape is covered by
+  a test that builds its own directory under `tmp_path`.
 - No credential value appears in any changed log statement.
 
 ## Estimated diff size
 
 | File | LOC |
 |---|---:|
-| `atlas_brain/services/google_oauth.py` | 117 |
-| `plans/PR-EOM-Token-Path-Validation.md` | 288 |
-| `tests/test_google_token_resolution.py` | 203 |
-| **Total** | **608** |
+| `atlas_brain/services/google_oauth.py` | 132 |
+| `plans/PR-EOM-Token-Path-Validation.md` | 304 |
+| `tests/test_google_token_resolution.py` | 256 |
+| **Total** | **692** |

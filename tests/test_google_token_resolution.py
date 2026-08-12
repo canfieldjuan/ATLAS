@@ -725,7 +725,12 @@ def test_default_path_recovery_still_names_default_and_legacy(tmp_path, caplog):
 # data problem, no account is a loud outage.
 
 
-@pytest.mark.parametrize("alias", [".", "./", "data/.."])
+# NOTE: no "data/.." here. `data/` has zero tracked files, so on a clean
+# checkout the missing intermediate component makes exists() and is_dir()
+# both False and the case proves nothing. The traversal shape is covered
+# hermetically by test_a_traversal_alias_through_an_existing_dir_is_caught,
+# which builds its own directory under tmp_path (Codex #2360 R2/R12).
+@pytest.mark.parametrize("alias", [".", "./"])
 def test_relative_directory_aliases_yield_no_credential(alias, monkeypatch, caplog):
     """The CLASS, not the blank spelling.
 
@@ -866,3 +871,51 @@ def test_a_valid_configured_path_reports_no_problem(tmp_path, monkeypatch):
 
     assert google_oauth.configured_token_path_problem(str(good)) is None
     assert GoogleTokenStore(str(good)).get_credentials("calendar") is not None
+
+
+def test_health_status_reports_unconfigured_when_the_path_is_invalid(
+    tmp_path, monkeypatch
+):
+    """Health must agree with behaviour.
+
+    `get_credentials()` fails closed on an unusable path, but `get_status()` --
+    which `atlas_brain/api/health.py` calls directly -- read the `.env` fallback
+    and reported `configured: true`. Monitoring would say Google OAuth is fine
+    while every operational request returned None (Codex #2360 R1/R2/R6).
+    """
+    from atlas_brain.services import google_oauth
+
+    monkeypatch.setattr(
+        google_oauth, "token_path_was_explicitly_configured", lambda: True
+    )
+    monkeypatch.setattr(google_oauth.settings.tools, "calendar_refresh_token", "envtok")
+    monkeypatch.setattr(google_oauth.settings.tools, "gmail_refresh_token", "envtok")
+
+    a_dir = tmp_path / "creds-dir"
+    a_dir.mkdir()
+    store = GoogleTokenStore(str(a_dir))
+
+    status = store.get_status()
+
+    assert status["calendar"]["configured"] is False
+    assert status["gmail"]["configured"] is False
+    assert status["file_exists"] is False
+    assert "DIRECTORY" in status["path_problem"]
+    # and the behaviour it is reporting on
+    assert store.get_credentials("calendar") is None
+
+
+def test_health_status_is_unchanged_for_a_valid_path(tmp_path, monkeypatch):
+    from atlas_brain.services import google_oauth
+
+    monkeypatch.setattr(
+        google_oauth, "token_path_was_explicitly_configured", lambda: True
+    )
+    good = tmp_path / "google_tokens.json"
+    _write_token_file(good, calendar="tok", gmail="tok")
+
+    status = GoogleTokenStore(str(good)).get_status()
+
+    assert status["calendar"]["configured"] is True
+    assert status["calendar"]["source"] == "file"
+    assert "path_problem" not in status
