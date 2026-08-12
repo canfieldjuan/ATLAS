@@ -176,7 +176,10 @@ async def lifespan(app: FastAPI):
         yield
     finally:
         try:
-            if funnel_settings.api_enabled:
+            # Mirrors init_eom_funnel_database's condition. Closing only when
+            # the funnel API is on would leak the pool in the deployment that
+            # opened it for receivables alone.
+            if funnel_settings.api_enabled or invoicing_settings.receivables_api_enabled:
                 await close_eom_funnel_database()
         finally:
             if db_settings.enabled:

@@ -78,6 +78,12 @@ async def test_the_billing_projection_answers_every_eligibility_case():
         blank_email = await _seed_contact(conn, name="Blank Address", email="   ")
         tab_email = await _seed_contact(conn, name="Tab Address", email="\t")
         newline_email = await _seed_contact(conn, name="Newline Address", email="\n ")
+        malformed = await _seed_contact(
+            conn, name="Bad Address", email="not-an-address")
+        lead = await _seed_contact(
+            conn, name="A Lead With Email", email="lead@example.test")
+        await conn.execute(
+            "UPDATE contacts SET contact_type = 'lead' WHERE id = $1", lead)
         other_tenant = await _seed_contact(
             conn, name="Someone Else's AP", email="ap@other.test",
             tenant="churnsignals")
@@ -116,6 +122,8 @@ async def test_the_billing_projection_answers_every_eligibility_case():
             (blank_email, "no_email"),
             (tab_email, "no_email"),
             (newline_email, "no_email"),
+            (malformed, "no_email"),
+            (lead, "inactive"),
             (missing, "not_found"),
         ):
             verdict = await service.get_billing_recipient(contact_id)
@@ -146,6 +154,7 @@ async def test_the_billing_projection_answers_every_eligibility_case():
             (archived, "archived"), (inactive, "inactive"),
             (no_email, "no email"), (blank_email, "blank email"),
             (tab_email, "tab-only email"), (newline_email, "newline-only email"),
+            (malformed, "malformed email"), (lead, "a lead, not a customer"),
             (other_tenant, "another tenant"),
         ):
             assert str(excluded) not in ids, f"{label} contact was offered"

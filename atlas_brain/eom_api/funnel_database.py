@@ -144,9 +144,19 @@ def get_eom_funnel_db_pool(
 
 
 async def init_eom_funnel_database(config: EOMFunnelConfig | None = None) -> None:
-    """Initialize the dedicated slim funnel CRM pool when the API is enabled."""
+    """Initialize the dedicated slim funnel CRM pool when anything needs it.
+
+    Gated on the funnel API alone until the receivables billing-recipient
+    routes started reading canonical contacts through this pool. Those routes
+    are enabled independently, so a deployment with receivables on and the
+    funnel API off would leave the pool uninitialized and fail them at runtime.
+    Ownership of the contacts data, not the feature flag that first needed it,
+    decides when the pool comes up.
+    """
+    from .config import invoicing_settings
+
     resolved = config or funnel_settings
-    if not resolved.api_enabled:
+    if not resolved.api_enabled and not invoicing_settings.receivables_api_enabled:
         return
     pool = get_eom_funnel_db_pool(resolved)
     await pool.initialize()

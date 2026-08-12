@@ -447,6 +447,19 @@ BILLING_RECIPIENT_BLANK_CHARS = " \t\r\n\x0b\x0c"
 # Public reason tokens. `wrong_tenant` is deliberately absent: the lookup is
 # tenant-scoped in SQL, so a contact belonging to another tenant is simply not
 # found and this code never learns otherwise.
+# Only an account may be invoiced. A lead, prospect or vendor with an address
+# still satisfies "active with an email", and offering one as a billing
+# recipient would let an invoice be addressed to a party that is not a customer.
+# Verified against live data before encoding: every EOM contact that actually
+# receives invoices is contact_type='customer'; all leads have zero.
+BILLING_RECIPIENT_ELIGIBLE_CONTACT_TYPE = "customer"
+
+# Deliberately permissive: one @, no whitespace either side, and a dot in the
+# domain. Trimming alone let "not-an-address" through as a recipient, but a
+# stricter grammar would reject deliverable real-world addresses -- checked
+# against live data, this rejects none of the addresses currently invoiced.
+BILLING_RECIPIENT_EMAIL_RE = r"^[^[:space:]@]+@[^[:space:]@]+\.[^[:space:]@]+$"
+
 BILLING_RECIPIENT_REASONS = ("not_found", "inactive", "no_email")
 
 
@@ -2051,13 +2064,16 @@ class DatabaseCRMProvider:
         conditions = [
             "business_context_id = $1",
             "status = $2",
+            "contact_type = $4",
             "email IS NOT NULL",
-            "btrim(email, $3) <> ''",
+            "btrim(email, $3) ~ $5",
         ]
         args: list[Any] = [
             EOM_BUSINESS_CONTEXT_ID,
             BILLING_RECIPIENT_ELIGIBLE_STATUS,
             BILLING_RECIPIENT_BLANK_CHARS,
+            BILLING_RECIPIENT_ELIGIBLE_CONTACT_TYPE,
+            BILLING_RECIPIENT_EMAIL_RE,
         ]
         if search and search.strip():
             args.append(f"%{search.strip()}%")
@@ -2094,14 +2110,16 @@ class DatabaseCRMProvider:
         pool = self._get_pool()
         row = await pool.fetchrow(
             """
-            SELECT id, full_name, status,
-                   btrim(COALESCE(email, ''), $3) AS email
+            SELECT id, full_name, status, contact_type,
+                   btrim(COALESCE(email, ''), $3) AS email,
+                   btrim(COALESCE(email, ''), $3) ~ $4 AS email_usable
             FROM contacts
             WHERE id = $1 AND business_context_id = $2
             """,
             contact_id,
             EOM_BUSINESS_CONTEXT_ID,
             BILLING_RECIPIENT_BLANK_CHARS,
+            BILLING_RECIPIENT_EMAIL_RE,
         )
         if row is None:
             return _billing_recipient_refusal(contact_id, "not_found")
@@ -2110,7 +2128,15 @@ class DatabaseCRMProvider:
         # admit any future value.
         if row["status"] != BILLING_RECIPIENT_ELIGIBLE_STATUS:
             return _billing_recipient_refusal(contact_id, "inactive")
-        if not row["email"]:
+        if row["contact_type"] != BILLING_RECIPIENT_ELIGIBLE_CONTACT_TYPE:
+            # Not an account. Reported as `inactive` rather than a new public
+            # token: from the caller's side it is the same answer -- this
+            # contact may not receive invoices -- and the reason set stays the
+            # four the contract declares.
+            return _billing_recipient_refusal(contact_id, "inactive")
+        # Nonblank is not usable. "not-an-address" survived a trim and would
+        # have been handed to the mail path as a recipient.
+        if not row["email"] or not row["email_usable"]:
             return _billing_recipient_refusal(contact_id, "no_email")
         return _billing_recipient_projection(row)
 
