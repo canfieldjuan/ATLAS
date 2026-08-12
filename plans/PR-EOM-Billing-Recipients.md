@@ -59,7 +59,7 @@ in halves rather than once whole.
 
 Ownership lane: eom-crm/billing-recipients
 Slice phase: Vertical slice
-Max files: 8
+Max files: 9
 
 1. `ReceivablesService.list_billing_recipients` — eligible EOM contacts only.
 2. `ReceivablesService.get_billing_recipient` — authoritative per-contact
@@ -180,18 +180,27 @@ exhaustively rather than by example:
   opened, admission is not demanded, readiness reports `unconfigured`, and the
   routes fail closed with 503 rather than 500.
 - *default-session* — the blueprint row above: receivables off, funnel off,
-  confirmed false. Nothing opens, nothing raises. Exercised end-to-end through
-  the real app in
-  `::test_the_real_app_fails_closed_when_the_contact_pool_is_unconfigured`,
-  which asserts `dependency_overrides == 0`.
+  confirmed false. Nothing opens, nothing raises. Covered by the behavioural
+  predicate test below, which walks it as one of its 40 points.
+
+  The real-app probe
+  (`::test_the_real_app_fails_closed_when_the_contact_pool_is_unconfigured`)
+  is **not** the default session and this plan previously implied it was: it
+  sets `ATLAS_INVOICING_RECEIVABLES_API_ENABLED=true` deliberately, because its
+  subject is the receivables-on/no-DSN deployment. It asserts
+  `dependency_overrides == 0` so the production wiring is what answers.
 
 **No side effect before admission.** `init_eom_funnel_database` opens no pool
-until its predicate passes, and
-`validate_eom_funnel_canonical_crm_config` runs at startup before it
-(`atlas_brain/main_eom.py`). The two predicates are checked for agreement by
-`::test_admission_condition_matches_the_condition_that_opens_the_pool` — they
-are separate expressions over the same facts, and drift between them would open
-a pool nothing demanded admission for.
+until its predicate passes, and `validate_eom_funnel_canonical_crm_config` runs
+at startup before it (`atlas_brain/main_eom.py`).
+
+`::test_initialization_cannot_open_a_pool_admission_would_refuse` **executes
+both** across all 40 configuration points and asserts the implication that
+matters: if initialization opens the pool, admission was owed. An earlier
+version of this test only compared the two function bodies for shared tokens,
+which settles nothing — negating the receivables flag inside the initializer
+keeps every token in place while opening a pool the validator never admitted.
+That exact mutation is the test's negative control.
 
 ### Files touched
 
@@ -200,6 +209,7 @@ a pool nothing demanded admission for.
 - `atlas_brain/eom_api/receivables.py`
 - `atlas_brain/main_eom.py`
 - `atlas_brain/services/crm_provider.py`
+- `atlas_brain/services/eom_crm_mutations.py`
 - `plans/PR-EOM-Billing-Recipients.md`
 - `tests/test_eom_billing_recipients.py`
 - `tests/test_eom_render_profile.py`
@@ -221,6 +231,14 @@ line, or error path can betray it.
 `status` is allow-listed to the single live value rather than deny-listing the
 inactive ones, because the column carries no CHECK constraint and enumerating
 would silently admit any future status.
+
+Address usability is decided by the **canonical** validator
+(`is_valid_contact_email`, exported from `eom_crm_mutations`), not by a second
+expression of the grammar. The SQL regex this replaced admitted `a@b..com` and
+`a@.b.com`, which the canonical write path rejects — so the routes could offer
+a recipient that path would refuse. The list now prefilters coarsely in SQL and
+narrows in Python, fetching to the hard cap before applying the caller's limit
+so eligible rows cannot be displaced by ones the validator then rejects.
 
 ## Intentional
 
@@ -304,8 +322,9 @@ Parked hardening: none.
 | `atlas_brain/eom_api/funnel_database.py` | 58 |
 | `atlas_brain/eom_api/receivables.py` | 119 |
 | `atlas_brain/main_eom.py` | 8 |
-| `atlas_brain/services/crm_provider.py` | 179 |
-| `plans/PR-EOM-Billing-Recipients.md` | 311 |
-| `tests/test_eom_billing_recipients.py` | 582 |
+| `atlas_brain/services/crm_provider.py` | 186 |
+| `atlas_brain/services/eom_crm_mutations.py` | 14 |
+| `plans/PR-EOM-Billing-Recipients.md` | 331 |
+| `tests/test_eom_billing_recipients.py` | 766 |
 | `tests/test_eom_render_profile.py` | 5 |
-| **Total** | **1265** |
+| **Total** | **1490** |

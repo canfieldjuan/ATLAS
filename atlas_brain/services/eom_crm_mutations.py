@@ -129,6 +129,20 @@ def _normalize_email(value: Any) -> str | None:
     return candidate
 
 
+def is_valid_contact_email(value: Any) -> bool:
+    """The single canonical answer to "can this address receive mail?".
+
+    Exported so no consumer has to re-express the grammar. A second, weaker
+    expression of it -- an SQL regex, say -- drifts by construction: it admitted
+    ``a@b..com`` and ``a@.b.com``, which the rules below reject, so a caller
+    could be offered a recipient the canonical write path refuses.
+    """
+    try:
+        return _normalize_email(value) is not None
+    except EOMOperatorContactMutationError:
+        return False
+
+
 def _normalize_phone(value: Any) -> str | None:
     normalized = _blank_to_none(value)
     if normalized is None:

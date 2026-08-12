@@ -346,6 +346,190 @@ def test_canonical_admission_is_owed_by_whoever_opens_the_pool(
             config, canonical_crm_database_confirmed=confirmed)
 
 
+@pytest.mark.asyncio
+async def test_initialization_cannot_open_a_pool_admission_would_refuse(monkeypatch):
+    """Drive BOTH predicates, over the whole configuration space.
+
+    The previous version of this test only asserted that the two function
+    bodies mentioned the same tokens. That proves nothing: the receivables
+    flag could be negated in one of them and the strings would still match,
+    leaving the pool opened under a configuration the validator never
+    admitted. This one executes them.
+
+    The property is one implication: **if initialization opens the pool, then
+    admission was owed** -- so an unconfirmed configuration cannot reach an
+    open pool.
+    """
+    from itertools import product
+
+    from atlas_brain.eom_api import config as eom_config
+    from atlas_brain.eom_api import funnel_database as fd
+
+    dsns = ["", "   ", "\t", "postgresql://h/d", "  postgresql://h/d  "]
+    space = list(product((True, False), (True, False), dsns, (True, False)))
+
+    for api_enabled, receivables_enabled, dsn, confirmed in space:
+        opened: list[str] = []
+
+        class _Pool:
+            async def initialize(self):
+                opened.append("yes")
+
+        monkeypatch.setattr(fd, "get_eom_funnel_db_pool", lambda *a, **k: _Pool())
+        monkeypatch.setattr(
+            eom_config.invoicing_settings,
+            "receivables_api_enabled",
+            receivables_enabled,
+        )
+        config = _canonical_config(dsn, api_enabled=api_enabled)
+
+        await fd.init_eom_funnel_database(config)
+        pool_opened = bool(opened)
+
+        try:
+            fd.validate_eom_funnel_canonical_crm_config(
+                config, canonical_crm_database_confirmed=confirmed)
+            admission_refused = False
+        except RuntimeError:
+            admission_refused = True
+
+        label = (
+            f"api={api_enabled} receivables={receivables_enabled} "
+            f"dsn={dsn!r} confirmed={confirmed}"
+        )
+        # The implication that matters: nothing opens without admission
+        # having been demanded of it.
+        if pool_opened and not confirmed:
+            assert admission_refused, (
+                f"{label}: the pool opened under a configuration admission "
+                f"would not have confirmed"
+            )
+        # And the converse direction -- admission is not demanded of a
+        # configuration that opens nothing -- so the gate cannot creep into
+        # blocking deployments it has no claim on.
+        if not pool_opened and not api_enabled:
+            assert not admission_refused, (
+                f"{label}: admission refused a configuration that opens no pool"
+            )
+
+    assert len(space) == 2 * 2 * len(dsns) * 2 == 40
+
+
+@pytest.mark.parametrize(
+    "address",
+    [
+        # admitted by the canonical grammar
+        "ap@example.com", "a.b@example.co.uk", "AP@EXAMPLE.COM",
+        "first+tag@sub.example.com",
+        # rejected -- the two the SQL regex used to admit are the point
+        "a@b..com", "a@.b.com", "a@b.", "a@b", "not-an-address",
+        "", "   ", "\t", "\n", "a b@example.com", "@example.com", "ap@",
+        "ap@@example.com", ".ap@example.com", "ap.@example.com",
+    ],
+)
+@pytest.mark.asyncio
+async def test_recipient_eligibility_follows_the_canonical_grammar(address):
+    """One grammar, not two. The oracle IS the canonical validator.
+
+    A second expression of the rule drifts by construction: the SQL regex
+    admitted `a@b..com` and `a@.b.com`, so a caller could be offered a
+    recipient the canonical write path refuses. Asserting against the
+    canonical predicate makes that class of divergence unrepresentable rather
+    than testing the few examples someone happened to think of.
+    """
+    from atlas_brain.services import crm_provider as svc
+    from atlas_brain.services.eom_crm_mutations import is_valid_contact_email
+
+    contact_id = uuid4()
+
+    class _Pool:
+        is_initialized = True
+
+        async def fetchrow(self, query, *args):
+            # An otherwise perfectly eligible contact: active, a customer, in
+            # the EOM context. The address is the only variable.
+            return {
+                "id": contact_id,
+                "full_name": "Accounts Payable",
+                "status": "active",
+                "contact_type": "customer",
+                "email": address.strip(" \t\r\n\x0b\x0c"),
+            }
+
+    verdict = await svc.DatabaseCRMProvider(pool=_Pool()).get_billing_recipient(
+        contact_id
+    )
+
+    # The verdict must agree with the canonical validator on EVERY address --
+    # that is the closure. Anything else is a second grammar.
+    assert verdict["eligible"] is is_valid_contact_email(address), (
+        f"{address!r}: route says eligible={verdict['eligible']}, canonical "
+        f"validator says {is_valid_contact_email(address)}"
+    )
+    if not verdict["eligible"]:
+        assert verdict["reason"] == "no_email"
+        assert verdict["email"] is None and verdict["displayName"] is None
+
+
+def _canonical_config(dsn: str, *, api_enabled: bool = False):
+    return SimpleNamespace(api_enabled=api_enabled, db_connection_string=dsn)
+
+
+@pytest.mark.parametrize(
+    "receivables_enabled, dsn, api_enabled, confirmed, expect_raise",
+    [
+        # Receivables opening the pool is admission-bearing on its own.
+        (True, "postgresql://host/db", False, False, True),
+        (True, "postgresql://host/db", False, True, False),
+        # No DSN: receivables never opens the pool, so nothing to admit.
+        (True, "", False, False, False),
+        (True, "   ", False, False, False),
+        # Receivables off: unchanged from before this slice.
+        (False, "postgresql://host/db", False, False, False),
+        # The funnel flag keeps its own admission regardless of receivables.
+        (False, "postgresql://host/db", True, False, True),
+        (True, "postgresql://host/db", True, False, True),
+    ],
+)
+def test_canonical_admission_is_owed_by_whoever_opens_the_pool(
+    monkeypatch, receivables_enabled, dsn, api_enabled, confirmed, expect_raise,
+):
+    """Admission follows the pool, not the flag that first needed it.
+
+    Gating on `api_enabled` alone let receivables open a configured DSN
+    unadmitted. Pointed at a reachable non-canonical Atlas database holding
+    `effingham_maids` contacts, that would disclose their names and addresses
+    to the receivables bearer through the very routes this slice adds.
+    """
+    from atlas_brain.eom_api import config as eom_config
+    from atlas_brain.eom_api import funnel_database as fd
+
+    monkeypatch.setattr(
+        eom_config.invoicing_settings,
+        "receivables_api_enabled",
+        receivables_enabled,
+    )
+    config = _canonical_config(dsn, api_enabled=api_enabled)
+
+    if expect_raise:
+        with pytest.raises(RuntimeError) as excinfo:
+            fd.validate_eom_funnel_canonical_crm_config(
+                config, canonical_crm_database_confirmed=confirmed)
+        message = str(excinfo.value)
+        assert "ATLAS_EOM_CANONICAL_CRM_DATABASE_CONFIRMED=true" in message
+        # The message must name the trigger that actually applies, or an
+        # operator sets the wrong variable and the pool stays shut.
+        expected_trigger = (
+            "ATLAS_EOM_FUNNEL_API_ENABLED=true"
+            if api_enabled
+            else "ATLAS_INVOICING_RECEIVABLES_API_ENABLED=true"
+        )
+        assert expected_trigger in message
+    else:
+        fd.validate_eom_funnel_canonical_crm_config(
+            config, canonical_crm_database_confirmed=confirmed)
+
+
 def test_admission_condition_matches_the_condition_that_opens_the_pool():
     """The validator and the initializer must agree on when the pool opens.
 
