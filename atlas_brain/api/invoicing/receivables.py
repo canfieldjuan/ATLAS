@@ -21,6 +21,7 @@ from ...services.receivables import (
     ReceivablesValidationError,
     get_receivables_service,
 )
+from ...services.eom_lead_ingress import EOM_BUSINESS_CONTEXT_ID
 from ...storage.exceptions import DatabaseUnavailableError
 from .auth import require_actor, require_receivables_api
 
@@ -222,6 +223,8 @@ async def create_payment(
             allocations=_allocations(body.allocations),
             recorded_by=actor,
             idempotency_key=idempotency_key,
+            allow_unapplied=True,
+            unapplied_contact_context_id=EOM_BUSINESS_CONTEXT_ID,
         )
     )
 
