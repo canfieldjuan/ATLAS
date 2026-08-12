@@ -225,6 +225,11 @@ jobs:
             tests/test_eom_contacts_api_tenant_scope.py \
             tests/test_backfill_eom_customer_type.py \
             tests/test_eom_link_verification.py \
+            # eom_crm_mutations triggers THIS workflow, and its
+            # normalize_contact_email decides billing-recipient
+            # eligibility -- so a grammar change reaching here must
+            # run the billing proof too, not only the pipeline's.
+            tests/test_eom_billing_recipients.py \
             tests/test_eom_lead_conversion.py \
             tests/test_eom_lead_conversion_integration.py \
             tests/test_eom_write_boundary_audit.py \

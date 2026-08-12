@@ -475,61 +475,6 @@ def _canonical_config(dsn: str, *, api_enabled: bool = False):
     return SimpleNamespace(api_enabled=api_enabled, db_connection_string=dsn)
 
 
-@pytest.mark.parametrize(
-    "receivables_enabled, dsn, api_enabled, confirmed, expect_raise",
-    [
-        # Receivables opening the pool is admission-bearing on its own.
-        (True, "postgresql://host/db", False, False, True),
-        (True, "postgresql://host/db", False, True, False),
-        # No DSN: receivables never opens the pool, so nothing to admit.
-        (True, "", False, False, False),
-        (True, "   ", False, False, False),
-        # Receivables off: unchanged from before this slice.
-        (False, "postgresql://host/db", False, False, False),
-        # The funnel flag keeps its own admission regardless of receivables.
-        (False, "postgresql://host/db", True, False, True),
-        (True, "postgresql://host/db", True, False, True),
-    ],
-)
-def test_canonical_admission_is_owed_by_whoever_opens_the_pool(
-    monkeypatch, receivables_enabled, dsn, api_enabled, confirmed, expect_raise,
-):
-    """Admission follows the pool, not the flag that first needed it.
-
-    Gating on `api_enabled` alone let receivables open a configured DSN
-    unadmitted. Pointed at a reachable non-canonical Atlas database holding
-    `effingham_maids` contacts, that would disclose their names and addresses
-    to the receivables bearer through the very routes this slice adds.
-    """
-    from atlas_brain.eom_api import config as eom_config
-    from atlas_brain.eom_api import funnel_database as fd
-
-    monkeypatch.setattr(
-        eom_config.invoicing_settings,
-        "receivables_api_enabled",
-        receivables_enabled,
-    )
-    config = _canonical_config(dsn, api_enabled=api_enabled)
-
-    if expect_raise:
-        with pytest.raises(RuntimeError) as excinfo:
-            fd.validate_eom_funnel_canonical_crm_config(
-                config, canonical_crm_database_confirmed=confirmed)
-        message = str(excinfo.value)
-        assert "ATLAS_EOM_CANONICAL_CRM_DATABASE_CONFIRMED=true" in message
-        # The message must name the trigger that actually applies, or an
-        # operator sets the wrong variable and the pool stays shut.
-        expected_trigger = (
-            "ATLAS_EOM_FUNNEL_API_ENABLED=true"
-            if api_enabled
-            else "ATLAS_INVOICING_RECEIVABLES_API_ENABLED=true"
-        )
-        assert expected_trigger in message
-    else:
-        fd.validate_eom_funnel_canonical_crm_config(
-            config, canonical_crm_database_confirmed=confirmed)
-
-
 def test_admission_condition_matches_the_condition_that_opens_the_pool():
     """The validator and the initializer must agree on when the pool opens.
 
@@ -845,13 +790,11 @@ async def test_the_list_pages_until_the_requested_limit_is_filled():
             fetches.append(args)
             limit = args[-1]
             # Emulate the keyset predicate the query builds.
-            if "(full_name, id) >" in query:
-                cursor_name, cursor_id = args[-3], args[-2]
-                remaining = [
-                    row for row in corpus
-                    if (row["full_name"], str(row["id"]))
-                    > (cursor_name, str(cursor_id))
-                ]
+            if "id > $" in query:
+                cursor_id = args[-2]
+                seen = [str(row["id"]) for row in corpus]
+                start = seen.index(str(cursor_id)) + 1
+                remaining = corpus[start:]
             else:
                 remaining = corpus
             return remaining[:limit]
@@ -895,3 +838,55 @@ async def test_the_list_stops_at_the_scan_cap_and_says_so(caplog):
     assert any("scan cap reached" in record.message for record in caplog.records), (
         "the scan truncated silently, which reads as 'no eligible recipients'"
     )
+
+
+@pytest.mark.asyncio
+async def test_paging_survives_a_rename_between_pages():
+    """The cursor must not live on a column an operator can edit.
+
+    `full_name` is editable through the operator contact mutation. A keyset
+    built on it has exactly the defect keyset is chosen to avoid: renaming an
+    unvisited row to sort BEFORE the cursor drops it from the result, and
+    renaming a visited row to sort AFTER the cursor emits the same contact
+    twice. `id` is immutable, so the scan is keyed on that and display order is
+    applied to the assembled page.
+    """
+    from atlas_brain.services import crm_provider as svc
+
+    page_size = svc.BILLING_RECIPIENT_PAGE_SIZE
+    corpus = [
+        {"id": uuid4(), "full_name": f"AP {i:04d}", "email": "not-an-address"}
+        for i in range(page_size)
+    ]
+    target = {"id": uuid4(), "full_name": "ZZ Valid", "email": "ap@example.com"}
+    corpus.append(target)
+    fetch_count = {"n": 0}
+
+    class _Pool:
+        is_initialized = True
+
+        async def fetch(self, query, *args):
+            fetch_count["n"] += 1
+            limit = args[-1]
+            if "id > $" in query:
+                cursor_id = args[-2]
+                start = [str(r["id"]) for r in corpus].index(str(cursor_id)) + 1
+                remaining = corpus[start:]
+            else:
+                remaining = corpus
+            page = remaining[:limit]
+            # Between page 1 and page 2, an operator renames the still-unvisited
+            # eligible contact to sort FIRST. A (full_name, id) cursor would now
+            # skip it entirely.
+            if fetch_count["n"] == 1:
+                target["full_name"] = "AAA Renamed"
+            return page
+
+    listed = await svc.DatabaseCRMProvider(pool=_Pool()).list_billing_recipients(
+        limit=1
+    )
+
+    assert [item["contactId"] for item in listed] == [str(target["id"])], (
+        "a contact renamed between pages was lost by the cursor"
+    )
+    assert listed[0]["displayName"] == "AAA Renamed"

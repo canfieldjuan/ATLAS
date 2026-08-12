@@ -2097,28 +2097,30 @@ class DatabaseCRMProvider:
         # ordered after them -- 500 malformed rows followed by one valid
         # recipient would return an empty list for limit=1.
         #
-        # Keyset, not OFFSET: the scan is ordered by (full_name, id) and a
-        # concurrent write under an OFFSET can skip or repeat a row.
+        # Keyset on `id`, which is IMMUTABLE. An OFFSET can skip or repeat a
+        # row under concurrent writes -- but so can a keyset built on a
+        # MUTABLE column: `full_name` is editable through the operator contact
+        # mutation, so renaming an unvisited row to sort before the cursor
+        # drops it, and renaming a visited row to sort after it emits the
+        # contact twice. Ordering for display is applied to the assembled
+        # result instead, which is bounded by `requested`.
         results: list[dict[str, Any]] = []
-        cursor_name: str | None = None
         cursor_id: Any = None
         pages = 0
         while len(results) < requested and pages < BILLING_RECIPIENT_MAX_PAGES:
             pages += 1
             conditions = list(base_conditions)
             args = list(base_args)
-            if cursor_name is not None:
-                args.extend([cursor_name, cursor_id])
-                conditions.append(
-                    f"(full_name, id) > (${len(args) - 1}, ${len(args)})"
-                )
+            if cursor_id is not None:
+                args.append(cursor_id)
+                conditions.append(f"id > ${len(args)}")
             args.append(BILLING_RECIPIENT_PAGE_SIZE)
             rows = await pool.fetch(
                 f"""
                 SELECT id, full_name, btrim(email, $3) AS email
                 FROM contacts
                 WHERE {' AND '.join(conditions)}
-                ORDER BY full_name, id
+                ORDER BY id
                 LIMIT ${len(args)}
                 """,
                 *args,
@@ -2134,8 +2136,7 @@ class DatabaseCRMProvider:
                 )
                 if len(results) == requested:
                     break
-            last = rows[-1]
-            cursor_name, cursor_id = last["full_name"], last["id"]
+            cursor_id = rows[-1]["id"]
             if len(rows) < BILLING_RECIPIENT_PAGE_SIZE:
                 break  # candidates exhausted
 
@@ -2150,6 +2151,10 @@ class DatabaseCRMProvider:
                 len(results),
                 requested,
             )
+        # Display order, applied once to the assembled page. The scan order is
+        # an implementation detail of stable paging and is not what an operator
+        # should see.
+        results.sort(key=lambda item: (item["displayName"] or "", item["contactId"]))
         return results
 
     async def billing_recipients_schema_ready(self) -> bool:

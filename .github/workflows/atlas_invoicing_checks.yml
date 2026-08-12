@@ -28,6 +28,10 @@ on:
       - "atlas_brain/main_eom.py"
       - "atlas_brain/services/__init__.py"
       - "atlas_brain/services/crm_provider.py"
+      # normalize_contact_email decides billing eligibility and the
+      # address these routes return; a grammar change here must run
+      # the billing proof.
+      - "atlas_brain/services/eom_crm_mutations.py"
       - "atlas_brain/services/eom_lead_conversion.py"
       - "atlas_brain/services/receivables.py"
       - "atlas_brain/storage/migrations/344_receivables_payments.sql"
@@ -71,6 +75,10 @@ on:
       - "atlas_brain/main_eom.py"
       - "atlas_brain/services/__init__.py"
       - "atlas_brain/services/crm_provider.py"
+      # normalize_contact_email decides billing eligibility and the
+      # address these routes return; a grammar change here must run
+      # the billing proof.
+      - "atlas_brain/services/eom_crm_mutations.py"
       - "atlas_brain/services/eom_lead_conversion.py"
       - "atlas_brain/services/receivables.py"
       - "atlas_brain/storage/migrations/344_receivables_payments.sql"

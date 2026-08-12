@@ -59,7 +59,7 @@ in halves rather than once whole.
 
 Ownership lane: eom-crm/billing-recipients
 Slice phase: Vertical slice
-Max files: 9
+Max files: 10
 
 1. `ReceivablesService.list_billing_recipients` — eligible EOM contacts only.
 2. `ReceivablesService.get_billing_recipient` — authoritative per-contact
@@ -139,13 +139,85 @@ divergence path.
 
 ### Boundary-change enumeration
 
-- Boundary path/seam: two new GET routes on an existing authenticated router.
-- Replaced-path behaviors: none. Nothing existing changes shape.
-- Guard-relevant fields: `contacts.business_context_id` (in the query),
-  `contacts.status`, `contacts.email`.
-- Caller x input shape: receivables credential x {eligible id, archived id,
-  inactive id, no-email id, blank-email id, foreign-tenant id, missing id};
-  funnel credential x any; no credential x any.
+Written for two read-only routes and never revisited as later rounds added an
+eligibility rule, a normalization rule, and a startup admission gate. One group
+per seam, each with what it replaced and the caller x input classes that reach
+it.
+
+**Seam 1 — recipient eligibility** (`DatabaseCRMProvider.get_billing_recipient`,
+`.list_billing_recipients`)
+
+- Replaced behavior: none existed; this is the new decision.
+- Guard-relevant fields: `contacts.business_context_id` (tenant predicate, in
+  the SQL), `contacts.status` (allow-listed to the single live value, since the
+  column carries no CHECK), `contacts.contact_type` (**customer only** — a lead
+  is refused), `contacts.email`.
+- Caller x input: receivables credential x {eligible customer, archived,
+  inactive, unknown-future status, **lead with a valid address**, absent email,
+  blank/tab/newline email, malformed email, foreign-tenant id, missing id}.
+  Funnel credential x any -> 401. No credential x any -> 401.
+- Disposition: every class above is asserted in
+  `::test_the_billing_projection_answers_every_eligibility_case`; the
+  cross-tenant class is asserted byte-identical to missing.
+
+**Seam 2 — address validity and representation**
+(`normalize_contact_email`, exported from `eom_crm_mutations`)
+
+- Replaced behavior: an SQL regex that was a **second, weaker grammar** — it
+  admitted `a@b..com` and `a@.b.com`, and it returned the stored column, which
+  `btrim` leaves with Unicode edge whitespace and mixed case. Deleted, not
+  tightened.
+- Guard-relevant fields: `contacts.email` only.
+- Caller x input: both routes x {canonical address, Unicode-padded, ASCII-padded,
+  mixed case, empty-label domain, no TLD, no `@`, double `@`, leading/trailing
+  dot in local part, whitespace-only, absent}.
+- Disposition: `::test_recipient_eligibility_follows_the_canonical_grammar`
+  asserts the route verdict **equals** the canonical validator for every class;
+  `::test_the_projection_returns_the_canonical_address_not_the_column` asserts
+  the emitted address is the canonical form.
+
+**Seam 3 — result completeness under paging** (`list_billing_recipients`)
+
+- Replaced behavior: a single SQL `LIMIT`, which read N candidates rather than N
+  recipients and let rejected rows displace eligible ones behind them.
+- Guard-relevant fields: `contacts.id` (the cursor — immutable),
+  `contacts.full_name` (display order only; **deliberately not the cursor**,
+  because it is operator-editable and a rename between pages would skip or
+  duplicate).
+- Caller x input: {limit within one page, limit requiring several pages, a page
+  entirely of rejected rows, a rename between pages, candidates exhausted early,
+  scan cap reached}.
+- Disposition: `::test_the_list_pages_until_the_requested_limit_is_filled`,
+  `::test_paging_survives_a_rename_between_pages`, and
+  `::test_the_list_stops_at_the_scan_cap_and_says_so` (which asserts the
+  truncation is logged, not silent).
+
+**Seam 4 — configuration admission and pool startup**
+(`validate_eom_funnel_canonical_crm_config`, `init_eom_funnel_database`,
+`atlas_brain/main_eom.py`, `/receivables/ready`)
+
+- Replaced behavior: admission was demanded only when the funnel API was
+  enabled, so the receivables path could open a configured DSN unadmitted.
+- Guard-relevant fields: `ATLAS_EOM_FUNNEL_API_ENABLED`,
+  `ATLAS_INVOICING_RECEIVABLES_API_ENABLED`,
+  `ATLAS_EOM_FUNNEL_DB_CONNECTION_STRING`,
+  `ATLAS_EOM_CANONICAL_CRM_DATABASE_CONFIRMED` (values tabulated under
+  Deployed-config probing).
+- Caller x input: the full 2 x 2 x 10-DSN-shape x 2 grid.
+- Disposition: `::test_canonical_admission_is_owed_by_whoever_opens_the_pool`
+  and `::test_admission_holds_over_the_whole_configuration_grammar` (80 points
+  against a rule-derived oracle);
+  `::test_initialization_cannot_open_a_pool_admission_would_refuse` executes
+  **both** predicates over 40 points and asserts initialization cannot precede
+  admission; `::test_readiness_separates_unconfigured_from_unavailable` covers
+  the readiness decision in both directions.
+
+**Seam 5 — transport and credential** (two GET routes on the receivables router)
+
+- Replaced behavior: none; additive.
+- Caller x input: as Seam 1's credential rows. An ineligible verdict is **200
+  with a reason**, not 404 — settled by
+  `::test_an_ineligible_verdict_is_200_with_a_reason_not_404`.
 
 ### Deployed-config probing
 
@@ -204,6 +276,7 @@ That exact mutation is the test's negative control.
 
 ### Files touched
 
+- `.github/workflows/atlas_eom_lead_pipeline_checks.yml`
 - `.github/workflows/atlas_invoicing_checks.yml`
 - `atlas_brain/eom_api/funnel_database.py`
 - `atlas_brain/eom_api/receivables.py`
@@ -332,13 +405,14 @@ Parked hardening: none.
 
 | File | LOC |
 |---|---:|
-| `.github/workflows/atlas_invoicing_checks.yml` | 3 |
+| `.github/workflows/atlas_eom_lead_pipeline_checks.yml` | 5 |
+| `.github/workflows/atlas_invoicing_checks.yml` | 11 |
 | `atlas_brain/eom_api/funnel_database.py` | 58 |
 | `atlas_brain/eom_api/receivables.py` | 119 |
 | `atlas_brain/main_eom.py` | 8 |
-| `atlas_brain/services/crm_provider.py` | 241 |
+| `atlas_brain/services/crm_provider.py` | 246 |
 | `atlas_brain/services/eom_crm_mutations.py` | 27 |
-| `plans/PR-EOM-Billing-Recipients.md` | 344 |
-| `tests/test_eom_billing_recipients.py` | 897 |
+| `plans/PR-EOM-Billing-Recipients.md` | 419 |
+| `tests/test_eom_billing_recipients.py` | 947 |
 | `tests/test_eom_render_profile.py` | 5 |
-| **Total** | **1702** |
+| **Total** | **1845** |
