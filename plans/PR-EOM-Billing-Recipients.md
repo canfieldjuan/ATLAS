@@ -127,7 +127,9 @@ config value is newly read.
 ### Files touched
 
 - `.github/workflows/atlas_invoicing_checks.yml`
+- `atlas_brain/eom_api/funnel_database.py`
 - `atlas_brain/eom_api/receivables.py`
+- `atlas_brain/main_eom.py`
 - `atlas_brain/services/crm_provider.py`
 - `plans/PR-EOM-Billing-Recipients.md`
 - `tests/test_eom_billing_recipients.py`
@@ -208,8 +210,10 @@ Parked hardening: none.
 | File | LOC |
 |---|---:|
 | `.github/workflows/atlas_invoicing_checks.yml` | 3 |
+| `atlas_brain/eom_api/funnel_database.py` | 14 |
 | `atlas_brain/eom_api/receivables.py` | 55 |
-| `atlas_brain/services/crm_provider.py` | 131 |
+| `atlas_brain/main_eom.py` | 5 |
+| `atlas_brain/services/crm_provider.py` | 157 |
 | `plans/PR-EOM-Billing-Recipients.md` | 215 |
-| `tests/test_eom_billing_recipients.py` | 278 |
-| **Total** | **682** |
+| `tests/test_eom_billing_recipients.py` | 287 |
+| **Total** | **736** |
