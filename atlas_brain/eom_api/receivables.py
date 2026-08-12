@@ -23,6 +23,7 @@ from ..services.receivables import (
 )
 from ..storage.exceptions import DatabaseUnavailableError
 from .auth import require_actor, require_receivables_api
+from .config import funnel_settings
 from .funnel_database import get_eom_funnel_crm_provider, get_eom_funnel_db_pool
 
 _DATABASE_UNAVAILABLE_ERRORS = (
@@ -175,14 +176,45 @@ async def ready() -> dict:
     if not schema_ready:
         raise HTTPException(status_code=503, detail="Receivables schema unavailable")
     # The billing-recipient routes read a SECOND database -- the pool that owns
-    # canonical EOM contacts. Reporting ready off the global receivables
-    # database alone would call the service healthy while every recipient read
-    # fails closed, which is the state readiness exists to surface.
-    contacts_ready = get_eom_funnel_db_pool().is_initialized
-    return {
-        "status": "ready",
-        "billingRecipients": "ready" if contacts_ready else "unconfigured",
-    }
+    # canonical EOM contacts -- so readiness off the global receivables
+    # database alone is not the whole answer.
+    #
+    # Two different states, deliberately not collapsed:
+    #
+    #   unconfigured -- no funnel DSN. This is a SUPPORTED deployment: a
+    #     profile running receivables without billing recipients. Failing
+    #     readiness here would take the whole invoicing service out over a
+    #     capability it does not use, which is worse than the gap. Reported,
+    #     not fatal.
+    #
+    #   unavailable -- a DSN IS configured and the pool cannot serve the two
+    #     queries: the pool never came up, or the database is reachable but
+    #     partially migrated. That is a real misconfiguration, and an
+    #     initialized pool alone does not rule it out -- it proves a
+    #     connection opened, not that `contacts` has the columns both queries
+    #     name. This one fails readiness.
+    pool = get_eom_funnel_db_pool()
+    if not funnel_settings.db_connection_string.strip():
+        return {"status": "ready", "billingRecipients": "unconfigured"}
+    schema_ready = False
+    if pool.is_initialized:
+        try:
+            schema_ready = await get_eom_funnel_crm_provider(
+            ).billing_recipients_schema_ready()
+        except Exception:
+            schema_ready = False
+    if not schema_ready:
+        raise HTTPException(
+            status_code=503,
+            detail={
+                "code": "billing_recipients_unavailable",
+                "message": (
+                    "A canonical EOM contact database is configured but cannot "
+                    "serve billing-recipient reads."
+                ),
+            },
+        )
+    return {"status": "ready", "billingRecipients": "ready"}
 
 
 @router.get("/open-invoices")

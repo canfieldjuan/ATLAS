@@ -2093,6 +2093,28 @@ class DatabaseCRMProvider:
         )
         return [_billing_recipient_projection(row) for row in rows]
 
+    async def billing_recipients_schema_ready(self) -> bool:
+        """True when both billing-recipient queries could actually run.
+
+        An initialized pool only proves a connection opened. A configured but
+        partially migrated database passes that check and then fails every
+        recipient read with an undefined column, so readiness has to name the
+        columns the two queries depend on. LIMIT 0 validates them without
+        reading a row.
+        """
+        try:
+            await self._get_pool().fetch(
+                """
+                SELECT id, full_name, email, status, contact_type,
+                       business_context_id
+                FROM contacts
+                LIMIT 0
+                """
+            )
+        except Exception:
+            return False
+        return True
+
     async def get_billing_recipient(self, contact_id: UUID) -> dict[str, Any]:
         """Answer whether ONE contact may receive invoices, and who it is.
 

@@ -138,7 +138,7 @@ def validate_eom_funnel_canonical_crm_config(
     trigger = (
         "ATLAS_EOM_FUNNEL_API_ENABLED=true"
         if resolved.api_enabled
-        else "ATLAS_EOM_RECEIVABLES_API_ENABLED=true with "
+        else "ATLAS_INVOICING_RECEIVABLES_API_ENABLED=true with "
         "ATLAS_EOM_FUNNEL_DB_CONNECTION_STRING set"
     )
     if not canonical_crm_database_confirmed:

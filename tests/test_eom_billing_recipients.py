@@ -338,7 +338,7 @@ def test_canonical_admission_is_owed_by_whoever_opens_the_pool(
         expected_trigger = (
             "ATLAS_EOM_FUNNEL_API_ENABLED=true"
             if api_enabled
-            else "ATLAS_EOM_RECEIVABLES_API_ENABLED=true"
+            else "ATLAS_INVOICING_RECEIVABLES_API_ENABLED=true"
         )
         assert expected_trigger in message
     else:
@@ -521,3 +521,62 @@ def test_admission_holds_over_the_whole_configuration_grammar(monkeypatch):
 
     # Guards against the enumeration silently collapsing to a few cases.
     assert len(space) == 2 * 2 * (len(blank_dsns) + len(real_dsns)) * 2 == 80
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "dsn, initialized, schema_ok, expect_status, expect_label",
+    [
+        # Deliberately absent: a supported profile that never calls these
+        # routes. Failing readiness would take invoicing out over a capability
+        # it does not use.
+        ("", False, False, 200, "unconfigured"),
+        ("   ", False, False, 200, "unconfigured"),
+        # Configured and working.
+        ("postgresql://h/d", True, True, 200, "ready"),
+        # Configured and NOT working -- the two ways that happens.
+        ("postgresql://h/d", False, False, 503, None),   # pool never came up
+        ("postgresql://h/d", True, False, 503, None),    # partially migrated
+    ],
+)
+async def test_readiness_separates_unconfigured_from_unavailable(
+    monkeypatch, dsn, initialized, schema_ok, expect_status, expect_label,
+):
+    """An initialized pool is not the same claim as a usable one.
+
+    `is_initialized` proves a connection opened. A reachable but partially
+    migrated database passes it and then fails every recipient read on an
+    undefined column, so readiness has to probe the columns both queries name.
+    """
+    from fastapi import HTTPException
+
+    from atlas_brain.eom_api import config as eom_config
+    from atlas_brain.eom_api import receivables as routes
+
+    monkeypatch.setattr(
+        eom_config.funnel_settings, "db_connection_string", dsn, raising=False)
+    monkeypatch.setattr(routes, "funnel_settings", eom_config.funnel_settings)
+    monkeypatch.setattr(
+        routes, "get_eom_funnel_db_pool",
+        lambda *a, **k: SimpleNamespace(is_initialized=initialized))
+
+    class _Provider:
+        async def billing_recipients_schema_ready(self):
+            return schema_ok
+
+    monkeypatch.setattr(routes, "get_eom_funnel_crm_provider", lambda: _Provider())
+
+    class _ReadyService:
+        async def is_ready(self):
+            return True
+
+    monkeypatch.setattr(routes, "get_receivables_service", lambda: _ReadyService())
+
+    if expect_status == 200:
+        body = await routes.ready()
+        assert body == {"status": "ready", "billingRecipients": expect_label}
+    else:
+        with pytest.raises(HTTPException) as excinfo:
+            await routes.ready()
+        assert excinfo.value.status_code == 503
+        assert excinfo.value.detail["code"] == "billing_recipients_unavailable"

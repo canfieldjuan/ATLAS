@@ -78,8 +78,15 @@ Max files: 8
    path too — gating it on the funnel flag alone would open a configured DSN
    unadmitted, and a non-canonical Atlas database holding `effingham_maids`
    contacts would then be readable by the receivables bearer.
-   `/receivables/ready` reports the contact pool as well, so a service whose
-   every recipient read fails cannot report itself healthy.
+   `/receivables/ready` reports the contact pool as well, and distinguishes
+   two states rather than collapsing them: **unconfigured** (no funnel DSN --
+   a supported deployment that simply does not use billing recipients, so
+   readiness still passes; failing it would take invoicing out over a
+   capability it never calls) and **unavailable** (a DSN IS configured but the
+   pool cannot serve the two queries, including a reachable but partially
+   migrated database -- an initialized pool proves a connection opened, not
+   that `contacts` carries the columns both queries name). Only the second
+   fails readiness.
 6. Enrolment of that test file in `.github/workflows/atlas_invoicing_checks.yml`
    — both path-filter blocks and the pytest arguments. The fifth file exists
    because the test skips without `ATLAS_RECEIVABLES_TEST_DATABASE_URL`, which
@@ -246,10 +253,10 @@ Parked hardening: none.
 |---|---:|
 | `.github/workflows/atlas_invoicing_checks.yml` | 3 |
 | `atlas_brain/eom_api/funnel_database.py` | 58 |
-| `atlas_brain/eom_api/receivables.py` | 87 |
+| `atlas_brain/eom_api/receivables.py` | 119 |
 | `atlas_brain/main_eom.py` | 8 |
-| `atlas_brain/services/crm_provider.py` | 157 |
-| `plans/PR-EOM-Billing-Recipients.md` | 255 |
-| `tests/test_eom_billing_recipients.py` | 521 |
+| `atlas_brain/services/crm_provider.py` | 179 |
+| `plans/PR-EOM-Billing-Recipients.md` | 262 |
+| `tests/test_eom_billing_recipients.py` | 582 |
 | `tests/test_eom_render_profile.py` | 5 |
-| **Total** | **1094** |
+| **Total** | **1216** |
