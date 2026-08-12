@@ -321,8 +321,14 @@ The list **pages** until the caller's limit is filled with eligible rows. A
 single SQL `LIMIT` reads N candidates, not N recipients, so rejected rows
 displace eligible ones ordered after them — 500 malformed rows followed by one
 valid recipient returned an empty list for `limit=1`. Paging is keyset on
-`(full_name, id)` rather than `OFFSET`, because a concurrent write under an
-offset can skip or repeat a row. The scan is bounded at
+`id` alone rather than `OFFSET`, because a concurrent write under an offset can
+skip or repeat a row — and for the same reason the key must be **immutable**.
+An earlier draft keyed on `(full_name, id)`, which has the identical defect it
+was chosen to avoid: `full_name` is editable through the operator contact
+mutation, so renaming an unvisited row to sort before the cursor drops it and
+renaming a visited row to sort after it emits the contact twice. Display order
+is applied once to the assembled page instead, which is bounded by the caller's
+limit. The scan is bounded at
 `BILLING_RECIPIENT_MAX_PAGES` (20 x 500 = 10k candidates, far beyond the real
 EOM contact count) and **logs a warning when that cap truncates the result**,
 since a silently short list reads as "no eligible recipients".
@@ -412,7 +418,7 @@ Parked hardening: none.
 | `atlas_brain/main_eom.py` | 8 |
 | `atlas_brain/services/crm_provider.py` | 246 |
 | `atlas_brain/services/eom_crm_mutations.py` | 27 |
-| `plans/PR-EOM-Billing-Recipients.md` | 418 |
+| `plans/PR-EOM-Billing-Recipients.md` | 424 |
 | `tests/test_eom_billing_recipients.py` | 921 |
 | `tests/test_eom_render_profile.py` | 5 |
-| **Total** | **1818** |
+| **Total** | **1824** |
