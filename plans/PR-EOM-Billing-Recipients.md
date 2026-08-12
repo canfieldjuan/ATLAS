@@ -59,7 +59,7 @@ in halves rather than once whole.
 
 Ownership lane: eom-crm/billing-recipients
 Slice phase: Vertical slice
-Max files: 5
+Max files: 7
 
 1. `ReceivablesService.list_billing_recipients` — eligible EOM contacts only.
 2. `ReceivablesService.get_billing_recipient` — authoritative per-contact
@@ -67,7 +67,12 @@ Max files: 5
 3. Two GET routes on the receivables router, behind `require_receivables_api`.
 4. Tests covering every eligibility branch, the tenant probe, the disclosure
    guarantee, and the credential boundary.
-5. Enrolment of that test file in `.github/workflows/atlas_invoicing_checks.yml`
+5. Pool lifecycle in `atlas_brain/eom_api/funnel_database.py` and
+   `atlas_brain/main_eom.py`: the funnel CRM pool must come up when receivables
+   is enabled, not only when the funnel API is, and close under the same
+   condition. Reading contacts from the pool that owns them ties this slice to
+   that pool's lifecycle.
+6. Enrolment of that test file in `.github/workflows/atlas_invoicing_checks.yml`
    — both path-filter blocks and the pytest arguments. The fifth file exists
    because the test skips without `ATLAS_RECEIVABLES_TEST_DATABASE_URL`, which
    only that workflow provisions; without it the only proof of the SQL
@@ -214,6 +219,6 @@ Parked hardening: none.
 | `atlas_brain/eom_api/receivables.py` | 55 |
 | `atlas_brain/main_eom.py` | 5 |
 | `atlas_brain/services/crm_provider.py` | 157 |
-| `plans/PR-EOM-Billing-Recipients.md` | 215 |
+| `plans/PR-EOM-Billing-Recipients.md` | 224 |
 | `tests/test_eom_billing_recipients.py` | 287 |
-| **Total** | **736** |
+| **Total** | **745** |
