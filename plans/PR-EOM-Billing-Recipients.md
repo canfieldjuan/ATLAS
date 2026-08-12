@@ -413,6 +413,6 @@ Parked hardening: none.
 | `atlas_brain/services/crm_provider.py` | 246 |
 | `atlas_brain/services/eom_crm_mutations.py` | 27 |
 | `plans/PR-EOM-Billing-Recipients.md` | 418 |
-| `tests/test_eom_billing_recipients.py` | 892 |
+| `tests/test_eom_billing_recipients.py` | 921 |
 | `tests/test_eom_render_profile.py` | 5 |
-| **Total** | **1789** |
+| **Total** | **1818** |

@@ -764,53 +764,71 @@ async def test_the_projection_returns_the_canonical_address_not_the_column(
 
 
 @pytest.mark.asyncio
-async def test_the_list_pages_until_the_requested_limit_is_filled():
-    """Rejected rows must not displace eligible ones ordered after them.
+async def test_paging_fills_the_limit_against_real_postgres(monkeypatch):
+    """Paging proven against PostgreSQL, not a hand-written cursor.
 
-    A single SQL LIMIT reads N candidates, not N recipients: 500 malformed rows
-    followed by one valid recipient returned an empty list for limit=1.
+    The earlier version used fake pools that implemented the cursor progression
+    themselves -- including the UUID ordering -- so they proved the test author
+    understood the intent, not that the SQL does it. A regression in the
+    `id > $n` predicate or in `ORDER BY id` would not have failed them.
+
+    Page size is shrunk rather than inserting 500 rows: the multi-query
+    behaviour is what matters and it is identical at 3.
     """
+    asyncpg = pytest.importorskip("asyncpg")
+    database_url = _database_url()
     from atlas_brain.services import crm_provider as svc
 
-    page_size = svc.BILLING_RECIPIENT_PAGE_SIZE
-    # One page of unusable addresses, then a single valid one after them.
-    corpus = [
-        {"id": uuid4(), "full_name": f"AP {i:04d}", "email": "not-an-address"}
-        for i in range(page_size)
-    ]
-    corpus.append(
-        {"id": uuid4(), "full_name": "ZZ Valid", "email": "ap@example.com"}
-    )
-    fetches = []
+    monkeypatch.setattr(svc, "BILLING_RECIPIENT_PAGE_SIZE", 3)
+    schema = f"billing_paging_{uuid4().hex}"
+    conn = await asyncpg.connect(database_url)
+    try:
+        await conn.execute(f'CREATE SCHEMA "{schema}"')
+        await conn.execute(f'SET search_path TO "{schema}"')
+        await conn.execute(
+            """
+            CREATE TABLE contacts (
+                id UUID PRIMARY KEY, full_name VARCHAR(256) NOT NULL,
+                email VARCHAR(256), status VARCHAR(32) NOT NULL,
+                contact_type VARCHAR(32) NOT NULL, business_context_id VARCHAR(64)
+            )
+            """
+        )
+        # Postgres orders UUIDs bytewise. Sort real ones and give the ONLY
+        # usable address the last id, so it is reachable only by paging past
+        # the rejects -- the arrangement the finding described.
+        ids = sorted((uuid4() for _ in range(8)), key=str)
+        for i, cid in enumerate(ids[:-1]):
+            await conn.execute(
+                "INSERT INTO contacts VALUES ($1,$2,$3,'active','customer',$4)",
+                cid, f"AP {i}", "not-an-address", EOM)
+        target = ids[-1]
+        await conn.execute(
+            "INSERT INTO contacts VALUES ($1,$2,$3,'active','customer',$4)",
+            target, "Last Valid", "ap@example.test", EOM)
 
-    class _Pool:
-        is_initialized = True
+        queries = []
 
-        async def fetch(self, query, *args):
-            fetches.append(args)
-            limit = args[-1]
-            # Emulate the keyset predicate the query builds.
-            if "id > $" in query:
-                cursor_id = args[-2]
-                seen = [str(row["id"]) for row in corpus]
-                start = seen.index(str(cursor_id)) + 1
-                remaining = corpus[start:]
-            else:
-                remaining = corpus
-            return remaining[:limit]
+        class _Pool:
+            is_initialized = True
 
-    listed = await svc.DatabaseCRMProvider(pool=_Pool()).list_billing_recipients(
-        limit=1
-    )
+            async def fetch(self, query, *args):
+                queries.append(query)
+                return await conn.fetch(query, *args)
 
-    assert len(fetches) > 1, (
-        "the scan stopped after one page, so rejected rows displaced the "
-        "eligible one behind them"
-    )
-    assert [item["email"] for item in listed] == ["ap@example.com"]
-    assert all(item["eligible"] is True for item in listed)
+        listed = await svc.DatabaseCRMProvider(
+            pool=_Pool()).list_billing_recipients(limit=1)
 
-
+        assert len(queries) > 1, (
+            "one query only -- the scan stopped at the first page and the "
+            "rejected rows displaced the eligible one behind them")
+        assert [item["contactId"] for item in listed] == [str(target)]
+        assert listed[0]["email"] == "ap@example.test"
+        assert any("id > $" in q for q in queries[1:]), (
+            "later pages carried no keyset predicate")
+    finally:
+        await conn.execute(f'DROP SCHEMA IF EXISTS "{schema}" CASCADE')
+        await conn.close()
 @pytest.mark.asyncio
 async def test_the_list_stops_at_the_scan_cap_and_says_so(caplog):
     """A bounded scan must announce truncation rather than look complete."""
@@ -841,52 +859,63 @@ async def test_the_list_stops_at_the_scan_cap_and_says_so(caplog):
 
 
 @pytest.mark.asyncio
-async def test_paging_survives_a_rename_between_pages():
-    """The cursor must not live on a column an operator can edit.
+async def test_paging_survives_a_rename_against_real_postgres(monkeypatch):
+    """A rename between pages must not drop or duplicate a contact.
 
-    `full_name` is editable through the operator contact mutation. A keyset
-    built on it has exactly the defect keyset is chosen to avoid: renaming an
-    unvisited row to sort BEFORE the cursor drops it from the result, and
-    renaming a visited row to sort AFTER the cursor emits the same contact
-    twice. `id` is immutable, so the scan is keyed on that and display order is
-    applied to the assembled page.
+    `full_name` is operator-editable, so a cursor on it moves under the scan.
+    The rename happens between real queries here, against real SQL ordering.
     """
+    asyncpg = pytest.importorskip("asyncpg")
+    database_url = _database_url()
     from atlas_brain.services import crm_provider as svc
 
-    page_size = svc.BILLING_RECIPIENT_PAGE_SIZE
-    corpus = [
-        {"id": uuid4(), "full_name": f"AP {i:04d}", "email": "not-an-address"}
-        for i in range(page_size)
-    ]
-    target = {"id": uuid4(), "full_name": "ZZ Valid", "email": "ap@example.com"}
-    corpus.append(target)
-    fetch_count = {"n": 0}
+    monkeypatch.setattr(svc, "BILLING_RECIPIENT_PAGE_SIZE", 3)
+    schema = f"billing_rename_{uuid4().hex}"
+    conn = await asyncpg.connect(database_url)
+    try:
+        await conn.execute(f'CREATE SCHEMA "{schema}"')
+        await conn.execute(f'SET search_path TO "{schema}"')
+        await conn.execute(
+            """
+            CREATE TABLE contacts (
+                id UUID PRIMARY KEY, full_name VARCHAR(256) NOT NULL,
+                email VARCHAR(256), status VARCHAR(32) NOT NULL,
+                contact_type VARCHAR(32) NOT NULL, business_context_id VARCHAR(64)
+            )
+            """
+        )
+        ids = sorted((uuid4() for _ in range(8)), key=str)
+        for i, cid in enumerate(ids[:-1]):
+            await conn.execute(
+                "INSERT INTO contacts VALUES ($1,$2,$3,'active','customer',$4)",
+                cid, f"MM {i}", "not-an-address", EOM)
+        target = ids[-1]
+        await conn.execute(
+            "INSERT INTO contacts VALUES ($1,$2,$3,'active','customer',$4)",
+            target, "ZZ Still Unvisited", "ap@example.test", EOM)
 
-    class _Pool:
-        is_initialized = True
+        calls = {"n": 0}
 
-        async def fetch(self, query, *args):
-            fetch_count["n"] += 1
-            limit = args[-1]
-            if "id > $" in query:
-                cursor_id = args[-2]
-                start = [str(r["id"]) for r in corpus].index(str(cursor_id)) + 1
-                remaining = corpus[start:]
-            else:
-                remaining = corpus
-            page = remaining[:limit]
-            # Between page 1 and page 2, an operator renames the still-unvisited
-            # eligible contact to sort FIRST. A (full_name, id) cursor would now
-            # skip it entirely.
-            if fetch_count["n"] == 1:
-                target["full_name"] = "AAA Renamed"
-            return page
+        class _Pool:
+            is_initialized = True
 
-    listed = await svc.DatabaseCRMProvider(pool=_Pool()).list_billing_recipients(
-        limit=1
-    )
+            async def fetch(self, query, *args):
+                calls["n"] += 1
+                rows = await conn.fetch(query, *args)
+                if calls["n"] == 1:
+                    # Rename the still-unvisited eligible contact to sort FIRST
+                    # by name. A (full_name, id) cursor would now skip it.
+                    await conn.execute(
+                        "UPDATE contacts SET full_name = $1 WHERE id = $2",
+                        "AAA Renamed", target)
+                return rows
 
-    assert [item["contactId"] for item in listed] == [str(target["id"])], (
-        "a contact renamed between pages was lost by the cursor"
-    )
-    assert listed[0]["displayName"] == "AAA Renamed"
+        listed = await svc.DatabaseCRMProvider(
+            pool=_Pool()).list_billing_recipients(limit=1)
+
+        assert [item["contactId"] for item in listed] == [str(target)], (
+            "a contact renamed between pages was lost by the cursor")
+        assert listed[0]["displayName"] == "AAA Renamed"
+    finally:
+        await conn.execute(f'DROP SCHEMA IF EXISTS "{schema}" CASCADE')
+        await conn.close()
