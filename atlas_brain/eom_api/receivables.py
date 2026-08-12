@@ -188,6 +188,38 @@ async def list_open_invoices(
     )
 
 
+@router.get("/billing-recipients")
+async def list_billing_recipients(
+    search: Optional[str] = Query(default=None, max_length=256),
+    limit: int = Query(default=200, ge=1, le=500),
+    service: ReceivablesService = Depends(get_receivables_service),
+) -> list[dict]:
+    """EOM contacts assignable as an invoice recipient. Eligible only.
+
+    Behind the receivables credential rather than the EOM funnel one: this is a
+    billing capability, and the funnel token is broad. /eom-funnel/known-contacts
+    is deliberately NOT extended for it -- that route's value is that it
+    discloses nothing beyond whether an id resolves, and widening it a second
+    time would turn link verification into a general contact reader.
+    """
+    return await _call(service.list_billing_recipients(search=search, limit=limit))
+
+
+@router.get("/billing-recipients/{contact_id}")
+async def get_billing_recipient(
+    contact_id: UUID,
+    service: ReceivablesService = Depends(get_receivables_service),
+) -> dict:
+    """Authoritative answer on whether ONE contact may receive invoices.
+
+    Always 200 with an explicit verdict, never 404: "this contact is not an
+    eligible recipient, because X" is a domain answer the caller must handle,
+    not a transport failure. An ineligible verdict carries identity and cause
+    only -- never a name or address.
+    """
+    return await _call(service.get_billing_recipient(contact_id))
+
+
 @router.get("/allocation-suggestions")
 async def allocation_suggestions(
     contact_id: UUID,
