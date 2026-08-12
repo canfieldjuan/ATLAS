@@ -23,6 +23,8 @@ Admit missing/empty allocations only through two EOM routes, create an active ca
 ### Review Contract
 
 - Acceptance: EOM route accepts omitted/[]; active EOM customer gets one payment/event, zero allocated cents, full unapplied cents, no invoice writes; unknown/foreign/lead/inactive contacts fail before insert.
+- Real-Postgres evidence exercises foreign, lead, and inactive rows through the
+  production SQL and proves each leaves no payment or event.
 - Default service callers, adjustments, and legacy MCP/invoice callers remain strict;
   only both EOM routes explicitly opt into `allow_unapplied`.
 - Reachability: tracker targets Funnel full `main:app`; full/slim routes have parity.
@@ -74,7 +76,8 @@ through the transaction.
 
 ## Verification
 
-- Focused/optional Postgres concurrency, EOM profile, ruff, diff/plan and full gates; no live financial write.
+- Focused/optional Postgres concurrency and ineligible-customer boundaries,
+  EOM profile, ruff, diff/plan and full gates; no live financial write.
 
 ## Estimated diff size
 
@@ -83,6 +86,6 @@ through the transaction.
 | `atlas_brain/api/invoicing/receivables.py` | 5 |
 | `atlas_brain/eom_api/receivables.py` | 5 |
 | `atlas_brain/services/receivables.py` | 41 |
-| `plans/PR-EOM-Receivables-Unapplied-Payments.md` | 88 |
-| `tests/test_receivables.py` | 575 |
-| **Total** | **714** |
+| `plans/PR-EOM-Receivables-Unapplied-Payments.md` | 91 |
+| `tests/test_receivables.py` | 640 |
+| **Total** | **782** |

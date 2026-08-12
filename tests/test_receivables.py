@@ -1845,6 +1845,71 @@ async def test_real_postgres_unapplied_payment_holds_customer_eligibility_lock()
 
 
 @pytest.mark.asyncio
+async def test_real_postgres_unapplied_payment_rejects_ineligible_customer_rows():
+    asyncpg = pytest.importorskip("asyncpg")
+    database_url = os.environ.get("ATLAS_RECEIVABLES_TEST_DATABASE_URL")
+    if not database_url:
+        pytest.skip("ATLAS_RECEIVABLES_TEST_DATABASE_URL not set")
+
+    schema = f"receivables_ineligible_customer_{uuid4().hex}"
+    observer = await asyncpg.connect(database_url)
+    payment_conn = await asyncpg.connect(database_url)
+    try:
+        await _create_pre_receivables_schema(observer, schema)
+        await observer.execute(_receivables_migration_sql())
+        cases = (
+            ("foreign", "other_business", "customer", "active"),
+            ("lead", "effingham_maids", "lead", "active"),
+            ("inactive", "effingham_maids", "customer", "inactive"),
+        )
+        contacts = [(uuid4(), *case[1:]) for case in cases]
+        await observer.executemany(
+            """
+            INSERT INTO contacts (id, business_context_id, contact_type, status)
+            VALUES ($1, $2, $3, $4)
+            """,
+            contacts,
+        )
+        service = ReceivablesService(_SingleConnectionPool(payment_conn, schema))
+
+        for (label, *_), (contact_id, *_contact) in zip(cases, contacts):
+            key = f"e2e-unapplied-ineligible-{label}"
+            with pytest.raises(ReceivablesNotFoundError, match="Customer not found"):
+                await service.create_payment(
+                    contact_id=contact_id,
+                    payer_name="Residential Customer",
+                    total_amount=Decimal("125"),
+                    payment_method="check",
+                    received_date=date.today(),
+                    allocations=[],
+                    idempotency_key=key,
+                    allow_unapplied=True,
+                    unapplied_contact_context_id="effingham_maids",
+                )
+            assert (
+                await observer.fetchval(
+                    "SELECT COUNT(*) FROM customer_payments "
+                    "WHERE idempotency_key = $1",
+                    key,
+                )
+                == 0
+            )
+            assert (
+                await observer.fetchval(
+                    "SELECT COUNT(*) FROM payment_events "
+                    "WHERE idempotency_key = $1",
+                    key,
+                )
+                == 0
+            )
+    finally:
+        await payment_conn.close()
+        await observer.execute("SET search_path TO public")
+        await observer.execute(f'DROP SCHEMA IF EXISTS "{schema}" CASCADE')
+        await observer.close()
+
+
+@pytest.mark.asyncio
 async def test_return_waits_for_concurrent_create_before_balance_snapshot():
     """A return cannot overwrite a concurrently-created active allocation."""
     asyncpg = pytest.importorskip("asyncpg")
