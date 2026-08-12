@@ -671,72 +671,6 @@ def test_every_recovery_message_requires_a_restart(tmp_path, caplog, monkeypatch
 # --- ATLAS #2359 slice 1: configured-path validation ----------------------
 
 
-@pytest.mark.parametrize("blank", ["", "   ", "\t", "\n  "])
-def test_blank_configured_path_falls_back_to_the_default(blank):
-    """A set-but-EMPTY setting names no file, so it must not become a path.
-
-    `Path("")` is `.`, which resolved to the repo ROOT DIRECTORY: the service
-    would try to read a directory, and the setup script would bind it as its
-    write target and fail with IsADirectoryError only AFTER completing OAuth.
-    """
-    resolved = resolve_token_file_path(blank)
-
-    assert resolved == resolve_token_file_path(DEFAULT_TOKEN_FILE)
-    assert not resolved.is_dir(), resolved
-    assert resolved != REPO_ROOT
-
-
-def test_non_string_configured_path_falls_back_to_the_default():
-    """Defence in depth: a non-string setting must not reach `Path()`."""
-    assert resolve_token_file_path(None) == resolve_token_file_path(  # type: ignore[arg-type]
-        DEFAULT_TOKEN_FILE
-    )
-
-
-def test_store_with_a_blank_path_never_targets_a_directory():
-    store = GoogleTokenStore("")
-
-    assert store.token_file_path == resolve_token_file_path(DEFAULT_TOKEN_FILE)
-    assert not store.token_file_path.is_dir()
-
-
-@pytest.mark.real_provenance
-@pytest.mark.parametrize("blank", ["", "   "])
-def test_blank_setting_is_not_an_explicit_override(monkeypatch, blank):
-    """Provenance must agree with resolution.
-
-    If a blank value were treated as an override, legacy discovery would be
-    suppressed for a setting that names nothing — the operator would get
-    neither their file nor the upgrade path.
-    """
-    from atlas_brain.services import google_oauth
-
-    class _Tools:
-        model_fields_set = {"google_token_file"}
-        google_token_file = blank
-
-    class _Settings:
-        tools = _Tools()
-
-    monkeypatch.setattr(google_oauth, "settings", _Settings())
-    assert google_oauth.token_path_was_explicitly_configured() is False
-
-
-@pytest.mark.real_provenance
-def test_a_real_value_is_still_an_explicit_override(monkeypatch):
-    from atlas_brain.services import google_oauth
-
-    class _Tools:
-        model_fields_set = {"google_token_file"}
-        google_token_file = "/srv/creds/google_tokens.json"
-
-    class _Settings:
-        tools = _Tools()
-
-    monkeypatch.setattr(google_oauth, "settings", _Settings())
-    assert google_oauth.token_path_was_explicitly_configured() is True
-
-
 # --- ATLAS #2359 slice 1: the remedy must match what is actually read -----
 
 
@@ -781,3 +715,154 @@ def test_default_path_recovery_still_names_default_and_legacy(tmp_path, caplog):
     assert "Legacy locations searched" in joined
     assert "EXPLICIT" not in joined
     assert "RESTART" in joined
+
+
+# --- ATLAS #2359 slice 1: an unusable configured path fails CLOSED -------
+#
+# One invariant, checked on the FILESYSTEM rather than by spelling: if the
+# configured credential path is unusable, there is no credential at all. Wrong
+# account is worse than no account -- a wrong account is a silent cross-tenant
+# data problem, no account is a loud outage.
+
+
+@pytest.mark.parametrize("alias", [".", "./", "data/.."])
+def test_relative_directory_aliases_yield_no_credential(alias, monkeypatch, caplog):
+    """The CLASS, not the blank spelling.
+
+    A guard that only recognised `""` fixed one alias while `.`, `./` and
+    `sub/..` reproduced the same attempted-directory read (Codex #2360
+    R1/R2/R13).
+    """
+    from atlas_brain.services import google_oauth
+
+    monkeypatch.setattr(
+        google_oauth, "token_path_was_explicitly_configured", lambda: True
+    )
+    store = GoogleTokenStore(alias)
+
+    with caplog.at_level(logging.ERROR, logger="atlas.services.google_oauth"):
+        assert store.get_credentials("calendar") is None
+
+    joined = " ".join(r.getMessage() for r in caplog.records)
+    assert "DIRECTORY" in joined
+    assert "RESTART" in joined
+
+
+def test_absolute_directory_yields_no_credential(tmp_path, monkeypatch, caplog):
+    from atlas_brain.services import google_oauth
+
+    monkeypatch.setattr(
+        google_oauth, "token_path_was_explicitly_configured", lambda: True
+    )
+    a_dir = tmp_path / "creds-dir"
+    a_dir.mkdir()
+
+    with caplog.at_level(logging.ERROR, logger="atlas.services.google_oauth"):
+        assert GoogleTokenStore(str(a_dir)).get_credentials("calendar") is None
+    assert "DIRECTORY" in " ".join(r.getMessage() for r in caplog.records)
+
+
+def test_explicitly_blank_override_fails_closed(monkeypatch, caplog, tmp_path):
+    """A failed secret mount must not re-admit legacy discovery.
+
+    An empty env var is what a failed substitution looks like. Reclassifying it
+    as "unconfigured" would let a legacy credential load and authenticate as a
+    stale, unrelated Google account (Codex #2360 R3/R11).
+    """
+    from atlas_brain.services import google_oauth
+
+    monkeypatch.setattr(
+        google_oauth, "token_path_was_explicitly_configured", lambda: True
+    )
+    legacy = tmp_path / "checkout" / "data" / "google_tokens.json"
+    _write_token_file(legacy, calendar="stale-other-account")
+    monkeypatch.setattr(google_oauth, "LEGACY_TOKEN_FILES", (legacy,))
+    monkeypatch.setattr(google_oauth.settings.tools, "calendar_client_id", "cid")
+    monkeypatch.setattr(google_oauth.settings.tools, "calendar_client_secret", "sec")
+    monkeypatch.setattr(google_oauth.settings.tools, "calendar_refresh_token", "envtok")
+
+    with caplog.at_level(logging.ERROR, logger="atlas.services.google_oauth"):
+        creds = GoogleTokenStore("").get_credentials("calendar")
+
+    # neither the legacy credential NOR the .env fallback may be used
+    assert creds is None
+    joined = " ".join(r.getMessage() for r in caplog.records)
+    assert "set but EMPTY" in joined
+    assert "different Google account" in joined
+
+
+def test_blank_is_acceptable_when_NOT_explicitly_configured(monkeypatch):
+    """An unconfigured blank is just "use the default" -- not an error."""
+    from atlas_brain.services import google_oauth
+
+    monkeypatch.setattr(
+        google_oauth, "token_path_was_explicitly_configured", lambda: False
+    )
+    assert google_oauth.configured_token_path_problem("") is None
+    assert resolve_token_file_path("") == resolve_token_file_path(DEFAULT_TOKEN_FILE)
+
+
+def test_trailing_whitespace_in_an_absolute_path_is_preserved():
+    """A POSIX filename may legitimately end with whitespace.
+
+    Trimming it silently redirects the configured path — possibly onto a
+    different account's credential (Codex #2360 R1/R5).
+    """
+    raw = "/srv/creds/google_tokens.json "
+    assert str(resolve_token_file_path(raw)) == raw
+
+
+def test_whitespace_bearing_paths_are_not_silently_trimmed():
+    """Whatever the anchoring, the value must not be quietly normalised."""
+    for raw in ("/srv/creds/google_tokens.json ", " /srv/creds/google_tokens.json"):
+        assert resolve_token_file_path(raw) != resolve_token_file_path(raw.strip()), raw
+
+
+def test_a_traversal_alias_through_an_existing_dir_is_caught(
+    tmp_path, monkeypatch, caplog
+):
+    """`<dir>/sub/..` is the same defect wearing a different name.
+
+    Only caught because the check asks the FILESYSTEM whether the resolved
+    target is a directory, rather than matching spellings.
+    """
+    from atlas_brain.services import google_oauth
+
+    monkeypatch.setattr(
+        google_oauth, "token_path_was_explicitly_configured", lambda: True
+    )
+    (tmp_path / "sub").mkdir()
+    alias = str(tmp_path / "sub" / "..")
+
+    with caplog.at_level(logging.ERROR, logger="atlas.services.google_oauth"):
+        assert GoogleTokenStore(alias).get_credentials("calendar") is None
+    assert "DIRECTORY" in " ".join(r.getMessage() for r in caplog.records)
+
+
+@pytest.mark.real_provenance
+def test_a_blank_setting_is_still_explicit_provenance(monkeypatch):
+    """Blank must NOT be reclassified as unconfigured; it is invalid instead."""
+    from atlas_brain.services import google_oauth
+
+    class _Tools:
+        model_fields_set = {"google_token_file"}
+        google_token_file = ""
+
+    class _Settings:
+        tools = _Tools()
+
+    monkeypatch.setattr(google_oauth, "settings", _Settings())
+    assert google_oauth.token_path_was_explicitly_configured() is True
+
+
+def test_a_valid_configured_path_reports_no_problem(tmp_path, monkeypatch):
+    from atlas_brain.services import google_oauth
+
+    monkeypatch.setattr(
+        google_oauth, "token_path_was_explicitly_configured", lambda: True
+    )
+    good = tmp_path / "google_tokens.json"
+    _write_token_file(good, calendar="tok")
+
+    assert google_oauth.configured_token_path_problem(str(good)) is None
+    assert GoogleTokenStore(str(good)).get_credentials("calendar") is not None

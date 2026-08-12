@@ -15,9 +15,16 @@ is a DIRECTORY (the repo root): True
 store would read/write        : /…/Atlas-worktrees/eom-token-path-validation
 ```
 
-The service then tries to read a directory, and `scripts/setup_google_oauth.py`
-binds the same value as its write target and fails with `IsADirectoryError`
-only AFTER the operator has completed the interactive OAuth flow.
+The service then tries to read a directory.
+
+**Correction to an earlier draft of this plan.** It also claimed the setup
+script would bind the same value and fail with `IsADirectoryError` after the
+OAuth flow. That is NOT wired at this head: `scripts/setup_google_oauth.py`
+hardcodes its own `TOKEN_FILE` and never reads `google_token_file` or calls
+`resolve_token_file_path` — verified by grep at this head, 0 references. The
+claim was carried over from #2359's issue text, which describes the state during
+#2355 before that surface was reverted. The setup entrypoint is wired in a later
+#2359 slice; this slice is service-side only.
 
 **2. The missing-file remedy names a file the service will not read.** Under an
 explicit override, `locate_token_file` correctly refuses legacy discovery — but
@@ -53,26 +60,43 @@ Ownership lane: eom-ops/google-token-resolution
 Slice phase: Vertical slice
 Max files: 3
 
-1. A blank (empty/whitespace) or non-string configured path falls back to
-   `DEFAULT_TOKEN_FILE` instead of resolving to the repo root directory.
-2. Provenance agrees: a set-but-blank setting is NOT an explicit override, so it
-   does not suppress legacy discovery for a value that names nothing.
-3. The missing-file warning branches on provenance. Under an override it names
-   that exact path and states that legacy locations are deliberately not
-   searched; unconfigured, it keeps naming the default and the searched legacy
-   locations.
+1. **One invariant, checked on the filesystem: an unusable configured path
+   yields NO credential.** `configured_token_path_problem()` returns a reason
+   when the path is (a) explicitly set but blank, or (b) resolves to an existing
+   DIRECTORY. `get_credentials` then fails closed — no token file, no `.env`
+   fallback — and logs the reason. Wrong account is worse than no account.
+2. The directory test asks the OS, not the spelling, so `.`, `./`, `<dir>/..`
+   and any absolute directory are one defect rather than four.
+3. An explicitly blank override stays EXPLICIT provenance and is treated as
+   INVALID. Reclassifying it as unconfigured would re-admit legacy discovery
+   exactly when a secret mount or deployment substitution has failed.
+4. `.strip()` is used only to DETECT blankness; a nonblank value reaches
+   `Path()` verbatim, so a filename with leading/trailing whitespace is not
+   silently redirected.
+5. The missing-file warning branches on provenance: under an override it names
+   that exact path and says legacy locations are deliberately not searched.
 
 ### Review Contract
 
 - Acceptance criteria:
-  1. Blank and non-string configured paths resolve to the stable default and
-     never to a directory — settled by
-     `tests/test_google_token_resolution.py::test_blank_configured_path_falls_back_to_the_default`,
-     `::test_non_string_configured_path_falls_back_to_the_default` and
-     `::test_store_with_a_blank_path_never_targets_a_directory`.
-  2. Provenance treats a blank setting as unconfigured, and a real value as an
-     override — settled by `::test_blank_setting_is_not_an_explicit_override`
-     and `::test_a_real_value_is_still_an_explicit_override`.
+  1. An unusable configured path yields NO credential — neither a token file
+     nor the `.env` fallback — and logs why. Settled by
+     `tests/test_google_token_resolution.py::test_relative_directory_aliases_yield_no_credential`,
+     `::test_absolute_directory_yields_no_credential`,
+     `::test_a_traversal_alias_through_an_existing_dir_is_caught` and
+     `::test_explicitly_blank_override_fails_closed`.
+  2. An explicitly blank override keeps EXPLICIT provenance and is invalid, so
+     it cannot re-admit legacy discovery — settled by
+     `::test_a_blank_setting_is_still_explicit_provenance` and
+     `::test_explicitly_blank_override_fails_closed`, which stages BOTH a legacy
+     credential and an `.env` fallback and asserts neither is used. A blank that
+     was never configured is simply the default —
+     `::test_blank_is_acceptable_when_NOT_explicitly_configured`.
+  2b. A nonblank path is never silently trimmed — settled by
+     `::test_trailing_whitespace_in_an_absolute_path_is_preserved` and
+     `::test_whitespace_bearing_paths_are_not_silently_trimmed`.
+  2c. A valid configured path still works — settled by
+     `::test_a_valid_configured_path_reports_no_problem`.
   3. Under an explicit override the remedy names THAT path, says legacy
      discovery is deliberately skipped, and does NOT name the default or claim
      a search that did not happen — settled by
@@ -98,11 +122,26 @@ Max files: 3
   previously produced a directory, which cannot have been a working
   configuration); a provenance change could silently re-enable legacy discovery
   for a real override (mitigated by
-  `::test_a_real_value_is_still_an_explicit_override` and the unchanged
+  `::test_a_blank_setting_is_still_explicit_provenance` and the unchanged
   override-refusal test).
-- Reviewer rules triggered: R1, R14. R1 for the operator-facing behaviour change
-  in a failure path. R14 declared deliberately: `resolve_token_file_path` is an
-  admission/normalisation boundary for a filesystem path.
+- Reviewer rules triggered: R1, R2, R3, R14.
+  - **R1** — operator-facing behaviour change in a failure path.
+  - **R2 (boundary probe)** — this is a validator change. Boundary probe, both
+    sides: VALID paths still admit (`::test_a_valid_configured_path_reports_no_problem`,
+    `::test_absolute_path_is_honoured_unchanged`,
+    `::test_trailing_whitespace_in_an_absolute_path_is_preserved`) and INVALID
+    paths refuse (`::test_relative_directory_aliases_yield_no_credential`,
+    `::test_absolute_directory_yields_no_credential`,
+    `::test_a_traversal_alias_through_an_existing_dir_is_caught`,
+    `::test_explicitly_blank_override_fails_closed`). Each was negative-probed
+    by injecting the removal of the guard and confirming failure.
+  - **R3 (credential isolation)** — this selects an OAuth credential. The
+    isolation property is that an unusable configuration can never fall through
+    to a DIFFERENT account: `::test_explicitly_blank_override_fails_closed`
+    stages both a legacy credential and an `.env` fallback and asserts NEITHER
+    is used.
+  - **R14** — `resolve_token_file_path` / `configured_token_path_problem` are
+    an admission boundary for a filesystem path.
 
 ### Boundary-change enumeration
 
@@ -125,16 +164,15 @@ Closure declaration for the **configured-path** input set:
 1. **Closed or open? — CLOSED**, four shapes exhaust it: blank/non-string,
    absolute, `~`-prefixed, relative.
 2. **Where does membership come from? — ENUMERATED** in
-   `resolve_token_file_path` and asserted per shape by
-   `::test_blank_configured_path_falls_back_to_the_default`,
-   `::test_non_string_configured_path_falls_back_to_the_default`,
+   `resolve_token_file_path` / `configured_token_path_problem` and asserted per
+   shape by `::test_explicitly_blank_override_fails_closed`,
+   `::test_blank_is_acceptable_when_NOT_explicitly_configured`,
    `::test_absolute_path_is_honoured_unchanged`,
    `::test_user_home_shorthand_expands` and
    `::test_relative_path_anchors_to_the_repo_root`.
 3. **Out-of-set behaviour — none remains**: after the blank/non-string guard,
    `Path.is_absolute` is total, so every input resolves to a file path. The
-   safety property is that no input can resolve to a DIRECTORY, asserted by
-   `::test_store_with_a_blank_path_never_targets_a_directory`.
+   safety property is asserted by `::test_absolute_directory_yields_no_credential`.
 
 Closure declaration for the **provenance** decision:
 
@@ -216,10 +254,10 @@ Parked hardening: ATLAS #2359.
 
 All counts re-run at this head.
 
-- `python -m pytest tests/test_google_token_resolution.py -q` — **42 passed**
+- `python -m pytest tests/test_google_token_resolution.py -q` — **44 passed**
 - Every consumer of the changed store — `test_google_token_resolution.py`,
   `test_calendar_import_rerun.py`, `test_eom_live_calendar_import.py`,
-  `test_eom_scoped_gmail_credentials.py`, `test_leads_intake.py` — **189 passed, 1 skipped**
+  `test_eom_scoped_gmail_credentials.py`, `test_leads_intake.py` — **191 passed, 1 skipped**
 - **Both defects reproduced against this head BEFORE fixing**, quoted verbatim
   in "Why this slice exists": `resolve_token_file_path('')` returned the repo
   root and the stdlib `Path.is_dir` predicate was `True`; the override-branch warning named the stable
@@ -229,8 +267,10 @@ All counts re-run at this head.
   reverted (restored state **42 passed**):
   | Injected defect | Result |
   |---|---|
-  | blank path resolves to the repo root again | 6 failed |
-  | blank setting counted as an explicit override | 2 failed |
+  | directory check removed (the class defect returns) | 5 failed |
+  | explicitly-blank no longer fails closed | 1 failed |
+  | whitespace stripped from nonblank paths again | 2 failed |
+  | blank reclassified as unconfigured (the design I had wrong) | 2 failed |
   | recovery message stops branching on provenance | 1 failed |
 - `ruff check` on the changed module and test file: findings identical to the
   `origin/main` baseline; none introduced.
@@ -242,7 +282,7 @@ All counts re-run at this head.
 
 | File | LOC |
 |---|---:|
-| `atlas_brain/services/google_oauth.py` | 64 |
-| `plans/PR-EOM-Token-Path-Validation.md` | 248 |
-| `tests/test_google_token_resolution.py` | 118 |
-| **Total** | **430** |
+| `atlas_brain/services/google_oauth.py` | 117 |
+| `plans/PR-EOM-Token-Path-Validation.md` | 288 |
+| `tests/test_google_token_resolution.py` | 203 |
+| **Total** | **608** |

@@ -110,15 +110,21 @@ def resolve_token_file_path(token_file_path: str) -> Path:
     living outside the repo entirely; this function's job is only to honour
     absolute and `~` paths verbatim so that default works.
     """
-    # An explicitly-set-but-EMPTY setting names no file. `Path("")` is `.`,
-    # which resolves to the repo ROOT DIRECTORY -- the service would then try to
-    # read a directory, and the setup script would bind it as its write target
-    # and fail with IsADirectoryError only AFTER completing OAuth. Treat blank
-    # as "not configured" and fall back to the stable default.
+    # A blank setting names no file. `Path("")` is `.`, which resolves to the
+    # repo ROOT DIRECTORY, so the service would try to read a directory. Blank
+    # falls back to the stable default here so callers always get a usable
+    # Path; whether a blank value is ACCEPTABLE is a separate question answered
+    # by `configured_token_path_problem()`, which fails closed for an operator
+    # who explicitly set it to empty.
+    #
+    # `.strip()` is used ONLY to detect blankness. A nonblank value is passed to
+    # `Path()` verbatim, because a POSIX filename may legitimately begin or end
+    # with whitespace and silently trimming it would redirect the configured
+    # path -- possibly onto a different account's credential.
     raw = token_file_path if isinstance(token_file_path, str) else ""
     if not raw.strip():
         raw = DEFAULT_TOKEN_FILE
-    path = Path(raw.strip()).expanduser()
+    path = Path(raw).expanduser()
     if path.is_absolute():
         return path
     return _REPO_ROOT / path
@@ -135,13 +141,12 @@ def token_path_was_explicitly_configured() -> bool:
     supplied in `model_fields_set`, which is the actual provenance signal.
     """
     try:
-        if "google_token_file" not in settings.tools.model_fields_set:
-            return False
-        # Set-but-blank names no credential, so it cannot be an override. This
-        # keeps provenance consistent with resolution, which treats blank as
-        # "use the default".
-        configured = settings.tools.google_token_file
-        return bool(isinstance(configured, str) and configured.strip())
+        # A set-but-BLANK value is still an explicit override. Reclassifying it
+        # as unconfigured would re-admit legacy discovery exactly when a secret
+        # mount or deployment substitution has failed, potentially loading a
+        # stale, unrelated Google account. Blank is handled as INVALID by
+        # `configured_token_path_problem()`, not as absent.
+        return "google_token_file" in settings.tools.model_fields_set
     except Exception:  # pragma: no cover - defensive: never block auth on this
         return False
 
@@ -168,6 +173,42 @@ def describe_credential_remedy(creds: Optional["GoogleCredentials"], path: Path)
         "Re-run: python scripts/setup_google_oauth.py, then RESTART the "
         "service -- the credential is cached for the life of the process."
     )
+
+
+def configured_token_path_problem(token_file_path: str) -> Optional[str]:
+    """Return why the configured credential path is unusable, or None.
+
+    Two unusable shapes, both of which must FAIL CLOSED -- no credential at all
+    -- rather than silently resolving to something else. Loading the wrong
+    Google account is worse than loading none: a wrong account is a silent,
+    cross-tenant data problem, while no account is a loud outage.
+
+    1. EXPLICITLY SET BUT BLANK. This is what a failed secret mount or
+       deployment substitution looks like. Treating it as "unconfigured" would
+       re-admit legacy discovery precisely when the operator's intent is
+       unknown (Codex #2360 R3/R11).
+    2. RESOLVES TO AN EXISTING DIRECTORY. Checked on the filesystem rather than
+       by spelling, because `""`, `.`, `./`, `sub/..` and any absolute
+       directory are the same defect wearing different names (Codex #2360
+       R1/R2/R13). Enumerating spellings fixes examples; checking the type
+       fixes the class.
+    """
+    raw = token_file_path if isinstance(token_file_path, str) else ""
+    if not raw.strip() and token_path_was_explicitly_configured():
+        return (
+            "ATLAS_TOOLS_GOOGLE_TOKEN_FILE is set but EMPTY. Refusing to guess "
+            "a credential path: an empty override usually means a secret mount "
+            "or deployment substitution failed, and falling back could "
+            "authenticate as a different Google account. Set it to a real "
+            "path, or remove it entirely to use the default."
+        )
+    resolved = resolve_token_file_path(token_file_path)
+    if resolved.is_dir():
+        return (
+            f"the configured credential path resolves to a DIRECTORY "
+            f"({resolved}). A credential path must name a file."
+        )
+    return None
 
 
 def locate_token_file(token_file_path: str, *, explicit: bool | None = None) -> Path:
@@ -238,6 +279,8 @@ class GoogleTokenStore:
     """
 
     def __init__(self, token_file_path: str) -> None:
+        self._configured = token_file_path
+        self._path_problem = configured_token_path_problem(token_file_path)
         self._path = locate_token_file(token_file_path)
         self._data: dict = {}
         self._lock = threading.Lock()
@@ -328,6 +371,18 @@ class GoogleTokenStore:
             GoogleCredentials or None if not configured.
         """
         with self._lock:
+            if self._path_problem is not None:
+                # FAIL CLOSED. No token file, no .env fallback -- an unusable
+                # configured path means the operator's intent is unknown, and
+                # guessing risks authenticating as the wrong Google account.
+                logger.error(
+                    "Google credentials unavailable for %s: %s RESTART the "
+                    "service after fixing the configuration -- it is read once "
+                    "at startup.",
+                    service,
+                    self._path_problem,
+                )
+                return None
             self._load()
             cfg = settings.tools
 
