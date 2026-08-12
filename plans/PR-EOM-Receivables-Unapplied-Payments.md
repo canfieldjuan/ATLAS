@@ -6,17 +6,19 @@ Issue: #2362
 
 Billing & Payments must record a payment for a canonical customer who has no
 invoice, such as a residential customer. ATLAS currently requires an invoice
-allocation at both its private EOM API and service layer. The allocation also
-acts as the current proof that a supplied customer exists.
+allocation at both versioned provider request models and the shared service layer.
+The allocation also acts as the current proof that a supplied customer exists.
 
 This first provider slice is additive and safe before tracker or website
 consumers change.
 
 ### Problem-derived contract
 
-- Root cause: CreatePaymentRequest and _normalize_allocations reject [], even
-  though customer_payments, its event, its idempotency fingerprint, and its
-  payment view already represent an unapplied payment.
+- Root cause: the full `main:app` provider used by the deployed tracker and
+  the slim EOM provider each have a CreatePaymentRequest that rejects [], and
+  _normalize_allocations rejects it too, even though customer_payments, its
+  event, its idempotency fingerprint, and its payment view already represent
+  an unapplied payment.
 - Correct fix must change only initial creation: admit missing/empty
   allocations, validate and key-share lock the canonical contact, skip invoice
   work for no invoice IDs, and preserve the existing fingerprint/replay path.
@@ -28,8 +30,10 @@ consumers change.
 
 Ownership lane: eom/receivables
 Slice phase: Vertical slice
+Max files: 5
 
-1. Allow POST /api/v1/receivables/payments to omit allocations or send [].
+1. Allow both POST /api/v1/receivables/payments provider implementations to
+   omit allocations or send [].
 2. Atomically create an unapplied payment/event for an existing canonical
    contact without querying, allocating to, or recalculating an invoice.
 3. Keep same-key retries deduplicated and leave all non-create allocation
@@ -37,25 +41,30 @@ Slice phase: Vertical slice
 
 ### Review Contract
 
-- Acceptance criteria: the EOM request model accepts missing/empty allocations;
-  a valid empty request yields one received check payment, zero allocated cents,
-  full unapplied cents, one event, and no invoice writes; unknown contacts fail
-  before a parent/event insert; an unchanged retry returns its original ID and
-  does not add a payment/event; default normalization and adjustments still
-  reject []; legacy invoicing/MCP request behavior remains allocation-required.
-- Reachability proof: the production create-payment route converts
-  body.allocations and calls ReceivablesService.create_payment. Focused tests
-  invoke the real model/route function, the service transaction, and an
-  optional real-Postgres concurrent replay path.
-- Affected surfaces: private EOM create request, payment creation normalizer,
-  zero-invoice contact validation, and receivables tests.
+- Acceptance criteria: both provider request models accept missing/empty
+  allocations; a valid empty request yields one received check payment, zero
+  allocated cents, full unapplied cents, one event, and no invoice writes;
+  unknown contacts fail before a parent/event insert; an unchanged retry
+  returns its original ID and does not add a payment/event; default
+  normalization and adjustments still reject []; legacy invoicing/MCP request
+  behavior remains allocation-required.
+- Reachability proof: the deployed tracker has a configured server-only token
+  and its base URL matches the live Atlas Funnel, which proxies `/api` to the
+  full `main:app`; that app includes `api.invoicing.receivables`. Both full and
+  slim create-payment functions convert body.allocations and call
+  ReceivablesService.create_payment. Focused tests invoke both real
+  model/route functions, the service transaction, and an optional real-Postgres
+  concurrent replay path.
+- Affected surfaces: full and slim EOM create requests, payment creation
+  normalizer, zero-invoice contact validation, and receivables tests.
 - Risk areas: broad relaxation of adjustment admission, unknown contact,
   invoice balance mutation, retry duplication, and lifecycle regression.
-- Reviewer rules triggered: R1, R3, R4, R5, R8, R11, R12, R14.
+- Reviewer rules triggered: R1, R2, R3, R4, R5, R8, R11, R12, R14.
 
 ### Boundary-change enumeration
 
-- Boundary path/seam: CreatePaymentRequest.allocations at POST /payments.
+- Boundary path/seam: CreatePaymentRequest.allocations at POST /payments in
+  the full `main:app` and slim EOM provider routers.
 - Replaced-path behaviors: create changes one-to-100 rows to omitted/zero-to-100;
   AdjustAllocationsRequest remains one-to-100.
 - Guard-relevant fields: allocations, invoice_id, amount_cents,
@@ -81,8 +90,11 @@ Slice phase: Vertical slice
 ### Deployed-config probing
 
 - Deployed/default config values: no config, flag, credential, or migration is
-  changed; repo-owned render.eom.yaml keeps the EOM receivables API disabled by
-  default, while live Atlas values are unavailable through read-only access.
+  changed. The live `atlas-api.service` runs full `main:app` with
+  ATLAS_INVOICING_RECEIVABLES_API_ENABLED=true and a masked present token;
+  the deployed tracker has a masked present service token and a base URL that
+  matches that service's Funnel `/api/v1` route. Repo-owned render.eom.yaml
+  remains an undeployed slim-service candidate with receivables disabled.
 - Explicit value probe: tests use [] plus an inserted canonical contact and
   prove one payment/event with no invoice side effect.
 - Absent value probe: the request-model test omits allocations and proves [].
@@ -95,6 +107,7 @@ Slice phase: Vertical slice
 
 ### Files touched
 
+- `atlas_brain/api/invoicing/receivables.py`
 - `atlas_brain/eom_api/receivables.py`
 - `atlas_brain/services/receivables.py`
 - `plans/PR-EOM-Receivables-Unapplied-Payments.md`
@@ -102,19 +115,20 @@ Slice phase: Vertical slice
 
 ## Mechanism
 
-The EOM request model defaults allocations to []. Only initial creation passes
-allow_empty=True to the existing normalizer; all other callers retain its
-strict default. With no invoice IDs, the service key-share locks contacts.id
-and raises the domain not-found error if it is absent, then skips invoice
-locking/allocation/recalculation. Existing Decimal amounts, parent insert,
-payment event, fingerprint, and replay logic are unchanged.
+Both provider request models default allocations to []. Only initial creation
+passes allow_empty=True to the existing normalizer; all other callers retain
+its strict default. With no invoice IDs, the service key-share locks
+contacts.id and raises the domain not-found error if it is absent, then skips
+invoice locking/allocation/recalculation. Existing Decimal amounts, parent
+insert, payment event, fingerprint, and replay logic are unchanged.
 
 ## Intentional
 
 - No migration is needed: customer_payments is already separate from
   invoice_payments and supports unapplied totals.
-- The private EOM route remains the new UI provider; legacy invoicing/MCP
-  stays allocation-required and unchanged for backwards compatibility.
+- The full live provider and the slim future EOM provider remain behaviorally
+  equivalent; legacy invoicing/MCP stays allocation-required and unchanged for
+  backwards compatibility.
 - Customer selection, check metadata, receipts, tracker proxy, and website UI
   belong to later #2362 slices. Payment validity does not infer customer type.
 
@@ -135,7 +149,7 @@ Parked hardening: #2363 H-01 only.
 - pytest -q tests/test_receivables.py: focused tests pass locally; the
   real-Postgres concurrent-replay test is skipped only when
   ATLAS_RECEIVABLES_TEST_DATABASE_URL is absent.
-- ruff check on all three changed Python files, git diff --check, plan sync,
+- ruff check on all four changed Python files, git diff --check, plan sync,
   and plan-sync check pass locally.
 - Cold reconstruction is recorded in the final PR body; publish through
   push_pr.sh exactly once with that audited body.
@@ -144,8 +158,9 @@ Parked hardening: #2363 H-01 only.
 
 | File | LOC |
 |---|---:|
+| `atlas_brain/api/invoicing/receivables.py` | 2 |
 | `atlas_brain/eom_api/receivables.py` | 2 |
 | `atlas_brain/services/receivables.py` | 23 |
-| `plans/PR-EOM-Receivables-Unapplied-Payments.md` | 151 |
-| `tests/test_receivables.py` | 198 |
-| **Total** | **374** |
+| `plans/PR-EOM-Receivables-Unapplied-Payments.md` | 166 |
+| `tests/test_receivables.py` | 206 |
+| **Total** | **399** |

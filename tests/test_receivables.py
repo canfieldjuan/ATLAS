@@ -2366,16 +2366,14 @@ def test_payment_http_models_reject_coercive_cent_values():
         "allocations": [{"invoice_id": str(uuid4()), "amount_cents": 100}],
     }
     assert CreatePaymentRequest.model_validate(base).total_amount_cents == 100
-    assert (
-        EOMCreatePaymentRequest.model_validate(
-            {key: value for key, value in base.items() if key != "allocations"}
-        ).allocations
-        == []
-    )
-    assert (
-        EOMCreatePaymentRequest.model_validate({**base, "allocations": []}).allocations
-        == []
-    )
+    for request_model in (CreatePaymentRequest, EOMCreatePaymentRequest):
+        assert (
+            request_model.model_validate(
+                {key: value for key, value in base.items() if key != "allocations"}
+            ).allocations
+            == []
+        )
+        assert request_model.model_validate({**base, "allocations": []}).allocations == []
     with pytest.raises(ValueError):
         AdjustAllocationsRequest.model_validate(
             {"allocations": [], "reason": "Cannot leave adjustment empty"}
@@ -2396,9 +2394,15 @@ def test_payment_http_models_reject_coercive_cent_values():
 
 
 @pytest.mark.asyncio
-async def test_eom_payment_route_forwards_omitted_allocations_as_empty_list():
-    from atlas_brain.eom_api.receivables import CreatePaymentRequest
-    from atlas_brain.eom_api.receivables import create_payment
+async def test_payment_routes_forward_omitted_allocations_as_empty_list():
+    from atlas_brain.api.invoicing.receivables import (
+        CreatePaymentRequest as FullCreatePaymentRequest,
+    )
+    from atlas_brain.api.invoicing.receivables import create_payment as full_create_payment
+    from atlas_brain.eom_api.receivables import (
+        CreatePaymentRequest as EOMCreatePaymentRequest,
+    )
+    from atlas_brain.eom_api.receivables import create_payment as eom_create_payment
 
     class _RecordingService:
         def __init__(self) -> None:
@@ -2408,29 +2412,33 @@ async def test_eom_payment_route_forwards_omitted_allocations_as_empty_list():
             self.kwargs = kwargs
             return {"id": "payment-1"}
 
-    body = CreatePaymentRequest.model_validate(
-        {
-            "contact_id": str(uuid4()),
-            "payer_name": "Residential Customer",
-            "total_amount_cents": 12_500,
-            "payment_method": "check",
-            "received_date": "2026-08-12",
-            "reference": "1001",
-        }
-    )
-    service = _RecordingService()
+    for request_model, create_route in (
+        (FullCreatePaymentRequest, full_create_payment),
+        (EOMCreatePaymentRequest, eom_create_payment),
+    ):
+        body = request_model.model_validate(
+            {
+                "contact_id": str(uuid4()),
+                "payer_name": "Residential Customer",
+                "total_amount_cents": 12_500,
+                "payment_method": "check",
+                "received_date": "2026-08-12",
+                "reference": "1001",
+            }
+        )
+        service = _RecordingService()
 
-    result = await create_payment(
-        body,
-        actor="Juan Canfield",
-        idempotency_key="route-unapplied-payment-1",
-        service=service,
-    )
+        result = await create_route(
+            body,
+            actor="Juan Canfield",
+            idempotency_key="route-unapplied-payment-1",
+            service=service,
+        )
 
-    assert result == {"id": "payment-1"}
-    assert service.kwargs["allocations"] == []
-    assert service.kwargs["recorded_by"] == "Juan Canfield"
-    assert service.kwargs["idempotency_key"] == "route-unapplied-payment-1"
+        assert result == {"id": "payment-1"}
+        assert service.kwargs["allocations"] == []
+        assert service.kwargs["recorded_by"] == "Juan Canfield"
+        assert service.kwargs["idempotency_key"] == "route-unapplied-payment-1"
 
 
 def test_multi_invoice_mcp_is_registered_with_bounded_strict_schema():
