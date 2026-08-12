@@ -114,16 +114,41 @@ def validate_eom_funnel_canonical_crm_config(
     *,
     canonical_crm_database_confirmed: bool,
 ) -> None:
-    """Require explicit canonical CRM admission before enabled slim startup."""
+    """Require explicit canonical CRM admission before this pool is opened.
+
+    Admission is owed by whoever OPENS the pool, not by the funnel flag that
+    first needed it. The receivables billing-recipient routes read canonical
+    contacts through this same pool and are enabled independently, so gating
+    on ``api_enabled`` alone would open a configured DSN unadmitted: if it
+    pointed at a reachable non-canonical Atlas database holding
+    ``effingham_maids`` contacts, the receivables bearer could read those
+    names and addresses through routes that exist to disclose exactly that.
+    """
+    from .config import invoicing_settings
+
     resolved = config or funnel_settings
-    if not resolved.api_enabled:
+    # Mirrors the condition in init_eom_funnel_database. Both must agree, or
+    # a pool opens without the admission this function exists to require.
+    receivables_opens_pool = bool(
+        invoicing_settings.receivables_api_enabled
+        and resolved.db_connection_string.strip()
+    )
+    if not resolved.api_enabled and not receivables_opens_pool:
         return
+    trigger = (
+        "ATLAS_EOM_FUNNEL_API_ENABLED=true"
+        if resolved.api_enabled
+        else "ATLAS_EOM_RECEIVABLES_API_ENABLED=true with "
+        "ATLAS_EOM_FUNNEL_DB_CONNECTION_STRING set"
+    )
     if not canonical_crm_database_confirmed:
         raise RuntimeError(
             "ATLAS_EOM_CANONICAL_CRM_DATABASE_CONFIRMED=true is required when "
-            "ATLAS_EOM_FUNNEL_API_ENABLED=true"
+            + trigger
         )
     if not resolved.db_connection_string.strip():
+        # Only reachable via api_enabled; the receivables branch requires a
+        # DSN to be considered at all.
         raise RuntimeError(
             "ATLAS_EOM_FUNNEL_DB_CONNECTION_STRING is required when "
             "ATLAS_EOM_FUNNEL_API_ENABLED=true"
@@ -168,10 +193,7 @@ async def init_eom_funnel_database(config: EOMFunnelConfig | None = None) -> Non
     if invoicing_settings.receivables_api_enabled and resolved.db_connection_string.strip():
         pool = get_eom_funnel_db_pool(resolved)
         await pool.initialize()
-        return
     return
-    pool = get_eom_funnel_db_pool(resolved)
-    await pool.initialize()
 
 
 async def close_eom_funnel_database() -> None:

@@ -285,3 +285,239 @@ def test_wrong_tenant_is_not_a_public_reason():
 
     assert "wrong_tenant" not in BILLING_RECIPIENT_REASONS
     assert set(BILLING_RECIPIENT_REASONS) == {"not_found", "inactive", "no_email"}
+
+
+def _canonical_config(dsn: str, *, api_enabled: bool = False):
+    return SimpleNamespace(api_enabled=api_enabled, db_connection_string=dsn)
+
+
+@pytest.mark.parametrize(
+    "receivables_enabled, dsn, api_enabled, confirmed, expect_raise",
+    [
+        # Receivables opening the pool is admission-bearing on its own.
+        (True, "postgresql://host/db", False, False, True),
+        (True, "postgresql://host/db", False, True, False),
+        # No DSN: receivables never opens the pool, so nothing to admit.
+        (True, "", False, False, False),
+        (True, "   ", False, False, False),
+        # Receivables off: unchanged from before this slice.
+        (False, "postgresql://host/db", False, False, False),
+        # The funnel flag keeps its own admission regardless of receivables.
+        (False, "postgresql://host/db", True, False, True),
+        (True, "postgresql://host/db", True, False, True),
+    ],
+)
+def test_canonical_admission_is_owed_by_whoever_opens_the_pool(
+    monkeypatch, receivables_enabled, dsn, api_enabled, confirmed, expect_raise,
+):
+    """Admission follows the pool, not the flag that first needed it.
+
+    Gating on `api_enabled` alone let receivables open a configured DSN
+    unadmitted. Pointed at a reachable non-canonical Atlas database holding
+    `effingham_maids` contacts, that would disclose their names and addresses
+    to the receivables bearer through the very routes this slice adds.
+    """
+    from atlas_brain.eom_api import config as eom_config
+    from atlas_brain.eom_api import funnel_database as fd
+
+    monkeypatch.setattr(
+        eom_config.invoicing_settings,
+        "receivables_api_enabled",
+        receivables_enabled,
+    )
+    config = _canonical_config(dsn, api_enabled=api_enabled)
+
+    if expect_raise:
+        with pytest.raises(RuntimeError) as excinfo:
+            fd.validate_eom_funnel_canonical_crm_config(
+                config, canonical_crm_database_confirmed=confirmed)
+        message = str(excinfo.value)
+        assert "ATLAS_EOM_CANONICAL_CRM_DATABASE_CONFIRMED=true" in message
+        # The message must name the trigger that actually applies, or an
+        # operator sets the wrong variable and the pool stays shut.
+        expected_trigger = (
+            "ATLAS_EOM_FUNNEL_API_ENABLED=true"
+            if api_enabled
+            else "ATLAS_EOM_RECEIVABLES_API_ENABLED=true"
+        )
+        assert expected_trigger in message
+    else:
+        fd.validate_eom_funnel_canonical_crm_config(
+            config, canonical_crm_database_confirmed=confirmed)
+
+
+def test_admission_condition_matches_the_condition_that_opens_the_pool():
+    """The validator and the initializer must agree on when the pool opens.
+
+    They are two separate predicates over the same facts. If they drift, a
+    pool opens that the validator never demanded admission for -- which is
+    exactly the hole this pair of changes closes.
+    """
+    import inspect
+
+    from atlas_brain.eom_api import funnel_database as fd
+
+    init_src = inspect.getsource(fd.init_eom_funnel_database)
+    validate_src = inspect.getsource(fd.validate_eom_funnel_canonical_crm_config)
+    for source in (init_src, validate_src):
+        assert "invoicing_settings.receivables_api_enabled" in source
+        assert "db_connection_string.strip()" in source
+
+
+def test_the_real_app_fails_closed_when_the_contact_pool_is_unconfigured(tmp_path):
+    """No dependency override -- the production wiring, end to end.
+
+    The earlier version of this guard ran AFTER the app-state factory branch,
+    and the real app installs that factory unconditionally, so the guard sat
+    on a path production never takes: the fetch raised an untranslated
+    RuntimeError and answered 500. Every route test here overrides
+    `_billing_crm_dependency`, so none of them could see it. This one runs the
+    real app in a subprocess and asserts the override count is zero.
+    """
+    import json
+    import os
+    import subprocess
+    import sys
+    from pathlib import Path
+
+    from atlas_brain.eom_api import auth as receivables_auth
+
+    generated = receivables_auth.generate_receivables_service_token()
+    probe = """
+import json
+import os
+
+from fastapi.testclient import TestClient
+
+from atlas_brain import main_eom
+from atlas_brain.eom_api import receivables
+
+
+# Only the receivables DB is stubbed -- never the billing dependency. This
+# profile runs with ATLAS_DB_ENABLED=false, so /ready would 503 on the global
+# database before it ever reported the contact pool.
+class _ReadyService:
+    async def is_ready(self):
+        return True
+
+
+receivables.get_receivables_service = lambda: _ReadyService()
+if main_eom.app.dependency_overrides:
+    raise AssertionError("no dependency may be overridden in this probe")
+
+with TestClient(main_eom.app) as client:
+    headers = {"Authorization": f"Bearer {os.environ['EOM_TEST_CALLER_TOKEN']}"}
+    listed = client.get("/api/v1/receivables/billing-recipients", headers=headers)
+    detail = client.get(
+        "/api/v1/receivables/billing-recipients/"
+        "00000000-0000-4000-8000-000000000000",
+        headers=headers,
+    )
+    ready = client.get("/api/v1/receivables/ready", headers=headers)
+
+print(json.dumps({
+    "listed_status": listed.status_code,
+    "listed_code": listed.json().get("detail", {}).get("code"),
+    "detail_status": detail.status_code,
+    "ready_billing": ready.json().get("billingRecipients"),
+    "dependency_overrides": len(main_eom.app.dependency_overrides),
+}))
+"""
+    env = os.environ.copy()
+    for key in list(env):
+        if key.upper().startswith(("ATLAS_INVOICING_", "ATLAS_EOM_FUNNEL_")):
+            env.pop(key, None)
+    repo_root = Path(__file__).resolve().parents[1]
+    existing = env.get("PYTHONPATH", "")
+    env["PYTHONPATH"] = (
+        str(repo_root) if not existing else f"{repo_root}{os.pathsep}{existing}"
+    )
+    env["ATLAS_DB_ENABLED"] = "false"
+    env["ATLAS_EOM_FUNNEL_API_ENABLED"] = "false"
+    # Receivables on, no funnel DSN: the deployment shape the finding names.
+    env["ATLAS_INVOICING_RECEIVABLES_API_ENABLED"] = "true"
+    env["ATLAS_INVOICING_RECEIVABLES_SERVICE_TOKEN_SHA256"] = generated.sha256
+    env["EOM_TEST_CALLER_TOKEN"] = generated.token
+
+    result = subprocess.run(
+        [sys.executable, "-c", probe],
+        check=False, capture_output=True, cwd=tmp_path, env=env, text=True,
+    )
+
+    assert result.returncode == 0, result.stderr
+    observed = json.loads(result.stdout.strip().splitlines()[-1])
+    assert observed == {
+        # 503 with a named cause, NOT a 500 from an untranslated RuntimeError.
+        "listed_status": 503,
+        "listed_code": "billing_recipients_unavailable",
+        "detail_status": 503,
+        # Readiness says so too, rather than reporting a healthy service whose
+        # every recipient read fails.
+        "ready_billing": "unconfigured",
+        "dependency_overrides": 0,
+    }, observed
+
+
+def test_admission_holds_over_the_whole_configuration_grammar(monkeypatch):
+    """Every point in the config space, checked against a spec-derived oracle.
+
+    The rule this encodes is one sentence: **admission is owed exactly when
+    the pool is opened**, and the pool is opened by the funnel API being on,
+    or by receivables being on with a usable DSN.
+
+    The oracle is derived from that sentence rather than from the
+    implementation, so a change that redefines when the pool opens breaks this
+    test instead of quietly agreeing with itself. Enumerating the grammar
+    matters here because the defect was a whole FAMILY of configurations --
+    every (receivables on, DSN set, funnel off) point -- being admitted
+    without confirmation, not one special case.
+    """
+    from itertools import product
+
+    from atlas_brain.eom_api import config as eom_config
+    from atlas_brain.eom_api import funnel_database as fd
+
+    # Containers for a DSN: absent, several shapes of blank, and present.
+    # `strip()` decides usability, so whitespace families are the interesting
+    # boundary -- a tab-only DSN must count as absent, not as configured.
+    blank_dsns = ["", " ", "   ", "\t", "\n", "\r\n", " \t\n "]
+    real_dsns = ["postgresql://h/d", "  postgresql://h/d  ", "postgres://u:p@h:5432/d"]
+
+    space = list(product(
+        (True, False),                 # api_enabled
+        (True, False),                 # receivables_api_enabled
+        blank_dsns + real_dsns,        # DSN containers
+        (True, False),                 # canonical admission confirmed
+    ))
+    for api_enabled, receivables_enabled, dsn, confirmed in space:
+        monkeypatch.setattr(
+            eom_config.invoicing_settings,
+            "receivables_api_enabled",
+            receivables_enabled,
+        )
+        config = _canonical_config(dsn, api_enabled=api_enabled)
+
+        # --- the oracle, straight from the rule ------------------------
+        usable_dsn = bool(dsn.strip())
+        pool_opens = api_enabled or (receivables_enabled and usable_dsn)
+        # A DSN is also independently required once the funnel API is on,
+        # which is the pre-existing second failure mode.
+        expect_raise = pool_opens and (
+            not confirmed or (api_enabled and not usable_dsn)
+        )
+
+        try:
+            fd.validate_eom_funnel_canonical_crm_config(
+                config, canonical_crm_database_confirmed=confirmed)
+            raised = False
+        except RuntimeError:
+            raised = True
+
+        assert raised == expect_raise, (
+            f"api_enabled={api_enabled} receivables={receivables_enabled} "
+            f"dsn={dsn!r} confirmed={confirmed}: "
+            f"expected raise={expect_raise}, got {raised}"
+        )
+
+    # Guards against the enumeration silently collapsing to a few cases.
+    assert len(space) == 2 * 2 * (len(blank_dsns) + len(real_dsns)) * 2 == 80

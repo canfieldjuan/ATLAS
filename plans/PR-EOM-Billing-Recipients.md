@@ -59,7 +59,7 @@ in halves rather than once whole.
 
 Ownership lane: eom-crm/billing-recipients
 Slice phase: Vertical slice
-Max files: 7
+Max files: 8
 
 1. `ReceivablesService.list_billing_recipients` — eligible EOM contacts only.
 2. `ReceivablesService.get_billing_recipient` — authoritative per-contact
@@ -68,10 +68,18 @@ Max files: 7
 4. Tests covering every eligibility branch, the tenant probe, the disclosure
    guarantee, and the credential boundary.
 5. Pool lifecycle in `atlas_brain/eom_api/funnel_database.py` and
-   `atlas_brain/main_eom.py`: the funnel CRM pool must come up when receivables
-   is enabled, not only when the funnel API is, and close under the same
-   condition. Reading contacts from the pool that owns them ties this slice to
-   that pool's lifecycle.
+   `atlas_brain/main_eom.py`: the funnel CRM pool comes up when receivables is
+   enabled **and a DSN is configured**, and closes under the same condition.
+   Enabling receivables without a DSN must not stop a profile that never
+   touches billing recipients from booting, so the routes fail closed with
+   `billing_recipients_unavailable` (503) instead. Canonical-database
+   admission is owed by whoever OPENS the pool, so
+   `validate_eom_funnel_canonical_crm_config` now applies to the receivables
+   path too — gating it on the funnel flag alone would open a configured DSN
+   unadmitted, and a non-canonical Atlas database holding `effingham_maids`
+   contacts would then be readable by the receivables bearer.
+   `/receivables/ready` reports the contact pool as well, so a service whose
+   every recipient read fails cannot report itself healthy.
 6. Enrolment of that test file in `.github/workflows/atlas_invoicing_checks.yml`
    — both path-filter blocks and the pytest arguments. The fifth file exists
    because the test skips without `ATLAS_RECEIVABLES_TEST_DATABASE_URL`, which
@@ -138,6 +146,7 @@ config value is newly read.
 - `atlas_brain/services/crm_provider.py`
 - `plans/PR-EOM-Billing-Recipients.md`
 - `tests/test_eom_billing_recipients.py`
+- `tests/test_eom_render_profile.py`
 
 ## Mechanism
 
@@ -194,8 +203,15 @@ Parked hardening: none.
 
 ## Verification
 
-- `tests/test_eom_billing_recipients.py` plus `tests/test_receivables.py`
-  against a throwaway `postgres`: **68 passed**.
+- `tests/test_eom_billing_recipients.py`, `tests/test_receivables.py` and
+  `tests/test_eom_render_profile.py` against a throwaway `postgres`:
+  **138 passed**.
+- The fail-closed path is proven through the REAL app in a subprocess, with
+  `dependency_overrides == 0` asserted, because every other route test here
+  overrides `_billing_crm_dependency` and therefore could not see the
+  production wiring. That is how the first version of the guard passed while
+  being unreachable: the app installs the provider factory unconditionally, so
+  a check placed after the factory branch never ran.
 - Ruff clean on all three changed source files. The repo-wide ruff count is
   identical with these changes stashed, so it is pre-existing.
 - **Negative controls, both run and restored:** removing the tenant predicate
@@ -205,6 +221,20 @@ Parked hardening: none.
 - The first tenant control was rewritten: its initial form failed with an
   asyncpg type error rather than on the assertion, which would have "passed"
   as a control while proving nothing.
+- The admission rule is proven over the whole configuration grammar --
+  api_enabled x receivables_enabled x ten DSN shapes (blank, tab, CRLF,
+  padded, real) x confirmed, 80 points, against an oracle derived from the
+  rule ("admission is owed exactly when the pool is opened") rather than from
+  the implementation. The defect was a whole FAMILY of configurations, not one
+  case, so a fixture list would not have shown its shape.
+- Additional negative controls, all run and restored: moving the availability
+  check back after the factory branch fails the real-app test; gating admission
+  on `api_enabled` alone fails the receivables-opens-the-pool case; dropping
+  `billingRecipients` from readiness fails the real-app test.
+- A regression the unit gate caught and this head fixes: initializing the pool
+  whenever receivables is enabled made startup raise for a profile with no
+  funnel DSN, breaking
+  `test_eom_profile_reaches_receivables_ready_through_real_app`.
 - Eligibility was checked against live data before being encoded: every EOM
   contact that actually receives invoices is `status='active'` with a usable
   email, so the rule admits the AP addresses this feature exists to reach
@@ -215,10 +245,11 @@ Parked hardening: none.
 | File | LOC |
 |---|---:|
 | `.github/workflows/atlas_invoicing_checks.yml` | 3 |
-| `atlas_brain/eom_api/funnel_database.py` | 26 |
-| `atlas_brain/eom_api/receivables.py` | 74 |
+| `atlas_brain/eom_api/funnel_database.py` | 58 |
+| `atlas_brain/eom_api/receivables.py` | 87 |
 | `atlas_brain/main_eom.py` | 8 |
 | `atlas_brain/services/crm_provider.py` | 157 |
-| `plans/PR-EOM-Billing-Recipients.md` | 224 |
-| `tests/test_eom_billing_recipients.py` | 287 |
-| **Total** | **779** |
+| `plans/PR-EOM-Billing-Recipients.md` | 255 |
+| `tests/test_eom_billing_recipients.py` | 521 |
+| `tests/test_eom_render_profile.py` | 5 |
+| **Total** | **1094** |

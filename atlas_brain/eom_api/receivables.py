@@ -174,7 +174,15 @@ async def ready() -> dict:
         ) from exc
     if not schema_ready:
         raise HTTPException(status_code=503, detail="Receivables schema unavailable")
-    return {"status": "ready"}
+    # The billing-recipient routes read a SECOND database -- the pool that owns
+    # canonical EOM contacts. Reporting ready off the global receivables
+    # database alone would call the service healthy while every recipient read
+    # fails closed, which is the state readiness exists to surface.
+    contacts_ready = get_eom_funnel_db_pool().is_initialized
+    return {
+        "status": "ready",
+        "billingRecipients": "ready" if contacts_ready else "unconfigured",
+    }
 
 
 @router.get("/open-invoices")
@@ -199,16 +207,16 @@ def _billing_crm_dependency(request: Request) -> Any:
     these routes stay behind the receivables token while reading contacts from
     the pool that actually owns them.
     """
-    provider_factory = getattr(request.app.state, "eom_funnel_crm_provider", None)
-    if callable(provider_factory):
-        return provider_factory()
-    # Fail closed, and say why. Startup deliberately does NOT raise when
+    # Availability FIRST, before the app-state factory. The real app installs
+    # that factory unconditionally (atlas_brain/main_eom.py), so checking it
+    # after the factory branch put this guard on a path production never
+    # takes: the fetch would raise an untranslated RuntimeError and answer 500
+    # instead of failing closed. Startup deliberately does NOT raise when
     # receivables runs without a funnel DSN -- that would stop a profile which
     # never touches billing recipients from booting -- so the cost is borne
-    # here, by the routes that actually need the pool. Falling through would be
-    # worse than a 503: DatabaseCRMProvider._get_pool() defaults to the global
-    # pool, which is the wrong database and would answer with silence rather
-    # than an error.
+    # here, by the routes that actually need the pool. Falling through is worse
+    # than a 503: DatabaseCRMProvider._get_pool() defaults to the global pool,
+    # which is the wrong database and would answer with silence, not an error.
     if not get_eom_funnel_db_pool().is_initialized:
         raise HTTPException(
             status_code=503,
@@ -221,6 +229,9 @@ def _billing_crm_dependency(request: Request) -> Any:
                 ),
             },
         )
+    provider_factory = getattr(request.app.state, "eom_funnel_crm_provider", None)
+    if callable(provider_factory):
+        return provider_factory()
     return get_eom_funnel_crm_provider()
 
 
