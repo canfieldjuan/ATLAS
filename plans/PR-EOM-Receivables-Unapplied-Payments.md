@@ -137,12 +137,12 @@ insert, payment event, fingerprint, and replay logic are unchanged.
 - #2362 Slice 2 tracker proxy; Slice 3 customer-wide website payment entry;
   later receipt, ledger, billing preview/review, Gmail, sent-mail, and Square
   slices.
-- #2363 H-01 legacy invoice float-money audit remains separate.
+- #2363 H-01 legacy invoice float-money audit and H-06 duplicate-provider refactor remain separate.
 
 Parking predicate: do not add customer fields, delivery, invoices, UI, or a
 schema migration without a later provider-backed slice contract.
 
-Parked hardening: #2363 H-01 only.
+Parked hardening: #2363 H-01 and H-06.
 
 ## Verification
 
