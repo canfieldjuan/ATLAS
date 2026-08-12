@@ -119,14 +119,23 @@ divergence path.
     `::test_wrong_tenant_is_not_a_public_reason`.
 - Reachability proof: `GET /api/v1/receivables/billing-recipients` and
   `/{contact_id}` on the receivables router, behind `require_receivables_api`.
-- Affected surfaces: the receivables service and router, plus one new test file.
+- Affected surfaces: the receivables service and router; the funnel CRM pool's
+  lifecycle and its canonical-database admission; app startup and shutdown in
+  `atlas_brain/main_eom.py`; `/receivables/ready`; **configuration and
+  deployment** (four environment variables, tabulated under Deployed-config
+  probing); plus the new test file and one assertion in the render-profile
+  suite.
 - Risk areas: disclosing contact identity to a credential that should not have
   it; leaking a name or address on an ineligible verdict; making the route a
   cross-tenant existence oracle; admitting a contact that cannot actually
   receive mail.
 - Reviewer rules triggered: R2 (test evidence), R3 (security/authorization —
-  this is a new disclosure), R5 (backward compatibility — additive only), R14
-  (verify against the codebase).
+  this is a new disclosure), R5 (backward compatibility — additive only),
+  **R11 (config/env fallback — the admission and startup predicates now read
+  four environment values, and the canonical-database gate applies to a second
+  trigger)**, **R12 (deployment safety — a startup gate that can refuse to boot,
+  and a readiness endpoint that can now fail)**, R14 (verify against the
+  codebase).
 
 ### Boundary-change enumeration
 
@@ -140,9 +149,49 @@ divergence path.
 
 ### Deployed-config probing
 
-N/A - no guard/config boundary change. The route reuses
-`require_receivables_api` and its existing configuration; no environment or
-config value is newly read.
+This was written when the PR was two read-only routes and stayed "N/A" after
+later rounds turned it into a config boundary. It is one: the diff makes the
+admission and startup predicates depend on receivables enablement and the
+funnel DSN, mirrors that predicate in `atlas_brain/main_eom.py`, and makes
+readiness depend on the same values.
+
+**Deployed / default values** (from repo-owned deployment config,
+`render.eom.yaml:25-36`, and the typed defaults in
+`atlas_brain/eom_api/config.py`):
+
+| variable | blueprint | code default |
+|---|---|---|
+| `ATLAS_INVOICING_RECEIVABLES_API_ENABLED` | `"false"` | `False` |
+| `ATLAS_EOM_FUNNEL_API_ENABLED` | `"false"` | `False` |
+| `ATLAS_EOM_FUNNEL_DB_CONNECTION_STRING` | `sync: false` (operator-supplied, absent by default) | `""` |
+| `ATLAS_EOM_CANONICAL_CRM_DATABASE_CONFIRMED` | `"false"` | `False` |
+
+So at blueprint defaults the pool never opens, admission is never demanded, and
+the billing routes answer 503 — the gate is inert until an operator turns
+something on. That is the settling shape, and it is the one the deployed EOM
+slim profile starts from.
+
+**Probes.** All three shapes are covered, and the grammar test walks them
+exhaustively rather than by example:
+
+- *explicit* — `api_enabled=True`, and `receivables_api_enabled=True` with a
+  real DSN: admission demanded, and refused unless confirmed.
+- *absent* — no DSN at all (empty, and every whitespace shape): the pool is not
+  opened, admission is not demanded, readiness reports `unconfigured`, and the
+  routes fail closed with 503 rather than 500.
+- *default-session* — the blueprint row above: receivables off, funnel off,
+  confirmed false. Nothing opens, nothing raises. Exercised end-to-end through
+  the real app in
+  `::test_the_real_app_fails_closed_when_the_contact_pool_is_unconfigured`,
+  which asserts `dependency_overrides == 0`.
+
+**No side effect before admission.** `init_eom_funnel_database` opens no pool
+until its predicate passes, and
+`validate_eom_funnel_canonical_crm_config` runs at startup before it
+(`atlas_brain/main_eom.py`). The two predicates are checked for agreement by
+`::test_admission_condition_matches_the_condition_that_opens_the_pool` — they
+are separate expressions over the same facts, and drift between them would open
+a pool nothing demanded admission for.
 
 ### Files touched
 
@@ -256,7 +305,7 @@ Parked hardening: none.
 | `atlas_brain/eom_api/receivables.py` | 119 |
 | `atlas_brain/main_eom.py` | 8 |
 | `atlas_brain/services/crm_provider.py` | 179 |
-| `plans/PR-EOM-Billing-Recipients.md` | 262 |
+| `plans/PR-EOM-Billing-Recipients.md` | 311 |
 | `tests/test_eom_billing_recipients.py` | 582 |
 | `tests/test_eom_render_profile.py` | 5 |
-| **Total** | **1216** |
+| **Total** | **1265** |
