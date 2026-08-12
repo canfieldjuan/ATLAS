@@ -2000,19 +2000,21 @@ class DatabaseCRMProvider:
         intact -- it is a dangling or cross-tenant id that means the write
         boundary was bypassed.
 
-        Returns rows of ``{id, customer_type}`` rather than bare ids so a
-        caller mirroring the classification can refresh it from the same
-        tenant-scoped read (ATLAS #2357). The tenant predicate is unchanged and
-        still part of the query, so a contact in another business context is
-        absent here exactly as before -- it cannot leak a type it never
-        returns an id for.
+        Returns rows of ``{id, customer_type, customer_type_revision}`` rather than bare
+        ids so a caller mirroring the classification can refresh it from the
+        same tenant-scoped read (ATLAS #2357). The revision is assigned by the
+        database on each customer_type change, so it lets that caller order the
+        observed type evidence without depending on an application clock. The
+        tenant predicate is unchanged and still part of the query, so a contact
+        in another business context is absent here exactly as before -- it
+        cannot leak a type it never returns an id for.
         """
         if not contact_ids:
             return []
         pool = self._get_pool()
         rows = await pool.fetch(
             """
-            SELECT c.id, c.customer_type
+            SELECT c.id, c.customer_type, c.customer_type_revision
             FROM contacts AS c
             WHERE c.business_context_id = 'effingham_maids'
               AND c.id = ANY($1::uuid[])

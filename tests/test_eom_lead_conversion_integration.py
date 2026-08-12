@@ -105,6 +105,7 @@ async def _prepare_schema(
     *,
     apply_privilege_migration: bool = True,
     apply_lifecycle_sequence_migration: bool = True,
+    apply_customer_type_revision_migration: bool = True,
 ) -> None:
     await conn.execute(f'CREATE SCHEMA "{schema}"')
     await conn.execute(f'SET search_path TO "{schema}", public')
@@ -139,13 +140,19 @@ async def _prepare_schema(
         # column has to exist for any operator write in these tests.
         "366_contacts_customer_type.sql",
     ]
+    if apply_customer_type_revision_migration:
+        migration_names.append("367_contacts_customer_type_revision.sql")
     if apply_lifecycle_sequence_migration:
         migration_names.append("363_eom_lead_lifecycle_sequence.sql")
     if apply_privilege_migration:
         await _provision_nocodb_login(conn)
         migration_names.append("354_eom_customer_handoff_privileges.sql")
     for name in migration_names:
-        await conn.execute((MIGRATIONS / name).read_text())
+        if name == "367_contacts_customer_type_revision.sql":
+            async with conn.transaction():
+                await conn.execute((MIGRATIONS / name).read_text())
+        else:
+            await conn.execute((MIGRATIONS / name).read_text())
 
 
 async def _insert_contact(
@@ -2594,10 +2601,43 @@ async def test_nocodb_role_cannot_bypass_handoff_or_lifecycle_guards():
                     await nocodb_conn.execute(statement)
 
             contact_id = uuid.uuid4()
+            # The security-definer trigger may consume the sequence for an
+            # ordinary NocoDB insert, but that does not grant the NocoDB login
+            # direct access to either the sequence or the protected evidence
+            # column. Pin both catalog capabilities and their executable
+            # denial paths so a future ACL widening cannot pass on the happy
+            # path alone.
+            assert not await nocodb_conn.fetchval(
+                "SELECT has_sequence_privilege("
+                "'contacts_customer_type_revision_seq'::regclass, 'USAGE')"
+            )
+            assert not await nocodb_conn.fetchval(
+                "SELECT has_column_privilege("
+                "'contacts'::regclass, 'customer_type_revision', 'INSERT')"
+            )
+            assert not await nocodb_conn.fetchval(
+                "SELECT has_column_privilege("
+                "'contacts'::regclass, 'customer_type_revision', 'UPDATE')"
+            )
+            with pytest.raises(asyncpg.exceptions.InsufficientPrivilegeError):
+                await nocodb_conn.fetchval(
+                    "SELECT nextval('contacts_customer_type_revision_seq'::regclass)"
+                )
+            with pytest.raises(asyncpg.exceptions.InsufficientPrivilegeError):
+                await nocodb_conn.execute(
+                    "INSERT INTO contacts (id, full_name, customer_type_revision) "
+                    "VALUES ($1, 'Forged revision', 1)",
+                    contact_id,
+                )
             await nocodb_conn.execute(
                 "INSERT INTO contacts (id, full_name, notes) VALUES ($1, 'NocoDB CRM', 'before')",
                 contact_id,
             )
+            revision_after_insert = await nocodb_conn.fetchval(
+                "SELECT customer_type_revision FROM contacts WHERE id = $1",
+                contact_id,
+            )
+            assert revision_after_insert > 0
             await nocodb_conn.execute(
                 "UPDATE contacts SET notes = 'ordinary edit' WHERE id = $1",
                 contact_id,
@@ -2608,6 +2648,18 @@ async def test_nocodb_role_cannot_bypass_handoff_or_lifecycle_guards():
                 )
                 == "ordinary edit"
             )
+            assert (
+                await nocodb_conn.fetchval(
+                    "SELECT customer_type_revision FROM contacts WHERE id = $1",
+                    contact_id,
+                )
+                == revision_after_insert
+            )
+            with pytest.raises(asyncpg.exceptions.InsufficientPrivilegeError):
+                await nocodb_conn.execute(
+                    "UPDATE contacts SET customer_type_revision = 1 WHERE id = $1",
+                    contact_id,
+                )
             await nocodb_conn.execute(
                 """
                 INSERT INTO contact_interactions (id, contact_id, interaction_type)
@@ -5918,6 +5970,7 @@ async def test_operator_create_persists_customer_type_rather_than_defaulting():
             "SELECT * FROM contacts WHERE id = $1", uuid.UUID(created["contact_id"])
         )
         assert contact["customer_type"] == "commercial"
+        assert contact["customer_type_revision"] > 0
     finally:
         await conn.execute(f'DROP SCHEMA IF EXISTS "{schema}" CASCADE')
         await conn.close()
@@ -5981,6 +6034,10 @@ async def test_operator_update_changes_customer_type_and_audits_the_old_value():
             ),
         )
         contact_id = created["contact_id"]
+        before = await conn.fetchval(
+            "SELECT customer_type_revision FROM contacts WHERE id = $1",
+            uuid.UUID(contact_id),
+        )
 
         updated = await mutate_eom_operator_contact(
             provider,
@@ -6001,6 +6058,7 @@ async def test_operator_update_changes_customer_type_and_audits_the_old_value():
             "SELECT * FROM contacts WHERE id = $1", uuid.UUID(contact_id)
         )
         assert contact["customer_type"] == "commercial"
+        assert contact["customer_type_revision"] > before
 
         event = await conn.fetchrow(
             """
@@ -6059,6 +6117,7 @@ def test_the_boundary_refuses_a_bad_customer_type_before_the_database_sees_it():
     database rejects reaches the caller as a server error instead of a
     validation error. Both layers must agree on the same set.
     """
+
     def _command(value):
         return EOMOperatorContactMutation.from_raw(
             operation_key=f"ctype-guard-{uuid.uuid4().hex}",
@@ -6083,14 +6142,14 @@ def test_the_boundary_refuses_a_bad_customer_type_before_the_database_sees_it():
 
 
 @pytest.mark.asyncio
-async def test_funnel_readiness_refuses_a_contacts_table_without_customer_type():
-    """Migration 366 is a readiness precondition, not merely a nice-to-have.
+async def test_funnel_readiness_refuses_a_contacts_table_without_customer_type_or_revision():
+    """Migrations 366 and 367 are readiness preconditions, not nice-to-haves.
 
     Startup catches a failed migration and continues into the readiness guard.
-    The provider's contact INSERT names customer_type explicitly, so admitting
-    the funnel against a table missing that column would move the failure from
-    the gate -- where it is one controlled error -- to every operator create,
-    which would raise undefined_column at the write.
+    The provider's contact INSERT names customer_type explicitly and the
+    known-contacts read names customer_type_revision. Admitting the funnel
+    against a table missing either field would move failure from the gate --
+    where it is one controlled error -- to a later write or tracker refresh.
     """
     from atlas_brain.eom_api.funnel_store import require_eom_funnel_data_store
 
@@ -6116,8 +6175,31 @@ async def test_funnel_readiness_refuses_a_contacts_table_without_customer_type()
             get_db_pool_fn=lambda: _Pool(),
         )
 
-        # ...and refused once it is gone, which is the state a failed 366 leaves.
+        # ...and refused once either field is gone, which is the state a failed
+        # migration leaves.
         await conn.execute("ALTER TABLE contacts DROP COLUMN customer_type")
+        with pytest.raises(RuntimeError, match="CRM lifecycle and handoff schema"):
+            await require_eom_funnel_data_store(
+                type("Config", (), {"api_enabled": True})(),
+                database_enabled=True,
+                get_db_pool_fn=lambda: _Pool(),
+            )
+
+        await conn.execute("ALTER TABLE contacts ADD COLUMN customer_type VARCHAR(16)")
+        await conn.execute("ALTER TABLE contacts DROP COLUMN customer_type_revision")
+        with pytest.raises(RuntimeError, match="CRM lifecycle and handoff schema"):
+            await require_eom_funnel_data_store(
+                type("Config", (), {"api_enabled": True})(),
+                database_enabled=True,
+                get_db_pool_fn=lambda: _Pool(),
+            )
+
+        # A present but incompatible value would satisfy a name-only guard, yet
+        # cannot support the BIGINT source-version contract. The type check is
+        # therefore a real fail-closed branch, not an incidental refinement.
+        await conn.execute(
+            "ALTER TABLE contacts ADD COLUMN customer_type_revision INTEGER"
+        )
         with pytest.raises(RuntimeError, match="CRM lifecycle and handoff schema"):
             await require_eom_funnel_data_store(
                 type("Config", (), {"api_enabled": True})(),
@@ -6145,7 +6227,12 @@ async def test_a_generic_contact_insert_still_works_without_migration_366():
     schema = f"atlas_eom_ctype_pre366_{uuid.uuid4().hex}"
     conn = await asyncpg.connect(database_url)
     try:
-        await _prepare_schema(conn, schema, apply_privilege_migration=False)
+        await _prepare_schema(
+            conn,
+            schema,
+            apply_privilege_migration=False,
+            apply_customer_type_revision_migration=False,
+        )
         # The state a pending or failed migration 366 leaves behind.
         await conn.execute("ALTER TABLE contacts DROP COLUMN customer_type")
         provider = DatabaseCRMProvider(pool=conn)

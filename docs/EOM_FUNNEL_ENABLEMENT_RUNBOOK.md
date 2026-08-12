@@ -4,12 +4,12 @@ Operator + DBA procedure to bring the private EOM funnel live on the **ts.net At
 
 ## What the boot gate requires
 
-`atlas_brain/eom_api/funnel_store.py::require_eom_funnel_data_store` runs when `ATLAS_EOM_FUNNEL_API_ENABLED=true` and fails closed unless the DB has migrations **353–363** applied **and** a role contract: `atlas_eom_handoff_owner` owns `eom_customer_handoffs` + holds schema `CREATE`; the app login is **not** a member of it; `atlas_nocodb` is read/write on only `contacts`/`contact_interactions`/`appointments`. Migration `354` establishes that contract but aborts unless a DBA pre-provisions roles (below). "Apply migration 353" alone is **not** sufficient.
+`atlas_brain/eom_api/funnel_store.py::require_eom_funnel_data_store` runs when `ATLAS_EOM_FUNNEL_API_ENABLED=true` and fails closed unless the DB has migrations **353–363, 366, and 367** applied **and** a role contract: `atlas_eom_handoff_owner` owns `eom_customer_handoffs` + holds schema `CREATE`; the app login is **not** a member of it; `atlas_nocodb` is read/write on only `contacts`/`contact_interactions`/`appointments`. Migration `354` establishes that contract but aborts unless a DBA pre-provisions roles (below). "Apply migration 353" alone is **not** sufficient.
 
 ## Prerequisites (verify first)
 
 - The `atlas-api` unit runs the **full** app: `grep ExecStart ~/.config/systemd/user/atlas-api.service` shows `uvicorn atlas_brain.main:app`. The slim `main_eom` applies only receivables migrations and can never satisfy the gate.
-- The runtime is on current `origin/main` (has `funnel_store.py` + migrations 356–363). If it is behind, advance it — a **fresh-worktree cutover** is the safe form: `git -C <atlas> worktree add --detach worktrees/atlas-runtime-main origin/main`, repoint the unit's `WorkingDirectory` to it (keep a `.bak`), `systemctl --user daemon-reload`. Rollback = repoint to the old worktree + restart.
+- The runtime is on current `origin/main` (has `funnel_store.py` + migrations 356–363, 366, and 367). If it is behind, advance it — a **fresh-worktree cutover** is the safe form: `git -C <atlas> worktree add --detach worktrees/atlas-runtime-main origin/main`, repoint the unit's `WorkingDirectory` to it (keep a `.bak`), `systemctl --user daemon-reload`. Rollback = repoint to the old worktree + restart.
   - **Env carries automatically:** the unit's `EnvironmentFile` is an **absolute** path to the main repo's `.env` (e.g. `EnvironmentFile=-/home/<user>/Desktop/Atlas/.env`), so the fresh worktree needs **no** `.env` copy — systemd injects the process environment regardless of `WorkingDirectory`. Confirm the `EnvironmentFile` path is absolute (not worktree-relative) before cutting over.
 - A superuser DB session is reachable: on this host, `psql -U postgres -d atlas -h localhost -p 5433` connects as superuser (no external DBA needed).
 
@@ -27,12 +27,14 @@ GRANT atlas_eom_handoff_owner TO <app-login> WITH ADMIN OPTION;          -- temp
 
 ## Phase 2 — Apply migrations (auto; keep the funnel disabled)
 
-`systemctl --user restart atlas-api`. The full-app lifespan runs `run_migrations()` → applies 353–363 (354 now passes). Verify:
+`systemctl --user restart atlas-api`. The full-app lifespan runs `run_migrations()` → applies 353–363, 366, and 367 (354 now passes). Verify:
 
 ```sql
-SELECT version FROM schema_migrations WHERE version BETWEEN 353 AND 363;   -- expect all eleven
+SELECT version FROM schema_migrations WHERE version BETWEEN 353 AND 363 OR version IN (366, 367);  -- expect all thirteen
 SELECT pg_get_userbyid(relowner) FROM pg_class WHERE relname='eom_customer_handoffs';  -- atlas_eom_handoff_owner
 SELECT attname FROM pg_attribute WHERE attrelid='eom_lead_lifecycle_events'::regclass AND attname='lifecycle_sequence' AND NOT attisdropped;  -- expect lifecycle_sequence
+SELECT attname, format_type(atttypid, atttypmod) FROM pg_attribute WHERE attrelid='contacts'::regclass AND attname='customer_type_revision' AND NOT attisdropped;  -- expect customer_type_revision | bigint
+SELECT EXISTS (SELECT 1 FROM pg_trigger WHERE tgrelid='contacts'::regclass AND tgname='trg_stamp_contacts_customer_type_revision' AND NOT tgisinternal);  -- expect true
 ```
 Migration failures are logged as warnings (not fatal) — **confirm 354 committed**, don't assume.
 
@@ -53,7 +55,7 @@ This does not affect the gate (which audits `atlas_nocodb` + ownership + non-mem
 
 ## Phase 4 — Prove the gate passes as the app login (before enabling)
 
-As the app login, confirm: not a member of `atlas_eom_handoff_owner`; handoff owned by the guard; `atlas_nocodb` has no INSERT on handoff/lifecycle nor write on `contacts.lead_stage`; `eom_onboarding_email_drafts.approved_by_employee_id` is `bigint`; `eom_lead_lifecycle_events.lifecycle_sequence` exists; and the app login can now SELECT/INSERT the handoff table (Phase 3b). All true → safe to enable.
+As the app login, confirm: not a member of `atlas_eom_handoff_owner`; handoff owned by the guard; `atlas_nocodb` has no INSERT on handoff/lifecycle nor write on `contacts.lead_stage` or `contacts.customer_type_revision`, and no direct usage on `contacts_customer_type_revision_seq`; `eom_onboarding_email_drafts.approved_by_employee_id` is `bigint`; `eom_lead_lifecycle_events.lifecycle_sequence` exists; the `customer_type_revision` `bigint` column and its trigger exist; and the app login can now SELECT/INSERT the handoff table (Phase 3b). All true → safe to enable.
 
 ## Phase 5 — Enable (Atlas runtime)
 
@@ -88,7 +90,9 @@ Then: admin login → portal Leads tab loads live; `/api/admin/funnel/review` re
 
 ## Rollback
 
-`ATLAS_EOM_FUNNEL_API_ENABLED=false` + `systemctl --user restart atlas-api` — fail-closed by design; tracker degrades to prior behavior. To revert the runtime, repoint the unit `WorkingDirectory` to the previous worktree + restart.
+`ATLAS_EOM_FUNNEL_API_ENABLED=false` + `systemctl --user restart atlas-api` — fail-closed by design; tracker degrades to prior behavior. To revert the runtime, repoint the unit `WorkingDirectory` to the previous worktree + restart **while retaining migration 367's revision column, positive constraint, trigger, function, sequence, and backfilled data**. Pre-367 contact writers omit the new column and the trigger supplies it, so retained schema is the safe mixed-version rollback state.
+
+Do **not** drop migration 367 artifacts as a routine rollback: that discards source-order evidence and can break a still-running revision-aware provider or tracker. A separately authorized DBA teardown is permitted only after every such deployment is gone, in this order: drop `trg_stamp_contacts_customer_type_revision`; drop `stamp_contacts_customer_type_revision()`; detach `contacts_customer_type_revision_seq` ownership; drop `contacts.customer_type_revision` (which removes its positive CHECK); then drop the sequence.
 
 ## Failure modes
 
