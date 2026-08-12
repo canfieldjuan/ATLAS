@@ -1369,7 +1369,6 @@ class ReceivablesService:
                   AND business_context_id = $2
                   AND contact_type = 'customer'
                   AND status = 'active'
-                  AND lead_stage IS NULL
                 FOR KEY SHARE
                 """,
                 contact_id,

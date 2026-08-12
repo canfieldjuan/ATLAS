@@ -48,7 +48,6 @@ class _CreatePaymentConnection:
                 "business_context_id": "effingham_maids",
                 "contact_type": "customer",
                 "status": "active",
-                "lead_stage": None,
             }
             for contact_id in contact_ids or []
         }
@@ -56,6 +55,7 @@ class _CreatePaymentConnection:
             {contact["id"]: contact for contact in contact_rows or []}
         )
         self.contact_lock_count = 0
+        self.contact_queries: list[str] = []
         self.parent_args = None
         self.parent_insert_count = 0
         self.allocations: list[dict] = []
@@ -72,6 +72,7 @@ class _CreatePaymentConnection:
             return None
         if "FROM contacts" in query:
             self.contact_lock_count += 1
+            self.contact_queries.append(query)
             contact = self.contacts.get(args[0])
             if not contact:
                 return None
@@ -79,7 +80,6 @@ class _CreatePaymentConnection:
                 contact.get("business_context_id") != args[1]
                 or contact.get("contact_type") != "customer"
                 or contact.get("status") != "active"
-                or contact.get("lead_stage") is not None
             ):
                 return None
             return {"id": args[0]}
@@ -258,6 +258,7 @@ async def test_create_payment_records_unapplied_receipt_and_replays_without_invo
     assert pool.transaction_count == 2
     assert pool.conn.parent_insert_count == 1
     assert pool.conn.contact_lock_count == 1
+    assert all("lead_stage" not in query for query in pool.conn.contact_queries)
     assert not any("FROM invoices" in query for query, _args in pool.conn.fetches)
     assert not any(
         "INSERT INTO invoice_payments" in query or "WITH totals AS" in query
@@ -321,7 +322,7 @@ async def test_create_unapplied_payment_rejects_ineligible_eom_contacts_before_i
     contact_id = uuid4()
     pool = _CreatePaymentPool(
         [],
-        contact_rows=[{"id": contact_id, "lead_stage": None, **contact}],
+        contact_rows=[{"id": contact_id, **contact}],
     )
 
     with pytest.raises(ReceivablesNotFoundError, match="Customer not found"):
@@ -879,7 +880,11 @@ class _MigrationConnectionPool:
 async def _create_pre_receivables_schema(conn, schema: str) -> None:
     await conn.execute(f'CREATE SCHEMA "{schema}"')
     await conn.execute(f'SET search_path TO "{schema}"')
-    await conn.execute("CREATE TABLE contacts (id uuid PRIMARY KEY, business_context_id VARCHAR(64), contact_type VARCHAR(32) NOT NULL DEFAULT 'customer', status VARCHAR(32) NOT NULL DEFAULT 'active', lead_stage VARCHAR(32))")
+    await conn.execute(
+        "CREATE TABLE contacts (id uuid PRIMARY KEY, business_context_id VARCHAR(64), "
+        "contact_type VARCHAR(32) NOT NULL DEFAULT 'customer', "
+        "status VARCHAR(32) NOT NULL DEFAULT 'active')"
+    )
     invoice_migration = (
         Path(__file__).parents[1] / "atlas_brain/storage/migrations/045_invoices.sql"
     ).read_text(encoding="utf-8")
