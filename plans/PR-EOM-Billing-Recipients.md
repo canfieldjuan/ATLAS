@@ -27,13 +27,30 @@ Fixing it needs a relationship the tracker can store and the invoicing path can
 resolve. Before the tracker can store one, Atlas has to be able to say which
 contacts are permissible recipients and who they are. That is this PR.
 
+### Diff budget
+
+Over the 400-line soft cap. The code is a small fraction of it: the routes plus
+the two provider methods and their helpers. The remainder is the plan document
+and the tests, both required by this same contract.
+
+This is not indivisible and I will not claim it is -- the detail route could
+ship before the list route. The claim is that splitting is worse. The two share
+the eligibility predicate and both projection helpers, so separating them either
+duplicates that rule or lands a helper whose second consumer arrives next PR,
+and each half carries its own copy of the plan document. Total reviewed lines go
+up, and the disclosure decision that actually needs scrutiny gets reviewed twice
+in halves rather than once whole.
+
 ### Problem-derived contract
 
 - Root cause: no modelled billing-recipient relationship, and no read that lets
   a caller validate one.
 - Correct fix must touch/change: a narrow Atlas read exposing recipient
   eligibility and recipient identity, behind the billing credential.
-- Must not change: `/eom-funnel/known-contacts`, which stays id-and-type only —
+- Must not change: the pool that owns EOM contacts — these reads go through the
+  funnel CRM provider, because `ReceivablesService.pool` resolves the separate
+  global DSN which in the deployed slim topology is a different database;
+  `/eom-funnel/known-contacts`, which stays id-and-type only —
   its value is that it discloses nothing, and widening it a second time turns
   link verification into a general contact reader; the EOM funnel credential,
   which gains no billing capability; any write path — this PR is read-only.
@@ -42,7 +59,7 @@ contacts are permissible recipients and who they are. That is this PR.
 
 Ownership lane: eom-crm/billing-recipients
 Slice phase: Vertical slice
-Max files: 4
+Max files: 5
 
 1. `ReceivablesService.list_billing_recipients` — eligible EOM contacts only.
 2. `ReceivablesService.get_billing_recipient` — authoritative per-contact
@@ -50,6 +67,11 @@ Max files: 4
 3. Two GET routes on the receivables router, behind `require_receivables_api`.
 4. Tests covering every eligibility branch, the tenant probe, the disclosure
    guarantee, and the credential boundary.
+5. Enrolment of that test file in `.github/workflows/atlas_invoicing_checks.yml`
+   — both path-filter blocks and the pytest arguments. The fifth file exists
+   because the test skips without `ATLAS_RECEIVABLES_TEST_DATABASE_URL`, which
+   only that workflow provisions; without it the only proof of the SQL
+   eligibility logic would never run in CI.
 
 Not in this PR: `billing_contact_id` on the tracker (1B), the resolver (1C),
 invoice-creation integration (1D), and the caller-supplied-email refusal (1E).
@@ -104,8 +126,9 @@ config value is newly read.
 
 ### Files touched
 
+- `.github/workflows/atlas_invoicing_checks.yml`
 - `atlas_brain/eom_api/receivables.py`
-- `atlas_brain/services/receivables.py`
+- `atlas_brain/services/crm_provider.py`
 - `plans/PR-EOM-Billing-Recipients.md`
 - `tests/test_eom_billing_recipients.py`
 
@@ -184,8 +207,9 @@ Parked hardening: none.
 
 | File | LOC |
 |---|---:|
-| `atlas_brain/eom_api/receivables.py` | 32 |
-| `atlas_brain/services/receivables.py` | 122 |
-| `plans/PR-EOM-Billing-Recipients.md` | 191 |
-| `tests/test_eom_billing_recipients.py` | 275 |
-| **Total** | **620** |
+| `.github/workflows/atlas_invoicing_checks.yml` | 3 |
+| `atlas_brain/eom_api/receivables.py` | 55 |
+| `atlas_brain/services/crm_provider.py` | 131 |
+| `plans/PR-EOM-Billing-Recipients.md` | 215 |
+| `tests/test_eom_billing_recipients.py` | 278 |
+| **Total** | **682** |

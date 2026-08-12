@@ -43,18 +43,12 @@ async def _seed_contact(conn, *, name, status="active", email="ap@example.test",
     return contact_id
 
 
-async def _service_for(conn_pool):
-    from atlas_brain.services.receivables import ReceivablesService
-
-    return ReceivablesService(pool=conn_pool)
-
-
 @pytest.mark.asyncio
 async def test_the_billing_projection_answers_every_eligibility_case():
     asyncpg = pytest.importorskip("asyncpg")
     database_url = _database_url()
 
-    from atlas_brain.services import receivables as svc
+    from atlas_brain.services import crm_provider as svc
 
     schema = f"billing_recipients_{uuid4().hex}"
     conn = await asyncpg.connect(database_url)
@@ -82,6 +76,8 @@ async def test_the_billing_projection_answers_every_eligibility_case():
             conn, name="Paused AP", status="inactive", email="paused@example.test")
         no_email = await _seed_contact(conn, name="No Address", email=None)
         blank_email = await _seed_contact(conn, name="Blank Address", email="   ")
+        tab_email = await _seed_contact(conn, name="Tab Address", email="\t")
+        newline_email = await _seed_contact(conn, name="Newline Address", email="\n ")
         other_tenant = await _seed_contact(
             conn, name="Someone Else's AP", email="ap@other.test",
             tenant="churnsignals")
@@ -90,13 +86,17 @@ async def test_the_billing_projection_answers_every_eligibility_case():
         class _Pool:
             is_initialized = True
 
+            @property
+            def pool(self):
+                return self
+
             async def fetch(self, query, *args):
                 return await conn.fetch(query, *args)
 
             async def fetchrow(self, query, *args):
                 return await conn.fetchrow(query, *args)
 
-        service = svc.ReceivablesService(pool=_Pool())
+        service = svc.DatabaseCRMProvider(pool=_Pool())
 
         # --- the positive case -------------------------------------------
         ok = await service.get_billing_recipient(eligible)
@@ -114,6 +114,8 @@ async def test_the_billing_projection_answers_every_eligibility_case():
             (inactive, "inactive"),
             (no_email, "no_email"),
             (blank_email, "no_email"),
+            (tab_email, "no_email"),
+            (newline_email, "no_email"),
             (missing, "not_found"),
         ):
             verdict = await service.get_billing_recipient(contact_id)
@@ -143,6 +145,7 @@ async def test_the_billing_projection_answers_every_eligibility_case():
         for excluded, label in (
             (archived, "archived"), (inactive, "inactive"),
             (no_email, "no email"), (blank_email, "blank email"),
+            (tab_email, "tab-only email"), (newline_email, "newline-only email"),
             (other_tenant, "another tenant"),
         ):
             assert str(excluded) not in ids, f"{label} contact was offered"
@@ -193,7 +196,7 @@ async def test_the_routes_sit_behind_the_receivables_credential():
     app.dependency_overrides[receivables_auth.get_receivables_api_config] = (
         lambda: config
     )
-    app.dependency_overrides[routes.get_receivables_service] = lambda: _Service()
+    app.dependency_overrides[routes._billing_crm_dependency] = lambda: _Service()
 
     transport = httpx.ASGITransport(app=app)
     async with httpx.AsyncClient(
@@ -245,7 +248,7 @@ async def test_an_ineligible_verdict_is_200_with_a_reason_not_404():
     app.dependency_overrides[receivables_auth.get_receivables_api_config] = (
         lambda: config
     )
-    app.dependency_overrides[routes.get_receivables_service] = lambda: _Service()
+    app.dependency_overrides[routes._billing_crm_dependency] = lambda: _Service()
 
     transport = httpx.ASGITransport(app=app)
     async with httpx.AsyncClient(
@@ -269,7 +272,7 @@ def test_wrong_tenant_is_not_a_public_reason():
     requiring that callers never learn it -- a contradiction. The lookup is
     tenant-scoped instead, so the distinction is never computed.
     """
-    from atlas_brain.services.receivables import BILLING_RECIPIENT_REASONS
+    from atlas_brain.services.crm_provider import BILLING_RECIPIENT_REASONS
 
     assert "wrong_tenant" not in BILLING_RECIPIENT_REASONS
     assert set(BILLING_RECIPIENT_REASONS) == {"not_found", "inactive", "no_email"}

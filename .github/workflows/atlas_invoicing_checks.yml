@@ -38,6 +38,7 @@ on:
       - "tests/test_monthly_invoice_generation.py"
       - "tests/test_invoice_repository.py"
       - "tests/test_receivables.py"
+      - "tests/test_eom_billing_recipients.py"
       - "tests/test_invoicing_readonly_mcp.py"
       - "tests/test_invoicing_readonly_oauth.py"
       - "tests/test_invoicing_draft_writer_mcp.py"
@@ -80,6 +81,7 @@ on:
       - "tests/test_monthly_invoice_generation.py"
       - "tests/test_invoice_repository.py"
       - "tests/test_receivables.py"
+      - "tests/test_eom_billing_recipients.py"
       - "tests/test_invoicing_readonly_mcp.py"
       - "tests/test_invoicing_readonly_oauth.py"
       - "tests/test_invoicing_draft_writer_mcp.py"
@@ -134,6 +136,7 @@ jobs:
           python -m pytest \
             tests/test_eom_render_profile.py \
             tests/test_receivables.py \
+            tests/test_eom_billing_recipients.py \
             tests/test_invoice_repository.py \
             -q
 

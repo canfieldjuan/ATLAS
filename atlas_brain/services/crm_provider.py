@@ -433,6 +433,50 @@ async def _write_contact_interaction(
 # ---------------------------------------------------------------------------
 
 
+# --------------------------------------------------------------------------
+# Billing recipients (EOM Slice 1A)
+# --------------------------------------------------------------------------
+
+BILLING_RECIPIENT_ELIGIBLE_STATUS = "active"
+
+# Whitespace that makes an address unusable. btrim's one-argument form strips
+# SPACES ONLY, so an email of "\t" survived it and was reported eligible --
+# then handed to the mail path as a recipient. Every trim below names the set.
+BILLING_RECIPIENT_BLANK_CHARS = " \t\r\n\x0b\x0c"
+
+# Public reason tokens. `wrong_tenant` is deliberately absent: the lookup is
+# tenant-scoped in SQL, so a contact belonging to another tenant is simply not
+# found and this code never learns otherwise.
+BILLING_RECIPIENT_REASONS = ("not_found", "inactive", "no_email")
+
+
+def _billing_recipient_projection(row: Any) -> dict[str, Any]:
+    """Build the five-field public object from an ALREADY-ELIGIBLE row.
+
+    Eligibility is decided before this is called, never after. Constructing a
+    full contact response and blanking fields on the way out would make "never
+    a partial row" depend on every failure branch remembering to redact.
+    """
+    return {
+        "contactId": str(row["id"]),
+        "displayName": row["full_name"],
+        "email": row["email"],
+        "eligible": True,
+        "reason": None,
+    }
+
+
+def _billing_recipient_refusal(contact_id: Any, reason: str) -> dict[str, Any]:
+    """The only shape an ineligible answer may take: identity and cause only."""
+    return {
+        "contactId": str(contact_id),
+        "displayName": None,
+        "email": None,
+        "eligible": False,
+        "reason": reason,
+    }
+
+
 class DatabaseCRMProvider:
     """CRM provider -- queries the `contacts` table directly via asyncpg."""
 
@@ -1982,6 +2026,93 @@ class DatabaseCRMProvider:
             *params,
         )
         return [dict(row) for row in rows]
+
+    async def list_billing_recipients(
+        self,
+        *,
+        search: Optional[str] = None,
+        limit: int = 200,
+    ) -> list[dict[str, Any]]:
+        """List EOM contacts assignable as an invoice recipient. Eligible only.
+
+        Lives on the CRM provider, not the receivables service, because that is
+        where canonical EOM contact reads live -- get_eom_funnel_crm_provider()
+        pins this to the dedicated funnel CRM pool. ReceivablesService.pool
+        resolves the separate global DSN, which in the deployed slim topology is
+        a different database, so a contacts query there would read the wrong one.
+
+        Discloses display name and email deliberately: an operator choosing
+        where money-related mail goes has to see the address. It stays a narrow
+        billing projection -- no phone, address, notes, tags, source, lifecycle.
+        """
+        from .eom_lead_ingress import EOM_BUSINESS_CONTEXT_ID
+
+        pool = self._get_pool()
+        conditions = [
+            "business_context_id = $1",
+            "status = $2",
+            "email IS NOT NULL",
+            "btrim(email, $3) <> ''",
+        ]
+        args: list[Any] = [
+            EOM_BUSINESS_CONTEXT_ID,
+            BILLING_RECIPIENT_ELIGIBLE_STATUS,
+            BILLING_RECIPIENT_BLANK_CHARS,
+        ]
+        if search and search.strip():
+            args.append(f"%{search.strip()}%")
+            conditions.append(
+                f"(full_name ILIKE ${len(args)} OR email ILIKE ${len(args)})"
+            )
+        args.append(max(1, min(limit, 500)))
+        rows = await pool.fetch(
+            f"""
+            SELECT id, full_name, btrim(email, $3) AS email
+            FROM contacts
+            WHERE {' AND '.join(conditions)}
+            ORDER BY full_name, id
+            LIMIT ${len(args)}
+            """,
+            *args,
+        )
+        return [_billing_recipient_projection(row) for row in rows]
+
+    async def get_billing_recipient(self, contact_id: UUID) -> dict[str, Any]:
+        """Answer whether ONE contact may receive invoices, and who it is.
+
+        The authoritative validation used before storing a billing contact and
+        again when resolving a recipient at invoice time -- eligibility can
+        lapse between those moments, which is why the resolver re-asks rather
+        than trusting a stored id.
+
+        The tenant predicate is IN the query. A contact under another tenant
+        returns no row and is reported not_found, identical to one that does not
+        exist, so no later branch or log can betray the difference.
+        """
+        from .eom_lead_ingress import EOM_BUSINESS_CONTEXT_ID
+
+        pool = self._get_pool()
+        row = await pool.fetchrow(
+            """
+            SELECT id, full_name, status,
+                   btrim(COALESCE(email, ''), $3) AS email
+            FROM contacts
+            WHERE id = $1 AND business_context_id = $2
+            """,
+            contact_id,
+            EOM_BUSINESS_CONTEXT_ID,
+            BILLING_RECIPIENT_BLANK_CHARS,
+        )
+        if row is None:
+            return _billing_recipient_refusal(contact_id, "not_found")
+        # Allow-list the single live status rather than deny-listing the others:
+        # the column carries no CHECK constraint, so enumerating would silently
+        # admit any future value.
+        if row["status"] != BILLING_RECIPIENT_ELIGIBLE_STATUS:
+            return _billing_recipient_refusal(contact_id, "inactive")
+        if not row["email"]:
+            return _billing_recipient_refusal(contact_id, "no_email")
+        return _billing_recipient_projection(row)
 
     async def list_known_eom_contact_ids(
         self,

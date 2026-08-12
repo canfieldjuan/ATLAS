@@ -8,10 +8,9 @@ import re
 from dataclasses import dataclass
 from datetime import date, datetime, timezone
 from decimal import Decimal, InvalidOperation
-from typing import Any, Iterable, Mapping, Optional
+from typing import Any, Iterable, Optional
 from uuid import UUID, uuid4
 
-from .eom_lead_ingress import EOM_BUSINESS_CONTEXT_ID
 from ..storage.database import DatabasePool, get_db_pool
 from ..storage.exceptions import DatabaseUnavailableError
 
@@ -426,81 +425,6 @@ class ReceivablesService:
                 constraint_type,
             ) in _RECEIVABLES_REQUIRED_INDEXES
         )
-
-    async def list_billing_recipients(
-        self,
-        *,
-        search: Optional[str] = None,
-        limit: int = 200,
-    ) -> list[dict[str, Any]]:
-        """List the EOM contacts that may be assigned as an invoice recipient.
-
-        Eligible rows ONLY. The operator picks from this list, so an entry that
-        cannot actually receive an invoice would be a trap: they would assign
-        it, and delivery would fail later with no obvious cause.
-
-        Discloses display name and email deliberately -- an operator choosing
-        where money-related mail goes has to see the address. It is a narrow
-        billing projection behind the receivables credential, not a contact
-        reader: no phone, address, notes, tags, source, or lifecycle.
-        """
-        args: list[Any] = [EOM_BUSINESS_CONTEXT_ID, BILLING_RECIPIENT_ELIGIBLE_STATUS]
-        conditions = [
-            "business_context_id = $1",
-            "status = $2",
-            "email IS NOT NULL",
-            "btrim(email) <> ''",
-        ]
-        if search and search.strip():
-            args.append(f"%{search.strip()}%")
-            conditions.append(
-                f"(full_name ILIKE ${len(args)} OR email ILIKE ${len(args)})"
-            )
-        args.append(max(1, min(limit, 500)))
-        rows = await self.pool.fetch(
-            f"""
-            SELECT id, full_name, btrim(email) AS email
-            FROM contacts
-            WHERE {' AND '.join(conditions)}
-            ORDER BY full_name, id
-            LIMIT ${len(args)}
-            """,
-            *args,
-        )
-        return [_billing_recipient_projection(row) for row in rows]
-
-    async def get_billing_recipient(self, contact_id: UUID) -> dict[str, Any]:
-        """Answer whether ONE contact may receive invoices, and who it is.
-
-        The authoritative validation used before storing a billing_contact_id
-        and again when resolving a recipient at invoice time -- eligibility can
-        lapse between those moments, which is exactly why the resolver re-asks
-        rather than trusting the stored id.
-
-        The tenant predicate is IN the query. A contact under another tenant
-        returns no row and is reported as ``not_found``, identical to one that
-        does not exist: this service never learns the difference, so no later
-        branch, log line, or error path can betray it.
-        """
-        row = await self.pool.fetchrow(
-            """
-            SELECT id, full_name, status, btrim(COALESCE(email, '')) AS email
-            FROM contacts
-            WHERE id = $1 AND business_context_id = $2
-            """,
-            contact_id,
-            EOM_BUSINESS_CONTEXT_ID,
-        )
-        if row is None:
-            return _billing_recipient_refusal(contact_id, "not_found")
-        # Any status other than active is ineligible. `status` carries no CHECK
-        # constraint, so enumerating the inactive values would silently admit
-        # any future one; allow-list the single live value instead.
-        if row["status"] != BILLING_RECIPIENT_ELIGIBLE_STATUS:
-            return _billing_recipient_refusal(contact_id, "inactive")
-        if not row["email"]:
-            return _billing_recipient_refusal(contact_id, "no_email")
-        return _billing_recipient_projection(row)
 
     async def list_open_invoices(
         self,
@@ -1696,50 +1620,6 @@ class ReceivablesService:
 
 
 _receivables_service: Optional[ReceivablesService] = None
-
-
-# --------------------------------------------------------------------------
-# Billing recipients (EOM Slice 1A)
-# --------------------------------------------------------------------------
-
-# A contact may receive invoices only when it is EOM's, live, and reachable.
-# Anything else is ineligible; the reason set below is what callers see.
-BILLING_RECIPIENT_ELIGIBLE_STATUS = "active"
-
-# Public reason tokens. `wrong_tenant` is deliberately NOT here: the lookup is
-# tenant-scoped in SQL, so a contact belonging to another tenant is simply not
-# found and this service never learns otherwise. Discovering it and then
-# remembering to suppress it would be one branch away from leaking a
-# cross-tenant existence oracle.
-BILLING_RECIPIENT_REASONS = ("not_found", "inactive", "no_email")
-
-
-def _billing_recipient_projection(row: Mapping[str, Any]) -> dict[str, Any]:
-    """Build the five-field public object from an ALREADY-ELIGIBLE row.
-
-    Eligibility is decided before this is called, never after. Constructing a
-    full contact response and blanking fields on the way out makes "never a
-    partial row" depend on every failure branch remembering to redact; doing
-    it this way makes it structural.
-    """
-    return {
-        "contactId": str(row["id"]),
-        "displayName": row["full_name"],
-        "email": row["email"],
-        "eligible": True,
-        "reason": None,
-    }
-
-
-def _billing_recipient_refusal(contact_id: Any, reason: str) -> dict[str, Any]:
-    """The only shape an ineligible answer may take: identity and cause only."""
-    return {
-        "contactId": str(contact_id),
-        "displayName": None,
-        "email": None,
-        "eligible": False,
-        "reason": reason,
-    }
 
 
 def get_receivables_service() -> ReceivablesService:

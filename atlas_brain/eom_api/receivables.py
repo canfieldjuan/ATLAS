@@ -6,11 +6,11 @@ import errno
 import socket
 from datetime import date
 from decimal import Decimal
-from typing import Annotated, Literal, Optional
+from typing import Annotated, Any, Literal, Optional
 from uuid import UUID
 
 import asyncpg
-from fastapi import APIRouter, Depends, Header, HTTPException, Query
+from fastapi import APIRouter, Depends, Header, HTTPException, Query, Request
 from pydantic import BaseModel, Field
 
 from ..services.receivables import (
@@ -23,6 +23,7 @@ from ..services.receivables import (
 )
 from ..storage.exceptions import DatabaseUnavailableError
 from .auth import require_actor, require_receivables_api
+from .funnel_database import get_eom_funnel_crm_provider
 
 _DATABASE_UNAVAILABLE_ERRORS = (
     DatabaseUnavailableError,
@@ -188,11 +189,28 @@ async def list_open_invoices(
     )
 
 
+def _billing_crm_dependency(request: Request) -> Any:
+    """Resolve the CRM provider pinned to the canonical EOM contact pool.
+
+    Contacts are owned by the dedicated funnel CRM pool. ReceivablesService
+    resolves the separate global DSN, which in the deployed slim topology is a
+    different database entirely -- reading contacts through it would query the
+    wrong one. The credential boundary and the data source are independent:
+    these routes stay behind the receivables token while reading contacts from
+    the pool that actually owns them.
+    """
+    provider_factory = getattr(request.app.state, "eom_funnel_crm_provider", None)
+    if callable(provider_factory):
+        return provider_factory()
+    return get_eom_funnel_crm_provider()
+
+
 @router.get("/billing-recipients")
 async def list_billing_recipients(
+    request: Request,
     search: Optional[str] = Query(default=None, max_length=256),
     limit: int = Query(default=200, ge=1, le=500),
-    service: ReceivablesService = Depends(get_receivables_service),
+    crm: Any = Depends(_billing_crm_dependency),
 ) -> list[dict]:
     """EOM contacts assignable as an invoice recipient. Eligible only.
 
@@ -202,13 +220,14 @@ async def list_billing_recipients(
     discloses nothing beyond whether an id resolves, and widening it a second
     time would turn link verification into a general contact reader.
     """
-    return await _call(service.list_billing_recipients(search=search, limit=limit))
+    return await _call(crm.list_billing_recipients(search=search, limit=limit))
 
 
 @router.get("/billing-recipients/{contact_id}")
 async def get_billing_recipient(
     contact_id: UUID,
-    service: ReceivablesService = Depends(get_receivables_service),
+    request: Request,
+    crm: Any = Depends(_billing_crm_dependency),
 ) -> dict:
     """Authoritative answer on whether ONE contact may receive invoices.
 
@@ -217,7 +236,7 @@ async def get_billing_recipient(
     not a transport failure. An ineligible verdict carries identity and cause
     only -- never a name or address.
     """
-    return await _call(service.get_billing_recipient(contact_id))
+    return await _call(crm.get_billing_recipient(contact_id))
 
 
 @router.get("/allocation-suggestions")
