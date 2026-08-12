@@ -488,6 +488,7 @@ def test_eom_startup_migrations_are_curated_for_receivables_readiness():
         "045_invoices",
         "344_receivables_payments",
         "345_receivables_event_key_lookup",
+        "368_receivables_payment_check_metadata",
     )
     assert not any(
         migration.startswith(("066_", "068_", "074_", "076_", "083_", "095_"))

@@ -65,6 +65,7 @@ async def test_real_postgres_invoice_lookup_overdue_history_and_singular_payment
         await conn.execute("CREATE TABLE contacts (id uuid PRIMARY KEY)")
         await conn.execute(_migration_sql("045_invoices.sql"))
         await conn.execute(_migration_sql("344_receivables_payments.sql"))
+        await conn.execute(_migration_sql("368_receivables_payment_check_metadata.sql"))
 
         contact_id = uuid4()
         lookup_id = uuid4()

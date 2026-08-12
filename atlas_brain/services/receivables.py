@@ -28,6 +28,8 @@ _RECEIVABLES_REQUIRED_COLUMNS = {
         "payment_method",
         "reference",
         "received_date",
+        "check_date",
+        "received_through",
         "status",
         "source",
         "idempotency_key",
@@ -495,6 +497,8 @@ class ReceivablesService:
         received_date: date,
         allocations: list[dict[str, Any]],
         idempotency_key: str,
+        check_date: Optional[date] = None,
+        received_through: Optional[str] = None,
         reference: Optional[str] = None,
         notes: Optional[str] = None,
         recorded_by: Optional[str] = None,
@@ -511,6 +515,8 @@ class ReceivablesService:
             total_amount=total_amount,
             payment_method=payment_method,
             received_date=received_date,
+            check_date=check_date,
+            received_through=received_through,
             allocations=allocations,
             idempotency_key=idempotency_key,
             reference=reference,
@@ -534,6 +540,8 @@ class ReceivablesService:
         received_date: date,
         allocations: list[dict[str, Any]],
         idempotency_key: str,
+        check_date: Optional[date] = None,
+        received_through: Optional[str] = None,
         reference: Optional[str] = None,
         notes: Optional[str] = None,
         recorded_by: Optional[str] = None,
@@ -582,6 +590,8 @@ class ReceivablesService:
             "total_amount": total,
             "payment_method": method,
             "received_date": received_date,
+            "check_date": check_date,
+            "received_through": (received_through or "").strip() or None,
             "allocations": normalized,
             "reference": (reference or "").strip() or None,
             "notes": (notes or "").strip() or None,
@@ -653,15 +663,15 @@ class ReceivablesService:
                 """
                 INSERT INTO customer_payments (
                     id, contact_id, payer_name, total_amount, payment_method,
-                    reference, received_date, status, source, idempotency_key,
-                    request_fingerprint, notes, recorded_by, cleared_at,
-                    metadata, created_at, updated_at
+                    reference, received_date, check_date, received_through,
+                    status, source, idempotency_key, request_fingerprint, notes,
+                    recorded_by, cleared_at, metadata, created_at, updated_at
                 )
                 VALUES (
                     $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12,
-                    $13, CASE WHEN $8::varchar = 'cleared'
-                        THEN $14::timestamptz ELSE NULL END,
-                    $15::jsonb, $14, $14
+                    $13, $14, $15, CASE WHEN $10::varchar = 'cleared'
+                        THEN $16::timestamptz ELSE NULL END,
+                    $17::jsonb, $16, $16
                 )
                 ON CONFLICT (source, idempotency_key)
                     WHERE idempotency_key IS NOT NULL
@@ -675,6 +685,8 @@ class ReceivablesService:
                 method,
                 payload["reference"],
                 received_date,
+                payload["check_date"],
+                payload["received_through"],
                 initial_status,
                 source,
                 key,
