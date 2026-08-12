@@ -1369,7 +1369,7 @@ class ReceivablesService:
                   AND business_context_id = $2
                   AND contact_type = 'customer'
                   AND status = 'active'
-                FOR KEY SHARE
+                FOR SHARE
                 """,
                 contact_id,
                 unapplied_contact_context_id,

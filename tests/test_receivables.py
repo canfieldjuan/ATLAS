@@ -259,6 +259,8 @@ async def test_create_payment_records_unapplied_receipt_and_replays_without_invo
     assert pool.conn.parent_insert_count == 1
     assert pool.conn.contact_lock_count == 1
     assert all("lead_stage" not in query for query in pool.conn.contact_queries)
+    assert all("FOR SHARE" in query for query in pool.conn.contact_queries)
+    assert all("FOR KEY SHARE" not in query for query in pool.conn.contact_queries)
     assert not any("FROM invoices" in query for query, _args in pool.conn.fetches)
     assert not any(
         "INSERT INTO invoice_payments" in query or "WITH totals AS" in query
@@ -860,6 +862,40 @@ class _SingleConnectionPool:
         async with self.conn.transaction():
             await self.conn.execute(f'SET LOCAL search_path TO "{self.schema}"')
             return await self.conn.fetchval(query, *args)
+
+
+class _PauseAfterContactLockConnection:
+    def __init__(self, conn, contact_locked, release_contact_lock) -> None:
+        self._conn = conn
+        self._contact_locked = contact_locked
+        self._release_contact_lock = release_contact_lock
+
+    async def fetchrow(self, query, *args):
+        row = await self._conn.fetchrow(query, *args)
+        if "FROM contacts" in query:
+            self._contact_locked.set()
+            await self._release_contact_lock.wait()
+        return row
+
+    def __getattr__(self, name):
+        return getattr(self._conn, name)
+
+
+class _PauseAfterContactLockPool(_SingleConnectionPool):
+    def __init__(self, conn, schema, contact_locked, release_contact_lock) -> None:
+        super().__init__(conn, schema)
+        self._contact_locked = contact_locked
+        self._release_contact_lock = release_contact_lock
+
+    @asynccontextmanager
+    async def transaction(self):
+        async with self.conn.transaction():
+            await self.conn.execute(f'SET LOCAL search_path TO "{self.schema}"')
+            yield _PauseAfterContactLockConnection(
+                self.conn,
+                self._contact_locked,
+                self._release_contact_lock,
+            )
 
 
 class _MigrationConnectionPool:
@@ -1707,6 +1743,108 @@ async def test_real_postgres_receivables_lifecycle_and_concurrent_replays():
 
 
 @pytest.mark.asyncio
+async def test_real_postgres_unapplied_payment_holds_customer_eligibility_lock():
+    asyncpg = pytest.importorskip("asyncpg")
+    database_url = os.environ.get("ATLAS_RECEIVABLES_TEST_DATABASE_URL")
+    if not database_url:
+        pytest.skip("ATLAS_RECEIVABLES_TEST_DATABASE_URL not set")
+
+    schema = f"receivables_customer_lock_{uuid4().hex}"
+    observer = await asyncpg.connect(database_url)
+    payment_conn = await asyncpg.connect(database_url)
+    archive_conn = await asyncpg.connect(database_url)
+    contact_locked = asyncio.Event()
+    release_contact_lock = asyncio.Event()
+    payment_task = None
+    archive_task = None
+    try:
+        await _create_pre_receivables_schema(observer, schema)
+        await observer.execute(_receivables_migration_sql())
+        contact_id = uuid4()
+        await observer.execute(
+            "INSERT INTO contacts (id, business_context_id) "
+            "VALUES ($1, 'effingham_maids')",
+            contact_id,
+        )
+        service = ReceivablesService(
+            _PauseAfterContactLockPool(
+                payment_conn,
+                schema,
+                contact_locked,
+                release_contact_lock,
+            )
+        )
+        payment_task = asyncio.create_task(
+            service.create_payment(
+                contact_id=contact_id,
+                payer_name="Residential Customer",
+                total_amount=Decimal("125"),
+                payment_method="check",
+                received_date=date.today(),
+                allocations=[],
+                idempotency_key="e2e-unapplied-customer-lock",
+                allow_unapplied=True,
+                unapplied_contact_context_id="effingham_maids",
+            )
+        )
+        await asyncio.wait_for(contact_locked.wait(), timeout=3)
+
+        async with archive_conn.transaction():
+            await archive_conn.execute(f'SET LOCAL search_path TO "{schema}"')
+            archive_task = asyncio.create_task(
+                archive_conn.execute(
+                    "UPDATE contacts SET status = 'inactive' WHERE id = $1",
+                    contact_id,
+                )
+            )
+            with pytest.raises(asyncio.TimeoutError):
+                await asyncio.wait_for(asyncio.shield(archive_task), timeout=0.2)
+            assert (
+                await observer.fetchval(
+                    "SELECT status FROM contacts WHERE id = $1", contact_id
+                )
+                == "active"
+            )
+
+            release_contact_lock.set()
+            payment = await asyncio.wait_for(payment_task, timeout=3)
+            payment_task = None
+            assert payment["status"] == "received"
+            assert payment["allocated_amount_cents"] == 0
+            assert payment["unapplied_amount_cents"] == 12_500
+            assert await asyncio.wait_for(archive_task, timeout=3) == "UPDATE 1"
+            archive_task = None
+
+        assert (
+            await observer.fetchval(
+                "SELECT status FROM contacts WHERE id = $1", contact_id
+            )
+            == "inactive"
+        )
+        assert (
+            await observer.fetchval(
+                "SELECT COUNT(*) FROM invoice_payments WHERE payment_id = $1",
+                UUID(payment["id"]),
+            )
+            == 0
+        )
+    finally:
+        release_contact_lock.set()
+        pending_tasks = [
+            task for task in (payment_task, archive_task) if task is not None
+        ]
+        for task in pending_tasks:
+            task.cancel()
+        if pending_tasks:
+            await asyncio.gather(*pending_tasks, return_exceptions=True)
+        await payment_conn.close()
+        await archive_conn.close()
+        await observer.execute("SET search_path TO public")
+        await observer.execute(f'DROP SCHEMA IF EXISTS "{schema}" CASCADE')
+        await observer.close()
+
+
+@pytest.mark.asyncio
 async def test_return_waits_for_concurrent_create_before_balance_snapshot():
     """A return cannot overwrite a concurrently-created active allocation."""
     asyncpg = pytest.importorskip("asyncpg")
@@ -2189,6 +2327,7 @@ async def test_real_postgres_http_and_mcp_entrypoints_use_supported_dependencies
     if not database_url:
         pytest.skip("ATLAS_RECEIVABLES_TEST_DATABASE_URL not set")
 
+    from atlas_brain import main
     from atlas_brain.api.invoicing import receivables as routes
     from atlas_brain.mcp import invoicing_server
     from atlas_brain.storage.repositories.invoice import InvoiceRepository
@@ -2213,6 +2352,13 @@ async def test_real_postgres_http_and_mcp_entrypoints_use_supported_dependencies
                 (invoice_ids[1], "INV-HTTP-2", contact_id),
                 (invoice_ids[2], "INV-MCP-1", contact_id),
             ],
+        )
+
+        unapplied_contact_id = uuid4()
+        await conn.execute(
+            "INSERT INTO contacts (id, business_context_id) "
+            "VALUES ($1, 'effingham_maids')",
+            unapplied_contact_id,
         )
 
         allocation_contact_id = uuid4()
@@ -2263,8 +2409,8 @@ async def test_real_postgres_http_and_mcp_entrypoints_use_supported_dependencies
             receivables_service_token="",
             receivables_service_token_sha256=generated.sha256,
         )
-        app = FastAPI()
-        app.include_router(routes.router)
+        app = main.app
+        original_dependency_overrides = app.dependency_overrides.copy()
         app.dependency_overrides[receivables_auth.get_receivables_api_config] = (
             lambda: config
         )
@@ -2280,45 +2426,105 @@ async def test_real_postgres_http_and_mcp_entrypoints_use_supported_dependencies
                 {"invoice_id": str(invoice_ids[1]), "amount_cents": 5_000},
             ],
         }
+        unapplied_body = {
+            "contact_id": str(unapplied_contact_id),
+            "payer_name": "Residential Customer",
+            "total_amount_cents": 12_500,
+            "payment_method": "check",
+            "received_date": "2026-08-12",
+            "reference": "1001",
+        }
 
-        transport = httpx.ASGITransport(app=app)
-        async with httpx.AsyncClient(
-            transport=transport,
-            base_url="http://receivables.test",
-        ) as client:
-            unauthorized = await client.post("/receivables/payments", json=body)
-            assert unauthorized.status_code == 401
-            assert await conn.fetchval("SELECT COUNT(*) FROM customer_payments") == 0
+        try:
+            transport = httpx.ASGITransport(app=app)
+            async with httpx.AsyncClient(
+                transport=transport,
+                base_url="http://receivables.test",
+            ) as client:
+                unauthorized = await client.post(
+                    "/api/v1/receivables/payments", json=body
+                )
+                assert unauthorized.status_code == 401
+                assert (
+                    await conn.fetchval("SELECT COUNT(*) FROM customer_payments")
+                    == 0
+                )
 
-            response = await client.post(
-                "/receivables/payments",
-                headers={
-                    "Authorization": f"Bearer {generated.token}",
-                    "X-EOM-Actor": "Juan Canfield",
-                    "Idempotency-Key": "http-payment-1",
-                },
-                json=body,
+                response = await client.post(
+                    "/api/v1/receivables/payments",
+                    headers={
+                        "Authorization": f"Bearer {generated.token}",
+                        "X-EOM-Actor": "Juan Canfield",
+                        "Idempotency-Key": "http-payment-1",
+                    },
+                    json=body,
+                )
+                unapplied_response = await client.post(
+                    "/api/v1/receivables/payments",
+                    headers={
+                        "Authorization": f"Bearer {generated.token}",
+                        "X-EOM-Actor": "Juan Canfield",
+                        "Idempotency-Key": "http-unapplied-payment-1",
+                    },
+                    json=unapplied_body,
+                )
+                unapplied_replay = await client.post(
+                    "/api/v1/receivables/payments",
+                    headers={
+                        "Authorization": f"Bearer {generated.token}",
+                        "X-EOM-Actor": "Juan Canfield",
+                        "Idempotency-Key": "http-unapplied-payment-1",
+                    },
+                    json=unapplied_body,
+                )
+
+            assert response.status_code == 201
+            assert response.json()["status"] == "received"
+            http_payment = await conn.fetchrow("""
+                SELECT idempotency_key, total_amount, recorded_by
+                FROM customer_payments
+                WHERE source = 'eom_admin' AND idempotency_key = 'http-payment-1'
+                """)
+            assert http_payment["total_amount"] == Decimal("200.00")
+            assert http_payment["recorded_by"] == "Juan Canfield"
+            http_allocations = await conn.fetch("""
+                SELECT amount FROM invoice_payments ip
+                JOIN customer_payments cp ON cp.id = ip.payment_id
+                WHERE cp.idempotency_key = 'http-payment-1'
+                ORDER BY amount DESC
+                """)
+            assert [row["amount"] for row in http_allocations] == [
+                Decimal("125.00"),
+                Decimal("50.00"),
+            ]
+
+            assert unapplied_response.status_code == 201
+            assert unapplied_replay.status_code == 201
+            unapplied_payment = unapplied_response.json()
+            assert unapplied_replay.json()["id"] == unapplied_payment["id"]
+            assert unapplied_payment["status"] == "received"
+            assert unapplied_payment["allocated_amount_cents"] == 0
+            assert unapplied_payment["unapplied_amount_cents"] == 12_500
+            assert (
+                await conn.fetchval(
+                    "SELECT COUNT(*) FROM invoice_payments ip "
+                    "JOIN customer_payments cp ON cp.id = ip.payment_id "
+                    "WHERE cp.idempotency_key = 'http-unapplied-payment-1'"
+                )
+                == 0
             )
-
-        assert response.status_code == 201
-        assert response.json()["status"] == "received"
-        http_payment = await conn.fetchrow("""
-            SELECT idempotency_key, total_amount, recorded_by
-            FROM customer_payments
-            WHERE source = 'eom_admin' AND idempotency_key = 'http-payment-1'
-            """)
-        assert http_payment["total_amount"] == Decimal("200.00")
-        assert http_payment["recorded_by"] == "Juan Canfield"
-        http_allocations = await conn.fetch("""
-            SELECT amount FROM invoice_payments ip
-            JOIN customer_payments cp ON cp.id = ip.payment_id
-            WHERE cp.idempotency_key = 'http-payment-1'
-            ORDER BY amount DESC
-            """)
-        assert [row["amount"] for row in http_allocations] == [
-            Decimal("125.00"),
-            Decimal("50.00"),
-        ]
+            assert (
+                await conn.fetchval(
+                    "SELECT COUNT(*) FROM payment_events pe "
+                    "JOIN customer_payments cp ON cp.id = pe.payment_id "
+                    "WHERE cp.idempotency_key = 'http-unapplied-payment-1' "
+                    "AND pe.event_type = 'payment_recorded'"
+                )
+                == 1
+            )
+        finally:
+            app.dependency_overrides.clear()
+            app.dependency_overrides.update(original_dependency_overrides)
 
         crm_calls = []
 
