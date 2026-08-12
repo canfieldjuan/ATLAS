@@ -6,6 +6,14 @@ Issue: #2362
 
 ATLAS must record an EOM canonical-customer payment without an invoice; provider models/service otherwise require an allocation.
 
+The 782-LOC diff exceeds the 400-LOC target because 640 LOC are inseparable
+regression and real-entrypoint proof for this one transactional admission seam:
+empty-allocation creation, idempotent replay, tenant/customer eligibility,
+concurrent archival, and the mounted API all protect the same financial write.
+Splitting that evidence into a later PR would deploy the widened payment boundary
+without the proof that makes it safe; the production-code delta remains limited to
+the two route models and the receivables service.
+
 ### Problem-derived contract
 
 - Root cause: initial creation and the shared normalizer required at least one allocation.
@@ -72,12 +80,25 @@ through the transaction.
 
 ## Deferred
 
-- #2362 later slices; #2363 H-01/H-06 remain separate. No schema or UI expansion here.
+Parking predicate: park any new work that does not change initial EOM
+allocation-free payment admission, its required financial-safety proof, or this
+provider slice's independent deployability.
+
+Parked hardening: #2363 H-01 (legacy invoice float-money audit) and H-06
+(full/slim provider-model structural deduplication). #2362 owns later tracker,
+Website, receipts, ledger, billing, Gmail, sent-mail, and Square slices. No
+schema or UI expansion belongs here.
 
 ## Verification
 
-- Focused/optional Postgres concurrency and ineligible-customer boundaries,
-  EOM profile, ruff, diff/plan and full gates; no live financial write.
+- `pytest -q tests/test_receivables.py`: 65 passed, 8 skipped. The optional
+  PostgreSQL cases require `ATLAS_RECEIVABLES_TEST_DATABASE_URL`; absent it,
+  they skip without accessing live financial data.
+- `pytest -q tests/test_eom_render_profile.py --disable-warnings`: 61 passed.
+- Command: ruff check atlas_brain/api/invoicing/receivables.py atlas_brain/eom_api/receivables.py atlas_brain/services/receivables.py tests/test_receivables.py. Result: passed.
+- `python scripts/sync_pr_plan.py --check plans/PR-EOM-Receivables-Unapplied-Payments.md origin/main`, `python scripts/audit_plan_doc.py plans/PR-EOM-Receivables-Unapplied-Payments.md`, `python scripts/audit_plan_code_consistency.py --base-ref origin/main plans/PR-EOM-Receivables-Unapplied-Payments.md`, `python scripts/check_boundary_change_enumeration.py --base origin/main --strict`, and `python scripts/check_deployed_config_probing.py --base origin/main --strict`: passed.
+- The required `scripts/push_pr.sh` local review gate passed and its impacted
+  test selector conservatively ran the full unit suite; no live financial write.
 
 ## Estimated diff size
 
@@ -86,6 +107,6 @@ through the transaction.
 | `atlas_brain/api/invoicing/receivables.py` | 5 |
 | `atlas_brain/eom_api/receivables.py` | 5 |
 | `atlas_brain/services/receivables.py` | 41 |
-| `plans/PR-EOM-Receivables-Unapplied-Payments.md` | 91 |
+| `plans/PR-EOM-Receivables-Unapplied-Payments.md` | 112 |
 | `tests/test_receivables.py` | 640 |
-| **Total** | **782** |
+| **Total** | **803** |
