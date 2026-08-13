@@ -183,6 +183,30 @@ def test_open_pr_forwards_draft_assignment_when_operator_consent_flag_is_set(tmp
     assert stdin_capture.read_text(encoding="utf-8") == _stamped_body(body)
 
 
+def test_open_pr_consumes_draft_consent_before_local_review(tmp_path: Path) -> None:
+    repo, body, env, log, stdin_capture = _ready(tmp_path, view_exit=1)
+    env["ATLAS_OPEN_PR_DRAFT_CONSENT"] = "1"
+    local_review = repo / "scripts" / "local_pr_review.sh"
+    local_review.write_text(
+        local_review.read_text(encoding="utf-8").replace(
+            'exit "${LOCAL_REVIEW_EXIT:-0}"',
+            "printf '%s\\n' \"${ATLAS_OPEN_PR_DRAFT_CONSENT:-}\" "
+            "> local-review-draft-consent.log\n"
+            'exit "${LOCAL_REVIEW_EXIT:-0}"',
+        ),
+        encoding="utf-8",
+    )
+
+    result = _run(repo, env, body, "--draft", "--title", "Draft wrapper")
+
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert (repo / "local-review-draft-consent.log").read_text(
+        encoding="utf-8"
+    ) == "\n"
+    assert log.read_text(encoding="utf-8").strip().startswith("pr create --draft")
+    assert stdin_capture.read_text(encoding="utf-8") == _stamped_body(body)
+
+
 def test_open_pr_allows_value_shorthand_containing_d_without_consent(tmp_path: Path) -> None:
     # -t takes a value, so the attached text (even containing 'd') is a title,
     # not a shorthand cluster that enables draft mode.

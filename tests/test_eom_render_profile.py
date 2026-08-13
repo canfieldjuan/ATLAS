@@ -489,6 +489,7 @@ def test_eom_startup_migrations_are_curated_for_receivables_readiness():
         "344_receivables_payments",
         "345_receivables_event_key_lookup",
         "368_receivables_payment_check_metadata",
+        "369_receivables_payment_receipt_outbox",
     )
     assert not any(
         migration.startswith(("066_", "068_", "074_", "076_", "083_", "095_"))
@@ -1347,6 +1348,9 @@ def test_eom_receivables_bearer_admission_matches_generated_token_grammar(
         async def is_ready(self):
             return True
 
+        async def is_receipt_delivery_ready(self):
+            return True
+
     app = FastAPI()
     app.include_router(receivables.router)
     runtime_config = {
@@ -1478,6 +1482,9 @@ def test_eom_receivables_ready_route_is_fail_closed(monkeypatch):
 
     class _ReadyService:
         async def is_ready(self):
+            return True
+
+        async def is_receipt_delivery_ready(self):
             return True
 
     app = FastAPI()
@@ -1926,6 +1933,9 @@ from atlas_brain.eom_api import receivables
 
 class _ReadyService:
     async def is_ready(self):
+        return True
+
+    async def is_receipt_delivery_ready(self):
         return True
 
 

@@ -11,12 +11,15 @@ from decimal import Decimal, InvalidOperation
 from typing import Any, Iterable, Optional
 from uuid import UUID, uuid4
 
+from ..templates.email.payment_receipt import render_residential_payment_receipt
 from ..storage.database import DatabasePool, get_db_pool
 from ..storage.exceptions import DatabaseUnavailableError
 
 ACTIVE_PAYMENT_STATUSES = ("legacy", "received", "deposited", "cleared")
 OPEN_INVOICE_STATUSES = ("sent", "partial", "overdue")
 API_PAYMENT_METHODS = ("check", "ach", "square")
+EOM_CUSTOMER_TYPES = ("residential", "commercial", "unknown")
+RESIDENTIAL_CUSTOMER_TYPE = "residential"
 _CENT = Decimal("0.01")
 _MAX_DATABASE_MONEY = Decimal("9999999999.99")
 _RECEIVABLES_REQUIRED_COLUMNS = {
@@ -222,6 +225,69 @@ _RECEIVABLES_REQUIRED_INDEXES = (
     ),
 )
 
+# Receipt delivery is a capability layered onto the existing ledger.  It is
+# deliberately NOT part of the legacy receivables readiness set: full Atlas
+# and MCP callers must remain able to use the established payment lifecycle
+# while an EOM-only outbox migration rolls out.  The receipt-aware full and
+# slim EOM routes require this additive set explicitly.
+_RECEIPT_DELIVERY_REQUIRED_COLUMNS = {
+    "payment_receipt_deliveries": (
+        "id",
+        "payment_id",
+        "contact_id",
+        "receipt_number",
+        "recipient_email",
+        "delivery_status",
+        "skip_reason",
+        "subject",
+        "body",
+        "created_at",
+        "updated_at",
+    ),
+}
+_RECEIPT_DELIVERY_REQUIRED_INDEXES = (
+    (
+        "payment_receipt_deliveries",
+        "payment_receipt_deliveries_pkey",
+        True,
+        ("id",),
+        None,
+        "p",
+    ),
+    (
+        "payment_receipt_deliveries",
+        "payment_receipt_deliveries_payment_id_key",
+        True,
+        ("payment_id",),
+        None,
+        "u",
+    ),
+    (
+        "payment_receipt_deliveries",
+        "payment_receipt_deliveries_receipt_number_key",
+        True,
+        ("receipt_number",),
+        None,
+        "u",
+    ),
+    (
+        "payment_receipt_deliveries",
+        "idx_payment_receipt_deliveries_contact_created",
+        False,
+        ("contact_id", "created_at"),
+        None,
+        None,
+    ),
+    (
+        "payment_receipt_deliveries",
+        "idx_payment_receipt_deliveries_status_created",
+        False,
+        ("delivery_status", "created_at"),
+        None,
+        None,
+    ),
+)
+
 
 @dataclass(frozen=True)
 class PaymentCreationOutcome:
@@ -229,6 +295,16 @@ class PaymentCreationOutcome:
 
     payment: dict[str, Any]
     replayed: bool
+
+
+@dataclass(frozen=True)
+class PaymentReceiptRecipient:
+    """Canonical customer snapshot used only by receipt-aware EOM routes."""
+
+    contact_id: UUID
+    customer_name: str
+    customer_type: str
+    recipient_email: Optional[str]
 
 
 class ReceivablesError(Exception):
@@ -251,6 +327,12 @@ class ReceivablesConflictError(ReceivablesError):
 
 class ReceivablesSchemaUnavailableError(ReceivablesError):
     code = "schema_unavailable"
+
+
+class ReceivablesReceiptContextRequiredError(ReceivablesError):
+    """An EOM route could not prove a new payment's canonical customer."""
+
+    code = "canonical_customer_unavailable"
 
 
 def money(value: Any) -> Decimal:
@@ -332,10 +414,37 @@ class ReceivablesService:
         return pool
 
     async def is_ready(self) -> bool:
-        """Return whether every required ledger column and index is usable."""
+        """Return whether the established receivables ledger is usable.
+
+        This remains the compatibility readiness probe for full Atlas and MCP
+        callers.  Receipt delivery is an EOM-only additive capability and is
+        checked by :meth:`is_receipt_delivery_ready` instead.
+        """
+        return await self._schema_objects_ready(
+            required_columns=_RECEIVABLES_REQUIRED_COLUMNS,
+            required_indexes=_RECEIVABLES_REQUIRED_INDEXES,
+        )
+
+    async def is_receipt_delivery_ready(self) -> bool:
+        """Return whether the ledger and residential receipt outbox are usable."""
+        return (
+            await self.is_ready()
+            and await self._schema_objects_ready(
+                required_columns=_RECEIPT_DELIVERY_REQUIRED_COLUMNS,
+                required_indexes=_RECEIPT_DELIVERY_REQUIRED_INDEXES,
+            )
+        )
+
+    async def _schema_objects_ready(
+        self,
+        *,
+        required_columns: dict[str, tuple[str, ...]],
+        required_indexes: tuple[tuple[Any, ...], ...],
+    ) -> bool:
+        """Probe one closed schema contract without broadening another one."""
         required = [
             (table_name, column_name)
-            for table_name, columns in _RECEIVABLES_REQUIRED_COLUMNS.items()
+            for table_name, columns in required_columns.items()
             for column_name in columns
         ]
         columns_ready = bool(
@@ -396,7 +505,7 @@ class ReceivablesService:
             """,
             [
                 index_name
-                for _table_name, index_name, *_rest in _RECEIVABLES_REQUIRED_INDEXES
+                for _table_name, index_name, *_rest in required_indexes
             ],
         )
         actual_indexes = {
@@ -429,7 +538,7 @@ class ReceivablesService:
                 key_columns,
                 predicate,
                 constraint_type,
-            ) in _RECEIVABLES_REQUIRED_INDEXES
+            ) in required_indexes
         )
 
     async def list_open_invoices(
@@ -511,6 +620,8 @@ class ReceivablesService:
         enforce_api_methods: bool = True,
         allow_unapplied: bool = False,
         unapplied_contact_context_id: Optional[str] = None,
+        receipt_recipient: Optional[PaymentReceiptRecipient] = None,
+        require_receipt_recipient: bool = False,
     ) -> dict[str, Any]:
         """Create one receipt and all of its allocations atomically."""
         outcome = await self.create_payment_with_outcome(
@@ -531,6 +642,8 @@ class ReceivablesService:
             enforce_api_methods=enforce_api_methods,
             allow_unapplied=allow_unapplied,
             unapplied_contact_context_id=unapplied_contact_context_id,
+            receipt_recipient=receipt_recipient,
+            require_receipt_recipient=require_receipt_recipient,
         )
         return outcome.payment
 
@@ -554,6 +667,8 @@ class ReceivablesService:
         enforce_api_methods: bool = True,
         allow_unapplied: bool = False,
         unapplied_contact_context_id: Optional[str] = None,
+        receipt_recipient: Optional[PaymentReceiptRecipient] = None,
+        require_receipt_recipient: bool = False,
     ) -> PaymentCreationOutcome:
         """Create a receipt and report whether this call replayed its first write."""
         total = money(total_amount)
@@ -578,6 +693,20 @@ class ReceivablesService:
             raise ReceivablesValidationError(
                 "Unapplied payments require a canonical customer context"
             )
+        self._assert_receipt_recipient_invariant(
+            contact_id=contact_id,
+            receipt_recipient=receipt_recipient,
+        )
+        # A replay whose canonical CRM read is unavailable must still return
+        # its financial payment during a mixed migration rollout.  Do not
+        # query the EOM-only outbox merely because the caller *requires* a
+        # canonical context for a new payment: it may be a legacy payment
+        # created before migration 369.  A supplied residential snapshot is
+        # the only case that asks the response projection to read the outbox.
+        include_receipt_delivery = bool(
+            receipt_recipient is not None
+            and receipt_recipient.customer_type == RESIDENTIAL_CUSTOMER_TYPE
+        )
 
         normalized = self._normalize_allocations(
             allocations, allow_empty=allow_unapplied
@@ -642,8 +771,30 @@ class ReceivablesService:
             if existing:
                 self._assert_idempotent(existing, fingerprint)
                 return PaymentCreationOutcome(
-                    payment=await self._payment_view(conn, existing["id"]),
+                    payment=await self._payment_view(
+                        conn,
+                        existing["id"],
+                        include_receipt_delivery=include_receipt_delivery,
+                    ),
                     replayed=True,
+                )
+            if require_receipt_recipient and receipt_recipient is None:
+                # This check follows the first idempotency lookup on purpose:
+                # an unchanged retry must recover its original payment even if
+                # the canonical CRM contact has been edited or is unavailable
+                # after the original commit.  A new payment still fails before
+                # any financial row is inserted when an EOM route lacks an
+                # authoritative customer snapshot.
+                raise ReceivablesReceiptContextRequiredError(
+                    "Canonical customer data is required for a new EOM payment"
+                )
+            if (
+                receipt_recipient is not None
+                and receipt_recipient.customer_type == RESIDENTIAL_CUSTOMER_TYPE
+                and not await self.is_receipt_delivery_ready()
+            ):
+                raise ReceivablesSchemaUnavailableError(
+                    "Receivables schema unavailable for payment receipt delivery"
                 )
             await self._assert_event_key_available(
                 conn, key=key, fingerprint=fingerprint
@@ -672,7 +823,11 @@ class ReceivablesService:
             if existing:
                 self._assert_idempotent(existing, fingerprint)
                 return PaymentCreationOutcome(
-                    payment=await self._payment_view(conn, existing["id"]),
+                    payment=await self._payment_view(
+                        conn,
+                        existing["id"],
+                        include_receipt_delivery=include_receipt_delivery,
+                    ),
                     replayed=True,
                 )
 
@@ -775,11 +930,30 @@ class ReceivablesService:
                     )
                 self._assert_idempotent(existing, fingerprint)
                 return PaymentCreationOutcome(
-                    payment=await self._payment_view(conn, existing["id"]),
+                    payment=await self._payment_view(
+                        conn,
+                        existing["id"],
+                        include_receipt_delivery=include_receipt_delivery,
+                    ),
                     replayed=True,
                 )
 
             now = datetime.now(timezone.utc)
+            if (
+                receipt_recipient is not None
+                and receipt_recipient.customer_type == RESIDENTIAL_CUSTOMER_TYPE
+            ):
+                await self._enqueue_residential_payment_receipt(
+                    conn,
+                    payment_id=payment_id,
+                    receipt_recipient=receipt_recipient,
+                    payer_name=payer,
+                    total_amount=total,
+                    payment_method=method,
+                    reference=payload["reference"],
+                    received_date=received_date,
+                    created_at=now,
+                )
             for allocation in normalized:
                 await conn.execute(
                     """
@@ -818,7 +992,11 @@ class ReceivablesService:
                 conn, [item["invoice_id"] for item in normalized]
             )
             return PaymentCreationOutcome(
-                payment=await self._payment_view(conn, payment_id),
+                payment=await self._payment_view(
+                    conn,
+                    payment_id,
+                    include_receipt_delivery=include_receipt_delivery,
+                ),
                 replayed=False,
             )
 
@@ -1389,6 +1567,86 @@ class ReceivablesService:
             await self._recalculate_invoices(conn, [invoice_id])
 
     @staticmethod
+    def _assert_receipt_recipient_invariant(
+        *,
+        contact_id: Optional[UUID],
+        receipt_recipient: Optional[PaymentReceiptRecipient],
+    ) -> None:
+        """Reject malformed internal receipt context before a new write.
+
+        The public HTTP body never carries these fields: EOM routes resolve
+        them from their canonical CRM provider.  This defensive check keeps a
+        future direct caller from attaching one customer's receipt metadata to
+        another customer's payment.
+        """
+        if receipt_recipient is None:
+            return
+        if not isinstance(receipt_recipient, PaymentReceiptRecipient):
+            raise ReceivablesValidationError("Receipt customer context is invalid")
+        if contact_id is None or receipt_recipient.contact_id != contact_id:
+            raise ReceivablesValidationError(
+                "Receipt customer context must match the payment customer"
+            )
+        if receipt_recipient.customer_type not in EOM_CUSTOMER_TYPES:
+            raise ReceivablesValidationError("Receipt customer type is invalid")
+        if not receipt_recipient.customer_name.strip():
+            raise ReceivablesValidationError("Receipt customer name is required")
+        if receipt_recipient.recipient_email is not None:
+            from .eom_crm_mutations import normalize_contact_email
+
+            if (
+                normalize_contact_email(receipt_recipient.recipient_email)
+                != receipt_recipient.recipient_email
+            ):
+                raise ReceivablesValidationError("Receipt email is invalid")
+
+    @staticmethod
+    async def _enqueue_residential_payment_receipt(
+        conn: Any,
+        *,
+        payment_id: UUID,
+        receipt_recipient: PaymentReceiptRecipient,
+        payer_name: str,
+        total_amount: Decimal,
+        payment_method: str,
+        reference: Optional[str],
+        received_date: date,
+        created_at: datetime,
+    ) -> None:
+        """Persist one non-sending receipt record in the payment transaction."""
+        receipt_number, subject, body = render_residential_payment_receipt(
+            payment_id=payment_id,
+            customer_name=receipt_recipient.customer_name.strip(),
+            payer_name=payer_name,
+            total_amount=total_amount,
+            payment_method=payment_method,
+            reference=reference,
+            received_date=received_date,
+        )
+        recipient_email = receipt_recipient.recipient_email
+        status = "pending" if recipient_email else "skipped"
+        skip_reason = None if recipient_email else "no_email"
+        await conn.execute(
+            """
+            INSERT INTO payment_receipt_deliveries (
+                id, payment_id, contact_id, receipt_number, recipient_email,
+                delivery_status, skip_reason, subject, body, created_at, updated_at
+            )
+            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $10)
+            """,
+            uuid4(),
+            payment_id,
+            receipt_recipient.contact_id,
+            receipt_number,
+            recipient_email,
+            status,
+            skip_reason,
+            subject,
+            body,
+            created_at,
+        )
+
+    @staticmethod
     def _normalize_allocations(
         allocations: list[dict[str, Any]],
         *,
@@ -1630,7 +1888,13 @@ class ReceivablesService:
             datetime.now(timezone.utc),
         )
 
-    async def _payment_view(self, conn: Any, payment_id: UUID) -> dict[str, Any]:
+    async def _payment_view(
+        self,
+        conn: Any,
+        payment_id: UUID,
+        *,
+        include_receipt_delivery: bool = False,
+    ) -> dict[str, Any]:
         row = await conn.fetchrow(
             """
             SELECT cp.*, pdi.batch_id
@@ -1655,11 +1919,39 @@ class ReceivablesService:
             """,
             payment_id,
         )
-        return self._compose_payment(row, allocations)
+        receipt_delivery = None
+        if include_receipt_delivery:
+            receipt_delivery = await conn.fetchrow(
+                """
+                SELECT receipt_number, recipient_email,
+                       delivery_status AS status, skip_reason
+                FROM payment_receipt_deliveries
+                WHERE payment_id = $1
+                """,
+                payment_id,
+            )
+        return self._compose_payment(
+            row,
+            allocations,
+            receipt_delivery=receipt_delivery,
+            include_receipt_delivery=include_receipt_delivery,
+        )
 
     @staticmethod
-    def _compose_payment(row: Any, allocations: list[Any]) -> dict[str, Any]:
+    def _compose_payment(
+        row: Any,
+        allocations: list[Any],
+        *,
+        receipt_delivery: Optional[Any] = None,
+        include_receipt_delivery: bool = False,
+    ) -> dict[str, Any]:
         result = _serialize_row(row)
+        if include_receipt_delivery:
+            result["receipt_delivery"] = (
+                _serialize_row(receipt_delivery)
+                if receipt_delivery is not None
+                else None
+            )
         allocation_views = [_serialize_row(item) for item in allocations]
         active_allocated = Decimal("0")
         is_active = row["status"] in ACTIVE_PAYMENT_STATUSES

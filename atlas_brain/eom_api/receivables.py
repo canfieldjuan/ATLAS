@@ -17,9 +17,11 @@ from ..services.receivables import (
     ReceivablesConflictError,
     ReceivablesError,
     ReceivablesNotFoundError,
+    ReceivablesReceiptContextRequiredError,
     ReceivablesSchemaUnavailableError,
     ReceivablesService,
     ReceivablesValidationError,
+    PaymentReceiptRecipient,
     get_receivables_service,
 )
 from ..services.eom_lead_ingress import EOM_BUSINESS_CONTEXT_ID
@@ -176,16 +178,16 @@ async def _call(awaitable):
 async def ready() -> dict:
     service = get_receivables_service()
     try:
-        schema_ready = await service.is_ready()
+        schema_ready = await service.is_receipt_delivery_ready()
     except Exception as exc:
         raise HTTPException(
             status_code=503, detail="Receivables database unavailable"
         ) from exc
     if not schema_ready:
         raise HTTPException(status_code=503, detail="Receivables schema unavailable")
-    # The billing-recipient routes read a SECOND database -- the pool that owns
-    # canonical EOM contacts -- so readiness off the global receivables
-    # database alone is not the whole answer.
+    # The billing-recipient and payment-receipt routes read a SECOND database
+    # -- the pool that owns canonical EOM contacts -- so readiness off the
+    # global receivables database alone is not the whole answer.
     #
     # Two different states, deliberately not collapsed:
     #
@@ -329,26 +331,81 @@ async def create_payment(
     idempotency_key: Annotated[
         str, Header(alias="Idempotency-Key", min_length=1, max_length=128)
     ],
+    request: Request,
     service: ReceivablesService = Depends(get_receivables_service),
 ) -> dict:
-    return await _call(
-        service.create_payment(
-            contact_id=body.contact_id,
-            payer_name=body.payer_name,
-            total_amount=_dollars(body.total_amount_cents),
-            payment_method=body.payment_method,
-            received_date=body.received_date,
-            check_date=body.check_date,
-            received_through=body.received_through,
-            reference=body.reference,
-            notes=body.notes,
-            allocations=_allocations(body.allocations),
-            recorded_by=actor,
-            idempotency_key=idempotency_key,
-            allow_unapplied=True,
-            unapplied_contact_context_id=EOM_BUSINESS_CONTEXT_ID,
+    """Record a payment with a canonical snapshot for receipt enqueueing.
+
+    The canonical read happens before the ledger write because the deployed
+    canonical CRM and receivables pools are separate.  A missing/unavailable
+    canonical customer cannot create a new EOM payment, but the service checks
+    its existing idempotency key first so an unchanged retry still recovers the
+    original payment after a later contact edit or CRM outage.
+    """
+    receipt_recipient: PaymentReceiptRecipient | None = None
+    canonical_failure: HTTPException | None = None
+    require_receipt_recipient = True
+    try:
+        crm = _billing_crm_dependency(request)
+        customer = await crm.get_eom_payment_customer(body.contact_id)
+        if customer is None:
+            canonical_failure = HTTPException(
+                status_code=404,
+                detail={
+                    "code": "not_found",
+                    "message": "Customer not found",
+                },
+            )
+        else:
+            receipt_recipient = PaymentReceiptRecipient(
+                contact_id=UUID(str(customer["contact_id"])),
+                customer_name=str(customer["customer_name"]),
+                customer_type=str(customer["customer_type"]),
+                recipient_email=(
+                    str(customer["recipient_email"])
+                    if customer["recipient_email"] is not None
+                    else None
+                ),
+            )
+    except HTTPException as exc:
+        canonical_failure = exc
+    except Exception as exc:
+        if not _is_database_unavailable_error(exc):
+            raise
+        canonical_failure = HTTPException(
+            status_code=503,
+            detail={
+                "code": "canonical_customer_unavailable",
+                "message": "Canonical EOM customer data is unavailable",
+            },
         )
-    )
+
+    async def _write_payment() -> dict:
+        try:
+            return await service.create_payment(
+                contact_id=body.contact_id,
+                payer_name=body.payer_name,
+                total_amount=_dollars(body.total_amount_cents),
+                payment_method=body.payment_method,
+                received_date=body.received_date,
+                check_date=body.check_date,
+                received_through=body.received_through,
+                reference=body.reference,
+                notes=body.notes,
+                allocations=_allocations(body.allocations),
+                recorded_by=actor,
+                idempotency_key=idempotency_key,
+                allow_unapplied=True,
+                unapplied_contact_context_id=EOM_BUSINESS_CONTEXT_ID,
+                receipt_recipient=receipt_recipient,
+                require_receipt_recipient=require_receipt_recipient,
+            )
+        except ReceivablesReceiptContextRequiredError:
+            if canonical_failure is not None:
+                raise canonical_failure
+            raise
+
+    return await _call(_write_payment())
 
 
 @router.get("/payments")

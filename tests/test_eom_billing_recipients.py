@@ -529,6 +529,9 @@ class _ReadyService:
     async def is_ready(self):
         return True
 
+    async def is_receipt_delivery_ready(self):
+        return True
+
 
 receivables.get_receivables_service = lambda: _ReadyService()
 if main_eom.app.dependency_overrides:
@@ -697,6 +700,9 @@ async def test_readiness_separates_unconfigured_from_unavailable(
 
     class _ReadyService:
         async def is_ready(self):
+            return True
+
+        async def is_receipt_delivery_ready(self):
             return True
 
     monkeypatch.setattr(routes, "get_receivables_service", lambda: _ReadyService())

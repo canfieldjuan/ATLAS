@@ -331,7 +331,11 @@ require_pr_branch_name() {
 
 run_final_local_review() {
     echo "Running final local PR review before GitHub mutation..."
-    ATLAS_CURRENT_PR_BODY_FILE="$body_file" \
+    # Draft consent is consumed during argv admission. Do not leak it into the
+    # local unit suite: its own draft-admission fixtures must exercise the
+    # default no-consent case, independent of this outer PR's authorized mode.
+    env -u ATLAS_OPEN_PR_DRAFT_CONSENT \
+        ATLAS_CURRENT_PR_BODY_FILE="$body_file" \
         bash scripts/local_pr_review.sh --current-pr-body-file "$body_file"
 }
 
