@@ -6,7 +6,7 @@ re-pays for a guarantee `repo_wide_unit_backstop` already holds daily. This
 picks the tests a change can actually reach, so a push pays for its own blast
 radius instead of the repo's.
 
-Soundness rests on three properties, in order of how much they matter:
+Soundness rests on four properties, in order of how much they matter:
 
 1. **Transitive, not one-hop.** Reachability is computed over the whole
    first-party import graph, so `tests/test_a.py -> helpers -> changed_module`
@@ -21,6 +21,10 @@ Soundness rests on three properties, in order of how much they matter:
 3. **Empty is only for provably test-free changes.** An empty selection means
    every changed file was mapped and none of them is reachable from any test
    (documentation, plans). It is not the fallback for "I could not tell".
+4. **Bare file-level baseline entries require the full suite.** A collection
+   failure recorded as a bare test-file path can pass in isolation while still
+   failing in the full collection order, so scoped execution cannot prove that
+   entry stale.
 
 Output: newline-separated test paths on stdout, or the single token ``FULL``.
 
@@ -212,6 +216,56 @@ def is_provably_test_free_path(path: Path) -> bool:
     return path.suffix in TEST_FREE_SUFFIXES
 
 
+def bare_file_level_baseline_paths(repo: Path) -> set[str] | None:
+    """Return bare test-file baseline entries, or ``None`` when unreadable.
+
+    The Unit Gate's baseline records a collection failure as a bare test path,
+    unlike a normal failing test node that contains ``::``. A scoped run cannot
+    reliably prove that a collection failure disappears under the full suite's
+    import order, so callers must escalate when one of these paths is selected.
+    """
+    baseline = repo / "tests" / "unit_gate_baseline.txt"
+    if not baseline.exists():
+        return set()
+    try:
+        lines = baseline.read_text(encoding="utf-8").splitlines()
+    except (OSError, UnicodeDecodeError):
+        print(
+            "select_impacted_tests: cannot read unit-gate baseline; "
+            "escalating to FULL",
+            file=sys.stderr,
+        )
+        return None
+    return {
+        line
+        for raw in lines
+        if (line := raw.strip())
+        and not line.startswith("#")
+        and line.startswith("tests/")
+        and line.endswith(".py")
+        and "::" not in line
+    }
+
+
+def requires_full_suite_for_file_level_baseline(
+    selected: set[str], repo: Path
+) -> bool:
+    """True when selected tests overlap a full-suite-only collection baseline."""
+    baseline_paths = bare_file_level_baseline_paths(repo)
+    if baseline_paths is None:
+        return True
+    overlap = sorted(selected & baseline_paths)
+    if not overlap:
+        return False
+    print(
+        "select_impacted_tests: selected file-level unit-gate baseline entry "
+        "requires full-suite collection; escalating to FULL: "
+        + ", ".join(overlap),
+        file=sys.stderr,
+    )
+    return True
+
+
 def is_conftest_module(name: str) -> bool:
     """True for any ``tests/.../conftest.py`` module name."""
     return name == "tests.conftest" or name.endswith(".conftest")
@@ -395,6 +449,8 @@ def select(changed: list[str], repo: Path) -> list[str] | str:
         graph_changed.append(path)
 
     if not graph_changed:
+        if requires_full_suite_for_file_level_baseline(owned_tests, repo):
+            return FULL
         return sorted(owned_tests)
 
     reverse, unparseable = build_reverse_graph(repo)
@@ -409,7 +465,10 @@ def select(changed: list[str], repo: Path) -> list[str] | str:
     result = impacted_tests(graph_changed, reverse, repo)
     if result == FULL:
         return FULL
-    return sorted(result | owned_tests)
+    selected = result | owned_tests
+    if requires_full_suite_for_file_level_baseline(selected, repo):
+        return FULL
+    return sorted(selected)
 
 
 def main(argv: list[str] | None = None) -> int:
