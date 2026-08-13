@@ -22,6 +22,7 @@ EOM_CUSTOMER_TYPES = ("residential", "commercial", "unknown")
 RESIDENTIAL_CUSTOMER_TYPE = "residential"
 _CENT = Decimal("0.01")
 _MAX_DATABASE_MONEY = Decimal("9999999999.99")
+_LEDGER_ALLOCATION_HISTORY_LIMIT = 100
 _RECEIVABLES_REQUIRED_COLUMNS = {
     "customer_payments": (
         "id",
@@ -1075,8 +1076,12 @@ class ReceivablesService:
             )
 
         normalized_search = (search or "").strip() or None
-        normalized_status = (payment_status or "").strip() or None
-        normalized_method = (payment_method or "").strip() or None
+        if payment_status is not None and not payment_status.strip():
+            raise ReceivablesValidationError("Payment status cannot be blank")
+        if payment_method is not None and not payment_method.strip():
+            raise ReceivablesValidationError("Payment method cannot be blank")
+        normalized_status = payment_status.strip() if payment_status is not None else None
+        normalized_method = payment_method.strip() if payment_method is not None else None
         page_size = max(1, min(limit, 200))
         page_offset = max(0, offset)
         search_pattern = f"%{normalized_search}%" if normalized_search else None
@@ -1144,7 +1149,10 @@ class ReceivablesService:
                 )
                 SELECT entry_type, entry_id, created_at, occurred_date
                 FROM ledger_entries
-                ORDER BY created_at DESC, entry_type DESC, entry_id DESC
+                ORDER BY occurred_date DESC NULLS LAST,
+                         created_at DESC,
+                         entry_type DESC,
+                         entry_id DESC
                 LIMIT $7 OFFSET $8
                 """,
                 contact_id,
@@ -1182,6 +1190,7 @@ class ReceivablesService:
                     conn,
                     payment_rows,
                     include_receipt_delivery=True,
+                    allocation_history_limit=_LEDGER_ALLOCATION_HISTORY_LIMIT,
                 )
             }
             invoice_rows = (
@@ -1204,11 +1213,16 @@ class ReceivablesService:
             }
             balance_row = await conn.fetchrow(
                 """
-                WITH applied_by_payment AS (
+                WITH customer_payments_in_scope AS (
+                    SELECT cp.id, cp.total_amount, cp.status
+                    FROM customer_payments cp
+                    WHERE cp.contact_id = $1
+                ),
+                applied_by_payment AS (
                     SELECT ip.payment_id, COALESCE(SUM(ip.amount), 0) AS allocated_amount
                     FROM invoice_payments ip
-                    WHERE ip.payment_id IS NOT NULL
-                      AND ip.reversed_at IS NULL
+                    JOIN customer_payments_in_scope cp ON cp.id = ip.payment_id
+                    WHERE ip.reversed_at IS NULL
                     GROUP BY ip.payment_id
                 ),
                 invoice_balance AS (
@@ -1222,10 +1236,9 @@ class ReceivablesService:
                         SUM(cp.total_amount - COALESCE(abp.allocated_amount, 0)),
                         0
                     ) AS unapplied_payment_balance
-                    FROM customer_payments cp
+                    FROM customer_payments_in_scope cp
                     LEFT JOIN applied_by_payment abp ON abp.payment_id = cp.id
-                    WHERE cp.contact_id = $1
-                      AND cp.status = ANY($2::varchar[])
+                    WHERE cp.status = ANY($2::varchar[])
                 )
                 SELECT invoice_balance.open_invoice_balance,
                        unapplied_balance.unapplied_payment_balance
@@ -2158,29 +2171,95 @@ class ReceivablesService:
         rows: list[Any],
         *,
         include_receipt_delivery: bool = False,
+        allocation_history_limit: Optional[int] = None,
     ) -> list[dict[str, Any]]:
         """Hydrate payment list rows without changing their requested order."""
         if not rows:
             return []
         payment_ids = [row["id"] for row in rows]
-        allocation_rows = await executor.fetch(
-            """
-            SELECT ip.payment_id, ip.id, ip.invoice_id, i.invoice_number,
-                   ip.amount, ip.payment_date, ip.payment_method, ip.reference,
-                   ip.notes, ip.recorded_by, ip.created_at, ip.metadata,
-                   ip.reversed_at, ip.reversal_reason
-            FROM invoice_payments ip
-            JOIN invoices i ON i.id = ip.invoice_id
-            WHERE ip.payment_id = ANY($1::uuid[])
-            ORDER BY i.due_date, i.invoice_number, ip.created_at
-            """,
-            payment_ids,
-        )
+        if allocation_history_limit is None:
+            allocation_rows = await executor.fetch(
+                """
+                SELECT ip.payment_id, ip.id, ip.invoice_id, i.invoice_number,
+                       ip.amount, ip.payment_date, ip.payment_method, ip.reference,
+                       ip.notes, ip.recorded_by, ip.created_at, ip.metadata,
+                       ip.reversed_at, ip.reversal_reason
+                FROM invoice_payments ip
+                JOIN invoices i ON i.id = ip.invoice_id
+                WHERE ip.payment_id = ANY($1::uuid[])
+                ORDER BY i.due_date, i.invoice_number, ip.created_at
+                """,
+                payment_ids,
+            )
+        else:
+            if allocation_history_limit < 1:
+                raise ValueError("allocation_history_limit must be positive")
+            allocation_rows = await executor.fetch(
+                """
+                WITH allocation_totals AS (
+                    SELECT ip.payment_id,
+                           COALESCE(SUM(ip.amount) FILTER (
+                               WHERE ip.reversed_at IS NULL
+                           ), 0) AS active_allocated_amount,
+                           COUNT(*) AS allocation_history_count
+                    FROM invoice_payments ip
+                    WHERE ip.payment_id = ANY($1::uuid[])
+                    GROUP BY ip.payment_id
+                ),
+                ranked_allocations AS (
+                    SELECT ip.payment_id, ip.id, ip.invoice_id, i.invoice_number,
+                           ip.amount, ip.payment_date, ip.payment_method,
+                           ip.reference, ip.notes, ip.recorded_by, ip.created_at,
+                           ip.metadata, ip.reversed_at, ip.reversal_reason,
+                           ROW_NUMBER() OVER (
+                               PARTITION BY ip.payment_id
+                               ORDER BY (ip.reversed_at IS NULL) DESC,
+                                        i.due_date,
+                                        i.invoice_number,
+                                        ip.created_at,
+                                        ip.id
+                           ) AS allocation_rank
+                    FROM invoice_payments ip
+                    JOIN invoices i ON i.id = ip.invoice_id
+                    WHERE ip.payment_id = ANY($1::uuid[])
+                )
+                SELECT ranked_allocations.payment_id,
+                       ranked_allocations.id,
+                       ranked_allocations.invoice_id,
+                       ranked_allocations.invoice_number,
+                       ranked_allocations.amount,
+                       ranked_allocations.payment_date,
+                       ranked_allocations.payment_method,
+                       ranked_allocations.reference,
+                       ranked_allocations.notes,
+                       ranked_allocations.recorded_by,
+                       ranked_allocations.created_at,
+                       ranked_allocations.metadata,
+                       ranked_allocations.reversed_at,
+                       ranked_allocations.reversal_reason,
+                       allocation_totals.active_allocated_amount,
+                       allocation_totals.allocation_history_count
+                FROM ranked_allocations
+                JOIN allocation_totals
+                  ON allocation_totals.payment_id = ranked_allocations.payment_id
+                WHERE ranked_allocations.allocation_rank <= $2
+                ORDER BY ranked_allocations.payment_id, ranked_allocations.allocation_rank
+                """,
+                payment_ids,
+                allocation_history_limit,
+            )
         allocations_by_payment: dict[str, list[Any]] = {
             str(payment_id): [] for payment_id in payment_ids
         }
+        allocation_summaries_by_payment: dict[str, dict[str, Any]] = {}
         for allocation in allocation_rows:
-            allocations_by_payment[str(allocation["payment_id"])].append(allocation)
+            payment_id = str(allocation["payment_id"])
+            allocations_by_payment[payment_id].append(allocation)
+            if allocation_history_limit is not None:
+                allocation_summaries_by_payment[payment_id] = {
+                    "active_allocated_amount": allocation["active_allocated_amount"],
+                    "allocation_history_count": allocation["allocation_history_count"],
+                }
 
         receipt_by_payment: dict[str, dict[str, Any]] = {}
         if include_receipt_delivery:
@@ -2203,15 +2282,33 @@ class ReceivablesService:
                 for receipt in receipt_rows
             }
 
-        return [
-            self._compose_payment(
-                row,
-                allocations_by_payment.get(str(row["id"]), []),
-                receipt_delivery=receipt_by_payment.get(str(row["id"])),
-                include_receipt_delivery=include_receipt_delivery,
+        payment_views: list[dict[str, Any]] = []
+        for row in rows:
+            payment_id = str(row["id"])
+            allocation_summary = allocation_summaries_by_payment.get(payment_id)
+            payment_views.append(
+                self._compose_payment(
+                    row,
+                    allocations_by_payment.get(payment_id, []),
+                    receipt_delivery=receipt_by_payment.get(payment_id),
+                    include_receipt_delivery=include_receipt_delivery,
+                    active_allocated_amount=(
+                        allocation_summary["active_allocated_amount"]
+                        if allocation_summary is not None
+                        else Decimal("0")
+                        if allocation_history_limit is not None
+                        else None
+                    ),
+                    allocation_history_count=(
+                        int(allocation_summary["allocation_history_count"])
+                        if allocation_summary is not None
+                        else 0
+                        if allocation_history_limit is not None
+                        else None
+                    ),
+                )
             )
-            for row in rows
-        ]
+        return payment_views
 
     async def _has_replay_receipt_delivery(
         self,
@@ -2253,6 +2350,8 @@ class ReceivablesService:
         *,
         receipt_delivery: Optional[Any] = None,
         include_receipt_delivery: bool = False,
+        active_allocated_amount: Optional[Decimal] = None,
+        allocation_history_count: Optional[int] = None,
     ) -> dict[str, Any]:
         result = _serialize_row(row)
         if include_receipt_delivery:
@@ -2261,10 +2360,17 @@ class ReceivablesService:
                 if receipt_delivery is not None
                 else None
             )
-        allocation_views = [_serialize_row(item) for item in allocations]
+        allocation_views = []
+        for allocation in allocations:
+            view = _serialize_row(allocation)
+            view.pop("active_allocated_amount", None)
+            view.pop("allocation_history_count", None)
+            allocation_views.append(view)
         active_allocated = Decimal("0")
         is_active = row["status"] in ACTIVE_PAYMENT_STATUSES
-        if is_active:
+        if is_active and active_allocated_amount is not None:
+            active_allocated = money(active_allocated_amount)
+        elif is_active:
             active_allocated = sum(
                 (
                     money(item["amount"])
@@ -2284,6 +2390,11 @@ class ReceivablesService:
         for view in allocation_views:
             view["amount_cents"] = cents(view["amount"])
         result["allocations"] = allocation_views
+        if allocation_history_count is not None:
+            result["allocation_history_count"] = allocation_history_count
+            result["allocations_truncated"] = (
+                allocation_history_count > len(allocation_views)
+            )
         return result
 
     @staticmethod

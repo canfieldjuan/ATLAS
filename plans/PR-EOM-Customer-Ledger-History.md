@@ -21,6 +21,12 @@ later proxy one canonical query rather than inventing a second ledger.
   EOM HTTP read surface exposes only a payment-list projection. A portal cannot
   truthfully assemble customer history from that partial projection without
   becoming a parallel financial reporter.
+- Review-fix root cause: the first ledger projection ordered a financial
+  history by ingestion time, reused an unrestricted legacy nested-allocation
+  hydrator, aggregated allocations outside the selected customer, and left
+  continuation/filter/search-isolation boundaries without direct proof. Those
+  choices can misstate chronology, make a returned page URL invalid, or make a
+  bounded ledger response grow with unrelated/history rows.
 - Correct fix must touch/change: add one bounded, customer-scoped query on
   `ReceivablesService`; expose the same authenticated route from full and slim
   EOM providers; prove the result through a real local PostgreSQL schema and
@@ -38,15 +44,18 @@ Max files: 5
 
 1. Add `GET /receivables/customers/{contact_id}/ledger` to both the full and
    slim authenticated EOM provider routes. The additive response contains a
-   bounded, deterministic combined timeline of invoice and payment entries;
-   payment entries include allocations, unapplied cents, deposit/clearing
-   state, return/void reasons, and receipt-delivery state.
+   bounded, deterministic combined timeline ordered by financial
+   `occurred_date` before stable ingestion/type/ID ties. Payment entries include
+   deposit/clearing state, return/void reasons, receipt-delivery state, exact
+   active allocation/unapplied cents, and at most 100 active-first allocation
+   history rows with `allocation_history_count` and `allocations_truncated`.
 2. Support the existing finance-safe query shapes: optional case-insensitive
    search over
    payer, payment reference (including check/Square references), receipt number,
-   allocated invoice number, and invoice customer/name; optional payment
-   status/method and date-range filters; `limit` 1..200 and nonnegative
-   `offset`. Payment-only filters return payment entries only. The unfiltered
+   allocated invoice number, and invoice customer/name; optional nonblank
+   payment status/method and date-range filters; `limit` 1..200 and nonnegative
+   `offset`. Every generated `next_offset` remains routable through both
+   handlers. Payment-only filters return payment entries only. The unfiltered
    balance snapshot remains current ATLAS state, never a filter-dependent or
    reconstructed historical balance.
 3. Return `open_invoice_balance_cents` and
@@ -57,22 +66,29 @@ Max files: 5
    read contract and map an unavailable schema through the existing controlled
    receivables error boundary. Existing payment-list and mutation routes remain
    unchanged.
-5. Prove normal, filtered, paginated, retry/repeated-read, unavailable-schema,
-   and both-provider HTTP behavior locally without sending email or modifying
-   any non-test financial data.
+5. Prove chronological/backdated ordering, payer/check/Square/receipt/invoice
+   search, payment-side customer isolation, bounded nested allocation history
+   with exact totals, filtered/paginated/retry/repeated-read behavior,
+   unavailable schema, and both-provider HTTP admission locally without sending
+   email or modifying any non-test financial data.
 
 ### Review Contract
 
 - Acceptance criteria:
   - [ ] `ReceivablesService.list_customer_ledger` returns only the requested
-    customer's deterministic invoice/payment entries, each payment with
-    allocations, active-unapplied cents, deposit/clearing state, reversal
-    reason/state, and receipt-delivery projection; settled by the real
-    PostgreSQL service test in `tests/test_receivables.py`.
-  - [ ] A case-insensitive payer, check/Square reference, receipt number, or invoice
-    number search, payment status/method filter, date range, and bounded page
-    return only matching entries; settled by the same service test, including
-    an unrelated customer's rows.
+    customer's deterministic invoice/payment entries in descending
+    `occurred_date` order, then stable ingestion/type/ID ties. Each payment
+    includes exact active allocation/unapplied cents, a bounded active-first
+    allocation-history projection with explicit truncation/count metadata,
+    deposit/clearing state, reversal reason/state, and receipt-delivery
+    projection; settled by the real PostgreSQL service test in
+    `tests/test_receivables.py`.
+  - [ ] A case-insensitive payer, check/Square reference, receipt number, or
+    invoice number search, payment status/method filter, date range, and
+    bounded page return only matching entries. Blank supplied payment filters
+    are controlled validation errors, a generated continuation remains an
+    admitted handler input, and an unrelated customer's invoice **and payment**
+    never appear; settled by the service and both mounted-ASGI tests.
   - [ ] `open_invoice_balance_cents` and
     `unapplied_payment_balance_cents` reflect current persisted invoice/payment
     state in integer cents; settled by the service test. The response does not
@@ -108,8 +124,9 @@ Max files: 5
   sources are omitted rather than guessed.
 - Payment status and method are not locally enumerated policy sets. They are
   stored financial values compared exactly when a caller supplies a filter;
-  an unknown value takes the safe read-only default of matching no payment
-  rows. Existing lifecycle writers remain their canonical validators.
+  an unknown nonblank value takes the safe read-only default of matching no
+  payment rows, while a blank supplied value is rejected. Existing lifecycle
+  writers remain their canonical validators.
 
 ### Boundary-change enumeration
 
@@ -127,8 +144,10 @@ replace an existing route or widen an existing authorization dependency.
 - Guard-relevant fields: service token (existing router dependency), canonical
   UUID path `contact_id`, optional `search`, `payment_status`,
   `payment_method`, `from_date`, `to_date`, `limit`, and `offset`. FastAPI
-  rejects non-UUID dates/limits; the service rejects an inverted date interval;
-  unknown historical status/method values safely yield no matching payment rows.
+  rejects malformed UUID/date/limit inputs; the service rejects an inverted
+  date interval and blank supplied payment filters; unknown nonblank historical
+  status/method values safely yield no matching payment rows. No fixed handler
+  offset cap can invalidate a service-generated continuation.
 - Caller x input shape:
   - full provider + valid token + valid contact/filter page -> ledger envelope;
   - slim provider + valid token + valid contact/filter page -> same envelope;
@@ -167,10 +186,16 @@ configuration gate both routes through `require_receivables_api`.
 `ReceivablesService` starts one `REPEATABLE READ, READ ONLY` transaction,
 requires its receipt-aware schema capability inside that snapshot, then builds
 one combined SQL page from invoices and customer payments constrained by the
-requested `contact_id`. The union selects only identifiers plus stable ordering
-fields; the service hydrates invoice rows and payment rows in bounded set
-queries, groups allocations, and reads the one-to-one receipt outbox rows. The
-page, nested details, and summary therefore reflect one committed database
+requested `contact_id`. The union orders first by financial `occurred_date`,
+then uses creation/type/ID only as deterministic ties. The service hydrates
+invoice rows and payment rows in bounded set queries, scopes the balance
+allocation aggregate to that customer, and reads the one-to-one receipt outbox
+rows. Ledger hydration uses a dedicated active-first allocation-history cap:
+it transfers at most 100 allocation rows per payment while separately deriving
+the exact active total and history count for the selected payment IDs. The
+legacy payment-list projection retains its existing full-history shape.
+
+The page, nested details, and summary therefore reflect one committed database
 snapshot; a concurrent commit falls entirely before or after the read. It
 returns nested entry objects so invoice and payment field names cannot be
 confused.
@@ -193,8 +218,14 @@ canonical CRM, Gmail, MCP, or any mutation.
   selected ATLAS contact preserves the existing customer-payment index and
   avoids turning a read endpoint into an unbounded cross-customer report.
 - Offset pagination is retained for consistency with existing receivables list
-  clients. It is read-only: a stale page can be refreshed but can never create,
-  allocate, email, deposit, clear, return, or void money.
+  clients. It has no artificial handler maximum, so a returned `next_offset`
+  is always routable. It is read-only: a stale page can be refreshed but can
+  never create, allocate, email, deposit, clear, return, or void money.
+- The ledger's nested `allocations` list is intentionally a bounded,
+  active-first history projection rather than an unbounded response. Exact
+  active totals remain authoritative; `allocation_history_count` and
+  `allocations_truncated` make omitted historical rows explicit. Existing
+  `GET /receivables/payments` keeps its full legacy allocation shape.
 - The response exposes a current balance snapshot, not a historical running
   balance. The invoices table has mutable state but no immutable invoice event
   history; inventing one from present-day values would be false financial
@@ -219,6 +250,11 @@ canonical CRM, Gmail, MCP, or any mutation.
   it with an unrelated baseline rewrite. The follow-up must add direct
   test-discovery evidence and/or make an intentional targeted baseline-refresh
   decision. Discovered by #2373 and linked from #2362.
+- H-10 / #2363: add a customer-scoped, per-payment allocation-history detail
+  cursor before an operator needs to inspect more than the ledger's bounded
+  100-row projection. The current ledger exposes exact count/truncation rather
+  than silently dropping history; this follow-up is discovered by #2373 and
+  must preserve the existing immutable reversal evidence.
 - Tracker slice: proxy this contract and combine it with canonical active
   customer search; ATLAS deliberately does not create another CRM reader here.
 - Website slice: render ledger filters, CSV export from this canonical query,
@@ -233,7 +269,9 @@ block this provider read contract or prove a financial truthfulness/safety risk.
 Parked hardening: H-08 is tracked in #2363 because historical balance wording
 would otherwise overstate what mutable invoice rows can prove. H-09 is also
 parked in #2363 because the maturity baseline/test-discovery defect predates
-this slice and needs a dedicated coverage decision.
+this slice and needs a dedicated coverage decision. H-10 is parked in #2363
+because the current bounded projection provides explicit count/truncation
+evidence, while a cursor would be a separate read contract.
 
 ## Verification
 
@@ -241,9 +279,10 @@ this slice and needs a dedicated coverage decision.
   - `ATLAS_RECEIVABLES_TEST_DATABASE_URL=... python -m pytest -q
     tests/test_receivables.py tests/test_eom_payment_receipts.py
     tests/test_eom_billing_recipients.py tests/test_invoice_repository.py` —
-    157 passed; the real PostgreSQL test creates only an isolated temporary
+    158 passed; the real PostgreSQL test creates only an isolated temporary
     schema and proves receipt/status/search/filter/page/repeated-read/schema
-    failure/no-write behavior plus full/slim mounted ASGI reachability.
+    failure/no-write behavior, chronological ordering, payment-side isolation,
+    allocation-history bounds, and full/slim mounted ASGI reachability.
   - `ATLAS_RECEIVABLES_TEST_DATABASE_URL=... python -m pytest -q
     tests/test_invoicing_readonly_mcp.py tests/test_invoicing_draft_writer_mcp.py`
     — 22 passed, preserving existing MCP behavior.
@@ -261,7 +300,7 @@ this slice and needs a dedicated coverage decision.
 |---|---:|
 | `atlas_brain/api/invoicing/receivables.py` | 27 |
 | `atlas_brain/eom_api/receivables.py` | 27 |
-| `atlas_brain/services/receivables.py` | 302 |
-| `plans/PR-EOM-Customer-Ledger-History.md` | 267 |
-| `tests/test_receivables.py` | 293 |
-| **Total** | **916** |
+| `atlas_brain/services/receivables.py` | 417 |
+| `plans/PR-EOM-Customer-Ledger-History.md` | 306 |
+| `tests/test_receivables.py` | 496 |
+| **Total** | **1273** |

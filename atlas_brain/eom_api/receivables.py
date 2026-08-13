@@ -451,7 +451,7 @@ async def customer_ledger(
     from_date: Optional[date] = Query(default=None),
     to_date: Optional[date] = Query(default=None),
     limit: int = Query(default=100, ge=1, le=200),
-    offset: int = Query(default=0, ge=0, le=10000),
+    offset: int = Query(default=0, ge=0),
     service: ReceivablesService = Depends(get_receivables_service),
 ) -> dict:
     """Return one bounded, receipt-aware financial ledger page for a customer."""
