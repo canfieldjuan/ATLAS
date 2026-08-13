@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import ast
 import importlib.util
+import itertools
 from pathlib import Path
 
 import pytest
@@ -118,6 +119,80 @@ def test_unrelated_module_is_not_selected(tmp_path):
         "tests/test_other.py": "from atlas_brain.other import Y\n",
     })
     assert sel.select(["atlas_brain/svc.py"], repo) == []
+
+
+def test_selected_file_level_baseline_escalates_to_full(tmp_path):
+    """Collection-order baseline debt cannot be declared fixed in isolation."""
+    repo = _mkrepo(tmp_path, {
+        "atlas_brain/__init__.py": "",
+        "atlas_brain/svc.py": "VALUE = 1\n",
+        "tests/test_svc.py": "from atlas_brain.svc import VALUE\n",
+        "tests/unit_gate_baseline.txt": "tests/test_svc.py\n",
+    })
+
+    assert sel.select(["atlas_brain/svc.py"], repo) == sel.FULL
+
+
+def test_node_level_baseline_does_not_escalate_to_full(tmp_path):
+    """A named test node is not the full-suite collection-failure boundary."""
+    repo = _mkrepo(tmp_path, {
+        "atlas_brain/__init__.py": "",
+        "atlas_brain/svc.py": "VALUE = 1\n",
+        "tests/test_svc.py": "from atlas_brain.svc import VALUE\n",
+        "tests/unit_gate_baseline.txt": "tests/test_svc.py::test_known\n",
+    })
+
+    assert sel.select(["atlas_brain/svc.py"], repo) == ["tests/test_svc.py"]
+
+
+def test_unselected_file_level_baseline_does_not_escalate_to_full(tmp_path):
+    """Only the exact selected collection-failure path requires full scope."""
+    repo = _mkrepo(tmp_path, {
+        "atlas_brain/__init__.py": "",
+        "atlas_brain/svc.py": "VALUE = 1\n",
+        "tests/test_svc.py": "from atlas_brain.svc import VALUE\n",
+        "tests/unit_gate_baseline.txt": "tests/test_other.py\n",
+    })
+
+    assert sel.select(["atlas_brain/svc.py"], repo) == ["tests/test_svc.py"]
+
+
+def test_file_level_baseline_escalation_is_grammar_closed(tmp_path):
+    """Generate parser grammar axes, not a fixture list of reported files."""
+    baseline = tmp_path / "tests" / "unit_gate_baseline.txt"
+    baseline.parent.mkdir()
+    selected_path = "tests/test_selected.py"
+    other_path = "tests/test_other.py"
+
+    # Grammar axes: baseline line values x whitespace wrappers x selected key families.
+    line_forms = ("bare", "node", "comment", "source", "non_python", "blank")
+    candidate_paths = (selected_path, other_path)
+    selected_sets = (
+        frozenset({selected_path}),
+        frozenset({other_path}),
+        frozenset({selected_path, other_path}),
+    )
+    presentation_forms = ("", "  ", "\t")
+    contract_oracle = {"bare": True, "node": False, "comment": False,
+                       "source": False, "non_python": False, "blank": False}
+
+    for line_form, candidate_path, selected, wrapper in itertools.product(
+        line_forms, candidate_paths, selected_sets, presentation_forms
+    ):
+        core = {
+            "bare": candidate_path,
+            "node": f"{candidate_path}::test_known",
+            "comment": f"# {candidate_path}",
+            "source": "atlas_brain/service.py",
+            "non_python": candidate_path.removesuffix(".py") + ".txt",
+            "blank": "",
+        }[line_form]
+        baseline.write_text(f"{wrapper}{core}{wrapper}\n", encoding="utf-8")
+
+        expected_full = contract_oracle[line_form] and candidate_path in selected
+        assert sel.requires_full_suite_for_file_level_baseline(
+            set(selected), tmp_path
+        ) is expected_full
 
 
 # --- escalation: unresolvable input must never yield an empty selection -----
