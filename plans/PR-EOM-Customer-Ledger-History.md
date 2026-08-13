@@ -34,6 +34,7 @@ later proxy one canonical query rather than inventing a second ledger.
 
 Ownership lane: eom/customer-ledger
 Slice phase: vertical slice
+Max files: 5
 
 1. Add `GET /receivables/customers/{contact_id}/ledger` to both the full and
    slim authenticated EOM provider routes. The additive response contains a
@@ -211,6 +212,13 @@ canonical CRM, Gmail, MCP, or any mutation.
 - H-08 / #2363: add an immutable invoice financial-event basis before the UI
   uses the phrase "historical running balance." Discovered and linked from this
   slice in #2362.
+- H-09 / #2363: `origin/main` maturity baselines omit existing
+  `atlas_brain/api/invoicing/receivables.py` and
+  `atlas_brain/templates/email/payment_receipt.py` evidence. The exact sweep
+  fails identically on the base, so this finance-safe read slice must not mask
+  it with an unrelated baseline rewrite. The follow-up must add direct
+  test-discovery evidence and/or make an intentional targeted baseline-refresh
+  decision. Discovered by #2373 and linked from #2362.
 - Tracker slice: proxy this contract and combine it with canonical active
   customer search; ATLAS deliberately does not create another CRM reader here.
 - Website slice: render ledger filters, CSV export from this canonical query,
@@ -223,7 +231,9 @@ hardening, historical event-model work, and UI/product-copy choices unless they
 block this provider read contract or prove a financial truthfulness/safety risk.
 
 Parked hardening: H-08 is tracked in #2363 because historical balance wording
-would otherwise overstate what mutable invoice rows can prove.
+would otherwise overstate what mutable invoice rows can prove. H-09 is also
+parked in #2363 because the maturity baseline/test-discovery defect predates
+this slice and needs a dedicated coverage decision.
 
 ## Verification
 
@@ -252,6 +262,6 @@ would otherwise overstate what mutable invoice rows can prove.
 | `atlas_brain/api/invoicing/receivables.py` | 27 |
 | `atlas_brain/eom_api/receivables.py` | 27 |
 | `atlas_brain/services/receivables.py` | 302 |
-| `plans/PR-EOM-Customer-Ledger-History.md` | 257 |
+| `plans/PR-EOM-Customer-Ledger-History.md` | 267 |
 | `tests/test_receivables.py` | 293 |
-| **Total** | **906** |
+| **Total** | **916** |
