@@ -28,6 +28,8 @@ _RECEIVABLES_REQUIRED_COLUMNS = {
         "payment_method",
         "reference",
         "received_date",
+        "check_date",
+        "received_through",
         "status",
         "source",
         "idempotency_key",
@@ -245,6 +247,10 @@ class ReceivablesNotFoundError(ReceivablesError):
 
 class ReceivablesConflictError(ReceivablesError):
     code = "conflict"
+
+
+class ReceivablesSchemaUnavailableError(ReceivablesError):
+    code = "schema_unavailable"
 
 
 def money(value: Any) -> Decimal:
@@ -493,6 +499,8 @@ class ReceivablesService:
         total_amount: Decimal,
         payment_method: str,
         received_date: date,
+        check_date: Optional[date] = None,
+        received_through: Optional[str] = None,
         allocations: list[dict[str, Any]],
         idempotency_key: str,
         reference: Optional[str] = None,
@@ -511,6 +519,8 @@ class ReceivablesService:
             total_amount=total_amount,
             payment_method=payment_method,
             received_date=received_date,
+            check_date=check_date,
+            received_through=received_through,
             allocations=allocations,
             idempotency_key=idempotency_key,
             reference=reference,
@@ -532,6 +542,8 @@ class ReceivablesService:
         total_amount: Decimal,
         payment_method: str,
         received_date: date,
+        check_date: Optional[date] = None,
+        received_through: Optional[str] = None,
         allocations: list[dict[str, Any]],
         idempotency_key: str,
         reference: Optional[str] = None,
@@ -576,6 +588,19 @@ class ReceivablesService:
                 "Allocated amount cannot exceed the payment total"
             )
         initial_status = "received" if method == "check" else "cleared"
+        raw_received_through = received_through or ""
+        if len(raw_received_through) > 128:
+            raise ReceivablesValidationError(
+                "Received through must contain at most 128 characters"
+            )
+        normalized_received_through = raw_received_through.strip() or None
+        has_check_metadata = (
+            check_date is not None or normalized_received_through is not None
+        )
+        if has_check_metadata and method != "check":
+            raise ReceivablesValidationError(
+                "Check metadata requires a check payment method"
+            )
         payload = {
             "contact_id": contact_id,
             "payer_name": payer,
@@ -586,6 +611,17 @@ class ReceivablesService:
             "reference": (reference or "").strip() or None,
             "notes": (notes or "").strip() or None,
         }
+        if has_check_metadata:
+            if not await self.is_ready():
+                raise ReceivablesSchemaUnavailableError(
+                    "Receivables schema unavailable for check metadata"
+                )
+            payload.update(
+                {
+                    "check_date": check_date,
+                    "received_through": normalized_received_through,
+                }
+            )
         fingerprint = request_fingerprint(payload)
 
         async with self.pool.transaction() as conn:
@@ -649,41 +685,81 @@ class ReceivablesService:
                     )
 
             payment_id = uuid4()
-            payment_row = await conn.fetchrow(
-                """
-                INSERT INTO customer_payments (
-                    id, contact_id, payer_name, total_amount, payment_method,
-                    reference, received_date, status, source, idempotency_key,
-                    request_fingerprint, notes, recorded_by, cleared_at,
-                    metadata, created_at, updated_at
+            if has_check_metadata:
+                payment_row = await conn.fetchrow(
+                    """
+                    INSERT INTO customer_payments (
+                        id, contact_id, payer_name, total_amount, payment_method,
+                        reference, received_date, check_date, received_through,
+                        status, source, idempotency_key, request_fingerprint,
+                        notes, recorded_by, cleared_at, metadata, created_at,
+                        updated_at
+                    )
+                    VALUES (
+                        $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12,
+                        $13, $14, $15, CASE WHEN $10::varchar = 'cleared'
+                            THEN $16::timestamptz ELSE NULL END,
+                        $17::jsonb, $16, $16
+                    )
+                    ON CONFLICT (source, idempotency_key)
+                        WHERE idempotency_key IS NOT NULL
+                    DO NOTHING
+                    RETURNING id
+                    """,
+                    payment_id,
+                    contact_id,
+                    payer,
+                    total,
+                    method,
+                    payload["reference"],
+                    received_date,
+                    payload["check_date"],
+                    payload["received_through"],
+                    initial_status,
+                    source,
+                    key,
+                    fingerprint,
+                    payload["notes"],
+                    recorded_by,
+                    datetime.now(timezone.utc),
+                    json.dumps(metadata or {}),
                 )
-                VALUES (
-                    $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12,
-                    $13, CASE WHEN $8::varchar = 'cleared'
-                        THEN $14::timestamptz ELSE NULL END,
-                    $15::jsonb, $14, $14
+            else:
+                payment_row = await conn.fetchrow(
+                    """
+                    INSERT INTO customer_payments (
+                        id, contact_id, payer_name, total_amount, payment_method,
+                        reference, received_date, status, source, idempotency_key,
+                        request_fingerprint, notes, recorded_by, cleared_at,
+                        metadata, created_at, updated_at
+                    )
+                    VALUES (
+                        $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12,
+                        $13, CASE WHEN $8::varchar = 'cleared'
+                            THEN $14::timestamptz ELSE NULL END,
+                        $15::jsonb, $14, $14
+                    )
+                    ON CONFLICT (source, idempotency_key)
+                        WHERE idempotency_key IS NOT NULL
+                    DO NOTHING
+                    RETURNING id
+                    """,
+                    payment_id,
+                    contact_id,
+                    payer,
+                    total,
+                    method,
+                    payload["reference"],
+                    received_date,
+                    initial_status,
+                    source,
+                    key,
+                    fingerprint,
+                    payload["notes"],
+                    recorded_by,
+                    datetime.now(timezone.utc),
+                    json.dumps(metadata or {}),
                 )
-                ON CONFLICT (source, idempotency_key)
-                    WHERE idempotency_key IS NOT NULL
-                DO NOTHING
-                RETURNING id
-                """,
-                payment_id,
-                contact_id,
-                payer,
-                total,
-                method,
-                payload["reference"],
-                received_date,
-                initial_status,
-                source,
-                key,
-                fingerprint,
-                payload["notes"],
-                recorded_by,
-                datetime.now(timezone.utc),
-                json.dumps(metadata or {}),
-            )
             if not payment_row:
                 existing = await conn.fetchrow(
                     """

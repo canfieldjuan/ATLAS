@@ -28,9 +28,11 @@ from atlas_brain.services.receivables import (
     ReceivablesConflictError,
     ReceivablesError,
     ReceivablesNotFoundError,
+    ReceivablesSchemaUnavailableError,
     ReceivablesService,
     ReceivablesValidationError,
     money,
+    request_fingerprint,
 )
 from atlas_brain.storage.exceptions import DatabaseUnavailableError
 
@@ -57,6 +59,8 @@ class _CreatePaymentConnection:
         self.contact_lock_count = 0
         self.contact_queries: list[str] = []
         self.parent_args = None
+        self.parent_fingerprint_index: int | None = None
+        self.parent_has_check_metadata = False
         self.parent_insert_count = 0
         self.allocations: list[dict] = []
         self.fetches: list[tuple[str, tuple]] = []
@@ -67,7 +71,9 @@ class _CreatePaymentConnection:
             if self.parent_args is not None:
                 return {
                     "id": self.parent_args[0],
-                    "request_fingerprint": self.parent_args[10],
+                    "request_fingerprint": self.parent_args[
+                        self.parent_fingerprint_index
+                    ],
                 }
             return None
         if "FROM contacts" in query:
@@ -88,11 +94,17 @@ class _CreatePaymentConnection:
         if "INSERT INTO customer_payments" in query:
             self.parent_insert_count += 1
             self.parent_args = args
+            self.parent_has_check_metadata = (
+                "check_date, received_through" in query
+            )
+            self.parent_fingerprint_index = (
+                12 if self.parent_has_check_metadata else 10
+            )
             return {"id": args[0]}
         if "SELECT cp.*, pdi.batch_id" in query:
             assert self.parent_args is not None
             parent = self.parent_args
-            return {
+            payment = {
                 "id": parent[0],
                 "contact_id": parent[1],
                 "payer_name": parent[2],
@@ -100,15 +112,34 @@ class _CreatePaymentConnection:
                 "payment_method": parent[4],
                 "reference": parent[5],
                 "received_date": parent[6],
-                "status": parent[7],
-                "source": parent[8],
-                "idempotency_key": parent[9],
-                "request_fingerprint": parent[10],
-                "notes": parent[11],
-                "recorded_by": parent[12],
                 "metadata": {},
                 "batch_id": None,
             }
+            if self.parent_has_check_metadata:
+                payment.update(
+                    {
+                        "check_date": parent[7],
+                        "received_through": parent[8],
+                        "status": parent[9],
+                        "source": parent[10],
+                        "idempotency_key": parent[11],
+                        "request_fingerprint": parent[12],
+                        "notes": parent[13],
+                        "recorded_by": parent[14],
+                    }
+                )
+            else:
+                payment.update(
+                    {
+                        "status": parent[7],
+                        "source": parent[8],
+                        "idempotency_key": parent[9],
+                        "request_fingerprint": parent[10],
+                        "notes": parent[11],
+                        "recorded_by": parent[12],
+                    }
+                )
+            return payment
         raise AssertionError(f"Unexpected fetchrow query: {query}")
 
     async def fetchval(self, query: str, *_args):
@@ -273,6 +304,132 @@ async def test_create_payment_records_unapplied_receipt_and_replays_without_invo
     ]
     assert len(events) == 1
     assert json.loads(events[0][10]) == {"allocated_amount": "0"}
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("received_through", (None, "  "))
+async def test_create_payment_without_check_metadata_preserves_legacy_intent(
+    received_through,
+):
+    contact_id = uuid4()
+    pool = _CreatePaymentPool([], [contact_id])
+    service = ReceivablesService(pool)
+    create_args = {
+        "contact_id": contact_id,
+        "payer_name": "Residential Customer",
+        "total_amount": Decimal("125.00"),
+        "payment_method": "check",
+        "received_date": date(2026, 8, 12),
+        "received_through": received_through,
+        "allocations": [],
+        "idempotency_key": "legacy-payment-intent-1",
+        "recorded_by": "Juan Canfield",
+        "allow_unapplied": True,
+        "unapplied_contact_context_id": "effingham_maids",
+    }
+
+    result = await service.create_payment_with_outcome(**create_args)
+
+    assert result.replayed is False
+    assert pool.conn.parent_has_check_metadata is False
+    assert pool.conn.parent_args[10] == request_fingerprint(
+        {
+            "contact_id": contact_id,
+            "payer_name": "Residential Customer",
+            "total_amount": Decimal("125.00"),
+            "payment_method": "check",
+            "received_date": date(2026, 8, 12),
+            "allocations": [],
+            "reference": None,
+            "notes": None,
+        }
+    )
+
+    with pytest.raises(ReceivablesValidationError, match="at most 128"):
+        await service.create_payment_with_outcome(
+            **{**create_args, "received_through": "x" * 129}
+        )
+
+
+@pytest.mark.asyncio
+async def test_create_payment_persists_optional_check_metadata_in_payment_intent():
+    contact_id = uuid4()
+    pool = _CreatePaymentPool([], [contact_id])
+    service = ReceivablesService(pool)
+
+    async def ready() -> bool:
+        return True
+
+    service.is_ready = ready
+    create_args = {
+        "contact_id": contact_id,
+        "payer_name": "Residential Customer",
+        "total_amount": Decimal("125.00"),
+        "payment_method": "check",
+        "received_date": date(2026, 8, 12),
+        "check_date": date(2026, 8, 10),
+        "received_through": " Mail ",
+        "allocations": [],
+        "idempotency_key": "unapplied-payment-check-metadata-1",
+        "recorded_by": "Juan Canfield",
+        "allow_unapplied": True,
+        "unapplied_contact_context_id": "effingham_maids",
+    }
+
+    first = await service.create_payment_with_outcome(**create_args)
+    replay = await service.create_payment_with_outcome(**create_args)
+
+    assert first.replayed is False
+    assert replay.replayed is True
+    assert first.payment["id"] == replay.payment["id"]
+    assert first.payment["check_date"] == date(2026, 8, 10)
+    assert first.payment["received_through"] == "Mail"
+    for changed_field, changed_value in (
+        ("check_date", date(2026, 8, 11)),
+        ("received_through", "Employee handoff"),
+    ):
+        with pytest.raises(ReceivablesConflictError, match="different request"):
+            await service.create_payment_with_outcome(
+                **{**create_args, changed_field: changed_value}
+            )
+
+    assert pool.conn.parent_insert_count == 1
+    assert len(
+        [
+            query
+            for query, _args in pool.conn.executions
+            if "INSERT INTO payment_events" in query
+        ]
+    ) == 1
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("payment_method", ("ach", "square"))
+async def test_create_payment_rejects_check_metadata_for_non_check_methods(
+    payment_method,
+):
+    contact_id = uuid4()
+    pool = _CreatePaymentPool([], [contact_id])
+
+    with pytest.raises(
+        ReceivablesValidationError,
+        match="Check metadata requires a check payment method",
+    ):
+        await ReceivablesService(pool).create_payment(
+            contact_id=contact_id,
+            payer_name="Residential Customer",
+            total_amount=Decimal("125.00"),
+            payment_method=payment_method,
+            received_date=date(2026, 8, 12),
+            check_date=date(2026, 8, 10),
+            allocations=[],
+            idempotency_key=f"{payment_method}-check-metadata",
+            allow_unapplied=True,
+            unapplied_contact_context_id="effingham_maids",
+        )
+
+    assert pool.transaction_count == 0
+    assert pool.conn.parent_args is None
 
 
 @pytest.mark.asyncio
@@ -927,14 +1084,17 @@ async def _create_pre_receivables_schema(conn, schema: str) -> None:
     await conn.execute(invoice_migration)
 
 
-def _receivables_migration_sql() -> str:
+def _receivables_migration_sql(*, include_check_metadata: bool = True) -> str:
     migrations = Path(__file__).parents[1] / "atlas_brain/storage/migrations"
+    filenames = [
+        "344_receivables_payments.sql",
+        "345_receivables_event_key_lookup.sql",
+    ]
+    if include_check_metadata:
+        filenames.append("368_receivables_payment_check_metadata.sql")
     return "\n".join(
         (migrations / filename).read_text(encoding="utf-8")
-        for filename in (
-            "344_receivables_payments.sql",
-            "345_receivables_event_key_lookup.sql",
-        )
+        for filename in filenames
     )
 
 
@@ -1021,6 +1181,10 @@ def test_eom_readiness_migration_set_is_closed_over_receivables_dependencies():
         positions["344_receivables_payments"]
         < positions["345_receivables_event_key_lookup"]
     )
+    assert (
+        positions["345_receivables_event_key_lookup"]
+        < positions["368_receivables_payment_check_metadata"]
+    )
     assert "ALTER TABLE appointments" in _packaged_migration_sql("035_contacts")
     assert "REFERENCES contacts(id)" in _packaged_migration_sql("045_invoices")
     assert "ALTER TABLE invoice_payments" in _packaged_migration_sql(
@@ -1028,6 +1192,9 @@ def test_eom_readiness_migration_set_is_closed_over_receivables_dependencies():
     )
     assert "ON payment_events(idempotency_key)" in _packaged_migration_sql(
         "345_receivables_event_key_lookup"
+    )
+    assert "ADD COLUMN IF NOT EXISTS check_date DATE" in _packaged_migration_sql(
+        "368_receivables_payment_check_metadata"
     )
 
 
@@ -1121,6 +1288,87 @@ async def test_eom_receivables_readiness_migration_set_builds_ready_schema():
             )
         } == applied_names
         assert await service.is_ready() is True
+        for column, definition in (
+            ("check_date", "DATE"),
+            ("received_through", "VARCHAR(128)"),
+        ):
+            await conn.execute(
+                f"ALTER TABLE customer_payments DROP COLUMN {column}"
+            )
+            assert await service.is_ready() is False
+            await conn.execute(
+                f"ALTER TABLE customer_payments ADD COLUMN {column} {definition}"
+            )
+            assert await service.is_ready() is True
+    finally:
+        await conn.execute(f'DROP SCHEMA IF EXISTS "{schema}" CASCADE')
+        await conn.close()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "check_metadata",
+    (
+        {"check_date": date(2026, 8, 10)},
+        {"received_through": "Mail"},
+    ),
+)
+async def test_check_metadata_schema_gate_preserves_legacy_payment_creation(
+    check_metadata,
+):
+    asyncpg = pytest.importorskip("asyncpg")
+    database_url = os.environ.get("ATLAS_RECEIVABLES_TEST_DATABASE_URL")
+    if not database_url:
+        pytest.skip("ATLAS_RECEIVABLES_TEST_DATABASE_URL not set")
+
+    schema = f"receivables_check_metadata_gate_{uuid4().hex}"
+    conn = await asyncpg.connect(database_url)
+    try:
+        await _create_pre_receivables_schema(conn, schema)
+        await conn.execute(_receivables_migration_sql(include_check_metadata=False))
+        contact_id = uuid4()
+        await conn.execute(
+            "INSERT INTO contacts (id, business_context_id) "
+            "VALUES ($1, 'effingham_maids')",
+            contact_id,
+        )
+        service = ReceivablesService(_SingleConnectionPool(conn, schema))
+
+        assert await service.is_ready() is False
+        legacy_payment = await service.create_payment(
+            contact_id=contact_id,
+            payer_name="Residential Customer",
+            total_amount=Decimal("125.00"),
+            payment_method="check",
+            received_date=date(2026, 8, 12),
+            allocations=[],
+            idempotency_key="pre-368-legacy-payment",
+            recorded_by="Juan Canfield",
+            allow_unapplied=True,
+            unapplied_contact_context_id="effingham_maids",
+        )
+        assert legacy_payment["status"] == "received"
+
+        with pytest.raises(
+            ReceivablesSchemaUnavailableError,
+            match="schema unavailable for check metadata",
+        ):
+            await service.create_payment(
+                contact_id=contact_id,
+                payer_name="Residential Customer",
+                total_amount=Decimal("125.00"),
+                payment_method="check",
+                received_date=date(2026, 8, 12),
+                allocations=[],
+                idempotency_key="pre-368-check-metadata-payment",
+                recorded_by="Juan Canfield",
+                allow_unapplied=True,
+                unapplied_contact_context_id="effingham_maids",
+                **check_metadata,
+            )
+
+        assert await conn.fetchval("SELECT COUNT(*) FROM customer_payments") == 1
+        assert await conn.fetchval("SELECT COUNT(*) FROM payment_events") == 1
     finally:
         await conn.execute(f'DROP SCHEMA IF EXISTS "{schema}" CASCADE')
         await conn.close()
@@ -2392,8 +2640,9 @@ async def test_real_postgres_http_and_mcp_entrypoints_use_supported_dependencies
     if not database_url:
         pytest.skip("ATLAS_RECEIVABLES_TEST_DATABASE_URL not set")
 
-    from atlas_brain import main
+    from atlas_brain import main, main_eom
     from atlas_brain.api.invoicing import receivables as routes
+    from atlas_brain.eom_api import receivables as eom_routes
     from atlas_brain.mcp import invoicing_server
     from atlas_brain.storage.repositories.invoice import InvoiceRepository
 
@@ -2480,6 +2729,14 @@ async def test_real_postgres_http_and_mcp_entrypoints_use_supported_dependencies
             lambda: config
         )
         app.dependency_overrides[routes.get_receivables_service] = lambda: service
+        slim_app = main_eom.app
+        original_slim_dependency_overrides = slim_app.dependency_overrides.copy()
+        slim_app.dependency_overrides[
+            eom_receivables_auth.get_receivables_api_config
+        ] = lambda: config
+        slim_app.dependency_overrides[
+            eom_routes.get_receivables_service
+        ] = lambda: service
         body = {
             "contact_id": str(contact_id),
             "payer_name": "Acme",
@@ -2497,7 +2754,14 @@ async def test_real_postgres_http_and_mcp_entrypoints_use_supported_dependencies
             "total_amount_cents": 12_500,
             "payment_method": "check",
             "received_date": "2026-08-12",
+            "check_date": "2026-08-10",
+            "received_through": " Mail ",
             "reference": "1001",
+        }
+        slim_unapplied_body = {
+            **unapplied_body,
+            "check_date": "2026-08-11",
+            "received_through": "Employee handoff",
         }
 
         try:
@@ -2543,6 +2807,21 @@ async def test_real_postgres_http_and_mcp_entrypoints_use_supported_dependencies
                     json=unapplied_body,
                 )
 
+            slim_transport = httpx.ASGITransport(app=slim_app)
+            async with httpx.AsyncClient(
+                transport=slim_transport,
+                base_url="http://receivables.test",
+            ) as client:
+                slim_unapplied_response = await client.post(
+                    "/api/v1/receivables/payments",
+                    headers={
+                        "Authorization": f"Bearer {generated.token}",
+                        "X-EOM-Actor": "Juan Canfield",
+                        "Idempotency-Key": "slim-http-unapplied-payment-1",
+                    },
+                    json=slim_unapplied_body,
+                )
+
             assert response.status_code == 201
             assert response.json()["status"] == "received"
             http_payment = await conn.fetchrow("""
@@ -2568,8 +2847,35 @@ async def test_real_postgres_http_and_mcp_entrypoints_use_supported_dependencies
             unapplied_payment = unapplied_response.json()
             assert unapplied_replay.json()["id"] == unapplied_payment["id"]
             assert unapplied_payment["status"] == "received"
+            assert unapplied_payment["check_date"] == "2026-08-10"
+            assert unapplied_payment["received_through"] == "Mail"
             assert unapplied_payment["allocated_amount_cents"] == 0
             assert unapplied_payment["unapplied_amount_cents"] == 12_500
+            stored_check_metadata = await conn.fetchrow(
+                """
+                SELECT check_date, received_through
+                FROM customer_payments
+                WHERE idempotency_key = 'http-unapplied-payment-1'
+                """
+            )
+            assert stored_check_metadata["check_date"] == date(2026, 8, 10)
+            assert stored_check_metadata["received_through"] == "Mail"
+            assert slim_unapplied_response.status_code == 201
+            assert slim_unapplied_response.json()["check_date"] == "2026-08-11"
+            assert (
+                slim_unapplied_response.json()["received_through"]
+                == "Employee handoff"
+            )
+            stored_slim_check_metadata = await conn.fetchrow(
+                """
+                SELECT check_date, received_through, recorded_by
+                FROM customer_payments
+                WHERE idempotency_key = 'slim-http-unapplied-payment-1'
+                """
+            )
+            assert stored_slim_check_metadata["check_date"] == date(2026, 8, 11)
+            assert stored_slim_check_metadata["received_through"] == "Employee handoff"
+            assert stored_slim_check_metadata["recorded_by"] == "Juan Canfield"
             assert (
                 await conn.fetchval(
                     "SELECT COUNT(*) FROM invoice_payments ip "
@@ -2590,6 +2896,8 @@ async def test_real_postgres_http_and_mcp_entrypoints_use_supported_dependencies
         finally:
             app.dependency_overrides.clear()
             app.dependency_overrides.update(original_dependency_overrides)
+            slim_app.dependency_overrides.clear()
+            slim_app.dependency_overrides.update(original_slim_dependency_overrides)
 
         crm_calls = []
 
@@ -2813,6 +3121,47 @@ def test_payment_http_models_reject_coercive_cent_values():
             )
 
 
+def test_payment_http_models_preserve_optional_check_metadata():
+    from atlas_brain.api.invoicing.receivables import CreatePaymentRequest
+    from atlas_brain.eom_api.receivables import (
+        CreatePaymentRequest as EOMCreatePaymentRequest,
+    )
+
+    base = {
+        "contact_id": str(uuid4()),
+        "payer_name": "Residential Customer",
+        "total_amount_cents": 12_500,
+        "payment_method": "check",
+        "received_date": "2026-08-12",
+        "reference": "1001",
+    }
+    for request_model in (CreatePaymentRequest, EOMCreatePaymentRequest):
+        omitted = request_model.model_validate(base)
+        assert omitted.check_date is None
+        assert omitted.received_through is None
+
+        with_metadata = request_model.model_validate(
+            {
+                **base,
+                "check_date": "2026-08-10",
+                "received_through": "Mail",
+            }
+        )
+        assert with_metadata.check_date == date(2026, 8, 10)
+        assert with_metadata.received_through == "Mail"
+        assert (
+            request_model.model_validate(
+                {**base, "received_through": "x" * 128}
+            ).received_through
+            == "x" * 128
+        )
+
+        with pytest.raises(ValueError):
+            request_model.model_validate({**base, "check_date": "not-a-date"})
+        with pytest.raises(ValueError):
+            request_model.model_validate({**base, "received_through": "x" * 129})
+
+
 @pytest.mark.asyncio
 async def test_payment_routes_forward_omitted_allocations_as_empty_list():
     from atlas_brain.api.invoicing.receivables import (
@@ -2861,6 +3210,84 @@ async def test_payment_routes_forward_omitted_allocations_as_empty_list():
         assert service.kwargs["unapplied_contact_context_id"] == "effingham_maids"
         assert service.kwargs["recorded_by"] == "Juan Canfield"
         assert service.kwargs["idempotency_key"] == "route-unapplied-payment-1"
+        assert service.kwargs["check_date"] is None
+        assert service.kwargs["received_through"] is None
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "check_metadata",
+    (
+        {"check_date": "2026-08-10"},
+        {"received_through": "Mail"},
+    ),
+)
+async def test_full_and_slim_payment_entrypoints_reject_check_metadata_when_schema_is_unready(
+    check_metadata,
+):
+    from atlas_brain import main, main_eom
+    from atlas_brain.api.invoicing import auth as full_auth
+    from atlas_brain.api.invoicing import receivables as full_routes
+    from atlas_brain.eom_api import auth as slim_auth
+    from atlas_brain.eom_api import receivables as slim_routes
+
+    generated = eom_receivables_auth.generate_receivables_service_token()
+    config = SimpleNamespace(
+        receivables_api_enabled=True,
+        receivables_service_token="",
+        receivables_service_token_sha256=generated.sha256,
+    )
+    body = {
+        "contact_id": str(uuid4()),
+        "payer_name": "Residential Customer",
+        "total_amount_cents": 12_500,
+        "payment_method": "check",
+        "received_date": "2026-08-12",
+        "reference": "1001",
+        **check_metadata,
+    }
+    headers = {
+        "Authorization": f"Bearer {generated.token}",
+        "X-EOM-Actor": "Juan Canfield",
+        "Idempotency-Key": "asgi-unready-check-metadata-1",
+    }
+
+    for app, config_dependency, service_dependency in (
+        (main.app, full_auth.get_receivables_api_config, full_routes.get_receivables_service),
+        (
+            main_eom.app,
+            slim_auth.get_receivables_api_config,
+            slim_routes.get_receivables_service,
+        ),
+    ):
+        service = ReceivablesService()
+        readiness_calls = 0
+
+        async def unready() -> bool:
+            nonlocal readiness_calls
+            readiness_calls += 1
+            return False
+
+        service.is_ready = unready
+        original_overrides = app.dependency_overrides.copy()
+        app.dependency_overrides[config_dependency] = lambda: config
+        app.dependency_overrides[service_dependency] = lambda: service
+        try:
+            transport = httpx.ASGITransport(app=app)
+            async with httpx.AsyncClient(
+                transport=transport,
+                base_url="http://receivables.test",
+            ) as client:
+                response = await client.post(
+                    "/api/v1/receivables/payments",
+                    headers=headers,
+                    json=body,
+                )
+            assert response.status_code == 503
+            assert response.json()["detail"]["code"] == "schema_unavailable"
+            assert readiness_calls == 1
+        finally:
+            app.dependency_overrides.clear()
+            app.dependency_overrides.update(original_overrides)
 
 
 def test_multi_invoice_mcp_is_registered_with_bounded_strict_schema():
