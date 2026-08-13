@@ -24,9 +24,12 @@ later proxy one canonical query rather than inventing a second ledger.
 - Review-fix root cause: the first ledger projection ordered a financial
   history by ingestion time, reused an unrestricted legacy nested-allocation
   hydrator, aggregated allocations outside the selected customer, and left
-  continuation/filter/search-isolation boundaries without direct proof. Those
-  choices can misstate chronology, make a returned page URL invalid, or make a
-  bounded ledger response grow with unrelated/history rows.
+  continuation/filter/search-isolation boundaries without direct proof. It also
+  applied a single persisted-row money cap to multi-row balance aggregates and
+  interpreted literal ledger search text as SQL wildcard syntax. Those choices
+  can misstate chronology, make a returned page URL invalid, reject valid
+  balances, broaden a finance search, or make a bounded response grow with
+  unrelated/history rows.
 - Correct fix must touch/change: add one bounded, customer-scoped query on
   `ReceivablesService`; expose the same authenticated route from full and slim
   EOM providers; prove the result through a real local PostgreSQL schema and
@@ -49,28 +52,32 @@ Max files: 5
    deposit/clearing state, return/void reasons, receipt-delivery state, exact
    active allocation/unapplied cents, and at most 100 active-first allocation
    history rows with `allocation_history_count` and `allocations_truncated`.
-2. Support the existing finance-safe query shapes: optional case-insensitive
-   search over
+2. Support the existing finance-safe query shapes: optional case-insensitive,
+   literal-substring search over
    payer, payment reference (including check/Square references), receipt number,
    allocated invoice number, and invoice customer/name; optional nonblank
    payment status/method and date-range filters; `limit` 1..200 and nonnegative
-   `offset`. Every generated `next_offset` remains routable through both
-   handlers. Payment-only filters return payment entries only. The unfiltered
-   balance snapshot remains current ATLAS state, never a filter-dependent or
-   reconstructed historical balance.
+   `offset`. It escapes SQL `ILIKE` `%`, `_`, and escape characters. Every
+   generated `next_offset` remains routable through both handlers. Payment-only
+   filters return payment entries only. The unfiltered balance snapshot remains
+   current ATLAS state, never a filter-dependent or reconstructed historical
+   balance.
 3. Return `open_invoice_balance_cents` and
-   `unapplied_payment_balance_cents` as current source-of-truth snapshots.
-   Do not call either a historical running balance: immutable invoice lifecycle
-   evidence is tracked as H-08 in #2363.
+   `unapplied_payment_balance_cents` as exact current source-of-truth snapshots,
+   including a valid multi-row aggregate above one persisted `NUMERIC(12,2)`
+   value. Do not call either a historical running balance: immutable invoice
+   lifecycle evidence is tracked as H-08 in #2363.
 4. Require the already-deployed receipt-outbox schema for this new receipt-aware
    read contract and map an unavailable schema through the existing controlled
    receivables error boundary. Existing payment-list and mutation routes remain
    unchanged.
-5. Prove chronological/backdated ordering, payer/check/Square/receipt/invoice
-   search, payment-side customer isolation, bounded nested allocation history
-   with exact totals, filtered/paginated/retry/repeated-read behavior,
-   unavailable schema, and both-provider HTTP admission locally without sending
-   email or modifying any non-test financial data.
+5. Prove chronological/backdated ordering; literal payer/check/Square/receipt/
+   invoice search including SQL wildcard and escape characters; payment-side
+   customer isolation; bounded nested allocation history with exact totals;
+   aggregates beyond one persisted-row money cap; filtered/paginated/
+   retry/repeated-read behavior; unavailable schema; and both-provider HTTP
+   admission locally without sending email or modifying any non-test financial
+   data.
 
 ### Review Contract
 
@@ -83,16 +90,18 @@ Max files: 5
     deposit/clearing state, reversal reason/state, and receipt-delivery
     projection; settled by the real PostgreSQL service test in
     `tests/test_receivables.py`.
-  - [ ] A case-insensitive payer, check/Square reference, receipt number, or
-    invoice number search, payment status/method filter, date range, and
-    bounded page return only matching entries. Blank supplied payment filters
-    are controlled validation errors, a generated continuation remains an
-    admitted handler input, and an unrelated customer's invoice **and payment**
-    never appear; settled by the service and both mounted-ASGI tests.
+  - [ ] A case-insensitive literal payer, check/Square reference, receipt
+    number, or invoice-number substring search, payment status/method filter,
+    date range, and bounded page return only matching entries. SQL `%`, `_`,
+    and escape characters remain literal search text. Blank supplied payment
+    filters are controlled validation errors, a generated continuation remains
+    an admitted handler input, and an unrelated customer's invoice **and
+    payment** never appear; settled by the service and both mounted-ASGI tests.
   - [ ] `open_invoice_balance_cents` and
     `unapplied_payment_balance_cents` reflect current persisted invoice/payment
-    state in integer cents; settled by the service test. The response does not
-    claim a historical running balance.
+    state in exact integer cents even when a valid aggregate exceeds the maximum
+    persisted amount for one row; settled by the service test. The response does
+    not claim a historical running balance.
   - [ ] A repeated/stale read and a rejected inverted date range create no
     payment, allocation, invoice, receipt, event, or email side effect;
     settled by before/after counts and the validation test.
@@ -202,10 +211,12 @@ confused.
 
 Payment references are intentionally the common check/Square reference source;
 receipt numbers are queried from the durable outbox; allocated invoice numbers
-are queried through `invoice_payments`. Current balance snapshot values use the
-existing `invoices.amount_due` and active customer-payment allocations, then
-convert exact `Decimal` values to integer cents at the service boundary. No
-float is used for new financial calculations.
+are queried through `invoice_payments`. The ledger escapes `ILIKE` syntax and
+uses an explicit escape character, so these are literal substring searches.
+Current balance snapshot values use the existing `invoices.amount_due` and
+active customer-payment allocations, then convert finite, cent-precise
+`Decimal` aggregates to integer cents without applying the maximum for a single
+persisted row. No float is used for new financial calculations.
 
 The route handlers only pass validated path/query fields into the service and
 reuse `_call` for controlled domain/schema/database failures. They do not call
@@ -226,6 +237,13 @@ canonical CRM, Gmail, MCP, or any mutation.
   active totals remain authoritative; `allocation_history_count` and
   `allocations_truncated` make omitted historical rows explicit. Existing
   `GET /receivables/payments` keeps its full legacy allocation shape.
+- The ledger treats search input as literal text rather than a caller-supplied
+  `ILIKE` expression. This preserves expected receipt/reference lookup behavior
+  and prevents `%`, `_`, or a backslash from widening or changing a search.
+- A persisted invoice/payment remains limited to its database money range, but
+  a read-only balance sum is not: several valid rows can exceed one row's
+  `NUMERIC(12,2)` maximum. Aggregate conversion preserves finite cent precision
+  without weakening any mutation-time range guard.
 - The response exposes a current balance snapshot, not a historical running
   balance. The invoices table has mutable state but no immutable invoice event
   history; inventing one from present-day values would be false financial
@@ -279,10 +297,11 @@ evidence, while a cursor would be a separate read contract.
   - `ATLAS_RECEIVABLES_TEST_DATABASE_URL=... python -m pytest -q
     tests/test_receivables.py tests/test_eom_payment_receipts.py
     tests/test_eom_billing_recipients.py tests/test_invoice_repository.py` —
-    158 passed; the real PostgreSQL test creates only an isolated temporary
+    159 passed; the real PostgreSQL test creates only an isolated temporary
     schema and proves receipt/status/search/filter/page/repeated-read/schema
-    failure/no-write behavior, chronological ordering, payment-side isolation,
-    allocation-history bounds, and full/slim mounted ASGI reachability.
+    failure/no-write behavior, chronological ordering, literal wildcard/escape
+    search, payment-side isolation, aggregate values beyond one row's money
+    cap, allocation-history bounds, and full/slim mounted ASGI reachability.
   - `ATLAS_RECEIVABLES_TEST_DATABASE_URL=... python -m pytest -q
     tests/test_invoicing_readonly_mcp.py tests/test_invoicing_draft_writer_mcp.py`
     — 22 passed, preserving existing MCP behavior.
@@ -300,7 +319,7 @@ evidence, while a cursor would be a separate read contract.
 |---|---:|
 | `atlas_brain/api/invoicing/receivables.py` | 27 |
 | `atlas_brain/eom_api/receivables.py` | 27 |
-| `atlas_brain/services/receivables.py` | 417 |
-| `plans/PR-EOM-Customer-Ledger-History.md` | 306 |
-| `tests/test_receivables.py` | 496 |
-| **Total** | **1273** |
+| `atlas_brain/services/receivables.py` | 443 |
+| `plans/PR-EOM-Customer-Ledger-History.md` | 325 |
+| `tests/test_receivables.py` | 576 |
+| **Total** | **1398** |

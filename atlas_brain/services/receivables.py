@@ -336,8 +336,8 @@ class ReceivablesReceiptContextRequiredError(ReceivablesError):
     code = "canonical_customer_unavailable"
 
 
-def money(value: Any) -> Decimal:
-    """Normalize a value to finite, two-decimal currency."""
+def _currency(value: Any, *, max_abs: Optional[Decimal]) -> Decimal:
+    """Normalize finite, cent-precise currency with an optional magnitude cap."""
     try:
         raw = Decimal(str(value))
     except (InvalidOperation, TypeError, ValueError) as exc:
@@ -350,14 +350,34 @@ def money(value: Any) -> Decimal:
         raise ReceivablesValidationError("Amount must be valid currency") from exc
     if raw != normalized:
         raise ReceivablesValidationError("Amount must use cent precision")
-    if abs(normalized) > _MAX_DATABASE_MONEY:
+    if max_abs is not None and abs(normalized) > max_abs:
         raise ReceivablesValidationError("Amount exceeds the supported currency range")
     return normalized
+
+
+def money(value: Any) -> Decimal:
+    """Normalize a persisted money value to finite, two-decimal currency."""
+    return _currency(value, max_abs=_MAX_DATABASE_MONEY)
 
 
 def cents(value: Any) -> int:
     """Convert a database currency value to integer cents."""
     return int(money(value) * 100)
+
+
+def aggregate_cents(value: Any) -> int:
+    """Convert a finite, cent-precise aggregate without a per-row storage cap."""
+    return int(_currency(value, max_abs=None) * 100)
+
+
+def _literal_ilike_pattern(value: str) -> str:
+    """Build a literal substring pattern for ledger ILIKE predicates."""
+    escaped = (
+        value.replace("\\", "\\\\")
+        .replace("%", "\\%")
+        .replace("_", "\\_")
+    )
+    return f"%{escaped}%"
 
 
 def _jsonable(value: Any) -> Any:
@@ -1084,7 +1104,9 @@ class ReceivablesService:
         normalized_method = payment_method.strip() if payment_method is not None else None
         page_size = max(1, min(limit, 200))
         page_offset = max(0, offset)
-        search_pattern = f"%{normalized_search}%" if normalized_search else None
+        search_pattern = (
+            _literal_ilike_pattern(normalized_search) if normalized_search else None
+        )
 
         async with self.pool.transaction() as conn:
             await conn.execute(
@@ -1109,8 +1131,8 @@ class ReceivablesService:
                       AND ($5::varchar IS NULL AND $6::varchar IS NULL)
                       AND (
                           $4::text IS NULL
-                          OR i.invoice_number ILIKE $4
-                          OR i.customer_name ILIKE $4
+                          OR i.invoice_number ILIKE $4 ESCAPE E'\\\\'
+                          OR i.customer_name ILIKE $4 ESCAPE E'\\\\'
                       )
 
                     UNION ALL
@@ -1127,13 +1149,13 @@ class ReceivablesService:
                       AND ($6::varchar IS NULL OR cp.payment_method = $6)
                       AND (
                           $4::text IS NULL
-                          OR cp.payer_name ILIKE $4
-                          OR cp.reference ILIKE $4
+                          OR cp.payer_name ILIKE $4 ESCAPE E'\\\\'
+                          OR cp.reference ILIKE $4 ESCAPE E'\\\\'
                           OR EXISTS (
                               SELECT 1
                               FROM payment_receipt_deliveries prd
                               WHERE prd.payment_id = cp.id
-                                AND prd.receipt_number ILIKE $4
+                                AND prd.receipt_number ILIKE $4 ESCAPE E'\\\\'
                           )
                           OR EXISTS (
                               SELECT 1
@@ -1141,8 +1163,8 @@ class ReceivablesService:
                               JOIN invoices i ON i.id = ip.invoice_id
                               WHERE ip.payment_id = cp.id
                                 AND (
-                                    i.invoice_number ILIKE $4
-                                    OR i.customer_name ILIKE $4
+                                    i.invoice_number ILIKE $4 ESCAPE E'\\\\'
+                                    OR i.customer_name ILIKE $4 ESCAPE E'\\\\'
                                 )
                           )
                       )
@@ -1274,10 +1296,10 @@ class ReceivablesService:
                 page_offset + page_size if len(entry_rows) > page_size else None
             ),
             "balances": {
-                "open_invoice_balance_cents": cents(
+                "open_invoice_balance_cents": aggregate_cents(
                     balance_row["open_invoice_balance"]
                 ),
-                "unapplied_payment_balance_cents": cents(
+                "unapplied_payment_balance_cents": aggregate_cents(
                     balance_row["unapplied_payment_balance"]
                 ),
             },
