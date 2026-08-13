@@ -28,6 +28,7 @@ on:
       - "atlas_brain/main_eom.py"
       - "atlas_brain/services/__init__.py"
       - "atlas_brain/services/crm_provider.py"
+      - "atlas_brain/services/commercial_billing_candidates.py"
       # normalize_contact_email decides billing eligibility and the
       # address these routes return; a grammar change here must run
       # the billing proof.
@@ -46,6 +47,7 @@ on:
       - "tests/test_receivables.py"
       - "tests/test_eom_billing_recipients.py"
       - "tests/test_eom_payment_receipts.py"
+      - "tests/test_commercial_billing_candidates.py"
       - "tests/test_invoicing_readonly_mcp.py"
       - "tests/test_invoicing_readonly_oauth.py"
       - "tests/test_invoicing_draft_writer_mcp.py"
@@ -78,6 +80,7 @@ on:
       - "atlas_brain/main_eom.py"
       - "atlas_brain/services/__init__.py"
       - "atlas_brain/services/crm_provider.py"
+      - "atlas_brain/services/commercial_billing_candidates.py"
       # normalize_contact_email decides billing eligibility and the
       # address these routes return; a grammar change here must run
       # the billing proof.
@@ -96,6 +99,7 @@ on:
       - "tests/test_receivables.py"
       - "tests/test_eom_billing_recipients.py"
       - "tests/test_eom_payment_receipts.py"
+      - "tests/test_commercial_billing_candidates.py"
       - "tests/test_invoicing_readonly_mcp.py"
       - "tests/test_invoicing_readonly_oauth.py"
       - "tests/test_invoicing_draft_writer_mcp.py"
@@ -152,6 +156,7 @@ jobs:
             tests/test_receivables.py \
             tests/test_eom_billing_recipients.py \
             tests/test_eom_payment_receipts.py \
+            tests/test_commercial_billing_candidates.py \
             tests/test_invoice_repository.py \
             -q
 

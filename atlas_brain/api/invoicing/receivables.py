@@ -25,6 +25,12 @@ from ...services.receivables import (
     get_receivables_service,
 )
 from ...services.crm_provider import get_crm_provider
+from ...services.commercial_billing_candidates import (
+    CommercialBillingCandidateService,
+    CommercialBillingCandidatesUnavailableError,
+    CommercialBillingCandidatesValidationError,
+    get_commercial_billing_candidate_service,
+)
 from ...services.eom_lead_ingress import EOM_BUSINESS_CONTEXT_ID
 from ...storage.exceptions import DatabaseUnavailableError
 from .auth import require_actor, require_receivables_api
@@ -353,6 +359,34 @@ async def customer_ledger(
             offset=offset,
         )
     )
+
+
+@router.get("/commercial-billing-candidates")
+async def commercial_billing_candidates(
+    billing_period: str = Query(
+        ...,
+        min_length=7,
+        max_length=7,
+        pattern=r"^\d{4}-(0[1-9]|1[0-2])$",
+    ),
+    service: CommercialBillingCandidateService = Depends(
+        get_commercial_billing_candidate_service
+    ),
+) -> dict:
+    """Return a pure commercial billing preview; approval lives in a later slice."""
+
+    try:
+        return await service.preview(billing_period=billing_period)
+    except CommercialBillingCandidatesValidationError as exc:
+        raise HTTPException(
+            status_code=422,
+            detail={"code": exc.code, "message": str(exc)},
+        ) from exc
+    except CommercialBillingCandidatesUnavailableError as exc:
+        raise HTTPException(
+            status_code=503,
+            detail={"code": exc.code, "message": str(exc)},
+        ) from exc
 
 
 @router.put("/payments/{payment_id}/allocations")
