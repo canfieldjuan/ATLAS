@@ -6,11 +6,11 @@ import errno
 import socket
 from datetime import date
 from decimal import Decimal
-from typing import Annotated, Literal, Optional
+from typing import Annotated, Any, Literal, Optional
 from uuid import UUID
 
 import asyncpg
-from fastapi import APIRouter, Depends, Header, HTTPException, Query
+from fastapi import APIRouter, Depends, Header, HTTPException, Query, Request
 from pydantic import BaseModel, Field
 
 from ..services.receivables import (
@@ -24,6 +24,8 @@ from ..services.receivables import (
 from ..services.eom_lead_ingress import EOM_BUSINESS_CONTEXT_ID
 from ..storage.exceptions import DatabaseUnavailableError
 from .auth import require_actor, require_receivables_api
+from .config import funnel_settings
+from .funnel_database import get_eom_funnel_crm_provider, get_eom_funnel_db_pool
 
 _DATABASE_UNAVAILABLE_ERRORS = (
     DatabaseUnavailableError,
@@ -174,7 +176,46 @@ async def ready() -> dict:
         ) from exc
     if not schema_ready:
         raise HTTPException(status_code=503, detail="Receivables schema unavailable")
-    return {"status": "ready"}
+    # The billing-recipient routes read a SECOND database -- the pool that owns
+    # canonical EOM contacts -- so readiness off the global receivables
+    # database alone is not the whole answer.
+    #
+    # Two different states, deliberately not collapsed:
+    #
+    #   unconfigured -- no funnel DSN. This is a SUPPORTED deployment: a
+    #     profile running receivables without billing recipients. Failing
+    #     readiness here would take the whole invoicing service out over a
+    #     capability it does not use, which is worse than the gap. Reported,
+    #     not fatal.
+    #
+    #   unavailable -- a DSN IS configured and the pool cannot serve the two
+    #     queries: the pool never came up, or the database is reachable but
+    #     partially migrated. That is a real misconfiguration, and an
+    #     initialized pool alone does not rule it out -- it proves a
+    #     connection opened, not that `contacts` has the columns both queries
+    #     name. This one fails readiness.
+    pool = get_eom_funnel_db_pool()
+    if not funnel_settings.db_connection_string.strip():
+        return {"status": "ready", "billingRecipients": "unconfigured"}
+    schema_ready = False
+    if pool.is_initialized:
+        try:
+            schema_ready = await get_eom_funnel_crm_provider(
+            ).billing_recipients_schema_ready()
+        except Exception:
+            schema_ready = False
+    if not schema_ready:
+        raise HTTPException(
+            status_code=503,
+            detail={
+                "code": "billing_recipients_unavailable",
+                "message": (
+                    "A canonical EOM contact database is configured but cannot "
+                    "serve billing-recipient reads."
+                ),
+            },
+        )
+    return {"status": "ready", "billingRecipients": "ready"}
 
 
 @router.get("/open-invoices")
@@ -187,6 +228,78 @@ async def list_open_invoices(
             contact_id=contact_id, search=search
         )
     )
+
+
+def _billing_crm_dependency(request: Request) -> Any:
+    """Resolve the CRM provider pinned to the canonical EOM contact pool.
+
+    Contacts are owned by the dedicated funnel CRM pool. ReceivablesService
+    resolves the separate global DSN, which in the deployed slim topology is a
+    different database entirely -- reading contacts through it would query the
+    wrong one. The credential boundary and the data source are independent:
+    these routes stay behind the receivables token while reading contacts from
+    the pool that actually owns them.
+    """
+    # Availability FIRST, before the app-state factory. The real app installs
+    # that factory unconditionally (atlas_brain/main_eom.py), so checking it
+    # after the factory branch put this guard on a path production never
+    # takes: the fetch would raise an untranslated RuntimeError and answer 500
+    # instead of failing closed. Startup deliberately does NOT raise when
+    # receivables runs without a funnel DSN -- that would stop a profile which
+    # never touches billing recipients from booting -- so the cost is borne
+    # here, by the routes that actually need the pool. Falling through is worse
+    # than a 503: DatabaseCRMProvider._get_pool() defaults to the global pool,
+    # which is the wrong database and would answer with silence, not an error.
+    if not get_eom_funnel_db_pool().is_initialized:
+        raise HTTPException(
+            status_code=503,
+            detail={
+                "code": "billing_recipients_unavailable",
+                "message": (
+                    "The canonical EOM contact pool is not configured; set "
+                    "ATLAS_EOM_FUNNEL_DB_CONNECTION_STRING to use billing "
+                    "recipients."
+                ),
+            },
+        )
+    provider_factory = getattr(request.app.state, "eom_funnel_crm_provider", None)
+    if callable(provider_factory):
+        return provider_factory()
+    return get_eom_funnel_crm_provider()
+
+
+@router.get("/billing-recipients")
+async def list_billing_recipients(
+    request: Request,
+    search: Optional[str] = Query(default=None, max_length=256),
+    limit: int = Query(default=200, ge=1, le=500),
+    crm: Any = Depends(_billing_crm_dependency),
+) -> list[dict]:
+    """EOM contacts assignable as an invoice recipient. Eligible only.
+
+    Behind the receivables credential rather than the EOM funnel one: this is a
+    billing capability, and the funnel token is broad. /eom-funnel/known-contacts
+    is deliberately NOT extended for it -- that route's value is that it
+    discloses nothing beyond whether an id resolves, and widening it a second
+    time would turn link verification into a general contact reader.
+    """
+    return await _call(crm.list_billing_recipients(search=search, limit=limit))
+
+
+@router.get("/billing-recipients/{contact_id}")
+async def get_billing_recipient(
+    contact_id: UUID,
+    request: Request,
+    crm: Any = Depends(_billing_crm_dependency),
+) -> dict:
+    """Authoritative answer on whether ONE contact may receive invoices.
+
+    Always 200 with an explicit verdict, never 404: "this contact is not an
+    eligible recipient, because X" is a domain answer the caller must handle,
+    not a transport failure. An ineligible verdict carries identity and cause
+    only -- never a name or address.
+    """
+    return await _call(crm.get_billing_recipient(contact_id))
 
 
 @router.get("/allocation-suggestions")

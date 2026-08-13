@@ -1976,7 +1976,10 @@ print(json.dumps({
     observed = json.loads(result.stdout.strip().splitlines()[-1])
     assert observed == {
         "status_code": 200,
-        "body": {"status": "ready"},
+        # Readiness now also reports the SECOND database the billing-recipient
+        # routes read. This profile configures no funnel DSN, so that pool is
+        # deliberately unconfigured while the service itself is ready.
+        "body": {"status": "ready", "billingRecipients": "unconfigured"},
         "env_projected_enabled": True,
         "env_projected_digest": True,
         "dependency_overrides": 0,

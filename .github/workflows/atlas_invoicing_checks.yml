@@ -28,6 +28,10 @@ on:
       - "atlas_brain/main_eom.py"
       - "atlas_brain/services/__init__.py"
       - "atlas_brain/services/crm_provider.py"
+      # normalize_contact_email decides billing eligibility and the
+      # address these routes return; a grammar change here must run
+      # the billing proof.
+      - "atlas_brain/services/eom_crm_mutations.py"
       - "atlas_brain/services/eom_lead_conversion.py"
       - "atlas_brain/services/receivables.py"
       - "atlas_brain/storage/migrations/344_receivables_payments.sql"
@@ -38,6 +42,7 @@ on:
       - "tests/test_monthly_invoice_generation.py"
       - "tests/test_invoice_repository.py"
       - "tests/test_receivables.py"
+      - "tests/test_eom_billing_recipients.py"
       - "tests/test_invoicing_readonly_mcp.py"
       - "tests/test_invoicing_readonly_oauth.py"
       - "tests/test_invoicing_draft_writer_mcp.py"
@@ -70,6 +75,10 @@ on:
       - "atlas_brain/main_eom.py"
       - "atlas_brain/services/__init__.py"
       - "atlas_brain/services/crm_provider.py"
+      # normalize_contact_email decides billing eligibility and the
+      # address these routes return; a grammar change here must run
+      # the billing proof.
+      - "atlas_brain/services/eom_crm_mutations.py"
       - "atlas_brain/services/eom_lead_conversion.py"
       - "atlas_brain/services/receivables.py"
       - "atlas_brain/storage/migrations/344_receivables_payments.sql"
@@ -80,6 +89,7 @@ on:
       - "tests/test_monthly_invoice_generation.py"
       - "tests/test_invoice_repository.py"
       - "tests/test_receivables.py"
+      - "tests/test_eom_billing_recipients.py"
       - "tests/test_invoicing_readonly_mcp.py"
       - "tests/test_invoicing_readonly_oauth.py"
       - "tests/test_invoicing_draft_writer_mcp.py"
@@ -134,6 +144,7 @@ jobs:
           python -m pytest \
             tests/test_eom_render_profile.py \
             tests/test_receivables.py \
+            tests/test_eom_billing_recipients.py \
             tests/test_invoice_repository.py \
             -q
 
