@@ -31,6 +31,7 @@ from atlas_brain.services.receivables import (
     ReceivablesService,
     ReceivablesValidationError,
     money,
+    request_fingerprint,
 )
 from atlas_brain.storage.exceptions import DatabaseUnavailableError
 
@@ -257,6 +258,18 @@ async def test_create_payment_records_unapplied_receipt_and_replays_without_invo
     assert first.payment["allocated_amount_cents"] == 0
     assert first.payment["unapplied_amount_cents"] == 12_500
     assert first.payment["allocations"] == []
+    assert pool.conn.parent_args[12] == request_fingerprint(
+        {
+            "contact_id": contact_id,
+            "payer_name": "Residential Customer",
+            "total_amount": Decimal("125.00"),
+            "payment_method": "check",
+            "received_date": date(2026, 8, 12),
+            "allocations": [],
+            "reference": None,
+            "notes": None,
+        }
+    )
     assert pool.transaction_count == 2
     assert pool.conn.parent_insert_count == 1
     assert pool.conn.contact_lock_count == 1
@@ -2736,6 +2749,8 @@ async def test_real_postgres_http_and_mcp_entrypoints_use_supported_dependencies
         )
         assert multi_result["success"] is True
         assert multi_result["payment"]["total_amount_cents"] == 10_000
+        assert "check_date" not in multi_result["payment"]
+        assert "received_through" not in multi_result["payment"]
         assert sorted(
             item["amount_cents"] for item in multi_result["payment"]["allocations"]
         ) == [500, 7_500]

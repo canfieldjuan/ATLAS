@@ -34,7 +34,8 @@ would permit a provider deploy with an untested schema path.
   models, the service fingerprint/insert/payment view, and direct
   service/HTTP/migration regression tests.
 - Must not change: existing required request fields, check `received` versus
-  deposit/clearing lifecycle, allocation behavior, legacy/MCP payment routes,
+  deposit/clearing lifecycle, allocation behavior, legacy/MCP payment response
+  contract,
   customer identity admission, money representation, or any receipt-email,
   tracker, Website, Gmail, and billing-recipient behavior. The new fields stay
   optional and do not decide receipt-email copy or delivery policy.
@@ -43,6 +44,7 @@ would permit a provider deploy with an untested schema path.
 
 Ownership lane: eom/billing-payments
 Slice phase: Vertical slice
+Max files: 11
 
 1. Accept optional `check_date` and `received_through` only on the existing
    EOM payment-create provider request, retaining their normalized values in
@@ -54,6 +56,8 @@ Slice phase: Vertical slice
    path, and prove the real authenticated full `/api/v1/receivables/payments`
    entrypoint persists an optional check date and received-through value in an
    isolated test schema.
+4. Preserve the unchanged MCP payment response shape by projecting EOM-only
+   metadata out of the long-lived MCP response.
 
 ### Review Contract
 
@@ -69,11 +73,15 @@ Slice phase: Vertical slice
     settled by
     `tests/test_receivables.py::test_create_payment_persists_optional_check_metadata_in_payment_intent`.
   - [ ] The existing no-metadata payment create/replay behavior remains
-    unchanged; settled by the existing zero-allocation replay test plus the
-    full HTTP regression test with the legacy body unchanged.
+    unchanged and retains its exact pre-migration request fingerprint; settled
+    by the zero-allocation replay test's legacy-payload fingerprint assertion
+    plus the full HTTP regression test with the legacy body unchanged.
   - [ ] The real authenticated full `/api/v1/receivables/payments` entrypoint
     persists both values to `customer_payments` in an isolated Postgres schema;
     settled by `tests/test_receivables.py::test_receivables_http_and_mcp_contracts`.
+  - [ ] The unchanged MCP `record_customer_payment` response does not expose
+    the EOM-only fields; settled by
+    `tests/test_receivables.py::test_receivables_http_and_mcp_contracts`.
   - [ ] EOM readiness refuses a schema missing either new column and the new
     migration is included in the closed EOM migration set and invoicing CI path
     filters; settled by
@@ -89,13 +97,24 @@ Slice phase: Vertical slice
 - Risk areas: money record truthfulness, idempotency/retry safety,
   backward-compatible API evolution, safe additive migration and deployment
   order.
-- Reviewer rules triggered: R1, R2, R3, R4, R5, R6, R8, R12, R14.
+- Reviewer rules triggered: R1, R2, R3, R4, R5, R6, R8, R12, R13, R14.
 
 ### Boundary-change enumeration
 
 N/A - no permission, identity, or admission decision changes. The existing
 Pydantic request models gain optional bounded data fields, and the service
 fingerprint treats their normalized values as payment intent.
+
+### Closure declaration
+
+`EOM_RECEIVABLES_READINESS_MIGRATIONS` is **CLOSED**: it is the finite EOM
+receivables startup subset, with membership **ENUMERATED** from the canonical
+receivables readiness schema (`_RECEIVABLES_REQUIRED_COLUMNS`) and packaged SQL
+prerequisite chain. Migrations outside it do not run in the EOM profile because
+they are not required to make the receivables provider ready; a new receivables
+dependency must extend this tuple and its real-schema closure test in the same
+slice. This fail-closed readiness boundary is safer than silently running an
+unreviewed migration set under the manager-portal profile.
 
 ### Deployed-config probing
 
@@ -108,6 +127,7 @@ not environment configuration.
 - `atlas_brain/api/invoicing/receivables.py`
 - `atlas_brain/eom_api/receivables.py`
 - `atlas_brain/main_eom.py`
+- `atlas_brain/mcp/invoicing_server.py`
 - `atlas_brain/services/receivables.py`
 - `atlas_brain/storage/migrations/368_receivables_payment_check_metadata.sql`
 - `plans/PR-EOM-Payment-Check-Metadata.md`
@@ -121,9 +141,10 @@ The new migration uses nullable additions only, so already-recorded payments
 remain valid and rollback is a code rollback (the unused nullable columns can
 remain safely). Both provider models accept `check_date` as an ISO date and a
 bounded `received_through` string. The service normalizes `received_through`
-once, places both fields in its fingerprint payload, inserts them with the
-payment, and returns the database row through the existing payment view. A retry
-with identical metadata returns the original payment; a retry
+once, adds each supplied field to its fingerprint payload, inserts both nullable
+values with the payment, and returns the database row through the existing
+payment view. Omitting both fields preserves the pre-migration fingerprint. A
+retry with identical metadata returns the original payment; a retry
 that changes either field conflicts before a second receipt or allocation can
 be created.
 
@@ -144,6 +165,8 @@ the provider from reporting ready if a deploy has code but not the migration.
 - No event metadata duplication: `customer_payments` is the financial record;
   the existing immutable `payment_recorded` event retains lifecycle evidence
   without turning event JSON into a second source of truth.
+- The long-lived MCP tool projects the EOM-only response fields away so an
+  unchanged MCP caller does not gain null response members from `cp.*`.
 
 ## Deferred
 
@@ -167,7 +190,7 @@ Parked hardening: none.
 - `ATLAS_VOICE__ENABLED=false ATLAS_VOICE__AUTO_START_ASR=false python -m pytest tests/test_eom_render_profile.py -q` — 61 passed; the test-only setting matches GitHub's no-GPU runner and prevents local ASR start-up.
 - `ATLAS_RECEIVABLES_TEST_DATABASE_URL=<isolated local PostgreSQL> python -m pytest tests/test_invoice_repository.py -q` — 1 passed.
 - `python -m pytest tests/test_invoicing_readonly_mcp.py tests/test_invoicing_readonly_oauth.py tests/test_invoicing_draft_writer_mcp.py tests/test_invoicing_draft_writer_oauth.py -q` — 43 passed.
-- Targeted `ruff check ... --ignore E402` and `git diff --check` — passed; `main_eom.py`'s pre-import local-environment load is the established E402 exception.
+- Targeted `ruff check ... --ignore E402 --ignore F841` and `git diff --check` — passed; `main_eom.py`'s pre-import local-environment load is the established E402 exception, and the MCP module has pre-existing unused-exception bindings outside this diff.
 - The workstation's Python 3.11 venv could not install the pinned `webrtcvad` package because Python 3.11 development headers are absent. The same workflow commands above ran locally under the provisioned Python 3.13 environment; no code or deployed configuration was changed to compensate.
 
 ## Estimated diff size
@@ -178,10 +201,11 @@ Parked hardening: none.
 | `atlas_brain/api/invoicing/receivables.py` | 4 |
 | `atlas_brain/eom_api/receivables.py` | 4 |
 | `atlas_brain/main_eom.py` | 1 |
-| `atlas_brain/services/receivables.py` | 24 |
+| `atlas_brain/mcp/invoicing_server.py` | 9 |
+| `atlas_brain/services/receivables.py` | 29 |
 | `atlas_brain/storage/migrations/368_receivables_payment_check_metadata.sql` | 5 |
-| `plans/PR-EOM-Payment-Check-Metadata.md` | 187 |
+| `plans/PR-EOM-Payment-Check-Metadata.md` | 211 |
 | `tests/test_eom_render_profile.py` | 1 |
 | `tests/test_invoice_repository.py` | 1 |
-| `tests/test_receivables.py` | 201 |
-| **Total** | **430** |
+| `tests/test_receivables.py` | 216 |
+| **Total** | **483** |

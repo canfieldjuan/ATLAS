@@ -584,18 +584,23 @@ class ReceivablesService:
                 "Allocated amount cannot exceed the payment total"
             )
         initial_status = "received" if method == "check" else "cleared"
+        normalized_received_through = (received_through or "").strip() or None
         payload = {
             "contact_id": contact_id,
             "payer_name": payer,
             "total_amount": total,
             "payment_method": method,
             "received_date": received_date,
-            "check_date": check_date,
-            "received_through": (received_through or "").strip() or None,
             "allocations": normalized,
             "reference": (reference or "").strip() or None,
             "notes": (notes or "").strip() or None,
         }
+        # Preserve pre-migration request fingerprints when a legacy caller omits
+        # both optional fields. Only supplied metadata changes payment intent.
+        if check_date is not None:
+            payload["check_date"] = check_date
+        if normalized_received_through is not None:
+            payload["received_through"] = normalized_received_through
         fingerprint = request_fingerprint(payload)
 
         async with self.pool.transaction() as conn:
@@ -685,8 +690,8 @@ class ReceivablesService:
                 method,
                 payload["reference"],
                 received_date,
-                payload["check_date"],
-                payload["received_through"],
+                check_date,
+                normalized_received_through,
                 initial_status,
                 source,
                 key,
