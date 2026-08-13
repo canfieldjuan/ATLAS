@@ -2690,6 +2690,7 @@ async def test_mcp_payment_response_projects_future_eom_check_metadata():
         "allocations": [{"invoice_id": str(invoice_id), "amount_cents": 12_500}],
         "check_date": "2026-08-10",
         "received_through": "mail",
+        "unapproved_future_field": "preserved-by-legacy-mcp",
     }
 
     class _FutureMetadataService:
@@ -2728,6 +2729,7 @@ async def test_mcp_payment_response_projects_future_eom_check_metadata():
             "allocations": [
                 {"invoice_id": str(invoice_id), "amount_cents": 12_500}
             ],
+            "unapproved_future_field": "preserved-by-legacy-mcp",
         },
     }
     assert service.kwargs["contact_id"] == contact_id

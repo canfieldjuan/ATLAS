@@ -54,6 +54,29 @@ Max files: 3
    migration slice; the PR body and #2362 state the mandatory restart/verify
    handoff.
 
+### Closure declaration: legacy MCP EOM-metadata projection
+
+The exclusion set at `invoicing_server.py:558-562` is **CLOSED** for this
+prerequisite: its complete membership is `check_date` and
+`received_through`, the two names approved for #2362's next provider schema
+surface, migration 368's optional `customer_payments.check_date DATE` and
+`customer_payments.received_through VARCHAR(128)`. No other new payment
+metadata column is approved by that next slice; any later column requires its
+own compatibility/deployment decision rather than silently joining this set.
+
+Membership is **ENUMERATED** from that staged schema contract because migration
+368 intentionally does not exist in this prerequisite; deriving the set from a
+database schema would defeat the purpose of keeping an older long-lived MCP
+binary response-compatible during the later rollout. This one declaration
+governs both the response filter and the future-row fixture in its regression.
+
+For every key outside the set, the projection **preserves** the canonical value.
+That is the deliberate compatibility default: dropping an unrecognized field
+could hide an established MCP payment value, while an unapproved future field
+is deployment-contract drift that must be reviewed by its own later slice. The
+regression includes such an unapproved future key to prove the default instead
+of treating the two approved exclusions as a broad response sanitizer.
+
 ### Review Contract
 
 - Acceptance criteria:
@@ -64,6 +87,10 @@ Max files: 3
   - [ ] The same response retains ordinary canonical payment fields and nested
     allocations unchanged; settled by the same regression's exact JSON
     assertions.
+  - [ ] The closed, enumerated exclusion set is limited to the two migration
+    368 EOM metadata names; any other service-result key is preserved, settled
+    by the closure declaration above and the regression's unapproved-future-key
+    assertion.
   - [ ] The projection occurs after the canonical service completes, so it
     cannot change creation, idempotency, or allocation inputs; settled by the
     call-argument assertions in the same regression and
@@ -78,7 +105,7 @@ Max files: 3
   its regression coverage.
 - Risk areas: backward-compatible MCP output, mixed-version provider/MCP
   deployment, and accidental change to a financial write path.
-- Reviewer rules triggered: R1, R2, R5, R8, R14.
+- Reviewer rules triggered: R1, R2, R5, R8, R13, R14.
 
 ### Boundary-change enumeration
 
@@ -99,19 +126,21 @@ operational prerequisite, not a code-level configuration decision.
 ## Mechanism
 
 After `ReceivablesService.create_payment` returns, the MCP helper builds a
-shallow response dictionary that omits only `check_date` and
-`received_through`; it then serializes the projected dictionary with the
-existing JSON encoder. The canonical service still receives exactly the same
-arguments and persists exactly the same financial record. The direct regression
-uses valid helper inputs and a service fake that returns a representative
-payment/allocations view plus both future fields, proving this older MCP binary
-will remain response-compatible after a later schema expansion.
+shallow response dictionary that omits only the closed migration-368
+`check_date`/`received_through` pair; it then serializes the projected dictionary
+with the existing JSON encoder. The canonical service still receives exactly the
+same arguments and persists exactly the same financial record. The direct
+regression uses valid helper inputs and a service fake that returns a
+representative payment/allocations view, both approved future fields, and one
+unapproved future key. It proves this older MCP binary remains response-compatible
+after the approved schema expansion without becoming a broad sanitizer.
 
 ## Intentional
 
-- The projection lists only the two approved future EOM check-metadata fields;
-  it is not a broad or speculative filtering layer that could hide legitimate
-  existing MCP payment fields.
+- The projection lists only the closed, approved migration-368 EOM
+  check-metadata pair; unlisted keys deliberately remain visible rather than
+  silently broadening a filtering layer that could hide legitimate MCP payment
+  fields.
 - This slice contains no migration. It must be deployed and the standalone
   invoicing MCP service restarted/verified before the metadata schema PR is
   allowed to deploy.
@@ -146,6 +175,6 @@ Parked hardening: none.
 | File | LOC |
 |---|---:|
 | `atlas_brain/mcp/invoicing_server.py` | 9 |
-| `plans/PR-EOM-MCP-Payment-Projection.md` | 151 |
-| `tests/test_receivables.py` | 66 |
-| **Total** | **226** |
+| `plans/PR-EOM-MCP-Payment-Projection.md` | 180 |
+| `tests/test_receivables.py` | 68 |
+| **Total** | **257** |
