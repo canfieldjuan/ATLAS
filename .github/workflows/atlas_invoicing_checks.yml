@@ -29,6 +29,7 @@ on:
       - "atlas_brain/services/__init__.py"
       - "atlas_brain/services/crm_provider.py"
       - "atlas_brain/services/commercial_billing_candidates.py"
+      - "atlas_brain/services/commercial_billing_runs.py"
       # normalize_contact_email decides billing eligibility and the
       # address these routes return; a grammar change here must run
       # the billing proof.
@@ -38,6 +39,7 @@ on:
       - "atlas_brain/storage/migrations/344_receivables_payments.sql"
       - "atlas_brain/storage/migrations/345_receivables_event_key_lookup.sql"
       - "atlas_brain/storage/migrations/369_receivables_payment_receipt_outbox.sql"
+      - "atlas_brain/storage/migrations/370_commercial_billing_runs.sql"
       - "atlas_brain/storage/repositories/invoice.py"
       - "atlas_brain/templates/email/__init__.py"
       - "atlas_brain/templates/email/estimate_confirmation.py"
@@ -48,6 +50,7 @@ on:
       - "tests/test_eom_billing_recipients.py"
       - "tests/test_eom_payment_receipts.py"
       - "tests/test_commercial_billing_candidates.py"
+      - "tests/test_commercial_billing_runs.py"
       - "tests/test_invoicing_readonly_mcp.py"
       - "tests/test_invoicing_readonly_oauth.py"
       - "tests/test_invoicing_draft_writer_mcp.py"
@@ -81,6 +84,7 @@ on:
       - "atlas_brain/services/__init__.py"
       - "atlas_brain/services/crm_provider.py"
       - "atlas_brain/services/commercial_billing_candidates.py"
+      - "atlas_brain/services/commercial_billing_runs.py"
       # normalize_contact_email decides billing eligibility and the
       # address these routes return; a grammar change here must run
       # the billing proof.
@@ -90,6 +94,7 @@ on:
       - "atlas_brain/storage/migrations/344_receivables_payments.sql"
       - "atlas_brain/storage/migrations/345_receivables_event_key_lookup.sql"
       - "atlas_brain/storage/migrations/369_receivables_payment_receipt_outbox.sql"
+      - "atlas_brain/storage/migrations/370_commercial_billing_runs.sql"
       - "atlas_brain/storage/repositories/invoice.py"
       - "atlas_brain/templates/email/__init__.py"
       - "atlas_brain/templates/email/estimate_confirmation.py"
@@ -100,6 +105,7 @@ on:
       - "tests/test_eom_billing_recipients.py"
       - "tests/test_eom_payment_receipts.py"
       - "tests/test_commercial_billing_candidates.py"
+      - "tests/test_commercial_billing_runs.py"
       - "tests/test_invoicing_readonly_mcp.py"
       - "tests/test_invoicing_readonly_oauth.py"
       - "tests/test_invoicing_draft_writer_mcp.py"
@@ -157,6 +163,7 @@ jobs:
             tests/test_eom_billing_recipients.py \
             tests/test_eom_payment_receipts.py \
             tests/test_commercial_billing_candidates.py \
+            tests/test_commercial_billing_runs.py \
             tests/test_invoice_repository.py \
             -q
 

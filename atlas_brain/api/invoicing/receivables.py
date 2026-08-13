@@ -31,6 +31,14 @@ from ...services.commercial_billing_candidates import (
     CommercialBillingCandidatesValidationError,
     get_commercial_billing_candidate_service,
 )
+from ...services.commercial_billing_runs import (
+    CommercialBillingRunConflictError,
+    CommercialBillingRunNotFoundError,
+    CommercialBillingRunService,
+    CommercialBillingRunUnavailableError,
+    CommercialBillingRunValidationError,
+    get_commercial_billing_run_service,
+)
 from ...services.eom_lead_ingress import EOM_BUSINESS_CONTEXT_ID
 from ...storage.exceptions import DatabaseUnavailableError
 from .auth import require_actor, require_receivables_api
@@ -118,6 +126,14 @@ class CreateDepositBatchRequest(BaseModel):
     bank_reference: Optional[str] = Field(default=None, max_length=256)
 
 
+class CreateCommercialBillingRunRequest(BaseModel):
+    billing_period: str = Field(
+        min_length=7,
+        max_length=7,
+        pattern=r"^\d{4}-(0[1-9]|1[0-2])$",
+    )
+
+
 def _dollars(amount_cents: int) -> Decimal:
     return Decimal(amount_cents) / Decimal(100)
 
@@ -197,6 +213,41 @@ async def _call(awaitable):
         raise HTTPException(
             status_code=503,
             detail={"code": "database_unavailable", "message": message},
+        ) from exc
+
+
+async def _call_commercial_billing_run(awaitable):
+    try:
+        return await awaitable
+    except CommercialBillingCandidatesValidationError as exc:
+        raise HTTPException(
+            status_code=422,
+            detail={"code": exc.code, "message": str(exc)},
+        ) from exc
+    except CommercialBillingCandidatesUnavailableError as exc:
+        raise HTTPException(
+            status_code=503,
+            detail={"code": exc.code, "message": str(exc)},
+        ) from exc
+    except CommercialBillingRunValidationError as exc:
+        raise HTTPException(
+            status_code=422,
+            detail={"code": exc.code, "message": str(exc)},
+        ) from exc
+    except CommercialBillingRunNotFoundError as exc:
+        raise HTTPException(
+            status_code=404,
+            detail={"code": exc.code, "message": str(exc)},
+        ) from exc
+    except CommercialBillingRunConflictError as exc:
+        raise HTTPException(
+            status_code=409,
+            detail={"code": exc.code, "message": str(exc)},
+        ) from exc
+    except CommercialBillingRunUnavailableError as exc:
+        raise HTTPException(
+            status_code=503,
+            detail={"code": exc.code, "message": str(exc)},
         ) from exc
 
 
@@ -387,6 +438,64 @@ async def commercial_billing_candidates(
             status_code=503,
             detail={"code": exc.code, "message": str(exc)},
         ) from exc
+
+
+@router.post("/commercial-billing-runs", status_code=201)
+async def create_commercial_billing_run(
+    body: CreateCommercialBillingRunRequest,
+    actor: Annotated[str, Depends(require_actor)],
+    idempotency_key: Annotated[
+        str, Header(alias="Idempotency-Key", min_length=1, max_length=128)
+    ],
+    service: CommercialBillingRunService = Depends(get_commercial_billing_run_service),
+) -> dict:
+    """Persist immutable review evidence; explicit approval remains a later slice."""
+
+    return await _call_commercial_billing_run(
+        service.create_run(
+            billing_period=body.billing_period,
+            idempotency_key=idempotency_key,
+            actor=actor,
+        )
+    )
+
+
+@router.get("/commercial-billing-runs")
+async def list_commercial_billing_runs(
+    billing_period: Optional[str] = Query(default=None),
+    limit: int = Query(default=50, ge=1, le=100),
+    offset: int = Query(default=0, ge=0),
+    service: CommercialBillingRunService = Depends(get_commercial_billing_run_service),
+) -> dict:
+    """List bounded durable review-run summaries without regenerating sources."""
+
+    return await _call_commercial_billing_run(
+        service.list_runs(
+            billing_period=billing_period,
+            limit=limit,
+            offset=offset,
+        )
+    )
+
+
+@router.get("/commercial-billing-runs/{billing_run_id}/reconciliation")
+async def reconcile_commercial_billing_run(
+    billing_run_id: UUID,
+    service: CommercialBillingRunService = Depends(get_commercial_billing_run_service),
+) -> dict:
+    """Compare durable evidence with fresh sources without writing either."""
+
+    return await _call_commercial_billing_run(service.reconcile_run(billing_run_id))
+
+
+@router.get("/commercial-billing-runs/{billing_run_id}")
+async def get_commercial_billing_run(
+    billing_run_id: UUID,
+    service: CommercialBillingRunService = Depends(get_commercial_billing_run_service),
+) -> dict:
+    """Return the immutable candidate snapshot retained for operator review."""
+
+    return await _call_commercial_billing_run(service.get_run(billing_run_id))
 
 
 @router.put("/payments/{payment_id}/allocations")
