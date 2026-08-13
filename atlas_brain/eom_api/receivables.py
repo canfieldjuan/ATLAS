@@ -442,6 +442,33 @@ async def list_payments(
     )
 
 
+@router.get("/customers/{contact_id}/ledger")
+async def customer_ledger(
+    contact_id: UUID,
+    payment_status: Optional[str] = Query(default=None, max_length=16),
+    payment_method: Optional[str] = Query(default=None, max_length=32),
+    search: Optional[str] = Query(default=None, max_length=256),
+    from_date: Optional[date] = Query(default=None),
+    to_date: Optional[date] = Query(default=None),
+    limit: int = Query(default=100, ge=1, le=200),
+    offset: int = Query(default=0, ge=0),
+    service: ReceivablesService = Depends(get_receivables_service),
+) -> dict:
+    """Return one bounded, receipt-aware financial ledger page for a customer."""
+    return await _call(
+        service.list_customer_ledger(
+            contact_id=contact_id,
+            payment_status=payment_status,
+            payment_method=payment_method,
+            search=search,
+            from_date=from_date,
+            to_date=to_date,
+            limit=limit,
+            offset=offset,
+        )
+    )
+
+
 @router.put("/payments/{payment_id}/allocations")
 async def adjust_allocations(
     payment_id: UUID,

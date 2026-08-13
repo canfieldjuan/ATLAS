@@ -8,7 +8,7 @@ import re
 import subprocess
 import sys
 from contextlib import asynccontextmanager
-from datetime import date
+from datetime import date, datetime, timezone
 from decimal import Decimal
 from pathlib import Path
 from types import SimpleNamespace
@@ -34,6 +34,7 @@ from atlas_brain.services.receivables import (
     ReceivablesService,
     ReceivablesValidationError,
     PaymentReceiptRecipient,
+    aggregate_cents,
     money,
     request_fingerprint,
 )
@@ -954,11 +955,14 @@ async def test_open_invoice_feed_orders_due_date_before_customer_name():
     )
 
 
-def test_money_rejects_nan_and_duplicate_invoice_allocations():
+def test_money_and_aggregate_cents_preserve_currency_validation():
     with pytest.raises(ReceivablesValidationError, match="finite"):
         money("NaN")
     with pytest.raises(ReceivablesValidationError, match="cent precision"):
         money("10.005")
+    with pytest.raises(ReceivablesValidationError, match="finite"):
+        aggregate_cents("NaN")
+    assert aggregate_cents("10000000000.00") == 1_000_000_000_000
 
     invoice_id = uuid4()
     with pytest.raises(ReceivablesValidationError, match="only appear once"):
@@ -2086,6 +2090,491 @@ async def test_real_migration_backfills_and_adopts_late_rolling_writer_checks():
         assert await service.is_ready() is True
         await conn.execute("DROP TABLE payment_events")
         assert await service.is_ready() is False
+    finally:
+        await conn.execute("SET search_path TO public")
+        await conn.execute(f'DROP SCHEMA IF EXISTS "{schema}" CASCADE')
+        await conn.close()
+
+
+@pytest.mark.asyncio
+async def test_real_postgres_customer_ledger_is_bounded_receipt_aware_and_read_only():
+    asyncpg = pytest.importorskip("asyncpg")
+    database_url = os.environ.get("ATLAS_RECEIVABLES_TEST_DATABASE_URL")
+    if not database_url:
+        pytest.skip("ATLAS_RECEIVABLES_TEST_DATABASE_URL not set")
+
+    schema = f"receivables_customer_ledger_{uuid4().hex}"
+    conn = await asyncpg.connect(database_url)
+    try:
+        await _create_pre_receivables_schema(conn, schema)
+        await conn.execute(_receivables_migration_sql())
+        contact_id, other_contact_id = uuid4(), uuid4()
+        invoice_a, invoice_b, other_invoice = uuid4(), uuid4(), uuid4()
+        await conn.executemany(
+            "INSERT INTO contacts (id, business_context_id) VALUES ($1, 'effingham_maids')",
+            [(contact_id,), (other_contact_id,)],
+        )
+        await conn.executemany(
+            """
+            INSERT INTO invoices (
+                id, invoice_number, contact_id, customer_name, total_amount,
+                issue_date, due_date, status
+            ) VALUES ($1, $2, $3, $4, $5, $6, $7, 'sent')
+            """,
+            [
+                (
+                    invoice_a,
+                    "INV-LEDGER-ALPHA",
+                    contact_id,
+                    "Ledger Customer",
+                    Decimal("200.00"),
+                    date(2026, 8, 1),
+                    date(2026, 8, 31),
+                ),
+                (
+                    invoice_b,
+                    "INV-LEDGER-BRAVO",
+                    contact_id,
+                    "Ledger Customer",
+                    Decimal("100.00"),
+                    date(2026, 8, 2),
+                    date(2026, 9, 1),
+                ),
+                (
+                    other_invoice,
+                    "INV-OTHER-CUSTOMER",
+                    other_contact_id,
+                    "Other Customer",
+                    Decimal("400.00"),
+                    date(2026, 8, 3),
+                    date(2026, 9, 2),
+                ),
+            ],
+        )
+        service = ReceivablesService(_SingleConnectionPool(conn, schema))
+
+        check = await service.create_payment(
+            contact_id=contact_id,
+            payer_name="Ledger Check Payer",
+            total_amount=Decimal("80.00"),
+            payment_method="check",
+            received_date=date(2026, 8, 10),
+            allocations=[{"invoice_id": invoice_a, "amount": Decimal("50.00")}],
+            reference="CHECK_1042",
+            idempotency_key="customer-ledger-check-1",
+            recorded_by="Ledger test",
+            allow_unapplied=True,
+            unapplied_contact_context_id="effingham_maids",
+            receipt_recipient=PaymentReceiptRecipient(
+                contact_id=contact_id,
+                customer_name="Ledger Customer",
+                customer_type="residential",
+                recipient_email="ledger@example.test",
+            ),
+            require_receipt_recipient=True,
+        )
+        batch = await service.create_deposit_batch(
+            payment_ids=[UUID(check["id"])],
+            deposit_date=date(2026, 8, 11),
+            bank_reference="ledger-deposit-1",
+            actor="Ledger test",
+            idempotency_key="customer-ledger-deposit-1",
+        )
+        await service.clear_deposit_batch(
+            batch_id=UUID(batch["id"]),
+            actor="Ledger test",
+            idempotency_key="customer-ledger-clear-1",
+        )
+        returned = await service.create_payment(
+            contact_id=contact_id,
+            payer_name="Ledger ACH Payer",
+            total_amount=Decimal("30.00"),
+            payment_method="ach",
+            received_date=date(2026, 8, 11),
+            allocations=[{"invoice_id": invoice_a, "amount": Decimal("30.00")}],
+            reference="SQUAREXTXN-9001",
+            idempotency_key="customer-ledger-ach-1",
+            recorded_by="Ledger test",
+        )
+        await service.return_payment(
+            payment_id=UUID(returned["id"]),
+            reason="NSF",
+            actor="Ledger test",
+            idempotency_key="customer-ledger-return-1",
+        )
+        square = await service.create_payment(
+            contact_id=contact_id,
+            payer_name="Ledger Square Payer",
+            total_amount=Decimal("20.00"),
+            payment_method="square",
+            received_date=date(2026, 8, 12),
+            allocations=[],
+            reference="SQUARE%TXN-9001",
+            idempotency_key="customer-ledger-square-1",
+            recorded_by="Ledger test",
+            allow_unapplied=True,
+            unapplied_contact_context_id="effingham_maids",
+        )
+        other_payment = await service.create_payment(
+            contact_id=other_contact_id,
+            payer_name="Other Ledger Payer",
+            total_amount=Decimal("40.00"),
+            payment_method="check",
+            received_date=date(2026, 8, 12),
+            allocations=[{"invoice_id": other_invoice, "amount": Decimal("40.00")}],
+            reference="OTHER-CHECK-1042",
+            idempotency_key="customer-ledger-other-payment-1",
+            recorded_by="Ledger test",
+        )
+        backdated = await service.create_payment(
+            contact_id=contact_id,
+            payer_name=r"Ledger\Backdated Payer",
+            total_amount=Decimal("10.00"),
+            payment_method="ach",
+            received_date=date(2026, 7, 31),
+            allocations=[],
+            reference="CHECKX1042",
+            idempotency_key="customer-ledger-backdated-payment-1",
+            recorded_by="Ledger test",
+            allow_unapplied=True,
+            unapplied_contact_context_id="effingham_maids",
+        )
+        before = {
+            table: await conn.fetchval(f"SELECT COUNT(*) FROM {table}")
+            for table in (
+                "customer_payments",
+                "invoice_payments",
+                "payment_receipt_deliveries",
+                "payment_events",
+            )
+        }
+
+        receipt_number = check["receipt_delivery"]["receipt_number"]
+        receipt_search = await service.list_customer_ledger(
+            contact_id=contact_id,
+            search=receipt_number,
+        )
+        [receipt_entry] = receipt_search["entries"]
+        assert receipt_entry["entry_type"] == "payment"
+        assert receipt_entry["payment"]["id"] == check["id"]
+        assert receipt_entry["payment"]["status"] == "cleared"
+        assert receipt_entry["payment"]["batch_id"] == batch["id"]
+        assert receipt_entry["payment"]["receipt_delivery"] == {
+            "receipt_number": receipt_number,
+            "recipient_email": "ledger@example.test",
+            "status": "pending",
+            "skip_reason": None,
+        }
+        assert receipt_search["balances"] == {
+            "open_invoice_balance_cents": 25_000,
+            "unapplied_payment_balance_cents": 6_000,
+        }
+
+        payer_search = await service.list_customer_ledger(
+            contact_id=contact_id,
+            search="ledger check payer",
+        )
+        assert [entry["payment"]["id"] for entry in payer_search["entries"]] == [
+            check["id"]
+        ]
+        check_reference_search = await service.list_customer_ledger(
+            contact_id=contact_id,
+            search="check_1042",
+        )
+        assert [
+            entry["payment"]["id"]
+            for entry in check_reference_search["entries"]
+        ] == [check["id"]]
+        percent_reference_search = await service.list_customer_ledger(
+            contact_id=contact_id,
+            search="square%txn-9001",
+        )
+        assert [
+            entry["payment"]["id"]
+            for entry in percent_reference_search["entries"]
+        ] == [square["id"]]
+        backslash_payer_search = await service.list_customer_ledger(
+            contact_id=contact_id,
+            search=r"ledger\backdated payer",
+        )
+        assert [
+            entry["payment"]["id"]
+            for entry in backslash_payer_search["entries"]
+        ] == [backdated["id"]]
+        receipt_casefold_search = await service.list_customer_ledger(
+            contact_id=contact_id,
+            search=receipt_number.lower(),
+        )
+        assert [
+            entry["payment"]["id"]
+            for entry in receipt_casefold_search["entries"]
+        ] == [check["id"]]
+        other_payment_search = await service.list_customer_ledger(
+            contact_id=contact_id,
+            search="other ledger payer",
+        )
+        assert other_payment_search["entries"] == []
+        full_customer_ledger = await service.list_customer_ledger(
+            contact_id=contact_id,
+        )
+        assert other_payment["id"] not in {
+            entry["entry_id"] for entry in full_customer_ledger["entries"]
+        }
+        assert [entry["occurred_date"] for entry in full_customer_ledger["entries"]] == sorted(
+            (entry["occurred_date"] for entry in full_customer_ledger["entries"]),
+            reverse=True,
+        )
+        assert full_customer_ledger["entries"][-1]["payment"]["id"] == backdated["id"]
+
+        invoice_search = await service.list_customer_ledger(
+            contact_id=contact_id,
+            search="inv-ledger-alpha",
+        )
+        assert {entry["entry_type"] for entry in invoice_search["entries"]} == {
+            "invoice",
+            "payment",
+        }
+        assert all(
+            entry["entry_id"] != str(other_invoice)
+            for entry in invoice_search["entries"]
+        )
+        assert {
+            entry["payment"]["id"]
+            for entry in invoice_search["entries"]
+            if entry["entry_type"] == "payment"
+        } == {
+            check["id"],
+            returned["id"],
+        }
+
+        returned_only = await service.list_customer_ledger(
+            contact_id=contact_id,
+            payment_status="returned",
+        )
+        assert len(returned_only["entries"]) == 1
+        returned_entry = returned_only["entries"][0]
+        assert returned_entry["entry_type"] == "payment"
+        assert returned_entry["entry_id"] == returned["id"]
+        assert returned_entry["payment"]["return_reason"] == "NSF"
+        assert returned_entry["payment"]["unapplied_amount_cents"] == 0
+
+        square_only = await service.list_customer_ledger(
+            contact_id=contact_id,
+            payment_method="square",
+            search="SQUARE%TXN-9001",
+            from_date=date(2026, 8, 12),
+            to_date=date(2026, 8, 12),
+        )
+        assert [entry["payment"]["id"] for entry in square_only["entries"]] == [
+            square["id"]
+        ]
+
+        with pytest.raises(ReceivablesValidationError, match="status cannot be blank"):
+            await service.list_customer_ledger(
+                contact_id=contact_id,
+                payment_status="   ",
+            )
+        with pytest.raises(ReceivablesValidationError, match="method cannot be blank"):
+            await service.list_customer_ledger(
+                contact_id=contact_id,
+                payment_method="\t",
+            )
+
+        first_page = await service.list_customer_ledger(
+            contact_id=contact_id,
+            limit=1,
+        )
+        second_page = await service.list_customer_ledger(
+            contact_id=contact_id,
+            limit=1,
+            offset=first_page["next_offset"],
+        )
+        assert first_page["next_offset"] == 1
+        assert (
+            second_page["entries"][0]["entry_id"]
+            != first_page["entries"][0]["entry_id"]
+        )
+        assert receipt_search == await service.list_customer_ledger(
+            contact_id=contact_id,
+            search=receipt_number,
+        )
+        assert before == {
+            table: await conn.fetchval(f"SELECT COUNT(*) FROM {table}")
+            for table in before
+        }
+
+        with pytest.raises(ReceivablesValidationError, match="start date"):
+            await service.list_customer_ledger(
+                contact_id=contact_id,
+                from_date=date(2026, 8, 13),
+                to_date=date(2026, 8, 12),
+            )
+        assert before == {
+            table: await conn.fetchval(f"SELECT COUNT(*) FROM {table}")
+            for table in before
+        }
+
+        await conn.execute("DROP TABLE payment_receipt_deliveries")
+        with pytest.raises(ReceivablesSchemaUnavailableError, match="customer ledger"):
+            await service.list_customer_ledger(contact_id=contact_id)
+    finally:
+        await conn.execute("SET search_path TO public")
+        await conn.execute(f'DROP SCHEMA IF EXISTS "{schema}" CASCADE')
+        await conn.close()
+
+
+@pytest.mark.asyncio
+async def test_real_postgres_customer_ledger_bounds_allocation_history_and_preserves_active_total():
+    asyncpg = pytest.importorskip("asyncpg")
+    database_url = os.environ.get("ATLAS_RECEIVABLES_TEST_DATABASE_URL")
+    if not database_url:
+        pytest.skip("ATLAS_RECEIVABLES_TEST_DATABASE_URL not set")
+
+    schema = f"receivables_ledger_allocation_history_{uuid4().hex}"
+    conn = await asyncpg.connect(database_url)
+    try:
+        await _create_pre_receivables_schema(conn, schema)
+        await conn.execute(_receivables_migration_sql())
+        contact_id, invoice_id, payment_id = uuid4(), uuid4(), uuid4()
+        await conn.execute(
+            "INSERT INTO contacts (id, business_context_id) VALUES ($1, 'effingham_maids')",
+            contact_id,
+        )
+        await conn.execute(
+            """
+            INSERT INTO invoices (
+                id, invoice_number, contact_id, customer_name, total_amount,
+                issue_date, due_date, status
+            ) VALUES ($1, 'INV-ALLOCATION-HISTORY', $2, 'History Customer', 200,
+                      DATE '2026-08-01', DATE '2026-08-31', 'sent')
+            """,
+            invoice_id,
+            contact_id,
+        )
+        await conn.execute(
+            """
+            INSERT INTO customer_payments (
+                id, contact_id, payer_name, total_amount, payment_method,
+                received_date, status, source, idempotency_key,
+                request_fingerprint, recorded_by
+            ) VALUES ($1, $2, 'Allocation History Payer', 100, 'ach',
+                      DATE '2026-08-12', 'received', 'test',
+                      'allocation-history-payment', 'allocation-history-fingerprint',
+                      'Ledger test')
+            """,
+            payment_id,
+            contact_id,
+        )
+        historical_at = datetime(2026, 8, 12, tzinfo=timezone.utc)
+        history_rows = [
+            (
+                uuid4(),
+                invoice_id,
+                payment_id,
+                Decimal("1.00"),
+                date(2026, 8, 12),
+                "ach",
+                "ALLOCATION-HISTORY",
+                "historical adjustment",
+                "Ledger test",
+                historical_at if index else None,
+                "replaced allocation" if index else None,
+            )
+            for index in range(101)
+        ]
+        await conn.executemany(
+            """
+            INSERT INTO invoice_payments (
+                id, invoice_id, payment_id, amount, payment_date,
+                payment_method, reference, notes, recorded_by, reversed_at,
+                reversal_reason
+            ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
+            """,
+            history_rows,
+        )
+        service = ReceivablesService(_SingleConnectionPool(conn, schema))
+
+        ledger = await service.list_customer_ledger(
+            contact_id=contact_id,
+            payment_method="ach",
+        )
+
+        [entry] = ledger["entries"]
+        payment = entry["payment"]
+        assert payment["id"] == str(payment_id)
+        assert payment["allocated_amount_cents"] == 100
+        assert payment["unapplied_amount_cents"] == 9_900
+        assert payment["allocation_history_count"] == 101
+        assert payment["allocations_truncated"] is True
+        assert len(payment["allocations"]) == 100
+        assert payment["allocations"][0]["reversed_at"] is None
+        assert all(
+            "active_allocated_amount" not in allocation
+            and "allocation_history_count" not in allocation
+            for allocation in payment["allocations"]
+        )
+        assert all(
+            allocation["reversed_at"] is not None
+            for allocation in payment["allocations"][1:]
+        )
+    finally:
+        await conn.execute("SET search_path TO public")
+        await conn.execute(f'DROP SCHEMA IF EXISTS "{schema}" CASCADE')
+        await conn.close()
+
+
+@pytest.mark.asyncio
+async def test_real_postgres_customer_ledger_aggregate_balances_exceed_one_row_money_cap():
+    asyncpg = pytest.importorskip("asyncpg")
+    database_url = os.environ.get("ATLAS_RECEIVABLES_TEST_DATABASE_URL")
+    if not database_url:
+        pytest.skip("ATLAS_RECEIVABLES_TEST_DATABASE_URL not set")
+
+    schema = f"receivables_ledger_aggregate_{uuid4().hex}"
+    conn = await asyncpg.connect(database_url)
+    try:
+        await _create_pre_receivables_schema(conn, schema)
+        await conn.execute(_receivables_migration_sql())
+        contact_id = uuid4()
+        await conn.execute(
+            "INSERT INTO contacts (id, business_context_id) VALUES ($1, 'effingham_maids')",
+            contact_id,
+        )
+        amount = Decimal("5000000000.00")
+        await conn.executemany(
+            """
+            INSERT INTO invoices (
+                id, invoice_number, contact_id, customer_name, total_amount,
+                issue_date, due_date, status
+            ) VALUES ($1, $2, $3, 'Aggregate Customer', $4,
+                      DATE '2026-08-01', DATE '2026-08-31', 'sent')
+            """,
+            [
+                (uuid4(), "INV-LEDGER-AGGREGATE-A", contact_id, amount),
+                (uuid4(), "INV-LEDGER-AGGREGATE-B", contact_id, amount),
+            ],
+        )
+        await conn.executemany(
+            """
+            INSERT INTO customer_payments (
+                id, contact_id, payer_name, total_amount, payment_method,
+                received_date, status, source
+            ) VALUES ($1, $2, $3, $4, 'ach', DATE '2026-08-02', 'received', 'test')
+            """,
+            [
+                (uuid4(), contact_id, "Aggregate Payer A", amount),
+                (uuid4(), contact_id, "Aggregate Payer B", amount),
+            ],
+        )
+
+        ledger = await ReceivablesService(
+            _SingleConnectionPool(conn, schema)
+        ).list_customer_ledger(contact_id=contact_id)
+
+        assert ledger["balances"] == {
+            "open_invoice_balance_cents": 1_000_000_000_000,
+            "unapplied_payment_balance_cents": 1_000_000_000_000,
+        }
     finally:
         await conn.execute("SET search_path TO public")
         await conn.execute(f'DROP SCHEMA IF EXISTS "{schema}" CASCADE')
@@ -3484,6 +3973,89 @@ async def test_real_postgres_http_and_mcp_entrypoints_use_supported_dependencies
                     },
                     json=slim_unapplied_body,
                 )
+
+            before_ledger_reads = await conn.fetchval(
+                "SELECT COUNT(*) FROM customer_payments"
+            )
+            async with httpx.AsyncClient(
+                transport=httpx.ASGITransport(app=app),
+                base_url="http://receivables.test",
+            ) as client:
+                unauthenticated_ledger = await client.get(
+                    f"/api/v1/receivables/customers/{contact_id}/ledger"
+                )
+                invalid_ledger_limit = await client.get(
+                    f"/api/v1/receivables/customers/{contact_id}/ledger",
+                    headers={"Authorization": f"Bearer {generated.token}"},
+                    params={"limit": 0},
+                )
+                blank_ledger_status = await client.get(
+                    f"/api/v1/receivables/customers/{contact_id}/ledger",
+                    headers={"Authorization": f"Bearer {generated.token}"},
+                    params={"payment_status": "   "},
+                )
+                routable_large_offset = await client.get(
+                    f"/api/v1/receivables/customers/{contact_id}/ledger",
+                    headers={"Authorization": f"Bearer {generated.token}"},
+                    params={"offset": 10_001},
+                )
+                full_ledger = await client.get(
+                    f"/api/v1/receivables/customers/{contact_id}/ledger",
+                    headers={"Authorization": f"Bearer {generated.token}"},
+                )
+            async with httpx.AsyncClient(
+                transport=httpx.ASGITransport(app=slim_app),
+                base_url="http://receivables.test",
+            ) as client:
+                slim_ledger = await client.get(
+                    f"/api/v1/receivables/customers/{unapplied_contact_id}/ledger",
+                    headers={"Authorization": f"Bearer {generated.token}"},
+                )
+                slim_blank_ledger_method = await client.get(
+                    f"/api/v1/receivables/customers/{unapplied_contact_id}/ledger",
+                    headers={"Authorization": f"Bearer {generated.token}"},
+                    params={"payment_method": "\t"},
+                )
+                slim_routable_large_offset = await client.get(
+                    f"/api/v1/receivables/customers/{unapplied_contact_id}/ledger",
+                    headers={"Authorization": f"Bearer {generated.token}"},
+                    params={"offset": 10_001},
+                )
+
+            assert unauthenticated_ledger.status_code == 401
+            assert invalid_ledger_limit.status_code == 422
+            assert blank_ledger_status.status_code == 422
+            assert routable_large_offset.status_code == 200
+            assert routable_large_offset.json()["entries"] == []
+            assert full_ledger.status_code == 200, full_ledger.text
+            full_ledger_payload = full_ledger.json()
+            assert full_ledger_payload["contact_id"] == str(contact_id)
+            assert any(
+                entry["entry_type"] == "invoice"
+                and entry["invoice"]["invoice_number"] == "INV-HTTP-1"
+                for entry in full_ledger_payload["entries"]
+            )
+            assert any(
+                entry["entry_type"] == "payment"
+                and entry["payment"]["id"] == response.json()["id"]
+                for entry in full_ledger_payload["entries"]
+            )
+            assert slim_ledger.status_code == 200, slim_ledger.text
+            assert slim_blank_ledger_method.status_code == 422
+            assert slim_routable_large_offset.status_code == 200
+            assert slim_routable_large_offset.json()["entries"] == []
+            slim_ledger_payload = slim_ledger.json()
+            assert slim_ledger_payload["contact_id"] == str(unapplied_contact_id)
+            assert (
+                slim_ledger_payload["entries"][0]["payment"]["receipt_delivery"][
+                    "status"
+                ]
+                == "pending"
+            )
+            assert (
+                await conn.fetchval("SELECT COUNT(*) FROM customer_payments")
+                == before_ledger_reads
+            )
 
             assert response.status_code == 201
             assert response.json()["status"] == "received"
