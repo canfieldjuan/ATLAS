@@ -17,6 +17,7 @@ from ...services.receivables import (
     ReceivablesConflictError,
     ReceivablesError,
     ReceivablesNotFoundError,
+    ReceivablesSchemaUnavailableError,
     ReceivablesService,
     ReceivablesValidationError,
     get_receivables_service,
@@ -79,6 +80,8 @@ class CreatePaymentRequest(BaseModel):
     total_amount_cents: PositiveCents
     payment_method: Literal["check", "ach", "square"]
     received_date: date
+    check_date: Optional[date] = None
+    received_through: Optional[str] = Field(default=None, max_length=128)
     reference: Optional[str] = Field(default=None, max_length=256)
     notes: Optional[str] = None
     allocations: list[AllocationRequest] = Field(default_factory=list, max_length=100)
@@ -133,6 +136,10 @@ def _is_database_unavailable_error(exc: Exception) -> bool:
 async def _call(awaitable):
     try:
         return await awaitable
+    except ReceivablesSchemaUnavailableError as exc:
+        raise HTTPException(
+            status_code=503, detail={"code": exc.code, "message": str(exc)}
+        ) from exc
     except ReceivablesValidationError as exc:
         raise HTTPException(
             status_code=422, detail={"code": exc.code, "message": str(exc)}
@@ -218,6 +225,8 @@ async def create_payment(
             total_amount=_dollars(body.total_amount_cents),
             payment_method=body.payment_method,
             received_date=body.received_date,
+            check_date=body.check_date,
+            received_through=body.received_through,
             reference=body.reference,
             notes=body.notes,
             allocations=_allocations(body.allocations),
