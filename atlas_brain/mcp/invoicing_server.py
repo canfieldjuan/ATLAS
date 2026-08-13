@@ -553,7 +553,14 @@ async def _record_customer_payment_with_service(
             recorded_by="atlas-invoicing-mcp",
             source="invoicing_mcp",
         )
-        return json.dumps({"success": True, "payment": payment}, default=str)
+        # Keep the long-lived MCP payment response stable while EOM adds its
+        # provider-only check metadata in a later, separately deployed slice.
+        mcp_payment = {
+            key: value
+            for key, value in payment.items()
+            if key not in {"check_date", "received_through"}
+        }
+        return json.dumps({"success": True, "payment": mcp_payment}, default=str)
     except Exception as exc:
         logger.warning("record_customer_payment rejected: %s", exc)
         return json.dumps({"success": False, "error": str(exc)})

@@ -2674,6 +2674,72 @@ async def test_real_postgres_http_and_mcp_entrypoints_use_supported_dependencies
         await conn.close()
 
 
+@pytest.mark.asyncio
+async def test_mcp_payment_response_projects_future_eom_check_metadata():
+    from atlas_brain.mcp import invoicing_server
+
+    contact_id = uuid4()
+    invoice_id = uuid4()
+    canonical_payment = {
+        "id": "payment-1",
+        "contact_id": str(contact_id),
+        "payer_name": "Residential Customer",
+        "total_amount_cents": 12_500,
+        "payment_method": "check",
+        "status": "received",
+        "allocations": [{"invoice_id": str(invoice_id), "amount_cents": 12_500}],
+        "check_date": "2026-08-10",
+        "received_through": "mail",
+    }
+
+    class _FutureMetadataService:
+        def __init__(self) -> None:
+            self.kwargs = None
+
+        async def create_payment(self, **kwargs):
+            self.kwargs = kwargs
+            return canonical_payment
+
+    service = _FutureMetadataService()
+    result = json.loads(
+        await invoicing_server._record_customer_payment_with_service(
+            service=service,
+            contact_id=str(contact_id),
+            payer_name="Residential Customer",
+            total_amount_cents=12_500,
+            payment_method="check",
+            allocations=[{"invoice_id": str(invoice_id), "amount_cents": 12_500}],
+            idempotency_key="mcp-projection-1",
+            reference="1001",
+            notes="Received in mail",
+            payment_date="2026-08-12",
+        )
+    )
+
+    assert result == {
+        "success": True,
+        "payment": {
+            "id": "payment-1",
+            "contact_id": str(contact_id),
+            "payer_name": "Residential Customer",
+            "total_amount_cents": 12_500,
+            "payment_method": "check",
+            "status": "received",
+            "allocations": [
+                {"invoice_id": str(invoice_id), "amount_cents": 12_500}
+            ],
+        },
+    }
+    assert service.kwargs["contact_id"] == contact_id
+    assert service.kwargs["total_amount"] == Decimal("125")
+    assert service.kwargs["received_date"] == date(2026, 8, 12)
+    assert service.kwargs["allocations"] == [
+        {"invoice_id": invoice_id, "amount": Decimal("125")}
+    ]
+    assert service.kwargs["reference"] == "1001"
+    assert service.kwargs["notes"] == "Received in mail"
+
+
 def test_full_invoicing_mcp_http_refuses_to_start_without_strong_auth():
     from atlas_brain.mcp import invoicing_server
     from atlas_brain.mcp.auth import BearerAuthMiddleware
