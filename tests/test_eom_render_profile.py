@@ -104,6 +104,33 @@ def _sha256_ascii(value: str) -> str:
     return hashlib.sha256(value.encode("ascii")).hexdigest()
 
 
+def _configure_billing_recipient_readiness(monkeypatch, receivables) -> None:
+    """Make authentication-only readiness tests satisfy the payment dependency."""
+
+    class _CanonicalPool:
+        is_initialized = True
+
+    class _CanonicalCRM:
+        async def billing_recipients_schema_ready(self):
+            return True
+
+    monkeypatch.setattr(
+        receivables.funnel_settings,
+        "db_connection_string",
+        "postgresql://canonical.test/eom",
+    )
+    monkeypatch.setattr(
+        receivables,
+        "get_eom_funnel_db_pool",
+        lambda: _CanonicalPool(),
+    )
+    monkeypatch.setattr(
+        receivables,
+        "get_eom_funnel_crm_provider",
+        lambda: _CanonicalCRM(),
+    )
+
+
 def _route_paths_for_app_expr(app_expr: str) -> str:
     return f"""
 def _route_paths(app):
@@ -489,6 +516,7 @@ def test_eom_startup_migrations_are_curated_for_receivables_readiness():
         "344_receivables_payments",
         "345_receivables_event_key_lookup",
         "368_receivables_payment_check_metadata",
+        "369_receivables_payment_receipt_outbox",
     )
     assert not any(
         migration.startswith(("066_", "068_", "074_", "076_", "083_", "095_"))
@@ -1347,6 +1375,9 @@ def test_eom_receivables_bearer_admission_matches_generated_token_grammar(
         async def is_ready(self):
             return True
 
+        async def is_receipt_delivery_ready(self):
+            return True
+
     app = FastAPI()
     app.include_router(receivables.router)
     runtime_config = {
@@ -1366,6 +1397,7 @@ def test_eom_receivables_bearer_admission_matches_generated_token_grammar(
         "get_receivables_service",
         lambda: _ReadyService(),
     )
+    _configure_billing_recipient_readiness(monkeypatch, receivables)
 
     token_prefixes = (
         _GENERATED_RECEIVABLES_TOKEN_PREFIX,
@@ -1480,6 +1512,9 @@ def test_eom_receivables_ready_route_is_fail_closed(monkeypatch):
         async def is_ready(self):
             return True
 
+        async def is_receipt_delivery_ready(self):
+            return True
+
     app = FastAPI()
     app.include_router(receivables.router)
     generated = auth.generate_receivables_service_token()
@@ -1494,6 +1529,7 @@ def test_eom_receivables_ready_route_is_fail_closed(monkeypatch):
         "get_receivables_service",
         lambda: _ReadyService(),
     )
+    _configure_billing_recipient_readiness(monkeypatch, receivables)
 
     client = TestClient(app)
     assert client.get("/receivables/ready").status_code == 401
@@ -1928,6 +1964,9 @@ class _ReadyService:
     async def is_ready(self):
         return True
 
+    async def is_receipt_delivery_ready(self):
+        return True
+
 
 receivables.get_receivables_service = lambda: _ReadyService()
 if main_eom.app.dependency_overrides:
@@ -1976,11 +2015,20 @@ print(json.dumps({
     assert result.returncode == 0, result.stderr
     observed = json.loads(result.stdout.strip().splitlines()[-1])
     assert observed == {
-        "status_code": 200,
-        # Readiness now also reports the SECOND database the billing-recipient
-        # routes read. This profile configures no funnel DSN, so that pool is
-        # deliberately unconfigured while the service itself is ready.
-        "body": {"status": "ready", "billingRecipients": "unconfigured"},
+        "status_code": 503,
+        # A receipt-aware payment route cannot accept a new payment without
+        # its canonical-contact database, so an unconfigured profile must
+        # advertise that operationally rather than report readiness.
+        "body": {
+            "detail": {
+                "code": "billing_recipients_unavailable",
+                "message": (
+                    "The canonical EOM contact database is not configured; set "
+                    "ATLAS_EOM_FUNNEL_DB_CONNECTION_STRING to use billing "
+                    "recipients."
+                ),
+            }
+        },
         "env_projected_enabled": True,
         "env_projected_digest": True,
         "dependency_overrides": 0,

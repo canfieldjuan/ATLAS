@@ -23,14 +23,17 @@ from atlas_brain.api.invoicing import actions
 from atlas_brain.api.invoicing import auth as receivables_auth
 from atlas_brain.eom_api import auth as eom_receivables_auth
 from atlas_brain.services.receivables import (
+    _RECEIPT_DELIVERY_REQUIRED_INDEXES,
     _RECEIVABLES_REQUIRED_COLUMNS,
     _RECEIVABLES_REQUIRED_INDEXES,
     ReceivablesConflictError,
     ReceivablesError,
     ReceivablesNotFoundError,
+    ReceivablesReceiptContextRequiredError,
     ReceivablesSchemaUnavailableError,
     ReceivablesService,
     ReceivablesValidationError,
+    PaymentReceiptRecipient,
     money,
     request_fingerprint,
 )
@@ -62,6 +65,7 @@ class _CreatePaymentConnection:
         self.parent_fingerprint_index: int | None = None
         self.parent_has_check_metadata = False
         self.parent_insert_count = 0
+        self.receipt_deliveries: dict[UUID, dict] = {}
         self.allocations: list[dict] = []
         self.fetches: list[tuple[str, tuple]] = []
         self.executions: list[tuple[str, tuple]] = []
@@ -140,14 +144,63 @@ class _CreatePaymentConnection:
                     }
                 )
             return payment
+        if "FROM payment_receipt_deliveries" in query:
+            stored = self.receipt_deliveries.get(args[0])
+            if stored is None:
+                return None
+            return {
+                "receipt_number": stored["receipt_number"],
+                "recipient_email": stored["recipient_email"],
+                "status": stored["delivery_status"],
+                "skip_reason": stored["skip_reason"],
+            }
         raise AssertionError(f"Unexpected fetchrow query: {query}")
 
-    async def fetchval(self, query: str, *_args):
-        assert "pg_advisory_xact_lock" in query
-        return None
+    async def fetchval(self, query: str, *args):
+        if "pg_advisory_xact_lock" in query:
+            return None
+        if "information_schema.columns" in query:
+            return True
+        if "FROM payment_receipt_deliveries" in query:
+            return args[0] in self.receipt_deliveries
+        raise AssertionError(f"Unexpected fetchval query: {query}")
 
     async def fetch(self, query: str, *args):
         self.fetches.append((query, args))
+        if "FROM pg_index AS index_state" in query:
+            required_indexes = {
+                index_name: (
+                    table_name,
+                    is_unique,
+                    key_columns,
+                    predicate,
+                    constraint_type,
+                )
+                for (
+                    table_name,
+                    index_name,
+                    is_unique,
+                    key_columns,
+                    predicate,
+                    constraint_type,
+                ) in (
+                    *_RECEIVABLES_REQUIRED_INDEXES,
+                    *_RECEIPT_DELIVERY_REQUIRED_INDEXES,
+                )
+            }
+            return [
+                {
+                    "index_name": index_name,
+                    "table_name": required_indexes[index_name][0],
+                    "is_unique": required_indexes[index_name][1],
+                    "key_columns": list(required_indexes[index_name][2]),
+                    "predicate": required_indexes[index_name][3],
+                    "constraint_type": required_indexes[index_name][4],
+                    "is_valid": True,
+                    "is_ready": True,
+                }
+                for index_name in args[0]
+            ]
         if "FROM invoices" in query and "ORDER BY id FOR UPDATE" in query:
             selected = {str(item) for item in args[0]}
             return [row for row in self.invoices if str(row["id"]) in selected]
@@ -170,6 +223,19 @@ class _CreatePaymentConnection:
                     "reversal_reason": None,
                 }
             )
+        if "INSERT INTO payment_receipt_deliveries" in query:
+            self.receipt_deliveries[args[1]] = {
+                "id": args[0],
+                "payment_id": args[1],
+                "contact_id": args[2],
+                "receipt_number": args[3],
+                "recipient_email": args[4],
+                "delivery_status": args[5],
+                "skip_reason": args[6],
+                "subject": args[7],
+                "body": args[8],
+                "created_at": args[9],
+            }
         return "OK"
 
 
@@ -304,6 +370,299 @@ async def test_create_payment_records_unapplied_receipt_and_replays_without_invo
     ]
     assert len(events) == 1
     assert json.loads(events[0][10]) == {"allocated_amount": "0"}
+
+
+@pytest.mark.asyncio
+async def test_residential_payment_enqueues_one_pending_receipt_without_sending():
+    contact_id = uuid4()
+    pool = _CreatePaymentPool([], [contact_id])
+    service = ReceivablesService(pool)
+
+    async def ready(_conn=None) -> bool:
+        return True
+
+    service.is_receipt_delivery_ready = ready
+    create_args = {
+        "contact_id": contact_id,
+        "payer_name": "Jordan Customer",
+        "total_amount": Decimal("125.00"),
+        "payment_method": "check",
+        "received_date": date(2026, 8, 12),
+        "reference": "1042",
+        "allocations": [],
+        "idempotency_key": "residential-receipt-payment-1",
+        "recorded_by": "Juan Canfield",
+        "allow_unapplied": True,
+        "unapplied_contact_context_id": "effingham_maids",
+        "receipt_recipient": PaymentReceiptRecipient(
+            contact_id=contact_id,
+            customer_name="Jordan Customer",
+            customer_type="residential",
+            recipient_email="jordan@example.test",
+        ),
+        "require_receipt_recipient": True,
+    }
+
+    first = await service.create_payment_with_outcome(**create_args)
+    replay = await service.create_payment_with_outcome(**create_args)
+
+    assert first.replayed is False
+    assert replay.replayed is True
+    assert first.payment["id"] == replay.payment["id"]
+    receipt = first.payment["receipt_delivery"]
+    assert receipt == {
+        "receipt_number": f"EOM-RCP-{first.payment['id']}",
+        "recipient_email": "jordan@example.test",
+        "status": "pending",
+        "skip_reason": None,
+    }
+    assert len(pool.conn.receipt_deliveries) == 1
+    stored = next(iter(pool.conn.receipt_deliveries.values()))
+    assert stored["subject"] == (
+        f"Payment received — receipt EOM-RCP-{first.payment['id']}"
+    )
+    assert "Customer: Jordan Customer" in stored["body"]
+    assert "Payer: Jordan Customer" in stored["body"]
+    assert "Amount received: $125.00" in stored["body"]
+    assert "Payment method: Check" in stored["body"]
+    assert "Check number: 1042" in stored["body"]
+    assert "Date received: August 12, 2026" in stored["body"]
+    assert "We have received your check. It has not yet cleared." in stored["body"]
+    assert not any(
+        "Gmail" in query or "Resend" in query
+        for query, _args in pool.conn.executions
+    )
+
+
+@pytest.mark.asyncio
+async def test_residential_receipt_readiness_uses_held_transaction_connection():
+    """Receipt readiness must not check out another pooled connection mid-write."""
+    contact_id = uuid4()
+    pool = _CreatePaymentPool([], [contact_id])
+
+    result = await ReceivablesService(pool).create_payment_with_outcome(
+        contact_id=contact_id,
+        payer_name="Held Connection Customer",
+        total_amount=Decimal("50.00"),
+        payment_method="check",
+        received_date=date(2026, 8, 12),
+        allocations=[],
+        idempotency_key="receipt-readiness-held-connection-1",
+        recorded_by="Juan Canfield",
+        allow_unapplied=True,
+        unapplied_contact_context_id="effingham_maids",
+        receipt_recipient=PaymentReceiptRecipient(
+            contact_id=contact_id,
+            customer_name="Held Connection Customer",
+            customer_type="residential",
+            recipient_email="held-connection@example.test",
+        ),
+        require_receipt_recipient=True,
+    )
+
+    assert result.replayed is False
+    assert result.payment["receipt_delivery"]["status"] == "pending"
+    # _CreatePaymentPool intentionally has no direct fetch/fetchval methods.
+    # Success therefore proves the readiness catalogs used the held `conn`.
+    assert pool.transaction_count == 1
+
+
+@pytest.mark.asyncio
+async def test_residential_replay_uses_persisted_receipt_after_reclassification():
+    contact_id = uuid4()
+    pool = _CreatePaymentPool([], [contact_id])
+    service = ReceivablesService(pool)
+
+    async def ready(_conn=None) -> bool:
+        return True
+
+    service.is_receipt_delivery_ready = ready
+    create_args = {
+        "contact_id": contact_id,
+        "payer_name": "Reclassified Customer",
+        "total_amount": Decimal("50.00"),
+        "payment_method": "ach",
+        "received_date": date(2026, 8, 12),
+        "allocations": [],
+        "idempotency_key": "residential-reclassification-replay-1",
+        "recorded_by": "Juan Canfield",
+        "allow_unapplied": True,
+        "unapplied_contact_context_id": "effingham_maids",
+        "require_receipt_recipient": True,
+    }
+    original = await service.create_payment_with_outcome(
+        **{
+            **create_args,
+            "receipt_recipient": PaymentReceiptRecipient(
+                contact_id=contact_id,
+                customer_name="Reclassified Customer",
+                customer_type="residential",
+                recipient_email="reclassified@example.test",
+            ),
+        }
+    )
+    replay = await service.create_payment_with_outcome(
+        **{
+            **create_args,
+            "receipt_recipient": PaymentReceiptRecipient(
+                contact_id=contact_id,
+                customer_name="Reclassified Customer",
+                customer_type="commercial",
+                recipient_email="billing@example.test",
+            ),
+        }
+    )
+
+    assert replay.replayed is True
+    assert replay.payment["id"] == original.payment["id"]
+    assert replay.payment["receipt_delivery"] == original.payment["receipt_delivery"]
+    assert len(pool.conn.receipt_deliveries) == 1
+
+
+@pytest.mark.asyncio
+async def test_residential_payment_without_email_is_skipped_but_financially_valid():
+    contact_id = uuid4()
+    pool = _CreatePaymentPool([], [contact_id])
+    service = ReceivablesService(pool)
+
+    async def ready(_conn=None) -> bool:
+        return True
+
+    service.is_receipt_delivery_ready = ready
+    result = await service.create_payment_with_outcome(
+        contact_id=contact_id,
+        payer_name="No Email Customer",
+        total_amount=Decimal("50.00"),
+        payment_method="ach",
+        received_date=date(2026, 8, 12),
+        allocations=[],
+        idempotency_key="residential-receipt-no-email-1",
+        recorded_by="Juan Canfield",
+        allow_unapplied=True,
+        unapplied_contact_context_id="effingham_maids",
+        receipt_recipient=PaymentReceiptRecipient(
+            contact_id=contact_id,
+            customer_name="No Email Customer",
+            customer_type="residential",
+            recipient_email=None,
+        ),
+        require_receipt_recipient=True,
+    )
+
+    assert result.payment["status"] == "cleared"
+    assert result.payment["receipt_delivery"]["status"] == "skipped"
+    assert result.payment["receipt_delivery"]["skip_reason"] == "no_email"
+    assert result.payment["receipt_delivery"]["recipient_email"] is None
+    assert pool.conn.parent_insert_count == 1
+    assert len(pool.conn.receipt_deliveries) == 1
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("customer_type", ("commercial", "unknown"))
+async def test_non_residential_payment_has_no_residential_receipt_delivery(
+    customer_type,
+):
+    contact_id = uuid4()
+    pool = _CreatePaymentPool([], [contact_id])
+    service = ReceivablesService(pool)
+    result = await service.create_payment_with_outcome(
+        contact_id=contact_id,
+        payer_name="Commercial Customer",
+        total_amount=Decimal("50.00"),
+        payment_method="ach",
+        received_date=date(2026, 8, 12),
+        allocations=[],
+        idempotency_key=f"{customer_type}-no-residential-receipt-1",
+        recorded_by="Juan Canfield",
+        allow_unapplied=True,
+        unapplied_contact_context_id="effingham_maids",
+        receipt_recipient=PaymentReceiptRecipient(
+            contact_id=contact_id,
+            customer_name="Commercial Customer",
+            customer_type=customer_type,
+            recipient_email="billing@example.test",
+        ),
+        require_receipt_recipient=True,
+    )
+
+    assert result.payment["status"] == "cleared"
+    assert "receipt_delivery" not in result.payment
+    assert pool.conn.receipt_deliveries == {}
+
+
+@pytest.mark.asyncio
+async def test_receipt_context_rejects_noncanonical_email_before_payment_write():
+    contact_id = uuid4()
+    pool = _CreatePaymentPool([], [contact_id])
+    with pytest.raises(ReceivablesValidationError, match="Receipt email is invalid"):
+        await ReceivablesService(pool).create_payment_with_outcome(
+            contact_id=contact_id,
+            payer_name="Residential Customer",
+            total_amount=Decimal("50.00"),
+            payment_method="ach",
+            received_date=date(2026, 8, 12),
+            allocations=[],
+            idempotency_key="invalid-receipt-email-1",
+            allow_unapplied=True,
+            unapplied_contact_context_id="effingham_maids",
+            receipt_recipient=PaymentReceiptRecipient(
+                contact_id=contact_id,
+                customer_name="Residential Customer",
+                customer_type="residential",
+                recipient_email="not-an-email",
+            ),
+            require_receipt_recipient=True,
+        )
+
+    assert pool.transaction_count == 0
+    assert pool.conn.parent_insert_count == 0
+
+
+@pytest.mark.asyncio
+async def test_canonical_receipt_context_is_required_only_for_a_new_eom_payment():
+    contact_id = uuid4()
+    pool = _CreatePaymentPool([], [contact_id])
+    service = ReceivablesService(pool)
+
+    async def ready(_conn=None) -> bool:
+        return True
+
+    service.is_receipt_delivery_ready = ready
+    create_args = {
+        "contact_id": contact_id,
+        "payer_name": "Replay Customer",
+        "total_amount": Decimal("50.00"),
+        "payment_method": "ach",
+        "received_date": date(2026, 8, 12),
+        "allocations": [],
+        "idempotency_key": "residential-receipt-replay-1",
+        "recorded_by": "Juan Canfield",
+        "allow_unapplied": True,
+        "unapplied_contact_context_id": "effingham_maids",
+        "require_receipt_recipient": True,
+    }
+    with pytest.raises(ReceivablesReceiptContextRequiredError):
+        await service.create_payment_with_outcome(**create_args)
+    assert pool.conn.parent_insert_count == 0
+
+    first = await service.create_payment_with_outcome(
+        **{
+            **create_args,
+            "receipt_recipient": PaymentReceiptRecipient(
+                contact_id=contact_id,
+                customer_name="Replay Customer",
+                customer_type="residential",
+                recipient_email="replay@example.test",
+            ),
+        }
+    )
+    replay = await service.create_payment_with_outcome(**create_args)
+
+    assert first.replayed is False
+    assert replay.replayed is True
+    assert replay.payment["id"] == first.payment["id"]
+    assert pool.conn.parent_insert_count == 1
+    assert len(pool.conn.receipt_deliveries) == 1
 
 
 @pytest.mark.asyncio
@@ -964,11 +1323,17 @@ def _workflow_event_paths(workflow: str, event_name: str) -> tuple[str, ...]:
     )
 
 
-def test_followup_receivables_migration_is_enrolled_in_invoicing_ci():
+@pytest.mark.parametrize(
+    "migration_path",
+    (
+        "atlas_brain/storage/migrations/345_receivables_event_key_lookup.sql",
+        "atlas_brain/storage/migrations/369_receivables_payment_receipt_outbox.sql",
+    ),
+)
+def test_receivables_migrations_are_enrolled_in_invoicing_ci(migration_path):
     workflow = (
         Path(__file__).parents[1] / ".github/workflows/atlas_invoicing_checks.yml"
     ).read_text(encoding="utf-8")
-    migration_path = "atlas_brain/storage/migrations/345_receivables_event_key_lookup.sql"
     entry = f'      - "{migration_path}"\n'
 
     assert migration_path in _workflow_event_paths(workflow, "pull_request")
@@ -990,6 +1355,17 @@ def test_followup_receivables_migration_is_enrolled_in_invoicing_ci():
     assert migration_path not in _workflow_event_paths(
         misplaced_under_branches, "push"
     )
+
+
+def test_payment_receipt_route_tests_are_enrolled_in_invoicing_ci():
+    workflow = (
+        Path(__file__).parents[1] / ".github/workflows/atlas_invoicing_checks.yml"
+    ).read_text(encoding="utf-8")
+    test_path = "tests/test_eom_payment_receipts.py"
+
+    assert test_path in _workflow_event_paths(workflow, "pull_request")
+    assert test_path in _workflow_event_paths(workflow, "push")
+    assert f"            {test_path} \\\n" in workflow
 
 
 class _SingleConnectionPool:
@@ -1084,7 +1460,11 @@ async def _create_pre_receivables_schema(conn, schema: str) -> None:
     await conn.execute(invoice_migration)
 
 
-def _receivables_migration_sql(*, include_check_metadata: bool = True) -> str:
+def _receivables_migration_sql(
+    *,
+    include_check_metadata: bool = True,
+    include_receipt_outbox: bool = True,
+) -> str:
     migrations = Path(__file__).parents[1] / "atlas_brain/storage/migrations"
     filenames = [
         "344_receivables_payments.sql",
@@ -1092,6 +1472,8 @@ def _receivables_migration_sql(*, include_check_metadata: bool = True) -> str:
     ]
     if include_check_metadata:
         filenames.append("368_receivables_payment_check_metadata.sql")
+    if include_receipt_outbox:
+        filenames.append("369_receivables_payment_receipt_outbox.sql")
     return "\n".join(
         (migrations / filename).read_text(encoding="utf-8")
         for filename in filenames
@@ -1174,6 +1556,7 @@ def test_eom_readiness_migration_set_is_closed_over_receivables_dependencies():
     )
 
     assert set(_RECEIVABLES_REQUIRED_COLUMNS) <= created_tables
+    assert "payment_receipt_deliveries" in created_tables
     assert positions["012_appointments"] < positions["035_contacts"]
     assert positions["035_contacts"] < positions["045_invoices"]
     assert positions["045_invoices"] < positions["344_receivables_payments"]
@@ -1184,6 +1567,10 @@ def test_eom_readiness_migration_set_is_closed_over_receivables_dependencies():
     assert (
         positions["345_receivables_event_key_lookup"]
         < positions["368_receivables_payment_check_metadata"]
+    )
+    assert (
+        positions["368_receivables_payment_check_metadata"]
+        < positions["369_receivables_payment_receipt_outbox"]
     )
     assert "ALTER TABLE appointments" in _packaged_migration_sql("035_contacts")
     assert "REFERENCES contacts(id)" in _packaged_migration_sql("045_invoices")
@@ -1196,6 +1583,12 @@ def test_eom_readiness_migration_set_is_closed_over_receivables_dependencies():
     assert "ADD COLUMN IF NOT EXISTS check_date DATE" in _packaged_migration_sql(
         "368_receivables_payment_check_metadata"
     )
+    receipt_outbox_sql = _packaged_migration_sql(
+        "369_receivables_payment_receipt_outbox"
+    )
+    assert "CREATE TABLE IF NOT EXISTS payment_receipt_deliveries" in receipt_outbox_sql
+    assert "UNIQUE (payment_id)" in receipt_outbox_sql
+    assert "'pending', 'sent', 'failed', 'skipped'" in receipt_outbox_sql
 
 
 @pytest.mark.asyncio
@@ -1238,6 +1631,7 @@ async def test_eom_receivables_readiness_migration_set_builds_ready_schema():
         )
         service = ReceivablesService(_SingleConnectionPool(conn, schema))
         assert await service.is_ready() is True
+        assert await service.is_receipt_delivery_ready() is True
         expected_foreign_keys = {
             ("appointments", ("contact_id",), "contacts", ("id",), "n"),
             ("contact_interactions", ("contact_id",), "contacts", ("id",), "c"),
@@ -1266,6 +1660,20 @@ async def test_eom_receivables_readiness_migration_set_builds_ready_schema():
                 "r",
             ),
             ("payment_events", ("payment_id",), "customer_payments", ("id",), "r"),
+            (
+                "payment_receipt_deliveries",
+                ("payment_id",),
+                "customer_payments",
+                ("id",),
+                "r",
+            ),
+            (
+                "payment_receipt_deliveries",
+                ("contact_id",),
+                "contacts",
+                ("id",),
+                "r",
+            ),
         }
         assert expected_foreign_keys <= await _schema_foreign_key_relationships(
             conn,
@@ -1288,6 +1696,7 @@ async def test_eom_receivables_readiness_migration_set_builds_ready_schema():
             )
         } == applied_names
         assert await service.is_ready() is True
+        assert await service.is_receipt_delivery_ready() is True
         for column, definition in (
             ("check_date", "DATE"),
             ("received_through", "VARCHAR(128)"),
@@ -1300,6 +1709,14 @@ async def test_eom_receivables_readiness_migration_set_builds_ready_schema():
                 f"ALTER TABLE customer_payments ADD COLUMN {column} {definition}"
             )
             assert await service.is_ready() is True
+            assert await service.is_receipt_delivery_ready() is True
+
+        await conn.execute("DROP TABLE payment_receipt_deliveries")
+        # The global/full-MCP readiness contract deliberately remains intact:
+        # it has no outbox writer.  The slim EOM receipt capability alone must
+        # fail closed until its additive migration is restored.
+        assert await service.is_ready() is True
+        assert await service.is_receipt_delivery_ready() is False
     finally:
         await conn.execute(f'DROP SCHEMA IF EXISTS "{schema}" CASCADE')
         await conn.close()
@@ -1375,6 +1792,60 @@ async def test_check_metadata_schema_gate_preserves_legacy_payment_creation(
 
 
 @pytest.mark.asyncio
+async def test_receipt_required_replay_recovers_legacy_payment_without_outbox_schema():
+    """A CRM outage cannot turn a valid old payment retry into a table error."""
+    asyncpg = pytest.importorskip("asyncpg")
+    database_url = os.environ.get("ATLAS_RECEIVABLES_TEST_DATABASE_URL")
+    if not database_url:
+        pytest.skip("ATLAS_RECEIVABLES_TEST_DATABASE_URL not set")
+
+    schema = f"receivables_receipt_legacy_replay_{uuid4().hex}"
+    conn = await asyncpg.connect(database_url)
+    try:
+        await _create_pre_receivables_schema(conn, schema)
+        await conn.execute(_receivables_migration_sql(include_receipt_outbox=False))
+        contact_id = uuid4()
+        await conn.execute(
+            "INSERT INTO contacts (id, business_context_id) "
+            "VALUES ($1, 'effingham_maids')",
+            contact_id,
+        )
+        service = ReceivablesService(_SingleConnectionPool(conn, schema))
+        create_args = {
+            "contact_id": contact_id,
+            "payer_name": "Residential Customer",
+            "total_amount": Decimal("125.00"),
+            "payment_method": "check",
+            "received_date": date(2026, 8, 12),
+            "allocations": [],
+            "idempotency_key": "legacy-payment-replay-without-outbox-1",
+            "recorded_by": "Juan Canfield",
+            "allow_unapplied": True,
+            "unapplied_contact_context_id": "effingham_maids",
+        }
+        original = await service.create_payment_with_outcome(**create_args)
+        replay = await service.create_payment_with_outcome(
+            **{**create_args, "require_receipt_recipient": True}
+        )
+
+        assert original.replayed is False
+        assert replay.replayed is True
+        assert replay.payment["id"] == original.payment["id"]
+        assert "receipt_delivery" not in replay.payment
+        assert (
+            await conn.fetchval(
+                "SELECT COUNT(*) FROM customer_payments "
+                "WHERE idempotency_key = 'legacy-payment-replay-without-outbox-1'"
+            )
+            == 1
+        )
+    finally:
+        await conn.execute("SET search_path TO public")
+        await conn.execute(f'DROP SCHEMA IF EXISTS "{schema}" CASCADE')
+        await conn.close()
+
+
+@pytest.mark.asyncio
 async def test_real_migration_backfills_and_adopts_late_rolling_writer_checks():
     asyncpg = pytest.importorskip("asyncpg")
     database_url = os.environ.get("ATLAS_RECEIVABLES_TEST_DATABASE_URL")
@@ -1428,9 +1899,15 @@ async def test_real_migration_backfills_and_adopts_late_rolling_writer_checks():
         created_tables = set(
             re.findall(r"CREATE TABLE IF NOT EXISTS ([a-z_]+)", migration_sql)
         )
-        assert set(_RECEIVABLES_REQUIRED_COLUMNS) == created_tables | {
-            "invoice_payments"
-        }
+        # The receipt outbox is an EOM-only additive capability.  It is
+        # intentionally absent from the legacy/full-MCP readiness set, so a
+        # mixed rollout cannot make established financial entrypoints claim
+        # their schema is incomplete solely because the EOM outbox has not
+        # reached that database yet.
+        assert set(_RECEIVABLES_REQUIRED_COLUMNS) == (
+            created_tables - {"payment_receipt_deliveries"}
+        ) | {"invoice_payments"}
+        assert "payment_receipt_deliveries" in created_tables
 
         for table_name, required_columns in _RECEIVABLES_REQUIRED_COLUMNS.items():
             actual_columns = {
@@ -1546,7 +2023,14 @@ async def test_real_migration_backfills_and_adopts_late_rolling_writer_checks():
             index_name
             for _table_name, index_name, *_rest in _RECEIVABLES_REQUIRED_INDEXES
         }
-        assert required_index_names == migration_index_names
+        receipt_delivery_index_names = {
+            index_name
+            for _table_name, index_name, *_rest in _RECEIPT_DELIVERY_REQUIRED_INDEXES
+        }
+        assert (
+            required_index_names | receipt_delivery_index_names
+            == migration_index_names
+        )
         for index_name in sorted(required_index_names):
             transaction = conn.transaction()
             await transaction.start()
@@ -1563,6 +2047,24 @@ async def test_real_migration_backfills_and_adopts_late_rolling_writer_checks():
             finally:
                 await transaction.rollback()
             assert await service.is_ready() is True
+
+        for index_name in sorted(receipt_delivery_index_names):
+            transaction = conn.transaction()
+            await transaction.start()
+            try:
+                if index_name in constraint_indexes:
+                    table_name = constraint_indexes[index_name]
+                    await conn.execute(
+                        f'ALTER TABLE "{table_name}" '
+                        f'DROP CONSTRAINT "{index_name}" CASCADE'
+                    )
+                else:
+                    await conn.execute(f'DROP INDEX "{index_name}"')
+                assert await service.is_ready() is True
+                assert await service.is_receipt_delivery_ready() is False
+            finally:
+                await transaction.rollback()
+            assert await service.is_receipt_delivery_ready() is True
 
         await conn.execute(
             "ALTER TABLE payment_deposit_batches "
@@ -1988,6 +2490,113 @@ async def test_real_postgres_receivables_lifecycle_and_concurrent_replays():
         await observer.execute("SET search_path TO public")
         await observer.execute(f'DROP SCHEMA IF EXISTS "{schema}" CASCADE')
         await observer.close()
+
+
+@pytest.mark.asyncio
+async def test_real_postgres_receipt_outbox_failure_rolls_back_new_payment():
+    """The receipt enqueue is financial-transaction work, never an email send.
+
+    An injected outbox write failure must leave no payment, event, or orphaned
+    delivery row behind.  Retrying after the transient failure clears must
+    produce exactly one complete payment/outbox pair under the same key.
+    """
+    asyncpg = pytest.importorskip("asyncpg")
+    database_url = os.environ.get("ATLAS_RECEIVABLES_TEST_DATABASE_URL")
+    if not database_url:
+        pytest.skip("ATLAS_RECEIVABLES_TEST_DATABASE_URL not set")
+
+    schema = f"receivables_receipt_outbox_atomicity_{uuid4().hex}"
+    conn = await asyncpg.connect(database_url)
+    try:
+        await _create_pre_receivables_schema(conn, schema)
+        await conn.execute(_receivables_migration_sql())
+        contact_id = uuid4()
+        await conn.execute(
+            "INSERT INTO contacts (id, business_context_id) "
+            "VALUES ($1, 'effingham_maids')",
+            contact_id,
+        )
+        await conn.execute(
+            """
+            CREATE FUNCTION fail_payment_receipt_enqueue()
+            RETURNS trigger
+            LANGUAGE plpgsql
+            AS $$
+            BEGIN
+                RAISE EXCEPTION 'injected receipt outbox failure';
+            END;
+            $$;
+
+            CREATE TRIGGER receipt_outbox_failure
+            BEFORE INSERT ON payment_receipt_deliveries
+            FOR EACH ROW EXECUTE FUNCTION fail_payment_receipt_enqueue();
+            """
+        )
+        service = ReceivablesService(_SingleConnectionPool(conn, schema))
+        create_args = {
+            "contact_id": contact_id,
+            "payer_name": "Residential Customer",
+            "total_amount": Decimal("125.00"),
+            "payment_method": "check",
+            "received_date": date(2026, 8, 12),
+            "reference": "1042",
+            "allocations": [],
+            "idempotency_key": "receipt-outbox-atomicity-1",
+            "recorded_by": "Juan Canfield",
+            "allow_unapplied": True,
+            "unapplied_contact_context_id": "effingham_maids",
+            "receipt_recipient": PaymentReceiptRecipient(
+                contact_id=contact_id,
+                customer_name="Residential Customer",
+                customer_type="residential",
+                recipient_email="residential@example.test",
+            ),
+            "require_receipt_recipient": True,
+        }
+
+        with pytest.raises(asyncpg.PostgresError, match="injected receipt outbox"):
+            await service.create_payment_with_outcome(**create_args)
+
+        assert (
+            await conn.fetchval(
+                "SELECT COUNT(*) FROM customer_payments "
+                "WHERE idempotency_key = 'receipt-outbox-atomicity-1'"
+            )
+            == 0
+        )
+        assert (
+            await conn.fetchval(
+                "SELECT COUNT(*) FROM payment_events "
+                "WHERE idempotency_key = 'receipt-outbox-atomicity-1'"
+            )
+            == 0
+        )
+        assert (
+            await conn.fetchval("SELECT COUNT(*) FROM payment_receipt_deliveries")
+            == 0
+        )
+
+        await conn.execute(
+            "DROP TRIGGER receipt_outbox_failure ON payment_receipt_deliveries"
+        )
+        recovered = await service.create_payment_with_outcome(**create_args)
+        assert recovered.replayed is False
+        assert recovered.payment["receipt_delivery"]["status"] == "pending"
+        assert (
+            await conn.fetchval(
+                "SELECT COUNT(*) FROM customer_payments "
+                "WHERE idempotency_key = 'receipt-outbox-atomicity-1'"
+            )
+            == 1
+        )
+        assert (
+            await conn.fetchval("SELECT COUNT(*) FROM payment_receipt_deliveries")
+            == 1
+        )
+    finally:
+        await conn.execute("SET search_path TO public")
+        await conn.execute(f'DROP SCHEMA IF EXISTS "{schema}" CASCADE')
+        await conn.close()
 
 
 @pytest.mark.asyncio
@@ -2634,7 +3243,9 @@ async def test_singular_mcp_rejects_invalid_key_before_repository_access(
 
 
 @pytest.mark.asyncio
-async def test_real_postgres_http_and_mcp_entrypoints_use_supported_dependencies():
+async def test_real_postgres_http_and_mcp_entrypoints_use_supported_dependencies(
+    monkeypatch,
+):
     asyncpg = pytest.importorskip("asyncpg")
     database_url = os.environ.get("ATLAS_RECEIVABLES_TEST_DATABASE_URL")
     if not database_url:
@@ -2737,6 +3348,49 @@ async def test_real_postgres_http_and_mcp_entrypoints_use_supported_dependencies
         slim_app.dependency_overrides[
             eom_routes.get_receivables_service
         ] = lambda: service
+
+        class _CanonicalPool:
+            is_initialized = True
+
+        class _SlimPaymentCRM:
+            async def get_eom_payment_customer(self, requested_contact_id):
+                if requested_contact_id != unapplied_contact_id:
+                    return None
+                return {
+                    "contact_id": unapplied_contact_id,
+                    "customer_name": "Residential Customer",
+                    "customer_type": "residential",
+                    "recipient_email": "residential@example.test",
+                }
+
+        class _FullPaymentCRM:
+            async def get_eom_payment_customer(self, requested_contact_id):
+                if requested_contact_id == contact_id:
+                    return {
+                        "contact_id": contact_id,
+                        "customer_name": "Acme",
+                        "customer_type": "commercial",
+                        "recipient_email": "billing@example.test",
+                    }
+                if requested_contact_id == unapplied_contact_id:
+                    return {
+                        "contact_id": unapplied_contact_id,
+                        "customer_name": "Residential Customer",
+                        "customer_type": "residential",
+                        "recipient_email": "residential@example.test",
+                    }
+                return None
+
+        monkeypatch.setattr(routes, "get_crm_provider", lambda: _FullPaymentCRM())
+        monkeypatch.setattr(
+            eom_routes, "get_eom_funnel_db_pool", lambda: _CanonicalPool()
+        )
+        monkeypatch.setattr(
+            slim_app.state,
+            "eom_funnel_crm_provider",
+            lambda: _SlimPaymentCRM(),
+            raising=False,
+        )
         body = {
             "contact_id": str(contact_id),
             "payer_name": "Acme",
@@ -2821,6 +3475,15 @@ async def test_real_postgres_http_and_mcp_entrypoints_use_supported_dependencies
                     },
                     json=slim_unapplied_body,
                 )
+                slim_unapplied_replay = await client.post(
+                    "/api/v1/receivables/payments",
+                    headers={
+                        "Authorization": f"Bearer {generated.token}",
+                        "X-EOM-Actor": "Juan Canfield",
+                        "Idempotency-Key": "slim-http-unapplied-payment-1",
+                    },
+                    json=slim_unapplied_body,
+                )
 
             assert response.status_code == 201
             assert response.json()["status"] == "received"
@@ -2851,6 +3514,12 @@ async def test_real_postgres_http_and_mcp_entrypoints_use_supported_dependencies
             assert unapplied_payment["received_through"] == "Mail"
             assert unapplied_payment["allocated_amount_cents"] == 0
             assert unapplied_payment["unapplied_amount_cents"] == 12_500
+            assert unapplied_payment["receipt_delivery"] == {
+                "receipt_number": f"EOM-RCP-{unapplied_payment['id']}",
+                "recipient_email": "residential@example.test",
+                "status": "pending",
+                "skip_reason": None,
+            }
             stored_check_metadata = await conn.fetchrow(
                 """
                 SELECT check_date, received_through
@@ -2860,7 +3529,29 @@ async def test_real_postgres_http_and_mcp_entrypoints_use_supported_dependencies
             )
             assert stored_check_metadata["check_date"] == date(2026, 8, 10)
             assert stored_check_metadata["received_through"] == "Mail"
+            full_receipt_delivery = await conn.fetchrow(
+                """
+                SELECT receipt_number, recipient_email, delivery_status, skip_reason
+                FROM payment_receipt_deliveries
+                WHERE payment_id = (
+                    SELECT id
+                    FROM customer_payments
+                    WHERE idempotency_key = 'http-unapplied-payment-1'
+                )
+                """
+            )
+            assert dict(full_receipt_delivery) == {
+                "receipt_number": f"EOM-RCP-{unapplied_payment['id']}",
+                "recipient_email": "residential@example.test",
+                "delivery_status": "pending",
+                "skip_reason": None,
+            }
             assert slim_unapplied_response.status_code == 201
+            assert slim_unapplied_replay.status_code == 201
+            assert (
+                slim_unapplied_replay.json()["id"]
+                == slim_unapplied_response.json()["id"]
+            )
             assert slim_unapplied_response.json()["check_date"] == "2026-08-11"
             assert (
                 slim_unapplied_response.json()["received_through"]
@@ -2876,6 +3567,39 @@ async def test_real_postgres_http_and_mcp_entrypoints_use_supported_dependencies
             assert stored_slim_check_metadata["check_date"] == date(2026, 8, 11)
             assert stored_slim_check_metadata["received_through"] == "Employee handoff"
             assert stored_slim_check_metadata["recorded_by"] == "Juan Canfield"
+            receipt_delivery = await conn.fetchrow(
+                """
+                SELECT receipt_number, recipient_email, delivery_status, skip_reason
+                FROM payment_receipt_deliveries
+                WHERE payment_id = (
+                    SELECT id
+                    FROM customer_payments
+                    WHERE idempotency_key = 'slim-http-unapplied-payment-1'
+                )
+                """
+            )
+            assert dict(receipt_delivery) == {
+                "receipt_number": (
+                    f"EOM-RCP-{slim_unapplied_response.json()['id']}"
+                ),
+                "recipient_email": "residential@example.test",
+                "delivery_status": "pending",
+                "skip_reason": None,
+            }
+            assert (
+                await conn.fetchval(
+                    """
+                    SELECT COUNT(*)
+                    FROM payment_receipt_deliveries
+                    WHERE payment_id = (
+                        SELECT id
+                        FROM customer_payments
+                        WHERE idempotency_key = 'slim-http-unapplied-payment-1'
+                    )
+                    """
+                )
+                == 1
+            )
             assert (
                 await conn.fetchval(
                     "SELECT COUNT(*) FROM invoice_payments ip "
@@ -3163,7 +3887,8 @@ def test_payment_http_models_preserve_optional_check_metadata():
 
 
 @pytest.mark.asyncio
-async def test_payment_routes_forward_omitted_allocations_as_empty_list():
+async def test_payment_routes_forward_omitted_allocations_as_empty_list(monkeypatch):
+    from atlas_brain.api.invoicing import receivables as full_routes
     from atlas_brain.api.invoicing.receivables import (
         CreatePaymentRequest as FullCreatePaymentRequest,
     )
@@ -3171,6 +3896,7 @@ async def test_payment_routes_forward_omitted_allocations_as_empty_list():
     from atlas_brain.eom_api.receivables import (
         CreatePaymentRequest as EOMCreatePaymentRequest,
     )
+    from atlas_brain.eom_api import receivables as eom_routes
     from atlas_brain.eom_api.receivables import create_payment as eom_create_payment
 
     class _RecordingService:
@@ -3180,6 +3906,17 @@ async def test_payment_routes_forward_omitted_allocations_as_empty_list():
         async def create_payment(self, **kwargs):
             self.kwargs = kwargs
             return {"id": "payment-1"}
+
+    class _CRM:
+        async def get_eom_payment_customer(self, contact_id):
+            return {
+                "contact_id": contact_id,
+                "customer_name": "Residential Customer",
+                "customer_type": "residential",
+                "recipient_email": "residential@example.test",
+            }
+
+    monkeypatch.setattr(full_routes, "get_crm_provider", lambda: _CRM())
 
     for request_model, create_route in (
         (FullCreatePaymentRequest, full_create_payment),
@@ -3197,12 +3934,25 @@ async def test_payment_routes_forward_omitted_allocations_as_empty_list():
         )
         service = _RecordingService()
 
-        result = await create_route(
-            body,
-            actor="Juan Canfield",
-            idempotency_key="route-unapplied-payment-1",
-            service=service,
-        )
+        route_args = {
+            "actor": "Juan Canfield",
+            "idempotency_key": "route-unapplied-payment-1",
+            "service": service,
+        }
+        if create_route is eom_create_payment:
+            class _CanonicalPool:
+                is_initialized = True
+
+            monkeypatch.setattr(
+                eom_routes, "get_eom_funnel_db_pool", lambda: _CanonicalPool()
+            )
+            route_args["request"] = SimpleNamespace(
+                app=SimpleNamespace(
+                    state=SimpleNamespace(eom_funnel_crm_provider=lambda: _CRM())
+                )
+            )
+
+        result = await create_route(body, **route_args)
 
         assert result == {"id": "payment-1"}
         assert service.kwargs["allocations"] == []
@@ -3212,6 +3962,8 @@ async def test_payment_routes_forward_omitted_allocations_as_empty_list():
         assert service.kwargs["idempotency_key"] == "route-unapplied-payment-1"
         assert service.kwargs["check_date"] is None
         assert service.kwargs["received_through"] is None
+        assert service.kwargs["require_receipt_recipient"] is True
+        assert service.kwargs["receipt_recipient"].contact_id == body.contact_id
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
@@ -3223,6 +3975,7 @@ async def test_payment_routes_forward_omitted_allocations_as_empty_list():
 )
 async def test_full_and_slim_payment_entrypoints_reject_check_metadata_when_schema_is_unready(
     check_metadata,
+    monkeypatch,
 ):
     from atlas_brain import main, main_eom
     from atlas_brain.api.invoicing import auth as full_auth
@@ -3250,6 +4003,29 @@ async def test_full_and_slim_payment_entrypoints_reject_check_metadata_when_sche
         "X-EOM-Actor": "Juan Canfield",
         "Idempotency-Key": "asgi-unready-check-metadata-1",
     }
+
+    class _CanonicalPool:
+        is_initialized = True
+
+    class _CRM:
+        async def get_eom_payment_customer(self, contact_id):
+            return {
+                "contact_id": contact_id,
+                "customer_name": "Residential Customer",
+                "customer_type": "residential",
+                "recipient_email": "residential@example.test",
+            }
+
+    monkeypatch.setattr(full_routes, "get_crm_provider", lambda: _CRM())
+    monkeypatch.setattr(
+        slim_routes, "get_eom_funnel_db_pool", lambda: _CanonicalPool()
+    )
+    monkeypatch.setattr(
+        main_eom.app.state,
+        "eom_funnel_crm_provider",
+        lambda: _CRM(),
+        raising=False,
+    )
 
     for app, config_dependency, service_dependency in (
         (main.app, full_auth.get_receivables_api_config, full_routes.get_receivables_service),

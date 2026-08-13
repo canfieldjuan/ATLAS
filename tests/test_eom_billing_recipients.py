@@ -529,6 +529,9 @@ class _ReadyService:
     async def is_ready(self):
         return True
 
+    async def is_receipt_delivery_ready(self):
+        return True
+
 
 receivables.get_receivables_service = lambda: _ReadyService()
 if main_eom.app.dependency_overrides:
@@ -548,7 +551,8 @@ print(json.dumps({
     "listed_status": listed.status_code,
     "listed_code": listed.json().get("detail", {}).get("code"),
     "detail_status": detail.status_code,
-    "ready_billing": ready.json().get("billingRecipients"),
+    "ready_status": ready.status_code,
+    "ready_code": ready.json().get("detail", {}).get("code"),
     "dependency_overrides": len(main_eom.app.dependency_overrides),
 }))
 """
@@ -580,9 +584,10 @@ print(json.dumps({
         "listed_status": 503,
         "listed_code": "billing_recipients_unavailable",
         "detail_status": 503,
-        # Readiness says so too, rather than reporting a healthy service whose
-        # every recipient read fails.
-        "ready_billing": "unconfigured",
+        # Receipt-aware payment creation needs this database for every new
+        # payment, so readiness must make that unusable deployment explicit.
+        "ready_status": 503,
+        "ready_code": "billing_recipients_unavailable",
         "dependency_overrides": 0,
     }, observed
 
@@ -656,11 +661,10 @@ def test_admission_holds_over_the_whole_configuration_grammar(monkeypatch):
 @pytest.mark.parametrize(
     "dsn, initialized, schema_ok, expect_status, expect_label",
     [
-        # Deliberately absent: a supported profile that never calls these
-        # routes. Failing readiness would take invoicing out over a capability
-        # it does not use.
-        ("", False, False, 200, "unconfigured"),
-        ("   ", False, False, 200, "unconfigured"),
+        # Receipt-aware payment creation needs the canonical CRM for every
+        # new payment, so an absent DSN is unavailable rather than healthy.
+        ("", False, False, 503, None),
+        ("   ", False, False, 503, None),
         # Configured and working.
         ("postgresql://h/d", True, True, 200, "ready"),
         # Configured and NOT working -- the two ways that happens.
@@ -671,11 +675,12 @@ def test_admission_holds_over_the_whole_configuration_grammar(monkeypatch):
 async def test_readiness_separates_unconfigured_from_unavailable(
     monkeypatch, dsn, initialized, schema_ok, expect_status, expect_label,
 ):
-    """An initialized pool is not the same claim as a usable one.
+    """A configured pool is not the same claim as a usable payment dependency.
 
-    `is_initialized` proves a connection opened. A reachable but partially
-    migrated database passes it and then fails every recipient read on an
-    undefined column, so readiness has to probe the columns both queries name.
+    A blank DSN, an unopened pool, and a reachable-but-partially-migrated pool
+    all make receipt-aware payment creation unavailable. `is_initialized`
+    proves only that a connection opened, not that both payment customer reads
+    can run against the canonical CRM schema.
     """
     from fastapi import HTTPException
 
@@ -697,6 +702,9 @@ async def test_readiness_separates_unconfigured_from_unavailable(
 
     class _ReadyService:
         async def is_ready(self):
+            return True
+
+        async def is_receipt_delivery_ready(self):
             return True
 
     monkeypatch.setattr(routes, "get_receivables_service", lambda: _ReadyService())

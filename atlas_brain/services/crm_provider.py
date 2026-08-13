@@ -2157,19 +2157,58 @@ class DatabaseCRMProvider:
         results.sort(key=lambda item: (item["displayName"] or "", item["contactId"]))
         return results
 
+    async def get_eom_payment_customer(
+        self, contact_id: UUID
+    ) -> dict[str, Any] | None:
+        """Return the canonical active customer snapshot for an EOM payment.
+
+        This is intentionally not the public billing-recipient projection.  A
+        residential payment remains valid without an email address, so it must
+        carry the active-customer identity and classified type while preserving
+        a normalized email-or-``None`` outcome for the ledger receipt outbox.
+        The query is tenant-scoped and admits only active account records.
+        """
+        from .eom_crm_mutations import normalize_contact_email
+        from .eom_lead_ingress import EOM_BUSINESS_CONTEXT_ID
+
+        row = await self._get_pool().fetchrow(
+            """
+            SELECT id, full_name, customer_type,
+                   btrim(COALESCE(email, ''), $3) AS email
+            FROM contacts
+            WHERE id = $1
+              AND business_context_id = $2
+              AND status = $4
+              AND contact_type = $5
+            """,
+            contact_id,
+            EOM_BUSINESS_CONTEXT_ID,
+            BILLING_RECIPIENT_BLANK_CHARS,
+            BILLING_RECIPIENT_ELIGIBLE_STATUS,
+            BILLING_RECIPIENT_ELIGIBLE_CONTACT_TYPE,
+        )
+        if row is None:
+            return None
+        return {
+            "contact_id": row["id"],
+            "customer_name": str(row["full_name"] or "").strip() or "Customer",
+            "customer_type": str(row["customer_type"] or "unknown"),
+            "recipient_email": normalize_contact_email(row["email"]),
+        }
+
     async def billing_recipients_schema_ready(self) -> bool:
-        """True when both billing-recipient queries could actually run.
+        """True when the billing-recipient and payment-customer reads work.
 
         An initialized pool only proves a connection opened. A configured but
         partially migrated database passes that check and then fails every
         recipient read with an undefined column, so readiness has to name the
-        columns the two queries depend on. LIMIT 0 validates them without
-        reading a row.
+        columns the queries depend on. LIMIT 0 validates them without reading
+        a row.
         """
         try:
             await self._get_pool().fetch(
                 """
-                SELECT id, full_name, email, status, contact_type,
+                SELECT id, full_name, email, status, contact_type, customer_type,
                        business_context_id
                 FROM contacts
                 LIMIT 0

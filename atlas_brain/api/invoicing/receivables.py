@@ -17,11 +17,14 @@ from ...services.receivables import (
     ReceivablesConflictError,
     ReceivablesError,
     ReceivablesNotFoundError,
+    ReceivablesReceiptContextRequiredError,
     ReceivablesSchemaUnavailableError,
     ReceivablesService,
     ReceivablesValidationError,
+    PaymentReceiptRecipient,
     get_receivables_service,
 )
+from ...services.crm_provider import get_crm_provider
 from ...services.eom_lead_ingress import EOM_BUSINESS_CONTEXT_ID
 from ...storage.exceptions import DatabaseUnavailableError
 from .auth import require_actor, require_receivables_api
@@ -33,6 +36,13 @@ _DATABASE_UNAVAILABLE_ERRORS = (
     asyncpg.TooManyConnectionsError,
     asyncpg.AdminShutdownError,
     asyncpg.CrashShutdownError,
+)
+_CANONICAL_CUSTOMER_UNAVAILABLE_ERRORS = _DATABASE_UNAVAILABLE_ERRORS + (
+    asyncpg.UndefinedTableError,
+    asyncpg.UndefinedColumnError,
+    asyncpg.InvalidSchemaNameError,
+    asyncpg.InsufficientPrivilegeError,
+    asyncpg.InvalidAuthorizationSpecificationError,
 )
 _UNAVAILABLE_INTERFACE_PREFIXES = (
     "connection is closed",
@@ -133,6 +143,20 @@ def _is_database_unavailable_error(exc: Exception) -> bool:
     return isinstance(exc, OSError) and exc.errno in _NETWORK_UNAVAILABLE_ERRNOS
 
 
+def _is_canonical_customer_unavailable_error(exc: Exception) -> bool:
+    """Classify canonical-CRM schema and connection failures for payment reads.
+
+    The payment route has a recovery path for a same-key replay when the
+    canonical customer read is unavailable.  A partially migrated or
+    permission-denied canonical CRM must therefore take that same controlled
+    path rather than escaping as an HTTP 500 before the ledger can reconcile
+    the existing payment.
+    """
+    return _is_database_unavailable_error(exc) or isinstance(
+        exc, _CANONICAL_CUSTOMER_UNAVAILABLE_ERRORS
+    )
+
+
 async def _call(awaitable):
     try:
         return await awaitable
@@ -174,7 +198,7 @@ async def _call(awaitable):
 async def ready() -> dict:
     service = get_receivables_service()
     try:
-        schema_ready = await service.is_ready()
+        schema_ready = await service.is_receipt_delivery_ready()
     except Exception as exc:
         raise HTTPException(
             status_code=503, detail="Receivables database unavailable"
@@ -218,24 +242,76 @@ async def create_payment(
     ],
     service: ReceivablesService = Depends(get_receivables_service),
 ) -> dict:
-    return await _call(
-        service.create_payment(
-            contact_id=body.contact_id,
-            payer_name=body.payer_name,
-            total_amount=_dollars(body.total_amount_cents),
-            payment_method=body.payment_method,
-            received_date=body.received_date,
-            check_date=body.check_date,
-            received_through=body.received_through,
-            reference=body.reference,
-            notes=body.notes,
-            allocations=_allocations(body.allocations),
-            recorded_by=actor,
-            idempotency_key=idempotency_key,
-            allow_unapplied=True,
-            unapplied_contact_context_id=EOM_BUSINESS_CONTEXT_ID,
+    """Record a payment from the deployed full EOM provider route.
+
+    The full application owns both the receivables ledger and canonical CRM
+    contacts through its primary database.  Resolve a narrow active-customer
+    snapshot before a new write, but defer a missing/unavailable CRM result to
+    the service's idempotency lookup so an unchanged retry can recover a
+    previously committed payment.
+    """
+    receipt_recipient: PaymentReceiptRecipient | None = None
+    canonical_failure: HTTPException | None = None
+    try:
+        customer = await get_crm_provider().get_eom_payment_customer(
+            body.contact_id
         )
-    )
+        if customer is None:
+            canonical_failure = HTTPException(
+                status_code=404,
+                detail={
+                    "code": "not_found",
+                    "message": "Customer not found",
+                },
+            )
+        else:
+            receipt_recipient = PaymentReceiptRecipient(
+                contact_id=UUID(str(customer["contact_id"])),
+                customer_name=str(customer["customer_name"]),
+                customer_type=str(customer["customer_type"]),
+                recipient_email=(
+                    str(customer["recipient_email"])
+                    if customer["recipient_email"] is not None
+                    else None
+                ),
+            )
+    except Exception as exc:
+        if not _is_canonical_customer_unavailable_error(exc):
+            raise
+        canonical_failure = HTTPException(
+            status_code=503,
+            detail={
+                "code": "canonical_customer_unavailable",
+                "message": "Canonical EOM customer data is unavailable",
+            },
+        )
+
+    async def _write_payment() -> dict:
+        try:
+            return await service.create_payment(
+                contact_id=body.contact_id,
+                payer_name=body.payer_name,
+                total_amount=_dollars(body.total_amount_cents),
+                payment_method=body.payment_method,
+                received_date=body.received_date,
+                check_date=body.check_date,
+                received_through=body.received_through,
+                reference=body.reference,
+                notes=body.notes,
+                allocations=_allocations(body.allocations),
+                recorded_by=actor,
+                idempotency_key=idempotency_key,
+                allow_unapplied=True,
+                unapplied_contact_context_id=EOM_BUSINESS_CONTEXT_ID,
+                receipt_recipient=receipt_recipient,
+                require_receipt_recipient=True,
+            )
+        except ReceivablesReceiptContextRequiredError:
+            if canonical_failure is not None:
+                raise canonical_failure
+            raise
+
+    return await _call(_write_payment())
 
 
 @router.get("/payments")
