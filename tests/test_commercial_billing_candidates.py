@@ -65,16 +65,21 @@ class _ReadOnlyCRM:
         self,
         customers: dict[UUID, dict | None],
         recipients: dict[UUID, dict],
+        preferences: dict[UUID, dict | None] | None = None,
         *,
         customer_error: Exception | None = None,
         recipient_error: Exception | None = None,
+        preference_error: Exception | None = None,
     ) -> None:
         self.customers = customers
         self.recipients = recipients
+        self.preferences = preferences or {}
         self.customer_error = customer_error
         self.recipient_error = recipient_error
+        self.preference_error = preference_error
         self.customer_calls: list[UUID] = []
         self.recipient_calls: list[UUID] = []
+        self.preference_calls: list[UUID] = []
         self.write_attempts = 0
 
     async def get_eom_payment_customer(self, contact_id: UUID) -> dict | None:
@@ -88,6 +93,15 @@ class _ReadOnlyCRM:
         if self.recipient_error is not None:
             raise self.recipient_error
         return self.recipients[contact_id]
+
+    async def get_eom_billing_delivery_preference(
+        self,
+        contact_id: UUID,
+    ) -> dict | None:
+        self.preference_calls.append(contact_id)
+        if self.preference_error is not None:
+            raise self.preference_error
+        return self.preferences.get(contact_id)
 
     async def log_interaction(self, *_args, **_kwargs) -> None:
         self.write_attempts += 1
@@ -136,6 +150,17 @@ def _recipient(contact_id: UUID, *, eligible: bool = True, reason: str | None = 
     }
 
 
+def _preference(contact_id: UUID, delivery_method: str) -> dict:
+    return {
+        "contactId": str(contact_id),
+        "deliveryMethod": delivery_method,
+        "createdAt": None,
+        "createdBy": "Juan Canfield",
+        "updatedAt": None,
+        "updatedBy": "Juan Canfield",
+    }
+
+
 def _event(
     event_id: str,
     day: int,
@@ -162,9 +187,11 @@ def _candidate_service(
     *,
     customers: dict[UUID, dict | None] | None = None,
     recipients: dict[UUID, dict] | None = None,
+    preferences: dict[UUID, dict | None] | None = None,
     calendar_error: Exception | None = None,
     crm_customer_error: Exception | None = None,
     crm_recipient_error: Exception | None = None,
+    crm_preference_error: Exception | None = None,
 ) -> tuple[
     CommercialBillingCandidateService,
     _ReadOnlyServiceRepository,
@@ -181,8 +208,10 @@ def _candidate_service(
     crm = _ReadOnlyCRM(
         customers or {contact_id: _customer(contact_id) for contact_id in contact_ids},
         recipients or {contact_id: _recipient(contact_id) for contact_id in contact_ids},
+        preferences,
         customer_error=crm_customer_error,
         recipient_error=crm_recipient_error,
+        preference_error=crm_preference_error,
     )
     return (
         CommercialBillingCandidateService(
@@ -262,6 +291,7 @@ async def test_per_visit_preview_is_exact_and_has_no_financial_or_delivery_effec
     assert repository.calls == [True]
     assert calendar.calls[0][2] == "commercial-calendar"
     assert crm.customer_calls == [contact_id]
+    assert crm.preference_calls == [contact_id]
     assert crm.recipient_calls == [contact_id]
     assert repository.write_attempts == calendar.write_attempts == crm.write_attempts == 0
 
@@ -299,13 +329,95 @@ async def test_preview_retries_are_identical_and_source_changes_make_it_stale():
         != changed_service_identity["candidates"][0]["sourceFingerprint"]
     )
 
+    crm.preferences[contact_id] = _preference(contact_id, "gmail_pdf")
+    changed_delivery_preference = await service.preview(billing_period="2026-03")
+    assert changed_delivery_preference["candidates"][0]["deliveryMethod"] == "gmail_pdf"
+    assert (
+        changed_delivery_preference["candidates"][0]["sourceFingerprint"]
+        != changed_recipient["candidates"][0]["sourceFingerprint"]
+    )
+
     calendar.events.append(_event("evt-2", 10, location="Second Site"))
     changed_calendar = await service.preview(billing_period="2026-03")
     assert (
         changed_calendar["candidates"][0]["sourceFingerprint"]
-        != changed_recipient["candidates"][0]["sourceFingerprint"]
+        != changed_delivery_preference["candidates"][0]["sourceFingerprint"]
     )
     assert repository.write_attempts == calendar.write_attempts == crm.write_attempts == 0
+
+
+@pytest.mark.asyncio
+async def test_explicit_delivery_preferences_never_infer_gmail_or_invoice_eligibility():
+    contact_id = uuid4()
+    row = _service_row(contact_id)
+    no_email = _recipient(contact_id, eligible=False, reason="no_email")
+
+    manual_service, manual_repository, manual_calendar, manual_crm = _candidate_service(
+        [row],
+        [_event("evt-manual", 3)],
+        recipients={contact_id: no_email},
+        preferences={contact_id: _preference(contact_id, "manual_square")},
+    )
+    manual = (await manual_service.preview(billing_period="2026-03"))["candidates"][0]
+    assert manual["deliveryMethod"] == "manual_square"
+    assert manual["recipient"] == {
+        "contactId": str(contact_id),
+        "displayName": None,
+        "email": None,
+    }
+    assert {blocker["code"] for blocker in manual["blockers"]} == set()
+    assert manual_crm.preference_calls == [contact_id]
+    assert manual_crm.recipient_calls == []
+    assert (
+        manual_repository.write_attempts
+        == manual_calendar.write_attempts
+        == manual_crm.write_attempts
+        == 0
+    )
+
+    gmail_service, _, _, gmail_crm = _candidate_service(
+        [_service_row(contact_id)],
+        [_event("evt-gmail", 3)],
+        recipients={contact_id: no_email},
+        preferences={contact_id: _preference(contact_id, "gmail_pdf")},
+    )
+    gmail = (await gmail_service.preview(billing_period="2026-03"))["candidates"][0]
+    assert gmail["deliveryMethod"] == "gmail_pdf"
+    assert {blocker["code"] for blocker in gmail["blockers"]} == {
+        "missing_billing_email"
+    }
+    assert gmail_crm.recipient_calls == [contact_id]
+
+    receipt_service, _, _, receipt_crm = _candidate_service(
+        [_service_row(contact_id)],
+        [_event("evt-receipt", 3)],
+        preferences={
+            contact_id: _preference(
+                contact_id,
+                "no_invoice_residential_receipt",
+            )
+        },
+    )
+    receipt_only = (
+        await receipt_service.preview(billing_period="2026-03")
+    )["candidates"][0]
+    assert receipt_only["deliveryMethod"] == "no_invoice_residential_receipt"
+    assert {blocker["code"] for blocker in receipt_only["blockers"]} == {
+        "no_invoice_delivery_preference"
+    }
+    assert receipt_crm.recipient_calls == []
+
+    invalid_service, _, _, invalid_crm = _candidate_service(
+        [_service_row(contact_id)],
+        [_event("evt-invalid", 3)],
+        preferences={contact_id: _preference(contact_id, "future_delivery_method")},
+    )
+    invalid = (await invalid_service.preview(billing_period="2026-03"))["candidates"][0]
+    assert invalid["deliveryMethod"] == "future_delivery_method"
+    assert {blocker["code"] for blocker in invalid["blockers"]} == {
+        "source_evidence_invalid"
+    }
+    assert invalid_crm.recipient_calls == []
 
 
 @pytest.mark.asyncio
@@ -522,6 +634,7 @@ async def test_invalid_period_and_source_outage_fail_without_a_write_or_partial_
     assert crm_unavailable_repository.calls == [True]
     assert crm_unavailable_calendar.calls
     assert crm_unavailable.customer_calls == [contact_id]
+    assert crm_unavailable.preference_calls == []
     assert crm_unavailable.recipient_calls == []
     assert (
         crm_unavailable_repository.write_attempts
@@ -549,6 +662,7 @@ async def test_invalid_period_and_source_outage_fail_without_a_write_or_partial_
     assert recipient_unavailable_repository.calls == [True]
     assert recipient_unavailable_calendar.calls
     assert recipient_unavailable.customer_calls == [contact_id]
+    assert recipient_unavailable.preference_calls == [contact_id]
     assert recipient_unavailable.recipient_calls == [contact_id]
     assert (
         recipient_unavailable_repository.write_attempts
@@ -565,6 +679,27 @@ async def test_invalid_period_and_source_outage_fail_without_a_write_or_partial_
         "blockedCandidateCount": 1,
         "candidateCount": 1,
     }
+
+    preference_unavailable_service, preference_unavailable_repository, preference_unavailable_calendar, preference_unavailable = (
+        _candidate_service(
+            [_service_row(contact_id)],
+            [_event("evt-1", 3)],
+            crm_preference_error=RuntimeError("delivery preference unavailable"),
+        )
+    )
+    with pytest.raises(CommercialBillingCandidatesUnavailableError):
+        await preference_unavailable_service.preview(billing_period="2026-03")
+    assert preference_unavailable_repository.calls == [True]
+    assert preference_unavailable_calendar.calls
+    assert preference_unavailable.customer_calls == [contact_id]
+    assert preference_unavailable.preference_calls == [contact_id]
+    assert preference_unavailable.recipient_calls == []
+    assert (
+        preference_unavailable_repository.write_attempts
+        == preference_unavailable_calendar.write_attempts
+        == preference_unavailable.write_attempts
+        == 0
+    )
 
 
 @pytest.mark.asyncio

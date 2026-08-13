@@ -22,6 +22,7 @@ from uuid import UUID
 
 import asyncpg
 
+from .crm_provider import EOM_BILLING_DELIVERY_METHODS
 from ..storage.exceptions import DatabaseOperationError, DatabaseUnavailableError
 
 
@@ -51,6 +52,7 @@ BILLING_CANDIDATE_BLOCKER_CODES = frozenset(
         "missing_calendar_service_evidence",
         "missing_canonical_customer",
         "missing_hours",
+        "no_invoice_delivery_preference",
         "source_evidence_invalid",
         "zero_or_invalid_total",
     }
@@ -112,6 +114,11 @@ class _CRMProvider(Protocol):
     ) -> dict[str, Any] | None: ...
 
     async def get_billing_recipient(self, contact_id: UUID) -> dict[str, Any]: ...
+
+    async def get_eom_billing_delivery_preference(
+        self,
+        contact_id: UUID,
+    ) -> dict[str, Any] | None: ...
 
 
 @dataclass(frozen=True)
@@ -526,16 +533,22 @@ class CommercialBillingCandidateService:
             contact_id = bundle_services[0].contact_id
             customer: dict[str, Any] | None = None
             recipient: dict[str, Any] | None = None
+            delivery_preference: dict[str, Any] | None = None
             if contact_id is not None:
                 if crm is None:
                     crm = self._load_crm_provider()
-                customer, recipient = await self._load_customer_evidence(crm, contact_id)
+                (
+                    customer,
+                    recipient,
+                    delivery_preference,
+                ) = await self._load_customer_evidence(crm, contact_id)
             candidate = self._build_candidate(
                 period=period,
                 contact_id=contact_id,
                 services=bundle_services,
                 customer=customer,
                 recipient=recipient,
+                delivery_preference=delivery_preference,
                 assignments=assignments,
                 matches=matches,
                 collisions=collisions,
@@ -574,19 +587,35 @@ class CommercialBillingCandidateService:
         self,
         crm: _CRMProvider,
         contact_id: UUID,
-    ) -> tuple[dict[str, Any] | None, dict[str, Any] | None]:
+    ) -> tuple[
+        dict[str, Any] | None,
+        dict[str, Any] | None,
+        dict[str, Any] | None,
+    ]:
         try:
             customer = await crm.get_eom_payment_customer(contact_id)
-            recipient = (
-                await crm.get_billing_recipient(contact_id)
+            delivery_preference = (
+                await crm.get_eom_billing_delivery_preference(contact_id)
                 if customer is not None
                 else None
             )
+            delivery_method = _string_or_none(
+                (delivery_preference or {}).get("deliveryMethod")
+            )
+            recipient = None
+            if customer is not None and delivery_method in {
+                None,
+                "gmail_pdf",
+            }:
+                # Preserve today's recipient evidence for unconfigured
+                # customers while avoiding an irrelevant Gmail dependency for
+                # explicit manual-Square and receipt-only policies.
+                recipient = await crm.get_billing_recipient(contact_id)
         except (RuntimeError, *_SOURCE_UNAVAILABLE_ERRORS) as exc:
             raise CommercialBillingCandidatesUnavailableError(
                 "Canonical customer evidence is unavailable"
             ) from exc
-        return customer, recipient
+        return customer, recipient, delivery_preference
 
     @staticmethod
     def _assign_events(
@@ -644,6 +673,7 @@ class CommercialBillingCandidateService:
         services: list[_SourceService],
         customer: dict[str, Any] | None,
         recipient: dict[str, Any] | None,
+        delivery_preference: dict[str, Any] | None,
         assignments: Mapping[str, list[_SourceEvent]],
         matches: Mapping[str, list[_SourceEvent]],
         collisions: Mapping[str, list[dict[str, Any]]],
@@ -686,6 +716,9 @@ class CommercialBillingCandidateService:
                 else None
             ),
         }
+        delivery_method = _string_or_none(
+            (delivery_preference or {}).get("deliveryMethod")
+        )
 
         if customer is None:
             _append_blocker(
@@ -705,7 +738,11 @@ class CommercialBillingCandidateService:
                     "The canonical customer is not classified as commercial.",
                 ),
             )
-        if customer is not None and not recipient_eligible:
+        if (
+            customer is not None
+            and delivery_method in {None, "gmail_pdf"}
+            and not recipient_eligible
+        ):
             recipient_reason = _string_or_none((recipient or {}).get("reason"))
             if recipient_reason == "no_email":
                 _append_blocker(
@@ -727,14 +764,33 @@ class CommercialBillingCandidateService:
                 )
                 incomplete_total = True
         if customer_type == "commercial":
-            _append_blocker(
-                blockers,
-                seen_blockers,
-                _blocker(
-                    "missing_billing_delivery_preference",
-                    "No explicit billing delivery preference is recorded.",
-                ),
-            )
+            if delivery_method is None:
+                _append_blocker(
+                    blockers,
+                    seen_blockers,
+                    _blocker(
+                        "missing_billing_delivery_preference",
+                        "No explicit billing delivery preference is recorded.",
+                    ),
+                )
+            elif delivery_method not in EOM_BILLING_DELIVERY_METHODS:
+                _append_blocker(
+                    blockers,
+                    seen_blockers,
+                    _blocker(
+                        "source_evidence_invalid",
+                        "The recorded billing delivery preference is not supported.",
+                    ),
+                )
+            elif delivery_method == "no_invoice_residential_receipt":
+                _append_blocker(
+                    blockers,
+                    seen_blockers,
+                    _blocker(
+                        "no_invoice_delivery_preference",
+                        "The recorded delivery preference does not permit a commercial invoice.",
+                    ),
+                )
 
         line_items: list[dict[str, Any]] = []
         service_views: list[dict[str, Any]] = []
@@ -953,7 +1009,7 @@ class CommercialBillingCandidateService:
             "calendarId": self._calendar_id,
             "candidateKey": f"commercial-billing:{candidate_key_contact}:{period.label}",
             "customer": customer_view,
-            "deliveryMethod": None,
+            "deliveryMethod": delivery_method,
             "fingerprintVersion": _FINGERPRINT_VERSION,
             "lineItems": line_items,
             "recipient": recipient_view,

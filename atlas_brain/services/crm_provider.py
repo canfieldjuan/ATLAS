@@ -20,6 +20,7 @@ import hashlib
 from contextlib import asynccontextmanager
 from dataclasses import dataclass
 from datetime import datetime, timezone
+from enum import Enum
 from typing import Any, Mapping, Optional, Sequence
 from uuid import UUID, uuid4
 
@@ -464,6 +465,53 @@ BILLING_RECIPIENT_ELIGIBLE_CONTACT_TYPE = "customer"
 # against live data, this rejects none of the addresses currently invoiced.
 
 BILLING_RECIPIENT_REASONS = ("not_found", "inactive", "no_email")
+
+
+class EOMBillingDeliveryMethod(str, Enum):
+    """Explicit EOM billing-delivery policy values owned by canonical CRM."""
+
+    GMAIL_PDF = "gmail_pdf"
+    MANUAL_SQUARE = "manual_square"
+    NO_INVOICE_RESIDENTIAL_RECEIPT = "no_invoice_residential_receipt"
+
+
+EOM_BILLING_DELIVERY_METHODS = frozenset(
+    method.value for method in EOMBillingDeliveryMethod
+)
+
+
+def _require_eom_billing_delivery_method(value: Any) -> str:
+    """Return one closed delivery policy value or reject an unsafe direct call."""
+
+    if isinstance(value, EOMBillingDeliveryMethod):
+        return value.value
+    if isinstance(value, str) and value in EOM_BILLING_DELIVERY_METHODS:
+        return value
+    raise ValueError("delivery_method must be a supported EOM billing delivery method")
+
+
+def _eom_billing_delivery_preference_projection(
+    row: Any,
+    *,
+    changed: bool | None = None,
+) -> dict[str, Any]:
+    """Project one canonical preference without deriving a delivery fallback."""
+
+    result = {
+        "contactId": str(row["contact_id"]),
+        "deliveryMethod": (
+            str(row["delivery_method"])
+            if row["delivery_method"] is not None
+            else None
+        ),
+        "createdAt": row["created_at"],
+        "createdBy": row["created_by"],
+        "updatedAt": row["updated_at"],
+        "updatedBy": row["updated_by"],
+    }
+    if changed is not None:
+        result["changed"] = changed
+    return result
 
 
 def _billing_recipient_projection(row: Any, email: str) -> dict[str, Any]:
@@ -2195,6 +2243,136 @@ class DatabaseCRMProvider:
             "customer_type": str(row["customer_type"] or "unknown"),
             "recipient_email": normalize_contact_email(row["email"]),
         }
+
+    async def get_eom_billing_delivery_preference(
+        self,
+        contact_id: UUID,
+    ) -> dict[str, Any] | None:
+        """Return an active canonical customer's explicit delivery policy.
+
+        A missing profile row is intentionally distinct from a missing customer:
+        it returns the admitted contact with every preference field ``None``.
+        Callers must keep the candidate blocked rather than deriving Gmail or
+        Square from customer type, email, or historical invoice behavior.
+        """
+        from .eom_lead_ingress import EOM_BUSINESS_CONTEXT_ID
+
+        row = await self._get_pool().fetchrow(
+            """
+            SELECT c.id AS contact_id,
+                   p.delivery_method,
+                   p.created_at,
+                   p.created_by,
+                   p.updated_at,
+                   p.updated_by
+            FROM contacts AS c
+            LEFT JOIN eom_billing_delivery_preferences AS p
+              ON p.contact_id = c.id
+            WHERE c.id = $1
+              AND c.business_context_id = $2
+              AND c.status = $3
+              AND c.contact_type = $4
+            """,
+            contact_id,
+            EOM_BUSINESS_CONTEXT_ID,
+            BILLING_RECIPIENT_ELIGIBLE_STATUS,
+            BILLING_RECIPIENT_ELIGIBLE_CONTACT_TYPE,
+        )
+        if row is None:
+            return None
+        return _eom_billing_delivery_preference_projection(row)
+
+    async def set_eom_billing_delivery_preference(
+        self,
+        *,
+        contact_id: UUID,
+        delivery_method: str | EOMBillingDeliveryMethod,
+        actor: str,
+    ) -> dict[str, Any] | None:
+        """Atomically set an explicit delivery policy for one active customer.
+
+        The canonical customer row is the transaction's linearization point.
+        Holding it `FOR UPDATE` makes the active-tenant admission decision and
+        profile upsert one operation for all callers of the primary CRM pool.
+        Equal-method retries deliberately return the existing evidence without
+        modifying its actor or timestamp.
+        """
+        from .eom_lead_ingress import EOM_BUSINESS_CONTEXT_ID
+
+        selected_method = _require_eom_billing_delivery_method(delivery_method)
+        if not isinstance(actor, str):
+            raise ValueError("actor must be a non-empty string")
+        normalized_actor = actor.strip()
+        if not normalized_actor or len(normalized_actor) > 128:
+            raise ValueError("actor must be a non-empty string of at most 128 characters")
+
+        pool = self._get_pool()
+        async with _transaction_connection(pool) as conn:
+            customer = await conn.fetchrow(
+                """
+                SELECT id
+                FROM contacts
+                WHERE id = $1
+                  AND business_context_id = $2
+                  AND status = $3
+                  AND contact_type = $4
+                FOR UPDATE
+                """,
+                contact_id,
+                EOM_BUSINESS_CONTEXT_ID,
+                BILLING_RECIPIENT_ELIGIBLE_STATUS,
+                BILLING_RECIPIENT_ELIGIBLE_CONTACT_TYPE,
+            )
+            if customer is None:
+                return None
+
+            existing = await conn.fetchrow(
+                """
+                SELECT contact_id, delivery_method, created_at, created_by,
+                       updated_at, updated_by
+                FROM eom_billing_delivery_preferences
+                WHERE contact_id = $1
+                """,
+                contact_id,
+            )
+            if existing is not None and existing["delivery_method"] == selected_method:
+                return _eom_billing_delivery_preference_projection(
+                    existing,
+                    changed=False,
+                )
+
+            if existing is None:
+                updated = await conn.fetchrow(
+                    """
+                    INSERT INTO eom_billing_delivery_preferences (
+                        contact_id, delivery_method, created_by, updated_by
+                    )
+                    VALUES ($1, $2, $3, $3)
+                    RETURNING contact_id, delivery_method, created_at, created_by,
+                              updated_at, updated_by
+                    """,
+                    contact_id,
+                    selected_method,
+                    normalized_actor,
+                )
+            else:
+                updated = await conn.fetchrow(
+                    """
+                    UPDATE eom_billing_delivery_preferences
+                    SET delivery_method = $2,
+                        updated_by = $3,
+                        updated_at = CURRENT_TIMESTAMP
+                    WHERE contact_id = $1
+                    RETURNING contact_id, delivery_method, created_at, created_by,
+                              updated_at, updated_by
+                    """,
+                    contact_id,
+                    selected_method,
+                    normalized_actor,
+                )
+            if updated is None:
+                raise RuntimeError("EOM billing delivery preference write was lost")
+            return _eom_billing_delivery_preference_projection(updated, changed=True)
 
     async def billing_recipients_schema_ready(self) -> bool:
         """True when the billing-recipient and payment-customer reads work.

@@ -11,7 +11,10 @@ the disclosure this route exists to avoid.
 
 from __future__ import annotations
 
+import asyncio
+import inspect
 import os
+from pathlib import Path
 from types import SimpleNamespace
 from uuid import UUID, uuid4
 
@@ -927,3 +930,430 @@ async def test_paging_survives_a_rename_against_real_postgres(monkeypatch):
     finally:
         await conn.execute(f'DROP SCHEMA IF EXISTS "{schema}" CASCADE')
         await conn.close()
+
+
+@pytest.mark.asyncio
+async def test_canonical_delivery_preference_is_actor_audited_and_retry_safe():
+    """The policy write shares canonical-customer admission with its upsert."""
+    asyncpg = pytest.importorskip("asyncpg")
+    database_url = _database_url()
+    from atlas_brain.services import crm_provider as svc
+
+    schema = f"billing_delivery_preference_{uuid4().hex}"
+    conn = await asyncpg.connect(database_url)
+    try:
+        await conn.execute(f'CREATE SCHEMA "{schema}"')
+        await conn.execute(f'SET search_path TO "{schema}"')
+        await conn.execute(
+            """
+            CREATE TABLE contacts (
+                id UUID PRIMARY KEY,
+                full_name VARCHAR(256) NOT NULL,
+                email VARCHAR(256),
+                status VARCHAR(32) NOT NULL,
+                contact_type VARCHAR(32) NOT NULL,
+                business_context_id VARCHAR(64)
+            )
+            """
+        )
+        migration = (
+            Path(__file__).parents[1]
+            / "atlas_brain/storage/migrations/371_eom_billing_delivery_preferences.sql"
+        ).read_text(encoding="utf-8")
+        await conn.execute(migration)
+
+        active = await _seed_contact(conn, name="Acme Office")
+        inactive = await _seed_contact(conn, name="Paused Office", status="inactive")
+        foreign = await _seed_contact(
+            conn,
+            name="Other Tenant Office",
+            tenant="other_tenant",
+        )
+        lead = await _seed_contact(conn, name="Lead Office")
+        await conn.execute("UPDATE contacts SET contact_type = 'lead' WHERE id = $1", lead)
+        missing = uuid4()
+
+        service = svc.DatabaseCRMProvider(pool=conn)
+        assert await service.get_eom_billing_delivery_preference(active) == {
+            "contactId": str(active),
+            "deliveryMethod": None,
+            "createdAt": None,
+            "createdBy": None,
+            "updatedAt": None,
+            "updatedBy": None,
+        }
+
+        created = await service.set_eom_billing_delivery_preference(
+            contact_id=active,
+            delivery_method="manual_square",
+            actor="Juan Canfield",
+        )
+        assert created is not None
+        assert {
+            key: created[key]
+            for key in ("contactId", "deliveryMethod", "createdBy", "updatedBy", "changed")
+        } == {
+            "contactId": str(active),
+            "deliveryMethod": "manual_square",
+            "createdBy": "Juan Canfield",
+            "updatedBy": "Juan Canfield",
+            "changed": True,
+        }
+        assert created["createdAt"] is not None
+        assert created["updatedAt"] is not None
+
+        same = await service.set_eom_billing_delivery_preference(
+            contact_id=active,
+            delivery_method=svc.EOMBillingDeliveryMethod.MANUAL_SQUARE,
+            actor="Another Operator",
+        )
+        assert same == {**created, "changed": False}
+
+        changed = await service.set_eom_billing_delivery_preference(
+            contact_id=active,
+            delivery_method="gmail_pdf",
+            actor="Another Operator",
+        )
+        assert changed is not None
+        assert changed["changed"] is True
+        assert changed["deliveryMethod"] == "gmail_pdf"
+        assert changed["createdBy"] == "Juan Canfield"
+        assert changed["updatedBy"] == "Another Operator"
+        assert changed["updatedAt"] >= created["updatedAt"]
+
+        for not_a_customer in (inactive, foreign, lead, missing):
+            assert await service.get_eom_billing_delivery_preference(not_a_customer) is None
+            assert (
+                await service.set_eom_billing_delivery_preference(
+                    contact_id=not_a_customer,
+                    delivery_method="manual_square",
+                    actor="Juan Canfield",
+                )
+                is None
+            )
+        assert (
+            await conn.fetchval(
+                "SELECT COUNT(*) FROM eom_billing_delivery_preferences"
+            )
+            == 1
+        )
+
+        with pytest.raises(ValueError):
+            await service.set_eom_billing_delivery_preference(
+                contact_id=active,
+                delivery_method="future_delivery_method",
+                actor="Juan Canfield",
+            )
+        with pytest.raises(ValueError):
+            await service.set_eom_billing_delivery_preference(
+                contact_id=active,
+                delivery_method="manual_square",
+                actor="  ",
+            )
+        database_rejected = await _seed_contact(conn, name="Database Rejected")
+        with pytest.raises(asyncpg.CheckViolationError):
+            await conn.execute(
+                """
+                INSERT INTO eom_billing_delivery_preferences (
+                    contact_id, delivery_method, created_by, updated_by
+                )
+                VALUES ($1, 'future_delivery_method', 'Juan Canfield', 'Juan Canfield')
+                """,
+                database_rejected,
+            )
+        assert set(svc.EOM_BILLING_DELIVERY_METHODS) == {
+            "gmail_pdf",
+            "manual_square",
+            "no_invoice_residential_receipt",
+        }
+    finally:
+        await conn.execute(f'DROP SCHEMA IF EXISTS "{schema}" CASCADE')
+        await conn.close()
+
+
+@pytest.mark.asyncio
+async def test_delivery_preference_same_method_concurrency_has_one_write():
+    """The locked canonical customer makes concurrent same-policy retries stable."""
+    asyncpg = pytest.importorskip("asyncpg")
+    database_url = _database_url()
+    from atlas_brain.services import crm_provider as svc
+
+    schema = f"billing_delivery_preference_race_{uuid4().hex}"
+    first = await asyncpg.connect(database_url)
+    second = await asyncpg.connect(database_url)
+    try:
+        for conn in (first, second):
+            if conn is first:
+                await conn.execute(f'CREATE SCHEMA "{schema}"')
+            await conn.execute(f'SET search_path TO "{schema}"')
+        await first.execute(
+            """
+            CREATE TABLE contacts (
+                id UUID PRIMARY KEY,
+                full_name VARCHAR(256) NOT NULL,
+                email VARCHAR(256),
+                status VARCHAR(32) NOT NULL,
+                contact_type VARCHAR(32) NOT NULL,
+                business_context_id VARCHAR(64)
+            )
+            """
+        )
+        migration = (
+            Path(__file__).parents[1]
+            / "atlas_brain/storage/migrations/371_eom_billing_delivery_preferences.sql"
+        ).read_text(encoding="utf-8")
+        await first.execute(migration)
+        contact_id = await _seed_contact(first, name="Concurrent Office")
+        first_service = svc.DatabaseCRMProvider(pool=first)
+        second_service = svc.DatabaseCRMProvider(pool=second)
+
+        async with first.transaction():
+            await first.fetchrow(
+                "SELECT id FROM contacts WHERE id = $1 FOR UPDATE",
+                contact_id,
+            )
+            contender = asyncio.create_task(
+                second_service.set_eom_billing_delivery_preference(
+                    contact_id=contact_id,
+                    delivery_method="manual_square",
+                    actor="Second Operator",
+                )
+            )
+            await asyncio.sleep(0.05)
+            assert not contender.done(), (
+                "the second policy write bypassed the canonical customer lock"
+            )
+            winner = await first_service.set_eom_billing_delivery_preference(
+                contact_id=contact_id,
+                delivery_method="manual_square",
+                actor="First Operator",
+            )
+            assert winner is not None and winner["changed"] is True
+
+        replay = await asyncio.wait_for(contender, timeout=2)
+        assert replay is not None and replay["changed"] is False
+        row = await first.fetchrow(
+            """
+            SELECT delivery_method, created_by, updated_by
+            FROM eom_billing_delivery_preferences
+            WHERE contact_id = $1
+            """,
+            contact_id,
+        )
+        assert dict(row) == {
+            "delivery_method": "manual_square",
+            "created_by": "First Operator",
+            "updated_by": "First Operator",
+        }
+    finally:
+        await first.execute(f'DROP SCHEMA IF EXISTS "{schema}" CASCADE')
+        await first.close()
+        await second.close()
+
+
+@pytest.mark.asyncio
+async def test_full_provider_delivery_preference_routes_are_authenticated_and_closed():
+    """The full provider is the active route; no slim duplicate is introduced."""
+    from atlas_brain.api.invoicing import auth as receivables_auth
+    from atlas_brain.api.invoicing import receivables as routes
+    from atlas_brain.eom_api.auth import generate_receivables_service_token
+
+    generated = generate_receivables_service_token()
+    contact_id = uuid4()
+
+    class _CRM:
+        def __init__(self) -> None:
+            self.get_calls: list[UUID] = []
+            self.set_calls: list[tuple[UUID, str, str]] = []
+
+        async def get_eom_billing_delivery_preference(self, requested: UUID):
+            self.get_calls.append(requested)
+            return {
+                "contactId": str(requested),
+                "deliveryMethod": "manual_square",
+                "createdAt": None,
+                "createdBy": "Juan Canfield",
+                "updatedAt": None,
+                "updatedBy": "Juan Canfield",
+            }
+
+        async def set_eom_billing_delivery_preference(
+            self,
+            *,
+            contact_id: UUID,
+            delivery_method: str,
+            actor: str,
+        ):
+            self.set_calls.append((contact_id, delivery_method, actor))
+            return {
+                "contactId": str(contact_id),
+                "deliveryMethod": delivery_method,
+                "createdAt": None,
+                "createdBy": actor,
+                "updatedAt": None,
+                "updatedBy": actor,
+                "changed": True,
+            }
+
+    crm = _CRM()
+    app = FastAPI()
+    app.include_router(routes.router)
+    app.dependency_overrides[receivables_auth.get_receivables_api_config] = lambda: (
+        SimpleNamespace(
+            receivables_api_enabled=True,
+            receivables_service_token="",
+            receivables_service_token_sha256=generated.sha256,
+        )
+    )
+    app.dependency_overrides[
+        routes._commercial_billing_delivery_preference_crm_dependency
+    ] = lambda: crm
+
+    path = f"/receivables/commercial-billing-delivery-preferences/{contact_id}"
+    transport = httpx.ASGITransport(app=app)
+    async with httpx.AsyncClient(
+        transport=transport,
+        base_url="http://receivables.test",
+    ) as client:
+        assert (await client.get(path)).status_code == 401
+        assert (
+            await client.put(path, json={"delivery_method": "manual_square"})
+        ).status_code == 401
+        assert crm.get_calls == []
+        assert crm.set_calls == []
+
+        headers = {"Authorization": f"Bearer {generated.token}"}
+        assert (await client.get(path, headers=headers)).status_code == 200
+        assert crm.get_calls == [contact_id]
+
+        missing_actor = await client.put(
+            path,
+            headers=headers,
+            json={"delivery_method": "manual_square"},
+        )
+        assert missing_actor.status_code == 422
+        malformed = await client.put(
+            path,
+            headers={**headers, "X-EOM-Actor": "Juan Canfield"},
+            json={"delivery_method": "future_delivery_method"},
+        )
+        assert malformed.status_code == 422
+        assert crm.set_calls == []
+
+        for delivery_method in (
+            "gmail_pdf",
+            "manual_square",
+            "no_invoice_residential_receipt",
+        ):
+            response = await client.put(
+                path,
+                headers={**headers, "X-EOM-Actor": "Juan Canfield"},
+                json={"delivery_method": delivery_method},
+            )
+            assert response.status_code == 200, response.text
+            assert response.json()["deliveryMethod"] == delivery_method
+            assert response.json()["changed"] is True
+
+    assert crm.set_calls == [
+        (contact_id, "gmail_pdf", "Juan Canfield"),
+        (contact_id, "manual_square", "Juan Canfield"),
+        (contact_id, "no_invoice_residential_receipt", "Juan Canfield"),
+    ]
+
+
+@pytest.mark.asyncio
+async def test_full_provider_delivery_preference_route_fails_closed_when_profile_schema_is_missing():
+    import asyncpg
+
+    from atlas_brain.api.invoicing import auth as receivables_auth
+    from atlas_brain.api.invoicing import receivables as routes
+    from atlas_brain.eom_api.auth import generate_receivables_service_token
+
+    generated = generate_receivables_service_token()
+
+    class _UnavailableCRM:
+        async def get_eom_billing_delivery_preference(self, _contact_id):
+            raise asyncpg.UndefinedTableError("delivery preference table missing")
+
+    app = FastAPI()
+    app.include_router(routes.router)
+    app.dependency_overrides[receivables_auth.get_receivables_api_config] = lambda: (
+        SimpleNamespace(
+            receivables_api_enabled=True,
+            receivables_service_token="",
+            receivables_service_token_sha256=generated.sha256,
+        )
+    )
+    app.dependency_overrides[
+        routes._commercial_billing_delivery_preference_crm_dependency
+    ] = lambda: _UnavailableCRM()
+    transport = httpx.ASGITransport(app=app)
+    async with httpx.AsyncClient(
+        transport=transport,
+        base_url="http://receivables.test",
+    ) as client:
+        response = await client.get(
+            f"/receivables/commercial-billing-delivery-preferences/{uuid4()}",
+            headers={"Authorization": f"Bearer {generated.token}"},
+        )
+
+    assert response.status_code == 503
+    assert response.json()["detail"]["code"] == "canonical_customer_unavailable"
+
+
+def test_delivery_preference_migration_is_additive_and_closed():
+    migration = (
+        Path(__file__).parents[1]
+        / "atlas_brain/storage/migrations/371_eom_billing_delivery_preferences.sql"
+    ).read_text(encoding="utf-8")
+    executable_sql = "\n".join(
+        line for line in migration.splitlines() if not line.lstrip().startswith("--")
+    )
+
+    assert "CREATE TABLE IF NOT EXISTS eom_billing_delivery_preferences" in migration
+    assert "REFERENCES contacts(id) ON DELETE RESTRICT" in migration
+    assert "delivery_method VARCHAR(64) NOT NULL" in migration
+    assert "delivery_method IN" in migration
+    assert all(
+        f"'{method}'" in migration
+        for method in (
+            "gmail_pdf",
+            "manual_square",
+            "no_invoice_residential_receipt",
+        )
+    )
+    assert "DROP TABLE" not in executable_sql
+    assert "delivery_method VARCHAR(64) NOT NULL DEFAULT" not in migration
+
+
+def test_delivery_preference_provider_has_no_financial_or_delivery_writer_call():
+    from atlas_brain.services.crm_provider import DatabaseCRMProvider
+
+    source = "\n".join(
+        (
+            inspect.getsource(DatabaseCRMProvider.get_eom_billing_delivery_preference),
+            inspect.getsource(DatabaseCRMProvider.set_eom_billing_delivery_preference),
+        )
+    )
+    forbidden_fragments = {
+        "monthly_invoice_generation",
+        "create_invoice",
+        "invoice_pdf",
+        "email_provider",
+        "send_email",
+        "gmail",
+        "customer_payments",
+    }
+    assert not any(fragment in source for fragment in forbidden_fragments)
+
+
+def test_invoicing_workflow_enrolls_delivery_preference_migration_for_pr_and_main_push():
+    workflow = (
+        Path(__file__).resolve().parents[1]
+        / ".github/workflows/atlas_invoicing_checks.yml"
+    ).read_text(encoding="utf-8")
+
+    assert workflow.count(
+        '"atlas_brain/storage/migrations/371_eom_billing_delivery_preferences.sql"'
+    ) == 2
+    assert "tests/test_eom_billing_recipients.py " + "\\" in workflow

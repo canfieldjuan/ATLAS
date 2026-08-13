@@ -6,7 +6,7 @@ import errno
 import socket
 from datetime import date
 from decimal import Decimal
-from typing import Annotated, Literal, Optional
+from typing import Annotated, Any, Literal, Optional
 from uuid import UUID
 
 import asyncpg
@@ -24,7 +24,7 @@ from ...services.receivables import (
     PaymentReceiptRecipient,
     get_receivables_service,
 )
-from ...services.crm_provider import get_crm_provider
+from ...services.crm_provider import EOMBillingDeliveryMethod, get_crm_provider
 from ...services.commercial_billing_candidates import (
     CommercialBillingCandidateService,
     CommercialBillingCandidatesUnavailableError,
@@ -132,6 +132,10 @@ class CreateCommercialBillingRunRequest(BaseModel):
         max_length=7,
         pattern=r"^\d{4}-(0[1-9]|1[0-2])$",
     )
+
+
+class SetCommercialBillingDeliveryPreferenceRequest(BaseModel):
+    delivery_method: EOMBillingDeliveryMethod
 
 
 def _dollars(amount_cents: int) -> Decimal:
@@ -249,6 +253,40 @@ async def _call_commercial_billing_run(awaitable):
             status_code=503,
             detail={"code": exc.code, "message": str(exc)},
         ) from exc
+
+
+def _commercial_billing_delivery_preference_crm_dependency() -> Any:
+    """Expose the canonical CRM provider through an overrideable route seam."""
+
+    return get_crm_provider()
+
+
+async def _call_commercial_billing_delivery_preference(awaitable) -> dict:
+    """Map canonical profile failures without guessing a delivery policy."""
+
+    try:
+        result = await awaitable
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=422,
+            detail={"code": "invalid_billing_delivery_preference", "message": str(exc)},
+        ) from exc
+    except Exception as exc:
+        if not _is_canonical_customer_unavailable_error(exc):
+            raise
+        raise HTTPException(
+            status_code=503,
+            detail={
+                "code": "canonical_customer_unavailable",
+                "message": "Canonical EOM customer data is unavailable",
+            },
+        ) from exc
+    if result is None:
+        raise HTTPException(
+            status_code=404,
+            detail={"code": "not_found", "message": "Customer not found"},
+        )
+    return result
 
 
 @router.get("/ready")
@@ -438,6 +476,42 @@ async def commercial_billing_candidates(
             status_code=503,
             detail={"code": exc.code, "message": str(exc)},
         ) from exc
+
+
+@router.get("/commercial-billing-delivery-preferences/{contact_id}")
+async def get_commercial_billing_delivery_preference(
+    contact_id: UUID,
+    crm: Annotated[
+        Any,
+        Depends(_commercial_billing_delivery_preference_crm_dependency),
+    ],
+) -> dict:
+    """Read one explicit canonical delivery policy; absence is not inferred."""
+
+    return await _call_commercial_billing_delivery_preference(
+        crm.get_eom_billing_delivery_preference(contact_id)
+    )
+
+
+@router.put("/commercial-billing-delivery-preferences/{contact_id}")
+async def set_commercial_billing_delivery_preference(
+    contact_id: UUID,
+    body: SetCommercialBillingDeliveryPreferenceRequest,
+    actor: Annotated[str, Depends(require_actor)],
+    crm: Annotated[
+        Any,
+        Depends(_commercial_billing_delivery_preference_crm_dependency),
+    ],
+) -> dict:
+    """Store one actor-audited policy without creating any delivery effect."""
+
+    return await _call_commercial_billing_delivery_preference(
+        crm.set_eom_billing_delivery_preference(
+            contact_id=contact_id,
+            delivery_method=body.delivery_method.value,
+            actor=actor,
+        )
+    )
 
 
 @router.post("/commercial-billing-runs", status_code=201)
