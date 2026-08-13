@@ -5,9 +5,10 @@ from __future__ import annotations
 from types import SimpleNamespace
 from uuid import UUID, uuid4
 
+import asyncpg
 import httpx
 import pytest
-from fastapi import FastAPI
+from fastapi import FastAPI, HTTPException
 
 from atlas_brain.eom_api import auth as receivables_auth
 from atlas_brain.eom_api import receivables as routes
@@ -168,6 +169,32 @@ async def test_full_payment_route_refuses_new_missing_customer_but_recovers_repl
 
 
 @pytest.mark.asyncio
+async def test_full_payment_route_translates_canonical_schema_failure(monkeypatch):
+    from atlas_brain.api.invoicing import receivables as full_routes
+
+    class _SchemaBrokenCRM:
+        async def get_eom_payment_customer(self, _contact_id):
+            raise asyncpg.UndefinedColumnError("customer_type")
+
+    contact_id = uuid4()
+    service = _PaymentService()
+    monkeypatch.setattr(full_routes, "get_crm_provider", lambda: _SchemaBrokenCRM())
+
+    with pytest.raises(HTTPException) as excinfo:
+        await full_routes.create_payment(
+            full_routes.CreatePaymentRequest.model_validate(_body(contact_id)),
+            actor="Juan Canfield",
+            idempotency_key="full-payment-canonical-schema-1",
+            service=service,
+        )
+
+    assert excinfo.value.status_code == 503
+    assert excinfo.value.detail["code"] == "canonical_customer_unavailable"
+    assert service.ledger_writes == 0
+    assert service.calls[0]["receipt_recipient"] is None
+
+
+@pytest.mark.asyncio
 async def test_slim_payment_route_passes_only_canonical_residential_snapshot(
     monkeypatch,
 ):
@@ -236,6 +263,34 @@ async def test_slim_payment_route_refuses_new_payment_without_canonical_customer
     assert service.ledger_writes == 0
     assert service.calls[0]["receipt_recipient"] is None
     assert service.calls[0]["require_receipt_recipient"] is True
+
+
+@pytest.mark.asyncio
+async def test_slim_payment_route_translates_canonical_schema_failure(monkeypatch):
+    class _SchemaBrokenCRM:
+        async def get_eom_payment_customer(self, _contact_id):
+            raise asyncpg.UndefinedColumnError("customer_type")
+
+    contact_id = uuid4()
+    service = _PaymentService()
+    app, token = _app(_SchemaBrokenCRM(), service)
+    monkeypatch.setattr(
+        routes, "get_eom_funnel_db_pool", lambda: _CanonicalPool(initialized=True)
+    )
+
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=app), base_url="http://receivables.test"
+    ) as client:
+        response = await client.post(
+            "/receivables/payments",
+            headers=_headers(token, key="slim-payment-canonical-schema-1"),
+            json=_body(contact_id),
+        )
+
+    assert response.status_code == 503, response.text
+    assert response.json()["detail"]["code"] == "canonical_customer_unavailable"
+    assert service.ledger_writes == 0
+    assert service.calls[0]["receipt_recipient"] is None
 
 
 @pytest.mark.asyncio

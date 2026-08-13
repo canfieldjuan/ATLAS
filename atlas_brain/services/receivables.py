@@ -413,7 +413,7 @@ class ReceivablesService:
             raise DatabaseUnavailableError("receivables ledger")
         return pool
 
-    async def is_ready(self) -> bool:
+    async def is_ready(self, conn: Any | None = None) -> bool:
         """Return whether the established receivables ledger is usable.
 
         This remains the compatibility readiness probe for full Atlas and MCP
@@ -421,15 +421,17 @@ class ReceivablesService:
         checked by :meth:`is_receipt_delivery_ready` instead.
         """
         return await self._schema_objects_ready(
+            conn,
             required_columns=_RECEIVABLES_REQUIRED_COLUMNS,
             required_indexes=_RECEIVABLES_REQUIRED_INDEXES,
         )
 
-    async def is_receipt_delivery_ready(self) -> bool:
+    async def is_receipt_delivery_ready(self, conn: Any | None = None) -> bool:
         """Return whether the ledger and residential receipt outbox are usable."""
         return (
-            await self.is_ready()
+            await self.is_ready(conn)
             and await self._schema_objects_ready(
+                conn,
                 required_columns=_RECEIPT_DELIVERY_REQUIRED_COLUMNS,
                 required_indexes=_RECEIPT_DELIVERY_REQUIRED_INDEXES,
             )
@@ -437,18 +439,20 @@ class ReceivablesService:
 
     async def _schema_objects_ready(
         self,
+        conn: Any | None = None,
         *,
         required_columns: dict[str, tuple[str, ...]],
         required_indexes: tuple[tuple[Any, ...], ...],
     ) -> bool:
         """Probe one closed schema contract without broadening another one."""
+        executor = conn if conn is not None else self.pool
         required = [
             (table_name, column_name)
             for table_name, columns in required_columns.items()
             for column_name in columns
         ]
         columns_ready = bool(
-            await self.pool.fetchval(
+            await executor.fetchval(
                 """
                 SELECT NOT EXISTS (
                     SELECT 1
@@ -470,7 +474,7 @@ class ReceivablesService:
         if not columns_ready:
             return False
 
-        index_rows = await self.pool.fetch(
+        index_rows = await executor.fetch(
             """
             SELECT
                 table_class.relname AS table_name,
@@ -697,13 +701,7 @@ class ReceivablesService:
             contact_id=contact_id,
             receipt_recipient=receipt_recipient,
         )
-        # A replay whose canonical CRM read is unavailable must still return
-        # its financial payment during a mixed migration rollout.  Do not
-        # query the EOM-only outbox merely because the caller *requires* a
-        # canonical context for a new payment: it may be a legacy payment
-        # created before migration 369.  A supplied residential snapshot is
-        # the only case that asks the response projection to read the outbox.
-        include_receipt_delivery = bool(
+        is_residential_receipt = bool(
             receipt_recipient is not None
             and receipt_recipient.customer_type == RESIDENTIAL_CUSTOMER_TYPE
         )
@@ -774,7 +772,13 @@ class ReceivablesService:
                     payment=await self._payment_view(
                         conn,
                         existing["id"],
-                        include_receipt_delivery=include_receipt_delivery,
+                        include_receipt_delivery=(
+                            await self._has_replay_receipt_delivery(
+                                conn,
+                                payment_id=existing["id"],
+                                require_receipt_recipient=require_receipt_recipient,
+                            )
+                        ),
                     ),
                     replayed=True,
                 )
@@ -788,10 +792,8 @@ class ReceivablesService:
                 raise ReceivablesReceiptContextRequiredError(
                     "Canonical customer data is required for a new EOM payment"
                 )
-            if (
-                receipt_recipient is not None
-                and receipt_recipient.customer_type == RESIDENTIAL_CUSTOMER_TYPE
-                and not await self.is_receipt_delivery_ready()
+            if is_residential_receipt and not await self.is_receipt_delivery_ready(
+                conn
             ):
                 raise ReceivablesSchemaUnavailableError(
                     "Receivables schema unavailable for payment receipt delivery"
@@ -826,7 +828,13 @@ class ReceivablesService:
                     payment=await self._payment_view(
                         conn,
                         existing["id"],
-                        include_receipt_delivery=include_receipt_delivery,
+                        include_receipt_delivery=(
+                            await self._has_replay_receipt_delivery(
+                                conn,
+                                payment_id=existing["id"],
+                                require_receipt_recipient=require_receipt_recipient,
+                            )
+                        ),
                     ),
                     replayed=True,
                 )
@@ -933,7 +941,13 @@ class ReceivablesService:
                     payment=await self._payment_view(
                         conn,
                         existing["id"],
-                        include_receipt_delivery=include_receipt_delivery,
+                        include_receipt_delivery=(
+                            await self._has_replay_receipt_delivery(
+                                conn,
+                                payment_id=existing["id"],
+                                require_receipt_recipient=require_receipt_recipient,
+                            )
+                        ),
                     ),
                     replayed=True,
                 )
@@ -995,7 +1009,7 @@ class ReceivablesService:
                 payment=await self._payment_view(
                     conn,
                     payment_id,
-                    include_receipt_delivery=include_receipt_delivery,
+                    include_receipt_delivery=is_residential_receipt,
                 ),
                 replayed=False,
             )
@@ -1935,6 +1949,39 @@ class ReceivablesService:
             allocations,
             receipt_delivery=receipt_delivery,
             include_receipt_delivery=include_receipt_delivery,
+        )
+
+    async def _has_replay_receipt_delivery(
+        self,
+        conn: Any,
+        *,
+        payment_id: UUID,
+        require_receipt_recipient: bool,
+    ) -> bool:
+        """Read a receipt projection only when an EOM replay can prove it exists.
+
+        The original receipt is immutable payment evidence, whereas the CRM
+        customer type is mutable.  An unchanged retry must therefore derive
+        its projection from the committed outbox row.  The held transaction
+        connection performs the readiness/catalog probe so this path never
+        tries to acquire a second pool connection.  A pre-369 ledger simply
+        returns no projection without querying its missing outbox table.
+        """
+        if not require_receipt_recipient:
+            return False
+        if not await self.is_receipt_delivery_ready(conn):
+            return False
+        return bool(
+            await conn.fetchval(
+                """
+                SELECT EXISTS (
+                    SELECT 1
+                    FROM payment_receipt_deliveries
+                    WHERE payment_id = $1
+                )
+                """,
+                payment_id,
+            )
         )
 
     @staticmethod

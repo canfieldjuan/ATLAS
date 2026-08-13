@@ -38,6 +38,13 @@ _DATABASE_UNAVAILABLE_ERRORS = (
     asyncpg.AdminShutdownError,
     asyncpg.CrashShutdownError,
 )
+_CANONICAL_CUSTOMER_UNAVAILABLE_ERRORS = _DATABASE_UNAVAILABLE_ERRORS + (
+    asyncpg.UndefinedTableError,
+    asyncpg.UndefinedColumnError,
+    asyncpg.InvalidSchemaNameError,
+    asyncpg.InsufficientPrivilegeError,
+    asyncpg.InvalidAuthorizationSpecificationError,
+)
 _UNAVAILABLE_INTERFACE_PREFIXES = (
     "connection is closed",
     "pool is closed",
@@ -137,6 +144,18 @@ def _is_database_unavailable_error(exc: Exception) -> bool:
     return isinstance(exc, OSError) and exc.errno in _NETWORK_UNAVAILABLE_ERRNOS
 
 
+def _is_canonical_customer_unavailable_error(exc: Exception) -> bool:
+    """Classify canonical-CRM schema and connection failures for payment reads.
+
+    A same-key retry may recover through the ledger when canonical data is
+    unavailable, but a missing customer column/table or denied read must not
+    escape this HTTP boundary as a 500 before that recovery decision runs.
+    """
+    return _is_database_unavailable_error(exc) or isinstance(
+        exc, _CANONICAL_CUSTOMER_UNAVAILABLE_ERRORS
+    )
+
+
 async def _call(awaitable):
     try:
         return await awaitable
@@ -189,23 +208,24 @@ async def ready() -> dict:
     # -- the pool that owns canonical EOM contacts -- so readiness off the
     # global receivables database alone is not the whole answer.
     #
-    # Two different states, deliberately not collapsed:
-    #
-    #   unconfigured -- no funnel DSN. This is a SUPPORTED deployment: a
-    #     profile running receivables without billing recipients. Failing
-    #     readiness here would take the whole invoicing service out over a
-    #     capability it does not use, which is worse than the gap. Reported,
-    #     not fatal.
-    #
-    #   unavailable -- a DSN IS configured and the pool cannot serve the two
-    #     queries: the pool never came up, or the database is reachable but
-    #     partially migrated. That is a real misconfiguration, and an
-    #     initialized pool alone does not rule it out -- it proves a
-    #     connection opened, not that `contacts` has the columns both queries
-    #     name. This one fails readiness.
-    pool = get_eom_funnel_db_pool()
+    # Receipt-aware payment creation requires this second database for every
+    # new payment.  A profile without its canonical-contact DSN is therefore
+    # not ready to serve the enabled receivables payment surface.
     if not funnel_settings.db_connection_string.strip():
-        return {"status": "ready", "billingRecipients": "unconfigured"}
+        raise HTTPException(
+            status_code=503,
+            detail={
+                "code": "billing_recipients_unavailable",
+                "message": (
+                    "The canonical EOM contact database is not configured; set "
+                    "ATLAS_EOM_FUNNEL_DB_CONNECTION_STRING to use billing "
+                    "recipients."
+                ),
+            },
+        )
+    # A configured pool may still be partially migrated or lack permissions;
+    # initialization alone only proves that a connection opened.
+    pool = get_eom_funnel_db_pool()
     schema_ready = False
     if pool.is_initialized:
         try:
@@ -370,7 +390,7 @@ async def create_payment(
     except HTTPException as exc:
         canonical_failure = exc
     except Exception as exc:
-        if not _is_database_unavailable_error(exc):
+        if not _is_canonical_customer_unavailable_error(exc):
             raise
         canonical_failure = HTTPException(
             status_code=503,

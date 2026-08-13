@@ -4,6 +4,13 @@
 
 Billing & Payments coordination issue [#2362](https://github.com/canfieldjuan/ATLAS/issues/2362) requires a residential payment to commit even when email cannot be delivered, while retaining one durable, retry-safe receipt-delivery record.  The current receivables transaction persists a payment, allocations, and a payment event, but has no receipt number, receipt email snapshot, or delivery status.  The current Gmail and Resend send abstractions also do not accept a caller-owned idempotency key, so calling either transport from the payment transaction would make an uncertain HTTP failure indistinguishable from a duplicate customer email.
 
+This diff intentionally exceeds the 400-line soft budget because the migration,
+canonical-customer preflight in both supported HTTP profiles, atomic ledger
+write, readiness admission, and rollback/replay proof are one financial
+transaction contract.  Splitting them would either ship no usable receipt
+behavior or expose a receipt-aware payment route without durable recovery
+evidence.
+
 ### Problem-derived contract
 
 - Root cause: the financial payment transaction has no durable, payment-keyed receipt outbox; neither the deployed full EOM route nor the slim EOM profile resolves customer type/email from its authoritative CRM before committing a payment.  The user-required draft-PR workflow also leaked its one-shot draft-consent environment variable into local verification, invalidating the wrapper's own no-consent safety fixtures.
@@ -32,7 +39,9 @@ Max files: 15
 - Acceptance criteria:
   - `ReceivablesService.create_payment_with_outcome` inserts the payment, event, allocations, and (when a residential context is supplied) one receipt delivery in one database transaction; a same-key replay returns the original payment and cannot insert a second receipt -- settled by `tests/test_receivables.py` unit and local-Postgres transaction tests.
   - A canonical active residential customer with a valid email yields a `pending` delivery whose persisted subject/body/receipt number contain the payment facts and check-received wording; no-email yields `skipped/no_email` while the payment still exists -- settled by focused service/template tests.
-  - The deployed full and slim `POST /api/v1/receivables/payments` routes resolve the active canonical customer before invoking the ledger and return a controlled failure without a ledger write when that canonical read is unavailable or refuses the contact -- settled by full direct-route and slim ASGI tests with recording service/CRM doubles, plus isolated PostgreSQL HTTP entrypoint coverage.
+  - The deployed full and slim `POST /api/v1/receivables/payments` routes resolve the active canonical customer before invoking the ledger and return a controlled failure without a ledger write when that canonical read is unavailable, schema-incompatible, permission-denied, or refuses the contact -- settled by full direct-route and slim ASGI tests with recording service/CRM doubles, plus isolated PostgreSQL HTTP entrypoint coverage.
+  - A slim receipt-aware profile without its canonical-contact DSN reports `billing_recipients_unavailable` from readiness; a configured but unreachable, partially migrated, or unauthorized canonical CRM follows the same controlled readiness admission -- settled by real-profile and focused readiness tests.
+  - A same-key EOM retry derives its receipt projection from the committed outbox row, not the mutable current customer classification; the receipt readiness probe uses the already-held ledger transaction connection, so a max-one/saturated pool cannot deadlock itself -- settled by reclassification and held-connection service tests.
   - `EOM_RECEIVABLES_READINESS_MIGRATIONS` includes the receipt-outbox migration and a fresh, isolated local PostgreSQL schema reaches receivables readiness; removal of the outbox relation is detected only for receipt-enabled use -- settled by `tests/test_receivables.py::test_eom_receivables_readiness_migration_set_builds_ready_schema` and focused readiness tests.
   - This slice has no path to Gmail, Resend, a real customer address, or a transport call; the next send/retry slice must introduce an idempotent transport/reconciliation contract -- settled by diff review and focused test doubles.
   - A user-authorized `--draft` remains accepted by `scripts/open_pr.sh`, while its final local review sees no draft-consent value and therefore cannot mutate the wrapper's no-consent safety fixture behavior -- settled by `tests/test_open_pr_wrapper.py::test_open_pr_consumes_draft_consent_before_local_review`.
@@ -113,7 +122,7 @@ Parking predicate: this PR parks unrelated billing-run, invoice/PDF/Gmail-draft,
 - Passed locally: receipt-focused service/route coverage, plus isolated
   PostgreSQL migration/readiness/rollback/recovery/mixed-rollout coverage.
 - Passed locally: the exact invoicing CI selections -- 2
-  monthly approval-blocker tests; 213 EOM/receivables/billing-recipient/
+  monthly approval-blocker tests; 217 EOM/receivables/billing-recipient/
   receipt/repository tests against a disposable local PostgreSQL 16 container;
   and 43 MCP/OAuth regression tests.  No production payment, invoice, Gmail
   draft, or customer email was created.
@@ -128,18 +137,18 @@ Parking predicate: this PR parks unrelated billing-run, invoice/PDF/Gmail-draft,
 | File | LOC |
 |---|---:|
 | `.github/workflows/atlas_invoicing_checks.yml` | 7 |
-| `atlas_brain/api/invoicing/receivables.py` | 91 |
-| `atlas_brain/eom_api/receivables.py` | 99 |
+| `atlas_brain/api/invoicing/receivables.py` | 112 |
+| `atlas_brain/eom_api/receivables.py` | 151 |
 | `atlas_brain/main_eom.py` | 1 |
 | `atlas_brain/services/crm_provider.py` | 47 |
-| `atlas_brain/services/receivables.py` | 314 |
+| `atlas_brain/services/receivables.py` | 367 |
 | `atlas_brain/storage/migrations/369_receivables_payment_receipt_outbox.sql` | 68 |
 | `atlas_brain/templates/email/payment_receipt.py` | 67 |
-| `plans/PR-EOM-Residential-Receipt-Outbox.md` | 145 |
+| `plans/PR-EOM-Residential-Receipt-Outbox.md` | 154 |
 | `scripts/open_pr.sh` | 6 |
-| `tests/test_eom_billing_recipients.py` | 6 |
-| `tests/test_eom_payment_receipts.py` | 395 |
-| `tests/test_eom_render_profile.py` | 10 |
+| `tests/test_eom_billing_recipients.py` | 34 |
+| `tests/test_eom_payment_receipts.py` | 450 |
+| `tests/test_eom_render_profile.py` | 58 |
 | `tests/test_open_pr_wrapper.py` | 24 |
-| `tests/test_receivables.py` | 682 |
-| **Total** | **1962** |
+| `tests/test_receivables.py` | 812 |
+| **Total** | **2358** |

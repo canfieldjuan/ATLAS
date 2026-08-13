@@ -37,6 +37,13 @@ _DATABASE_UNAVAILABLE_ERRORS = (
     asyncpg.AdminShutdownError,
     asyncpg.CrashShutdownError,
 )
+_CANONICAL_CUSTOMER_UNAVAILABLE_ERRORS = _DATABASE_UNAVAILABLE_ERRORS + (
+    asyncpg.UndefinedTableError,
+    asyncpg.UndefinedColumnError,
+    asyncpg.InvalidSchemaNameError,
+    asyncpg.InsufficientPrivilegeError,
+    asyncpg.InvalidAuthorizationSpecificationError,
+)
 _UNAVAILABLE_INTERFACE_PREFIXES = (
     "connection is closed",
     "pool is closed",
@@ -134,6 +141,20 @@ def _is_database_unavailable_error(exc: Exception) -> bool:
     if isinstance(exc, (ConnectionError, TimeoutError, socket.gaierror)):
         return True
     return isinstance(exc, OSError) and exc.errno in _NETWORK_UNAVAILABLE_ERRNOS
+
+
+def _is_canonical_customer_unavailable_error(exc: Exception) -> bool:
+    """Classify canonical-CRM schema and connection failures for payment reads.
+
+    The payment route has a recovery path for a same-key replay when the
+    canonical customer read is unavailable.  A partially migrated or
+    permission-denied canonical CRM must therefore take that same controlled
+    path rather than escaping as an HTTP 500 before the ledger can reconcile
+    the existing payment.
+    """
+    return _is_database_unavailable_error(exc) or isinstance(
+        exc, _CANONICAL_CUSTOMER_UNAVAILABLE_ERRORS
+    )
 
 
 async def _call(awaitable):
@@ -255,7 +276,7 @@ async def create_payment(
                 ),
             )
     except Exception as exc:
-        if not _is_database_unavailable_error(exc):
+        if not _is_canonical_customer_unavailable_error(exc):
             raise
         canonical_failure = HTTPException(
             status_code=503,

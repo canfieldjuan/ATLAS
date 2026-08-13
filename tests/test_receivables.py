@@ -156,12 +156,51 @@ class _CreatePaymentConnection:
             }
         raise AssertionError(f"Unexpected fetchrow query: {query}")
 
-    async def fetchval(self, query: str, *_args):
-        assert "pg_advisory_xact_lock" in query
-        return None
+    async def fetchval(self, query: str, *args):
+        if "pg_advisory_xact_lock" in query:
+            return None
+        if "information_schema.columns" in query:
+            return True
+        if "FROM payment_receipt_deliveries" in query:
+            return args[0] in self.receipt_deliveries
+        raise AssertionError(f"Unexpected fetchval query: {query}")
 
     async def fetch(self, query: str, *args):
         self.fetches.append((query, args))
+        if "FROM pg_index AS index_state" in query:
+            required_indexes = {
+                index_name: (
+                    table_name,
+                    is_unique,
+                    key_columns,
+                    predicate,
+                    constraint_type,
+                )
+                for (
+                    table_name,
+                    index_name,
+                    is_unique,
+                    key_columns,
+                    predicate,
+                    constraint_type,
+                ) in (
+                    *_RECEIVABLES_REQUIRED_INDEXES,
+                    *_RECEIPT_DELIVERY_REQUIRED_INDEXES,
+                )
+            }
+            return [
+                {
+                    "index_name": index_name,
+                    "table_name": required_indexes[index_name][0],
+                    "is_unique": required_indexes[index_name][1],
+                    "key_columns": list(required_indexes[index_name][2]),
+                    "predicate": required_indexes[index_name][3],
+                    "constraint_type": required_indexes[index_name][4],
+                    "is_valid": True,
+                    "is_ready": True,
+                }
+                for index_name in args[0]
+            ]
         if "FROM invoices" in query and "ORDER BY id FOR UPDATE" in query:
             selected = {str(item) for item in args[0]}
             return [row for row in self.invoices if str(row["id"]) in selected]
@@ -339,7 +378,7 @@ async def test_residential_payment_enqueues_one_pending_receipt_without_sending(
     pool = _CreatePaymentPool([], [contact_id])
     service = ReceivablesService(pool)
 
-    async def ready() -> bool:
+    async def ready(_conn=None) -> bool:
         return True
 
     service.is_receipt_delivery_ready = ready
@@ -396,12 +435,97 @@ async def test_residential_payment_enqueues_one_pending_receipt_without_sending(
 
 
 @pytest.mark.asyncio
+async def test_residential_receipt_readiness_uses_held_transaction_connection():
+    """Receipt readiness must not check out another pooled connection mid-write."""
+    contact_id = uuid4()
+    pool = _CreatePaymentPool([], [contact_id])
+
+    result = await ReceivablesService(pool).create_payment_with_outcome(
+        contact_id=contact_id,
+        payer_name="Held Connection Customer",
+        total_amount=Decimal("50.00"),
+        payment_method="check",
+        received_date=date(2026, 8, 12),
+        allocations=[],
+        idempotency_key="receipt-readiness-held-connection-1",
+        recorded_by="Juan Canfield",
+        allow_unapplied=True,
+        unapplied_contact_context_id="effingham_maids",
+        receipt_recipient=PaymentReceiptRecipient(
+            contact_id=contact_id,
+            customer_name="Held Connection Customer",
+            customer_type="residential",
+            recipient_email="held-connection@example.test",
+        ),
+        require_receipt_recipient=True,
+    )
+
+    assert result.replayed is False
+    assert result.payment["receipt_delivery"]["status"] == "pending"
+    # _CreatePaymentPool intentionally has no direct fetch/fetchval methods.
+    # Success therefore proves the readiness catalogs used the held `conn`.
+    assert pool.transaction_count == 1
+
+
+@pytest.mark.asyncio
+async def test_residential_replay_uses_persisted_receipt_after_reclassification():
+    contact_id = uuid4()
+    pool = _CreatePaymentPool([], [contact_id])
+    service = ReceivablesService(pool)
+
+    async def ready(_conn=None) -> bool:
+        return True
+
+    service.is_receipt_delivery_ready = ready
+    create_args = {
+        "contact_id": contact_id,
+        "payer_name": "Reclassified Customer",
+        "total_amount": Decimal("50.00"),
+        "payment_method": "ach",
+        "received_date": date(2026, 8, 12),
+        "allocations": [],
+        "idempotency_key": "residential-reclassification-replay-1",
+        "recorded_by": "Juan Canfield",
+        "allow_unapplied": True,
+        "unapplied_contact_context_id": "effingham_maids",
+        "require_receipt_recipient": True,
+    }
+    original = await service.create_payment_with_outcome(
+        **{
+            **create_args,
+            "receipt_recipient": PaymentReceiptRecipient(
+                contact_id=contact_id,
+                customer_name="Reclassified Customer",
+                customer_type="residential",
+                recipient_email="reclassified@example.test",
+            ),
+        }
+    )
+    replay = await service.create_payment_with_outcome(
+        **{
+            **create_args,
+            "receipt_recipient": PaymentReceiptRecipient(
+                contact_id=contact_id,
+                customer_name="Reclassified Customer",
+                customer_type="commercial",
+                recipient_email="billing@example.test",
+            ),
+        }
+    )
+
+    assert replay.replayed is True
+    assert replay.payment["id"] == original.payment["id"]
+    assert replay.payment["receipt_delivery"] == original.payment["receipt_delivery"]
+    assert len(pool.conn.receipt_deliveries) == 1
+
+
+@pytest.mark.asyncio
 async def test_residential_payment_without_email_is_skipped_but_financially_valid():
     contact_id = uuid4()
     pool = _CreatePaymentPool([], [contact_id])
     service = ReceivablesService(pool)
 
-    async def ready() -> bool:
+    async def ready(_conn=None) -> bool:
         return True
 
     service.is_receipt_delivery_ready = ready
@@ -500,7 +624,7 @@ async def test_canonical_receipt_context_is_required_only_for_a_new_eom_payment(
     pool = _CreatePaymentPool([], [contact_id])
     service = ReceivablesService(pool)
 
-    async def ready() -> bool:
+    async def ready(_conn=None) -> bool:
         return True
 
     service.is_receipt_delivery_ready = ready
