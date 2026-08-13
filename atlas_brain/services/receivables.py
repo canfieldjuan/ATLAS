@@ -1048,26 +1048,227 @@ class ReceivablesService:
         )
         if not rows:
             return []
-        payment_ids = [row["id"] for row in rows]
-        allocation_rows = await self.pool.fetch(
-            """
-            SELECT ip.payment_id, ip.id, ip.invoice_id, i.invoice_number,
-                   ip.amount, ip.payment_date, ip.payment_method, ip.reference,
-                   ip.notes, ip.recorded_by, ip.created_at, ip.metadata,
-                   ip.reversed_at, ip.reversal_reason
-            FROM invoice_payments ip
-            JOIN invoices i ON i.id = ip.invoice_id
-            WHERE ip.payment_id = ANY($1::uuid[])
-            ORDER BY i.due_date, i.invoice_number, ip.created_at
-            """,
-            payment_ids,
-        )
-        grouped: dict[str, list[Any]] = {str(item): [] for item in payment_ids}
-        for allocation in allocation_rows:
-            grouped[str(allocation["payment_id"])].append(allocation)
-        return [
-            self._compose_payment(row, grouped.get(str(row["id"]), [])) for row in rows
-        ]
+        return await self._payment_views_for_rows(self.pool, rows)
+
+    async def list_customer_ledger(
+        self,
+        *,
+        contact_id: UUID,
+        payment_status: Optional[str] = None,
+        payment_method: Optional[str] = None,
+        search: Optional[str] = None,
+        from_date: Optional[date] = None,
+        to_date: Optional[date] = None,
+        limit: int = 100,
+        offset: int = 0,
+    ) -> dict[str, Any]:
+        """Return one bounded, receipt-aware ledger page for a customer.
+
+        Entries are a current financial snapshot, not a reconstructed historical
+        balance.  Invoices do not yet have an immutable lifecycle-event stream,
+        so the response names current invoice and unapplied-payment balances
+        explicitly instead of inferring a running balance from mutable rows.
+        """
+        if from_date is not None and to_date is not None and from_date > to_date:
+            raise ReceivablesValidationError(
+                "Ledger start date cannot be after end date"
+            )
+
+        normalized_search = (search or "").strip() or None
+        normalized_status = (payment_status or "").strip() or None
+        normalized_method = (payment_method or "").strip() or None
+        page_size = max(1, min(limit, 200))
+        page_offset = max(0, offset)
+        search_pattern = f"%{normalized_search}%" if normalized_search else None
+
+        async with self.pool.transaction() as conn:
+            await conn.execute(
+                "SET TRANSACTION ISOLATION LEVEL REPEATABLE READ, READ ONLY"
+            )
+            if not await self.is_receipt_delivery_ready(conn):
+                raise ReceivablesSchemaUnavailableError(
+                    "Receivables schema unavailable for customer ledger"
+                )
+
+            entry_rows = await conn.fetch(
+                """
+                WITH ledger_entries AS (
+                    SELECT 'invoice'::text AS entry_type,
+                           i.id AS entry_id,
+                           i.created_at,
+                           i.issue_date AS occurred_date
+                    FROM invoices i
+                    WHERE i.contact_id = $1
+                      AND ($2::date IS NULL OR i.issue_date >= $2)
+                      AND ($3::date IS NULL OR i.issue_date <= $3)
+                      AND ($5::varchar IS NULL AND $6::varchar IS NULL)
+                      AND (
+                          $4::text IS NULL
+                          OR i.invoice_number ILIKE $4
+                          OR i.customer_name ILIKE $4
+                      )
+
+                    UNION ALL
+
+                    SELECT 'payment'::text AS entry_type,
+                           cp.id AS entry_id,
+                           cp.created_at,
+                           cp.received_date AS occurred_date
+                    FROM customer_payments cp
+                    WHERE cp.contact_id = $1
+                      AND ($2::date IS NULL OR cp.received_date >= $2)
+                      AND ($3::date IS NULL OR cp.received_date <= $3)
+                      AND ($5::varchar IS NULL OR cp.status = $5)
+                      AND ($6::varchar IS NULL OR cp.payment_method = $6)
+                      AND (
+                          $4::text IS NULL
+                          OR cp.payer_name ILIKE $4
+                          OR cp.reference ILIKE $4
+                          OR EXISTS (
+                              SELECT 1
+                              FROM payment_receipt_deliveries prd
+                              WHERE prd.payment_id = cp.id
+                                AND prd.receipt_number ILIKE $4
+                          )
+                          OR EXISTS (
+                              SELECT 1
+                              FROM invoice_payments ip
+                              JOIN invoices i ON i.id = ip.invoice_id
+                              WHERE ip.payment_id = cp.id
+                                AND (
+                                    i.invoice_number ILIKE $4
+                                    OR i.customer_name ILIKE $4
+                                )
+                          )
+                      )
+                )
+                SELECT entry_type, entry_id, created_at, occurred_date
+                FROM ledger_entries
+                ORDER BY created_at DESC, entry_type DESC, entry_id DESC
+                LIMIT $7 OFFSET $8
+                """,
+                contact_id,
+                from_date,
+                to_date,
+                search_pattern,
+                normalized_status,
+                normalized_method,
+                page_size + 1,
+                page_offset,
+            )
+            page_rows = entry_rows[:page_size]
+            payment_ids = [
+                row["entry_id"] for row in page_rows if row["entry_type"] == "payment"
+            ]
+            invoice_ids = [
+                row["entry_id"] for row in page_rows if row["entry_type"] == "invoice"
+            ]
+            payment_rows = (
+                await conn.fetch(
+                    """
+                SELECT cp.*, pdi.batch_id
+                FROM customer_payments cp
+                LEFT JOIN payment_deposit_items pdi ON pdi.payment_id = cp.id
+                WHERE cp.id = ANY($1::uuid[])
+                """,
+                    payment_ids,
+                )
+                if payment_ids
+                else []
+            )
+            payment_views = {
+                view["id"]: view
+                for view in await self._payment_views_for_rows(
+                    conn,
+                    payment_rows,
+                    include_receipt_delivery=True,
+                )
+            }
+            invoice_rows = (
+                await conn.fetch(
+                    """
+                SELECT id, invoice_number, contact_id, customer_name, issue_date,
+                       due_date, status, total_amount, amount_paid, amount_due,
+                       sent_at, paid_at, voided_at, void_reason, source, source_ref,
+                       created_at, updated_at
+                FROM invoices
+                WHERE id = ANY($1::uuid[])
+                """,
+                    invoice_ids,
+                )
+                if invoice_ids
+                else []
+            )
+            invoice_views = {
+                view["id"]: view for view in map(self._invoice_view, invoice_rows)
+            }
+            balance_row = await conn.fetchrow(
+                """
+                WITH applied_by_payment AS (
+                    SELECT ip.payment_id, COALESCE(SUM(ip.amount), 0) AS allocated_amount
+                    FROM invoice_payments ip
+                    WHERE ip.payment_id IS NOT NULL
+                      AND ip.reversed_at IS NULL
+                    GROUP BY ip.payment_id
+                ),
+                invoice_balance AS (
+                    SELECT COALESCE(SUM(i.amount_due), 0) AS open_invoice_balance
+                    FROM invoices i
+                    WHERE i.contact_id = $1
+                      AND i.status NOT IN ('draft', 'void')
+                ),
+                unapplied_balance AS (
+                    SELECT COALESCE(
+                        SUM(cp.total_amount - COALESCE(abp.allocated_amount, 0)),
+                        0
+                    ) AS unapplied_payment_balance
+                    FROM customer_payments cp
+                    LEFT JOIN applied_by_payment abp ON abp.payment_id = cp.id
+                    WHERE cp.contact_id = $1
+                      AND cp.status = ANY($2::varchar[])
+                )
+                SELECT invoice_balance.open_invoice_balance,
+                       unapplied_balance.unapplied_payment_balance
+                FROM invoice_balance
+                CROSS JOIN unapplied_balance
+                """,
+                contact_id,
+                list(ACTIVE_PAYMENT_STATUSES),
+            )
+
+        entries: list[dict[str, Any]] = []
+        for row in page_rows:
+            entry_id = str(row["entry_id"])
+            entry_type = row["entry_type"]
+            entries.append(
+                {
+                    "entry_type": entry_type,
+                    "entry_id": entry_id,
+                    "created_at": row["created_at"],
+                    "occurred_date": row["occurred_date"],
+                    entry_type: (
+                        payment_views[entry_id]
+                        if entry_type == "payment"
+                        else invoice_views[entry_id]
+                    ),
+                }
+            )
+
+        return {
+            "contact_id": str(contact_id),
+            "entries": entries,
+            "next_offset": (
+                page_offset + page_size if len(entry_rows) > page_size else None
+            ),
+            "balances": {
+                "open_invoice_balance_cents": cents(
+                    balance_row["open_invoice_balance"]
+                ),
+                "unapplied_payment_balance_cents": cents(
+                    balance_row["unapplied_payment_balance"]
+                ),
+            },
+        }
 
     async def adjust_allocations(
         self,
@@ -1950,6 +2151,67 @@ class ReceivablesService:
             receipt_delivery=receipt_delivery,
             include_receipt_delivery=include_receipt_delivery,
         )
+
+    async def _payment_views_for_rows(
+        self,
+        executor: Any,
+        rows: list[Any],
+        *,
+        include_receipt_delivery: bool = False,
+    ) -> list[dict[str, Any]]:
+        """Hydrate payment list rows without changing their requested order."""
+        if not rows:
+            return []
+        payment_ids = [row["id"] for row in rows]
+        allocation_rows = await executor.fetch(
+            """
+            SELECT ip.payment_id, ip.id, ip.invoice_id, i.invoice_number,
+                   ip.amount, ip.payment_date, ip.payment_method, ip.reference,
+                   ip.notes, ip.recorded_by, ip.created_at, ip.metadata,
+                   ip.reversed_at, ip.reversal_reason
+            FROM invoice_payments ip
+            JOIN invoices i ON i.id = ip.invoice_id
+            WHERE ip.payment_id = ANY($1::uuid[])
+            ORDER BY i.due_date, i.invoice_number, ip.created_at
+            """,
+            payment_ids,
+        )
+        allocations_by_payment: dict[str, list[Any]] = {
+            str(payment_id): [] for payment_id in payment_ids
+        }
+        for allocation in allocation_rows:
+            allocations_by_payment[str(allocation["payment_id"])].append(allocation)
+
+        receipt_by_payment: dict[str, dict[str, Any]] = {}
+        if include_receipt_delivery:
+            receipt_rows = await executor.fetch(
+                """
+                SELECT payment_id, receipt_number, recipient_email,
+                       delivery_status AS status, skip_reason
+                FROM payment_receipt_deliveries
+                WHERE payment_id = ANY($1::uuid[])
+                """,
+                payment_ids,
+            )
+            receipt_by_payment = {
+                str(receipt["payment_id"]): {
+                    "receipt_number": receipt["receipt_number"],
+                    "recipient_email": receipt["recipient_email"],
+                    "status": receipt["status"],
+                    "skip_reason": receipt["skip_reason"],
+                }
+                for receipt in receipt_rows
+            }
+
+        return [
+            self._compose_payment(
+                row,
+                allocations_by_payment.get(str(row["id"]), []),
+                receipt_delivery=receipt_by_payment.get(str(row["id"])),
+                include_receipt_delivery=include_receipt_delivery,
+            )
+            for row in rows
+        ]
 
     async def _has_replay_receipt_delivery(
         self,
