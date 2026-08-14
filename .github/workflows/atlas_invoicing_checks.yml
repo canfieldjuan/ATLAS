@@ -30,6 +30,7 @@ on:
       - "atlas_brain/services/crm_provider.py"
       - "atlas_brain/services/commercial_billing_candidates.py"
       - "atlas_brain/services/commercial_billing_runs.py"
+      - "atlas_brain/services/invoice_pdf.py"
       # normalize_contact_email decides billing eligibility and the
       # address these routes return; a grammar change here must run
       # the billing proof.
@@ -47,6 +48,7 @@ on:
       - "atlas_brain/templates/email/payment_receipt.py"
       - "tests/test_monthly_invoice_generation.py"
       - "tests/test_invoice_repository.py"
+      - "tests/test_invoice_pdf.py"
       - "tests/test_receivables.py"
       - "tests/test_eom_billing_recipients.py"
       - "tests/test_eom_payment_receipts.py"
@@ -86,6 +88,7 @@ on:
       - "atlas_brain/services/crm_provider.py"
       - "atlas_brain/services/commercial_billing_candidates.py"
       - "atlas_brain/services/commercial_billing_runs.py"
+      - "atlas_brain/services/invoice_pdf.py"
       # normalize_contact_email decides billing eligibility and the
       # address these routes return; a grammar change here must run
       # the billing proof.
@@ -103,6 +106,7 @@ on:
       - "atlas_brain/templates/email/payment_receipt.py"
       - "tests/test_monthly_invoice_generation.py"
       - "tests/test_invoice_repository.py"
+      - "tests/test_invoice_pdf.py"
       - "tests/test_receivables.py"
       - "tests/test_eom_billing_recipients.py"
       - "tests/test_eom_payment_receipts.py"
@@ -167,6 +171,7 @@ jobs:
             tests/test_commercial_billing_candidates.py \
             tests/test_commercial_billing_runs.py \
             tests/test_invoice_repository.py \
+            tests/test_invoice_pdf.py \
             -q
 
       - name: Run invoicing MCP + OAuth surface tests
