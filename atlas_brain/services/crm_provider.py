@@ -2364,9 +2364,12 @@ class DatabaseCRMProvider:
                 updated = await conn.fetchrow(
                     """
                     INSERT INTO eom_billing_delivery_preferences (
-                        contact_id, delivery_method, created_by, updated_by
+                        contact_id, delivery_method, created_by, created_at,
+                        updated_by, updated_at
                     )
-                    VALUES ($1, $2, $3, $3)
+                    VALUES (
+                        $1, $2, $3, statement_timestamp(), $3, statement_timestamp()
+                    )
                     RETURNING contact_id, delivery_method, created_at, created_by,
                               updated_at, updated_by
                     """,
@@ -2380,7 +2383,7 @@ class DatabaseCRMProvider:
                     UPDATE eom_billing_delivery_preferences
                     SET delivery_method = $2,
                         updated_by = $3,
-                        updated_at = CURRENT_TIMESTAMP
+                        updated_at = statement_timestamp()
                     WHERE contact_id = $1
                     RETURNING contact_id, delivery_method, created_at, created_by,
                               updated_at, updated_by

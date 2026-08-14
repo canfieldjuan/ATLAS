@@ -165,13 +165,18 @@ contender, but cannot expose a partial profile. All application writes in this
 slice use this method; direct administrative SQL outside this provider is not
 an admitted caller.
 
+The conditional `INSERT` and `UPDATE` take `statement_timestamp()` in their
+own post-lock SQL statement rather than transaction-start `CURRENT_TIMESTAMP`.
+Consequently, a transaction that began first but waited behind a later-starting
+lock holder cannot write an `updatedAt` older than the prior serialized change.
+
 For every schedule among those admitted calls, each successful different-method
 write linearizes when it acquires the canonical row lock. The committed profile
-is therefore either absent or exactly the method/actor/timestamp of the final
-different-method call in that lock order; its `created_*` fields remain from
-the insert, and an equal-method replay makes no state change. A failed
-admission creates no profile. Calls for different contacts are intentionally
-independent rather than globally ordered.
+is therefore either absent or exactly the method/actor of the final
+different-method call in that lock order, with a nondecreasing post-lock audit
+timestamp; its `created_*` fields remain from the insert, and an equal-method
+replay makes no state change. A failed admission creates no profile. Calls for
+different contacts are intentionally independent rather than globally ordered.
 
 Cancellation, database error, or process failure before commit exits the
 transaction and PostgreSQL rolls back its partial work before releasing locks;
@@ -181,7 +186,8 @@ the result is intentionally ambiguous to that caller, but persistent state is
 still either the prior complete profile or the complete committed profile—never
 a partial row. Retrying the same observed method reads that current state and
 returns the no-write replay result. The real-PostgreSQL concurrency test forces
-same-method replay, different-method serialization, cancellation while the
+same-method replay, different-method serialization, reversed transaction-start
+versus lock ordering with nondecreasing audit time, cancellation while the
 profile `UPDATE` is blocked, and the subsequent retry; it asserts this
 invariant before and after lock release.
 
@@ -321,10 +327,10 @@ remain outside this canonical EOM profile slice.
 | `.github/workflows/atlas_invoicing_checks.yml` | 2 |
 | `atlas_brain/api/invoicing/receivables.py` | 78 |
 | `atlas_brain/services/commercial_billing_candidates.py` | 147 |
-| `atlas_brain/services/crm_provider.py` | 199 |
+| `atlas_brain/services/crm_provider.py` | 202 |
 | `atlas_brain/storage/migrations/371_eom_billing_delivery_preferences.sql` | 42 |
-| `plans/PR-EOM-Billing-Delivery-Preference.md` | 330 |
+| `plans/PR-EOM-Billing-Delivery-Preference.md` | 336 |
 | `tests/test_commercial_billing_candidates.py` | 190 |
 | `tests/test_commercial_billing_runs.py` | 16 |
-| `tests/test_eom_billing_recipients.py` | 634 |
-| **Total** | **1638** |
+| `tests/test_eom_billing_recipients.py` | 702 |
+| **Total** | **1715** |

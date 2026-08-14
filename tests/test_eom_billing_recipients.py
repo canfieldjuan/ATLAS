@@ -1093,6 +1093,7 @@ async def test_delivery_preference_same_method_concurrency_has_one_write():
     schema = f"billing_delivery_preference_race_{uuid4().hex}"
     first = await asyncpg.connect(database_url)
     second = await asyncpg.connect(database_url)
+    reversed_start_task = None
     try:
         for conn in (first, second):
             if conn is first:
@@ -1200,6 +1201,67 @@ async def test_delivery_preference_same_method_concurrency_has_one_write():
             "updated_by": "Second Operator",
         }
 
+        # A writer can begin its transaction first but be descheduled before
+        # its contact-row read. The later-starting lock holder must still leave
+        # first, and the waiting writer's audit time must not move backward to
+        # its stale transaction-start timestamp when it becomes the final
+        # serialized change.
+        earlier_transaction_started = None
+        earlier_transaction_open = asyncio.Event()
+        allow_earlier_transaction_to_read = asyncio.Event()
+
+        async def write_after_later_lock_holder():
+            nonlocal earlier_transaction_started
+            async with second.transaction():
+                earlier_transaction_started = await second.fetchval(
+                    "SELECT transaction_timestamp()"
+                )
+                earlier_transaction_open.set()
+                await allow_earlier_transaction_to_read.wait()
+                return await second_service.set_eom_billing_delivery_preference(
+                    contact_id=contact_id,
+                    delivery_method="no_invoice_residential_receipt",
+                    actor="Earlier Transaction Operator",
+                )
+
+        reversed_start_task = asyncio.create_task(write_after_later_lock_holder())
+        await asyncio.wait_for(earlier_transaction_open.wait(), timeout=2)
+        async with first.transaction():
+            await first.fetchrow(
+                "SELECT id FROM contacts WHERE id = $1 FOR UPDATE",
+                contact_id,
+            )
+            allow_earlier_transaction_to_read.set()
+            await asyncio.sleep(0.05)
+            assert not reversed_start_task.done(), (
+                "the earlier transaction acquired the canonical customer lock first"
+            )
+            lock_holder_change = await first_service.set_eom_billing_delivery_preference(
+                contact_id=contact_id,
+                delivery_method="manual_square",
+                actor="Later Transaction Lock Holder",
+            )
+            assert lock_holder_change is not None and lock_holder_change["changed"] is True
+
+        reversed_start_change = await asyncio.wait_for(reversed_start_task, timeout=2)
+        assert reversed_start_change is not None and reversed_start_change["changed"] is True
+        assert earlier_transaction_started is not None
+        assert lock_holder_change["updatedAt"] > earlier_transaction_started
+        assert reversed_start_change["updatedAt"] >= lock_holder_change["updatedAt"]
+        row = await first.fetchrow(
+            """
+            SELECT delivery_method, updated_by, updated_at
+            FROM eom_billing_delivery_preferences
+            WHERE contact_id = $1
+            """,
+            contact_id,
+        )
+        assert dict(row) == {
+            "delivery_method": "no_invoice_residential_receipt",
+            "updated_by": "Earlier Transaction Operator",
+            "updated_at": reversed_start_change["updatedAt"],
+        }
+
         # Cancellation while the UPDATE is blocked on the profile row rolls
         # back its whole transaction. The profile cannot show a partial method
         # or a cancelled caller as its updater after the lock is released.
@@ -1236,9 +1298,9 @@ async def test_delivery_preference_same_method_concurrency_has_one_write():
                 contact_id,
             )
             assert dict(during_cancellation) == {
-                "delivery_method": "gmail_pdf",
+                "delivery_method": "no_invoice_residential_receipt",
                 "created_by": "First Operator",
-                "updated_by": "Second Operator",
+                "updated_by": "Earlier Transaction Operator",
             }
 
         after_cancellation = await first.fetchrow(
@@ -1250,9 +1312,9 @@ async def test_delivery_preference_same_method_concurrency_has_one_write():
             contact_id,
         )
         assert dict(after_cancellation) == {
-            "delivery_method": "gmail_pdf",
+            "delivery_method": "no_invoice_residential_receipt",
             "created_by": "First Operator",
-            "updated_by": "Second Operator",
+            "updated_by": "Earlier Transaction Operator",
         }
 
         # The same requested method can safely recover after cancellation: it
@@ -1284,6 +1346,12 @@ async def test_delivery_preference_same_method_concurrency_has_one_write():
             "updated_by": "Recovered Operator",
         }
     finally:
+        if reversed_start_task is not None and not reversed_start_task.done():
+            reversed_start_task.cancel()
+            try:
+                await reversed_start_task
+            except asyncio.CancelledError:
+                pass
         await first.execute(f'DROP SCHEMA IF EXISTS "{schema}" CASCADE')
         await first.close()
         await second.close()
