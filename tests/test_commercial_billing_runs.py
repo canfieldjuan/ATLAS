@@ -106,7 +106,7 @@ def _preview(*candidates: dict) -> dict:
         "billingPeriod": "2026-03",
         "calendarId": "commercial-calendar",
         "candidates": list(candidates),
-        "contractVersion": 1,
+        "contractVersion": 2,
         "summary": {
             "blockedCandidateCount": sum(1 for candidate in candidates if candidate["blockers"]),
             "candidateCount": len(candidates),
@@ -227,7 +227,7 @@ async def test_real_postgres_snapshot_is_immutable_and_same_key_replays_without_
         run = created["billingRun"]
         assert run["state"] == "draft"
         assert run["createdBy"] == "Juan Canfield"
-        assert run["candidateContractVersion"] == 1
+        assert run["candidateContractVersion"] == 2
         assert run["summary"] == {"blockedCandidateCount": 1, "candidateCount": 1}
         assert run["candidates"][0]["lineItems"][0]["amountCents"] == 9650
         assert run["candidates"][0]["sourceEvents"][0]["location"] == "100 Main St"
@@ -544,7 +544,7 @@ def test_generated_preview_admission_has_a_grammar_derived_oracle():
             "billingPeriod": "2026-03",
             "calendarId": "commercial-calendar",
             "candidates": [raw_candidate],
-            "contractVersion": 1,
+            "contractVersion": 2,
         }
         expected = family == "accepted"
         try:
@@ -556,6 +556,16 @@ def test_generated_preview_admission_has_a_grammar_derived_oracle():
             assert normalized.candidates[0].candidate_key == candidate["candidateKey"]
 
         assert observed is expected
+
+
+def test_normalize_preview_keeps_legacy_candidate_contract_versions_readable():
+    """A deployed v1 billing-run snapshot remains readable after v2 preview."""
+    preview = _preview(_candidate("commercial-billing:legacy:2026-03", _fingerprint("a")))
+    preview["contractVersion"] = 1
+
+    normalized = _normalize_preview(preview, billing_period="2026-03")
+
+    assert normalized.contract_version == 1
 class _RouteRunService:
     def __init__(self) -> None:
         self.create_calls: list[tuple[str, str, str]] = []
