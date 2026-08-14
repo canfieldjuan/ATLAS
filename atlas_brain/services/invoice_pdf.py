@@ -7,6 +7,7 @@ invoice PDFs matching the branded HTML email layout.
 from __future__ import annotations
 
 import io
+from decimal import Decimal, DecimalException, InvalidOperation, ROUND_HALF_UP
 from datetime import date
 from typing import Any
 
@@ -27,6 +28,8 @@ _MUTED = (136, 136, 136)     # #888888
 _LIGHT_BG = (244, 244, 244)  # #f4f4f4
 _WHITE = (255, 255, 255)
 _TABLE_BORDER = (224, 224, 224)  # #e0e0e0
+_CENT = Decimal("0.01")
+_ZERO = Decimal("0")
 
 _UNICODE_MAP = str.maketrans({
     "\u2014": "--",
@@ -48,11 +51,48 @@ def _safe(text: Any) -> str:
     return s.encode("latin-1", errors="replace").decode("latin-1")
 
 
-def _money(val: Any) -> str:
+def _decimal(value: Any) -> Decimal:
+    """Return finite decimal input or a safe zero for legacy malformed data."""
+
     try:
-        return f"${float(val):,.2f}"
-    except (TypeError, ValueError):
-        return "$0.00"
+        result = Decimal(str(value))
+    except (InvalidOperation, TypeError, ValueError):
+        return _ZERO
+    return result if result.is_finite() else _ZERO
+
+
+def _money_value(value: Any) -> Decimal:
+    """Normalize monetary display/calculation input to exact whole cents."""
+
+    try:
+        return _decimal(value).quantize(_CENT, rounding=ROUND_HALF_UP)
+    except DecimalException:
+        return _ZERO
+
+
+def _money(val: Any) -> str:
+    return f"${_money_value(val):,.2f}"
+
+
+def _line_total(item: dict[str, Any], quantity: Any) -> Decimal:
+    """Retain the legacy fallback order without binary-float arithmetic."""
+
+    flat = item.get("flat_fee")
+    amount = item.get("amount")
+    try:
+        if amount:
+            total = _money_value(amount)
+        elif flat:
+            total = _money_value(flat)
+        else:
+            unit = _money_value(item.get("unit_price") or item.get("rate") or 0)
+            total = _money_value(_decimal(quantity) * unit)
+        discount = item.get("discount")
+        if discount:
+            total = _money_value(total - _money_value(discount))
+        return total
+    except DecimalException:
+        return _ZERO
 
 
 def _fmt_date(val: Any) -> str:
@@ -207,12 +247,10 @@ def render_invoice_pdf(invoice: dict[str, Any]) -> bytes:
     for item in parsed_items:
         desc = _safe(item.get("description", ""))
         qty = item.get("quantity") or 1
-        unit = float(item.get("unit_price") or item.get("rate") or 0)
+        unit = _money_value(item.get("unit_price") or item.get("rate") or 0)
         flat = item.get("flat_fee")
         discount = item.get("discount")
-        total = float(item.get("amount") or (float(flat) if flat else qty * unit))
-        if discount:
-            total -= float(discount)
+        total = _line_total(item, qty)
 
         if has_dates:
             pdf.cell(col_w[0], 6, _safe(item.get("date", "")), align="L")
@@ -254,13 +292,13 @@ def render_invoice_pdf(invoice: dict[str, Any]) -> bytes:
         pdf.cell(0, 6, value, align="R", new_x="LMARGIN", new_y="NEXT")
 
     _total_row("Subtotal:", _money(invoice.get("subtotal")))
-    tax = invoice.get("tax_amount")
-    if tax and float(tax) > 0:
+    tax = _money_value(invoice.get("tax_amount"))
+    if tax > _ZERO:
         meta = invoice.get("metadata") or {}
         tax_label = meta.get("tax_label", "Tax") if isinstance(meta, dict) else "Tax"
         _total_row(f"{tax_label}:", _money(tax))
-    discount = invoice.get("discount_amount")
-    if discount and float(discount) > 0:
+    discount = _money_value(invoice.get("discount_amount"))
+    if discount > _ZERO:
         _total_row("Discount:", f"-{_money(discount)}")
     _total_row("Total Due:", _money(invoice.get("total_amount") or invoice.get("amount_due")), bold=True, border_top=True)
 
