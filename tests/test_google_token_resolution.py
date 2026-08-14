@@ -919,3 +919,63 @@ def test_health_status_is_unchanged_for_a_valid_path(tmp_path, monkeypatch):
     assert status["calendar"]["configured"] is True
     assert status["calendar"]["source"] == "file"
     assert "path_problem" not in status
+
+
+def test_path_validity_is_rechecked_at_point_of_use(tmp_path, monkeypatch, caplog):
+    """A constructor snapshot goes stale under a long-lived singleton.
+
+    The store lives for the process, the filesystem does not: a secret-volume
+    remount or an operator repair can replace the target between construction
+    and first use. When validity was cached, a path that was merely ABSENT at
+    startup and later became a DIRECTORY kept `problem = None`, `_load()`
+    swallowed the `IsADirectoryError`, and `get_credentials()` fell through to
+    the `.env` token — authenticating as a DIFFERENT account in exactly the case
+    the no-fallback invariant exists to prevent (Codex #2360 R1/R3).
+    """
+    from atlas_brain.services import google_oauth
+
+    monkeypatch.setattr(
+        google_oauth, "token_path_was_explicitly_configured", lambda: True
+    )
+    monkeypatch.setattr(google_oauth.settings.tools, "calendar_client_id", "cid")
+    monkeypatch.setattr(google_oauth.settings.tools, "calendar_client_secret", "sec")
+    monkeypatch.setattr(
+        google_oauth.settings.tools, "calendar_refresh_token", "other-account-token"
+    )
+
+    target = tmp_path / "creds" / "google_tokens.json"
+    target.parent.mkdir(parents=True)
+    store = GoogleTokenStore(str(target))  # absent at construction: not yet a problem
+
+    target.mkdir()  # ...then becomes a directory
+
+    with caplog.at_level(logging.ERROR, logger="atlas.services.google_oauth"):
+        creds = store.get_credentials("calendar")
+
+    assert creds is None, "fell through to the .env token for a directory path"
+    assert "DIRECTORY" in " ".join(r.getMessage() for r in caplog.records)
+    assert store.get_status()["calendar"]["configured"] is False
+
+
+def test_a_path_repaired_after_construction_is_honoured(tmp_path, monkeypatch):
+    """Revalidation cuts both ways: a repaired path must start working.
+
+    (The credential CONTENTS are still cached for the process — that is what
+    the RESTART guidance covers — but validity must not stay stuck at
+    'broken'.)
+    """
+    from atlas_brain.services import google_oauth
+
+    monkeypatch.setattr(
+        google_oauth, "token_path_was_explicitly_configured", lambda: True
+    )
+    target = tmp_path / "google_tokens.json"
+    target.mkdir()                                   # starts as a directory
+    store = GoogleTokenStore(str(target))
+    assert store.get_credentials("calendar") is None
+
+    target.rmdir()                                   # operator repairs it
+    _write_token_file(target, calendar="repaired-token")
+
+    creds = store.get_credentials("calendar")
+    assert creds is not None and creds.refresh_token == "repaired-token"

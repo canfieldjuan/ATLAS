@@ -280,12 +280,29 @@ class GoogleTokenStore:
 
     def __init__(self, token_file_path: str) -> None:
         self._configured = token_file_path
-        self._path_problem = configured_token_path_problem(token_file_path)
         self._path = locate_token_file(token_file_path)
         self._data: dict = {}
         self._lock = threading.Lock()
         self._loaded = False
         self._file_present = False
+
+    def _current_path_problem(self) -> Optional[str]:
+        """Re-check validity on EVERY use, never from a constructor snapshot.
+
+        The store is a process-lifetime singleton but the filesystem is not
+        frozen: a secret-volume remount or an operator repair can replace the
+        target between construction and first use. Caching the verdict meant a
+        path that was merely absent at startup, and later became a DIRECTORY,
+        kept `_path_problem = None` -- `_load()` swallowed the
+        `IsADirectoryError`, `_data` emptied, and `get_credentials()` fell
+        through to the `.env` token, authenticating as a different account in
+        exactly the case the no-fallback invariant exists to prevent
+        (Codex #2360 R1/R3).
+
+        Cheap: one `stat` per credential request, against a network round trip.
+        """
+        return configured_token_path_problem(self._configured)
+
 
     @property
     def token_file_path(self) -> Path:
@@ -371,7 +388,8 @@ class GoogleTokenStore:
             GoogleCredentials or None if not configured.
         """
         with self._lock:
-            if self._path_problem is not None:
+            path_problem = self._current_path_problem()
+            if path_problem is not None:
                 # FAIL CLOSED. No token file, no .env fallback -- an unusable
                 # configured path means the operator's intent is unknown, and
                 # guessing risks authenticating as the wrong Google account.
@@ -380,7 +398,7 @@ class GoogleTokenStore:
                     "service after fixing the configuration -- it is read once "
                     "at startup.",
                     service,
-                    self._path_problem,
+                    path_problem,
                 )
                 return None
             self._load()
@@ -470,7 +488,8 @@ class GoogleTokenStore:
         Returns dict with per-service status.
         """
         with self._lock:
-            if self._path_problem is not None:
+            path_problem = self._current_path_problem()
+            if path_problem is not None:
                 # Health MUST agree with behaviour. get_credentials() fails
                 # closed on an unusable configured path, so reporting
                 # `configured: true` here -- which it did while an .env token
@@ -480,7 +499,7 @@ class GoogleTokenStore:
                 return {
                     "token_file": str(self._path),
                     "file_exists": False,
-                    "path_problem": self._path_problem,
+                    "path_problem": path_problem,
                     "calendar": {"configured": False, "source": None},
                     "gmail": {"configured": False, "source": None},
                 }
