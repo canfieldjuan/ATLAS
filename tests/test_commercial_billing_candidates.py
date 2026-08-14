@@ -80,6 +80,7 @@ class _ReadOnlyCRM:
         self.customer_calls: list[UUID] = []
         self.recipient_calls: list[UUID] = []
         self.preference_calls: list[UUID] = []
+        self.preference_batch_calls: list[tuple[UUID, ...]] = []
         self.write_attempts = 0
 
     async def get_eom_payment_customer(self, contact_id: UUID) -> dict | None:
@@ -102,6 +103,20 @@ class _ReadOnlyCRM:
         if self.preference_error is not None:
             raise self.preference_error
         return self.preferences.get(contact_id)
+
+    async def get_eom_billing_delivery_preferences(
+        self,
+        contact_ids,
+    ) -> dict[UUID, dict]:
+        requested = tuple(sorted(set(contact_ids), key=str))
+        self.preference_batch_calls.append(requested)
+        if self.preference_error is not None:
+            raise self.preference_error
+        return {
+            contact_id: preference
+            for contact_id, preference in self.preferences.items()
+            if contact_id in requested and preference is not None
+        }
 
     async def log_interaction(self, *_args, **_kwargs) -> None:
         self.write_attempts += 1
@@ -238,6 +253,7 @@ async def test_per_visit_preview_is_exact_and_has_no_financial_or_delivery_effec
 
     assert preview["billingPeriod"] == "2026-03"
     assert preview["calendarId"] == "commercial-calendar"
+    assert preview["contractVersion"] == 2
     assert preview["summary"] == {"blockedCandidateCount": 1, "candidateCount": 1}
     candidate = preview["candidates"][0]
     assert candidate["customer"] == {
@@ -291,7 +307,8 @@ async def test_per_visit_preview_is_exact_and_has_no_financial_or_delivery_effec
     assert repository.calls == [True]
     assert calendar.calls[0][2] == "commercial-calendar"
     assert crm.customer_calls == [contact_id]
-    assert crm.preference_calls == [contact_id]
+    assert crm.preference_batch_calls == [(contact_id,)]
+    assert crm.preference_calls == []
     assert crm.recipient_calls == [contact_id]
     assert repository.write_attempts == calendar.write_attempts == crm.write_attempts == 0
 
@@ -347,6 +364,38 @@ async def test_preview_retries_are_identical_and_source_changes_make_it_stale():
 
 
 @pytest.mark.asyncio
+async def test_preview_batches_delivery_preferences_for_all_candidate_customers():
+    first_contact_id, second_contact_id = sorted((uuid4(), uuid4()), key=str)
+    service, repository, calendar, crm = _candidate_service(
+        [
+            _service_row(first_contact_id, keyword="Alpha"),
+            _service_row(second_contact_id, keyword="Bravo"),
+        ],
+        [
+            _event("evt-alpha", 3, summary="Alpha Office cleaning"),
+            _event("evt-bravo", 10, summary="Bravo Office cleaning"),
+        ],
+        preferences={
+            first_contact_id: _preference(first_contact_id, "gmail_pdf"),
+            second_contact_id: _preference(second_contact_id, "manual_square"),
+        },
+    )
+
+    preview = await service.preview(billing_period="2026-03")
+
+    assert crm.preference_batch_calls == [(first_contact_id, second_contact_id)]
+    assert crm.preference_calls == []
+    assert {
+        candidate["customer"]["contactId"]: candidate["deliveryMethod"]
+        for candidate in preview["candidates"]
+    } == {
+        str(first_contact_id): "gmail_pdf",
+        str(second_contact_id): "manual_square",
+    }
+    assert repository.write_attempts == calendar.write_attempts == crm.write_attempts == 0
+
+
+@pytest.mark.asyncio
 async def test_explicit_delivery_preferences_never_infer_gmail_or_invoice_eligibility():
     contact_id = uuid4()
     row = _service_row(contact_id)
@@ -366,7 +415,8 @@ async def test_explicit_delivery_preferences_never_infer_gmail_or_invoice_eligib
         "email": None,
     }
     assert {blocker["code"] for blocker in manual["blockers"]} == set()
-    assert manual_crm.preference_calls == [contact_id]
+    assert manual_crm.preference_batch_calls == [(contact_id,)]
+    assert manual_crm.preference_calls == []
     assert manual_crm.recipient_calls == []
     assert (
         manual_repository.write_attempts
@@ -633,6 +683,7 @@ async def test_invalid_period_and_source_outage_fail_without_a_write_or_partial_
         await crm_unavailable_service.preview(billing_period="2026-03")
     assert crm_unavailable_repository.calls == [True]
     assert crm_unavailable_calendar.calls
+    assert crm_unavailable.preference_batch_calls == [(contact_id,)]
     assert crm_unavailable.customer_calls == [contact_id]
     assert crm_unavailable.preference_calls == []
     assert crm_unavailable.recipient_calls == []
@@ -661,8 +712,9 @@ async def test_invalid_period_and_source_outage_fail_without_a_write_or_partial_
         await recipient_unavailable_service.preview(billing_period="2026-03")
     assert recipient_unavailable_repository.calls == [True]
     assert recipient_unavailable_calendar.calls
+    assert recipient_unavailable.preference_batch_calls == [(contact_id,)]
     assert recipient_unavailable.customer_calls == [contact_id]
-    assert recipient_unavailable.preference_calls == [contact_id]
+    assert recipient_unavailable.preference_calls == []
     assert recipient_unavailable.recipient_calls == [contact_id]
     assert (
         recipient_unavailable_repository.write_attempts
@@ -691,8 +743,9 @@ async def test_invalid_period_and_source_outage_fail_without_a_write_or_partial_
         await preference_unavailable_service.preview(billing_period="2026-03")
     assert preference_unavailable_repository.calls == [True]
     assert preference_unavailable_calendar.calls
-    assert preference_unavailable.customer_calls == [contact_id]
-    assert preference_unavailable.preference_calls == [contact_id]
+    assert preference_unavailable.preference_batch_calls == [(contact_id,)]
+    assert preference_unavailable.customer_calls == []
+    assert preference_unavailable.preference_calls == []
     assert preference_unavailable.recipient_calls == []
     assert (
         preference_unavailable_repository.write_attempts

@@ -21,7 +21,7 @@ from contextlib import asynccontextmanager
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from enum import Enum
-from typing import Any, Mapping, Optional, Sequence
+from typing import Any, Collection, Mapping, Optional, Sequence
 from uuid import UUID, uuid4
 
 logger = logging.getLogger("atlas.services.crm_provider")
@@ -2255,9 +2255,27 @@ class DatabaseCRMProvider:
         Callers must keep the candidate blocked rather than deriving Gmail or
         Square from customer type, email, or historical invoice behavior.
         """
+        preferences = await self.get_eom_billing_delivery_preferences((contact_id,))
+        return preferences.get(contact_id)
+
+    async def get_eom_billing_delivery_preferences(
+        self,
+        contact_ids: Collection[UUID],
+    ) -> dict[UUID, dict[str, Any]]:
+        """Return canonical delivery policies in one tenant-scoped read.
+
+        A caller receives only active EOM customers. Every admitted customer is
+        represented even when it has no profile row, so a missing map entry is
+        always non-canonical/not-current evidence rather than an inferred
+        delivery method. This keeps candidate preview reads bounded without
+        relaxing the single-customer route's identity boundary.
+        """
         from .eom_lead_ingress import EOM_BUSINESS_CONTEXT_ID
 
-        row = await self._get_pool().fetchrow(
+        requested = tuple(sorted(set(contact_ids), key=str))
+        if not requested:
+            return {}
+        rows = await self._get_pool().fetch(
             """
             SELECT c.id AS contact_id,
                    p.delivery_method,
@@ -2268,19 +2286,20 @@ class DatabaseCRMProvider:
             FROM contacts AS c
             LEFT JOIN eom_billing_delivery_preferences AS p
               ON p.contact_id = c.id
-            WHERE c.id = $1
+            WHERE c.id = ANY($1::uuid[])
               AND c.business_context_id = $2
               AND c.status = $3
               AND c.contact_type = $4
             """,
-            contact_id,
+            requested,
             EOM_BUSINESS_CONTEXT_ID,
             BILLING_RECIPIENT_ELIGIBLE_STATUS,
             BILLING_RECIPIENT_ELIGIBLE_CONTACT_TYPE,
         )
-        if row is None:
-            return None
-        return _eom_billing_delivery_preference_projection(row)
+        return {
+            row["contact_id"]: _eom_billing_delivery_preference_projection(row)
+            for row in rows
+        }
 
     async def set_eom_billing_delivery_preference(
         self,

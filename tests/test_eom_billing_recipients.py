@@ -982,6 +982,18 @@ async def test_canonical_delivery_preference_is_actor_audited_and_retry_safe():
             "updatedAt": None,
             "updatedBy": None,
         }
+        assert await service.get_eom_billing_delivery_preferences(
+            (active, active, inactive, foreign, lead, missing)
+        ) == {
+            active: {
+                "contactId": str(active),
+                "deliveryMethod": None,
+                "createdAt": None,
+                "createdBy": None,
+                "updatedAt": None,
+                "updatedBy": None,
+            }
+        }
 
         created = await service.set_eom_billing_delivery_preference(
             contact_id=active,
@@ -1073,7 +1085,7 @@ async def test_canonical_delivery_preference_is_actor_audited_and_retry_safe():
 
 @pytest.mark.asyncio
 async def test_delivery_preference_same_method_concurrency_has_one_write():
-    """The locked canonical customer makes concurrent same-policy retries stable."""
+    """PostgreSQL serializes policy schedules and rolls back a cancelled write."""
     asyncpg = pytest.importorskip("asyncpg")
     database_url = _database_url()
     from atlas_brain.services import crm_provider as svc
@@ -1144,6 +1156,132 @@ async def test_delivery_preference_same_method_concurrency_has_one_write():
             "delivery_method": "manual_square",
             "created_by": "First Operator",
             "updated_by": "First Operator",
+        }
+
+        # A distinct method follows the same canonical-row serial order: the
+        # task blocked behind First Operator must become the later audited
+        # change rather than racing a read-modify-write update.
+        async with first.transaction():
+            await first.fetchrow(
+                "SELECT id FROM contacts WHERE id = $1 FOR UPDATE",
+                contact_id,
+            )
+            different_method = asyncio.create_task(
+                second_service.set_eom_billing_delivery_preference(
+                    contact_id=contact_id,
+                    delivery_method="gmail_pdf",
+                    actor="Second Operator",
+                )
+            )
+            await asyncio.sleep(0.05)
+            assert not different_method.done(), (
+                "the different-method write bypassed the canonical customer lock"
+            )
+            first_change = await first_service.set_eom_billing_delivery_preference(
+                contact_id=contact_id,
+                delivery_method="no_invoice_residential_receipt",
+                actor="First Operator",
+            )
+            assert first_change is not None and first_change["changed"] is True
+
+        later_change = await asyncio.wait_for(different_method, timeout=2)
+        assert later_change is not None and later_change["changed"] is True
+        row = await first.fetchrow(
+            """
+            SELECT delivery_method, created_by, updated_by
+            FROM eom_billing_delivery_preferences
+            WHERE contact_id = $1
+            """,
+            contact_id,
+        )
+        assert dict(row) == {
+            "delivery_method": "gmail_pdf",
+            "created_by": "First Operator",
+            "updated_by": "Second Operator",
+        }
+
+        # Cancellation while the UPDATE is blocked on the profile row rolls
+        # back its whole transaction. The profile cannot show a partial method
+        # or a cancelled caller as its updater after the lock is released.
+        async with first.transaction():
+            await first.fetchrow(
+                """
+                SELECT contact_id
+                FROM eom_billing_delivery_preferences
+                WHERE contact_id = $1
+                FOR UPDATE
+                """,
+                contact_id,
+            )
+            cancelled_write = asyncio.create_task(
+                second_service.set_eom_billing_delivery_preference(
+                    contact_id=contact_id,
+                    delivery_method="manual_square",
+                    actor="Cancelled Operator",
+                )
+            )
+            await asyncio.sleep(0.05)
+            assert not cancelled_write.done(), (
+                "the cancellation probe must stop during the profile update"
+            )
+            cancelled_write.cancel()
+            with pytest.raises(asyncio.CancelledError):
+                await cancelled_write
+            during_cancellation = await first.fetchrow(
+                """
+                SELECT delivery_method, created_by, updated_by
+                FROM eom_billing_delivery_preferences
+                WHERE contact_id = $1
+                """,
+                contact_id,
+            )
+            assert dict(during_cancellation) == {
+                "delivery_method": "gmail_pdf",
+                "created_by": "First Operator",
+                "updated_by": "Second Operator",
+            }
+
+        after_cancellation = await first.fetchrow(
+            """
+            SELECT delivery_method, created_by, updated_by
+            FROM eom_billing_delivery_preferences
+            WHERE contact_id = $1
+            """,
+            contact_id,
+        )
+        assert dict(after_cancellation) == {
+            "delivery_method": "gmail_pdf",
+            "created_by": "First Operator",
+            "updated_by": "Second Operator",
+        }
+
+        # The same requested method can safely recover after cancellation: it
+        # becomes one complete change, and its later retry is the no-write
+        # replay rather than a second audit mutation.
+        recovered = await second_service.set_eom_billing_delivery_preference(
+            contact_id=contact_id,
+            delivery_method="manual_square",
+            actor="Recovered Operator",
+        )
+        assert recovered is not None and recovered["changed"] is True
+        recovered_replay = await first_service.set_eom_billing_delivery_preference(
+            contact_id=contact_id,
+            delivery_method="manual_square",
+            actor="Later Operator",
+        )
+        assert recovered_replay is not None and recovered_replay["changed"] is False
+        recovered_row = await first.fetchrow(
+            """
+            SELECT delivery_method, created_by, updated_by
+            FROM eom_billing_delivery_preferences
+            WHERE contact_id = $1
+            """,
+            contact_id,
+        )
+        assert dict(recovered_row) == {
+            "delivery_method": "manual_square",
+            "created_by": "First Operator",
+            "updated_by": "Recovered Operator",
         }
     finally:
         await first.execute(f'DROP SCHEMA IF EXISTS "{schema}" CASCADE')
@@ -1259,6 +1397,72 @@ async def test_full_provider_delivery_preference_routes_are_authenticated_and_cl
         (contact_id, "manual_square", "Juan Canfield"),
         (contact_id, "no_invoice_residential_receipt", "Juan Canfield"),
     ]
+
+
+@pytest.mark.asyncio
+async def test_full_application_mounts_delivery_preference_route_under_api_v1():
+    """Exercise main.app -> api_router -> invoicing router reachability."""
+    from atlas_brain import main
+    from atlas_brain.api.invoicing import auth as receivables_auth
+    from atlas_brain.api.invoicing import receivables as routes
+    from atlas_brain.eom_api.auth import generate_receivables_service_token
+
+    generated = generate_receivables_service_token()
+    contact_id = uuid4()
+
+    class _CRM:
+        def __init__(self) -> None:
+            self.get_calls: list[UUID] = []
+
+        async def get_eom_billing_delivery_preference(self, requested: UUID):
+            self.get_calls.append(requested)
+            return {
+                "contactId": str(requested),
+                "deliveryMethod": "manual_square",
+                "createdAt": None,
+                "createdBy": "Juan Canfield",
+                "updatedAt": None,
+                "updatedBy": "Juan Canfield",
+            }
+
+    crm = _CRM()
+    original_overrides = dict(main.app.dependency_overrides)
+    main.app.dependency_overrides[receivables_auth.get_receivables_api_config] = (
+        lambda: SimpleNamespace(
+            receivables_api_enabled=True,
+            receivables_service_token="",
+            receivables_service_token_sha256=generated.sha256,
+        )
+    )
+    main.app.dependency_overrides[
+        routes._commercial_billing_delivery_preference_crm_dependency
+    ] = lambda: crm
+    mounted_path = (
+        f"/api/v1/receivables/commercial-billing-delivery-preferences/{contact_id}"
+    )
+    try:
+        transport = httpx.ASGITransport(app=main.app)
+        async with httpx.AsyncClient(
+            transport=transport,
+            base_url="http://atlas.test",
+        ) as client:
+            assert (await client.get(mounted_path)).status_code == 401
+            response = await client.get(
+                mounted_path,
+                headers={"Authorization": f"Bearer {generated.token}"},
+            )
+            unprefixed = await client.get(
+                mounted_path.removeprefix("/api/v1"),
+                headers={"Authorization": f"Bearer {generated.token}"},
+            )
+    finally:
+        main.app.dependency_overrides.clear()
+        main.app.dependency_overrides.update(original_overrides)
+
+    assert response.status_code == 200, response.text
+    assert response.json()["deliveryMethod"] == "manual_square"
+    assert unprefixed.status_code == 404
+    assert crm.get_calls == [contact_id]
 
 
 @pytest.mark.asyncio

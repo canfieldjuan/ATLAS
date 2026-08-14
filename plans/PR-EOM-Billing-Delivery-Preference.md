@@ -48,6 +48,7 @@ writer or recreate a stored policy that no review/staleness boundary observes.
 
 Ownership lane: eom/billing-delivery-preference
 Slice phase: Vertical slice
+Max files: 9
 
 1. Add an explicit canonical EOM billing-delivery preference with exactly three
    persisted methods: `gmail_pdf`, `manual_square`, and
@@ -75,15 +76,20 @@ Slice phase: Vertical slice
     values, missing actor, wrong token, and no-token calls.
   - Equal contact/method retries return `changed: false` without changing
     `updated_at` or `updated_by`; a different method returns `changed: true`
-    and records its actor.  The transaction locks the canonical contact row,
-    so the eligibility decision and upsert share one PostgreSQL transaction.
+    and records its actor. The real-PostgreSQL test forces same-method and
+    different-method contenders through the canonical row lock, then cancels a
+    blocked profile update and proves the committed state still contains only
+    the preceding complete change.
   - `CommercialBillingCandidateService` returns the exact stored method as
     `deliveryMethod`; an absent preference keeps the existing missing-preference
     blocker, `manual_square` does not add `missing_billing_email`, and
     `no_invoice_residential_receipt` adds the closed
     `no_invoice_delivery_preference` blocker for a commercial candidate.
-    Candidate tests prove every case and that a preference change changes the
-    SHA-256 source fingerprint consumed by the existing run reconciliation.
+    Candidate tests prove every case, one bounded preference query for all
+    candidate customers, and that a preference change changes the SHA-256
+    source fingerprint consumed by the existing run reconciliation. The
+    current candidate contract is explicitly version 2; durable-run parsing
+    continues to read persisted version-1 snapshots.
   - Static source assertions prove this slice imports no invoice/PDF/Gmail/
     email/notification/monthly-scheduler writer and its tests exercise only a
     disposable local PostgreSQL schema or ASGI transport; it cannot send real
@@ -93,10 +99,13 @@ Slice phase: Vertical slice
     controlled 503; rollback is application rollback first while retaining the
     audited profile evidence.
 - Reachability proof: the active full application mounts
-  `atlas_brain.api.invoicing.receivables` under `/api/v1`.  A real-router ASGI
-  test uses the existing hashed receivables token and `X-EOM-Actor`, then
-  observes GET/PUT output and a candidate preview.  Production verification is
-  unauthenticated-only (401); it will not create a real preference.
+  `atlas_brain.api.invoicing.receivables` through
+  `atlas_brain.main.app -> api_router -> invoicing router` under `/api/v1`.
+  The smoke test uses that real app object, observes an authenticated GET at
+  the prefixed path, and proves the unprefixed path is 404. A separate
+  router-ASGI test exercises PUT with a fake canonical provider. Production
+  verification is unauthenticated-only (401); it will not create a real
+  preference.
 - Affected surfaces: migration 371, `DatabaseCRMProvider`, full receivables
   router, the pure candidate source protocol/projection, existing invoicing
   workflow, focused provider/route/candidate tests, and this plan.
@@ -125,8 +134,10 @@ active-customer row lock/upsert.
   preference retry.  Invalid request/auth shapes fail before provider write.
 
 **Seam 2 — pure candidate source resolution.**
-`CommercialBillingCandidateService._load_customer_evidence` reads canonical
-customer, preference, and recipient evidence before constructing a candidate.
+`CommercialBillingCandidateService._build_preview` reads one tenant-scoped
+delivery-preference map for all linked candidate contacts, then
+`_load_customer_evidence` reads canonical customer and conditional recipient
+evidence before constructing each candidate.
 
 - Replaced-path behaviors: the existing hard-coded null/missing-preference
   projection.  No writer is introduced.
@@ -137,6 +148,42 @@ customer, preference, and recipient evidence before constructing a candidate.
   no-invoice/receipt}; unavailable/malformed provider evidence x every class.
   Unknown stored delivery values fail closed as source evidence invalid rather
   than claiming approval eligibility.
+
+### Preference-write execution model and invariant
+
+The admitted execution surface is one call to
+`DatabaseCRMProvider.set_eom_billing_delivery_preference` for one contact.
+Input vocabulary and actor validation happen before the transaction. Every
+admitted provider write then uses one PostgreSQL transaction without an
+application-level isolation override (the PostgreSQL default is `READ
+COMMITTED`): it first selects the active, tenant-scoped canonical `contacts`
+row `FOR UPDATE`, reads the one-to-one profile, conditionally inserts or
+updates it, and commits or rolls back as one unit. PostgreSQL holds that
+contact-row lock until commit/rollback; the profile's primary key supplies at
+most one row per contact. A deployment-selected stronger isolation may abort a
+contender, but cannot expose a partial profile. All application writes in this
+slice use this method; direct administrative SQL outside this provider is not
+an admitted caller.
+
+For every schedule among those admitted calls, each successful different-method
+write linearizes when it acquires the canonical row lock. The committed profile
+is therefore either absent or exactly the method/actor/timestamp of the final
+different-method call in that lock order; its `created_*` fields remain from
+the insert, and an equal-method replay makes no state change. A failed
+admission creates no profile. Calls for different contacts are intentionally
+independent rather than globally ordered.
+
+Cancellation, database error, or process failure before commit exits the
+transaction and PostgreSQL rolls back its partial work before releasing locks;
+there is no invoice, payment, Gmail, or other external side effect in this
+transaction. If a caller loses its result after the server may have committed,
+the result is intentionally ambiguous to that caller, but persistent state is
+still either the prior complete profile or the complete committed profile—never
+a partial row. Retrying the same observed method reads that current state and
+returns the no-write replay result. The real-PostgreSQL concurrency test forces
+same-method replay, different-method serialization, cancellation while the
+profile `UPDATE` is blocked, and the subsequent retry; it asserts this
+invariant before and after lock release.
 
 ### Deployed-config probing
 
@@ -169,6 +216,10 @@ customer, preference, and recipient evidence before constructing a candidate.
   `no_invoice_delivery_preference`; it means a commercial candidate cannot
   proceed as an invoice candidate under a receipt-only policy. Unknown source
   evidence is not normalized into a new blocker token.
+- Candidate JSON is **versioned**: this new delivery method/blocker semantics
+  increments `_CANDIDATE_CONTRACT_VERSION` from 1 to 2. New previews and their
+  durable snapshot fingerprints carry 2; the run reader intentionally accepts
+  already-persisted positive versions, including version 1.
 
 ### Files touched
 
@@ -179,6 +230,7 @@ customer, preference, and recipient evidence before constructing a candidate.
 - `atlas_brain/storage/migrations/371_eom_billing_delivery_preferences.sql`
 - `plans/PR-EOM-Billing-Delivery-Preference.md`
 - `tests/test_commercial_billing_candidates.py`
+- `tests/test_commercial_billing_runs.py`
 - `tests/test_eom_billing_recipients.py`
 
 ## Mechanism
@@ -194,11 +246,12 @@ existing row unchanged for an equal-method replay.  A changed method updates
 only the profile's delivery method, updater, and timestamp.  Both read and
 write project the current preference plus actor/timestamp audit fields.
 
-The candidate reader obtains that preference together with its existing
-customer and recipient evidence.  It puts the exact method into the canonical
-candidate JSON before hashing.  Gmail still needs a recipient; manual Square
-does not.  Receipt-only is represented explicitly but remains blocked for a
-commercial invoice candidate.  Thus durable-run reconciliation sees a changed
+The candidate reader obtains one tenant-scoped batch of preferences for all
+linked candidate contacts, then combines each map entry with its existing
+customer and recipient evidence. It puts the exact method into version-2
+canonical candidate JSON before hashing. Gmail still needs a recipient; manual
+Square does not. Receipt-only is represented explicitly but remains blocked for
+a commercial invoice candidate. Thus durable-run reconciliation sees a changed
 preference as a changed source fingerprint, while no invoice/PDF/Gmail/Square
 writer exists in this slice.
 
@@ -233,18 +286,21 @@ remain outside this canonical EOM profile slice.
 
 ## Verification
 
-- Local workflow-equivalent evidence (2026-08-13): the exact three commands in
+- Local workflow-equivalent evidence (2026-08-14): the exact three commands in
   `.github/workflows/atlas_invoicing_checks.yml` ran with CPython 3.11.15 against the isolated
   local PostgreSQL 16 container at `127.0.0.1:55441` (disposable schemas only):
-  approval-blocker command **2 passed**; ledger/repository command **250
+  approval-blocker command **2 passed**; ledger/repository command **253
   passed**; MCP/OAuth command **43 passed**. The new real-PostgreSQL test also
   proved actor-audited set/read, no-write retry, check-constraint rejection,
-  and forced concurrent same-method replay (**2 passed**).
+  forced same- and different-method serialization, cancellation rollback, and
+  post-cancellation retry (**81 focused tests passed**).
 - CPython 3.11 `compileall`, focused `ruff check`, candidate/route/migration/
   no-writer/workflow-enrollment tests, `sync_pr_plan.py --check`, and `git diff
   --check` passed. The candidate test covers no preference, Gmail/no-email,
-  manual Square/no-recipient, receipt-only, unknown stored value, source change,
-  error/recovery, and no side effects.
+  manual Square/no-recipient, receipt-only, unknown stored value, one batched
+  preference query, source change, error/recovery, and no side effects. The
+  real `main.app` smoke test proves the `/api/v1` full-router mount; version-2
+  new previews and version-1 durable snapshots are both covered.
 - Before push: run the repository `push_pr.sh`/`open_pr.sh` local review path.
   Hosted Actions are diagnostic only under Juan's explicit local-check
   direction. Before merge, inspect GraphQL review threads on the published
@@ -257,10 +313,11 @@ remain outside this canonical EOM profile slice.
 |---|---:|
 | `.github/workflows/atlas_invoicing_checks.yml` | 2 |
 | `atlas_brain/api/invoicing/receivables.py` | 78 |
-| `atlas_brain/services/commercial_billing_candidates.py` | 86 |
-| `atlas_brain/services/crm_provider.py` | 178 |
+| `atlas_brain/services/commercial_billing_candidates.py` | 147 |
+| `atlas_brain/services/crm_provider.py` | 199 |
 | `atlas_brain/storage/migrations/371_eom_billing_delivery_preferences.sql` | 42 |
-| `plans/PR-EOM-Billing-Delivery-Preference.md` | 266 |
-| `tests/test_commercial_billing_candidates.py` | 137 |
-| `tests/test_eom_billing_recipients.py` | 430 |
-| **Total** | **1219** |
+| `plans/PR-EOM-Billing-Delivery-Preference.md` | 323 |
+| `tests/test_commercial_billing_candidates.py` | 190 |
+| `tests/test_commercial_billing_runs.py` | 16 |
+| `tests/test_eom_billing_recipients.py` | 634 |
+| **Total** | **1631** |

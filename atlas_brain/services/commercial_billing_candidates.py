@@ -17,7 +17,7 @@ from collections import defaultdict
 from dataclasses import dataclass
 from datetime import date, datetime, timedelta, timezone
 from decimal import Decimal, InvalidOperation, ROUND_HALF_UP
-from typing import Any, Callable, Mapping, Optional, Protocol
+from typing import Any, Callable, Collection, Mapping, Optional, Protocol
 from uuid import UUID
 
 import asyncpg
@@ -31,7 +31,7 @@ _TAX_RATE_QUANTUM = Decimal("0.0001")
 _MAX_CURRENCY = Decimal("9999999999.99")
 _PERIOD_PATTERN = re.compile(r"^(?P<year>[0-9]{4})-(?P<month>0[1-9]|1[0-2])$")
 _FINGERPRINT_VERSION = 1
-_CANDIDATE_CONTRACT_VERSION = 1
+_CANDIDATE_CONTRACT_VERSION = 2
 
 RATE_LABEL_PER_VISIT = "Per Visit"
 RATE_LABEL_PER_MONTH = "Per Month"
@@ -115,10 +115,10 @@ class _CRMProvider(Protocol):
 
     async def get_billing_recipient(self, contact_id: UUID) -> dict[str, Any]: ...
 
-    async def get_eom_billing_delivery_preference(
+    async def get_eom_billing_delivery_preferences(
         self,
-        contact_id: UUID,
-    ) -> dict[str, Any] | None: ...
+        contact_ids: Collection[UUID],
+    ) -> Mapping[UUID, dict[str, Any]]: ...
 
 
 @dataclass(frozen=True)
@@ -524,7 +524,24 @@ class CommercialBillingCandidateService:
             )
             bundles[bundle_key].append(service)
 
+        contact_ids = tuple(
+            sorted(
+                {
+                    bundle_services[0].contact_id
+                    for bundle_services in bundles.values()
+                    if bundle_services[0].contact_id is not None
+                },
+                key=str,
+            )
+        )
         crm: _CRMProvider | None = None
+        delivery_preferences: Mapping[UUID, dict[str, Any]] = {}
+        if contact_ids:
+            crm = self._load_crm_provider()
+            delivery_preferences = await self._load_delivery_preferences(
+                crm,
+                contact_ids,
+            )
         candidates: list[dict[str, Any]] = []
         for bundle_key in sorted(bundles):
             bundle_services = sorted(
@@ -535,13 +552,16 @@ class CommercialBillingCandidateService:
             recipient: dict[str, Any] | None = None
             delivery_preference: dict[str, Any] | None = None
             if contact_id is not None:
-                if crm is None:
-                    crm = self._load_crm_provider()
+                assert crm is not None
                 (
                     customer,
                     recipient,
                     delivery_preference,
-                ) = await self._load_customer_evidence(crm, contact_id)
+                ) = await self._load_customer_evidence(
+                    crm,
+                    contact_id,
+                    delivery_preference=delivery_preferences.get(contact_id),
+                )
             candidate = self._build_candidate(
                 period=period,
                 contact_id=contact_id,
@@ -583,10 +603,44 @@ class CommercialBillingCandidateService:
                 "Canonical customer evidence is unavailable"
             ) from exc
 
+    async def _load_delivery_preferences(
+        self,
+        crm: _CRMProvider,
+        contact_ids: Collection[UUID],
+    ) -> Mapping[UUID, dict[str, Any]]:
+        """Read one preference projection for every candidate customer.
+
+        Candidate bundles still read their existing customer/recipient evidence
+        individually, but delivery policy is new source evidence. Fetching it in
+        one tenant-scoped query avoids adding a serial database round trip per
+        bundle to both preview and durable-run reconciliation.
+        """
+        try:
+            preferences = await crm.get_eom_billing_delivery_preferences(contact_ids)
+        except (RuntimeError, *_SOURCE_UNAVAILABLE_ERRORS) as exc:
+            raise CommercialBillingCandidatesUnavailableError(
+                "Canonical customer evidence is unavailable"
+            ) from exc
+        if not isinstance(preferences, Mapping):
+            raise CommercialBillingCandidatesUnavailableError(
+                "Canonical customer evidence is unavailable"
+            )
+        requested = set(contact_ids)
+        normalized: dict[UUID, dict[str, Any]] = {}
+        for contact_id, preference in preferences.items():
+            if contact_id not in requested or not isinstance(preference, Mapping):
+                raise CommercialBillingCandidatesUnavailableError(
+                    "Canonical customer evidence is unavailable"
+                )
+            normalized[contact_id] = dict(preference)
+        return normalized
+
     async def _load_customer_evidence(
         self,
         crm: _CRMProvider,
         contact_id: UUID,
+        *,
+        delivery_preference: dict[str, Any] | None,
     ) -> tuple[
         dict[str, Any] | None,
         dict[str, Any] | None,
@@ -594,11 +648,6 @@ class CommercialBillingCandidateService:
     ]:
         try:
             customer = await crm.get_eom_payment_customer(contact_id)
-            delivery_preference = (
-                await crm.get_eom_billing_delivery_preference(contact_id)
-                if customer is not None
-                else None
-            )
             delivery_method = _string_or_none(
                 (delivery_preference or {}).get("deliveryMethod")
             )
