@@ -179,8 +179,11 @@ rather than continuing to carry it in the working tree.
 `docs/SECURITY_GUARDRAILS.md` previously said the lockfile was "intentionally
 not enrolled for routine Dependabot churn". That sentence now records what was
 actually wrong with it: the exclusion addressed update churn and left the
-scanner untouched, so it converted a maintenance cost into a permanent red
-gate.
+scanner untouched, so it converted a maintenance cost into a standing block of
+advisory alerts. OSV is advisory/report-only and is not a `main`
+branch-protection context, so nothing was ever blocked -- the cost is that
+alerts from code the repo forbids using share a set with alerts from code that
+ships.
 ## Intentional
 
 - **Deleted rather than scope-excluded from `osv-scan`.** Excluding it would
@@ -317,5 +320,5 @@ Parked hardening: none.
 | `_ARCHIVED_atlas-intel-next/tsconfig.json` | 34 |
 | `_ARCHIVED_atlas-intel-next/vercel.json` | 3 |
 | `docs/SECURITY_GUARDRAILS.md` | 13 |
-| `plans/PR-Drop-Archived-Intel-Next.md` | 321 |
-| **Total** | **29159** |
+| `plans/PR-Drop-Archived-Intel-Next.md` | 324 |
+| **Total** | **29162** |
