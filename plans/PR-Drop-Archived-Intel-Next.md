@@ -3,7 +3,7 @@
 ## Why this slice exists
 
 `_ARCHIVED_atlas-intel-next/` contributes **46 open OSV alerts** to
-`osv-scan`, a check that gates `main`. It is, by its own its own DO_NOT_USE note, an
+`osv-scan`, which is advisory/report-only. It is, by its own its own DO_NOT_USE note, an
 "unused Next.js experiment" that "exists only as an archive"; the live
 frontend is `atlas-churn-ui`.
 
@@ -11,25 +11,20 @@ frontend is `atlas-churn-ui`.
 *scanning*. `docs/SECURITY_GUARDRAILS.md` records that exclusion as
 deliberate — it stopped update churn, and stopping churn was read as handling
 the problem. It was not: `osv-scan` still walks the lockfile, so the exclusion
-traded routine PRs for permanent noise on a security gate. A gate that is
-always red carries no signal, which is the actual harm here — a genuinely new
-vulnerability would land invisibly behind 46 alerts nobody reads.
+traded routine update PRs for a permanent block of advisory alerts. The harm
+is signal dilution, not a blocked merge: 46 alerts from code the repo forbids
+using sit in the same set as alerts from code that ships, so the advisory
+output is worth less than it should be.
 
 ### Problem-derived contract
 
-- Root cause: an unused tree is scanned by a gate on `main`, and the mitigation
+- Root cause: an unused tree is scanned by `osv-scan`, and the mitigation
   chosen (Dependabot exclusion) does not affect scanning.
 - Correct fix must touch/change: the tree itself, and the document asserting
   the exclusion policy that this supersedes.
 - Must not change: any deployed manifest; the `npm_package_checks` matrix
   (which never listed this tree); the Dependabot config (no entry to remove);
   `HARDENING.md`'s dated log entries.
-### Problem-derived contract
-
-- Root cause: TODO: State what is actually wrong, and why, from the problem alone.
-- Correct fix must touch/change: TODO: Name the modules, contracts, tests, and behaviors the fix must change to reach that cause.
-- Must not change: TODO: Name modules, behaviors, product shape, contracts, and adjacent lanes this work must leave alone.
-
 ## Scope (this PR)
 
 Ownership lane: security/dependency-noise
@@ -321,6 +316,6 @@ Parked hardening: none.
 | `_ARCHIVED_atlas-intel-next/scripts/indexnow.ts` | 54 |
 | `_ARCHIVED_atlas-intel-next/tsconfig.json` | 34 |
 | `_ARCHIVED_atlas-intel-next/vercel.json` | 3 |
-| `docs/SECURITY_GUARDRAILS.md` | 10 |
-| `plans/PR-Drop-Archived-Intel-Next.md` | 326 |
-| **Total** | **29161** |
+| `docs/SECURITY_GUARDRAILS.md` | 13 |
+| `plans/PR-Drop-Archived-Intel-Next.md` | 321 |
+| **Total** | **29159** |
