@@ -241,7 +241,10 @@ def locate_token_file(token_file_path: str, *, explicit: bool | None = None) -> 
         return primary
 
     for legacy in LEGACY_TOKEN_FILES:
-        if legacy == primary or not legacy.exists():
+        # `is_file()`, not `exists()`: a legacy candidate that is a DIRECTORY
+        # must never be SELECTED, or the path actually read differs from the
+        # path validated and the .env fallback re-opens (Codex #2360 R1/R3/R13).
+        if legacy == primary or not legacy.is_file():
             continue
         logger.warning(
             "Google token file found at the LEGACY in-repo path %s, not at the "
@@ -301,7 +304,18 @@ class GoogleTokenStore:
 
         Cheap: one `stat` per credential request, against a network round trip.
         """
-        return configured_token_path_problem(self._configured)
+        problem = configured_token_path_problem(self._configured)
+        if problem is not None:
+            return problem
+        # Legacy discovery can make the SELECTED path differ from the
+        # configured one, so validating only the configured value leaves the
+        # path actually read unchecked.
+        if self._path.is_dir():
+            return (
+                f"the selected credential path resolves to a DIRECTORY "
+                f"({self._path}). A credential path must name a file."
+            )
+        return None
 
 
     @property

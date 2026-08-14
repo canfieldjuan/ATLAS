@@ -979,3 +979,69 @@ def test_a_path_repaired_after_construction_is_honoured(tmp_path, monkeypatch):
 
     creds = store.get_credentials("calendar")
     assert creds is not None and creds.refresh_token == "repaired-token"
+
+
+def test_a_legacy_directory_candidate_is_never_selected(tmp_path, monkeypatch):
+    """Legacy discovery must require a FILE, not merely an existing path.
+
+    `exists()` accepted a directory, so the path SELECTED differed from the
+    path validated: `configured_token_path_problem` looked at the configured
+    value (fine), `_load()` swallowed the directory-read error, and the `.env`
+    fallback re-opened (Codex #2360 R1/R3/R13).
+    """
+    from atlas_brain.services import google_oauth
+
+    monkeypatch.setattr(
+        google_oauth, "token_path_was_explicitly_configured", lambda: False
+    )
+    primary = tmp_path / "config" / "google_tokens.json"
+    legacy_dir = tmp_path / "checkout" / "data" / "google_tokens.json"
+    legacy_dir.parent.mkdir(parents=True)
+    legacy_dir.mkdir()
+    monkeypatch.setattr(google_oauth, "DEFAULT_TOKEN_FILE", str(primary))
+    monkeypatch.setattr(google_oauth, "LEGACY_TOKEN_FILES", (legacy_dir,))
+
+    store = GoogleTokenStore(str(primary))
+
+    assert store.token_file_path != legacy_dir
+    assert store.token_file_path == primary
+
+
+def test_a_legacy_file_candidate_is_still_selected(tmp_path, monkeypatch):
+    """The tightened check must not break real legacy discovery."""
+    primary, legacy = _default_with_legacy(monkeypatch, tmp_path)
+
+    store = GoogleTokenStore(str(primary))
+
+    assert store.token_file_path == legacy
+    assert store.get_credentials("calendar").refresh_token == "legacy-token"
+
+
+def test_the_selected_path_is_revalidated_not_just_the_configured_one(
+    tmp_path, monkeypatch, caplog
+):
+    """Defence in depth: the path READ is the path that must be valid.
+
+    A legacy file selected at construction can be replaced by a directory
+    before first use, so validating only the configured value would leave the
+    path actually read unchecked.
+    """
+    from atlas_brain.services import google_oauth
+
+    primary, legacy = _default_with_legacy(monkeypatch, tmp_path)
+    monkeypatch.setattr(google_oauth.settings.tools, "calendar_client_id", "cid")
+    monkeypatch.setattr(google_oauth.settings.tools, "calendar_client_secret", "sec")
+    monkeypatch.setattr(
+        google_oauth.settings.tools, "calendar_refresh_token", "other-account-token"
+    )
+    store = GoogleTokenStore(str(primary))
+    assert store.token_file_path == legacy
+
+    legacy.unlink()
+    legacy.mkdir()  # the selected path becomes a directory
+
+    with caplog.at_level(logging.ERROR, logger="atlas.services.google_oauth"):
+        creds = store.get_credentials("calendar")
+
+    assert creds is None, "fell through to the .env token for a directory path"
+    assert "DIRECTORY" in " ".join(r.getMessage() for r in caplog.records)

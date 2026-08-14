@@ -106,6 +106,13 @@ Max files: 3
      `::test_path_validity_is_rechecked_at_point_of_use`, with
      `::test_a_path_repaired_after_construction_is_honoured` holding the other
      direction so revalidation cannot get stuck at "broken".
+  2d-bis. The path VALIDATED is the path READ. Legacy discovery can make the
+     selected path differ from the configured one, so a legacy candidate must
+     be a FILE (not merely exist) and the selected path is revalidated at point
+     of use — settled by `::test_a_legacy_directory_candidate_is_never_selected`,
+     `::test_the_selected_path_is_revalidated_not_just_the_configured_one`, with
+     `::test_a_legacy_file_candidate_is_still_selected` proving the tightened
+     check does not break real legacy discovery.
   2e. Health agrees with behaviour on an unusable path — settled by
      `::test_health_status_reports_unconfigured_when_the_path_is_invalid` and
      `::test_health_status_is_unchanged_for_a_valid_path`.
@@ -275,10 +282,10 @@ Parked hardening: ATLAS #2359.
 
 All counts re-run at this head.
 
-- `python -m pytest tests/test_google_token_resolution.py -q` — **47 passed**
+- `python -m pytest tests/test_google_token_resolution.py -q` — **50 passed**
 - Every consumer of the changed store — `test_google_token_resolution.py`,
   `test_calendar_import_rerun.py`, `test_eom_live_calendar_import.py`,
-  `test_eom_scoped_gmail_credentials.py`, `test_leads_intake.py` — **194 passed, 1 skipped**
+  `test_eom_scoped_gmail_credentials.py`, `test_leads_intake.py` — **197 passed, 1 skipped**
 - **Both defects reproduced against this head BEFORE fixing**, quoted verbatim
   in "Why this slice exists": `resolve_token_file_path('')` returned the repo
   root and the stdlib `Path.is_dir` predicate was `True`; the override-branch warning named the stable
@@ -295,6 +302,8 @@ All counts re-run at this head.
   | recovery message stops branching on provenance | 1 failed |
   | `get_status` stops honouring the invalid path | 2 failed |
   | validity reverted to a constructor snapshot | 2 failed |
+  | legacy candidate check back to `exists()` | 1 failed |
+  | selected-path revalidation removed | 1 failed |
 - `ruff check` on the changed module and test file: findings identical to the
   `origin/main` baseline; none introduced.
 - `python -m py_compile` on the changed module — OK.
@@ -302,8 +311,8 @@ All counts re-run at this head.
 - **HERMETICITY proved in a clean checkout.** `data/` has ZERO tracked files, so
   a `data/..` alias resolves to nothing on a fresh clone — a test relying on it
   passed here only because this worktree has an untracked `data/`. The suite was
-  re-run in a fresh `origin/main` worktree with no untracked `data/`: **47
-  passed** (re-proved after merging current main). The non-hermetic case was removed; the traversal shape is covered by
+  re-run in a fresh `origin/main` worktree with no untracked `data/`: **50
+  passed** (re-proved after each round, at current `origin/main`). The non-hermetic case was removed; the traversal shape is covered by
   a test that builds its own directory under `tmp_path`.
 - No credential value appears in any changed log statement.
 
@@ -311,7 +320,7 @@ All counts re-run at this head.
 
 | File | LOC |
 |---|---:|
-| `atlas_brain/services/google_oauth.py` | 151 |
-| `plans/PR-EOM-Token-Path-Validation.md` | 317 |
-| `tests/test_google_token_resolution.py` | 316 |
-| **Total** | **784** |
+| `atlas_brain/services/google_oauth.py` | 167 |
+| `plans/PR-EOM-Token-Path-Validation.md` | 326 |
+| `tests/test_google_token_resolution.py` | 382 |
+| **Total** | **875** |
