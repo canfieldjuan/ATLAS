@@ -1293,7 +1293,7 @@ async def test_delivery_preference_same_method_concurrency_has_one_write():
 async def test_full_provider_delivery_preference_routes_are_authenticated_and_closed():
     """The full provider is the active route; no slim duplicate is introduced."""
     from atlas_brain.api.invoicing import auth as receivables_auth
-    from atlas_brain.api.invoicing import receivables as routes
+    from atlas_brain.api.invoicing import receivables as full_routes
     from atlas_brain.eom_api.auth import generate_receivables_service_token
 
     generated = generate_receivables_service_token()
@@ -1335,7 +1335,7 @@ async def test_full_provider_delivery_preference_routes_are_authenticated_and_cl
 
     crm = _CRM()
     app = FastAPI()
-    app.include_router(routes.router)
+    app.include_router(full_routes.router)
     app.dependency_overrides[receivables_auth.get_receivables_api_config] = lambda: (
         SimpleNamespace(
             receivables_api_enabled=True,
@@ -1344,7 +1344,7 @@ async def test_full_provider_delivery_preference_routes_are_authenticated_and_cl
         )
     )
     app.dependency_overrides[
-        routes._commercial_billing_delivery_preference_crm_dependency
+        full_routes._commercial_billing_delivery_preference_crm_dependency
     ] = lambda: crm
 
     path = f"/receivables/commercial-billing-delivery-preferences/{contact_id}"
@@ -1404,7 +1404,7 @@ async def test_full_application_mounts_delivery_preference_route_under_api_v1():
     """Exercise main.app -> api_router -> invoicing router reachability."""
     from atlas_brain import main
     from atlas_brain.api.invoicing import auth as receivables_auth
-    from atlas_brain.api.invoicing import receivables as routes
+    from atlas_brain.api.invoicing import receivables as full_routes
     from atlas_brain.eom_api.auth import generate_receivables_service_token
 
     generated = generate_receivables_service_token()
@@ -1435,7 +1435,7 @@ async def test_full_application_mounts_delivery_preference_route_under_api_v1():
         )
     )
     main.app.dependency_overrides[
-        routes._commercial_billing_delivery_preference_crm_dependency
+        full_routes._commercial_billing_delivery_preference_crm_dependency
     ] = lambda: crm
     mounted_path = (
         f"/api/v1/receivables/commercial-billing-delivery-preferences/{contact_id}"
@@ -1470,7 +1470,7 @@ async def test_full_provider_delivery_preference_route_fails_closed_when_profile
     import asyncpg
 
     from atlas_brain.api.invoicing import auth as receivables_auth
-    from atlas_brain.api.invoicing import receivables as routes
+    from atlas_brain.api.invoicing import receivables as full_routes
     from atlas_brain.eom_api.auth import generate_receivables_service_token
 
     generated = generate_receivables_service_token()
@@ -1480,7 +1480,7 @@ async def test_full_provider_delivery_preference_route_fails_closed_when_profile
             raise asyncpg.UndefinedTableError("delivery preference table missing")
 
     app = FastAPI()
-    app.include_router(routes.router)
+    app.include_router(full_routes.router)
     app.dependency_overrides[receivables_auth.get_receivables_api_config] = lambda: (
         SimpleNamespace(
             receivables_api_enabled=True,
@@ -1489,7 +1489,7 @@ async def test_full_provider_delivery_preference_route_fails_closed_when_profile
         )
     )
     app.dependency_overrides[
-        routes._commercial_billing_delivery_preference_crm_dependency
+        full_routes._commercial_billing_delivery_preference_crm_dependency
     ] = lambda: _UnavailableCRM()
     transport = httpx.ASGITransport(app=app)
     async with httpx.AsyncClient(

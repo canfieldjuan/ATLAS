@@ -267,6 +267,9 @@ writer exists in this slice.
 - `no_invoice_residential_receipt` is retained as an explicit universal policy
   value but blocks a commercial invoice candidate, instead of silently turning
   a commercial candidate into a receipt workflow.
+- Full- and slim-provider test aliases stay distinct where both are exercised
+  in one module; this changes no route or runtime behavior, but keeps maturity
+  attribution attached to the route each test actually imports.
 
 ## Deferred
 
@@ -301,6 +304,10 @@ remain outside this canonical EOM profile slice.
   preference query, source change, error/recovery, and no side effects. The
   real `main.app` smoke test proves the `/api/v1` full-router mount; version-2
   new previews and version-1 durable snapshots are both covered.
+- Local maturity attribution repair: `tests/test_eom_billing_recipients.py`
+  passed all 56 tests after separating full and slim test-local route aliases;
+  the API scan returned to the exact main-level score 28 / seven-mock result.
+  H-14 #2379 supplies that main baseline and receipt-template discovery proof.
 - Before push: run the repository `push_pr.sh`/`open_pr.sh` local review path.
   Hosted Actions are diagnostic only under Juan's explicit local-check
   direction. Before merge, inspect GraphQL review threads on the published
@@ -316,8 +323,8 @@ remain outside this canonical EOM profile slice.
 | `atlas_brain/services/commercial_billing_candidates.py` | 147 |
 | `atlas_brain/services/crm_provider.py` | 199 |
 | `atlas_brain/storage/migrations/371_eom_billing_delivery_preferences.sql` | 42 |
-| `plans/PR-EOM-Billing-Delivery-Preference.md` | 323 |
+| `plans/PR-EOM-Billing-Delivery-Preference.md` | 330 |
 | `tests/test_commercial_billing_candidates.py` | 190 |
 | `tests/test_commercial_billing_runs.py` | 16 |
 | `tests/test_eom_billing_recipients.py` | 634 |
-| **Total** | **1631** |
+| **Total** | **1638** |
