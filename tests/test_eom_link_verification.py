@@ -31,6 +31,7 @@ FOREIGN_TENANT = "churnsignals"
 _GENERATED_SERVICE_TOKEN = auth_mod.generate_eom_funnel_service_token()
 _SERVICE_TOKEN = _GENERATED_SERVICE_TOKEN.token
 _SERVICE_TOKEN_SHA256 = _GENERATED_SERVICE_TOKEN.sha256
+_DEFAULT_TYPE_REVISION = 1
 
 
 class _CRM:
@@ -41,9 +42,11 @@ class _CRM:
         *,
         known: list[UUID] | None = None,
         types: dict[UUID, str] | None = None,
+        type_revisions: dict[UUID, int] | None = None,
     ) -> None:
         self.known = known or []
         self.types = types or {}
+        self.type_revisions = type_revisions or {}
         self.calls: list[list[UUID]] = []
 
     async def list_known_eom_contact_ids(
@@ -51,7 +54,13 @@ class _CRM:
     ) -> list[dict]:
         self.calls.append(list(contact_ids))
         return [
-            {"id": value, "customer_type": self.types.get(value, "unknown")}
+            {
+                "id": value,
+                "customer_type": self.types.get(value, "unknown"),
+                "customer_type_revision": self.type_revisions.get(
+                    value, _DEFAULT_TYPE_REVISION
+                ),
+            }
             for value in self.known
             if value in set(contact_ids)
         ]
@@ -133,7 +142,10 @@ async def test_a_contact_in_another_tenant_is_not_known_here():
     response = await _get(crm, f"?contact_id={churnsignals_contact}")
 
     assert response.status_code == 200
-    assert response.json()["knownContactIds"] == []
+    body = response.json()
+    assert body["knownContactIds"] == []
+    assert body["customerTypes"] == {}
+    assert body["customerTypeRevisions"] == {}
 
 
 @pytest.mark.asyncio
@@ -148,8 +160,16 @@ async def test_an_id_the_caller_never_submitted_is_never_returned():
         ) -> list[dict]:
             self.calls.append(list(contact_ids))
             return [
-                {"id": asked, "customer_type": "commercial"},
-                {"id": never_asked, "customer_type": "commercial"},
+                {
+                    "id": asked,
+                    "customer_type": "commercial",
+                    "customer_type_revision": _DEFAULT_TYPE_REVISION,
+                },
+                {
+                    "id": never_asked,
+                    "customer_type": "commercial",
+                    "customer_type_revision": _DEFAULT_TYPE_REVISION,
+                },
             ]
 
     response = await _get(_LeakyCRM(), f"?contact_id={asked}")
@@ -169,6 +189,7 @@ async def test_repeated_ids_are_asked_once_and_answered_once():
     assert response.json() == {
         "knownContactIds": [str(live)],
         "customerTypes": {str(live): "unknown"},
+        "customerTypeRevisions": {str(live): _DEFAULT_TYPE_REVISION},
         "checked": 1,
         "limit": funnel_mod._MAX_KNOWN_CONTACT_IDS,
     }
@@ -252,18 +273,24 @@ async def test_a_wrong_service_token_is_refused():
 
 
 @pytest.mark.asyncio
-async def test_the_route_discloses_no_contact_data_beyond_the_id():
-    """Callers get resolution, not a read of the CRM record."""
+async def test_the_route_discloses_no_contact_identity_data():
+    """Callers get link/type/version evidence, not a CRM identity record."""
     live = uuid4()
     crm = _CRM(known=[live])
 
     response = await _get(crm, f"?contact_id={live}")
 
     body = response.json()
-    assert set(body) == {"knownContactIds", "customerTypes", "checked", "limit"}
+    assert set(body) == {
+        "knownContactIds",
+        "customerTypes",
+        "customerTypeRevisions",
+        "checked",
+        "limit",
+    }
     # The point of this test is that no IDENTITY data is disclosed. customerType
-    # is an operator-set classification, not personal data; name/email/phone/
-    # address must still never appear anywhere in the payload.
+    # and its source revision are narrow mirror evidence, not personal data;
+    # name/email/phone/address must still never appear anywhere in the payload.
     rendered = json.dumps(body)
     for leaked in ("fullName", "email", "phone", "address", "notes"):
         assert leaked not in rendered
@@ -318,6 +345,7 @@ async def test_the_real_aggregate_serves_the_route_at_its_deployed_path():
     body = response.json()
     assert body["knownContactIds"] == [str(live)]
     assert str(dangling) not in body["knownContactIds"]
+    assert set(body["customerTypeRevisions"]) == {str(live)}
 
 
 @pytest.mark.asyncio
@@ -349,10 +377,15 @@ async def test_tenant_scope_holds_against_real_postgres():
             "012_appointments.sql",
             "030_call_transcripts.sql",
             "035_contacts.sql",
-            # The provider now selects customer_type, so this schema needs it.
+            # The provider selects type revision evidence with the type, so this
+            # schema needs both prerequisite migrations.
             "366_contacts_customer_type.sql",
         ):
             await admin_conn.execute((MIGRATIONS / name).read_text())
+        async with admin_conn.transaction():
+            await admin_conn.execute(
+                (MIGRATIONS / "367_contacts_customer_type_revision.sql").read_text()
+            )
 
         async def set_search_path(connection):
             await connection.execute(f'SET search_path TO "{schema}", public')
@@ -435,6 +468,22 @@ async def test_the_route_reports_the_type_for_each_known_contact():
 
 
 @pytest.mark.asyncio
+async def test_the_route_reports_a_database_owned_type_revision_for_each_known_contact():
+    """A consumer must be able to order the type evidence, not just read it."""
+    commercial = uuid4()
+    crm = _CRM(
+        known=[commercial],
+        types={commercial: "commercial"},
+        type_revisions={commercial: 37},
+    )
+
+    body = (await _get(crm, f"?contact_id={commercial}")).json()
+
+    assert body["customerTypes"] == {str(commercial): "commercial"}
+    assert body["customerTypeRevisions"] == {str(commercial): 37}
+
+
+@pytest.mark.asyncio
 async def test_a_dangling_id_gets_no_type_at_all():
     """No id, no type. A caller must not read a classification for a link that
     does not resolve -- that would be worse than silence, because it looks
@@ -447,6 +496,7 @@ async def test_a_dangling_id_gets_no_type_at_all():
 
     assert str(dangling) not in body["customerTypes"]
     assert set(body["customerTypes"]) == set(body["knownContactIds"])
+    assert set(body["customerTypeRevisions"]) == set(body["knownContactIds"])
 
 
 @pytest.mark.asyncio
@@ -459,14 +509,23 @@ async def test_types_never_carry_an_id_the_caller_did_not_submit():
         async def list_known_eom_contact_ids(self, *, contact_ids):
             self.calls.append(list(contact_ids))
             return [
-                {"id": asked, "customer_type": "commercial"},
-                {"id": never_asked, "customer_type": "residential"},
+                {
+                    "id": asked,
+                    "customer_type": "commercial",
+                    "customer_type_revision": _DEFAULT_TYPE_REVISION,
+                },
+                {
+                    "id": never_asked,
+                    "customer_type": "residential",
+                    "customer_type_revision": _DEFAULT_TYPE_REVISION,
+                },
             ]
 
     body = (await _get(_LeakyCRM(), f"?contact_id={asked}")).json()
 
     assert body["knownContactIds"] == [str(asked)]
     assert body["customerTypes"] == {str(asked): "commercial"}
+    assert body["customerTypeRevisions"] == {str(asked): _DEFAULT_TYPE_REVISION}
 
 
 @pytest.mark.asyncio
@@ -495,6 +554,10 @@ async def test_the_type_read_is_tenant_scoped_against_real_postgres():
         await admin_conn.execute("CREATE TABLE call_transcripts (id UUID PRIMARY KEY)")
         for name in ("035_contacts.sql", "366_contacts_customer_type.sql"):
             await admin_conn.execute((MIGRATIONS / name).read_text())
+        async with admin_conn.transaction():
+            await admin_conn.execute(
+                (MIGRATIONS / "367_contacts_customer_type_revision.sql").read_text()
+            )
 
         async def set_search_path(connection):
             await connection.execute(f'SET search_path TO "{schema}", public')
@@ -507,14 +570,16 @@ async def test_the_type_read_is_tenant_scoped_against_real_postgres():
         eom = await pool.fetchrow(
             """
             INSERT INTO contacts (full_name, business_context_id, customer_type)
-            VALUES ('EOM Commercial', $1, 'commercial') RETURNING id
+            VALUES ('EOM Commercial', $1, 'commercial')
+            RETURNING id, customer_type_revision
             """,
             TENANT,
         )
         foreign = await pool.fetchrow(
             """
             INSERT INTO contacts (full_name, business_context_id, customer_type)
-            VALUES ('Churnsignals Co', $1, 'commercial') RETURNING id
+            VALUES ('Churnsignals Co', $1, 'commercial')
+            RETURNING id, customer_type_revision
             """,
             FOREIGN_TENANT,
         )
@@ -523,11 +588,71 @@ async def test_the_type_read_is_tenant_scoped_against_real_postgres():
             contact_ids=[eom["id"], foreign["id"]]
         )
 
-        by_id = {row["id"]: row["customer_type"] for row in rows}
-        assert by_id.get(eom["id"]) == "commercial"
+        by_id = {row["id"]: row for row in rows}
+        assert by_id[eom["id"]]["customer_type"] == "commercial"
+        assert (
+            by_id[eom["id"]]["customer_type_revision"] == eom["customer_type_revision"]
+        )
+        assert isinstance(by_id[eom["id"]]["customer_type_revision"], int)
+        assert by_id[eom["id"]]["customer_type_revision"] > 0
         assert foreign["id"] not in by_id, (
             "another tenant's type must not be readable through this route"
         )
+
+        unrelated = await pool.fetchrow(
+            """
+            UPDATE contacts
+               SET full_name = 'EOM Commercial Renamed'
+             WHERE id = $1
+         RETURNING customer_type_revision
+            """,
+            eom["id"],
+        )
+        assert unrelated["customer_type_revision"] == eom["customer_type_revision"]
+
+        type_change = await pool.fetchrow(
+            """
+            UPDATE contacts
+               SET customer_type = 'residential'
+             WHERE id = $1
+         RETURNING customer_type_revision
+            """,
+            eom["id"],
+        )
+        assert type_change["customer_type_revision"] > eom["customer_type_revision"]
+
+        type_noop = await pool.fetchrow(
+            """
+            UPDATE contacts
+               SET customer_type = 'residential'
+             WHERE id = $1
+         RETURNING customer_type_revision
+            """,
+            eom["id"],
+        )
+        assert type_noop["customer_type_revision"] == type_change[
+            "customer_type_revision"
+        ]
+
+        forged = await pool.fetchrow(
+            """
+            UPDATE contacts
+               SET customer_type = 'commercial', customer_type_revision = 1
+             WHERE id = $1
+         RETURNING customer_type_revision
+            """,
+            eom["id"],
+        )
+        assert forged["customer_type_revision"] > type_change["customer_type_revision"]
+
+        with pytest.raises(
+            asyncpg.exceptions.RaiseError,
+            match="customer_type_revision is database-owned",
+        ):
+            await pool.execute(
+                "UPDATE contacts SET customer_type_revision = 1 WHERE id = $1",
+                eom["id"],
+            )
     finally:
         if pool is not None:
             await pool.close()

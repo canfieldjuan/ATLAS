@@ -89,6 +89,7 @@ on:
       - "tests/test_migration_365_business_context_fk.py"
       - "atlas_brain/storage/migrations/365_contacts_business_context_registry_fk.sql"
       - "atlas_brain/storage/migrations/366_contacts_customer_type.sql"
+      - "atlas_brain/storage/migrations/367_contacts_customer_type_revision.sql"
       - "scripts/backfill_eom_customer_type.py"
   push:
     branches:
@@ -177,6 +178,7 @@ on:
       - "tests/test_migration_365_business_context_fk.py"
       - "atlas_brain/storage/migrations/365_contacts_business_context_registry_fk.sql"
       - "atlas_brain/storage/migrations/366_contacts_customer_type.sql"
+      - "atlas_brain/storage/migrations/367_contacts_customer_type_revision.sql"
       - "scripts/backfill_eom_customer_type.py"
 
 jobs:
@@ -216,6 +218,10 @@ jobs:
 
       - name: Run EOM lead pipeline checks
         run: |
+          # test_eom_billing_recipients.py is enrolled here as well as in the
+          # invoicing workflow: eom_crm_mutations triggers THIS workflow, and
+          # its normalize_contact_email decides billing-recipient eligibility
+          # and the address those routes return.
           python -m pytest \
             tests/test_ack_commercial_templates.py \
             tests/test_ack_variant_classification.py \
@@ -225,6 +231,7 @@ jobs:
             tests/test_eom_contacts_api_tenant_scope.py \
             tests/test_backfill_eom_customer_type.py \
             tests/test_eom_link_verification.py \
+            tests/test_eom_billing_recipients.py \
             tests/test_eom_lead_conversion.py \
             tests/test_eom_lead_conversion_integration.py \
             tests/test_eom_write_boundary_audit.py \

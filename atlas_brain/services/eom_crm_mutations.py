@@ -129,6 +129,33 @@ def _normalize_email(value: Any) -> str | None:
     return candidate
 
 
+def normalize_contact_email(value: Any) -> str | None:
+    """The canonical address, or None when it cannot receive mail.
+
+    Returns the NORMALIZED form rather than a verdict, because validity and
+    representation are the same decision and splitting them reintroduces the
+    drift this function exists to remove. The validator strips Unicode edge
+    whitespace and lowercases; SQL ``btrim`` does neither, so a caller that
+    asked only "is this valid?" and then emitted the column would report
+    ``\u00a0ap@example.com\u00a0`` eligible and hand back the unusable
+    original -- and would emit ``AP@Example.COM`` where the canonical write
+    path stores ``ap@example.com``.
+
+    Exported so no consumer re-expresses the grammar. A second expression of it
+    -- an SQL regex, say -- drifts by construction: one admitted ``a@b..com``
+    and ``a@.b.com``, which the rules below reject.
+    """
+    try:
+        return _normalize_email(value)
+    except EOMOperatorContactMutationError:
+        return None
+
+
+def is_valid_contact_email(value: Any) -> bool:
+    """Verdict form of :func:`normalize_contact_email`. One implementation."""
+    return normalize_contact_email(value) is not None
+
+
 def _normalize_phone(value: Any) -> str | None:
     normalized = _blank_to_none(value)
     if normalized is None:

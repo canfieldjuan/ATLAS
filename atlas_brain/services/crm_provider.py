@@ -433,6 +433,73 @@ async def _write_contact_interaction(
 # ---------------------------------------------------------------------------
 
 
+# --------------------------------------------------------------------------
+# Billing recipients (EOM Slice 1A)
+# --------------------------------------------------------------------------
+
+BILLING_RECIPIENT_PAGE_SIZE = 500
+# Bounds the scan when eligible rows are sparse. 20 x 500 = 10k
+# candidates, far beyond the real EOM contact count.
+BILLING_RECIPIENT_MAX_PAGES = 20
+BILLING_RECIPIENT_ELIGIBLE_STATUS = "active"
+
+# Whitespace that makes an address unusable. btrim's one-argument form strips
+# SPACES ONLY, so an email of "\t" survived it and was reported eligible --
+# then handed to the mail path as a recipient. Every trim below names the set.
+BILLING_RECIPIENT_BLANK_CHARS = " \t\r\n\x0b\x0c"
+
+# Public reason tokens. `wrong_tenant` is deliberately absent: the lookup is
+# tenant-scoped in SQL, so a contact belonging to another tenant is simply not
+# found and this code never learns otherwise.
+# Only an account may be invoiced. A lead, prospect or vendor with an address
+# still satisfies "active with an email", and offering one as a billing
+# recipient would let an invoice be addressed to a party that is not a customer.
+# Verified against live data before encoding: every EOM contact that actually
+# receives invoices is contact_type='customer'; all leads have zero.
+BILLING_RECIPIENT_ELIGIBLE_CONTACT_TYPE = "customer"
+
+# Deliberately permissive: one @, no whitespace either side, and a dot in the
+# domain. Trimming alone let "not-an-address" through as a recipient, but a
+# stricter grammar would reject deliverable real-world addresses -- checked
+# against live data, this rejects none of the addresses currently invoiced.
+
+BILLING_RECIPIENT_REASONS = ("not_found", "inactive", "no_email")
+
+
+def _billing_recipient_projection(row: Any, email: str) -> dict[str, Any]:
+    """Build the five-field public object from an ALREADY-ELIGIBLE row.
+
+    Eligibility is decided before this is called, never after. Constructing a
+    full contact response and blanking fields on the way out would make "never
+    a partial row" depend on every failure branch remembering to redact.
+
+    ``email`` is passed in as the CANONICAL form rather than read off the row:
+    validity and representation are one decision, and the stored column is not
+    the answer to either. SQL ``btrim`` leaves Unicode edge whitespace and does
+    not lowercase, so emitting the column would report
+    ``\u00a0ap@example.com\u00a0`` eligible while returning an address nothing
+    can send to.
+    """
+    return {
+        "contactId": str(row["id"]),
+        "displayName": row["full_name"],
+        "email": email,
+        "eligible": True,
+        "reason": None,
+    }
+
+
+def _billing_recipient_refusal(contact_id: Any, reason: str) -> dict[str, Any]:
+    """The only shape an ineligible answer may take: identity and cause only."""
+    return {
+        "contactId": str(contact_id),
+        "displayName": None,
+        "email": None,
+        "eligible": False,
+        "reason": reason,
+    }
+
+
 class DatabaseCRMProvider:
     """CRM provider -- queries the `contacts` table directly via asyncpg."""
 
@@ -1983,6 +2050,224 @@ class DatabaseCRMProvider:
         )
         return [dict(row) for row in rows]
 
+    async def list_billing_recipients(
+        self,
+        *,
+        search: Optional[str] = None,
+        limit: int = 200,
+    ) -> list[dict[str, Any]]:
+        """List EOM contacts assignable as an invoice recipient. Eligible only.
+
+        Lives on the CRM provider, not the receivables service, because that is
+        where canonical EOM contact reads live -- get_eom_funnel_crm_provider()
+        pins this to the dedicated funnel CRM pool. ReceivablesService.pool
+        resolves the separate global DSN, which in the deployed slim topology is
+        a different database, so a contacts query there would read the wrong one.
+
+        Discloses display name and email deliberately: an operator choosing
+        where money-related mail goes has to see the address. It stays a narrow
+        billing projection -- no phone, address, notes, tags, source, lifecycle.
+        """
+        from .eom_crm_mutations import normalize_contact_email
+        from .eom_lead_ingress import EOM_BUSINESS_CONTEXT_ID
+
+        pool = self._get_pool()
+        requested = max(1, min(limit, 500))
+        base_conditions = [
+            "business_context_id = $1",
+            "status = $2",
+            "contact_type = $4",
+            "email IS NOT NULL",
+        ]
+        base_args: list[Any] = [
+            EOM_BUSINESS_CONTEXT_ID,
+            BILLING_RECIPIENT_ELIGIBLE_STATUS,
+            BILLING_RECIPIENT_BLANK_CHARS,
+            BILLING_RECIPIENT_ELIGIBLE_CONTACT_TYPE,
+        ]
+        if search and search.strip():
+            base_args.append(f"%{search.strip()}%")
+            base_conditions.append(
+                f"(full_name ILIKE ${len(base_args)} OR email ILIKE ${len(base_args)})"
+            )
+
+        # Page until `requested` ELIGIBLE rows are found, not until `requested`
+        # candidates have been read. The address grammar is decided in Python,
+        # so a single SQL LIMIT lets rejected rows displace eligible ones
+        # ordered after them -- 500 malformed rows followed by one valid
+        # recipient would return an empty list for limit=1.
+        #
+        # Keyset on `id`, which is IMMUTABLE. An OFFSET can skip or repeat a
+        # row under concurrent writes -- but so can a keyset built on a
+        # MUTABLE column: `full_name` is editable through the operator contact
+        # mutation, so renaming an unvisited row to sort before the cursor
+        # drops it, and renaming a visited row to sort after it emits the
+        # contact twice. Ordering for display is applied to the assembled
+        # result instead, which is bounded by `requested`.
+        results: list[dict[str, Any]] = []
+        cursor_id: Any = None
+        pages = 0
+        while len(results) < requested and pages < BILLING_RECIPIENT_MAX_PAGES:
+            pages += 1
+            conditions = list(base_conditions)
+            args = list(base_args)
+            if cursor_id is not None:
+                args.append(cursor_id)
+                conditions.append(f"id > ${len(args)}")
+            args.append(BILLING_RECIPIENT_PAGE_SIZE)
+            rows = await pool.fetch(
+                f"""
+                SELECT id, full_name, btrim(email, $3) AS email
+                FROM contacts
+                WHERE {' AND '.join(conditions)}
+                ORDER BY id
+                LIMIT ${len(args)}
+                """,
+                *args,
+            )
+            if not rows:
+                break
+            for row in rows:
+                canonical_email = normalize_contact_email(row["email"])
+                if canonical_email is None:
+                    continue
+                results.append(
+                    _billing_recipient_projection(row, canonical_email)
+                )
+                if len(results) == requested:
+                    break
+            cursor_id = rows[-1]["id"]
+            if len(rows) < BILLING_RECIPIENT_PAGE_SIZE:
+                break  # candidates exhausted
+
+        if len(results) < requested and pages >= BILLING_RECIPIENT_MAX_PAGES:
+            # Never truncate silently. Hitting this means the eligible rows are
+            # sparser than the scan budget, which is a data-quality signal, not
+            # a normal result.
+            logger.warning(
+                "billing recipients: scan cap reached after %d pages with "
+                "%d/%d eligible found; result is truncated",
+                pages,
+                len(results),
+                requested,
+            )
+        # Display order, applied once to the assembled page. The scan order is
+        # an implementation detail of stable paging and is not what an operator
+        # should see.
+        results.sort(key=lambda item: (item["displayName"] or "", item["contactId"]))
+        return results
+
+    async def get_eom_payment_customer(
+        self, contact_id: UUID
+    ) -> dict[str, Any] | None:
+        """Return the canonical active customer snapshot for an EOM payment.
+
+        This is intentionally not the public billing-recipient projection.  A
+        residential payment remains valid without an email address, so it must
+        carry the active-customer identity and classified type while preserving
+        a normalized email-or-``None`` outcome for the ledger receipt outbox.
+        The query is tenant-scoped and admits only active account records.
+        """
+        from .eom_crm_mutations import normalize_contact_email
+        from .eom_lead_ingress import EOM_BUSINESS_CONTEXT_ID
+
+        row = await self._get_pool().fetchrow(
+            """
+            SELECT id, full_name, customer_type,
+                   btrim(COALESCE(email, ''), $3) AS email
+            FROM contacts
+            WHERE id = $1
+              AND business_context_id = $2
+              AND status = $4
+              AND contact_type = $5
+            """,
+            contact_id,
+            EOM_BUSINESS_CONTEXT_ID,
+            BILLING_RECIPIENT_BLANK_CHARS,
+            BILLING_RECIPIENT_ELIGIBLE_STATUS,
+            BILLING_RECIPIENT_ELIGIBLE_CONTACT_TYPE,
+        )
+        if row is None:
+            return None
+        return {
+            "contact_id": row["id"],
+            "customer_name": str(row["full_name"] or "").strip() or "Customer",
+            "customer_type": str(row["customer_type"] or "unknown"),
+            "recipient_email": normalize_contact_email(row["email"]),
+        }
+
+    async def billing_recipients_schema_ready(self) -> bool:
+        """True when the billing-recipient and payment-customer reads work.
+
+        An initialized pool only proves a connection opened. A configured but
+        partially migrated database passes that check and then fails every
+        recipient read with an undefined column, so readiness has to name the
+        columns the queries depend on. LIMIT 0 validates them without reading
+        a row.
+        """
+        try:
+            await self._get_pool().fetch(
+                """
+                SELECT id, full_name, email, status, contact_type, customer_type,
+                       business_context_id
+                FROM contacts
+                LIMIT 0
+                """
+            )
+        except Exception:
+            return False
+        return True
+
+    async def get_billing_recipient(self, contact_id: UUID) -> dict[str, Any]:
+        """Answer whether ONE contact may receive invoices, and who it is.
+
+        The authoritative validation used before storing a billing contact and
+        again when resolving a recipient at invoice time -- eligibility can
+        lapse between those moments, which is why the resolver re-asks rather
+        than trusting a stored id.
+
+        The tenant predicate is IN the query. A contact under another tenant
+        returns no row and is reported not_found, identical to one that does not
+        exist, so no later branch or log can betray the difference.
+        """
+        from .eom_crm_mutations import normalize_contact_email
+        from .eom_lead_ingress import EOM_BUSINESS_CONTEXT_ID
+
+        pool = self._get_pool()
+        row = await pool.fetchrow(
+            """
+            SELECT id, full_name, status, contact_type,
+                   btrim(COALESCE(email, ''), $3) AS email
+            FROM contacts
+            WHERE id = $1 AND business_context_id = $2
+            """,
+            contact_id,
+            EOM_BUSINESS_CONTEXT_ID,
+            BILLING_RECIPIENT_BLANK_CHARS,
+        )
+        if row is None:
+            return _billing_recipient_refusal(contact_id, "not_found")
+        # Allow-list the single live status rather than deny-listing the others:
+        # the column carries no CHECK constraint, so enumerating would silently
+        # admit any future value.
+        if row["status"] != BILLING_RECIPIENT_ELIGIBLE_STATUS:
+            return _billing_recipient_refusal(contact_id, "inactive")
+        if row["contact_type"] != BILLING_RECIPIENT_ELIGIBLE_CONTACT_TYPE:
+            # Not an account. Reported as `inactive` rather than a new public
+            # token: from the caller's side it is the same answer -- this
+            # contact may not receive invoices -- and the reason set stays the
+            # four the contract declares.
+            return _billing_recipient_refusal(contact_id, "inactive")
+        # Nonblank is not usable, and usable is decided by the CANONICAL
+        # grammar rather than a second expression of it. An SQL regex here
+        # admitted `a@b..com` and `a@.b.com`, which the canonical validator
+        # rejects -- so a caller could be offered a recipient the canonical
+        # write path would refuse.
+        canonical_email = normalize_contact_email(row["email"])
+        if canonical_email is None:
+            return _billing_recipient_refusal(contact_id, "no_email")
+        return _billing_recipient_projection(row, canonical_email)
+
     async def list_known_eom_contact_ids(
         self,
         *,
@@ -2000,19 +2285,21 @@ class DatabaseCRMProvider:
         intact -- it is a dangling or cross-tenant id that means the write
         boundary was bypassed.
 
-        Returns rows of ``{id, customer_type}`` rather than bare ids so a
-        caller mirroring the classification can refresh it from the same
-        tenant-scoped read (ATLAS #2357). The tenant predicate is unchanged and
-        still part of the query, so a contact in another business context is
-        absent here exactly as before -- it cannot leak a type it never
-        returns an id for.
+        Returns rows of ``{id, customer_type, customer_type_revision}`` rather than bare
+        ids so a caller mirroring the classification can refresh it from the
+        same tenant-scoped read (ATLAS #2357). The revision is assigned by the
+        database on each customer_type change, so it lets that caller order the
+        observed type evidence without depending on an application clock. The
+        tenant predicate is unchanged and still part of the query, so a contact
+        in another business context is absent here exactly as before -- it
+        cannot leak a type it never returns an id for.
         """
         if not contact_ids:
             return []
         pool = self._get_pool()
         rows = await pool.fetch(
             """
-            SELECT c.id, c.customer_type
+            SELECT c.id, c.customer_type, c.customer_type_revision
             FROM contacts AS c
             WHERE c.business_context_id = 'effingham_maids'
               AND c.id = ANY($1::uuid[])

@@ -252,7 +252,7 @@ class EOMLeadReviewResponse(BaseModel):
 
 
 class EOMKnownContactsResponse(BaseModel):
-    """Which of the submitted contact ids name a live EOM contact, and its type.
+    """Which submitted ids name a live EOM contact, its type, and its source version.
 
     Still not an identity read: no name, email, phone or address is disclosed.
     A caller holding a stored contact id is asking whether its link resolves
@@ -281,6 +281,11 @@ class EOMKnownContactsResponse(BaseModel):
     # known_contact_ids above.
     customer_types: dict[str, str] = Field(
         default_factory=dict, serialization_alias="customerTypes"
+    )
+    # Database-owned and monotonic for this contact's customer_type evidence.
+    # Keep it parallel so legacy fields retain their shapes.
+    customer_type_revisions: dict[str, int] = Field(
+        default_factory=dict, serialization_alias="customerTypeRevisions"
     )
     checked: int
     limit: Annotated[int, Field(ge=1, le=_MAX_KNOWN_CONTACT_IDS)]
@@ -688,9 +693,13 @@ async def list_known_eom_contacts(
         str(value): str(by_id[value].get("customer_type") or "unknown")
         for value in known_ids
     }
+    customer_type_revisions = {
+        str(value): int(by_id[value]["customer_type_revision"]) for value in known_ids
+    }
     return EOMKnownContactsResponse(
         known_contact_ids=known_ids,
         customer_types=customer_types,
+        customer_type_revisions=customer_type_revisions,
         checked=len(requested),
         limit=_MAX_KNOWN_CONTACT_IDS,
     )

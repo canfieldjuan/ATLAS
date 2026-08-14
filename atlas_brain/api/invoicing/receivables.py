@@ -17,10 +17,29 @@ from ...services.receivables import (
     ReceivablesConflictError,
     ReceivablesError,
     ReceivablesNotFoundError,
+    ReceivablesReceiptContextRequiredError,
+    ReceivablesSchemaUnavailableError,
     ReceivablesService,
     ReceivablesValidationError,
+    PaymentReceiptRecipient,
     get_receivables_service,
 )
+from ...services.crm_provider import get_crm_provider
+from ...services.commercial_billing_candidates import (
+    CommercialBillingCandidateService,
+    CommercialBillingCandidatesUnavailableError,
+    CommercialBillingCandidatesValidationError,
+    get_commercial_billing_candidate_service,
+)
+from ...services.commercial_billing_runs import (
+    CommercialBillingRunConflictError,
+    CommercialBillingRunNotFoundError,
+    CommercialBillingRunService,
+    CommercialBillingRunUnavailableError,
+    CommercialBillingRunValidationError,
+    get_commercial_billing_run_service,
+)
+from ...services.eom_lead_ingress import EOM_BUSINESS_CONTEXT_ID
 from ...storage.exceptions import DatabaseUnavailableError
 from .auth import require_actor, require_receivables_api
 
@@ -31,6 +50,13 @@ _DATABASE_UNAVAILABLE_ERRORS = (
     asyncpg.TooManyConnectionsError,
     asyncpg.AdminShutdownError,
     asyncpg.CrashShutdownError,
+)
+_CANONICAL_CUSTOMER_UNAVAILABLE_ERRORS = _DATABASE_UNAVAILABLE_ERRORS + (
+    asyncpg.UndefinedTableError,
+    asyncpg.UndefinedColumnError,
+    asyncpg.InvalidSchemaNameError,
+    asyncpg.InsufficientPrivilegeError,
+    asyncpg.InvalidAuthorizationSpecificationError,
 )
 _UNAVAILABLE_INTERFACE_PREFIXES = (
     "connection is closed",
@@ -78,9 +104,11 @@ class CreatePaymentRequest(BaseModel):
     total_amount_cents: PositiveCents
     payment_method: Literal["check", "ach", "square"]
     received_date: date
+    check_date: Optional[date] = None
+    received_through: Optional[str] = Field(default=None, max_length=128)
     reference: Optional[str] = Field(default=None, max_length=256)
     notes: Optional[str] = None
-    allocations: list[AllocationRequest] = Field(min_length=1, max_length=100)
+    allocations: list[AllocationRequest] = Field(default_factory=list, max_length=100)
 
 
 class AdjustAllocationsRequest(BaseModel):
@@ -96,6 +124,14 @@ class CreateDepositBatchRequest(BaseModel):
     payment_ids: list[UUID] = Field(min_length=1, max_length=500)
     deposit_date: date
     bank_reference: Optional[str] = Field(default=None, max_length=256)
+
+
+class CreateCommercialBillingRunRequest(BaseModel):
+    billing_period: str = Field(
+        min_length=7,
+        max_length=7,
+        pattern=r"^\d{4}-(0[1-9]|1[0-2])$",
+    )
 
 
 def _dollars(amount_cents: int) -> Decimal:
@@ -129,9 +165,27 @@ def _is_database_unavailable_error(exc: Exception) -> bool:
     return isinstance(exc, OSError) and exc.errno in _NETWORK_UNAVAILABLE_ERRNOS
 
 
+def _is_canonical_customer_unavailable_error(exc: Exception) -> bool:
+    """Classify canonical-CRM schema and connection failures for payment reads.
+
+    The payment route has a recovery path for a same-key replay when the
+    canonical customer read is unavailable.  A partially migrated or
+    permission-denied canonical CRM must therefore take that same controlled
+    path rather than escaping as an HTTP 500 before the ledger can reconcile
+    the existing payment.
+    """
+    return _is_database_unavailable_error(exc) or isinstance(
+        exc, _CANONICAL_CUSTOMER_UNAVAILABLE_ERRORS
+    )
+
+
 async def _call(awaitable):
     try:
         return await awaitable
+    except ReceivablesSchemaUnavailableError as exc:
+        raise HTTPException(
+            status_code=503, detail={"code": exc.code, "message": str(exc)}
+        ) from exc
     except ReceivablesValidationError as exc:
         raise HTTPException(
             status_code=422, detail={"code": exc.code, "message": str(exc)}
@@ -162,11 +216,46 @@ async def _call(awaitable):
         ) from exc
 
 
+async def _call_commercial_billing_run(awaitable):
+    try:
+        return await awaitable
+    except CommercialBillingCandidatesValidationError as exc:
+        raise HTTPException(
+            status_code=422,
+            detail={"code": exc.code, "message": str(exc)},
+        ) from exc
+    except CommercialBillingCandidatesUnavailableError as exc:
+        raise HTTPException(
+            status_code=503,
+            detail={"code": exc.code, "message": str(exc)},
+        ) from exc
+    except CommercialBillingRunValidationError as exc:
+        raise HTTPException(
+            status_code=422,
+            detail={"code": exc.code, "message": str(exc)},
+        ) from exc
+    except CommercialBillingRunNotFoundError as exc:
+        raise HTTPException(
+            status_code=404,
+            detail={"code": exc.code, "message": str(exc)},
+        ) from exc
+    except CommercialBillingRunConflictError as exc:
+        raise HTTPException(
+            status_code=409,
+            detail={"code": exc.code, "message": str(exc)},
+        ) from exc
+    except CommercialBillingRunUnavailableError as exc:
+        raise HTTPException(
+            status_code=503,
+            detail={"code": exc.code, "message": str(exc)},
+        ) from exc
+
+
 @router.get("/ready")
 async def ready() -> dict:
     service = get_receivables_service()
     try:
-        schema_ready = await service.is_ready()
+        schema_ready = await service.is_receipt_delivery_ready()
     except Exception as exc:
         raise HTTPException(
             status_code=503, detail="Receivables database unavailable"
@@ -210,20 +299,76 @@ async def create_payment(
     ],
     service: ReceivablesService = Depends(get_receivables_service),
 ) -> dict:
-    return await _call(
-        service.create_payment(
-            contact_id=body.contact_id,
-            payer_name=body.payer_name,
-            total_amount=_dollars(body.total_amount_cents),
-            payment_method=body.payment_method,
-            received_date=body.received_date,
-            reference=body.reference,
-            notes=body.notes,
-            allocations=_allocations(body.allocations),
-            recorded_by=actor,
-            idempotency_key=idempotency_key,
+    """Record a payment from the deployed full EOM provider route.
+
+    The full application owns both the receivables ledger and canonical CRM
+    contacts through its primary database.  Resolve a narrow active-customer
+    snapshot before a new write, but defer a missing/unavailable CRM result to
+    the service's idempotency lookup so an unchanged retry can recover a
+    previously committed payment.
+    """
+    receipt_recipient: PaymentReceiptRecipient | None = None
+    canonical_failure: HTTPException | None = None
+    try:
+        customer = await get_crm_provider().get_eom_payment_customer(
+            body.contact_id
         )
-    )
+        if customer is None:
+            canonical_failure = HTTPException(
+                status_code=404,
+                detail={
+                    "code": "not_found",
+                    "message": "Customer not found",
+                },
+            )
+        else:
+            receipt_recipient = PaymentReceiptRecipient(
+                contact_id=UUID(str(customer["contact_id"])),
+                customer_name=str(customer["customer_name"]),
+                customer_type=str(customer["customer_type"]),
+                recipient_email=(
+                    str(customer["recipient_email"])
+                    if customer["recipient_email"] is not None
+                    else None
+                ),
+            )
+    except Exception as exc:
+        if not _is_canonical_customer_unavailable_error(exc):
+            raise
+        canonical_failure = HTTPException(
+            status_code=503,
+            detail={
+                "code": "canonical_customer_unavailable",
+                "message": "Canonical EOM customer data is unavailable",
+            },
+        )
+
+    async def _write_payment() -> dict:
+        try:
+            return await service.create_payment(
+                contact_id=body.contact_id,
+                payer_name=body.payer_name,
+                total_amount=_dollars(body.total_amount_cents),
+                payment_method=body.payment_method,
+                received_date=body.received_date,
+                check_date=body.check_date,
+                received_through=body.received_through,
+                reference=body.reference,
+                notes=body.notes,
+                allocations=_allocations(body.allocations),
+                recorded_by=actor,
+                idempotency_key=idempotency_key,
+                allow_unapplied=True,
+                unapplied_contact_context_id=EOM_BUSINESS_CONTEXT_ID,
+                receipt_recipient=receipt_recipient,
+                require_receipt_recipient=True,
+            )
+        except ReceivablesReceiptContextRequiredError:
+            if canonical_failure is not None:
+                raise canonical_failure
+            raise
+
+    return await _call(_write_payment())
 
 
 @router.get("/payments")
@@ -238,6 +383,119 @@ async def list_payments(
             status=status, search=search, limit=limit, offset=offset
         )
     )
+
+
+@router.get("/customers/{contact_id}/ledger")
+async def customer_ledger(
+    contact_id: UUID,
+    payment_status: Optional[str] = Query(default=None, max_length=16),
+    payment_method: Optional[str] = Query(default=None, max_length=32),
+    search: Optional[str] = Query(default=None, max_length=256),
+    from_date: Optional[date] = Query(default=None),
+    to_date: Optional[date] = Query(default=None),
+    limit: int = Query(default=100, ge=1, le=200),
+    offset: int = Query(default=0, ge=0),
+    service: ReceivablesService = Depends(get_receivables_service),
+) -> dict:
+    """Return one bounded, receipt-aware financial ledger page for a customer."""
+    return await _call(
+        service.list_customer_ledger(
+            contact_id=contact_id,
+            payment_status=payment_status,
+            payment_method=payment_method,
+            search=search,
+            from_date=from_date,
+            to_date=to_date,
+            limit=limit,
+            offset=offset,
+        )
+    )
+
+
+@router.get("/commercial-billing-candidates")
+async def commercial_billing_candidates(
+    billing_period: str = Query(
+        ...,
+        min_length=7,
+        max_length=7,
+        pattern=r"^\d{4}-(0[1-9]|1[0-2])$",
+    ),
+    service: CommercialBillingCandidateService = Depends(
+        get_commercial_billing_candidate_service
+    ),
+) -> dict:
+    """Return a pure commercial billing preview; approval lives in a later slice."""
+
+    try:
+        return await service.preview(billing_period=billing_period)
+    except CommercialBillingCandidatesValidationError as exc:
+        raise HTTPException(
+            status_code=422,
+            detail={"code": exc.code, "message": str(exc)},
+        ) from exc
+    except CommercialBillingCandidatesUnavailableError as exc:
+        raise HTTPException(
+            status_code=503,
+            detail={"code": exc.code, "message": str(exc)},
+        ) from exc
+
+
+@router.post("/commercial-billing-runs", status_code=201)
+async def create_commercial_billing_run(
+    body: CreateCommercialBillingRunRequest,
+    actor: Annotated[str, Depends(require_actor)],
+    idempotency_key: Annotated[
+        str, Header(alias="Idempotency-Key", min_length=1, max_length=128)
+    ],
+    service: CommercialBillingRunService = Depends(get_commercial_billing_run_service),
+) -> dict:
+    """Persist immutable review evidence; explicit approval remains a later slice."""
+
+    return await _call_commercial_billing_run(
+        service.create_run(
+            billing_period=body.billing_period,
+            idempotency_key=idempotency_key,
+            actor=actor,
+        )
+    )
+
+
+@router.get("/commercial-billing-runs")
+async def list_commercial_billing_runs(
+    billing_period: Optional[str] = Query(default=None),
+    limit: int = Query(default=50, ge=1, le=100),
+    offset: int = Query(default=0, ge=0),
+    service: CommercialBillingRunService = Depends(get_commercial_billing_run_service),
+) -> dict:
+    """List bounded durable review-run summaries without regenerating sources."""
+
+    return await _call_commercial_billing_run(
+        service.list_runs(
+            billing_period=billing_period,
+            limit=limit,
+            offset=offset,
+        )
+    )
+
+
+@router.get("/commercial-billing-runs/{billing_run_id}/reconciliation")
+async def reconcile_commercial_billing_run(
+    billing_run_id: UUID,
+    service: CommercialBillingRunService = Depends(get_commercial_billing_run_service),
+) -> dict:
+    """Compare durable evidence with fresh sources without writing either."""
+
+    return await _call_commercial_billing_run(service.reconcile_run(billing_run_id))
+
+
+@router.get("/commercial-billing-runs/{billing_run_id}")
+async def get_commercial_billing_run(
+    billing_run_id: UUID,
+    service: CommercialBillingRunService = Depends(get_commercial_billing_run_service),
+) -> dict:
+    """Return the immutable candidate snapshot retained for operator review."""
+
+    return await _call_commercial_billing_run(service.get_run(billing_run_id))
 
 
 @router.put("/payments/{payment_id}/allocations")

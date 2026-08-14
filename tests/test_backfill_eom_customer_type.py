@@ -92,6 +92,10 @@ async def db():
         await admin.execute("CREATE TABLE call_transcripts (id UUID PRIMARY KEY)")
         for name in ("035_contacts.sql", "366_contacts_customer_type.sql"):
             await admin.execute((MIGRATIONS / name).read_text())
+        async with admin.transaction():
+            await admin.execute(
+                (MIGRATIONS / "367_contacts_customer_type_revision.sql").read_text()
+            )
 
         async def set_search_path(connection):
             await connection.execute(f'SET search_path TO "{schema}", public')
@@ -129,16 +133,24 @@ async def test_apply_writes_both_types(db, tmp_path):
         tmp_path,
         [(commercial, "commercial", "sites=1"), (residential, "residential", "sites=1")],
     )
+    before = {
+        str(row["id"]): row["customer_type_revision"]
+        for row in await db.fetch("SELECT id, customer_type_revision FROM contacts")
+    }
 
     exit_code = await backfill.run(mapping_path=mapping, apply=True, pool=db)
 
     assert exit_code == 0
     rows = {
-        str(r["id"]): r["customer_type"]
-        for r in await db.fetch("SELECT id, customer_type FROM contacts")
+        str(row["id"]): row
+        for row in await db.fetch(
+            "SELECT id, customer_type, customer_type_revision FROM contacts"
+        )
     }
-    assert rows[commercial] == "commercial"
-    assert rows[residential] == "residential"
+    assert rows[commercial]["customer_type"] == "commercial"
+    assert rows[residential]["customer_type"] == "residential"
+    assert rows[commercial]["customer_type_revision"] > before[commercial]
+    assert rows[residential]["customer_type_revision"] > before[residential]
 
 
 @pytest.mark.asyncio
