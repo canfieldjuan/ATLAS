@@ -344,5 +344,5 @@ Parked hardening: none.
 | `_ARCHIVED_atlas-intel-next/vercel.json` | 3 |
 | `docs/SECURITY_GUARDRAILS.md` | 15 |
 | `docs/product_context_pack.md` | 1 |
-| `plans/PR-Drop-Archived-Intel-Next.md` | 344 |
-| **Total** | **29186** |
+| `plans/PR-Drop-Archived-Intel-Next.md` | 348 |
+| **Total** | **29190** |
