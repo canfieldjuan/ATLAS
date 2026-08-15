@@ -48,6 +48,15 @@ from ...services.commercial_billing_approvals import (
     CommercialBillingApprovalValidationError,
     get_commercial_billing_approval_service,
 )
+from ...services.commercial_billing_invoice_pdfs import (
+    CommercialBillingInvoicePDFConflictError,
+    CommercialBillingInvoicePDFNotFoundError,
+    CommercialBillingInvoicePDFRenderError,
+    CommercialBillingInvoicePDFService,
+    CommercialBillingInvoicePDFUnavailableError,
+    CommercialBillingInvoicePDFValidationError,
+    get_commercial_billing_invoice_pdf_service,
+)
 from ...services.eom_lead_ingress import EOM_BUSINESS_CONTEXT_ID
 from ...storage.exceptions import DatabaseUnavailableError
 from .auth import require_actor, require_receivables_api
@@ -292,6 +301,34 @@ async def _call_commercial_billing_approval(awaitable):
             detail={"code": exc.code, "message": str(exc)},
         ) from exc
     except CommercialBillingApprovalUnavailableError as exc:
+        raise HTTPException(
+            status_code=503,
+            detail={"code": exc.code, "message": str(exc)},
+        ) from exc
+
+
+async def _call_commercial_billing_invoice_pdf(awaitable):
+    try:
+        return await awaitable
+    except CommercialBillingInvoicePDFValidationError as exc:
+        raise HTTPException(
+            status_code=422,
+            detail={"code": exc.code, "message": str(exc)},
+        ) from exc
+    except CommercialBillingInvoicePDFNotFoundError as exc:
+        raise HTTPException(
+            status_code=404,
+            detail={"code": exc.code, "message": str(exc)},
+        ) from exc
+    except CommercialBillingInvoicePDFConflictError as exc:
+        raise HTTPException(
+            status_code=409,
+            detail={"code": exc.code, "message": str(exc)},
+        ) from exc
+    except (
+        CommercialBillingInvoicePDFRenderError,
+        CommercialBillingInvoicePDFUnavailableError,
+    ) as exc:
         raise HTTPException(
             status_code=503,
             detail={"code": exc.code, "message": str(exc)},
@@ -596,6 +633,28 @@ async def approve_commercial_billing_candidate(
             billing_run_id=billing_run_id,
             candidate_key=body.candidate_key,
             expected_source_fingerprint=body.expected_source_fingerprint,
+            idempotency_key=idempotency_key,
+            actor=actor,
+        )
+    )
+
+
+@router.post("/commercial-billing-approvals/{approval_id}/invoice-pdf", status_code=201)
+async def generate_commercial_billing_invoice_pdf(
+    approval_id: UUID,
+    actor: Annotated[str, Depends(require_actor)],
+    idempotency_key: Annotated[
+        str, Header(alias="Idempotency-Key", min_length=1, max_length=128)
+    ],
+    service: CommercialBillingInvoicePDFService = Depends(
+        get_commercial_billing_invoice_pdf_service
+    ),
+) -> dict:
+    """Create or reuse one durable PDF for an explicitly approved draft invoice."""
+
+    return await _call_commercial_billing_invoice_pdf(
+        service.generate_or_reuse(
+            approval_id=approval_id,
             idempotency_key=idempotency_key,
             actor=actor,
         )
