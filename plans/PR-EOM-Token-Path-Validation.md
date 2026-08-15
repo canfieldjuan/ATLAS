@@ -113,6 +113,11 @@ Max files: 3
      `::test_the_selected_path_is_revalidated_not_just_the_configured_one`, with
      `::test_a_legacy_file_candidate_is_still_selected` proving the tightened
      check does not break real legacy discovery.
+  2f. The guard is enforced at ONE point (`_load`), so every caller is covered
+     — including the write path, which previously had no check. Settled by
+     `::test_rotation_refuses_to_persist_through_an_unusable_path`,
+     `::test_every_load_call_site_is_guarded` and
+     `::test_repaired_path_recovers_after_a_refusal`.
   2e. Health agrees with behaviour on an unusable path — settled by
      `::test_health_status_reports_unconfigured_when_the_path_is_invalid` and
      `::test_health_status_is_unchanged_for_a_valid_path`.
@@ -227,6 +232,20 @@ does not touch.
 
 ## Mechanism
 
+**ONE enforcement point.** Validity is checked inside `_load()` — the single
+place the credential path is consumed — and every caller acts on the verdict it
+returns. This is the structural answer to why the same defect kept reappearing
+through a new door each review round: the check used to be duplicated per public
+method, so the path VALIDATED was not always the path USED, and
+`persist_refresh_token` reached `_load()` with **no check at all** — a rotation
+into an unusable path lost the freshly issued Google token silently, because
+`_save()` caught the `OSError` and logged it. Enforcing at the consumption point
+covers present and future callers by construction rather than by remembering.
+The check runs BEFORE the `_loaded` short circuit, so a path that turns bad after
+a successful load is still caught, and a bad verdict is never cached, so an
+operator repair takes effect.
+
+
 `resolve_token_file_path` now normalises before it resolves: a non-`str` becomes
 `""`, and a blank string is replaced with `DEFAULT_TOKEN_FILE` before `Path()`
 sees it. That is the whole of defect 1 — the previous code's failure was that
@@ -282,10 +301,10 @@ Parked hardening: ATLAS #2359.
 
 All counts re-run at this head.
 
-- `python -m pytest tests/test_google_token_resolution.py -q` — **50 passed**
+- `python -m pytest tests/test_google_token_resolution.py -q` — **53 passed**
 - Every consumer of the changed store — `test_google_token_resolution.py`,
   `test_calendar_import_rerun.py`, `test_eom_live_calendar_import.py`,
-  `test_eom_scoped_gmail_credentials.py`, `test_leads_intake.py` — **197 passed, 1 skipped**
+  `test_eom_scoped_gmail_credentials.py`, `test_leads_intake.py` — **200 passed, 1 skipped**
 - **Both defects reproduced against this head BEFORE fixing**, quoted verbatim
   in "Why this slice exists": `resolve_token_file_path('')` returned the repo
   root and the stdlib `Path.is_dir` predicate was `True`; the override-branch warning named the stable
@@ -302,8 +321,10 @@ All counts re-run at this head.
   | recovery message stops branching on provenance | 1 failed |
   | `get_status` stops honouring the invalid path | 2 failed |
   | validity reverted to a constructor snapshot | 2 failed |
-  | legacy candidate check back to `exists()` | 1 failed |
+  | legacy candidate check back to the stdlib existence check | 1 failed |
   | selected-path revalidation removed | 1 failed |
+  | write path unguarded again | 1 failed |
+  | enforcement removed from `_load` (the single point) | **12 failed** |
 - `ruff check` on the changed module and test file: findings identical to the
   `origin/main` baseline; none introduced.
 - `python -m py_compile` on the changed module — OK.
@@ -311,7 +332,7 @@ All counts re-run at this head.
 - **HERMETICITY proved in a clean checkout.** `data/` has ZERO tracked files, so
   a `data/..` alias resolves to nothing on a fresh clone — a test relying on it
   passed here only because this worktree has an untracked `data/`. The suite was
-  re-run in a fresh `origin/main` worktree with no untracked `data/`: **50
+  re-run in a fresh `origin/main` worktree with no untracked `data/`: **53
   passed** (re-proved after each round, at current `origin/main`). The non-hermetic case was removed; the traversal shape is covered by
   a test that builds its own directory under `tmp_path`.
 - No credential value appears in any changed log statement.
@@ -320,7 +341,7 @@ All counts re-run at this head.
 
 | File | LOC |
 |---|---:|
-| `atlas_brain/services/google_oauth.py` | 167 |
-| `plans/PR-EOM-Token-Path-Validation.md` | 326 |
-| `tests/test_google_token_resolution.py` | 382 |
-| **Total** | **875** |
+| `atlas_brain/services/google_oauth.py` | 211 |
+| `plans/PR-EOM-Token-Path-Validation.md` | 347 |
+| `tests/test_google_token_resolution.py` | 462 |
+| **Total** | **1020** |

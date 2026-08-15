@@ -323,10 +323,32 @@ class GoogleTokenStore:
         """The resolved absolute path this store reads and writes."""
         return self._path
 
-    def _load(self) -> None:
-        """Load tokens from file if it exists."""
+    def _load(self) -> Optional[str]:
+        """Load tokens from file, refusing an unusable path.
+
+        THE single enforcement point. Validity used to be checked in each
+        public method, which is why the same defect kept reappearing through a
+        new door each review round: the path VALIDATED was not always the path
+        USED, and `persist_refresh_token` reached this method with no check at
+        all. Enforcing here means every caller -- present and future -- is
+        covered by construction rather than by remembering.
+
+        Returns the problem string when the path is unusable (caller must fail
+        closed), else None. Deliberately checked BEFORE the `_loaded` short
+        circuit, so a path that turns bad after a successful load is still
+        caught.
+        """
+        problem = self._current_path_problem()
+        if problem is not None:
+            # Never cache a bad state: the operator may repair the path, and a
+            # cached verdict would keep serving the failure after the fix.
+            self._data = {}
+            self._loaded = False
+            self._file_present = False
+            return problem
+
         if self._loaded:
-            return
+            return None
         if self._path.exists():
             try:
                 with open(self._path) as f:
@@ -402,11 +424,11 @@ class GoogleTokenStore:
             GoogleCredentials or None if not configured.
         """
         with self._lock:
-            path_problem = self._current_path_problem()
+            path_problem = self._load()
             if path_problem is not None:
                 # FAIL CLOSED. No token file, no .env fallback -- an unusable
-                # configured path means the operator's intent is unknown, and
-                # guessing risks authenticating as the wrong Google account.
+                # path means the operator's intent is unknown, and guessing
+                # risks authenticating as the wrong Google account.
                 logger.error(
                     "Google credentials unavailable for %s: %s RESTART the "
                     "service after fixing the configuration -- it is read once "
@@ -415,7 +437,6 @@ class GoogleTokenStore:
                     path_problem,
                 )
                 return None
-            self._load()
             cfg = settings.tools
 
             # Try token file first
@@ -475,7 +496,19 @@ class GoogleTokenStore:
         an access token refresh.
         """
         with self._lock:
-            self._load()
+            path_problem = self._load()
+            if path_problem is not None:
+                # The write path was the one caller with no validation at all.
+                # Rotating into an unusable path meant _save() hit an OSError,
+                # logged it, and the freshly rotated Google token was silently
+                # lost -- the next restart came back on the old one.
+                logger.error(
+                    "Refusing to persist a rotated %s refresh token: %s "
+                    "The rotation is NOT saved; fix the path and re-authorise.",
+                    service,
+                    path_problem,
+                )
+                return
 
             if "services" not in self._data:
                 self._data["services"] = {}
@@ -502,7 +535,7 @@ class GoogleTokenStore:
         Returns dict with per-service status.
         """
         with self._lock:
-            path_problem = self._current_path_problem()
+            path_problem = self._load()
             if path_problem is not None:
                 # Health MUST agree with behaviour. get_credentials() fails
                 # closed on an unusable configured path, so reporting
@@ -518,7 +551,6 @@ class GoogleTokenStore:
                     "gmail": {"configured": False, "source": None},
                 }
 
-            self._load()
             result = {"token_file": str(self._path), "file_exists": self._path.exists()}
 
             for svc in ("calendar", "gmail"):

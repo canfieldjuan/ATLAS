@@ -1045,3 +1045,83 @@ def test_the_selected_path_is_revalidated_not_just_the_configured_one(
 
     assert creds is None, "fell through to the .env token for a directory path"
     assert "DIRECTORY" in " ".join(r.getMessage() for r in caplog.records)
+
+
+# --- the guard lives at ONE point, so every caller is covered --------------
+
+
+def test_rotation_refuses_to_persist_through_an_unusable_path(
+    tmp_path, monkeypatch, caplog
+):
+    """`persist_refresh_token` was the caller with NO validation at all.
+
+    It reached `_load()` unguarded, so rotating into a directory path meant
+    `_save()` hit an OSError, logged it, and the freshly rotated Google token
+    was silently lost — the next restart came back on the old one. This is the
+    write-path door of the same class the read paths kept re-opening.
+    """
+    from atlas_brain.services import google_oauth
+
+    monkeypatch.setattr(
+        google_oauth, "token_path_was_explicitly_configured", lambda: True
+    )
+    target = tmp_path / "creds" / "google_tokens.json"
+    target.parent.mkdir(parents=True)
+    _write_token_file(target, calendar="original")
+    store = GoogleTokenStore(str(target))
+    store.get_credentials("calendar")
+
+    target.unlink()
+    target.mkdir()  # path becomes unusable before the rotation lands
+
+    with caplog.at_level(logging.ERROR, logger="atlas.services.google_oauth"):
+        store.persist_refresh_token("calendar", "rotated-token")
+
+    joined = " ".join(r.getMessage() for r in caplog.records)
+    assert "Refusing to persist" in joined
+    assert "NOT saved" in joined
+    assert target.is_dir(), "the directory was clobbered by the write"
+
+
+def test_every_load_call_site_is_guarded():
+    """Structural: the check lives in `_load`, not in each caller.
+
+    The class recurred because validity was enforced per-caller and one caller
+    was missed. If a future method calls `_load()` and ignores its return, this
+    test still holds — but the guard has already run, so the credential cannot
+    be read through an unusable path.
+    """
+    import inspect
+
+    from atlas_brain.services import google_oauth
+
+    source = inspect.getsource(google_oauth.GoogleTokenStore)
+    # every _load() call binds the verdict rather than discarding it
+    for line in source.splitlines():
+        stripped = line.strip()
+        if "self._load()" in stripped:
+            assert "=" in stripped, f"_load() result discarded: {stripped}"
+    # and the enforcement itself is inside _load
+    load_src = inspect.getsource(google_oauth.GoogleTokenStore._load)
+    assert "_current_path_problem()" in load_src
+
+
+def test_repaired_path_recovers_after_a_refusal(tmp_path, monkeypatch):
+    """A bad verdict must never be cached, or a repair would not take effect."""
+    from atlas_brain.services import google_oauth
+
+    monkeypatch.setattr(
+        google_oauth, "token_path_was_explicitly_configured", lambda: True
+    )
+    target = tmp_path / "google_tokens.json"
+    target.mkdir()
+    store = GoogleTokenStore(str(target))
+    assert store.get_credentials("calendar") is None
+
+    target.rmdir()
+    _write_token_file(target, calendar="repaired")
+
+    store.persist_refresh_token("calendar", "rotated-after-repair")
+    assert (
+        store.get_credentials("calendar").refresh_token == "rotated-after-repair"
+    )
