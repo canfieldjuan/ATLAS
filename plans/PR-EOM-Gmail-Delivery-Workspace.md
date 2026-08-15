@@ -16,6 +16,7 @@ This slice is above the 400-LOC soft target because one safe recovery read must 
 
 Ownership lane: eom/billing-gmail-delivery-state
 Slice phase: Vertical slice
+Max files: 6
 
 1. Add `GET /api/v1/receivables/commercial-billing-runs/{billing_run_id}/gmail-delivery-state`, protected by the existing receivables service token and bounded by `limit`/`offset`.
 2. Reuse the existing commercial Gmail sent-reconciliation service as the durable read owner.  Its projection identifies approvals by the requested run candidate's exact `candidateKey` plus `sourceFingerprint`, so a safely reused approval remains reopenable from a later equivalent review run.
@@ -107,6 +108,6 @@ Parked hardening: none.
 | `atlas_brain/services/commercial_billing_invoice_gmail_drafts.py` | 8 |
 | `atlas_brain/services/commercial_billing_invoice_gmail_sent_reconciliation.py` | 431 |
 | `atlas_brain/services/commercial_billing_invoice_pdfs.py` | 8 |
-| `plans/PR-EOM-Gmail-Delivery-Workspace.md` | 112 |
+| `plans/PR-EOM-Gmail-Delivery-Workspace.md` | 113 |
 | `tests/test_commercial_billing_gmail_drafts.py` | 398 |
-| **Total** | **983** |
+| **Total** | **984** |
