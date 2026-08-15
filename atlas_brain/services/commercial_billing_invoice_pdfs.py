@@ -471,6 +471,28 @@ class CommercialBillingInvoicePDFService:
             raise CommercialBillingInvoicePDFNotFoundError(
                 "Commercial billing approval not found"
             )
+        return self._approved_invoice_from_row(row)
+
+    @classmethod
+    def render_fingerprint_from_invoice_row(cls, row: Mapping[str, Any]) -> str:
+        """Derive the PDF-service fingerprint for a current invoice read row.
+
+        Read-only recovery projections use this shared parser so a stale
+        artifact is judged by exactly the same invoice fields and canonical
+        serialization as PDF generation and delivery reuse.  The caller may
+        inspect a non-draft lifecycle row, so only the writer keeps the
+        still-draft requirement.
+        """
+
+        return cls._approved_invoice_from_row(
+            row,
+            require_draft=False,
+        ).render_fingerprint
+
+    @staticmethod
+    def _approved_invoice_from_row(
+        row: Mapping[str, Any], *, require_draft: bool = True
+    ) -> _ApprovedInvoice:
         approval_state = _required_text(row["approval_state"], "approval state", limit=32)
         if approval_state != "invoice_created":
             raise CommercialBillingInvoicePDFConflictError(
@@ -488,7 +510,7 @@ class CommercialBillingInvoicePDFService:
                 "Approved invoice is not an EOM commercial billing invoice"
             )
         status = _required_text(row["invoice_status"], "invoice status", limit=32)
-        if status != "draft":
+        if require_draft and status != "draft":
             raise CommercialBillingInvoicePDFConflictError(
                 "Approved invoice is no longer a draft"
             )

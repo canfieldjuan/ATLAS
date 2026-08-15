@@ -27,7 +27,10 @@ from ..tools.gmail import (
 from .commercial_billing_invoice_gmail_drafts import (
     CommercialBillingInvoiceGmailDraftService,
 )
-from .commercial_billing_invoice_pdfs import CommercialBillingInvoicePDFService
+from .commercial_billing_invoice_pdfs import (
+    CommercialBillingInvoicePDFConflictError,
+    CommercialBillingInvoicePDFService,
+)
 from .eom_lead_ingress import EOM_BUSINESS_CONTEXT_ID
 
 
@@ -516,18 +519,36 @@ class CommercialBillingInvoiceGmailSentReconciliationService:
                                candidate.source_fingerprint AS candidate_source_fingerprint,
                                approval.id AS approval_id,
                                approval.billing_run_id AS approval_billing_run_id,
+                               approval.billing_run_id,
                                approval.invoice_id AS approval_invoice_id,
                                approval.state AS approval_state,
+                               approval.source_fingerprint,
                                invoice.id AS invoice_id,
                                invoice.invoice_number,
+                               invoice.customer_name,
+                               invoice.customer_email,
+                               invoice.customer_phone,
+                               invoice.customer_address,
+                               invoice.line_items,
+                               invoice.subtotal,
+                               invoice.tax_amount,
+                               invoice.discount_amount,
+                               invoice.total_amount,
+                               invoice.amount_due,
                                invoice.status AS invoice_status,
                                invoice.issue_date AS invoice_issue_date,
+                               invoice.issue_date,
                                invoice.due_date AS invoice_due_date,
+                               invoice.due_date,
                                invoice.sent_at AS invoice_sent_at,
                                invoice.sent_via AS invoice_sent_via,
                                invoice.source AS invoice_source,
                                invoice.business_context_id AS invoice_business_context_id,
                                invoice.metadata AS invoice_metadata,
+                               invoice.metadata,
+                               invoice.notes,
+                               invoice.invoice_for,
+                               invoice.contact_name,
                                artifact.id AS artifact_id,
                                artifact.approval_id AS artifact_approval_id,
                                artifact.artifact_kind,
@@ -1129,6 +1150,11 @@ class CommercialBillingInvoiceGmailSentReconciliationService:
             invoice_sent_via = _stored_text(
                 invoice_sent_via, "invoice sent via", limit=32
             )
+        invoice_is_draft = cls._is_draft_invoice(
+            invoice_status=invoice_status,
+            invoice_sent_at=invoice_sent_at,
+            invoice_sent_via=invoice_sent_via,
+        )
         metadata = _mapping(row.get("invoice_metadata"), "invoice metadata")
         context_matches = (
             _uuid(row.get("approval_invoice_id"), "approval invoice id") == invoice_id
@@ -1148,9 +1174,33 @@ class CommercialBillingInvoiceGmailSentReconciliationService:
             and metadata.get("deliveryMethod") == _DELIVERY_METHOD
         )
         artifact = cls._artifact_view(row, approval_id, invoice_id)
+        artifact_is_current = True
+        if artifact is not None and invoice_is_draft:
+            try:
+                current_render_fingerprint = (
+                    CommercialBillingInvoicePDFService.render_fingerprint_from_invoice_row(
+                        row
+                    )
+                )
+            except CommercialBillingInvoicePDFConflictError:
+                artifact_is_current = False
+            else:
+                artifact_is_current = (
+                    artifact.get("renderFingerprint") == current_render_fingerprint
+                )
         draft, reconciliation = cls._draft_and_reconciliation_view(
             row, approval_id, invoice_id, artifact
         )
+        if reconciliation is not None and (
+            not artifact_is_current
+            or draft is None
+            or draft.get("state") != "draft_created"
+        ):
+            reconciliation = {
+                key: value
+                for key, value in reconciliation.items()
+                if key != "recoveryAction"
+            }
         delivery_state = cls._delivery_state(
             context_matches=context_matches,
             invoice_status=invoice_status,
@@ -1160,6 +1210,8 @@ class CommercialBillingInvoiceGmailSentReconciliationService:
             draft=draft,
             reconciliation=reconciliation,
         )
+        if not artifact_is_current:
+            delivery_state = "lifecycle_conflict"
         if delivery_state not in _DELIVERY_STATES:
             raise CommercialBillingGmailSentReconciliationUnavailableError(
                 "Commercial billing Gmail delivery state is invalid"
@@ -1303,10 +1355,10 @@ class CommercialBillingInvoiceGmailSentReconciliationService:
     ) -> str:
         if not context_matches:
             return "lifecycle_conflict"
-        invoice_is_draft = (
-            invoice_status == "draft"
-            and invoice_sent_at is None
-            and invoice_sent_via is None
+        invoice_is_draft = CommercialBillingInvoiceGmailSentReconciliationService._is_draft_invoice(
+            invoice_status=invoice_status,
+            invoice_sent_at=invoice_sent_at,
+            invoice_sent_via=invoice_sent_via,
         )
         invoice_has_confirmed_gmail_send = (
             invoice_status in _POST_SEND_INVOICE_STATUSES
@@ -1338,6 +1390,19 @@ class CommercialBillingInvoiceGmailSentReconciliationService:
             "draft_present": "gmail_draft_present",
             "draft_missing": "gmail_draft_missing",
         }.get(reconciliation_state, "lifecycle_conflict")
+
+    @staticmethod
+    def _is_draft_invoice(
+        *,
+        invoice_status: str,
+        invoice_sent_at: datetime | None,
+        invoice_sent_via: str | None,
+    ) -> bool:
+        return (
+            invoice_status == "draft"
+            and invoice_sent_at is None
+            and invoice_sent_via is None
+        )
 
     @staticmethod
     def _assert_operation(

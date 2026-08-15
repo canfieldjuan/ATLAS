@@ -710,6 +710,92 @@ async def test_real_postgres_delivery_state_never_infers_sent_from_a_missing_dra
 
 
 @pytest.mark.asyncio
+async def test_real_postgres_delivery_state_marks_a_stale_pdf_as_a_lifecycle_conflict():
+    async with _gmail_draft_database() as (connection, schema):
+        seed = await _seed_approved_invoice(connection, schema)
+        await _service(connection, schema, _RecordingGateway()).create_or_reuse(
+            approval_id=seed["approval_id"],
+            idempotency_key="stale-pdf-draft",
+            actor="Juan",
+        )
+        await connection.execute(
+            "UPDATE invoices SET notes = 'Edited after PDF generation' WHERE id = $1",
+            seed["invoice_id"],
+        )
+        service = CommercialBillingInvoiceGmailSentReconciliationService(
+            pool=_SchemaPool(connection, schema),
+            gateway_loader=lambda: (_ for _ in ()).throw(
+                AssertionError("durable delivery-state reads must not load Gmail")
+            ),
+        )
+
+        page = await service.list_delivery_state_for_run(
+            billing_run_id=seed["run_id"]
+        )
+
+        item, = page["items"]
+        assert item["deliveryState"] == "lifecycle_conflict"
+        assert item["gmailDraft"]["state"] == "draft_created"
+        assert item["reconciliation"]["state"] == "not_reconciled"
+        assert "recoveryAction" not in item["reconciliation"]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("draft_state", "delivery_state"),
+    (
+        ("creating", "gmail_draft_creating"),
+        ("retryable", "gmail_draft_retryable"),
+        ("recovery_required", "gmail_draft_recovery_required"),
+    ),
+)
+async def test_real_postgres_delivery_state_omits_sent_reconciliation_until_draft_is_ready(
+    draft_state: str, delivery_state: str
+):
+    async with _gmail_draft_database() as (connection, schema):
+        seed = await _seed_approved_invoice(connection, schema)
+        await _service(connection, schema, _RecordingGateway()).create_or_reuse(
+            approval_id=seed["approval_id"],
+            idempotency_key=f"unfinished-draft-{draft_state}",
+            actor="Juan",
+        )
+        await connection.execute(
+            """
+            UPDATE commercial_billing_invoice_gmail_drafts
+            SET state = $2::varchar,
+                gmail_draft_id = NULL,
+                gmail_message_id = NULL,
+                gmail_thread_id = NULL,
+                draft_created_at = NULL,
+                recovery_required_at = CASE
+                    WHEN $2::text = 'recovery_required' THEN created_at
+                    ELSE NULL
+                END,
+                reconciliation_state = 'not_reconciled'
+            WHERE approval_id = $1
+            """,
+            seed["approval_id"],
+            draft_state,
+        )
+        service = CommercialBillingInvoiceGmailSentReconciliationService(
+            pool=_SchemaPool(connection, schema),
+            gateway_loader=lambda: (_ for _ in ()).throw(
+                AssertionError("durable delivery-state reads must not load Gmail")
+            ),
+        )
+
+        page = await service.list_delivery_state_for_run(
+            billing_run_id=seed["run_id"]
+        )
+
+        item, = page["items"]
+        assert item["deliveryState"] == delivery_state
+        assert item["gmailDraft"]["state"] == draft_state
+        assert item["reconciliation"]["state"] == "not_reconciled"
+        assert "recoveryAction" not in item["reconciliation"]
+
+
+@pytest.mark.asyncio
 async def test_real_postgres_delivery_state_rejects_unknown_run_without_loading_gmail():
     async with _gmail_draft_database() as (connection, schema):
         gateway_loads = 0
