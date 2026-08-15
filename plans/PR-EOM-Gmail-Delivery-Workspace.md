@@ -86,10 +86,11 @@ The existing receivables router adds one `GET` route with the same service-token
 - #2362: eom-timetracker proxy for this canonical read, Website rehydration/recovery UI, and explicit operator-triggered sent-mail reconciliation controls.
 - #2362: operating documentation and end-to-end production-safe verification after tracker and Website consumers deploy.
 - #2363: background Gmail mailbox sweeps, push/webhook delivery observation, and broader delivery reporting remain deferred; none is required to reopen an operator-selected immutable run.
+- #2363 (discovered by #2386): database-level prevention and audit of Gmail drafts cross-linked to an approval's different PDF artifact require a separate production-data assessment and additive migration/rollback plan.  This read-only slice already exposes those durable rows fail-closed as `lifecycle_conflict`.
 
 Parking predicate: park any new delivery writer, Gmail mailbox scanner, report/export, migration, customer-visible copy/PDF/email redesign, or generic multi-channel queue unless it directly prevents this read-only durable recovery path from being truthful.
 
-Parked hardening: none.
+Parked hardening: #2363 database-level cross-linked Gmail-draft/PDF prevention; it is not required for this reader to report existing evidence truthfully.
 
 ## Verification
 
@@ -108,6 +109,6 @@ Parked hardening: none.
 | `atlas_brain/services/commercial_billing_invoice_gmail_drafts.py` | 8 |
 | `atlas_brain/services/commercial_billing_invoice_gmail_sent_reconciliation.py` | 512 |
 | `atlas_brain/services/commercial_billing_invoice_pdfs.py` | 32 |
-| `plans/PR-EOM-Gmail-Delivery-Workspace.md` | 113 |
+| `plans/PR-EOM-Gmail-Delivery-Workspace.md` | 114 |
 | `tests/test_commercial_billing_gmail_drafts.py` | 625 |
-| **Total** | **1317** |
+| **Total** | **1318** |
