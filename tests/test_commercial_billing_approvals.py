@@ -2,14 +2,16 @@
 
 from __future__ import annotations
 
+import asyncio
 import ast
 import copy
 import hashlib
 import inspect
 import json
 import os
+import threading
 from contextlib import asynccontextmanager
-from datetime import date
+from datetime import date, datetime, timezone
 from decimal import Decimal
 from itertools import product
 from pathlib import Path
@@ -27,12 +29,59 @@ from atlas_brain.services.commercial_billing_approvals import (
     CommercialBillingApprovalUnavailableError,
     CommercialBillingApprovalValidationError,
 )
+from atlas_brain.services.commercial_billing_invoice_pdfs import (
+    CommercialBillingInvoicePDFConflictError,
+    CommercialBillingInvoicePDFRenderError,
+    CommercialBillingInvoicePDFService,
+    CommercialBillingInvoicePDFUnavailableError,
+    CommercialBillingInvoicePDFValidationError,
+    _validate_key,
+)
 
 
 def _fingerprint(value: object) -> str:
     return hashlib.sha256(
         json.dumps(value, sort_keys=True, separators=(",", ":"), allow_nan=False).encode()
     ).hexdigest()
+
+
+def _idempotency_key_oracle(value: object) -> bool:
+    """Specification-derived admission oracle for the bounded header key."""
+
+    return isinstance(value, str) and 1 <= len(value.strip()) <= 128
+
+
+def _idempotency_key_grammar_candidates():
+    """Generate tokens x wrappers x families rather than enumerating examples."""
+
+    for token, wrapper, family in product(
+        ("", "a", "a" * 128, "a" * 129, " "),
+        (
+            lambda value: value,
+            lambda value: [value],
+            lambda value: {"idempotency": value},
+            lambda value: (value,),
+        ),
+        (
+            lambda value: value,
+            lambda value: f" {value} ",
+            lambda value: f"\t{value}\n",
+        ),
+    ):
+        yield wrapper(family(token))
+
+
+@pytest.mark.parametrize("value", tuple(_idempotency_key_grammar_candidates()))
+def test_commercial_billing_invoice_pdfs_idempotency_key_matches_spec_derived_oracle(
+    value: object,
+):
+    """Every generated shape follows the key contract without a database call."""
+
+    if _idempotency_key_oracle(value):
+        assert _validate_key(value, field="Idempotency key", limit=128) == value.strip()
+    else:
+        with pytest.raises(CommercialBillingInvoicePDFValidationError):
+            _validate_key(value, field="Idempotency key", limit=128)
 
 
 def _candidate(
@@ -236,6 +285,7 @@ async def _approval_database():
             "047_invoice_extra_fields.sql",
             "370_commercial_billing_runs.sql",
             "372_commercial_billing_candidate_approvals.sql",
+            "373_commercial_billing_invoice_pdf_artifacts.sql",
         ):
             await connection.execute((migrations / name).read_text())
         yield connection, schema
@@ -540,6 +590,383 @@ async def test_real_postgres_rolls_back_the_invoice_when_approval_audit_insert_f
         ) == 0
 
 
+async def _create_approved_invoice(connection, schema: str) -> dict:
+    run_id, candidate = uuid4(), _candidate()
+    fingerprint = candidate["sourceFingerprint"]
+    await connection.execute(
+        "INSERT INTO contacts (id) VALUES ($1)",
+        UUID(candidate["customer"]["contactId"]),
+    )
+    await connection.execute(
+        """
+        INSERT INTO commercial_billing_runs (
+            id, billing_period, state, candidate_contract_version,
+            snapshot_fingerprint, source, idempotency_key,
+            request_fingerprint, created_by
+        ) VALUES ($1, '2026-03', 'draft', 2, $2, 'eom_admin', 'review-pdf', $2, 'Juan')
+        """,
+        run_id,
+        fingerprint,
+    )
+    await connection.execute(
+        """
+        INSERT INTO commercial_billing_run_candidates (
+            id, billing_run_id, candidate_key, source_fingerprint,
+            display_order, snapshot
+        ) VALUES ($1, $2, $3, $4, 0, $5::jsonb)
+        """,
+        uuid4(),
+        run_id,
+        candidate["candidateKey"],
+        fingerprint,
+        json.dumps(candidate),
+    )
+    result = await _service(
+        _SchemaPool(connection, schema), _CandidateService(candidate)
+    ).approve(
+        billing_run_id=run_id,
+        candidate_key=candidate["candidateKey"],
+        expected_source_fingerprint=fingerprint,
+        idempotency_key="approve-pdf",
+        actor="Juan",
+    )
+    return result["approval"]
+
+
+class _PDFRenderer:
+    def __init__(self) -> None:
+        self.calls: list[dict] = []
+        self.failure: Exception | None = None
+        self.output = b"%PDF-1.7\nsynthetic commercial billing artifact\n%%EOF\n"
+
+    def __call__(self, invoice: dict) -> bytes:
+        self.calls.append(copy.deepcopy(invoice))
+        if self.failure is not None:
+            raise self.failure
+        return self.output
+
+
+class _BlockingPDFRenderer(_PDFRenderer):
+    """Hold one real service transaction while another caller reaches its lock."""
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.first_render_started = threading.Event()
+        self.release_first_render = threading.Event()
+        self._calls_lock = threading.Lock()
+
+    def __call__(self, invoice: dict) -> bytes:
+        with self._calls_lock:
+            call_number = len(self.calls) + 1
+            self.calls.append(copy.deepcopy(invoice))
+        if call_number == 1:
+            self.first_render_started.set()
+            if not self.release_first_render.wait(timeout=5):
+                raise RuntimeError("timed out waiting to release synthetic PDF render")
+        if self.failure is not None:
+            raise self.failure
+        return self.output
+
+
+class _IsolatedSchemaPool:
+    """Give concurrent service calls independent real PostgreSQL connections."""
+
+    def __init__(self, database_url: str, schema: str) -> None:
+        self.database_url = database_url
+        self.schema = schema
+
+    @property
+    def is_initialized(self) -> bool:
+        return True
+
+    @asynccontextmanager
+    async def transaction(self):
+        asyncpg = pytest.importorskip("asyncpg")
+        connection = await asyncpg.connect(self.database_url)
+        try:
+            await connection.execute(f'SET search_path TO "{self.schema}"')
+            async with connection.transaction():
+                yield connection
+        finally:
+            await connection.close()
+
+
+class _ApprovalLockObservingPDFService(CommercialBillingInvoicePDFService):
+    def __init__(self, *, approval_lock_started: threading.Event, **kwargs) -> None:
+        super().__init__(**kwargs)
+        self._approval_lock_started = approval_lock_started
+
+    async def _lock(self, conn, scope: str) -> None:
+        if scope.startswith("approval:"):
+            self._approval_lock_started.set()
+        await super()._lock(conn, scope)
+
+
+def _pdf_service(connection, schema: str, renderer: _PDFRenderer) -> CommercialBillingInvoicePDFService:
+    return CommercialBillingInvoicePDFService(
+        pool=_SchemaPool(connection, schema),
+        renderer=renderer,
+        now=lambda: datetime(2026, 4, 2, tzinfo=timezone.utc),
+    )
+
+
+@pytest.mark.asyncio
+async def test_real_postgres_pdf_artifact_is_immutable_idempotent_and_reusable():
+    async with _approval_database() as (connection, schema):
+        approval = await _create_approved_invoice(connection, schema)
+        renderer = _PDFRenderer()
+        service = _pdf_service(connection, schema, renderer)
+
+        created = await service.generate_or_reuse(
+            approval_id=UUID(approval["id"]), idempotency_key="pdf-1", actor="Juan"
+        )
+        replayed = await service.generate_or_reuse(
+            approval_id=UUID(approval["id"]), idempotency_key="pdf-1", actor="Juan"
+        )
+        reused = await service.generate_or_reuse(
+            approval_id=UUID(approval["id"]), idempotency_key="pdf-2", actor="Juan"
+        )
+
+        assert created["replayed"] is False
+        assert created["reused"] is False
+        assert created["artifact"]["state"] == "ready"
+        assert created["artifact"]["filename"] == "INV-2026-Mar-0001.pdf"
+        assert "pdfBytes" not in created["artifact"]
+        assert replayed == {**created, "replayed": True, "reused": True}
+        assert reused == {**created, "replayed": False, "reused": True}
+        assert len(renderer.calls) == 1
+
+        artifact = await connection.fetchrow(
+            "SELECT pdf_bytes, byte_size, pdf_sha256, render_fingerprint, generated_by "
+            "FROM commercial_billing_invoice_pdf_artifacts"
+        )
+        assert artifact["pdf_bytes"] == b"%PDF-1.7\nsynthetic commercial billing artifact\n%%EOF\n"
+        assert artifact["byte_size"] == len(artifact["pdf_bytes"])
+        assert artifact["pdf_sha256"] == hashlib.sha256(artifact["pdf_bytes"]).hexdigest()
+        assert artifact["render_fingerprint"] == created["artifact"]["renderFingerprint"]
+        assert artifact["generated_by"] == "Juan"
+        assert await connection.fetchval(
+            "SELECT COUNT(*) FROM commercial_billing_invoice_pdf_artifacts"
+        ) == 1
+        assert await connection.fetchval(
+            "SELECT COUNT(*) FROM commercial_billing_invoice_pdf_operations"
+        ) == 2
+
+
+@pytest.mark.asyncio
+async def test_real_postgres_pdf_artifact_serializes_concurrent_new_keys_per_approval():
+    """Every admitted distinct-key schedule creates one artifact and two receipts."""
+
+    async with _approval_database() as (connection, schema):
+        approval = await _create_approved_invoice(connection, schema)
+        approval_id = UUID(approval["id"])
+        database_url = os.environ["ATLAS_RECEIVABLES_TEST_DATABASE_URL"]
+        renderer = _BlockingPDFRenderer()
+        first_service = CommercialBillingInvoicePDFService(
+            pool=_IsolatedSchemaPool(database_url, schema),
+            renderer=renderer,
+            now=lambda: datetime(2026, 4, 2, tzinfo=timezone.utc),
+        )
+        second_approval_lock_started = threading.Event()
+        second_service = _ApprovalLockObservingPDFService(
+            pool=_IsolatedSchemaPool(database_url, schema),
+            renderer=renderer,
+            now=lambda: datetime(2026, 4, 2, tzinfo=timezone.utc),
+            approval_lock_started=second_approval_lock_started,
+        )
+
+        first = asyncio.create_task(
+            asyncio.to_thread(
+                lambda: asyncio.run(
+                    first_service.generate_or_reuse(
+                        approval_id=approval_id,
+                        idempotency_key="pdf-concurrent-1",
+                        actor="Juan",
+                    )
+                )
+            )
+        )
+        assert await asyncio.to_thread(renderer.first_render_started.wait, 2)
+        second = asyncio.create_task(
+            asyncio.to_thread(
+                lambda: asyncio.run(
+                    second_service.generate_or_reuse(
+                        approval_id=approval_id,
+                        idempotency_key="pdf-concurrent-2",
+                        actor="Juan",
+                    )
+                )
+            )
+        )
+        assert await asyncio.to_thread(second_approval_lock_started.wait, 2)
+        assert not second.done()
+
+        renderer.release_first_render.set()
+        first_result, second_result = await asyncio.gather(first, second)
+        assert {result["reused"] for result in (first_result, second_result)} == {False, True}
+        assert all(result["replayed"] is False for result in (first_result, second_result))
+        assert len(renderer.calls) == 1
+        assert await connection.fetchval(
+            "SELECT COUNT(*) FROM commercial_billing_invoice_pdf_artifacts"
+        ) == 1
+        assert await connection.fetchval(
+            "SELECT COUNT(*) FROM commercial_billing_invoice_pdf_operations"
+        ) == 2
+
+
+@pytest.mark.asyncio
+async def test_pdf_new_request_rejects_changed_or_non_draft_invoice_without_a_new_write():
+    async with _approval_database() as (connection, schema):
+        approval = await _create_approved_invoice(connection, schema)
+        renderer = _PDFRenderer()
+        service = _pdf_service(connection, schema, renderer)
+        created = await service.generate_or_reuse(
+            approval_id=UUID(approval["id"]), idempotency_key="pdf-change-1", actor="Juan"
+        )
+
+        await connection.execute(
+            "UPDATE invoices SET customer_name = 'Changed Office' WHERE id = $1",
+            UUID(approval["invoice"]["id"]),
+        )
+        with pytest.raises(CommercialBillingInvoicePDFConflictError):
+            await service.generate_or_reuse(
+                approval_id=UUID(approval["id"]),
+                idempotency_key="pdf-change-2",
+                actor="Juan",
+            )
+        replayed = await service.generate_or_reuse(
+            approval_id=UUID(approval["id"]),
+            idempotency_key="pdf-change-1",
+            actor="Juan",
+        )
+        assert replayed == {**created, "replayed": True, "reused": True}
+        assert len(renderer.calls) == 1
+        assert await connection.fetchval(
+            "SELECT COUNT(*) FROM commercial_billing_invoice_pdf_operations"
+        ) == 1
+
+    async with _approval_database() as (connection, schema):
+        approval = await _create_approved_invoice(connection, schema)
+        renderer = _PDFRenderer()
+        await connection.execute(
+            "UPDATE invoices SET status = 'sent' WHERE id = $1",
+            UUID(approval["invoice"]["id"]),
+        )
+        with pytest.raises(CommercialBillingInvoicePDFConflictError):
+            await _pdf_service(connection, schema, renderer).generate_or_reuse(
+                approval_id=UUID(approval["id"]),
+                idempotency_key="pdf-sent-1",
+                actor="Juan",
+            )
+        assert renderer.calls == []
+        assert await connection.fetchval(
+            "SELECT COUNT(*) FROM commercial_billing_invoice_pdf_artifacts"
+        ) == 0
+        assert await connection.fetchval(
+            "SELECT COUNT(*) FROM commercial_billing_invoice_pdf_operations"
+        ) == 0
+
+    async with _approval_database() as (connection, schema):
+        approval = await _create_approved_invoice(connection, schema)
+        renderer = _PDFRenderer()
+        await connection.execute(
+            "UPDATE invoices SET total_amount = 'NaN'::numeric WHERE id = $1",
+            UUID(approval["invoice"]["id"]),
+        )
+        with pytest.raises(CommercialBillingInvoicePDFConflictError):
+            await _pdf_service(connection, schema, renderer).generate_or_reuse(
+                approval_id=UUID(approval["id"]),
+                idempotency_key="pdf-nan-1",
+                actor="Juan",
+            )
+        assert renderer.calls == []
+        assert await connection.fetchval(
+            "SELECT COUNT(*) FROM commercial_billing_invoice_pdf_artifacts"
+        ) == 0
+        assert await connection.fetchval(
+            "SELECT COUNT(*) FROM commercial_billing_invoice_pdf_operations"
+        ) == 0
+
+
+@pytest.mark.asyncio
+async def test_pdf_render_and_operation_failures_leave_no_artifact_and_retry_safely():
+    async with _approval_database() as (connection, schema):
+        approval = await _create_approved_invoice(connection, schema)
+        renderer = _PDFRenderer()
+        renderer.failure = RuntimeError("synthetic renderer failure")
+        service = _pdf_service(connection, schema, renderer)
+
+        with pytest.raises(CommercialBillingInvoicePDFRenderError):
+            await service.generate_or_reuse(
+                approval_id=UUID(approval["id"]), idempotency_key="pdf-retry-1", actor="Juan"
+            )
+        assert await connection.fetchval(
+            "SELECT COUNT(*) FROM commercial_billing_invoice_pdf_artifacts"
+        ) == 0
+        assert await connection.fetchval(
+            "SELECT COUNT(*) FROM commercial_billing_invoice_pdf_operations"
+        ) == 0
+
+        renderer.failure = None
+        renderer.output = b"not a PDF"
+        with pytest.raises(CommercialBillingInvoicePDFRenderError):
+            await service.generate_or_reuse(
+                approval_id=UUID(approval["id"]), idempotency_key="pdf-retry-1", actor="Juan"
+            )
+        assert await connection.fetchval(
+            "SELECT COUNT(*) FROM commercial_billing_invoice_pdf_artifacts"
+        ) == 0
+        assert await connection.fetchval(
+            "SELECT COUNT(*) FROM commercial_billing_invoice_pdf_operations"
+        ) == 0
+
+        renderer.output = b"%PDF-1.7\nsynthetic commercial billing artifact\n%%EOF\n"
+        await connection.execute(
+            """
+            CREATE FUNCTION reject_commercial_billing_pdf_operation()
+            RETURNS trigger LANGUAGE plpgsql AS $$
+            BEGIN
+                RAISE EXCEPTION 'injected PDF operation failure';
+            END;
+            $$
+            """
+        )
+        await connection.execute(
+            """
+            CREATE TRIGGER reject_commercial_billing_pdf_operation_trigger
+            BEFORE INSERT ON commercial_billing_invoice_pdf_operations
+            FOR EACH ROW EXECUTE FUNCTION reject_commercial_billing_pdf_operation()
+            """
+        )
+        with pytest.raises(CommercialBillingInvoicePDFUnavailableError):
+            await service.generate_or_reuse(
+                approval_id=UUID(approval["id"]), idempotency_key="pdf-retry-1", actor="Juan"
+            )
+        assert await connection.fetchval(
+            "SELECT COUNT(*) FROM commercial_billing_invoice_pdf_artifacts"
+        ) == 0
+        assert await connection.fetchval(
+            "SELECT COUNT(*) FROM commercial_billing_invoice_pdf_operations"
+        ) == 0
+
+        await connection.execute(
+            "DROP TRIGGER reject_commercial_billing_pdf_operation_trigger "
+            "ON commercial_billing_invoice_pdf_operations"
+        )
+        await connection.execute("DROP FUNCTION reject_commercial_billing_pdf_operation()")
+        retried = await service.generate_or_reuse(
+            approval_id=UUID(approval["id"]), idempotency_key="pdf-retry-1", actor="Juan"
+        )
+        assert retried["replayed"] is False
+        assert retried["reused"] is False
+        assert await connection.fetchval(
+            "SELECT COUNT(*) FROM commercial_billing_invoice_pdf_artifacts"
+        ) == 1
+        assert await connection.fetchval(
+            "SELECT COUNT(*) FROM commercial_billing_invoice_pdf_operations"
+        ) == 1
+
+
 class _RouteService:
     def __init__(self) -> None:
         self.calls: list[dict] = []
@@ -549,7 +976,27 @@ class _RouteService:
         return {"approval": {"id": "approval-1"}, "replayed": False}
 
 
-def _route_app(service: _RouteService) -> tuple[FastAPI, str]:
+class _PDFRouteService:
+    def __init__(self) -> None:
+        self.calls: list[dict] = []
+
+    async def generate_or_reuse(self, **kwargs):
+        self.calls.append(kwargs)
+        return {
+            "artifact": {
+                "approvalId": str(kwargs["approval_id"]),
+                "id": "artifact-1",
+                "state": "ready",
+            },
+            "replayed": False,
+            "reused": False,
+        }
+
+
+def _route_app(
+    service: _RouteService,
+    pdf_service: _PDFRouteService | None = None,
+) -> tuple[FastAPI, str]:
     from atlas_brain.api.invoicing import auth as receivables_auth
     from atlas_brain.api.invoicing import receivables as routes
     from atlas_brain.eom_api.auth import generate_receivables_service_token
@@ -561,6 +1008,10 @@ def _route_app(service: _RouteService) -> tuple[FastAPI, str]:
         receivables_api_enabled=True, receivables_service_token="", receivables_service_token_sha256=generated.sha256,
     )
     app.dependency_overrides[routes.get_commercial_billing_approval_service] = lambda: service
+    if pdf_service is not None:
+        app.dependency_overrides[
+            routes.get_commercial_billing_invoice_pdf_service
+        ] = lambda: pdf_service
     return app, generated.token
 
 
@@ -579,6 +1030,60 @@ async def test_approval_route_requires_token_actor_fingerprint_and_idempotency_k
     assert service.calls == [{"billing_run_id": run_id, "candidate_key": body["candidate_key"], "expected_source_fingerprint": body["expected_source_fingerprint"], "idempotency_key": "route-1", "actor": "Juan"}]
 
 
+@pytest.mark.asyncio
+async def test_full_atlas_app_pdf_route_requires_token_actor_and_idempotency_without_returning_bytes():
+    """Exercise the live ``main.app -> /api/v1`` route registration chain."""
+
+    from atlas_brain.api.invoicing import auth as receivables_auth
+    from atlas_brain.api.invoicing import receivables as routes
+    from atlas_brain.eom_api.auth import generate_receivables_service_token
+    from atlas_brain.main import app
+
+    approval_id = uuid4()
+    service = _PDFRouteService()
+    generated = generate_receivables_service_token()
+    original_overrides = dict(app.dependency_overrides)
+    app.dependency_overrides[receivables_auth.get_receivables_api_config] = lambda: SimpleNamespace(
+        receivables_api_enabled=True,
+        receivables_service_token="",
+        receivables_service_token_sha256=generated.sha256,
+    )
+    app.dependency_overrides[routes.get_commercial_billing_invoice_pdf_service] = lambda: service
+    path = f"/api/v1/receivables/commercial-billing-approvals/{approval_id}/invoice-pdf"
+    headers = {"Authorization": f"Bearer {generated.token}"}
+    try:
+        async with httpx.AsyncClient(
+            transport=httpx.ASGITransport(app=app), base_url="http://test"
+        ) as client:
+            assert (await client.post(path)).status_code == 401
+            assert (await client.post(path, headers=headers)).status_code == 422
+            assert (
+                await client.post(
+                    path,
+                    headers={**headers, "Idempotency-Key": "route-pdf-1"},
+                )
+            ).status_code == 422
+            response = await client.post(
+                path,
+                headers={
+                    **headers,
+                    "Idempotency-Key": "route-pdf-1",
+                    "X-EOM-Actor": "Juan",
+                },
+            )
+    finally:
+        app.dependency_overrides.clear()
+        app.dependency_overrides.update(original_overrides)
+    assert response.status_code == 201
+    assert response.json()["artifact"] == {
+        "approvalId": str(approval_id), "id": "artifact-1", "state": "ready"
+    }
+    assert "pdf_bytes" not in response.text
+    assert service.calls == [
+        {"approval_id": approval_id, "idempotency_key": "route-pdf-1", "actor": "Juan"}
+    ]
+
+
 def test_approval_migration_is_additive_and_financially_restrictive():
     migration = (Path(__file__).parents[1] / "atlas_brain/storage/migrations/372_commercial_billing_candidate_approvals.sql").read_text()
     assert "CREATE TABLE IF NOT EXISTS commercial_billing_candidate_approvals" in migration
@@ -592,6 +1097,27 @@ def test_approval_migration_is_additive_and_financially_restrictive():
     assert "DROP TABLE" not in "\n".join(line for line in migration.splitlines() if not line.lstrip().startswith("--"))
 
 
+def test_pdf_artifact_migration_is_additive_and_financially_restrictive():
+    migration = (
+        Path(__file__).parents[1]
+        / "atlas_brain/storage/migrations/373_commercial_billing_invoice_pdf_artifacts.sql"
+    ).read_text()
+    assert "CREATE TABLE IF NOT EXISTS commercial_billing_invoice_pdf_artifacts" in migration
+    assert "CREATE TABLE IF NOT EXISTS commercial_billing_invoice_pdf_operations" in migration
+    assert migration.count("ON DELETE RESTRICT") == 2
+    assert "approval_id UUID NOT NULL UNIQUE" in migration
+    assert "invoice_id UUID" not in migration
+    assert "pdf_bytes BYTEA NOT NULL" in migration
+    assert "CHECK (state = 'ready')" in migration
+    assert "CHECK (octet_length(pdf_bytes) = byte_size)" in migration
+    assert "UNIQUE (source, idempotency_key)" in migration
+    executable = "\n".join(
+        line for line in migration.splitlines() if not line.lstrip().startswith("--")
+    )
+    assert "DROP TABLE" not in executable
+    assert not any(token in executable.lower() for token in ("gmail", "email", "sent_via"))
+
+
 def test_approval_service_does_not_import_delivery_or_legacy_monthly_writers():
     import atlas_brain.services.commercial_billing_approvals as approvals
 
@@ -601,11 +1127,57 @@ def test_approval_service_does_not_import_delivery_or_legacy_monthly_writers():
     assert "float(" not in inspect.getsource(approvals)
 
 
+def test_pdf_artifact_service_tracks_every_renderer_field_without_delivery_imports():
+    import atlas_brain.services.commercial_billing_invoice_pdfs as pdf_artifacts
+    from atlas_brain.services import invoice_pdf
+
+    renderer_fields = {
+        node.args[0].value
+        for node in ast.walk(ast.parse(inspect.getsource(invoice_pdf.render_invoice_pdf)))
+        if isinstance(node, ast.Call)
+        and isinstance(node.func, ast.Attribute)
+        and node.func.attr == "get"
+        and isinstance(node.func.value, ast.Name)
+        and node.func.value.id == "invoice"
+        and node.args
+        and isinstance(node.args[0], ast.Constant)
+        and isinstance(node.args[0].value, str)
+    }
+    snapshot = pdf_artifacts._render_snapshot(
+        {field: None for field in renderer_fields}
+    )
+    source = inspect.getsource(pdf_artifacts)
+    imports = {
+        alias.name
+        for node in ast.walk(ast.parse(source))
+        if isinstance(node, ast.Import)
+        for alias in node.names
+    }
+    imports.update(
+        {
+            f"{node.module}.{alias.name}" if node.module else alias.name
+            for node in ast.walk(ast.parse(source))
+            if isinstance(node, ast.ImportFrom)
+            for alias in node.names
+        }
+    )
+    assert renderer_fields == set(snapshot)
+    assert not any(
+        fragment in imported
+        for fragment in {"gmail", "email_provider", "monthly_invoice_generation", "crm_provider"}
+        for imported in imports
+    )
+    assert "UPDATE invoices" not in source
+    assert "float(" not in source
+
+
 def test_invoicing_workflow_enrolls_the_approval_writer_and_contract():
     workflow = (Path(__file__).parents[1] / ".github/workflows/atlas_invoicing_checks.yml").read_text()
     for path in (
         "atlas_brain/services/commercial_billing_approvals.py",
         "atlas_brain/storage/migrations/372_commercial_billing_candidate_approvals.sql",
+        "atlas_brain/services/commercial_billing_invoice_pdfs.py",
+        "atlas_brain/storage/migrations/373_commercial_billing_invoice_pdf_artifacts.sql",
         "tests/test_commercial_billing_approvals.py",
     ):
         assert workflow.count(f'      - "{path}"') == 2
