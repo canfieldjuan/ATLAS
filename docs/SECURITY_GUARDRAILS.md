@@ -210,15 +210,11 @@ Dependabot is enabled for:
 The archived `_ARCHIVED_atlas-intel-next/` tree was **deleted** rather than
 kept out of Dependabot. Excluding it from updates did not exclude it from
 `osv-scan`, so an unused Next.js experiment contributed 46 open code-scanning
-alerts against `main`'s tree. `osv-full`
-(`.github/workflows/security_guardrails.yml:158-159`) does not evaluate pull
-requests at all -- `if: github.event_name != 'pull_request' &&
-github.event_name != 'pull_request_target'` -- so this was never a PR-time
-check of any kind, blocking or advisory; it is a standalone scan of `main`
-triggered on push/schedule. This was alert-set hygiene on that standalone
-scan, not an unblocking change. Its own DO_NOT_USE note recorded that it was
-never in production; the live frontend is `atlas-churn-ui`. The history
-remains in git if it is ever wanted back.
+alerts on `main`'s usual scan. `osv-full`
+(`.github/workflows/security_guardrails.yml:3-11,158-159`) never evaluates a pull request -- the job's own `if:` excludes both `pull_request` and `pull_request_target` -- but the workflow also declares `workflow_dispatch` alongside `push: main` and a weekly `schedule`, and a manual dispatch can target any ref via `--ref`. So it is not a PR check of any kind, but it is not guaranteed to always scan `main` either -- push and schedule do, a manual run may not. This was
+alert-set hygiene, not an unblocking change. Its own DO_NOT_USE note recorded
+that it was never in production; the live frontend is `atlas-churn-ui`. The
+history remains in git if it is ever wanted back.
 
 ## Initial Secret Scan Result
 

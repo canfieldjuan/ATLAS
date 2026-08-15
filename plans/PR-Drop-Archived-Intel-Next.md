@@ -2,14 +2,15 @@
 
 ## Why this slice exists
 
-`_ARCHIVED_atlas-intel-next/` contributes **46 open OSV alerts** against
-`main`'s tree. `osv-full`
-(`.github/workflows/security_guardrails.yml:158-159`) never evaluates a pull
-request -- `if: github.event_name != 'pull_request' && github.event_name !=
-'pull_request_target'` -- so this is not a PR-time check of any kind; it is a
-standalone push/schedule scan of `main`. It is, by its own DO_NOT_USE note, an
-"unused Next.js experiment" that "exists only as an archive"; the live
-frontend is `atlas-churn-ui`.
+`_ARCHIVED_atlas-intel-next/` contributes **46 open OSV alerts** on `osv-full`'s
+usual scan. That job (`.github/workflows/security_guardrails.yml:3-11,158-159`)
+never evaluates a pull request -- its own `if:` excludes both `pull_request`
+and `pull_request_target` -- so this is not a PR-time check of any kind. It
+also declares `workflow_dispatch` alongside `push: main` and a weekly
+`schedule`, and a manual dispatch can target any ref via `--ref`, so it is not
+guaranteed to always scan `main` either; push and schedule do. It is, by its
+own DO_NOT_USE note, an "unused Next.js experiment" that "exists only as an
+archive"; the live frontend is `atlas-churn-ui`.
 
 **Root cause.** The tree was excluded from *Dependabot* but not from
 *scanning*. `docs/SECURITY_GUARDRAILS.md` records that exclusion as
@@ -192,11 +193,12 @@ rather than continuing to carry it in the working tree.
 not enrolled for routine Dependabot churn". That sentence now records what was
 actually wrong with it: the exclusion addressed update churn and left the
 scanner untouched, so it converted a maintenance cost into a standing set of
-alerts on `osv-full`'s scan of `main`. That job does not evaluate pull
-requests at all (`.github/workflows/security_guardrails.yml:158-159`), so
-nothing was ever blocked or gated, advisory or otherwise -- the cost is that
-alerts from code the repo forbids using share the scanned set with alerts
-from code that ships.
+alerts on `osv-full`'s scan. That job does not evaluate pull requests at all
+(`.github/workflows/security_guardrails.yml:3-11,158-159`) -- it runs on push
+to `main`, a weekly schedule, or manual `workflow_dispatch` (which can target
+any ref) -- so nothing was ever blocked or gated, advisory or otherwise. The
+cost is that alerts from code the repo forbids using share the scanned set
+with alerts from code that ships.
 ## Intentional
 
 - **Deleted rather than scope-excluded from `osv-scan`.** Excluding it would
@@ -342,7 +344,7 @@ Parked hardening: none.
 | `_ARCHIVED_atlas-intel-next/scripts/indexnow.ts` | 54 |
 | `_ARCHIVED_atlas-intel-next/tsconfig.json` | 34 |
 | `_ARCHIVED_atlas-intel-next/vercel.json` | 3 |
-| `docs/SECURITY_GUARDRAILS.md` | 15 |
+| `docs/SECURITY_GUARDRAILS.md` | 11 |
 | `docs/product_context_pack.md` | 1 |
-| `plans/PR-Drop-Archived-Intel-Next.md` | 348 |
-| **Total** | **29190** |
+| `plans/PR-Drop-Archived-Intel-Next.md` | 350 |
+| **Total** | **29188** |
