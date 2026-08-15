@@ -1,0 +1,67 @@
+-- atlas: atomic-bookkeeping
+-- Explicit, append-only recovery evidence for a commercial Gmail draft that
+-- reconciliation proved missing. The existing root row remains one-per-
+-- approval/PDF so a prior provider revision can continue to read it after a
+-- rollback; this table retains the prior generation before the root becomes
+-- the next current delivery attempt.
+--
+-- This never sends mail or changes invoice lifecycle state. Sent-mail proof
+-- remains the responsibility of the reconciliation service.
+--
+-- Rollback: stop the replacement route/service and retain the event rows and
+-- current root generation. The prior application revision still sees one root
+-- draft record per approval/PDF and fails closed rather than creating a
+-- duplicate because it cannot derive a later generation's RFC Message-ID.
+
+ALTER TABLE commercial_billing_invoice_gmail_drafts
+    ADD COLUMN IF NOT EXISTS draft_generation INTEGER NOT NULL DEFAULT 1,
+    ADD COLUMN IF NOT EXISTS last_replaced_by VARCHAR(128),
+    ADD COLUMN IF NOT EXISTS last_replaced_at TIMESTAMPTZ;
+
+ALTER TABLE commercial_billing_invoice_gmail_drafts
+    ADD CONSTRAINT commercial_billing_invoice_gmail_drafts_generation_check
+        CHECK (draft_generation > 0),
+    ADD CONSTRAINT commercial_billing_invoice_gmail_drafts_last_replacement_check
+        CHECK (
+            (last_replaced_by IS NULL AND last_replaced_at IS NULL)
+            OR (
+                length(btrim(COALESCE(last_replaced_by, ''))) > 0
+                AND last_replaced_at IS NOT NULL
+            )
+        );
+
+CREATE TABLE commercial_billing_invoice_gmail_draft_replacement_events (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    gmail_draft_record_id UUID NOT NULL
+        REFERENCES commercial_billing_invoice_gmail_drafts(id) ON DELETE RESTRICT,
+    operation_id UUID NOT NULL UNIQUE
+        REFERENCES commercial_billing_invoice_gmail_draft_operations(id) ON DELETE RESTRICT,
+    prior_generation INTEGER NOT NULL,
+    replacement_generation INTEGER NOT NULL,
+    prior_snapshot JSONB NOT NULL,
+    replaced_by VARCHAR(128) NOT NULL,
+    replaced_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    CONSTRAINT commercial_billing_gmail_draft_replacement_generation_check
+        CHECK (
+            prior_generation > 0
+            AND replacement_generation = prior_generation + 1
+        ),
+    CONSTRAINT commercial_billing_gmail_draft_replacement_snapshot_check
+        CHECK (jsonb_typeof(prior_snapshot) = 'object'),
+    CONSTRAINT commercial_billing_gmail_draft_replacement_actor_check
+        CHECK (length(btrim(replaced_by)) > 0),
+    CONSTRAINT commercial_billing_gmail_draft_replacement_once_per_generation
+        UNIQUE (gmail_draft_record_id, replacement_generation)
+);
+
+CREATE INDEX idx_commercial_billing_gmail_draft_replacement_events_record
+    ON commercial_billing_invoice_gmail_draft_replacement_events (
+        gmail_draft_record_id, replacement_generation DESC
+    );
+
+COMMENT ON TABLE commercial_billing_invoice_gmail_draft_replacement_events IS
+    'Append-only snapshots of reconciliation-proven missing commercial Gmail draft generations replaced by an explicit operator action.';
+
+COMMENT ON COLUMN commercial_billing_invoice_gmail_drafts.draft_generation IS
+    'Current Gmail draft identity generation; prior identities are retained in replacement events.';
