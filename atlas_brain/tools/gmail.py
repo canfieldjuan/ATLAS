@@ -24,6 +24,7 @@ logger = logging.getLogger("atlas.tools.gmail")
 GMAIL_API_BASE = "https://gmail.googleapis.com/gmail/v1"
 TOKEN_URL = "https://oauth2.googleapis.com/token"
 _MAX_GMAIL_DRAFT_LOOKUP_PAGES = 20
+_MAX_GMAIL_SENT_LOOKUP_PAGES = 20
 _MAX_GMAIL_RFC_MESSAGE_ID_LENGTH = 320
 _MAX_GMAIL_EXTRA_HEADER_VALUE_LENGTH = 998
 _EXTRA_HEADER_NAME = re.compile(r"^(?:Message-ID|X-[A-Za-z0-9-]{1,72})$")
@@ -41,6 +42,14 @@ _PROTECTED_HEADER_NAMES = frozenset(
 
 class GmailDraftLookupError(RuntimeError):
     """A Gmail draft lookup cannot safely name one external draft."""
+
+
+class GmailSentMessageLookupError(RuntimeError):
+    """A Gmail Sent lookup cannot safely name one external message."""
+
+    def __init__(self, message: str, *, retryable: bool = False) -> None:
+        super().__init__(message)
+        self.retryable = retryable
 
 
 class GmailDraftCreateError(RuntimeError):
@@ -98,6 +107,25 @@ def _rfc_message_id(value: str) -> str:
     ):
         raise GmailDraftLookupError("Gmail draft RFC Message-ID is invalid")
     return value
+
+
+def _gmail_message_identifier(value: Any, field: str) -> str:
+    if not isinstance(value, str):
+        raise GmailSentMessageLookupError(
+            f"Gmail sent-message {field} is invalid"
+        )
+    normalized = value.strip()
+    if (
+        not normalized
+        or len(normalized) > 256
+        or "\r" in normalized
+        or "\n" in normalized
+        or "\x00" in normalized
+    ):
+        raise GmailSentMessageLookupError(
+            f"Gmail sent-message {field} is invalid"
+        )
+    return normalized
 
 
 class GmailTransport:
@@ -462,6 +490,189 @@ class GmailTransport:
             page_token = next_page
 
         raise GmailDraftLookupError("Gmail draft lookup exceeded its page bound")
+
+    async def find_sent_message_by_rfc_message_id(
+        self,
+        rfc_message_id: str,
+    ) -> dict[str, Any] | None:
+        """Return one metadata-verified Sent message for a stable Message-ID.
+
+        The Gmail list API returns only resource identifiers, so every candidate
+        is fetched with ``format=metadata`` before this transport reports it.
+        The caller remains responsible for comparing its business-specific
+        namespaced headers; this generic transport only establishes one bounded,
+        read-only mailbox result that has Gmail's ``SENT`` label.
+        """
+
+        try:
+            message_id = _rfc_message_id(rfc_message_id)
+        except GmailDraftLookupError as exc:
+            raise GmailSentMessageLookupError(
+                "Gmail sent-message RFC Message-ID is invalid"
+            ) from exc
+        token = await self._get_access_token()
+        client = await self._ensure_client()
+        page_token: str | None = None
+        seen_page_tokens: set[str] = set()
+        matches: list[dict[str, Any]] = []
+
+        for _ in range(_MAX_GMAIL_SENT_LOOKUP_PAGES):
+            params: dict[str, Any] = {
+                "q": f"rfc822msgid:{message_id}",
+                "labelIds": "SENT",
+                "maxResults": 100,
+            }
+            if page_token is not None:
+                params["pageToken"] = page_token
+            response = await client.get(
+                f"{GMAIL_API_BASE}/users/me/messages",
+                params=params,
+                headers={"Authorization": f"Bearer {token}"},
+            )
+            if response.status_code == 403:
+                raise GmailSentMessageLookupError(
+                    "Gmail sent-message lookup permission denied. Re-run setup with gmail.modify scope: "
+                    "python scripts/setup_google_oauth.py",
+                    retryable=True,
+                )
+            response.raise_for_status()
+            payload = response.json()
+            if not isinstance(payload, dict):
+                raise GmailSentMessageLookupError(
+                    "Gmail sent-message lookup response is invalid"
+                )
+            messages = payload.get("messages", [])
+            if not isinstance(messages, list):
+                raise GmailSentMessageLookupError(
+                    "Gmail sent-message lookup response is invalid"
+                )
+            for message in messages:
+                if not isinstance(message, dict):
+                    raise GmailSentMessageLookupError(
+                        "Gmail sent-message lookup response is invalid"
+                    )
+                candidate_id = _gmail_message_identifier(
+                    message.get("id"), "id"
+                )
+                candidate_thread_id = _gmail_message_identifier(
+                    message.get("threadId"), "thread ID"
+                )
+                metadata = await self._get_sent_message_metadata(
+                    client=client,
+                    token=token,
+                    message_id=candidate_id,
+                )
+                if metadata["id"] != candidate_id or metadata["threadId"] != candidate_thread_id:
+                    raise GmailSentMessageLookupError(
+                        "Gmail sent-message lookup identity is inconsistent"
+                    )
+                matches.append(metadata)
+                if len(matches) > 1:
+                    raise GmailSentMessageLookupError(
+                        "Gmail sent-message lookup found multiple matching messages"
+                    )
+
+            next_page = payload.get("nextPageToken")
+            if next_page is None:
+                return next(iter(matches), None)
+            if not isinstance(next_page, str) or not next_page:
+                raise GmailSentMessageLookupError(
+                    "Gmail sent-message lookup pagination is invalid"
+                )
+            if next_page in seen_page_tokens:
+                raise GmailSentMessageLookupError(
+                    "Gmail sent-message lookup pagination is invalid"
+                )
+            seen_page_tokens.add(next_page)
+            page_token = next_page
+
+        raise GmailSentMessageLookupError(
+            "Gmail sent-message lookup exceeded its page bound"
+        )
+
+    @staticmethod
+    async def _get_sent_message_metadata(
+        *,
+        client: httpx.AsyncClient,
+        token: str,
+        message_id: str,
+    ) -> dict[str, Any]:
+        response = await client.get(
+            f"{GMAIL_API_BASE}/users/me/messages/{message_id}",
+            params=[
+                ("format", "metadata"),
+                ("metadataHeaders", "Message-ID"),
+                ("metadataHeaders", "X-Atlas-Commercial-Billing-Approval"),
+                ("metadataHeaders", "X-Atlas-Commercial-Billing-Invoice"),
+            ],
+            headers={"Authorization": f"Bearer {token}"},
+        )
+        if response.status_code == 403:
+            raise GmailSentMessageLookupError(
+                "Gmail sent-message lookup permission denied. Re-run setup with gmail.modify scope: "
+                "python scripts/setup_google_oauth.py",
+                retryable=True,
+            )
+        response.raise_for_status()
+        payload = response.json()
+        if not isinstance(payload, dict):
+            raise GmailSentMessageLookupError("Gmail sent-message metadata is invalid")
+        normalized_id = _gmail_message_identifier(payload.get("id"), "id")
+        normalized_thread_id = _gmail_message_identifier(
+            payload.get("threadId"), "thread ID"
+        )
+        labels = payload.get("labelIds")
+        if (
+            not isinstance(labels, list)
+            or not all(isinstance(label, str) and label for label in labels)
+            or "SENT" not in labels
+        ):
+            raise GmailSentMessageLookupError(
+                "Gmail sent-message metadata is not in Sent mail"
+            )
+        internal_date = payload.get("internalDate")
+        if not isinstance(internal_date, str) or not internal_date:
+            raise GmailSentMessageLookupError(
+                "Gmail sent-message metadata is missing its timestamp"
+            )
+        message_payload = payload.get("payload")
+        if not isinstance(message_payload, dict):
+            raise GmailSentMessageLookupError("Gmail sent-message metadata is invalid")
+        headers = message_payload.get("headers")
+        if not isinstance(headers, list):
+            raise GmailSentMessageLookupError("Gmail sent-message metadata is invalid")
+        normalized_headers: list[dict[str, str]] = []
+        for header in headers:
+            if not isinstance(header, dict):
+                raise GmailSentMessageLookupError(
+                    "Gmail sent-message metadata is invalid"
+                )
+            name = header.get("name")
+            value = header.get("value")
+            if (
+                not isinstance(name, str)
+                or not name
+                or len(name) > 128
+                or "\r" in name
+                or "\n" in name
+                or "\x00" in name
+                or not isinstance(value, str)
+                or len(value) > _MAX_GMAIL_EXTRA_HEADER_VALUE_LENGTH
+                or "\r" in value
+                or "\n" in value
+                or "\x00" in value
+            ):
+                raise GmailSentMessageLookupError(
+                    "Gmail sent-message metadata is invalid"
+                )
+            normalized_headers.append({"name": name, "value": value})
+        return {
+            "id": normalized_id,
+            "threadId": normalized_thread_id,
+            "labelIds": list(labels),
+            "internalDate": internal_date,
+            "headers": normalized_headers,
+        }
 
     async def modify_thread(
         self,
