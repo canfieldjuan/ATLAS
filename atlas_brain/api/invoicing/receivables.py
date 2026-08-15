@@ -841,6 +841,31 @@ async def create_commercial_billing_invoice_gmail_draft(
     )
 
 
+@router.post(
+    "/commercial-billing-approvals/{approval_id}/gmail-draft/replace-missing",
+    status_code=201,
+)
+async def replace_commercial_billing_missing_gmail_draft(
+    approval_id: UUID,
+    actor: Annotated[str, Depends(require_actor)],
+    idempotency_key: Annotated[
+        str, Header(alias="Idempotency-Key", min_length=1, max_length=128)
+    ],
+    service: CommercialBillingInvoiceGmailDraftService = Depends(
+        get_commercial_billing_invoice_gmail_draft_service
+    ),
+) -> dict:
+    """Replace only a reconciliation-proven missing Gmail draft; never send it."""
+
+    return await _call_commercial_billing_gmail_draft(
+        service.replace_missing(
+            approval_id=approval_id,
+            idempotency_key=idempotency_key,
+            actor=actor,
+        )
+    )
+
+
 @router.post("/commercial-billing-approvals/{approval_id}/gmail-draft/reconcile")
 async def reconcile_commercial_billing_invoice_gmail_draft_sent_mail(
     approval_id: UUID,

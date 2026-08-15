@@ -45,12 +45,16 @@ from .eom_crm_mutations import normalize_contact_email
 logger = logging.getLogger("atlas.services.commercial_billing_invoice_gmail_drafts")
 
 _DRAFT_SOURCE = "eom_admin"
+_REPLACEMENT_DRAFT_SOURCE = "eom_admin_draft_replacement"
 _DELIVERY_METHOD = "gmail_pdf"
 _MAX_IDEMPOTENCY_KEY_LENGTH = 128
 _MAX_ACTOR_LENGTH = 128
 _MAX_GMAIL_ID_LENGTH = 256
 _DRAFT_STATES = frozenset(
     {"creating", "retryable", "recovery_required", "draft_created"}
+)
+_RECONCILIATION_STATES = frozenset(
+    {"not_reconciled", "draft_present", "draft_missing", "sent_confirmed"}
 )
 _DATABASE_UNAVAILABLE_ERRORS = (
     DatabaseOperationError,
@@ -66,6 +70,29 @@ _DATABASE_UNAVAILABLE_ERRORS = (
     asyncpg.InsufficientPrivilegeError,
     asyncpg.InvalidAuthorizationSpecificationError,
 )
+
+_RECORD_SELECT = """
+    SELECT draft.id, draft.approval_id, draft.artifact_id, draft.state,
+           draft.recipient_email, draft.subject, draft.rfc_message_id,
+           draft.gmail_draft_id, draft.gmail_message_id,
+           draft.gmail_thread_id, draft.created_by, draft.created_at,
+           draft.last_attempt_by, draft.last_attempt_at,
+           draft.draft_created_at, draft.recovery_required_at,
+           draft.draft_generation, draft.last_replaced_by,
+           draft.last_replaced_at, draft.reconciliation_state,
+           draft.gmail_sent_message_id, draft.gmail_sent_thread_id,
+           draft.gmail_sent_at, draft.sent_reconciled_by,
+           draft.sent_reconciled_at, draft.last_reconciled_by,
+           draft.last_reconciled_at, draft.draft_missing_by,
+           draft.draft_missing_at, approval.invoice_id,
+           invoice.status AS invoice_status,
+           invoice.sent_at AS invoice_sent_at,
+           invoice.sent_via AS invoice_sent_via
+    FROM commercial_billing_invoice_gmail_drafts AS draft
+    JOIN commercial_billing_candidate_approvals AS approval
+      ON approval.id = draft.approval_id
+    JOIN invoices AS invoice ON invoice.id = approval.invoice_id
+"""
 
 
 class CommercialBillingGmailDraftError(Exception):
@@ -115,6 +142,7 @@ class _DraftContext:
     artifact: ReadyCommercialBillingInvoicePDFArtifact
     body: str
     html: str
+    generation: int
     recipient_email: str
     rfc_message_id: str
     subject: str
@@ -126,6 +154,7 @@ class _PreparedDraft:
     record: Mapping[str, Any]
     replayed: bool
     action: str
+    replacement: Mapping[str, Any] | None = None
 
 
 def _request_text(value: Any, field: str, *, limit: int) -> str:
@@ -175,12 +204,22 @@ def _fingerprint(value: Mapping[str, Any]) -> str:
     return hashlib.sha256(encoded).hexdigest()
 
 
-def _rfc_message_id(approval_id: UUID) -> str:
-    """One stable mailbox-search identity per immutable approval record."""
+def _draft_generation(value: Any) -> int:
+    if isinstance(value, bool) or not isinstance(value, int) or value <= 0:
+        raise CommercialBillingGmailDraftConflictError(
+            "Commercial billing Gmail draft generation is invalid"
+        )
+    return value
+
+
+def _rfc_message_id(approval_id: UUID, *, generation: int = 1) -> str:
+    """One stable mailbox-search identity per current draft generation."""
+
+    generation = _draft_generation(generation)
+    suffix = "" if generation == 1 else f"-g{generation}"
 
     return (
-        f"<atlas-eom-commercial-billing-{approval_id}"
-        "@effinghamofficemaids.com>"
+        f"<atlas-eom-commercial-billing-{approval_id}{suffix}@effinghamofficemaids.com>"
     )
 
 
@@ -348,6 +387,85 @@ class CommercialBillingInvoiceGmailDraftService:
                 "Commercial billing database unavailable"
             ) from exc
 
+    async def replace_missing(
+        self,
+        *,
+        approval_id: UUID,
+        idempotency_key: str,
+        actor: str,
+    ) -> dict[str, Any]:
+        """Explicitly replace one reconciliation-proven missing Gmail draft.
+
+        This is deliberately separate from ``create_or_reuse``: only an
+        operator action after durable ``draft_missing`` evidence can advance
+        the root record to a new current generation.  The predecessor is
+        captured in an append-only event before the no-send Gmail create.
+        """
+
+        if not isinstance(approval_id, UUID):
+            raise CommercialBillingGmailDraftValidationError("Approval id is invalid")
+        key = _request_text(
+            idempotency_key,
+            "Idempotency key",
+            limit=_MAX_IDEMPOTENCY_KEY_LENGTH,
+        )
+        requested_by = _request_text(actor, "actor", limit=_MAX_ACTOR_LENGTH)
+        request_fingerprint = _fingerprint(
+            {"approvalId": str(approval_id), "operation": "replace_missing"}
+        )
+        try:
+            prepared = await self._prepare_replacement(
+                approval_id=approval_id,
+                idempotency_key=key,
+                request_fingerprint=request_fingerprint,
+                actor=requested_by,
+            )
+            if prepared.action == "return":
+                result = {
+                    "draft": self.view(prepared.record),
+                    "replayed": prepared.replayed,
+                    "reused": True,
+                }
+            elif prepared.action == "lookup":
+                result = await self._recover(prepared=prepared, actor=requested_by)
+            elif prepared.action == "create" and prepared.context is not None:
+                result = await self._create(prepared=prepared, actor=requested_by)
+            else:
+                raise CommercialBillingGmailDraftConflictError(
+                    "Commercial billing Gmail draft replacement action is invalid"
+                )
+            replacement = prepared.replacement
+            if replacement is None:
+                raise CommercialBillingGmailDraftUnavailableError(
+                    "Commercial billing Gmail draft replacement evidence is unavailable"
+                )
+            result["replacement"] = self._replacement_view(replacement)
+            return result
+        except CommercialBillingGmailDraftError:
+            raise
+        except CommercialBillingInvoicePDFValidationError as exc:
+            raise CommercialBillingGmailDraftValidationError(str(exc)) from exc
+        except CommercialBillingInvoicePDFNotFoundError as exc:
+            raise CommercialBillingGmailDraftNotFoundError(str(exc)) from exc
+        except CommercialBillingInvoicePDFConflictError as exc:
+            raise CommercialBillingGmailDraftConflictError(str(exc)) from exc
+        except CommercialBillingInvoicePDFUnavailableError as exc:
+            raise CommercialBillingGmailDraftUnavailableError(str(exc)) from exc
+        except CommercialBillingInvoicePDFError as exc:
+            raise CommercialBillingGmailDraftUnavailableError(str(exc)) from exc
+        except (asyncpg.UniqueViolationError, asyncpg.ForeignKeyViolationError) as exc:
+            raise CommercialBillingGmailDraftConflictError(
+                "Commercial billing Gmail draft replacement could not be reconciled"
+            ) from exc
+        except asyncpg.PostgresError as exc:
+            raise CommercialBillingGmailDraftUnavailableError(
+                "Commercial billing database unavailable"
+            ) from exc
+        except _DATABASE_UNAVAILABLE_ERRORS as exc:
+            raise CommercialBillingGmailDraftUnavailableError(
+                "Commercial billing database unavailable"
+            ) from exc
+
     async def _prepare(
         self,
         *,
@@ -361,6 +479,13 @@ class CommercialBillingInvoiceGmailDraftService:
             operation = await self._find_operation(conn, idempotency_key)
             if operation is not None:
                 self._assert_operation(operation, approval_id, request_fingerprint)
+                await self._lock(conn, f"approval:{approval_id}")
+                operation = await self._find_operation(conn, idempotency_key)
+                if operation is None:
+                    raise CommercialBillingGmailDraftUnavailableError(
+                        "Commercial billing Gmail draft operation is unavailable"
+                    )
+                self._assert_operation_generation(operation)
                 state = self._state(operation)
                 if state == "draft_created":
                     return _PreparedDraft(
@@ -369,12 +494,20 @@ class CommercialBillingInvoiceGmailDraftService:
                         replayed=True,
                         action="return",
                     )
-                await self._lock(conn, f"approval:{approval_id}")
                 if state == "retryable":
-                    context = await self._current_context(conn, approval_id)
+                    context = await self._current_context(
+                        conn,
+                        approval_id,
+                        generation=_draft_generation(
+                            operation.get("operation_draft_generation")
+                        ),
+                    )
                     self._assert_context(operation, context)
                     claimed = await self._claim_retryable(
-                        conn, _uuid(operation["id"], "record id"), actor
+                        conn,
+                        _uuid(operation["id"], "record id"),
+                        actor,
+                        draft_generation=context.generation,
                     )
                     return _PreparedDraft(
                         context=context,
@@ -390,13 +523,14 @@ class CommercialBillingInvoiceGmailDraftService:
                 )
 
             await self._lock(conn, f"approval:{approval_id}")
-            context = await self._current_context(conn, approval_id)
             record = await self._find_record_for_approval(conn, approval_id)
             if record is None:
+                context = await self._current_context(conn, approval_id)
                 record = await self._insert_record(conn, context, actor)
                 await self._insert_operation(
                     conn,
                     record_id=_uuid(record["id"], "record id"),
+                    draft_generation=_draft_generation(record["draft_generation"]),
                     idempotency_key=idempotency_key,
                     request_fingerprint=request_fingerprint,
                     actor=actor,
@@ -408,10 +542,16 @@ class CommercialBillingInvoiceGmailDraftService:
                     action="create",
                 )
 
+            context = await self._current_context(
+                conn,
+                approval_id,
+                generation=_draft_generation(record.get("draft_generation", 1)),
+            )
             self._assert_context(record, context)
             await self._insert_operation(
                 conn,
                 record_id=_uuid(record["id"], "record id"),
+                draft_generation=_draft_generation(record["draft_generation"]),
                 idempotency_key=idempotency_key,
                 request_fingerprint=request_fingerprint,
                 actor=actor,
@@ -426,7 +566,10 @@ class CommercialBillingInvoiceGmailDraftService:
                 )
             if state == "retryable":
                 claimed = await self._claim_retryable(
-                    conn, _uuid(record["id"], "record id"), actor
+                    conn,
+                    _uuid(record["id"], "record id"),
+                    actor,
+                    draft_generation=context.generation,
                 )
                 return _PreparedDraft(
                     context=context,
@@ -439,6 +582,138 @@ class CommercialBillingInvoiceGmailDraftService:
                 record=record,
                 replayed=False,
                 action="lookup",
+            )
+
+    async def _prepare_replacement(
+        self,
+        *,
+        approval_id: UUID,
+        idempotency_key: str,
+        request_fingerprint: str,
+        actor: str,
+    ) -> _PreparedDraft:
+        """Commit one new current-draft intent only after missing-draft proof.
+
+        The replacement operation and its predecessor snapshot commit together
+        before Gmail is called.  This keeps the retry key tied to a durable,
+        non-sending intent even if the external request times out.
+        """
+
+        async with self.pool.transaction() as conn:
+            await self._lock(conn, f"replacement-operation:{idempotency_key}")
+            operation = await self._find_operation(
+                conn,
+                idempotency_key,
+                source=_REPLACEMENT_DRAFT_SOURCE,
+            )
+            if operation is not None:
+                self._assert_operation(operation, approval_id, request_fingerprint)
+                await self._lock(conn, f"approval:{approval_id}")
+                operation = await self._find_operation(
+                    conn,
+                    idempotency_key,
+                    source=_REPLACEMENT_DRAFT_SOURCE,
+                )
+                if operation is None:
+                    raise CommercialBillingGmailDraftUnavailableError(
+                        "Commercial billing Gmail draft replacement operation is unavailable"
+                    )
+                replacement = await self._find_replacement_event_for_operation(
+                    conn,
+                    _uuid(operation["operation_id"], "replacement operation id"),
+                )
+                if replacement is None:
+                    raise CommercialBillingGmailDraftConflictError(
+                        "Commercial billing Gmail draft replacement evidence is invalid"
+                    )
+                replacement_generation = self._replacement_generation_for_current_record(
+                    operation,
+                    replacement,
+                )
+                state = self._state(operation)
+                if state == "draft_created":
+                    return _PreparedDraft(
+                        context=None,
+                        record=operation,
+                        replayed=True,
+                        action="return",
+                        replacement=replacement,
+                    )
+                context = await self._current_context(
+                    conn,
+                    approval_id,
+                    generation=replacement_generation,
+                )
+                self._assert_context(operation, context)
+                if state == "retryable":
+                    claimed = await self._claim_retryable(
+                        conn,
+                        _uuid(operation["id"], "record id"),
+                        actor,
+                        draft_generation=context.generation,
+                    )
+                    return _PreparedDraft(
+                        context=context,
+                        record=claimed,
+                        replayed=True,
+                        action="create",
+                        replacement=replacement,
+                    )
+                return _PreparedDraft(
+                    context=None,
+                    record=operation,
+                    replayed=True,
+                    action="lookup",
+                    replacement=replacement,
+                )
+
+            await self._lock(conn, f"approval:{approval_id}")
+            record = await self._find_record_for_approval(
+                conn,
+                approval_id,
+                for_update=True,
+            )
+            if record is None:
+                raise CommercialBillingGmailDraftNotFoundError(
+                    "Commercial billing Gmail draft not found"
+                )
+            self._assert_replaceable(record)
+            if await self._has_pending_sent_reconciliation(
+                conn,
+                _uuid(record["id"], "record id"),
+            ):
+                raise CommercialBillingGmailDraftConflictError(
+                    "Commercial billing Gmail draft replacement must wait for pending sent-mail reconciliation"
+                )
+            prior_generation = _draft_generation(record["draft_generation"])
+            context = await self._current_context(
+                conn,
+                approval_id,
+                generation=prior_generation + 1,
+            )
+            self._assert_replacement_context(record, context)
+            operation_id = await self._insert_operation(
+                conn,
+                record_id=_uuid(record["id"], "record id"),
+                draft_generation=prior_generation + 1,
+                idempotency_key=idempotency_key,
+                request_fingerprint=request_fingerprint,
+                actor=actor,
+                source=_REPLACEMENT_DRAFT_SOURCE,
+            )
+            replaced, replacement = await self._snapshot_and_claim_replacement(
+                conn,
+                record=record,
+                context=context,
+                operation_id=operation_id,
+                actor=actor,
+            )
+            return _PreparedDraft(
+                context=context,
+                record=replaced,
+                replayed=False,
+                action="create",
+                replacement=replacement,
             )
 
     async def _create(
@@ -455,7 +730,12 @@ class CommercialBillingInvoiceGmailDraftService:
         try:
             gateway = self._gateway_loader()
         except Exception as exc:
-            await self._best_effort_transition(record_id, "retryable", actor)
+            await self._best_effort_transition(
+                record_id,
+                "retryable",
+                actor,
+                draft_generation=prepared.context.generation,
+            )
             raise CommercialBillingGmailDraftUnavailableError(
                 "Gmail draft transport is unavailable; retry is safe"
             ) from exc
@@ -485,16 +765,31 @@ class CommercialBillingInvoiceGmailDraftService:
             )
         except GmailDraftCreateError as exc:
             if exc.definitely_not_created:
-                await self._best_effort_transition(record_id, "retryable", actor)
+                await self._best_effort_transition(
+                    record_id,
+                    "retryable",
+                    actor,
+                    draft_generation=prepared.context.generation,
+                )
                 raise CommercialBillingGmailDraftUnavailableError(
                     "Gmail draft creation failed before acceptance; retry is safe"
                 ) from exc
-            await self._best_effort_transition(record_id, "recovery_required", actor)
+            await self._best_effort_transition(
+                record_id,
+                "recovery_required",
+                actor,
+                draft_generation=prepared.context.generation,
+            )
             raise CommercialBillingGmailDraftRecoveryRequiredError(
                 "Gmail draft creation outcome is uncertain; recover it by its Message-ID"
             ) from exc
         except Exception as exc:
-            await self._best_effort_transition(record_id, "recovery_required", actor)
+            await self._best_effort_transition(
+                record_id,
+                "recovery_required",
+                actor,
+                draft_generation=prepared.context.generation,
+            )
             raise CommercialBillingGmailDraftRecoveryRequiredError(
                 "Gmail draft creation outcome is uncertain; recover it by its Message-ID"
             ) from exc
@@ -502,14 +797,29 @@ class CommercialBillingInvoiceGmailDraftService:
         try:
             identity = _gateway_identity(result)
         except CommercialBillingGmailDraftRecoveryRequiredError as exc:
-            await self._best_effort_transition(record_id, "recovery_required", actor)
+            await self._best_effort_transition(
+                record_id,
+                "recovery_required",
+                actor,
+                draft_generation=prepared.context.generation,
+            )
             raise exc
         try:
-            confirmed = await self._confirm_draft(record_id, identity, actor)
+            confirmed = await self._confirm_draft(
+                record_id,
+                identity,
+                actor,
+                draft_generation=prepared.context.generation,
+            )
         except CommercialBillingGmailDraftError:
             raise
         except Exception as exc:
-            await self._best_effort_transition(record_id, "recovery_required", actor)
+            await self._best_effort_transition(
+                record_id,
+                "recovery_required",
+                actor,
+                draft_generation=prepared.context.generation,
+            )
             raise CommercialBillingGmailDraftRecoveryRequiredError(
                 "Gmail draft may exist but confirmation failed; recover it by its Message-ID"
             ) from exc
@@ -526,6 +836,7 @@ class CommercialBillingInvoiceGmailDraftService:
         actor: str,
     ) -> dict[str, Any]:
         record_id = _uuid(prepared.record["id"], "record id")
+        draft_generation = _draft_generation(prepared.record["draft_generation"])
         rfc_message_id = _stored_text(
             prepared.record["rfc_message_id"], "RFC Message-ID", limit=320
         )
@@ -533,26 +844,51 @@ class CommercialBillingInvoiceGmailDraftService:
             gateway = self._gateway_loader()
             result = await gateway.find_draft_by_rfc_message_id(rfc_message_id)
         except Exception as exc:
-            await self._best_effort_transition(record_id, "recovery_required", actor)
+            await self._best_effort_transition(
+                record_id,
+                "recovery_required",
+                actor,
+                draft_generation=draft_generation,
+            )
             raise CommercialBillingGmailDraftRecoveryRequiredError(
                 "Gmail draft lookup failed; recover it by its Message-ID"
             ) from exc
         if result is None:
-            await self._best_effort_transition(record_id, "recovery_required", actor)
+            await self._best_effort_transition(
+                record_id,
+                "recovery_required",
+                actor,
+                draft_generation=draft_generation,
+            )
             raise CommercialBillingGmailDraftRecoveryRequiredError(
                 "Gmail draft was not found; it may be missing or require reconciliation"
             )
         try:
             identity = _gateway_identity(result)
         except CommercialBillingGmailDraftRecoveryRequiredError as exc:
-            await self._best_effort_transition(record_id, "recovery_required", actor)
+            await self._best_effort_transition(
+                record_id,
+                "recovery_required",
+                actor,
+                draft_generation=draft_generation,
+            )
             raise exc
         try:
-            confirmed = await self._confirm_draft(record_id, identity, actor)
+            confirmed = await self._confirm_draft(
+                record_id,
+                identity,
+                actor,
+                draft_generation=draft_generation,
+            )
         except CommercialBillingGmailDraftError:
             raise
         except Exception as exc:
-            await self._best_effort_transition(record_id, "recovery_required", actor)
+            await self._best_effort_transition(
+                record_id,
+                "recovery_required",
+                actor,
+                draft_generation=draft_generation,
+            )
             raise CommercialBillingGmailDraftRecoveryRequiredError(
                 "Gmail draft was found but could not be confirmed; retry recovery"
             ) from exc
@@ -566,6 +902,8 @@ class CommercialBillingInvoiceGmailDraftService:
         self,
         conn: Any,
         approval_id: UUID,
+        *,
+        generation: int = 1,
     ) -> _DraftContext:
         artifact = await self.pdf_service.load_ready_artifact_for_delivery(
             conn=conn,
@@ -606,8 +944,12 @@ class CommercialBillingInvoiceGmailDraftService:
             artifact=artifact,
             body=body,
             html=html,
+            generation=_draft_generation(generation),
             recipient_email=recipient_email,
-            rfc_message_id=_rfc_message_id(artifact.approval_id),
+            rfc_message_id=_rfc_message_id(
+                artifact.approval_id,
+                generation=generation,
+            ),
             subject=_subject(artifact.invoice),
         )
 
@@ -619,45 +961,56 @@ class CommercialBillingInvoiceGmailDraftService:
         )
 
     @staticmethod
-    async def _find_operation(conn: Any, idempotency_key: str) -> Any | None:
+    async def _find_operation(
+        conn: Any,
+        idempotency_key: str,
+        *,
+        source: str = _DRAFT_SOURCE,
+    ) -> Any | None:
         row = await conn.fetchrow(
             """
-            SELECT operation.request_fingerprint AS operation_request_fingerprint,
+            SELECT operation.id AS operation_id,
+                   operation.request_fingerprint AS operation_request_fingerprint,
+                   operation.draft_generation AS operation_draft_generation,
                    draft.id, draft.approval_id, draft.artifact_id, draft.state,
                    draft.recipient_email, draft.subject, draft.rfc_message_id,
                    draft.gmail_draft_id, draft.gmail_message_id,
                    draft.gmail_thread_id, draft.created_by, draft.created_at,
                    draft.last_attempt_by, draft.last_attempt_at,
                    draft.draft_created_at, draft.recovery_required_at,
-                   approval.invoice_id
+                   draft.draft_generation, draft.last_replaced_by,
+                   draft.last_replaced_at, draft.reconciliation_state,
+                   draft.gmail_sent_message_id, draft.gmail_sent_thread_id,
+                   draft.gmail_sent_at, draft.sent_reconciled_by,
+                   draft.sent_reconciled_at, draft.last_reconciled_by,
+                   draft.last_reconciled_at, draft.draft_missing_by,
+                   draft.draft_missing_at, approval.invoice_id,
+                   invoice.status AS invoice_status,
+                   invoice.sent_at AS invoice_sent_at,
+                   invoice.sent_via AS invoice_sent_via
             FROM commercial_billing_invoice_gmail_draft_operations AS operation
             JOIN commercial_billing_invoice_gmail_drafts AS draft
               ON draft.id = operation.gmail_draft_record_id
             JOIN commercial_billing_candidate_approvals AS approval
               ON approval.id = draft.approval_id
+            JOIN invoices AS invoice ON invoice.id = approval.invoice_id
             WHERE operation.source = $1 AND operation.idempotency_key = $2
             """,
-            _DRAFT_SOURCE,
+            source,
             idempotency_key,
         )
         return dict(row) if row is not None else None
 
     @staticmethod
-    async def _find_record_for_approval(conn: Any, approval_id: UUID) -> Any | None:
+    async def _find_record_for_approval(
+        conn: Any,
+        approval_id: UUID,
+        *,
+        for_update: bool = False,
+    ) -> Any | None:
+        suffix = " FOR UPDATE OF draft" if for_update else ""
         row = await conn.fetchrow(
-            """
-            SELECT draft.id, draft.approval_id, draft.artifact_id, draft.state,
-                   draft.recipient_email, draft.subject, draft.rfc_message_id,
-                   draft.gmail_draft_id, draft.gmail_message_id,
-                   draft.gmail_thread_id, draft.created_by, draft.created_at,
-                   draft.last_attempt_by, draft.last_attempt_at,
-                   draft.draft_created_at, draft.recovery_required_at,
-                   approval.invoice_id
-            FROM commercial_billing_invoice_gmail_drafts AS draft
-            JOIN commercial_billing_candidate_approvals AS approval
-              ON approval.id = draft.approval_id
-            WHERE draft.approval_id = $1
-            """,
+            _RECORD_SELECT + " WHERE draft.approval_id = $1" + suffix,
             approval_id,
         )
         return dict(row) if row is not None else None
@@ -680,7 +1033,12 @@ class CommercialBillingInvoiceGmailDraftService:
             RETURNING id, approval_id, artifact_id, state, recipient_email,
                       subject, rfc_message_id, gmail_draft_id, gmail_message_id,
                       gmail_thread_id, created_by, created_at, last_attempt_by,
-                      last_attempt_at, draft_created_at, recovery_required_at
+                      last_attempt_at, draft_created_at, recovery_required_at,
+                      draft_generation, last_replaced_by, last_replaced_at,
+                      reconciliation_state, gmail_sent_message_id,
+                      gmail_sent_thread_id, gmail_sent_at, sent_reconciled_by,
+                      sent_reconciled_at, last_reconciled_by, last_reconciled_at,
+                      draft_missing_by, draft_missing_at
             """,
             uuid4(),
             context.artifact.approval_id,
@@ -702,44 +1060,73 @@ class CommercialBillingInvoiceGmailDraftService:
         conn: Any,
         *,
         record_id: UUID,
+        draft_generation: int,
         idempotency_key: str,
         request_fingerprint: str,
         actor: str,
-    ) -> None:
+        source: str = _DRAFT_SOURCE,
+    ) -> UUID:
         now = self._timestamp()
-        await conn.execute(
+        operation_id = uuid4()
+        row = await conn.fetchrow(
             """
             INSERT INTO commercial_billing_invoice_gmail_draft_operations (
                 id, gmail_draft_record_id, source, idempotency_key,
-                request_fingerprint, requested_by, requested_at, created_at
+                request_fingerprint, draft_generation, requested_by, requested_at,
+                created_at
             )
-            VALUES ($1, $2, $3, $4, $5, $6, $7, $7)
+            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $8)
+            RETURNING id
             """,
-            uuid4(),
+            operation_id,
             record_id,
-            _DRAFT_SOURCE,
+            source,
             idempotency_key,
             request_fingerprint,
+            _draft_generation(draft_generation),
             actor,
             now,
         )
+        if row is None:
+            raise CommercialBillingGmailDraftUnavailableError(
+                "Commercial billing Gmail draft operation could not be reconciled"
+            )
+        returned = _uuid(row["id"], "operation id")
+        if returned != operation_id:
+            raise CommercialBillingGmailDraftConflictError(
+                "Commercial billing Gmail draft operation identity is invalid"
+            )
+        return returned
 
-    async def _claim_retryable(self, conn: Any, record_id: UUID, actor: str) -> Any:
+    async def _claim_retryable(
+        self,
+        conn: Any,
+        record_id: UUID,
+        actor: str,
+        *,
+        draft_generation: int,
+    ) -> Any:
         now = self._timestamp()
         row = await conn.fetchrow(
             """
             UPDATE commercial_billing_invoice_gmail_drafts
                SET state = 'creating', last_attempt_by = $2, last_attempt_at = $3,
                    recovery_required_at = NULL
-             WHERE id = $1 AND state = 'retryable'
+             WHERE id = $1 AND state = 'retryable' AND draft_generation = $4
             RETURNING id, approval_id, artifact_id, state, recipient_email,
                       subject, rfc_message_id, gmail_draft_id, gmail_message_id,
                       gmail_thread_id, created_by, created_at, last_attempt_by,
-                      last_attempt_at, draft_created_at, recovery_required_at
+                      last_attempt_at, draft_created_at, recovery_required_at,
+                      draft_generation, last_replaced_by, last_replaced_at,
+                      reconciliation_state, gmail_sent_message_id,
+                      gmail_sent_thread_id, gmail_sent_at, sent_reconciled_by,
+                      sent_reconciled_at, last_reconciled_by, last_reconciled_at,
+                      draft_missing_by, draft_missing_at
             """,
             record_id,
             actor,
             now,
+            _draft_generation(draft_generation),
         )
         if row is None:
             raise CommercialBillingGmailDraftConflictError(
@@ -752,6 +1139,8 @@ class CommercialBillingInvoiceGmailDraftService:
         record_id: UUID,
         identity: Mapping[str, str],
         actor: str,
+        *,
+        draft_generation: int,
     ) -> Any:
         now = self._timestamp()
         async with self.pool.transaction() as conn:
@@ -767,6 +1156,11 @@ class CommercialBillingInvoiceGmailDraftService:
                 raise CommercialBillingGmailDraftUnavailableError(
                     "Commercial billing Gmail draft intent is unavailable"
                 )
+            expected_generation = _draft_generation(draft_generation)
+            if _draft_generation(record["draft_generation"]) != expected_generation:
+                raise CommercialBillingGmailDraftConflictError(
+                    "Commercial billing Gmail draft completion is stale"
+                )
             state = self._state(record)
             if state == "draft_created":
                 if all(record[field] == identity[field] for field in identity):
@@ -781,11 +1175,17 @@ class CommercialBillingInvoiceGmailDraftService:
                        gmail_message_id = $3, gmail_thread_id = $4,
                        last_attempt_by = $5, last_attempt_at = $6,
                        draft_created_at = $6, recovery_required_at = NULL
-                 WHERE id = $1 AND state IN ('creating', 'retryable', 'recovery_required')
+                 WHERE id = $1 AND draft_generation = $7
+                   AND state IN ('creating', 'retryable', 'recovery_required')
                 RETURNING id, approval_id, artifact_id, state, recipient_email,
                           subject, rfc_message_id, gmail_draft_id, gmail_message_id,
                           gmail_thread_id, created_by, created_at, last_attempt_by,
-                          last_attempt_at, draft_created_at, recovery_required_at
+                          last_attempt_at, draft_created_at, recovery_required_at,
+                          draft_generation, last_replaced_by, last_replaced_at,
+                          reconciliation_state, gmail_sent_message_id,
+                          gmail_sent_thread_id, gmail_sent_at, sent_reconciled_by,
+                          sent_reconciled_at, last_reconciled_by,
+                          last_reconciled_at, draft_missing_by, draft_missing_at
                 """,
                 record_id,
                 identity["gmail_draft_id"],
@@ -793,6 +1193,7 @@ class CommercialBillingInvoiceGmailDraftService:
                 identity["gmail_thread_id"],
                 actor,
                 now,
+                expected_generation,
             )
             if row is None:
                 raise CommercialBillingGmailDraftConflictError(
@@ -803,28 +1204,164 @@ class CommercialBillingInvoiceGmailDraftService:
     @staticmethod
     async def _find_record_for_id(conn: Any, record_id: UUID) -> Any | None:
         row = await conn.fetchrow(
+            _RECORD_SELECT + " WHERE draft.id = $1",
+            record_id,
+        )
+        return dict(row) if row is not None else None
+
+    @staticmethod
+    async def _find_replacement_event_for_operation(
+        conn: Any,
+        operation_id: UUID,
+    ) -> Any | None:
+        row = await conn.fetchrow(
             """
-            SELECT draft.id, draft.approval_id, draft.artifact_id, draft.state,
-                   draft.recipient_email, draft.subject, draft.rfc_message_id,
-                   draft.gmail_draft_id, draft.gmail_message_id,
-                   draft.gmail_thread_id, draft.created_by, draft.created_at,
-                   draft.last_attempt_by, draft.last_attempt_at,
-                   draft.draft_created_at, draft.recovery_required_at,
-                   approval.invoice_id
+            SELECT id, gmail_draft_record_id, operation_id, prior_generation,
+                   replacement_generation, replaced_by, replaced_at, created_at
+            FROM commercial_billing_invoice_gmail_draft_replacement_events
+            WHERE operation_id = $1
+            """,
+            operation_id,
+        )
+        return dict(row) if row is not None else None
+
+    @staticmethod
+    async def _has_pending_sent_reconciliation(conn: Any, record_id: UUID) -> bool:
+        value = await conn.fetchval(
+            """
+            SELECT EXISTS (
+                SELECT 1
+                FROM commercial_billing_gmail_sent_reconciliation_operations
+                WHERE gmail_draft_record_id = $1 AND state = 'pending'
+            )
+            """,
+            record_id,
+        )
+        if not isinstance(value, bool):
+            raise CommercialBillingGmailDraftUnavailableError(
+                "Commercial billing Gmail draft reconciliation state is unavailable"
+            )
+        return value
+
+    async def _snapshot_and_claim_replacement(
+        self,
+        conn: Any,
+        *,
+        record: Mapping[str, Any],
+        context: _DraftContext,
+        operation_id: UUID,
+        actor: str,
+    ) -> tuple[Mapping[str, Any], Mapping[str, Any]]:
+        """Preserve the missing generation and atomically reset current intent."""
+
+        record_id = _uuid(record["id"], "record id")
+        prior_generation = _draft_generation(record["draft_generation"])
+        replacement_generation = prior_generation + 1
+        snapshot = await conn.fetchval(
+            """
+            SELECT to_jsonb(draft)::text
             FROM commercial_billing_invoice_gmail_drafts AS draft
-            JOIN commercial_billing_candidate_approvals AS approval
-              ON approval.id = draft.approval_id
             WHERE draft.id = $1
             """,
             record_id,
         )
-        return dict(row) if row is not None else None
+        if not isinstance(snapshot, str):
+            raise CommercialBillingGmailDraftUnavailableError(
+                "Commercial billing Gmail draft replacement snapshot is unavailable"
+            )
+        try:
+            snapshot_value = json.loads(snapshot)
+        except json.JSONDecodeError as exc:
+            raise CommercialBillingGmailDraftConflictError(
+                "Commercial billing Gmail draft replacement snapshot is invalid"
+            ) from exc
+        if (
+            not isinstance(snapshot_value, Mapping)
+            or snapshot_value.get("id") != str(record_id)
+            or snapshot_value.get("draft_generation") != prior_generation
+        ):
+            raise CommercialBillingGmailDraftConflictError(
+                "Commercial billing Gmail draft replacement snapshot is invalid"
+            )
+        now = self._timestamp()
+        event = await conn.fetchrow(
+            """
+            INSERT INTO commercial_billing_invoice_gmail_draft_replacement_events (
+                id, gmail_draft_record_id, operation_id, prior_generation,
+                replacement_generation, prior_snapshot, replaced_by,
+                replaced_at, created_at
+            )
+            VALUES ($1, $2, $3, $4, $5, $6::jsonb, $7, $8, $8)
+            RETURNING id, gmail_draft_record_id, operation_id, prior_generation,
+                      replacement_generation, replaced_by, replaced_at, created_at
+            """,
+            uuid4(),
+            record_id,
+            operation_id,
+            prior_generation,
+            replacement_generation,
+            snapshot,
+            actor,
+            now,
+        )
+        if event is None:
+            raise CommercialBillingGmailDraftUnavailableError(
+                "Commercial billing Gmail draft replacement evidence is unavailable"
+            )
+        row = await conn.fetchrow(
+            """
+            UPDATE commercial_billing_invoice_gmail_drafts
+               SET artifact_id = $2, state = 'creating', recipient_email = $3,
+                   subject = $4, rfc_message_id = $5, gmail_draft_id = NULL,
+                   gmail_message_id = NULL, gmail_thread_id = NULL,
+                   last_attempt_by = $6, last_attempt_at = $8,
+                   draft_created_at = NULL, recovery_required_at = NULL,
+                   draft_generation = $7, last_replaced_by = $6,
+                   last_replaced_at = $8, reconciliation_state = 'not_reconciled',
+                   gmail_sent_message_id = NULL, gmail_sent_thread_id = NULL,
+                   gmail_sent_at = NULL, sent_reconciled_by = NULL,
+                   sent_reconciled_at = NULL, last_reconciled_by = NULL,
+                   last_reconciled_at = NULL, draft_missing_by = NULL,
+                   draft_missing_at = NULL
+             WHERE id = $1 AND state = 'draft_created'
+               AND reconciliation_state = 'draft_missing'
+               AND draft_generation = $9
+            RETURNING id, approval_id, artifact_id, state, recipient_email,
+                      subject, rfc_message_id, gmail_draft_id, gmail_message_id,
+                      gmail_thread_id, created_by, created_at, last_attempt_by,
+                      last_attempt_at, draft_created_at, recovery_required_at,
+                      draft_generation, last_replaced_by, last_replaced_at,
+                      reconciliation_state, gmail_sent_message_id,
+                      gmail_sent_thread_id, gmail_sent_at, sent_reconciled_by,
+                      sent_reconciled_at, last_reconciled_by, last_reconciled_at,
+                      draft_missing_by, draft_missing_at
+            """,
+            record_id,
+            context.artifact.artifact_id,
+            context.recipient_email,
+            context.subject,
+            context.rfc_message_id,
+            actor,
+            replacement_generation,
+            now,
+            prior_generation,
+        )
+        if row is None:
+            raise CommercialBillingGmailDraftConflictError(
+                "Commercial billing Gmail draft replacement could not be claimed"
+            )
+        return (
+            {**dict(row), "invoice_id": context.artifact.invoice_id},
+            dict(event),
+        )
 
     async def _best_effort_transition(
         self,
         record_id: UUID,
         state: str,
         actor: str,
+        *,
+        draft_generation: int,
     ) -> None:
         """Record recovery evidence without masking the original transport error."""
 
@@ -832,21 +1369,32 @@ class CommercialBillingInvoiceGmailDraftService:
             now = self._timestamp()
             async with self.pool.transaction() as conn:
                 record = await self._find_record_for_id(conn, record_id)
-                if record is None or self._state(record) == "draft_created":
+                if record is None:
                     return
                 approval_id = _uuid(record["approval_id"], "approval id")
                 await self._lock(conn, f"approval:{approval_id}")
+                record = await self._find_record_for_id(conn, record_id)
+                if (
+                    record is None
+                    or self._state(record) == "draft_created"
+                    or _draft_generation(record["draft_generation"])
+                    != _draft_generation(draft_generation)
+                ):
+                    return
                 if state == "retryable":
                     await conn.execute(
                         """
                         UPDATE commercial_billing_invoice_gmail_drafts
                            SET state = 'retryable', last_attempt_by = $2,
                                last_attempt_at = $3, recovery_required_at = NULL
-                         WHERE id = $1 AND state = 'creating'
+                         WHERE id = $1
+                           AND state IN ('creating', 'recovery_required')
+                           AND draft_generation = $4
                         """,
                         record_id,
                         actor,
                         now,
+                        _draft_generation(draft_generation),
                     )
                 elif state == "recovery_required":
                     await conn.execute(
@@ -856,10 +1404,12 @@ class CommercialBillingInvoiceGmailDraftService:
                                last_attempt_at = $3, recovery_required_at = $3
                          WHERE id = $1
                            AND state IN ('creating', 'retryable', 'recovery_required')
+                           AND draft_generation = $4
                         """,
                         record_id,
                         actor,
                         now,
+                        _draft_generation(draft_generation),
                     )
                 else:
                     raise CommercialBillingGmailDraftConflictError(
@@ -889,10 +1439,92 @@ class CommercialBillingInvoiceGmailDraftService:
             )
 
     @staticmethod
+    def _assert_operation_generation(operation: Mapping[str, Any]) -> None:
+        if _draft_generation(operation.get("operation_draft_generation")) != _draft_generation(
+            operation.get("draft_generation")
+        ):
+            raise CommercialBillingGmailDraftConflictError(
+                "Commercial billing Gmail draft replay is stale"
+            )
+
+    @staticmethod
+    def _assert_replaceable(record: Mapping[str, Any]) -> None:
+        if CommercialBillingInvoiceGmailDraftService._state(record) != "draft_created":
+            raise CommercialBillingGmailDraftConflictError(
+                "Commercial billing Gmail draft is not ready for replacement"
+            )
+        if (
+            CommercialBillingInvoiceGmailDraftService._reconciliation_state(record)
+            != "draft_missing"
+        ):
+            raise CommercialBillingGmailDraftConflictError(
+                "Commercial billing Gmail draft replacement requires confirmed missing-draft evidence"
+            )
+        invoice_status = _stored_text(
+            record.get("invoice_status"),
+            "invoice status",
+            limit=32,
+        )
+        if (
+            invoice_status != "draft"
+            or record.get("invoice_sent_at") is not None
+            or record.get("invoice_sent_via") is not None
+        ):
+            raise CommercialBillingGmailDraftConflictError(
+                "Commercial billing invoice is no longer eligible for Gmail draft replacement"
+            )
+        if any(
+            record.get(field) is not None
+            for field in (
+                "gmail_sent_message_id",
+                "gmail_sent_thread_id",
+                "gmail_sent_at",
+                "sent_reconciled_by",
+                "sent_reconciled_at",
+            )
+        ):
+            raise CommercialBillingGmailDraftConflictError(
+                "Commercial billing Gmail draft has conflicting sent-mail evidence"
+            )
+        _stored_text(record.get("draft_missing_by"), "missing-draft actor", limit=128)
+        CommercialBillingInvoiceGmailDraftService._recorded_timestamp(
+            record.get("draft_missing_at"),
+            "missing-draft timestamp",
+        )
+        generation = _draft_generation(record.get("draft_generation"))
+        approval_id = _uuid(record.get("approval_id"), "approval id")
+        if _stored_text(
+            record.get("rfc_message_id"),
+            "RFC Message-ID",
+            limit=320,
+        ) != _rfc_message_id(approval_id, generation=generation):
+            raise CommercialBillingGmailDraftConflictError(
+                "Commercial billing Gmail draft identity is invalid for replacement"
+            )
+
+    @staticmethod
+    def _assert_replacement_context(
+        record: Mapping[str, Any],
+        context: _DraftContext,
+    ) -> None:
+        expected = {
+            "approval_id": context.artifact.approval_id,
+            "artifact_id": context.artifact.artifact_id,
+            "recipient_email": context.recipient_email,
+            "subject": context.subject,
+        }
+        for field, value in expected.items():
+            if record.get(field) != value:
+                raise CommercialBillingGmailDraftConflictError(
+                    "Commercial billing Gmail draft predecessor no longer matches its approval PDF"
+                )
+
+    @staticmethod
     def _assert_context(record: Mapping[str, Any], context: _DraftContext) -> None:
         expected = {
             "approval_id": context.artifact.approval_id,
             "artifact_id": context.artifact.artifact_id,
+            "draft_generation": context.generation,
             "recipient_email": context.recipient_email,
             "subject": context.subject,
             "rfc_message_id": context.rfc_message_id,
@@ -904,6 +1536,48 @@ class CommercialBillingInvoiceGmailDraftService:
                 )
 
     @staticmethod
+    def _replacement_generation_for_current_record(
+        record: Mapping[str, Any],
+        replacement: Mapping[str, Any],
+    ) -> int:
+        """Reject an old replacement key after a later generation takes over."""
+
+        record_id = _uuid(record.get("id"), "record id")
+        if _uuid(
+            replacement.get("gmail_draft_record_id"),
+            "replacement record id",
+        ) != record_id:
+            raise CommercialBillingGmailDraftConflictError(
+                "Commercial billing Gmail draft replacement evidence is invalid"
+            )
+        prior_generation = _draft_generation(replacement.get("prior_generation"))
+        replacement_generation = _draft_generation(
+            replacement.get("replacement_generation")
+        )
+        if replacement_generation != prior_generation + 1:
+            raise CommercialBillingGmailDraftConflictError(
+                "Commercial billing Gmail draft replacement evidence is invalid"
+            )
+        if _draft_generation(record.get("draft_generation")) != replacement_generation:
+            raise CommercialBillingGmailDraftConflictError(
+                "Commercial billing Gmail draft replacement replay is stale"
+            )
+        return replacement_generation
+
+    @staticmethod
+    def _reconciliation_state(record: Mapping[str, Any]) -> str:
+        state = _stored_text(
+            record.get("reconciliation_state"),
+            "reconciliation state",
+            limit=32,
+        )
+        if state not in _RECONCILIATION_STATES:
+            raise CommercialBillingGmailDraftConflictError(
+                "Commercial billing Gmail draft reconciliation state is invalid"
+            )
+        return state
+
+    @staticmethod
     def _state(record: Mapping[str, Any]) -> str:
         state = _stored_text(record.get("state"), "state", limit=32)
         if state not in _DRAFT_STATES:
@@ -911,6 +1585,43 @@ class CommercialBillingInvoiceGmailDraftService:
                 "Commercial billing Gmail draft state is invalid"
             )
         return state
+
+    @staticmethod
+    def _recorded_timestamp(value: Any, field: str) -> datetime:
+        if not isinstance(value, datetime) or value.tzinfo is None:
+            raise CommercialBillingGmailDraftConflictError(
+                f"Commercial billing Gmail draft {field} is invalid"
+            )
+        return value
+
+    @staticmethod
+    def _replacement_view(replacement: Mapping[str, Any]) -> dict[str, Any]:
+        prior_generation = _draft_generation(replacement.get("prior_generation"))
+        replacement_generation = _draft_generation(
+            replacement.get("replacement_generation")
+        )
+        if replacement_generation != prior_generation + 1:
+            raise CommercialBillingGmailDraftConflictError(
+                "Commercial billing Gmail draft replacement evidence is invalid"
+            )
+        replaced_at = CommercialBillingInvoiceGmailDraftService._recorded_timestamp(
+            replacement.get("replaced_at"),
+            "replacement timestamp",
+        )
+        return {
+            "draftId": str(
+                _uuid(replacement.get("gmail_draft_record_id"), "record id")
+            ),
+            "id": str(_uuid(replacement.get("id"), "replacement event id")),
+            "priorGeneration": prior_generation,
+            "replacedAt": replaced_at.isoformat(),
+            "replacedBy": _stored_text(
+                replacement.get("replaced_by"),
+                "replacement actor",
+                limit=128,
+            ),
+            "replacementGeneration": replacement_generation,
+        }
 
     def _timestamp(self) -> datetime:
         value = self._now()
