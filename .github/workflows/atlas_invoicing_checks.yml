@@ -30,6 +30,13 @@ on:
       - "atlas_brain/services/crm_provider.py"
       - "atlas_brain/services/commercial_billing_candidates.py"
       - "atlas_brain/services/commercial_billing_runs.py"
+      - "atlas_brain/services/commercial_billing_approvals.py"
+      - "atlas_brain/services/commercial_billing_invoice_pdfs.py"
+      - "atlas_brain/services/commercial_billing_invoice_gmail_drafts.py"
+      - "atlas_brain/services/commercial_billing_invoice_gmail_sent_reconciliation.py"
+      - "atlas_brain/services/commercial_billing_manual_square_invoices.py"
+      - "atlas_brain/services/invoice_pdf.py"
+      - "atlas_brain/tools/gmail.py"
       # normalize_contact_email decides billing eligibility and the
       # address these routes return; a grammar change here must run
       # the billing proof.
@@ -40,17 +47,27 @@ on:
       - "atlas_brain/storage/migrations/345_receivables_event_key_lookup.sql"
       - "atlas_brain/storage/migrations/369_receivables_payment_receipt_outbox.sql"
       - "atlas_brain/storage/migrations/370_commercial_billing_runs.sql"
+      - "atlas_brain/storage/migrations/371_eom_billing_delivery_preferences.sql"
+      - "atlas_brain/storage/migrations/372_commercial_billing_candidate_approvals.sql"
+      - "atlas_brain/storage/migrations/373_commercial_billing_invoice_pdf_artifacts.sql"
+      - "atlas_brain/storage/migrations/374_commercial_billing_invoice_gmail_drafts.sql"
+      - "atlas_brain/storage/migrations/375_commercial_billing_invoice_gmail_sent_reconciliation.sql"
+      - "atlas_brain/storage/migrations/376_commercial_billing_manual_square_invoices.sql"
       - "atlas_brain/storage/repositories/invoice.py"
       - "atlas_brain/templates/email/__init__.py"
       - "atlas_brain/templates/email/estimate_confirmation.py"
       - "atlas_brain/templates/email/payment_receipt.py"
       - "tests/test_monthly_invoice_generation.py"
       - "tests/test_invoice_repository.py"
+      - "tests/test_invoice_pdf.py"
       - "tests/test_receivables.py"
       - "tests/test_eom_billing_recipients.py"
       - "tests/test_eom_payment_receipts.py"
       - "tests/test_commercial_billing_candidates.py"
       - "tests/test_commercial_billing_runs.py"
+      - "tests/test_commercial_billing_approvals.py"
+      - "tests/test_commercial_billing_gmail_drafts.py"
+      - "tests/test_commercial_billing_manual_square_invoices.py"
       - "tests/test_invoicing_readonly_mcp.py"
       - "tests/test_invoicing_readonly_oauth.py"
       - "tests/test_invoicing_draft_writer_mcp.py"
@@ -85,6 +102,13 @@ on:
       - "atlas_brain/services/crm_provider.py"
       - "atlas_brain/services/commercial_billing_candidates.py"
       - "atlas_brain/services/commercial_billing_runs.py"
+      - "atlas_brain/services/commercial_billing_approvals.py"
+      - "atlas_brain/services/commercial_billing_invoice_pdfs.py"
+      - "atlas_brain/services/commercial_billing_invoice_gmail_drafts.py"
+      - "atlas_brain/services/commercial_billing_invoice_gmail_sent_reconciliation.py"
+      - "atlas_brain/services/commercial_billing_manual_square_invoices.py"
+      - "atlas_brain/services/invoice_pdf.py"
+      - "atlas_brain/tools/gmail.py"
       # normalize_contact_email decides billing eligibility and the
       # address these routes return; a grammar change here must run
       # the billing proof.
@@ -95,17 +119,27 @@ on:
       - "atlas_brain/storage/migrations/345_receivables_event_key_lookup.sql"
       - "atlas_brain/storage/migrations/369_receivables_payment_receipt_outbox.sql"
       - "atlas_brain/storage/migrations/370_commercial_billing_runs.sql"
+      - "atlas_brain/storage/migrations/371_eom_billing_delivery_preferences.sql"
+      - "atlas_brain/storage/migrations/372_commercial_billing_candidate_approvals.sql"
+      - "atlas_brain/storage/migrations/373_commercial_billing_invoice_pdf_artifacts.sql"
+      - "atlas_brain/storage/migrations/374_commercial_billing_invoice_gmail_drafts.sql"
+      - "atlas_brain/storage/migrations/375_commercial_billing_invoice_gmail_sent_reconciliation.sql"
+      - "atlas_brain/storage/migrations/376_commercial_billing_manual_square_invoices.sql"
       - "atlas_brain/storage/repositories/invoice.py"
       - "atlas_brain/templates/email/__init__.py"
       - "atlas_brain/templates/email/estimate_confirmation.py"
       - "atlas_brain/templates/email/payment_receipt.py"
       - "tests/test_monthly_invoice_generation.py"
       - "tests/test_invoice_repository.py"
+      - "tests/test_invoice_pdf.py"
       - "tests/test_receivables.py"
       - "tests/test_eom_billing_recipients.py"
       - "tests/test_eom_payment_receipts.py"
       - "tests/test_commercial_billing_candidates.py"
       - "tests/test_commercial_billing_runs.py"
+      - "tests/test_commercial_billing_approvals.py"
+      - "tests/test_commercial_billing_gmail_drafts.py"
+      - "tests/test_commercial_billing_manual_square_invoices.py"
       - "tests/test_invoicing_readonly_mcp.py"
       - "tests/test_invoicing_readonly_oauth.py"
       - "tests/test_invoicing_draft_writer_mcp.py"
@@ -164,7 +198,11 @@ jobs:
             tests/test_eom_payment_receipts.py \
             tests/test_commercial_billing_candidates.py \
             tests/test_commercial_billing_runs.py \
+            tests/test_commercial_billing_approvals.py \
+            tests/test_commercial_billing_gmail_drafts.py \
+            tests/test_commercial_billing_manual_square_invoices.py \
             tests/test_invoice_repository.py \
+            tests/test_invoice_pdf.py \
             -q
 
       - name: Run invoicing MCP + OAuth surface tests
