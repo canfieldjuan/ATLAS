@@ -55,9 +55,21 @@ changes with their own blast radius; this is a deletion of unused code.
 ### Review Contract
 
 - Acceptance criteria:
-  - The tree is gone from the working tree and nothing references it from code
-    or CI — verified by `git grep` across the repo excluding `plans/archive/`
-    and `HARDENING.md`, which are historical records.
+  - The tree is gone from the working tree and nothing references the
+    **prefixed** `_ARCHIVED_atlas-intel-next` path from code or CI — verified
+    by `git grep` across the repo excluding `plans/archive/` and
+    `HARDENING.md`, which are historical records.
+  - One executable reference to the **bare, unprefixed** name survives and is
+    explicitly NOT claimed as resolved:
+    `scripts/migrate_bundled_posts_to_db.py:24-25` builds
+    `../atlas-intel-next/content/blog` and passes it to `os.listdir()` at
+    line 103, so invoking that script's documented command raises
+    `FileNotFoundError` today. That path never existed in this repo under
+    either name, so this PR's deletion does not change that script's
+    behavior in any way — it was broken before this PR and is identically
+    broken after it. Fixing or removing that script is unrelated engineering
+    work outside a directory-deletion PR's scope; deferred, not resolved
+    here. See "Independently-flagged, out of scope" in the PR description.
   - No workflow globs or matrix entry loses a target: `npm_package_checks`
     lists `atlas-admin-ui`, `atlas-churn-ui`, `atlas-mobile`, `atlas-ui` only.
   - Dependabot loses nothing: the tree has no entry in `.github/dependabot.yml`.
@@ -346,5 +358,5 @@ Parked hardening: none.
 | `_ARCHIVED_atlas-intel-next/vercel.json` | 3 |
 | `docs/SECURITY_GUARDRAILS.md` | 11 |
 | `docs/product_context_pack.md` | 1 |
-| `plans/PR-Drop-Archived-Intel-Next.md` | 350 |
-| **Total** | **29188** |
+| `plans/PR-Drop-Archived-Intel-Next.md` | 362 |
+| **Total** | **29200** |
