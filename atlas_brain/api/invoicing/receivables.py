@@ -67,6 +67,7 @@ from ...services.commercial_billing_invoice_gmail_drafts import (
     get_commercial_billing_invoice_gmail_draft_service,
 )
 from ...services.commercial_billing_invoice_gmail_sent_reconciliation import (
+    MAX_DELIVERY_STATE_OFFSET,
     CommercialBillingGmailDeliveryStateNotFoundError,
     CommercialBillingGmailSentReconciliationConflictError,
     CommercialBillingGmailSentReconciliationNotFoundError,
@@ -852,7 +853,7 @@ async def reconcile_commercial_billing_invoice_gmail_draft_sent_mail(
 async def list_commercial_billing_gmail_delivery_state(
     billing_run_id: UUID,
     limit: int = Query(default=50, ge=1, le=100),
-    offset: int = Query(default=0, ge=0),
+    offset: int = Query(default=0, ge=0, le=MAX_DELIVERY_STATE_OFFSET),
     service: CommercialBillingInvoiceGmailSentReconciliationService = Depends(
         get_commercial_billing_invoice_gmail_sent_reconciliation_service
     ),

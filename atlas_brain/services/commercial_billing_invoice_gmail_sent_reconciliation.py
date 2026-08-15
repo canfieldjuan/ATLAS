@@ -42,6 +42,7 @@ _MAX_GMAIL_ID_LENGTH = 256
 _MAX_IDEMPOTENCY_KEY_LENGTH = 128
 _MAX_RFC_MESSAGE_ID_LENGTH = 320
 _MAX_PAGE_SIZE = 100
+MAX_DELIVERY_STATE_OFFSET = 2**63 - 1
 _OPERATION_STATES = frozenset({"pending", "completed"})
 _OUTCOME_STATES = frozenset({"draft_present", "draft_missing", "sent_confirmed"})
 _RECONCILIATION_STATES = frozenset(
@@ -500,9 +501,13 @@ class CommercialBillingInvoiceGmailSentReconciliationService:
             raise CommercialBillingGmailSentReconciliationValidationError(
                 "Limit must be between 1 and 100"
             )
-        if isinstance(offset, bool) or not isinstance(offset, int) or offset < 0:
+        if (
+            isinstance(offset, bool)
+            or not isinstance(offset, int)
+            or not 0 <= offset <= MAX_DELIVERY_STATE_OFFSET
+        ):
             raise CommercialBillingGmailSentReconciliationValidationError(
-                "Offset must be zero or greater"
+                "Offset must be between 0 and 9223372036854775807"
             )
         try:
             async with self.pool.transaction() as conn:
@@ -1188,11 +1193,12 @@ class CommercialBillingInvoiceGmailSentReconciliationService:
                 artifact_is_current = (
                     artifact.get("renderFingerprint") == current_render_fingerprint
                 )
-        draft, reconciliation = cls._draft_and_reconciliation_view(
+        draft, reconciliation, draft_relationships_match = cls._draft_and_reconciliation_view(
             row, approval_id, invoice_id, artifact
         )
         if reconciliation is not None and (
             not artifact_is_current
+            or not draft_relationships_match
             or draft is None
             or draft.get("state") != "draft_created"
         ):
@@ -1210,7 +1216,7 @@ class CommercialBillingInvoiceGmailSentReconciliationService:
             draft=draft,
             reconciliation=reconciliation,
         )
-        if not artifact_is_current:
+        if not artifact_is_current or not draft_relationships_match:
             delivery_state = "lifecycle_conflict"
         if delivery_state not in _DELIVERY_STATES:
             raise CommercialBillingGmailSentReconciliationUnavailableError(
@@ -1283,26 +1289,25 @@ class CommercialBillingInvoiceGmailSentReconciliationService:
         approval_id: UUID,
         invoice_id: UUID,
         artifact: Mapping[str, Any] | None,
-    ) -> tuple[dict[str, Any] | None, dict[str, Any] | None]:
+    ) -> tuple[dict[str, Any] | None, dict[str, Any] | None, bool]:
         if row.get("gmail_draft_record_id") is None:
-            return None, None
-        if artifact is None:
-            raise CommercialBillingGmailSentReconciliationConflictError(
-                "Commercial billing Gmail draft has no immutable PDF artifact"
-            )
-        if _uuid(
+            return None, None, True
+        draft_approval_id = _uuid(
             row.get("gmail_draft_approval_id"), "Gmail draft approval id"
-        ) != approval_id or _uuid(
+        )
+        draft_artifact_id = _uuid(
             row.get("gmail_draft_artifact_id"), "Gmail draft artifact id"
-        ) != _uuid(artifact.get("id"), "PDF artifact id"):
-            raise CommercialBillingGmailSentReconciliationConflictError(
-                "Commercial billing Gmail draft no longer matches its approval PDF"
-            )
+        )
+        draft_relationships_match = (
+            draft_approval_id == approval_id
+            and artifact is not None
+            and draft_artifact_id == _uuid(artifact.get("id"), "PDF artifact id")
+        )
         draft = CommercialBillingInvoiceGmailDraftService.view(
             {
                 "id": row.get("gmail_draft_record_id"),
-                "approval_id": approval_id,
-                "artifact_id": row.get("gmail_draft_artifact_id"),
+                "approval_id": draft_approval_id,
+                "artifact_id": draft_artifact_id,
                 "state": row.get("gmail_draft_state"),
                 "recipient_email": row.get("recipient_email"),
                 "subject": row.get("subject"),
@@ -1321,7 +1326,7 @@ class CommercialBillingInvoiceGmailSentReconciliationService:
         )
         reconciliation = cls.view(
             {
-                "approval_id": approval_id,
+                "approval_id": draft_approval_id,
                 "draft_id": row.get("gmail_draft_record_id"),
                 "invoice_id": invoice_id,
                 "reconciliation_state": row.get("reconciliation_state"),
@@ -1340,7 +1345,7 @@ class CommercialBillingInvoiceGmailSentReconciliationService:
                 "draft_missing_at": row.get("draft_missing_at"),
             }
         )
-        return draft, reconciliation
+        return draft, reconciliation, draft_relationships_match
 
     @staticmethod
     def _delivery_state(
@@ -1591,6 +1596,7 @@ def get_commercial_billing_invoice_gmail_sent_reconciliation_service(
 
 
 __all__ = [
+    "MAX_DELIVERY_STATE_OFFSET",
     "CommercialBillingGmailDeliveryStateNotFoundError",
     "CommercialBillingGmailSentReconciliationConflictError",
     "CommercialBillingGmailSentReconciliationError",

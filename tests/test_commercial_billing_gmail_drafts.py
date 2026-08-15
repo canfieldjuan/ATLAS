@@ -30,6 +30,7 @@ from atlas_brain.services.commercial_billing_invoice_gmail_drafts import (
     _request_text,
 )
 from atlas_brain.services.commercial_billing_invoice_gmail_sent_reconciliation import (
+    MAX_DELIVERY_STATE_OFFSET,
     CommercialBillingGmailDeliveryStateNotFoundError,
     CommercialBillingGmailSentReconciliationConflictError,
     CommercialBillingGmailSentReconciliationUnavailableError,
@@ -154,6 +155,13 @@ class _SingleStatementDeliveryStatePool(_SchemaPool):
         async with self.connection.transaction():
             await self.connection.execute(f'SET LOCAL search_path TO "{self.schema}"')
             yield self.read_connection
+
+
+class _TransactionForbiddenPool:
+    def transaction(self):
+        raise AssertionError(
+            "out-of-range delivery-state offsets must fail before opening a database transaction"
+        )
 
 
 class _PDFRenderer:
@@ -558,6 +566,71 @@ async def test_real_postgres_delivery_state_is_bounded_and_never_calls_gmail():
                 billing_run_id=first["run_id"], offset=-1
             )
         assert gateway_loads == 0
+
+
+@pytest.mark.asyncio
+async def test_delivery_state_rejects_postgres_out_of_range_offsets_before_opening_a_database_transaction():
+    service = CommercialBillingInvoiceGmailSentReconciliationService(
+        pool=_TransactionForbiddenPool(),
+        gateway_loader=lambda: (_ for _ in ()).throw(
+            AssertionError("delivery-state validation must not load Gmail")
+        ),
+    )
+
+    with pytest.raises(CommercialBillingGmailSentReconciliationValidationError):
+        await service.list_delivery_state_for_run(
+            billing_run_id=uuid4(), offset=MAX_DELIVERY_STATE_OFFSET + 1
+        )
+
+
+@pytest.mark.asyncio
+async def test_real_postgres_delivery_state_projects_cross_linked_gmail_drafts_as_lifecycle_conflicts():
+    async with _gmail_draft_database() as (connection, schema):
+        first = await _seed_approved_invoice(connection, schema)
+        second = await _seed_approved_invoice(
+            connection,
+            schema,
+            billing_run_id=first["run_id"],
+            display_order=1,
+        )
+        await _service(connection, schema, _RecordingGateway()).create_or_reuse(
+            approval_id=first["approval_id"],
+            idempotency_key="cross-linked-draft",
+            actor="Juan",
+        )
+        second_artifact_id = await connection.fetchval(
+            "SELECT id FROM commercial_billing_invoice_pdf_artifacts WHERE approval_id = $1",
+            second["approval_id"],
+        )
+        await connection.execute(
+            """
+            UPDATE commercial_billing_invoice_gmail_drafts
+               SET artifact_id = $2
+             WHERE approval_id = $1
+            """,
+            first["approval_id"],
+            second_artifact_id,
+        )
+        service = CommercialBillingInvoiceGmailSentReconciliationService(
+            pool=_SchemaPool(connection, schema),
+            gateway_loader=lambda: (_ for _ in ()).throw(
+                AssertionError("durable delivery-state reads must not load Gmail")
+            ),
+        )
+
+        page = await service.list_delivery_state_for_run(
+            billing_run_id=first["run_id"]
+        )
+
+        by_approval = {item["approval"]["id"]: item for item in page["items"]}
+        conflict = by_approval[str(first["approval_id"])]
+        assert page["total"] == 2
+        assert conflict["deliveryState"] == "lifecycle_conflict"
+        assert conflict["gmailDraft"]["approvalId"] == str(first["approval_id"])
+        assert conflict["gmailDraft"]["artifactId"] == str(second_artifact_id)
+        assert conflict["reconciliation"]["state"] == "not_reconciled"
+        assert "recoveryAction" not in conflict["reconciliation"]
+        assert by_approval[str(second["approval_id"])]["deliveryState"] == "needs_gmail_draft"
 
 
 @pytest.mark.asyncio
@@ -1674,6 +1747,9 @@ async def test_full_atlas_app_gmail_delivery_state_route_requires_existing_auth_
             assert (
                 await client.get(f"{path}?limit=0", headers=headers)
             ).status_code == 422
+            out_of_range = await client.get(
+                f"{path}?offset={MAX_DELIVERY_STATE_OFFSET + 1}", headers=headers
+            )
             response = await client.get(f"{path}?limit=1&offset=2", headers=headers)
             service.error = CommercialBillingGmailDeliveryStateNotFoundError(
                 "Commercial billing run not found"
@@ -1688,6 +1764,7 @@ async def test_full_atlas_app_gmail_delivery_state_route_requires_existing_auth_
         app.dependency_overrides.update(original_overrides)
 
     assert response.status_code == 200
+    assert out_of_range.status_code == 422
     assert response.json()["billingRunId"] == str(billing_run_id)
     assert response.json()["items"][0]["deliveryState"] == "gmail_draft_missing"
     assert "pdf_bytes" not in response.text.casefold()
