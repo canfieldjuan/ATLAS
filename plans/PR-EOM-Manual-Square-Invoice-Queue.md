@@ -226,9 +226,12 @@ Parked hardening: none.
 - Migration-runner regression: `30 passed, 1 skipped`.
 - Changed-path `ruff`, Python compilation, Black on new Python modules, and
   `git diff --check` passed. The service maturity lane reports zero findings.
-- Pending before push: sync the final plan after this verification note,
-  construct the canonical PR body, and run the managed local PR review plus
-  its local full-unit baseline comparison.
+- The managed local PR review passed: body contract, diff-budget override,
+  AI-reconciliation record, plan/code consistency, guard closure, and the
+  local full-unit baseline comparison. Its `160` failing/error nodes exactly
+  matched the trusted baseline (zero regressions and zero newly-passing nodes).
+- GitHub Actions are intentionally not used as the acceptance source; Juan
+  requested the corresponding checks run locally.
 
 ## Estimated diff size
 
@@ -238,6 +241,6 @@ Parked hardening: none.
 | `atlas_brain/api/invoicing/receivables.py` | 113 |
 | `atlas_brain/services/commercial_billing_manual_square_invoices.py` | 1006 |
 | `atlas_brain/storage/migrations/376_commercial_billing_manual_square_invoices.sql` | 84 |
-| `plans/PR-EOM-Manual-Square-Invoice-Queue.md` | 243 |
+| `plans/PR-EOM-Manual-Square-Invoice-Queue.md` | 246 |
 | `tests/test_commercial_billing_manual_square_invoices.py` | 739 |
-| **Total** | **2192** |
+| **Total** | **2195** |
