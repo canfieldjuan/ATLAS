@@ -209,14 +209,16 @@ Dependabot is enabled for:
 
 The archived `_ARCHIVED_atlas-intel-next/` tree was **deleted** rather than
 kept out of Dependabot. Excluding it from updates did not exclude it from
-`osv-scan`, so an unused Next.js experiment contributed 46 open alerts to the
-advisory alert set -- the exclusion stopped routine update PRs and left the
-scanner reporting on code the repo forbids using. OSV is advisory/report-only
-(see "Current blocking posture" above) and is not a `main` branch-protection
-context, so this was alert-set hygiene rather than an unblocking change. Its
-own DO_NOT_USE note recorded that it was never in production; the live
-frontend is `atlas-churn-ui`. The history remains in git if it is ever wanted
-back.
+`osv-scan`, so an unused Next.js experiment contributed 46 open code-scanning
+alerts against `main`'s tree. `osv-full`
+(`.github/workflows/security_guardrails.yml:158-159`) does not evaluate pull
+requests at all -- `if: github.event_name != 'pull_request' &&
+github.event_name != 'pull_request_target'` -- so this was never a PR-time
+check of any kind, blocking or advisory; it is a standalone scan of `main`
+triggered on push/schedule. This was alert-set hygiene on that standalone
+scan, not an unblocking change. Its own DO_NOT_USE note recorded that it was
+never in production; the live frontend is `atlas-churn-ui`. The history
+remains in git if it is ever wanted back.
 
 ## Initial Secret Scan Result
 

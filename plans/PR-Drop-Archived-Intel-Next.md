@@ -2,19 +2,24 @@
 
 ## Why this slice exists
 
-`_ARCHIVED_atlas-intel-next/` contributes **46 open OSV alerts** to
-`osv-scan`, which is advisory/report-only. It is, by its own its own DO_NOT_USE note, an
+`_ARCHIVED_atlas-intel-next/` contributes **46 open OSV alerts** against
+`main`'s tree. `osv-full`
+(`.github/workflows/security_guardrails.yml:158-159`) never evaluates a pull
+request -- `if: github.event_name != 'pull_request' && github.event_name !=
+'pull_request_target'` -- so this is not a PR-time check of any kind; it is a
+standalone push/schedule scan of `main`. It is, by its own DO_NOT_USE note, an
 "unused Next.js experiment" that "exists only as an archive"; the live
 frontend is `atlas-churn-ui`.
 
 **Root cause.** The tree was excluded from *Dependabot* but not from
 *scanning*. `docs/SECURITY_GUARDRAILS.md` records that exclusion as
 deliberate — it stopped update churn, and stopping churn was read as handling
-the problem. It was not: `osv-scan` still walks the lockfile, so the exclusion
-traded routine update PRs for a permanent block of advisory alerts. The harm
-is signal dilution, not a blocked merge: 46 alerts from code the repo forbids
-using sit in the same set as alerts from code that ships, so the advisory
-output is worth less than it should be.
+the problem. It was not: `osv-full` still walks the lockfile on every scan of
+`main`, so the exclusion traded routine update PRs for a standing set of
+alerts on that scan. The harm is signal dilution in that alert set, not any
+blocked check: 46 alerts from code the repo forbids using sit alongside
+alerts from code that ships, which makes the scan's output worth less than
+it should be.
 
 ### Problem-derived contract
 
@@ -179,11 +184,12 @@ rather than continuing to carry it in the working tree.
 `docs/SECURITY_GUARDRAILS.md` previously said the lockfile was "intentionally
 not enrolled for routine Dependabot churn". That sentence now records what was
 actually wrong with it: the exclusion addressed update churn and left the
-scanner untouched, so it converted a maintenance cost into a standing block of
-advisory alerts. OSV is advisory/report-only and is not a `main`
-branch-protection context, so nothing was ever blocked -- the cost is that
-alerts from code the repo forbids using share a set with alerts from code that
-ships.
+scanner untouched, so it converted a maintenance cost into a standing set of
+alerts on `osv-full`'s scan of `main`. That job does not evaluate pull
+requests at all (`.github/workflows/security_guardrails.yml:158-159`), so
+nothing was ever blocked or gated, advisory or otherwise -- the cost is that
+alerts from code the repo forbids using share the scanned set with alerts
+from code that ships.
 ## Intentional
 
 - **Deleted rather than scope-excluded from `osv-scan`.** Excluding it would
@@ -319,6 +325,6 @@ Parked hardening: none.
 | `_ARCHIVED_atlas-intel-next/scripts/indexnow.ts` | 54 |
 | `_ARCHIVED_atlas-intel-next/tsconfig.json` | 34 |
 | `_ARCHIVED_atlas-intel-next/vercel.json` | 3 |
-| `docs/SECURITY_GUARDRAILS.md` | 13 |
-| `plans/PR-Drop-Archived-Intel-Next.md` | 324 |
-| **Total** | **29162** |
+| `docs/SECURITY_GUARDRAILS.md` | 15 |
+| `plans/PR-Drop-Archived-Intel-Next.md` | 330 |
+| **Total** | **29170** |
