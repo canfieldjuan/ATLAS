@@ -11,7 +11,7 @@ from uuid import UUID
 
 import asyncpg
 from fastapi import APIRouter, Depends, Header, HTTPException, Query
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 
 from ...services.receivables import (
     ReceivablesConflictError,
@@ -151,9 +151,23 @@ class CreatePaymentRequest(BaseModel):
     received_date: date
     check_date: Optional[date] = None
     received_through: Optional[str] = Field(default=None, max_length=128)
-    reference: Optional[str] = Field(default=None, max_length=256)
+    reference: str = Field(min_length=1, max_length=256)
     notes: Optional[str] = None
     allocations: list[AllocationRequest] = Field(default_factory=list, max_length=100)
+
+    @field_validator("reference", mode="before")
+    @classmethod
+    def reference_must_identify_receipt(cls, value: Any) -> str:
+        if not isinstance(value, str):
+            raise ValueError(
+                "check number, ACH confirmation, or Square transaction ID is required"
+            )
+        normalized = value.strip()
+        if not normalized:
+            raise ValueError(
+                "check number, ACH confirmation, or Square transaction ID is required"
+            )
+        return normalized
 
 
 class AdjustAllocationsRequest(BaseModel):
