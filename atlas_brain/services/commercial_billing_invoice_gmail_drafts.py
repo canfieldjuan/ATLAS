@@ -306,7 +306,7 @@ class CommercialBillingInvoiceGmailDraftService:
             )
             if prepared.action == "return":
                 return {
-                    "draft": self._view(prepared.record),
+                    "draft": self.view(prepared.record),
                     "replayed": prepared.replayed,
                     "reused": True,
                 }
@@ -514,7 +514,7 @@ class CommercialBillingInvoiceGmailDraftService:
                 "Gmail draft may exist but confirmation failed; recover it by its Message-ID"
             ) from exc
         return {
-            "draft": self._view(confirmed),
+            "draft": self.view(confirmed),
             "replayed": prepared.replayed,
             "reused": False,
         }
@@ -557,7 +557,7 @@ class CommercialBillingInvoiceGmailDraftService:
                 "Gmail draft was found but could not be confirmed; retry recovery"
             ) from exc
         return {
-            "draft": self._view(confirmed),
+            "draft": self.view(confirmed),
             "replayed": prepared.replayed,
             "reused": True,
         }
@@ -921,7 +921,7 @@ class CommercialBillingInvoiceGmailDraftService:
         return value
 
     @staticmethod
-    def _view(record: Mapping[str, Any]) -> dict[str, Any]:
+    def view(record: Mapping[str, Any]) -> dict[str, Any]:
         state = CommercialBillingInvoiceGmailDraftService._state(record)
         created_at = record.get("created_at")
         last_attempt_at = record.get("last_attempt_at")
