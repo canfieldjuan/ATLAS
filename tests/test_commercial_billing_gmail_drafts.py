@@ -29,12 +29,18 @@ from atlas_brain.services.commercial_billing_invoice_gmail_drafts import (
     CommercialBillingInvoiceGmailDraftService,
     _request_text,
 )
+from atlas_brain.services.commercial_billing_invoice_gmail_sent_reconciliation import (
+    CommercialBillingGmailSentReconciliationConflictError,
+    CommercialBillingGmailSentReconciliationUnavailableError,
+    CommercialBillingInvoiceGmailSentReconciliationService,
+)
 from atlas_brain.services.commercial_billing_invoice_pdfs import (
     CommercialBillingInvoicePDFService,
 )
 from atlas_brain.tools.gmail import (
     GmailDraftCreateError,
     GmailDraftLookupError,
+    GmailSentMessageLookupError,
     GmailTransport,
 )
 
@@ -99,8 +105,11 @@ class _RecordingGateway:
     def __init__(self) -> None:
         self.create_calls: list[dict] = []
         self.lookup_calls: list[str] = []
+        self.sent_lookup_calls: list[str] = []
         self.drafts: dict[str, dict] = {}
+        self.sent_messages: dict[str, dict] = {}
         self.create_error: Exception | None = None
+        self.sent_lookup_error: Exception | None = None
         self.create_then_raise = False
 
     async def create_draft(self, **kwargs) -> dict:
@@ -126,6 +135,42 @@ class _RecordingGateway:
         result = self.drafts.get(rfc_message_id)
         return json.loads(json.dumps(result)) if result is not None else None
 
+    async def find_sent_message_by_rfc_message_id(
+        self, rfc_message_id: str
+    ) -> dict | None:
+        self.sent_lookup_calls.append(rfc_message_id)
+        if self.sent_lookup_error is not None:
+            raise self.sent_lookup_error
+        result = self.sent_messages.get(rfc_message_id)
+        return json.loads(json.dumps(result)) if result is not None else None
+
+    def record_sent(
+        self,
+        *,
+        rfc_message_id: str,
+        approval_id,
+        invoice_id,
+        internal_date: str = "1775088000123",
+    ) -> None:
+        self.drafts.pop(rfc_message_id, None)
+        self.sent_messages[rfc_message_id] = {
+            "id": "sent-message-1",
+            "threadId": "sent-thread-1",
+            "labelIds": ["SENT"],
+            "internalDate": internal_date,
+            "headers": [
+                {"name": "Message-ID", "value": rfc_message_id},
+                {
+                    "name": "X-Atlas-Commercial-Billing-Approval",
+                    "value": str(approval_id),
+                },
+                {
+                    "name": "X-Atlas-Commercial-Billing-Invoice",
+                    "value": str(invoice_id),
+                },
+            ],
+        }
+
 
 class _BlockingGateway(_RecordingGateway):
     def __init__(self) -> None:
@@ -144,6 +189,23 @@ class _BlockingGateway(_RecordingGateway):
         }
         self.drafts[message_id] = result
         return result
+
+
+class _BlockingSentGateway(_RecordingGateway):
+    def __init__(self) -> None:
+        super().__init__()
+        self.sent_lookup_started = asyncio.Event()
+        self.release_first_lookup = asyncio.Event()
+
+    async def find_sent_message_by_rfc_message_id(
+        self, rfc_message_id: str
+    ) -> dict | None:
+        self.sent_lookup_calls.append(rfc_message_id)
+        if len(self.sent_lookup_calls) == 1:
+            self.sent_lookup_started.set()
+            await self.release_first_lookup.wait()
+        result = self.sent_messages.get(rfc_message_id)
+        return json.loads(json.dumps(result)) if result is not None else None
 
 
 @asynccontextmanager
@@ -166,6 +228,7 @@ async def _gmail_draft_database():
             "372_commercial_billing_candidate_approvals.sql",
             "373_commercial_billing_invoice_pdf_artifacts.sql",
             "374_commercial_billing_invoice_gmail_drafts.sql",
+            "375_commercial_billing_invoice_gmail_sent_reconciliation.sql",
         ):
             await connection.execute((migrations / name).read_text())
         yield connection, schema
@@ -314,6 +377,17 @@ def _service(connection, schema: str, gateway: _RecordingGateway):
     )
 
 
+def _sent_reconciliation_service(
+    connection, schema: str, gateway: _RecordingGateway
+):
+    now = datetime(2026, 4, 2, tzinfo=timezone.utc)
+    return CommercialBillingInvoiceGmailSentReconciliationService(
+        pool=_SchemaPool(connection, schema),
+        gateway_loader=lambda: gateway,
+        now=lambda: now,
+    )
+
+
 @pytest.mark.asyncio
 async def test_real_postgres_creates_one_no_send_draft_and_reuses_it_idempotently():
     async with _gmail_draft_database() as (connection, schema):
@@ -371,6 +445,272 @@ async def test_real_postgres_creates_one_no_send_draft_and_reuses_it_idempotentl
             "SELECT status, sent_at, sent_via FROM invoices WHERE id = $1", seed["invoice_id"]
         )
         assert dict(invoice) == {"status": "draft", "sent_at": None, "sent_via": None}
+
+
+@pytest.mark.asyncio
+async def test_real_postgres_reconciles_verifiable_sent_mail_once_and_replays_it():
+    async with _gmail_draft_database() as (connection, schema):
+        seed = await _seed_approved_invoice(connection, schema)
+        gateway = _RecordingGateway()
+        draft = await _service(connection, schema, gateway).create_or_reuse(
+            approval_id=seed["approval_id"], idempotency_key="gmail-for-sent", actor="Juan"
+        )
+        rfc_message_id = draft["draft"]["rfcMessageId"]
+        gateway.record_sent(
+            rfc_message_id=rfc_message_id,
+            approval_id=seed["approval_id"],
+            invoice_id=seed["invoice_id"],
+        )
+        service = _sent_reconciliation_service(connection, schema, gateway)
+
+        reconciled = await service.reconcile(
+            approval_id=seed["approval_id"], idempotency_key="sent-reconcile-1", actor="Juan"
+        )
+        replayed = await service.reconcile(
+            approval_id=seed["approval_id"], idempotency_key="sent-reconcile-1", actor="Mayra"
+        )
+
+        assert reconciled["outcome"] == "sent_confirmed"
+        assert reconciled["replayed"] is False
+        assert reconciled["reused"] is False
+        assert reconciled["reconciliation"]["state"] == "sent_confirmed"
+        assert reconciled["reconciliation"]["gmailSentMessageId"] == "sent-message-1"
+        assert reconciled["reconciliation"]["gmailSentThreadId"] == "sent-thread-1"
+        assert reconciled["reconciliation"]["sentReconciledBy"] == "Juan"
+        assert reconciled["reconciliation"]["recoveryAction"] == "none"
+        assert replayed["outcome"] == "sent_confirmed"
+        assert replayed["replayed"] is True
+        assert replayed["reused"] is True
+        assert len(gateway.sent_lookup_calls) == 1
+        assert gateway.lookup_calls == []
+
+        invoice = await connection.fetchrow(
+            "SELECT status, sent_at, sent_via FROM invoices WHERE id = $1", seed["invoice_id"]
+        )
+        assert invoice["status"] == "sent"
+        assert invoice["sent_via"] == "gmail"
+        assert invoice["sent_at"] == datetime.fromtimestamp(
+            1775088000, tz=timezone.utc
+        ).replace(microsecond=123000)
+        assert await connection.fetchval(
+            "SELECT COUNT(*) FROM commercial_billing_gmail_sent_reconciliation_operations"
+        ) == 1
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("remove_draft", "expected_state", "expected_recovery_action"),
+    (
+        (False, "draft_present", "wait_for_operator_send"),
+        (True, "draft_missing", "review_missing_draft"),
+    ),
+)
+async def test_sent_reconciliation_retains_nonfinancial_draft_observations(
+    remove_draft: bool, expected_state: str, expected_recovery_action: str
+):
+    async with _gmail_draft_database() as (connection, schema):
+        seed = await _seed_approved_invoice(connection, schema)
+        gateway = _RecordingGateway()
+        draft = await _service(connection, schema, gateway).create_or_reuse(
+            approval_id=seed["approval_id"], idempotency_key="gmail-observation", actor="Juan"
+        )
+        if remove_draft:
+            gateway.drafts.pop(draft["draft"]["rfcMessageId"])
+
+        result = await _sent_reconciliation_service(connection, schema, gateway).reconcile(
+            approval_id=seed["approval_id"],
+            idempotency_key=f"sent-observation-{expected_state}",
+            actor="Mayra",
+        )
+
+        assert result["outcome"] == expected_state
+        assert result["reconciliation"]["state"] == expected_state
+        assert result["reconciliation"]["recoveryAction"] == expected_recovery_action
+        assert result["reconciliation"]["gmailSentMessageId"] is None
+        if remove_draft:
+            assert result["reconciliation"]["draftMissingAt"] is not None
+        else:
+            assert result["reconciliation"]["draftMissingAt"] is None
+        invoice = await connection.fetchrow(
+            "SELECT status, sent_at, sent_via FROM invoices WHERE id = $1", seed["invoice_id"]
+        )
+        assert dict(invoice) == {"status": "draft", "sent_at": None, "sent_via": None}
+
+
+@pytest.mark.asyncio
+async def test_sent_reconciliation_rejects_mismatched_or_ambiguous_evidence_without_financial_write():
+    async with _gmail_draft_database() as (connection, schema):
+        seed = await _seed_approved_invoice(connection, schema)
+        gateway = _RecordingGateway()
+        draft = await _service(connection, schema, gateway).create_or_reuse(
+            approval_id=seed["approval_id"], idempotency_key="gmail-bad-sent", actor="Juan"
+        )
+        rfc_message_id = draft["draft"]["rfcMessageId"]
+        gateway.record_sent(
+            rfc_message_id=rfc_message_id,
+            approval_id=seed["approval_id"],
+            invoice_id=uuid4(),
+        )
+        service = _sent_reconciliation_service(connection, schema, gateway)
+
+        with pytest.raises(CommercialBillingGmailSentReconciliationConflictError):
+            await service.reconcile(
+                approval_id=seed["approval_id"],
+                idempotency_key="sent-mismatched", actor="Juan"
+            )
+        gateway.sent_lookup_error = GmailSentMessageLookupError(
+            "synthetic multiple sent messages"
+        )
+        with pytest.raises(CommercialBillingGmailSentReconciliationConflictError):
+            await service.reconcile(
+                approval_id=seed["approval_id"],
+                idempotency_key="sent-ambiguous", actor="Juan"
+            )
+
+        invoice = await connection.fetchrow(
+            "SELECT status, sent_at, sent_via FROM invoices WHERE id = $1", seed["invoice_id"]
+        )
+        assert dict(invoice) == {"status": "draft", "sent_at": None, "sent_via": None}
+        assert await connection.fetchval(
+            "SELECT COUNT(*) FROM commercial_billing_gmail_sent_reconciliation_operations "
+            "WHERE state = 'completed'"
+        ) == 0
+
+
+@pytest.mark.asyncio
+async def test_sent_reconciliation_retries_a_read_failure_with_the_same_key():
+    async with _gmail_draft_database() as (connection, schema):
+        seed = await _seed_approved_invoice(connection, schema)
+        gateway = _RecordingGateway()
+        draft = await _service(connection, schema, gateway).create_or_reuse(
+            approval_id=seed["approval_id"], idempotency_key="gmail-retry-sent", actor="Juan"
+        )
+        gateway.sent_lookup_error = RuntimeError("synthetic Gmail timeout")
+        service = _sent_reconciliation_service(connection, schema, gateway)
+
+        with pytest.raises(CommercialBillingGmailSentReconciliationUnavailableError):
+            await service.reconcile(
+                approval_id=seed["approval_id"], idempotency_key="sent-retry", actor="Juan"
+            )
+        gateway.sent_lookup_error = None
+        gateway.record_sent(
+            rfc_message_id=draft["draft"]["rfcMessageId"],
+            approval_id=seed["approval_id"],
+            invoice_id=seed["invoice_id"],
+        )
+
+        result = await service.reconcile(
+            approval_id=seed["approval_id"], idempotency_key="sent-retry", actor="Juan"
+        )
+        assert result["outcome"] == "sent_confirmed"
+        assert result["replayed"] is True
+        assert len(gateway.sent_lookup_calls) == 2
+
+
+@pytest.mark.asyncio
+async def test_concurrent_sent_reconciliation_requests_have_one_financial_transition():
+    async with _gmail_draft_database() as (connection, schema):
+        seed = await _seed_approved_invoice(connection, schema)
+        gateway = _BlockingSentGateway()
+        draft = await _service(connection, schema, gateway).create_or_reuse(
+            approval_id=seed["approval_id"], idempotency_key="gmail-concurrent-sent", actor="Juan"
+        )
+        gateway.record_sent(
+            rfc_message_id=draft["draft"]["rfcMessageId"],
+            approval_id=seed["approval_id"],
+            invoice_id=seed["invoice_id"],
+        )
+        await connection.execute(
+            "CREATE TABLE invoice_status_changes (old_status text, new_status text)"
+        )
+        await connection.execute(
+            """
+            CREATE FUNCTION capture_invoice_status_change()
+            RETURNS trigger LANGUAGE plpgsql AS $$
+            BEGIN
+                IF OLD.status IS DISTINCT FROM NEW.status THEN
+                    INSERT INTO invoice_status_changes (old_status, new_status)
+                    VALUES (OLD.status, NEW.status);
+                END IF;
+                RETURN NEW;
+            END;
+            $$
+            """
+        )
+        await connection.execute(
+            """
+            CREATE TRIGGER capture_invoice_status_change_trigger
+            BEFORE UPDATE ON invoices
+            FOR EACH ROW EXECUTE FUNCTION capture_invoice_status_change()
+            """
+        )
+        service = _sent_reconciliation_service(connection, schema, gateway)
+        first = asyncio.create_task(
+            service.reconcile(
+                approval_id=seed["approval_id"], idempotency_key="sent-concurrent-1", actor="Juan"
+            )
+        )
+        await asyncio.wait_for(gateway.sent_lookup_started.wait(), timeout=2)
+        second = await service.reconcile(
+            approval_id=seed["approval_id"], idempotency_key="sent-concurrent-2", actor="Mayra"
+        )
+        gateway.release_first_lookup.set()
+        first_result = await first
+
+        assert first_result["outcome"] == "sent_confirmed"
+        assert second["outcome"] == "sent_confirmed"
+        assert len(gateway.create_calls) == 1
+        assert len(gateway.sent_lookup_calls) == 2
+        assert await connection.fetchval(
+            "SELECT COUNT(*) FROM invoice_status_changes "
+            "WHERE old_status = 'draft' AND new_status = 'sent'"
+        ) == 1
+
+
+@pytest.mark.asyncio
+async def test_sent_reconciliation_rejects_a_stale_invoice_after_gmail_lookup():
+    async with _gmail_draft_database() as (connection, schema):
+        seed = await _seed_approved_invoice(connection, schema)
+        gateway = _BlockingSentGateway()
+        draft = await _service(connection, schema, gateway).create_or_reuse(
+            approval_id=seed["approval_id"],
+            idempotency_key="gmail-stale-sent",
+            actor="Juan",
+        )
+        gateway.record_sent(
+            rfc_message_id=draft["draft"]["rfcMessageId"],
+            approval_id=seed["approval_id"],
+            invoice_id=seed["invoice_id"],
+        )
+        reconciliation = _sent_reconciliation_service(connection, schema, gateway)
+        task = asyncio.create_task(
+            reconciliation.reconcile(
+                approval_id=seed["approval_id"],
+                idempotency_key="sent-stale",
+                actor="Juan",
+            )
+        )
+        await asyncio.wait_for(gateway.sent_lookup_started.wait(), timeout=2)
+        await connection.execute(
+            "UPDATE invoices SET status = 'void' WHERE id = $1", seed["invoice_id"]
+        )
+        gateway.release_first_lookup.set()
+
+        with pytest.raises(CommercialBillingGmailSentReconciliationConflictError):
+            await task
+
+        invoice = await connection.fetchrow(
+            "SELECT status, sent_at, sent_via FROM invoices WHERE id = $1",
+            seed["invoice_id"],
+        )
+        assert dict(invoice) == {"status": "void", "sent_at": None, "sent_via": None}
+        assert await connection.fetchval(
+            "SELECT reconciliation_state FROM commercial_billing_invoice_gmail_drafts"
+        ) == "not_reconciled"
+        assert await connection.fetchval(
+            "SELECT COUNT(*) FROM commercial_billing_gmail_sent_reconciliation_operations "
+            "WHERE state = 'completed'"
+        ) == 0
 
 
 @pytest.mark.asyncio
@@ -652,6 +992,112 @@ async def test_gmail_transport_looks_up_exact_rfc_message_id_and_rejects_ambigui
         await transport.close()
 
 
+@pytest.mark.asyncio
+async def test_gmail_transport_reads_one_sent_message_with_metadata_and_never_sends():
+    requests: list[httpx.Request] = []
+
+    async def handler(request: httpx.Request) -> httpx.Response:
+        requests.append(request)
+        if request.url.path.endswith("/users/me/messages"):
+            return httpx.Response(
+                200,
+                json={"messages": [{"id": "sent-1", "threadId": "thread-1"}]},
+            )
+        if request.url.path.endswith("/users/me/messages/sent-1"):
+            return httpx.Response(
+                200,
+                json={
+                    "id": "sent-1",
+                    "threadId": "thread-1",
+                    "labelIds": ["SENT"],
+                    "internalDate": "1775088000123",
+                    "payload": {
+                        "headers": [
+                            {"name": "Message-ID", "value": "<stable@example.test>"},
+                            {
+                                "name": "X-Atlas-Commercial-Billing-Approval",
+                                "value": "approval-1",
+                            },
+                            {
+                                "name": "X-Atlas-Commercial-Billing-Invoice",
+                                "value": "invoice-1",
+                            },
+                        ]
+                    },
+                },
+            )
+        return httpx.Response(404)
+
+    transport = GmailTransport()
+    transport._access_token = "token"
+    transport._token_expires = time.time() + 600
+    transport._client = httpx.AsyncClient(transport=httpx.MockTransport(handler))
+    try:
+        found = await transport.find_sent_message_by_rfc_message_id(
+            "<stable@example.test>"
+        )
+    finally:
+        await transport.close()
+
+    assert found == {
+        "id": "sent-1",
+        "threadId": "thread-1",
+        "labelIds": ["SENT"],
+        "internalDate": "1775088000123",
+        "headers": [
+            {"name": "Message-ID", "value": "<stable@example.test>"},
+            {"name": "X-Atlas-Commercial-Billing-Approval", "value": "approval-1"},
+            {"name": "X-Atlas-Commercial-Billing-Invoice", "value": "invoice-1"},
+        ],
+    }
+    assert [request.method for request in requests] == ["GET", "GET"]
+    assert "/messages/send" not in " ".join(request.url.path for request in requests)
+    search = requests[0]
+    assert search.url.params["q"] == "rfc822msgid:<stable@example.test>"
+    assert search.url.params["labelIds"] == "SENT"
+    metadata_headers = requests[1].url.params.get_list("metadataHeaders")
+    assert metadata_headers == [
+        "Message-ID",
+        "X-Atlas-Commercial-Billing-Approval",
+        "X-Atlas-Commercial-Billing-Invoice",
+    ]
+
+    async def ambiguous_handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path.endswith("/users/me/messages"):
+            return httpx.Response(
+                200,
+                json={
+                    "messages": [
+                        {"id": "sent-1", "threadId": "thread-1"},
+                        {"id": "sent-2", "threadId": "thread-2"},
+                    ]
+                },
+            )
+        message_id = request.url.path.rsplit("/", maxsplit=1)[-1]
+        return httpx.Response(
+            200,
+            json={
+                "id": message_id,
+                "threadId": f"thread-{message_id[-1]}",
+                "labelIds": ["SENT"],
+                "internalDate": "1775088000123",
+                "payload": {"headers": []},
+            },
+        )
+
+    transport = GmailTransport()
+    transport._access_token = "token"
+    transport._token_expires = time.time() + 600
+    transport._client = httpx.AsyncClient(
+        transport=httpx.MockTransport(ambiguous_handler)
+    )
+    try:
+        with pytest.raises(GmailSentMessageLookupError, match="multiple"):
+            await transport.find_sent_message_by_rfc_message_id("<stable@example.test>")
+    finally:
+        await transport.close()
+
+
 class _RouteService:
     def __init__(self) -> None:
         self.calls: list[dict] = []
@@ -663,6 +1109,23 @@ class _RouteService:
                 "approvalId": str(kwargs["approval_id"]),
                 "id": "draft-record-1",
                 "state": "draft_created",
+            },
+            "replayed": False,
+            "reused": False,
+        }
+
+
+class _SentReconciliationRouteService:
+    def __init__(self) -> None:
+        self.calls: list[dict] = []
+
+    async def reconcile(self, **kwargs) -> dict:
+        self.calls.append(kwargs)
+        return {
+            "outcome": "draft_missing",
+            "reconciliation": {
+                "approvalId": str(kwargs["approval_id"]),
+                "state": "draft_missing",
             },
             "replayed": False,
             "reused": False,
@@ -726,6 +1189,61 @@ async def test_full_atlas_app_gmail_draft_route_requires_existing_auth_and_never
     ]
 
 
+@pytest.mark.asyncio
+async def test_full_atlas_app_gmail_sent_reconciliation_route_requires_existing_auth():
+    from atlas_brain.api.invoicing import auth as receivables_auth
+    from atlas_brain.api.invoicing import receivables as routes
+    from atlas_brain.eom_api.auth import generate_receivables_service_token
+    from atlas_brain.main import app
+
+    approval_id = uuid4()
+    service = _SentReconciliationRouteService()
+    generated = generate_receivables_service_token()
+    original_overrides = dict(app.dependency_overrides)
+    app.dependency_overrides[receivables_auth.get_receivables_api_config] = lambda: SimpleNamespace(
+        receivables_api_enabled=True,
+        receivables_service_token="",
+        receivables_service_token_sha256=generated.sha256,
+    )
+    app.dependency_overrides[
+        routes.get_commercial_billing_invoice_gmail_sent_reconciliation_service
+    ] = lambda: service
+    path = (
+        "/api/v1/receivables/commercial-billing-approvals/"
+        f"{approval_id}/gmail-draft/reconcile"
+    )
+    headers = {"Authorization": f"Bearer {generated.token}"}
+    try:
+        async with httpx.AsyncClient(
+            transport=httpx.ASGITransport(app=app), base_url="http://test"
+        ) as client:
+            assert (await client.post(path)).status_code == 401
+            assert (await client.post(path, headers=headers)).status_code == 422
+            assert (
+                await client.post(
+                    path,
+                    headers={**headers, "Idempotency-Key": "route-sent-1"},
+                )
+            ).status_code == 422
+            response = await client.post(
+                path,
+                headers={
+                    **headers,
+                    "Idempotency-Key": "route-sent-1",
+                    "X-EOM-Actor": "Juan",
+                },
+            )
+    finally:
+        app.dependency_overrides.clear()
+        app.dependency_overrides.update(original_overrides)
+
+    assert response.status_code == 200
+    assert response.json()["outcome"] == "draft_missing"
+    assert service.calls == [
+        {"approval_id": approval_id, "idempotency_key": "route-sent-1", "actor": "Juan"}
+    ]
+
+
 def test_gmail_draft_migration_is_additive_and_never_encodes_sent_state():
     migration = (
         Path(__file__).parents[1]
@@ -744,6 +1262,23 @@ def test_gmail_draft_migration_is_additive_and_never_encodes_sent_state():
     assert "sent_at" not in executable
     assert "UPDATE invoices" not in executable
     assert "DROP TABLE" not in executable
+
+
+def test_gmail_sent_reconciliation_migration_is_additive_and_never_marks_an_invoice_sent():
+    migration = (
+        Path(__file__).parents[1]
+        / "atlas_brain/storage/migrations/375_commercial_billing_invoice_gmail_sent_reconciliation.sql"
+    ).read_text()
+    executable = "\n".join(
+        line for line in migration.splitlines() if not line.lstrip().startswith("--")
+    )
+    assert "ADD COLUMN IF NOT EXISTS reconciliation_state" in migration
+    assert "CREATE TABLE IF NOT EXISTS commercial_billing_gmail_sent_reconciliation_operations" in migration
+    assert "UNIQUE (source, idempotency_key)" in migration
+    assert "'draft_present', 'draft_missing', 'sent_confirmed'" in migration
+    assert "UPDATE invoices" not in executable
+    assert "DROP TABLE" not in executable
+    assert "DROP COLUMN" not in executable
 
 
 def test_gmail_draft_service_imports_no_sender_or_financial_state_writer():
@@ -779,11 +1314,25 @@ def test_gmail_draft_service_imports_no_sender_or_financial_state_writer():
     assert "float(" not in source
 
 
+def test_gmail_sent_reconciliation_service_only_reads_gmail_and_writes_after_proof():
+    import atlas_brain.services.commercial_billing_invoice_gmail_sent_reconciliation as reconciliation
+
+    source = inspect.getsource(reconciliation)
+    assert "find_sent_message_by_rfc_message_id" in source
+    assert "find_draft_by_rfc_message_id" in source
+    assert "create_draft" not in source
+    assert ".send(" not in source
+    assert "UPDATE invoices" in source
+    assert "float(" not in source
+
+
 def test_invoicing_workflow_enrolls_the_gmail_draft_surface_and_contract():
     workflow = (Path(__file__).parents[1] / ".github/workflows/atlas_invoicing_checks.yml").read_text()
     for path in (
         "atlas_brain/services/commercial_billing_invoice_gmail_drafts.py",
+        "atlas_brain/services/commercial_billing_invoice_gmail_sent_reconciliation.py",
         "atlas_brain/storage/migrations/374_commercial_billing_invoice_gmail_drafts.sql",
+        "atlas_brain/storage/migrations/375_commercial_billing_invoice_gmail_sent_reconciliation.sql",
         "atlas_brain/tools/gmail.py",
         "tests/test_commercial_billing_gmail_drafts.py",
     ):

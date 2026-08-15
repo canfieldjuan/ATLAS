@@ -66,6 +66,14 @@ from ...services.commercial_billing_invoice_gmail_drafts import (
     CommercialBillingGmailDraftValidationError,
     get_commercial_billing_invoice_gmail_draft_service,
 )
+from ...services.commercial_billing_invoice_gmail_sent_reconciliation import (
+    CommercialBillingGmailSentReconciliationConflictError,
+    CommercialBillingGmailSentReconciliationNotFoundError,
+    CommercialBillingGmailSentReconciliationUnavailableError,
+    CommercialBillingGmailSentReconciliationValidationError,
+    CommercialBillingInvoiceGmailSentReconciliationService,
+    get_commercial_billing_invoice_gmail_sent_reconciliation_service,
+)
 from ...services.eom_lead_ingress import EOM_BUSINESS_CONTEXT_ID
 from ...storage.exceptions import DatabaseUnavailableError
 from .auth import require_actor, require_receivables_api
@@ -378,6 +386,41 @@ async def _call_commercial_billing_gmail_draft(awaitable):
             detail={
                 "code": "commercial_billing_gmail_draft_unavailable",
                 "message": "Commercial billing Gmail draft database unavailable",
+            },
+        ) from exc
+
+
+async def _call_commercial_billing_gmail_sent_reconciliation(awaitable):
+    try:
+        return await awaitable
+    except CommercialBillingGmailSentReconciliationValidationError as exc:
+        raise HTTPException(
+            status_code=422,
+            detail={"code": exc.code, "message": str(exc)},
+        ) from exc
+    except CommercialBillingGmailSentReconciliationNotFoundError as exc:
+        raise HTTPException(
+            status_code=404,
+            detail={"code": exc.code, "message": str(exc)},
+        ) from exc
+    except CommercialBillingGmailSentReconciliationConflictError as exc:
+        raise HTTPException(
+            status_code=409,
+            detail={"code": exc.code, "message": str(exc)},
+        ) from exc
+    except CommercialBillingGmailSentReconciliationUnavailableError as exc:
+        raise HTTPException(
+            status_code=503,
+            detail={"code": exc.code, "message": str(exc)},
+        ) from exc
+    except Exception as exc:
+        if not _is_database_unavailable_error(exc):
+            raise
+        raise HTTPException(
+            status_code=503,
+            detail={
+                "code": "commercial_billing_gmail_sent_reconciliation_unavailable",
+                "message": "Commercial billing Gmail sent reconciliation database unavailable",
             },
         ) from exc
 
@@ -723,6 +766,28 @@ async def create_commercial_billing_invoice_gmail_draft(
 
     return await _call_commercial_billing_gmail_draft(
         service.create_or_reuse(
+            approval_id=approval_id,
+            idempotency_key=idempotency_key,
+            actor=actor,
+        )
+    )
+
+
+@router.post("/commercial-billing-approvals/{approval_id}/gmail-draft/reconcile")
+async def reconcile_commercial_billing_invoice_gmail_draft_sent_mail(
+    approval_id: UUID,
+    actor: Annotated[str, Depends(require_actor)],
+    idempotency_key: Annotated[
+        str, Header(alias="Idempotency-Key", min_length=1, max_length=128)
+    ],
+    service: CommercialBillingInvoiceGmailSentReconciliationService = Depends(
+        get_commercial_billing_invoice_gmail_sent_reconciliation_service
+    ),
+) -> dict:
+    """Reconcile a manually sent Gmail draft from verifiable Sent-mail evidence."""
+
+    return await _call_commercial_billing_gmail_sent_reconciliation(
+        service.reconcile(
             approval_id=approval_id,
             idempotency_key=idempotency_key,
             actor=actor,

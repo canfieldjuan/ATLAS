@@ -33,6 +33,7 @@ on:
       - "atlas_brain/services/commercial_billing_approvals.py"
       - "atlas_brain/services/commercial_billing_invoice_pdfs.py"
       - "atlas_brain/services/commercial_billing_invoice_gmail_drafts.py"
+      - "atlas_brain/services/commercial_billing_invoice_gmail_sent_reconciliation.py"
       - "atlas_brain/services/invoice_pdf.py"
       - "atlas_brain/tools/gmail.py"
       # normalize_contact_email decides billing eligibility and the
@@ -49,6 +50,7 @@ on:
       - "atlas_brain/storage/migrations/372_commercial_billing_candidate_approvals.sql"
       - "atlas_brain/storage/migrations/373_commercial_billing_invoice_pdf_artifacts.sql"
       - "atlas_brain/storage/migrations/374_commercial_billing_invoice_gmail_drafts.sql"
+      - "atlas_brain/storage/migrations/375_commercial_billing_invoice_gmail_sent_reconciliation.sql"
       - "atlas_brain/storage/repositories/invoice.py"
       - "atlas_brain/templates/email/__init__.py"
       - "atlas_brain/templates/email/estimate_confirmation.py"
@@ -100,6 +102,7 @@ on:
       - "atlas_brain/services/commercial_billing_approvals.py"
       - "atlas_brain/services/commercial_billing_invoice_pdfs.py"
       - "atlas_brain/services/commercial_billing_invoice_gmail_drafts.py"
+      - "atlas_brain/services/commercial_billing_invoice_gmail_sent_reconciliation.py"
       - "atlas_brain/services/invoice_pdf.py"
       - "atlas_brain/tools/gmail.py"
       # normalize_contact_email decides billing eligibility and the
@@ -116,6 +119,7 @@ on:
       - "atlas_brain/storage/migrations/372_commercial_billing_candidate_approvals.sql"
       - "atlas_brain/storage/migrations/373_commercial_billing_invoice_pdf_artifacts.sql"
       - "atlas_brain/storage/migrations/374_commercial_billing_invoice_gmail_drafts.sql"
+      - "atlas_brain/storage/migrations/375_commercial_billing_invoice_gmail_sent_reconciliation.sql"
       - "atlas_brain/storage/repositories/invoice.py"
       - "atlas_brain/templates/email/__init__.py"
       - "atlas_brain/templates/email/estimate_confirmation.py"
