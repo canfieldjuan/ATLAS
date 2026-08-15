@@ -1,6 +1,6 @@
 # Plan archive index
 
-1524 archived plan doc(s). Merged plan docs are moved under `archive/` and listed below; once the archive sweep has run, the `plans/` root holds only in-flight slices.
+1525 archived plan doc(s). Merged plan docs are moved under `archive/` and listed below; once the archive sweep has run, the `plans/` root holds only in-flight slices.
 
 - [PR-ASR-Pip-Audit-Egg-Fragment](archive/PR-ASR-Pip-Audit-Egg-Fragment.md) - lane: security/workflow | phase: Production hardening
 - [PR-ASR-Requirements-Audit-Pin](archive/PR-ASR-Requirements-Audit-Pin.md) - lane: security/workflow | phase: Production hardening
@@ -1009,6 +1009,7 @@
 - [PR-EOM-API-Contacts-Auth](archive/PR-EOM-API-Contacts-Auth.md) - lane: eom-crm/api-auth | phase: Production hardening
 - [PR-EOM-Atomic-Portal-Reconciliation](archive/PR-EOM-Atomic-Portal-Reconciliation.md) - lane: eom-crm/lead-funnel | phase: production hardening
 - [PR-EOM-B2B-Omission-Flag-Pin](archive/PR-EOM-B2B-Omission-Flag-Pin.md) - lane: eom-crm/read-scoping | phase: robust testing
+- [PR-EOM-Billing-Candidate-Approval-Invoices](archive/PR-EOM-Billing-Candidate-Approval-Invoices.md) - lane: eom/billing-approved-gmail-drafts | phase: Vertical slice
 - [PR-EOM-Calendar-Demotion-Guard](archive/PR-EOM-Calendar-Demotion-Guard.md) - lane: eom-crm/lead-funnel | phase: vertical slice
 - [PR-EOM-Calendar-Email-Veto](archive/PR-EOM-Calendar-Email-Veto.md) - lane: eom-crm/calendar-veto | phase: production hardening
 - [PR-EOM-Complaints-Tracking](archive/PR-EOM-Complaints-Tracking.md) - lane: eom-crm/complaints | phase: Vertical slice
