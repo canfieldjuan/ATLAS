@@ -11,7 +11,7 @@ from uuid import UUID
 
 import asyncpg
 from fastapi import APIRouter, Depends, Header, HTTPException, Query
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 
 from ...services.receivables import (
     ReceivablesConflictError,
@@ -151,9 +151,23 @@ class CreatePaymentRequest(BaseModel):
     received_date: date
     check_date: Optional[date] = None
     received_through: Optional[str] = Field(default=None, max_length=128)
-    reference: Optional[str] = Field(default=None, max_length=256)
+    reference: str = Field(min_length=1, max_length=256)
     notes: Optional[str] = None
     allocations: list[AllocationRequest] = Field(default_factory=list, max_length=100)
+
+    @field_validator("reference", mode="before")
+    @classmethod
+    def reference_must_identify_receipt(cls, value: Any) -> str:
+        if not isinstance(value, str):
+            raise ValueError(
+                "check number, ACH confirmation, or Square transaction ID is required"
+            )
+        normalized = value.strip()
+        if not normalized:
+            raise ValueError(
+                "check number, ACH confirmation, or Square transaction ID is required"
+            )
+        return normalized
 
 
 class AdjustAllocationsRequest(BaseModel):
@@ -820,6 +834,31 @@ async def create_commercial_billing_invoice_gmail_draft(
 
     return await _call_commercial_billing_gmail_draft(
         service.create_or_reuse(
+            approval_id=approval_id,
+            idempotency_key=idempotency_key,
+            actor=actor,
+        )
+    )
+
+
+@router.post(
+    "/commercial-billing-approvals/{approval_id}/gmail-draft/replace-missing",
+    status_code=201,
+)
+async def replace_commercial_billing_missing_gmail_draft(
+    approval_id: UUID,
+    actor: Annotated[str, Depends(require_actor)],
+    idempotency_key: Annotated[
+        str, Header(alias="Idempotency-Key", min_length=1, max_length=128)
+    ],
+    service: CommercialBillingInvoiceGmailDraftService = Depends(
+        get_commercial_billing_invoice_gmail_draft_service
+    ),
+) -> dict:
+    """Replace only a reconciliation-proven missing Gmail draft; never send it."""
+
+    return await _call_commercial_billing_gmail_draft(
+        service.replace_missing(
             approval_id=approval_id,
             idempotency_key=idempotency_key,
             actor=actor,

@@ -3886,6 +3886,7 @@ async def test_real_postgres_http_and_mcp_entrypoints_use_supported_dependencies
             "total_amount_cents": 20_000,
             "payment_method": "check",
             "received_date": "2026-07-16",
+            "reference": "HTTP-1001",
             "allocations": [
                 {"invoice_id": str(invoice_ids[0]), "amount_cents": 12_500},
                 {"invoice_id": str(invoice_ids[1]), "amount_cents": 5_000},
@@ -4346,6 +4347,42 @@ async def test_mcp_payment_response_projects_future_eom_check_metadata():
     assert service.kwargs["notes"] == "Received in mail"
 
 
+@pytest.mark.asyncio
+async def test_legacy_mcp_customer_payment_keeps_reference_optional():
+    from atlas_brain.mcp import invoicing_server
+
+    contact_id = uuid4()
+    invoice_id = uuid4()
+
+    class _LegacyMCPService:
+        def __init__(self) -> None:
+            self.kwargs = None
+
+        async def create_payment(self, **kwargs):
+            self.kwargs = kwargs
+            return {"id": "legacy-mcp-payment", "status": "received"}
+
+    service = _LegacyMCPService()
+    result = json.loads(
+        await invoicing_server._record_customer_payment_with_service(
+            service=service,
+            contact_id=str(contact_id),
+            payer_name="Legacy Customer",
+            total_amount_cents=12_500,
+            payment_method="check",
+            allocations=[{"invoice_id": str(invoice_id), "amount_cents": 12_500}],
+            idempotency_key="legacy-mcp-optional-reference-1",
+        )
+    )
+
+    assert result == {
+        "success": True,
+        "payment": {"id": "legacy-mcp-payment", "status": "received"},
+    }
+    assert service.kwargs["reference"] is None
+    assert service.kwargs["source"] == "invoicing_mcp"
+
+
 def test_full_invoicing_mcp_http_refuses_to_start_without_strong_auth():
     from atlas_brain.mcp import invoicing_server
     from atlas_brain.mcp.auth import BearerAuthMiddleware
@@ -4415,6 +4452,36 @@ def test_payment_http_models_reject_coercive_cent_values():
                     ],
                 }
             )
+
+
+@pytest.mark.parametrize("payment_method", ("check", "ach", "square"))
+def test_eom_payment_http_models_require_trimmed_reference(payment_method):
+    from atlas_brain.api.invoicing.receivables import CreatePaymentRequest
+    from atlas_brain.eom_api.receivables import (
+        CreatePaymentRequest as EOMCreatePaymentRequest,
+    )
+
+    base = {
+        "contact_id": str(uuid4()),
+        "payer_name": "Receipt Customer",
+        "total_amount_cents": 12_500,
+        "payment_method": payment_method,
+        "received_date": "2026-08-15",
+        "reference": "  receipt-reference-1001  ",
+    }
+    invalid_references = (None, "", " \t ", 1001, False, {}, [], "x" * 257)
+
+    for request_model in (CreatePaymentRequest, EOMCreatePaymentRequest):
+        assert request_model.model_validate(base).reference == "receipt-reference-1001"
+
+        with pytest.raises(ValueError):
+            request_model.model_validate(
+                {key: value for key, value in base.items() if key != "reference"}
+            )
+
+        for reference in invalid_references:
+            with pytest.raises(ValueError):
+                request_model.model_validate({**base, "reference": reference})
 
 
 def test_payment_http_models_preserve_optional_check_metadata():
@@ -4534,6 +4601,7 @@ async def test_payment_routes_forward_omitted_allocations_as_empty_list(monkeypa
         assert service.kwargs["idempotency_key"] == "route-unapplied-payment-1"
         assert service.kwargs["check_date"] is None
         assert service.kwargs["received_through"] is None
+        assert service.kwargs["reference"] == "1001"
         assert service.kwargs["require_receipt_recipient"] is True
         assert service.kwargs["receipt_recipient"].contact_id == body.contact_id
 
@@ -4638,6 +4706,93 @@ async def test_full_and_slim_payment_entrypoints_reject_check_metadata_when_sche
             app.dependency_overrides.update(original_overrides)
 
 
+@pytest.mark.asyncio
+@pytest.mark.parametrize("payment_method", ("check", "ach", "square"))
+@pytest.mark.parametrize(
+    "reference_body",
+    (
+        {},
+        {"reference": None},
+        {"reference": ""},
+        {"reference": " \t "},
+        {"reference": 1001},
+    ),
+)
+async def test_full_and_slim_payment_entrypoints_reject_invalid_reference_before_service(
+    payment_method,
+    reference_body,
+):
+    from atlas_brain import main, main_eom
+    from atlas_brain.api.invoicing import auth as full_auth
+    from atlas_brain.api.invoicing import receivables as full_routes
+    from atlas_brain.eom_api import auth as slim_auth
+    from atlas_brain.eom_api import receivables as slim_routes
+
+    generated = eom_receivables_auth.generate_receivables_service_token()
+    config = SimpleNamespace(
+        receivables_api_enabled=True,
+        receivables_service_token="",
+        receivables_service_token_sha256=generated.sha256,
+    )
+    body = {
+        "contact_id": str(uuid4()),
+        "payer_name": "Receipt Customer",
+        "total_amount_cents": 12_500,
+        "payment_method": payment_method,
+        "received_date": "2026-08-15",
+        **reference_body,
+    }
+    headers = {
+        "Authorization": f"Bearer {generated.token}",
+        "X-EOM-Actor": "Juan Canfield",
+        "Idempotency-Key": "invalid-reference-before-service-1",
+    }
+
+    class _NoPaymentWriteService:
+        def __init__(self) -> None:
+            self.calls: list[dict] = []
+
+        async def create_payment(self, **kwargs):
+            self.calls.append(kwargs)
+            raise AssertionError("invalid payment reference must not reach service")
+
+    for app, config_dependency, service_dependency in (
+        (
+            main.app,
+            full_auth.get_receivables_api_config,
+            full_routes.get_receivables_service,
+        ),
+        (
+            main_eom.app,
+            slim_auth.get_receivables_api_config,
+            slim_routes.get_receivables_service,
+        ),
+    ):
+        service = _NoPaymentWriteService()
+        original_overrides = app.dependency_overrides.copy()
+        app.dependency_overrides[config_dependency] = lambda: config
+        app.dependency_overrides[service_dependency] = lambda: service
+        try:
+            async with httpx.AsyncClient(
+                transport=httpx.ASGITransport(app=app),
+                base_url="http://receivables.test",
+            ) as client:
+                response = await client.post(
+                    "/api/v1/receivables/payments",
+                    headers=headers,
+                    json=body,
+                )
+
+            assert response.status_code == 422, response.text
+            assert any(
+                error["loc"][-1] == "reference" for error in response.json()["detail"]
+            )
+            assert service.calls == []
+        finally:
+            app.dependency_overrides.clear()
+            app.dependency_overrides.update(original_overrides)
+
+
 def test_multi_invoice_mcp_is_registered_with_bounded_strict_schema():
     probe = r'''
 import asyncio
@@ -4659,6 +4814,7 @@ async def main():
     assert properties["allocations"]["maxItems"] == 100
     assert properties["payer_name"]["maxLength"] == 256
     assert properties["idempotency_key"]["maxLength"] == 128
+    assert "reference" not in matching[0].inputSchema.get("required", [])
 
     singular = [tool for tool in tools if tool.name == "record_payment"]
     assert len(singular) == 1
