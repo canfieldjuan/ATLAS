@@ -74,6 +74,14 @@ from ...services.commercial_billing_invoice_gmail_sent_reconciliation import (
     CommercialBillingInvoiceGmailSentReconciliationService,
     get_commercial_billing_invoice_gmail_sent_reconciliation_service,
 )
+from ...services.commercial_billing_manual_square_invoices import (
+    CommercialBillingManualSquareInvoiceConflictError,
+    CommercialBillingManualSquareInvoiceNotFoundError,
+    CommercialBillingManualSquareInvoiceService,
+    CommercialBillingManualSquareInvoiceUnavailableError,
+    CommercialBillingManualSquareInvoiceValidationError,
+    get_commercial_billing_manual_square_invoice_service,
+)
 from ...services.eom_lead_ingress import EOM_BUSINESS_CONTEXT_ID
 from ...storage.exceptions import DatabaseUnavailableError
 from .auth import require_actor, require_receivables_api
@@ -180,6 +188,10 @@ class ApproveCommercialBillingCandidateRequest(BaseModel):
 
 class SetCommercialBillingDeliveryPreferenceRequest(BaseModel):
     delivery_method: EOMBillingDeliveryMethod
+
+
+class RecordCommercialBillingManualSquareReferenceRequest(BaseModel):
+    square_invoice_reference: str = Field(min_length=1, max_length=256)
 
 
 def _dollars(amount_cents: int) -> Decimal:
@@ -421,6 +433,41 @@ async def _call_commercial_billing_gmail_sent_reconciliation(awaitable):
             detail={
                 "code": "commercial_billing_gmail_sent_reconciliation_unavailable",
                 "message": "Commercial billing Gmail sent reconciliation database unavailable",
+            },
+        ) from exc
+
+
+async def _call_commercial_billing_manual_square_invoice(awaitable):
+    try:
+        return await awaitable
+    except CommercialBillingManualSquareInvoiceValidationError as exc:
+        raise HTTPException(
+            status_code=422,
+            detail={"code": exc.code, "message": str(exc)},
+        ) from exc
+    except CommercialBillingManualSquareInvoiceNotFoundError as exc:
+        raise HTTPException(
+            status_code=404,
+            detail={"code": exc.code, "message": str(exc)},
+        ) from exc
+    except CommercialBillingManualSquareInvoiceConflictError as exc:
+        raise HTTPException(
+            status_code=409,
+            detail={"code": exc.code, "message": str(exc)},
+        ) from exc
+    except CommercialBillingManualSquareInvoiceUnavailableError as exc:
+        raise HTTPException(
+            status_code=503,
+            detail={"code": exc.code, "message": str(exc)},
+        ) from exc
+    except Exception as exc:
+        if not _is_database_unavailable_error(exc):
+            raise
+        raise HTTPException(
+            status_code=503,
+            detail={
+                "code": "commercial_billing_manual_square_invoice_unavailable",
+                "message": "Commercial billing manual Square database unavailable",
             },
         ) from exc
 
@@ -788,6 +835,72 @@ async def reconcile_commercial_billing_invoice_gmail_draft_sent_mail(
 
     return await _call_commercial_billing_gmail_sent_reconciliation(
         service.reconcile(
+            approval_id=approval_id,
+            idempotency_key=idempotency_key,
+            actor=actor,
+        )
+    )
+
+
+@router.get("/commercial-billing/manual-square-invoices")
+async def list_commercial_billing_manual_square_invoices(
+    limit: int = Query(default=50, ge=1, le=100),
+    offset: int = Query(default=0, ge=0),
+    service: CommercialBillingManualSquareInvoiceService = Depends(
+        get_commercial_billing_manual_square_invoice_service
+    ),
+) -> dict:
+    """List bounded manual-Square delivery work without changing financial state."""
+
+    return await _call_commercial_billing_manual_square_invoice(
+        service.list_needs_square_invoices(limit=limit, offset=offset)
+    )
+
+
+@router.post(
+    "/commercial-billing-approvals/{approval_id}/manual-square-invoice-reference",
+    status_code=201,
+)
+async def record_commercial_billing_manual_square_invoice_reference(
+    approval_id: UUID,
+    body: RecordCommercialBillingManualSquareReferenceRequest,
+    actor: Annotated[str, Depends(require_actor)],
+    idempotency_key: Annotated[
+        str, Header(alias="Idempotency-Key", min_length=1, max_length=128)
+    ],
+    service: CommercialBillingManualSquareInvoiceService = Depends(
+        get_commercial_billing_manual_square_invoice_service
+    ),
+) -> dict:
+    """Record one external Square reference without marking an invoice sent."""
+
+    return await _call_commercial_billing_manual_square_invoice(
+        service.record_reference(
+            approval_id=approval_id,
+            square_invoice_reference=body.square_invoice_reference,
+            idempotency_key=idempotency_key,
+            actor=actor,
+        )
+    )
+
+
+@router.post(
+    "/commercial-billing-approvals/{approval_id}/manual-square-invoice/mark-sent"
+)
+async def mark_commercial_billing_manual_square_invoice_sent(
+    approval_id: UUID,
+    actor: Annotated[str, Depends(require_actor)],
+    idempotency_key: Annotated[
+        str, Header(alias="Idempotency-Key", min_length=1, max_length=128)
+    ],
+    service: CommercialBillingManualSquareInvoiceService = Depends(
+        get_commercial_billing_manual_square_invoice_service
+    ),
+) -> dict:
+    """Explicitly mark one referenced manual-Square invoice sent via Square."""
+
+    return await _call_commercial_billing_manual_square_invoice(
+        service.mark_sent(
             approval_id=approval_id,
             idempotency_key=idempotency_key,
             actor=actor,
