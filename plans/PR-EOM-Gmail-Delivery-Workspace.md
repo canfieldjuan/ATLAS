@@ -33,7 +33,7 @@ Max files: 6
 ### Review Contract
 
 - Acceptance criteria:
-  - [ ] An authenticated request for an existing billing run returns a bounded page of only `gmail_pdf` approvals whose candidate key and source fingerprint exactly match that requested run; an approval originally created from an equivalent earlier run is still returned, and an empty beyond-end page retains the collection total.  Settled by `tests/test_commercial_billing_gmail_drafts.py::test_real_postgres_delivery_state_is_bounded_and_never_calls_gmail` and `tests/test_commercial_billing_gmail_drafts.py::test_real_postgres_delivery_state_reopens_exact_prior_approval_from_a_later_equivalent_run`.
+  - [ ] An authenticated request for an existing billing run returns a bounded page of only `gmail_pdf` approvals whose candidate key and source fingerprint exactly match that requested run; an approval originally created from an equivalent earlier run is still returned, and an empty beyond-end page retains the collection total.  Its page and total derive from one PostgreSQL statement snapshot, so concurrent approvals cannot make an item and total disagree.  Settled by `tests/test_commercial_billing_gmail_drafts.py::test_real_postgres_delivery_state_is_bounded_and_never_calls_gmail`, `tests/test_commercial_billing_gmail_drafts.py::test_real_postgres_delivery_state_total_and_page_share_one_snapshot`, and `tests/test_commercial_billing_gmail_drafts.py::test_real_postgres_delivery_state_reopens_exact_prior_approval_from_a_later_equivalent_run`.
   - [ ] The response returns no PDF bytes and makes no Gmail gateway/load call; it exposes only retained metadata and persisted state.  Settled by `tests/test_commercial_billing_gmail_drafts.py::test_real_postgres_delivery_state_is_bounded_and_never_calls_gmail`.
   - [ ] A `draft_missing` observation remains `gmail_draft_missing`, while only retained `sent_confirmed` evidence with matching ATLAS invoice lifecycle becomes `gmail_sent_confirmed`; inconsistent durable rows are surfaced as `lifecycle_conflict`, never inferred sent.  Settled by `tests/test_commercial_billing_gmail_drafts.py::test_real_postgres_delivery_state_never_infers_sent_from_a_missing_draft`.
   - [ ] Missing runs return the existing 404 error boundary; invalid limits/offsets are rejected before a database/Gmail action; unavailable delivery schema maps to 503.  Settled by focused service and ASGI tests in `tests/test_commercial_billing_gmail_drafts.py`.
@@ -68,7 +68,7 @@ N/A - this slice changes no environment/config fallback.  It uses the already-de
 
 ## Mechanism
 
-`CommercialBillingInvoiceGmailSentReconciliationService.list_delivery_state_for_run()` will first prove the requested immutable run exists, then execute one bounded query rooted at `commercial_billing_run_candidates`.  The join matches `commercial_billing_candidate_approvals` on the candidate's globally exact `(candidate_key, source_fingerprint)` pair rather than only the approval's original `billing_run_id`; this preserves the existing idempotent reuse rule across equivalent regenerated runs.  It filters the linked invoice to the canonical EOM business context and explicit `deliveryMethod: gmail_pdf`, and left-joins the one immutable PDF artifact and one Gmail draft record.
+`CommercialBillingInvoiceGmailSentReconciliationService.list_delivery_state_for_run()` executes one bounded PostgreSQL statement that proves the requested immutable run exists and derives the matching collection, bounded page, and total from the same statement snapshot.  The materialized matching set is rooted at `commercial_billing_run_candidates`; its join matches `commercial_billing_candidate_approvals` on the candidate's globally exact `(candidate_key, source_fingerprint)` pair rather than only the approval's original `billing_run_id`.  This preserves the existing idempotent reuse rule across equivalent regenerated runs while preventing the default `READ COMMITTED` transaction isolation from splitting a page and total across committed states.  It filters the linked invoice to the canonical EOM business context and explicit `deliveryMethod: gmail_pdf`, and left-joins the one immutable PDF artifact and one Gmail draft record.
 
 The response reuses the existing PDF and Gmail-draft metadata projections and the reconciliation service's persistent evidence projection.  It never selects PDF bytes, never calls `get_gmail_transport`, and never invokes a Gmail `drafts` or `messages` endpoint.  `deliveryState` is derived only from persisted artifact/draft/reconciliation/invoice lifecycle facts.  In particular, `draft_missing` stays a recovery observation, while `gmail_sent_confirmed` requires the pre-existing persisted sent proof and matching invoice sent lifecycle.  An invalid/out-of-band relationship yields `lifecycle_conflict` rather than a false delivery claim.
 
@@ -93,8 +93,8 @@ Parked hardening: none.
 
 ## Verification
 
-- Focused durable delivery-state service/route proof: `15 passed` after the beyond-end offset-total regression repair.
-- Existing commercial Gmail draft and sent-reconciliation suite: `101 passed`.
+- Focused durable delivery-state service/route proof: `16 passed` after the beyond-end offset-total and same-snapshot pagination regression repairs.
+- Existing commercial Gmail draft and sent-reconciliation suite: `102 passed`.
 - Adjacent commercial approval/run/Gmail regression suite: `181 passed`.
 - Local Atlas Invoicing Checks mirror: approval blockers `2 passed`; EOM render, receivables, billing-recipient, payment-receipt, and commercial-candidate suite `240 passed`; manual-Square/invoice/PDF suite `117 passed`; MCP/OAuth surface `43 passed`.
 - Changed-path compilation, `ruff`, `git diff --check`, strict guard-class closure lint, and the file maturity lane all passed with zero findings. Plan synchronization and the managed local PR review remain to run immediately before publish.
@@ -106,8 +106,8 @@ Parked hardening: none.
 |---|---:|
 | `atlas_brain/api/invoicing/receivables.py` | 26 |
 | `atlas_brain/services/commercial_billing_invoice_gmail_drafts.py` | 8 |
-| `atlas_brain/services/commercial_billing_invoice_gmail_sent_reconciliation.py` | 431 |
+| `atlas_brain/services/commercial_billing_invoice_gmail_sent_reconciliation.py` | 441 |
 | `atlas_brain/services/commercial_billing_invoice_pdfs.py` | 8 |
 | `plans/PR-EOM-Gmail-Delivery-Workspace.md` | 113 |
-| `tests/test_commercial_billing_gmail_drafts.py` | 398 |
-| **Total** | **984** |
+| `tests/test_commercial_billing_gmail_drafts.py` | 462 |
+| **Total** | **1058** |

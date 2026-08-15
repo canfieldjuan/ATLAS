@@ -503,104 +503,100 @@ class CommercialBillingInvoiceGmailSentReconciliationService:
             )
         try:
             async with self.pool.transaction() as conn:
-                run = await conn.fetchrow(
-                    "SELECT id FROM commercial_billing_runs WHERE id = $1",
-                    billing_run_id,
-                )
-                if run is None:
-                    raise CommercialBillingGmailDeliveryStateNotFoundError(
-                        "Commercial billing run not found"
-                    )
-                total = await conn.fetchval(
-                    """
-                    SELECT COUNT(*)
-                    FROM commercial_billing_run_candidates AS candidate
-                    JOIN commercial_billing_candidate_approvals AS approval
-                      ON approval.candidate_key = candidate.candidate_key
-                     AND approval.source_fingerprint = candidate.source_fingerprint
-                    JOIN invoices AS invoice ON invoice.id = approval.invoice_id
-                    WHERE candidate.billing_run_id = $1
-                      AND approval.state = 'invoice_created'
-                      AND invoice.source = $2
-                      AND invoice.business_context_id = $3
-                      AND invoice.metadata ->> 'deliveryMethod' = $4
-                    """,
-                    billing_run_id,
-                    _INVOICE_SOURCE,
-                    EOM_BUSINESS_CONTEXT_ID,
-                    _DELIVERY_METHOD,
-                )
                 rows = await conn.fetch(
                     """
-                    SELECT candidate.candidate_key,
-                           candidate.source_fingerprint AS candidate_source_fingerprint,
-                           approval.id AS approval_id,
-                           approval.billing_run_id AS approval_billing_run_id,
-                           approval.invoice_id AS approval_invoice_id,
-                           approval.state AS approval_state,
-                           invoice.id AS invoice_id,
-                           invoice.invoice_number,
-                           invoice.status AS invoice_status,
-                           invoice.issue_date AS invoice_issue_date,
-                           invoice.due_date AS invoice_due_date,
-                           invoice.sent_at AS invoice_sent_at,
-                           invoice.sent_via AS invoice_sent_via,
-                           invoice.source AS invoice_source,
-                           invoice.business_context_id AS invoice_business_context_id,
-                           invoice.metadata AS invoice_metadata,
-                           artifact.id AS artifact_id,
-                           artifact.approval_id AS artifact_approval_id,
-                           artifact.artifact_kind,
-                           artifact.state AS artifact_state,
-                           artifact.content_type,
-                           artifact.filename,
-                           artifact.byte_size,
-                           artifact.pdf_sha256,
-                           artifact.render_fingerprint,
-                           artifact.generated_by,
-                           artifact.generated_at,
-                           draft.id AS gmail_draft_record_id,
-                           draft.approval_id AS gmail_draft_approval_id,
-                           draft.artifact_id AS gmail_draft_artifact_id,
-                           draft.state AS gmail_draft_state,
-                           draft.recipient_email,
-                           draft.subject,
-                           draft.rfc_message_id,
-                           draft.gmail_draft_id,
-                           draft.gmail_message_id,
-                           draft.gmail_thread_id,
-                           draft.created_by AS gmail_draft_created_by,
-                           draft.created_at AS gmail_draft_created_at,
-                           draft.last_attempt_by,
-                           draft.last_attempt_at,
-                           draft.draft_created_at,
-                           draft.recovery_required_at,
-                           draft.reconciliation_state,
-                           draft.gmail_sent_message_id,
-                           draft.gmail_sent_thread_id,
-                           draft.gmail_sent_at,
-                           draft.sent_reconciled_by,
-                           draft.sent_reconciled_at,
-                           draft.last_reconciled_by,
-                           draft.last_reconciled_at,
-                           draft.draft_missing_by,
-                           draft.draft_missing_at
-                    FROM commercial_billing_run_candidates AS candidate
-                    JOIN commercial_billing_candidate_approvals AS approval
-                      ON approval.candidate_key = candidate.candidate_key
-                     AND approval.source_fingerprint = candidate.source_fingerprint
-                    JOIN invoices AS invoice ON invoice.id = approval.invoice_id
-                    LEFT JOIN commercial_billing_invoice_pdf_artifacts AS artifact
-                      ON artifact.approval_id = approval.id
-                    LEFT JOIN commercial_billing_invoice_gmail_drafts AS draft
-                      ON draft.approval_id = approval.id
-                    WHERE candidate.billing_run_id = $1
-                      AND approval.state = 'invoice_created'
-                      AND invoice.source = $2
-                      AND invoice.business_context_id = $3
-                      AND invoice.metadata ->> 'deliveryMethod' = $4
-                    ORDER BY candidate.display_order ASC, candidate.candidate_key ASC
-                    LIMIT $5 OFFSET $6
+                    WITH target_run AS MATERIALIZED (
+                        SELECT id
+                        FROM commercial_billing_runs
+                        WHERE id = $1
+                    ),
+                    matching AS MATERIALIZED (
+                        SELECT candidate.candidate_key,
+                               candidate.display_order AS candidate_display_order,
+                               candidate.source_fingerprint AS candidate_source_fingerprint,
+                               approval.id AS approval_id,
+                               approval.billing_run_id AS approval_billing_run_id,
+                               approval.invoice_id AS approval_invoice_id,
+                               approval.state AS approval_state,
+                               invoice.id AS invoice_id,
+                               invoice.invoice_number,
+                               invoice.status AS invoice_status,
+                               invoice.issue_date AS invoice_issue_date,
+                               invoice.due_date AS invoice_due_date,
+                               invoice.sent_at AS invoice_sent_at,
+                               invoice.sent_via AS invoice_sent_via,
+                               invoice.source AS invoice_source,
+                               invoice.business_context_id AS invoice_business_context_id,
+                               invoice.metadata AS invoice_metadata,
+                               artifact.id AS artifact_id,
+                               artifact.approval_id AS artifact_approval_id,
+                               artifact.artifact_kind,
+                               artifact.state AS artifact_state,
+                               artifact.content_type,
+                               artifact.filename,
+                               artifact.byte_size,
+                               artifact.pdf_sha256,
+                               artifact.render_fingerprint,
+                               artifact.generated_by,
+                               artifact.generated_at,
+                               draft.id AS gmail_draft_record_id,
+                               draft.approval_id AS gmail_draft_approval_id,
+                               draft.artifact_id AS gmail_draft_artifact_id,
+                               draft.state AS gmail_draft_state,
+                               draft.recipient_email,
+                               draft.subject,
+                               draft.rfc_message_id,
+                               draft.gmail_draft_id,
+                               draft.gmail_message_id,
+                               draft.gmail_thread_id,
+                               draft.created_by AS gmail_draft_created_by,
+                               draft.created_at AS gmail_draft_created_at,
+                               draft.last_attempt_by,
+                               draft.last_attempt_at,
+                               draft.draft_created_at,
+                               draft.recovery_required_at,
+                               draft.reconciliation_state,
+                               draft.gmail_sent_message_id,
+                               draft.gmail_sent_thread_id,
+                               draft.gmail_sent_at,
+                               draft.sent_reconciled_by,
+                               draft.sent_reconciled_at,
+                               draft.last_reconciled_by,
+                               draft.last_reconciled_at,
+                               draft.draft_missing_by,
+                               draft.draft_missing_at
+                        FROM target_run
+                        JOIN commercial_billing_run_candidates AS candidate
+                          ON candidate.billing_run_id = target_run.id
+                        JOIN commercial_billing_candidate_approvals AS approval
+                          ON approval.candidate_key = candidate.candidate_key
+                         AND approval.source_fingerprint = candidate.source_fingerprint
+                        JOIN invoices AS invoice ON invoice.id = approval.invoice_id
+                        LEFT JOIN commercial_billing_invoice_pdf_artifacts AS artifact
+                          ON artifact.approval_id = approval.id
+                        LEFT JOIN commercial_billing_invoice_gmail_drafts AS draft
+                          ON draft.approval_id = approval.id
+                        WHERE approval.state = 'invoice_created'
+                          AND invoice.source = $2
+                          AND invoice.business_context_id = $3
+                          AND invoice.metadata ->> 'deliveryMethod' = $4
+                    ),
+                    page AS (
+                        SELECT *
+                        FROM matching
+                        ORDER BY candidate_display_order ASC, candidate_key ASC
+                        LIMIT $5 OFFSET $6
+                    ),
+                    summary AS (
+                        SELECT EXISTS (SELECT 1 FROM target_run) AS run_exists,
+                               COUNT(*) AS total_count
+                        FROM matching
+                    )
+                    SELECT page.*, summary.run_exists, summary.total_count
+                    FROM summary
+                    LEFT JOIN page ON TRUE
+                    ORDER BY page.candidate_display_order ASC NULLS LAST,
+                             page.candidate_key ASC NULLS LAST
                     """,
                     billing_run_id,
                     _INVOICE_SOURCE,
@@ -609,7 +605,21 @@ class CommercialBillingInvoiceGmailSentReconciliationService:
                     limit,
                     offset,
                 )
-            items = [self._delivery_item(dict(row)) for row in rows]
+                summary = next(iter(rows), None)
+                if summary is None:
+                    raise CommercialBillingGmailSentReconciliationUnavailableError(
+                        "Commercial billing Gmail delivery state is unavailable"
+                    )
+                if not summary["run_exists"]:
+                    raise CommercialBillingGmailDeliveryStateNotFoundError(
+                        "Commercial billing run not found"
+                    )
+                total = int(summary["total_count"])
+            items = [
+                self._delivery_item(dict(row))
+                for row in rows
+                if row["approval_id"] is not None
+            ]
             return {
                 "billingRunId": str(billing_run_id),
                 "items": items,

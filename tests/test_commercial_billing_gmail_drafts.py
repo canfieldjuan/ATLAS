@@ -123,6 +123,39 @@ class _SchemaPool:
             yield self.connection
 
 
+class _SingleStatementDeliveryStateConnection:
+    def __init__(self, connection) -> None:
+        self._connection = connection
+        self.read_statement_count = 0
+
+    async def fetch(self, query: str, *args):
+        self.read_statement_count += 1
+        if self.read_statement_count > 1:
+            raise AssertionError("delivery-state pagination must use one read statement")
+        return await self._connection.fetch(query, *args)
+
+    async def fetchrow(self, *args, **kwargs):
+        raise AssertionError("delivery-state pagination must not split its read")
+
+    async def fetchval(self, *args, **kwargs):
+        raise AssertionError("delivery-state pagination must not split its read")
+
+    def __getattr__(self, name):
+        return getattr(self._connection, name)
+
+
+class _SingleStatementDeliveryStatePool(_SchemaPool):
+    def __init__(self, connection, schema: str) -> None:
+        super().__init__(connection, schema)
+        self.read_connection = _SingleStatementDeliveryStateConnection(connection)
+
+    @asynccontextmanager
+    async def transaction(self):
+        async with self.connection.transaction():
+            await self.connection.execute(f'SET LOCAL search_path TO "{self.schema}"')
+            yield self.read_connection
+
+
 class _PDFRenderer:
     def __init__(self) -> None:
         self.calls: list[str] = []
@@ -525,6 +558,37 @@ async def test_real_postgres_delivery_state_is_bounded_and_never_calls_gmail():
                 billing_run_id=first["run_id"], offset=-1
             )
         assert gateway_loads == 0
+
+
+@pytest.mark.asyncio
+async def test_real_postgres_delivery_state_total_and_page_share_one_snapshot():
+    async with _gmail_draft_database() as (connection, schema):
+        first = await _seed_approved_invoice(connection, schema)
+        await _seed_approved_invoice(
+            connection,
+            schema,
+            billing_run_id=first["run_id"],
+            display_order=1,
+        )
+        pool = _SingleStatementDeliveryStatePool(connection, schema)
+        service = CommercialBillingInvoiceGmailSentReconciliationService(
+            pool=pool,
+            gateway_loader=lambda: (_ for _ in ()).throw(
+                AssertionError("durable delivery-state reads must not load Gmail")
+            ),
+        )
+
+        page = await service.list_delivery_state_for_run(
+            billing_run_id=first["run_id"], limit=1
+        )
+
+        # DatabasePool.transaction() is READ COMMITTED, so a separate count and
+        # page statement could observe different committed approvals.  This
+        # wrapper admits only one service read statement, which PostgreSQL
+        # evaluates from one statement snapshot.
+        assert pool.read_connection.read_statement_count == 1
+        assert page["total"] == 2
+        assert len(page["items"]) == 1
 
 
 @pytest.mark.asyncio
