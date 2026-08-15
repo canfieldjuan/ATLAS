@@ -780,6 +780,42 @@ async def test_real_postgres_delivery_state_never_infers_sent_from_a_missing_dra
             conflict_by_approval[str(missing["approval_id"])]["deliveryState"]
             == "lifecycle_conflict"
         )
+        assert (
+            "recoveryAction"
+            not in conflict_by_approval[str(missing["approval_id"])]["reconciliation"]
+        )
+
+
+@pytest.mark.asyncio
+async def test_real_postgres_delivery_state_omits_reconciliation_actions_for_all_lifecycle_conflicts():
+    async with _gmail_draft_database() as (connection, schema):
+        seed = await _seed_approved_invoice(connection, schema)
+        await _service(connection, schema, _RecordingGateway()).create_or_reuse(
+            approval_id=seed["approval_id"],
+            idempotency_key="sent-before-reconciliation",
+            actor="Juan",
+        )
+        await connection.execute(
+            "UPDATE invoices SET status = 'sent', sent_at = $2, sent_via = 'gmail' WHERE id = $1",
+            seed["invoice_id"],
+            datetime(2026, 4, 4, tzinfo=timezone.utc),
+        )
+        service = CommercialBillingInvoiceGmailSentReconciliationService(
+            pool=_SchemaPool(connection, schema),
+            gateway_loader=lambda: (_ for _ in ()).throw(
+                AssertionError("durable delivery-state reads must not load Gmail")
+            ),
+        )
+
+        page = await service.list_delivery_state_for_run(
+            billing_run_id=seed["run_id"]
+        )
+
+        item, = page["items"]
+        assert item["deliveryState"] == "lifecycle_conflict"
+        assert item["gmailDraft"]["state"] == "draft_created"
+        assert item["reconciliation"]["state"] == "not_reconciled"
+        assert "recoveryAction" not in item["reconciliation"]
 
 
 @pytest.mark.asyncio

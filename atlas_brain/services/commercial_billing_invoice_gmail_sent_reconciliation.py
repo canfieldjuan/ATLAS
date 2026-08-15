@@ -1196,17 +1196,6 @@ class CommercialBillingInvoiceGmailSentReconciliationService:
         draft, reconciliation, draft_relationships_match = cls._draft_and_reconciliation_view(
             row, approval_id, invoice_id, artifact
         )
-        if reconciliation is not None and (
-            not artifact_is_current
-            or not draft_relationships_match
-            or draft is None
-            or draft.get("state") != "draft_created"
-        ):
-            reconciliation = {
-                key: value
-                for key, value in reconciliation.items()
-                if key != "recoveryAction"
-            }
         delivery_state = cls._delivery_state(
             context_matches=context_matches,
             invoice_status=invoice_status,
@@ -1218,6 +1207,16 @@ class CommercialBillingInvoiceGmailSentReconciliationService:
         )
         if not artifact_is_current or not draft_relationships_match:
             delivery_state = "lifecycle_conflict"
+        if reconciliation is not None and (
+            delivery_state == "lifecycle_conflict"
+            or draft is None
+            or draft.get("state") != "draft_created"
+        ):
+            reconciliation = {
+                key: value
+                for key, value in reconciliation.items()
+                if key != "recoveryAction"
+            }
         if delivery_state not in _DELIVERY_STATES:
             raise CommercialBillingGmailSentReconciliationUnavailableError(
                 "Commercial billing Gmail delivery state is invalid"
