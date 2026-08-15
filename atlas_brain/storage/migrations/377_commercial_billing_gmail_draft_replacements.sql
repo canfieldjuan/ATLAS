@@ -30,6 +30,14 @@ ALTER TABLE commercial_billing_invoice_gmail_drafts
             )
         );
 
+-- Every ordinary create/recover/reuse key is also bound to the exact current
+-- identity generation.  Before H-15 every draft operation necessarily refers
+-- to generation 1, so the default backfills old rows without changing them.
+ALTER TABLE commercial_billing_invoice_gmail_draft_operations
+    ADD COLUMN IF NOT EXISTS draft_generation INTEGER NOT NULL DEFAULT 1,
+    ADD CONSTRAINT commercial_billing_invoice_gmail_draft_operations_generation_check
+        CHECK (draft_generation > 0);
+
 -- A completed reconciliation is an observation of one exact current identity.
 -- Before H-15 there was only generation 1, so this default safely backfills
 -- deployed operations while subsequent inserts persist their observed generation.
@@ -37,6 +45,38 @@ ALTER TABLE commercial_billing_gmail_sent_reconciliation_operations
     ADD COLUMN IF NOT EXISTS draft_generation INTEGER NOT NULL DEFAULT 1,
     ADD CONSTRAINT commercial_billing_gmail_sent_reconciliation_operations_generation_check
         CHECK (draft_generation > 0);
+
+-- A newer completed observation can safely retire an abandoned pending
+-- observation of the same durable identity.  The original idempotency row is
+-- retained with its authenticated supersession actor/timestamp; a replay of it
+-- fails closed instead of blocking missing-draft recovery forever.
+ALTER TABLE commercial_billing_gmail_sent_reconciliation_operations
+    ADD COLUMN IF NOT EXISTS superseded_by VARCHAR(128),
+    ADD COLUMN IF NOT EXISTS superseded_at TIMESTAMPTZ;
+
+ALTER TABLE commercial_billing_gmail_sent_reconciliation_operations
+    DROP CONSTRAINT IF EXISTS cb_gmail_sent_recon_ops_state_check,
+    DROP CONSTRAINT IF EXISTS cb_gmail_sent_recon_ops_outcome_check,
+    ADD CONSTRAINT cb_gmail_sent_recon_ops_state_check
+        CHECK (state IN ('pending', 'completed', 'superseded')),
+    ADD CONSTRAINT cb_gmail_sent_recon_ops_outcome_check
+        CHECK (
+            (state = 'pending'
+                AND outcome_state IS NULL
+                AND completed_at IS NULL
+                AND superseded_by IS NULL
+                AND superseded_at IS NULL)
+            OR (state = 'completed'
+                AND outcome_state IN ('draft_present', 'draft_missing', 'sent_confirmed')
+                AND completed_at IS NOT NULL
+                AND superseded_by IS NULL
+                AND superseded_at IS NULL)
+            OR (state = 'superseded'
+                AND outcome_state IS NULL
+                AND completed_at IS NULL
+                AND length(btrim(COALESCE(superseded_by, ''))) > 0
+                AND superseded_at IS NOT NULL)
+        );
 
 CREATE TABLE commercial_billing_invoice_gmail_draft_replacement_events (
     id UUID PRIMARY KEY DEFAULT gen_random_uuid(),

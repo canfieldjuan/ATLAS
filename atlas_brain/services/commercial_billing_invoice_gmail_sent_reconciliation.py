@@ -43,8 +43,9 @@ _MAX_IDEMPOTENCY_KEY_LENGTH = 128
 _MAX_RFC_MESSAGE_ID_LENGTH = 320
 _MAX_PAGE_SIZE = 100
 MAX_DELIVERY_STATE_OFFSET = 2**63 - 1
-_OPERATION_STATES = frozenset({"pending", "completed"})
+_OPERATION_STATES = frozenset({"pending", "completed", "superseded"})
 _OUTCOME_STATES = frozenset({"draft_present", "draft_missing", "sent_confirmed"})
+_PENDING_OPERATION_LEASE = timedelta(minutes=5)
 _RECONCILIATION_STATES = frozenset(
     {"not_reconciled", "draft_present", "draft_missing", "sent_confirmed"}
 )
@@ -698,7 +699,12 @@ class CommercialBillingInvoiceGmailSentReconciliationService:
                     )
                 self._assert_operation_generation(operation)
                 context = self._context(operation)
-                if _operation_state(operation["operation_state"]) == "completed":
+                operation_state = _operation_state(operation["operation_state"])
+                if operation_state == "superseded":
+                    raise CommercialBillingGmailSentReconciliationConflictError(
+                        "Commercial billing Gmail reconciliation operation was superseded; retry with a new idempotency key"
+                    )
+                if operation_state == "completed":
                     return _PreparedReconciliation(
                         context=context,
                         operation=operation,
@@ -813,6 +819,10 @@ class CommercialBillingInvoiceGmailSentReconciliationService:
     ) -> dict[str, Any]:
         now = self._now_timestamp()
         async with self.pool.transaction() as conn:
+            if outcome.state == "sent_confirmed":
+                await self._lock_invoice_for_sent_reconciliation(
+                    conn, prepared.context.invoice_id
+                )
             await self._lock_approval(conn, prepared.context.approval_id)
             record = await self._find_record_for_id(conn, prepared.context.draft_id)
             if record is None:
@@ -827,7 +837,15 @@ class CommercialBillingInvoiceGmailSentReconciliationService:
                 raise CommercialBillingGmailSentReconciliationUnavailableError(
                     "Commercial billing Gmail reconciliation operation is unavailable"
                 )
+            self._assert_operation_generation(
+                operation,
+                draft_generation=context.draft_generation,
+            )
             operation_state = _operation_state(operation["operation_state"])
+            if operation_state == "superseded":
+                raise CommercialBillingGmailSentReconciliationConflictError(
+                    "Commercial billing Gmail reconciliation operation was superseded; retry with a new idempotency key"
+                )
             if operation_state == "completed":
                 return self._result(
                     record,
@@ -845,6 +863,14 @@ class CommercialBillingInvoiceGmailSentReconciliationService:
                     conn,
                     operation_id=_uuid(operation["operation_id"], "operation id"),
                     outcome_state="sent_confirmed",
+                    now=now,
+                )
+                await self._supersede_expired_pending_operations(
+                    conn,
+                    draft_id=context.draft_id,
+                    draft_generation=context.draft_generation,
+                    except_operation_id=_uuid(operation["operation_id"], "operation id"),
+                    actor=actor,
                     now=now,
                 )
                 return self._result(
@@ -889,6 +915,14 @@ class CommercialBillingInvoiceGmailSentReconciliationService:
                 outcome_state=outcome.state,
                 now=now,
             )
+            await self._supersede_expired_pending_operations(
+                conn,
+                draft_id=context.draft_id,
+                draft_generation=context.draft_generation,
+                except_operation_id=_uuid(operation["operation_id"], "operation id"),
+                actor=actor,
+                now=now,
+            )
             return self._result(
                 record,
                 outcome_state=_stored_text(
@@ -915,6 +949,23 @@ class CommercialBillingInvoiceGmailSentReconciliationService:
             "SELECT pg_advisory_xact_lock(hashtextextended($1, 0))",
             f"commercial-billing-invoice-gmail-draft:approval:{approval_id}",
         )
+
+    @staticmethod
+    async def _lock_invoice_for_sent_reconciliation(conn: Any, invoice_id: UUID) -> None:
+        """Take the invoice row before the shared approval advisory lock.
+
+        A legacy ``UPDATE invoices`` takes its row lock before the migration's
+        trigger acquires that same advisory lock.  Taking the locks in the same
+        order avoids a cycle while preserving the trigger's fail-closed fence.
+        """
+
+        invoice = await conn.fetchrow(
+            "SELECT id FROM invoices WHERE id = $1 FOR UPDATE", invoice_id
+        )
+        if invoice is None:
+            raise CommercialBillingGmailSentReconciliationNotFoundError(
+                "Commercial billing invoice not found"
+            )
 
     @staticmethod
     async def _find_record_for_approval(conn: Any, approval_id: UUID) -> Any | None:
@@ -947,7 +998,8 @@ class CommercialBillingInvoiceGmailSentReconciliationService:
         row = await conn.fetchrow(
             """
             SELECT id AS operation_id, state AS operation_state,
-                   outcome_state AS operation_outcome_state
+                   outcome_state AS operation_outcome_state,
+                   draft_generation AS operation_draft_generation
             FROM commercial_billing_gmail_sent_reconciliation_operations
             WHERE id = $1
             """,
@@ -1027,6 +1079,34 @@ class CommercialBillingInvoiceGmailSentReconciliationService:
             "Commercial billing Gmail reconciliation operation could not be completed"
         )
 
+    @staticmethod
+    async def _supersede_expired_pending_operations(
+        conn: Any,
+        *,
+        draft_id: UUID,
+        draft_generation: int,
+        except_operation_id: UUID,
+        actor: str,
+        now: datetime,
+    ) -> None:
+        await conn.execute(
+            """
+            UPDATE commercial_billing_gmail_sent_reconciliation_operations
+               SET state = 'superseded', superseded_by = $4, superseded_at = $5
+             WHERE gmail_draft_record_id = $1
+               AND draft_generation = $2
+               AND id <> $3
+               AND state = 'pending'
+               AND requested_at <= $6
+            """,
+            draft_id,
+            _draft_generation(draft_generation),
+            except_operation_id,
+            actor,
+            now,
+            now - _PENDING_OPERATION_LEASE,
+        )
+
     async def _confirm_sent(
         self,
         conn: Any,
@@ -1077,6 +1157,7 @@ class CommercialBillingInvoiceGmailSentReconciliationService:
                    last_reconciled_at = $6
              WHERE id = $1 AND state = 'draft_created'
                AND reconciliation_state <> 'sent_confirmed'
+               AND draft_generation = $7
             RETURNING id
             """,
             context.draft_id,
@@ -1085,6 +1166,7 @@ class CommercialBillingInvoiceGmailSentReconciliationService:
             proof.gmail_sent_at,
             actor,
             now,
+            context.draft_generation,
         )
         if row is None:
             raise CommercialBillingGmailSentReconciliationConflictError(
@@ -1116,12 +1198,14 @@ class CommercialBillingInvoiceGmailSentReconciliationService:
                    END
              WHERE id = $1 AND state = 'draft_created'
                AND reconciliation_state <> 'sent_confirmed'
+               AND draft_generation = $5
             RETURNING id
             """,
             context.draft_id,
             outcome_state,
             actor,
             now,
+            context.draft_generation,
         )
         if row is None:
             raise CommercialBillingGmailSentReconciliationConflictError(
@@ -1439,10 +1523,18 @@ class CommercialBillingInvoiceGmailSentReconciliationService:
             )
 
     @staticmethod
-    def _assert_operation_generation(operation: Mapping[str, Any]) -> None:
+    def _assert_operation_generation(
+        operation: Mapping[str, Any],
+        *,
+        draft_generation: int | None = None,
+    ) -> None:
         if _draft_generation(
             operation.get("operation_draft_generation")
-        ) != _draft_generation(operation.get("draft_generation")):
+        ) != _draft_generation(
+            operation.get("draft_generation")
+            if draft_generation is None
+            else draft_generation
+        ):
             raise CommercialBillingGmailSentReconciliationConflictError(
                 "Commercial billing Gmail sent-mail reconciliation replay is stale"
             )

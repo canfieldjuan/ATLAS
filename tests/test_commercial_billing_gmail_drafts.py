@@ -11,7 +11,7 @@ import json
 import os
 import time
 from contextlib import asynccontextmanager
-from datetime import date, datetime, timezone
+from datetime import date, datetime, timedelta, timezone
 from email import message_from_bytes
 from itertools import product
 from pathlib import Path
@@ -262,6 +262,29 @@ class _BlockingGateway(_RecordingGateway):
             "message": {"id": "message-1", "threadId": "thread-1"},
         }
         self.drafts[message_id] = result
+        return result
+
+
+class _PersistThenBlockGateway(_RecordingGateway):
+    """Expose Gmail's accepted identity before the first caller can confirm it."""
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.create_started = asyncio.Event()
+        self.release_first_create = asyncio.Event()
+
+    async def create_draft(self, **kwargs) -> dict:
+        self.create_calls.append(kwargs)
+        message_id = kwargs["headers"]["Message-ID"]
+        sequence = len(self.create_calls)
+        result = {
+            "id": f"draft-{sequence}",
+            "message": {"id": f"message-{sequence}", "threadId": f"thread-{sequence}"},
+        }
+        self.drafts[message_id] = result
+        if sequence == 1:
+            self.create_started.set()
+            await self.release_first_create.wait()
         return result
 
 
@@ -1359,6 +1382,256 @@ async def test_sent_reconciliation_replay_rejects_stale_replacement_generation_b
 
 
 @pytest.mark.asyncio
+async def test_ordinary_gmail_draft_replay_rejects_stale_replacement_generation_before_gmail():
+    async with _gmail_draft_database() as (connection, schema):
+        seed = await _seed_approved_invoice(connection, schema)
+        gateway = _RecordingGateway()
+        original = await _create_and_reconcile_missing_draft(
+            connection,
+            schema,
+            seed=seed,
+            gateway=gateway,
+            draft_key="ordinary-stale-generation",
+        )
+        service = _service(connection, schema, gateway)
+        replacement = await service.replace_missing(
+            approval_id=seed["approval_id"],
+            idempotency_key="ordinary-stale-generation-replacement",
+            actor="Mayra",
+        )
+        before_create_calls = len(gateway.create_calls)
+        before_lookup_calls = list(gateway.lookup_calls)
+
+        with pytest.raises(
+            CommercialBillingGmailDraftConflictError,
+            match="draft replay is stale",
+        ):
+            await service.create_or_reuse(
+                approval_id=seed["approval_id"],
+                idempotency_key="ordinary-stale-generation",
+                actor="Juan",
+            )
+
+        assert original["draft"]["rfcMessageId"] != replacement["draft"]["rfcMessageId"]
+        assert len(gateway.create_calls) == before_create_calls
+        assert gateway.lookup_calls == before_lookup_calls
+        operation = await connection.fetchrow(
+            """
+            SELECT draft_generation
+            FROM commercial_billing_invoice_gmail_draft_operations
+            WHERE source = 'eom_admin' AND idempotency_key = $1
+            """,
+            "ordinary-stale-generation",
+        )
+        assert dict(operation) == {"draft_generation": 1}
+        assert await connection.fetchval(
+            """
+            SELECT draft_generation
+            FROM commercial_billing_invoice_gmail_drafts
+            WHERE approval_id = $1
+            """,
+            seed["approval_id"],
+        ) == 2
+
+
+@pytest.mark.asyncio
+async def test_stale_gmail_create_completion_and_recovery_transition_cannot_touch_new_generation():
+    async with _gmail_draft_database() as (connection, schema):
+        seed = await _seed_approved_invoice(connection, schema)
+        gateway = _PersistThenBlockGateway()
+        service = _service(connection, schema, gateway)
+        first = asyncio.create_task(
+            service.create_or_reuse(
+                approval_id=seed["approval_id"],
+                idempotency_key="stale-create-first",
+                actor="Juan",
+            )
+        )
+        await asyncio.wait_for(gateway.create_started.wait(), timeout=2)
+
+        original_rfc_message_id = gateway.create_calls[0]["headers"]["Message-ID"]
+        confirmed = await service.create_or_reuse(
+            approval_id=seed["approval_id"],
+            idempotency_key="stale-create-duplicate",
+            actor="Mayra",
+        )
+        assert confirmed["draft"]["state"] == "draft_created"
+        gateway.drafts.pop(original_rfc_message_id)
+        missing = await _sent_reconciliation_service(connection, schema, gateway).reconcile(
+            approval_id=seed["approval_id"],
+            idempotency_key="stale-create-missing",
+            actor="Mayra",
+        )
+        assert missing["outcome"] == "draft_missing"
+        replacement = await service.replace_missing(
+            approval_id=seed["approval_id"],
+            idempotency_key="stale-create-replacement",
+            actor="Mayra",
+        )
+        root_id = await connection.fetchval(
+            """
+            SELECT id
+            FROM commercial_billing_invoice_gmail_drafts
+            WHERE approval_id = $1
+            """,
+            seed["approval_id"],
+        )
+        assert root_id is not None
+
+        gateway.release_first_create.set()
+        with pytest.raises(
+            CommercialBillingGmailDraftConflictError,
+            match="completion is stale",
+        ):
+            await first
+        await service._best_effort_transition(
+            root_id,
+            "retryable",
+            "Juan",
+            draft_generation=1,
+        )
+
+        root = await connection.fetchrow(
+            """
+            SELECT state, draft_generation, rfc_message_id
+            FROM commercial_billing_invoice_gmail_drafts
+            WHERE approval_id = $1
+            """,
+            seed["approval_id"],
+        )
+        assert dict(root) == {
+            "state": "draft_created",
+            "draft_generation": 2,
+            "rfc_message_id": replacement["draft"]["rfcMessageId"],
+        }
+
+
+@pytest.mark.asyncio
+async def test_sent_reconciliation_finalization_rejects_a_completed_old_generation_after_replacement():
+    async with _gmail_draft_database() as (connection, schema):
+        seed = await _seed_approved_invoice(connection, schema)
+        gateway = _BlockingSentGateway()
+        await _create_and_reconcile_missing_draft(
+            connection,
+            schema,
+            seed=seed,
+            gateway=_RecordingGateway(),
+            draft_key="stale-finalization-original",
+        )
+        gateway.drafts = {}
+        reconciliation = _sent_reconciliation_service(connection, schema, gateway)
+        first = asyncio.create_task(
+            reconciliation.reconcile(
+                approval_id=seed["approval_id"],
+                idempotency_key="stale-finalization",
+                actor="Juan",
+            )
+        )
+        await asyncio.wait_for(gateway.sent_lookup_started.wait(), timeout=2)
+
+        completed = await reconciliation.reconcile(
+            approval_id=seed["approval_id"],
+            idempotency_key="stale-finalization",
+            actor="Mayra",
+        )
+        assert completed["outcome"] == "draft_missing"
+        replacement = await _service(connection, schema, gateway).replace_missing(
+            approval_id=seed["approval_id"],
+            idempotency_key="stale-finalization-replacement",
+            actor="Mayra",
+        )
+
+        gateway.release_first_lookup.set()
+        with pytest.raises(
+            CommercialBillingGmailSentReconciliationConflictError,
+            match="reconciliation replay is stale",
+        ):
+            await first
+        root = await connection.fetchrow(
+            """
+            SELECT draft_generation, reconciliation_state, rfc_message_id
+            FROM commercial_billing_invoice_gmail_drafts
+            WHERE approval_id = $1
+            """,
+            seed["approval_id"],
+        )
+        assert dict(root) == {
+            "draft_generation": 2,
+            "reconciliation_state": "not_reconciled",
+            "rfc_message_id": replacement["draft"]["rfcMessageId"],
+        }
+
+
+@pytest.mark.asyncio
+async def test_completed_reconciliation_supersedes_an_abandoned_pending_claim_and_unblocks_replacement():
+    async with _gmail_draft_database() as (connection, schema):
+        seed = await _seed_approved_invoice(connection, schema)
+        gateway = _RecordingGateway()
+        await _create_and_reconcile_missing_draft(
+            connection,
+            schema,
+            seed=seed,
+            gateway=gateway,
+            draft_key="superseded-pending-original",
+        )
+        reconciliation = _sent_reconciliation_service(connection, schema, gateway)
+        abandoned_key = "superseded-pending-abandoned"
+        await reconciliation._prepare(
+            approval_id=seed["approval_id"],
+            idempotency_key=abandoned_key,
+            request_fingerprint=_fingerprint({"approvalId": str(seed["approval_id"])}),
+            actor="Juan",
+        )
+        await connection.execute(
+            """
+            UPDATE commercial_billing_gmail_sent_reconciliation_operations
+               SET requested_at = $2
+             WHERE source = 'eom_admin' AND idempotency_key = $1
+            """,
+            abandoned_key,
+            datetime(2026, 4, 2, tzinfo=timezone.utc) - timedelta(minutes=6),
+        )
+
+        completed = await reconciliation.reconcile(
+            approval_id=seed["approval_id"],
+            idempotency_key="superseded-pending-completed",
+            actor="Mayra",
+        )
+        assert completed["outcome"] == "draft_missing"
+        abandoned = await connection.fetchrow(
+            """
+            SELECT state, outcome_state, superseded_by, superseded_at
+            FROM commercial_billing_gmail_sent_reconciliation_operations
+            WHERE source = 'eom_admin' AND idempotency_key = $1
+            """,
+            abandoned_key,
+        )
+        assert abandoned["state"] == "superseded"
+        assert abandoned["outcome_state"] is None
+        assert abandoned["superseded_by"] == "Mayra"
+        assert abandoned["superseded_at"] is not None
+        before_lookup_calls = list(gateway.sent_lookup_calls)
+        with pytest.raises(
+            CommercialBillingGmailSentReconciliationConflictError,
+            match="operation was superseded",
+        ):
+            await reconciliation.reconcile(
+                approval_id=seed["approval_id"],
+                idempotency_key=abandoned_key,
+                actor="Juan",
+            )
+        assert gateway.sent_lookup_calls == before_lookup_calls
+
+        replacement = await _service(connection, schema, gateway).replace_missing(
+            approval_id=seed["approval_id"],
+            idempotency_key="superseded-pending-replacement",
+            actor="Mayra",
+        )
+        assert replacement["draft"]["state"] == "draft_created"
+        assert replacement["replacement"]["replacementGeneration"] == 2
+
+
+@pytest.mark.asyncio
 async def test_replacement_migration_backfills_existing_sent_reconciliation_operations():
     async with _gmail_draft_database(include_replacements=False) as (connection, schema):
         seed = await _seed_approved_invoice(connection, schema)
@@ -1406,6 +1679,20 @@ async def test_replacement_migration_backfills_existing_sent_reconciliation_oper
             _fingerprint({"approvalId": str(seed["approval_id"])}),
             now,
         )
+        await connection.execute(
+            """
+            INSERT INTO commercial_billing_invoice_gmail_draft_operations (
+                id, gmail_draft_record_id, source, idempotency_key,
+                request_fingerprint, requested_by, requested_at, created_at
+            )
+            VALUES ($1, $2, 'eom_admin', 'migration-draft-operation', $3,
+                    'Juan', $4, $4)
+            """,
+            uuid4(),
+            draft_id,
+            _fingerprint({"approvalId": str(seed["approval_id"]), "draft": True}),
+            now,
+        )
         migration = (
             Path(__file__).parents[1]
             / "atlas_brain/storage/migrations/377_commercial_billing_gmail_draft_replacements.sql"
@@ -1427,6 +1714,13 @@ async def test_replacement_migration_backfills_existing_sent_reconciliation_oper
             WHERE id = $1
             """,
             draft_id,
+        ) == 1
+        assert await connection.fetchval(
+            """
+            SELECT draft_generation
+            FROM commercial_billing_invoice_gmail_draft_operations
+            WHERE idempotency_key = 'migration-draft-operation'
+            """
         ) == 1
 
 
@@ -1637,6 +1931,77 @@ async def test_missing_gmail_draft_replacement_blocks_invoice_mutations_until_cr
                 await asyncio.gather(invoice_update, return_exceptions=True)
             if first is not None:
                 await asyncio.gather(first, return_exceptions=True)
+            await writer.close()
+
+
+@pytest.mark.asyncio
+async def test_sent_reconciliation_locks_invoice_before_approval_to_avoid_trigger_cycle(
+    monkeypatch,
+):
+    asyncpg = pytest.importorskip("asyncpg")
+    async with _gmail_draft_database() as (connection, schema):
+        seed = await _seed_approved_invoice(connection, schema)
+        gateway = _RecordingGateway()
+        draft = await _service(connection, schema, gateway).create_or_reuse(
+            approval_id=seed["approval_id"],
+            idempotency_key="lock-order-draft",
+            actor="Juan",
+        )
+        gateway.record_sent(
+            rfc_message_id=draft["draft"]["rfcMessageId"],
+            approval_id=seed["approval_id"],
+            invoice_id=seed["invoice_id"],
+        )
+        reconciliation = _sent_reconciliation_service(connection, schema, gateway)
+        original_lock_approval = reconciliation._lock_approval
+        approval_lock_acquired = asyncio.Event()
+        release_finalization = asyncio.Event()
+        approval_lock_calls = 0
+
+        async def hold_after_finalization_lock(conn, approval_id):
+            nonlocal approval_lock_calls
+            await original_lock_approval(conn, approval_id)
+            approval_lock_calls += 1
+            if approval_lock_calls == 2:
+                approval_lock_acquired.set()
+                await release_finalization.wait()
+
+        monkeypatch.setattr(reconciliation, "_lock_approval", hold_after_finalization_lock)
+        writer = await asyncpg.connect(os.environ["ATLAS_RECEIVABLES_TEST_DATABASE_URL"])
+        await writer.execute(f'SET search_path TO "{schema}"')
+        reconcile_task = None
+        invoice_update = None
+        try:
+            reconcile_task = asyncio.create_task(
+                reconciliation.reconcile(
+                    approval_id=seed["approval_id"],
+                    idempotency_key="lock-order-reconcile",
+                    actor="Mayra",
+                )
+            )
+            await asyncio.wait_for(approval_lock_acquired.wait(), timeout=2)
+            invoice_update = asyncio.create_task(
+                writer.execute(
+                    "UPDATE invoices SET notes = 'concurrent lock-order check' WHERE id = $1",
+                    seed["invoice_id"],
+                )
+            )
+            await asyncio.sleep(0.05)
+            assert not invoice_update.done()
+
+            release_finalization.set()
+            result = await asyncio.wait_for(reconcile_task, timeout=4)
+            await asyncio.wait_for(invoice_update, timeout=4)
+            assert result["outcome"] == "sent_confirmed"
+            assert await connection.fetchval(
+                "SELECT status FROM invoices WHERE id = $1", seed["invoice_id"]
+            ) == "sent"
+        finally:
+            release_finalization.set()
+            if reconcile_task is not None:
+                await asyncio.gather(reconcile_task, return_exceptions=True)
+            if invoice_update is not None:
+                await asyncio.gather(invoice_update, return_exceptions=True)
             await writer.close()
 
 
@@ -2813,8 +3178,12 @@ def test_missing_gmail_draft_replacement_migration_is_atomic_append_only_and_non
     )
     assert migration.splitlines()[0] == "-- atlas: atomic-bookkeeping"
     assert "ADD COLUMN IF NOT EXISTS draft_generation" in migration
+    assert "ALTER TABLE commercial_billing_invoice_gmail_draft_operations" in migration
+    assert "commercial_billing_invoice_gmail_draft_operations_generation_check" in migration
     assert "ALTER TABLE commercial_billing_gmail_sent_reconciliation_operations" in migration
     assert "ADD COLUMN IF NOT EXISTS draft_generation INTEGER NOT NULL DEFAULT 1" in migration
+    assert "ADD COLUMN IF NOT EXISTS superseded_by VARCHAR(128)" in migration
+    assert "CHECK (state IN ('pending', 'completed', 'superseded'))" in migration
     assert (
         "CREATE TABLE commercial_billing_invoice_gmail_draft_replacement_events"
         in migration

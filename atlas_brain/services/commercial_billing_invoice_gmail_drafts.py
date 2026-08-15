@@ -142,6 +142,7 @@ class _DraftContext:
     artifact: ReadyCommercialBillingInvoicePDFArtifact
     body: str
     html: str
+    generation: int
     recipient_email: str
     rfc_message_id: str
     subject: str
@@ -478,6 +479,13 @@ class CommercialBillingInvoiceGmailDraftService:
             operation = await self._find_operation(conn, idempotency_key)
             if operation is not None:
                 self._assert_operation(operation, approval_id, request_fingerprint)
+                await self._lock(conn, f"approval:{approval_id}")
+                operation = await self._find_operation(conn, idempotency_key)
+                if operation is None:
+                    raise CommercialBillingGmailDraftUnavailableError(
+                        "Commercial billing Gmail draft operation is unavailable"
+                    )
+                self._assert_operation_generation(operation)
                 state = self._state(operation)
                 if state == "draft_created":
                     return _PreparedDraft(
@@ -486,18 +494,20 @@ class CommercialBillingInvoiceGmailDraftService:
                         replayed=True,
                         action="return",
                     )
-                await self._lock(conn, f"approval:{approval_id}")
                 if state == "retryable":
                     context = await self._current_context(
                         conn,
                         approval_id,
                         generation=_draft_generation(
-                            operation.get("draft_generation", 1)
+                            operation.get("operation_draft_generation")
                         ),
                     )
                     self._assert_context(operation, context)
                     claimed = await self._claim_retryable(
-                        conn, _uuid(operation["id"], "record id"), actor
+                        conn,
+                        _uuid(operation["id"], "record id"),
+                        actor,
+                        draft_generation=context.generation,
                     )
                     return _PreparedDraft(
                         context=context,
@@ -520,6 +530,7 @@ class CommercialBillingInvoiceGmailDraftService:
                 await self._insert_operation(
                     conn,
                     record_id=_uuid(record["id"], "record id"),
+                    draft_generation=_draft_generation(record["draft_generation"]),
                     idempotency_key=idempotency_key,
                     request_fingerprint=request_fingerprint,
                     actor=actor,
@@ -540,6 +551,7 @@ class CommercialBillingInvoiceGmailDraftService:
             await self._insert_operation(
                 conn,
                 record_id=_uuid(record["id"], "record id"),
+                draft_generation=_draft_generation(record["draft_generation"]),
                 idempotency_key=idempotency_key,
                 request_fingerprint=request_fingerprint,
                 actor=actor,
@@ -554,7 +566,10 @@ class CommercialBillingInvoiceGmailDraftService:
                 )
             if state == "retryable":
                 claimed = await self._claim_retryable(
-                    conn, _uuid(record["id"], "record id"), actor
+                    conn,
+                    _uuid(record["id"], "record id"),
+                    actor,
+                    draft_generation=context.generation,
                 )
                 return _PreparedDraft(
                     context=context,
@@ -635,6 +650,7 @@ class CommercialBillingInvoiceGmailDraftService:
                         conn,
                         _uuid(operation["id"], "record id"),
                         actor,
+                        draft_generation=context.generation,
                     )
                     return _PreparedDraft(
                         context=context,
@@ -679,6 +695,7 @@ class CommercialBillingInvoiceGmailDraftService:
             operation_id = await self._insert_operation(
                 conn,
                 record_id=_uuid(record["id"], "record id"),
+                draft_generation=prior_generation + 1,
                 idempotency_key=idempotency_key,
                 request_fingerprint=request_fingerprint,
                 actor=actor,
@@ -713,7 +730,12 @@ class CommercialBillingInvoiceGmailDraftService:
         try:
             gateway = self._gateway_loader()
         except Exception as exc:
-            await self._best_effort_transition(record_id, "retryable", actor)
+            await self._best_effort_transition(
+                record_id,
+                "retryable",
+                actor,
+                draft_generation=prepared.context.generation,
+            )
             raise CommercialBillingGmailDraftUnavailableError(
                 "Gmail draft transport is unavailable; retry is safe"
             ) from exc
@@ -743,16 +765,31 @@ class CommercialBillingInvoiceGmailDraftService:
             )
         except GmailDraftCreateError as exc:
             if exc.definitely_not_created:
-                await self._best_effort_transition(record_id, "retryable", actor)
+                await self._best_effort_transition(
+                    record_id,
+                    "retryable",
+                    actor,
+                    draft_generation=prepared.context.generation,
+                )
                 raise CommercialBillingGmailDraftUnavailableError(
                     "Gmail draft creation failed before acceptance; retry is safe"
                 ) from exc
-            await self._best_effort_transition(record_id, "recovery_required", actor)
+            await self._best_effort_transition(
+                record_id,
+                "recovery_required",
+                actor,
+                draft_generation=prepared.context.generation,
+            )
             raise CommercialBillingGmailDraftRecoveryRequiredError(
                 "Gmail draft creation outcome is uncertain; recover it by its Message-ID"
             ) from exc
         except Exception as exc:
-            await self._best_effort_transition(record_id, "recovery_required", actor)
+            await self._best_effort_transition(
+                record_id,
+                "recovery_required",
+                actor,
+                draft_generation=prepared.context.generation,
+            )
             raise CommercialBillingGmailDraftRecoveryRequiredError(
                 "Gmail draft creation outcome is uncertain; recover it by its Message-ID"
             ) from exc
@@ -760,14 +797,29 @@ class CommercialBillingInvoiceGmailDraftService:
         try:
             identity = _gateway_identity(result)
         except CommercialBillingGmailDraftRecoveryRequiredError as exc:
-            await self._best_effort_transition(record_id, "recovery_required", actor)
+            await self._best_effort_transition(
+                record_id,
+                "recovery_required",
+                actor,
+                draft_generation=prepared.context.generation,
+            )
             raise exc
         try:
-            confirmed = await self._confirm_draft(record_id, identity, actor)
+            confirmed = await self._confirm_draft(
+                record_id,
+                identity,
+                actor,
+                draft_generation=prepared.context.generation,
+            )
         except CommercialBillingGmailDraftError:
             raise
         except Exception as exc:
-            await self._best_effort_transition(record_id, "recovery_required", actor)
+            await self._best_effort_transition(
+                record_id,
+                "recovery_required",
+                actor,
+                draft_generation=prepared.context.generation,
+            )
             raise CommercialBillingGmailDraftRecoveryRequiredError(
                 "Gmail draft may exist but confirmation failed; recover it by its Message-ID"
             ) from exc
@@ -784,6 +836,7 @@ class CommercialBillingInvoiceGmailDraftService:
         actor: str,
     ) -> dict[str, Any]:
         record_id = _uuid(prepared.record["id"], "record id")
+        draft_generation = _draft_generation(prepared.record["draft_generation"])
         rfc_message_id = _stored_text(
             prepared.record["rfc_message_id"], "RFC Message-ID", limit=320
         )
@@ -791,26 +844,51 @@ class CommercialBillingInvoiceGmailDraftService:
             gateway = self._gateway_loader()
             result = await gateway.find_draft_by_rfc_message_id(rfc_message_id)
         except Exception as exc:
-            await self._best_effort_transition(record_id, "recovery_required", actor)
+            await self._best_effort_transition(
+                record_id,
+                "recovery_required",
+                actor,
+                draft_generation=draft_generation,
+            )
             raise CommercialBillingGmailDraftRecoveryRequiredError(
                 "Gmail draft lookup failed; recover it by its Message-ID"
             ) from exc
         if result is None:
-            await self._best_effort_transition(record_id, "recovery_required", actor)
+            await self._best_effort_transition(
+                record_id,
+                "recovery_required",
+                actor,
+                draft_generation=draft_generation,
+            )
             raise CommercialBillingGmailDraftRecoveryRequiredError(
                 "Gmail draft was not found; it may be missing or require reconciliation"
             )
         try:
             identity = _gateway_identity(result)
         except CommercialBillingGmailDraftRecoveryRequiredError as exc:
-            await self._best_effort_transition(record_id, "recovery_required", actor)
+            await self._best_effort_transition(
+                record_id,
+                "recovery_required",
+                actor,
+                draft_generation=draft_generation,
+            )
             raise exc
         try:
-            confirmed = await self._confirm_draft(record_id, identity, actor)
+            confirmed = await self._confirm_draft(
+                record_id,
+                identity,
+                actor,
+                draft_generation=draft_generation,
+            )
         except CommercialBillingGmailDraftError:
             raise
         except Exception as exc:
-            await self._best_effort_transition(record_id, "recovery_required", actor)
+            await self._best_effort_transition(
+                record_id,
+                "recovery_required",
+                actor,
+                draft_generation=draft_generation,
+            )
             raise CommercialBillingGmailDraftRecoveryRequiredError(
                 "Gmail draft was found but could not be confirmed; retry recovery"
             ) from exc
@@ -866,6 +944,7 @@ class CommercialBillingInvoiceGmailDraftService:
             artifact=artifact,
             body=body,
             html=html,
+            generation=_draft_generation(generation),
             recipient_email=recipient_email,
             rfc_message_id=_rfc_message_id(
                 artifact.approval_id,
@@ -892,6 +971,7 @@ class CommercialBillingInvoiceGmailDraftService:
             """
             SELECT operation.id AS operation_id,
                    operation.request_fingerprint AS operation_request_fingerprint,
+                   operation.draft_generation AS operation_draft_generation,
                    draft.id, draft.approval_id, draft.artifact_id, draft.state,
                    draft.recipient_email, draft.subject, draft.rfc_message_id,
                    draft.gmail_draft_id, draft.gmail_message_id,
@@ -980,6 +1060,7 @@ class CommercialBillingInvoiceGmailDraftService:
         conn: Any,
         *,
         record_id: UUID,
+        draft_generation: int,
         idempotency_key: str,
         request_fingerprint: str,
         actor: str,
@@ -991,9 +1072,10 @@ class CommercialBillingInvoiceGmailDraftService:
             """
             INSERT INTO commercial_billing_invoice_gmail_draft_operations (
                 id, gmail_draft_record_id, source, idempotency_key,
-                request_fingerprint, requested_by, requested_at, created_at
+                request_fingerprint, draft_generation, requested_by, requested_at,
+                created_at
             )
-            VALUES ($1, $2, $3, $4, $5, $6, $7, $7)
+            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $8)
             RETURNING id
             """,
             operation_id,
@@ -1001,6 +1083,7 @@ class CommercialBillingInvoiceGmailDraftService:
             source,
             idempotency_key,
             request_fingerprint,
+            _draft_generation(draft_generation),
             actor,
             now,
         )
@@ -1015,14 +1098,21 @@ class CommercialBillingInvoiceGmailDraftService:
             )
         return returned
 
-    async def _claim_retryable(self, conn: Any, record_id: UUID, actor: str) -> Any:
+    async def _claim_retryable(
+        self,
+        conn: Any,
+        record_id: UUID,
+        actor: str,
+        *,
+        draft_generation: int,
+    ) -> Any:
         now = self._timestamp()
         row = await conn.fetchrow(
             """
             UPDATE commercial_billing_invoice_gmail_drafts
                SET state = 'creating', last_attempt_by = $2, last_attempt_at = $3,
                    recovery_required_at = NULL
-             WHERE id = $1 AND state = 'retryable'
+             WHERE id = $1 AND state = 'retryable' AND draft_generation = $4
             RETURNING id, approval_id, artifact_id, state, recipient_email,
                       subject, rfc_message_id, gmail_draft_id, gmail_message_id,
                       gmail_thread_id, created_by, created_at, last_attempt_by,
@@ -1036,6 +1126,7 @@ class CommercialBillingInvoiceGmailDraftService:
             record_id,
             actor,
             now,
+            _draft_generation(draft_generation),
         )
         if row is None:
             raise CommercialBillingGmailDraftConflictError(
@@ -1048,6 +1139,8 @@ class CommercialBillingInvoiceGmailDraftService:
         record_id: UUID,
         identity: Mapping[str, str],
         actor: str,
+        *,
+        draft_generation: int,
     ) -> Any:
         now = self._timestamp()
         async with self.pool.transaction() as conn:
@@ -1063,6 +1156,11 @@ class CommercialBillingInvoiceGmailDraftService:
                 raise CommercialBillingGmailDraftUnavailableError(
                     "Commercial billing Gmail draft intent is unavailable"
                 )
+            expected_generation = _draft_generation(draft_generation)
+            if _draft_generation(record["draft_generation"]) != expected_generation:
+                raise CommercialBillingGmailDraftConflictError(
+                    "Commercial billing Gmail draft completion is stale"
+                )
             state = self._state(record)
             if state == "draft_created":
                 if all(record[field] == identity[field] for field in identity):
@@ -1077,7 +1175,8 @@ class CommercialBillingInvoiceGmailDraftService:
                        gmail_message_id = $3, gmail_thread_id = $4,
                        last_attempt_by = $5, last_attempt_at = $6,
                        draft_created_at = $6, recovery_required_at = NULL
-                 WHERE id = $1 AND state IN ('creating', 'retryable', 'recovery_required')
+                 WHERE id = $1 AND draft_generation = $7
+                   AND state IN ('creating', 'retryable', 'recovery_required')
                 RETURNING id, approval_id, artifact_id, state, recipient_email,
                           subject, rfc_message_id, gmail_draft_id, gmail_message_id,
                           gmail_thread_id, created_by, created_at, last_attempt_by,
@@ -1094,6 +1193,7 @@ class CommercialBillingInvoiceGmailDraftService:
                 identity["gmail_thread_id"],
                 actor,
                 now,
+                expected_generation,
             )
             if row is None:
                 raise CommercialBillingGmailDraftConflictError(
@@ -1260,6 +1360,8 @@ class CommercialBillingInvoiceGmailDraftService:
         record_id: UUID,
         state: str,
         actor: str,
+        *,
+        draft_generation: int,
     ) -> None:
         """Record recovery evidence without masking the original transport error."""
 
@@ -1267,10 +1369,18 @@ class CommercialBillingInvoiceGmailDraftService:
             now = self._timestamp()
             async with self.pool.transaction() as conn:
                 record = await self._find_record_for_id(conn, record_id)
-                if record is None or self._state(record) == "draft_created":
+                if record is None:
                     return
                 approval_id = _uuid(record["approval_id"], "approval id")
                 await self._lock(conn, f"approval:{approval_id}")
+                record = await self._find_record_for_id(conn, record_id)
+                if (
+                    record is None
+                    or self._state(record) == "draft_created"
+                    or _draft_generation(record["draft_generation"])
+                    != _draft_generation(draft_generation)
+                ):
+                    return
                 if state == "retryable":
                     await conn.execute(
                         """
@@ -1279,10 +1389,12 @@ class CommercialBillingInvoiceGmailDraftService:
                                last_attempt_at = $3, recovery_required_at = NULL
                          WHERE id = $1
                            AND state IN ('creating', 'recovery_required')
+                           AND draft_generation = $4
                         """,
                         record_id,
                         actor,
                         now,
+                        _draft_generation(draft_generation),
                     )
                 elif state == "recovery_required":
                     await conn.execute(
@@ -1292,10 +1404,12 @@ class CommercialBillingInvoiceGmailDraftService:
                                last_attempt_at = $3, recovery_required_at = $3
                          WHERE id = $1
                            AND state IN ('creating', 'retryable', 'recovery_required')
+                           AND draft_generation = $4
                         """,
                         record_id,
                         actor,
                         now,
+                        _draft_generation(draft_generation),
                     )
                 else:
                     raise CommercialBillingGmailDraftConflictError(
@@ -1322,6 +1436,15 @@ class CommercialBillingInvoiceGmailDraftService:
         if _uuid(operation.get("approval_id"), "approval id") != approval_id:
             raise CommercialBillingGmailDraftConflictError(
                 "Idempotency key was already used with a different commercial billing approval"
+            )
+
+    @staticmethod
+    def _assert_operation_generation(operation: Mapping[str, Any]) -> None:
+        if _draft_generation(operation.get("operation_draft_generation")) != _draft_generation(
+            operation.get("draft_generation")
+        ):
+            raise CommercialBillingGmailDraftConflictError(
+                "Commercial billing Gmail draft replay is stale"
             )
 
     @staticmethod
@@ -1401,6 +1524,7 @@ class CommercialBillingInvoiceGmailDraftService:
         expected = {
             "approval_id": context.artifact.approval_id,
             "artifact_id": context.artifact.artifact_id,
+            "draft_generation": context.generation,
             "recipient_email": context.recipient_email,
             "subject": context.subject,
             "rfc_message_id": context.rfc_message_id,
