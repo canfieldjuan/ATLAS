@@ -34,13 +34,18 @@ it should be.
 
 Ownership lane: security/dependency-noise
 Slice phase: Workflow/process
-Max files: 93
+Max files: 95
 
 1. Delete `_ARCHIVED_atlas-intel-next/` — 91 tracked files, ~1.1 MB, last
    touched 2026-06-16 (`f253164c1`).
 2. Update `docs/SECURITY_GUARDRAILS.md`, whose "Continuous Updates" section
    states the Dependabot-exclusion policy this replaces.
-3. This plan document.
+3. Remove the two stale repository-map entries this deletion orphans:
+   `README.md`'s directory tree and `docs/product_context_pack.md`'s
+   "Relevant code and product surfaces" list. Both name the bare
+   `atlas-intel-next/` (no `_ARCHIVED_` prefix) as a current, relevant path;
+   after this PR no directory of either name exists.
+4. This plan document.
 
 Not in this PR: the rest of ATLAS #2375 — bumping `transformers` and
 `cryptography` in root `requirements.txt` (2 critical / 22 high), and deciding
@@ -81,6 +86,7 @@ touched. `requirements.eom.txt` (the EOM slim profile) and root
 `requirements.txt` are untouched by this PR.
 ### Files touched
 
+- `README.md`
 - `_ARCHIVED_atlas-intel-next/.gitignore`
 - `_ARCHIVED_atlas-intel-next/.gitkeep`
 - `_ARCHIVED_atlas-intel-next/AGENTS.md`
@@ -173,6 +179,7 @@ touched. `requirements.eom.txt` (the EOM slim profile) and root
 - `_ARCHIVED_atlas-intel-next/tsconfig.json`
 - `_ARCHIVED_atlas-intel-next/vercel.json`
 - `docs/SECURITY_GUARDRAILS.md`
+- `docs/product_context_pack.md`
 - `plans/PR-Drop-Archived-Intel-Next.md`
 
 ## Mechanism
@@ -221,6 +228,15 @@ Parked hardening: none.
   returns only documentation — `HARDENING.md` (dated log), this PR's
   `docs/SECURITY_GUARDRAILS.md` update, and `plans/archive/`. **No code, no
   workflow, no config.**
+- That search used the prefixed name only, and missed two files naming the
+  BARE `atlas-intel-next` (no prefix): `README.md`'s directory tree and
+  `docs/product_context_pack.md`'s relevant-surfaces list. An independent
+  review caught this; a repo-wide sweep for the bare name found no further
+  live references — the remaining hits are the gitleaks baseline (a
+  historical secret-scan record keyed to a specific commit,
+  `20c8f7a3b`, not a live path) and the already-reviewed `HARDENING.md` /
+  `plans/archive/` / `scripts/migrate_bundled_posts_to_db.py`. Both live
+  references are now removed.
 - `.github/workflows/npm_package_checks.yml` matrix lists `atlas-admin-ui`, `atlas-churn-ui`,
   `atlas-mobile`, `atlas-ui` — the deleted tree was never a target.
 - `.github/dependabot.yml` has no entry for the path, matching what
@@ -234,6 +250,7 @@ Parked hardening: none.
 
 | File | LOC |
 |---|---:|
+| `README.md` | 1 |
 | `_ARCHIVED_atlas-intel-next/.gitignore` | 41 |
 | `_ARCHIVED_atlas-intel-next/.gitkeep` | 1 |
 | `_ARCHIVED_atlas-intel-next/AGENTS.md` | 5 |
@@ -326,5 +343,6 @@ Parked hardening: none.
 | `_ARCHIVED_atlas-intel-next/tsconfig.json` | 34 |
 | `_ARCHIVED_atlas-intel-next/vercel.json` | 3 |
 | `docs/SECURITY_GUARDRAILS.md` | 15 |
-| `plans/PR-Drop-Archived-Intel-Next.md` | 330 |
-| **Total** | **29170** |
+| `docs/product_context_pack.md` | 1 |
+| `plans/PR-Drop-Archived-Intel-Next.md` | 344 |
+| **Total** | **29186** |

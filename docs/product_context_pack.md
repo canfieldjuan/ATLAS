@@ -30,7 +30,6 @@ Relevant code and product surfaces in this repo:
 
 - `atlas_brain/`
 - `atlas-churn-ui/`
-- `atlas-intel-next/`
 - selected B2B pages in `atlas-intel-ui/`
 
 ---
