@@ -511,6 +511,25 @@ class CommercialBillingInvoiceGmailSentReconciliationService:
                     raise CommercialBillingGmailDeliveryStateNotFoundError(
                         "Commercial billing run not found"
                     )
+                total = await conn.fetchval(
+                    """
+                    SELECT COUNT(*)
+                    FROM commercial_billing_run_candidates AS candidate
+                    JOIN commercial_billing_candidate_approvals AS approval
+                      ON approval.candidate_key = candidate.candidate_key
+                     AND approval.source_fingerprint = candidate.source_fingerprint
+                    JOIN invoices AS invoice ON invoice.id = approval.invoice_id
+                    WHERE candidate.billing_run_id = $1
+                      AND approval.state = 'invoice_created'
+                      AND invoice.source = $2
+                      AND invoice.business_context_id = $3
+                      AND invoice.metadata ->> 'deliveryMethod' = $4
+                    """,
+                    billing_run_id,
+                    _INVOICE_SOURCE,
+                    EOM_BUSINESS_CONTEXT_ID,
+                    _DELIVERY_METHOD,
+                )
                 rows = await conn.fetch(
                     """
                     SELECT candidate.candidate_key,
@@ -565,8 +584,7 @@ class CommercialBillingInvoiceGmailSentReconciliationService:
                            draft.last_reconciled_by,
                            draft.last_reconciled_at,
                            draft.draft_missing_by,
-                           draft.draft_missing_at,
-                           COUNT(*) OVER() AS total_count
+                           draft.draft_missing_at
                     FROM commercial_billing_run_candidates AS candidate
                     JOIN commercial_billing_candidate_approvals AS approval
                       ON approval.candidate_key = candidate.candidate_key
@@ -597,7 +615,7 @@ class CommercialBillingInvoiceGmailSentReconciliationService:
                 "items": items,
                 "limit": limit,
                 "offset": offset,
-                "total": int(rows[0]["total_count"]) if rows else 0,
+                "total": int(total),
             }
         except CommercialBillingGmailSentReconciliationError:
             raise

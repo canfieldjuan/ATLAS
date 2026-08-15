@@ -490,6 +490,9 @@ async def test_real_postgres_delivery_state_is_bounded_and_never_calls_gmail():
         second_page = await service.list_delivery_state_for_run(
             billing_run_id=first["run_id"], limit=1, offset=1
         )
+        empty_page = await service.list_delivery_state_for_run(
+            billing_run_id=first["run_id"], limit=1, offset=2
+        )
 
         assert first_page["total"] == 2
         assert first_page["limit"] == 1
@@ -502,6 +505,13 @@ async def test_real_postgres_delivery_state_is_bounded_and_never_calls_gmail():
         assert first_page["items"][0]["deliveryState"] == "needs_gmail_draft"
         assert first_page["items"][0]["pdf"]["state"] == "ready"
         assert first_page["items"][0]["gmailDraft"] is None
+        assert empty_page == {
+            "billingRunId": str(first["run_id"]),
+            "items": [],
+            "limit": 1,
+            "offset": 2,
+            "total": 2,
+        }
         assert "pdf_bytes" not in json.dumps(first_page).casefold()
         assert "pdfbytes" not in json.dumps(first_page).casefold()
         assert gateway_loads == 0
