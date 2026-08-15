@@ -67,6 +67,7 @@ from ...services.commercial_billing_invoice_gmail_drafts import (
     get_commercial_billing_invoice_gmail_draft_service,
 )
 from ...services.commercial_billing_invoice_gmail_sent_reconciliation import (
+    CommercialBillingGmailDeliveryStateNotFoundError,
     CommercialBillingGmailSentReconciliationConflictError,
     CommercialBillingGmailSentReconciliationNotFoundError,
     CommercialBillingGmailSentReconciliationUnavailableError,
@@ -405,6 +406,11 @@ async def _call_commercial_billing_gmail_draft(awaitable):
 async def _call_commercial_billing_gmail_sent_reconciliation(awaitable):
     try:
         return await awaitable
+    except CommercialBillingGmailDeliveryStateNotFoundError as exc:
+        raise HTTPException(
+            status_code=404,
+            detail={"code": exc.code, "message": str(exc)},
+        ) from exc
     except CommercialBillingGmailSentReconciliationValidationError as exc:
         raise HTTPException(
             status_code=422,
@@ -838,6 +844,26 @@ async def reconcile_commercial_billing_invoice_gmail_draft_sent_mail(
             approval_id=approval_id,
             idempotency_key=idempotency_key,
             actor=actor,
+        )
+    )
+
+
+@router.get("/commercial-billing-runs/{billing_run_id}/gmail-delivery-state")
+async def list_commercial_billing_gmail_delivery_state(
+    billing_run_id: UUID,
+    limit: int = Query(default=50, ge=1, le=100),
+    offset: int = Query(default=0, ge=0),
+    service: CommercialBillingInvoiceGmailSentReconciliationService = Depends(
+        get_commercial_billing_invoice_gmail_sent_reconciliation_service
+    ),
+) -> dict:
+    """Return durable Gmail delivery evidence for one immutable review run."""
+
+    return await _call_commercial_billing_gmail_sent_reconciliation(
+        service.list_delivery_state_for_run(
+            billing_run_id=billing_run_id,
+            limit=limit,
+            offset=offset,
         )
     )
 

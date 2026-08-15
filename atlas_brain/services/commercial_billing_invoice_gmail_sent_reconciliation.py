@@ -24,6 +24,11 @@ from ..tools.gmail import (
     GmailSentMessageLookupError,
     get_gmail_transport,
 )
+from .commercial_billing_invoice_gmail_drafts import (
+    CommercialBillingInvoiceGmailDraftService,
+)
+from .commercial_billing_invoice_pdfs import CommercialBillingInvoicePDFService
+from .eom_lead_ingress import EOM_BUSINESS_CONTEXT_ID
 
 
 _DELIVERY_METHOD = "gmail_pdf"
@@ -33,6 +38,7 @@ _MAX_ACTOR_LENGTH = 128
 _MAX_GMAIL_ID_LENGTH = 256
 _MAX_IDEMPOTENCY_KEY_LENGTH = 128
 _MAX_RFC_MESSAGE_ID_LENGTH = 320
+_MAX_PAGE_SIZE = 100
 _OPERATION_STATES = frozenset({"pending", "completed"})
 _OUTCOME_STATES = frozenset({"draft_present", "draft_missing", "sent_confirmed"})
 _RECONCILIATION_STATES = frozenset(
@@ -40,6 +46,20 @@ _RECONCILIATION_STATES = frozenset(
 )
 _POST_SEND_INVOICE_STATUSES = frozenset(
     {"sent", "partial", "overdue", "paid", "void"}
+)
+_DELIVERY_STATES = frozenset(
+    {
+        "needs_pdf",
+        "needs_gmail_draft",
+        "gmail_draft_creating",
+        "gmail_draft_retryable",
+        "gmail_draft_recovery_required",
+        "gmail_draft_not_reconciled",
+        "gmail_draft_present",
+        "gmail_draft_missing",
+        "gmail_sent_confirmed",
+        "lifecycle_conflict",
+    }
 )
 _DATABASE_UNAVAILABLE_ERRORS = (
     DatabaseOperationError,
@@ -117,6 +137,12 @@ class CommercialBillingGmailSentReconciliationNotFoundError(
     CommercialBillingGmailSentReconciliationError
 ):
     code = "commercial_billing_gmail_draft_not_found"
+
+
+class CommercialBillingGmailDeliveryStateNotFoundError(
+    CommercialBillingGmailSentReconciliationError
+):
+    code = "commercial_billing_run_not_found"
 
 
 class CommercialBillingGmailSentReconciliationConflictError(
@@ -435,6 +461,146 @@ class CommercialBillingInvoiceGmailSentReconciliationService:
             raise CommercialBillingGmailSentReconciliationConflictError(
                 "Commercial billing Gmail reconciliation could not be reconciled"
             ) from exc
+        except asyncpg.PostgresError as exc:
+            raise CommercialBillingGmailSentReconciliationUnavailableError(
+                "Commercial billing database unavailable"
+            ) from exc
+        except _DATABASE_UNAVAILABLE_ERRORS as exc:
+            raise CommercialBillingGmailSentReconciliationUnavailableError(
+                "Commercial billing database unavailable"
+            ) from exc
+
+    async def list_delivery_state_for_run(
+        self,
+        *,
+        billing_run_id: UUID,
+        limit: int = 50,
+        offset: int = 0,
+    ) -> dict[str, Any]:
+        """Return one bounded, persisted Gmail-delivery page for a reviewed run.
+
+        This reader intentionally uses no Gmail gateway.  It joins the target
+        run's exact candidate identity to a matching immutable approval so an
+        idempotently reused approval remains discoverable from a later
+        equivalent run.
+        """
+
+        if not isinstance(billing_run_id, UUID):
+            raise CommercialBillingGmailSentReconciliationValidationError(
+                "Billing run id is invalid"
+            )
+        if (
+            isinstance(limit, bool)
+            or not isinstance(limit, int)
+            or not 1 <= limit <= _MAX_PAGE_SIZE
+        ):
+            raise CommercialBillingGmailSentReconciliationValidationError(
+                "Limit must be between 1 and 100"
+            )
+        if isinstance(offset, bool) or not isinstance(offset, int) or offset < 0:
+            raise CommercialBillingGmailSentReconciliationValidationError(
+                "Offset must be zero or greater"
+            )
+        try:
+            async with self.pool.transaction() as conn:
+                run = await conn.fetchrow(
+                    "SELECT id FROM commercial_billing_runs WHERE id = $1",
+                    billing_run_id,
+                )
+                if run is None:
+                    raise CommercialBillingGmailDeliveryStateNotFoundError(
+                        "Commercial billing run not found"
+                    )
+                rows = await conn.fetch(
+                    """
+                    SELECT candidate.candidate_key,
+                           candidate.source_fingerprint AS candidate_source_fingerprint,
+                           approval.id AS approval_id,
+                           approval.billing_run_id AS approval_billing_run_id,
+                           approval.invoice_id AS approval_invoice_id,
+                           approval.state AS approval_state,
+                           invoice.id AS invoice_id,
+                           invoice.invoice_number,
+                           invoice.status AS invoice_status,
+                           invoice.issue_date AS invoice_issue_date,
+                           invoice.due_date AS invoice_due_date,
+                           invoice.sent_at AS invoice_sent_at,
+                           invoice.sent_via AS invoice_sent_via,
+                           invoice.source AS invoice_source,
+                           invoice.business_context_id AS invoice_business_context_id,
+                           invoice.metadata AS invoice_metadata,
+                           artifact.id AS artifact_id,
+                           artifact.approval_id AS artifact_approval_id,
+                           artifact.artifact_kind,
+                           artifact.state AS artifact_state,
+                           artifact.content_type,
+                           artifact.filename,
+                           artifact.byte_size,
+                           artifact.pdf_sha256,
+                           artifact.render_fingerprint,
+                           artifact.generated_by,
+                           artifact.generated_at,
+                           draft.id AS gmail_draft_record_id,
+                           draft.approval_id AS gmail_draft_approval_id,
+                           draft.artifact_id AS gmail_draft_artifact_id,
+                           draft.state AS gmail_draft_state,
+                           draft.recipient_email,
+                           draft.subject,
+                           draft.rfc_message_id,
+                           draft.gmail_draft_id,
+                           draft.gmail_message_id,
+                           draft.gmail_thread_id,
+                           draft.created_by AS gmail_draft_created_by,
+                           draft.created_at AS gmail_draft_created_at,
+                           draft.last_attempt_by,
+                           draft.last_attempt_at,
+                           draft.draft_created_at,
+                           draft.recovery_required_at,
+                           draft.reconciliation_state,
+                           draft.gmail_sent_message_id,
+                           draft.gmail_sent_thread_id,
+                           draft.gmail_sent_at,
+                           draft.sent_reconciled_by,
+                           draft.sent_reconciled_at,
+                           draft.last_reconciled_by,
+                           draft.last_reconciled_at,
+                           draft.draft_missing_by,
+                           draft.draft_missing_at,
+                           COUNT(*) OVER() AS total_count
+                    FROM commercial_billing_run_candidates AS candidate
+                    JOIN commercial_billing_candidate_approvals AS approval
+                      ON approval.candidate_key = candidate.candidate_key
+                     AND approval.source_fingerprint = candidate.source_fingerprint
+                    JOIN invoices AS invoice ON invoice.id = approval.invoice_id
+                    LEFT JOIN commercial_billing_invoice_pdf_artifacts AS artifact
+                      ON artifact.approval_id = approval.id
+                    LEFT JOIN commercial_billing_invoice_gmail_drafts AS draft
+                      ON draft.approval_id = approval.id
+                    WHERE candidate.billing_run_id = $1
+                      AND approval.state = 'invoice_created'
+                      AND invoice.source = $2
+                      AND invoice.business_context_id = $3
+                      AND invoice.metadata ->> 'deliveryMethod' = $4
+                    ORDER BY candidate.display_order ASC, candidate.candidate_key ASC
+                    LIMIT $5 OFFSET $6
+                    """,
+                    billing_run_id,
+                    _INVOICE_SOURCE,
+                    EOM_BUSINESS_CONTEXT_ID,
+                    _DELIVERY_METHOD,
+                    limit,
+                    offset,
+                )
+            items = [self._delivery_item(dict(row)) for row in rows]
+            return {
+                "billingRunId": str(billing_run_id),
+                "items": items,
+                "limit": limit,
+                "offset": offset,
+                "total": int(rows[0]["total_count"]) if rows else 0,
+            }
+        except CommercialBillingGmailSentReconciliationError:
+            raise
         except asyncpg.PostgresError as exc:
             raise CommercialBillingGmailSentReconciliationUnavailableError(
                 "Commercial billing database unavailable"
@@ -903,6 +1069,248 @@ class CommercialBillingInvoiceGmailSentReconciliationService:
             )
         return context_row
 
+    @classmethod
+    def _delivery_item(cls, row: Mapping[str, Any]) -> dict[str, Any]:
+        candidate_key = _stored_text(
+            row.get("candidate_key"), "candidate key", limit=512
+        )
+        source_fingerprint = _stored_text(
+            row.get("candidate_source_fingerprint"),
+            "candidate source fingerprint",
+            limit=64,
+        )
+        if len(source_fingerprint) != 64 or any(
+            character not in "0123456789abcdef" for character in source_fingerprint
+        ):
+            raise CommercialBillingGmailSentReconciliationConflictError(
+                "Commercial billing Gmail candidate evidence is invalid"
+            )
+        approval_id = _uuid(row.get("approval_id"), "approval id")
+        approval_billing_run_id = _uuid(
+            row.get("approval_billing_run_id"), "approval billing run id"
+        )
+        invoice_id = _uuid(row.get("invoice_id"), "invoice id")
+        invoice_status = _stored_text(
+            row.get("invoice_status"), "invoice status", limit=32
+        )
+        invoice_sent_at = _optional_timestamp(
+            row.get("invoice_sent_at"), "invoice sent timestamp"
+        )
+        invoice_sent_via = row.get("invoice_sent_via")
+        if invoice_sent_via is not None:
+            invoice_sent_via = _stored_text(
+                invoice_sent_via, "invoice sent via", limit=32
+            )
+        metadata = _mapping(row.get("invoice_metadata"), "invoice metadata")
+        context_matches = (
+            _uuid(row.get("approval_invoice_id"), "approval invoice id") == invoice_id
+            and _stored_text(row.get("approval_state"), "approval state", limit=32)
+            == "invoice_created"
+            and _stored_text(row.get("invoice_source"), "invoice source", limit=32)
+            == _INVOICE_SOURCE
+            and _stored_text(
+                row.get("invoice_business_context_id"),
+                "invoice business context",
+                limit=128,
+            )
+            == EOM_BUSINESS_CONTEXT_ID
+            and metadata.get("candidateKey") == candidate_key
+            and metadata.get("sourceFingerprint") == source_fingerprint
+            and metadata.get("commercialBillingRunId") == str(approval_billing_run_id)
+            and metadata.get("deliveryMethod") == _DELIVERY_METHOD
+        )
+        artifact = cls._artifact_view(row, approval_id, invoice_id)
+        draft, reconciliation = cls._draft_and_reconciliation_view(
+            row, approval_id, invoice_id, artifact
+        )
+        delivery_state = cls._delivery_state(
+            context_matches=context_matches,
+            invoice_status=invoice_status,
+            invoice_sent_at=invoice_sent_at,
+            invoice_sent_via=invoice_sent_via,
+            artifact=artifact,
+            draft=draft,
+            reconciliation=reconciliation,
+        )
+        if delivery_state not in _DELIVERY_STATES:
+            raise CommercialBillingGmailSentReconciliationUnavailableError(
+                "Commercial billing Gmail delivery state is invalid"
+            )
+        return {
+            "approval": {
+                "billingRunId": str(approval_billing_run_id),
+                "candidateKey": candidate_key,
+                "id": str(approval_id),
+                "sourceFingerprint": source_fingerprint,
+                "state": _stored_text(
+                    row.get("approval_state"), "approval state", limit=32
+                ),
+            },
+            "candidate": {
+                "candidateKey": candidate_key,
+                "sourceFingerprint": source_fingerprint,
+            },
+            "deliveryState": delivery_state,
+            "gmailDraft": draft,
+            "invoice": {
+                "dueDate": str(row.get("invoice_due_date")),
+                "id": str(invoice_id),
+                "invoiceNumber": _stored_text(
+                    row.get("invoice_number"), "invoice number", limit=64
+                ),
+                "issueDate": str(row.get("invoice_issue_date")),
+                "sentAt": cls._iso_optional(
+                    invoice_sent_at, "invoice sent timestamp"
+                ),
+                "sentVia": invoice_sent_via,
+                "status": invoice_status,
+            },
+            "pdf": artifact,
+            "reconciliation": reconciliation,
+        }
+
+    @staticmethod
+    def _artifact_view(
+        row: Mapping[str, Any], approval_id: UUID, invoice_id: UUID
+    ) -> dict[str, Any] | None:
+        if row.get("artifact_id") is None:
+            return None
+        if _uuid(row.get("artifact_approval_id"), "PDF approval id") != approval_id:
+            raise CommercialBillingGmailSentReconciliationConflictError(
+                "Commercial billing PDF no longer matches its approval"
+            )
+        return CommercialBillingInvoicePDFService.view(
+            {
+                "approval_id": approval_id,
+                "artifact_id": row.get("artifact_id"),
+                "invoice_id": invoice_id,
+                "artifact_kind": row.get("artifact_kind"),
+                "state": row.get("artifact_state"),
+                "content_type": row.get("content_type"),
+                "filename": row.get("filename"),
+                "byte_size": row.get("byte_size"),
+                "pdf_sha256": row.get("pdf_sha256"),
+                "render_fingerprint": row.get("render_fingerprint"),
+                "generated_by": row.get("generated_by"),
+                "generated_at": row.get("generated_at"),
+            }
+        )
+
+    @classmethod
+    def _draft_and_reconciliation_view(
+        cls,
+        row: Mapping[str, Any],
+        approval_id: UUID,
+        invoice_id: UUID,
+        artifact: Mapping[str, Any] | None,
+    ) -> tuple[dict[str, Any] | None, dict[str, Any] | None]:
+        if row.get("gmail_draft_record_id") is None:
+            return None, None
+        if artifact is None:
+            raise CommercialBillingGmailSentReconciliationConflictError(
+                "Commercial billing Gmail draft has no immutable PDF artifact"
+            )
+        if _uuid(
+            row.get("gmail_draft_approval_id"), "Gmail draft approval id"
+        ) != approval_id or _uuid(
+            row.get("gmail_draft_artifact_id"), "Gmail draft artifact id"
+        ) != _uuid(artifact.get("id"), "PDF artifact id"):
+            raise CommercialBillingGmailSentReconciliationConflictError(
+                "Commercial billing Gmail draft no longer matches its approval PDF"
+            )
+        draft = CommercialBillingInvoiceGmailDraftService.view(
+            {
+                "id": row.get("gmail_draft_record_id"),
+                "approval_id": approval_id,
+                "artifact_id": row.get("gmail_draft_artifact_id"),
+                "state": row.get("gmail_draft_state"),
+                "recipient_email": row.get("recipient_email"),
+                "subject": row.get("subject"),
+                "rfc_message_id": row.get("rfc_message_id"),
+                "gmail_draft_id": row.get("gmail_draft_id"),
+                "gmail_message_id": row.get("gmail_message_id"),
+                "gmail_thread_id": row.get("gmail_thread_id"),
+                "created_by": row.get("gmail_draft_created_by"),
+                "created_at": row.get("gmail_draft_created_at"),
+                "last_attempt_by": row.get("last_attempt_by"),
+                "last_attempt_at": row.get("last_attempt_at"),
+                "draft_created_at": row.get("draft_created_at"),
+                "recovery_required_at": row.get("recovery_required_at"),
+                "invoice_id": invoice_id,
+            }
+        )
+        reconciliation = cls.view(
+            {
+                "approval_id": approval_id,
+                "draft_id": row.get("gmail_draft_record_id"),
+                "invoice_id": invoice_id,
+                "reconciliation_state": row.get("reconciliation_state"),
+                "rfc_message_id": row.get("rfc_message_id"),
+                "gmail_draft_id": row.get("gmail_draft_id"),
+                "gmail_message_id": row.get("gmail_message_id"),
+                "gmail_thread_id": row.get("gmail_thread_id"),
+                "gmail_sent_message_id": row.get("gmail_sent_message_id"),
+                "gmail_sent_thread_id": row.get("gmail_sent_thread_id"),
+                "gmail_sent_at": row.get("gmail_sent_at"),
+                "sent_reconciled_by": row.get("sent_reconciled_by"),
+                "sent_reconciled_at": row.get("sent_reconciled_at"),
+                "last_reconciled_by": row.get("last_reconciled_by"),
+                "last_reconciled_at": row.get("last_reconciled_at"),
+                "draft_missing_by": row.get("draft_missing_by"),
+                "draft_missing_at": row.get("draft_missing_at"),
+            }
+        )
+        return draft, reconciliation
+
+    @staticmethod
+    def _delivery_state(
+        *,
+        context_matches: bool,
+        invoice_status: str,
+        invoice_sent_at: datetime | None,
+        invoice_sent_via: str | None,
+        artifact: Mapping[str, Any] | None,
+        draft: Mapping[str, Any] | None,
+        reconciliation: Mapping[str, Any] | None,
+    ) -> str:
+        if not context_matches:
+            return "lifecycle_conflict"
+        invoice_is_draft = (
+            invoice_status == "draft"
+            and invoice_sent_at is None
+            and invoice_sent_via is None
+        )
+        invoice_has_confirmed_gmail_send = (
+            invoice_status in _POST_SEND_INVOICE_STATUSES
+            and invoice_sent_at is not None
+            and invoice_sent_via == "gmail"
+        )
+        if artifact is None:
+            return "needs_pdf" if invoice_is_draft else "lifecycle_conflict"
+        if draft is None or reconciliation is None:
+            return "needs_gmail_draft" if invoice_is_draft else "lifecycle_conflict"
+        draft_state = _stored_text(draft.get("state"), "Gmail draft state", limit=32)
+        reconciliation_state = _state(reconciliation.get("state"))
+        if draft_state in {"creating", "retryable", "recovery_required"}:
+            if not invoice_is_draft or reconciliation_state != "not_reconciled":
+                return "lifecycle_conflict"
+            return f"gmail_draft_{draft_state}"
+        if draft_state != "draft_created":
+            return "lifecycle_conflict"
+        if reconciliation_state == "sent_confirmed":
+            return (
+                "gmail_sent_confirmed"
+                if invoice_has_confirmed_gmail_send
+                else "lifecycle_conflict"
+            )
+        if not invoice_is_draft:
+            return "lifecycle_conflict"
+        return {
+            "not_reconciled": "gmail_draft_not_reconciled",
+            "draft_present": "gmail_draft_present",
+            "draft_missing": "gmail_draft_missing",
+        }.get(reconciliation_state, "lifecycle_conflict")
+
     @staticmethod
     def _assert_operation(
         operation: Mapping[str, Any], approval_id: UUID, request_fingerprint: str
@@ -1014,7 +1422,7 @@ class CommercialBillingInvoiceGmailSentReconciliationService:
         return _timestamp(self._now(), "clock")
 
     @staticmethod
-    def _view(record: Mapping[str, Any]) -> dict[str, Any]:
+    def view(record: Mapping[str, Any]) -> dict[str, Any]:
         state = _state(record.get("reconciliation_state"))
         result = {
             "approvalId": str(_uuid(record.get("approval_id"), "approval id")),
@@ -1078,7 +1486,7 @@ class CommercialBillingInvoiceGmailSentReconciliationService:
             )
         return {
             "outcome": outcome_state,
-            "reconciliation": cls._view(record),
+            "reconciliation": cls.view(record),
             "replayed": replayed,
             "reused": reused,
         }
@@ -1090,6 +1498,7 @@ def get_commercial_billing_invoice_gmail_sent_reconciliation_service(
 
 
 __all__ = [
+    "CommercialBillingGmailDeliveryStateNotFoundError",
     "CommercialBillingGmailSentReconciliationConflictError",
     "CommercialBillingGmailSentReconciliationError",
     "CommercialBillingGmailSentReconciliationNotFoundError",

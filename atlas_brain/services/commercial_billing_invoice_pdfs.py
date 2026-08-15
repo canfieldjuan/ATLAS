@@ -286,7 +286,7 @@ class CommercialBillingInvoicePDFService:
                 if operation is not None:
                     self._assert_operation(operation, request_fingerprint)
                     return {
-                        "artifact": self._view(operation),
+                        "artifact": self.view(operation),
                         "replayed": True,
                         "reused": True,
                     }
@@ -307,7 +307,7 @@ class CommercialBillingInvoicePDFService:
                         actor=requested_by,
                     )
                     return {
-                        "artifact": self._view(artifact),
+                        "artifact": self.view(artifact),
                         "replayed": False,
                         "reused": True,
                     }
@@ -327,7 +327,7 @@ class CommercialBillingInvoicePDFService:
                     actor=requested_by,
                 )
                 return {
-                    "artifact": self._view(artifact),
+                    "artifact": self.view(artifact),
                     "replayed": False,
                     "reused": False,
                 }
@@ -672,7 +672,7 @@ class CommercialBillingInvoicePDFService:
         )
 
     @staticmethod
-    def _view(row: Any) -> dict[str, Any]:
+    def view(row: Any) -> dict[str, Any]:
         return {
             "approvalId": str(row["approval_id"]),
             "contentType": row["content_type"],

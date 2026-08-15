@@ -30,8 +30,10 @@ from atlas_brain.services.commercial_billing_invoice_gmail_drafts import (
     _request_text,
 )
 from atlas_brain.services.commercial_billing_invoice_gmail_sent_reconciliation import (
+    CommercialBillingGmailDeliveryStateNotFoundError,
     CommercialBillingGmailSentReconciliationConflictError,
     CommercialBillingGmailSentReconciliationUnavailableError,
+    CommercialBillingGmailSentReconciliationValidationError,
     CommercialBillingInvoiceGmailSentReconciliationService,
 )
 from atlas_brain.services.commercial_billing_invoice_pdfs import (
@@ -76,6 +78,35 @@ def test_gmail_draft_idempotency_key_matches_the_spec_derived_oracle(value: obje
     else:
         with pytest.raises(CommercialBillingGmailDraftValidationError):
             _request_text(value, "Idempotency key", limit=128)
+
+
+@pytest.mark.parametrize(
+    ("artifact", "draft", "reconciliation", "invoice_status", "sent_at", "sent_via", "expected"),
+    (
+        (None, None, None, "draft", None, None, "needs_pdf"),
+        ({"id": "pdf"}, None, None, "draft", None, None, "needs_gmail_draft"),
+        ({"id": "pdf"}, {"state": "creating"}, {"state": "not_reconciled"}, "draft", None, None, "gmail_draft_creating"),
+        ({"id": "pdf"}, {"state": "retryable"}, {"state": "not_reconciled"}, "draft", None, None, "gmail_draft_retryable"),
+        ({"id": "pdf"}, {"state": "recovery_required"}, {"state": "not_reconciled"}, "draft", None, None, "gmail_draft_recovery_required"),
+        ({"id": "pdf"}, {"state": "draft_created"}, {"state": "not_reconciled"}, "draft", None, None, "gmail_draft_not_reconciled"),
+        ({"id": "pdf"}, {"state": "draft_created"}, {"state": "draft_present"}, "draft", None, None, "gmail_draft_present"),
+        ({"id": "pdf"}, {"state": "draft_created"}, {"state": "draft_missing"}, "draft", None, None, "gmail_draft_missing"),
+        ({"id": "pdf"}, {"state": "draft_created"}, {"state": "sent_confirmed"}, "sent", datetime(2026, 4, 2, tzinfo=timezone.utc), "gmail", "gmail_sent_confirmed"),
+        ({"id": "pdf"}, {"state": "draft_created"}, {"state": "draft_missing"}, "sent", datetime(2026, 4, 2, tzinfo=timezone.utc), "gmail", "lifecycle_conflict"),
+    ),
+)
+def test_delivery_state_vocabulary_is_closed_and_missing_drafts_never_become_sent(
+    artifact, draft, reconciliation, invoice_status, sent_at, sent_via, expected
+):
+    assert CommercialBillingInvoiceGmailSentReconciliationService._delivery_state(
+        context_matches=True,
+        invoice_status=invoice_status,
+        invoice_sent_at=sent_at,
+        invoice_sent_via=sent_via,
+        artifact=artifact,
+        draft=draft,
+        reconciliation=reconciliation,
+    ) == expected
 
 
 class _SchemaPool:
@@ -245,46 +276,51 @@ async def _seed_approved_invoice(
     delivery_method: str = "gmail_pdf",
     customer_email: str = "billing@example.test",
     with_artifact: bool = True,
+    billing_run_id=None,
+    display_order: int = 0,
 ) -> dict:
-    contact_id, run_id, candidate_id, approval_id, invoice_id = (
+    contact_id, generated_run_id, candidate_id, approval_id, invoice_id = (
         uuid4(),
         uuid4(),
         uuid4(),
         uuid4(),
         uuid4(),
     )
+    run_id = billing_run_id or generated_run_id
     candidate_key = f"commercial-billing:acme:{approval_id}"
     source_fingerprint = _fingerprint({"approval": str(approval_id)})
     request_fingerprint = _fingerprint({"seed": str(approval_id)})
     now = datetime(2026, 4, 2, tzinfo=timezone.utc)
     await connection.execute("INSERT INTO contacts (id) VALUES ($1)", contact_id)
-    await connection.execute(
-        """
-        INSERT INTO commercial_billing_runs (
-            id, billing_period, state, candidate_contract_version,
-            snapshot_fingerprint, source, idempotency_key, request_fingerprint,
-            created_by, created_at, updated_at
+    if billing_run_id is None:
+        await connection.execute(
+            """
+            INSERT INTO commercial_billing_runs (
+                id, billing_period, state, candidate_contract_version,
+                snapshot_fingerprint, source, idempotency_key, request_fingerprint,
+                created_by, created_at, updated_at
+            )
+            VALUES ($1, '2026-03', 'draft', 1, $2, 'eom_admin', $3, $4, 'Juan', $5, $5)
+            """,
+            run_id,
+            source_fingerprint,
+            f"run-{approval_id}",
+            request_fingerprint,
+            now,
         )
-        VALUES ($1, '2026-03', 'draft', 1, $2, 'eom_admin', $3, $4, 'Juan', $5, $5)
-        """,
-        run_id,
-        source_fingerprint,
-        f"run-{approval_id}",
-        request_fingerprint,
-        now,
-    )
     await connection.execute(
         """
         INSERT INTO commercial_billing_run_candidates (
             id, billing_run_id, candidate_key, source_fingerprint,
             display_order, snapshot, created_at
         )
-        VALUES ($1, $2, $3, $4, 0, '{}'::jsonb, $5)
+        VALUES ($1, $2, $3, $4, $5, '{}'::jsonb, $6)
         """,
         candidate_id,
         run_id,
         candidate_key,
         source_fingerprint,
+        display_order,
         now,
     )
     metadata = {
@@ -361,9 +397,48 @@ async def _seed_approved_invoice(
         )
     return {
         "approval_id": approval_id,
+        "candidate_key": candidate_key,
         "invoice_id": invoice_id,
         "renderer": renderer,
+        "run_id": run_id,
+        "source_fingerprint": source_fingerprint,
     }
+
+
+async def _seed_equivalent_review_run(connection, seed: dict) -> dict:
+    run_id = uuid4()
+    candidate_id = uuid4()
+    now = datetime(2026, 4, 3, tzinfo=timezone.utc)
+    await connection.execute(
+        """
+        INSERT INTO commercial_billing_runs (
+            id, billing_period, state, candidate_contract_version,
+            snapshot_fingerprint, source, idempotency_key, request_fingerprint,
+            created_by, created_at, updated_at
+        )
+        VALUES ($1, '2026-03', 'draft', 1, $2, 'eom_admin', $3, $4, 'Juan', $5, $5)
+        """,
+        run_id,
+        seed["source_fingerprint"],
+        f"equivalent-run-{run_id}",
+        _fingerprint({"equivalentRun": str(run_id)}),
+        now,
+    )
+    await connection.execute(
+        """
+        INSERT INTO commercial_billing_run_candidates (
+            id, billing_run_id, candidate_key, source_fingerprint,
+            display_order, snapshot, created_at
+        )
+        VALUES ($1, $2, $3, $4, 0, '{}'::jsonb, $5)
+        """,
+        candidate_id,
+        run_id,
+        seed["candidate_key"],
+        seed["source_fingerprint"],
+        now,
+    )
+    return {"run_id": run_id}
 
 
 def _service(connection, schema: str, gateway: _RecordingGateway):
@@ -386,6 +461,196 @@ def _sent_reconciliation_service(
         gateway_loader=lambda: gateway,
         now=lambda: now,
     )
+
+
+@pytest.mark.asyncio
+async def test_real_postgres_delivery_state_is_bounded_and_never_calls_gmail():
+    async with _gmail_draft_database() as (connection, schema):
+        first = await _seed_approved_invoice(connection, schema)
+        second = await _seed_approved_invoice(
+            connection,
+            schema,
+            billing_run_id=first["run_id"],
+            display_order=1,
+        )
+        gateway_loads = 0
+
+        def failing_gateway_loader():
+            nonlocal gateway_loads
+            gateway_loads += 1
+            raise AssertionError("durable delivery-state reads must not load Gmail")
+
+        service = CommercialBillingInvoiceGmailSentReconciliationService(
+            pool=_SchemaPool(connection, schema),
+            gateway_loader=failing_gateway_loader,
+        )
+        first_page = await service.list_delivery_state_for_run(
+            billing_run_id=first["run_id"], limit=1, offset=0
+        )
+        second_page = await service.list_delivery_state_for_run(
+            billing_run_id=first["run_id"], limit=1, offset=1
+        )
+
+        assert first_page["total"] == 2
+        assert first_page["limit"] == 1
+        assert first_page["offset"] == 0
+        assert second_page["total"] == 2
+        assert {first_page["items"][0]["approval"]["id"], second_page["items"][0]["approval"]["id"]} == {
+            str(first["approval_id"]),
+            str(second["approval_id"]),
+        }
+        assert first_page["items"][0]["deliveryState"] == "needs_gmail_draft"
+        assert first_page["items"][0]["pdf"]["state"] == "ready"
+        assert first_page["items"][0]["gmailDraft"] is None
+        assert "pdf_bytes" not in json.dumps(first_page).casefold()
+        assert "pdfbytes" not in json.dumps(first_page).casefold()
+        assert gateway_loads == 0
+
+        with pytest.raises(CommercialBillingGmailSentReconciliationValidationError):
+            await service.list_delivery_state_for_run(
+                billing_run_id=first["run_id"], limit=0
+            )
+        with pytest.raises(CommercialBillingGmailSentReconciliationValidationError):
+            await service.list_delivery_state_for_run(
+                billing_run_id=first["run_id"], offset=-1
+            )
+        assert gateway_loads == 0
+
+
+@pytest.mark.asyncio
+async def test_real_postgres_delivery_state_reopens_exact_prior_approval_from_a_later_equivalent_run():
+    async with _gmail_draft_database() as (connection, schema):
+        seed = await _seed_approved_invoice(connection, schema)
+        later_run = await _seed_equivalent_review_run(connection, seed)
+        service = CommercialBillingInvoiceGmailSentReconciliationService(
+            pool=_SchemaPool(connection, schema),
+            gateway_loader=lambda: (_ for _ in ()).throw(
+                AssertionError("durable delivery-state reads must not load Gmail")
+            ),
+        )
+
+        page = await service.list_delivery_state_for_run(
+            billing_run_id=later_run["run_id"]
+        )
+
+        assert page["billingRunId"] == str(later_run["run_id"])
+        assert page["total"] == 1
+        item, = page["items"]
+        assert item["approval"] == {
+            "billingRunId": str(seed["run_id"]),
+            "candidateKey": seed["candidate_key"],
+            "id": str(seed["approval_id"]),
+            "sourceFingerprint": seed["source_fingerprint"],
+            "state": "invoice_created",
+        }
+        assert item["candidate"] == {
+            "candidateKey": seed["candidate_key"],
+            "sourceFingerprint": seed["source_fingerprint"],
+        }
+        assert item["deliveryState"] == "needs_gmail_draft"
+
+
+@pytest.mark.asyncio
+async def test_real_postgres_delivery_state_never_infers_sent_from_a_missing_draft():
+    async with _gmail_draft_database() as (connection, schema):
+        missing = await _seed_approved_invoice(connection, schema)
+        sent = await _seed_approved_invoice(
+            connection,
+            schema,
+            billing_run_id=missing["run_id"],
+            display_order=1,
+        )
+        missing_gateway = _RecordingGateway()
+        sent_gateway = _RecordingGateway()
+        missing_draft = await _service(connection, schema, missing_gateway).create_or_reuse(
+            approval_id=missing["approval_id"],
+            idempotency_key="missing-draft",
+            actor="Juan",
+        )
+        sent_draft = await _service(connection, schema, sent_gateway).create_or_reuse(
+            approval_id=sent["approval_id"],
+            idempotency_key="sent-draft",
+            actor="Juan",
+        )
+        missing_gateway.drafts.pop(missing_draft["draft"]["rfcMessageId"])
+        missing_outcome = await _sent_reconciliation_service(
+            connection, schema, missing_gateway
+        ).reconcile(
+            approval_id=missing["approval_id"],
+            idempotency_key="missing-reconcile",
+            actor="Juan",
+        )
+        sent_gateway.record_sent(
+            rfc_message_id=sent_draft["draft"]["rfcMessageId"],
+            approval_id=sent["approval_id"],
+            invoice_id=sent["invoice_id"],
+        )
+        sent_outcome = await _sent_reconciliation_service(
+            connection, schema, sent_gateway
+        ).reconcile(
+            approval_id=sent["approval_id"],
+            idempotency_key="sent-reconcile",
+            actor="Juan",
+        )
+        service = CommercialBillingInvoiceGmailSentReconciliationService(
+            pool=_SchemaPool(connection, schema),
+            gateway_loader=lambda: (_ for _ in ()).throw(
+                AssertionError("durable delivery-state reads must not load Gmail")
+            ),
+        )
+
+        page = await service.list_delivery_state_for_run(
+            billing_run_id=missing["run_id"]
+        )
+        by_approval = {item["approval"]["id"]: item for item in page["items"]}
+        missing_item = by_approval[str(missing["approval_id"])]
+        sent_item = by_approval[str(sent["approval_id"])]
+
+        assert missing_outcome["outcome"] == "draft_missing"
+        assert missing_item["deliveryState"] == "gmail_draft_missing"
+        assert missing_item["reconciliation"]["state"] == "draft_missing"
+        assert missing_item["invoice"]["status"] == "draft"
+        assert missing_item["invoice"]["sentAt"] is None
+        assert sent_outcome["outcome"] == "sent_confirmed"
+        assert sent_item["deliveryState"] == "gmail_sent_confirmed"
+        assert sent_item["reconciliation"]["state"] == "sent_confirmed"
+        assert sent_item["invoice"]["status"] == "sent"
+        assert sent_item["invoice"]["sentVia"] == "gmail"
+        assert sent_item["invoice"]["sentAt"] is not None
+
+        await connection.execute(
+            "UPDATE invoices SET status = 'sent', sent_at = $2, sent_via = 'gmail' WHERE id = $1",
+            missing["invoice_id"],
+            datetime(2026, 4, 4, tzinfo=timezone.utc),
+        )
+        conflict_page = await service.list_delivery_state_for_run(
+            billing_run_id=missing["run_id"]
+        )
+        conflict_by_approval = {
+            item["approval"]["id"]: item for item in conflict_page["items"]
+        }
+        assert (
+            conflict_by_approval[str(missing["approval_id"])]["deliveryState"]
+            == "lifecycle_conflict"
+        )
+
+
+@pytest.mark.asyncio
+async def test_real_postgres_delivery_state_rejects_unknown_run_without_loading_gmail():
+    async with _gmail_draft_database() as (connection, schema):
+        gateway_loads = 0
+
+        def failing_gateway_loader():
+            nonlocal gateway_loads
+            gateway_loads += 1
+            raise AssertionError("durable delivery-state reads must not load Gmail")
+
+        service = CommercialBillingInvoiceGmailSentReconciliationService(
+            pool=_SchemaPool(connection, schema), gateway_loader=failing_gateway_loader
+        )
+        with pytest.raises(CommercialBillingGmailDeliveryStateNotFoundError):
+            await service.list_delivery_state_for_run(billing_run_id=uuid4())
+        assert gateway_loads == 0
 
 
 @pytest.mark.asyncio
@@ -1132,6 +1397,31 @@ class _SentReconciliationRouteService:
         }
 
 
+class _DeliveryStateRouteService:
+    def __init__(self) -> None:
+        self.calls: list[dict] = []
+        self.error: Exception | None = None
+
+    async def list_delivery_state_for_run(self, **kwargs) -> dict:
+        self.calls.append(kwargs)
+        if self.error is not None:
+            raise self.error
+        return {
+            "billingRunId": str(kwargs["billing_run_id"]),
+            "items": [
+                {
+                    "approval": {"id": "approval-1"},
+                    "deliveryState": "gmail_draft_missing",
+                    "pdf": {"id": "artifact-1", "state": "ready"},
+                    "reconciliation": {"state": "draft_missing"},
+                }
+            ],
+            "limit": kwargs["limit"],
+            "offset": kwargs["offset"],
+            "total": 1,
+        }
+
+
 @pytest.mark.asyncio
 async def test_full_atlas_app_gmail_draft_route_requires_existing_auth_and_never_returns_pdf_bytes():
     from atlas_brain.api.invoicing import auth as receivables_auth
@@ -1186,6 +1476,72 @@ async def test_full_atlas_app_gmail_draft_route_requires_existing_auth_and_never
     assert "pdfBytes" not in response.text
     assert service.calls == [
         {"approval_id": approval_id, "idempotency_key": "route-gmail-1", "actor": "Juan"}
+    ]
+
+
+@pytest.mark.asyncio
+async def test_full_atlas_app_gmail_delivery_state_route_requires_existing_auth_and_returns_no_delivery_side_effect():
+    from atlas_brain.api.invoicing import auth as receivables_auth
+    from atlas_brain.api.invoicing import receivables as routes
+    from atlas_brain.eom_api.auth import generate_receivables_service_token
+    from atlas_brain.main import app
+
+    billing_run_id = uuid4()
+    service = _DeliveryStateRouteService()
+    generated = generate_receivables_service_token()
+    original_overrides = dict(app.dependency_overrides)
+    app.dependency_overrides[receivables_auth.get_receivables_api_config] = lambda: SimpleNamespace(
+        receivables_api_enabled=True,
+        receivables_service_token="",
+        receivables_service_token_sha256=generated.sha256,
+    )
+    app.dependency_overrides[
+        routes.get_commercial_billing_invoice_gmail_sent_reconciliation_service
+    ] = lambda: service
+    path = (
+        "/api/v1/receivables/commercial-billing-runs/"
+        f"{billing_run_id}/gmail-delivery-state"
+    )
+    headers = {"Authorization": f"Bearer {generated.token}"}
+    try:
+        async with httpx.AsyncClient(
+            transport=httpx.ASGITransport(app=app), base_url="http://test"
+        ) as client:
+            assert (await client.get(path)).status_code == 401
+            assert (
+                await client.get(path, headers={"Authorization": "Bearer wrong"})
+            ).status_code == 401
+            assert (
+                await client.get(f"{path}?limit=0", headers=headers)
+            ).status_code == 422
+            response = await client.get(f"{path}?limit=1&offset=2", headers=headers)
+            service.error = CommercialBillingGmailDeliveryStateNotFoundError(
+                "Commercial billing run not found"
+            )
+            not_found = await client.get(path, headers=headers)
+            service.error = CommercialBillingGmailSentReconciliationUnavailableError(
+                "Commercial billing database unavailable"
+            )
+            unavailable = await client.get(path, headers=headers)
+    finally:
+        app.dependency_overrides.clear()
+        app.dependency_overrides.update(original_overrides)
+
+    assert response.status_code == 200
+    assert response.json()["billingRunId"] == str(billing_run_id)
+    assert response.json()["items"][0]["deliveryState"] == "gmail_draft_missing"
+    assert "pdf_bytes" not in response.text.casefold()
+    assert "pdfbytes" not in response.text.casefold()
+    assert not_found.status_code == 404
+    assert not_found.json()["detail"]["code"] == "commercial_billing_run_not_found"
+    assert unavailable.status_code == 503
+    assert unavailable.json()["detail"]["code"] == (
+        "commercial_billing_gmail_sent_reconciliation_unavailable"
+    )
+    assert service.calls == [
+        {"billing_run_id": billing_run_id, "limit": 1, "offset": 2},
+        {"billing_run_id": billing_run_id, "limit": 50, "offset": 0},
+        {"billing_run_id": billing_run_id, "limit": 50, "offset": 0},
     ]
 
 
