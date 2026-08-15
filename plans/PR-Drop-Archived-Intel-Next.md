@@ -35,7 +35,7 @@ it should be.
 
 Ownership lane: security/dependency-noise
 Slice phase: Workflow/process
-Max files: 95
+Max files: 97
 
 1. Delete `_ARCHIVED_atlas-intel-next/` — 91 tracked files, ~1.1 MB, last
    touched 2026-06-16 (`f253164c1`).
@@ -46,7 +46,16 @@ Max files: 95
    "Relevant code and product surfaces" list. Both name the bare
    `atlas-intel-next/` (no `_ARCHIVED_` prefix) as a current, relevant path;
    after this PR no directory of either name exists.
-4. This plan document.
+4. Retire the remaining stale guidance a semantic sweep found beyond the
+   literal-name search: `docs/product_context_pack.md`'s "Next.js B2B UI
+   Migration" section (forward-looking "direction of travel" language for
+   an app that no longer exists — removed, not historicized, since this doc
+   is a live current-state reference) and `docs/SEO_AEO_GEO_GAP_PLAN.md`
+   (an entire plan claiming gaps "COMPLETE" against deleted `app/**`
+   paths — historicized in place with a banner, since no `docs/archive/`
+   convention exists and the document has standalone historical value as a
+   record of SEO work performed).
+5. This plan document.
 
 Not in this PR: the rest of ATLAS #2375 — bumping `transformers` and
 `cryptography` in root `requirements.txt` (2 critical / 22 high), and deciding
@@ -192,6 +201,7 @@ touched. `requirements.eom.txt` (the EOM slim profile) and root
 - `_ARCHIVED_atlas-intel-next/tsconfig.json`
 - `_ARCHIVED_atlas-intel-next/vercel.json`
 - `docs/SECURITY_GUARDRAILS.md`
+- `docs/SEO_AEO_GEO_GAP_PLAN.md`
 - `docs/product_context_pack.md`
 - `plans/PR-Drop-Archived-Intel-Next.md`
 
@@ -357,6 +367,7 @@ Parked hardening: none.
 | `_ARCHIVED_atlas-intel-next/tsconfig.json` | 34 |
 | `_ARCHIVED_atlas-intel-next/vercel.json` | 3 |
 | `docs/SECURITY_GUARDRAILS.md` | 11 |
-| `docs/product_context_pack.md` | 1 |
-| `plans/PR-Drop-Archived-Intel-Next.md` | 362 |
-| **Total** | **29200** |
+| `docs/SEO_AEO_GEO_GAP_PLAN.md` | 11 |
+| `docs/product_context_pack.md` | 18 |
+| `plans/PR-Drop-Archived-Intel-Next.md` | 373 |
+| **Total** | **29239** |

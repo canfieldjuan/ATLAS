@@ -166,23 +166,6 @@ Current pages include:
 
 These are primarily internal, analyst-facing, or power-user B2B surfaces today, though several are close to customer-facing product surfaces.
 
-### Next.js B2B UI Migration
-
-The Next.js app mirrors major B2B product routes:
-
-- dashboard
-- vendors
-- vendor detail
-- reviews
-- reports
-- campaign review
-- briefing review
-- blog review
-- leads and prospects
-- onboarding and account flows
-
-Treat this as the direction of travel for product delivery, not a separate data product.
-
 ### Operations UI
 
 The Operations surface already includes:
