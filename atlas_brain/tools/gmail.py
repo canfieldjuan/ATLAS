@@ -8,11 +8,12 @@ when gmail_send_enabled is True.
 
 import base64
 import logging
+import re
 import time
 from email.mime.base import MIMEBase
 from email.mime.multipart import MIMEMultipart
 from email.mime.text import MIMEText
-from typing import Any
+from typing import Any, Mapping
 
 import httpx
 
@@ -22,6 +23,81 @@ logger = logging.getLogger("atlas.tools.gmail")
 
 GMAIL_API_BASE = "https://gmail.googleapis.com/gmail/v1"
 TOKEN_URL = "https://oauth2.googleapis.com/token"
+_MAX_GMAIL_DRAFT_LOOKUP_PAGES = 20
+_MAX_GMAIL_RFC_MESSAGE_ID_LENGTH = 320
+_MAX_GMAIL_EXTRA_HEADER_VALUE_LENGTH = 998
+_EXTRA_HEADER_NAME = re.compile(r"^(?:Message-ID|X-[A-Za-z0-9-]{1,72})$")
+_PROTECTED_HEADER_NAMES = frozenset(
+    {
+        "bcc",
+        "cc",
+        "from",
+        "reply-to",
+        "subject",
+        "to",
+    }
+)
+
+
+class GmailDraftLookupError(RuntimeError):
+    """A Gmail draft lookup cannot safely name one external draft."""
+
+
+class GmailDraftCreateError(RuntimeError):
+    """A Gmail draft create failed with known or uncertain delivery state."""
+
+    def __init__(self, message: str, *, definitely_not_created: bool) -> None:
+        super().__init__(message)
+        self.definitely_not_created = definitely_not_created
+
+
+def _extra_headers(headers: Mapping[str, str] | None) -> dict[str, str]:
+    """Accept the narrow immutable headers a server-side draft may add.
+
+    Gmail's raw-message API accepts arbitrary message headers.  This transport
+    is shared, so only Message-ID and namespaced X- headers are admitted here;
+    recipients and normal mail headers remain explicit method arguments.  A
+    newline would permit header injection into the raw MIME message.
+    """
+
+    if headers is None:
+        return {}
+    if not isinstance(headers, Mapping):
+        raise ValueError("Gmail draft headers must be a mapping")
+    result: dict[str, str] = {}
+    for name, value in headers.items():
+        if not isinstance(name, str) or not _EXTRA_HEADER_NAME.fullmatch(name):
+            raise ValueError("Gmail draft header name is invalid")
+        if name.casefold() in _PROTECTED_HEADER_NAMES:
+            raise ValueError("Gmail draft header name is invalid")
+        if (
+            not isinstance(value, str)
+            or not value
+            or len(value) > _MAX_GMAIL_EXTRA_HEADER_VALUE_LENGTH
+            or "\r" in value
+            or "\n" in value
+            or "\x00" in value
+        ):
+            raise ValueError("Gmail draft header value is invalid")
+        result[name] = value
+    return result
+
+
+def _rfc_message_id(value: str) -> str:
+    if (
+        not isinstance(value, str)
+        or len(value) > _MAX_GMAIL_RFC_MESSAGE_ID_LENGTH
+        or len(value) < 5
+        or "\r" in value
+        or "\n" in value
+        or "\x00" in value
+        or not value.startswith("<")
+        or not value.endswith(">")
+        or value.count("@") != 1
+        or any(char.isspace() for char in value)
+    ):
+        raise GmailDraftLookupError("Gmail draft RFC Message-ID is invalid")
+    return value
 
 
 class GmailTransport:
@@ -206,6 +282,7 @@ class GmailTransport:
         reply_to: str | None = None,
         attachments: list[dict[str, Any]] | None = None,
         html: str | None = None,
+        headers: Mapping[str, str] | None = None,
     ) -> dict[str, Any]:
         """Create a Gmail draft (NOT sent) under the authenticated account.
 
@@ -213,6 +290,13 @@ class GmailTransport:
         Gmail draft resource: {"id": draft_id, "message": {"id", "threadId"}}.
         The user can review and send the draft from their Gmail UI.
         """
+        try:
+            validated_headers = _extra_headers(headers)
+        except ValueError as exc:
+            raise GmailDraftCreateError(
+                "Gmail draft headers are invalid", definitely_not_created=True
+            ) from exc
+
         if attachments:
             msg = MIMEMultipart("mixed")
             if html:
@@ -232,6 +316,8 @@ class GmailTransport:
             msg["Bcc"] = ", ".join(bcc)
         if reply_to:
             msg["Reply-To"] = reply_to
+        for name, value in validated_headers.items():
+            msg[name] = value
 
         if attachments:
             for att in attachments:
@@ -247,20 +333,41 @@ class GmailTransport:
 
         raw_b64 = base64.urlsafe_b64encode(msg.as_bytes()).decode("ascii")
 
-        token = await self._get_access_token()
+        try:
+            token = await self._get_access_token()
+        except Exception as exc:
+            raise GmailDraftCreateError(
+                "Gmail draft authentication failed", definitely_not_created=True
+            ) from exc
         client = await self._ensure_client()
-        response = await client.post(
-            f"{GMAIL_API_BASE}/users/me/drafts",
-            json={"message": {"raw": raw_b64}},
-            headers={"Authorization": f"Bearer {token}"},
-        )
+        try:
+            response = await client.post(
+                f"{GMAIL_API_BASE}/users/me/drafts",
+                json={"message": {"raw": raw_b64}},
+                headers={"Authorization": f"Bearer {token}"},
+            )
+        except Exception:
+            # A transport exception can happen after Gmail accepted the bytes.
+            # Preserve it as uncertain so the caller reconciles by Message-ID
+            # rather than submitting another create request.
+            raise
 
         if response.status_code == 403:
-            raise RuntimeError(
+            raise GmailDraftCreateError(
                 "Gmail draft permission denied. Re-run setup with gmail.modify scope: "
-                "python scripts/setup_google_oauth.py"
+                "python scripts/setup_google_oauth.py",
+                definitely_not_created=True,
             )
-        response.raise_for_status()
+        try:
+            response.raise_for_status()
+        except Exception as exc:
+            status_code = getattr(response, "status_code", 0)
+            raise GmailDraftCreateError(
+                "Gmail draft creation was rejected"
+                if 400 <= status_code < 500
+                else "Gmail draft creation outcome is unknown",
+                definitely_not_created=400 <= status_code < 500,
+            ) from exc
 
         result = response.json()
         logger.info(
@@ -270,6 +377,91 @@ class GmailTransport:
             subject[:50],
         )
         return result
+
+    async def find_draft_by_rfc_message_id(
+        self,
+        rfc_message_id: str,
+    ) -> dict[str, Any] | None:
+        """Return the one Gmail draft with a stable RFC Message-ID, if present.
+
+        Gmail's documented ``users.drafts.list`` search supports
+        ``rfc822msgid:<...>`` and returns the draft resource's own id plus its
+        message/thread ids.  Searching is intentionally read-only: a caller
+        recovering an uncertain create may inspect this identity before deciding
+        whether another draft create would be safe.
+        """
+
+        message_id = _rfc_message_id(rfc_message_id)
+        token = await self._get_access_token()
+        client = await self._ensure_client()
+        page_token: str | None = None
+        seen_page_tokens: set[str] = set()
+        matches: list[dict[str, Any]] = []
+
+        for _ in range(_MAX_GMAIL_DRAFT_LOOKUP_PAGES):
+            params: dict[str, Any] = {
+                "q": f"rfc822msgid:{message_id}",
+                "maxResults": 100,
+            }
+            if page_token is not None:
+                params["pageToken"] = page_token
+            response = await client.get(
+                f"{GMAIL_API_BASE}/users/me/drafts",
+                params=params,
+                headers={"Authorization": f"Bearer {token}"},
+            )
+            if response.status_code == 403:
+                raise GmailDraftLookupError(
+                    "Gmail draft lookup permission denied. Re-run setup with gmail.modify scope: "
+                    "python scripts/setup_google_oauth.py"
+                )
+            response.raise_for_status()
+            payload = response.json()
+            if not isinstance(payload, dict):
+                raise GmailDraftLookupError("Gmail draft lookup response is invalid")
+            drafts = payload.get("drafts", [])
+            if not isinstance(drafts, list):
+                raise GmailDraftLookupError("Gmail draft lookup response is invalid")
+            for draft in drafts:
+                if not isinstance(draft, dict):
+                    raise GmailDraftLookupError("Gmail draft lookup response is invalid")
+                draft_id = draft.get("id")
+                message = draft.get("message")
+                if (
+                    not isinstance(draft_id, str)
+                    or not draft_id.strip()
+                    or not isinstance(message, dict)
+                    or not isinstance(message.get("id"), str)
+                    or not message["id"].strip()
+                    or not isinstance(message.get("threadId"), str)
+                    or not message["threadId"].strip()
+                ):
+                    raise GmailDraftLookupError("Gmail draft lookup response is invalid")
+                matches.append(
+                    {
+                        "id": draft_id.strip(),
+                        "message": {
+                            "id": message["id"].strip(),
+                            "threadId": message["threadId"].strip(),
+                        },
+                    }
+                )
+                if len(matches) > 1:
+                    raise GmailDraftLookupError(
+                        "Gmail draft lookup found multiple matching drafts"
+                    )
+
+            next_page = payload.get("nextPageToken")
+            if next_page is None:
+                return next(iter(matches), None)
+            if not isinstance(next_page, str) or not next_page:
+                raise GmailDraftLookupError("Gmail draft lookup response is invalid")
+            if next_page in seen_page_tokens:
+                raise GmailDraftLookupError("Gmail draft lookup pagination is invalid")
+            seen_page_tokens.add(next_page)
+            page_token = next_page
+
+        raise GmailDraftLookupError("Gmail draft lookup exceeded its page bound")
 
     async def modify_thread(
         self,

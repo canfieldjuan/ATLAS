@@ -32,7 +32,9 @@ on:
       - "atlas_brain/services/commercial_billing_runs.py"
       - "atlas_brain/services/commercial_billing_approvals.py"
       - "atlas_brain/services/commercial_billing_invoice_pdfs.py"
+      - "atlas_brain/services/commercial_billing_invoice_gmail_drafts.py"
       - "atlas_brain/services/invoice_pdf.py"
+      - "atlas_brain/tools/gmail.py"
       # normalize_contact_email decides billing eligibility and the
       # address these routes return; a grammar change here must run
       # the billing proof.
@@ -46,6 +48,7 @@ on:
       - "atlas_brain/storage/migrations/371_eom_billing_delivery_preferences.sql"
       - "atlas_brain/storage/migrations/372_commercial_billing_candidate_approvals.sql"
       - "atlas_brain/storage/migrations/373_commercial_billing_invoice_pdf_artifacts.sql"
+      - "atlas_brain/storage/migrations/374_commercial_billing_invoice_gmail_drafts.sql"
       - "atlas_brain/storage/repositories/invoice.py"
       - "atlas_brain/templates/email/__init__.py"
       - "atlas_brain/templates/email/estimate_confirmation.py"
@@ -59,6 +62,7 @@ on:
       - "tests/test_commercial_billing_candidates.py"
       - "tests/test_commercial_billing_runs.py"
       - "tests/test_commercial_billing_approvals.py"
+      - "tests/test_commercial_billing_gmail_drafts.py"
       - "tests/test_invoicing_readonly_mcp.py"
       - "tests/test_invoicing_readonly_oauth.py"
       - "tests/test_invoicing_draft_writer_mcp.py"
@@ -95,7 +99,9 @@ on:
       - "atlas_brain/services/commercial_billing_runs.py"
       - "atlas_brain/services/commercial_billing_approvals.py"
       - "atlas_brain/services/commercial_billing_invoice_pdfs.py"
+      - "atlas_brain/services/commercial_billing_invoice_gmail_drafts.py"
       - "atlas_brain/services/invoice_pdf.py"
+      - "atlas_brain/tools/gmail.py"
       # normalize_contact_email decides billing eligibility and the
       # address these routes return; a grammar change here must run
       # the billing proof.
@@ -109,6 +115,7 @@ on:
       - "atlas_brain/storage/migrations/371_eom_billing_delivery_preferences.sql"
       - "atlas_brain/storage/migrations/372_commercial_billing_candidate_approvals.sql"
       - "atlas_brain/storage/migrations/373_commercial_billing_invoice_pdf_artifacts.sql"
+      - "atlas_brain/storage/migrations/374_commercial_billing_invoice_gmail_drafts.sql"
       - "atlas_brain/storage/repositories/invoice.py"
       - "atlas_brain/templates/email/__init__.py"
       - "atlas_brain/templates/email/estimate_confirmation.py"
@@ -122,6 +129,7 @@ on:
       - "tests/test_commercial_billing_candidates.py"
       - "tests/test_commercial_billing_runs.py"
       - "tests/test_commercial_billing_approvals.py"
+      - "tests/test_commercial_billing_gmail_drafts.py"
       - "tests/test_invoicing_readonly_mcp.py"
       - "tests/test_invoicing_readonly_oauth.py"
       - "tests/test_invoicing_draft_writer_mcp.py"
@@ -181,6 +189,7 @@ jobs:
             tests/test_commercial_billing_candidates.py \
             tests/test_commercial_billing_runs.py \
             tests/test_commercial_billing_approvals.py \
+            tests/test_commercial_billing_gmail_drafts.py \
             tests/test_invoice_repository.py \
             tests/test_invoice_pdf.py \
             -q

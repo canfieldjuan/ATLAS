@@ -79,6 +79,27 @@ class _ApprovedInvoice:
     render_fingerprint: str
 
 
+@dataclass(frozen=True)
+class ReadyCommercialBillingInvoicePDFArtifact:
+    """One verified stored artifact for a server-side delivery transition.
+
+    The raw bytes intentionally remain an internal service result.  Public
+    receivables routes continue to expose metadata only; a later server-side
+    delivery service may attach the verified bytes without exposing them to a
+    browser or trusting a caller-supplied file.
+    """
+
+    approval_id: UUID
+    artifact_id: UUID
+    invoice_id: UUID
+    content_type: str
+    filename: str
+    pdf_bytes: bytes
+    pdf_sha256: str
+    render_fingerprint: str
+    invoice: dict[str, Any]
+
+
 def _text(value: Any) -> str | None:
     return value if isinstance(value, str) else None
 
@@ -325,6 +346,80 @@ class CommercialBillingInvoicePDFService:
                 "Commercial billing database unavailable"
             ) from exc
 
+    async def load_ready_artifact_for_delivery(
+        self,
+        *,
+        conn: Any,
+        approval_id: UUID,
+    ) -> ReadyCommercialBillingInvoicePDFArtifact:
+        """Read one unchanged ready artifact for a server-side delivery step.
+
+        The caller owns the surrounding transaction and approval lock.  Keeping
+        the read inside that transaction makes the approval/invoice evidence,
+        immutable artifact fingerprint, and eventual external-delivery intent
+        one preflight decision rather than a read-then-write race.  This method
+        never renders, inserts, updates, or exposes bytes through a route.
+        """
+
+        if not isinstance(approval_id, UUID):
+            raise CommercialBillingInvoicePDFValidationError("Approval id is invalid")
+        approved = await self._approved_invoice(conn, approval_id)
+        artifact = await self._find_artifact_with_bytes(conn, approval_id)
+        if artifact is None:
+            raise CommercialBillingInvoicePDFConflictError(
+                "Approved invoice PDF has not been generated"
+            )
+        if artifact["render_fingerprint"] != approved.render_fingerprint:
+            raise CommercialBillingInvoicePDFConflictError(
+                "Approved invoice changed after PDF generation; resolve it before delivery"
+            )
+        artifact_kind = _required_text(artifact["artifact_kind"], "PDF artifact kind", limit=32)
+        state = _required_text(artifact["state"], "PDF artifact state", limit=32)
+        content_type = _required_text(
+            artifact["content_type"], "PDF artifact content type", limit=128
+        )
+        filename = _required_text(artifact["filename"], "PDF artifact filename", limit=128)
+        sha256 = _required_text(artifact["pdf_sha256"], "PDF artifact hash", limit=64)
+        if (
+            artifact_kind != _ARTIFACT_KIND
+            or state != "ready"
+            or content_type != _CONTENT_TYPE
+            or _FINGERPRINT.fullmatch(sha256) is None
+        ):
+            raise CommercialBillingInvoicePDFConflictError(
+                "Approved invoice PDF artifact is invalid"
+            )
+        raw_bytes = artifact["pdf_bytes"]
+        if not isinstance(raw_bytes, (bytes, bytearray, memoryview)):
+            raise CommercialBillingInvoicePDFConflictError(
+                "Approved invoice PDF artifact is invalid"
+            )
+        pdf_bytes = bytes(raw_bytes)
+        size = artifact["byte_size"]
+        if (
+            not isinstance(size, int)
+            or size != len(pdf_bytes)
+            or len(pdf_bytes) < 8
+            or len(pdf_bytes) > _MAX_ARTIFACT_BYTES
+            or not pdf_bytes.startswith(b"%PDF-")
+            or b"%%EOF" not in pdf_bytes[-1024:]
+            or hashlib.sha256(pdf_bytes).hexdigest() != sha256
+        ):
+            raise CommercialBillingInvoicePDFConflictError(
+                "Approved invoice PDF artifact is invalid"
+            )
+        return ReadyCommercialBillingInvoicePDFArtifact(
+            approval_id=approved.approval_id,
+            artifact_id=_uuid(artifact["artifact_id"], "PDF artifact id"),
+            invoice_id=approved.invoice_id,
+            content_type=content_type,
+            filename=filename,
+            pdf_bytes=pdf_bytes,
+            pdf_sha256=sha256,
+            render_fingerprint=approved.render_fingerprint,
+            invoice=approved.invoice,
+        )
+
     def _render(self, invoice: dict[str, Any]) -> bytes:
         try:
             value = self._renderer(invoice)
@@ -476,6 +571,24 @@ class CommercialBillingInvoicePDFService:
         )
 
     @staticmethod
+    async def _find_artifact_with_bytes(conn: Any, approval_id: UUID) -> Any | None:
+        return await conn.fetchrow(
+            """
+            SELECT artifact.id AS artifact_id, artifact.approval_id,
+                   approval.invoice_id, artifact.artifact_kind, artifact.state,
+                   artifact.content_type, artifact.filename, artifact.pdf_bytes,
+                   artifact.byte_size, artifact.pdf_sha256,
+                   artifact.render_fingerprint, artifact.generated_by,
+                   artifact.generated_at
+            FROM commercial_billing_invoice_pdf_artifacts AS artifact
+            JOIN commercial_billing_candidate_approvals AS approval
+              ON approval.id = artifact.approval_id
+            WHERE artifact.approval_id = $1
+            """,
+            approval_id,
+        )
+
+    @staticmethod
     def _assert_operation(row: Any, request_fingerprint: str) -> None:
         if row["operation_request_fingerprint"] != request_fingerprint:
             raise CommercialBillingInvoicePDFConflictError(
@@ -588,5 +701,6 @@ __all__ = [
     "CommercialBillingInvoicePDFService",
     "CommercialBillingInvoicePDFUnavailableError",
     "CommercialBillingInvoicePDFValidationError",
+    "ReadyCommercialBillingInvoicePDFArtifact",
     "get_commercial_billing_invoice_pdf_service",
 ]

@@ -57,6 +57,15 @@ from ...services.commercial_billing_invoice_pdfs import (
     CommercialBillingInvoicePDFValidationError,
     get_commercial_billing_invoice_pdf_service,
 )
+from ...services.commercial_billing_invoice_gmail_drafts import (
+    CommercialBillingGmailDraftConflictError,
+    CommercialBillingGmailDraftNotFoundError,
+    CommercialBillingGmailDraftRecoveryRequiredError,
+    CommercialBillingInvoiceGmailDraftService,
+    CommercialBillingGmailDraftUnavailableError,
+    CommercialBillingGmailDraftValidationError,
+    get_commercial_billing_invoice_gmail_draft_service,
+)
 from ...services.eom_lead_ingress import EOM_BUSINESS_CONTEXT_ID
 from ...storage.exceptions import DatabaseUnavailableError
 from .auth import require_actor, require_receivables_api
@@ -332,6 +341,44 @@ async def _call_commercial_billing_invoice_pdf(awaitable):
         raise HTTPException(
             status_code=503,
             detail={"code": exc.code, "message": str(exc)},
+        ) from exc
+
+
+async def _call_commercial_billing_gmail_draft(awaitable):
+    try:
+        return await awaitable
+    except CommercialBillingGmailDraftValidationError as exc:
+        raise HTTPException(
+            status_code=422,
+            detail={"code": exc.code, "message": str(exc)},
+        ) from exc
+    except CommercialBillingGmailDraftNotFoundError as exc:
+        raise HTTPException(
+            status_code=404,
+            detail={"code": exc.code, "message": str(exc)},
+        ) from exc
+    except (
+        CommercialBillingGmailDraftConflictError,
+        CommercialBillingGmailDraftRecoveryRequiredError,
+    ) as exc:
+        raise HTTPException(
+            status_code=409,
+            detail={"code": exc.code, "message": str(exc)},
+        ) from exc
+    except CommercialBillingGmailDraftUnavailableError as exc:
+        raise HTTPException(
+            status_code=503,
+            detail={"code": exc.code, "message": str(exc)},
+        ) from exc
+    except Exception as exc:
+        if not _is_database_unavailable_error(exc):
+            raise
+        raise HTTPException(
+            status_code=503,
+            detail={
+                "code": "commercial_billing_gmail_draft_unavailable",
+                "message": "Commercial billing Gmail draft database unavailable",
+            },
         ) from exc
 
 
@@ -654,6 +701,28 @@ async def generate_commercial_billing_invoice_pdf(
 
     return await _call_commercial_billing_invoice_pdf(
         service.generate_or_reuse(
+            approval_id=approval_id,
+            idempotency_key=idempotency_key,
+            actor=actor,
+        )
+    )
+
+
+@router.post("/commercial-billing-approvals/{approval_id}/gmail-draft", status_code=201)
+async def create_commercial_billing_invoice_gmail_draft(
+    approval_id: UUID,
+    actor: Annotated[str, Depends(require_actor)],
+    idempotency_key: Annotated[
+        str, Header(alias="Idempotency-Key", min_length=1, max_length=128)
+    ],
+    service: CommercialBillingInvoiceGmailDraftService = Depends(
+        get_commercial_billing_invoice_gmail_draft_service
+    ),
+) -> dict:
+    """Create, recover, or reuse one no-send Gmail draft for an approval PDF."""
+
+    return await _call_commercial_billing_gmail_draft(
+        service.create_or_reuse(
             approval_id=approval_id,
             idempotency_key=idempotency_key,
             actor=actor,
