@@ -39,6 +39,15 @@ from ...services.commercial_billing_runs import (
     CommercialBillingRunValidationError,
     get_commercial_billing_run_service,
 )
+from ...services.commercial_billing_approvals import (
+    CommercialBillingApprovalConflictError,
+    CommercialBillingApprovalNotFoundError,
+    CommercialBillingApprovalService,
+    CommercialBillingApprovalStaleError,
+    CommercialBillingApprovalUnavailableError,
+    CommercialBillingApprovalValidationError,
+    get_commercial_billing_approval_service,
+)
 from ...services.eom_lead_ingress import EOM_BUSINESS_CONTEXT_ID
 from ...storage.exceptions import DatabaseUnavailableError
 from .auth import require_actor, require_receivables_api
@@ -131,6 +140,15 @@ class CreateCommercialBillingRunRequest(BaseModel):
         min_length=7,
         max_length=7,
         pattern=r"^\d{4}-(0[1-9]|1[0-2])$",
+    )
+
+
+class ApproveCommercialBillingCandidateRequest(BaseModel):
+    candidate_key: str = Field(min_length=1, max_length=512)
+    expected_source_fingerprint: str = Field(
+        min_length=64,
+        max_length=64,
+        pattern=r"^[0-9a-f]{64}$",
     )
 
 
@@ -249,6 +267,31 @@ async def _call_commercial_billing_run(awaitable):
             detail={"code": exc.code, "message": str(exc)},
         ) from exc
     except CommercialBillingRunUnavailableError as exc:
+        raise HTTPException(
+            status_code=503,
+            detail={"code": exc.code, "message": str(exc)},
+        ) from exc
+
+
+async def _call_commercial_billing_approval(awaitable):
+    try:
+        return await awaitable
+    except CommercialBillingApprovalValidationError as exc:
+        raise HTTPException(
+            status_code=422,
+            detail={"code": exc.code, "message": str(exc)},
+        ) from exc
+    except CommercialBillingApprovalNotFoundError as exc:
+        raise HTTPException(
+            status_code=404,
+            detail={"code": exc.code, "message": str(exc)},
+        ) from exc
+    except (CommercialBillingApprovalConflictError, CommercialBillingApprovalStaleError) as exc:
+        raise HTTPException(
+            status_code=409,
+            detail={"code": exc.code, "message": str(exc)},
+        ) from exc
+    except CommercialBillingApprovalUnavailableError as exc:
         raise HTTPException(
             status_code=503,
             detail={"code": exc.code, "message": str(exc)},
@@ -528,6 +571,31 @@ async def create_commercial_billing_run(
     return await _call_commercial_billing_run(
         service.create_run(
             billing_period=body.billing_period,
+            idempotency_key=idempotency_key,
+            actor=actor,
+        )
+    )
+
+
+@router.post("/commercial-billing-runs/{billing_run_id}/approvals", status_code=201)
+async def approve_commercial_billing_candidate(
+    billing_run_id: UUID,
+    body: ApproveCommercialBillingCandidateRequest,
+    actor: Annotated[str, Depends(require_actor)],
+    idempotency_key: Annotated[
+        str, Header(alias="Idempotency-Key", min_length=1, max_length=128)
+    ],
+    service: CommercialBillingApprovalService = Depends(
+        get_commercial_billing_approval_service
+    ),
+) -> dict:
+    """Create or reuse one draft invoice only after explicit candidate approval."""
+
+    return await _call_commercial_billing_approval(
+        service.approve(
+            billing_run_id=billing_run_id,
+            candidate_key=body.candidate_key,
+            expected_source_fingerprint=body.expected_source_fingerprint,
             idempotency_key=idempotency_key,
             actor=actor,
         )
