@@ -254,6 +254,8 @@ class _BlockingGateway(_RecordingGateway):
         self.create_calls.append(kwargs)
         self.create_started.set()
         await self.release_create.wait()
+        if self.create_error is not None:
+            raise self.create_error
         message_id = kwargs["headers"]["Message-ID"]
         result = {
             "id": "draft-1",
@@ -1351,6 +1353,153 @@ async def test_missing_gmail_draft_replacement_definite_failure_retries_the_same
             )
             == 1
         )
+
+
+@pytest.mark.asyncio
+async def test_missing_gmail_draft_replacement_definite_failure_wins_over_duplicate_recovery():
+    async with _gmail_draft_database() as (connection, schema):
+        seed = await _seed_approved_invoice(connection, schema)
+        original_gateway = _RecordingGateway()
+        await _create_and_reconcile_missing_draft(
+            connection,
+            schema,
+            seed=seed,
+            gateway=original_gateway,
+            draft_key="replacement-definite-overlap-original",
+        )
+        gateway = _BlockingGateway()
+        gateway.create_error = GmailDraftCreateError(
+            "synthetic replacement rejection", definitely_not_created=True
+        )
+        service = _service(connection, schema, gateway)
+        first = asyncio.create_task(
+            service.replace_missing(
+                approval_id=seed["approval_id"],
+                idempotency_key="replacement-definite-overlap",
+                actor="Juan",
+            )
+        )
+        await asyncio.wait_for(gateway.create_started.wait(), timeout=2)
+
+        with pytest.raises(CommercialBillingGmailDraftRecoveryRequiredError):
+            await service.replace_missing(
+                approval_id=seed["approval_id"],
+                idempotency_key="replacement-definite-overlap",
+                actor="Mayra",
+            )
+        assert (
+            await connection.fetchval(
+                "SELECT state FROM commercial_billing_invoice_gmail_drafts"
+            )
+            == "recovery_required"
+        )
+
+        gateway.release_create.set()
+        with pytest.raises(CommercialBillingGmailDraftUnavailableError):
+            await first
+        assert (
+            await connection.fetchval(
+                "SELECT state FROM commercial_billing_invoice_gmail_drafts"
+            )
+            == "retryable"
+        )
+
+        gateway.create_error = None
+        retried = await service.replace_missing(
+            approval_id=seed["approval_id"],
+            idempotency_key="replacement-definite-overlap",
+            actor="Juan",
+        )
+        assert retried["draft"]["state"] == "draft_created"
+        assert len(gateway.create_calls) == 2
+        assert len(gateway.lookup_calls) == 1
+
+
+@pytest.mark.asyncio
+async def test_missing_gmail_draft_replacement_blocks_invoice_mutations_until_creation(
+    monkeypatch,
+):
+    asyncpg = pytest.importorskip("asyncpg")
+    async with _gmail_draft_database() as (connection, schema):
+        seed = await _seed_approved_invoice(connection, schema)
+        original_gateway = _RecordingGateway()
+        await _create_and_reconcile_missing_draft(
+            connection,
+            schema,
+            seed=seed,
+            gateway=original_gateway,
+            draft_key="replacement-invoice-fence-original",
+        )
+        gateway = _BlockingGateway()
+        service = _service(connection, schema, gateway)
+        original_context = service._current_context
+        replacement_context_started = asyncio.Event()
+        release_replacement_context = asyncio.Event()
+
+        async def block_replacement_context(*args, **kwargs):
+            replacement_context_started.set()
+            await release_replacement_context.wait()
+            return await original_context(*args, **kwargs)
+
+        monkeypatch.setattr(service, "_current_context", block_replacement_context)
+        writer = await asyncpg.connect(os.environ["ATLAS_RECEIVABLES_TEST_DATABASE_URL"])
+        await writer.execute(f'SET search_path TO "{schema}"')
+        first = None
+        invoice_update = None
+        try:
+            first = asyncio.create_task(
+                service.replace_missing(
+                    approval_id=seed["approval_id"],
+                    idempotency_key="replacement-invoice-fence",
+                    actor="Juan",
+                )
+            )
+            await asyncio.wait_for(replacement_context_started.wait(), timeout=2)
+
+            invoice_update = asyncio.create_task(
+                writer.execute(
+                    "UPDATE invoices SET status = 'sent' WHERE id = $1",
+                    seed["invoice_id"],
+                )
+            )
+            await asyncio.sleep(0.05)
+            assert not invoice_update.done()
+
+            release_replacement_context.set()
+            await asyncio.wait_for(gateway.create_started.wait(), timeout=2)
+            with pytest.raises(
+                asyncpg.CheckViolationError,
+                match="Gmail draft replacement is pending",
+            ):
+                await asyncio.wait_for(invoice_update, timeout=2)
+            with pytest.raises(
+                asyncpg.CheckViolationError,
+                match="Gmail draft replacement is pending",
+            ):
+                await writer.execute(
+                    "UPDATE invoices SET notes = 'must remain immutable' WHERE id = $1",
+                    seed["invoice_id"],
+                )
+            invoice = await connection.fetchrow(
+                "SELECT status, notes FROM invoices WHERE id = $1", seed["invoice_id"]
+            )
+            assert dict(invoice) == {
+                "status": "draft",
+                "notes": "Approved commercial billing candidate",
+            }
+
+            gateway.release_create.set()
+            completed = await first
+            assert completed["draft"]["state"] == "draft_created"
+            assert len(gateway.create_calls) == 1
+        finally:
+            release_replacement_context.set()
+            gateway.release_create.set()
+            if invoice_update is not None:
+                await asyncio.gather(invoice_update, return_exceptions=True)
+            if first is not None:
+                await asyncio.gather(first, return_exceptions=True)
+            await writer.close()
 
 
 @pytest.mark.asyncio
@@ -2532,6 +2681,9 @@ def test_missing_gmail_draft_replacement_migration_is_atomic_append_only_and_non
     )
     assert "prior_snapshot JSONB NOT NULL" in migration
     assert "UNIQUE (gmail_draft_record_id, replacement_generation)" in migration
+    assert "CREATE TRIGGER commercial_billing_reject_invoice_mutation_while_gmail_replacement_pending" in migration
+    assert "BEFORE UPDATE ON invoices" in executable
+    assert "sent_at" not in executable
     assert "UPDATE invoices" not in executable
     assert "DROP TABLE" not in executable
     assert "DROP COLUMN" not in executable

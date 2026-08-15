@@ -65,3 +65,57 @@ COMMENT ON TABLE commercial_billing_invoice_gmail_draft_replacement_events IS
 
 COMMENT ON COLUMN commercial_billing_invoice_gmail_drafts.draft_generation IS
     'Current Gmail draft identity generation; prior identities are retained in replacement events.';
+
+-- A replacement commits its new intent before the external Gmail Drafts call.
+-- Every invoice writer therefore shares the replacement service's approval lock
+-- and rejects while this particular replacement generation remains unresolved.
+-- The trigger never changes invoice lifecycle state; it only prevents a legacy
+-- writer from bypassing the committed no-send delivery intent with stale fields.
+CREATE OR REPLACE FUNCTION commercial_billing_reject_invoice_mutation_while_gmail_replacement_pending()
+RETURNS TRIGGER
+LANGUAGE plpgsql
+AS $$
+DECLARE
+    approval_row RECORD;
+BEGIN
+    FOR approval_row IN
+        SELECT id
+        FROM commercial_billing_candidate_approvals
+        WHERE invoice_id = OLD.id
+        ORDER BY id
+    LOOP
+        PERFORM pg_advisory_xact_lock(
+            hashtextextended(
+                'commercial-billing-invoice-gmail-draft:approval:' || approval_row.id::text,
+                0
+            )
+        );
+    END LOOP;
+
+    IF EXISTS (
+        SELECT 1
+        FROM commercial_billing_candidate_approvals AS approval
+        JOIN commercial_billing_invoice_gmail_drafts AS draft
+          ON draft.approval_id = approval.id
+        JOIN commercial_billing_invoice_gmail_draft_replacement_events AS replacement
+          ON replacement.gmail_draft_record_id = draft.id
+         AND replacement.replacement_generation = draft.draft_generation
+        WHERE approval.invoice_id = OLD.id
+          AND draft.state IN ('creating', 'retryable', 'recovery_required')
+    ) THEN
+        RAISE EXCEPTION
+            'Commercial billing invoice mutation is blocked while a Gmail draft replacement is pending'
+            USING ERRCODE = '23514';
+    END IF;
+
+    RETURN NEW;
+END;
+$$;
+
+DROP TRIGGER IF EXISTS commercial_billing_reject_invoice_mutation_while_gmail_replacement_pending
+    ON invoices;
+
+CREATE TRIGGER commercial_billing_reject_invoice_mutation_while_gmail_replacement_pending
+BEFORE UPDATE ON invoices
+FOR EACH ROW
+EXECUTE FUNCTION commercial_billing_reject_invoice_mutation_while_gmail_replacement_pending();

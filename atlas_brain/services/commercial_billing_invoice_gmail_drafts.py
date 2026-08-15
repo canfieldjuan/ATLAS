@@ -1277,7 +1277,8 @@ class CommercialBillingInvoiceGmailDraftService:
                         UPDATE commercial_billing_invoice_gmail_drafts
                            SET state = 'retryable', last_attempt_by = $2,
                                last_attempt_at = $3, recovery_required_at = NULL
-                         WHERE id = $1 AND state = 'creating'
+                         WHERE id = $1
+                           AND state IN ('creating', 'recovery_required')
                         """,
                         record_id,
                         actor,
