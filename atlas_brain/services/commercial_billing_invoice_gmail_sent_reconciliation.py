@@ -82,6 +82,7 @@ _DATABASE_UNAVAILABLE_ERRORS = (
 
 _RECORD_SELECT = """
     SELECT draft.id AS draft_id, draft.approval_id, draft.state AS draft_state,
+           draft.draft_generation,
            draft.rfc_message_id, draft.reconciliation_state,
            draft.gmail_draft_id, draft.gmail_message_id, draft.gmail_thread_id,
            draft.gmail_sent_message_id, draft.gmail_sent_thread_id,
@@ -105,7 +106,9 @@ _OPERATION_RECORD_SELECT = """
            operation.request_fingerprint AS operation_request_fingerprint,
            operation.state AS operation_state,
            operation.outcome_state AS operation_outcome_state,
+           operation.draft_generation AS operation_draft_generation,
            draft.id AS draft_id, draft.approval_id, draft.state AS draft_state,
+           draft.draft_generation,
            draft.rfc_message_id, draft.reconciliation_state,
            draft.gmail_draft_id, draft.gmail_message_id, draft.gmail_thread_id,
            draft.gmail_sent_message_id, draft.gmail_sent_thread_id,
@@ -176,6 +179,7 @@ class _Context:
     approval_id: UUID
     draft_id: UUID
     draft_state: str
+    draft_generation: int
     invoice_id: UUID
     invoice_sent_at: datetime | None
     invoice_sent_via: str | None
@@ -298,6 +302,14 @@ def _operation_state(value: Any) -> str:
             "Commercial billing Gmail reconciliation operation state is invalid"
         )
     return state
+
+
+def _draft_generation(value: Any) -> int:
+    if isinstance(value, bool) or not isinstance(value, int) or value <= 0:
+        raise CommercialBillingGmailSentReconciliationConflictError(
+            "Commercial billing Gmail reconciliation draft generation is invalid"
+        )
+    return value
 
 
 def _external_id(value: Any, field: str) -> str:
@@ -684,6 +696,7 @@ class CommercialBillingInvoiceGmailSentReconciliationService:
                     raise CommercialBillingGmailSentReconciliationUnavailableError(
                         "Commercial billing Gmail reconciliation operation is unavailable"
                     )
+                self._assert_operation_generation(operation)
                 context = self._context(operation)
                 if _operation_state(operation["operation_state"]) == "completed":
                     return _PreparedReconciliation(
@@ -727,6 +740,7 @@ class CommercialBillingInvoiceGmailSentReconciliationService:
             operation = await self._insert_operation(
                 conn,
                 draft_id=context.draft_id,
+                draft_generation=context.draft_generation,
                 idempotency_key=idempotency_key,
                 request_fingerprint=request_fingerprint,
                 actor=actor,
@@ -946,6 +960,7 @@ class CommercialBillingInvoiceGmailSentReconciliationService:
         conn: Any,
         *,
         draft_id: UUID,
+        draft_generation: int,
         idempotency_key: str,
         request_fingerprint: str,
         actor: str,
@@ -955,9 +970,10 @@ class CommercialBillingInvoiceGmailSentReconciliationService:
             """
             INSERT INTO commercial_billing_gmail_sent_reconciliation_operations (
                 id, gmail_draft_record_id, source, idempotency_key,
-                request_fingerprint, requested_by, requested_at, created_at
+                request_fingerprint, draft_generation, requested_by, requested_at,
+                created_at
             )
-            VALUES ($1, $2, $3, $4, $5, $6, $7, $7)
+            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $8)
             RETURNING id AS operation_id, state AS operation_state,
                       outcome_state AS operation_outcome_state
             """,
@@ -966,6 +982,7 @@ class CommercialBillingInvoiceGmailSentReconciliationService:
             _DRAFT_SOURCE,
             idempotency_key,
             request_fingerprint,
+            _draft_generation(draft_generation),
             actor,
             now,
         )
@@ -1422,6 +1439,15 @@ class CommercialBillingInvoiceGmailSentReconciliationService:
             )
 
     @staticmethod
+    def _assert_operation_generation(operation: Mapping[str, Any]) -> None:
+        if _draft_generation(
+            operation.get("operation_draft_generation")
+        ) != _draft_generation(operation.get("draft_generation")):
+            raise CommercialBillingGmailSentReconciliationConflictError(
+                "Commercial billing Gmail sent-mail reconciliation replay is stale"
+            )
+
+    @staticmethod
     def _context(record: Mapping[str, Any]) -> _Context:
         approval_id = _uuid(record.get("approval_id"), "approval id")
         invoice_id = _uuid(record.get("invoice_id"), "invoice id")
@@ -1446,6 +1472,7 @@ class CommercialBillingInvoiceGmailSentReconciliationService:
             approval_id=approval_id,
             draft_id=_uuid(record.get("draft_id"), "draft id"),
             draft_state=_stored_text(record.get("draft_state"), "draft state", limit=32),
+            draft_generation=_draft_generation(record.get("draft_generation")),
             invoice_id=invoice_id,
             invoice_sent_at=_optional_timestamp(
                 record.get("invoice_sent_at"), "invoice sent timestamp"

@@ -7,7 +7,7 @@ H-15 remains open in [the Billing & Payments coordinating issue #2362](https://g
 ### Problem-derived contract
 
 - Root cause: `commercial_billing_invoice_gmail_drafts` stores one mutable current Gmail identity per immutable approval/PDF (`374_commercial_billing_invoice_gmail_drafts.sql:18-80`), while reconciliation records `draft_missing` on that same row (`375_commercial_billing_invoice_gmail_sent_reconciliation.sql:14-77`). The normal create/reuse preparation returns a `draft_created` row even when reconciliation later proves the remote draft has gone (`atlas_brain/services/commercial_billing_invoice_gmail_drafts.py:351-442`). Reusing that row would either create no recovery draft or overwrite the only evidence of the missing one.
-- Correct fix must touch/change: add an atomic, append-only replacement-event table plus current-generation fields; add an authenticated, idempotent `replace_missing` draft-service action and full receivables route; retain the old identity snapshot before changing the one compatibility-preserving root row; bind every replay to its immutable replacement-event generation and reject it before Gmail if the mutable root has advanced; let a definitive Gmail rejection restore `retryable` even if an overlapping same-key recovery lookup first records `recovery_required`; make all invoice writes share the approval lock and reject while a replacement generation is unresolved; prove normal, malformed/precondition, retry, concurrent, uncertain-create recovery, stale-invoice, stale-generation replay, duplicate-execution recovery, invoice-writer fencing, and no-send behavior in the real PostgreSQL contract suite; enroll the new migration in the invoicing workflow.
+- Correct fix must touch/change: add an atomic, append-only replacement-event table plus current-generation fields; add an authenticated, idempotent `replace_missing` draft-service action and full receivables route; retain the old identity snapshot before changing the one compatibility-preserving root row; bind both replacement and completed sent-mail reconciliation replays to their immutable generation and reject them before Gmail if the mutable root has advanced; let a definitive Gmail rejection restore `retryable` even if an overlapping same-key recovery lookup first records `recovery_required`; make all invoice writes share the approval lock and reject while a replacement generation is unresolved; prove normal, malformed/precondition, retry, concurrent, uncertain-create recovery, stale-invoice, stale-generation replay, duplicate-execution recovery, invoice-writer fencing, and no-send behavior in the real PostgreSQL contract suite; enroll the new migration in the invoicing workflow.
 - Must not change: invoices stay `draft` unless the existing sent-mail reconciler later finds verifiable `SENT` evidence; this action never calls Gmail send, MCP invoicing, CRM/service markers, Square, or payment writers; ordinary draft creation and legacy callers stay compatible; tracker/Website recovery controls, scheduled observation, and the existing cross-linked draft/PDF hardening item are not folded into this provider slice.
 - Diff-budget exception: this provider recovery is one indivisible financial-safety transition, so its migration, authenticated route, idempotency/recovery state-machine extension, and real-PostgreSQL failure/concurrency proof ship together. Splitting the event/intent mutation from its no-send retry and stale-proof tests would deploy a customer-facing recovery action without the evidence required to establish that it cannot duplicate a draft or mark an invoice sent.
 
@@ -15,11 +15,11 @@ H-15 remains open in [the Billing & Payments coordinating issue #2362](https://g
 
 Ownership lane: eom/billing-payments
 Slice phase: vertical slice
-Max files: 6
+Max files: 7
 
 1. Permit an authenticated operator to explicitly replace only the currently durable, reconciliation-proven `draft_missing` commercial Gmail draft for an approval whose invoice remains `draft`.
 2. Write an append-only snapshot/event of the missing generation and its actor/time before resetting the compatibility-preserving current root record to a new generation and a new stable RFC Message-ID.
-3. Use the existing committed-intent → Gmail-draft → confirm/recover state machine for the new generation, keyed by a replacement-specific idempotency source, so retry cannot produce another Gmail draft; use the append-only event's replacement generation as the replay fence and reject a key after a later generation takes over the current root. A definitive no-create result wins over an overlapping same-key recovery lookup and restores the same current generation to `retryable`.
+3. Use the existing committed-intent → Gmail-draft → confirm/recover state machine for the new generation, keyed by a replacement-specific idempotency source, so retry cannot produce another Gmail draft; use the append-only event's replacement generation as the replacement replay fence and persist a sent-mail reconciliation operation's current generation at creation. Both replay paths reject a key after a later generation takes over the current root. A definitive no-create result wins over an overlapping same-key recovery lookup and restores the same current generation to `retryable`.
 4. At the database boundary, make every invoice mutation share the existing approval advisory lock and reject it while a replacement generation is `creating`, `retryable`, or `recovery_required`. This preserves the approved PDF/invoice lifecycle evidence from legacy writers through the external no-send call.
 5. Keep the original table's one-row-per-approval/PDF uniqueness intact so an older provider revision can still read a single current root row after deployment rollback. The replacement event is additive audit history, not a second competing root row.
 6. Expose the action only through the existing private full receivables boundary and add proof that it has the same authentication/actor/idempotency behavior as ordinary no-send draft creation.
@@ -29,12 +29,12 @@ Max files: 6
 - Acceptance criteria:
   1. `CommercialBillingInvoiceGmailDraftService.replace_missing` admits only a `draft_created` root with `reconciliation_state == 'draft_missing'` and a still-draft approved invoice, records the predecessor snapshot/event, then calls only `create_draft`; this is settled by the real PostgreSQL normal/precondition tests in `tests/test_commercial_billing_gmail_drafts.py`.
   2. The replacement action assigns a distinct generation-scoped RFC Message-ID and leaves no `UPDATE invoices` / send path in the Gmail-draft service; this is settled by the event-row, gateway-header, and invoice-state assertions in `tests/test_commercial_billing_gmail_drafts.py`.
-  3. The same replacement idempotency key returns/recoveries the one committed replacement intent only while its immutable event generation remains the current root; a replay after a later replacement rejects before Gmail. A concurrent fresh key cannot produce a second Gmail create, and a definitive no-create outcome restores retryability even if an overlapping same-key recovery lookup records an uncertain state. This is settled by the retry, uncertain outcome, generation-advance, advisory-lock, pending-reconciliation, and duplicate-execution tests in `tests/test_commercial_billing_gmail_drafts.py`.
+  3. A replacement or sent-mail reconciliation idempotency key returns/recoveries the one committed generation only while its immutable generation remains the current root; a replay after a later replacement rejects before Gmail. A concurrent fresh key cannot produce a second Gmail create, and a definitive no-create outcome restores retryability even if an overlapping same-key recovery lookup records an uncertain state. This is settled by the retry, uncertain outcome, generation-advance, advisory-lock, pending-reconciliation, and duplicate-execution tests in `tests/test_commercial_billing_gmail_drafts.py`.
   4. An invoice status or render-field writer started after replacement preparation cannot commit through the pending replacement claim; the database trigger takes the same approval advisory lock and rejects while the replacement generation is unresolved. This is settled by `test_missing_gmail_draft_replacement_blocks_invoice_mutations_until_creation` using two real PostgreSQL connections.
   5. The root table keeps its existing approval/PDF unique constraints while migration 377 adds only transactional audit/event/fence bookkeeping and never writes an invoice sent lifecycle value; this is settled by the migration contract test plus the local production-shape preflight recorded in #2362.
   6. `POST /api/v1/receivables/commercial-billing-approvals/{approval_id}/gmail-draft/replace-missing` requires existing receivables auth, actor, and `Idempotency-Key`, routes to the service, and never returns PDF bytes; this is settled by the full ASGI route test.
 - Reachability proof: the real full FastAPI route invokes the service under existing token/actor dependencies; real PostgreSQL fixtures prove the committed intent and event state; a recording Gmail gateway proves the only external operation is no-send `create_draft` with the replacement RFC Message-ID.
-- Affected surfaces: `atlas_brain/api/invoicing/receivables.py`; `atlas_brain/services/commercial_billing_invoice_gmail_drafts.py`; migration 377; the existing Gmail-draft contract suite and invoicing workflow enrollment.
+- Affected surfaces: `atlas_brain/api/invoicing/receivables.py`; `atlas_brain/services/commercial_billing_invoice_gmail_drafts.py`; `atlas_brain/services/commercial_billing_invoice_gmail_sent_reconciliation.py`; migration 377; the existing Gmail-draft contract suite and invoicing workflow enrollment.
 - Risk areas: financial lifecycle separation; missing-versus-sent proof; idempotency/retry; concurrent replacement attempts; migration atomicity and rollback compatibility; credential boundary; PII-free logs/responses.
 - Reviewer rules triggered: R1, R2, R3, R4, R5, R6, R8, R10, R11, R12, R13, R14.
 
@@ -64,6 +64,7 @@ Max files: 6
 - `.github/workflows/atlas_invoicing_checks.yml`
 - `atlas_brain/api/invoicing/receivables.py`
 - `atlas_brain/services/commercial_billing_invoice_gmail_drafts.py`
+- `atlas_brain/services/commercial_billing_invoice_gmail_sent_reconciliation.py`
 - `atlas_brain/storage/migrations/377_commercial_billing_gmail_draft_replacements.sql`
 - `plans/PR-EOM-Missing-Gmail-Draft-Replacement.md`
 - `tests/test_commercial_billing_gmail_drafts.py`
@@ -74,9 +75,19 @@ Migration 377 uses `-- atlas: atomic-bookkeeping` because it couples the event t
 
 The normal create/reuse code remains the transport/recovery engine for that current root: a definite Gmail rejection becomes retryable even when an overlapping duplicate request first logged recovery-required; an uncertain result is searched by the newly persisted RFC Message-ID; confirmation saves one Gmail draft/message/thread identity. The immutable replacement event is one-to-one with its replacement operation and records its target generation; replay first compares that target to the mutable root and fails closed if a later replacement advanced it. A fresh concurrent key cannot pass the missing-draft predicate after the first committed transition, and a pending Sent-mail recheck blocks replacement until that proof attempt completes.
 
+The Sent-mail reconciler writes the root's current generation onto each reconciliation operation when it is created. Migration 377 backfills the already-deployed generation-1 operations through a non-null default. On a same-key replay, the reconciler takes the shared approval lock, refetches the operation/root join, and compares the operation generation to the current root before it can return a completed result or make a Gmail lookup. A later replacement therefore makes the old reconciliation key an explicit stale conflict rather than pairing its historical outcome with a new delivery projection.
+
 Migration 377 also adds a `BEFORE UPDATE` trigger on `invoices`. It first acquires the same approval advisory lock held by replacement preparation, then rejects any invoice mutation while the corresponding event's current generation remains `creating`, `retryable`, or `recovery_required`. A legacy MCP/repository writer that arrives before the replacement lock commits first, so preparation rereads its changed invoice and fails closed; one that arrives afterward waits, observes the committed replacement claim, and cannot change lifecycle or render fields before the Gmail outcome is known.
 
 The prior missing identity is not deleted or silently discarded: the event snapshot records its root ID, prior/new generation, full durable draft/reconciliation state, actor, timestamp, and replacement operation. An older provider revision continues to see one root record rather than encountering duplicate approval/PDF rows; because it cannot derive a later generation's RFC Message-ID, it fails closed instead of issuing a duplicate draft.
+
+### Execution model and invariant
+
+The provider state machine runs in PostgreSQL's default `READ COMMITTED` transaction model. Gmail calls are deliberately outside those transactions. The protocol uses only database-provided closed-surface components: transaction-scoped advisory locks serialize a given operation key and the shared approval transition; unique operation keys and replacement-event generations bind each committed intent to one durable identity; conditional row updates protect state transitions; atomic transactions persist either the full intent/evidence change or none of it; and the invoice `BEFORE UPDATE` trigger takes the shared approval lock and fences legacy invoice writers while an unresolved replacement is current.
+
+For every interleaving admitted by that model, each `(operation source, idempotency key)` has one durable intent bound to exactly one `(draft record, generation)`. A root generation has at most one unresolved replacement intent; distinct Sent-mail reconciliation keys may observe that same generation concurrently, but their finalizations take the shared approval lock and only one conditional financial transition can commit. A replay may return, recover, or make an external Gmail lookup/create call only while its persisted generation equals the current root generation. A replacement refuses to advance a root while any prior-generation reconciliation intent is pending. Once a later replacement commits, every completed operation bound to an earlier generation fails before Gmail or an invoice write. An invoice writer either commits before replacement preparation reads the invoice (so the replacement precondition fails), or waits for the approval lock and is rejected by the trigger while the replacement remains unresolved. No path in this service marks an invoice sent; only the pre-existing Sent-mail reconciler can do so after verifiable Gmail `SENT` evidence.
+
+This model assumes PostgreSQL advisory locks and row/trigger semantics are available to all application writers, migrations have been applied before this provider version serves traffic, and privileged direct database administration does not disable the trigger or edit rows outside the application protocol. Gmail can be unavailable, ambiguous, duplicate a transport response, or lose a request response; those outcomes are represented by the persisted retry/recovery state and do not authorize a new generation or send operation. The model does not assume Gmail supports caller idempotency.
 
 ## Intentional
 
@@ -84,6 +95,7 @@ The prior missing identity is not deleted or silently discarded: the event snaps
 - The root record is a current-delivery projection, while migration 377's event table is the append-only identity/history ledger. This preserves the existing one-row compatibility contract without losing the missing generation.
 - A replacement gets a new generation-scoped RFC Message-ID; it does not reuse the missing draft's mailbox identity.
 - A stale replacement idempotency key is rejected rather than reconstructed against a later current root; the append-only event is the durable generation claim for that key.
+- A stale completed Sent-mail reconciliation key is rejected rather than paired with a later root's mutable reconciliation projection; its operation stores the generation it observed.
 - A commercial invoice is temporarily immutable while its explicit replacement generation is unresolved. Rejecting a legacy mutation is safer than permitting a stale PDF or an out-of-band sent status; the trigger lifts automatically once the draft is confirmed.
 - The service does not query or send Sent mail during replacement. The existing reconciliation path remains the sole proof-gated invoice-sent writer; a stale invoice/non-missing reconciliation state rejects the action.
 - No UI copy or operator interaction shape is decided here. Tracker and Website will consume the deployed provider action in a separate slice.
@@ -101,12 +113,12 @@ Parked hardening: none.
 
 ## Verification
 
-- Ephemeral local PostgreSQL (`postgres:16`, loopback-only port) ran `python -m pytest -q tests/test_commercial_billing_gmail_drafts.py -k 'definite_failure_wins_over_duplicate_recovery or blocks_invoice_mutations_until_creation'` — 2 passed, 121 deselected.
-- The same isolated database ran `python -m pytest -q tests/test_commercial_billing_gmail_drafts.py` — 123 passed.
-- Local equivalent of the invoicing workflow approval blocker command — 2 passed, 41 deselected; receivables/repository group — 589 passed; MCP/OAuth group — 43 passed; migration runner — 30 passed, 1 skipped.
+- Ephemeral local PostgreSQL (`postgres:16`, loopback-only port) ran `python -m pytest -q tests/test_commercial_billing_gmail_drafts.py -k 'definite_failure_wins_over_duplicate_recovery or blocks_invoice_mutations_until_creation or sent_reconciliation_replay_rejects_stale_replacement_generation_before_gmail or replacement_migration_backfills_existing_sent_reconciliation_operations'` — 4 passed, 121 deselected in 1.92s.
+- The same isolated database ran `python -m pytest -q tests/test_commercial_billing_gmail_drafts.py` — 125 passed, 1 warning in 17.46s.
+- Local equivalent of the invoicing workflow approval blocker command — 2 passed, 41 deselected in 0.19s; receivables/repository group — 591 passed, 1 warning in 71.11s; MCP/OAuth group — 43 passed in 0.56s; migration runner — 30 passed, 1 skipped in 0.42s.
 - Scoped Ruff, Python compile, and `git diff --check` passed.
-- Pinned redacted Gitleaks scan of the previously published `origin/main..d33ac487` range with the trusted-base baseline — 1 commit scanned, no leaks. The final exact-head scan and diff-budget check run after this corrective commit.
-- `bash scripts/push_pr.sh .tmp/h15-pr-body.md --force-with-lease -u origin HEAD` remains the repository local-review/unit gate for the exact corrective commit before publication; current-head thread reconciliation follows publication.
+- Local `check_diff_budget.py` accepted 1,874 additions through the visible indivisibility override. The pinned redacted Gitleaks scan of `origin/main..HEAD` scanned all 3 branch commits after mounting the primary Git metadata for this linked worktree; it found no leaks.
+- `bash scripts/push_pr.sh .tmp/h15-pr-body.md --force-with-lease -u origin HEAD` ran the repository local-review/unit gate and published this corrective branch; its full unit mirror found the established 160 failing/errored baseline nodes with 0 regressions and 0 newly-passing nodes. Current-head thread reconciliation follows publication.
 - Pre-implementation production evidence: `BEGIN TRANSACTION READ ONLY` inspection of the live `atlas` database at the #2387 runtime returned 0 root draft/missing/sent rows and confirmed the existing unique-constraint names; it made no data change.
 
 ## Estimated diff size
@@ -116,7 +128,8 @@ Parked hardening: none.
 | `.github/workflows/atlas_invoicing_checks.yml` | 2 |
 | `atlas_brain/api/invoicing/receivables.py` | 25 |
 | `atlas_brain/services/commercial_billing_invoice_gmail_drafts.py` | 673 |
-| `atlas_brain/storage/migrations/377_commercial_billing_gmail_draft_replacements.sql` | 121 |
-| `plans/PR-EOM-Missing-Gmail-Draft-Replacement.md` | 122 |
-| `tests/test_commercial_billing_gmail_drafts.py` | 781 |
-| **Total** | **1724** |
+| `atlas_brain/services/commercial_billing_invoice_gmail_sent_reconciliation.py` | 31 |
+| `atlas_brain/storage/migrations/377_commercial_billing_gmail_draft_replacements.sql` | 129 |
+| `plans/PR-EOM-Missing-Gmail-Draft-Replacement.md` | 135 |
+| `tests/test_commercial_billing_gmail_drafts.py` | 927 |
+| **Total** | **1922** |

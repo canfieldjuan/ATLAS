@@ -30,6 +30,14 @@ ALTER TABLE commercial_billing_invoice_gmail_drafts
             )
         );
 
+-- A completed reconciliation is an observation of one exact current identity.
+-- Before H-15 there was only generation 1, so this default safely backfills
+-- deployed operations while subsequent inserts persist their observed generation.
+ALTER TABLE commercial_billing_gmail_sent_reconciliation_operations
+    ADD COLUMN IF NOT EXISTS draft_generation INTEGER NOT NULL DEFAULT 1,
+    ADD CONSTRAINT commercial_billing_gmail_sent_reconciliation_operations_generation_check
+        CHECK (draft_generation > 0);
+
 CREATE TABLE commercial_billing_invoice_gmail_draft_replacement_events (
     id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     gmail_draft_record_id UUID NOT NULL
