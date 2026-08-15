@@ -1,6 +1,6 @@
 # Plan archive index
 
-1525 archived plan doc(s). Merged plan docs are moved under `archive/` and listed below; once the archive sweep has run, the `plans/` root holds only in-flight slices.
+1526 archived plan doc(s). Merged plan docs are moved under `archive/` and listed below; once the archive sweep has run, the `plans/` root holds only in-flight slices.
 
 - [PR-ASR-Pip-Audit-Egg-Fragment](archive/PR-ASR-Pip-Audit-Egg-Fragment.md) - lane: security/workflow | phase: Production hardening
 - [PR-ASR-Requirements-Audit-Pin](archive/PR-ASR-Requirements-Audit-Pin.md) - lane: security/workflow | phase: Production hardening
@@ -1007,6 +1007,7 @@
 - [PR-Docs-Only-Live-Reconciliation](archive/PR-Docs-Only-Live-Reconciliation.md) - lane: workflow/docs-only-live-reconciliation | phase: Workflow/process
 - [PR-Docs-Preserve-Product-Audit-Notes](archive/PR-Docs-Preserve-Product-Audit-Notes.md) - lane: docs/product-history-preservation | phase: Workflow/process
 - [PR-EOM-API-Contacts-Auth](archive/PR-EOM-API-Contacts-Auth.md) - lane: eom-crm/api-auth | phase: Production hardening
+- [PR-EOM-Approved-Invoice-PDF-Artifact](archive/PR-EOM-Approved-Invoice-PDF-Artifact.md) - lane: eom/billing-approved-gmail-drafts | phase: Vertical slice
 - [PR-EOM-Atomic-Portal-Reconciliation](archive/PR-EOM-Atomic-Portal-Reconciliation.md) - lane: eom-crm/lead-funnel | phase: production hardening
 - [PR-EOM-B2B-Omission-Flag-Pin](archive/PR-EOM-B2B-Omission-Flag-Pin.md) - lane: eom-crm/read-scoping | phase: robust testing
 - [PR-EOM-Billing-Candidate-Approval-Invoices](archive/PR-EOM-Billing-Candidate-Approval-Invoices.md) - lane: eom/billing-approved-gmail-drafts | phase: Vertical slice
