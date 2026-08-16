@@ -23,7 +23,10 @@ from atlas_brain.api.invoicing import actions
 from atlas_brain.api.invoicing import auth as receivables_auth
 from atlas_brain.eom_api import auth as eom_receivables_auth
 from atlas_brain.services.receivables import (
+    _RECEIPT_DELIVERY_REQUIRED_COLUMNS,
     _RECEIPT_DELIVERY_REQUIRED_INDEXES,
+    _RECEIPT_DISPATCH_REQUIRED_COLUMNS,
+    _RECEIPT_DISPATCH_REQUIRED_INDEXES,
     _RECEIVABLES_REQUIRED_COLUMNS,
     _RECEIVABLES_REQUIRED_INDEXES,
     ReceivablesConflictError,
@@ -187,6 +190,7 @@ class _CreatePaymentConnection:
                 ) in (
                     *_RECEIVABLES_REQUIRED_INDEXES,
                     *_RECEIPT_DELIVERY_REQUIRED_INDEXES,
+                    *_RECEIPT_DISPATCH_REQUIRED_INDEXES,
                 )
             }
             return [
@@ -1498,6 +1502,43 @@ def _packaged_migration_sql(migration_stem: str) -> str:
     ).read_text(encoding="utf-8")
 
 
+async def _apply_receivables_migrations(
+    conn,
+    schema: str,
+    *,
+    include_check_metadata: bool = True,
+    include_receipt_outbox: bool = True,
+    include_receipt_dispatch: bool = True,
+) -> None:
+    """Apply the real receipt-aware migration set to an isolated test schema.
+
+    Migration 378 contains concurrent index DDL and therefore must run through
+    the production migration runner rather than the legacy raw-SQL fixture.
+    Tests that model a pre-378 deployment continue to use
+    ``_receivables_migration_sql`` directly and state that boundary explicitly.
+    """
+    if include_receipt_dispatch and not include_receipt_outbox:
+        raise ValueError("Receipt dispatch requires the receipt-outbox migration")
+
+    await conn.execute(
+        _receivables_migration_sql(
+            include_check_metadata=include_check_metadata,
+            include_receipt_outbox=include_receipt_outbox,
+        )
+    )
+    if not include_receipt_dispatch:
+        return
+
+    from atlas_brain.storage.migrations import run_migrations
+
+    migrations_dir = Path(__file__).parents[1] / "atlas_brain/storage/migrations"
+    await run_migrations(
+        _MigrationConnectionPool(conn, schema),
+        migrations_dir=migrations_dir,
+        only={"378_receivables_payment_receipt_delivery"},
+    )
+
+
 async def _schema_foreign_key_relationships(conn, schema: str) -> set[tuple]:
     rows = await conn.fetch(
         """
@@ -1566,7 +1607,8 @@ def test_eom_readiness_migration_set_is_closed_over_receivables_dependencies():
     )
 
     assert set(_RECEIVABLES_REQUIRED_COLUMNS) <= created_tables
-    assert "payment_receipt_deliveries" in created_tables
+    assert set(_RECEIPT_DELIVERY_REQUIRED_COLUMNS) <= created_tables
+    assert set(_RECEIPT_DISPATCH_REQUIRED_COLUMNS) <= created_tables
     assert positions["012_appointments"] < positions["035_contacts"]
     assert positions["035_contacts"] < positions["045_invoices"]
     assert positions["045_invoices"] < positions["344_receivables_payments"]
@@ -1646,6 +1688,53 @@ async def test_eom_receivables_readiness_migration_set_builds_ready_schema():
         service = ReceivablesService(_SingleConnectionPool(conn, schema))
         assert await service.is_ready() is True
         assert await service.is_receipt_delivery_ready() is True
+        for table_name, required_columns in _RECEIPT_DISPATCH_REQUIRED_COLUMNS.items():
+            actual_columns = {
+                row["column_name"]
+                for row in await conn.fetch(
+                    """
+                    SELECT column_name
+                    FROM information_schema.columns
+                    WHERE table_schema = current_schema() AND table_name = $1
+                    """,
+                    table_name,
+                )
+            }
+            expected_columns = set(required_columns)
+            if table_name == "payment_receipt_deliveries":
+                expected_columns |= set(_RECEIPT_DELIVERY_REQUIRED_COLUMNS[table_name])
+            assert actual_columns == expected_columns
+
+        async def assert_dispatch_schema_is_not_ready(drop_statement: str) -> None:
+            transaction = conn.transaction()
+            await transaction.start()
+            try:
+                await conn.execute(drop_statement)
+                assert await service.is_ready() is True
+                assert await service.is_receipt_delivery_ready() is False
+            finally:
+                await transaction.rollback()
+            assert await service.is_receipt_delivery_ready() is True
+
+        await assert_dispatch_schema_is_not_ready(
+            "ALTER TABLE payment_receipt_deliveries "
+            "DROP COLUMN rfc_message_id CASCADE"
+        )
+        await assert_dispatch_schema_is_not_ready(
+            "DROP TABLE payment_receipt_delivery_operations CASCADE"
+        )
+        await assert_dispatch_schema_is_not_ready(
+            "DROP TABLE payment_receipt_delivery_reconciliation_events"
+        )
+        for table_name, index_name, *_ignored, constraint_type in (
+            _RECEIPT_DISPATCH_REQUIRED_INDEXES
+        ):
+            drop_statement = (
+                f'ALTER TABLE "{table_name}" DROP CONSTRAINT "{index_name}" CASCADE'
+                if constraint_type is not None
+                else f'DROP INDEX "{index_name}"'
+            )
+            await assert_dispatch_schema_is_not_ready(drop_statement)
         expected_foreign_keys = {
             ("appointments", ("contact_id",), "contacts", ("id",), "n"),
             ("contact_interactions", ("contact_id",), "contacts", ("id",), "c"),
@@ -1915,18 +2004,28 @@ async def test_real_migration_backfills_and_adopts_late_rolling_writer_checks():
         }
 
         migration_sql = _receivables_migration_sql()
-        await conn.execute(migration_sql)
+        dispatch_migration_sql = _packaged_migration_sql(
+            "378_receivables_payment_receipt_delivery"
+        )
+        await _apply_receivables_migrations(conn, schema)
 
         created_tables = set(
             re.findall(r"CREATE TABLE IF NOT EXISTS ([a-z_]+)", migration_sql)
+        ) | set(
+            re.findall(
+                r"CREATE TABLE IF NOT EXISTS ([a-z_]+)", dispatch_migration_sql
+            )
         )
         # The receipt outbox is an EOM-only additive capability.  It is
         # intentionally absent from the legacy/full-MCP readiness set, so a
         # mixed rollout cannot make established financial entrypoints claim
         # their schema is incomplete solely because the EOM outbox has not
         # reached that database yet.
+        receipt_delivery_tables = set(_RECEIPT_DELIVERY_REQUIRED_COLUMNS) | set(
+            _RECEIPT_DISPATCH_REQUIRED_COLUMNS
+        )
         assert set(_RECEIVABLES_REQUIRED_COLUMNS) == (
-            created_tables - {"payment_receipt_deliveries"}
+            created_tables - receipt_delivery_tables
         ) | {"invoice_payments"}
         assert "payment_receipt_deliveries" in created_tables
 
@@ -1946,6 +2045,24 @@ async def test_real_migration_backfills_and_adopts_late_rolling_writer_checks():
             if table_name == "invoice_payments":
                 actual_columns -= pre_migration_invoice_payment_columns
             assert actual_columns == set(required_columns)
+
+        for table_name, required_columns in _RECEIPT_DISPATCH_REQUIRED_COLUMNS.items():
+            actual_columns = {
+                row["column_name"]
+                for row in await conn.fetch(
+                    """
+                    SELECT column_name
+                    FROM information_schema.columns
+                    WHERE table_schema = current_schema()
+                      AND table_name = $1
+                    """,
+                    table_name,
+                )
+            }
+            expected_columns = set(required_columns)
+            if table_name == "payment_receipt_deliveries":
+                expected_columns |= set(_RECEIPT_DELIVERY_REQUIRED_COLUMNS[table_name])
+            assert actual_columns == expected_columns
 
         backfilled = await conn.fetch(
             """
@@ -2010,13 +2127,12 @@ async def test_real_migration_backfills_and_adopts_late_rolling_writer_checks():
         assert await service.is_ready() is True
         explicit_migration_index_names = set(
             re.findall(
-                r"CREATE (?:UNIQUE )?INDEX IF NOT EXISTS ([a-z_]+)",
-                migration_sql,
+                r"CREATE\s+(?:UNIQUE\s+)?INDEX\s+(?:CONCURRENTLY\s+)?"
+                r"(?:IF\s+NOT\s+EXISTS\s+)?([a-z_]+)",
+                f"{migration_sql}\n{dispatch_migration_sql}",
             )
         )
-        migration_table_names = set(
-            re.findall(r"CREATE TABLE IF NOT EXISTS ([a-z_]+)", migration_sql)
-        )
+        migration_table_names = created_tables
         constraint_index_rows = await conn.fetch(
             """
             SELECT
@@ -2048,8 +2164,14 @@ async def test_real_migration_backfills_and_adopts_late_rolling_writer_checks():
             index_name
             for _table_name, index_name, *_rest in _RECEIPT_DELIVERY_REQUIRED_INDEXES
         }
+        receipt_dispatch_index_names = {
+            index_name
+            for _table_name, index_name, *_rest in _RECEIPT_DISPATCH_REQUIRED_INDEXES
+        }
         assert (
-            required_index_names | receipt_delivery_index_names
+            required_index_names
+            | receipt_delivery_index_names
+            | receipt_dispatch_index_names
             == migration_index_names
         )
         for index_name in sorted(required_index_names):
@@ -2124,7 +2246,7 @@ async def test_real_postgres_customer_ledger_is_bounded_receipt_aware_and_read_o
     conn = await asyncpg.connect(database_url)
     try:
         await _create_pre_receivables_schema(conn, schema)
-        await conn.execute(_receivables_migration_sql())
+        await _apply_receivables_migrations(conn, schema)
         contact_id, other_contact_id = uuid4(), uuid4()
         invoice_a, invoice_b, other_invoice = uuid4(), uuid4(), uuid4()
         await conn.executemany(
@@ -2431,7 +2553,7 @@ async def test_real_postgres_customer_ledger_is_bounded_receipt_aware_and_read_o
             for table in before
         }
 
-        await conn.execute("DROP TABLE payment_receipt_deliveries")
+        await conn.execute("DROP TABLE payment_receipt_deliveries CASCADE")
         with pytest.raises(ReceivablesSchemaUnavailableError, match="customer ledger"):
             await service.list_customer_ledger(contact_id=contact_id)
     finally:
@@ -2451,7 +2573,7 @@ async def test_real_postgres_customer_ledger_bounds_allocation_history_and_prese
     conn = await asyncpg.connect(database_url)
     try:
         await _create_pre_receivables_schema(conn, schema)
-        await conn.execute(_receivables_migration_sql())
+        await _apply_receivables_migrations(conn, schema)
         contact_id, invoice_id, payment_id = uuid4(), uuid4(), uuid4()
         await conn.execute(
             "INSERT INTO contacts (id, business_context_id) VALUES ($1, 'effingham_maids')",
@@ -2551,7 +2673,7 @@ async def test_real_postgres_customer_ledger_aggregate_balances_exceed_one_row_m
     conn = await asyncpg.connect(database_url)
     try:
         await _create_pre_receivables_schema(conn, schema)
-        await conn.execute(_receivables_migration_sql())
+        await _apply_receivables_migrations(conn, schema)
         contact_id = uuid4()
         await conn.execute(
             "INSERT INTO contacts (id, business_context_id) VALUES ($1, 'effingham_maids')",
@@ -2611,7 +2733,7 @@ async def test_real_postgres_receivables_lifecycle_and_concurrent_replays():
     conn_b = await asyncpg.connect(database_url)
     try:
         await _create_pre_receivables_schema(observer, schema)
-        await observer.execute(_receivables_migration_sql())
+        await _apply_receivables_migrations(observer, schema)
         contact_id = uuid4()
         invoice_ids = [uuid4() for _ in range(4)]
         await observer.execute("INSERT INTO contacts (id) VALUES ($1)", contact_id)
@@ -3015,7 +3137,7 @@ async def test_real_postgres_receipt_outbox_failure_rolls_back_new_payment():
     conn = await asyncpg.connect(database_url)
     try:
         await _create_pre_receivables_schema(conn, schema)
-        await conn.execute(_receivables_migration_sql())
+        await _apply_receivables_migrations(conn, schema)
         contact_id = uuid4()
         await conn.execute(
             "INSERT INTO contacts (id, business_context_id) "
@@ -3122,7 +3244,7 @@ async def test_real_postgres_unapplied_payment_holds_customer_eligibility_lock()
     archive_task = None
     try:
         await _create_pre_receivables_schema(observer, schema)
-        await observer.execute(_receivables_migration_sql())
+        await _apply_receivables_migrations(observer, schema)
         contact_id = uuid4()
         await observer.execute(
             "INSERT INTO contacts (id, business_context_id) "
@@ -3219,7 +3341,7 @@ async def test_real_postgres_unapplied_payment_rejects_ineligible_customer_rows(
     payment_conn = await asyncpg.connect(database_url)
     try:
         await _create_pre_receivables_schema(observer, schema)
-        await observer.execute(_receivables_migration_sql())
+        await _apply_receivables_migrations(observer, schema)
         cases = (
             ("foreign", "other_business", "customer", "active"),
             ("lead", "effingham_maids", "lead", "active"),
@@ -3767,7 +3889,7 @@ async def test_real_postgres_http_and_mcp_entrypoints_use_supported_dependencies
     conn = await asyncpg.connect(database_url)
     try:
         await _create_pre_receivables_schema(conn, schema)
-        await conn.execute(_receivables_migration_sql())
+        await _apply_receivables_migrations(conn, schema)
         contact_id = uuid4()
         invoice_ids = [uuid4() for _ in range(3)]
         await conn.execute("INSERT INTO contacts (id) VALUES ($1)", contact_id)
