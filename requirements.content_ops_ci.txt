@@ -8,7 +8,7 @@ slowapi==0.1.10
 
 # Content-ops workflow collection still imports the torch-backed service base.
 torch==2.13.0
-numpy==2.5.1
+numpy==2.4.6
 
 # HTTP, database, and scheduling surfaces exercised by content-ops tests.
 httpx==0.28.1

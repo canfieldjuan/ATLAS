@@ -17,7 +17,7 @@ DIGEST_PREFIX = "# constraints-root-asr-sha256: "
 INCLUDE_LINE = f"-c {CONSTRAINTS_NAME}"
 UV_VERSION = "0.10.10"
 PLATFORM = "x86_64-manylinux_2_28"
-EXCLUDE_NEWER = "2026-07-14T19:30:00Z"
+EXCLUDE_NEWER = "2026-08-11T00:00:00Z"
 _NAME_RE = re.compile(r"^([A-Za-z0-9_.-]+)(?:\[[^]]+\])?")
 _CONCRETE_RE = re.compile(
     r"^[A-Za-z0-9_.-]+(?:\[[^]]+\])?(?:==[^ ;]+| @ \S+)$"
