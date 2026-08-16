@@ -13,14 +13,17 @@ load_dotenv(_env_root / ".env", override=True)
 load_dotenv(_env_root / ".env.local", override=True)
 
 import asyncio
+import json
 import logging
 import subprocess
 from contextlib import asynccontextmanager
 from datetime import datetime, timedelta, timezone
 from urllib.parse import urlparse
 
-from fastapi import FastAPI
-from fastapi.responses import JSONResponse, PlainTextResponse
+from fastapi import FastAPI, Request
+from fastapi.encoders import jsonable_encoder
+from fastapi.exceptions import RequestValidationError
+from fastapi.responses import JSONResponse, PlainTextResponse, Response
 
 from .api import router as api_router
 from .config import settings
@@ -914,6 +917,30 @@ app = FastAPI(
     version="0.2.0",
     lifespan=lifespan,
 )
+
+
+async def _request_validation_error_handler(
+    _request: Request, exc: RequestValidationError
+) -> Response:
+    """Return 422 even when malformed JSON text cannot be emitted as UTF-8."""
+
+    content = {"detail": jsonable_encoder(exc.errors())}
+    try:
+        return JSONResponse(status_code=422, content=content)
+    except UnicodeEncodeError:
+        return Response(
+            content=json.dumps(
+                content,
+                ensure_ascii=True,
+                allow_nan=False,
+                separators=(",", ":"),
+            ),
+            status_code=422,
+            media_type="application/json",
+        )
+
+
+app.add_exception_handler(RequestValidationError, _request_validation_error_handler)
 
 # Campaign email webhook receiver (Resend ESP events) at root /webhooks/*
 from .api.campaign_webhooks import router as campaign_webhook_router

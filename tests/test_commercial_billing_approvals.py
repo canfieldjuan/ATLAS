@@ -37,6 +37,10 @@ from atlas_brain.services.commercial_billing_invoice_pdfs import (
     CommercialBillingInvoicePDFValidationError,
     _validate_key,
 )
+from atlas_brain.services.commercial_billing_runs import (
+    CommercialBillingRunConflictError,
+    CommercialBillingRunService,
+)
 
 
 def _fingerprint(value: object) -> str:
@@ -169,6 +173,7 @@ class _MemoryConnection:
         self.approvals_by_key: dict[str, dict] = {}
         self.approvals_by_candidate: dict[tuple[str, str], dict] = {}
         self.insert_attempts = 0
+        self.review_decision: dict | None = None
 
     async def fetchval(self, query, *_args):
         assert "pg_advisory_xact_lock" in query
@@ -189,6 +194,8 @@ class _MemoryConnection:
             else:
                 approval = self.approvals_by_candidate.get((args[0], args[1]))
             return self._view_row(approval) if approval else None
+        if "FROM commercial_billing_candidate_review_decisions" in query:
+            return self.review_decision
         if "INSERT INTO invoices" in query:
             self.insert_attempts += 1
             invoice_id = args[0]
@@ -267,6 +274,11 @@ class _SchemaPool:
             await self.connection.execute(f'SET LOCAL search_path TO "{self.schema}"')
             return await self.connection.fetchrow(query, *args)
 
+    async def fetch(self, query, *args):
+        async with self.connection.transaction():
+            await self.connection.execute(f'SET LOCAL search_path TO "{self.schema}"')
+            return await self.connection.fetch(query, *args)
+
 
 @asynccontextmanager
 async def _approval_database():
@@ -285,6 +297,7 @@ async def _approval_database():
             "047_invoice_extra_fields.sql",
             "370_commercial_billing_runs.sql",
             "372_commercial_billing_candidate_approvals.sql",
+            "380_commercial_billing_candidate_review_decisions.sql",
             "373_commercial_billing_invoice_pdf_artifacts.sql",
         ):
             await connection.execute((migrations / name).read_text())
@@ -386,6 +399,25 @@ async def test_stale_or_blocked_candidate_never_attempts_an_invoice_insert():
         )
     assert mismatch_pool.conn.insert_attempts == 0
     assert mismatch_source.calls == []
+
+
+@pytest.mark.asyncio
+async def test_excluded_review_decision_never_attempts_an_invoice_insert():
+    run_id, candidate = uuid4(), _candidate()
+    pool, source = _MemoryPool(candidate, run_id), _CandidateService(candidate)
+    pool.conn.review_decision = {"decision": "excluded"}
+
+    with pytest.raises(CommercialBillingApprovalConflictError, match="excluded"):
+        await _service(pool, source).approve(
+            billing_run_id=run_id,
+            candidate_key=candidate["candidateKey"],
+            expected_source_fingerprint=candidate["sourceFingerprint"],
+            idempotency_key="blocked1",
+            actor="Juan",
+        )
+
+    assert pool.conn.insert_attempts == 0
+    assert pool.conn.approvals_by_key == {}
 
 
 @pytest.mark.asyncio
@@ -519,6 +551,473 @@ async def test_real_postgres_approval_is_atomic_and_reuses_same_candidate_across
         invoice = await connection.fetchrow("SELECT status, total_amount, amount_due FROM invoices")
         assert dict(invoice) == {"status": "draft", "total_amount": Decimal("96.50"), "amount_due": Decimal("96.50")}
         assert source.calls == ["2026-03", "2026-03"]
+
+
+@pytest.mark.asyncio
+async def test_real_postgres_exclusion_blocks_approval_until_reincluded_and_rejects_late_review():
+    async with _approval_database() as (connection, schema):
+        run_id, candidate = uuid4(), _candidate(
+            candidate_key="commercial-billing:excluded:2026-03"
+        )
+        fingerprint = candidate["sourceFingerprint"]
+        await connection.execute(
+            "INSERT INTO contacts (id) VALUES ($1)",
+            UUID(candidate["customer"]["contactId"]),
+        )
+        await connection.execute(
+            """
+            INSERT INTO commercial_billing_runs (
+                id, billing_period, state, candidate_contract_version,
+                snapshot_fingerprint, source, idempotency_key,
+                request_fingerprint, created_by
+            ) VALUES ($1, '2026-03', 'draft', 2, $2, 'eom_admin', 'review-excluded', $2, 'Juan')
+            """,
+            run_id,
+            fingerprint,
+        )
+        await connection.execute(
+            """
+            INSERT INTO commercial_billing_run_candidates (
+                id, billing_run_id, candidate_key, source_fingerprint,
+                display_order, snapshot
+            ) VALUES ($1, $2, $3, $4, 0, $5::jsonb)
+            """,
+            uuid4(),
+            run_id,
+            candidate["candidateKey"],
+            fingerprint,
+            json.dumps(candidate),
+        )
+        await connection.execute(
+            """
+            INSERT INTO commercial_billing_candidate_review_decisions (
+                id, billing_run_id, candidate_key, source_fingerprint,
+                revision, decision, reason, source, idempotency_key,
+                request_fingerprint, decided_by
+            ) VALUES ($1, $2, $3, $4, 1, 'excluded', $5, 'eom_admin', $6, $7, 'Juan')
+            """,
+            uuid4(),
+            run_id,
+            candidate["candidateKey"],
+            fingerprint,
+            "Resolve a customer question first.",
+            "review-exclude-1",
+            fingerprint,
+        )
+
+        approval_service = _service(
+            _SchemaPool(connection, schema), _CandidateService(candidate)
+        )
+        with pytest.raises(CommercialBillingApprovalConflictError, match="excluded"):
+            await approval_service.approve(
+                billing_run_id=run_id,
+                candidate_key=candidate["candidateKey"],
+                expected_source_fingerprint=fingerprint,
+                idempotency_key="blocked2",
+                actor="Juan",
+            )
+        assert await connection.fetchval("SELECT COUNT(*) FROM invoices") == 0
+        assert (
+            await connection.fetchval(
+                "SELECT COUNT(*) FROM commercial_billing_candidate_approvals"
+            )
+            == 0
+        )
+
+        await connection.execute(
+            """
+            INSERT INTO commercial_billing_candidate_review_decisions (
+                id, billing_run_id, candidate_key, source_fingerprint,
+                revision, decision, reason, source, idempotency_key,
+                request_fingerprint, decided_by
+            ) VALUES ($1, $2, $3, $4, 2, 'included', $5, 'eom_admin', $6, $7, 'Juan')
+            """,
+            uuid4(),
+            run_id,
+            candidate["candidateKey"],
+            fingerprint,
+            "Question resolved after review.",
+            "review-include-1",
+            fingerprint,
+        )
+        approved = await approval_service.approve(
+            billing_run_id=run_id,
+            candidate_key=candidate["candidateKey"],
+            expected_source_fingerprint=fingerprint,
+            idempotency_key="restored1",
+            actor="Juan",
+        )
+        assert approved["replayed"] is False
+        assert await connection.fetchval("SELECT COUNT(*) FROM invoices") == 1
+
+        review_service = CommercialBillingRunService(
+            pool=_SchemaPool(connection, schema)
+        )
+        with pytest.raises(CommercialBillingRunConflictError, match="cannot be reviewed"):
+            await review_service.set_candidate_review_decision(
+                billing_run_id=run_id,
+                candidate_key=candidate["candidateKey"],
+                expected_source_fingerprint=fingerprint,
+                decision="excluded",
+                reason="Too late: an invoice already exists.",
+                idempotency_key="review-after-approved-1",
+                actor="Juan",
+            )
+        assert (
+            await connection.fetchval(
+                "SELECT COUNT(*) FROM commercial_billing_candidate_review_decisions"
+            )
+            == 2
+        )
+
+
+@pytest.mark.asyncio
+async def test_real_postgres_global_review_decision_fences_duplicate_runs_and_old_workers():
+    asyncpg = pytest.importorskip("asyncpg")
+    async with _approval_database() as (connection, schema):
+        first_run_id, second_run_id = uuid4(), uuid4()
+        candidate = _candidate(
+            candidate_key="commercial-billing:global-review:2026-03"
+        )
+        fingerprint = candidate["sourceFingerprint"]
+        contact_id = UUID(candidate["customer"]["contactId"])
+        await connection.execute("INSERT INTO contacts (id) VALUES ($1)", contact_id)
+        for run_id, run_key in ((first_run_id, "gla1"), (second_run_id, "glb1")):
+            await connection.execute(
+                """
+                INSERT INTO commercial_billing_runs (
+                    id, billing_period, state, candidate_contract_version,
+                    snapshot_fingerprint, source, idempotency_key,
+                    request_fingerprint, created_by
+                ) VALUES ($1, '2026-03', 'draft', 2, $2, 'eom_admin', $3, $2, 'Juan')
+                """,
+                run_id,
+                fingerprint,
+                run_key,
+            )
+            await connection.execute(
+                """
+                INSERT INTO commercial_billing_run_candidates (
+                    id, billing_run_id, candidate_key, source_fingerprint,
+                    display_order, snapshot
+                ) VALUES ($1, $2, $3, $4, 0, $5::jsonb)
+                """,
+                uuid4(),
+                run_id,
+                candidate["candidateKey"],
+                fingerprint,
+                json.dumps(candidate),
+            )
+
+        review_service = CommercialBillingRunService(pool=_SchemaPool(connection, schema))
+        excluded = await review_service.set_candidate_review_decision(
+            billing_run_id=first_run_id,
+            candidate_key=candidate["candidateKey"],
+            expected_source_fingerprint=fingerprint,
+            decision="excluded",
+            reason="The shared candidate must not be invoiced yet.",
+            idempotency_key="global1",
+            actor="Juan",
+        )
+        assert excluded["reviewDecision"]["revision"] == 1
+        second_view = await review_service.get_run(second_run_id)
+        assert second_view["candidates"][0]["reviewDecision"]["decision"] == "excluded"
+
+        approval_service = _service(
+            _SchemaPool(connection, schema), _CandidateService(candidate)
+        )
+        with pytest.raises(CommercialBillingApprovalConflictError, match="excluded"):
+            await approval_service.approve(
+                billing_run_id=second_run_id,
+                candidate_key=candidate["candidateKey"],
+                expected_source_fingerprint=fingerprint,
+                idempotency_key="global3",
+                actor="Juan",
+            )
+
+        with pytest.raises(asyncpg.PostgresError, match="excluded"):
+            await connection.execute(
+                """
+                INSERT INTO invoices (
+                    id, invoice_number, contact_id, customer_name, line_items,
+                    subtotal, tax_rate, tax_amount, total_amount, due_date,
+                    source, source_ref, business_context_id, metadata
+                ) VALUES (
+                    $1, $2, $3, 'Acme Office', $4::jsonb,
+                    96.50, 0, 0, 96.50, $5,
+                    'eom_commercial_billing', $6, 'effingham_maids', $7::jsonb
+                )
+                """,
+                uuid4(),
+                "INV-OLD-0001",
+                contact_id,
+                json.dumps([]),
+                date(2026, 4, 16),
+                "old1",
+                json.dumps(
+                    {
+                        "candidateKey": candidate["candidateKey"],
+                        "sourceFingerprint": fingerprint,
+                    }
+                ),
+            )
+        assert await connection.fetchval("SELECT COUNT(*) FROM invoices") == 0
+
+        included = await review_service.set_candidate_review_decision(
+            billing_run_id=second_run_id,
+            candidate_key=candidate["candidateKey"],
+            expected_source_fingerprint=fingerprint,
+            decision="included",
+            reason="The shared candidate is ready for approval.",
+            idempotency_key="global2",
+            actor="Juan",
+        )
+        assert included["reviewDecision"]["revision"] == 2
+        first_view = await review_service.get_run(first_run_id)
+        assert first_view["candidates"][0]["reviewDecision"] == included["reviewDecision"]
+
+        approved = await approval_service.approve(
+            billing_run_id=second_run_id,
+            candidate_key=candidate["candidateKey"],
+            expected_source_fingerprint=fingerprint,
+            idempotency_key="global4",
+            actor="Juan",
+        )
+        assert approved["replayed"] is False
+        assert await connection.fetchval("SELECT COUNT(*) FROM invoices") == 1
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("metadata", "canonical_candidate_key", "canonical_source_fingerprint"),
+    (
+        ({}, "candidate", "a" * 64),
+        ({"candidateKey": " ", "sourceFingerprint": "a" * 64}, "candidate", "a" * 64),
+        ({"candidateKey": "candidate"}, "candidate", "a" * 64),
+        ({"candidateKey": "candidate", "sourceFingerprint": "A" * 64}, "candidate", "a" * 64),
+        ({"candidateKey": "candidate", "sourceFingerprint": "a" * 63}, "candidate", "a" * 64),
+        ({"candidateKey": "x" * 513, "sourceFingerprint": "a" * 64}, "candidate", "a" * 64),
+        ({"candidateKey": "\tcandidate\t", "sourceFingerprint": "a" * 64}, "candidate", "a" * 64),
+        ({"candidateKey": "\ncandidate\n", "sourceFingerprint": "a" * 64}, "candidate", "a" * 64),
+        ({"candidateKey": 123, "sourceFingerprint": "a" * 64}, "123", "a" * 64),
+        ({"candidateKey": True, "sourceFingerprint": "a" * 64}, "true", "a" * 64),
+        ({"candidateKey": ["candidate"], "sourceFingerprint": "a" * 64}, "candidate", "a" * 64),
+        (
+            {"candidateKey": "candidate", "sourceFingerprint": int("1" * 64)},
+            "candidate",
+            "1" * 64,
+        ),
+    ),
+    ids=(
+        "missing-identity",
+        "blank-candidate-key",
+        "missing-fingerprint",
+        "uppercase-fingerprint",
+        "short-fingerprint",
+        "long-candidate-key",
+        "tab-wrapped-candidate-key",
+        "newline-wrapped-candidate-key",
+        "numeric-candidate-key",
+        "boolean-candidate-key",
+        "array-candidate-key",
+        "numeric-source-fingerprint",
+    ),
+)
+async def test_real_postgres_invoice_trigger_rejects_noncanonical_or_nonstring_review_identity(
+    metadata,
+    canonical_candidate_key,
+    canonical_source_fingerprint,
+):
+    """An old worker cannot coerce identity metadata around the final writer guard."""
+
+    asyncpg = pytest.importorskip("asyncpg")
+    async with _approval_database() as (connection, _schema):
+        run_id = uuid4()
+        await connection.execute(
+            """
+            INSERT INTO commercial_billing_runs (
+                id, billing_period, state, candidate_contract_version,
+                snapshot_fingerprint, source, idempotency_key,
+                request_fingerprint, created_by
+            ) VALUES ($1, '2026-03', 'draft', 2, $2, 'eom_admin', $3, $2, 'Juan')
+            """,
+            run_id,
+            canonical_source_fingerprint,
+            f"identity-{run_id.hex}",
+        )
+        await connection.execute(
+            """
+            INSERT INTO commercial_billing_run_candidates (
+                id, billing_run_id, candidate_key, source_fingerprint,
+                display_order, snapshot
+            ) VALUES ($1, $2, $3, $4, 0, $5::jsonb)
+            """,
+            uuid4(),
+            run_id,
+            canonical_candidate_key,
+            canonical_source_fingerprint,
+            json.dumps(
+                {
+                    "candidateKey": canonical_candidate_key,
+                    "sourceFingerprint": canonical_source_fingerprint,
+                }
+            ),
+        )
+        with pytest.raises(asyncpg.PostgresError, match="review identity is invalid"):
+            await connection.execute(
+                """
+                INSERT INTO invoices (
+                    id, invoice_number, customer_name, due_date,
+                    source, source_ref, metadata
+                ) VALUES (
+                    $1, 'INV-GUARD-0001', 'Guarded commercial invoice', $2,
+                    'eom_commercial_billing', 'guard1', $3::jsonb
+                )
+                """,
+                uuid4(),
+                date(2026, 4, 16),
+                json.dumps(metadata),
+            )
+        assert await connection.fetchval("SELECT COUNT(*) FROM invoices") == 0
+
+
+@pytest.mark.asyncio
+async def test_real_postgres_exclusion_and_approval_serialize_at_the_same_candidate_boundary():
+    """An approval waiting behind a committed exclusion cannot insert an invoice."""
+
+    async with _approval_database() as (connection, schema):
+        run_id, candidate = uuid4(), _candidate(
+            candidate_key="commercial-billing:concurrent-exclusion:2026-03"
+        )
+        fingerprint = candidate["sourceFingerprint"]
+        database_url = os.environ["ATLAS_RECEIVABLES_TEST_DATABASE_URL"]
+        await connection.execute(
+            "INSERT INTO contacts (id) VALUES ($1)",
+            UUID(candidate["customer"]["contactId"]),
+        )
+        await connection.execute(
+            """
+            INSERT INTO commercial_billing_runs (
+                id, billing_period, state, candidate_contract_version,
+                snapshot_fingerprint, source, idempotency_key,
+                request_fingerprint, created_by
+            ) VALUES ($1, '2026-03', 'draft', 2, $2, 'eom_admin', 'review-concurrent', $2, 'Juan')
+            """,
+            run_id,
+            fingerprint,
+        )
+        await connection.execute(
+            """
+            INSERT INTO commercial_billing_run_candidates (
+                id, billing_run_id, candidate_key, source_fingerprint,
+                display_order, snapshot
+            ) VALUES ($1, $2, $3, $4, 0, $5::jsonb)
+            """,
+            uuid4(),
+            run_id,
+            candidate["candidateKey"],
+            fingerprint,
+            json.dumps(candidate),
+        )
+
+        decision_service = CommercialBillingRunService(
+            pool=_IsolatedSchemaPool(database_url, schema)
+        )
+        approval_service = CommercialBillingApprovalService(
+            pool=_IsolatedSchemaPool(database_url, schema),
+            candidate_service_loader=lambda: _CandidateService(candidate),
+            due_days_loader=lambda: 14,
+            today=lambda: date(2026, 4, 2),
+        )
+        asyncpg = pytest.importorskip("asyncpg")
+        candidate_lock_key = (
+            "commercial-billing-approval:"
+            f"candidate:{candidate['candidateKey']}:{fingerprint}"
+        )
+        locker = await asyncpg.connect(database_url)
+        await locker.fetchval(
+            "SELECT pg_advisory_lock(hashtextextended($1, 0))",
+            candidate_lock_key,
+        )
+        decision_task = None
+        approval_task = None
+        lock_released = False
+        try:
+            decision_task = asyncio.create_task(
+                decision_service.set_candidate_review_decision(
+                    billing_run_id=run_id,
+                    candidate_key=candidate["candidateKey"],
+                    expected_source_fingerprint=fingerprint,
+                    decision="excluded",
+                    reason="Do not approve while the operator resolves this question.",
+                    idempotency_key="review-concurrent-exclude-1",
+                    actor="Juan",
+                )
+            )
+            for _ in range(100):
+                waiting = await connection.fetchval(
+                    "SELECT COUNT(*) FROM pg_locks "
+                    "WHERE locktype = 'advisory' AND NOT granted"
+                )
+                if waiting >= 1:
+                    break
+                await asyncio.sleep(0.01)
+            else:
+                raise AssertionError("review decision did not wait on the candidate lock")
+            approval_task = asyncio.create_task(
+                approval_service.approve(
+                    billing_run_id=run_id,
+                    candidate_key=candidate["candidateKey"],
+                    expected_source_fingerprint=fingerprint,
+                    idempotency_key="approve-concurrent-exclude-1",
+                    actor="Juan",
+                )
+            )
+            for _ in range(100):
+                waiting = await connection.fetchval(
+                    "SELECT COUNT(*) FROM pg_locks "
+                    "WHERE locktype = 'advisory' AND NOT granted"
+                )
+                if waiting >= 2:
+                    break
+                await asyncio.sleep(0.01)
+            else:
+                raise AssertionError("approval did not wait behind the review decision")
+
+            await locker.fetchval(
+                "SELECT pg_advisory_unlock(hashtextextended($1, 0))",
+                candidate_lock_key,
+            )
+            lock_released = True
+            decision = await asyncio.wait_for(decision_task, timeout=5)
+            assert decision["reviewDecision"]["decision"] == "excluded"
+            with pytest.raises(CommercialBillingApprovalConflictError, match="excluded"):
+                await asyncio.wait_for(approval_task, timeout=5)
+        finally:
+            if not lock_released:
+                await locker.fetchval(
+                    "SELECT pg_advisory_unlock(hashtextextended($1, 0))",
+                    candidate_lock_key,
+                )
+            await locker.close()
+            if decision_task is not None:
+                await asyncio.gather(decision_task, return_exceptions=True)
+            if approval_task is not None:
+                await asyncio.gather(approval_task, return_exceptions=True)
+
+        assert await connection.fetchval("SELECT COUNT(*) FROM invoices") == 0
+        assert (
+            await connection.fetchval(
+                "SELECT COUNT(*) FROM commercial_billing_candidate_approvals"
+            )
+            == 0
+        )
+        assert (
+            await connection.fetchval(
+                "SELECT COUNT(*) FROM commercial_billing_candidate_review_decisions"
+            )
+            == 1
+        )
 
 
 @pytest.mark.asyncio
@@ -687,6 +1186,15 @@ class _IsolatedSchemaPool:
             await connection.execute(f'SET search_path TO "{self.schema}"')
             async with connection.transaction():
                 yield connection
+        finally:
+            await connection.close()
+
+    async def fetchrow(self, query, *args):
+        asyncpg = pytest.importorskip("asyncpg")
+        connection = await asyncpg.connect(self.database_url)
+        try:
+            await connection.execute(f'SET search_path TO "{self.schema}"')
+            return await connection.fetchrow(query, *args)
         finally:
             await connection.close()
 

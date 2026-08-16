@@ -24,9 +24,12 @@ from atlas_brain.services.commercial_billing_candidates import (
 )
 from atlas_brain.services.commercial_billing_runs import (
     CommercialBillingRunConflictError,
+    CommercialBillingRunNotFoundError,
     CommercialBillingRunService,
     CommercialBillingRunUnavailableError,
+    CommercialBillingRunValidationError,
     _normalize_preview,
+    lock_commercial_billing_run_candidate,
 )
 
 
@@ -174,14 +177,21 @@ async def _billing_run_database():
 
     schema = f"commercial_billing_runs_{uuid4().hex}"
     conn = await asyncpg.connect(database_url)
-    migration = (
-        Path(__file__).parents[1]
-        / "atlas_brain/storage/migrations/370_commercial_billing_runs.sql"
-    ).read_text(encoding="utf-8")
+    migrations = Path(__file__).parents[1] / "atlas_brain/storage/migrations"
     try:
         await conn.execute(f'CREATE SCHEMA "{schema}"')
         await conn.execute(f'SET search_path TO "{schema}"')
-        await conn.execute(migration)
+        await conn.execute(
+            "CREATE TABLE invoices ("
+            "id UUID PRIMARY KEY, source TEXT, source_ref TEXT"
+            ")"
+        )
+        for name in (
+            "370_commercial_billing_runs.sql",
+            "372_commercial_billing_candidate_approvals.sql",
+            "380_commercial_billing_candidate_review_decisions.sql",
+        ):
+            await conn.execute((migrations / name).read_text(encoding="utf-8"))
         yield conn, schema, database_url
     finally:
         await conn.execute("SET search_path TO public")
@@ -231,6 +241,14 @@ async def test_real_postgres_snapshot_is_immutable_and_same_key_replays_without_
         assert run["summary"] == {"blockedCandidateCount": 1, "candidateCount": 1}
         assert run["candidates"][0]["lineItems"][0]["amountCents"] == 9650
         assert run["candidates"][0]["sourceEvents"][0]["location"] == "100 Main St"
+        assert run["candidates"][0]["reviewDecision"] == {
+            "decidedAt": None,
+            "decidedBy": None,
+            "decision": "included",
+            "isExplicit": False,
+            "reason": None,
+            "revision": 0,
+        }
         assert len(run["snapshotFingerprint"]) == 64
         assert candidate_service.calls == ["2026-03"]
 
@@ -448,6 +466,396 @@ async def test_same_key_with_another_period_conflicts_without_regenerating_sourc
         assert await conn.fetchval("SELECT COUNT(*) FROM commercial_billing_runs") == 1
 
 
+@pytest.mark.asyncio
+async def test_real_postgres_review_decisions_are_append_only_idempotent_and_derived():
+    async with _billing_run_database() as (conn, schema, _database_url):
+        candidate = _candidate("commercial-billing:review:2026-03", _fingerprint("a"))
+        service = _service(_SchemaPool(conn, schema), _CandidateService(_preview(candidate)))
+        created_run = await service.create_run(
+            billing_period="2026-03",
+            idempotency_key="billing-run-review-decision-1",
+            actor="Juan Canfield",
+        )
+        run_id = UUID(created_run["billingRun"]["id"])
+        source_fingerprint = candidate["sourceFingerprint"]
+        before_updated_at = await conn.fetchval(
+            "SELECT updated_at FROM commercial_billing_runs WHERE id = $1",
+            run_id,
+        )
+
+        excluded = await service.set_candidate_review_decision(
+            billing_run_id=run_id,
+            candidate_key=candidate["candidateKey"],
+            expected_source_fingerprint=source_fingerprint,
+            decision="excluded",
+            reason="Customer is resolving a service question.",
+            idempotency_key="review-exclude-1",
+            actor="Juan Canfield",
+        )
+        assert excluded["replayed"] is False
+        assert excluded["reviewDecision"] == {
+            "decidedAt": excluded["reviewDecision"]["decidedAt"],
+            "decidedBy": "Juan Canfield",
+            "decision": "excluded",
+            "id": excluded["reviewDecision"]["id"],
+            "isExplicit": True,
+            "reason": "Customer is resolving a service question.",
+            "revision": 1,
+        }
+
+        replayed = await service.set_candidate_review_decision(
+            billing_run_id=run_id,
+            candidate_key=candidate["candidateKey"],
+            expected_source_fingerprint=source_fingerprint,
+            decision="excluded",
+            reason="Customer is resolving a service question.",
+            idempotency_key="review-exclude-1",
+            actor="Another operator",
+        )
+        assert replayed == {**excluded, "replayed": True}
+        with pytest.raises(CommercialBillingRunConflictError):
+            await service.set_candidate_review_decision(
+                billing_run_id=run_id,
+                candidate_key=candidate["candidateKey"],
+                expected_source_fingerprint=source_fingerprint,
+                decision="excluded",
+                reason="A different reason must not reuse the operation key.",
+                idempotency_key="review-exclude-1",
+                actor="Juan Canfield",
+            )
+
+        included = await service.set_candidate_review_decision(
+            billing_run_id=run_id,
+            candidate_key=candidate["candidateKey"],
+            expected_source_fingerprint=source_fingerprint,
+            decision="included",
+            reason="Service question resolved.",
+            idempotency_key="review-include-1",
+            actor="Juan Canfield",
+        )
+        assert included["replayed"] is False
+        assert included["reviewDecision"]["decision"] == "included"
+        assert included["reviewDecision"]["revision"] == 2
+
+        detail = await service.get_run(run_id)
+        assert detail["candidates"][0]["reviewDecision"] == included["reviewDecision"]
+        snapshot = await conn.fetchval(
+            "SELECT snapshot FROM commercial_billing_run_candidates WHERE billing_run_id = $1",
+            run_id,
+        )
+        assert "reviewDecision" not in snapshot
+        history = await conn.fetch(
+            """
+            SELECT revision, decision, reason, decided_by
+            FROM commercial_billing_candidate_review_decisions
+            ORDER BY revision
+            """
+        )
+        assert [dict(row) for row in history] == [
+            {
+                "revision": 1,
+                "decision": "excluded",
+                "reason": "Customer is resolving a service question.",
+                "decided_by": "Juan Canfield",
+            },
+            {
+                "revision": 2,
+                "decision": "included",
+                "reason": "Service question resolved.",
+                "decided_by": "Juan Canfield",
+            },
+        ]
+        assert await conn.fetchval("SELECT COUNT(*) FROM invoices") == 0
+        assert (
+            await conn.fetchval(
+                "SELECT COUNT(*) FROM commercial_billing_candidate_approvals"
+            )
+            == 0
+        )
+        assert (
+            await conn.fetchval(
+                "SELECT updated_at FROM commercial_billing_runs WHERE id = $1",
+                run_id,
+            )
+            == before_updated_at
+        )
+
+
+@pytest.mark.asyncio
+async def test_real_postgres_review_decision_history_rejects_direct_mutation():
+    asyncpg = pytest.importorskip("asyncpg")
+    async with _billing_run_database() as (conn, schema, _database_url):
+        candidate = _candidate("commercial-billing:immutable:2026-03", _fingerprint("a"))
+        service = _service(_SchemaPool(conn, schema), _CandidateService(_preview(candidate)))
+        created_run = await service.create_run(
+            billing_period="2026-03",
+            idempotency_key="billing-run-immutable-history-1",
+            actor="Juan Canfield",
+        )
+        run_id = UUID(created_run["billingRun"]["id"])
+        recorded = await service.set_candidate_review_decision(
+            billing_run_id=run_id,
+            candidate_key=candidate["candidateKey"],
+            expected_source_fingerprint=candidate["sourceFingerprint"],
+            decision="excluded",
+            reason="Keep the original review evidence intact.",
+            idempotency_key="review-immutable-history-1",
+            actor="Juan Canfield",
+        )
+        decision_id = UUID(recorded["reviewDecision"]["id"])
+
+        mutations = (
+            (
+                "UPDATE commercial_billing_candidate_review_decisions "
+                "SET reason = 'rewritten' WHERE id = $1",
+                (decision_id,),
+            ),
+            (
+                "DELETE FROM commercial_billing_candidate_review_decisions WHERE id = $1",
+                (decision_id,),
+            ),
+            ("TRUNCATE commercial_billing_candidate_review_decisions", ()),
+        )
+        for statement, arguments in mutations:
+            with pytest.raises(asyncpg.PostgresError, match="append-only"):
+                await conn.execute(statement, *arguments)
+
+        history = await conn.fetchrow(
+            "SELECT id, decision, reason FROM commercial_billing_candidate_review_decisions"
+        )
+        assert dict(history) == {
+            "id": decision_id,
+            "decision": "excluded",
+            "reason": "Keep the original review evidence intact.",
+        }
+
+
+@pytest.mark.asyncio
+async def test_real_postgres_candidate_lock_does_not_serialize_other_candidates():
+    asyncpg = pytest.importorskip("asyncpg")
+    async with _billing_run_database() as (observer, schema, database_url):
+        first_candidate = _candidate("commercial-billing:lock-one:2026-03", _fingerprint("a"))
+        second_candidate = _candidate("commercial-billing:lock-two:2026-03", _fingerprint("b"))
+        service = _service(
+            _SchemaPool(observer, schema),
+            _CandidateService(_preview(first_candidate, second_candidate)),
+        )
+        created_run = await service.create_run(
+            billing_period="2026-03",
+            idempotency_key="billing-run-lock-scope-1",
+            actor="Juan Canfield",
+        )
+        run_id = UUID(created_run["billingRun"]["id"])
+        first_conn = await asyncpg.connect(database_url)
+        second_conn = await asyncpg.connect(database_url)
+        first_transaction = first_conn.transaction()
+        first_transaction_started = False
+        second_task = None
+        try:
+            await first_conn.execute(f'SET search_path TO "{schema}"')
+            await second_conn.execute(f'SET search_path TO "{schema}"')
+            await first_transaction.start()
+            first_transaction_started = True
+            locked = await lock_commercial_billing_run_candidate(
+                first_conn,
+                billing_run_id=run_id,
+                candidate_key=first_candidate["candidateKey"],
+            )
+            assert locked["source_fingerprint"] == first_candidate["sourceFingerprint"]
+
+            second_task = asyncio.create_task(
+                lock_commercial_billing_run_candidate(
+                    second_conn,
+                    billing_run_id=run_id,
+                    candidate_key=second_candidate["candidateKey"],
+                )
+            )
+            independently_locked = await asyncio.wait_for(
+                asyncio.shield(second_task), timeout=0.5
+            )
+            assert independently_locked["source_fingerprint"] == second_candidate[
+                "sourceFingerprint"
+            ]
+        finally:
+            if first_transaction_started:
+                await first_transaction.rollback()
+            if second_task is not None and not second_task.done():
+                second_task.cancel()
+                await asyncio.gather(second_task, return_exceptions=True)
+            await first_conn.close()
+            await second_conn.close()
+
+
+@pytest.mark.asyncio
+async def test_review_decision_rejects_invalid_unknown_and_stale_input_without_writing():
+    async with _billing_run_database() as (conn, schema, _database_url):
+        candidate = _candidate("commercial-billing:reject:2026-03", _fingerprint("a"))
+        service = _service(_SchemaPool(conn, schema), _CandidateService(_preview(candidate)))
+        created_run = await service.create_run(
+            billing_period="2026-03",
+            idempotency_key="billing-run-review-reject-1",
+            actor="Juan Canfield",
+        )
+        run_id = UUID(created_run["billingRun"]["id"])
+
+        with pytest.raises(CommercialBillingRunNotFoundError):
+            await service.set_candidate_review_decision(
+                billing_run_id=run_id,
+                candidate_key="commercial-billing:missing:2026-03",
+                expected_source_fingerprint=_fingerprint("a"),
+                decision="excluded",
+                reason="No matching retained candidate.",
+                idempotency_key="review-missing-1",
+                actor="Juan Canfield",
+            )
+        with pytest.raises(CommercialBillingRunConflictError):
+            await service.set_candidate_review_decision(
+                billing_run_id=run_id,
+                candidate_key=candidate["candidateKey"],
+                expected_source_fingerprint=_fingerprint("b"),
+                decision="excluded",
+                reason="Stale browser evidence.",
+                idempotency_key="review-stale-1",
+                actor="Juan Canfield",
+            )
+        with pytest.raises(CommercialBillingRunValidationError):
+            await service.set_candidate_review_decision(
+                billing_run_id=run_id,
+                candidate_key=candidate["candidateKey"],
+                expected_source_fingerprint=candidate["sourceFingerprint"],
+                decision="deleted",
+                reason=" ",
+                idempotency_key="review-invalid-1",
+                actor="Juan Canfield",
+            )
+
+        assert (
+            await conn.fetchval(
+                "SELECT COUNT(*) FROM commercial_billing_candidate_review_decisions"
+            )
+            == 0
+        )
+
+
+@pytest.mark.asyncio
+async def test_review_decision_input_grammar_fails_closed_across_boundary_forms():
+    """Generate contract grammar variants rather than a fixture list.
+
+    Candidate key, reason, idempotency key, and actor are OPEN scalar-text
+    families. The specification-derived oracle admits only a nonblank trimmed
+    scalar within each field's limit and with database-encodable text; list,
+    tuple, set, nested, and mapping containers reject. Fingerprints
+    admit only 64 lower-hex characters. The review decision is a CLOSED
+    vocabulary authored by this billing contract: included or excluded. Every
+    unrecognized form must reject before the transaction starts, so it cannot
+    create an audit row or invoice.
+    """
+
+    pool = _NoStoredRunPool()
+    service = _service(pool, _CandidateService(_preview()))
+    run_id = uuid4()
+    valid_candidate = "commercial-billing:grammar:2026-03"
+    valid_fingerprint = _fingerprint("a")
+
+    async def observed(**overrides):
+        before_transactions = pool.conn.transaction_count
+        try:
+            await service.set_candidate_review_decision(
+                billing_run_id=run_id,
+                candidate_key=overrides.get("candidate_key", valid_candidate),
+                expected_source_fingerprint=overrides.get(
+                    "expected_source_fingerprint", valid_fingerprint
+                ),
+                decision=overrides.get("decision", "excluded"),
+                reason=overrides.get("reason", "Review boundary grammar."),
+                idempotency_key=overrides.get("idempotency_key", "review-grammar-1"),
+                actor=overrides.get("actor", "Juan Canfield"),
+            )
+        except CommercialBillingRunValidationError:
+            return False, pool.conn.transaction_count == before_transactions
+        except CommercialBillingRunNotFoundError:
+            return True, pool.conn.transaction_count == before_transactions + 1
+        raise AssertionError("the no-stored-candidate pool must not accept a decision")
+
+    containers = (
+        ("scalar", lambda value: value),
+        ("list", lambda value: [value]),
+        ("tuple", lambda value: (value,)),
+        ("set", lambda value: {value}),
+        ("nested", lambda value: [[value]]),
+        ("wrapped", lambda value: {"value": value}),
+        ("none", lambda _value: None),
+    )
+    modifiers = ("", " ", "\t", "\n")
+
+    def database_text_is_admissible(value):
+        try:
+            value.encode("utf-8")
+        except UnicodeEncodeError:
+            return False
+        return "\x00" not in value
+
+    text_values = (
+        "",
+        "x",
+        "commercial-billing:acme:2026-03",
+        "x" * 128,
+        "x" * 129,
+        "x" * 512,
+        "x" * 513,
+        "x" * 1001,
+        "valid\x00text",
+        "\ud800",
+    )
+    text_families = (
+        ("candidate_key", 512),
+        ("reason", 1000),
+        ("actor", 128),
+        ("idempotency_key", 128),
+    )
+    for (field, limit), value, modifier, (_container_name, container) in product(
+        text_families, text_values, modifiers, containers
+    ):
+        raw = container(f"{modifier}{value}{modifier}")
+        expected = (
+            isinstance(raw, str)
+            and database_text_is_admissible(raw)
+            and 1 <= len(raw.strip()) <= limit
+        )
+        accepted, prewrite_boundary_held = await observed(**{field: raw})
+        assert accepted is expected
+        assert prewrite_boundary_held is True
+
+    fingerprint_tokens = ("0", "a", "f", "A", "g")
+    fingerprint_lengths = (63, 64, 65)
+    for token, length, modifier, (_container_name, container) in product(
+        fingerprint_tokens, fingerprint_lengths, modifiers, containers
+    ):
+        raw = container(f"{modifier}{token * length}{modifier}")
+        expected = (
+            isinstance(raw, str)
+            and len(raw) == 64
+            and all(character in "0123456789abcdef" for character in raw)
+        )
+        accepted, prewrite_boundary_held = await observed(
+            expected_source_fingerprint=raw
+        )
+        assert accepted is expected
+        assert prewrite_boundary_held is True
+
+    decision_tokens = ("included", "excluded", "deleted", "", "INCLUDED")
+    for token, modifier, (_container_name, container) in product(
+        decision_tokens, modifiers, containers
+    ):
+        raw = container(f"{modifier}{token}{modifier}")
+        expected = isinstance(raw, str) and raw in {"included", "excluded"}
+        accepted, prewrite_boundary_held = await observed(decision=raw)
+        assert accepted is expected
+        assert prewrite_boundary_held is True
+
+    assert pool.conn.write_attempts == 0
+
+
 class _NoStoredRunConnection:
     def __init__(self) -> None:
         self.transaction_count = 0
@@ -458,6 +866,8 @@ class _NoStoredRunConnection:
         return None
 
     async def fetchrow(self, query, *_args):
+        if "commercial_billing_candidate_review_decisions" in query:
+            return None
         assert "FROM commercial_billing_runs" in query
         return None
 
@@ -569,6 +979,7 @@ def test_normalize_preview_keeps_legacy_candidate_contract_versions_readable():
 class _RouteRunService:
     def __init__(self) -> None:
         self.create_calls: list[tuple[str, str, str]] = []
+        self.decision_calls: list[dict] = []
         self.get_calls: list[UUID] = []
         self.reconcile_calls: list[UUID] = []
 
@@ -585,6 +996,17 @@ class _RouteRunService:
 
     async def list_runs(self, *, billing_period, limit, offset):
         return {"items": [], "limit": limit, "offset": offset}
+
+    async def set_candidate_review_decision(self, **kwargs):
+        self.decision_calls.append(kwargs)
+        return {
+            "reviewDecision": {
+                "decision": kwargs["decision"],
+                "id": "review-decision-1",
+                "isExplicit": True,
+            },
+            "replayed": False,
+        }
 
     async def get_run(self, run_id: UUID):
         self.get_calls.append(run_id)
@@ -673,6 +1095,399 @@ async def test_full_provider_run_routes_authenticate_actor_and_expose_durable_re
     assert service.reconcile_calls == [UUID(run_id)]
 
 
+@pytest.mark.asyncio
+async def test_review_decision_route_requires_auth_actor_shape_and_idempotency():
+    service = _RouteRunService()
+    app, token = _route_app(service)
+    run_id = "00000000-0000-0000-0000-000000000001"
+    candidate_key = "commercial-billing:acme:2026-03"
+    path = (
+        f"/receivables/commercial-billing-runs/{run_id}/candidates/"
+        f"{candidate_key}/review-decision"
+    )
+    body = {
+        "expected_source_fingerprint": _fingerprint("a"),
+        "decision": "excluded",
+        "reason": "Resolve a customer question before approval.",
+    }
+    transport = httpx.ASGITransport(app=app)
+    async with httpx.AsyncClient(
+        transport=transport,
+        base_url="http://receivables.test",
+    ) as client:
+        assert (await client.put(path, json=body)).status_code == 401
+        assert service.decision_calls == []
+
+        no_actor = await client.put(
+            path,
+            json=body,
+            headers={"Authorization": f"Bearer {token}", "Idempotency-Key": "route-1"},
+        )
+        assert no_actor.status_code == 422
+        assert service.decision_calls == []
+
+        headers = {
+            "Authorization": f"Bearer {token}",
+            "Idempotency-Key": "route-1",
+            "X-EOM-Actor": "Juan Canfield",
+        }
+        malformed = await client.put(
+            path,
+            json={**body, "decision": "deleted"},
+            headers=headers,
+        )
+        assert malformed.status_code == 422
+        assert service.decision_calls == []
+
+        blank_reason = await client.put(
+            path,
+            json={**body, "reason": " \t "},
+            headers=headers,
+        )
+        assert blank_reason.status_code == 422
+        assert service.decision_calls == []
+
+        accepted = await client.put(path, json=body, headers=headers)
+
+    assert accepted.status_code == 200
+    assert accepted.json()["reviewDecision"] == {
+        "decision": "excluded",
+        "id": "review-decision-1",
+        "isExplicit": True,
+    }
+    assert service.decision_calls == [
+        {
+            "billing_run_id": UUID(run_id),
+            "candidate_key": candidate_key,
+            "expected_source_fingerprint": _fingerprint("a"),
+            "decision": "excluded",
+            "reason": "Resolve a customer question before approval.",
+            "idempotency_key": "route-1",
+            "actor": "Juan Canfield",
+        }
+    ]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("field", "value"),
+    (
+        ("amountCents", 9650),
+        ("recipient", {"email": "billing@example.test"}),
+        ("deliveryMethod", "gmail_pdf"),
+        ("lineItems", []),
+        ("taxRateBasisPoints", 0),
+        ("approved", False),
+        ("operationNote", {"reason": "unsupported"}),
+    ),
+)
+async def test_review_decision_route_rejects_unrecognized_fields_without_writer(
+    field: str, value: object
+):
+    service = _RouteRunService()
+    app, token = _route_app(service)
+    run_id = "00000000-0000-0000-0000-000000000001"
+    candidate_key = "commercial-billing:acme:2026-03"
+    path = (
+        f"/receivables/commercial-billing-runs/{run_id}/candidates/"
+        f"{candidate_key}/review-decision"
+    )
+    body = {
+        "expected_source_fingerprint": _fingerprint("a"),
+        "decision": "excluded",
+        "reason": "Reject unsupported billing review data.",
+        field: value,
+    }
+    headers = {
+        "Authorization": f"Bearer {token}",
+        "Idempotency-Key": "route-extra-field-1",
+        "X-EOM-Actor": "Juan Canfield",
+    }
+    transport = httpx.ASGITransport(app=app)
+    async with httpx.AsyncClient(
+        transport=transport,
+        base_url="http://receivables.test",
+    ) as client:
+        response = await client.put(path, json=body, headers=headers)
+
+    assert response.status_code == 422
+    assert service.decision_calls == []
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("raw_reason", "expected_status", "normalized_reason"),
+    (
+        (" " + "a" * 1000, 200, "a" * 1000),
+        ("\t" + "a" * 1000 + "\n", 200, "a" * 1000),
+        (" \t" + "a" * 999 + "\n ", 200, "a" * 999),
+        (" " + "a" * 1001, 422, None),
+        ("\t" + "a" * 1001 + "\n", 422, None),
+        (" \t\n ", 422, None),
+        ("", 422, None),
+    ),
+    ids=(
+        "leading-space-at-limit",
+        "tab-and-newline-at-limit",
+        "mixed-whitespace-within-limit",
+        "leading-space-over-limit",
+        "tab-and-newline-over-limit",
+        "whitespace-only",
+        "empty",
+    ),
+)
+async def test_review_decision_route_normalizes_reason_before_length_validation(
+    raw_reason: str,
+    expected_status: int,
+    normalized_reason: str | None,
+):
+    """Exercise seven whitespace/boundary shapes through the real route model."""
+
+    service = _RouteRunService()
+    app, token = _route_app(service)
+    run_id = "00000000-0000-0000-0000-000000000001"
+    candidate_key = "commercial-billing:acme:2026-03"
+    path = (
+        f"/receivables/commercial-billing-runs/{run_id}/candidates/"
+        f"{candidate_key}/review-decision"
+    )
+    headers = {
+        "Authorization": f"Bearer {token}",
+        "Idempotency-Key": "reason1",
+        "X-EOM-Actor": "Juan Canfield",
+    }
+    transport = httpx.ASGITransport(app=app)
+    async with httpx.AsyncClient(
+        transport=transport,
+        base_url="http://receivables.test",
+    ) as client:
+        response = await client.put(
+            path,
+            json={
+                "expected_source_fingerprint": _fingerprint("a"),
+                "decision": "excluded",
+                "reason": raw_reason,
+            },
+            headers=headers,
+        )
+
+    assert response.status_code == expected_status
+    if normalized_reason is None:
+        assert service.decision_calls == []
+    else:
+        assert service.decision_calls[0]["reason"] == normalized_reason
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "raw_idempotency_key",
+    (
+        " " + "a" * 128,
+        "\t" + "b" * 128,
+        "c" * 128 + " ",
+        " \t" + "d" * 126 + " \t",
+        "e" * 127 + "\t",
+        "f" * 128,
+    ),
+    ids=(
+        "leading-space-at-limit",
+        "leading-tab-at-limit",
+        "trailing-space-at-limit",
+        "mixed-padding-within-limit",
+        "trailing-tab-within-limit",
+        "unmodified-at-limit",
+    ),
+)
+async def test_review_decision_route_defers_padded_idempotency_key_length_to_service(
+    raw_idempotency_key: str,
+):
+    """The route must not reject a key before the shared trim-then-bound guard."""
+
+    service = _RouteRunService()
+    app, token = _route_app(service)
+    run_id = "00000000-0000-0000-0000-000000000001"
+    candidate_key = "commercial-billing:acme:2026-03"
+    path = (
+        f"/receivables/commercial-billing-runs/{run_id}/candidates/"
+        f"{candidate_key}/review-decision"
+    )
+    transport = httpx.ASGITransport(app=app)
+    async with httpx.AsyncClient(
+        transport=transport,
+        base_url="http://receivables.test",
+    ) as client:
+        response = await client.put(
+            path,
+            json={
+                "expected_source_fingerprint": _fingerprint("a"),
+                "decision": "excluded",
+                "reason": "Idempotency header boundary proof.",
+            },
+            headers={
+                "Authorization": f"Bearer {token}",
+                "Idempotency-Key": raw_idempotency_key,
+                "X-EOM-Actor": "Juan Canfield",
+            },
+        )
+
+    assert response.status_code == 200
+    assert service.decision_calls[0]["idempotency_key"] == raw_idempotency_key
+
+
+@pytest.mark.asyncio
+async def test_full_atlas_app_persists_review_decision_route_under_api_v1():
+    from atlas_brain.api.invoicing import auth as receivables_auth
+    from atlas_brain.api.invoicing import receivables as routes
+    from atlas_brain.eom_api.auth import generate_receivables_service_token
+    from atlas_brain.main import app
+
+    async with _billing_run_database() as (conn, schema, _database_url):
+        candidate = _candidate(
+            "commercial-billing:route-persistence:2026-03", _fingerprint("a")
+        )
+        service = _service(
+            _SchemaPool(conn, schema), _CandidateService(_preview(candidate))
+        )
+        created = await service.create_run(
+            billing_period="2026-03",
+            idempotency_key="billing-run-route-persistence-1",
+            actor="Juan Canfield",
+        )
+        run_id = UUID(created["billingRun"]["id"])
+        generated = generate_receivables_service_token()
+        original_overrides = dict(app.dependency_overrides)
+        path = (
+            f"/api/v1/receivables/commercial-billing-runs/{run_id}/candidates/"
+            f"{candidate['candidateKey']}/review-decision"
+        )
+        canonical_idempotency_key = "k" * 128
+        padded_idempotency_key = " " + canonical_idempotency_key
+        valid_body = {
+            "expected_source_fingerprint": candidate["sourceFingerprint"],
+            "decision": "included",
+            "reason": "Reviewed and ready for explicit approval.",
+        }
+        app.dependency_overrides[receivables_auth.get_receivables_api_config] = lambda: (
+            SimpleNamespace(
+                receivables_api_enabled=True,
+                receivables_service_token="",
+                receivables_service_token_sha256=generated.sha256,
+            )
+        )
+        app.dependency_overrides[routes.get_commercial_billing_run_service] = lambda: service
+        try:
+            async with httpx.AsyncClient(
+                transport=httpx.ASGITransport(app=app),
+                base_url="http://atlas.test",
+            ) as client:
+                assert (await client.put(path)).status_code == 401
+                normally_rejected = await client.put(
+                    path,
+                    json={
+                        "expected_source_fingerprint": candidate["sourceFingerprint"],
+                        "decision": "included",
+                        "reason": " ",
+                    },
+                    headers={
+                        "Authorization": f"Bearer {generated.token}",
+                        "Idempotency-Key": "full-route-invalid-blank-1",
+                        "X-EOM-Actor": "Juan Canfield",
+                    },
+                )
+                rejected = await client.put(
+                    path,
+                    content=json.dumps(
+                        {
+                            "expected_source_fingerprint": candidate["sourceFingerprint"],
+                            "decision": "included",
+                            "reason": "\ud800",
+                        },
+                        ensure_ascii=True,
+                    ).encode("ascii"),
+                    headers={
+                        "Authorization": f"Bearer {generated.token}",
+                        "Content-Type": "application/json",
+                        "Idempotency-Key": "full-route-invalid-1",
+                        "X-EOM-Actor": "Juan Canfield",
+                    },
+                )
+                blank_idempotency = await client.put(
+                    path,
+                    json=valid_body,
+                    headers={
+                        "Authorization": f"Bearer {generated.token}",
+                        "Idempotency-Key": " ",
+                        "X-EOM-Actor": "Juan Canfield",
+                    },
+                )
+                normalized_over_limit_idempotency = await client.put(
+                    path,
+                    json=valid_body,
+                    headers={
+                        "Authorization": f"Bearer {generated.token}",
+                        "Idempotency-Key": " " + "o" * 129,
+                        "X-EOM-Actor": "Juan Canfield",
+                    },
+                )
+                accepted = await client.put(
+                    path,
+                    json=valid_body,
+                    headers={
+                        "Authorization": f"Bearer {generated.token}",
+                        "Idempotency-Key": padded_idempotency_key,
+                        "X-EOM-Actor": "Juan Canfield",
+                    },
+                )
+                replayed = await client.put(
+                    path,
+                    json=valid_body,
+                    headers={
+                        "Authorization": f"Bearer {generated.token}",
+                        "Idempotency-Key": canonical_idempotency_key,
+                        "X-EOM-Actor": "Juan Canfield",
+                    },
+                )
+        finally:
+            app.dependency_overrides.clear()
+            app.dependency_overrides.update(original_overrides)
+
+        assert accepted.status_code == 200
+        assert replayed.status_code == 200
+        assert normally_rejected.status_code == 422
+        assert rejected.status_code == 422
+        assert blank_idempotency.status_code == 422
+        assert normalized_over_limit_idempotency.status_code == 422
+        response_decision = accepted.json()["reviewDecision"]
+        assert accepted.json()["replayed"] is False
+        assert replayed.json() == {**accepted.json(), "replayed": True}
+        assert response_decision["decision"] == "included"
+        assert response_decision["reason"] == "Reviewed and ready for explicit approval."
+        assert response_decision["decidedBy"] == "Juan Canfield"
+        persisted = await conn.fetchrow(
+            """
+            SELECT billing_run_id, candidate_key, source_fingerprint, revision,
+                   decision, reason, idempotency_key, decided_by
+            FROM commercial_billing_candidate_review_decisions
+            """
+        )
+        assert dict(persisted) == {
+            "billing_run_id": run_id,
+            "candidate_key": candidate["candidateKey"],
+            "source_fingerprint": candidate["sourceFingerprint"],
+            "revision": 1,
+            "decision": "included",
+            "reason": "Reviewed and ready for explicit approval.",
+            "idempotency_key": canonical_idempotency_key,
+            "decided_by": "Juan Canfield",
+        }
+        assert (
+            await conn.fetchval(
+                "SELECT COUNT(*) FROM commercial_billing_candidate_review_decisions"
+            )
+            == 1
+        )
+
+
 def test_billing_run_migration_is_additive_and_preserves_draft_evidence():
     migration = (
         Path(__file__).parents[1]
@@ -688,6 +1503,57 @@ def test_billing_run_migration_is_additive_and_preserves_draft_evidence():
     assert "DROP TABLE" not in "\n".join(
         line for line in migration.splitlines() if not line.lstrip().startswith("--")
     )
+
+
+def test_review_decision_migration_is_append_only_and_snapshot_restrictive():
+    migration = (
+        Path(__file__).parents[1]
+        / "atlas_brain/storage/migrations/380_commercial_billing_candidate_review_decisions.sql"
+    ).read_text(encoding="utf-8")
+
+    assert "CREATE TABLE IF NOT EXISTS commercial_billing_candidate_review_decisions" in migration
+    assert "CHECK (decision IN ('included', 'excluded'))" in migration
+    assert "UNIQUE (source, idempotency_key)" in migration
+    assert "UNIQUE (candidate_key, source_fingerprint, revision)" in migration
+    assert "commercial_billing_candidate_review_decisions_snapshot_fkey" in migration
+    assert "ON DELETE RESTRICT" in migration
+    assert "prevent_commercial_billing_review_decision_mutation" in migration
+    assert "BEFORE UPDATE OR DELETE ON commercial_billing_candidate_review_decisions" in migration
+    assert "BEFORE TRUNCATE ON commercial_billing_candidate_review_decisions" in migration
+    assert "prevent_commercial_billing_invoice_for_excluded_candidate" in migration
+    assert "BEFORE INSERT ON invoices" in migration
+    assert "jsonb_typeof(NEW.metadata -> 'candidateKey')" in migration
+    assert "jsonb_typeof(NEW.metadata -> 'sourceFingerprint')" in migration
+    assert "FROM commercial_billing_run_candidates" in migration
+    assert "idx_commercial_billing_run_candidates_identity" in migration
+    assert "ON commercial_billing_run_candidates (candidate_key, source_fingerprint)" in migration
+    executable = "\n".join(
+        line for line in migration.splitlines() if not line.lstrip().startswith("--")
+    )
+    assert "DROP TABLE" not in executable
+    assert "INSERT INTO invoices" not in executable
+    assert "UPDATE invoices" not in executable
+    assert "gmail" not in executable.lower()
+    assert "email" not in executable.lower()
+
+
+@pytest.mark.asyncio
+async def test_review_decision_migration_installs_trigger_identity_index():
+    async with _billing_run_database() as (conn, schema, _database_url):
+        indexdef = await conn.fetchval(
+            """
+            SELECT indexdef
+            FROM pg_indexes
+            WHERE schemaname = $1
+              AND tablename = 'commercial_billing_run_candidates'
+              AND indexname = 'idx_commercial_billing_run_candidates_identity'
+            """,
+            schema,
+        )
+
+    assert indexdef is not None
+    assert "commercial_billing_run_candidates" in indexdef
+    assert "(candidate_key, source_fingerprint)" in indexdef
 
 
 def test_billing_run_service_does_not_import_financial_or_delivery_writers():
@@ -731,6 +1597,7 @@ def test_invoicing_workflow_enrolls_billing_run_contract_for_pr_and_main_push():
     for path in (
         "atlas_brain/services/commercial_billing_runs.py",
         "atlas_brain/storage/migrations/370_commercial_billing_runs.sql",
+        "atlas_brain/storage/migrations/380_commercial_billing_candidate_review_decisions.sql",
         "tests/test_commercial_billing_runs.py",
     ):
         assert workflow.count(f'      - "{path}"') == 2
