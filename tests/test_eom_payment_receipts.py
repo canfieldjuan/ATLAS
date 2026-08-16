@@ -234,8 +234,6 @@ async def test_full_receipt_delivery_route_maps_conflicts_without_calling_paymen
 
 @pytest.mark.asyncio
 async def test_receipt_reconciliation_routes_are_authenticated_no_send_boundaries():
-    from atlas_brain.api.invoicing import receivables as full_routes
-
     payment_id = uuid4()
     receipt_service = _ReceiptDeliveryService()
     app, token = _app(_CRM(None), _PaymentService(), receipt_service)
@@ -262,17 +260,30 @@ async def test_receipt_reconciliation_routes_are_authenticated_no_send_boundarie
     ]
     assert receipt_service.dispatch_calls == []
 
-    result = await full_routes.reconcile_residential_payment_receipt_delivery(
-        payment_id=payment_id,
-        actor="Mayra",
-        service=receipt_service,
-    )
+    full_receipt_service = _ReceiptDeliveryService()
+    full_app, full_token = _full_app(full_receipt_service)
+    full_path = f"/api/v1/receivables/payments/{payment_id}/receipt-delivery/reconcile"
 
-    assert result["payment_id"] == str(payment_id)
-    assert receipt_service.reconcile_calls[-1] == {
-        "payment_id": payment_id,
-        "actor": "Mayra",
-    }
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=full_app), base_url="http://receivables.test"
+    ) as client:
+        unauthorized_full = await client.post(full_path)
+        full_response = await client.post(
+            full_path,
+            headers={
+                "Authorization": f"Bearer {full_token}",
+                "X-EOM-Actor": "Mayra",
+            },
+        )
+
+    assert unauthorized_full.status_code == 401
+    assert full_response.status_code == 200, full_response.text
+    assert full_response.json()["payment_id"] == str(payment_id)
+    assert full_response.json()["receipt_delivery"]["status"] == "sent"
+    assert full_receipt_service.reconcile_calls == [
+        {"payment_id": payment_id, "actor": "Mayra"}
+    ]
+    assert full_receipt_service.dispatch_calls == []
 
 
 @pytest.mark.asyncio

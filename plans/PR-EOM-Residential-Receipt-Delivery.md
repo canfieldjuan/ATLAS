@@ -4,7 +4,7 @@
 
 The EOM Billing & Payments coordinator [#2362](https://github.com/canfieldjuan/ATLAS/issues/2362) requires a committed residential payment to have a retry-safe receipt-email lifecycle. The prior outbox slice deliberately stopped before transport: migration 369 calls itself non-sending and requires a future explicit claim plus verifiable transport result. The Website can display its `pending`/`skipped` projection, but neither ATLAS API profile has a dispatch/recovery operation.
 
-Diff-budget override: this 3,908-added-line provider slice is deliberately over the 400-LOC soft cap because one safe, independently deployable receipt-dispatch contract requires its additive durable state, the exact Gmail transport boundary, both established ATLAS service profiles, and executable crash/concurrency proof together. Splitting those pieces would either publish a state machine with no safe operator boundary or a sender without the durable no-duplicate recovery invariant; no consumer is enabled by this release.
+Diff-budget override: this 3,927-added-line provider slice is deliberately over the 400-LOC soft cap because one safe, independently deployable receipt-dispatch contract requires its additive durable state, the exact Gmail transport boundary, both established ATLAS service profiles, and executable crash/concurrency proof together. Splitting those pieces would either publish a state machine with no safe operator boundary or a sender without the durable no-duplicate recovery invariant; no consumer is enabled by this release.
 
 ### Problem-derived contract
 
@@ -48,6 +48,12 @@ Diff-budget override: this 3,908-added-line provider slice is deliberately over 
 - Correct fix must touch/change: redact recipients at the shared `GmailTransport.send` success-log boundary by logging only the recipient count, and prove a successful multi-recipient transport call records neither recipient address while retaining the delivery identifier, count, and existing subject observability.
 - Must not change: the `to` argument sent to Gmail, raw MIME recipient construction, OAuth, headers, request/response/error classification, service state machine, routes, recipient persistence, payment state, or existing subject-log treatment.
 
+### Full-profile reconciliation reachability repair contract
+
+- Root cause: the full ATLAS reconciliation route is implemented with the real bearer/actor dependency and service dependency, but its current test calls the handler directly. That bypasses routing, header parsing, authentication, and dependency injection, so the existing slim-profile HTTP proof does not settle the full-profile reachability claim.
+- Correct fix must touch/change: replace only the direct full reconciliation handler invocation with an ASGI request through the mounted full router; prove unauthenticated rejection, authenticated actor forwarding, observable reconciliation result, and the no-dispatch property using the existing in-process transport fake.
+- Must not change: full or slim route implementation, dependencies, authentication rules, response mapping, service behavior, Gmail calls, recipient data, payment state, or the established slim-profile HTTP proof.
+
 ## Scope (this PR)
 
 Ownership lane: eom/billing-payments-receipt-delivery
@@ -58,14 +64,14 @@ Max files: 14
 2. Add `ResidentialPaymentReceiptDeliveryService`. It may dispatch only an existing `pending` or definitely `failed` residential receipt with a canonical persisted recipient. The service records the request/actor and marks an attempt in PostgreSQL before Gmail is called; it queries Gmail Sent by that stable identity before a new send and after an uncertain result.
 3. Extend `GmailTransport.send` with the same narrow immutable-header validation used by drafts, make known rejected sends distinguishable from uncertain send outcomes, and log only a recipient count after a successful send; HTTP 408 is explicitly uncertain rather than retryable. Receipt dispatch calls `GmailTransport` directly and never routes through the Gmail-to-Resend composite provider. No-send reconciliation writes append-only actor/timestamp/outcome evidence.
 4. Add the idempotent `POST /api/v1/receivables/payments/{payment_id}/receipt-delivery` send boundary plus `POST /api/v1/receivables/payments/{payment_id}/receipt-delivery/reconcile` to both full and slim service-to-service EOM profiles. Dispatch requires the existing bearer/actor boundary and `Idempotency-Key`; reconciliation is authenticated, performs only an exact Gmail Sent-mail lookup for an already-ambiguous operation, and cannot send email. Both expose only persisted receipt-delivery data, never credentials or raw Gmail responses.
-5. Add an isolated local-PostgreSQL migration/service suite, full and slim HTTP reachability tests, Gmail transport byte/header tests using `httpx.MockTransport`, and CI enrollment for the new test surface. Invalid/mismatched Sent evidence after an attempt must persist recovery-required evidence rather than strand an `attempting` operation; a late definite rejection after post-lease reconciliation must still complete as retryable `failed`.
+5. Add an isolated local-PostgreSQL migration/service suite, full and slim HTTP reachability tests for both dispatch and reconciliation, Gmail transport byte/header tests using `httpx.MockTransport`, and CI enrollment for the new test surface. Invalid/mismatched Sent evidence after an attempt must persist recovery-required evidence rather than strand an `attempting` operation; a late definite rejection after post-lease reconciliation must still complete as retryable `failed`.
 6. Make the existing EOM receipt-delivery readiness probe fail closed unless every migration-378 dispatch column, table, and safety index is present; retain the legacy receivables readiness contract unchanged; keep pre-378 fixtures explicit and apply the full current schema through the production migration runner where receipt-aware behavior is exercised.
 
 ### Review Contract
 
 - Acceptance criteria:
   - Migration 378 preserves every prior payment/receipt row, installs the `rfc_message_id` default before backfilling historical nulls, derives a deterministic identity for those historical rows, supplies the same stable default to a mixed-version legacy writer in that cutover seam, and enforces one dispatch operation per `(source, idempotency_key)`; a failed concurrent unique-index build is removed and rebuilt on migration replay. Its rollback is application-first and retention-preserving. Settled by isolated PostgreSQL migration/replay tests in `tests/test_residential_payment_receipt_delivery.py` through the production migration runner and a second schema-scoped writer connection.
-  - The delivery service persists its operation before the Gmail fake is invoked, sends the already-persisted subject/body to only the persisted recipient, and returns `sent` with Gmail identity. A Sent-mail proof can safely complete a still-`prepared` operation without dispatching, and later no-send reconciliation records its actor/time/outcome append-only. Both full and slim `POST /receivables/payments/{payment_id}/receipt-delivery` boundaries preserve existing bearer/actor/idempotency requirements and map service outcomes without exposing Gmail internals. Settled by full and slim ASGI plus service tests.
+  - The delivery service persists its operation before the Gmail fake is invoked, sends the already-persisted subject/body to only the persisted recipient, and returns `sent` with Gmail identity. A Sent-mail proof can safely complete a still-`prepared` operation without dispatching, and later no-send reconciliation records its actor/time/outcome append-only. Both full and slim dispatch and reconciliation HTTP boundaries preserve their bearer/actor requirements, forward the authenticated actor to the service, map service outcomes without exposing Gmail internals, and reconciliation never calls dispatch. Settled by full and slim ASGI plus service tests.
   - A same `(source, idempotency_key, payment_id)` returns that operation's immutable completed result without another Gmail call; reuse of that key for another payment conflicts before external I/O. A later retry may advance the receipt row without changing the original key's replay. Settled by service retry tests and HTTP boundary forwarding/auth tests.
   - A known Gmail rejection leaves the committed payment untouched, records `failed`, and permits a later new idempotency key to retry that existing receipt, including when a post-lease reconciliation changed the still-active operation to `recovery_required` before the original request obtained its rejection. HTTP 408 instead produces an ambiguous `GmailSendError`, which follows the existing no-resend recovery path; existing non-408 rejected behavior is retained. Settled by Gmail transport and service interleaving tests.
   - A successful `GmailTransport.send` log includes the Gmail delivery identifier, recipient count, and existing subject observability but never a raw recipient address. Settled by the multi-recipient successful transport-log assertion in `tests/test_residential_payment_receipt_delivery.py`.
@@ -159,6 +165,8 @@ Parked hardening: none.
 - 2026-08-16 local: `python -m pytest tests/test_residential_payment_receipt_delivery.py::test_gmail_transport_send_preserves_immutable_headers_and_classifies_outcomes -q` — 1 passed; a successful five-recipient Gmail transport call preserves all five recipients in raw MIME but logs only its Gmail id, recipient count, and subject.
 - 2026-08-16 local PostgreSQL: `python -m pytest tests/test_residential_payment_receipt_delivery.py -q` — 22 passed; no real Gmail call.
 - 2026-08-16 local PostgreSQL: `python -m pytest tests/test_receivables.py tests/test_eom_payment_receipts.py tests/test_residential_payment_receipt_delivery.py tests/test_commercial_billing_gmail_drafts.py tests/test_eom_render_profile.py tests/test_eom_billing_recipients.py -q` — 403 passed; no real Gmail call.
+- 2026-08-16 local: `python -m py_compile tests/test_eom_payment_receipts.py && ruff check tests/test_eom_payment_receipts.py && python -m pytest tests/test_eom_payment_receipts.py::test_receipt_reconciliation_routes_are_authenticated_no_send_boundaries -q` — 1 passed; the slim and full mounted routers reject unauthenticated reconciliation, forward their authenticated actors to reconciliation, and do not dispatch.
+- 2026-08-16 local PostgreSQL: `python -m pytest tests/test_eom_payment_receipts.py -q` — 14 passed; no real Gmail call.
 - Before publication: `python scripts/sync_pr_plan.py plans/PR-EOM-Residential-Receipt-Delivery.md origin/main`, `python scripts/sync_pr_plan.py --check plans/PR-EOM-Residential-Receipt-Delivery.md origin/main`, `git diff --check`, and `bash scripts/push_pr.sh <current-pr-body> -u origin HEAD` run the repository’s local mechanical review. No hosted GitHub status is treated as the acceptance gate under Juan's local-check direction.
 
 ## Estimated diff size
@@ -173,10 +181,10 @@ Parked hardening: none.
 | `atlas_brain/services/residential_payment_receipt_delivery.py` | 1451 |
 | `atlas_brain/storage/migrations/378_receivables_payment_receipt_delivery.sql` | 298 |
 | `atlas_brain/tools/gmail.py` | 84 |
-| `plans/PR-EOM-Residential-Receipt-Delivery.md` | 182 |
+| `plans/PR-EOM-Residential-Receipt-Delivery.md` | 190 |
 | `tests/test_commercial_billing_gmail_drafts.py` | 2 |
-| `tests/test_eom_payment_receipts.py` | 182 |
+| `tests/test_eom_payment_receipts.py` | 193 |
 | `tests/test_eom_render_profile.py` | 1 |
 | `tests/test_receivables.py` | 183 |
 | `tests/test_residential_payment_receipt_delivery.py` | 1269 |
-| **Total** | **3944** |
+| **Total** | **3963** |
