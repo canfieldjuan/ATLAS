@@ -27,6 +27,7 @@ _MAX_GMAIL_DRAFT_LOOKUP_PAGES = 20
 _MAX_GMAIL_SENT_LOOKUP_PAGES = 20
 _MAX_GMAIL_RFC_MESSAGE_ID_LENGTH = 320
 _MAX_GMAIL_EXTRA_HEADER_VALUE_LENGTH = 998
+_AMBIGUOUS_GMAIL_SEND_STATUS_CODES = frozenset({408})
 _EXTRA_HEADER_NAME = re.compile(r"^(?:Message-ID|X-[A-Za-z0-9-]{1,72})$")
 _PROTECTED_HEADER_NAMES = frozenset(
     {
@@ -66,6 +67,15 @@ class GmailSendError(RuntimeError):
     def __init__(self, message: str, *, definitely_not_sent: bool) -> None:
         super().__init__(message)
         self.definitely_not_sent = definitely_not_sent
+
+
+def _is_definitely_not_sent_http_status(status_code: int) -> bool:
+    """Return whether Gmail's response proves the raw message was rejected."""
+
+    return (
+        400 <= status_code < 500
+        and status_code not in _AMBIGUOUS_GMAIL_SEND_STATUS_CODES
+    )
 
 
 def _extra_headers(headers: Mapping[str, str] | None) -> dict[str, str]:
@@ -325,11 +335,12 @@ class GmailTransport:
             response.raise_for_status()
         except Exception as exc:
             status_code = getattr(response, "status_code", 0)
+            definitely_not_sent = _is_definitely_not_sent_http_status(status_code)
             raise GmailSendError(
                 "Gmail send was rejected"
-                if 400 <= status_code < 500
+                if definitely_not_sent
                 else "Gmail send outcome is unknown",
-                definitely_not_sent=400 <= status_code < 500,
+                definitely_not_sent=definitely_not_sent,
             ) from exc
 
         try:

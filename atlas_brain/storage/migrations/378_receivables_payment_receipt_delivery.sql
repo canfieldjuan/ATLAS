@@ -28,21 +28,24 @@ ALTER TABLE payment_receipt_deliveries
     ADD COLUMN IF NOT EXISTS last_failure_at TIMESTAMPTZ,
     ADD COLUMN IF NOT EXISTS recovery_required_at TIMESTAMPTZ;
 
+-- Install the default before backfilling.  This migration contains concurrent
+-- DDL and the runner therefore commits each statement separately; a legacy
+-- writer can otherwise insert a new null after the backfill but before the
+-- non-null invariant is enforced.
+ALTER TABLE payment_receipt_deliveries
+    ALTER COLUMN rfc_message_id SET DEFAULT
+        ('<atlas-eom-payment-receipt-' || gen_random_uuid()::text
+         || '@effinghamofficemaids.com>');
+
 -- UUID receipt-delivery ids are already unique.  Derive a deterministic
--- Message-ID for every historical row before enforcing the non-null invariant.
--- Keep a server-side default as well: mixed-version receipt writers from the
--- already-deployed outbox release do not name this new column, and they must
--- remain able to commit their financial transaction while this provider rolls
--- forward.
+-- Message-ID for every historical row after the default protects concurrent
+-- mixed-version legacy writers.
 UPDATE payment_receipt_deliveries
 SET rfc_message_id =
     '<atlas-eom-payment-receipt-' || id::text || '@effinghamofficemaids.com>'
 WHERE rfc_message_id IS NULL;
 
 ALTER TABLE payment_receipt_deliveries
-    ALTER COLUMN rfc_message_id SET DEFAULT
-        ('<atlas-eom-payment-receipt-' || gen_random_uuid()::text
-         || '@effinghamofficemaids.com>'),
     ALTER COLUMN rfc_message_id SET NOT NULL;
 
 -- A failed concurrent build leaves an invalid same-named catalog object.  The

@@ -60,6 +60,45 @@ class _MigrationPool:
         assert released is self.connection
 
 
+class _AfterBackfillConnection:
+    """Invoke a legacy writer exactly after migration 378's backfill statement."""
+
+    def __init__(self, connection, after_backfill) -> None:
+        self.connection = connection
+        self.after_backfill = after_backfill
+        self.after_backfill_ran = False
+
+    async def execute(self, statement, *args):
+        result = await self.connection.execute(statement, *args)
+        normalized = statement.casefold()
+        if (
+            not self.after_backfill_ran
+            and "update payment_receipt_deliveries" in normalized
+            and "set rfc_message_id" in normalized
+        ):
+            self.after_backfill_ran = True
+            await self.after_backfill()
+        return result
+
+    def __getattr__(self, name):
+        return getattr(self.connection, name)
+
+
+class _AfterBackfillMigrationPool(_MigrationPool):
+    def __init__(self, connection, schema: str, after_backfill) -> None:
+        super().__init__(connection, schema)
+        self.interleaving_connection = _AfterBackfillConnection(
+            connection, after_backfill
+        )
+
+    async def acquire(self):
+        await self.connection.execute(f'SET search_path TO "{self.schema}"')
+        return self.interleaving_connection
+
+    async def release(self, released) -> None:
+        assert released is self.interleaving_connection
+
+
 class _ReceiptGateway:
     def __init__(self) -> None:
         self.send_calls: list[dict] = []
@@ -164,7 +203,7 @@ class _RawSentProofGateway:
 
 
 @asynccontextmanager
-async def _receipt_database():
+async def _receipt_database(*, include_delivery_migration: bool = True):
     asyncpg = pytest.importorskip("asyncpg")
     database_url = os.environ.get("ATLAS_RECEIVABLES_TEST_DATABASE_URL")
     if not database_url:
@@ -177,13 +216,13 @@ async def _receipt_database():
         await connection.execute(f'SET search_path TO "{schema}"')
         await connection.execute("CREATE TABLE contacts (id UUID PRIMARY KEY)")
         await connection.execute("CREATE TABLE customer_payments (id UUID PRIMARY KEY)")
+        migration_names = ["369_receivables_payment_receipt_outbox"]
+        if include_delivery_migration:
+            migration_names.append("378_receivables_payment_receipt_delivery")
         await run_migrations(
             _MigrationPool(connection, schema),
             migrations_dir=migrations,
-            only=(
-                "369_receivables_payment_receipt_outbox",
-                "378_receivables_payment_receipt_delivery",
-            ),
+            only=tuple(migration_names),
         )
         yield connection, schema
     finally:
@@ -280,6 +319,83 @@ async def test_migration_preserves_legacy_receipt_writer_and_records_stable_iden
         assert await connection.fetchval(
             "SELECT to_regclass('payment_receipt_delivery_operations') IS NOT NULL"
         ) is True
+
+
+@pytest.mark.asyncio
+async def test_migration_installs_default_before_backfill_for_mixed_version_legacy_writer():
+    async with _receipt_database(include_delivery_migration=False) as (connection, schema):
+        asyncpg = pytest.importorskip("asyncpg")
+        writer = await asyncpg.connect(os.environ["ATLAS_RECEIVABLES_TEST_DATABASE_URL"])
+        inserted_delivery_id = None
+
+        async def insert_legacy_receipt(target, *, receipt_number: str):
+            payment_id, contact_id, delivery_id = uuid4(), uuid4(), uuid4()
+            await target.execute("INSERT INTO contacts (id) VALUES ($1)", contact_id)
+            await target.execute(
+                "INSERT INTO customer_payments (id) VALUES ($1)", payment_id
+            )
+            await target.execute(
+                """
+                INSERT INTO payment_receipt_deliveries (
+                    id, payment_id, contact_id, receipt_number, recipient_email,
+                    delivery_status, skip_reason, subject, body
+                )
+                VALUES ($1, $2, $3, $4, $5, 'pending', NULL, 'Receipt', 'Body')
+                """,
+                delivery_id,
+                payment_id,
+                contact_id,
+                receipt_number,
+                "riley@example.test",
+            )
+            return delivery_id
+
+        try:
+            await writer.execute(f'SET search_path TO "{schema}"')
+            historical_delivery_id = await insert_legacy_receipt(
+                connection, receipt_number="legacy-before-378"
+            )
+
+            async def write_in_former_cutover_seam():
+                nonlocal inserted_delivery_id
+                inserted_delivery_id = await insert_legacy_receipt(
+                    writer, receipt_number="legacy-during-378"
+                )
+
+            migrations = Path(__file__).parents[1] / "atlas_brain/storage/migrations"
+            pool = _AfterBackfillMigrationPool(
+                connection, schema, write_in_former_cutover_seam
+            )
+            await run_migrations(
+                pool,
+                migrations_dir=migrations,
+                only=("378_receivables_payment_receipt_delivery",),
+            )
+        finally:
+            await writer.close()
+
+        assert pool.interleaving_connection.after_backfill_ran is True
+        assert inserted_delivery_id is not None
+        assert await connection.fetchval(
+            "SELECT COUNT(*) FROM payment_receipt_deliveries WHERE rfc_message_id IS NULL"
+        ) == 0
+        assert await connection.fetchval(
+            "SELECT rfc_message_id FROM payment_receipt_deliveries WHERE id = $1",
+            historical_delivery_id,
+        ) == (
+            f"<atlas-eom-payment-receipt-{historical_delivery_id}"
+            "@effinghamofficemaids.com>"
+        )
+        inserted_rfc_message_id = await connection.fetchval(
+            "SELECT rfc_message_id FROM payment_receipt_deliveries WHERE id = $1",
+            inserted_delivery_id,
+        )
+        assert inserted_rfc_message_id.startswith("<atlas-eom-payment-receipt-")
+        assert inserted_rfc_message_id.endswith("@effinghamofficemaids.com>")
+        assert await connection.fetchval(
+            "SELECT COUNT(*) FROM schema_migrations WHERE name = $1",
+            "378_receivables_payment_receipt_delivery",
+        ) == 1
 
 
 @pytest.mark.asyncio
@@ -1045,6 +1161,22 @@ async def test_gmail_transport_send_preserves_immutable_headers_and_classifies_o
     finally:
         await transport.close()
     assert rejected_error.value.definitely_not_sent is True
+
+    async def request_timeout(_request: httpx.Request) -> httpx.Response:
+        return httpx.Response(408, json={"error": {"message": "timeout"}})
+
+    transport = GmailTransport()
+    transport._access_token = "test-token"
+    transport._token_expires = time.time() + 600
+    transport._client = httpx.AsyncClient(
+        transport=httpx.MockTransport(request_timeout)
+    )
+    try:
+        with pytest.raises(GmailSendError) as timeout_error:
+            await transport.send(to=["riley@example.test"], subject="Receipt", body="Body")
+    finally:
+        await transport.close()
+    assert timeout_error.value.definitely_not_sent is False
 
     async def uncertain(_request: httpx.Request) -> httpx.Response:
         return httpx.Response(500, json={"error": {"message": "retry"}})
