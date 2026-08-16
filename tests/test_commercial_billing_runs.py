@@ -151,6 +151,13 @@ class _SchemaPool:
         self.conn = conn
         self.schema = schema
 
+    async def acquire(self):
+        await self.conn.execute(f'SET search_path TO "{self.schema}"')
+        return self.conn
+
+    async def release(self, released) -> None:
+        assert released is self.conn
+
     @asynccontextmanager
     async def transaction(self):
         async with self.conn.transaction():
@@ -190,6 +197,7 @@ async def _billing_run_database():
             "370_commercial_billing_runs.sql",
             "372_commercial_billing_candidate_approvals.sql",
             "380_commercial_billing_candidate_review_decisions.sql",
+            "381_commercial_billing_candidate_review_decisions_recovery.sql",
         ):
             await conn.execute((migrations / name).read_text(encoding="utf-8"))
         yield conn, schema, database_url
@@ -197,6 +205,85 @@ async def _billing_run_database():
         await conn.execute("SET search_path TO public")
         await conn.execute(f'DROP SCHEMA IF EXISTS "{schema}" CASCADE')
         await conn.close()
+
+
+async def _recorded_380_legacy_schema(conn, schema: str):
+    """Build the observed recorded-380 shape before later safety DDL landed."""
+    from atlas_brain.storage.migrations import run_migrations
+
+    migrations_dir = Path(__file__).parents[1] / "atlas_brain/storage/migrations"
+    pool = _SchemaPool(conn, schema)
+    await run_migrations(
+        pool,
+        migrations_dir=migrations_dir,
+        only={
+            "370_commercial_billing_runs",
+            "372_commercial_billing_candidate_approvals",
+            "380_commercial_billing_candidate_review_decisions",
+        },
+    )
+    await conn.execute(f'SET search_path TO "{schema}"')
+    assert await conn.fetchval(
+        "SELECT COUNT(*) FROM schema_migrations WHERE name = $1",
+        "380_commercial_billing_candidate_review_decisions",
+    ) == 1
+
+    await conn.execute(
+        "DROP TRIGGER IF EXISTS "
+        "trg_prevent_commercial_billing_invoice_for_excluded_candidate ON invoices"
+    )
+    await conn.execute(
+        "DROP TRIGGER IF EXISTS "
+        "trg_prevent_commercial_billing_review_decision_mutation "
+        "ON commercial_billing_candidate_review_decisions"
+    )
+    await conn.execute(
+        "DROP TRIGGER IF EXISTS "
+        "trg_prevent_commercial_billing_review_decision_truncate "
+        "ON commercial_billing_candidate_review_decisions"
+    )
+    await conn.execute(
+        "DROP FUNCTION IF EXISTS "
+        "prevent_commercial_billing_invoice_for_excluded_candidate()"
+    )
+    await conn.execute(
+        "DROP FUNCTION IF EXISTS "
+        "prevent_commercial_billing_review_decision_mutation()"
+    )
+    await conn.execute(
+        "DROP INDEX IF EXISTS idx_commercial_billing_run_candidates_identity"
+    )
+    await conn.execute(
+        "ALTER TABLE commercial_billing_candidate_review_decisions "
+        "DROP CONSTRAINT commercial_billing_candidate_review_decisions_revision_key"
+    )
+    await conn.execute(
+        "ALTER TABLE commercial_billing_candidate_review_decisions "
+        "ADD CONSTRAINT commercial_billing_candidate_review_decisions_revision_key "
+        "UNIQUE (billing_run_id, candidate_key, source_fingerprint, revision)"
+    )
+    return pool, migrations_dir
+
+
+async def _revision_key_columns(conn) -> list[str] | None:
+    columns = await conn.fetchval(
+        """
+        SELECT ARRAY_AGG(attribute.attname ORDER BY key_column.ordinality)
+        FROM pg_constraint AS constraint_state
+        JOIN UNNEST(constraint_state.conkey) WITH ORDINALITY
+            AS key_column(attnum, ordinality)
+            ON TRUE
+        JOIN pg_attribute AS attribute
+            ON attribute.attrelid = constraint_state.conrelid
+           AND attribute.attnum = key_column.attnum
+        WHERE constraint_state.conrelid =
+                  'commercial_billing_candidate_review_decisions'::regclass
+          AND constraint_state.conname =
+                  'commercial_billing_candidate_review_decisions_revision_key'
+          AND constraint_state.contype = 'u'
+        """
+    )
+    return list(columns) if columns is not None else None
 
 
 def _service(pool, candidate_service: _CandidateService) -> CommercialBillingRunService:
@@ -1537,6 +1624,312 @@ def test_review_decision_migration_is_append_only_and_snapshot_restrictive():
     assert "email" not in executable.lower()
 
 
+def test_review_decision_recovery_migration_is_atomic_and_data_preserving():
+    migration = (
+        Path(__file__).parents[1]
+        / "atlas_brain/storage/migrations/"
+        "381_commercial_billing_candidate_review_decisions_recovery.sql"
+    ).read_text(encoding="utf-8")
+
+    assert migration.startswith("-- atlas: atomic-bookkeeping")
+    assert "UNIQUE (candidate_key, source_fingerprint, revision)" in migration
+    assert "duplicate global revision identities" in migration
+    assert "idx_commercial_billing_run_candidates_identity" in migration
+    assert "prevent_commercial_billing_review_decision_mutation" in migration
+    assert "prevent_commercial_billing_invoice_for_excluded_candidate" in migration
+    executable = "\n".join(
+        line for line in migration.splitlines() if not line.lstrip().startswith("--")
+    )
+    assert "DROP TABLE" not in executable
+    assert "INSERT INTO commercial_billing_candidate_review_decisions" not in executable
+    assert "INSERT INTO invoices" not in executable
+    assert "DELETE FROM commercial_billing_candidate_review_decisions" not in executable
+
+
+@pytest.mark.asyncio
+async def test_recorded_380_recovery_restores_review_decision_enforcement():
+    asyncpg = pytest.importorskip("asyncpg")
+    database_url = os.environ.get("ATLAS_RECEIVABLES_TEST_DATABASE_URL")
+    if not database_url:
+        pytest.skip("ATLAS_RECEIVABLES_TEST_DATABASE_URL not set")
+
+    from atlas_brain.storage.migrations import run_migrations
+
+    recovery_migration = "381_commercial_billing_candidate_review_decisions_recovery"
+    schema = f"billing_380_recovery_{uuid4().hex}"
+    conn = await asyncpg.connect(database_url)
+    try:
+        await conn.execute(f'CREATE SCHEMA "{schema}"')
+        await conn.execute(f'SET search_path TO "{schema}"')
+        await conn.execute(
+            "CREATE TABLE invoices ("
+            "id UUID PRIMARY KEY, source TEXT, source_ref TEXT, "
+            "metadata JSONB NOT NULL DEFAULT '{}'::jsonb"
+            ")"
+        )
+        pool, migrations_dir = await _recorded_380_legacy_schema(conn, schema)
+
+        assert await _revision_key_columns(conn) == [
+            "billing_run_id",
+            "candidate_key",
+            "source_fingerprint",
+            "revision",
+        ]
+        assert await conn.fetchval(
+            """
+            SELECT EXISTS (
+                SELECT 1
+                FROM pg_indexes
+                WHERE schemaname = $1
+                  AND tablename = 'commercial_billing_run_candidates'
+                  AND indexname = 'idx_commercial_billing_run_candidates_identity'
+            )
+            """,
+            schema,
+        ) is False
+
+        await run_migrations(
+            pool,
+            migrations_dir=migrations_dir,
+            only={recovery_migration},
+        )
+
+        assert await conn.fetchval(
+            "SELECT COUNT(*) FROM schema_migrations WHERE name = $1",
+            "380_commercial_billing_candidate_review_decisions",
+        ) == 1
+        assert await conn.fetchval(
+            "SELECT COUNT(*) FROM schema_migrations WHERE name = $1",
+            recovery_migration,
+        ) == 1
+        assert await _revision_key_columns(conn) == [
+            "candidate_key",
+            "source_fingerprint",
+            "revision",
+        ]
+        assert await conn.fetchval(
+            """
+            SELECT EXISTS (
+                SELECT 1
+                FROM pg_indexes
+                WHERE schemaname = $1
+                  AND tablename = 'commercial_billing_run_candidates'
+                  AND indexname = 'idx_commercial_billing_run_candidates_identity'
+            )
+            """,
+            schema,
+        ) is True
+        assert {
+            (row["tgname"], row["relname"])
+            for row in await conn.fetch(
+                """
+                SELECT trigger_state.tgname, relation.relname
+                FROM pg_trigger AS trigger_state
+                JOIN pg_class AS relation
+                  ON relation.oid = trigger_state.tgrelid
+                JOIN pg_namespace AS namespace_state
+                  ON namespace_state.oid = relation.relnamespace
+                WHERE NOT trigger_state.tgisinternal
+                  AND namespace_state.nspname = $1
+                  AND trigger_state.tgname IN (
+                      'trg_prevent_commercial_billing_review_decision_mutation',
+                      'trg_prevent_commercial_billing_review_decision_truncate',
+                      'trg_prevent_commercial_billing_invoice_for_excluded_candidate'
+                  )
+                """,
+                schema,
+            )
+        } == {
+            (
+                "trg_prevent_commercial_billing_review_decision_mutation",
+                "commercial_billing_candidate_review_decisions",
+            ),
+            (
+                "trg_prevent_commercial_billing_review_decision_truncate",
+                "commercial_billing_candidate_review_decisions",
+            ),
+            (
+                "trg_prevent_commercial_billing_invoice_for_excluded_candidate",
+                "invoices",
+            ),
+        }
+
+        candidate = _candidate("commercial-billing:recovery:2026-03", _fingerprint("a"))
+        service = _service(_SchemaPool(conn, schema), _CandidateService(_preview(candidate)))
+        created = await service.create_run(
+            billing_period="2026-03",
+            idempotency_key="billing-run-recorded-380-recovery",
+            actor="Migration recovery test",
+        )
+        recorded = await service.set_candidate_review_decision(
+            billing_run_id=UUID(created["billingRun"]["id"]),
+            candidate_key=candidate["candidateKey"],
+            expected_source_fingerprint=candidate["sourceFingerprint"],
+            decision="excluded",
+            reason="Restore the durable review decision fence.",
+            idempotency_key="recorded-380-recovery-decision",
+            actor="Migration recovery test",
+        )
+        decision_id = UUID(recorded["reviewDecision"]["id"])
+        for statement, arguments in (
+            (
+                "UPDATE commercial_billing_candidate_review_decisions "
+                "SET reason = 'rewritten' WHERE id = $1",
+                (decision_id,),
+            ),
+            (
+                "DELETE FROM commercial_billing_candidate_review_decisions WHERE id = $1",
+                (decision_id,),
+            ),
+            ("TRUNCATE commercial_billing_candidate_review_decisions", ()),
+        ):
+            with pytest.raises(asyncpg.PostgresError, match="append-only"):
+                await conn.execute(statement, *arguments)
+        with pytest.raises(asyncpg.PostgresError, match="candidate is excluded"):
+            await conn.execute(
+                """
+                INSERT INTO invoices (id, source, source_ref, metadata)
+                VALUES ($1, 'eom_commercial_billing', 'recovery-fence-test', $2::jsonb)
+                """,
+                uuid4(),
+                json.dumps(
+                    {
+                        "candidateKey": candidate["candidateKey"],
+                        "sourceFingerprint": candidate["sourceFingerprint"],
+                    }
+                ),
+            )
+        assert await conn.fetchval("SELECT COUNT(*) FROM invoices") == 0
+
+        history_before_rerun = await conn.fetch(
+            """
+            SELECT id, billing_run_id, candidate_key, source_fingerprint, revision,
+                   decision, reason, source, idempotency_key, request_fingerprint,
+                   decided_by, decided_at, created_at
+            FROM commercial_billing_candidate_review_decisions
+            ORDER BY revision
+            """
+        )
+        await run_migrations(
+            pool,
+            migrations_dir=migrations_dir,
+            only={recovery_migration},
+        )
+        assert await conn.fetchval(
+            "SELECT COUNT(*) FROM schema_migrations WHERE name = $1",
+            recovery_migration,
+        ) == 1
+        assert await conn.fetch(
+            """
+            SELECT id, billing_run_id, candidate_key, source_fingerprint, revision,
+                   decision, reason, source, idempotency_key, request_fingerprint,
+                   decided_by, decided_at, created_at
+            FROM commercial_billing_candidate_review_decisions
+            ORDER BY revision
+            """
+        ) == history_before_rerun
+    finally:
+        await conn.execute(f'DROP SCHEMA IF EXISTS "{schema}" CASCADE')
+        await conn.close()
+
+
+@pytest.mark.asyncio
+async def test_recorded_380_recovery_rejects_ambiguous_global_revision_history():
+    asyncpg = pytest.importorskip("asyncpg")
+    database_url = os.environ.get("ATLAS_RECEIVABLES_TEST_DATABASE_URL")
+    if not database_url:
+        pytest.skip("ATLAS_RECEIVABLES_TEST_DATABASE_URL not set")
+
+    from atlas_brain.storage.migrations import run_migrations
+
+    recovery_migration = "381_commercial_billing_candidate_review_decisions_recovery"
+    schema = f"billing_380_conflict_{uuid4().hex}"
+    conn = await asyncpg.connect(database_url)
+    try:
+        await conn.execute(f'CREATE SCHEMA "{schema}"')
+        await conn.execute(f'SET search_path TO "{schema}"')
+        await conn.execute(
+            "CREATE TABLE invoices ("
+            "id UUID PRIMARY KEY, source TEXT, source_ref TEXT, "
+            "metadata JSONB NOT NULL DEFAULT '{}'::jsonb"
+            ")"
+        )
+        pool, migrations_dir = await _recorded_380_legacy_schema(conn, schema)
+        candidate = _candidate("commercial-billing:conflict:2026-03", _fingerprint("b"))
+        service = _service(_SchemaPool(conn, schema), _CandidateService(_preview(candidate)))
+        first = await service.create_run(
+            billing_period="2026-03",
+            idempotency_key="billing-run-recorded-380-conflict-1",
+            actor="Migration recovery test",
+        )
+        second = await service.create_run(
+            billing_period="2026-03",
+            idempotency_key="billing-run-recorded-380-conflict-2",
+            actor="Migration recovery test",
+        )
+        for run, key, fingerprint in (
+            (first, "recorded-380-conflict-decision-1", _fingerprint("c")),
+            (second, "recorded-380-conflict-decision-2", _fingerprint("d")),
+        ):
+            await conn.execute(
+                """
+                INSERT INTO commercial_billing_candidate_review_decisions (
+                    id, billing_run_id, candidate_key, source_fingerprint,
+                    revision, decision, reason, source, idempotency_key,
+                    request_fingerprint, decided_by
+                ) VALUES ($1, $2, $3, $4, 1, 'excluded',
+                          'Legacy per-run revision evidence.', 'eom_admin', $5,
+                          $6, 'Migration recovery test')
+                """,
+                uuid4(),
+                UUID(run["billingRun"]["id"]),
+                candidate["candidateKey"],
+                candidate["sourceFingerprint"],
+                key,
+                fingerprint,
+            )
+
+        history_before = await conn.fetch(
+            """
+            SELECT billing_run_id, candidate_key, source_fingerprint, revision,
+                   decision, reason, idempotency_key, request_fingerprint
+            FROM commercial_billing_candidate_review_decisions
+            ORDER BY idempotency_key
+            """
+        )
+        with pytest.raises(
+            asyncpg.PostgresError,
+            match="duplicate global revision identities",
+        ):
+            await run_migrations(
+                pool,
+                migrations_dir=migrations_dir,
+                only={recovery_migration},
+            )
+
+        assert await conn.fetchval(
+            "SELECT COUNT(*) FROM schema_migrations WHERE name = $1",
+            recovery_migration,
+        ) == 0
+        assert await _revision_key_columns(conn) == [
+            "billing_run_id",
+            "candidate_key",
+            "source_fingerprint",
+            "revision",
+        ]
+        assert await conn.fetch(
+            """
+            SELECT billing_run_id, candidate_key, source_fingerprint, revision,
+                   decision, reason, idempotency_key, request_fingerprint
+            FROM commercial_billing_candidate_review_decisions
+            ORDER BY idempotency_key
+            """
+        ) == history_before
+    finally:
+        await conn.execute(f'DROP SCHEMA IF EXISTS "{schema}" CASCADE')
+        await conn.close()
+
+
 @pytest.mark.asyncio
 async def test_review_decision_migration_installs_trigger_identity_index():
     async with _billing_run_database() as (conn, schema, _database_url):
@@ -1598,6 +1991,7 @@ def test_invoicing_workflow_enrolls_billing_run_contract_for_pr_and_main_push():
         "atlas_brain/services/commercial_billing_runs.py",
         "atlas_brain/storage/migrations/370_commercial_billing_runs.sql",
         "atlas_brain/storage/migrations/380_commercial_billing_candidate_review_decisions.sql",
+        "atlas_brain/storage/migrations/381_commercial_billing_candidate_review_decisions_recovery.sql",
         "tests/test_commercial_billing_runs.py",
     ):
         assert workflow.count(f'      - "{path}"') == 2
