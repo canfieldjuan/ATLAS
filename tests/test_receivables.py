@@ -165,6 +165,10 @@ class _CreatePaymentConnection:
             return None
         if "information_schema.columns" in query:
             return True
+        if "FROM payment_receipt_delivery_operations" in query:
+            # This in-memory receipt writer has no persisted operations, so
+            # its closed semantic replay-result contract is ready.
+            return True
         if "FROM payment_receipt_deliveries" in query:
             return args[0] in self.receipt_deliveries
         raise AssertionError(f"Unexpected fetchval query: {query}")
@@ -1845,6 +1849,10 @@ async def test_recorded_378_recovery_restores_receipt_delivery_readiness():
         pytest.skip("ATLAS_RECEIVABLES_TEST_DATABASE_URL not set")
 
     from atlas_brain import main_eom
+    from atlas_brain.services.residential_payment_receipt_delivery import (
+        ResidentialPaymentReceiptDeliveryService,
+        _fingerprint,
+    )
     from atlas_brain.storage.migrations import run_migrations
 
     recovery_migration = "379_receivables_payment_receipt_delivery_recovery"
@@ -1875,7 +1883,23 @@ async def test_recorded_378_recovery_restores_receipt_delivery_readiness():
             recovery_migration,
         ) == 0
 
-        contact_id, payment_id, receipt_id, operation_id = (
+        # This is the schema shape created by the original 378 revision that
+        # was later recorded before the result/reconciliation DDL landed.
+        # Seed its completed-operation evidence only after removing the later
+        # result-shape constraint, as the historical writer did not know those
+        # columns existed.
+        await conn.execute("DROP TABLE payment_receipt_delivery_reconciliation_events")
+        await conn.execute(
+            "ALTER TABLE payment_receipt_delivery_operations "
+            "DROP CONSTRAINT payment_receipt_delivery_operations_result_shape_check"
+        )
+        await conn.execute(
+            "ALTER TABLE payment_receipt_delivery_operations "
+            "DROP COLUMN result_delivery_status, DROP COLUMN result_sent_at"
+        )
+
+        contact_id, payment_id, receipt_id, sent_operation_id, failed_operation_id = (
+            uuid4(),
             uuid4(),
             uuid4(),
             uuid4(),
@@ -1897,30 +1921,54 @@ async def test_recorded_378_recovery_restores_receipt_delivery_readiness():
             payment_id,
             contact_id,
         )
+        sent_at = datetime(2026, 8, 16, 12, 30, tzinfo=timezone.utc)
+        failed_at = datetime(2026, 8, 16, 11, 30, tzinfo=timezone.utc)
         await conn.execute(
             """
             INSERT INTO payment_receipt_deliveries (
                 id, payment_id, contact_id, receipt_number, recipient_email,
-                delivery_status, skip_reason, subject, body
+                delivery_status, skip_reason, subject, body, rfc_message_id,
+                gmail_message_id, gmail_thread_id, sent_at
             ) VALUES ($1, $2, $3, 'RCP-MIGRATION-RECOVERY',
-                      'customer@example.test', 'pending', NULL,
-                      'Payment receipt', 'Payment receipt body')
+                      'customer@example.test', 'sent', NULL,
+                      'Payment receipt', 'Payment receipt body',
+                      '<migration-recovery@example.test>',
+                      'migration-recovery-message', 'migration-recovery-thread', $4)
             """,
             receipt_id,
             payment_id,
             contact_id,
+            sent_at,
         )
         await conn.execute(
             """
             INSERT INTO payment_receipt_delivery_operations (
                 id, receipt_delivery_id, source, idempotency_key,
-                request_fingerprint, state, requested_by
+                request_fingerprint, state, outcome, requested_by,
+                attempt_started_at, completed_at
             ) VALUES ($1, $2, 'eom_admin', 'migration-recovery-operation',
-                      $3, 'prepared', 'migration-recovery-test')
+                      $3, 'completed', 'sent', 'migration-recovery-test', $4, $4)
             """,
-            operation_id,
+            sent_operation_id,
             receipt_id,
-            "0" * 64,
+            _fingerprint({"paymentId": str(payment_id)}),
+            sent_at,
+        )
+        # The current delivery is sent after a later retry.  The earlier failed
+        # key must nevertheless replay its own immutable failed result.
+        await conn.execute(
+            """
+            INSERT INTO payment_receipt_delivery_operations (
+                id, receipt_delivery_id, source, idempotency_key,
+                request_fingerprint, state, outcome, requested_by,
+                attempt_started_at, completed_at
+            ) VALUES ($1, $2, 'eom_admin', 'migration-recovery-failed-operation',
+                      $3, 'completed', 'failed', 'migration-recovery-test', $4, $4)
+            """,
+            failed_operation_id,
+            receipt_id,
+            _fingerprint({"paymentId": str(payment_id)}),
+            failed_at,
         )
 
         async def fact_snapshot() -> tuple[tuple, tuple, tuple]:
@@ -1934,34 +1982,30 @@ async def test_recorded_378_recovery_restores_receipt_delivery_readiness():
             receipt = await conn.fetchrow(
                 """
                 SELECT id, payment_id, contact_id, receipt_number, recipient_email,
-                       delivery_status, skip_reason, subject, body, rfc_message_id
+                       delivery_status, skip_reason, subject, body, rfc_message_id,
+                       gmail_message_id, gmail_thread_id, sent_at
                 FROM payment_receipt_deliveries WHERE id = $1
                 """,
                 receipt_id,
             )
-            operation = await conn.fetchrow(
+            operations = await conn.fetch(
                 """
                 SELECT id, receipt_delivery_id, source, idempotency_key,
-                       request_fingerprint, state, outcome, requested_by
-                FROM payment_receipt_delivery_operations WHERE id = $1
+                       request_fingerprint, state, outcome, requested_by,
+                       requested_at, attempt_started_at, completed_at
+                FROM payment_receipt_delivery_operations
+                WHERE receipt_delivery_id = $1
+                ORDER BY idempotency_key
                 """,
-                operation_id,
+                receipt_id,
             )
-            return tuple(payment), tuple(receipt), tuple(operation)
+            return (
+                tuple(payment),
+                tuple(receipt),
+                tuple(tuple(operation) for operation in operations),
+            )
 
         facts_before = await fact_snapshot()
-
-        # This is the schema shape created by the original 378 revision that
-        # was later recorded before the result/reconciliation DDL landed.
-        await conn.execute("DROP TABLE payment_receipt_delivery_reconciliation_events")
-        await conn.execute(
-            "ALTER TABLE payment_receipt_delivery_operations "
-            "DROP CONSTRAINT payment_receipt_delivery_operations_result_shape_check"
-        )
-        await conn.execute(
-            "ALTER TABLE payment_receipt_delivery_operations "
-            "DROP COLUMN result_delivery_status, DROP COLUMN result_sent_at"
-        )
 
         service = ReceivablesService(_SingleConnectionPool(conn, schema))
         assert await service.is_ready() is True
@@ -1969,8 +2013,11 @@ async def test_recorded_378_recovery_restores_receipt_delivery_readiness():
 
         assert recovery_sql.startswith("-- atlas: atomic-bookkeeping")
         assert not re.search(
-            r"(?im)^(?:UPDATE|INSERT|DELETE|DROP)\b", recovery_sql
+            r"(?im)^(?:INSERT|DELETE|DROP)\b", recovery_sql
         )
+        assert re.findall(r"(?im)^UPDATE\s+([a-z_]+)", recovery_sql) == [
+            "payment_receipt_delivery_operations"
+        ]
 
         await run_migrations(
             pool,
@@ -2006,9 +2053,83 @@ async def test_recorded_378_recovery_restores_receipt_delivery_readiness():
         assert await service.is_receipt_delivery_ready() is True
 
         assert await fact_snapshot() == facts_before
+        result_projection = [
+            dict(row)
+            for row in await conn.fetch(
+                """
+                SELECT idempotency_key, result_delivery_status, result_sent_at
+                FROM payment_receipt_delivery_operations
+                WHERE receipt_delivery_id = $1
+                ORDER BY idempotency_key
+                """,
+                receipt_id,
+            )
+        ]
+        assert result_projection == [
+            {
+                "idempotency_key": "migration-recovery-failed-operation",
+                "result_delivery_status": "failed",
+                "result_sent_at": None,
+            },
+            {
+                "idempotency_key": "migration-recovery-operation",
+                "result_delivery_status": "sent",
+                "result_sent_at": sent_at,
+            },
+        ]
         assert await conn.fetchval(
             "SELECT COUNT(*) FROM payment_receipt_delivery_reconciliation_events"
         ) == 0
+
+        sent_replay = await ResidentialPaymentReceiptDeliveryService(
+            pool=_SingleConnectionPool(conn, schema)
+        ).dispatch(
+            payment_id=payment_id,
+            idempotency_key="migration-recovery-operation",
+            actor="migration-recovery-test",
+        )
+        assert sent_replay["receipt_delivery"]["status"] == "sent"
+        assert sent_replay["receipt_delivery"]["sent_at"] == sent_at.isoformat()
+        assert sent_replay["operation"]["state"] == "completed"
+        assert sent_replay["operation"]["outcome"] == "sent"
+        assert sent_replay["operation"]["completed_at"] == sent_at.isoformat()
+        assert sent_replay["replayed"] is True
+        assert sent_replay["reused"] is True
+
+        failed_replay = await ResidentialPaymentReceiptDeliveryService(
+            pool=_SingleConnectionPool(conn, schema)
+        ).dispatch(
+            payment_id=payment_id,
+            idempotency_key="migration-recovery-failed-operation",
+            actor="migration-recovery-test",
+        )
+        assert failed_replay["receipt_delivery"]["status"] == "failed"
+        assert failed_replay["receipt_delivery"]["sent_at"] is None
+        assert failed_replay["operation"]["state"] == "completed"
+        assert failed_replay["operation"]["outcome"] == "failed"
+        assert failed_replay["operation"]["completed_at"] == failed_at.isoformat()
+        assert failed_replay["replayed"] is True
+        assert failed_replay["reused"] is True
+
+        # The `NOT VALID` constraint protects future writes, so readiness must
+        # separately reject any legacy completed result that cannot replay.
+        transaction = conn.transaction()
+        await transaction.start()
+        try:
+            await conn.execute(
+                "ALTER TABLE payment_receipt_delivery_operations "
+                "DROP CONSTRAINT payment_receipt_delivery_operations_result_shape_check"
+            )
+            await conn.execute(
+                "UPDATE payment_receipt_delivery_operations "
+                "SET result_delivery_status = NULL, result_sent_at = NULL "
+                "WHERE id = $1",
+                sent_operation_id,
+            )
+            assert await service.is_receipt_delivery_ready(conn) is False
+        finally:
+            await transaction.rollback()
+        assert await service.is_receipt_delivery_ready() is True
 
         await run_migrations(
             pool,
@@ -2021,6 +2142,18 @@ async def test_recorded_378_recovery_restores_receipt_delivery_readiness():
         } == applied_names
         assert await service.is_receipt_delivery_ready() is True
         assert await fact_snapshot() == facts_before
+        assert [
+            dict(row)
+            for row in await conn.fetch(
+                """
+                SELECT idempotency_key, result_delivery_status, result_sent_at
+                FROM payment_receipt_delivery_operations
+                WHERE receipt_delivery_id = $1
+                ORDER BY idempotency_key
+                """,
+                receipt_id,
+            )
+        ] == result_projection
     finally:
         await conn.execute(f'DROP SCHEMA IF EXISTS "{schema}" CASCADE')
         await conn.close()

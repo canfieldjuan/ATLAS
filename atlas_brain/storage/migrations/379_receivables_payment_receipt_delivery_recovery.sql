@@ -3,12 +3,42 @@
 -- its later result-shape and reconciliation-evidence DDL was added.
 --
 -- This migration is intentionally additive. It repairs only schema objects
--- introduced after the original 378 revision and leaves financial, receipt,
--- operation, and audit facts untouched.
+-- introduced after the original 378 revision, preserves financial, receipt,
+-- and original operation-lifecycle facts, and backfills only the two later
+-- immutable result-projection columns where those recorded facts prove them.
 
 ALTER TABLE payment_receipt_delivery_operations
     ADD COLUMN IF NOT EXISTS result_delivery_status VARCHAR(16),
     ADD COLUMN IF NOT EXISTS result_sent_at TIMESTAMPTZ;
+
+-- Completed operations created by the original 378 revision predate the
+-- immutable replay-result columns.  A failed outcome proves its result without
+-- consulting mutable delivery state.  A sent/already-sent outcome is safe to
+-- backfill only when the linked delivery still carries its terminal sent proof.
+-- Any contradictory legacy row remains incomplete so semantic readiness stays
+-- fail-closed rather than inventing a historical receipt result.
+UPDATE payment_receipt_delivery_operations AS operation
+SET result_delivery_status = CASE
+        WHEN operation.outcome IN ('sent', 'already_sent') THEN 'sent'
+        WHEN operation.outcome = 'failed' THEN 'failed'
+    END,
+    result_sent_at = CASE
+        WHEN operation.outcome IN ('sent', 'already_sent') THEN delivery.sent_at
+        ELSE NULL
+    END
+FROM payment_receipt_deliveries AS delivery
+WHERE operation.receipt_delivery_id = delivery.id
+  AND operation.state = 'completed'
+  AND operation.result_delivery_status IS NULL
+  AND operation.result_sent_at IS NULL
+  AND (
+      operation.outcome = 'failed'
+      OR (
+          operation.outcome IN ('sent', 'already_sent')
+          AND delivery.delivery_status = 'sent'
+          AND delivery.sent_at IS NOT NULL
+      )
+  );
 
 DO $$
 BEGIN

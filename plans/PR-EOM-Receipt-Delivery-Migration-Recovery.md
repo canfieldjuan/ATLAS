@@ -28,42 +28,52 @@ the production migration runner. That proof is indivisible from the recovery.
   database stays structurally partial.
 - Correct fix must touch/change: add one new, forward-only recovery migration
   that restores only the receipt-delivery schema objects introduced after the
-  originally recorded 378; enroll that migration in the closed EOM startup set
-  and invoice-check workflow; and add an isolated-database replay test that
-  records 378, removes those later objects, runs the real migration runner,
-  and proves receipt-delivery readiness returns without modifying existing
-  payment or receipt facts.
+  originally recorded 378 and backfills the later immutable operation-result
+  projection only when the old completed outcome proves it; require semantic
+  readiness to fail closed for any unprovable legacy result; enroll that
+  migration in the closed EOM startup set and invoice-check workflow; and add
+  an isolated-database replay test that records 378, removes those later
+  objects, runs the real migration runner, and proves a historical completed
+  operation replays without modifying existing payment, receipt, or original
+  operation-lifecycle facts.
 - Must not change: do not edit migration 378 or mutate its ledger row; do not
   change payment, allocation, check, return, void, finalization, or audit
-  behavior; do not change Gmail dispatch/reconciliation semantics, routes,
-  authorization, tracker, Website, dependencies, or the generic migration
-  runner. This repair treats the deployed partial schema safely; a generic
-  policy for immutable applied-migration contents is deferred.
+  behavior; do not change receipt rows, original operation state/outcome/timing,
+  Gmail dispatch/reconciliation semantics, routes, authorization, tracker,
+  Website, dependencies, or the generic migration runner. This repair treats
+  the deployed partial schema safely; a generic policy for immutable
+  applied-migration contents is deferred.
 
 ## Scope (this PR)
 
 Ownership lane: eom/billing-payments-receipt-delivery
 Slice phase: Production hardening
+Max files: 7
 
 1. Add the additive receipt-delivery recovery DDL as migration 379 and include
    it in the EOM readiness migration tuple that the slim EOM entrypoint applies
    on startup.
 2. Enroll the new migration file in both invoice-check workflow path filters.
-3. Prove the exact recorded-378/partial-schema replay path, readiness result,
-   idempotent rerun, and preservation of pre-existing financial and receipt
-   rows in an isolated PostgreSQL schema.
+3. Prove the exact recorded-378/partial-schema replay path, completed-key
+   replay result, semantic readiness result, idempotent rerun, and preservation
+   of pre-existing financial, receipt, and original operation-lifecycle rows in
+   an isolated PostgreSQL schema.
 
 ### Review Contract
 
 - Acceptance criteria:
   1. Given a ledger-recorded 378 schema missing its later result fields and
      reconciliation-events table, migration 379 creates the required columns,
-     table, and index and `ReceivablesService.is_receipt_delivery_ready()`
-     returns true; settled by the new isolated-schema regression test in
+     table, and index, safely backfills both sent and failed completed
+     operation results, and `ReceivablesService.is_receipt_delivery_ready()`
+     returns true; a legacy result without a replayable shape remains
+     fail-closed. Settled by the isolated-schema regression test in
      `tests/test_receivables.py`.
-  2. The recovery SQL contains only additive schema operations and no DML over
-     payment, receipt, allocation, or audit facts; settled by the migration
-     file and the regression test's before/after row snapshots.
+  2. The recovery SQL changes no payment, receipt, allocation, audit, or
+     original operation-lifecycle facts. Its only DML fills the two later
+     immutable operation-result projection columns from an already recorded
+     completed outcome; settled by the migration file and the regression test's
+     before/after row snapshots.
   3. A rerun after migration 379 is recorded makes no further schema or fact
      changes; settled by the same regression test's repeated
      `run_migrations(..., only=EOM_RECEIVABLES_READINESS_MIGRATIONS)` call.
@@ -84,17 +94,20 @@ Slice phase: Production hardening
   startup migration tuple; invoice workflow path enrollment; the closed
   receipt-delivery schema/readiness contract; isolated PostgreSQL migration
   tests.
-- Risk areas: preserving financial and receipt facts; idempotent replay;
-  backward compatibility with already-complete 378 schemas; migration ordering
-  and atomic ledger recording; startup reachability; and fail-closed readiness
-  before the recovery runs.
+- Risk areas: preserving financial, receipt, and original operation-lifecycle
+  facts; idempotent replay; backward compatibility with already-complete 378
+  schemas; migration ordering and atomic ledger recording; startup reachability;
+  and fail-closed readiness before the recovery runs or when a legacy result is
+  unprovable.
 - Reviewer rules triggered: R1, R2, R4, R5, R6, R8, R10, R12, R14.
 
 ### Boundary-change enumeration
 
-N/A - no guard, validator, router, classifier, or admission boundary changes.
-The existing receipt-delivery readiness gate remains fail closed until the
-recovered schema satisfies its unchanged closed object contract.
+The receipt-delivery readiness boundary now additionally verifies the
+operation-result shape because the installed database constraint is `NOT VALID`
+for historical rows. The regression test admits a backfilled completed result
+and rejects a deliberately incomplete legacy completed result. No router,
+validator, classifier, or admission boundary changes.
 
 ### Deployed-config probing
 
@@ -106,6 +119,7 @@ setting or fallback.
 
 - `.github/workflows/atlas_invoicing_checks.yml`
 - `atlas_brain/main_eom.py`
+- `atlas_brain/services/receivables.py`
 - `atlas_brain/storage/migrations/379_receivables_payment_receipt_delivery_recovery.sql`
 - `plans/PR-EOM-Receipt-Delivery-Migration-Recovery.md`
 - `tests/test_eom_render_profile.py`
@@ -116,10 +130,14 @@ setting or fallback.
 Migration 379 uses the runner's atomic-bookkeeping marker because it has no
 concurrent DDL. It uses `IF NOT EXISTS` / catalog-guarded additive DDL to add
 the two result columns and their `NOT VALID` shape constraint to
-`payment_receipt_delivery_operations`, then creates the missing append-only
+`payment_receipt_delivery_operations`, then backfills those new columns only
+for completed rows whose recorded outcome proves the immutable replay result.
+It creates the missing append-only
 `payment_receipt_delivery_reconciliation_events` table and its receipt-order
-index. It does not update, insert, or delete financial, receipt, operation, or
-audit rows.
+index. It does not update, insert, or delete financial, receipt, allocation,
+audit, or original operation-lifecycle rows. The receipt-delivery readiness
+probe verifies the same result shape for existing rows, so incomplete legacy
+evidence remains fail-closed.
 
 Appending 379 to `EOM_RECEIVABLES_READINESS_MIGRATIONS` makes the existing slim
 startup path request it. Because 378 is already in `schema_migrations`, the
@@ -137,7 +155,8 @@ reruns the same migration set to prove idempotence.
   behavior.
 - `NOT VALID` preserves the final 378 constraint posture: it enforces the
   result shape for future writes without rejecting historical rows during this
-  schema repair.
+  schema repair. The readiness probe separately rejects historical rows whose
+  result shape cannot be proved.
 
 ## Deferred
 
@@ -156,9 +175,9 @@ Parked hardening: none.
 
 - Passed locally:
   - targeted recovery, EOM tuple, complete-readiness, and CI-enrollment tests:
-    8 passed;
+    9 passed in 4.57s;
   - invoice workflow's receivables ledger/repository selection: 625 passed in
-    78.51s;
+    81.18s;
   - invoice approval-blocker selection: 2 passed, 41 deselected;
   - invoice MCP/OAuth surface selection: 43 passed;
   - targeted Ruff validation: passed. The E402 import-order exception is the
@@ -179,8 +198,9 @@ Parked hardening: none.
 |---|---:|
 | `.github/workflows/atlas_invoicing_checks.yml` | 2 |
 | `atlas_brain/main_eom.py` | 1 |
-| `atlas_brain/storage/migrations/379_receivables_payment_receipt_delivery_recovery.sql` | 72 |
-| `plans/PR-EOM-Receipt-Delivery-Migration-Recovery.md` | 186 |
+| `atlas_brain/services/receivables.py` | 48 |
+| `atlas_brain/storage/migrations/379_receivables_payment_receipt_delivery_recovery.sql` | 102 |
+| `plans/PR-EOM-Receipt-Delivery-Migration-Recovery.md` | 206 |
 | `tests/test_eom_render_profile.py` | 1 |
-| `tests/test_receivables.py` | 194 |
-| **Total** | **456** |
+| `tests/test_receivables.py` | 327 |
+| **Total** | **687** |

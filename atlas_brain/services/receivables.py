@@ -567,6 +567,54 @@ class ReceivablesService:
                 required_columns=_RECEIPT_DISPATCH_REQUIRED_COLUMNS,
                 required_indexes=_RECEIPT_DISPATCH_REQUIRED_INDEXES,
             )
+            and await self._receipt_delivery_operation_results_ready(conn)
+        )
+
+    async def _receipt_delivery_operation_results_ready(
+        self, conn: Any | None = None
+    ) -> bool:
+        """Require every persisted operation to have a replayable result shape.
+
+        The result-shape constraint is intentionally ``NOT VALID`` so a
+        forward-only migration can install it on an existing ledger.  Catalog
+        presence alone therefore cannot prove that legacy completed operations
+        can replay their immutable outcome.  Keep dispatch readiness closed
+        until every existing row satisfies the same shape.
+        """
+        executor = conn if conn is not None else self.pool
+        return bool(
+            await executor.fetchval(
+                """
+                SELECT NOT EXISTS (
+                    SELECT 1
+                    FROM payment_receipt_delivery_operations
+                    WHERE (
+                        (
+                            state <> 'completed'
+                            AND result_delivery_status IS NULL
+                            AND result_sent_at IS NULL
+                        )
+                        OR
+                        (
+                            state = 'completed'
+                            AND (
+                                (
+                                    outcome IN ('sent', 'already_sent')
+                                    AND result_delivery_status = 'sent'
+                                    AND result_sent_at IS NOT NULL
+                                )
+                                OR
+                                (
+                                    outcome = 'failed'
+                                    AND result_delivery_status = 'failed'
+                                    AND result_sent_at IS NULL
+                                )
+                            )
+                        )
+                    ) IS NOT TRUE
+                )
+                """
+            )
         )
 
     async def _schema_objects_ready(
