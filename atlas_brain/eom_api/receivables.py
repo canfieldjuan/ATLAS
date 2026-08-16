@@ -24,6 +24,14 @@ from ..services.receivables import (
     PaymentReceiptRecipient,
     get_receivables_service,
 )
+from ..services.residential_payment_receipt_delivery import (
+    ResidentialPaymentReceiptDeliveryConflictError,
+    ResidentialPaymentReceiptDeliveryNotFoundError,
+    ResidentialPaymentReceiptDeliveryService,
+    ResidentialPaymentReceiptDeliveryUnavailableError,
+    ResidentialPaymentReceiptDeliveryValidationError,
+    get_residential_payment_receipt_delivery_service,
+)
 from ..services.eom_lead_ingress import EOM_BUSINESS_CONTEXT_ID
 from ..storage.exceptions import DatabaseUnavailableError
 from .auth import require_actor, require_receivables_api
@@ -204,6 +212,39 @@ async def _call(awaitable):
         raise HTTPException(
             status_code=503,
             detail={"code": "database_unavailable", "message": message},
+        ) from exc
+
+
+async def _call_residential_payment_receipt_delivery(awaitable) -> dict:
+    """Translate the receipt dispatcher without exposing Gmail internals."""
+
+    try:
+        return await awaitable
+    except ResidentialPaymentReceiptDeliveryValidationError as exc:
+        raise HTTPException(
+            status_code=422, detail={"code": exc.code, "message": str(exc)}
+        ) from exc
+    except ResidentialPaymentReceiptDeliveryNotFoundError as exc:
+        raise HTTPException(
+            status_code=404, detail={"code": exc.code, "message": str(exc)}
+        ) from exc
+    except ResidentialPaymentReceiptDeliveryConflictError as exc:
+        raise HTTPException(
+            status_code=409, detail={"code": exc.code, "message": str(exc)}
+        ) from exc
+    except ResidentialPaymentReceiptDeliveryUnavailableError as exc:
+        raise HTTPException(
+            status_code=503, detail={"code": exc.code, "message": str(exc)}
+        ) from exc
+    except Exception as exc:
+        if not _is_database_unavailable_error(exc):
+            raise
+        raise HTTPException(
+            status_code=503,
+            detail={
+                "code": "residential_payment_receipt_delivery_unavailable",
+                "message": "Residential payment receipt delivery database unavailable",
+            },
         ) from exc
 
 
@@ -440,6 +481,48 @@ async def create_payment(
             raise
 
     return await _call(_write_payment())
+
+
+@router.post("/payments/{payment_id}/receipt-delivery")
+async def dispatch_residential_payment_receipt_delivery(
+    payment_id: UUID,
+    actor: Annotated[str, Depends(require_actor)],
+    idempotency_key: Annotated[
+        str, Header(alias="Idempotency-Key", min_length=1, max_length=128)
+    ],
+    service: ResidentialPaymentReceiptDeliveryService = Depends(
+        get_residential_payment_receipt_delivery_service
+    ),
+) -> dict:
+    """Explicitly send, recover, or replay one committed residential receipt."""
+
+    return await _call_residential_payment_receipt_delivery(
+        service.dispatch(
+            payment_id=payment_id,
+            idempotency_key=idempotency_key,
+            actor=actor,
+        )
+    )
+
+
+@router.post("/payments/{payment_id}/receipt-delivery/reconcile")
+async def reconcile_residential_payment_receipt_delivery(
+    payment_id: UUID,
+    actor: Annotated[str, Depends(require_actor)],
+    service: ResidentialPaymentReceiptDeliveryService = Depends(
+        get_residential_payment_receipt_delivery_service
+    ),
+) -> dict:
+    """Reconcile an ambiguous receipt only from Gmail Sent-mail evidence.
+
+    This endpoint never dispatches a new email.  It is intentionally separate
+    from the idempotent dispatch boundary so an operator can safely recover
+    after a browser reload without recovering a prior request key.
+    """
+
+    return await _call_residential_payment_receipt_delivery(
+        service.reconcile(payment_id=payment_id, actor=actor)
+    )
 
 
 @router.get("/payments")

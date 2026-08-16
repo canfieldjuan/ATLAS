@@ -1332,6 +1332,7 @@ def _workflow_event_paths(workflow: str, event_name: str) -> tuple[str, ...]:
     (
         "atlas_brain/storage/migrations/345_receivables_event_key_lookup.sql",
         "atlas_brain/storage/migrations/369_receivables_payment_receipt_outbox.sql",
+        "atlas_brain/storage/migrations/378_receivables_payment_receipt_delivery.sql",
     ),
 )
 def test_receivables_migrations_are_enrolled_in_invoicing_ci(migration_path):
@@ -1361,12 +1362,17 @@ def test_receivables_migrations_are_enrolled_in_invoicing_ci(migration_path):
     )
 
 
-def test_payment_receipt_route_tests_are_enrolled_in_invoicing_ci():
+@pytest.mark.parametrize(
+    "test_path",
+    (
+        "tests/test_eom_payment_receipts.py",
+        "tests/test_residential_payment_receipt_delivery.py",
+    ),
+)
+def test_payment_receipt_route_tests_are_enrolled_in_invoicing_ci(test_path):
     workflow = (
         Path(__file__).parents[1] / ".github/workflows/atlas_invoicing_checks.yml"
     ).read_text(encoding="utf-8")
-    test_path = "tests/test_eom_payment_receipts.py"
-
     assert test_path in _workflow_event_paths(workflow, "pull_request")
     assert test_path in _workflow_event_paths(workflow, "push")
     assert f"            {test_path} \\\n" in workflow
@@ -1576,6 +1582,10 @@ def test_eom_readiness_migration_set_is_closed_over_receivables_dependencies():
         positions["368_receivables_payment_check_metadata"]
         < positions["369_receivables_payment_receipt_outbox"]
     )
+    assert (
+        positions["369_receivables_payment_receipt_outbox"]
+        < positions["378_receivables_payment_receipt_delivery"]
+    )
     assert "ALTER TABLE appointments" in _packaged_migration_sql("035_contacts")
     assert "REFERENCES contacts(id)" in _packaged_migration_sql("045_invoices")
     assert "ALTER TABLE invoice_payments" in _packaged_migration_sql(
@@ -1678,6 +1688,13 @@ async def test_eom_receivables_readiness_migration_set_builds_ready_schema():
                 ("id",),
                 "r",
             ),
+            (
+                "payment_receipt_delivery_operations",
+                ("receipt_delivery_id",),
+                "payment_receipt_deliveries",
+                ("id",),
+                "r",
+            ),
         }
         assert expected_foreign_keys <= await _schema_foreign_key_relationships(
             conn,
@@ -1715,7 +1732,7 @@ async def test_eom_receivables_readiness_migration_set_builds_ready_schema():
             assert await service.is_ready() is True
             assert await service.is_receipt_delivery_ready() is True
 
-        await conn.execute("DROP TABLE payment_receipt_deliveries")
+        await conn.execute("DROP TABLE payment_receipt_deliveries CASCADE")
         # The global/full-MCP readiness contract deliberately remains intact:
         # it has no outbox writer.  The slim EOM receipt capability alone must
         # fail closed until its additive migration is restored.

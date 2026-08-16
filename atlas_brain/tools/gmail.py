@@ -60,6 +60,14 @@ class GmailDraftCreateError(RuntimeError):
         self.definitely_not_created = definitely_not_created
 
 
+class GmailSendError(RuntimeError):
+    """A Gmail send failed with known or uncertain acceptance state."""
+
+    def __init__(self, message: str, *, definitely_not_sent: bool) -> None:
+        super().__init__(message)
+        self.definitely_not_sent = definitely_not_sent
+
+
 def _extra_headers(headers: Mapping[str, str] | None) -> dict[str, str]:
     """Accept the narrow immutable headers a server-side draft may add.
 
@@ -200,6 +208,7 @@ class GmailTransport:
         thread_id: str | None = None,
         in_reply_to: str | None = None,
         references: str | None = None,
+        headers: Mapping[str, str] | None = None,
     ) -> dict[str, Any]:
         """
         Send an email via Gmail API.
@@ -217,10 +226,18 @@ class GmailTransport:
             thread_id: Gmail thread ID for threading replies.
             in_reply_to: Message-ID of the email being replied to.
             references: Message-ID references for threading.
+            headers: Server-owned immutable Message-ID/X-* headers.
 
         Returns:
             Dict with "id" (Gmail message ID) and "threadId".
         """
+        try:
+            validated_headers = _extra_headers(headers)
+        except ValueError as exc:
+            raise GmailSendError(
+                "Gmail send headers are invalid", definitely_not_sent=True
+            ) from exc
+
         # Build MIME message
         if attachments:
             msg = MIMEMultipart("mixed")
@@ -248,6 +265,8 @@ class GmailTransport:
             msg["In-Reply-To"] = in_reply_to
         if references:
             msg["References"] = references
+        for name, value in validated_headers.items():
+            msg[name] = value
 
         # Add attachments
         if attachments:
@@ -270,27 +289,55 @@ class GmailTransport:
         raw_b64 = base64.urlsafe_b64encode(raw_bytes).decode("ascii")
 
         # Send via Gmail API
-        token = await self._get_access_token()
+        try:
+            token = await self._get_access_token()
+        except Exception as exc:
+            raise GmailSendError(
+                "Gmail send authentication failed", definitely_not_sent=True
+            ) from exc
         client = await self._ensure_client()
 
         payload = {"raw": raw_b64}
         if thread_id:
             payload["threadId"] = thread_id
 
-        response = await client.post(
-            f"{GMAIL_API_BASE}/users/me/messages/send",
-            json=payload,
-            headers={"Authorization": f"Bearer {token}"},
-        )
+        try:
+            response = await client.post(
+                f"{GMAIL_API_BASE}/users/me/messages/send",
+                json=payload,
+                headers={"Authorization": f"Bearer {token}"},
+            )
+        except Exception as exc:
+            # The request can fail after Gmail accepted the raw bytes.  A caller
+            # that owns a stable Message-ID must reconcile Sent mail instead of
+            # issuing another send.
+            raise GmailSendError(
+                "Gmail send outcome is unknown", definitely_not_sent=False
+            ) from exc
 
         if response.status_code == 403:
-            raise RuntimeError(
+            raise GmailSendError(
                 "Gmail send permission denied. Re-run setup with gmail.modify scope: "
-                "python scripts/setup_google_oauth.py"
+                "python scripts/setup_google_oauth.py",
+                definitely_not_sent=True,
             )
-        response.raise_for_status()
+        try:
+            response.raise_for_status()
+        except Exception as exc:
+            status_code = getattr(response, "status_code", 0)
+            raise GmailSendError(
+                "Gmail send was rejected"
+                if 400 <= status_code < 500
+                else "Gmail send outcome is unknown",
+                definitely_not_sent=400 <= status_code < 500,
+            ) from exc
 
-        result = response.json()
+        try:
+            result = response.json()
+        except Exception as exc:
+            raise GmailSendError(
+                "Gmail send outcome is unknown", definitely_not_sent=False
+            ) from exc
         logger.info(
             "Email sent via Gmail: id=%s, to=%s, subject=%s",
             result.get("id"),
@@ -602,8 +649,10 @@ class GmailTransport:
             params=[
                 ("format", "metadata"),
                 ("metadataHeaders", "Message-ID"),
+                ("metadataHeaders", "To"),
                 ("metadataHeaders", "X-Atlas-Commercial-Billing-Approval"),
                 ("metadataHeaders", "X-Atlas-Commercial-Billing-Invoice"),
+                ("metadataHeaders", "X-Atlas-EOM-Payment-Receipt"),
             ],
             headers={"Authorization": f"Bearer {token}"},
         )

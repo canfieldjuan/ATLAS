@@ -104,6 +104,7 @@ EOM_RECEIVABLES_READINESS_MIGRATIONS: tuple[str, ...] = (
     "345_receivables_event_key_lookup",
     "368_receivables_payment_check_metadata",
     "369_receivables_payment_receipt_outbox",
+    "378_receivables_payment_receipt_delivery",
 )
 
 
