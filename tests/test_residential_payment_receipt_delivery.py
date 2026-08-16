@@ -9,6 +9,7 @@ from __future__ import annotations
 import asyncio
 import base64
 import json
+import logging
 import os
 import time
 from contextlib import asynccontextmanager, suppress
@@ -1176,8 +1177,18 @@ async def test_same_key_cannot_be_reused_for_a_different_payment():
 
 
 @pytest.mark.asyncio
-async def test_gmail_transport_send_preserves_immutable_headers_and_classifies_outcomes():
+async def test_gmail_transport_send_preserves_immutable_headers_and_classifies_outcomes(
+    caplog: pytest.LogCaptureFixture,
+):
     requests: list[httpx.Request] = []
+    recipients = [
+        "riley@example.test",
+        "morgan@example.test",
+        "alex@example.test",
+        "sam@example.test",
+        "jordan@example.test",
+    ]
+    caplog.set_level(logging.INFO, logger="atlas.tools.gmail")
 
     async def accepted(request: httpx.Request) -> httpx.Response:
         requests.append(request)
@@ -1189,7 +1200,7 @@ async def test_gmail_transport_send_preserves_immutable_headers_and_classifies_o
     transport._client = httpx.AsyncClient(transport=httpx.MockTransport(accepted))
     try:
         result = await transport.send(
-            to=["riley@example.test"],
+            to=recipients,
             subject="Receipt",
             body="Body",
             headers={
@@ -1205,9 +1216,13 @@ async def test_gmail_transport_send_preserves_immutable_headers_and_classifies_o
     raw = json.loads(requests[0].content)["raw"]
     raw_bytes = base64.urlsafe_b64decode(raw + "=" * (-len(raw) % 4))
     message = message_from_bytes(raw_bytes)
-    assert message["To"] == "riley@example.test"
+    assert all(recipient in message["To"] for recipient in recipients)
     assert message["Message-ID"] == "<atlas-eom-payment-receipt-test@example.test>"
     assert message["X-Atlas-EOM-Payment-Receipt"] == "receipt-1"
+    assert all(recipient not in caplog.text for recipient in recipients)
+    assert "id=message-1" in caplog.text
+    assert "recipients=5" in caplog.text
+    assert "subject=Receipt" in caplog.text
 
     async def rejected(_request: httpx.Request) -> httpx.Response:
         return httpx.Response(429, json={"error": {"message": "busy"}})

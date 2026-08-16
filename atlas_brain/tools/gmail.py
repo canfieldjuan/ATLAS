@@ -350,9 +350,9 @@ class GmailTransport:
                 "Gmail send outcome is unknown", definitely_not_sent=False
             ) from exc
         logger.info(
-            "Email sent via Gmail: id=%s, to=%s, subject=%s",
+            "Email sent via Gmail: id=%s, recipients=%d, subject=%s",
             result.get("id"),
-            to,
+            len(to),
             subject[:50],
         )
         return result
