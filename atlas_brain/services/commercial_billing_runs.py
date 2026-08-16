@@ -33,7 +33,9 @@ _RUN_SOURCE = "eom_admin"
 _MAX_IDEMPOTENCY_KEY_LENGTH = 128
 _MAX_CANDIDATE_KEY_LENGTH = 512
 _MAX_CANDIDATES = 500
+_MAX_REASON_LENGTH = 1000
 _FINGERPRINT_PATTERN = re.compile(r"^[0-9a-f]{64}$")
+_REVIEW_DECISIONS = frozenset({"included", "excluded"})
 _DATABASE_UNAVAILABLE_ERRORS = (
     DatabaseOperationError,
     DatabaseUnavailableError,
@@ -144,6 +146,22 @@ def _text(value: Any) -> str | None:
     return value if isinstance(value, str) else None
 
 
+def _reject_database_unsafe_text(value: str, field: str) -> str:
+    """Reject text asyncpg/PostgreSQL cannot represent before a transaction."""
+
+    if "\x00" in value:
+        raise CommercialBillingRunValidationError(
+            f"{field} contains a database-unsafe NUL character"
+        )
+    try:
+        value.encode("utf-8")
+    except UnicodeEncodeError as exc:
+        raise CommercialBillingRunValidationError(
+            f"{field} contains UTF-8-unencodable text"
+        ) from exc
+    return value
+
+
 def _timestamp(value: Any) -> str:
     if isinstance(value, datetime):
         return value.isoformat()
@@ -153,12 +171,105 @@ def _timestamp(value: Any) -> str:
 def _validate_idempotency_key(value: str) -> str:
     if not isinstance(value, str):
         raise CommercialBillingRunValidationError("Idempotency key is required")
-    key = value.strip()
+    key = _reject_database_unsafe_text(value, "Idempotency key").strip()
     if not key or len(key) > _MAX_IDEMPOTENCY_KEY_LENGTH:
         raise CommercialBillingRunValidationError(
             "Idempotency key must contain 1 to 128 characters"
         )
     return key
+
+
+def _validate_candidate_key(value: Any) -> str:
+    candidate_key = _text(value)
+    if candidate_key is None:
+        raise CommercialBillingRunValidationError("Candidate key is required")
+    normalized = _reject_database_unsafe_text(candidate_key, "Candidate key").strip()
+    if not normalized or len(normalized) > _MAX_CANDIDATE_KEY_LENGTH:
+        raise CommercialBillingRunValidationError(
+            "Candidate key must contain 1 to 512 characters"
+        )
+    return normalized
+
+
+def _validate_source_fingerprint(value: Any) -> str:
+    if not isinstance(value, str) or _FINGERPRINT_PATTERN.fullmatch(value) is None:
+        raise CommercialBillingRunValidationError("Source fingerprint is invalid")
+    return value
+
+
+def _required_text(value: Any, field: str, *, limit: int) -> str:
+    text = _text(value)
+    if text is None:
+        raise CommercialBillingRunValidationError(f"{field} is required")
+    normalized = _reject_database_unsafe_text(text, field).strip()
+    if not normalized or len(normalized) > limit:
+        raise CommercialBillingRunValidationError(
+            f"{field} must contain 1 to {limit} characters"
+        )
+    return normalized
+
+
+async def lock_commercial_billing_candidate_identity(
+    conn: Any,
+    *,
+    candidate_key: str,
+    source_fingerprint: str,
+) -> None:
+    """Serialize candidate review with approval, including rolling upgrades.
+
+    The namespace deliberately matches the deployed approval lock.  Keeping it
+    stable lets the new review writer serialize against an older approval
+    process during a rolling application deployment as well as current code.
+    """
+
+    await conn.fetchval(
+        "SELECT pg_advisory_xact_lock(hashtextextended($1, 0))",
+        "commercial-billing-approval:"
+        f"candidate:{candidate_key}:{source_fingerprint}",
+    )
+
+
+async def lock_commercial_billing_run_candidate(
+    conn: Any,
+    *,
+    billing_run_id: UUID,
+    candidate_key: str,
+) -> Any | None:
+    """Lock one immutable review snapshot before its decision or approval."""
+
+    return await conn.fetchrow(
+        """
+        SELECT run.billing_period, candidate.source_fingerprint, candidate.snapshot
+        FROM commercial_billing_runs AS run
+        JOIN commercial_billing_run_candidates AS candidate
+          ON candidate.billing_run_id = run.id
+        WHERE run.id = $1 AND candidate.candidate_key = $2
+        FOR UPDATE OF candidate
+        """,
+        billing_run_id,
+        candidate_key,
+    )
+
+
+def _review_decision_view(row: Any | None) -> dict[str, Any]:
+    if row is None:
+        return {
+            "decidedAt": None,
+            "decidedBy": None,
+            "decision": "included",
+            "isExplicit": False,
+            "reason": None,
+            "revision": 0,
+        }
+    return {
+        "decidedAt": _timestamp(row["decided_at"]),
+        "decidedBy": row["decided_by"],
+        "decision": row["decision"],
+        "id": str(row["id"]),
+        "isExplicit": True,
+        "reason": row["reason"],
+        "revision": row["revision"],
+    }
 
 
 def _normalize_preview(preview: Any, *, billing_period: str) -> _NormalizedPreview:
@@ -374,6 +485,134 @@ class CommercialBillingRunService:
                 "Commercial billing database unavailable"
             ) from exc
 
+    async def set_candidate_review_decision(
+        self,
+        *,
+        billing_run_id: UUID,
+        candidate_key: str,
+        expected_source_fingerprint: str,
+        decision: str,
+        reason: str,
+        idempotency_key: str,
+        actor: str,
+    ) -> dict[str, Any]:
+        """Append one include/exclude decision without creating financial state."""
+
+        if not isinstance(billing_run_id, UUID):
+            raise CommercialBillingRunValidationError("Billing run id is invalid")
+        selected = _validate_candidate_key(candidate_key)
+        fingerprint = _validate_source_fingerprint(expected_source_fingerprint)
+        if not isinstance(decision, str) or decision not in _REVIEW_DECISIONS:
+            raise CommercialBillingRunValidationError(
+                "Review decision must be included or excluded"
+            )
+        decision_reason = _required_text(reason, "Reason", limit=_MAX_REASON_LENGTH)
+        key = _validate_idempotency_key(idempotency_key)
+        decided_by = _required_text(actor, "Authenticated actor", limit=128)
+        request_fingerprint = _fingerprint(
+            {
+                "billingRunId": str(billing_run_id),
+                "candidateKey": selected,
+                "sourceFingerprint": fingerprint,
+                "decision": decision,
+                "reason": decision_reason,
+            }
+        )
+
+        try:
+            async with self.pool.transaction() as conn:
+                await self._lock_review_decision_operation_key(conn, key)
+                existing = await self._find_review_decision_by_operation_key(conn, key)
+                if existing is not None:
+                    self._assert_review_decision_request(existing, request_fingerprint)
+                    return {
+                        "reviewDecision": _review_decision_view(existing),
+                        "replayed": True,
+                    }
+
+                await lock_commercial_billing_candidate_identity(
+                    conn,
+                    candidate_key=selected,
+                    source_fingerprint=fingerprint,
+                )
+                stored = await lock_commercial_billing_run_candidate(
+                    conn,
+                    billing_run_id=billing_run_id,
+                    candidate_key=selected,
+                )
+                if stored is None:
+                    raise CommercialBillingRunNotFoundError(
+                        "Commercial billing candidate not found"
+                    )
+                if stored["source_fingerprint"] != fingerprint:
+                    raise CommercialBillingRunConflictError(
+                        "Commercial billing candidate fingerprint does not match review evidence"
+                    )
+                approved = await self._find_approval_for_candidate_identity(
+                    conn,
+                    candidate_key=selected,
+                    source_fingerprint=fingerprint,
+                )
+                if approved is not None:
+                    raise CommercialBillingRunConflictError(
+                        "Approved commercial billing candidates cannot be reviewed again"
+                    )
+
+                revision = await self._next_review_decision_revision(
+                    conn,
+                    candidate_key=selected,
+                    source_fingerprint=fingerprint,
+                )
+                created = await conn.fetchrow(
+                    """
+                    INSERT INTO commercial_billing_candidate_review_decisions (
+                        id, billing_run_id, candidate_key, source_fingerprint,
+                        revision, decision, reason, source, idempotency_key,
+                        request_fingerprint, decided_by, decided_at, created_at
+                    )
+                    VALUES (
+                        $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $12
+                    )
+                    RETURNING id, billing_run_id, candidate_key, source_fingerprint,
+                              revision, decision, reason, request_fingerprint,
+                              decided_by, decided_at
+                    """,
+                    uuid4(),
+                    billing_run_id,
+                    selected,
+                    fingerprint,
+                    revision,
+                    decision,
+                    decision_reason,
+                    _RUN_SOURCE,
+                    key,
+                    request_fingerprint,
+                    decided_by,
+                    datetime.now(timezone.utc),
+                )
+                if created is None:  # pragma: no cover - INSERT RETURNING invariant
+                    raise CommercialBillingRunUnavailableError(
+                        "Commercial billing review decision could not be reconciled"
+                    )
+                return {
+                    "reviewDecision": _review_decision_view(created),
+                    "replayed": False,
+                }
+        except CommercialBillingRunError:
+            raise
+        except (asyncpg.UniqueViolationError, asyncpg.ForeignKeyViolationError) as exc:
+            raise CommercialBillingRunConflictError(
+                "Commercial billing review decision could not be reconciled"
+            ) from exc
+        except asyncpg.PostgresError as exc:
+            raise CommercialBillingRunUnavailableError(
+                "Commercial billing database unavailable"
+            ) from exc
+        except _DATABASE_UNAVAILABLE_ERRORS as exc:
+            raise CommercialBillingRunUnavailableError(
+                "Commercial billing database unavailable"
+            ) from exc
+
     async def list_runs(
         self,
         *,
@@ -542,6 +781,13 @@ class CommercialBillingRunService:
         )
 
     @staticmethod
+    async def _lock_review_decision_operation_key(conn: Any, key: str) -> None:
+        await conn.fetchval(
+            "SELECT pg_advisory_xact_lock(hashtextextended($1, 0))",
+            f"commercial-billing-run-review-decision:{_RUN_SOURCE}:{key}",
+        )
+
+    @staticmethod
     async def _find_by_operation_key(conn: Any, key: str) -> Any | None:
         return await conn.fetchrow(
             """
@@ -560,6 +806,68 @@ class CommercialBillingRunService:
             raise CommercialBillingRunConflictError(
                 "Idempotency key was already used with a different billing period"
             )
+
+    @staticmethod
+    async def _find_review_decision_by_operation_key(conn: Any, key: str) -> Any | None:
+        return await conn.fetchrow(
+            """
+            SELECT id, billing_run_id, candidate_key, source_fingerprint,
+                   revision, decision, reason, request_fingerprint,
+                   decided_by, decided_at
+            FROM commercial_billing_candidate_review_decisions
+            WHERE source = $1 AND idempotency_key = $2
+            FOR UPDATE
+            """,
+            _RUN_SOURCE,
+            key,
+        )
+
+    @staticmethod
+    def _assert_review_decision_request(row: Any, expected: str) -> None:
+        if row["request_fingerprint"] != expected:
+            raise CommercialBillingRunConflictError(
+                "Idempotency key was already used with a different review decision"
+            )
+
+    @staticmethod
+    async def _find_approval_for_candidate_identity(
+        conn: Any,
+        *,
+        candidate_key: str,
+        source_fingerprint: str,
+    ) -> Any | None:
+        return await conn.fetchrow(
+            """
+            SELECT id
+            FROM commercial_billing_candidate_approvals
+            WHERE candidate_key = $1 AND source_fingerprint = $2
+            """,
+            candidate_key,
+            source_fingerprint,
+        )
+
+    @staticmethod
+    async def _next_review_decision_revision(
+        conn: Any,
+        *,
+        candidate_key: str,
+        source_fingerprint: str,
+    ) -> int:
+        latest = await conn.fetchval(
+            """
+            SELECT COALESCE(MAX(revision), 0)
+            FROM commercial_billing_candidate_review_decisions
+            WHERE candidate_key = $1
+              AND source_fingerprint = $2
+            """,
+            candidate_key,
+            source_fingerprint,
+        )
+        if isinstance(latest, bool) or not isinstance(latest, int) or latest < 0:
+            raise CommercialBillingRunUnavailableError(
+                "Commercial billing review decision history is invalid"
+            )
+        return latest + 1
 
     async def _run_view(self, executor: Any, run_id: UUID) -> dict[str, Any]:
         row = await executor.fetchrow(
@@ -590,6 +898,26 @@ class CommercialBillingRunService:
             """,
             run_id,
         )
+        decision_rows = await executor.fetch(
+            """
+            SELECT DISTINCT ON (decision.candidate_key, decision.source_fingerprint)
+                   decision.id, decision.candidate_key, decision.source_fingerprint,
+                   decision.revision, decision.decision, decision.reason,
+                   decision.decided_by, decision.decided_at
+            FROM commercial_billing_candidate_review_decisions AS decision
+            JOIN commercial_billing_run_candidates AS candidate
+              ON candidate.candidate_key = decision.candidate_key
+             AND candidate.source_fingerprint = decision.source_fingerprint
+            WHERE candidate.billing_run_id = $1
+            ORDER BY decision.candidate_key, decision.source_fingerprint,
+                     decision.revision DESC
+            """,
+            run_id,
+        )
+        latest_decision_by_candidate = {
+            (decision["candidate_key"], decision["source_fingerprint"]): decision
+            for decision in decision_rows
+        }
         candidates = [_json_object(candidate["snapshot"]) for candidate in candidate_rows]
         for candidate, row_candidate in zip(candidates, candidate_rows):
             if (
@@ -600,6 +928,11 @@ class CommercialBillingRunService:
                 raise CommercialBillingRunUnavailableError(
                     "Commercial billing snapshot evidence is invalid"
                 )
+            candidate["reviewDecision"] = _review_decision_view(
+                latest_decision_by_candidate.get(
+                    (row_candidate["candidate_key"], row_candidate["source_fingerprint"])
+                )
+            )
         return {
             "billingPeriod": row["billing_period"],
             "calendarId": row["calendar_id"],
@@ -652,4 +985,6 @@ __all__ = [
     "CommercialBillingRunUnavailableError",
     "CommercialBillingRunValidationError",
     "get_commercial_billing_run_service",
+    "lock_commercial_billing_candidate_identity",
+    "lock_commercial_billing_run_candidate",
 ]

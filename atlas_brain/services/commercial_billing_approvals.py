@@ -28,6 +28,10 @@ from .commercial_billing_candidates import (
     CommercialBillingCandidatesValidationError,
     get_commercial_billing_candidate_service,
 )
+from .commercial_billing_runs import (
+    lock_commercial_billing_candidate_identity,
+    lock_commercial_billing_run_candidate,
+)
 from .eom_lead_ingress import EOM_BUSINESS_CONTEXT_ID
 
 
@@ -448,7 +452,33 @@ class CommercialBillingApprovalService:
                 if existing is not None:
                     self._assert_request(existing, request_fingerprint)
                     return {"approval": self._view(existing), "replayed": True}
-                await self._lock(conn, f"candidate:{selected}:{expected_source_fingerprint}")
+                await lock_commercial_billing_candidate_identity(
+                    conn,
+                    candidate_key=selected,
+                    source_fingerprint=expected_source_fingerprint,
+                )
+                locked_candidate = await lock_commercial_billing_run_candidate(
+                    conn,
+                    billing_run_id=billing_run_id,
+                    candidate_key=selected,
+                )
+                if locked_candidate is None:
+                    raise CommercialBillingApprovalNotFoundError(
+                        "Commercial billing candidate not found"
+                    )
+                if locked_candidate["source_fingerprint"] != expected_source_fingerprint:
+                    raise CommercialBillingApprovalConflictError(
+                        "Commercial billing candidate fingerprint changed before approval"
+                    )
+                review_decision = await self._latest_review_decision(
+                    conn,
+                    candidate_key=selected,
+                    source_fingerprint=expected_source_fingerprint,
+                )
+                if review_decision is not None and review_decision["decision"] == "excluded":
+                    raise CommercialBillingApprovalConflictError(
+                        "Commercial billing candidate is excluded; include it before approval"
+                    )
                 existing = await self._find_by_candidate(conn, selected, expected_source_fingerprint)
                 if existing is not None:
                     return {"approval": self._view(existing), "replayed": True}
@@ -526,6 +556,26 @@ class CommercialBillingApprovalService:
             raise CommercialBillingApprovalStaleError(
                 "Commercial billing candidate changed; regenerate and review it before approval"
             )
+
+    @staticmethod
+    async def _latest_review_decision(
+        conn: Any,
+        *,
+        candidate_key: str,
+        source_fingerprint: str,
+    ) -> Any | None:
+        return await conn.fetchrow(
+            """
+            SELECT decision
+            FROM commercial_billing_candidate_review_decisions
+            WHERE candidate_key = $1
+              AND source_fingerprint = $2
+            ORDER BY revision DESC
+            LIMIT 1
+            """,
+            candidate_key,
+            source_fingerprint,
+        )
 
     @staticmethod
     async def _lock(conn: Any, scope: str) -> None:

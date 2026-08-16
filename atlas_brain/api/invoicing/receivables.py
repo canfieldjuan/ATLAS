@@ -11,7 +11,7 @@ from uuid import UUID
 
 import asyncpg
 from fastapi import APIRouter, Depends, Header, HTTPException, Query
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 from ...services.receivables import (
     ReceivablesConflictError,
@@ -208,6 +208,23 @@ class ApproveCommercialBillingCandidateRequest(BaseModel):
         max_length=64,
         pattern=r"^[0-9a-f]{64}$",
     )
+
+
+class SetCommercialBillingCandidateReviewDecisionRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    expected_source_fingerprint: str = Field(
+        min_length=64,
+        max_length=64,
+        pattern=r"^[0-9a-f]{64}$",
+    )
+    decision: Literal["included", "excluded"]
+    reason: str = Field(min_length=1, max_length=1000)
+
+    @field_validator("reason", mode="before")
+    @classmethod
+    def normalize_reason_before_length_validation(cls, value: Any) -> Any:
+        return value.strip() if isinstance(value, str) else value
 
 
 class SetCommercialBillingDeliveryPreferenceRequest(BaseModel):
@@ -879,6 +896,34 @@ async def approve_commercial_billing_candidate(
             billing_run_id=billing_run_id,
             candidate_key=body.candidate_key,
             expected_source_fingerprint=body.expected_source_fingerprint,
+            idempotency_key=idempotency_key,
+            actor=actor,
+        )
+    )
+
+
+@router.put(
+    "/commercial-billing-runs/{billing_run_id}/candidates/{candidate_key}/review-decision",
+)
+async def set_commercial_billing_candidate_review_decision(
+    billing_run_id: UUID,
+    candidate_key: str,
+    body: SetCommercialBillingCandidateReviewDecisionRequest,
+    actor: Annotated[str, Depends(require_actor)],
+    idempotency_key: Annotated[
+        str, Header(alias="Idempotency-Key", min_length=1)
+    ],
+    service: CommercialBillingRunService = Depends(get_commercial_billing_run_service),
+) -> dict:
+    """Append an audited include/exclude review decision without delivery work."""
+
+    return await _call_commercial_billing_run(
+        service.set_candidate_review_decision(
+            billing_run_id=billing_run_id,
+            candidate_key=candidate_key,
+            expected_source_fingerprint=body.expected_source_fingerprint,
+            decision=body.decision,
+            reason=body.reason,
             idempotency_key=idempotency_key,
             actor=actor,
         )
