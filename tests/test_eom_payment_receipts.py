@@ -14,6 +14,9 @@ from atlas_brain.eom_api import auth as receivables_auth
 from atlas_brain.eom_api import receivables as routes
 from atlas_brain.services.crm_provider import DatabaseCRMProvider
 from atlas_brain.services.receivables import ReceivablesReceiptContextRequiredError
+from atlas_brain.services.residential_payment_receipt_delivery import (
+    ResidentialPaymentReceiptDeliveryConflictError,
+)
 from atlas_brain.storage.exceptions import DatabaseUnavailableError
 
 
@@ -60,7 +63,52 @@ class _PaymentService:
         }
 
 
-def _app(crm: _CRM, service: _PaymentService) -> tuple[FastAPI, str]:
+class _ReceiptDeliveryService:
+    def __init__(self, *, error: Exception | None = None) -> None:
+        self.error = error
+        self.dispatch_calls: list[dict] = []
+        self.reconcile_calls: list[dict] = []
+
+    async def dispatch(self, **kwargs) -> dict:
+        self.dispatch_calls.append(kwargs)
+        if self.error is not None:
+            raise self.error
+        return self._result(kwargs)
+
+    async def reconcile(self, **kwargs) -> dict:
+        self.reconcile_calls.append(kwargs)
+        if self.error is not None:
+            raise self.error
+        return self._result(kwargs)
+
+    @staticmethod
+    def _result(kwargs: dict) -> dict:
+        return {
+            "payment_id": str(kwargs["payment_id"]),
+            "receipt_delivery": {
+                "receipt_number": "EOM-RCP-payment-1",
+                "recipient_email": "riley@example.test",
+                "status": "sent",
+                "skip_reason": None,
+                "sent_at": "2026-08-15T18:30:00+00:00",
+                "recovery_required_at": None,
+            },
+            "operation": {
+                "state": "completed",
+                "outcome": "sent",
+                "requested_at": "2026-08-15T18:30:00+00:00",
+                "completed_at": "2026-08-15T18:30:00+00:00",
+            },
+            "replayed": False,
+            "reused": False,
+        }
+
+
+def _app(
+    crm: _CRM,
+    service: _PaymentService,
+    receipt_delivery_service: _ReceiptDeliveryService | None = None,
+) -> tuple[FastAPI, str]:
     generated = receivables_auth.generate_receivables_service_token()
     app = FastAPI()
     app.include_router(routes.router)
@@ -73,6 +121,30 @@ def _app(crm: _CRM, service: _PaymentService) -> tuple[FastAPI, str]:
         )
     )
     app.dependency_overrides[routes.get_receivables_service] = lambda: service
+    if receipt_delivery_service is not None:
+        app.dependency_overrides[
+            routes.get_residential_payment_receipt_delivery_service
+        ] = lambda: receipt_delivery_service
+    return app, generated.token
+
+
+def _full_app(receipt_delivery_service: _ReceiptDeliveryService) -> tuple[FastAPI, str]:
+    """Mount the full Atlas router with its real bearer/actor dependencies."""
+
+    from atlas_brain.api.invoicing import auth as full_auth
+    from atlas_brain.api.invoicing import receivables as full_routes
+
+    generated = receivables_auth.generate_receivables_service_token()
+    app = FastAPI()
+    app.include_router(full_routes.router, prefix="/api/v1")
+    app.dependency_overrides[full_auth.get_receivables_api_config] = lambda: SimpleNamespace(
+        receivables_api_enabled=True,
+        receivables_service_token="",
+        receivables_service_token_sha256=generated.sha256,
+    )
+    app.dependency_overrides[
+        full_routes.get_residential_payment_receipt_delivery_service
+    ] = lambda: receipt_delivery_service
     return app, generated.token
 
 
@@ -93,6 +165,125 @@ def _body(contact_id: UUID) -> dict:
         "received_date": "2026-08-12",
         "reference": "1042",
     }
+
+
+@pytest.mark.asyncio
+async def test_slim_receipt_delivery_route_requires_authenticated_actor_and_passes_idempotency():
+    payment_id = uuid4()
+    receipt_service = _ReceiptDeliveryService()
+    app, token = _app(_CRM(None), _PaymentService(), receipt_service)
+
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=app), base_url="http://receivables.test"
+    ) as client:
+        response = await client.post(
+            f"/receivables/payments/{payment_id}/receipt-delivery",
+            headers=_headers(token, key="receipt-delivery-http-1"),
+        )
+        stale_session = await client.post(
+            f"/receivables/payments/{payment_id}/receipt-delivery",
+            headers={"Idempotency-Key": "receipt-delivery-http-2"},
+        )
+
+    assert response.status_code == 200, response.text
+    assert response.json()["receipt_delivery"]["status"] == "sent"
+    assert receipt_service.dispatch_calls == [
+        {
+            "payment_id": payment_id,
+            "idempotency_key": "receipt-delivery-http-1",
+            "actor": "Juan Canfield",
+        }
+    ]
+    assert stale_session.status_code == 401
+
+
+@pytest.mark.asyncio
+async def test_full_receipt_delivery_route_maps_conflicts_without_calling_payment_writer():
+    payment_id = uuid4()
+    receipt_service = _ReceiptDeliveryService(
+        error=ResidentialPaymentReceiptDeliveryConflictError("reconcile first")
+    )
+    app, token = _full_app(receipt_service)
+    path = f"/api/v1/receivables/payments/{payment_id}/receipt-delivery"
+
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=app), base_url="http://receivables.test"
+    ) as client:
+        unauthorized = await client.post(path, headers={"Idempotency-Key": "missing-auth"})
+        response = await client.post(
+            path,
+            headers=_headers(token, key="receipt-delivery-full-conflict-1"),
+        )
+
+    assert unauthorized.status_code == 401
+    assert response.status_code == 409
+    assert response.json() == {
+        "detail": {
+            "code": "residential_payment_receipt_delivery_conflict",
+            "message": "reconcile first",
+        }
+    }
+    assert receipt_service.dispatch_calls == [
+        {
+            "payment_id": payment_id,
+            "idempotency_key": "receipt-delivery-full-conflict-1",
+            "actor": "Juan Canfield",
+        }
+    ]
+
+
+@pytest.mark.asyncio
+async def test_receipt_reconciliation_routes_are_authenticated_no_send_boundaries():
+    payment_id = uuid4()
+    receipt_service = _ReceiptDeliveryService()
+    app, token = _app(_CRM(None), _PaymentService(), receipt_service)
+
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=app), base_url="http://receivables.test"
+    ) as client:
+        response = await client.post(
+            f"/receivables/payments/{payment_id}/receipt-delivery/reconcile",
+            headers={
+                "Authorization": f"Bearer {token}",
+                "X-EOM-Actor": "Juan Canfield",
+            },
+        )
+        stale_session = await client.post(
+            f"/receivables/payments/{payment_id}/receipt-delivery/reconcile"
+        )
+
+    assert response.status_code == 200, response.text
+    assert response.json()["receipt_delivery"]["status"] == "sent"
+    assert stale_session.status_code == 401
+    assert receipt_service.reconcile_calls == [
+        {"payment_id": payment_id, "actor": "Juan Canfield"}
+    ]
+    assert receipt_service.dispatch_calls == []
+
+    full_receipt_service = _ReceiptDeliveryService()
+    full_app, full_token = _full_app(full_receipt_service)
+    full_path = f"/api/v1/receivables/payments/{payment_id}/receipt-delivery/reconcile"
+
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=full_app), base_url="http://receivables.test"
+    ) as client:
+        unauthorized_full = await client.post(full_path)
+        full_response = await client.post(
+            full_path,
+            headers={
+                "Authorization": f"Bearer {full_token}",
+                "X-EOM-Actor": "Mayra",
+            },
+        )
+
+    assert unauthorized_full.status_code == 401
+    assert full_response.status_code == 200, full_response.text
+    assert full_response.json()["payment_id"] == str(payment_id)
+    assert full_response.json()["receipt_delivery"]["status"] == "sent"
+    assert full_receipt_service.reconcile_calls == [
+        {"payment_id": payment_id, "actor": "Mayra"}
+    ]
+    assert full_receipt_service.dispatch_calls == []
 
 
 @pytest.mark.asyncio

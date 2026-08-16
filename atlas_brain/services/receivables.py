@@ -289,6 +289,112 @@ _RECEIPT_DELIVERY_REQUIRED_INDEXES = (
     ),
 )
 
+# Migration 378 turns the non-sending receipt outbox into the durable EOM
+# dispatch/reconciliation capability.  Keep this closed additive contract
+# separate from the migration-369 outbox requirements above: the legacy ledger
+# readiness probe must remain usable during the staged EOM-only rollout, while
+# the receipt-aware routes must fail closed until the full dispatch schema is
+# present.
+_RECEIPT_DISPATCH_REQUIRED_COLUMNS = {
+    "payment_receipt_deliveries": (
+        "rfc_message_id",
+        "gmail_message_id",
+        "gmail_thread_id",
+        "sent_at",
+        "last_attempt_by",
+        "last_attempt_at",
+        "last_failure_code",
+        "last_failure_at",
+        "recovery_required_at",
+    ),
+    "payment_receipt_delivery_operations": (
+        "id",
+        "receipt_delivery_id",
+        "source",
+        "idempotency_key",
+        "request_fingerprint",
+        "state",
+        "outcome",
+        "requested_by",
+        "requested_at",
+        "attempt_started_at",
+        "completed_at",
+        "recovery_required_at",
+        "result_delivery_status",
+        "result_sent_at",
+        "created_at",
+    ),
+    "payment_receipt_delivery_reconciliation_events": (
+        "id",
+        "receipt_delivery_id",
+        "operation_id",
+        "actor",
+        "outcome",
+        "reconciled_at",
+        "created_at",
+    ),
+}
+_RECEIPT_DISPATCH_REQUIRED_INDEXES = (
+    (
+        "payment_receipt_deliveries",
+        "idx_payment_receipt_deliveries_rfc_message_id",
+        True,
+        ("rfc_message_id",),
+        None,
+        None,
+    ),
+    (
+        "payment_receipt_delivery_operations",
+        "payment_receipt_delivery_operations_pkey",
+        True,
+        ("id",),
+        None,
+        "p",
+    ),
+    (
+        "payment_receipt_delivery_operations",
+        "payment_receipt_delivery_operations_source_key",
+        True,
+        ("source", "idempotency_key"),
+        None,
+        "u",
+    ),
+    (
+        "payment_receipt_delivery_operations",
+        "idx_payment_receipt_delivery_operations_record",
+        False,
+        ("receipt_delivery_id", "requested_at"),
+        None,
+        None,
+    ),
+    (
+        "payment_receipt_delivery_operations",
+        "idx_payment_receipt_delivery_operations_one_active",
+        True,
+        ("receipt_delivery_id",),
+        "((state)::text = ANY ((ARRAY['prepared'::character varying, "
+        "'attempting'::character varying, "
+        "'recovery_required'::character varying])::text[]))",
+        None,
+    ),
+    (
+        "payment_receipt_delivery_reconciliation_events",
+        "payment_receipt_delivery_reconciliation_events_pkey",
+        True,
+        ("id",),
+        None,
+        "p",
+    ),
+    (
+        "payment_receipt_delivery_reconciliation_events",
+        "idx_payment_receipt_delivery_reconciliation_events_record",
+        False,
+        ("receipt_delivery_id", "reconciled_at", "id"),
+        None,
+        None,
+    ),
+)
+
 
 @dataclass(frozen=True)
 class PaymentCreationOutcome:
@@ -448,13 +554,18 @@ class ReceivablesService:
         )
 
     async def is_receipt_delivery_ready(self, conn: Any | None = None) -> bool:
-        """Return whether the ledger and residential receipt outbox are usable."""
+        """Return whether the ledger and full residential dispatch schema are usable."""
         return (
             await self.is_ready(conn)
             and await self._schema_objects_ready(
                 conn,
                 required_columns=_RECEIPT_DELIVERY_REQUIRED_COLUMNS,
                 required_indexes=_RECEIPT_DELIVERY_REQUIRED_INDEXES,
+            )
+            and await self._schema_objects_ready(
+                conn,
+                required_columns=_RECEIPT_DISPATCH_REQUIRED_COLUMNS,
+                required_indexes=_RECEIPT_DISPATCH_REQUIRED_INDEXES,
             )
         )
 

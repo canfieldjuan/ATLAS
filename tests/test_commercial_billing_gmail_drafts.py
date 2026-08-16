@@ -2764,8 +2764,10 @@ async def test_gmail_transport_reads_one_sent_message_with_metadata_and_never_se
     metadata_headers = requests[1].url.params.get_list("metadataHeaders")
     assert metadata_headers == [
         "Message-ID",
+        "To",
         "X-Atlas-Commercial-Billing-Approval",
         "X-Atlas-Commercial-Billing-Invoice",
+        "X-Atlas-EOM-Payment-Receipt",
     ]
 
     async def ambiguous_handler(request: httpx.Request) -> httpx.Response:
