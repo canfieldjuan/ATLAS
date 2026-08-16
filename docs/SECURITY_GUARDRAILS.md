@@ -207,9 +207,14 @@ Dependabot is enabled for:
 - Dockerfiles.
 - Docker Compose files at the repo root and under `atlas_video-processing`.
 
-The archived `_ARCHIVED_atlas-intel-next/package-lock.json` is intentionally
-not enrolled for routine Dependabot churn. If that project is reactivated,
-either move it out of `_ARCHIVED_` or add a separate archived-dependency policy.
+The archived `_ARCHIVED_atlas-intel-next/` tree was **deleted** rather than
+kept out of Dependabot. Excluding it from updates did not exclude it from
+`osv-scan`, so an unused Next.js experiment contributed 46 open code-scanning
+alerts on `main`'s usual scan. `osv-full`
+(`.github/workflows/security_guardrails.yml:3-11,158-159`) never evaluates a pull request -- the job's own `if:` excludes both `pull_request` and `pull_request_target` -- but the workflow also declares `workflow_dispatch` alongside `push: main` and a weekly `schedule`, and a manual dispatch can target any ref via `--ref`. So it is not a PR check of any kind, but it is not guaranteed to always scan `main` either -- push and schedule do, a manual run may not. This was
+alert-set hygiene, not an unblocking change. Its own DO_NOT_USE note recorded
+that it was never in production; the live frontend is `atlas-churn-ui`. The
+history remains in git if it is ever wanted back.
 
 ## Initial Secret Scan Result
 
