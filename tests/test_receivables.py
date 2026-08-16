@@ -1337,6 +1337,7 @@ def _workflow_event_paths(workflow: str, event_name: str) -> tuple[str, ...]:
         "atlas_brain/storage/migrations/345_receivables_event_key_lookup.sql",
         "atlas_brain/storage/migrations/369_receivables_payment_receipt_outbox.sql",
         "atlas_brain/storage/migrations/378_receivables_payment_receipt_delivery.sql",
+        "atlas_brain/storage/migrations/379_receivables_payment_receipt_delivery_recovery.sql",
     ),
 )
 def test_receivables_migrations_are_enrolled_in_invoicing_ci(migration_path):
@@ -1628,6 +1629,10 @@ def test_eom_readiness_migration_set_is_closed_over_receivables_dependencies():
         positions["369_receivables_payment_receipt_outbox"]
         < positions["378_receivables_payment_receipt_delivery"]
     )
+    assert (
+        positions["378_receivables_payment_receipt_delivery"]
+        < positions["379_receivables_payment_receipt_delivery_recovery"]
+    )
     assert "ALTER TABLE appointments" in _packaged_migration_sql("035_contacts")
     assert "REFERENCES contacts(id)" in _packaged_migration_sql("045_invoices")
     assert "ALTER TABLE invoice_payments" in _packaged_migration_sql(
@@ -1827,6 +1832,195 @@ async def test_eom_receivables_readiness_migration_set_builds_ready_schema():
         # fail closed until its additive migration is restored.
         assert await service.is_ready() is True
         assert await service.is_receipt_delivery_ready() is False
+    finally:
+        await conn.execute(f'DROP SCHEMA IF EXISTS "{schema}" CASCADE')
+        await conn.close()
+
+
+@pytest.mark.asyncio
+async def test_recorded_378_recovery_restores_receipt_delivery_readiness():
+    asyncpg = pytest.importorskip("asyncpg")
+    database_url = os.environ.get("ATLAS_RECEIVABLES_TEST_DATABASE_URL")
+    if not database_url:
+        pytest.skip("ATLAS_RECEIVABLES_TEST_DATABASE_URL not set")
+
+    from atlas_brain import main_eom
+    from atlas_brain.storage.migrations import run_migrations
+
+    recovery_migration = "379_receivables_payment_receipt_delivery_recovery"
+    pre_recovery_migrations = tuple(
+        migration
+        for migration in main_eom.EOM_RECEIVABLES_READINESS_MIGRATIONS
+        if migration != recovery_migration
+    )
+    recovery_sql = _packaged_migration_sql(recovery_migration)
+    schema = f"eom_receivables_recorded_378_{uuid4().hex}"
+    conn = await asyncpg.connect(database_url)
+    migrations_dir = Path(__file__).parents[1] / "atlas_brain/storage/migrations"
+    try:
+        await conn.execute(f'CREATE SCHEMA "{schema}"')
+        pool = _MigrationConnectionPool(conn, schema)
+        await run_migrations(
+            pool,
+            migrations_dir=migrations_dir,
+            only=pre_recovery_migrations,
+        )
+
+        assert await conn.fetchval(
+            "SELECT COUNT(*) FROM schema_migrations WHERE name = $1",
+            "378_receivables_payment_receipt_delivery",
+        ) == 1
+        assert await conn.fetchval(
+            "SELECT COUNT(*) FROM schema_migrations WHERE name = $1",
+            recovery_migration,
+        ) == 0
+
+        contact_id, payment_id, receipt_id, operation_id = (
+            uuid4(),
+            uuid4(),
+            uuid4(),
+            uuid4(),
+        )
+        await conn.execute(
+            "INSERT INTO contacts (id, full_name, business_context_id) "
+            "VALUES ($1, 'Migration Recovery Customer', 'effingham_maids')",
+            contact_id,
+        )
+        await conn.execute(
+            """
+            INSERT INTO customer_payments (
+                id, contact_id, payer_name, total_amount, payment_method,
+                received_date, status, source
+            ) VALUES ($1, $2, 'Migration Recovery Customer', 125.25, 'check',
+                      DATE '2026-08-16', 'received', 'migration_recovery_test')
+            """,
+            payment_id,
+            contact_id,
+        )
+        await conn.execute(
+            """
+            INSERT INTO payment_receipt_deliveries (
+                id, payment_id, contact_id, receipt_number, recipient_email,
+                delivery_status, skip_reason, subject, body
+            ) VALUES ($1, $2, $3, 'RCP-MIGRATION-RECOVERY',
+                      'customer@example.test', 'pending', NULL,
+                      'Payment receipt', 'Payment receipt body')
+            """,
+            receipt_id,
+            payment_id,
+            contact_id,
+        )
+        await conn.execute(
+            """
+            INSERT INTO payment_receipt_delivery_operations (
+                id, receipt_delivery_id, source, idempotency_key,
+                request_fingerprint, state, requested_by
+            ) VALUES ($1, $2, 'eom_admin', 'migration-recovery-operation',
+                      $3, 'prepared', 'migration-recovery-test')
+            """,
+            operation_id,
+            receipt_id,
+            "0" * 64,
+        )
+
+        async def fact_snapshot() -> tuple[tuple, tuple, tuple]:
+            payment = await conn.fetchrow(
+                """
+                SELECT id, contact_id, total_amount, status, source, received_date
+                FROM customer_payments WHERE id = $1
+                """,
+                payment_id,
+            )
+            receipt = await conn.fetchrow(
+                """
+                SELECT id, payment_id, contact_id, receipt_number, recipient_email,
+                       delivery_status, skip_reason, subject, body, rfc_message_id
+                FROM payment_receipt_deliveries WHERE id = $1
+                """,
+                receipt_id,
+            )
+            operation = await conn.fetchrow(
+                """
+                SELECT id, receipt_delivery_id, source, idempotency_key,
+                       request_fingerprint, state, outcome, requested_by
+                FROM payment_receipt_delivery_operations WHERE id = $1
+                """,
+                operation_id,
+            )
+            return tuple(payment), tuple(receipt), tuple(operation)
+
+        facts_before = await fact_snapshot()
+
+        # This is the schema shape created by the original 378 revision that
+        # was later recorded before the result/reconciliation DDL landed.
+        await conn.execute("DROP TABLE payment_receipt_delivery_reconciliation_events")
+        await conn.execute(
+            "ALTER TABLE payment_receipt_delivery_operations "
+            "DROP CONSTRAINT payment_receipt_delivery_operations_result_shape_check"
+        )
+        await conn.execute(
+            "ALTER TABLE payment_receipt_delivery_operations "
+            "DROP COLUMN result_delivery_status, DROP COLUMN result_sent_at"
+        )
+
+        service = ReceivablesService(_SingleConnectionPool(conn, schema))
+        assert await service.is_ready() is True
+        assert await service.is_receipt_delivery_ready() is False
+
+        assert recovery_sql.startswith("-- atlas: atomic-bookkeeping")
+        assert not re.search(
+            r"(?im)^(?:UPDATE|INSERT|DELETE|DROP)\b", recovery_sql
+        )
+
+        await run_migrations(
+            pool,
+            migrations_dir=migrations_dir,
+            only=main_eom.EOM_RECEIVABLES_READINESS_MIGRATIONS,
+        )
+
+        applied_names = {
+            row["name"]
+            for row in await conn.fetch("SELECT name FROM schema_migrations")
+        }
+        assert applied_names == set(main_eom.EOM_RECEIVABLES_READINESS_MIGRATIONS)
+        assert await conn.fetchval(
+            "SELECT COUNT(*) FROM schema_migrations WHERE name = $1",
+            "378_receivables_payment_receipt_delivery",
+        ) == 1
+        assert await conn.fetchval(
+            "SELECT COUNT(*) FROM schema_migrations WHERE name = $1",
+            recovery_migration,
+        ) == 1
+        assert await conn.fetchval(
+            """
+            SELECT EXISTS (
+                SELECT 1
+                FROM pg_constraint
+                WHERE conrelid = 'payment_receipt_delivery_operations'::regclass
+                  AND conname =
+                      'payment_receipt_delivery_operations_result_shape_check'
+            )
+            """
+        ) is True
+        assert await service.is_ready() is True
+        assert await service.is_receipt_delivery_ready() is True
+
+        assert await fact_snapshot() == facts_before
+        assert await conn.fetchval(
+            "SELECT COUNT(*) FROM payment_receipt_delivery_reconciliation_events"
+        ) == 0
+
+        await run_migrations(
+            pool,
+            migrations_dir=migrations_dir,
+            only=main_eom.EOM_RECEIVABLES_READINESS_MIGRATIONS,
+        )
+        assert {
+            row["name"]
+            for row in await conn.fetch("SELECT name FROM schema_migrations")
+        } == applied_names
+        assert await service.is_receipt_delivery_ready() is True
+        assert await fact_snapshot() == facts_before
     finally:
         await conn.execute(f'DROP SCHEMA IF EXISTS "{schema}" CASCADE')
         await conn.close()

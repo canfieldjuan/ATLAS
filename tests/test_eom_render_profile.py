@@ -518,6 +518,7 @@ def test_eom_startup_migrations_are_curated_for_receivables_readiness():
         "368_receivables_payment_check_metadata",
         "369_receivables_payment_receipt_outbox",
         "378_receivables_payment_receipt_delivery",
+        "379_receivables_payment_receipt_delivery_recovery",
     )
     assert not any(
         migration.startswith(("066_", "068_", "074_", "076_", "083_", "095_"))
