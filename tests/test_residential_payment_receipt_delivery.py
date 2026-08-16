@@ -68,6 +68,7 @@ class _ReceiptGateway:
         self.send_error: Exception | None = None
         self.lookup_error: Exception | None = None
         self.record_before_error = False
+        self.record_before_error_recipient: str | None = None
 
     async def send(
         self,
@@ -88,7 +89,7 @@ class _ReceiptGateway:
             self.record_sent(
                 rfc_message_id=headers["Message-ID"],
                 receipt_delivery_id=UUID(headers["X-Atlas-EOM-Payment-Receipt"]),
-                recipient_email=to[0],
+                recipient_email=self.record_before_error_recipient or to[0],
             )
         if self.send_error is not None:
             raise self.send_error
@@ -720,6 +721,27 @@ async def test_unknown_gmail_result_never_resends_and_can_later_reconcile_sent_e
 
 
 @pytest.mark.asyncio
+async def test_invalid_sent_proof_after_ambiguous_send_requires_recovery_without_resend():
+    async with _receipt_database() as (connection, schema):
+        seed = await _seed_receipt_delivery(connection)
+        gateway = _ReceiptGateway()
+        gateway.record_before_error = True
+        gateway.record_before_error_recipient = "wrong-recipient@example.test"
+        gateway.send_error = GmailSendError("synthetic timeout", definitely_not_sent=False)
+
+        result = await _service(connection, schema, gateway).dispatch(
+            payment_id=seed["payment_id"],
+            idempotency_key="receipt-invalid-proof-after-send-1",
+            actor="Juan",
+        )
+
+        assert result["receipt_delivery"]["status"] == "pending"
+        assert result["receipt_delivery"]["recovery_required_at"] is not None
+        assert result["operation"]["state"] == "recovery_required"
+        assert len(gateway.send_calls) == 1
+
+
+@pytest.mark.asyncio
 async def test_no_sent_reconciliation_attempt_is_actor_audited_without_a_second_send():
     async with _receipt_database() as (connection, schema):
         seed = await _seed_receipt_delivery(connection)
@@ -813,6 +835,47 @@ async def test_interrupted_attempt_recovers_by_lookup_without_a_second_send():
         )
 
         assert recovered["receipt_delivery"]["status"] == "pending"
+        assert recovered["receipt_delivery"]["recovery_required_at"] is not None
+        assert recovered["operation"]["state"] == "recovery_required"
+        assert len(gateway.send_calls) == 1
+
+
+@pytest.mark.asyncio
+async def test_interrupted_attempt_with_invalid_sent_proof_requires_recovery_without_a_second_send():
+    async with _receipt_database() as (connection, schema):
+        seed = await _seed_receipt_delivery(connection)
+        gateway = _BlockingReceiptGateway()
+        initial_now = datetime(2026, 8, 15, 18, 30, tzinfo=timezone.utc)
+        in_flight = asyncio.create_task(
+            _service(connection, schema, gateway, now=initial_now).dispatch(
+                payment_id=seed["payment_id"],
+                idempotency_key="bad-proof",
+                actor="Juan",
+            )
+        )
+        await gateway.send_started.wait()
+        in_flight.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await in_flight
+        gateway.record_sent(
+            rfc_message_id=seed["rfc_message_id"],
+            receipt_delivery_id=seed["delivery_id"],
+            recipient_email="wrong-recipient@example.test",
+        )
+
+        recovered = await _service(
+            connection,
+            schema,
+            gateway,
+            now=datetime(2026, 8, 15, 18, 36, tzinfo=timezone.utc),
+        ).dispatch(
+            payment_id=seed["payment_id"],
+            idempotency_key="bad-proof",
+            actor="Mayra",
+        )
+
+        assert recovered["receipt_delivery"]["status"] == "pending"
+        assert recovered["receipt_delivery"]["recovery_required_at"] is not None
         assert recovered["operation"]["state"] == "recovery_required"
         assert len(gateway.send_calls) == 1
 

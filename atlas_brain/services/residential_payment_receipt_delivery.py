@@ -828,7 +828,12 @@ class ResidentialPaymentReceiptDeliveryService:
                 )
         try:
             proof = await self._lookup_sent(prepared.context)
-        except ResidentialPaymentReceiptDeliveryUnavailableError:
+        except (
+            ResidentialPaymentReceiptDeliveryConflictError,
+            ResidentialPaymentReceiptDeliveryUnavailableError,
+        ):
+            # An invalid candidate is still ambiguous after a durable attempt:
+            # it cannot prove sent, but it must also never authorize a resend.
             return await self._mark_recovery_required(
                 prepared=prepared,
                 actor=actor,
@@ -859,7 +864,11 @@ class ResidentialPaymentReceiptDeliveryService:
     ) -> dict[str, Any]:
         try:
             proof = await self._lookup_sent(prepared.context)
-        except ResidentialPaymentReceiptDeliveryUnavailableError:
+        except (
+            ResidentialPaymentReceiptDeliveryConflictError,
+            ResidentialPaymentReceiptDeliveryUnavailableError,
+        ):
+            # A malformed or unavailable Sent lookup cannot settle an attempt.
             proof = None
         if proof is not None:
             return await self._confirm_sent(

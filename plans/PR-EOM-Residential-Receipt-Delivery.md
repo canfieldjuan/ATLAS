@@ -4,7 +4,7 @@
 
 The EOM Billing & Payments coordinator [#2362](https://github.com/canfieldjuan/ATLAS/issues/2362) requires a committed residential payment to have a retry-safe receipt-email lifecycle. The prior outbox slice deliberately stopped before transport: migration 369 calls itself non-sending and requires a future explicit claim plus verifiable transport result. The Website can display its `pending`/`skipped` projection, but neither ATLAS API profile has a dispatch/recovery operation.
 
-Diff-budget override: this 3,600-LOC provider slice is deliberately over the 400-LOC soft cap because one safe, independently deployable receipt-dispatch contract requires its additive durable state, the exact Gmail transport boundary, both established ATLAS service profiles, and executable crash/concurrency proof together. Splitting those pieces would either publish a state machine with no safe operator boundary or a sender without the durable no-duplicate recovery invariant; no consumer is enabled by this release.
+Diff-budget override: this 3,679-LOC provider slice is deliberately over the 400-LOC soft cap because one safe, independently deployable receipt-dispatch contract requires its additive durable state, the exact Gmail transport boundary, both established ATLAS service profiles, and executable crash/concurrency proof together. Splitting those pieces would either publish a state machine with no safe operator boundary or a sender without the durable no-duplicate recovery invariant; no consumer is enabled by this release.
 
 ### Problem-derived contract
 
@@ -18,6 +18,12 @@ Diff-budget override: this 3,600-LOC provider slice is deliberately over the 400
 - Correct fix must touch/change: extend only the additive EOM receipt-delivery readiness contract with the closed migration-378 schema set; use the production migration runner for real-schema fixtures that exercise migration 378's concurrent DDL; and prove a missing migration-378 column, table, or required index returns not-ready while legacy receivables readiness remains usable.
 - Must not change: the startup migration order, payment/allocation behavior, receipt dispatch/reconciliation state machine, Gmail transport, public route shape, or legacy `is_ready()` contract.
 
+### Invalid-proof recovery repair contract
+
+- Root cause: recovery treats Gmail lookup outage as ambiguous but lets malformed or mismatched Sent evidence escape as a conflict, leaving an already-attempting operation without durable recovery evidence.
+- Correct fix must touch/change: in only the post-attempt recovery paths, treat invalid proof as unverified evidence and persist `recovery_required`; prove immediate uncertain-send and later crash-recovery paths do so without a second send.
+- Must not change: preflight behavior before an attempt, the exact Gmail proof grammar, payment state, Gmail transport, route shape, or retry semantics.
+
 ## Scope (this PR)
 
 Ownership lane: eom/billing-payments-receipt-delivery
@@ -28,7 +34,7 @@ Max files: 14
 2. Add `ResidentialPaymentReceiptDeliveryService`. It may dispatch only an existing `pending` or definitely `failed` residential receipt with a canonical persisted recipient. The service records the request/actor and marks an attempt in PostgreSQL before Gmail is called; it queries Gmail Sent by that stable identity before a new send and after an uncertain result.
 3. Extend `GmailTransport.send` with the same narrow immutable-header validation used by drafts, and make known rejected sends distinguishable from uncertain send outcomes. Receipt dispatch calls `GmailTransport` directly and never routes through the Gmail-to-Resend composite provider. No-send reconciliation writes append-only actor/timestamp/outcome evidence.
 4. Add the idempotent `POST /api/v1/receivables/payments/{payment_id}/receipt-delivery` send boundary plus `POST /api/v1/receivables/payments/{payment_id}/receipt-delivery/reconcile` to both full and slim service-to-service EOM profiles. Dispatch requires the existing bearer/actor boundary and `Idempotency-Key`; reconciliation is authenticated, performs only an exact Gmail Sent-mail lookup for an already-ambiguous operation, and cannot send email. Both expose only persisted receipt-delivery data, never credentials or raw Gmail responses.
-5. Add an isolated local-PostgreSQL migration/service suite, full and slim HTTP reachability tests, Gmail transport byte/header tests using `httpx.MockTransport`, and CI enrollment for the new test surface.
+5. Add an isolated local-PostgreSQL migration/service suite, full and slim HTTP reachability tests, Gmail transport byte/header tests using `httpx.MockTransport`, and CI enrollment for the new test surface. Invalid/mismatched Sent evidence after an attempt must persist recovery-required evidence rather than strand an `attempting` operation.
 6. Make the existing EOM receipt-delivery readiness probe fail closed unless every migration-378 dispatch column, table, and safety index is present; retain the legacy receivables readiness contract unchanged; keep pre-378 fixtures explicit and apply the full current schema through the production migration runner where receipt-aware behavior is exercised.
 
 ### Review Contract
@@ -38,7 +44,7 @@ Max files: 14
   - The delivery service persists its operation before the Gmail fake is invoked, sends the already-persisted subject/body to only the persisted recipient, and returns `sent` with Gmail identity. A Sent-mail proof can safely complete a still-`prepared` operation without dispatching, and later no-send reconciliation records its actor/time/outcome append-only. Both full and slim `POST /receivables/payments/{payment_id}/receipt-delivery` boundaries preserve existing bearer/actor/idempotency requirements and map service outcomes without exposing Gmail internals. Settled by full and slim ASGI plus service tests.
   - A same `(source, idempotency_key, payment_id)` returns that operation's immutable completed result without another Gmail call; reuse of that key for another payment conflicts before external I/O. A later retry may advance the receipt row without changing the original key's replay. Settled by service retry tests and HTTP boundary forwarding/auth tests.
   - A known Gmail rejection leaves the committed payment untouched, records `failed`, and permits a later new idempotency key to retry that existing receipt. Settled by service tests with a definite `GmailSendError` double.
-  - A timeout, cancellation, malformed accepted response, or process interruption after the durable `attempting` marker cannot invoke a second send. The operation remains `pending`/`recovery_required`; the authenticated reconcile route gives a reloaded Website a no-send recovery path by performing only a Sent lookup against that existing operation, and only records `sent` after exact `SENT`, Message-ID, and receipt-id header evidence. This is the selected PostgreSQL/unique-index execution model: every state transition takes the receipt advisory lock before operation and delivery row locks, while the active-operation partial uniqueness invariant remains a database backstop; tests exercise concurrent callers, crash-shaped `attempting`, lookup-hit, lookup-miss, actor audit, and the no-ambiguous-attempt guard.
+  - A timeout, cancellation, malformed accepted response, invalid/incomplete Sent proof, or process interruption after the durable `attempting` marker cannot invoke a second send. The operation remains `pending`/`recovery_required`; the authenticated reconcile route gives a reloaded Website a no-send recovery path by performing only a Sent lookup against that existing operation, and only records `sent` after exact `SENT`, Message-ID, and receipt-id header evidence. This is the selected PostgreSQL/unique-index execution model: every state transition takes the receipt advisory lock before operation and delivery row locks, while the active-operation partial uniqueness invariant remains a database backstop; tests exercise concurrent callers, crash-shaped `attempting`, lookup-hit, lookup-miss, invalid proof, actor audit, and the no-ambiguous-attempt guard.
   - EOM `/receivables/ready` can report receipt-delivery-ready only after the migration-378 dispatch columns, operation/reconciliation tables, and required indexes are present and valid. A missing one returns not-ready without changing the legacy receivables readiness result. Settled by the isolated local-PostgreSQL readiness test in `tests/test_receivables.py`.
   - `skipped/no_email`, absent receipt records, invalid/incomplete Gmail proof, unauthenticated requests, and unavailable Gmail all fail closed without a payment mutation or a customer send. Settled by negative route/service/transport tests.
   - Existing payment creation, legacy receipt projections, commercial draft/sent-mail behavior, and generic Gmail/Resend callers retain their inputs and behavior. Settled by focused receipt regressions, Gmail transport regression tests, and the local invoicing-check selection.
@@ -114,10 +120,11 @@ Parked hardening: none.
 ## Verification
 
 - 2026-08-15 local, no customer Gmail: `python -m py_compile atlas_brain/services/residential_payment_receipt_delivery.py tests/test_residential_payment_receipt_delivery.py tests/test_eom_payment_receipts.py && ruff check atlas_brain/services/residential_payment_receipt_delivery.py tests/test_residential_payment_receipt_delivery.py tests/test_eom_payment_receipts.py` — pass.
-- 2026-08-15 local PostgreSQL (`ATLAS_RECEIVABLES_TEST_DATABASE_URL=postgresql://atlas:atlas@localhost:5433/atlas`): `python -m pytest tests/test_residential_payment_receipt_delivery.py tests/test_eom_payment_receipts.py -q` — 32 passed; one environment-only `torch`/`pynvml` deprecation warning.
+- 2026-08-15 local PostgreSQL (`ATLAS_RECEIVABLES_TEST_DATABASE_URL=postgresql://atlas:atlas@localhost:5433/atlas`): `python -m pytest tests/test_residential_payment_receipt_delivery.py tests/test_eom_payment_receipts.py -q` — 34 passed; one environment-only `torch`/`pynvml` deprecation warning.
 - 2026-08-15 local: `python -m py_compile atlas_brain/services/receivables.py tests/test_receivables.py && ruff check atlas_brain/services/receivables.py tests/test_receivables.py` — pass.
 - 2026-08-15 local PostgreSQL: the readiness/migration/ledger regression subset in `tests/test_receivables.py` — 7 passed; no real Gmail call.
-- 2026-08-15 local PostgreSQL: `python -m pytest tests/test_receivables.py tests/test_eom_payment_receipts.py tests/test_residential_payment_receipt_delivery.py tests/test_commercial_billing_gmail_drafts.py tests/test_eom_render_profile.py tests/test_eom_billing_recipients.py -q` — 399 passed; no real Gmail call.
+- 2026-08-15 local PostgreSQL: invalid-proof recovery subset in `tests/test_residential_payment_receipt_delivery.py` — 5 passed; no real Gmail call.
+- 2026-08-15 local PostgreSQL: `python -m pytest tests/test_receivables.py tests/test_eom_payment_receipts.py tests/test_residential_payment_receipt_delivery.py tests/test_commercial_billing_gmail_drafts.py tests/test_eom_render_profile.py tests/test_eom_billing_recipients.py -q` — 401 passed; no real Gmail call.
 - Before publication: `python scripts/sync_pr_plan.py plans/PR-EOM-Residential-Receipt-Delivery.md origin/main`, `python scripts/sync_pr_plan.py --check plans/PR-EOM-Residential-Receipt-Delivery.md origin/main`, `git diff --check`, and `bash scripts/push_pr.sh <current-pr-body> -u origin HEAD` run the repository’s local mechanical review. No hosted GitHub status is treated as the acceptance gate under Juan's local-check direction.
 
 ## Estimated diff size
@@ -129,13 +136,13 @@ Parked hardening: none.
 | `atlas_brain/eom_api/receivables.py` | 83 |
 | `atlas_brain/main_eom.py` | 1 |
 | `atlas_brain/services/receivables.py` | 113 |
-| `atlas_brain/services/residential_payment_receipt_delivery.py` | 1437 |
+| `atlas_brain/services/residential_payment_receipt_delivery.py` | 1446 |
 | `atlas_brain/storage/migrations/378_receivables_payment_receipt_delivery.sql` | 295 |
 | `atlas_brain/tools/gmail.py` | 69 |
-| `plans/PR-EOM-Residential-Receipt-Delivery.md` | 141 |
+| `plans/PR-EOM-Residential-Receipt-Delivery.md` | 148 |
 | `tests/test_commercial_billing_gmail_drafts.py` | 2 |
 | `tests/test_eom_payment_receipts.py` | 182 |
 | `tests/test_eom_render_profile.py` | 1 |
 | `tests/test_receivables.py` | 183 |
-| `tests/test_residential_payment_receipt_delivery.py` | 998 |
-| **Total** | **3600** |
+| `tests/test_residential_payment_receipt_delivery.py` | 1061 |
+| **Total** | **3679** |
