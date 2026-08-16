@@ -1038,7 +1038,10 @@ class ResidentialPaymentReceiptDeliveryService:
                 raise ResidentialPaymentReceiptDeliveryConflictError(
                     "Residential payment receipt operation evidence is unavailable"
                 )
-            if _operation_state(operation["state"]) != "attempting":
+            if _operation_state(operation["state"]) not in {
+                "attempting",
+                "recovery_required",
+            }:
                 return self._result(delivery, operation, replayed=replayed, reused=True)
             now = self._now()
             delivery = await conn.fetchrow(
@@ -1046,7 +1049,8 @@ class ResidentialPaymentReceiptDeliveryService:
                 UPDATE payment_receipt_deliveries
                 SET delivery_status = 'failed', last_attempt_by = $2,
                     last_attempt_at = $3, last_failure_code = 'gmail_rejected',
-                    last_failure_at = $3, updated_at = $3
+                    last_failure_at = $3, recovery_required_at = NULL,
+                    updated_at = $3
                 WHERE id = $1
                 RETURNING *
                 """,
@@ -1058,7 +1062,8 @@ class ResidentialPaymentReceiptDeliveryService:
                 """
                 UPDATE payment_receipt_delivery_operations
                 SET state = 'completed', outcome = 'failed', completed_at = $2,
-                    result_delivery_status = 'failed', result_sent_at = NULL
+                    recovery_required_at = NULL, result_delivery_status = 'failed',
+                    result_sent_at = NULL
                 WHERE id = $1
                 RETURNING *
                 """,

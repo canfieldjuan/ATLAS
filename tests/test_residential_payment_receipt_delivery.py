@@ -12,7 +12,7 @@ import json
 import os
 import time
 from contextlib import asynccontextmanager, suppress
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from email import message_from_bytes
 from itertools import product
 from pathlib import Path
@@ -186,6 +186,8 @@ class _BlockingReceiptGateway(_ReceiptGateway):
         self.send_calls.append(call)
         self.send_started.set()
         await self.release_send.wait()
+        if self.send_error is not None:
+            raise self.send_error
         return {
             "id": f"gmail-message-{len(self.send_calls)}",
             "threadId": f"gmail-thread-{len(self.send_calls)}",
@@ -834,6 +836,65 @@ async def test_unknown_gmail_result_never_resends_and_can_later_reconcile_sent_e
             "outcome": "sent",
             "reconciled_at": datetime(2026, 8, 15, 18, 30, tzinfo=timezone.utc),
         }
+
+
+@pytest.mark.asyncio
+async def test_late_definite_rejection_after_lease_reconciliation_is_retryable():
+    async with _receipt_database() as (connection, schema):
+        seed = await _seed_receipt_delivery(connection)
+        gateway = _BlockingReceiptGateway()
+        initial_now = datetime(2026, 8, 15, 18, 30, tzinfo=timezone.utc)
+        original_send = asyncio.create_task(
+            _service(connection, schema, gateway, now=initial_now).dispatch(
+                payment_id=seed["payment_id"],
+                idempotency_key="late-a",
+                actor="Juan",
+            )
+        )
+        await gateway.send_started.wait()
+
+        reconciled = await _service(
+            connection,
+            schema,
+            gateway,
+            now=initial_now + timedelta(minutes=6),
+        ).reconcile(payment_id=seed["payment_id"], actor="Mayra")
+        assert reconciled["receipt_delivery"]["status"] == "pending"
+        assert reconciled["operation"]["state"] == "recovery_required"
+
+        gateway.send_error = GmailSendError(
+            "synthetic late rejection", definitely_not_sent=True
+        )
+        gateway.release_send.set()
+        failed = await original_send
+
+        assert failed["receipt_delivery"] == {
+            "receipt_number": f"EOM-RCP-{seed['payment_id']}",
+            "recipient_email": "riley@example.test",
+            "status": "failed",
+            "skip_reason": None,
+            "sent_at": None,
+            "recovery_required_at": None,
+        }
+        assert failed["operation"]["state"] == "completed"
+        assert failed["operation"]["outcome"] == "failed"
+        assert len(gateway.send_calls) == 1
+
+        gateway.send_error = None
+        retried = await _service(
+            connection,
+            schema,
+            gateway,
+            now=initial_now + timedelta(minutes=7),
+        ).dispatch(
+            payment_id=seed["payment_id"],
+            idempotency_key="late-b",
+            actor="Mayra",
+        )
+
+        assert retried["receipt_delivery"]["status"] == "sent"
+        assert retried["operation"]["outcome"] == "sent"
+        assert len(gateway.send_calls) == 2
 
 
 @pytest.mark.asyncio
