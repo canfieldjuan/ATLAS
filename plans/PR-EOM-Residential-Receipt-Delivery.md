@@ -4,7 +4,7 @@
 
 The EOM Billing & Payments coordinator [#2362](https://github.com/canfieldjuan/ATLAS/issues/2362) requires a committed residential payment to have a retry-safe receipt-email lifecycle. The prior outbox slice deliberately stopped before transport: migration 369 calls itself non-sending and requires a future explicit claim plus verifiable transport result. The Website can display its `pending`/`skipped` projection, but neither ATLAS API profile has a dispatch/recovery operation.
 
-Diff-budget override: this 3,315-LOC provider slice is deliberately over the 400-LOC soft cap because one safe, independently deployable receipt-dispatch contract requires its additive durable state, the exact Gmail transport boundary, both established ATLAS service profiles, and executable crash/concurrency proof together. Splitting those pieces would either publish a state machine with no safe operator boundary or a sender without the durable no-duplicate recovery invariant; no consumer is enabled by this release.
+Diff-budget override: this 3,317-LOC provider slice is deliberately over the 400-LOC soft cap because one safe, independently deployable receipt-dispatch contract requires its additive durable state, the exact Gmail transport boundary, both established ATLAS service profiles, and executable crash/concurrency proof together. Splitting those pieces would either publish a state machine with no safe operator boundary or a sender without the durable no-duplicate recovery invariant; no consumer is enabled by this release.
 
 ### Problem-derived contract
 
@@ -125,5 +125,5 @@ Parked hardening: none.
 | `tests/test_eom_payment_receipts.py` | 182 |
 | `tests/test_eom_render_profile.py` | 1 |
 | `tests/test_receivables.py` | 25 |
-| `tests/test_residential_payment_receipt_delivery.py` | 996 |
-| **Total** | **3315** |
+| `tests/test_residential_payment_receipt_delivery.py` | 998 |
+| **Total** | **3317** |
