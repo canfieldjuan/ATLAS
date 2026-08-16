@@ -1688,6 +1688,34 @@ async def test_recorded_380_recovery_restores_review_decision_enforcement():
             schema,
         ) is False
 
+        candidate = _candidate("commercial-billing:recovery:2026-03", _fingerprint("a"))
+        service = _service(_SchemaPool(conn, schema), _CandidateService(_preview(candidate)))
+        created = await service.create_run(
+            billing_period="2026-03",
+            idempotency_key="billing-run-recorded-380-recovery",
+            actor="Migration recovery test",
+        )
+        legacy_recorded = await service.set_candidate_review_decision(
+            billing_run_id=UUID(created["billingRun"]["id"]),
+            candidate_key=candidate["candidateKey"],
+            expected_source_fingerprint=candidate["sourceFingerprint"],
+            decision="included",
+            reason="Preserve the legacy review decision during recovery.",
+            idempotency_key="legacy-review-1",
+            actor="Migration recovery test",
+        )
+        legacy_decision_id = UUID(legacy_recorded["reviewDecision"]["id"])
+        legacy_history_before = await conn.fetchrow(
+            """
+            SELECT id, billing_run_id, candidate_key, source_fingerprint, revision,
+                   decision, reason, source, idempotency_key, request_fingerprint,
+                   decided_by, decided_at, created_at
+            FROM commercial_billing_candidate_review_decisions
+            WHERE id = $1
+            """,
+            legacy_decision_id,
+        )
+
         await run_migrations(
             pool,
             migrations_dir=migrations_dir,
@@ -1707,6 +1735,18 @@ async def test_recorded_380_recovery_restores_review_decision_enforcement():
             "source_fingerprint",
             "revision",
         ]
+        assert dict(
+            await conn.fetchrow(
+                """
+                SELECT id, billing_run_id, candidate_key, source_fingerprint, revision,
+                       decision, reason, source, idempotency_key, request_fingerprint,
+                       decided_by, decided_at, created_at
+                FROM commercial_billing_candidate_review_decisions
+                WHERE id = $1
+                """,
+                legacy_decision_id,
+            )
+        ) == dict(legacy_history_before)
         assert await conn.fetchval(
             """
             SELECT EXISTS (
@@ -1754,13 +1794,6 @@ async def test_recorded_380_recovery_restores_review_decision_enforcement():
             ),
         }
 
-        candidate = _candidate("commercial-billing:recovery:2026-03", _fingerprint("a"))
-        service = _service(_SchemaPool(conn, schema), _CandidateService(_preview(candidate)))
-        created = await service.create_run(
-            billing_period="2026-03",
-            idempotency_key="billing-run-recorded-380-recovery",
-            actor="Migration recovery test",
-        )
         recorded = await service.set_candidate_review_decision(
             billing_run_id=UUID(created["billingRun"]["id"]),
             candidate_key=candidate["candidateKey"],

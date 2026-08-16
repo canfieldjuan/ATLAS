@@ -27,7 +27,7 @@ Max files: 6
 ### Review Contract
 
 - Acceptance criteria:
-  1. Given a schema ledger that records 380 and has its observed legacy UNIQUE (billing_run_id, candidate_key, source_fingerprint, revision) constraint but lacks later safety objects, the real runner applies 381 once, leaves 380 recorded, installs the global revision constraint, idx_commercial_billing_run_candidates_identity, both append-only triggers, and the invoice-writer trigger. Settled by the isolated-schema recovery proof in tests/test_commercial_billing_runs.py.
+  1. Given a schema ledger that records 380 and has its observed legacy UNIQUE (billing_run_id, candidate_key, source_fingerprint, revision) constraint but lacks later safety objects, the real runner applies 381 once, leaves 380 and every non-conflicting pre-existing decision row unchanged, and installs the global revision constraint, idx_commercial_billing_run_candidates_identity, both append-only triggers, and the invoice-writer trigger. Settled by the isolated-schema recovery proof in tests/test_commercial_billing_runs.py.
   2. After successful recovery, the existing service can append one decision and direct update/delete/truncate attempts are rejected; no invoice is created by that proof. Settled by the same isolated PostgreSQL test and the existing service path it invokes.
   3. If an observed legacy table contains duplicate global (candidate_key, source_fingerprint, revision) histories that its old per-run constraint permits, 381 raises before recording itself or replacing the old constraint. Settled by the explicit duplicate-history isolated PostgreSQL case; no silent historical rewrite is allowed.
   4. A fresh/current 380 schema and the recovered legacy schema both tolerate rerunning the real migration runner without another ledger record or schema/fact change. Settled by the same recovery test's second invocation and catalog/row assertions.
@@ -80,10 +80,11 @@ Parked hardening: none.
 
 ## Verification
 
-- Pending before push:
-  - targeted recorded-380 recovery and migration-contract tests;
-  - the commercial billing-run/approval suites under the isolated PostgreSQL test database;
-  - Python compile/Ruff, workflow enrollment, plan synchronization, diff, and repository push_pr.sh gates.
+- `ATLAS_RECEIVABLES_TEST_DATABASE_URL='postgresql://postgres:postgres@127.0.0.1:55432/atlas_receivables_test' pytest -q tests/test_commercial_billing_runs.py -k 'recorded_380_recovery or review_decision_recovery_migration_is_atomic'` — 3 passed after seeding and preserving a non-conflicting legacy decision row.
+- `ATLAS_RECEIVABLES_TEST_DATABASE_URL='postgresql://postgres:postgres@127.0.0.1:55432/atlas_receivables_test' pytest -q tests/test_commercial_billing_runs.py` — 44 passed after review remediation (one existing torch/pynvml warning).
+- `ATLAS_RECEIVABLES_TEST_DATABASE_URL='postgresql://postgres:postgres@127.0.0.1:55432/atlas_receivables_test' python -m pytest tests/test_eom_render_profile.py tests/test_receivables.py tests/test_eom_billing_recipients.py tests/test_eom_payment_receipts.py tests/test_residential_payment_receipt_delivery.py tests/test_commercial_billing_candidates.py tests/test_commercial_billing_runs.py tests/test_commercial_billing_approvals.py tests/test_commercial_billing_gmail_drafts.py tests/test_commercial_billing_manual_square_invoices.py tests/test_invoice_repository.py tests/test_invoice_pdf.py -q` — 673 passed after review remediation (one existing torch/pynvml warning), using only the disposable local PostgreSQL database.
+- `python -m pytest tests/test_monthly_invoice_generation.py -k 'update_invoice_clears_needs_hours_when_line_items_are_billable or line_items_are_billable_requires_all_positive_quantities' -q` — 2 passed after review remediation; `python -m pytest tests/test_invoicing_readonly_mcp.py tests/test_invoicing_readonly_oauth.py tests/test_invoicing_draft_writer_mcp.py tests/test_invoicing_draft_writer_oauth.py -q` — 43 passed.
+- `python -m ruff check tests/test_commercial_billing_runs.py` and `python -m py_compile tests/test_commercial_billing_runs.py` — passed after review remediation. Plan synchronization, committed-diff plan audits, and the managed `scripts/push_pr.sh` full local gate are rerun before the updated head is pushed.
 - After merge/deploy: verify that migration 381 is ledger-recorded, the four required catalog objects exist, the mounted route remains authorization-gated, and the atlas-api runtime points at the merged SHA. No financial/Gmail operation will be used as a deployment probe.
 
 ## Estimated diff size
@@ -93,7 +94,7 @@ Parked hardening: none.
 | `.github/workflows/atlas_invoicing_checks.yml` | 2 |
 | `atlas_brain/storage/migrations/381_commercial_billing_candidate_review_decisions_recovery.sql` | 158 |
 | `plans/INDEX.md` | 3 |
-| `plans/PR-EOM-Commercial-Billing-Candidate-Review-Migration-Recovery.md` | 99 |
+| `plans/PR-EOM-Commercial-Billing-Candidate-Review-Migration-Recovery.md` | 100 |
 | `plans/archive/PR-EOM-Commercial-Billing-Candidate-Exclusions.md` | 0 |
-| `tests/test_commercial_billing_runs.py` | 394 |
-| **Total** | **656** |
+| `tests/test_commercial_billing_runs.py` | 427 |
+| **Total** | **690** |
