@@ -24,6 +24,11 @@ from enum import Enum
 from typing import Any, Collection, Mapping, Optional, Sequence
 from uuid import UUID, uuid4
 
+from .eom_public_onboarding_tokens import (
+    build_eom_public_onboarding_link,
+    format_eom_public_onboarding_token,
+)
+
 logger = logging.getLogger("atlas.services.crm_provider")
 
 _INTERACTION_DEDUPE_SUMMARY_MAX_CHARS = 2000
@@ -165,13 +170,38 @@ def _eom_identity_lock_key(channel: str, value: str) -> str:
     return f"eom-contact-identity:{channel}:{value}"
 
 
+def _eom_customer_handoff_lock_keys(
+    *,
+    approval_key: str,
+    contact_id: str,
+    tracker_customer_id: int,
+    tracker_site_id: int,
+) -> list[str]:
+    """One sorted lock vocabulary shared by office and public finalizers."""
+
+    return sorted(
+        {
+            f"eom-customer-handoff:approval:{approval_key}",
+            f"eom-customer-handoff:contact:{contact_id}",
+            f"eom-customer-handoff:tracker-customer:{tracker_customer_id}",
+            f"eom-customer-handoff:tracker-site:{tracker_site_id}",
+        }
+    )
+
+
 @asynccontextmanager
-async def _transaction_connection(pool: Any):
+async def _transaction_connection(pool: Any, connection: Any | None = None):
     """Yield a transaction from Atlas' wrapper, asyncpg connection, or pool.
 
     Production uses ``DatabasePool.transaction``.  Supporting a raw asyncpg
     connection/pool keeps the migration integration proof on the real SQL path.
+    A caller that already owns a transaction supplies its connection so related
+    lifecycle writes remain one atomic operation rather than nesting a second
+    transaction.
     """
+    if connection is not None:
+        yield connection
+        return
     transaction = getattr(pool, "transaction", None)
     if callable(transaction):
         # ``asyncpg.Connection.transaction()`` enters as ``None``; the raw
@@ -3708,6 +3738,8 @@ class DatabaseCRMProvider:
         draft_id: str,
         actor_id: int,
         actor_name: str,
+        public_onboarding_base_url: str | None = None,
+        public_onboarding_hmac_secret: str | None = None,
     ) -> dict[str, Any]:
         """Atomically claim one pending draft into 'sending' (migration 360).
 
@@ -3718,34 +3750,130 @@ class DatabaseCRMProvider:
         """
         from .eom_lead_conversion import EOMLeadConversionError
 
+        if (public_onboarding_base_url is None) != (
+            public_onboarding_hmac_secret is None
+        ):
+            raise RuntimeError("public onboarding link configuration must be paired")
+
         pool = self._get_pool()
-        row = await pool.fetchrow(
-            """
-            UPDATE eom_onboarding_email_drafts AS d
-               SET status = 'sending', claimed_at = NOW(),
-                   approved_by_employee_id = $2, approved_by_name = $3
-             WHERE d.id = $1::uuid
-               AND d.status = 'pending'
-               AND d.blocker IS NULL
-               AND d.recipient_email IS NOT NULL
-               AND EXISTS (
-                   SELECT 1
-                   FROM contacts AS c
-                   WHERE c.id = d.contact_id
-                     AND c.business_context_id = 'effingham_maids'
-                     AND c.status = 'active'
-               )
-             RETURNING *
-            """,
-            str(draft_id),
-            actor_id,
-            actor_name,
-        )
-        if row is not None:
-            return {
-                "claimed": True,
-                "draft": self._eom_onboarding_draft_closed(row),
-            }
+        public_onboarding_enabled = public_onboarding_base_url is not None
+        if not public_onboarding_enabled:
+            row = await pool.fetchrow(
+                """
+                UPDATE eom_onboarding_email_drafts AS d
+                   SET status = 'sending', claimed_at = NOW(),
+                       approved_by_employee_id = $2, approved_by_name = $3
+                 WHERE d.id = $1::uuid
+                   AND d.status = 'pending'
+                   AND d.blocker IS NULL
+                   AND d.recipient_email IS NOT NULL
+                   AND EXISTS (
+                       SELECT 1
+                       FROM contacts AS c
+                       WHERE c.id = d.contact_id
+                         AND c.business_context_id = 'effingham_maids'
+                         AND c.status = 'active'
+                   )
+                 RETURNING *
+                """,
+                str(draft_id),
+                actor_id,
+                actor_name,
+            )
+            if row is not None:
+                return {
+                    "claimed": True,
+                    "draft": self._eom_onboarding_draft_closed(row),
+                }
+        else:
+            # Token issuance and the status claim share one transaction. A
+            # failed insert (including an unexpected live-token conflict) rolls
+            # the draft back to pending, so no email is ever sent with an
+            # unredeemable link.
+            token_id = uuid4()
+            approval_key = f"eom-public-onboarding:{token_id}"
+            raw_token = format_eom_public_onboarding_token(
+                token_id=token_id,
+                secret=str(public_onboarding_hmac_secret),
+            )
+            link = build_eom_public_onboarding_link(
+                base_url=str(public_onboarding_base_url),
+                token=raw_token,
+            )
+            async with _transaction_connection(pool) as conn:
+                # Token issuance is itself an alternate handoff admission path,
+                # not merely an email concern. Take the shared contact lock
+                # before changing the draft so a concurrent office handoff
+                # cannot finalize the lead between the enabled-claim predicate
+                # and token insertion. This hint deliberately takes no row lock:
+                # public redemption takes the contact lock before the draft lock,
+                # and reversing that order here would create a cycle.
+                draft_hint = await conn.fetchrow(
+                    """
+                    SELECT contact_id
+                    FROM eom_onboarding_email_drafts
+                    WHERE id = $1::uuid
+                    """,
+                    str(draft_id),
+                )
+                if draft_hint is not None:
+                    await conn.execute(
+                        "SELECT pg_advisory_xact_lock(hashtextextended($1, 0))",
+                        f"eom-customer-handoff:contact:{draft_hint['contact_id']}",
+                    )
+                row = await conn.fetchrow(
+                    """
+                    UPDATE eom_onboarding_email_drafts AS d
+                       SET status = 'sending', claimed_at = NOW(),
+                           approved_by_employee_id = $2, approved_by_name = $3
+                     WHERE d.id = $1::uuid
+                       AND d.status = 'pending'
+                       AND d.blocker IS NULL
+                       AND d.recipient_email IS NOT NULL
+                       AND EXISTS (
+                           SELECT 1
+                           FROM contacts AS c
+                           WHERE c.id = d.contact_id
+                             AND c.business_context_id = 'effingham_maids'
+                             AND c.status = 'active'
+                             AND c.contact_type = 'lead'
+                             AND c.lead_stage = 'won'
+                       )
+                     RETURNING *
+                    """,
+                    str(draft_id),
+                    actor_id,
+                    actor_name,
+                )
+                if row is not None:
+                    token_row = await conn.fetchrow(
+                        """
+                        INSERT INTO eom_public_onboarding_tokens (
+                            id, draft_id, contact_id, approval_key,
+                            approved_by_employee_id, approved_by_name
+                        ) VALUES ($1, $2::uuid, $3::uuid, $4, $5, $6)
+                        ON CONFLICT DO NOTHING
+                        RETURNING id
+                        """,
+                        token_id,
+                        str(draft_id),
+                        str(row["contact_id"]),
+                        approval_key,
+                        actor_id,
+                        actor_name,
+                    )
+                    if token_row is None:
+                        raise EOMLeadConversionError(
+                            409,
+                            "EOM onboarding draft already has a public onboarding link",
+                        )
+                    return {
+                        "claimed": True,
+                        "draft": self._eom_onboarding_draft_closed(row),
+                        # Ephemeral transport material only. The raw bearer
+                        # never becomes part of the durable draft projection.
+                        "public_onboarding_link": link,
+                    }
         existing = await self.get_eom_onboarding_draft(draft_id)
         if existing is None:
             raise EOMLeadConversionError(404, "EOM onboarding draft not found")
@@ -3853,25 +3981,45 @@ class DatabaseCRMProvider:
         from .eom_lead_conversion import EOMLeadConversionError
 
         pool = self._get_pool()
-        row = await pool.fetchrow(
-            """
-            UPDATE eom_onboarding_email_drafts
-               SET status = 'revoked', revoked_at = NOW()
-             WHERE id = $1::uuid
-               AND (
-                   status = 'pending'
-                   OR (
-                       status = 'sending'
-                       AND claimed_at <= NOW() - make_interval(mins => $2)
+        async with _transaction_connection(pool) as conn:
+            # The public finalizer uses this exact lock before it locks the
+            # token/draft row. A stale-send reconciliation therefore cannot
+            # revoke a link between its validation and redemption.
+            await conn.execute(
+                "SELECT pg_advisory_xact_lock(hashtextextended($1, 0))",
+                f"eom-public-onboarding:draft:{draft_id}",
+            )
+            row = await conn.fetchrow(
+                """
+                UPDATE eom_onboarding_email_drafts
+                   SET status = 'revoked', revoked_at = NOW()
+                 WHERE id = $1::uuid
+                   AND (
+                       status = 'pending'
+                       OR (
+                           status = 'sending'
+                           AND claimed_at <= NOW() - make_interval(mins => $2)
+                       )
                    )
-               )
-             RETURNING *
-            """,
-            str(draft_id),
-            _EOM_ONBOARDING_SENDING_STALE_AFTER_MINUTES,
-        )
-        if row is not None:
-            return self._eom_onboarding_draft_closed(row)
+                 RETURNING *
+                """,
+                str(draft_id),
+                _EOM_ONBOARDING_SENDING_STALE_AFTER_MINUTES,
+            )
+            if row is not None:
+                if await conn.fetchval(
+                    "SELECT to_regclass('eom_public_onboarding_tokens') IS NOT NULL"
+                ):
+                    await conn.execute(
+                        """
+                        UPDATE eom_public_onboarding_tokens
+                           SET status = 'revoked', revoked_at = NOW()
+                         WHERE draft_id = $1::uuid
+                           AND status = 'issued'
+                        """,
+                        str(draft_id),
+                    )
+                return self._eom_onboarding_draft_closed(row)
         existing = await self.get_eom_onboarding_draft(draft_id)
         if existing is None:
             raise EOMLeadConversionError(404, "EOM onboarding draft not found")
@@ -3887,6 +4035,307 @@ class DatabaseCRMProvider:
         raise EOMLeadConversionError(
             409, "EOM onboarding draft was already sent and cannot be revoked"
         )
+
+    async def get_eom_public_onboarding_session(
+        self, *, token_id: str
+    ) -> dict[str, Any]:
+        """Return a token-bound prefill projection for the tracker bridge.
+
+        This is intentionally an internal, bearer-authenticated API result. The
+        tracker chooses the smaller browser projection; no browser request ever
+        reads Atlas directly or learns a CRM mutation capability.
+        """
+
+        from .eom_lead_conversion import EOMLeadConversionError
+        from .eom_lead_ingress import EOM_BUSINESS_CONTEXT_ID
+
+        pool = self._get_pool()
+        row = await pool.fetchrow(
+            """
+            SELECT
+                token.status AS token_status,
+                token.handoff_id,
+                draft.status AS draft_status,
+                contact.id AS contact_id,
+                contact.business_context_id,
+                contact.contact_type,
+                contact.lead_stage,
+                contact.status AS contact_status,
+                contact.full_name,
+                contact.email,
+                contact.phone,
+                contact.address,
+                contact.city,
+                contact.state,
+                contact.zip,
+                contact.customer_type,
+                handoff.tracker_customer_id,
+                handoff.tracker_site_id
+            FROM eom_public_onboarding_tokens AS token
+            JOIN eom_onboarding_email_drafts AS draft ON draft.id = token.draft_id
+            JOIN contacts AS contact ON contact.id = token.contact_id
+            LEFT JOIN eom_customer_handoffs AS handoff ON handoff.id = token.handoff_id
+            WHERE token.id = $1::uuid
+            """,
+            token_id,
+        )
+        if row is None:
+            raise EOMLeadConversionError(404, "Public onboarding link is unavailable")
+        token_status = str(row["token_status"])
+        if token_status == "redeemed":
+            if (
+                row["handoff_id"] is None
+                or row["tracker_customer_id"] is None
+                or row["tracker_site_id"] is None
+            ):
+                raise EOMLeadConversionError(
+                    409, "Public onboarding completion evidence is incomplete"
+                )
+            return {
+                "status": "completed",
+                "contact_id": str(row["contact_id"]),
+                "tracker_customer_id": int(row["tracker_customer_id"]),
+                "tracker_site_id": int(row["tracker_site_id"]),
+                "handoff_id": str(row["handoff_id"]),
+                "idempotent": True,
+            }
+        if token_status != "issued":
+            raise EOMLeadConversionError(404, "Public onboarding link is unavailable")
+        if (
+            row["draft_status"] not in ("sending", "sent")
+            or row["business_context_id"] != EOM_BUSINESS_CONTEXT_ID
+            or row["contact_status"] != "active"
+            or row["contact_type"] != "lead"
+            or row["lead_stage"] != "won"
+        ):
+            raise EOMLeadConversionError(404, "Public onboarding link is unavailable")
+        return {
+            "status": "ready",
+            "contact_id": str(row["contact_id"]),
+            "full_name": str(row["full_name"]),
+            "email": row["email"],
+            "phone": row["phone"],
+            "address": row["address"],
+            "city": row["city"],
+            "state": row["state"],
+            "zip": row["zip"],
+            "customer_type": row["customer_type"],
+        }
+
+    async def complete_eom_public_onboarding(
+        self,
+        *,
+        token_id: str,
+        tracker_customer_id: int,
+        tracker_site_id: int,
+    ) -> dict[str, Any]:
+        """Redeem one issued link into the existing immutable handoff.
+
+        The initial token read merely supplies the fixed lock vocabulary. The
+        decisive token/draft/contact read happens after all lock keys are held;
+        that is the linearization point shared with the ordinary office handoff.
+        ``finalize_eom_customer_handoff`` receives this same connection, so its
+        lead transition, lifecycle evidence, handoff insert, and token redemption
+        either all commit or all roll back together.
+        """
+
+        from .eom_lead_conversion import EOMLeadConversionError
+        from .eom_lead_ingress import EOM_BUSINESS_CONTEXT_ID
+
+        pool = self._get_pool()
+        async with _transaction_connection(pool) as conn:
+            token_hint = await conn.fetchrow(
+                """
+                SELECT draft_id, contact_id, approval_key
+                FROM eom_public_onboarding_tokens
+                WHERE id = $1::uuid
+                """,
+                token_id,
+            )
+            if token_hint is None:
+                raise EOMLeadConversionError(
+                    404, "Public onboarding link is unavailable"
+                )
+            lock_keys = _eom_customer_handoff_lock_keys(
+                approval_key=str(token_hint["approval_key"]),
+                contact_id=str(token_hint["contact_id"]),
+                tracker_customer_id=tracker_customer_id,
+                tracker_site_id=tracker_site_id,
+            )
+            lock_keys.append(
+                f"eom-public-onboarding:draft:{token_hint['draft_id']}"
+            )
+            for lock_key in sorted(set(lock_keys)):
+                await conn.execute(
+                    "SELECT pg_advisory_xact_lock(hashtextextended($1, 0))",
+                    lock_key,
+                )
+            row = await conn.fetchrow(
+                """
+                SELECT
+                    token.id AS token_id,
+                    token.status AS token_status,
+                    token.approval_key,
+                    token.approved_by_employee_id,
+                    token.approved_by_name,
+                    token.handoff_id,
+                    draft.status AS draft_status,
+                    contact.id AS contact_id,
+                    contact.business_context_id,
+                    contact.contact_type,
+                    contact.lead_stage,
+                    contact.status AS contact_status,
+                    handoff.tracker_customer_id,
+                    handoff.tracker_site_id,
+                    handoff.approval_key AS handoff_approval_key
+                FROM eom_public_onboarding_tokens AS token
+                JOIN eom_onboarding_email_drafts AS draft ON draft.id = token.draft_id
+                JOIN contacts AS contact ON contact.id = token.contact_id
+                LEFT JOIN eom_customer_handoffs AS handoff ON handoff.id = token.handoff_id
+                WHERE token.id = $1::uuid
+                FOR UPDATE OF token, draft, contact
+                """,
+                token_id,
+            )
+            if row is None:
+                raise EOMLeadConversionError(
+                    404, "Public onboarding link is unavailable"
+                )
+            token_status = str(row["token_status"])
+            if token_status == "redeemed":
+                if (
+                    row["handoff_id"] is None
+                    or row["tracker_customer_id"] is None
+                    or row["tracker_site_id"] is None
+                    or str(row["handoff_approval_key"]) != str(row["approval_key"])
+                ):
+                    raise EOMLeadConversionError(
+                        409, "Public onboarding completion evidence is incomplete"
+                    )
+                if (
+                    int(row["tracker_customer_id"]) != tracker_customer_id
+                    or int(row["tracker_site_id"]) != tracker_site_id
+                ):
+                    raise EOMLeadConversionError(
+                        409,
+                        "Public onboarding link was already completed for different tracker records",
+                    )
+                return {
+                    "status": "completed",
+                    "contact_id": str(row["contact_id"]),
+                    "tracker_customer_id": tracker_customer_id,
+                    "tracker_site_id": tracker_site_id,
+                    "handoff_id": str(row["handoff_id"]),
+                    "idempotent": True,
+                }
+            if token_status != "issued":
+                raise EOMLeadConversionError(
+                    409, "Public onboarding link is unavailable"
+                )
+            if (
+                row["draft_status"] not in ("sending", "sent")
+                or row["business_context_id"] != EOM_BUSINESS_CONTEXT_ID
+                or row["contact_status"] != "active"
+                or row["contact_type"] != "lead"
+                or row["lead_stage"] != "won"
+            ):
+                raise EOMLeadConversionError(
+                    409, "Public onboarding link is unavailable"
+                )
+            handoff = await self.finalize_eom_customer_handoff(
+                contact_id=str(row["contact_id"]),
+                tracker_customer_id=tracker_customer_id,
+                tracker_site_id=tracker_site_id,
+                approval_key=str(row["approval_key"]),
+                actor_id=int(row["approved_by_employee_id"]),
+                actor_name=str(row["approved_by_name"]),
+                connection=conn,
+                permitted_public_onboarding_token_id=str(row["token_id"]),
+            )
+            redeemed = await conn.fetchrow(
+                """
+                UPDATE eom_public_onboarding_tokens
+                   SET status = 'redeemed', redeemed_at = NOW(), handoff_id = $2::uuid
+                 WHERE id = $1::uuid
+                   AND status = 'issued'
+                 RETURNING id, contact_id, handoff_id
+                """,
+                token_id,
+                handoff["handoff_id"],
+            )
+            if redeemed is None:
+                raise RuntimeError("public onboarding token changed during finalization")
+            return {
+                "status": "completed",
+                "contact_id": str(redeemed["contact_id"]),
+                "tracker_customer_id": tracker_customer_id,
+                "tracker_site_id": tracker_site_id,
+                "handoff_id": str(redeemed["handoff_id"]),
+                "idempotent": bool(handoff["idempotent"]),
+            }
+
+    async def revoke_eom_public_onboarding_token(
+        self, *, draft_id: str
+    ) -> dict[str, Any]:
+        """Revoke an issued public link without rewriting sent-email evidence."""
+
+        from .eom_lead_conversion import EOMLeadConversionError
+
+        pool = self._get_pool()
+        async with _transaction_connection(pool) as conn:
+            if not await conn.fetchval(
+                "SELECT to_regclass('eom_public_onboarding_tokens') IS NOT NULL"
+            ):
+                raise EOMLeadConversionError(
+                    503, "Public onboarding token storage is unavailable"
+                )
+            await conn.execute(
+                "SELECT pg_advisory_xact_lock(hashtextextended($1, 0))",
+                f"eom-public-onboarding:draft:{draft_id}",
+            )
+            row = await conn.fetchrow(
+                """
+                SELECT id, contact_id, status
+                FROM eom_public_onboarding_tokens
+                WHERE draft_id = $1::uuid
+                FOR UPDATE
+                """,
+                draft_id,
+            )
+            if row is None:
+                raise EOMLeadConversionError(
+                    404, "Public onboarding link was not found"
+                )
+            token_status = str(row["status"])
+            if token_status == "redeemed":
+                raise EOMLeadConversionError(
+                    409, "Completed public onboarding cannot be revoked"
+                )
+            if token_status == "revoked":
+                return {
+                    "token_id": str(row["id"]),
+                    "contact_id": str(row["contact_id"]),
+                    "status": "revoked",
+                    "idempotent": True,
+                }
+            revoked = await conn.fetchrow(
+                """
+                UPDATE eom_public_onboarding_tokens
+                   SET status = 'revoked', revoked_at = NOW()
+                 WHERE id = $1::uuid
+                   AND status = 'issued'
+                 RETURNING id, contact_id
+                """,
+                row["id"],
+            )
+            if revoked is None:
+                raise RuntimeError("public onboarding token changed during revocation")
+            return {
+                "token_id": str(revoked["id"]),
+                "contact_id": str(revoked["contact_id"]),
+                "status": "revoked",
+                "idempotent": False,
+            }
 
     async def open_customer_service_ticket(
         self,
@@ -4326,6 +4775,58 @@ class DatabaseCRMProvider:
             )
         return [dict(r) for r in rows]
 
+    async def _assert_eom_public_onboarding_fence(
+        self,
+        conn: Any,
+        *,
+        contact_id: str,
+        permitted_token_id: str | None,
+    ) -> None:
+        """Fence office conversion while an issued public link owns the lead.
+
+        A code deployment can precede migration 382 while the feature is
+        disabled. The relation probe preserves the existing office handoff in
+        that deliberately dormant state; once the table exists, the matching
+        row is locked under the same sorted advisory-lock vocabulary as both
+        finalizers, so either channel observes one serialized decision.
+        """
+
+        from .eom_lead_conversion import EOMLeadConversionError
+
+        relation_exists = await conn.fetchval(
+            "SELECT to_regclass('eom_public_onboarding_tokens') IS NOT NULL"
+        )
+        if not relation_exists:
+            if permitted_token_id is not None:
+                raise EOMLeadConversionError(
+                    503, "Public onboarding token storage is unavailable"
+                )
+            return
+        issued = await conn.fetchrow(
+            """
+            SELECT id
+            FROM eom_public_onboarding_tokens
+            WHERE contact_id = $1::uuid
+              AND status = 'issued'
+            FOR UPDATE
+            """,
+            contact_id,
+        )
+        if issued is None:
+            if permitted_token_id is not None:
+                raise EOMLeadConversionError(
+                    409, "Public onboarding link is no longer available"
+                )
+            return
+        if permitted_token_id is not None and str(issued["id"]) == str(
+            permitted_token_id
+        ):
+            return
+        raise EOMLeadConversionError(
+            409,
+            "An active public onboarding link must be revoked before office approval",
+        )
+
     async def finalize_eom_customer_handoff(
         self,
         *,
@@ -4335,6 +4836,8 @@ class DatabaseCRMProvider:
         approval_key: str,
         actor_id: int,
         actor_name: str,
+        connection: Any | None = None,
+        permitted_public_onboarding_token_id: str | None = None,
     ) -> dict[str, Any]:
         """Atomically link a tracker Customer/Site and promote one EOM lead.
 
@@ -4365,21 +4868,33 @@ class DatabaseCRMProvider:
                 "idempotent": idempotent,
             }
 
+        # This is derived from the only alternate admission path. It is not an
+        # independently caller-controlled metadata field, so future internal
+        # callers cannot label an ordinary office conversion as public.
+        completion_channel = (
+            "public_onboarding"
+            if permitted_public_onboarding_token_id is not None
+            else "office"
+        )
+
         pool = self._get_pool()
-        async with _transaction_connection(pool) as conn:
-            lock_keys = sorted(
-                {
-                    f"eom-customer-handoff:approval:{approval_key}",
-                    f"eom-customer-handoff:contact:{contact_id}",
-                    f"eom-customer-handoff:tracker-customer:{tracker_customer_id}",
-                    f"eom-customer-handoff:tracker-site:{tracker_site_id}",
-                }
+        async with _transaction_connection(pool, connection) as conn:
+            lock_keys = _eom_customer_handoff_lock_keys(
+                approval_key=approval_key,
+                contact_id=contact_id,
+                tracker_customer_id=tracker_customer_id,
+                tracker_site_id=tracker_site_id,
             )
             for lock_key in lock_keys:
                 await conn.execute(
                     "SELECT pg_advisory_xact_lock(hashtextextended($1, 0))",
                     lock_key,
                 )
+            await self._assert_eom_public_onboarding_fence(
+                conn,
+                contact_id=contact_id,
+                permitted_token_id=permitted_public_onboarding_token_id,
+            )
             existing_key = await conn.fetchrow(
                 """
                 SELECT id, contact_id, approval_key, tracker_customer_id, tracker_site_id
@@ -4587,7 +5102,8 @@ class DatabaseCRMProvider:
                         jsonb_build_object(
                             'tracker_customer_id', $4::bigint,
                             'tracker_site_id', $5::bigint,
-                            'approved_by_employee_id', $6::bigint
+                            'approved_by_employee_id', $6::bigint,
+                            'completion_channel', $8::text
                         ))
                 """,
                 contact_id,
@@ -4597,6 +5113,7 @@ class DatabaseCRMProvider:
                 tracker_site_id,
                 actor_id,
                 from_stage,
+                completion_channel,
             )
             handoff = await conn.fetchrow(
                 """

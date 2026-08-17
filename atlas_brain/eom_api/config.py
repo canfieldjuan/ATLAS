@@ -5,9 +5,10 @@ from __future__ import annotations
 import os
 from collections.abc import Iterable, Mapping
 from pathlib import Path
+from urllib.parse import urlsplit
 
 from dotenv import dotenv_values
-from pydantic import Field
+from pydantic import Field, SecretStr
 from pydantic import model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
@@ -176,6 +177,27 @@ class EOMFunnelConfig(BaseSettings):
             "the slim EOM funnel routes"
         ),
     )
+    public_onboarding_enabled: bool = Field(
+        default=False,
+        description=(
+            "Enable the tracker-only authority for public EOM onboarding links; "
+            "disabled keeps approved onboarding email behavior unchanged"
+        ),
+    )
+    public_onboarding_url: str = Field(
+        default="",
+        description=(
+            "HTTPS Website onboarding page base URL; the bearer is appended only "
+            "as a URL fragment at email-delivery time"
+        ),
+    )
+    public_onboarding_hmac_secret: SecretStr = Field(
+        default_factory=lambda: SecretStr(""),
+        description=(
+            "Atlas-only HMAC secret for public onboarding link signatures; never "
+            "expose it to the tracker or browser"
+        ),
+    )
 
     @model_validator(mode="after")
     def reject_raw_eom_funnel_service_token_env(self) -> "EOMFunnelConfig":
@@ -186,6 +208,62 @@ class EOMFunnelConfig(BaseSettings):
                 "ATLAS_EOM_FUNNEL_SERVICE_TOKEN_SHA256 on the Atlas API service "
                 "and keep the raw token on the caller side."
             )
+        return self
+
+    @model_validator(mode="after")
+    def validate_public_onboarding_configuration(self) -> "EOMFunnelConfig":
+        """Make an explicitly configured bearer authority safe before use.
+
+        Both values may be staged while disabled, but a partial or unsafe pair
+        is never accepted. That makes a later flag flip deterministic and keeps
+        an operator from discovering a malformed URL only after a draft has
+        already been claimed for sending.
+        """
+
+        base_url = self.public_onboarding_url.strip()
+        secret = self.public_onboarding_hmac_secret.get_secret_value().strip()
+        has_url = bool(base_url)
+        has_secret = bool(secret)
+        if has_url != has_secret:
+            raise ValueError(
+                "ATLAS_EOM_FUNNEL_PUBLIC_ONBOARDING_URL and "
+                "ATLAS_EOM_FUNNEL_PUBLIC_ONBOARDING_HMAC_SECRET must be set together"
+            )
+        if self.public_onboarding_enabled and not has_url:
+            raise ValueError(
+                "public onboarding requires ATLAS_EOM_FUNNEL_PUBLIC_ONBOARDING_URL "
+                "and ATLAS_EOM_FUNNEL_PUBLIC_ONBOARDING_HMAC_SECRET"
+            )
+        if self.public_onboarding_enabled and not self.api_enabled:
+            raise ValueError(
+                "public onboarding requires ATLAS_EOM_FUNNEL_API_ENABLED=true"
+            )
+        if not has_url:
+            return self
+        try:
+            parsed = urlsplit(base_url)
+            # ``urlsplit`` defers an invalid numeric port until this property
+            # is read, so force that validation while configuration is still
+            # fail-closed rather than when an approved draft is sent.
+            port = parsed.port
+        except ValueError as exc:
+            raise ValueError("public onboarding URL must be a valid HTTPS URL") from exc
+        if (
+            parsed.scheme != "https"
+            or not parsed.netloc
+            or not parsed.hostname
+            or parsed.username is not None
+            or parsed.password is not None
+            or port == 0
+            or parsed.query
+            or parsed.fragment
+        ):
+            raise ValueError(
+                "public onboarding URL must be an HTTPS URL without credentials, "
+                "query, or fragment"
+            )
+        if len(secret.encode("utf-8")) < 32:
+            raise ValueError("public onboarding HMAC secret must be at least 32 bytes")
         return self
 
 
