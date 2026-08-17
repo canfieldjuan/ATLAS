@@ -14,7 +14,7 @@
     "expo": "~54.0.33",
     "expo-av": "~16.0.8",
     "expo-constants": "~18.0.13",
-    "expo-file-system": "~19.0.21",
+    "expo-file-system": "~57.0.2",
     "expo-haptics": "~15.0.8",
     "expo-linking": "~8.0.11",
     "expo-router": "~6.0.24",
