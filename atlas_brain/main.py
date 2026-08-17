@@ -44,6 +44,13 @@ logger = logging.getLogger("atlas.main")
 _SECURITY_CONTACT_URL = "https://github.com/canfieldjuan/ATLAS/security/advisories/new"
 _SECURITY_POLICY_URL = "https://github.com/canfieldjuan/ATLAS/blob/main/SECURITY.md"
 _SECURITY_TXT_MAX_AGE_DAYS = 180
+_COMMERCIAL_BILLING_REVIEW_RECOVERY_MIGRATION = (
+    "381_commercial_billing_candidate_review_decisions_recovery"
+)
+
+
+class CommercialBillingReviewRecoveryUnavailableError(RuntimeError):
+    """The enabled receivables API cannot safely serve commercial billing."""
 
 
 def _setting_text(config: object, name: str) -> str:
@@ -308,6 +315,76 @@ async def _start_asr_server() -> subprocess.Popen | None:
     return None
 
 
+async def _commercial_billing_review_recovery_is_recorded(pool: object) -> bool:
+    """Return whether the recovery migration is durably present in the ledger."""
+    try:
+        return bool(
+            await pool.fetchval(
+                "SELECT EXISTS (SELECT 1 FROM schema_migrations WHERE name = $1)",
+                _COMMERCIAL_BILLING_REVIEW_RECOVERY_MIGRATION,
+            )
+        )
+    except Exception as exc:
+        logger.warning(
+            "Could not confirm commercial billing review recovery migration: %s",
+            exc,
+        )
+        return False
+
+
+async def _run_database_migration_check(
+    pool: object,
+    *,
+    receivables_api_enabled: bool,
+    run_migrations_fn=None,
+    close_database_fn=None,
+) -> None:
+    """Run generic migrations, fencing unsafe receivables recovery failures."""
+    if run_migrations_fn is None:
+        from .storage.migrations import run_migrations
+
+        runner = run_migrations
+    else:
+        runner = run_migrations_fn
+    closer = close_database if close_database_fn is None else close_database_fn
+
+    migration_error = None
+    try:
+        await runner(pool)
+    except Exception as exc:
+        migration_error = exc
+
+    if not receivables_api_enabled:
+        if migration_error is not None:
+            logger.warning("Database migration check failed: %s", migration_error)
+        else:
+            logger.info("Database migrations checked")
+        return
+
+    if await _commercial_billing_review_recovery_is_recorded(pool):
+        if migration_error is not None:
+            logger.warning("Database migration check failed: %s", migration_error)
+        else:
+            logger.info("Database migrations checked")
+        return
+
+    try:
+        await closer()
+    except Exception as close_exc:
+        logger.error(
+            "Error closing database after commercial billing recovery failure: %s",
+            close_exc,
+            exc_info=True,
+        )
+    error = CommercialBillingReviewRecoveryUnavailableError(
+        "Commercial billing review recovery migration must complete before "
+        "the enabled receivables API can start"
+    )
+    if migration_error is not None:
+        raise error from migration_error
+    raise error
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """
@@ -328,14 +405,18 @@ async def lifespan(app: FastAPI):
             await init_database()
             logger.info("Database connection pool initialized")
             try:
-                from .storage.migrations import run_migrations
-
                 pool = get_db_pool()
                 if pool.is_initialized:
-                    await run_migrations(pool)
-                    logger.info("Database migrations checked")
+                    await _run_database_migration_check(
+                        pool,
+                        receivables_api_enabled=settings.invoicing.receivables_api_enabled,
+                    )
+            except CommercialBillingReviewRecoveryUnavailableError:
+                raise
             except Exception as e:
                 logger.warning("Database migration check failed: %s", e)
+        except CommercialBillingReviewRecoveryUnavailableError:
+            raise
         except Exception as e:
             logger.error("Failed to initialize database: %s", e, exc_info=True)
             # Continue without database - service can still function

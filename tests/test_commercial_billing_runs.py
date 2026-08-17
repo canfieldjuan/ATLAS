@@ -1636,6 +1636,173 @@ async def test_full_atlas_app_persists_review_decision_route_under_api_v1():
         )
 
 
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("migration_fails", "ledger_mode"),
+    (
+        (True, "missing"),
+        (True, "unqueryable"),
+        (False, "missing"),
+    ),
+)
+async def test_full_atlas_migration_check_blocks_enabled_receivables_without_recovery(
+    migration_fails: bool,
+    ledger_mode: str,
+):
+    from atlas_brain import main
+
+    events: list[str] = []
+    queries: list[tuple[str, tuple[object, ...]]] = []
+
+    class _Pool:
+        async def fetchval(self, query: str, *args: object) -> bool:
+            events.append("ledger")
+            queries.append((query, args))
+            if ledger_mode == "unqueryable":
+                raise RuntimeError("ledger unavailable")
+            return False
+
+    async def fail_migrations(pool: object) -> None:
+        assert isinstance(pool, _Pool)
+        events.append("migrate")
+        if migration_fails:
+            raise RuntimeError("migration failed")
+
+    async def close_database() -> None:
+        events.append("close")
+
+    with pytest.raises(
+        main.CommercialBillingReviewRecoveryUnavailableError,
+        match="recovery migration must complete",
+    ) as exc_info:
+        await main._run_database_migration_check(
+            _Pool(),
+            receivables_api_enabled=True,
+            run_migrations_fn=fail_migrations,
+            close_database_fn=close_database,
+        )
+
+    if migration_fails:
+        assert isinstance(exc_info.value.__cause__, RuntimeError)
+    else:
+        assert exc_info.value.__cause__ is None
+    assert events == ["migrate", "ledger", "close"]
+    assert queries == [
+        (
+            "SELECT EXISTS (SELECT 1 FROM schema_migrations WHERE name = $1)",
+            (main._COMMERCIAL_BILLING_REVIEW_RECOVERY_MIGRATION,),
+        )
+    ]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    (
+        "migration_fails",
+        "receivables_api_enabled",
+        "ledger_recorded",
+        "expected_events",
+    ),
+    (
+        (True, True, True, ["migrate", "ledger"]),
+        (False, True, True, ["migrate", "ledger"]),
+        (True, False, False, ["migrate"]),
+        (False, False, False, ["migrate"]),
+    ),
+)
+async def test_full_atlas_migration_check_allows_recovered_or_disabled_receivables(
+    migration_fails: bool,
+    receivables_api_enabled: bool,
+    ledger_recorded: bool,
+    expected_events: list[str],
+):
+    from atlas_brain import main
+
+    events: list[str] = []
+
+    class _Pool:
+        async def fetchval(self, query: str, *args: object) -> bool:
+            assert query == "SELECT EXISTS (SELECT 1 FROM schema_migrations WHERE name = $1)"
+            assert args == (main._COMMERCIAL_BILLING_REVIEW_RECOVERY_MIGRATION,)
+            events.append("ledger")
+            return ledger_recorded
+
+    async def fail_migrations(pool: object) -> None:
+        assert isinstance(pool, _Pool)
+        events.append("migrate")
+        if migration_fails:
+            raise RuntimeError("migration failed")
+
+    async def close_database() -> None:
+        events.append("close")
+
+    await main._run_database_migration_check(
+        _Pool(),
+        receivables_api_enabled=receivables_api_enabled,
+        run_migrations_fn=fail_migrations,
+        close_database_fn=close_database,
+    )
+
+    assert events == expected_events
+
+
+@pytest.mark.asyncio
+async def test_full_atlas_lifespan_uses_enabled_receivables_recovery_fence(monkeypatch):
+    from atlas_brain import main
+    from atlas_brain.api.invoicing import auth as receivables_auth
+    from atlas_brain.storage import migrations
+
+    events: list[str] = []
+
+    class _Pool:
+        is_initialized = True
+
+        async def fetchval(self, query: str, *args: object) -> bool:
+            assert query == "SELECT EXISTS (SELECT 1 FROM schema_migrations WHERE name = $1)"
+            assert args == (main._COMMERCIAL_BILLING_REVIEW_RECOVERY_MIGRATION,)
+            events.append("ledger")
+            return False
+
+    pool = _Pool()
+
+    async def init_database() -> None:
+        events.append("init")
+
+    async def fail_migrations(observed_pool: object) -> None:
+        assert observed_pool is pool
+        events.append("migrate")
+        raise RuntimeError("migration failed")
+
+    async def close_database() -> None:
+        events.append("close")
+
+    monkeypatch.setattr(
+        main,
+        "settings",
+        SimpleNamespace(invoicing=SimpleNamespace(receivables_api_enabled=True)),
+    )
+    monkeypatch.setattr(main, "db_settings", SimpleNamespace(enabled=True))
+    monkeypatch.setattr(main, "_enforce_paid_funnel_alert_channel", lambda _settings: None)
+    monkeypatch.setattr(
+        receivables_auth,
+        "validate_receivables_api_config",
+        lambda _config: None,
+    )
+    monkeypatch.setattr(main, "init_database", init_database)
+    monkeypatch.setattr(main, "get_db_pool", lambda: pool)
+    monkeypatch.setattr(main, "close_database", close_database)
+    monkeypatch.setattr(migrations, "run_migrations", fail_migrations)
+
+    with pytest.raises(
+        main.CommercialBillingReviewRecoveryUnavailableError,
+        match="recovery migration must complete",
+    ):
+        async with main.lifespan(FastAPI()):
+            raise AssertionError("unsafe receivables startup must not serve")
+
+    assert events == ["init", "migrate", "ledger", "close"]
+
+
 def test_billing_run_migration_is_additive_and_preserves_draft_evidence():
     migration = (
         Path(__file__).parents[1]
