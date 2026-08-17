@@ -1749,29 +1749,49 @@ async def test_full_atlas_migration_check_allows_recovered_or_disabled_receivabl
 @pytest.mark.asyncio
 async def test_full_atlas_lifespan_uses_enabled_receivables_recovery_fence(monkeypatch):
     from atlas_brain import main
-    from atlas_brain.api.invoicing import auth as receivables_auth
-    from atlas_brain.storage import migrations
+    from atlas_brain.eom_api.auth import generate_receivables_service_token
 
     events: list[str] = []
 
     class _Pool:
         is_initialized = True
 
+        async def acquire(self) -> _Pool:
+            events.append("acquire")
+            return self
+
+        async def release(self, connection: object) -> None:
+            assert connection is self
+            events.append("release")
+
         async def fetchval(self, query: str, *args: object) -> bool:
+            if query == "SELECT pg_try_advisory_lock($1)":
+                events.append("lock")
+                return True
             assert query == "SELECT EXISTS (SELECT 1 FROM schema_migrations WHERE name = $1)"
             assert args == (main._COMMERCIAL_BILLING_REVIEW_RECOVERY_MIGRATION,)
             events.append("ledger")
             return False
 
+        async def execute(self, query: str, *args: object) -> str:
+            if "CREATE TABLE IF NOT EXISTS schema_migrations" in query:
+                events.append("ensure")
+                return "CREATE TABLE"
+            assert query == "SELECT pg_advisory_unlock($1)"
+            assert args
+            events.append("unlock")
+            return "SELECT 1"
+
+        async def fetch(self, query: str) -> list[object]:
+            assert query == "SELECT name FROM schema_migrations"
+            events.append("migrate")
+            raise RuntimeError("migration failed")
+
     pool = _Pool()
+    generated = generate_receivables_service_token()
 
     async def init_database() -> None:
         events.append("init")
-
-    async def fail_migrations(observed_pool: object) -> None:
-        assert observed_pool is pool
-        events.append("migrate")
-        raise RuntimeError("migration failed")
 
     async def close_database() -> None:
         events.append("close")
@@ -1779,19 +1799,19 @@ async def test_full_atlas_lifespan_uses_enabled_receivables_recovery_fence(monke
     monkeypatch.setattr(
         main,
         "settings",
-        SimpleNamespace(invoicing=SimpleNamespace(receivables_api_enabled=True)),
+        SimpleNamespace(
+            invoicing=SimpleNamespace(
+                receivables_api_enabled=True,
+                receivables_service_token="",
+                receivables_service_token_sha256=generated.sha256,
+            )
+        ),
     )
     monkeypatch.setattr(main, "db_settings", SimpleNamespace(enabled=True))
     monkeypatch.setattr(main, "_enforce_paid_funnel_alert_channel", lambda _settings: None)
-    monkeypatch.setattr(
-        receivables_auth,
-        "validate_receivables_api_config",
-        lambda _config: None,
-    )
     monkeypatch.setattr(main, "init_database", init_database)
     monkeypatch.setattr(main, "get_db_pool", lambda: pool)
     monkeypatch.setattr(main, "close_database", close_database)
-    monkeypatch.setattr(migrations, "run_migrations", fail_migrations)
 
     with pytest.raises(
         main.CommercialBillingReviewRecoveryUnavailableError,
@@ -1800,7 +1820,17 @@ async def test_full_atlas_lifespan_uses_enabled_receivables_recovery_fence(monke
         async with main.lifespan(FastAPI()):
             raise AssertionError("unsafe receivables startup must not serve")
 
-    assert events == ["init", "migrate", "ledger", "close"]
+    assert events == [
+        "init",
+        "acquire",
+        "lock",
+        "ensure",
+        "migrate",
+        "unlock",
+        "release",
+        "ledger",
+        "close",
+    ]
 
 
 def test_billing_run_migration_is_additive_and_preserves_draft_evidence():
