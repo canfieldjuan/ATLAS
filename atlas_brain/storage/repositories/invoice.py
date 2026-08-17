@@ -8,7 +8,7 @@ import json
 import logging
 from dataclasses import dataclass
 from datetime import date, datetime, timezone
-from decimal import Decimal
+from decimal import Decimal, InvalidOperation
 from typing import Any, Optional
 from uuid import UUID, uuid4
 
@@ -16,6 +16,13 @@ from ..database import get_db_pool
 from ..exceptions import DatabaseUnavailableError, DatabaseOperationError
 
 logger = logging.getLogger("atlas.storage.invoice")
+
+
+# Only the commercial-billing approval writer sets this marker.  Its line
+# amounts are derived from retained whole-minute evidence, so a later
+# non-financial draft edit must preserve those exact cents rather than multiply
+# a rounded display quantity by its unit price again.
+_COMMERCIAL_BILLING_EXACT_LINE_AMOUNTS_MARKER = "commercialBillingExactLineAmounts"
 
 
 @dataclass(frozen=True)
@@ -51,6 +58,60 @@ def _line_items_with_amounts(items: list[dict], *, overwrite: bool) -> list[dict
             )
         normalized.append(line)
     return normalized
+
+
+def _line_items_subtotal(
+    items: list[dict], *, prefer_recorded_amounts: bool
+) -> Decimal:
+    """Calculate a draft subtotal without losing trusted committed cents.
+
+    A notes-only or due-date-only edit does not replace the line-item evidence.
+    A commercial-billing approval explicitly marks its persisted amounts as
+    authoritative because an hourly line can display rounded hours while its
+    approved amount was calculated from whole minutes.  Generic invoices do
+    not receive that authority: their caller-supplied ``amount`` field remains
+    display data and their subtotal is recalculated from quantity and price.
+    Replacing line items always retains the existing recalculation behavior.
+    """
+
+    subtotal = Decimal("0")
+    for item in items:
+        amount: Decimal | None = None
+        if prefer_recorded_amounts and "amount" in item:
+            try:
+                recorded = Decimal(str(item["amount"]))
+            except (InvalidOperation, TypeError, ValueError):
+                recorded = None
+            if (
+                recorded is not None
+                and recorded.is_finite()
+                and recorded == recorded.quantize(Decimal("0.01"))
+            ):
+                amount = recorded
+        if amount is None:
+            amount = Decimal(str(item.get("quantity", 1))) * Decimal(
+                str(item.get("unit_price", 0))
+            )
+        subtotal += amount
+    return subtotal
+
+
+def _has_trusted_commercial_billing_line_amounts(invoice: dict[str, Any]) -> bool:
+    """Return whether approved commercial evidence may retain line amounts.
+
+    The generic repository and MCP create paths accept line-item dictionaries
+    from callers, including an optional ``amount`` field.  Those fields cannot
+    become authoritative merely because a later edit omitted ``line_items``.
+    The approval writer is the one controlled producer that records exact-cent
+    amounts from retained billing evidence and marks that fact explicitly.
+    """
+
+    metadata = invoice.get("metadata")
+    return (
+        invoice.get("source") == "eom_commercial_billing"
+        and isinstance(metadata, dict)
+        and metadata.get(_COMMERCIAL_BILLING_EXACT_LINE_AMOUNTS_MARKER) is True
+    )
 
 
 class InvoiceRepository:
@@ -344,9 +405,12 @@ class InvoiceRepository:
         ):
             metadata = {**metadata, "needs_hours": False}
 
-        subtotal = sum(
-            Decimal(str(item.get("quantity", 1))) * Decimal(str(item.get("unit_price", 0)))
-            for item in items
+        subtotal = _line_items_subtotal(
+            items,
+            prefer_recorded_amounts=(
+                line_items is None
+                and _has_trusted_commercial_billing_line_amounts(current)
+            ),
         )
         tax_amt = subtotal * Decimal(str(tax_r))
         total = subtotal + tax_amt - Decimal(str(disc))

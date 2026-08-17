@@ -32,6 +32,11 @@ from .commercial_billing_runs import (
     lock_commercial_billing_candidate_identity,
     lock_commercial_billing_run_candidate,
 )
+from .commercial_billing_candidate_overrides import (
+    CommercialBillingCandidateOverrideValidationError,
+    MAX_INVOICE_LINE_DESCRIPTION_LENGTH,
+    override_review_fingerprint,
+)
 from .eom_lead_ingress import EOM_BUSINESS_CONTEXT_ID
 
 
@@ -139,6 +144,17 @@ def _text(value: Any) -> str | None:
     return value if isinstance(value, str) else None
 
 
+def _row_value(row: Any, key: str, default: Any = None) -> Any:
+    if row is None:
+        return default
+    if isinstance(row, Mapping):
+        return row.get(key, default)
+    try:
+        return row[key]
+    except (KeyError, IndexError):
+        return default
+
+
 def _timestamp(value: Any) -> str:
     return value.isoformat() if isinstance(value, datetime) else str(value)
 
@@ -199,8 +215,8 @@ def _validate_key(value: str, *, field: str, limit: int) -> str:
     return key
 
 
-def _source_ref(candidate_key: str, source_fingerprint: str) -> str:
-    digest = hashlib.sha256(f"{candidate_key}:{source_fingerprint}".encode()).hexdigest()
+def _source_ref(candidate_key: str, review_fingerprint: str) -> str:
+    digest = hashlib.sha256(f"{candidate_key}:{review_fingerprint}".encode()).hexdigest()
     return f"eom-commercial-billing:{digest}"
 
 
@@ -210,6 +226,7 @@ def _invoice_draft(
     billing_run_id: UUID,
     expected_candidate_key: str,
     expected_source_fingerprint: str,
+    expected_review_fingerprint: str,
     actor: str,
     due_days: int,
     issue_date: date,
@@ -277,25 +294,12 @@ def _invoice_draft(
             raise CommercialBillingApprovalValidationError(
                 "Commercial billing line item is invalid"
             )
-        quantity = line.get("quantity")
-        rate_cents = line.get("rateCents")
         amount_cents = line.get("amountCents")
-        if (
-            isinstance(quantity, bool)
-            or not isinstance(quantity, int)
-            or quantity <= 0
-            or isinstance(rate_cents, bool)
-            or not isinstance(rate_cents, int)
-            or rate_cents <= 0
-            or isinstance(amount_cents, bool)
-            or not isinstance(amount_cents, int)
-            or amount_cents != quantity * rate_cents
-            or amount_cents > _MAX_INVOICE_CENTS
-        ):
-            raise CommercialBillingApprovalValidationError(
-                "Commercial billing line-item cents are invalid"
-            )
-        description = _required_text(line.get("description"), "line-item description")
+        description = _required_text(
+            line.get("description"),
+            "line-item description",
+            limit=MAX_INVOICE_LINE_DESCRIPTION_LENGTH,
+        )
         source_date = _required_text(line.get("sourceDate"), "line-item source date", limit=10)
         try:
             date.fromisoformat(source_date)
@@ -303,6 +307,72 @@ def _invoice_draft(
             raise CommercialBillingApprovalValidationError(
                 "Commercial billing line-item source date is invalid"
             ) from exc
+        if line.get("kind") == "adjustment":
+            if (
+                isinstance(amount_cents, bool)
+                or not isinstance(amount_cents, int)
+                or amount_cents == 0
+                or abs(amount_cents) > _MAX_INVOICE_CENTS
+            ):
+                raise CommercialBillingApprovalValidationError(
+                    "Commercial billing adjustment cents are invalid"
+                )
+            subtotal_cents += amount_cents
+            if description not in names:
+                names.append(description)
+            line_items.append(
+                {
+                    "amount": _money_text(amount_cents),
+                    "date": source_date,
+                    "description": description,
+                    "quantity": 1,
+                    "unit_price": _money_text(amount_cents),
+                }
+            )
+            continue
+        quantity = line.get("quantity")
+        rate_cents = line.get("rateCents")
+        quantity_unit = line.get("quantityUnit")
+        if quantity_unit == "hour":
+            minutes = line.get("quantityMinutes")
+            if (
+                isinstance(minutes, bool)
+                or not isinstance(minutes, int)
+                or minutes <= 0
+                or isinstance(rate_cents, bool)
+                or not isinstance(rate_cents, int)
+                or rate_cents <= 0
+                or isinstance(amount_cents, bool)
+                or not isinstance(amount_cents, int)
+                or amount_cents
+                != int(
+                    (Decimal(rate_cents) * Decimal(minutes) / Decimal(60)).quantize(
+                        Decimal("1"), rounding=ROUND_HALF_UP
+                    )
+                )
+                or amount_cents > _MAX_INVOICE_CENTS
+            ):
+                raise CommercialBillingApprovalValidationError(
+                    "Commercial billing hourly line-item cents are invalid"
+                )
+            quantity_for_invoice = f"{(Decimal(minutes) / Decimal(60)):.4f}".rstrip("0").rstrip(".")
+        else:
+            quantity_for_invoice = quantity
+            if (
+                isinstance(quantity, bool)
+                or not isinstance(quantity, int)
+                or quantity <= 0
+                or isinstance(rate_cents, bool)
+                or not isinstance(rate_cents, int)
+                or rate_cents <= 0
+                or isinstance(amount_cents, bool)
+                or not isinstance(amount_cents, int)
+                or amount_cents != quantity * rate_cents
+                or amount_cents > _MAX_INVOICE_CENTS
+            ):
+                raise CommercialBillingApprovalValidationError(
+                    "Commercial billing line-item cents are invalid"
+                )
         subtotal_cents += amount_cents
         if description not in names:
             names.append(description)
@@ -311,7 +381,7 @@ def _invoice_draft(
                 "amount": _money_text(amount_cents),
                 "date": source_date,
                 "description": description,
-                "quantity": quantity,
+                "quantity": quantity_for_invoice,
                 "unit_price": _money_text(rate_cents),
             }
         )
@@ -348,11 +418,13 @@ def _invoice_draft(
         metadata={
             "approvedBy": actor,
             "candidateKey": candidate_key,
+            "commercialBillingExactLineAmounts": True,
             "commercialBillingRunId": str(billing_run_id),
             "deliveryMethod": delivery_method,
+            "reviewFingerprint": expected_review_fingerprint,
             "sourceFingerprint": expected_source_fingerprint,
         },
-        source_ref=_source_ref(candidate_key, expected_source_fingerprint),
+        source_ref=_source_ref(candidate_key, expected_review_fingerprint),
         subtotal=_money(subtotal),
         tax_amount=_money(tax),
         tax_rate=Decimal(basis_points) / Decimal(10_000),
@@ -401,6 +473,7 @@ class CommercialBillingApprovalService:
         expected_source_fingerprint: str,
         idempotency_key: str,
         actor: str,
+        expected_review_fingerprint: str | None = None,
     ) -> dict[str, Any]:
         if not isinstance(billing_run_id, UUID):
             raise CommercialBillingApprovalValidationError("Billing run id is invalid")
@@ -411,26 +484,59 @@ class CommercialBillingApprovalService:
             or _FINGERPRINT.fullmatch(expected_source_fingerprint) is None
         ):
             raise CommercialBillingApprovalValidationError("Source fingerprint is invalid")
+        if expected_review_fingerprint is None:
+            submitted_review_fingerprint = expected_source_fingerprint
+        elif isinstance(expected_review_fingerprint, str) and _FINGERPRINT.fullmatch(
+            expected_review_fingerprint
+        ) is not None:
+            submitted_review_fingerprint = expected_review_fingerprint
+        else:
+            raise CommercialBillingApprovalValidationError("Review fingerprint is invalid")
         approved_by = _required_text(actor, "authenticated actor", limit=128)
         request_fingerprint = _fingerprint(
-            {"billingRunId": str(billing_run_id), "candidateKey": selected, "sourceFingerprint": expected_source_fingerprint}
+            {
+                "billingRunId": str(billing_run_id),
+                "candidateKey": selected,
+                "reviewFingerprint": submitted_review_fingerprint,
+                "sourceFingerprint": expected_source_fingerprint,
+            }
+        )
+        legacy_request_fingerprint = (
+            _fingerprint(
+                {
+                    "billingRunId": str(billing_run_id),
+                    "candidateKey": selected,
+                    "sourceFingerprint": expected_source_fingerprint,
+                }
+            )
+            if submitted_review_fingerprint == expected_source_fingerprint
+            else None
         )
         try:
             async with self.pool.transaction() as conn:
                 await self._lock(conn, f"operation:{key}")
                 existing = await self._find_by_idempotency(conn, key)
                 if existing is not None:
-                    self._assert_request(existing, request_fingerprint)
+                    self._assert_request(
+                        existing, request_fingerprint, legacy_request_fingerprint
+                    )
                     return {"approval": self._view(existing), "replayed": True}
 
             stored = await self._stored_candidate(billing_run_id, selected)
-            snapshot = _json_object(stored["snapshot"])
+            source_snapshot = _json_object(stored["snapshot"])
             if (
-                stored["source_fingerprint"] != _verified_candidate_fingerprint(snapshot)
-                or snapshot.get("billingPeriod") != stored["billing_period"]
+                stored["source_fingerprint"] != _verified_candidate_fingerprint(source_snapshot)
+                or source_snapshot.get("billingPeriod") != stored["billing_period"]
             ):
                 raise CommercialBillingApprovalUnavailableError(
                     "Commercial billing snapshot evidence is invalid"
+                )
+            snapshot, actual_review_fingerprint = self._effective_snapshot(
+                billing_run_id, stored, source_snapshot
+            )
+            if actual_review_fingerprint != submitted_review_fingerprint:
+                raise CommercialBillingApprovalConflictError(
+                    "Commercial billing candidate review identity changed before approval"
                 )
             issue_date = self._today()
             if isinstance(issue_date, datetime) or not isinstance(issue_date, date):
@@ -440,6 +546,7 @@ class CommercialBillingApprovalService:
                 billing_run_id=billing_run_id,
                 expected_candidate_key=selected,
                 expected_source_fingerprint=expected_source_fingerprint,
+                expected_review_fingerprint=submitted_review_fingerprint,
                 actor=approved_by,
                 due_days=self._due_days_loader(),
                 issue_date=issue_date,
@@ -450,7 +557,9 @@ class CommercialBillingApprovalService:
                 await self._lock(conn, f"operation:{key}")
                 existing = await self._find_by_idempotency(conn, key)
                 if existing is not None:
-                    self._assert_request(existing, request_fingerprint)
+                    self._assert_request(
+                        existing, request_fingerprint, legacy_request_fingerprint
+                    )
                     return {"approval": self._view(existing), "replayed": True}
                 await lock_commercial_billing_candidate_identity(
                     conn,
@@ -470,11 +579,42 @@ class CommercialBillingApprovalService:
                     raise CommercialBillingApprovalConflictError(
                         "Commercial billing candidate fingerprint changed before approval"
                     )
+                locked_source_snapshot = _json_object(locked_candidate["snapshot"])
+                if (
+                    locked_candidate["source_fingerprint"]
+                    != _verified_candidate_fingerprint(locked_source_snapshot)
+                ):
+                    raise CommercialBillingApprovalUnavailableError(
+                        "Commercial billing snapshot evidence is invalid"
+                    )
+                locked_override = await self._latest_override(
+                    conn,
+                    billing_run_id=billing_run_id,
+                    candidate_key=selected,
+                    source_fingerprint=expected_source_fingerprint,
+                )
+                _, locked_review_fingerprint = self._effective_snapshot(
+                    billing_run_id,
+                    {**dict(locked_candidate), **({"override": locked_override} if locked_override else {})},
+                    locked_source_snapshot,
+                )
+                if locked_review_fingerprint != submitted_review_fingerprint:
+                    raise CommercialBillingApprovalConflictError(
+                        "Commercial billing candidate review identity changed before approval"
+                    )
                 review_decision = await self._latest_review_decision(
                     conn,
                     candidate_key=selected,
                     source_fingerprint=expected_source_fingerprint,
+                    review_fingerprint=submitted_review_fingerprint,
                 )
+                if (
+                    submitted_review_fingerprint != expected_source_fingerprint
+                    and (review_decision is None or review_decision["decision"] != "included")
+                ):
+                    raise CommercialBillingApprovalConflictError(
+                        "Commercial billing candidate override requires an explicit include decision"
+                    )
                 if review_decision is not None and review_decision["decision"] == "excluded":
                     raise CommercialBillingApprovalConflictError(
                         "Commercial billing candidate is excluded; include it before approval"
@@ -490,16 +630,16 @@ class CommercialBillingApprovalService:
                 await conn.fetchrow(
                     """
                     INSERT INTO commercial_billing_candidate_approvals (
-                        id, billing_run_id, candidate_key, source_fingerprint, source,
+                        id, billing_run_id, candidate_key, source_fingerprint, review_fingerprint, source,
                         idempotency_key, request_fingerprint, invoice_id, state,
                         approved_by, approved_at, created_at, updated_at
                     )
-                    VALUES ($1, $2, $3, $4, $5, $6, $7, $8, 'invoice_created', $9, $10, $10, $10)
+                    VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, 'invoice_created', $10, $11, $11, $11)
                     RETURNING id
                     """,
                     uuid4(), billing_run_id, selected, expected_source_fingerprint,
-                    _APPROVAL_SOURCE, key, request_fingerprint, invoice["id"], approved_by,
-                    datetime.now(timezone.utc),
+                    submitted_review_fingerprint, _APPROVAL_SOURCE, key,
+                    request_fingerprint, invoice["id"], approved_by, datetime.now(timezone.utc),
                 )
                 created = await self._find_by_idempotency(conn, key)
                 if created is None:
@@ -529,10 +669,23 @@ class CommercialBillingApprovalService:
     async def _stored_candidate(self, billing_run_id: UUID, candidate_key: str) -> Any:
         row = await self.pool.fetchrow(
             """
-            SELECT run.billing_period, candidate.source_fingerprint, candidate.snapshot
+            SELECT run.billing_period, candidate.source_fingerprint, candidate.snapshot,
+                   override.id AS override_id,
+                   override.revision AS override_revision,
+                   override.review_fingerprint AS override_review_fingerprint,
+                   override.effective_snapshot AS override_effective_snapshot
             FROM commercial_billing_runs AS run
             JOIN commercial_billing_run_candidates AS candidate
               ON candidate.billing_run_id = run.id
+            LEFT JOIN LATERAL (
+                SELECT id, revision, review_fingerprint, effective_snapshot
+                FROM commercial_billing_candidate_overrides AS candidate_override
+                WHERE candidate_override.billing_run_id = candidate.billing_run_id
+                  AND candidate_override.candidate_key = candidate.candidate_key
+                  AND candidate_override.source_fingerprint = candidate.source_fingerprint
+                ORDER BY candidate_override.revision DESC
+                LIMIT 1
+            ) AS override ON TRUE
             WHERE run.id = $1 AND candidate.candidate_key = $2
             """,
             billing_run_id, candidate_key,
@@ -540,6 +693,73 @@ class CommercialBillingApprovalService:
         if row is None:
             raise CommercialBillingApprovalNotFoundError("Commercial billing candidate not found")
         return row
+
+    @staticmethod
+    def _effective_snapshot(
+        billing_run_id: UUID, stored: Any, source_snapshot: Mapping[str, Any]
+    ) -> tuple[dict[str, Any], str]:
+        if not isinstance(billing_run_id, UUID):
+            raise CommercialBillingApprovalUnavailableError(
+                "Commercial billing run identity is invalid"
+            )
+        source_fingerprint = _row_value(stored, "source_fingerprint")
+        if not isinstance(source_fingerprint, str):
+            raise CommercialBillingApprovalUnavailableError(
+                "Commercial billing snapshot evidence is invalid"
+            )
+        override = _row_value(stored, "override")
+        if override is None and _row_value(stored, "override_id") is not None:
+            override = {
+                "revision": _row_value(stored, "override_revision"),
+                "review_fingerprint": _row_value(stored, "override_review_fingerprint"),
+                "effective_snapshot": _row_value(stored, "override_effective_snapshot"),
+            }
+        if override is None:
+            return dict(source_snapshot), source_fingerprint
+        effective = _json_object(_row_value(override, "effective_snapshot"))
+        if effective.get("sourceFingerprint") != source_fingerprint:
+            raise CommercialBillingApprovalUnavailableError(
+                "Commercial billing override evidence is invalid"
+            )
+        try:
+            expected = override_review_fingerprint(
+                billing_run_id,
+                source_fingerprint,
+                _row_value(override, "revision"),
+                effective,
+            )
+        except CommercialBillingCandidateOverrideValidationError as exc:
+            raise CommercialBillingApprovalUnavailableError(
+                "Commercial billing override evidence is invalid"
+            ) from exc
+        if _row_value(override, "review_fingerprint") != expected:
+            raise CommercialBillingApprovalUnavailableError(
+                "Commercial billing override evidence is invalid"
+            )
+        return effective, expected
+
+    @staticmethod
+    async def _latest_override(
+        conn: Any,
+        *,
+        billing_run_id: UUID,
+        candidate_key: str,
+        source_fingerprint: str,
+    ) -> Any | None:
+        return await conn.fetchrow(
+            """
+            SELECT id, revision, review_fingerprint, effective_snapshot
+            FROM commercial_billing_candidate_overrides
+            WHERE billing_run_id = $1
+              AND candidate_key = $2
+              AND source_fingerprint = $3
+            ORDER BY revision DESC
+            LIMIT 1
+            """,
+            billing_run_id,
+            candidate_key,
+            source_fingerprint,
+        )
 
     async def _assert_current(self, period: str, candidate_key: str, fingerprint: str) -> None:
         preview = await self._candidate_service_loader().preview(billing_period=period)
@@ -563,6 +783,7 @@ class CommercialBillingApprovalService:
         *,
         candidate_key: str,
         source_fingerprint: str,
+        review_fingerprint: str,
     ) -> Any | None:
         return await conn.fetchrow(
             """
@@ -570,11 +791,13 @@ class CommercialBillingApprovalService:
             FROM commercial_billing_candidate_review_decisions
             WHERE candidate_key = $1
               AND source_fingerprint = $2
+              AND review_fingerprint = $3
             ORDER BY revision DESC
             LIMIT 1
             """,
             candidate_key,
             source_fingerprint,
+            review_fingerprint,
         )
 
     @staticmethod
@@ -586,7 +809,7 @@ class CommercialBillingApprovalService:
         return await conn.fetchrow(
             """
             SELECT a.id AS approval_id, a.billing_run_id, a.candidate_key,
-                   a.source_fingerprint, a.request_fingerprint, a.state,
+                   a.source_fingerprint, a.review_fingerprint, a.request_fingerprint, a.state,
                    a.approved_by, a.approved_at, i.id AS invoice_id,
                    i.invoice_number, i.status AS invoice_status, i.total_amount,
                    i.issue_date, i.due_date, i.source_ref
@@ -602,7 +825,7 @@ class CommercialBillingApprovalService:
         return await conn.fetchrow(
             """
             SELECT a.id AS approval_id, a.billing_run_id, a.candidate_key,
-                   a.source_fingerprint, a.request_fingerprint, a.state,
+                   a.source_fingerprint, a.review_fingerprint, a.request_fingerprint, a.state,
                    a.approved_by, a.approved_at, i.id AS invoice_id,
                    i.invoice_number, i.status AS invoice_status, i.total_amount,
                    i.issue_date, i.due_date, i.source_ref
@@ -614,8 +837,13 @@ class CommercialBillingApprovalService:
         )
 
     @staticmethod
-    def _assert_request(row: Any, request_fingerprint: str) -> None:
-        if row["request_fingerprint"] != request_fingerprint:
+    def _assert_request(
+        row: Any, request_fingerprint: str, legacy_request_fingerprint: str | None = None
+    ) -> None:
+        if row["request_fingerprint"] not in {
+            request_fingerprint,
+            legacy_request_fingerprint,
+        }:
             raise CommercialBillingApprovalConflictError(
                 "Idempotency key was already used with a different commercial billing candidate"
             )
@@ -666,6 +894,9 @@ class CommercialBillingApprovalService:
                 "totalCents": _cents(row["total_amount"]),
             },
             "sourceFingerprint": row["source_fingerprint"],
+            "reviewFingerprint": _row_value(
+                row, "review_fingerprint", row["source_fingerprint"]
+            ),
             "state": row["state"],
         }
 

@@ -202,8 +202,16 @@ class CreateCommercialBillingRunRequest(BaseModel):
 
 
 class ApproveCommercialBillingCandidateRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
     candidate_key: str = Field(min_length=1, max_length=512)
     expected_source_fingerprint: str = Field(
+        min_length=64,
+        max_length=64,
+        pattern=r"^[0-9a-f]{64}$",
+    )
+    expected_review_fingerprint: Optional[str] = Field(
+        default=None,
         min_length=64,
         max_length=64,
         pattern=r"^[0-9a-f]{64}$",
@@ -218,12 +226,81 @@ class SetCommercialBillingCandidateReviewDecisionRequest(BaseModel):
         max_length=64,
         pattern=r"^[0-9a-f]{64}$",
     )
+    expected_review_fingerprint: Optional[str] = Field(
+        default=None,
+        min_length=64,
+        max_length=64,
+        pattern=r"^[0-9a-f]{64}$",
+    )
     decision: Literal["included", "excluded"]
     reason: str = Field(min_length=1, max_length=1000)
 
     @field_validator("reason", mode="before")
     @classmethod
     def normalize_reason_before_length_validation(cls, value: Any) -> Any:
+        return value.strip() if isinstance(value, str) else value
+
+
+class CommercialBillingCandidateLineOverrideRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    line_key: str = Field(min_length=64, max_length=64, pattern=r"^[0-9a-f]{64}$")
+    description: Optional[str] = Field(default=None, min_length=1, max_length=512)
+    rate_cents: Optional[int] = Field(
+        default=None, strict=True, gt=0, le=999_999_999_999
+    )
+    quantity: Optional[int] = Field(
+        default=None, strict=True, gt=0, le=999_999_999_999
+    )
+    quantity_minutes: Optional[int] = Field(
+        default=None, strict=True, gt=0, le=999_999_999_999
+    )
+
+
+class CommercialBillingCandidateAdjustmentRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    kind: Literal["credit", "charge"]
+    description: str = Field(min_length=1, max_length=512)
+    amount_cents: int = Field(strict=True, gt=0, le=999_999_999_999)
+
+
+class CommercialBillingCandidateRecipientOverrideRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    display_name: Optional[str] = Field(default=None, min_length=1, max_length=256)
+    email: str = Field(min_length=3, max_length=256)
+
+
+class SetCommercialBillingCandidateOverrideRequest(BaseModel):
+    """One full, run-only effective-candidate revision; no source data is edited."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    expected_source_fingerprint: str = Field(
+        min_length=64, max_length=64, pattern=r"^[0-9a-f]{64}$"
+    )
+    expected_override_revision: int = Field(strict=True, ge=0)
+    reason_code: Literal[
+        "one_time_service_variation",
+        "partial_or_missed_service",
+        "approved_pricing_exception",
+        "customer_credit",
+        "additional_charge",
+        "source_correction_pending",
+        "billing_delivery_exception",
+    ]
+    reason: str = Field(min_length=1, max_length=1000)
+    line_overrides: list[CommercialBillingCandidateLineOverrideRequest] = Field(
+        default_factory=list, max_length=500
+    )
+    adjustment: Optional[CommercialBillingCandidateAdjustmentRequest] = None
+    recipient: Optional[CommercialBillingCandidateRecipientOverrideRequest] = None
+    delivery_method: Optional[Literal["gmail_pdf", "manual_square"]] = None
+
+    @field_validator("reason", mode="before")
+    @classmethod
+    def normalize_override_reason_before_length_validation(cls, value: Any) -> Any:
         return value.strip() if isinstance(value, str) else value
 
 
@@ -891,11 +968,81 @@ async def approve_commercial_billing_candidate(
 ) -> dict:
     """Create or reuse one draft invoice only after explicit candidate approval."""
 
-    return await _call_commercial_billing_approval(
-        service.approve(
+    request = {
+        "billing_run_id": billing_run_id,
+        "candidate_key": body.candidate_key,
+        "expected_source_fingerprint": body.expected_source_fingerprint,
+        "idempotency_key": idempotency_key,
+        "actor": actor,
+    }
+    if body.expected_review_fingerprint is not None:
+        request["expected_review_fingerprint"] = body.expected_review_fingerprint
+    return await _call_commercial_billing_approval(service.approve(**request))
+
+
+@router.post(
+    "/commercial-billing-runs/{billing_run_id}/candidates/{candidate_key}/override",
+    status_code=201,
+)
+async def set_commercial_billing_candidate_override(
+    billing_run_id: UUID,
+    candidate_key: str,
+    body: SetCommercialBillingCandidateOverrideRequest,
+    actor: Annotated[str, Depends(require_actor)],
+    idempotency_key: Annotated[
+        str, Header(alias="Idempotency-Key", min_length=1, max_length=128)
+    ],
+    service: CommercialBillingRunService = Depends(get_commercial_billing_run_service),
+) -> dict:
+    """Append one audited candidate revision without financial or delivery work."""
+
+    line_overrides = [
+        {
+            **{"lineKey": item.line_key},
+            **({"description": item.description} if item.description is not None else {}),
+            **({"rateCents": item.rate_cents} if item.rate_cents is not None else {}),
+            **({"quantity": item.quantity} if item.quantity is not None else {}),
+            **(
+                {"quantityMinutes": item.quantity_minutes}
+                if item.quantity_minutes is not None
+                else {}
+            ),
+        }
+        for item in body.line_overrides
+    ]
+    adjustment = (
+        {
+            "kind": body.adjustment.kind,
+            "description": body.adjustment.description,
+            "amountCents": body.adjustment.amount_cents,
+        }
+        if body.adjustment is not None
+        else None
+    )
+    recipient = (
+        {
+            **(
+                {"displayName": body.recipient.display_name}
+                if body.recipient.display_name is not None
+                else {}
+            ),
+            "email": body.recipient.email,
+        }
+        if body.recipient is not None
+        else None
+    )
+    return await _call_commercial_billing_run(
+        service.set_candidate_override(
             billing_run_id=billing_run_id,
-            candidate_key=body.candidate_key,
+            candidate_key=candidate_key,
             expected_source_fingerprint=body.expected_source_fingerprint,
+            expected_override_revision=body.expected_override_revision,
+            reason_code=body.reason_code,
+            reason=body.reason,
+            line_overrides=line_overrides,
+            adjustment=adjustment,
+            recipient=recipient,
+            delivery_method=body.delivery_method,
             idempotency_key=idempotency_key,
             actor=actor,
         )
@@ -917,16 +1064,19 @@ async def set_commercial_billing_candidate_review_decision(
 ) -> dict:
     """Append an audited include/exclude review decision without delivery work."""
 
+    request = {
+        "billing_run_id": billing_run_id,
+        "candidate_key": candidate_key,
+        "expected_source_fingerprint": body.expected_source_fingerprint,
+        "decision": body.decision,
+        "reason": body.reason,
+        "idempotency_key": idempotency_key,
+        "actor": actor,
+    }
+    if body.expected_review_fingerprint is not None:
+        request["expected_review_fingerprint"] = body.expected_review_fingerprint
     return await _call_commercial_billing_run(
-        service.set_candidate_review_decision(
-            billing_run_id=billing_run_id,
-            candidate_key=candidate_key,
-            expected_source_fingerprint=body.expected_source_fingerprint,
-            decision=body.decision,
-            reason=body.reason,
-            idempotency_key=idempotency_key,
-            actor=actor,
-        )
+        service.set_candidate_review_decision(**request)
     )
 
 
