@@ -253,11 +253,15 @@ class EOMFunnelConfig(BaseSettings):
 
         raw_base_url = self.public_onboarding_url
         if any(
-            character.isspace() or ord(character) < 32 or ord(character) == 127
+            character.isspace()
+            or character == "\\"
+            or ord(character) < 32
+            or ord(character) == 127
             for character in raw_base_url
         ):
             raise ValueError(
-                "public onboarding URL must not contain control characters or whitespace"
+                "public onboarding URL must not contain control characters, whitespace, "
+                "or backslashes"
             )
         base_url = raw_base_url.strip()
         secret = self.public_onboarding_hmac_secret.get_secret_value().strip()

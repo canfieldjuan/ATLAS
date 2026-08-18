@@ -239,6 +239,35 @@ proof that its public and office completion paths cannot race.
   only disabled-state behavior change is fail-closed readiness when an already
   present token relation cannot support its still-reachable recovery paths.
 
+### Current-head browser-normalized separator contract
+
+- Root cause: the URL validator delegates raw reverse-solidus (`\`) handling
+  to Python's `urlsplit`. For
+  `https://example.com\evil.com/onboarding`, that parser reports a truthy
+  HTTPS hostname and the current structural predicate accepts the value. The
+  browser URL parser instead treats the reverse solidus as a path separator and
+  opens `https://example.com/evil.com/onboarding`. Because the original raw
+  value is used later to compose the approval link, the two parsers disagree
+  about the address that will be delivered. This is a configuration-admission
+  defect, not a link-rendering or token-authorization defect.
+- Correct remediation must:
+  1. Reject every raw public-onboarding URL containing a reverse solidus before
+     `urlsplit` or email-link construction, alongside the existing C0/DEL and
+     whitespace rejection. Reject rather than canonicalize or repair the
+     operator value.
+  2. Extend the independent configuration oracle and generated URL families
+     with a reverse-solidus authority family, and directly prove both the
+     authority and path forms reject. Valid HTTPS URLs retain their existing
+     acceptance and delivery behavior.
+  3. Preserve all existing HTTPS/host/credential/port/query/fragment and
+     paired-secret predicates; this repair must not make either Python or a
+     browser URL parser the authority for normalizing malformed input.
+- Must not change: valid URL semantics, issuance-pause behavior, configured
+  redemption authority, token grammar/rotation, service authentication,
+  persistence/migrations, revocation/fence behavior, email-copy/transport,
+  Tracker/Website scope, production configuration, or any unrelated EOM
+  lifecycle, payroll, QR/GPS, scheduling, payment, or CRM behavior.
+
 ## Scope (this PR)
 
 Ownership lane: eom-public-onboarding-token-authority
@@ -263,6 +292,8 @@ Max files: 13
 8. Bind the immutable public prefill email to the approved draft recipient and
    fail disabled startup only when an already-present token relation cannot
    serve its still-reachable office-fence/revocation recovery paths.
+9. Reject browser-normalized reverse solidi at public-onboarding URL admission
+   without canonicalizing an operator value or changing valid URL delivery.
 
 ### Review Contract
 
@@ -339,6 +370,10 @@ Max files: 13
       but an existing table must expose the fence/revocation columns and runtime
       `SELECT`/`UPDATE` privileges before startup succeeds; enabled issuance
       retains the stricter full-shape and `INSERT` readiness requirement.
+  13. A raw reverse solidus in either public-onboarding URL authority or path is
+      rejected before Python URL parsing or email construction. The independent
+      configuration oracle's generated authority family rejects the same input,
+      while an ordinary valid HTTPS URL retains its existing behavior.
 - Reachability proof: `tests/test_eom_public_onboarding.py` uses an ASGI
   transport against the registered `/eom-funnel/public-onboarding/*` routes;
   `tests/test_eom_lead_conversion_integration.py` uses a disposable Postgres
@@ -392,17 +427,18 @@ seam in the enumeration; otherwise write "N/A - no boundary change."
     bearer. The disabled-authority case remains rejected before CRM access.
 - Boundary path/seam: raw public-onboarding URL admission.
   - Replaced-path behaviors: the original validator rejected C0/DEL characters
-    but delegated ordinary whitespace to `urlsplit`, whose truthy hostname could
-    admit a value that cannot be emitted as one email link. The raw admission
-    boundary now rejects all whitespace before parsing and retains every later
-    structural URL predicate.
+    but delegated ordinary whitespace and raw reverse solidi to `urlsplit`,
+    whose truthy hostname could admit a value that cannot be emitted as one
+    email link. The raw admission boundary now rejects all whitespace and
+    reverse solidi before parsing and retains every later structural URL
+    predicate.
   - Guard-relevant fields: raw URL characters, normalized empty/nonempty state,
     HTTPS scheme, authority/host, credentials, port, query/fragment, and the
     paired HMAC secret.
   - Caller x input shape: operator configuration x valid URL, blank disabled
-    default, ordinary-space host/path, Unicode-whitespace host, ASCII control,
-    and malformed URL families. Whitespace values reject before draft claim or
-    transport construction.
+    default, ordinary-space host/path, Unicode-whitespace host, reverse-solidus
+    authority/path, ASCII control, and malformed URL families. Those raw
+    character families reject before draft claim or transport construction.
 - Boundary path/seam: public token finalizer and office-handoff fence.
   - Replaced-path behaviors: office handoff currently accepts an active lead in
     `new`, `estimate_booked`, or `won`; it now rejects only while a durable
@@ -444,14 +480,14 @@ Closure declaration:
 - The public-onboarding configuration tuple is **OPEN** because URL and secret
   values are arbitrary operator-provided text. Its safe membership is
   **DERIVED** at model validation time from HTTPS URL structure, the paired
-  URL/secret requirement, absence of C0/DEL and all whitespace, minimum secret
-  byte length, and enabled/API flag relationship; no host or URL list is copied
-  into the policy. Every partial, malformed, credential-bearing,
-  query/fragment-bearing, whitespace-bearing, or disabled-without-safe-pair
-  tuple rejects before issuance, which is the safer and cheaper outcome because
-  it preserves the existing disabled email path. A generated URL/secret/flag
-  product checks this result against an independent configuration contract
-  oracle.
+  URL/secret requirement, absence of C0/DEL, all whitespace, and raw reverse
+  solidi, minimum secret byte length, and enabled/API flag relationship; no host
+  or URL list is copied into the policy. Every partial, malformed,
+  credential-bearing, query/fragment-bearing, whitespace-bearing,
+  reverse-solidus-bearing, or disabled-without-safe-pair tuple rejects before
+  issuance, which is the safer and cheaper outcome because it preserves the
+  existing disabled email path. A generated URL/secret/flag product checks this
+  result against an independent configuration contract oracle.
 - The issuance override is **CLOSED**: its typed source is `bool | None` on
   `EOMFunnelConfig`. `None` derives the legacy authority-enabled issuance
   behavior; `false` pauses only new issuance; `true` is admitted only when the
@@ -558,10 +594,11 @@ the existing office fence.
 
 The configuration validator admits the raw public-onboarding base URL before
 any URL normalization or email-link construction. It rejects C0/DEL and every
-Unicode whitespace character, then applies the existing HTTPS/host/credential/
-port/query/fragment and paired-secret checks. The validator rejects rather than
-rewrites an operator value, so a valid base URL retains its established delivery
-semantics and a malformed one cannot be transported as a fragment link.
+Unicode whitespace character plus every raw reverse solidus, then applies the
+existing HTTPS/host/credential/port/query/fragment and paired-secret checks.
+The validator rejects rather than rewrites an operator value, so a valid base
+URL retains its established delivery semantics and a malformed one cannot be
+transported as a fragment link.
 
 The readiness query distinguishes no table from a present table. A missing token
 table is valid only when authority is disabled, preserving deploy-before-migrate
@@ -637,14 +674,16 @@ blocks the safety of this vertical path.
 ## Verification
 
 - Passed locally:
-  - `pytest -q tests/test_eom_public_onboarding.py` -- 30 passed.
+  - `pytest -q tests/test_eom_public_onboarding.py` -- 32 passed; its
+    independent grammar includes a reverse-solidus authority family, and direct
+    authority/path examples reject before URL parsing.
   - `pytest -q tests/test_migrations_runner.py` -- 30 passed, 1 skipped;
     its repository-wide duplicate-prefix policy admits only the established
     historic collisions and rejects the new `382` collision.
   - The exact `Run EOM lead pipeline checks` file list in
     `.github/workflows/atlas_eom_lead_pipeline_checks.yml`, run locally with
     `ATLAS_MIGRATION_TEST_DATABASE_URL` pointed at a fresh disposable
-    `postgres:16-alpine` instance -- 1102 passed, 5 skipped.
+    `postgres:16-alpine` instance -- 1104 passed, 5 skipped.
   - Focused disposable-Postgres recipient/recovery proof -- 4 passed; the full
     `tests/test_eom_lead_conversion_integration.py` suite -- 87 passed. These
     cover the latest-intake recipient snapshot, an issuance-only missing field
@@ -653,7 +692,7 @@ blocks the safety of this vertical path.
     `INSERT`) on the present token relation.
   - `python -m compileall -q` over the changed Python modules/test,
     `ruff check` over the same paths, `git diff --check`, and
-    `python scripts/check_diff_budget.py --additions 3699 --body-file <PR body>`
+    `python scripts/check_diff_budget.py --additions 3767 --body-file <PR body>`
     -- passed.
   - `python scripts/check_guard_class_closure.py --base origin/main --strict`
     -- advisory lint passed with no guard-shaped change lacking property proof.
@@ -669,7 +708,7 @@ blocks the safety of this vertical path.
 | File | LOC |
 |---|---:|
 | `.github/workflows/atlas_eom_lead_pipeline_checks.yml` | 7 |
-| `atlas_brain/eom_api/config.py` | 141 |
+| `atlas_brain/eom_api/config.py` | 145 |
 | `atlas_brain/eom_api/funnel.py` | 218 |
 | `atlas_brain/eom_api/funnel_auth.py` | 62 |
 | `atlas_brain/eom_api/funnel_store.py` | 116 |
@@ -677,8 +716,8 @@ blocks the safety of this vertical path.
 | `atlas_brain/services/eom_onboarding_drafts.py` | 47 |
 | `atlas_brain/services/eom_public_onboarding_tokens.py` | 169 |
 | `atlas_brain/storage/migrations/383_eom_public_onboarding_tokens.sql` | 72 |
-| `plans/PR-EOM-Public-Onboarding-Token-Authority.md` | 684 |
+| `plans/PR-EOM-Public-Onboarding-Token-Authority.md` | 723 |
 | `tests/test_eom_lead_conversion_integration.py` | 708 |
-| `tests/test_eom_public_onboarding.py` | 889 |
+| `tests/test_eom_public_onboarding.py` | 908 |
 | `tests/test_eom_render_profile.py` | 14 |
-| **Total** | **3778** |
+| **Total** | **3840** |
