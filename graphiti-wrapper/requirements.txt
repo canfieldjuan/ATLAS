@@ -11,7 +11,7 @@ pydantic-settings>=2.15.0
 graphiti-core>=0.29.2
 
 # HTTP client
-httpx>=0.25.0
+httpx>=0.28.1
 aiofiles>=25.1.0
 
 # Embeddings (optional - for local embeddings)
