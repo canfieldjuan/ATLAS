@@ -18,6 +18,16 @@ CREATE TABLE IF NOT EXISTS eom_public_onboarding_tokens (
     draft_id UUID NOT NULL REFERENCES eom_onboarding_email_drafts(id)
         ON DELETE RESTRICT,
     contact_id UUID NOT NULL REFERENCES contacts(id) ON DELETE RESTRICT,
+    signing_key_fingerprint VARCHAR(64) NOT NULL
+        CHECK (signing_key_fingerprint ~ '^[0-9a-f]{64}$'),
+    prefill_full_name VARCHAR(256) NOT NULL,
+    prefill_email VARCHAR(256),
+    prefill_phone VARCHAR(32),
+    prefill_address TEXT,
+    prefill_city VARCHAR(128),
+    prefill_state VARCHAR(64),
+    prefill_zip VARCHAR(16),
+    prefill_customer_type VARCHAR(32) NOT NULL,
     approval_key VARCHAR(128) NOT NULL,
     status VARCHAR(16) NOT NULL DEFAULT 'issued',
     approved_by_employee_id BIGINT NOT NULL CHECK (approved_by_employee_id > 0),
@@ -59,4 +69,4 @@ CREATE INDEX IF NOT EXISTS idx_eom_public_onboarding_tokens_status
     ON eom_public_onboarding_tokens (status, issued_at DESC);
 
 COMMENT ON TABLE eom_public_onboarding_tokens IS
-    'Atlas-owned opaque public-onboarding token state; one HMAC-signed bearer per approved email draft, explicitly revoked or redeemed into one immutable EOM customer handoff.';
+    'Atlas-owned opaque public-onboarding token state; one HMAC-signed bearer, signing-key fingerprint, and immutable prefill snapshot per approved email draft, explicitly revoked or redeemed into one immutable EOM customer handoff.';

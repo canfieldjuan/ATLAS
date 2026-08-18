@@ -13,6 +13,7 @@ import base64
 import hashlib
 import hmac
 import re
+from dataclasses import dataclass
 from uuid import UUID
 
 
@@ -36,6 +37,20 @@ class EOMPublicOnboardingTokenError(ValueError):
     """A caller presented a token outside the one admitted bearer grammar."""
 
 
+@dataclass(frozen=True)
+class AuthenticatedEOMPublicOnboardingToken:
+    """A verified bearer plus the non-secret verifier that admitted it.
+
+    The fingerprint binds a successful old-key verification to the durable row
+    minted under that key. Without it, a person who knew a retired HMAC secret
+    could sign the UUID from a newly issued link and be accepted by a generic
+    primary-or-previous verifier loop.
+    """
+
+    token_id: UUID
+    signing_key_fingerprint: str
+
+
 def validate_eom_public_onboarding_hmac_secret(secret: str) -> str:
     """Return a usable secret or reject before any bearer can be minted.
 
@@ -53,6 +68,13 @@ def validate_eom_public_onboarding_hmac_secret(secret: str) -> str:
             "public onboarding HMAC secret must be at least 32 bytes"
         )
     return normalized
+
+
+def eom_public_onboarding_hmac_key_fingerprint(*, secret: str) -> str:
+    """Return a durable, non-secret identifier for one validated HMAC key."""
+
+    normalized = validate_eom_public_onboarding_hmac_secret(secret)
+    return hashlib.sha256(normalized.encode("utf-8")).hexdigest()
 
 
 def _signature(*, token_id: UUID, secret: str) -> str:
@@ -74,12 +96,18 @@ def format_eom_public_onboarding_token(*, token_id: UUID, secret: str) -> str:
     )
 
 
-def parse_eom_public_onboarding_token(*, token: object, secret: str) -> UUID:
-    """Authenticate the closed token grammar before any database lookup.
+def authenticate_eom_public_onboarding_token(
+    *, token: object, secret: str, previous_secret: str | None = None
+) -> AuthenticatedEOMPublicOnboardingToken:
+    """Authenticate a bearer and identify the configured key that accepted it.
 
     Invalid formatting and a bad MAC intentionally share one exception. The
     service route turns that into the same generic unavailable response as an
     unknown/revoked durable token, so it does not become a token-validity oracle.
+
+    The optional verifier is deliberately bounded to one rotation generation.
+    The caller must bind its returned fingerprint to the durable token row before
+    exposing any prefill or finalizing the handoff.
     """
 
     if not isinstance(token, str) or len(token) > _MAX_TOKEN_LENGTH:
@@ -93,10 +121,32 @@ def parse_eom_public_onboarding_token(*, token: object, secret: str) -> UUID:
         raise EOMPublicOnboardingTokenError(
             "invalid public onboarding token"
         ) from exc
-    expected = _signature(token_id=token_id, secret=secret)
-    if not hmac.compare_digest(expected, match.group("signature")):
-        raise EOMPublicOnboardingTokenError("invalid public onboarding token")
-    return token_id
+    signature = match.group("signature")
+    verification_secrets = (secret,)
+    if previous_secret is not None:
+        verification_secrets = (secret, previous_secret)
+    for verification_secret in verification_secrets:
+        expected = _signature(token_id=token_id, secret=verification_secret)
+        if hmac.compare_digest(expected, signature):
+            return AuthenticatedEOMPublicOnboardingToken(
+                token_id=token_id,
+                signing_key_fingerprint=eom_public_onboarding_hmac_key_fingerprint(
+                    secret=verification_secret
+                ),
+            )
+    raise EOMPublicOnboardingTokenError("invalid public onboarding token")
+
+
+def parse_eom_public_onboarding_token(
+    *, token: object, secret: str, previous_secret: str | None = None
+) -> UUID:
+    """Return only a verified bearer UUID for callers that do not need key binding."""
+
+    return authenticate_eom_public_onboarding_token(
+        token=token,
+        secret=secret,
+        previous_secret=previous_secret,
+    ).token_id
 
 
 def build_eom_public_onboarding_link(*, base_url: str, token: str) -> str:

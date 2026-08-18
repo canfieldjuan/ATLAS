@@ -26,6 +26,7 @@ from uuid import UUID, uuid4
 
 from .eom_public_onboarding_tokens import (
     build_eom_public_onboarding_link,
+    eom_public_onboarding_hmac_key_fingerprint,
     format_eom_public_onboarding_token,
 )
 
@@ -3796,6 +3797,9 @@ class DatabaseCRMProvider:
                 token_id=token_id,
                 secret=str(public_onboarding_hmac_secret),
             )
+            signing_key_fingerprint = eom_public_onboarding_hmac_key_fingerprint(
+                secret=str(public_onboarding_hmac_secret)
+            )
             link = build_eom_public_onboarding_link(
                 base_url=str(public_onboarding_base_url),
                 token=raw_token,
@@ -3850,8 +3854,19 @@ class DatabaseCRMProvider:
                         """
                         INSERT INTO eom_public_onboarding_tokens (
                             id, draft_id, contact_id, approval_key,
-                            approved_by_employee_id, approved_by_name
-                        ) VALUES ($1, $2::uuid, $3::uuid, $4, $5, $6)
+                            approved_by_employee_id, approved_by_name,
+                            signing_key_fingerprint, prefill_full_name,
+                            prefill_email, prefill_phone, prefill_address,
+                            prefill_city, prefill_state, prefill_zip,
+                            prefill_customer_type
+                        )
+                        SELECT
+                            $1, $2::uuid, $3::uuid, $4, $5, $6, $7,
+                            contact.full_name, contact.email, contact.phone,
+                            contact.address, contact.city, contact.state,
+                            contact.zip, contact.customer_type
+                        FROM contacts AS contact
+                        WHERE contact.id = $3::uuid
                         ON CONFLICT DO NOTHING
                         RETURNING id
                         """,
@@ -3861,6 +3876,7 @@ class DatabaseCRMProvider:
                         approval_key,
                         actor_id,
                         actor_name,
+                        signing_key_fingerprint,
                     )
                     if token_row is None:
                         raise EOMLeadConversionError(
@@ -4037,7 +4053,7 @@ class DatabaseCRMProvider:
         )
 
     async def get_eom_public_onboarding_session(
-        self, *, token_id: str
+        self, *, token_id: str, signing_key_fingerprint: str
     ) -> dict[str, Any]:
         """Return a token-bound prefill projection for the tracker bridge.
 
@@ -4061,14 +4077,14 @@ class DatabaseCRMProvider:
                 contact.contact_type,
                 contact.lead_stage,
                 contact.status AS contact_status,
-                contact.full_name,
-                contact.email,
-                contact.phone,
-                contact.address,
-                contact.city,
-                contact.state,
-                contact.zip,
-                contact.customer_type,
+                token.prefill_full_name,
+                token.prefill_email,
+                token.prefill_phone,
+                token.prefill_address,
+                token.prefill_city,
+                token.prefill_state,
+                token.prefill_zip,
+                token.prefill_customer_type,
                 handoff.tracker_customer_id,
                 handoff.tracker_site_id
             FROM eom_public_onboarding_tokens AS token
@@ -4076,8 +4092,10 @@ class DatabaseCRMProvider:
             JOIN contacts AS contact ON contact.id = token.contact_id
             LEFT JOIN eom_customer_handoffs AS handoff ON handoff.id = token.handoff_id
             WHERE token.id = $1::uuid
+              AND token.signing_key_fingerprint = $2
             """,
             token_id,
+            signing_key_fingerprint,
         )
         if row is None:
             raise EOMLeadConversionError(404, "Public onboarding link is unavailable")
@@ -4112,20 +4130,21 @@ class DatabaseCRMProvider:
         return {
             "status": "ready",
             "contact_id": str(row["contact_id"]),
-            "full_name": str(row["full_name"]),
-            "email": row["email"],
-            "phone": row["phone"],
-            "address": row["address"],
-            "city": row["city"],
-            "state": row["state"],
-            "zip": row["zip"],
-            "customer_type": row["customer_type"],
+            "full_name": str(row["prefill_full_name"]),
+            "email": row["prefill_email"],
+            "phone": row["prefill_phone"],
+            "address": row["prefill_address"],
+            "city": row["prefill_city"],
+            "state": row["prefill_state"],
+            "zip": row["prefill_zip"],
+            "customer_type": row["prefill_customer_type"],
         }
 
     async def complete_eom_public_onboarding(
         self,
         *,
         token_id: str,
+        signing_key_fingerprint: str,
         tracker_customer_id: int,
         tracker_site_id: int,
     ) -> dict[str, Any]:
@@ -4149,8 +4168,10 @@ class DatabaseCRMProvider:
                 SELECT draft_id, contact_id, approval_key
                 FROM eom_public_onboarding_tokens
                 WHERE id = $1::uuid
+                  AND signing_key_fingerprint = $2
                 """,
                 token_id,
+                signing_key_fingerprint,
             )
             if token_hint is None:
                 raise EOMLeadConversionError(
@@ -4193,9 +4214,11 @@ class DatabaseCRMProvider:
                 JOIN contacts AS contact ON contact.id = token.contact_id
                 LEFT JOIN eom_customer_handoffs AS handoff ON handoff.id = token.handoff_id
                 WHERE token.id = $1::uuid
+                  AND token.signing_key_fingerprint = $2
                 FOR UPDATE OF token, draft, contact
                 """,
                 token_id,
+                signing_key_fingerprint,
             )
             if row is None:
                 raise EOMLeadConversionError(

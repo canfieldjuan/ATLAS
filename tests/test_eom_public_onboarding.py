@@ -21,7 +21,9 @@ from atlas_brain.eom_api import funnel_auth as auth_mod
 from atlas_brain.eom_api.config import EOMFunnelConfig
 from atlas_brain.services.eom_public_onboarding_tokens import (
     EOMPublicOnboardingTokenError,
+    authenticate_eom_public_onboarding_token,
     append_eom_public_onboarding_invitation,
+    eom_public_onboarding_hmac_key_fingerprint,
     format_eom_public_onboarding_token,
     parse_eom_public_onboarding_token,
 )
@@ -29,6 +31,7 @@ from atlas_brain.services.eom_public_onboarding_tokens import (
 
 _SERVICE = auth_mod.generate_eom_funnel_service_token()
 _PUBLIC_SECRET = "this-is-a-test-only-public-onboarding-secret-value-123456"
+_PREVIOUS_PUBLIC_SECRET = "previous-test-only-public-onboarding-secret-value-654321"
 _PUBLIC_URL = "https://effinghamofficemaids.com/onboarding"
 
 
@@ -59,7 +62,7 @@ class _Sender:
 
 class _CRM:
     def __init__(self) -> None:
-        self.session_calls: list[str] = []
+        self.session_calls: list[dict[str, str]] = []
         self.finalize_calls: list[dict[str, object]] = []
         self.revoke_calls: list[str] = []
         self.claim_calls: list[dict[str, object]] = []
@@ -80,8 +83,15 @@ class _CRM:
             "approved_by_name": "Juan Canfield",
         }
 
-    async def get_eom_public_onboarding_session(self, *, token_id: str):
-        self.session_calls.append(token_id)
+    async def get_eom_public_onboarding_session(
+        self, *, token_id: str, signing_key_fingerprint: str
+    ):
+        self.session_calls.append(
+            {
+                "token_id": token_id,
+                "signing_key_fingerprint": signing_key_fingerprint,
+            }
+        )
         return {
             "status": "ready",
             "contact_id": str(self.contact_id),
@@ -152,7 +162,9 @@ class _CRM:
         return confirmed
 
 
-def _config(*, enabled: bool = True) -> EOMFunnelConfig:
+def _config(
+    *, enabled: bool = True, previous_secret: str | None = None
+) -> EOMFunnelConfig:
     values: dict[str, object] = {
         "api_enabled": True,
         "service_token_sha256": _SERVICE.sha256,
@@ -165,15 +177,25 @@ def _config(*, enabled: bool = True) -> EOMFunnelConfig:
                 "public_onboarding_hmac_secret": _PUBLIC_SECRET,
             }
         )
+    if previous_secret is not None:
+        values["public_onboarding_previous_hmac_secret"] = previous_secret
     return EOMFunnelConfig(**values)
 
 
-def _app(crm: _CRM, *, enabled: bool = True, sender=None, history=None) -> FastAPI:
+def _app(
+    crm: _CRM,
+    *,
+    enabled: bool = True,
+    previous_secret: str | None = None,
+    sender=None,
+    history=None,
+) -> FastAPI:
     app = FastAPI()
     app.include_router(funnel_mod.router)
     app.dependency_overrides[funnel_mod._crm_dependency] = lambda: crm
     app.dependency_overrides[auth_mod.get_eom_funnel_api_config] = lambda: _config(
-        enabled=enabled
+        enabled=enabled,
+        previous_secret=previous_secret,
     )
     app.dependency_overrides[funnel_mod._onboarding_sender_dependency] = lambda: sender
     app.dependency_overrides[funnel_mod._onboarding_email_history_dependency] = (
@@ -182,9 +204,9 @@ def _app(crm: _CRM, *, enabled: bool = True, sender=None, history=None) -> FastA
     return app
 
 
-def _token() -> str:
+def _token(*, secret: str = _PUBLIC_SECRET) -> str:
     return format_eom_public_onboarding_token(
-        token_id=uuid4(), secret=_PUBLIC_SECRET
+        token_id=uuid4(), secret=secret
     )
 
 
@@ -306,16 +328,52 @@ def test_public_token_parser_matches_the_closed_grammar_product():
     assert checked == 486
 
 
+def test_public_token_parser_accepts_one_previous_verifier_with_its_key_binding():
+    token_id = UUID("12345678-1234-4234-9234-123456789abc")
+    old_token = format_eom_public_onboarding_token(
+        token_id=token_id, secret=_PREVIOUS_PUBLIC_SECRET
+    )
+
+    authenticated = authenticate_eom_public_onboarding_token(
+        token=old_token,
+        secret=_PUBLIC_SECRET,
+        previous_secret=_PREVIOUS_PUBLIC_SECRET,
+    )
+
+    assert authenticated.token_id == token_id
+    assert authenticated.signing_key_fingerprint == eom_public_onboarding_hmac_key_fingerprint(
+        secret=_PREVIOUS_PUBLIC_SECRET
+    )
+    assert (
+        parse_eom_public_onboarding_token(
+            token=old_token,
+            secret=_PUBLIC_SECRET,
+            previous_secret=_PREVIOUS_PUBLIC_SECRET,
+        )
+        == token_id
+    )
+    with pytest.raises(EOMPublicOnboardingTokenError):
+        parse_eom_public_onboarding_token(token=old_token, secret=_PUBLIC_SECRET)
+
+
 def _public_onboarding_config_spec_oracle(
-    *, api_enabled: bool, enabled: bool, url: str, secret: str
+    *, api_enabled: bool, enabled: bool, url: str, secret: str, previous_secret: str
 ) -> bool:
     """Encode the configuration contract independently of the model validator."""
 
+    if any(ord(character) < 32 or ord(character) == 127 for character in url):
+        return False
     base_url = url.strip()
     normalized_secret = secret.strip()
+    normalized_previous_secret = previous_secret.strip()
     has_url = bool(base_url)
     has_secret = bool(normalized_secret)
+    has_previous_secret = bool(normalized_previous_secret)
     if has_url != has_secret:
+        return False
+    if has_previous_secret and not has_secret:
+        return False
+    if has_previous_secret and normalized_previous_secret == normalized_secret:
         return False
     if enabled and (not has_url or not api_enabled):
         return False
@@ -336,6 +394,10 @@ def _public_onboarding_config_spec_oracle(
         and not parsed.query
         and not parsed.fragment
         and len(normalized_secret.encode("utf-8")) >= 32
+        and (
+            not has_previous_secret
+            or len(normalized_previous_secret.encode("utf-8")) >= 32
+        )
     )
 
 
@@ -361,8 +423,15 @@ def test_public_onboarding_config_matches_the_safe_url_grammar_product():
         "/onboarding",
         "/onboarding?preview=true",
         "/onboarding#fragment",
+        "/on\nboarding",
     )
     secret_families = (_PUBLIC_SECRET, "short", "")
+    previous_secret_families = (
+        "",
+        _PREVIOUS_PUBLIC_SECRET,
+        "short",
+        _PUBLIC_SECRET,
+    )
     checked = 0
     for (
         scheme,
@@ -370,6 +439,7 @@ def test_public_onboarding_config_matches_the_safe_url_grammar_product():
         port,
         suffix,
         secret,
+        previous_secret,
         enabled,
         api_enabled,
     ) in itertools.product(
@@ -378,6 +448,7 @@ def test_public_onboarding_config_matches_the_safe_url_grammar_product():
         port_families,
         suffix_families,
         secret_families,
+        previous_secret_families,
         (False, True),
         (False, True),
     ):
@@ -387,6 +458,7 @@ def test_public_onboarding_config_matches_the_safe_url_grammar_product():
             enabled=enabled,
             url=url,
             secret=secret,
+            previous_secret=previous_secret,
         )
         try:
             EOMFunnelConfig(
@@ -395,16 +467,25 @@ def test_public_onboarding_config_matches_the_safe_url_grammar_product():
                 public_onboarding_enabled=enabled,
                 public_onboarding_url=url,
                 public_onboarding_hmac_secret=secret,
+                public_onboarding_previous_hmac_secret=previous_secret,
             )
         except ValidationError:
             actual = False
         else:
             actual = True
 
-        assert actual == expected, (scheme, authority, port, suffix, secret, enabled)
+        assert actual == expected, (
+            scheme,
+            authority,
+            port,
+            suffix,
+            secret,
+            previous_secret,
+            enabled,
+        )
         checked += 1
 
-    assert checked == 2160
+    assert checked == 11520
 
 
 def test_public_onboarding_config_requires_a_complete_safe_pair():
@@ -434,6 +515,22 @@ def test_public_onboarding_config_requires_a_complete_safe_pair():
             public_onboarding_url=_PUBLIC_URL,
             public_onboarding_hmac_secret=_PUBLIC_SECRET,
         )
+    with pytest.raises(ValidationError, match="PREVIOUS_HMAC_SECRET requires"):
+        EOMFunnelConfig(
+            public_onboarding_previous_hmac_secret=_PREVIOUS_PUBLIC_SECRET,
+        )
+    with pytest.raises(ValidationError, match="must differ"):
+        EOMFunnelConfig(
+            public_onboarding_url=_PUBLIC_URL,
+            public_onboarding_hmac_secret=_PUBLIC_SECRET,
+            public_onboarding_previous_hmac_secret=_PUBLIC_SECRET,
+        )
+    with pytest.raises(ValidationError, match="previous HMAC secret must be at least"):
+        EOMFunnelConfig(
+            public_onboarding_url=_PUBLIC_URL,
+            public_onboarding_hmac_secret=_PUBLIC_SECRET,
+            public_onboarding_previous_hmac_secret="short",
+        )
 
 
 @pytest.mark.parametrize(
@@ -445,10 +542,14 @@ def test_public_onboarding_config_requires_a_complete_safe_pair():
         "https://example.test:0/onboarding",
         "https://example.test/onboarding?preview=true",
         "https://example.test/onboarding#fragment",
+        "https://example.test/on\nboarding",
+        "https://example.test/on\rboarding",
+        "https://example.test/on\tboarding",
+        "https://example.test/on\x7fboarding",
     ),
 )
 def test_public_onboarding_config_rejects_malformed_or_bearer_leaking_urls(unsafe_url):
-    with pytest.raises(ValidationError, match="HTTPS URL"):
+    with pytest.raises(ValidationError, match="HTTPS URL|control characters"):
         EOMFunnelConfig(
             public_onboarding_url=unsafe_url,
             public_onboarding_hmac_secret=_PUBLIC_SECRET,
@@ -486,7 +587,47 @@ async def test_public_session_requires_service_auth_and_never_requires_an_actor(
     assert accepted.json()["status"] == "ready"
     assert "contact_id" not in accepted.json()
     assert "handoff_id" not in accepted.json()
-    assert len(crm.session_calls) == 1
+    assert crm.session_calls == [
+        {
+            "token_id": str(
+                parse_eom_public_onboarding_token(token=token, secret=_PUBLIC_SECRET)
+            ),
+            "signing_key_fingerprint": eom_public_onboarding_hmac_key_fingerprint(
+                secret=_PUBLIC_SECRET
+            ),
+        }
+    ]
+
+
+@pytest.mark.asyncio
+async def test_public_session_binds_a_previous_key_to_the_private_provider_call():
+    crm = _CRM()
+    token = _token(secret=_PREVIOUS_PUBLIC_SECRET)
+    app = _app(crm, previous_secret=_PREVIOUS_PUBLIC_SECRET)
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=app), base_url="http://test"
+    ) as client:
+        accepted = await client.post(
+            "/eom-funnel/public-onboarding/session",
+            headers=_service_headers(),
+            json={"token": token},
+        )
+
+    assert accepted.status_code == 200
+    assert crm.session_calls == [
+        {
+            "token_id": str(
+                parse_eom_public_onboarding_token(
+                    token=token,
+                    secret=_PUBLIC_SECRET,
+                    previous_secret=_PREVIOUS_PUBLIC_SECRET,
+                )
+            ),
+            "signing_key_fingerprint": eom_public_onboarding_hmac_key_fingerprint(
+                secret=_PREVIOUS_PUBLIC_SECRET
+            ),
+        }
+    ]
 
 
 @pytest.mark.asyncio
@@ -538,7 +679,7 @@ async def test_public_session_rejects_bad_bearer_before_the_crm_lookup(token):
 
 
 @pytest.mark.asyncio
-async def test_public_finalize_delegates_only_token_and_tracker_ids():
+async def test_public_finalize_delegates_token_key_binding_and_tracker_ids():
     crm = _CRM()
     token = _token()
     app = _app(crm)
@@ -567,6 +708,9 @@ async def test_public_finalize_delegates_only_token_and_tracker_ids():
         {
             "token_id": str(
                 parse_eom_public_onboarding_token(token=token, secret=_PUBLIC_SECRET)
+            ),
+            "signing_key_fingerprint": eom_public_onboarding_hmac_key_fingerprint(
+                secret=_PUBLIC_SECRET
             ),
             "tracker_customer_id": 12,
             "tracker_site_id": 24,

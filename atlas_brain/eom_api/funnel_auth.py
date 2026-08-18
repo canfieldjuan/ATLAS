@@ -56,6 +56,7 @@ class EOMPublicOnboardingConfig:
 
     base_url: str
     hmac_secret: str = field(repr=False)
+    previous_hmac_secret: str | None = field(default=None, repr=False)
 
 
 def _token_sha256(token: str) -> str:
@@ -119,6 +120,14 @@ def require_eom_public_onboarding_config(
         secret = validate_eom_public_onboarding_hmac_secret(
             config.public_onboarding_hmac_secret.get_secret_value()
         )
+        previous_secret_raw = (
+            config.public_onboarding_previous_hmac_secret.get_secret_value().strip()
+        )
+        previous_secret = (
+            validate_eom_public_onboarding_hmac_secret(previous_secret_raw)
+            if previous_secret_raw
+            else None
+        )
     except ValueError as exc:
         raise HTTPException(
             status_code=503,
@@ -130,7 +139,11 @@ def require_eom_public_onboarding_config(
             status_code=503,
             detail="Public onboarding configuration is unavailable",
         )
-    return EOMPublicOnboardingConfig(base_url=base_url, hmac_secret=secret)
+    return EOMPublicOnboardingConfig(
+        base_url=base_url,
+        hmac_secret=secret,
+        previous_hmac_secret=previous_secret,
+    )
 
 
 async def require_eom_funnel_api(

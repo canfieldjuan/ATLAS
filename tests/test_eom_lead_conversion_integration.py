@@ -34,6 +34,7 @@ from atlas_brain.services.eom_lead_ingress import (  # noqa: E402
     resolve_or_create_eom_inbound_lead,
 )
 from atlas_brain.services.eom_public_onboarding_tokens import (  # noqa: E402
+    eom_public_onboarding_hmac_key_fingerprint,
     parse_eom_public_onboarding_token,
 )
 
@@ -44,6 +45,9 @@ _NOCODB_TEST_PASSWORD = "test-only-nocodb-password"
 _NON_SUPERUSER_TEST_PASSWORD = "test-only-migrator-password"
 _PUBLIC_ONBOARDING_URL = "https://effinghamofficemaids.com/onboarding"
 _PUBLIC_ONBOARDING_SECRET = "test-only-public-onboarding-secret-value-123456"
+_PUBLIC_ONBOARDING_KEY_FINGERPRINT = eom_public_onboarding_hmac_key_fingerprint(
+    secret=_PUBLIC_ONBOARDING_SECRET
+)
 
 
 def _database_url_or_skip() -> str:
@@ -4411,6 +4415,7 @@ async def _claim_public_onboarding_token(
     draft_id: str,
     actor_id: int = 7,
     actor_name: str = "Mayra Canfield",
+    hmac_secret: str = _PUBLIC_ONBOARDING_SECRET,
 ) -> tuple[dict[str, object], uuid.UUID]:
     """Claim a won lead's draft and recover only the test bearer UUID."""
 
@@ -4419,7 +4424,7 @@ async def _claim_public_onboarding_token(
         actor_id=actor_id,
         actor_name=actor_name,
         public_onboarding_base_url=_PUBLIC_ONBOARDING_URL,
-        public_onboarding_hmac_secret=_PUBLIC_ONBOARDING_SECRET,
+        public_onboarding_hmac_secret=hmac_secret,
     )
     assert claim["claimed"] is True
     link = str(claim["public_onboarding_link"])
@@ -4427,7 +4432,7 @@ async def _claim_public_onboarding_token(
     bearer = link.partition("#token=")[2]
     return claim, parse_eom_public_onboarding_token(
         token=bearer,
-        secret=_PUBLIC_ONBOARDING_SECRET,
+        secret=hmac_secret,
     )
 
 
@@ -4448,7 +4453,10 @@ async def test_public_onboarding_claim_redeems_once_through_the_existing_handoff
         token_row = await conn.fetchrow(
             """
             SELECT draft_id, contact_id, approval_key, status,
-                   approved_by_employee_id, approved_by_name, handoff_id
+                   approved_by_employee_id, approved_by_name, handoff_id,
+                   signing_key_fingerprint, prefill_full_name, prefill_email,
+                   prefill_phone, prefill_address, prefill_city, prefill_state,
+                   prefill_zip, prefill_customer_type
             FROM eom_public_onboarding_tokens
             WHERE id = $1
             """,
@@ -4463,6 +4471,15 @@ async def test_public_onboarding_claim_redeems_once_through_the_existing_handoff
             "approved_by_employee_id": 7,
             "approved_by_name": "Mayra Canfield",
             "handoff_id": None,
+            "signing_key_fingerprint": _PUBLIC_ONBOARDING_KEY_FINGERPRINT,
+            "prefill_full_name": "Won Lead",
+            "prefill_email": "won-lead@example.com",
+            "prefill_phone": None,
+            "prefill_address": None,
+            "prefill_city": None,
+            "prefill_state": None,
+            "prefill_zip": None,
+            "prefill_customer_type": "unknown",
         }
         assert await conn.fetchval(
             "SELECT body FROM eom_onboarding_email_drafts WHERE id = $1::uuid",
@@ -4470,8 +4487,29 @@ async def test_public_onboarding_claim_redeems_once_through_the_existing_handoff
         ) == claim["draft"]["body"]
         assert "#token=" not in str(claim["draft"]["body"])
 
+        await conn.execute(
+            """
+            UPDATE contacts
+               SET full_name = 'Corrected Lead', email = 'corrected@example.com',
+                   phone = '2175550199', address = '200 Updated St',
+                   city = 'Chicago', state = 'IL', zip = '60601',
+                   customer_type = 'commercial'
+             WHERE id = $1
+            """,
+            contact_id,
+        )
+        with pytest.raises(EOMLeadConversionError) as mismatched_verifier:
+            await provider.get_eom_public_onboarding_session(
+                token_id=str(token_id),
+                signing_key_fingerprint=eom_public_onboarding_hmac_key_fingerprint(
+                    secret="different-test-only-public-onboarding-secret-value-987654"
+                ),
+            )
+        assert mismatched_verifier.value.status_code == 404
+
         ready = await provider.get_eom_public_onboarding_session(
-            token_id=str(token_id)
+            token_id=str(token_id),
+            signing_key_fingerprint=_PUBLIC_ONBOARDING_KEY_FINGERPRINT,
         )
         assert ready == {
             "status": "ready",
@@ -4488,6 +4526,7 @@ async def test_public_onboarding_claim_redeems_once_through_the_existing_handoff
 
         completed = await provider.complete_eom_public_onboarding(
             token_id=str(token_id),
+            signing_key_fingerprint=_PUBLIC_ONBOARDING_KEY_FINGERPRINT,
             tracker_customer_id=101,
             tracker_site_id=202,
         )
@@ -4535,12 +4574,14 @@ async def test_public_onboarding_claim_redeems_once_through_the_existing_handoff
 
         replay = await provider.complete_eom_public_onboarding(
             token_id=str(token_id),
+            signing_key_fingerprint=_PUBLIC_ONBOARDING_KEY_FINGERPRINT,
             tracker_customer_id=101,
             tracker_site_id=202,
         )
         assert replay == {**completed, "idempotent": True}
         assert await provider.get_eom_public_onboarding_session(
-            token_id=str(token_id)
+            token_id=str(token_id),
+            signing_key_fingerprint=_PUBLIC_ONBOARDING_KEY_FINGERPRINT,
         ) == {
             "status": "completed",
             "contact_id": str(contact_id),
@@ -4552,9 +4593,47 @@ async def test_public_onboarding_claim_redeems_once_through_the_existing_handoff
         with pytest.raises(EOMLeadConversionError, match="different tracker records"):
             await provider.complete_eom_public_onboarding(
                 token_id=str(token_id),
+                signing_key_fingerprint=_PUBLIC_ONBOARDING_KEY_FINGERPRINT,
                 tracker_customer_id=101,
                 tracker_site_id=203,
             )
+    finally:
+        await conn.execute(f'DROP SCHEMA IF EXISTS "{schema}" CASCADE')
+        await conn.close()
+
+
+@pytest.mark.asyncio
+async def test_public_onboarding_session_accepts_only_the_key_that_minted_the_row():
+    """A controlled rotation keeps an old link valid without cross-key replay."""
+
+    previous_secret = "previous-test-only-public-onboarding-secret-value-654321"
+    previous_fingerprint = eom_public_onboarding_hmac_key_fingerprint(
+        secret=previous_secret
+    )
+    database_url = _database_url_or_skip()
+    schema = f"atlas_eom_public_onboarding_key_rotation_{uuid.uuid4().hex}"
+    conn = await asyncpg.connect(database_url)
+    try:
+        await _prepare_schema(conn, schema, apply_public_onboarding_migration=True)
+        provider = DatabaseCRMProvider(pool=conn)
+        _, draft_id = await _book_first_clean_draft(conn, provider)
+        _, token_id = await _claim_public_onboarding_token(
+            provider,
+            draft_id=draft_id,
+            hmac_secret=previous_secret,
+        )
+
+        ready = await provider.get_eom_public_onboarding_session(
+            token_id=str(token_id),
+            signing_key_fingerprint=previous_fingerprint,
+        )
+        assert ready["status"] == "ready"
+        with pytest.raises(EOMLeadConversionError) as wrong_key:
+            await provider.get_eom_public_onboarding_session(
+                token_id=str(token_id),
+                signing_key_fingerprint=_PUBLIC_ONBOARDING_KEY_FINGERPRINT,
+            )
+        assert wrong_key.value.status_code == 404
     finally:
         await conn.execute(f'DROP SCHEMA IF EXISTS "{schema}" CASCADE')
         await conn.close()
@@ -4685,7 +4764,10 @@ async def test_public_onboarding_revocation_releases_office_handoff_and_stale_dr
             == "revoked"
         )
         with pytest.raises(EOMLeadConversionError) as unavailable:
-            await provider.get_eom_public_onboarding_session(token_id=str(token_id))
+            await provider.get_eom_public_onboarding_session(
+                token_id=str(token_id),
+                signing_key_fingerprint=_PUBLIC_ONBOARDING_KEY_FINGERPRINT,
+            )
         assert unavailable.value.status_code == 404
 
         office = await provider.finalize_eom_customer_handoff(
@@ -4738,7 +4820,7 @@ async def test_public_onboarding_revocation_releases_office_handoff_and_stale_dr
 
 @pytest.mark.asyncio
 async def test_public_onboarding_readiness_requires_its_migration_only_when_enabled():
-    """A dormant code deploy stays compatible; enabling without 382 fails closed."""
+    """A dormant deploy stays compatible; missing token columns fail closed on enablement."""
     from atlas_brain.eom_api.funnel_store import require_eom_funnel_data_store
     from atlas_brain.storage.migrations import run_migrations
 
@@ -4795,6 +4877,13 @@ async def test_public_onboarding_readiness_requires_its_migration_only_when_enab
         await require_eom_funnel_data_store(
             enabled, database_enabled=True, get_db_pool_fn=lambda: _Pool()
         )
+        await conn.execute(
+            "ALTER TABLE eom_public_onboarding_tokens DROP COLUMN prefill_email"
+        )
+        with pytest.raises(RuntimeError, match="CRM lifecycle and handoff schema"):
+            await require_eom_funnel_data_store(
+                enabled, database_enabled=True, get_db_pool_fn=lambda: _Pool()
+            )
     finally:
         await conn.execute(f'DROP SCHEMA IF EXISTS "{schema}" CASCADE')
         await conn.close()
@@ -4822,6 +4911,7 @@ async def test_public_onboarding_and_office_finalizers_serialize_on_one_contact(
         public_result, office_result = await asyncio.gather(
             provider.complete_eom_public_onboarding(
                 token_id=str(token_id),
+                signing_key_fingerprint=_PUBLIC_ONBOARDING_KEY_FINGERPRINT,
                 tracker_customer_id=101,
                 tracker_site_id=202,
             ),

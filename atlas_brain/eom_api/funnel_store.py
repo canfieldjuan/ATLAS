@@ -144,10 +144,13 @@ async def require_eom_funnel_data_store(
                     AND NOT EXISTS (
                         SELECT required.attname
                         FROM unnest(ARRAY[
-                            'id', 'draft_id', 'contact_id', 'approval_key',
-                            'status', 'approved_by_employee_id',
-                            'approved_by_name', 'issued_at', 'redeemed_at',
-                            'revoked_at', 'handoff_id'
+                            'id', 'draft_id', 'contact_id',
+                            'signing_key_fingerprint', 'prefill_full_name',
+                            'prefill_email', 'prefill_phone', 'prefill_address',
+                            'prefill_city', 'prefill_state', 'prefill_zip',
+                            'prefill_customer_type', 'approval_key', 'status',
+                            'approved_by_employee_id', 'approved_by_name',
+                            'issued_at', 'redeemed_at', 'revoked_at', 'handoff_id'
                         ]) AS required(attname)
                         WHERE NOT EXISTS (
                             SELECT 1

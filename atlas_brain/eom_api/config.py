@@ -198,6 +198,14 @@ class EOMFunnelConfig(BaseSettings):
             "expose it to the tracker or browser"
         ),
     )
+    public_onboarding_previous_hmac_secret: SecretStr = Field(
+        default_factory=lambda: SecretStr(""),
+        description=(
+            "Optional immediately previous Atlas-only public-onboarding HMAC "
+            "secret, retained only while issued links from one controlled key "
+            "rotation are still active"
+        ),
+    )
 
     @model_validator(mode="after")
     def reject_raw_eom_funnel_service_token_env(self) -> "EOMFunnelConfig":
@@ -214,20 +222,37 @@ class EOMFunnelConfig(BaseSettings):
     def validate_public_onboarding_configuration(self) -> "EOMFunnelConfig":
         """Make an explicitly configured bearer authority safe before use.
 
-        Both values may be staged while disabled, but a partial or unsafe pair
-        is never accepted. That makes a later flag flip deterministic and keeps
-        an operator from discovering a malformed URL only after a draft has
-        already been claimed for sending.
+        The URL and primary secret may be staged while disabled, but a partial
+        or unsafe tuple is never accepted. One validated previous secret is
+        permitted only to bridge a controlled key rotation. That makes a later
+        flag flip deterministic and keeps an operator from discovering malformed
+        configuration only after a draft has already been claimed for sending.
         """
 
-        base_url = self.public_onboarding_url.strip()
+        raw_base_url = self.public_onboarding_url
+        if any(ord(character) < 32 or ord(character) == 127 for character in raw_base_url):
+            raise ValueError("public onboarding URL must not contain control characters")
+        base_url = raw_base_url.strip()
         secret = self.public_onboarding_hmac_secret.get_secret_value().strip()
+        previous_secret = (
+            self.public_onboarding_previous_hmac_secret.get_secret_value().strip()
+        )
         has_url = bool(base_url)
         has_secret = bool(secret)
+        has_previous_secret = bool(previous_secret)
         if has_url != has_secret:
             raise ValueError(
                 "ATLAS_EOM_FUNNEL_PUBLIC_ONBOARDING_URL and "
                 "ATLAS_EOM_FUNNEL_PUBLIC_ONBOARDING_HMAC_SECRET must be set together"
+            )
+        if has_previous_secret and not has_secret:
+            raise ValueError(
+                "ATLAS_EOM_FUNNEL_PUBLIC_ONBOARDING_PREVIOUS_HMAC_SECRET requires "
+                "ATLAS_EOM_FUNNEL_PUBLIC_ONBOARDING_HMAC_SECRET"
+            )
+        if has_previous_secret and previous_secret == secret:
+            raise ValueError(
+                "public onboarding previous HMAC secret must differ from the primary secret"
             )
         if self.public_onboarding_enabled and not has_url:
             raise ValueError(
@@ -264,6 +289,10 @@ class EOMFunnelConfig(BaseSettings):
             )
         if len(secret.encode("utf-8")) < 32:
             raise ValueError("public onboarding HMAC secret must be at least 32 bytes")
+        if has_previous_secret and len(previous_secret.encode("utf-8")) < 32:
+            raise ValueError(
+                "public onboarding previous HMAC secret must be at least 32 bytes"
+            )
         return self
 
 

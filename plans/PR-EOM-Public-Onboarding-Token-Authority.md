@@ -14,6 +14,13 @@ companions will use this private authority in later PRs; this PR remains
 dormant until those deployed callers and the explicit Atlas configuration are
 available.
 
+This foundation intentionally exceeds the normal diff target because durable
+token state, issuance, service-only redemption, the office-handoff fence,
+revocation, and their transaction proofs form one safety boundary. Splitting
+them would leave either a bearer without durable revocation/fencing, a durable
+row without its only safe redemption path, or a caller-facing route without the
+proof that its public and office completion paths cannot race.
+
 ### Problem-derived contract
 
 - Root cause: The approved onboarding draft is only an email snapshot and the
@@ -70,10 +77,46 @@ available.
      Website page, change staff portal copy, enable production configuration,
      send test email, or mutate production data in this PR.
 
+### Current-head review remediation contract
+
+- Root cause: The first implementation made the issued bearer and the ready
+  projection depend on mutable runtime state: one configured HMAC secret and
+  the contact's current PII. It also normalized an operator URL before rejecting
+  control characters, left the safe-disable/revoke-before-rollback sequence
+  undocumented, and did not enroll the new authority proof in the explicit EOM
+  pull-request test list.
+- Correct remediation must:
+  1. Keep the existing opaque bearer grammar, mint with the primary HMAC secret,
+     and persist only a non-secret signing-key fingerprint with each token.
+     Accept at most one explicitly configured, validated previous verifier;
+     require the returned verifier fingerprint to match the token row so an old
+     key cannot authenticate a bearer for a newly issued row. This preserves
+     outstanding links across one controlled secret rotation without storing a
+     raw bearer or raw secret.
+  2. Persist the exact ready-state prefill projection with the token inside the
+     issuance transaction, and return that immutable snapshot while the token is
+     issued. Contact lifecycle predicates still use the live contact row, but a
+     later office correction cannot disclose new PII through an old link.
+  3. Reject every ASCII control character in the raw public onboarding URL
+     before URL parsing or transport-link construction, and extend the
+     independent configuration oracle to cover that input family and the
+     bounded previous-verifier rules.
+  4. Document the ordered rollback: disable issuance, use the existing private
+     `revoke-link` recovery command to drain every issued token, verify no
+     `issued` row remains, retain the audit table, then roll back application
+     code. The current release must remain deployed until that drain succeeds.
+  5. Enroll the new public-onboarding unit/route suite and authority source/
+     migration paths in the explicit EOM pull-request workflow.
+- Must not change: token text/version, service-only route authentication,
+  browser/Tracker scope, office-handoff request or response shapes, generic
+  CRM writers, tracker Customer/Site creation, production configuration, or any
+  payroll, QR/GPS, scheduling, payment, and existing disabled-path behavior.
+
 ## Scope (this PR)
 
 Ownership lane: eom-public-onboarding-token-authority
 Slice phase: vertical slice
+Max files: 13
 
 1. Establish dormant Atlas token issuance, validation, explicit revocation, and
    one-time finalization authority for one active `won` EOM lead.
@@ -93,12 +136,15 @@ Slice phase: vertical slice
      the focused HTTP approval regression test settles this behavior. The open
      configuration tuple is checked over a generated URL/secret/flag grammar
      against an independent contract oracle, so unsafe or incomplete values
-     cannot accidentally take the enabled branch.
+     cannot accidentally take the enabled branch, including an embedded control
+     character or an invalid bounded previous verifier.
   2. With valid explicit public configuration, one approved, active `won` lead
      gets exactly one opaque HMAC token during the same transaction that claims
      its draft. The email transport sees an HTTPS URL whose token is in the
      fragment, while the persisted draft and email-history payload contain no
-     bearer; focused service tests settle this behavior.
+     bearer. The token row records an immutable, token-time prefill projection
+     and non-secret signing-key fingerprint; focused service tests settle this
+     behavior.
   3. The token parser is the single admission choke point for the closed
      `eomob1.<UUID>.<base64url-HMAC>` grammar. Malformed, unknown-version, or
      MAC-mismatched strings make no CRM lookup or mutation; generated mutation
@@ -110,7 +156,9 @@ Slice phase: vertical slice
      EOM funnel bearer but no fabricated employee actor. Route tests exercise
      the real FastAPI entrypoints and prove that a browser-shaped unauthenticated
      request cannot obtain prefill or finalize a token; their whitelisted
-     responses omit Atlas contact and handoff identifiers.
+     responses omit Atlas contact and handoff identifiers. A one-generation
+     HMAC rotation accepts the configured prior verifier only for a row minted
+     under that verifier, and post-issuance contact edits cannot alter prefill.
   5. An issued token can resolve only its active EOM `lead` at `won`; a revoked
      token resolves nothing; a redeemed token replays only the tracker
      Customer/Site ids already committed. Disposable-Postgres tests settle the
@@ -129,8 +177,10 @@ Slice phase: vertical slice
      disabled, solely to recover an already-issued link. Route plus database
      tests settle this behavior.
   8. Existing lead conversion, draft approval, capability-manifest, and
-     migration-readiness tests remain green; this proves the staff paths and
-     previously advertised API shapes retain their contracts.
+     migration-readiness tests remain green; the public-onboarding route/token/
+     configuration suite is enrolled in the explicit EOM pull-request workflow.
+     Together these prove the staff paths and previously advertised API shapes
+     retain their contracts.
 - Reachability proof: `tests/test_eom_public_onboarding.py` uses an ASGI
   transport against the registered `/eom-funnel/public-onboarding/*` routes;
   `tests/test_eom_lead_conversion_integration.py` uses a disposable Postgres
@@ -233,6 +283,7 @@ fallback changes; otherwise write "N/A - no guard/config boundary change."
 
 ### Files touched
 
+- `.github/workflows/atlas_eom_lead_pipeline_checks.yml`
 - `atlas_brain/eom_api/config.py`
 - `atlas_brain/eom_api/funnel.py`
 - `atlas_brain/eom_api/funnel_auth.py`
@@ -252,9 +303,12 @@ The new `eom_public_onboarding_tokens` table is the authoritative token state:
 one row belongs to one draft and one Atlas contact, starts `issued`, may be
 explicitly `revoked`, and records its one immutable Atlas handoff when
 `redeemed`. A randomly generated UUID makes the bearer unguessable; the token
-formatter signs `eomob1.<id>` with the Atlas-only HMAC secret. The raw token is
-regenerated only in memory to build `https://.../onboarding#token=...` for the
-approved email transport, then discarded.
+formatter signs `eomob1.<id>` with the primary Atlas-only HMAC secret. The row
+stores a non-secret fingerprint of that signing key and the immutable prefill
+projection admitted at issuance; it stores neither a raw bearer nor a raw
+secret. The raw token is regenerated only in memory to build
+`https://.../onboarding#token=...` for the approved email transport, then
+discarded.
 
 When disabled, the existing `claim_eom_onboarding_draft` query and sender are
 unchanged. When enabled, its transaction requires the contact to still be an
@@ -282,14 +336,35 @@ disabled; it is the recovery path that releases the existing office fence.
   not a JWT and it does not reuse the tracker QR/JWT secret. Atlas owns the
   authority because it owns lead lifecycle.
 - This version does not invent an expiration period. An issued link stays valid
-  until completion or an office revokes it, which avoids an unannounced customer
-  deadline. Expiry/resend policy is a later product decision.
+  until completion or an office revokes it, including across one controlled HMAC
+  rotation when the prior verifier remains configured. Before a second rotation,
+  the office must revoke/reissue or drain all tokens signed by the old prior key.
+  Expiry/resend policy is a later product decision.
 - The public completion is recorded through the existing office-approved
   handoff evidence using the approving employee and explicit channel metadata.
   It does not add a second contact-to-tracker mapping table or change the
   intentional many-to-one tracker-to-Atlas topology.
 - The Atlas PR is deliberately feature-gated and not a live end-to-end rollout:
   tracker and Website callers must land before an operator enables it.
+
+### Rollback safety
+
+The migration is audit-bearing and is never dropped as an application rollback
+shortcut. If public onboarding has ever been enabled, the release manager must:
+
+1. Set public issuance disabled while the current Atlas release is still
+   serving. The existing private `revoke-link` route remains available in that
+   state and no new token can be minted.
+2. Enumerate every `issued` row through the authorized Atlas data path, invoke
+   `revoke-link` for its draft, and retain the revoked row as audit evidence.
+3. Verify `SELECT count(*) FROM eom_public_onboarding_tokens WHERE status =
+   'issued'` is zero. Do not roll back while any issued row remains.
+4. Only then deploy the earlier application revision; retain migration 382 and
+   its terminal audit rows. A later re-enable is a new rollout decision, not a
+   rollback side effect.
+
+The private-route proof covers recovery while issuance is disabled, and the
+disposable-Postgres proof covers revocation releasing the office handoff fence.
 
 ## Deferred
 
@@ -330,16 +405,17 @@ blocks the safety of this vertical path.
 
 | File | LOC |
 |---|---:|
-| `atlas_brain/eom_api/config.py` | 80 |
-| `atlas_brain/eom_api/funnel.py` | 208 |
-| `atlas_brain/eom_api/funnel_auth.py` | 47 |
-| `atlas_brain/eom_api/funnel_store.py` | 80 |
-| `atlas_brain/services/crm_provider.py` | 627 |
+| `.github/workflows/atlas_eom_lead_pipeline_checks.yml` | 7 |
+| `atlas_brain/eom_api/config.py` | 109 |
+| `atlas_brain/eom_api/funnel.py` | 218 |
+| `atlas_brain/eom_api/funnel_auth.py` | 60 |
+| `atlas_brain/eom_api/funnel_store.py` | 83 |
+| `atlas_brain/services/crm_provider.py` | 650 |
 | `atlas_brain/services/eom_onboarding_drafts.py` | 47 |
-| `atlas_brain/services/eom_public_onboarding_tokens.py` | 119 |
-| `atlas_brain/storage/migrations/382_eom_public_onboarding_tokens.sql` | 62 |
-| `plans/PR-EOM-Public-Onboarding-Token-Authority.md` | 345 |
-| `tests/test_eom_lead_conversion_integration.py` | 468 |
-| `tests/test_eom_public_onboarding.py` | 630 |
-| `tests/test_eom_render_profile.py` | 9 |
-| **Total** | **2722** |
+| `atlas_brain/services/eom_public_onboarding_tokens.py` | 169 |
+| `atlas_brain/storage/migrations/382_eom_public_onboarding_tokens.sql` | 72 |
+| `plans/PR-EOM-Public-Onboarding-Token-Authority.md` | 421 |
+| `tests/test_eom_lead_conversion_integration.py` | 558 |
+| `tests/test_eom_public_onboarding.py` | 774 |
+| `tests/test_eom_render_profile.py` | 11 |
+| **Total** | **3179** |

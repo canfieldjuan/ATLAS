@@ -41,8 +41,9 @@ from ..services.eom_onboarding_drafts import (
     record_operator_confirmed_send_evidence,
 )
 from ..services.eom_public_onboarding_tokens import (
+    AuthenticatedEOMPublicOnboardingToken,
     EOMPublicOnboardingTokenError,
-    parse_eom_public_onboarding_token,
+    authenticate_eom_public_onboarding_token,
 )
 from ..services.crm_provider import get_crm_provider
 from .funnel_auth import (
@@ -410,16 +411,17 @@ def _crm_dependency(request: Request) -> Any:
     return get_crm_provider()
 
 
-def _public_onboarding_token_id(
+def _authenticated_public_onboarding_token(
     token: object,
     public_onboarding: EOMPublicOnboardingConfig,
-) -> UUID:
-    """Authenticate a raw bearer before it reaches a CRM provider method."""
+) -> AuthenticatedEOMPublicOnboardingToken:
+    """Authenticate and bind a raw bearer before it reaches the CRM provider."""
 
     try:
-        return parse_eom_public_onboarding_token(
+        return authenticate_eom_public_onboarding_token(
             token=token,
             secret=public_onboarding.hmac_secret,
+            previous_secret=public_onboarding.previous_hmac_secret,
         )
     except EOMPublicOnboardingTokenError as exc:
         # The same result as an unknown/revoked durable token avoids telling a
@@ -1001,9 +1003,14 @@ async def get_eom_public_onboarding_session(
 ) -> JSONResponse:
     """Resolve a valid public link for the tracker, never for a browser directly."""
 
-    token_id = _public_onboarding_token_id(payload.token, public_onboarding)
+    authenticated_token = _authenticated_public_onboarding_token(
+        payload.token, public_onboarding
+    )
     try:
-        result = await crm.get_eom_public_onboarding_session(token_id=str(token_id))
+        result = await crm.get_eom_public_onboarding_session(
+            token_id=str(authenticated_token.token_id),
+            signing_key_fingerprint=authenticated_token.signing_key_fingerprint,
+        )
     except EOMLeadConversionError as exc:
         # Durable invalid/revoked/contact-state outcomes deliberately have the
         # same external text as a malformed bearer.
@@ -1032,10 +1039,13 @@ async def finalize_eom_public_onboarding(
 ) -> JSONResponse:
     """Redeem one public bearer after the tracker has made local records."""
 
-    token_id = _public_onboarding_token_id(payload.token, public_onboarding)
+    authenticated_token = _authenticated_public_onboarding_token(
+        payload.token, public_onboarding
+    )
     try:
         result = await crm.complete_eom_public_onboarding(
-            token_id=str(token_id),
+            token_id=str(authenticated_token.token_id),
+            signing_key_fingerprint=authenticated_token.signing_key_fingerprint,
             tracker_customer_id=payload.tracker_customer_id,
             tracker_site_id=payload.tracker_site_id,
         )

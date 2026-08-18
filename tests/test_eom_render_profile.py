@@ -538,6 +538,7 @@ def test_eom_funnel_canonical_crm_config_defaults_fail_closed(monkeypatch):
         "ATLAS_EOM_FUNNEL_PUBLIC_ONBOARDING_ENABLED",
         "ATLAS_EOM_FUNNEL_PUBLIC_ONBOARDING_URL",
         "ATLAS_EOM_FUNNEL_PUBLIC_ONBOARDING_HMAC_SECRET",
+        "ATLAS_EOM_FUNNEL_PUBLIC_ONBOARDING_PREVIOUS_HMAC_SECRET",
         _RAW_EOM_FUNNEL_SERVICE_TOKEN_ENV,
     ):
         monkeypatch.delenv(key, raising=False)
@@ -556,6 +557,7 @@ def test_eom_funnel_canonical_crm_config_defaults_fail_closed(monkeypatch):
     assert funnel_defaults.public_onboarding_enabled is False
     assert funnel_defaults.public_onboarding_url == ""
     assert funnel_defaults.public_onboarding_hmac_secret.get_secret_value() == ""
+    assert funnel_defaults.public_onboarding_previous_hmac_secret.get_secret_value() == ""
     validate_eom_funnel_canonical_crm_config(
         funnel_defaults,
         canonical_crm_database_confirmed=False,
