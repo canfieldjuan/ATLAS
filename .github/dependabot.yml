@@ -36,6 +36,26 @@ updates:
         update-types:
           - "patch"
           - "minor"
+    # atlas-mobile is frozen on Expo SDK 54; its React Native / Expo stack cannot
+    # take RN/Expo version bumps without a deliberate whole-SDK upgrade. Grouping
+    # them with the web-UI packages repeatedly broke the build and blocked the npm
+    # security group (closed PRs #2356 mobile leg / #2400 / #2401; blocked #2397).
+    # Block VERSION updates for these (major/minor/patch) so the web-UI security
+    # patches flow; genuine Dependabot security updates still surface (update-types
+    # scopes this to version updates only). These deps live only in atlas-mobile.
+    ignore:
+      - dependency-name: "react-native"
+        update-types: ["version-update:semver-major", "version-update:semver-minor", "version-update:semver-patch"]
+      - dependency-name: "react-native-*"
+        update-types: ["version-update:semver-major", "version-update:semver-minor", "version-update:semver-patch"]
+      - dependency-name: "nativewind"
+        update-types: ["version-update:semver-major", "version-update:semver-minor", "version-update:semver-patch"]
+      - dependency-name: "@siteed/*"
+        update-types: ["version-update:semver-major", "version-update:semver-minor", "version-update:semver-patch"]
+      - dependency-name: "expo"
+        update-types: ["version-update:semver-major", "version-update:semver-minor", "version-update:semver-patch"]
+      - dependency-name: "expo-*"
+        update-types: ["version-update:semver-major", "version-update:semver-minor", "version-update:semver-patch"]
 
   - package-ecosystem: "pip"
     directories:
@@ -61,6 +81,37 @@ updates:
         update-types:
           - "patch"
           - "minor"
+    # The heavy ML / CUDA stack is version-locked as a set: torch <-> torchaudio/
+    # torchvision <-> the CUDA toolkit and nvidia-cuda-* runtime must move together.
+    # Single-package minor bumps break pip resolution (torch 2.13.0 vs the pinned
+    # cuda-toolkit 13.3.1 => ResolutionImpossible in the python security group #2404)
+    # and previously the launcher import chain (#2350). Block VERSION updates so the
+    # rest of the security patches flow; this set is upgraded deliberately as one
+    # unit, and genuine Dependabot security updates still surface (update-types
+    # scopes this to version updates only).
+    ignore:
+      - dependency-name: "torch"
+        update-types: ["version-update:semver-major", "version-update:semver-minor", "version-update:semver-patch"]
+      - dependency-name: "torchaudio"
+        update-types: ["version-update:semver-major", "version-update:semver-minor", "version-update:semver-patch"]
+      - dependency-name: "torchvision"
+        update-types: ["version-update:semver-major", "version-update:semver-minor", "version-update:semver-patch"]
+      - dependency-name: "transformers"
+        update-types: ["version-update:semver-major", "version-update:semver-minor", "version-update:semver-patch"]
+      - dependency-name: "accelerate"
+        update-types: ["version-update:semver-major", "version-update:semver-minor", "version-update:semver-patch"]
+      - dependency-name: "bitsandbytes"
+        update-types: ["version-update:semver-major", "version-update:semver-minor", "version-update:semver-patch"]
+      - dependency-name: "sentence-transformers"
+        update-types: ["version-update:semver-major", "version-update:semver-minor", "version-update:semver-patch"]
+      - dependency-name: "datasets"
+        update-types: ["version-update:semver-major", "version-update:semver-minor", "version-update:semver-patch"]
+      - dependency-name: "cuda-toolkit"
+        update-types: ["version-update:semver-major", "version-update:semver-minor", "version-update:semver-patch"]
+      - dependency-name: "cuda-pathfinder"
+        update-types: ["version-update:semver-major", "version-update:semver-minor", "version-update:semver-patch"]
+      - dependency-name: "nvidia-*"
+        update-types: ["version-update:semver-major", "version-update:semver-minor", "version-update:semver-patch"]
 
   - package-ecosystem: "docker"
     directories:
