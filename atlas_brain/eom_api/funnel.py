@@ -40,8 +40,19 @@ from ..services.eom_onboarding_drafts import (
     approve_and_send_eom_onboarding_draft,
     record_operator_confirmed_send_evidence,
 )
+from ..services.eom_public_onboarding_tokens import (
+    AuthenticatedEOMPublicOnboardingToken,
+    EOMPublicOnboardingTokenError,
+    authenticate_eom_public_onboarding_token,
+)
 from ..services.crm_provider import get_crm_provider
-from .funnel_auth import require_eom_funnel_actor, require_eom_funnel_api
+from .funnel_auth import (
+    EOMPublicOnboardingConfig,
+    get_eom_funnel_api_config,
+    require_eom_funnel_actor,
+    require_eom_funnel_api,
+    require_eom_public_onboarding_config,
+)
 
 router = APIRouter(prefix="/eom-funnel", tags=["eom-funnel"])
 
@@ -89,6 +100,25 @@ class EOMCustomerHandoffRequest(BaseModel):
 
     model_config = ConfigDict(extra="forbid")
     contact_id: UUID
+    tracker_customer_id: Annotated[int, Field(strict=True, gt=0, le=_MAX_SIGNED_BIGINT)]
+    tracker_site_id: Annotated[int, Field(strict=True, gt=0, le=_MAX_SIGNED_BIGINT)]
+
+
+class EOMPublicOnboardingSessionRequest(BaseModel):
+    """Opaque bearer supplied by the tracker after the Website reads a fragment."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    # Deliberately accept the JSON shape here and hand every supplied value to
+    # the canonical parser. It is the one bearer-admission choke point, so a
+    # non-string or oversized value receives the same unavailable result before
+    # any CRM access rather than becoming a second token validator in Pydantic.
+    token: object
+
+
+class EOMPublicOnboardingFinalizeRequest(EOMPublicOnboardingSessionRequest):
+    """Tracker-owned local IDs for the one-time Atlas finalizer."""
+
     tracker_customer_id: Annotated[int, Field(strict=True, gt=0, le=_MAX_SIGNED_BIGINT)]
     tracker_site_id: Annotated[int, Field(strict=True, gt=0, le=_MAX_SIGNED_BIGINT)]
 
@@ -379,6 +409,66 @@ def _crm_dependency(request: Request) -> Any:
     if callable(provider_factory):
         return provider_factory()
     return get_crm_provider()
+
+
+def _authenticated_public_onboarding_token(
+    token: object,
+    public_onboarding: EOMPublicOnboardingConfig,
+) -> AuthenticatedEOMPublicOnboardingToken:
+    """Authenticate and bind a raw bearer before it reaches the CRM provider."""
+
+    try:
+        return authenticate_eom_public_onboarding_token(
+            token=token,
+            secret=public_onboarding.hmac_secret,
+            previous_secret=public_onboarding.previous_hmac_secret,
+        )
+    except EOMPublicOnboardingTokenError as exc:
+        # The same result as an unknown/revoked durable token avoids telling a
+        # caller whether its grammar or MAC was the rejected component.
+        raise HTTPException(
+            status_code=404,
+            detail="Public onboarding link is unavailable",
+        ) from exc
+
+
+def _public_onboarding_session_content(result: Mapping[str, Any]) -> dict[str, Any]:
+    """Whitelist the token-bound projection the tracker may bridge onward."""
+
+    state = str(result["status"])
+    content: dict[str, Any] = {"success": True, "status": state}
+    if state == "ready":
+        for field in (
+            "full_name",
+            "email",
+            "phone",
+            "address",
+            "city",
+            "state",
+            "zip",
+            "customer_type",
+        ):
+            content[field] = result[field]
+        return content
+    if state == "completed":
+        for field in ("tracker_customer_id", "tracker_site_id", "idempotent"):
+            content[field] = result[field]
+        return content
+    raise RuntimeError("CRM provider returned an invalid public onboarding session")
+
+
+def _public_onboarding_finalize_content(result: Mapping[str, Any]) -> dict[str, Any]:
+    """Return only completion evidence the tracker can reconcile locally."""
+
+    if str(result["status"]) != "completed":
+        raise RuntimeError("CRM provider returned an invalid public onboarding completion")
+    return {
+        "success": True,
+        "status": "completed",
+        "tracker_customer_id": result["tracker_customer_id"],
+        "tracker_site_id": result["tracker_site_id"],
+        "idempotent": result["idempotent"],
+    }
 
 
 def _calendar_dependency() -> Any:
@@ -900,6 +990,80 @@ def _draft_action_response(result: dict[str, Any]) -> JSONResponse:
     )
 
 
+@router.post(
+    "/public-onboarding/session",
+    dependencies=[Depends(require_eom_funnel_api)],
+)
+async def get_eom_public_onboarding_session(
+    payload: EOMPublicOnboardingSessionRequest,
+    public_onboarding: EOMPublicOnboardingConfig = Depends(
+        require_eom_public_onboarding_config
+    ),
+    crm: Any = Depends(_crm_dependency),
+) -> JSONResponse:
+    """Resolve a valid public link for the tracker, never for a browser directly."""
+
+    authenticated_token = _authenticated_public_onboarding_token(
+        payload.token, public_onboarding
+    )
+    try:
+        result = await crm.get_eom_public_onboarding_session(
+            token_id=str(authenticated_token.token_id),
+            signing_key_fingerprint=authenticated_token.signing_key_fingerprint,
+        )
+    except EOMLeadConversionError as exc:
+        # Durable invalid/revoked/contact-state outcomes deliberately have the
+        # same external text as a malformed bearer.
+        if exc.status_code in (404, 409):
+            raise HTTPException(
+                status_code=404,
+                detail="Public onboarding link is unavailable",
+            ) from exc
+        raise HTTPException(status_code=exc.status_code, detail=str(exc)) from exc
+    return JSONResponse(
+        status_code=status.HTTP_200_OK,
+        content=_public_onboarding_session_content(result),
+    )
+
+
+@router.post(
+    "/public-onboarding/finalize",
+    dependencies=[Depends(require_eom_funnel_api)],
+)
+async def finalize_eom_public_onboarding(
+    payload: EOMPublicOnboardingFinalizeRequest,
+    public_onboarding: EOMPublicOnboardingConfig = Depends(
+        require_eom_public_onboarding_config
+    ),
+    crm: Any = Depends(_crm_dependency),
+) -> JSONResponse:
+    """Redeem one public bearer after the tracker has made local records."""
+
+    authenticated_token = _authenticated_public_onboarding_token(
+        payload.token, public_onboarding
+    )
+    try:
+        result = await crm.complete_eom_public_onboarding(
+            token_id=str(authenticated_token.token_id),
+            signing_key_fingerprint=authenticated_token.signing_key_fingerprint,
+            tracker_customer_id=payload.tracker_customer_id,
+            tracker_site_id=payload.tracker_site_id,
+        )
+    except EOMLeadConversionError as exc:
+        if exc.status_code in (404, 409):
+            raise HTTPException(
+                status_code=404,
+                detail="Public onboarding link is unavailable",
+            ) from exc
+        raise HTTPException(status_code=exc.status_code, detail=str(exc)) from exc
+    return JSONResponse(
+        status_code=(
+            status.HTTP_200_OK if bool(result.get("idempotent")) else status.HTTP_201_CREATED
+        ),
+        content=_public_onboarding_finalize_content(result),
+    )
+
+
 @router.get(
     "/onboarding-drafts",
     response_model=EOMOnboardingDraftListResponse,
@@ -987,8 +1151,10 @@ async def edit_eom_onboarding_draft(
 async def approve_and_send_onboarding_draft(
     draft_id: UUID,
     actor: dict[str, object] = Depends(require_eom_funnel_actor),
+    config: Any = Depends(get_eom_funnel_api_config),
     crm: Any = Depends(_crm_dependency),
     sender: Any = Depends(_onboarding_sender_dependency),
+    email_history: Any = Depends(_onboarding_email_history_dependency),
 ) -> JSONResponse:
     """Claim the pending draft, send it, then confirm delivery.
 
@@ -997,6 +1163,11 @@ async def approve_and_send_onboarding_draft(
     already-sent draft replays 200 without a second transport call, and a
     concurrent approval loses the atomic claim.
     """
+    public_onboarding = (
+        require_eom_public_onboarding_config(config)
+        if config.public_onboarding_issuance_is_enabled
+        else None
+    )
     try:
         result = await approve_and_send_eom_onboarding_draft(
             crm,
@@ -1006,6 +1177,15 @@ async def approve_and_send_onboarding_draft(
                 actor_name=str(actor["name"]),
             ),
             sender=sender,
+            email_history=email_history,
+            public_onboarding_base_url=(
+                public_onboarding.base_url if public_onboarding is not None else None
+            ),
+            public_onboarding_hmac_secret=(
+                public_onboarding.hmac_secret
+                if public_onboarding is not None
+                else None
+            ),
         )
     except EOMOnboardingDraftError as exc:
         raise HTTPException(status_code=exc.status_code, detail=str(exc)) from exc
@@ -1035,6 +1215,42 @@ async def revoke_onboarding_draft(
             result,
             f"employee:{actor['id']}:{actor['name']} revoked onboarding "
             f"draft {result['draft_id']}",
+        )
+    return _draft_action_response(result)
+
+
+@router.post(
+    "/onboarding-drafts/{draft_id}/revoke-link",
+    status_code=status.HTTP_201_CREATED,
+    dependencies=[Depends(require_eom_funnel_api)],
+)
+async def revoke_eom_public_onboarding_link(
+    draft_id: UUID,
+    actor: dict[str, object] = Depends(require_eom_funnel_actor),
+    crm: Any = Depends(_crm_dependency),
+) -> JSONResponse:
+    """Invalidate an issued customer link without changing sent-email evidence.
+
+    This recovery command intentionally remains available if public issuance is
+    later disabled. Otherwise an existing issued token would still fence office
+    handoff while staff had no private way to revoke it. It never mints or
+    resolves a bearer, and it still requires the normal service credential plus
+    an office actor.
+    """
+
+    try:
+        result = await crm.revoke_eom_public_onboarding_token(draft_id=str(draft_id))
+    except EOMLeadConversionError as exc:
+        raise HTTPException(status_code=exc.status_code, detail=str(exc)) from exc
+    if not bool(result.get("idempotent")):
+        await _log_draft_reconciliation(
+            crm,
+            {
+                "draft_id": str(draft_id),
+                "contact_id": result["contact_id"],
+            },
+            f"employee:{actor['id']}:{actor['name']} revoked public onboarding "
+            f"link for draft {draft_id}",
         )
     return _draft_action_response(result)
 

@@ -255,7 +255,10 @@ print(json.dumps({
     assert "/api/v1/eom-funnel/onboarding-drafts/{draft_id}" in paths
     assert "/api/v1/eom-funnel/onboarding-drafts/{draft_id}/approve-send" in paths
     assert "/api/v1/eom-funnel/onboarding-drafts/{draft_id}/revoke" in paths
+    assert "/api/v1/eom-funnel/onboarding-drafts/{draft_id}/revoke-link" in paths
     assert "/api/v1/eom-funnel/onboarding-drafts/{draft_id}/confirm-sent" in paths
+    assert "/api/v1/eom-funnel/public-onboarding/session" in paths
+    assert "/api/v1/eom-funnel/public-onboarding/finalize" in paths
     assert "/openapi.json" not in paths
     assert "/docs" not in paths
     assert "/docs/oauth2-redirect" not in paths
@@ -532,6 +535,10 @@ def test_eom_funnel_canonical_crm_config_defaults_fail_closed(monkeypatch):
         "ATLAS_EOM_FUNNEL_API_ENABLED",
         "ATLAS_EOM_FUNNEL_SERVICE_TOKEN_SHA256",
         "ATLAS_EOM_FUNNEL_DB_CONNECTION_STRING",
+        "ATLAS_EOM_FUNNEL_PUBLIC_ONBOARDING_ENABLED",
+        "ATLAS_EOM_FUNNEL_PUBLIC_ONBOARDING_URL",
+        "ATLAS_EOM_FUNNEL_PUBLIC_ONBOARDING_HMAC_SECRET",
+        "ATLAS_EOM_FUNNEL_PUBLIC_ONBOARDING_PREVIOUS_HMAC_SECRET",
         _RAW_EOM_FUNNEL_SERVICE_TOKEN_ENV,
     ):
         monkeypatch.delenv(key, raising=False)
@@ -547,6 +554,10 @@ def test_eom_funnel_canonical_crm_config_defaults_fail_closed(monkeypatch):
     assert profile_defaults.canonical_crm_database_confirmed is False
     assert funnel_defaults.api_enabled is False
     assert funnel_defaults.db_connection_string == ""
+    assert funnel_defaults.public_onboarding_enabled is False
+    assert funnel_defaults.public_onboarding_url == ""
+    assert funnel_defaults.public_onboarding_hmac_secret.get_secret_value() == ""
+    assert funnel_defaults.public_onboarding_previous_hmac_secret.get_secret_value() == ""
     validate_eom_funnel_canonical_crm_config(
         funnel_defaults,
         canonical_crm_database_confirmed=False,
@@ -797,6 +808,9 @@ def test_shared_eom_funnel_datastore_guard_keeps_missing_relations_in_verdict():
     assert "contacts_required_columns_ready" in pool.query
     assert "lifecycle_required_columns_ready" in pool.query
     assert "onboarding_drafts_required_columns_ready" in pool.query
+    assert "public_onboarding_recovery_ready" in pool.query
+    assert "public_onboarding_issuance_ready" in pool.query
+    assert "'id', 'draft_id', 'contact_id', 'status', 'revoked_at'" in pool.query
     assert "WHEN NOT readiness_columns.contacts_required_columns_ready THEN FALSE" in pool.query
     assert "AND readiness_columns.lifecycle_required_columns_ready" in pool.query
     assert "WHEN readiness_relations.handoff_rel IS NULL THEN FALSE" in pool.query

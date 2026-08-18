@@ -6,7 +6,7 @@ import asyncio
 import json
 import os
 import uuid
-from contextlib import asynccontextmanager
+from contextlib import asynccontextmanager, suppress
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -33,12 +33,21 @@ from atlas_brain.services.eom_lead_conversion import (  # noqa: E402
 from atlas_brain.services.eom_lead_ingress import (  # noqa: E402
     resolve_or_create_eom_inbound_lead,
 )
+from atlas_brain.services.eom_public_onboarding_tokens import (  # noqa: E402
+    eom_public_onboarding_hmac_key_fingerprint,
+    parse_eom_public_onboarding_token,
+)
 
 ROOT = Path(__file__).resolve().parent.parent
 MIGRATIONS = ROOT / "atlas_brain" / "storage" / "migrations"
 DATABASE_URL_ENV = "ATLAS_MIGRATION_TEST_DATABASE_URL"
 _NOCODB_TEST_PASSWORD = "test-only-nocodb-password"
 _NON_SUPERUSER_TEST_PASSWORD = "test-only-migrator-password"
+_PUBLIC_ONBOARDING_URL = "https://effinghamofficemaids.com/onboarding"
+_PUBLIC_ONBOARDING_SECRET = "test-only-public-onboarding-secret-value-123456"
+_PUBLIC_ONBOARDING_KEY_FINGERPRINT = eom_public_onboarding_hmac_key_fingerprint(
+    secret=_PUBLIC_ONBOARDING_SECRET
+)
 
 
 def _database_url_or_skip() -> str:
@@ -106,6 +115,7 @@ async def _prepare_schema(
     apply_privilege_migration: bool = True,
     apply_lifecycle_sequence_migration: bool = True,
     apply_customer_type_revision_migration: bool = True,
+    apply_public_onboarding_migration: bool = False,
 ) -> None:
     await conn.execute(f'CREATE SCHEMA "{schema}"')
     await conn.execute(f'SET search_path TO "{schema}", public')
@@ -147,6 +157,8 @@ async def _prepare_schema(
     if apply_privilege_migration:
         await _provision_nocodb_login(conn)
         migration_names.append("354_eom_customer_handoff_privileges.sql")
+    if apply_public_onboarding_migration:
+        migration_names.append("383_eom_public_onboarding_tokens.sql")
     for name in migration_names:
         if name == "367_contacts_customer_type_revision.sql":
             async with conn.transaction():
@@ -3772,14 +3784,14 @@ async def test_first_clean_draft_enqueue_records_no_email_blocker_and_one_pendin
 async def test_first_clean_draft_recipient_follows_latest_intake_projection():
     """Ingress leaves contacts.email unchanged when an existing contact
     re-submits with a new address (the new address lives in the web_form
-    interaction metadata), so the draft recipient must resolve through the
-    same latest-intake projection the office review queue shows -- not the
-    stale contact column."""
+    interaction metadata), so the draft recipient and issued token prefill
+    must resolve through the same latest-intake projection the office review
+    queue shows -- not the stale contact column."""
     database_url = _database_url_or_skip()
     schema = f"atlas_eom_first_clean_recipient_{uuid.uuid4().hex}"
     conn = await asyncpg.connect(database_url)
     try:
-        await _prepare_schema(conn, schema)
+        await _prepare_schema(conn, schema, apply_public_onboarding_migration=True)
         provider = DatabaseCRMProvider(pool=conn)
         contact_id = uuid.uuid4()
         first_clean_key = f"office-first-clean-{uuid.uuid4().hex}"
@@ -3858,6 +3870,20 @@ async def test_first_clean_draft_recipient_follows_latest_intake_projection():
         )
         assert draft["recipient_email"] == "latest-address@example.com"
         assert draft["blocker"] is None
+
+        _, token_id = await _claim_public_onboarding_token(
+            provider, draft_id=str(completed["onboarding_draft_id"])
+        )
+        assert await conn.fetchval(
+            "SELECT prefill_email FROM eom_public_onboarding_tokens WHERE id = $1",
+            token_id,
+        ) == "latest-address@example.com"
+        assert (
+            await provider.get_eom_public_onboarding_session(
+                token_id=str(token_id),
+                signing_key_fingerprint=_PUBLIC_ONBOARDING_KEY_FINGERPRINT,
+            )
+        )["email"] == "latest-address@example.com"
     finally:
         await conn.execute(f'DROP SCHEMA IF EXISTS "{schema}" CASCADE')
         await conn.close()
@@ -4395,6 +4421,678 @@ async def _book_first_clean_draft(
         actor_name="Juan Canfield",
     )
     return contact_id, str(completed["onboarding_draft_id"])
+
+
+async def _claim_public_onboarding_token(
+    provider,
+    *,
+    draft_id: str,
+    actor_id: int = 7,
+    actor_name: str = "Mayra Canfield",
+    hmac_secret: str = _PUBLIC_ONBOARDING_SECRET,
+) -> tuple[dict[str, object], uuid.UUID]:
+    """Claim a won lead's draft and recover only the test bearer UUID."""
+
+    claim = await provider.claim_eom_onboarding_draft(
+        draft_id=draft_id,
+        actor_id=actor_id,
+        actor_name=actor_name,
+        public_onboarding_base_url=_PUBLIC_ONBOARDING_URL,
+        public_onboarding_hmac_secret=hmac_secret,
+    )
+    assert claim["claimed"] is True
+    link = str(claim["public_onboarding_link"])
+    assert link.startswith(f"{_PUBLIC_ONBOARDING_URL}#token=eomob1.")
+    bearer = link.partition("#token=")[2]
+    return claim, parse_eom_public_onboarding_token(
+        token=bearer,
+        secret=hmac_secret,
+    )
+
+
+@pytest.mark.asyncio
+async def test_public_onboarding_claim_redeems_once_through_the_existing_handoff():
+    """One token owns one won lead, then atomically becomes its handoff evidence."""
+    database_url = _database_url_or_skip()
+    schema = f"atlas_eom_public_onboarding_{uuid.uuid4().hex}"
+    conn = await asyncpg.connect(database_url)
+    try:
+        await _prepare_schema(conn, schema, apply_public_onboarding_migration=True)
+        provider = DatabaseCRMProvider(pool=conn)
+        contact_id, draft_id = await _book_first_clean_draft(conn, provider)
+
+        claim, token_id = await _claim_public_onboarding_token(
+            provider, draft_id=draft_id
+        )
+        token_row = await conn.fetchrow(
+            """
+            SELECT draft_id, contact_id, approval_key, status,
+                   approved_by_employee_id, approved_by_name, handoff_id,
+                   signing_key_fingerprint, prefill_full_name, prefill_email,
+                   prefill_phone, prefill_address, prefill_city, prefill_state,
+                   prefill_zip, prefill_customer_type
+            FROM eom_public_onboarding_tokens
+            WHERE id = $1
+            """,
+            token_id,
+        )
+        assert token_row is not None
+        assert dict(token_row) == {
+            "draft_id": uuid.UUID(draft_id),
+            "contact_id": contact_id,
+            "approval_key": token_row["approval_key"],
+            "status": "issued",
+            "approved_by_employee_id": 7,
+            "approved_by_name": "Mayra Canfield",
+            "handoff_id": None,
+            "signing_key_fingerprint": _PUBLIC_ONBOARDING_KEY_FINGERPRINT,
+            "prefill_full_name": "Won Lead",
+            "prefill_email": "won-lead@example.com",
+            "prefill_phone": None,
+            "prefill_address": None,
+            "prefill_city": None,
+            "prefill_state": None,
+            "prefill_zip": None,
+            "prefill_customer_type": "unknown",
+        }
+        assert await conn.fetchval(
+            "SELECT body FROM eom_onboarding_email_drafts WHERE id = $1::uuid",
+            draft_id,
+        ) == claim["draft"]["body"]
+        assert "#token=" not in str(claim["draft"]["body"])
+
+        await conn.execute(
+            """
+            UPDATE contacts
+               SET full_name = 'Corrected Lead', email = 'corrected@example.com',
+                   phone = '2175550199', address = '200 Updated St',
+                   city = 'Chicago', state = 'IL', zip = '60601',
+                   customer_type = 'commercial'
+             WHERE id = $1
+            """,
+            contact_id,
+        )
+        with pytest.raises(EOMLeadConversionError) as mismatched_verifier:
+            await provider.get_eom_public_onboarding_session(
+                token_id=str(token_id),
+                signing_key_fingerprint=eom_public_onboarding_hmac_key_fingerprint(
+                    secret="different-test-only-public-onboarding-secret-value-987654"
+                ),
+            )
+        assert mismatched_verifier.value.status_code == 404
+
+        ready = await provider.get_eom_public_onboarding_session(
+            token_id=str(token_id),
+            signing_key_fingerprint=_PUBLIC_ONBOARDING_KEY_FINGERPRINT,
+        )
+        assert ready == {
+            "status": "ready",
+            "contact_id": str(contact_id),
+            "full_name": "Won Lead",
+            "email": "won-lead@example.com",
+            "phone": None,
+            "address": None,
+            "city": None,
+            "state": None,
+            "zip": None,
+            "customer_type": "unknown",
+        }
+
+        completed = await provider.complete_eom_public_onboarding(
+            token_id=str(token_id),
+            signing_key_fingerprint=_PUBLIC_ONBOARDING_KEY_FINGERPRINT,
+            tracker_customer_id=101,
+            tracker_site_id=202,
+        )
+        assert completed["status"] == "completed"
+        assert completed["idempotent"] is False
+        assert completed["contact_id"] == str(contact_id)
+        assert await _contact_state(conn, contact_id) == (
+            {
+                "business_context_id": "effingham_maids",
+                "contact_type": "customer",
+                "lead_stage": None,
+                "status": "active",
+            },
+            1,
+            1,
+        )
+        lifecycle_metadata = _metadata_dict(
+            await conn.fetchval(
+                """
+                SELECT metadata
+                FROM eom_lead_lifecycle_events
+                WHERE contact_id = $1
+                  AND event_type = 'customer_approved'
+                  AND operation_key = $2
+                """,
+                contact_id,
+                token_row["approval_key"],
+            )
+        )
+        assert lifecycle_metadata["completion_channel"] == "public_onboarding"
+        assert lifecycle_metadata["approved_by_employee_id"] == 7
+        redeemed_row = await conn.fetchrow(
+            """
+            SELECT status, handoff_id IS NOT NULL AS has_handoff,
+                   redeemed_at IS NOT NULL AS is_redeemed
+            FROM eom_public_onboarding_tokens WHERE id = $1
+            """,
+            token_id,
+        )
+        assert dict(redeemed_row) == {
+            "status": "redeemed",
+            "has_handoff": True,
+            "is_redeemed": True,
+        }
+
+        replay = await provider.complete_eom_public_onboarding(
+            token_id=str(token_id),
+            signing_key_fingerprint=_PUBLIC_ONBOARDING_KEY_FINGERPRINT,
+            tracker_customer_id=101,
+            tracker_site_id=202,
+        )
+        assert replay == {**completed, "idempotent": True}
+        assert await provider.get_eom_public_onboarding_session(
+            token_id=str(token_id),
+            signing_key_fingerprint=_PUBLIC_ONBOARDING_KEY_FINGERPRINT,
+        ) == {
+            "status": "completed",
+            "contact_id": str(contact_id),
+            "tracker_customer_id": 101,
+            "tracker_site_id": 202,
+            "handoff_id": completed["handoff_id"],
+            "idempotent": True,
+        }
+        with pytest.raises(EOMLeadConversionError, match="different tracker records"):
+            await provider.complete_eom_public_onboarding(
+                token_id=str(token_id),
+                signing_key_fingerprint=_PUBLIC_ONBOARDING_KEY_FINGERPRINT,
+                tracker_customer_id=101,
+                tracker_site_id=203,
+            )
+    finally:
+        await conn.execute(f'DROP SCHEMA IF EXISTS "{schema}" CASCADE')
+        await conn.close()
+
+
+@pytest.mark.asyncio
+async def test_public_onboarding_session_accepts_only_the_key_that_minted_the_row():
+    """A controlled rotation keeps an old link valid without cross-key replay."""
+
+    previous_secret = "previous-test-only-public-onboarding-secret-value-654321"
+    previous_fingerprint = eom_public_onboarding_hmac_key_fingerprint(
+        secret=previous_secret
+    )
+    database_url = _database_url_or_skip()
+    schema = f"atlas_eom_public_onboarding_key_rotation_{uuid.uuid4().hex}"
+    conn = await asyncpg.connect(database_url)
+    try:
+        await _prepare_schema(conn, schema, apply_public_onboarding_migration=True)
+        provider = DatabaseCRMProvider(pool=conn)
+        _, draft_id = await _book_first_clean_draft(conn, provider)
+        _, token_id = await _claim_public_onboarding_token(
+            provider,
+            draft_id=draft_id,
+            hmac_secret=previous_secret,
+        )
+
+        ready = await provider.get_eom_public_onboarding_session(
+            token_id=str(token_id),
+            signing_key_fingerprint=previous_fingerprint,
+        )
+        assert ready["status"] == "ready"
+        with pytest.raises(EOMLeadConversionError) as wrong_key:
+            await provider.get_eom_public_onboarding_session(
+                token_id=str(token_id),
+                signing_key_fingerprint=_PUBLIC_ONBOARDING_KEY_FINGERPRINT,
+            )
+        assert wrong_key.value.status_code == 404
+    finally:
+        await conn.execute(f'DROP SCHEMA IF EXISTS "{schema}" CASCADE')
+        await conn.close()
+
+
+@pytest.mark.asyncio
+async def test_public_onboarding_claim_waits_for_the_office_contact_lock_before_minting():
+    """Issuance cannot mint a link after an office handoff has started."""
+    database_url = _database_url_or_skip()
+    schema = f"atlas_eom_public_onboarding_claim_lock_{uuid.uuid4().hex}"
+    conn = await asyncpg.connect(database_url)
+    lock_conn = None
+    pool = None
+    claim_task = None
+    try:
+        await _prepare_schema(conn, schema, apply_public_onboarding_migration=True)
+        setup_provider = DatabaseCRMProvider(pool=conn)
+        contact_id, draft_id = await _book_first_clean_draft(conn, setup_provider)
+        pool = await asyncpg.create_pool(
+            database_url,
+            min_size=1,
+            max_size=1,
+            server_settings={"search_path": f"{schema}, public"},
+        )
+        issuer = DatabaseCRMProvider(pool=pool)
+        lock_conn = await asyncpg.connect(database_url)
+
+        async with lock_conn.transaction():
+            await lock_conn.execute(
+                "SELECT pg_advisory_xact_lock(hashtextextended($1, 0))",
+                f"eom-customer-handoff:contact:{contact_id}",
+            )
+            claim_task = asyncio.create_task(
+                _claim_public_onboarding_token(issuer, draft_id=draft_id)
+            )
+            waiting_for_contact_lock = False
+            for _ in range(100):
+                waiting_for_contact_lock = bool(
+                    await conn.fetchval(
+                        """
+                        SELECT EXISTS (
+                            SELECT 1
+                            FROM pg_stat_activity
+                            WHERE datname = current_database()
+                              AND pid <> pg_backend_pid()
+                              AND query LIKE 'SELECT pg_advisory_xact_lock%'
+                              AND wait_event_type = 'Lock'
+                        )
+                        """
+                    )
+                )
+                if waiting_for_contact_lock:
+                    break
+                await asyncio.sleep(0.01)
+            assert waiting_for_contact_lock
+            assert not claim_task.done()
+            assert (
+                await conn.fetchval(
+                    "SELECT status FROM eom_onboarding_email_drafts WHERE id = $1::uuid",
+                    draft_id,
+                )
+                == "pending"
+            )
+            assert (
+                await conn.fetchval(
+                    "SELECT COUNT(*) FROM eom_public_onboarding_tokens"
+                )
+                == 0
+            )
+
+        claim, token_id = await claim_task
+        assert claim["claimed"] is True
+        assert await conn.fetchval(
+            "SELECT status FROM eom_public_onboarding_tokens WHERE id = $1",
+            token_id,
+        ) == "issued"
+        with pytest.raises(EOMLeadConversionError, match="active public onboarding"):
+            await issuer.finalize_eom_customer_handoff(
+                contact_id=str(contact_id),
+                tracker_customer_id=101,
+                tracker_site_id=202,
+                approval_key=_approval_key(),
+                actor_id=1,
+                actor_name="Juan Canfield",
+            )
+    finally:
+        if claim_task is not None and not claim_task.done():
+            claim_task.cancel()
+            with suppress(asyncio.CancelledError):
+                await claim_task
+        if lock_conn is not None:
+            await lock_conn.close()
+        if pool is not None:
+            await pool.close()
+        await conn.execute(f'DROP SCHEMA IF EXISTS "{schema}" CASCADE')
+        await conn.close()
+
+
+@pytest.mark.asyncio
+async def test_public_onboarding_revocation_releases_office_handoff_and_stale_draft_revoke():
+    """Either explicit link revocation or stale-draft reconciliation fences safely."""
+    database_url = _database_url_or_skip()
+    schema = f"atlas_eom_public_onboarding_revoke_{uuid.uuid4().hex}"
+    conn = await asyncpg.connect(database_url)
+    try:
+        await _prepare_schema(conn, schema, apply_public_onboarding_migration=True)
+        provider = DatabaseCRMProvider(pool=conn)
+        contact_id, draft_id = await _book_first_clean_draft(conn, provider)
+        _, token_id = await _claim_public_onboarding_token(provider, draft_id=draft_id)
+
+        with pytest.raises(EOMLeadConversionError, match="active public onboarding"):
+            await provider.finalize_eom_customer_handoff(
+                contact_id=str(contact_id),
+                tracker_customer_id=101,
+                tracker_site_id=202,
+                approval_key=_approval_key(),
+                actor_id=1,
+                actor_name="Juan Canfield",
+            )
+        revoked = await provider.revoke_eom_public_onboarding_token(draft_id=draft_id)
+        assert revoked["status"] == "revoked"
+        assert revoked["idempotent"] is False
+        assert (
+            await conn.fetchval(
+                "SELECT status FROM eom_public_onboarding_tokens WHERE id = $1",
+                token_id,
+            )
+            == "revoked"
+        )
+        with pytest.raises(EOMLeadConversionError) as unavailable:
+            await provider.get_eom_public_onboarding_session(
+                token_id=str(token_id),
+                signing_key_fingerprint=_PUBLIC_ONBOARDING_KEY_FINGERPRINT,
+            )
+        assert unavailable.value.status_code == 404
+
+        office = await provider.finalize_eom_customer_handoff(
+            contact_id=str(contact_id),
+            tracker_customer_id=101,
+            tracker_site_id=202,
+            approval_key=_approval_key(),
+            actor_id=1,
+            actor_name="Juan Canfield",
+        )
+        assert office["idempotent"] is False
+
+        stale_contact_id, stale_draft_id = await _book_first_clean_draft(conn, provider)
+        _, stale_token_id = await _claim_public_onboarding_token(
+            provider, draft_id=stale_draft_id
+        )
+        await conn.execute(
+            """
+            UPDATE eom_onboarding_email_drafts
+               SET claimed_at = NOW() - INTERVAL '20 minutes'
+             WHERE id = $1::uuid
+            """,
+            stale_draft_id,
+        )
+        stale_revoke = await provider.revoke_eom_onboarding_draft(
+            draft_id=stale_draft_id
+        )
+        assert stale_revoke["status"] == "revoked"
+        assert (
+            await conn.fetchval(
+                "SELECT status FROM eom_public_onboarding_tokens WHERE id = $1",
+                stale_token_id,
+            )
+            == "revoked"
+        )
+        assert await _contact_state(conn, stale_contact_id) == (
+            {
+                "business_context_id": "effingham_maids",
+                "contact_type": "lead",
+                "lead_stage": "won",
+                "status": "active",
+            },
+            0,
+            0,
+        )
+    finally:
+        await conn.execute(f'DROP SCHEMA IF EXISTS "{schema}" CASCADE')
+        await conn.close()
+
+
+@pytest.mark.asyncio
+async def test_public_onboarding_readiness_requires_its_migration_only_when_enabled():
+    """A dormant deploy may lack the table or issuance-only fields; enabled
+    issuance fails closed until the full token shape exists."""
+    from atlas_brain.eom_api.funnel_store import require_eom_funnel_data_store
+    from atlas_brain.storage.migrations import run_migrations
+
+    database_url = _database_url_or_skip()
+    schema = f"atlas_eom_public_onboarding_readiness_{uuid.uuid4().hex}"
+    conn = await asyncpg.connect(database_url)
+    try:
+        await _prepare_schema(conn, schema)
+        provider = DatabaseCRMProvider(pool=conn)
+
+        class _Pool:
+            is_initialized = True
+
+            async def fetchval(self, query: str) -> bool:
+                return bool(await conn.fetchval(query))
+
+        class _MigrationPool:
+            async def acquire(self):
+                return conn
+
+            async def release(self, released) -> None:
+                assert released is conn
+
+        disabled = type(
+            "Config", (), {"api_enabled": True, "public_onboarding_enabled": False}
+        )()
+        enabled = type(
+            "Config", (), {"api_enabled": True, "public_onboarding_enabled": True}
+        )()
+        await require_eom_funnel_data_store(
+            disabled, database_enabled=True, get_db_pool_fn=lambda: _Pool()
+        )
+        with pytest.raises(RuntimeError, match="CRM lifecycle and handoff schema"):
+            await require_eom_funnel_data_store(
+                enabled, database_enabled=True, get_db_pool_fn=lambda: _Pool()
+            )
+        with pytest.raises(EOMLeadConversionError, match="token storage") as exc_info:
+            await provider.revoke_eom_public_onboarding_token(draft_id=str(uuid.uuid4()))
+        assert exc_info.value.status_code == 503
+
+        await run_migrations(
+            _MigrationPool(),
+            migrations_dir=MIGRATIONS,
+            only={"383_eom_public_onboarding_tokens"},
+        )
+        assert await conn.fetchval(
+            """
+            SELECT EXISTS (
+                SELECT 1 FROM schema_migrations
+                WHERE name = '383_eom_public_onboarding_tokens'
+            )
+            """
+        )
+        await require_eom_funnel_data_store(
+            disabled, database_enabled=True, get_db_pool_fn=lambda: _Pool()
+        )
+        await require_eom_funnel_data_store(
+            enabled, database_enabled=True, get_db_pool_fn=lambda: _Pool()
+        )
+        await conn.execute(
+            "ALTER TABLE eom_public_onboarding_tokens DROP COLUMN prefill_email"
+        )
+        await require_eom_funnel_data_store(
+            disabled, database_enabled=True, get_db_pool_fn=lambda: _Pool()
+        )
+        with pytest.raises(RuntimeError, match="CRM lifecycle and handoff schema"):
+            await require_eom_funnel_data_store(
+                enabled, database_enabled=True, get_db_pool_fn=lambda: _Pool()
+            )
+    finally:
+        await conn.execute(f'DROP SCHEMA IF EXISTS "{schema}" CASCADE')
+        await conn.close()
+
+
+@pytest.mark.asyncio
+async def test_disabled_public_onboarding_readiness_requires_present_recovery_columns():
+    """Once migration 383 exists, dormant startup still protects the columns
+    that the office fence and private revoke-link recovery command use."""
+    from atlas_brain.eom_api.funnel_store import require_eom_funnel_data_store
+
+    database_url = _database_url_or_skip()
+    schema = f"atlas_eom_public_onboarding_recovery_columns_{uuid.uuid4().hex}"
+    conn = await asyncpg.connect(database_url)
+    try:
+        await _prepare_schema(conn, schema, apply_public_onboarding_migration=True)
+
+        class _Pool:
+            is_initialized = True
+
+            async def fetchval(self, query: str) -> bool:
+                return bool(await conn.fetchval(query))
+
+        disabled = type(
+            "Config", (), {"api_enabled": True, "public_onboarding_enabled": False}
+        )()
+        await require_eom_funnel_data_store(
+            disabled, database_enabled=True, get_db_pool_fn=lambda: _Pool()
+        )
+        await conn.execute(
+            "ALTER TABLE eom_public_onboarding_tokens "
+            "RENAME COLUMN revoked_at TO missing_revoked_at"
+        )
+        with pytest.raises(RuntimeError, match="CRM lifecycle and handoff schema"):
+            await require_eom_funnel_data_store(
+                disabled, database_enabled=True, get_db_pool_fn=lambda: _Pool()
+            )
+    finally:
+        await conn.execute(f'DROP SCHEMA IF EXISTS "{schema}" CASCADE')
+        await conn.close()
+
+
+@pytest.mark.asyncio
+async def test_disabled_public_onboarding_readiness_requires_present_recovery_privileges():
+    """A deployed token relation must grant the runtime its fence/revoke
+    SELECT and UPDATE surface even when issuance is disabled."""
+    from atlas_brain.eom_api.funnel_store import require_eom_funnel_data_store
+
+    database_url = _database_url_or_skip()
+    schema = f"atlas_eom_public_onboarding_recovery_privileges_{uuid.uuid4().hex}"
+    runtime_role = f"atlas_eom_public_token_runtime_{uuid.uuid4().hex}"
+    schema_ident = _quote_ident(schema)
+    runtime_ident = _quote_ident(runtime_role)
+    database_name: str | None = None
+    role_created = False
+    runtime_conn = None
+    conn = await asyncpg.connect(database_url)
+    try:
+        await _require_disposable_role_administration(conn)
+        await _prepare_schema(conn, schema, apply_public_onboarding_migration=True)
+        database_name = await conn.fetchval("SELECT current_database()")
+        await conn.execute(
+            f"CREATE ROLE {runtime_ident} LOGIN NOINHERIT "
+            f"PASSWORD '{_NON_SUPERUSER_TEST_PASSWORD}'"
+        )
+        role_created = True
+        await conn.execute(
+            f"GRANT CONNECT ON DATABASE {_quote_ident(database_name)} TO {runtime_ident}"
+        )
+        await conn.execute(f"GRANT USAGE ON SCHEMA {schema_ident} TO {runtime_ident}")
+
+        runtime_conn = await asyncpg.connect(
+            database_url,
+            user=runtime_role,
+            password=_NON_SUPERUSER_TEST_PASSWORD,
+        )
+        await runtime_conn.execute(f"SET search_path TO {schema_ident}, public")
+
+        class _Pool:
+            is_initialized = True
+
+            async def fetchval(self, query: str) -> bool:
+                return bool(await runtime_conn.fetchval(query))
+
+        disabled = type(
+            "Config", (), {"api_enabled": True, "public_onboarding_enabled": False}
+        )()
+        with pytest.raises(RuntimeError, match="CRM lifecycle and handoff schema"):
+            await require_eom_funnel_data_store(
+                disabled, database_enabled=True, get_db_pool_fn=lambda: _Pool()
+            )
+
+        await conn.execute(
+            "GRANT SELECT ON TABLE "
+            f"{schema_ident}.eom_public_onboarding_tokens TO {runtime_ident}"
+        )
+        with pytest.raises(RuntimeError, match="CRM lifecycle and handoff schema"):
+            await require_eom_funnel_data_store(
+                disabled, database_enabled=True, get_db_pool_fn=lambda: _Pool()
+            )
+
+        await conn.execute(
+            "GRANT UPDATE ON TABLE "
+            f"{schema_ident}.eom_public_onboarding_tokens TO {runtime_ident}"
+        )
+        assert not await runtime_conn.fetchval(
+            "SELECT has_table_privilege("
+            "current_user, 'eom_public_onboarding_tokens', 'INSERT')"
+        )
+        await require_eom_funnel_data_store(
+            disabled, database_enabled=True, get_db_pool_fn=lambda: _Pool()
+        )
+    finally:
+        if runtime_conn is not None:
+            await runtime_conn.close()
+        await conn.execute(f"DROP SCHEMA IF EXISTS {schema_ident} CASCADE")
+        if role_created:
+            assert database_name is not None
+            await conn.execute(
+                f"REVOKE CONNECT ON DATABASE {_quote_ident(database_name)} "
+                f"FROM {runtime_ident}"
+            )
+            await conn.execute(f"DROP ROLE IF EXISTS {runtime_ident}")
+        await conn.close()
+
+
+@pytest.mark.asyncio
+async def test_public_onboarding_and_office_finalizers_serialize_on_one_contact():
+    """An issued link wins the shared contact decision; office cannot make a second handoff."""
+    database_url = _database_url_or_skip()
+    schema = f"atlas_eom_public_onboarding_race_{uuid.uuid4().hex}"
+    conn = await asyncpg.connect(database_url)
+    pool = None
+    try:
+        await _prepare_schema(conn, schema, apply_public_onboarding_migration=True)
+        pool = await asyncpg.create_pool(
+            database_url,
+            min_size=2,
+            max_size=2,
+            server_settings={"search_path": f"{schema}, public"},
+        )
+        provider = DatabaseCRMProvider(pool=pool)
+        contact_id, draft_id = await _book_first_clean_draft(conn, provider)
+        _, token_id = await _claim_public_onboarding_token(provider, draft_id=draft_id)
+
+        public_result, office_result = await asyncio.gather(
+            provider.complete_eom_public_onboarding(
+                token_id=str(token_id),
+                signing_key_fingerprint=_PUBLIC_ONBOARDING_KEY_FINGERPRINT,
+                tracker_customer_id=101,
+                tracker_site_id=202,
+            ),
+            provider.finalize_eom_customer_handoff(
+                contact_id=str(contact_id),
+                tracker_customer_id=303,
+                tracker_site_id=404,
+                approval_key=_approval_key(),
+                actor_id=1,
+                actor_name="Juan Canfield",
+            ),
+            return_exceptions=True,
+        )
+        assert isinstance(public_result, dict)
+        assert public_result["status"] == "completed"
+        assert isinstance(office_result, EOMLeadConversionError)
+        assert office_result.status_code == 409
+        assert await _contact_state(conn, contact_id) == (
+            {
+                "business_context_id": "effingham_maids",
+                "contact_type": "customer",
+                "lead_stage": None,
+                "status": "active",
+            },
+            1,
+            1,
+        )
+        assert (
+            await conn.fetchval(
+                "SELECT status FROM eom_public_onboarding_tokens WHERE id = $1",
+                token_id,
+            )
+            == "redeemed"
+        )
+    finally:
+        if pool is not None:
+            await pool.close()
+        await conn.execute(f'DROP SCHEMA IF EXISTS "{schema}" CASCADE')
+        await conn.close()
 
 
 @pytest.mark.asyncio

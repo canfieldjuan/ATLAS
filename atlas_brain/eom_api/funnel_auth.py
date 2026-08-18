@@ -5,7 +5,7 @@ from __future__ import annotations
 import hmac
 import hashlib
 import secrets
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 from fastapi import Depends, Header, HTTPException
 
@@ -14,6 +14,9 @@ from .auth import (
     validate_generated_service_token_digest,
 )
 from .config import EOMFunnelConfig, funnel_settings
+from ..services.eom_public_onboarding_tokens import (
+    validate_eom_public_onboarding_hmac_secret,
+)
 
 _MAX_SIGNED_BIGINT = 2**63 - 1
 _MAX_LIFECYCLE_ACTOR_LENGTH = 128
@@ -45,6 +48,15 @@ class GeneratedEOMFunnelServiceToken:
 
     token: str
     sha256: str
+
+
+@dataclass(frozen=True)
+class EOMPublicOnboardingConfig:
+    """Validated Atlas-only ingredients for one public onboarding authority."""
+
+    base_url: str
+    hmac_secret: str = field(repr=False)
+    previous_hmac_secret: str | None = field(default=None, repr=False)
 
 
 def _token_sha256(token: str) -> str:
@@ -86,6 +98,54 @@ def validate_eom_funnel_api_config(config: EOMFunnelConfig | None = None) -> Non
 def get_eom_funnel_api_config() -> EOMFunnelConfig:
     """Expose the config through an overrideable request boundary."""
     return funnel_settings
+
+
+def require_eom_public_onboarding_config(
+    config: EOMFunnelConfig = Depends(get_eom_funnel_api_config),
+) -> EOMPublicOnboardingConfig:
+    """Require the separately enabled public-link authority, never a fallback.
+
+    The parent service bearer dependency stays on every route that uses this.
+    Keeping the feature gate separate lets the base private funnel continue its
+    current office behavior while callers roll out ahead of the manual Atlas
+    deployment or before the operator explicitly enables public links. The
+    optional issuance override is intentionally not consulted here: it pauses
+    new links at approval time without breaking redemption of existing links.
+    """
+
+    if not config.public_onboarding_enabled:
+        raise HTTPException(
+            status_code=503,
+            detail="Public onboarding is not enabled",
+        )
+    try:
+        secret = validate_eom_public_onboarding_hmac_secret(
+            config.public_onboarding_hmac_secret.get_secret_value()
+        )
+        previous_secret_raw = (
+            config.public_onboarding_previous_hmac_secret.get_secret_value().strip()
+        )
+        previous_secret = (
+            validate_eom_public_onboarding_hmac_secret(previous_secret_raw)
+            if previous_secret_raw
+            else None
+        )
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=503,
+            detail="Public onboarding configuration is unavailable",
+        ) from exc
+    base_url = config.public_onboarding_url.strip()
+    if not base_url:
+        raise HTTPException(
+            status_code=503,
+            detail="Public onboarding configuration is unavailable",
+        )
+    return EOMPublicOnboardingConfig(
+        base_url=base_url,
+        hmac_secret=secret,
+        previous_hmac_secret=previous_secret,
+    )
 
 
 async def require_eom_funnel_api(
