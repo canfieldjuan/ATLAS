@@ -134,11 +134,43 @@ async def require_eom_funnel_data_store(
                       AND NOT attisdropped
                       AND atttypid = 'bigint'::regtype
                 ) AS onboarding_drafts_required_columns_ready,
-                -- Public routes remain dormant until explicitly enabled, so an
-                -- Atlas code deployment can precede migration 383 safely. Once
-                -- enabled, every durable token column, constraint, active-link
-                -- index, and runtime DML privilege must exist before a draft
-                -- claim could mint a bearer.
+                -- A disabled authority may safely precede migration 383. Once
+                -- the relation exists, however, the ordinary office fence and
+                -- private revoke-link recovery path still SELECT ... FOR UPDATE
+                -- and UPDATE it. Check that smaller unconditional surface even
+                -- while issuance is dormant, so those paths cannot first fail
+                -- on a partial migration or missing runtime DML privilege.
+                (
+                    readiness_relations.public_onboarding_tokens_rel IS NULL
+                    OR (
+                        NOT EXISTS (
+                            SELECT required.attname
+                            FROM unnest(ARRAY[
+                                'id', 'draft_id', 'contact_id', 'status', 'revoked_at'
+                            ]) AS required(attname)
+                            WHERE NOT EXISTS (
+                                SELECT 1
+                                FROM pg_attribute
+                                WHERE attrelid = readiness_relations.public_onboarding_tokens_rel
+                                  AND attname = required.attname
+                                  AND NOT attisdropped
+                            )
+                        )
+                        AND has_table_privilege(
+                            current_user,
+                            readiness_relations.public_onboarding_tokens_rel,
+                            'SELECT'
+                        )
+                        AND has_table_privilege(
+                            current_user,
+                            readiness_relations.public_onboarding_tokens_rel,
+                            'UPDATE'
+                        )
+                    )
+                ) AS public_onboarding_recovery_ready,
+                -- Issuance itself remains explicitly enabled-only. It needs the
+                -- full immutable projection, durable constraints/index, and
+                -- INSERT in addition to the recovery surface above.
                 CASE WHEN {public_onboarding_enabled_sql} THEN (
                     readiness_relations.public_onboarding_tokens_rel IS NOT NULL
                     AND NOT EXISTS (
@@ -157,7 +189,7 @@ async def require_eom_funnel_data_store(
                             FROM pg_attribute
                             WHERE attrelid = readiness_relations.public_onboarding_tokens_rel
                               AND attname = required.attname
-                            AND NOT attisdropped
+                              AND NOT attisdropped
                         )
                     )
                     AND (
@@ -198,7 +230,7 @@ async def require_eom_funnel_data_store(
                         readiness_relations.public_onboarding_tokens_rel,
                         'UPDATE'
                     )
-                ) ELSE TRUE END AS public_onboarding_required_columns_ready
+                ) ELSE TRUE END AS public_onboarding_issuance_ready
             FROM readiness_relations
         )
         SELECT readiness_relations.contacts_rel IS NOT NULL
@@ -209,7 +241,8 @@ async def require_eom_funnel_data_store(
            AND readiness_columns.contacts_required_columns_ready
            AND readiness_columns.lifecycle_required_columns_ready
            AND readiness_columns.onboarding_drafts_required_columns_ready
-           AND readiness_columns.public_onboarding_required_columns_ready
+           AND readiness_columns.public_onboarding_recovery_ready
+           AND readiness_columns.public_onboarding_issuance_ready
            AND EXISTS (
                SELECT 1
                FROM pg_class AS handoff_table

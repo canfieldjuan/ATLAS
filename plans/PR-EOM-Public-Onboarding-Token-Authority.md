@@ -178,7 +178,7 @@ proof that its public and office completion paths cannot race.
   the prefix as its primary version and the repository test deliberately admits
   only historic collisions, so the newly introduced collision fails both the
   dedicated migration-runner check and the EOM pipeline that includes it. In a
-  separate policy defect, the PR body describes why this 3,437-line safety
+  separate policy defect, the PR body describes why this over-cap safety
   boundary is indivisible but omits the exact visible `Diff-budget override:`
   decision marker required by the diff-budget gate.
 - Correct remediation must:
@@ -202,6 +202,43 @@ proof that its public and office completion paths cannot race.
   threshold/gate policy. Do not split or broaden the product slice solely to
   silence this metadata and naming repair.
 
+### Current-head recipient-snapshot and dormant-recovery contract
+
+- Root cause: The enabled draft claim intentionally resolves a repeat
+  intake's newer approved recipient into `eom_onboarding_email_drafts`, but
+  token issuance then copies mutable `contacts.email` into `prefill_email`.
+  A newly approved recipient can therefore receive a valid link whose immutable
+  prefill discloses a different, stale address. Separately, startup treats the
+  public-token table as entirely irrelevant while authority is disabled, even
+  when the table already exists. That leaves the normal office-handoff fence
+  (`SELECT ... FOR UPDATE`) and the private `revoke-link` recovery command
+  able to fail later on missing columns or runtime privileges instead of
+  failing closed at startup.
+- Correct remediation must:
+  1. Bind `prefill_email` in the token insert to the successfully claimed
+     draft's non-null `recipient_email`, not to `contacts.email`. Preserve the
+     existing token-time snapshot of the other contact fields and the existing
+     draft claim/recipient predicate.
+  2. Split datastore readiness into (a) dormant-safe recovery checks that run
+     whenever `eom_public_onboarding_tokens` exists and verify exactly the
+     relation columns used by the unconditional office fence/revocation paths
+     (`id`, `draft_id`, `contact_id`, `status`, `revoked_at`) plus runtime
+     `SELECT` and `UPDATE`, and (b) enabled-only issuance checks for the full
+     durable token shape, constraints/index, and `INSERT` privilege. A missing
+     token relation remains compatible only while authority is disabled.
+  3. Prove both seams through disposable Postgres: a latest-intake recipient
+     becomes the draft and issued-token prefill email; an existing token table
+     missing a recovery column or `SELECT`/`UPDATE` access rejects disabled
+     startup, while a missing table and an issuance-only missing column retain
+     the intentionally dormant behavior.
+- Must not change: the migration schema or its SQL, raw-bearer handling,
+  HMAC/token grammar, feature/route authorization, issuance-pause semantics,
+  office-handoff request/response or locking semantics, draft email transport,
+  generic CRM writers, Tracker/Website scope, production configuration, or
+  any payroll, QR/GPS, scheduling, payment, and unrelated EOM behavior. The
+  only disabled-state behavior change is fail-closed readiness when an already
+  present token relation cannot support its still-reachable recovery paths.
+
 ## Scope (this PR)
 
 Ownership lane: eom-public-onboarding-token-authority
@@ -223,6 +260,9 @@ Max files: 13
    canonicalizing operator input or changing the enabled delivery flow.
 7. Repair the unmerged migration's numeric-prefix collision and record the
    existing indivisibility rationale in the canonical PR-body diff-budget form.
+8. Bind the immutable public prefill email to the approved draft recipient and
+   fail disabled startup only when an already-present token relation cannot
+   serve its still-reachable office-fence/revocation recovery paths.
 
 ### Review Contract
 
@@ -293,6 +333,12 @@ Max files: 13
       current repository migration set; its EOM workflow trigger and integration
       proof reference that same canonical name. The PR body carries a visible,
       substantive diff-budget override rather than changing the soft-cap policy.
+  12. The issued token's immutable `prefill_email` equals the approved draft
+      recipient even when repeat intake intentionally leaves `contacts.email`
+      stale. With authority disabled, a missing token table remains compatible,
+      but an existing table must expose the fence/revocation columns and runtime
+      `SELECT`/`UPDATE` privileges before startup succeeds; enabled issuance
+      retains the stricter full-shape and `INSERT` readiness requirement.
 - Reachability proof: `tests/test_eom_public_onboarding.py` uses an ASGI
   transport against the registered `/eom-funnel/public-onboarding/*` routes;
   `tests/test_eom_lead_conversion_integration.py` uses a disposable Postgres
@@ -326,10 +372,12 @@ seam in the enumeration; otherwise write "N/A - no boundary change."
     body. Disabled configuration preserves that branch; enabled configuration
     adds a transient fragment link after the atomic claim succeeds.
   - Guard-relevant fields: config enablement, safe HTTPS base URL, HMAC secret,
-    draft `pending`/blocker/recipient predicates, active EOM `lead`/`won`
-    contact, approving employee identity.
+    draft `pending`/blocker/recipient predicates, approved draft recipient
+    snapshot, active EOM `lead`/`won` contact, approving employee identity.
   - Caller x input shape: authenticated office approval x pending/sending/sent/
-    revoked drafts; only the current pending claim is intentionally changed.
+    revoked drafts; only the current pending claim is intentionally changed. A
+    repeat intake's newer approved recipient becomes the immutable prefill email
+    even if `contacts.email` intentionally remains stale.
 - Boundary path/seam: public-onboarding authority versus issuance pause.
   - Replaced-path behaviors: one authority flag previously both made routes
     reachable and chose whether approval minted a bearer. The new optional
@@ -367,6 +415,21 @@ seam in the enumeration; otherwise write "N/A - no boundary change."
     service x token plus positive tracker ids; replay with matching vs different
     ids; private office actor x issued/redeemed/missing token revocation even
     after public issuance has been disabled.
+- Boundary path/seam: dormant public-token relation readiness.
+  - Replaced-path behaviors: a disabled authority previously ignored a present
+    token table entirely. A missing table remains a compatible pre-migration
+    state, but a present table now must admit the unconditional office fence and
+    private recovery command before startup succeeds.
+  - Guard-relevant fields: relation existence; `id`, `draft_id`, `contact_id`,
+    `status`, and `revoked_at`; current runtime `SELECT` and `UPDATE`
+    privileges; authority-enable decision; enabled-only full projection,
+    constraints/index, and `INSERT` privilege.
+  - Caller x input shape: disabled authority x missing relation, complete
+    relation, issuance-only missing column, recovery-column omission, no token
+    `SELECT`, SELECT without UPDATE, and SELECT+UPDATE without INSERT; enabled
+    authority x incomplete full projection. The missing relation remains
+    accepted only for the disabled authority; any present recovery deficiency
+    rejects at startup before a later office command reaches database DML.
 
 Closure declaration:
 
@@ -430,6 +493,11 @@ fallback changes; otherwise write "N/A - no guard/config boundary change."
 - Side-effect ordering: validate transport/config before claim; atomically
   claim draft plus mint durable token; send outside the transaction; atomically
   validate/redeem token plus write the existing handoff/contact transition.
+- Dormant-recovery probe: a disabled deployment without migration 383 remains
+  ready. If that relation is present, startup requires the exact columns and
+  runtime `SELECT`/`UPDATE` used by the private fence/revocation recovery paths;
+  an issuance-only field or `INSERT` remains enabled-only. This makes a partial
+  migration or separate-DBA privilege omission fail before an office handoff.
 
 ### Files touched
 
@@ -464,9 +532,12 @@ When disabled, the existing `claim_eom_onboarding_draft` query and sender are
 unchanged. When enabled, its transaction requires the contact to still be an
 active EOM `lead` at `won`, changes the draft to `sending`, records the
 approving employee in the token row, and returns the transient link to the
-sender. The sender appends a fixed onboarding invitation in memory, confirms
-the ordinary draft delivery state as today, and writes redacted history using
-the stored draft body rather than the bearer-bearing transport body.
+sender. Its immutable `prefill_email` is the claimed draft's approved recipient
+rather than a possibly stale contact column; the remaining prefill fields retain
+their token-time contact snapshot. The sender appends a fixed onboarding
+invitation in memory, confirms the ordinary draft delivery state as today, and
+writes redacted history using the stored draft body rather than the
+bearer-bearing transport body.
 
 The tracker-only session/finalize routes authenticate with
 `require_eom_funnel_api` and the configured public-onboarding authority,
@@ -491,6 +562,14 @@ Unicode whitespace character, then applies the existing HTTPS/host/credential/
 port/query/fragment and paired-secret checks. The validator rejects rather than
 rewrites an operator value, so a valid base URL retains its established delivery
 semantics and a malformed one cannot be transported as a fragment link.
+
+The readiness query distinguishes no table from a present table. A missing token
+table is valid only when authority is disabled, preserving deploy-before-migrate
+compatibility. Once present, it must provide the fields and runtime DML used by
+the office fence and private revocation recovery regardless of issuance state.
+Only enabled issuance additionally requires the entire token projection,
+constraints/index, and `INSERT`; an operator can therefore pause authority only
+when its already-deployed recovery surface remains sound.
 
 ## Intentional
 
@@ -565,10 +644,16 @@ blocks the safety of this vertical path.
   - The exact `Run EOM lead pipeline checks` file list in
     `.github/workflows/atlas_eom_lead_pipeline_checks.yml`, run locally with
     `ATLAS_MIGRATION_TEST_DATABASE_URL` pointed at a fresh disposable
-    `postgres:16-alpine` instance -- 1100 passed, 5 skipped.
+    `postgres:16-alpine` instance -- 1102 passed, 5 skipped.
+  - Focused disposable-Postgres recipient/recovery proof -- 4 passed; the full
+    `tests/test_eom_lead_conversion_integration.py` suite -- 87 passed. These
+    cover the latest-intake recipient snapshot, an issuance-only missing field
+    under disabled authority, a missing recovery field, and a non-owner runtime
+    that gains disabled readiness only after `SELECT` plus `UPDATE` (not
+    `INSERT`) on the present token relation.
   - `python -m compileall -q` over the changed Python modules/test,
     `ruff check` over the same paths, `git diff --check`, and
-    `python scripts/check_diff_budget.py --additions 3437 --body-file <PR body>`
+    `python scripts/check_diff_budget.py --additions 3699 --body-file <PR body>`
     -- passed.
   - `python scripts/check_guard_class_closure.py --base origin/main --strict`
     -- advisory lint passed with no guard-shaped change lacking property proof.
@@ -587,13 +672,13 @@ blocks the safety of this vertical path.
 | `atlas_brain/eom_api/config.py` | 141 |
 | `atlas_brain/eom_api/funnel.py` | 218 |
 | `atlas_brain/eom_api/funnel_auth.py` | 62 |
-| `atlas_brain/eom_api/funnel_store.py` | 83 |
-| `atlas_brain/services/crm_provider.py` | 650 |
+| `atlas_brain/eom_api/funnel_store.py` | 116 |
+| `atlas_brain/services/crm_provider.py` | 651 |
 | `atlas_brain/services/eom_onboarding_drafts.py` | 47 |
 | `atlas_brain/services/eom_public_onboarding_tokens.py` | 169 |
 | `atlas_brain/storage/migrations/383_eom_public_onboarding_tokens.sql` | 72 |
-| `plans/PR-EOM-Public-Onboarding-Token-Authority.md` | 599 |
-| `tests/test_eom_lead_conversion_integration.py` | 558 |
+| `plans/PR-EOM-Public-Onboarding-Token-Authority.md` | 684 |
+| `tests/test_eom_lead_conversion_integration.py` | 708 |
 | `tests/test_eom_public_onboarding.py` | 889 |
-| `tests/test_eom_render_profile.py` | 11 |
-| **Total** | **3506** |
+| `tests/test_eom_render_profile.py` | 14 |
+| **Total** | **3778** |

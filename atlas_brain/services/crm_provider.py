@@ -3862,7 +3862,7 @@ class DatabaseCRMProvider:
                         )
                         SELECT
                             $1, $2::uuid, $3::uuid, $4, $5, $6, $7,
-                            contact.full_name, contact.email, contact.phone,
+                            contact.full_name, $8, contact.phone,
                             contact.address, contact.city, contact.state,
                             contact.zip, contact.customer_type
                         FROM contacts AS contact
@@ -3877,6 +3877,7 @@ class DatabaseCRMProvider:
                         actor_id,
                         actor_name,
                         signing_key_fingerprint,
+                        str(row["recipient_email"]),
                     )
                     if token_row is None:
                         raise EOMLeadConversionError(

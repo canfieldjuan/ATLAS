@@ -3784,14 +3784,14 @@ async def test_first_clean_draft_enqueue_records_no_email_blocker_and_one_pendin
 async def test_first_clean_draft_recipient_follows_latest_intake_projection():
     """Ingress leaves contacts.email unchanged when an existing contact
     re-submits with a new address (the new address lives in the web_form
-    interaction metadata), so the draft recipient must resolve through the
-    same latest-intake projection the office review queue shows -- not the
-    stale contact column."""
+    interaction metadata), so the draft recipient and issued token prefill
+    must resolve through the same latest-intake projection the office review
+    queue shows -- not the stale contact column."""
     database_url = _database_url_or_skip()
     schema = f"atlas_eom_first_clean_recipient_{uuid.uuid4().hex}"
     conn = await asyncpg.connect(database_url)
     try:
-        await _prepare_schema(conn, schema)
+        await _prepare_schema(conn, schema, apply_public_onboarding_migration=True)
         provider = DatabaseCRMProvider(pool=conn)
         contact_id = uuid.uuid4()
         first_clean_key = f"office-first-clean-{uuid.uuid4().hex}"
@@ -3870,6 +3870,20 @@ async def test_first_clean_draft_recipient_follows_latest_intake_projection():
         )
         assert draft["recipient_email"] == "latest-address@example.com"
         assert draft["blocker"] is None
+
+        _, token_id = await _claim_public_onboarding_token(
+            provider, draft_id=str(completed["onboarding_draft_id"])
+        )
+        assert await conn.fetchval(
+            "SELECT prefill_email FROM eom_public_onboarding_tokens WHERE id = $1",
+            token_id,
+        ) == "latest-address@example.com"
+        assert (
+            await provider.get_eom_public_onboarding_session(
+                token_id=str(token_id),
+                signing_key_fingerprint=_PUBLIC_ONBOARDING_KEY_FINGERPRINT,
+            )
+        )["email"] == "latest-address@example.com"
     finally:
         await conn.execute(f'DROP SCHEMA IF EXISTS "{schema}" CASCADE')
         await conn.close()
@@ -4820,7 +4834,8 @@ async def test_public_onboarding_revocation_releases_office_handoff_and_stale_dr
 
 @pytest.mark.asyncio
 async def test_public_onboarding_readiness_requires_its_migration_only_when_enabled():
-    """A dormant deploy stays compatible; missing token columns fail closed on enablement."""
+    """A dormant deploy may lack the table or issuance-only fields; enabled
+    issuance fails closed until the full token shape exists."""
     from atlas_brain.eom_api.funnel_store import require_eom_funnel_data_store
     from atlas_brain.storage.migrations import run_migrations
 
@@ -4875,10 +4890,16 @@ async def test_public_onboarding_readiness_requires_its_migration_only_when_enab
             """
         )
         await require_eom_funnel_data_store(
+            disabled, database_enabled=True, get_db_pool_fn=lambda: _Pool()
+        )
+        await require_eom_funnel_data_store(
             enabled, database_enabled=True, get_db_pool_fn=lambda: _Pool()
         )
         await conn.execute(
             "ALTER TABLE eom_public_onboarding_tokens DROP COLUMN prefill_email"
+        )
+        await require_eom_funnel_data_store(
+            disabled, database_enabled=True, get_db_pool_fn=lambda: _Pool()
         )
         with pytest.raises(RuntimeError, match="CRM lifecycle and handoff schema"):
             await require_eom_funnel_data_store(
@@ -4886,6 +4907,127 @@ async def test_public_onboarding_readiness_requires_its_migration_only_when_enab
             )
     finally:
         await conn.execute(f'DROP SCHEMA IF EXISTS "{schema}" CASCADE')
+        await conn.close()
+
+
+@pytest.mark.asyncio
+async def test_disabled_public_onboarding_readiness_requires_present_recovery_columns():
+    """Once migration 383 exists, dormant startup still protects the columns
+    that the office fence and private revoke-link recovery command use."""
+    from atlas_brain.eom_api.funnel_store import require_eom_funnel_data_store
+
+    database_url = _database_url_or_skip()
+    schema = f"atlas_eom_public_onboarding_recovery_columns_{uuid.uuid4().hex}"
+    conn = await asyncpg.connect(database_url)
+    try:
+        await _prepare_schema(conn, schema, apply_public_onboarding_migration=True)
+
+        class _Pool:
+            is_initialized = True
+
+            async def fetchval(self, query: str) -> bool:
+                return bool(await conn.fetchval(query))
+
+        disabled = type(
+            "Config", (), {"api_enabled": True, "public_onboarding_enabled": False}
+        )()
+        await require_eom_funnel_data_store(
+            disabled, database_enabled=True, get_db_pool_fn=lambda: _Pool()
+        )
+        await conn.execute(
+            "ALTER TABLE eom_public_onboarding_tokens "
+            "RENAME COLUMN revoked_at TO missing_revoked_at"
+        )
+        with pytest.raises(RuntimeError, match="CRM lifecycle and handoff schema"):
+            await require_eom_funnel_data_store(
+                disabled, database_enabled=True, get_db_pool_fn=lambda: _Pool()
+            )
+    finally:
+        await conn.execute(f'DROP SCHEMA IF EXISTS "{schema}" CASCADE')
+        await conn.close()
+
+
+@pytest.mark.asyncio
+async def test_disabled_public_onboarding_readiness_requires_present_recovery_privileges():
+    """A deployed token relation must grant the runtime its fence/revoke
+    SELECT and UPDATE surface even when issuance is disabled."""
+    from atlas_brain.eom_api.funnel_store import require_eom_funnel_data_store
+
+    database_url = _database_url_or_skip()
+    schema = f"atlas_eom_public_onboarding_recovery_privileges_{uuid.uuid4().hex}"
+    runtime_role = f"atlas_eom_public_token_runtime_{uuid.uuid4().hex}"
+    schema_ident = _quote_ident(schema)
+    runtime_ident = _quote_ident(runtime_role)
+    database_name: str | None = None
+    role_created = False
+    runtime_conn = None
+    conn = await asyncpg.connect(database_url)
+    try:
+        await _require_disposable_role_administration(conn)
+        await _prepare_schema(conn, schema, apply_public_onboarding_migration=True)
+        database_name = await conn.fetchval("SELECT current_database()")
+        await conn.execute(
+            f"CREATE ROLE {runtime_ident} LOGIN NOINHERIT "
+            f"PASSWORD '{_NON_SUPERUSER_TEST_PASSWORD}'"
+        )
+        role_created = True
+        await conn.execute(
+            f"GRANT CONNECT ON DATABASE {_quote_ident(database_name)} TO {runtime_ident}"
+        )
+        await conn.execute(f"GRANT USAGE ON SCHEMA {schema_ident} TO {runtime_ident}")
+
+        runtime_conn = await asyncpg.connect(
+            database_url,
+            user=runtime_role,
+            password=_NON_SUPERUSER_TEST_PASSWORD,
+        )
+        await runtime_conn.execute(f"SET search_path TO {schema_ident}, public")
+
+        class _Pool:
+            is_initialized = True
+
+            async def fetchval(self, query: str) -> bool:
+                return bool(await runtime_conn.fetchval(query))
+
+        disabled = type(
+            "Config", (), {"api_enabled": True, "public_onboarding_enabled": False}
+        )()
+        with pytest.raises(RuntimeError, match="CRM lifecycle and handoff schema"):
+            await require_eom_funnel_data_store(
+                disabled, database_enabled=True, get_db_pool_fn=lambda: _Pool()
+            )
+
+        await conn.execute(
+            "GRANT SELECT ON TABLE "
+            f"{schema_ident}.eom_public_onboarding_tokens TO {runtime_ident}"
+        )
+        with pytest.raises(RuntimeError, match="CRM lifecycle and handoff schema"):
+            await require_eom_funnel_data_store(
+                disabled, database_enabled=True, get_db_pool_fn=lambda: _Pool()
+            )
+
+        await conn.execute(
+            "GRANT UPDATE ON TABLE "
+            f"{schema_ident}.eom_public_onboarding_tokens TO {runtime_ident}"
+        )
+        assert not await runtime_conn.fetchval(
+            "SELECT has_table_privilege("
+            "current_user, 'eom_public_onboarding_tokens', 'INSERT')"
+        )
+        await require_eom_funnel_data_store(
+            disabled, database_enabled=True, get_db_pool_fn=lambda: _Pool()
+        )
+    finally:
+        if runtime_conn is not None:
+            await runtime_conn.close()
+        await conn.execute(f"DROP SCHEMA IF EXISTS {schema_ident} CASCADE")
+        if role_created:
+            assert database_name is not None
+            await conn.execute(
+                f"REVOKE CONNECT ON DATABASE {_quote_ident(database_name)} "
+                f"FROM {runtime_ident}"
+            )
+            await conn.execute(f"DROP ROLE IF EXISTS {runtime_ident}")
         await conn.close()
 
 

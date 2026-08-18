@@ -808,6 +808,9 @@ def test_shared_eom_funnel_datastore_guard_keeps_missing_relations_in_verdict():
     assert "contacts_required_columns_ready" in pool.query
     assert "lifecycle_required_columns_ready" in pool.query
     assert "onboarding_drafts_required_columns_ready" in pool.query
+    assert "public_onboarding_recovery_ready" in pool.query
+    assert "public_onboarding_issuance_ready" in pool.query
+    assert "'id', 'draft_id', 'contact_id', 'status', 'revoked_at'" in pool.query
     assert "WHEN NOT readiness_columns.contacts_required_columns_ready THEN FALSE" in pool.query
     assert "AND readiness_columns.lifecycle_required_columns_ready" in pool.query
     assert "WHEN readiness_relations.handoff_rel IS NULL THEN FALSE" in pool.query
