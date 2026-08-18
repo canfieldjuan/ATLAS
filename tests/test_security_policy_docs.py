@@ -1,7 +1,9 @@
 from __future__ import annotations
 
 import ast
+import fnmatch
 import importlib.util
+import json
 import re
 import sys
 import unittest
@@ -431,6 +433,165 @@ def _literal_incident_type(node: ast.Call) -> str | None:
         value = node.args[0].value
         return value if isinstance(value, str) else None
     return None
+
+
+ATLAS_MOBILE_PACKAGE_JSON = REPO_ROOT / "atlas-mobile" / "package.json"
+
+# atlas-mobile is frozen on Expo SDK 54 and is not under active development, so its
+# ENTIRE dependency set is version-frozen: every dependency must be matched by an
+# ignore pattern on the atlas-mobile npm entry (React Native / Expo / React are
+# SDK-coupled; typescript and tailwindcss are Expo-migration-coupled too -- TS 6 is
+# rejected by Expo and Tailwind v4 needs a coordinated NativeWind migration). This
+# allowlist is therefore empty: adding a new atlas-mobile dependency FAILS the test
+# until it is added to the freeze, so nothing can silently rejoin the update stream.
+# (Security updates still flow -- the ignores are scoped to version-update types.)
+ATLAS_MOBILE_NON_SDK_DEPS: frozenset[str] = frozenset()
+
+
+def _dependabot_update_blocks(config_text: str) -> list[dict[str, object]]:
+    """Parse dependabot.yml text into per-entry blocks (no PyYAML dependency).
+
+    Returns a list of {"ecosystem": str, "directories": set[str], "ignore": set[str]}
+    where "ignore" holds the dependency-name values under that entry's ignore block.
+    """
+    blocks: list[dict[str, object]] = []
+    current: dict[str, object] | None = None
+    section: str | None = None
+    section_headers = {"directories:": "directories", "ignore:": "ignore"}
+    reset_headers = {"schedule:", "labels:", "groups:", "open-pull-requests-limit:"}
+    for raw_line in config_text.splitlines():
+        stripped = raw_line.strip()
+        if not stripped or stripped.startswith("#"):
+            continue
+        if stripped.startswith("- package-ecosystem:"):
+            if current is not None:
+                blocks.append(current)
+            current = {
+                "ecosystem": stripped.split(":", 1)[1].strip().strip('"'),
+                "directories": set(),
+                "ignore": set(),
+            }
+            section = None
+            continue
+        if current is None:
+            continue
+        if stripped in section_headers:
+            section = section_headers[stripped]
+            continue
+        # Dependabot also accepts the singular scalar form `directory: "/path"`.
+        # Treat it as a one-element directory set so the root-exclusion guard cannot
+        # be defeated by re-adding root as `directory: "/"` instead of `directories:`.
+        if stripped.startswith("directory:"):
+            current["directories"].add(  # type: ignore[union-attr]
+                stripped.split(":", 1)[1].strip().strip('"')
+            )
+            section = None
+            continue
+        if stripped in reset_headers:
+            section = None
+            continue
+        if section == "directories" and stripped.startswith("- "):
+            current["directories"].add(stripped[2:].strip().strip('"'))  # type: ignore[union-attr]
+            continue
+        if section == "ignore" and stripped.startswith("- dependency-name:"):
+            current["ignore"].add(stripped.split(":", 1)[1].strip().strip('"'))  # type: ignore[union-attr]
+            continue
+    if current is not None:
+        blocks.append(current)
+    if not blocks:
+        raise AssertionError("no Dependabot update blocks found")
+    return blocks
+
+
+class DependabotFrozenSubsystemPolicyTest(unittest.TestCase):
+    """Guards the frozen-subsystem Dependabot policy (PR-Dependabot-Degroup-Frozen-Subsystems).
+
+    These assertions fail on the exact regressions that required multiple review
+    rounds: putting atlas-mobile back into the web npm group, omitting an
+    SDK-coupled mobile dependency from the freeze, or re-enabling root pip updates.
+    """
+
+    def setUp(self) -> None:
+        self.blocks = _dependabot_update_blocks(
+            DEPENDABOT_YML.read_text(encoding="utf-8")
+        )
+
+    def _npm_blocks(self) -> list[dict[str, object]]:
+        return [b for b in self.blocks if b["ecosystem"] == "npm"]
+
+    def _atlas_mobile_block(self) -> dict[str, object]:
+        mobile = [
+            b
+            for b in self._npm_blocks()
+            if b["directories"] == {"/atlas-mobile"}
+        ]
+        self.assertEqual(
+            len(mobile),
+            1,
+            "exactly one npm entry must own ONLY /atlas-mobile so its frozen SDK "
+            "ignores do not suppress the shared web-UI React updates",
+        )
+        return mobile[0]
+
+    def test_atlas_mobile_isolated_from_web_npm_group(self) -> None:
+        npm = self._npm_blocks()
+        self.assertGreaterEqual(
+            len(npm),
+            2,
+            "atlas-mobile must be its own npm entry, separate from the web-UI packages",
+        )
+        # The atlas-mobile entry owns only /atlas-mobile.
+        self._atlas_mobile_block()
+        # No other npm entry may include /atlas-mobile.
+        for block in npm:
+            if block["directories"] == {"/atlas-mobile"}:
+                continue
+            self.assertNotIn(
+                "/atlas-mobile",
+                block["directories"],
+                "/atlas-mobile must not be grouped with the web-UI packages",
+            )
+
+    def test_atlas_mobile_freezes_full_expo_sdk_stack(self) -> None:
+        ignore = self._atlas_mobile_block()["ignore"]
+        package = json.loads(ATLAS_MOBILE_PACKAGE_JSON.read_text(encoding="utf-8"))
+        # Cover every npm dependency section Dependabot can update, not just
+        # dependencies/devDependencies -- a package under optionalDependencies or
+        # peerDependencies would otherwise escape the freeze guard.
+        deps: set[str] = set()
+        for section in (
+            "dependencies",
+            "devDependencies",
+            "optionalDependencies",
+            "peerDependencies",
+        ):
+            deps |= set(package.get(section, {}))
+        self.assertTrue(deps, "expected atlas-mobile to declare dependencies")
+        unclassified = [
+            dep
+            for dep in sorted(deps)
+            if dep not in ATLAS_MOBILE_NON_SDK_DEPS
+            and not any(fnmatch.fnmatchcase(dep, pattern) for pattern in ignore)
+        ]
+        self.assertEqual(
+            unclassified,
+            [],
+            "every atlas-mobile dependency must be frozen by an ignore pattern "
+            "(Expo SDK 54-coupled) or classified in ATLAS_MOBILE_NON_SDK_DEPS; "
+            f"unclassified: {unclassified}",
+        )
+
+    def test_root_excluded_from_pip_updates(self) -> None:
+        pip = [b for b in self.blocks if b["ecosystem"] == "pip"]
+        self.assertTrue(pip, "expected a pip update entry")
+        for block in pip:
+            self.assertNotIn(
+                "/",
+                block["directories"],
+                "root '/' must be excluded from pip Dependabot updates: its "
+                "requirements.txt is bound to the generated constraints.root-asr.txt "
+                "(sha256 pin) that Dependabot cannot recompile",
+            )
 
 
 if __name__ == "__main__":
