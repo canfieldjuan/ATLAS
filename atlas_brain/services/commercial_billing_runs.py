@@ -12,7 +12,7 @@ import hashlib
 import json
 import re
 from dataclasses import dataclass
-from datetime import datetime, timezone
+from datetime import date, datetime, timezone
 from typing import Any, Callable, Mapping, Optional
 from uuid import UUID, uuid4
 
@@ -38,9 +38,11 @@ from .commercial_billing_candidate_overrides import (
     fingerprint as _override_fingerprint,
     override_review_fingerprint,
 )
+from .eom_lead_ingress import EOM_BUSINESS_CONTEXT_ID
 
 
 _RUN_SOURCE = "eom_admin"
+_INVOICE_SOURCE = "eom_commercial_billing"
 _MAX_IDEMPOTENCY_KEY_LENGTH = 128
 _MAX_CANDIDATE_KEY_LENGTH = 512
 _MAX_CANDIDATES = 500
@@ -252,6 +254,98 @@ def _override_view(row: Any | None) -> dict[str, Any] | None:
         "revision": _row_value(row, "revision"),
         "overriddenAt": _timestamp(_row_value(row, "overridden_at")),
         "overriddenBy": _row_value(row, "overridden_by"),
+    }
+
+
+def _stored_text(row: Any, key: str, field: str, *, limit: int) -> str:
+    value = _row_value(row, key)
+    if not isinstance(value, str) or not value or value != value.strip() or len(value) > limit:
+        raise CommercialBillingRunUnavailableError(
+            f"Commercial billing {field} evidence is invalid"
+        )
+    return value
+
+
+def _stored_uuid(row: Any, key: str, field: str) -> UUID:
+    value = _row_value(row, key)
+    if not isinstance(value, UUID):
+        raise CommercialBillingRunUnavailableError(
+            f"Commercial billing {field} evidence is invalid"
+        )
+    return value
+
+
+def _stored_fingerprint(row: Any, key: str, field: str) -> str:
+    value = _row_value(row, key)
+    if not isinstance(value, str) or _FINGERPRINT_PATTERN.fullmatch(value) is None:
+        raise CommercialBillingRunUnavailableError(
+            f"Commercial billing {field} evidence is invalid"
+        )
+    return value
+
+
+def _approval_view(row: Any | None) -> dict[str, Any] | None:
+    """Project durable approval evidence only when its linked invoice is canonical."""
+
+    if row is None or _row_value(row, "approval_id") is None:
+        return None
+    approval_id = _stored_uuid(row, "approval_id", "approval id")
+    billing_run_id = _stored_uuid(row, "approval_billing_run_id", "approval run id")
+    invoice_id = _stored_uuid(row, "approval_invoice_id", "approval invoice id")
+    approved_at = _row_value(row, "approval_approved_at")
+    issue_date = _row_value(row, "invoice_issue_date")
+    due_date = _row_value(row, "invoice_due_date")
+    total_cents = _row_value(row, "invoice_total_cents")
+    if not isinstance(approved_at, datetime):
+        raise CommercialBillingRunUnavailableError(
+            "Commercial billing approval timestamp evidence is invalid"
+        )
+    if not isinstance(issue_date, date) or not isinstance(due_date, date):
+        raise CommercialBillingRunUnavailableError(
+            "Commercial billing approval invoice date evidence is invalid"
+        )
+    if isinstance(total_cents, bool) or not isinstance(total_cents, int) or total_cents <= 0:
+        raise CommercialBillingRunUnavailableError(
+            "Commercial billing approval invoice amount evidence is invalid"
+        )
+    if _stored_text(row, "approval_state", "approval state", limit=32) != "invoice_created":
+        raise CommercialBillingRunUnavailableError(
+            "Commercial billing approval state evidence is invalid"
+        )
+    if _stored_text(row, "approval_source", "approval source", limit=32) != _RUN_SOURCE:
+        raise CommercialBillingRunUnavailableError(
+            "Commercial billing approval source evidence is invalid"
+        )
+    if _stored_text(row, "invoice_source", "invoice source", limit=64) != _INVOICE_SOURCE:
+        raise CommercialBillingRunUnavailableError(
+            "Commercial billing approval invoice source evidence is invalid"
+        )
+    if _stored_text(row, "invoice_business_context_id", "invoice context", limit=128) != EOM_BUSINESS_CONTEXT_ID:
+        raise CommercialBillingRunUnavailableError(
+            "Commercial billing approval invoice context evidence is invalid"
+        )
+    return {
+        "approvedAt": approved_at.isoformat(),
+        "approvedBy": _stored_text(row, "approval_approved_by", "approval actor", limit=128),
+        "billingRunId": str(billing_run_id),
+        "candidateKey": _stored_text(row, "approval_candidate_key", "approval candidate", limit=_MAX_CANDIDATE_KEY_LENGTH),
+        "id": str(approval_id),
+        "invoice": {
+            "dueDate": due_date.isoformat(),
+            "id": str(invoice_id),
+            "invoiceNumber": _stored_text(row, "invoice_number", "invoice number", limit=64),
+            "issueDate": issue_date.isoformat(),
+            "sourceRef": _stored_text(row, "invoice_source_ref", "invoice source reference", limit=256),
+            "status": _stored_text(row, "invoice_status", "invoice status", limit=32),
+            "totalCents": total_cents,
+        },
+        "reviewFingerprint": _stored_fingerprint(
+            row, "approval_review_fingerprint", "approval review fingerprint"
+        ),
+        "sourceFingerprint": _stored_fingerprint(
+            row, "approval_source_fingerprint", "approval source fingerprint"
+        ),
+        "state": "invoice_created",
     }
 
 
@@ -1313,7 +1407,25 @@ class CommercialBillingRunService:
                    override.request_fingerprint AS override_request_fingerprint,
                    override.overridden_by AS override_overridden_by,
                    override.overridden_at AS override_overridden_at,
-                   override.created_at AS override_created_at
+                   override.created_at AS override_created_at,
+                   approval.id AS approval_id,
+                   approval.billing_run_id AS approval_billing_run_id,
+                   approval.candidate_key AS approval_candidate_key,
+                   approval.source_fingerprint AS approval_source_fingerprint,
+                   approval.review_fingerprint AS approval_review_fingerprint,
+                   approval.invoice_id AS approval_invoice_id,
+                   approval.state AS approval_state,
+                   approval.source AS approval_source,
+                   approval.approved_by AS approval_approved_by,
+                   approval.approved_at AS approval_approved_at,
+                   invoice.invoice_number,
+                   invoice.status AS invoice_status,
+                   invoice.issue_date AS invoice_issue_date,
+                   invoice.due_date AS invoice_due_date,
+                   invoice.source_ref AS invoice_source_ref,
+                   invoice.source AS invoice_source,
+                   invoice.business_context_id AS invoice_business_context_id,
+                   ROUND(invoice.total_amount * 100)::BIGINT AS invoice_total_cents
             FROM commercial_billing_run_candidates AS candidate
             LEFT JOIN LATERAL (
                 SELECT id, revision, review_fingerprint, effective_snapshot,
@@ -1326,6 +1438,24 @@ class CommercialBillingRunService:
                 ORDER BY candidate_override.revision DESC
                 LIMIT 1
             ) AS override ON TRUE
+            LEFT JOIN LATERAL (
+                SELECT candidate_approval.id,
+                       candidate_approval.billing_run_id,
+                       candidate_approval.candidate_key,
+                       candidate_approval.source_fingerprint,
+                       candidate_approval.review_fingerprint,
+                       candidate_approval.invoice_id,
+                       candidate_approval.state,
+                       candidate_approval.source,
+                       candidate_approval.approved_by,
+                       candidate_approval.approved_at
+                FROM commercial_billing_candidate_approvals AS candidate_approval
+                WHERE candidate_approval.candidate_key = candidate.candidate_key
+                  AND candidate_approval.source_fingerprint = candidate.source_fingerprint
+                ORDER BY candidate_approval.approved_at DESC, candidate_approval.id DESC
+                LIMIT 1
+            ) AS approval ON TRUE
+            LEFT JOIN invoices AS invoice ON invoice.id = approval.invoice_id
             WHERE candidate.billing_run_id = $1
             ORDER BY candidate.display_order ASC, candidate.candidate_key ASC
             """,
@@ -1377,6 +1507,25 @@ class CommercialBillingRunService:
                 source_fingerprint=row_candidate["source_fingerprint"],
                 override=override,
             )
+            approval = _approval_view(row_candidate)
+            if approval is not None:
+                if approval["candidateKey"] != candidate["candidateKey"]:
+                    raise CommercialBillingRunUnavailableError(
+                        "Commercial billing approval candidate evidence is invalid"
+                    )
+                if approval["sourceFingerprint"] != candidate["sourceFingerprint"]:
+                    raise CommercialBillingRunUnavailableError(
+                        "Commercial billing approval source evidence is invalid"
+                    )
+                if approval["reviewFingerprint"] != candidate["reviewFingerprint"]:
+                    raise CommercialBillingRunUnavailableError(
+                        "Commercial billing approval review identity is stale"
+                    )
+                if approval["invoice"]["totalCents"] != candidate["totalCents"]:
+                    raise CommercialBillingRunUnavailableError(
+                        "Commercial billing approval invoice amount does not match review evidence"
+                    )
+            candidate["approval"] = approval
             candidate["reviewDecision"] = _review_decision_view(
                 latest_decision_by_candidate.get(
                     (

@@ -40,6 +40,7 @@ from atlas_brain.services.commercial_billing_invoice_pdfs import (
 from atlas_brain.services.commercial_billing_runs import (
     CommercialBillingRunConflictError,
     CommercialBillingRunService,
+    CommercialBillingRunUnavailableError,
 )
 from atlas_brain.services.commercial_billing_candidate_overrides import (
     decorate_line_keys,
@@ -1438,6 +1439,63 @@ async def test_real_postgres_global_review_decision_fences_duplicate_runs_and_ol
             actor="Juan",
         )
         assert approved["replayed"] is False
+        assert await connection.fetchval("SELECT COUNT(*) FROM invoices") == 1
+        first_approved_view = await review_service.get_run(first_run_id)
+        second_approved_view = await review_service.get_run(second_run_id)
+        assert first_approved_view["candidates"][0]["approval"] == approved["approval"]
+        assert second_approved_view["candidates"][0]["approval"] == approved["approval"]
+
+        # Exercise the real public reader as well as the service: the original
+        # approval belongs to the equivalent second run, but its exact durable
+        # candidate/source/review identity must lock either saved review.
+        from atlas_brain.api.invoicing import auth as receivables_auth
+        from atlas_brain.api.invoicing import receivables as routes
+        from atlas_brain.eom_api.auth import generate_receivables_service_token
+        from atlas_brain.main import app
+
+        generated = generate_receivables_service_token()
+        original_overrides = dict(app.dependency_overrides)
+        app.dependency_overrides[receivables_auth.get_receivables_api_config] = lambda: (
+            SimpleNamespace(
+                receivables_api_enabled=True,
+                receivables_service_token="",
+                receivables_service_token_sha256=generated.sha256,
+            )
+        )
+        app.dependency_overrides[routes.get_commercial_billing_run_service] = (
+            lambda: review_service
+        )
+        try:
+            async with httpx.AsyncClient(
+                transport=httpx.ASGITransport(app=app), base_url="http://atlas.test"
+            ) as client:
+                response = await client.get(
+                    f"/api/v1/receivables/commercial-billing-runs/{first_run_id}",
+                    headers={"Authorization": f"Bearer {generated.token}"},
+                )
+        finally:
+            app.dependency_overrides.clear()
+            app.dependency_overrides.update(original_overrides)
+        assert response.status_code == 200
+        assert response.json()["candidates"][0]["approval"] == approved["approval"]
+        assert await connection.fetchval("SELECT COUNT(*) FROM invoices") == 1
+        assert (
+            await connection.fetchval(
+                "SELECT COUNT(*) FROM commercial_billing_candidate_approvals"
+            )
+            == 1
+        )
+
+        # A retained approval with the wrong effective review identity is not
+        # silently downgraded to an unapproved candidate after a browser reload.
+        await connection.execute(
+            "UPDATE commercial_billing_candidate_approvals "
+            "SET review_fingerprint = $1 WHERE id = $2",
+            _fingerprint("mismatched-review"),
+            UUID(approved["approval"]["id"]),
+        )
+        with pytest.raises(CommercialBillingRunUnavailableError, match="review identity"):
+            await review_service.get_run(first_run_id)
         assert await connection.fetchval("SELECT COUNT(*) FROM invoices") == 1
 
 

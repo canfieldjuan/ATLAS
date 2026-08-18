@@ -190,7 +190,9 @@ async def _billing_run_database():
         await conn.execute(f'SET search_path TO "{schema}"')
         await conn.execute(
             "CREATE TABLE invoices ("
-            "id UUID PRIMARY KEY, source TEXT, source_ref TEXT"
+            "id UUID PRIMARY KEY, source TEXT, source_ref TEXT, "
+            "invoice_number TEXT, status TEXT, issue_date DATE, due_date DATE, "
+            "total_amount NUMERIC, business_context_id TEXT"
             ")"
         )
         for name in (
@@ -427,6 +429,7 @@ async def test_real_postgres_snapshot_is_immutable_and_same_key_replays_without_
         assert run["summary"] == {"blockedCandidateCount": 1, "candidateCount": 1}
         assert run["candidates"][0]["lineItems"][0]["amountCents"] == 9650
         assert run["candidates"][0]["sourceEvents"][0]["location"] == "100 Main St"
+        assert run["candidates"][0]["approval"] is None
         assert run["candidates"][0]["reviewDecision"] == {
             "decidedAt": None,
             "decidedBy": None,
