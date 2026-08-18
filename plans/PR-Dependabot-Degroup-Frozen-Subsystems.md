@@ -42,7 +42,7 @@ are 100% blocked:
 
 Ownership lane: dev-workflow/dependabot-config
 Slice phase: Workflow/process
-Max files: 2
+Max files: 3
 
 1. Split the single `npm` entry into two: (a) the 5 web-UI directories with NO
    ignores (react/react-dom/@types/react and the toolchain update freely), and
@@ -63,6 +63,13 @@ Max files: 2
    re-validates; Dependabot cannot re-run the compiler, so any root edit fails that
    check (Codex R12 on #2411). Root Python deps are maintained via the compiler,
    not Dependabot.
+3. Add a CI-enrolled regression test (`tests/test_security_policy_docs.py`, already
+   run by `.github/workflows/atlas_security_policy_docs_checks.yml` on
+   `.github/dependabot.yml` changes) asserting the three policy invariants:
+   atlas-mobile is its own npm entry (not grouped with web), the mobile entry's
+   ignore covers every Expo-SDK-coupled dep in `atlas-mobile/package.json`, and root
+   `/` is excluded from pip. This ends the recurring "missed a sibling package"
+   class (Codex R2/R13 on #2411) by failing until a new mobile dep is classified.
 
 ### Review Contract
 
@@ -104,9 +111,24 @@ Max files: 2
 
 ### Boundary-change enumeration
 
-N/A - no boundary change. This changes Dependabot update policy (which version
-bumps get proposed), not a runtime guard/validator/normalizer/resolver/router or
-admission boundary.
+The npm mobile-freeze ignore set and the pip root-exclusion are decision-driving
+member sets. Closure declaration (R13):
+
+- **atlas-mobile freeze set: CLOSED.** Canonical source of truth = the union of
+  the ignore patterns on the atlas-mobile npm entry, cross-checked against
+  `atlas-mobile/package.json` by `tests/test_security_policy_docs.py::
+  test_atlas_mobile_freezes_full_expo_sdk_stack`. Every atlas-mobile dependency
+  must be either matched by an ignore pattern (Expo/RN SDK-coupled) or listed in
+  `ATLAS_MOBILE_NON_SDK_DEPS` (currently tailwindcss, typescript, zustand). A new
+  unlisted dependency FAILS the test until classified -- so a new SDK-coupled
+  package cannot silently rejoin the update stream (this is the second-side guard
+  for the `@react-native/*` omission Codex found).
+- **pip root exclusion: CLOSED.** Root `/` is removed from the pip `directories`;
+  `test_root_excluded_from_pip_updates` fails if any pip entry re-adds `/`. The
+  ML/CUDA ignore set is a defense-in-depth version-lock guard for the remaining
+  sub-dirs, not the primary boundary.
+
+No runtime guard/validator/resolver/router/admission boundary is changed.
 
 ### Deployed-config probing
 
@@ -118,6 +140,7 @@ guard or admission path.
 
 - `.github/dependabot.yml`
 - `plans/PR-Dependabot-Degroup-Frozen-Subsystems.md`
+- `tests/test_security_policy_docs.py`
 
 ## Mechanism
 
@@ -170,16 +193,21 @@ Parked hardening: none.
 
 ## Verification
 
-- Pending before push: `python3 -c "import yaml; yaml.safe_load(open('.github/dependabot.yml'))"` exits 0 (done, prints the 6 npm + 11 pip ignore rules).
-- After merge: `@dependabot recreate` on #2397 and #2404; confirm the recreated
-  npm PR no longer touches `atlas-mobile/*` RN packages and the recreated pip PR
-  no longer bumps torch/cuda-* and resolves (no `ResolutionImpossible`); then
-  verify + merge each.
+- `python3 -c "import yaml; yaml.safe_load(open('.github/dependabot.yml'))"` exits 0
+  (2 npm entries: web with 0 ignores, mobile with 11; pip with root excluded, 11).
+- `python3 -m unittest tests.test_security_policy_docs.DependabotFrozenSubsystemPolicyTest`
+  passes (3 tests), and negative controls confirm it fails when atlas-mobile is
+  regrouped, an SDK dep is dropped from the freeze, or root pip is re-enabled.
+- After merge: `@dependabot recreate` on **#2397** only; confirm the recreated npm
+  PR is web-UI packages only (no `atlas-mobile/*`). **#2404 is NOT recreated** -- it
+  is closed (root updates cannot be Dependabot-merged, per the ASR lock), with a
+  follow-up issue for a proper root-Python-security path.
 
 ## Estimated diff size
 
 | File | LOC |
 |---|---:|
 | `.github/dependabot.yml` | 97 |
-| `plans/PR-Dependabot-Degroup-Frozen-Subsystems.md` | 185 |
-| **Total** | **282** |
+| `plans/PR-Dependabot-Degroup-Frozen-Subsystems.md` | 211 |
+| `tests/test_security_policy_docs.py` | 143 |
+| **Total** | **451** |
