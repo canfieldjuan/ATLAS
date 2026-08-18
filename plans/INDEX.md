@@ -1,6 +1,6 @@
 # Plan archive index
 
-1528 archived plan doc(s). Merged plan docs are moved under `archive/` and listed below; once the archive sweep has run, the `plans/` root holds only in-flight slices.
+1529 archived plan doc(s). Merged plan docs are moved under `archive/` and listed below; once the archive sweep has run, the `plans/` root holds only in-flight slices.
 
 - [PR-ASR-Pip-Audit-Egg-Fragment](archive/PR-ASR-Pip-Audit-Egg-Fragment.md) - lane: security/workflow | phase: Production hardening
 - [PR-ASR-Requirements-Audit-Pin](archive/PR-ASR-Requirements-Audit-Pin.md) - lane: security/workflow | phase: Production hardening
@@ -1028,6 +1028,7 @@
 - [PR-EOM-Operator-Mutation-Contract](archive/PR-EOM-Operator-Mutation-Contract.md) - lane: eom-crm/lead-funnel | phase: vertical slice
 - [PR-EOM-Portal-Customer-Sync](archive/PR-EOM-Portal-Customer-Sync.md) - lane: eom-crm/lead-funnel | phase: vertical slice
 - [PR-EOM-Portal-Reconciliation](archive/PR-EOM-Portal-Reconciliation.md) - lane: eom/portal-reconciliation | phase: Vertical slice
+- [PR-EOM-Public-Onboarding-Token-Authority](archive/PR-EOM-Public-Onboarding-Token-Authority.md) - lane: eom-public-onboarding-token-authority | phase: vertical slice
 - [PR-EOM-Read-Scoping-Fixes](archive/PR-EOM-Read-Scoping-Fixes.md) - lane: eom-crm/read-scoping | phase: production hardening
 - [PR-EOM-Read-Scoping-Test-Evidence](archive/PR-EOM-Read-Scoping-Test-Evidence.md) - lane: eom-crm/read-scoping | phase: robust testing
 - [PR-EOM-Read-Scoping](archive/PR-EOM-Read-Scoping.md) - lane: eom-crm/lead-funnel | phase: vertical slice

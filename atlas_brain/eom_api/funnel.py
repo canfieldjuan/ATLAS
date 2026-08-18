@@ -123,6 +123,12 @@ class EOMPublicOnboardingFinalizeRequest(EOMPublicOnboardingSessionRequest):
     tracker_site_id: Annotated[int, Field(strict=True, gt=0, le=_MAX_SIGNED_BIGINT)]
 
 
+class EOMPublicOnboardingRecoveryRequest(EOMCustomerHandoffRequest):
+    """Stored IDs for staff recovery when raw-bearer redemption cannot finish."""
+
+    token_id: UUID
+
+
 class EOMEstimateBookingRequest(BaseModel):
     """The office-selected estimate appointment window for one EOM lead."""
 
@@ -457,6 +463,22 @@ def _public_onboarding_session_content(result: Mapping[str, Any]) -> dict[str, A
     raise RuntimeError("CRM provider returned an invalid public onboarding session")
 
 
+def _public_onboarding_tracker_context_content(
+    result: Mapping[str, Any],
+) -> dict[str, Any]:
+    """Add durable Atlas IDs only to the tracker-only context projection."""
+
+    content = _public_onboarding_session_content(result)
+    content.update(
+        {
+            "token_id": result["token_id"],
+            "draft_id": result["draft_id"],
+            "contact_id": result["contact_id"],
+        }
+    )
+    return content
+
+
 def _public_onboarding_finalize_content(result: Mapping[str, Any]) -> dict[str, Any]:
     """Return only completion evidence the tracker can reconcile locally."""
 
@@ -469,6 +491,12 @@ def _public_onboarding_finalize_content(result: Mapping[str, Any]) -> dict[str, 
         "tracker_site_id": result["tracker_site_id"],
         "idempotent": result["idempotent"],
     }
+
+
+def _public_onboarding_recovery_content(result: Mapping[str, Any]) -> dict[str, Any]:
+    """Return only completion evidence after an actor-audited recovery."""
+
+    return _public_onboarding_finalize_content(result)
 
 
 def _calendar_dependency() -> Any:
@@ -1027,6 +1055,40 @@ async def get_eom_public_onboarding_session(
 
 
 @router.post(
+    "/public-onboarding/tracker-context",
+    dependencies=[Depends(require_eom_funnel_api)],
+)
+async def get_eom_public_onboarding_tracker_context(
+    payload: EOMPublicOnboardingSessionRequest,
+    public_onboarding: EOMPublicOnboardingConfig = Depends(
+        require_eom_public_onboarding_config
+    ),
+    crm: Any = Depends(_crm_dependency),
+) -> JSONResponse:
+    """Resolve private token context for the Tracker, never for a browser."""
+
+    authenticated_token = _authenticated_public_onboarding_token(
+        payload.token, public_onboarding
+    )
+    try:
+        result = await crm.get_eom_public_onboarding_tracker_context(
+            token_id=str(authenticated_token.token_id),
+            signing_key_fingerprint=authenticated_token.signing_key_fingerprint,
+        )
+    except EOMLeadConversionError as exc:
+        if exc.status_code in (404, 409):
+            raise HTTPException(
+                status_code=404,
+                detail="Public onboarding link is unavailable",
+            ) from exc
+        raise HTTPException(status_code=exc.status_code, detail=str(exc)) from exc
+    return JSONResponse(
+        status_code=status.HTTP_200_OK,
+        content=_public_onboarding_tracker_context_content(result),
+    )
+
+
+@router.post(
     "/public-onboarding/finalize",
     dependencies=[Depends(require_eom_funnel_api)],
 )
@@ -1061,6 +1123,36 @@ async def finalize_eom_public_onboarding(
             status.HTTP_200_OK if bool(result.get("idempotent")) else status.HTTP_201_CREATED
         ),
         content=_public_onboarding_finalize_content(result),
+    )
+
+
+@router.post(
+    "/public-onboarding/recover",
+    dependencies=[Depends(require_eom_funnel_api)],
+)
+async def recover_eom_public_onboarding(
+    payload: EOMPublicOnboardingRecoveryRequest,
+    actor: dict[str, object] = Depends(require_eom_funnel_actor),
+    crm: Any = Depends(_crm_dependency),
+) -> JSONResponse:
+    """Complete a durable Tracker reservation after an ambiguous finalization."""
+
+    try:
+        result = await crm.recover_eom_public_onboarding(
+            token_id=str(payload.token_id),
+            contact_id=str(payload.contact_id),
+            tracker_customer_id=payload.tracker_customer_id,
+            tracker_site_id=payload.tracker_site_id,
+            actor_id=int(actor["id"]),
+            actor_name=str(actor["name"]),
+        )
+    except EOMLeadConversionError as exc:
+        raise HTTPException(status_code=exc.status_code, detail=str(exc)) from exc
+    return JSONResponse(
+        status_code=(
+            status.HTTP_200_OK if bool(result.get("idempotent")) else status.HTTP_201_CREATED
+        ),
+        content=_public_onboarding_recovery_content(result),
     )
 
 
