@@ -13,11 +13,14 @@ updates:
       - cve-remediation-sla
 
   - package-ecosystem: "npm"
+    # Web UI packages only. react / react-dom / @types/react and the shared
+    # toolchain update freely here -- they are not Expo-owned in these packages.
+    # atlas-mobile is a SEPARATE entry below so its frozen Expo SDK stack can be
+    # held without suppressing these shared web updates (#2397).
     directories:
       - "/atlas-admin-ui"
       - "/atlas-churn-ui"
       - "/atlas-intel-ui"
-      - "/atlas-mobile"
       - "/atlas-ui"
       - "/portfolio-ui"
     schedule:
@@ -36,24 +39,42 @@ updates:
         update-types:
           - "patch"
           - "minor"
-    # atlas-mobile is frozen on Expo SDK 54; its React Native / Expo stack cannot
-    # take RN/Expo version bumps without a deliberate whole-SDK upgrade. Grouping
-    # them with the web-UI packages repeatedly broke the build and blocked the npm
-    # security group (closed PRs #2356 mobile leg / #2400 / #2401; blocked #2397).
-    # Block VERSION updates for these (major/minor/patch) so the web-UI security
-    # patches flow; genuine Dependabot security updates still surface (update-types
-    # scopes this to version updates only). These deps live only in atlas-mobile.
+
+  - package-ecosystem: "npm"
+    # atlas-mobile is frozen on Expo SDK 54, isolated in its own entry so the FULL
+    # Expo-owned SDK stack can be frozen without suppressing the shared web-UI React
+    # updates above. Expo owns react / react-dom / @types/react here (expo install
+    # --check rejects React 19.2 on SDK 54), and @react-native/* +
+    # @react-native-async-storage/* are scoped SDK-line packages the unscoped
+    # react-native-* pattern misses. This whole set moves only on a deliberate
+    # Expo-SDK upgrade, not one package at a time (closed PRs #2356 mobile leg /
+    # #2400 / #2401; blocked #2397). Block VERSION updates so the mobile build stays
+    # SDK-consistent; genuine security updates still surface (update-types scopes to
+    # version updates only). Non-SDK deps (tailwindcss, typescript, zustand) still
+    # receive updates.
+    directories:
+      - "/atlas-mobile"
+    schedule:
+      interval: "weekly"
+      day: "monday"
+      time: "08:35"
+      timezone: "America/Chicago"
+    labels:
+      - dependencies
+      - security
+      - cve-remediation-sla
+    groups:
+      atlas-mobile-patches:
+        patterns:
+          - "*"
+        update-types:
+          - "patch"
+          - "minor"
     ignore:
       - dependency-name: "react-native"
         update-types: ["version-update:semver-major", "version-update:semver-minor", "version-update:semver-patch"]
       - dependency-name: "react-native-*"
         update-types: ["version-update:semver-major", "version-update:semver-minor", "version-update:semver-patch"]
-      # Scoped SDK-line-coupled packages that "react-native-*" does NOT match:
-      # @react-native/metro-config is pinned to the 0.81 line (moving it to 0.87
-      # while react-native stays 0.81 recreates the mixed-SDK build), and the Expo
-      # SDK 54 async-storage module. react / react-dom / @types/react are shared
-      # with the web-UI packages and are deliberately NOT ignored (React's own 19.x
-      # line, not the RN SDK line).
       - dependency-name: "@react-native/*"
         update-types: ["version-update:semver-major", "version-update:semver-minor", "version-update:semver-patch"]
       - dependency-name: "@react-native-async-storage/*"
@@ -66,10 +87,21 @@ updates:
         update-types: ["version-update:semver-major", "version-update:semver-minor", "version-update:semver-patch"]
       - dependency-name: "expo-*"
         update-types: ["version-update:semver-major", "version-update:semver-minor", "version-update:semver-patch"]
+      - dependency-name: "react"
+        update-types: ["version-update:semver-major", "version-update:semver-minor", "version-update:semver-patch"]
+      - dependency-name: "react-dom"
+        update-types: ["version-update:semver-major", "version-update:semver-minor", "version-update:semver-patch"]
+      - dependency-name: "@types/react"
+        update-types: ["version-update:semver-major", "version-update:semver-minor", "version-update:semver-patch"]
 
   - package-ecosystem: "pip"
+    # Root "/" is intentionally excluded: its requirements.txt is bound to the
+    # GENERATED constraints.root-asr.txt via a sha256 pin, and
+    # python_constraints_checks.yml runs compile_root_asr_constraints.py --check,
+    # which rejects any edit Dependabot makes without re-running the compiler. Root
+    # Python deps are maintained through that compiler, not Dependabot (see #2404 /
+    # follow-up). Only the sub-directories below (no ASR binding) are Dependabot-safe.
     directories:
-      - "/"
       - "/atlas_edge"
       - "/atlas_video-processing"
       - "/atlas_video-processing/ingest/drone_client"

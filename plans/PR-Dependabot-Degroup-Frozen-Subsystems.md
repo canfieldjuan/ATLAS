@@ -43,16 +43,25 @@ are 100% blocked:
 Ownership lane: dev-workflow/dependabot-config
 Slice phase: Workflow/process
 
-1. Add an `ignore` block (version-update-scoped) to the `npm` ecosystem entry for
-   `react-native`, `react-native-*`, `@react-native/*`,
-   `@react-native-async-storage/*`, `nativewind`, `@siteed/*`, `expo`, `expo-*`.
-   (`@react-native/*` and `@react-native-async-storage/*` are scoped SDK-line
-   packages that `react-native-*` does not match; `react`/`react-dom`/`@types/react`
-   are shared with the web UI and deliberately left updatable.)
-2. Add an `ignore` block (version-update-scoped) to the `pip` ecosystem entry for
-   `torch`, `torchaudio`, `torchvision`, `transformers`, `accelerate`,
-   `bitsandbytes`, `sentence-transformers`, `datasets`, `cuda-toolkit`,
-   `cuda-pathfinder`, `nvidia-*`.
+1. Split the single `npm` entry into two: (a) the 5 web-UI directories with NO
+   ignores (react/react-dom/@types/react and the toolchain update freely), and
+   (b) a separate `/atlas-mobile` entry whose `ignore` freezes the FULL Expo SDK
+   stack -- `react-native`, `react-native-*`, `@react-native/*`,
+   `@react-native-async-storage/*`, `nativewind`, `@siteed/*`, `expo`, `expo-*`,
+   and (Expo-owned on SDK 54) `react`, `react-dom`, `@types/react`. Isolating mobile
+   is required to freeze its Expo-owned React without suppressing the shared web
+   React updates (Codex R11 on #2411; `expo install --check` rejects React 19.2 on
+   SDK 54, per plans/archive/PR-Mobile-NPM-Security-Patches.md).
+2. Drop root `/` from the `pip` entry's `directories` and keep a version-update
+   `ignore` for the ML/CUDA set (`torch`, `torchaudio`, `torchvision`,
+   `transformers`, `accelerate`, `bitsandbytes`, `sentence-transformers`,
+   `datasets`, `cuda-toolkit`, `cuda-pathfinder`, `nvidia-*`) on the remaining
+   sub-directories. Root `/` is excluded because its `requirements.txt` is bound to
+   the GENERATED `constraints.root-asr.txt` via a sha256 pin that
+   `compile_root_asr_constraints.py --check` (in `python_constraints_checks.yml`)
+   re-validates; Dependabot cannot re-run the compiler, so any root edit fails that
+   check (Codex R12 on #2411). Root Python deps are maintained via the compiler,
+   not Dependabot.
 
 ### Review Contract
 
@@ -78,8 +87,9 @@ Slice phase: Workflow/process
     version updates only and does not suppress Dependabot security updates.
 - Reachability proof: entrypoint is the Dependabot config parser reading
   `.github/dependabot.yml` from the default branch after merge; observable effect
-  is that a subsequent `@dependabot recreate` of #2397/#2404 (and all future
-  weekly groups) rebuilds the group PRs WITHOUT the ignored subsystem bumps. No
+  is that a subsequent `@dependabot recreate` of #2397 rebuilds it as a web-UI-only
+  group (mergeable), and future weekly groups exclude the frozen subsystems. #2404
+  is closed (its root updates cannot be Dependabot-merged, per the ASR lock). No
   runtime surface -- this is CI-tooling config.
 - Affected surfaces: `.github/dependabot.yml` npm + pip `updates` entries; the
   future/recreated `npm-security-and-patches` and `python-security-and-patches`
@@ -110,16 +120,24 @@ guard or admission path.
 
 ## Mechanism
 
-Dependabot reads `updates[].ignore` from the config on the default branch. Each
-`ignore` entry with `update-types` limited to `version-update:semver-{major,minor,
-patch}` tells Dependabot to skip **version** updates for that dependency (matched
-by exact name or wildcard, e.g. `react-native-*`, `nvidia-*`) while still allowing
-**security** updates. Because the group `patterns: ["*"]` only sweeps in deps that
-have a proposed update, ignoring the frozen subsystems' version updates removes
-them from the group entirely. The remaining group is exactly the mergeable set:
-the 5 web-UI packages (npm) and the ~75 non-ML security patches (pip), whose pip
-resolution then succeeds because `torch`/`cuda-toolkit` stay at their current,
-mutually-compatible pinned versions.
+Dependabot reads the `updates` list from the config on the default branch.
+
+- **npm:** atlas-mobile becomes its own `updates` entry. Its `ignore` (each rule
+  scoped to `version-update:semver-{major,minor,patch}`) freezes the full Expo SDK
+  stack -- including `react`/`react-dom`/`@types/react`, which are Expo-owned in
+  the mobile package but shared and freely-updatable in the separate web-UI entry.
+  The recreated `npm-security-and-patches` group is therefore the web-UI packages
+  only, and is mergeable; the mobile entry only proposes its non-SDK deps.
+- **pip:** dropping root `/` from `directories` stops Dependabot touching the
+  generated `constraints.root-asr.txt`/`requirements.txt` surface (which it cannot
+  recompile), so it no longer opens root PRs that fail the constraints check. The
+  remaining sub-directories have no ASR binding and are Dependabot-safe; the
+  version-update `ignore` for the ML/CUDA set still guards those sub-dirs (e.g.
+  `atlas_video-processing/requirements.txt` pins `torch`) from the resolution
+  conflict seen in #2404.
+
+`update-types` scoping means genuine Dependabot **security** updates are not
+suppressed for any ignored dependency.
 
 ## Intentional
 
@@ -137,8 +155,13 @@ mutually-compatible pinned versions.
 
 ## Deferred
 
-- Recreating #2397/#2404 and merging the slimmed security groups happens AFTER
-  this config lands (via `@dependabot recreate`), tracked in the same arc.
+- Recreating #2397 (npm) after this lands (via `@dependabot recreate`): the web-UI
+  entry rebuilds without atlas-mobile and is mergeable. Tracked in the same arc.
+- #2404 (pip) is NOT recreated -- with root `/` excluded, its root updates cannot
+  be a mergeable Dependabot PR (the generated ASR lock). It is closed, and a
+  follow-up issue tracks a proper root-Python-security-update path (a scheduled
+  `compile_root_asr_constraints.py` run that picks up CVEs, or a Dependabot-
+  compatible regeneration step).
 - A deliberate atlas-mobile Expo-SDK upgrade and a deliberate torch/CUDA-set bump
   remain future arcs, out of scope here.
 
@@ -156,6 +179,6 @@ Parked hardening: none.
 
 | File | LOC |
 |---|---:|
-| `.github/dependabot.yml` | 61 |
-| `plans/PR-Dependabot-Degroup-Frozen-Subsystems.md` | 161 |
-| **Total** | **222** |
+| `.github/dependabot.yml` | 97 |
+| `plans/PR-Dependabot-Degroup-Frozen-Subsystems.md` | 183 |
+| **Total** | **280** |
