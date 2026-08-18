@@ -42,6 +42,7 @@ are 100% blocked:
 
 Ownership lane: dev-workflow/dependabot-config
 Slice phase: Workflow/process
+Max files: 2
 
 1. Split the single `npm` entry into two: (a) the 5 web-UI directories with NO
    ignores (react/react-dom/@types/react and the toolchain update freely), and
@@ -58,7 +59,7 @@ Slice phase: Workflow/process
    `datasets`, `cuda-toolkit`, `cuda-pathfinder`, `nvidia-*`) on the remaining
    sub-directories. Root `/` is excluded because its `requirements.txt` is bound to
    the GENERATED `constraints.root-asr.txt` via a sha256 pin that
-   `compile_root_asr_constraints.py --check` (in `python_constraints_checks.yml`)
+   `compile_root_asr_constraints.py --check` (in `.github/workflows/python_constraints_checks.yml`)
    re-validates; Dependabot cannot re-run the compiler, so any root edit fails that
    check (Codex R12 on #2411). Root Python deps are maintained via the compiler,
    not Dependabot.
@@ -180,5 +181,5 @@ Parked hardening: none.
 | File | LOC |
 |---|---:|
 | `.github/dependabot.yml` | 97 |
-| `plans/PR-Dependabot-Degroup-Frozen-Subsystems.md` | 183 |
-| **Total** | **280** |
+| `plans/PR-Dependabot-Degroup-Frozen-Subsystems.md` | 185 |
+| **Total** | **282** |
