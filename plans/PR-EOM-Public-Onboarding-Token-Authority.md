@@ -146,6 +146,30 @@ proof that its public and office completion paths cannot race.
   tracker/Website scope, production configuration, or any unrelated EOM
   lifecycle, payment, payroll, QR/GPS, or scheduling behavior.
 
+### URL-whitespace review remediation contract
+
+- Root cause: URL validation rejects C0/DEL control characters but accepts
+  printable and Unicode whitespace because `urlsplit` can still return a
+  truthy hostname. The original accepted value is later used to construct the
+  email link, so a whitespace-bearing URL is structurally admitted at startup
+  yet cannot be delivered as one usable link. This is an input-admission defect,
+  not an email-rendering symptom.
+- Correct remediation must:
+  1. Reject every raw URL value containing whitespace before URL parsing, while
+     retaining the existing C0/DEL rejection and HTTPS/credential/query/
+     fragment/secret validation.
+  2. Extend the independent configuration oracle and its generated input
+     families to cover ordinary and Unicode whitespace, so an acceptance change
+     cannot silently re-admit a link-breaking value.
+  3. Reject rather than canonicalize whitespace: valid configured base URLs
+     retain their exact behavior and no surprising address mutation reaches an
+     approval email.
+- Must not change: issuance-pause behavior, the configured redemption authority,
+  token grammar/rotation, service authentication, persistence/migrations,
+  revocation/fence behavior, valid URL semantics, Tracker/Website scope,
+  production configuration, or any unrelated EOM lifecycle, payroll, QR/GPS,
+  scheduling, payment, or email-copy behavior.
+
 ## Scope (this PR)
 
 Ownership lane: eom-public-onboarding-token-authority
@@ -163,6 +187,8 @@ Max files: 13
    transaction suite before a tracker or Website caller is introduced.
 5. Repair the current-head issuance-pause control seam without changing the
    durable authority, datastore-readiness, or handoff state machine.
+6. Reject link-breaking whitespace at public-onboarding URL admission without
+   canonicalizing operator input or changing the enabled delivery flow.
 
 ### Review Contract
 
@@ -225,6 +251,10 @@ Max files: 13
      fully disabled authority still returns 503, and the paused approval route
      sends no fragment link; focused route/configuration tests settle each
      observable state.
+  10. A public-onboarding base URL containing ordinary or Unicode whitespace is
+      rejected before parsing or email construction; its independent grammar
+      oracle rejects the same families, while a valid configured URL retains the
+      existing issuance behavior.
 - Reachability proof: `tests/test_eom_public_onboarding.py` uses an ASGI
   transport against the registered `/eom-funnel/public-onboarding/*` routes;
   `tests/test_eom_lead_conversion_integration.py` uses a disposable Postgres
@@ -274,6 +304,19 @@ seam in the enumeration; otherwise write "N/A - no boundary change."
     override unset/false; tracker session/finalize x valid bearer with authority
     enabled and override false; authority-disabled session/finalize x any
     bearer. The disabled-authority case remains rejected before CRM access.
+- Boundary path/seam: raw public-onboarding URL admission.
+  - Replaced-path behaviors: the original validator rejected C0/DEL characters
+    but delegated ordinary whitespace to `urlsplit`, whose truthy hostname could
+    admit a value that cannot be emitted as one email link. The raw admission
+    boundary now rejects all whitespace before parsing and retains every later
+    structural URL predicate.
+  - Guard-relevant fields: raw URL characters, normalized empty/nonempty state,
+    HTTPS scheme, authority/host, credentials, port, query/fragment, and the
+    paired HMAC secret.
+  - Caller x input shape: operator configuration x valid URL, blank disabled
+    default, ordinary-space host/path, Unicode-whitespace host, ASCII control,
+    and malformed URL families. Whitespace values reject before draft claim or
+    transport construction.
 - Boundary path/seam: public token finalizer and office-handoff fence.
   - Replaced-path behaviors: office handoff currently accepts an active lead in
     `new`, `estimate_booked`, or `won`; it now rejects only while a durable
@@ -300,13 +343,14 @@ Closure declaration:
 - The public-onboarding configuration tuple is **OPEN** because URL and secret
   values are arbitrary operator-provided text. Its safe membership is
   **DERIVED** at model validation time from HTTPS URL structure, the paired
-  URL/secret requirement, minimum secret byte length, and enabled/API flag
-  relationship; no host or URL list is copied into the policy. Every partial,
-  malformed, credential-bearing, query/fragment-bearing, or disabled-without-
-  safe-pair tuple rejects before issuance, which is the safer and cheaper
-  outcome because it preserves the existing disabled email path. A generated
-  URL/secret/flag product checks this result against an independent configuration
-  contract oracle.
+  URL/secret requirement, absence of C0/DEL and all whitespace, minimum secret
+  byte length, and enabled/API flag relationship; no host or URL list is copied
+  into the policy. Every partial, malformed, credential-bearing,
+  query/fragment-bearing, whitespace-bearing, or disabled-without-safe-pair
+  tuple rejects before issuance, which is the safer and cheaper outcome because
+  it preserves the existing disabled email path. A generated URL/secret/flag
+  product checks this result against an independent configuration contract
+  oracle.
 - The issuance override is **CLOSED**: its typed source is `bool | None` on
   `EOMFunnelConfig`. `None` derives the legacy authority-enabled issuance
   behavior; `false` pauses only new issuance; `true` is admitted only when the
@@ -340,8 +384,8 @@ fallback changes; otherwise write "N/A - no guard/config boundary change."
   routes but no new tokenized email.
 - Absent value probe: disabled/blank configuration never mints a token or sends
   a link and rejects public session/finalize access; a partially present,
-  insecure, or malformed explicit configuration fails startup/route admission
-  before a draft claim.
+  insecure, whitespace-bearing, or malformed explicit configuration fails
+  startup/route admission before a draft claim.
 - Default-session/default-context probe: no actor header is accepted as a
   substitute for service authentication; no service bearer is emitted to a
   response, email, log, draft, or Website source.
@@ -402,6 +446,13 @@ writes the normal contact-to-customer evidence plus
 the token redeemed. The staff-only `revoke-link` command deliberately stays
 available if issuance is later paused; it is the recovery path that releases
 the existing office fence.
+
+The configuration validator admits the raw public-onboarding base URL before
+any URL normalization or email-link construction. It rejects C0/DEL and every
+Unicode whitespace character, then applies the existing HTTPS/host/credential/
+port/query/fragment and paired-secret checks. The validator rejects rather than
+rewrites an operator value, so a valid base URL retains its established delivery
+semantics and a malformed one cannot be transported as a fragment link.
 
 ## Intentional
 
@@ -469,12 +520,11 @@ blocks the safety of this vertical path.
 ## Verification
 
 - Passed locally:
-  - `pytest -q tests/test_eom_public_onboarding.py` -- 28 passed.
-  - `pytest -q tests/test_eom_public_onboarding.py tests/test_eom_lead_conversion.py tests/test_eom_funnel_capability_manifest.py tests/test_eom_render_profile.py tests/test_eom_link_verification.py tests/test_eom_billing_recipients.py tests/test_eom_payment_receipts.py` -- 391 passed, 7 skipped.
+  - `pytest -q tests/test_eom_public_onboarding.py` -- 30 passed.
   - The exact `Run EOM lead pipeline checks` file list in
     `.github/workflows/atlas_eom_lead_pipeline_checks.yml`, run locally with
     `ATLAS_MIGRATION_TEST_DATABASE_URL` pointed at a fresh disposable
-    `postgres:16-alpine` instance -- 1098 passed, 5 skipped.
+    `postgres:16-alpine` instance -- 1105 passed, 5 skipped.
   - `python -m compileall -q` over every changed Python module/test,
     `ruff check` over the same paths, and `git diff --check` -- passed.
   - `python scripts/check_guard_class_closure.py --base origin/main --strict`
@@ -491,7 +541,7 @@ blocks the safety of this vertical path.
 | File | LOC |
 |---|---:|
 | `.github/workflows/atlas_eom_lead_pipeline_checks.yml` | 7 |
-| `atlas_brain/eom_api/config.py` | 136 |
+| `atlas_brain/eom_api/config.py` | 141 |
 | `atlas_brain/eom_api/funnel.py` | 218 |
 | `atlas_brain/eom_api/funnel_auth.py` | 62 |
 | `atlas_brain/eom_api/funnel_store.py` | 83 |
@@ -499,8 +549,8 @@ blocks the safety of this vertical path.
 | `atlas_brain/services/eom_onboarding_drafts.py` | 47 |
 | `atlas_brain/services/eom_public_onboarding_tokens.py` | 169 |
 | `atlas_brain/storage/migrations/382_eom_public_onboarding_tokens.sql` | 72 |
-| `plans/PR-EOM-Public-Onboarding-Token-Authority.md` | 506 |
+| `plans/PR-EOM-Public-Onboarding-Token-Authority.md` | 556 |
 | `tests/test_eom_lead_conversion_integration.py` | 558 |
-| `tests/test_eom_public_onboarding.py` | 865 |
+| `tests/test_eom_public_onboarding.py` | 889 |
 | `tests/test_eom_render_profile.py` | 11 |
-| **Total** | **3384** |
+| **Total** | **3463** |

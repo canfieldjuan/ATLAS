@@ -374,7 +374,10 @@ def _public_onboarding_config_spec_oracle(
 ) -> bool:
     """Encode the configuration contract independently of the model validator."""
 
-    if any(ord(character) < 32 or ord(character) == 127 for character in url):
+    if any(
+        character.isspace() or ord(character) < 32 or ord(character) == 127
+        for character in url
+    ):
         return False
     base_url = url.strip()
     normalized_secret = secret.strip()
@@ -432,6 +435,8 @@ def test_public_onboarding_config_matches_the_safe_url_grammar_product():
         "@",
         "user@effinghamofficemaids.com",
         "user:password@effinghamofficemaids.com",
+        "exa mple.com",
+        "exa\u00a0mple.com",
     )
     port_families = ("", ":443", ":0", ":not-a-port")
     suffix_families = (
@@ -439,6 +444,7 @@ def test_public_onboarding_config_matches_the_safe_url_grammar_product():
         "/onboarding?preview=true",
         "/onboarding#fragment",
         "/on\nboarding",
+        "/on boarding",
     )
     secret_families = (_PUBLIC_SECRET, "short", "")
     previous_secret_families = (
@@ -505,7 +511,7 @@ def test_public_onboarding_config_matches_the_safe_url_grammar_product():
         )
         checked += 1
 
-    assert checked == 34560
+    assert checked == 60480
 
 
 def test_public_onboarding_config_requires_a_complete_safe_pair():
@@ -559,6 +565,24 @@ def test_public_onboarding_config_requires_a_complete_safe_pair():
             public_onboarding_url=_PUBLIC_URL,
             public_onboarding_hmac_secret=_PUBLIC_SECRET,
             public_onboarding_previous_hmac_secret="short",
+        )
+
+
+@pytest.mark.parametrize(
+    "url",
+    (
+        "https://exa mple.test/onboarding",
+        "https://exa\u00a0mple.test/onboarding",
+    ),
+)
+def test_public_onboarding_config_rejects_link_breaking_whitespace(url):
+    with pytest.raises(ValidationError, match="whitespace"):
+        EOMFunnelConfig(
+            api_enabled=True,
+            service_token_sha256=_SERVICE.sha256,
+            public_onboarding_enabled=True,
+            public_onboarding_url=url,
+            public_onboarding_hmac_secret=_PUBLIC_SECRET,
         )
 
 
