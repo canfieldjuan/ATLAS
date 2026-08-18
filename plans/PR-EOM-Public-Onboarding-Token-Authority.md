@@ -110,7 +110,41 @@ proof that its public and office completion paths cannot race.
 - Must not change: token text/version, service-only route authentication,
   browser/Tracker scope, office-handoff request or response shapes, generic
   CRM writers, tracker Customer/Site creation, production configuration, or any
-  payroll, QR/GPS, scheduling, payment, and existing disabled-path behavior.
+  payroll, QR/GPS, scheduling, payment, and existing disabled-issuance email
+  behavior.
+
+### Issuance-pause review remediation contract
+
+- Root cause: `public_onboarding_enabled` currently carries two incompatible
+  decisions. It tells `approve-send` whether to mint a new bearer, but the same
+  value also gates the configured HMAC authority used by session/finalize.
+  Turning it off to pause issuance therefore returns 503 before an already
+  issued bearer reaches HMAC or durable-token validation, even though that row
+  still fences the office handoff. This change fixes that upstream control-model
+  error, not the downstream 503 symptom.
+- Correct remediation must:
+  1. Retain `public_onboarding_enabled` as the existing, migration-gated
+     authority switch for the private service routes so absent authority remains
+     fail-closed and existing deployment configuration remains compatible.
+  2. Add a typed optional issuance override whose unset value derives the
+     legacy enabled behavior. With authority enabled and that override false,
+     `approve-send` must retain its ordinary draft claim/send/confirm flow
+     without minting or transporting a new bearer, while session/finalize can
+     still authenticate a valid outstanding bearer through the existing private
+     service boundary.
+  3. Reject an explicit request to issue while the authority is disabled. Do not
+     loosen HMAC, URL, API-bearer, token-status, revocation, key-fingerprint,
+     migration-readiness, or office-handoff checks.
+  4. Prove all three states through the real ASGI routes: fully disabled
+     authority returns 503; enabled authority with the pause override permits a
+     valid session and finalization; and the same pause sends no new link.
+     Update the rollback instructions so an operator pauses issuance without
+     disabling redemption before issued rows are drained.
+- Must not change: the meaning of a fully disabled authority, the legacy
+  configured-and-enabled issuance default, token format/rotation, service
+  authentication, persistence/migrations, revocation, office-fence semantics,
+  tracker/Website scope, production configuration, or any unrelated EOM
+  lifecycle, payment, payroll, QR/GPS, or scheduling behavior.
 
 ## Scope (this PR)
 
@@ -127,6 +161,8 @@ Max files: 13
    narrow prefill response and no generic CRM mutation surface.
 4. Prove the new surface through the router and a disposable PostgreSQL
    transaction suite before a tracker or Website caller is introduced.
+5. Repair the current-head issuance-pause control seam without changing the
+   durable authority, datastore-readiness, or handoff state machine.
 
 ### Review Contract
 
@@ -181,6 +217,14 @@ Max files: 13
      configuration suite is enrolled in the explicit EOM pull-request workflow.
      Together these prove the staff paths and previously advertised API shapes
      retain their contracts.
+  9. `public_onboarding_enabled` remains the authority/readiness switch. Its
+     optional issuance override defaults to the legacy effective value, rejects
+     `true` when authority is disabled, and may be explicitly false to stop
+     future tokenized emails while real ASGI session/finalize requests for an
+     outstanding valid bearer remain service-authenticated and reachable. A
+     fully disabled authority still returns 503, and the paused approval route
+     sends no fragment link; focused route/configuration tests settle each
+     observable state.
 - Reachability proof: `tests/test_eom_public_onboarding.py` uses an ASGI
   transport against the registered `/eom-funnel/public-onboarding/*` routes;
   `tests/test_eom_lead_conversion_integration.py` uses a disposable Postgres
@@ -218,6 +262,18 @@ seam in the enumeration; otherwise write "N/A - no boundary change."
     contact, approving employee identity.
   - Caller x input shape: authenticated office approval x pending/sending/sent/
     revoked drafts; only the current pending claim is intentionally changed.
+- Boundary path/seam: public-onboarding authority versus issuance pause.
+  - Replaced-path behaviors: one authority flag previously both made routes
+    reachable and chose whether approval minted a bearer. The new optional
+    issuance override preserves the former authority decision and isolates the
+    latter mint/no-mint decision.
+  - Guard-relevant fields: authority flag, optional issuance override, valid
+    URL/HMAC tuple, private funnel API flag and bearer, and a durable bearer
+    whose token-status/key-binding predicates are still enforced downstream.
+  - Caller x input shape: office approval x authority enabled/disabled and
+    override unset/false; tracker session/finalize x valid bearer with authority
+    enabled and override false; authority-disabled session/finalize x any
+    bearer. The disabled-authority case remains rejected before CRM access.
 - Boundary path/seam: public token finalizer and office-handoff fence.
   - Replaced-path behaviors: office handoff currently accepts an active lead in
     `new`, `estimate_booked`, or `won`; it now rejects only while a durable
@@ -251,6 +307,13 @@ Closure declaration:
   outcome because it preserves the existing disabled email path. A generated
   URL/secret/flag product checks this result against an independent configuration
   contract oracle.
+- The issuance override is **CLOSED**: its typed source is `bool | None` on
+  `EOMFunnelConfig`. `None` derives the legacy authority-enabled issuance
+  behavior; `false` pauses only new issuance; `true` is admitted only when the
+  authority is enabled. Model validation rejects the false-authority/
+  true-issuance combination before an approval claim. The effective decision is
+  derived once in configuration, and every rejected or unconfigured authority
+  path remains on the safe no-issue/no-redemption side.
 - Token statuses are **CLOSED** and authored by the new migration CHECK plus
   the canonical Python status vocabulary. Out-of-set database values are
   rejected by the schema; unknown application values fail closed rather than
@@ -267,13 +330,18 @@ Closure declaration:
 Required for guard, validator, resolver, admission-boundary, or env/config
 fallback changes; otherwise write "N/A - no guard/config boundary change."
 
-- Deployed/default config values: public onboarding is disabled by default;
-  existing approved-draft email behavior is the default session behavior.
+- Deployed/default config values: public-onboarding authority is disabled and
+  the optional issuance override is unset; existing approved-draft email
+  behavior is the default session behavior.
 - Explicit value probe: a valid HTTPS page URL plus high-entropy Atlas-only
-  HMAC secret and enabled flag yields the tokenized email and private routes.
+  HMAC secret and enabled authority yields the tokenized email and private
+  routes when the issuance override is unset or true. Keeping that authority
+  enabled while explicitly setting the override false yields private redemption
+  routes but no new tokenized email.
 - Absent value probe: disabled/blank configuration never mints a token or sends
-  a link; a partially present, insecure, or malformed explicit configuration
-  fails startup/route admission before a draft claim.
+  a link and rejects public session/finalize access; a partially present,
+  insecure, or malformed explicit configuration fails startup/route admission
+  before a draft claim.
 - Default-session/default-context probe: no actor header is accepted as a
   substitute for service authentication; no service bearer is emitted to a
   response, email, log, draft, or Website source.
@@ -319,16 +387,21 @@ the ordinary draft delivery state as today, and writes redacted history using
 the stored draft body rather than the bearer-bearing transport body.
 
 The tracker-only session/finalize routes authenticate with
-`require_eom_funnel_api` and a separate public-onboarding-enabled dependency,
-never `require_eom_funnel_actor`. The session route returns only the prefill
-that the tracker needs to construct the public form. The finalizer takes only
-the bearer plus tracker Customer/Site identifiers; it derives the Atlas contact
-and approval actor from durable token state. Its transaction reuses the existing
-sorted advisory locks and handoff uniqueness constraints, writes the normal
-contact-to-customer evidence plus `completion_channel=public_onboarding`,
-inserts the single handoff, and marks the token redeemed. The staff-only
-`revoke-link` command deliberately stays available if issuance is later
-disabled; it is the recovery path that releases the existing office fence.
+`require_eom_funnel_api` and the configured public-onboarding authority,
+never `require_eom_funnel_actor`. The authority flag continues to control
+migration readiness and complete route availability. A separate optional
+issuance override is consulted only by `approve-send`: its default retains the
+legacy enabled behavior, while `false` stops new bearer minting without
+interrupting redemption or private revocation. The session route returns only
+the prefill that the tracker needs to construct the public form. The finalizer
+takes only the bearer plus tracker Customer/Site identifiers; it derives the
+Atlas contact and approval actor from durable token state. Its transaction
+reuses the existing sorted advisory locks and handoff uniqueness constraints,
+writes the normal contact-to-customer evidence plus
+`completion_channel=public_onboarding`, inserts the single handoff, and marks
+the token redeemed. The staff-only `revoke-link` command deliberately stays
+available if issuance is later paused; it is the recovery path that releases
+the existing office fence.
 
 ## Intentional
 
@@ -346,15 +419,21 @@ disabled; it is the recovery path that releases the existing office fence.
   intentional many-to-one tracker-to-Atlas topology.
 - The Atlas PR is deliberately feature-gated and not a live end-to-end rollout:
   tracker and Website callers must land before an operator enables it.
+- `public_onboarding_enabled=false` remains a full authority disable, not an
+  issuance-pause command. To drain existing issued rows, retain the configured
+  authority and set only the optional issuance override false; leaving the
+  override unset preserves the behavior of already-configured deployments.
 
 ### Rollback safety
 
 The migration is audit-bearing and is never dropped as an application rollback
 shortcut. If public onboarding has ever been enabled, the release manager must:
 
-1. Set public issuance disabled while the current Atlas release is still
-   serving. The existing private `revoke-link` route remains available in that
-   state and no new token can be minted.
+1. While the current Atlas release is still serving, retain
+   `ATLAS_EOM_FUNNEL_PUBLIC_ONBOARDING_ENABLED=true` and set
+   `ATLAS_EOM_FUNNEL_PUBLIC_ONBOARDING_ISSUANCE_ENABLED=false`. This pauses new
+   token minting while session/finalize and the existing private `revoke-link`
+   route remain available to drain already-issued rows.
 2. Enumerate every `issued` row through the authorized Atlas data path, invoke
    `revoke-link` for its draft, and retain the revoked row as audit evidence.
 3. Verify `SELECT count(*) FROM eom_public_onboarding_tokens WHERE status =
@@ -390,10 +469,16 @@ blocks the safety of this vertical path.
 ## Verification
 
 - Passed locally:
-  - `pytest -q tests/test_eom_public_onboarding.py tests/test_eom_lead_conversion.py tests/test_eom_funnel_capability_manifest.py tests/test_eom_render_profile.py tests/test_eom_link_verification.py tests/test_eom_billing_recipients.py tests/test_eom_payment_receipts.py`
-  - `ATLAS_MIGRATION_TEST_DATABASE_URL=<disposable local PostgreSQL> pytest -q tests/test_eom_lead_conversion_integration.py -rs`
+  - `pytest -q tests/test_eom_public_onboarding.py` -- 28 passed.
+  - `pytest -q tests/test_eom_public_onboarding.py tests/test_eom_lead_conversion.py tests/test_eom_funnel_capability_manifest.py tests/test_eom_render_profile.py tests/test_eom_link_verification.py tests/test_eom_billing_recipients.py tests/test_eom_payment_receipts.py` -- 391 passed, 7 skipped.
+  - The exact `Run EOM lead pipeline checks` file list in
+    `.github/workflows/atlas_eom_lead_pipeline_checks.yml`, run locally with
+    `ATLAS_MIGRATION_TEST_DATABASE_URL` pointed at a fresh disposable
+    `postgres:16-alpine` instance -- 1098 passed, 5 skipped.
   - `python -m compileall -q` over every changed Python module/test,
-    `ruff check` over the same paths, and `git diff --check`.
+    `ruff check` over the same paths, and `git diff --check` -- passed.
+  - `python scripts/check_guard_class_closure.py --base origin/main --strict`
+    -- advisory lint passed with no guard-shaped change lacking property proof.
 - The disposable `postgres:16-alpine` container was local-only and removed after
   the integration suite. No configured repository formatter/type-check command
   applies to this slice; the existing broad Black rewrite was not run because
@@ -406,16 +491,16 @@ blocks the safety of this vertical path.
 | File | LOC |
 |---|---:|
 | `.github/workflows/atlas_eom_lead_pipeline_checks.yml` | 7 |
-| `atlas_brain/eom_api/config.py` | 109 |
+| `atlas_brain/eom_api/config.py` | 136 |
 | `atlas_brain/eom_api/funnel.py` | 218 |
-| `atlas_brain/eom_api/funnel_auth.py` | 60 |
+| `atlas_brain/eom_api/funnel_auth.py` | 62 |
 | `atlas_brain/eom_api/funnel_store.py` | 83 |
 | `atlas_brain/services/crm_provider.py` | 650 |
 | `atlas_brain/services/eom_onboarding_drafts.py` | 47 |
 | `atlas_brain/services/eom_public_onboarding_tokens.py` | 169 |
 | `atlas_brain/storage/migrations/382_eom_public_onboarding_tokens.sql` | 72 |
-| `plans/PR-EOM-Public-Onboarding-Token-Authority.md` | 421 |
+| `plans/PR-EOM-Public-Onboarding-Token-Authority.md` | 506 |
 | `tests/test_eom_lead_conversion_integration.py` | 558 |
-| `tests/test_eom_public_onboarding.py` | 774 |
+| `tests/test_eom_public_onboarding.py` | 865 |
 | `tests/test_eom_render_profile.py` | 11 |
-| **Total** | **3179** |
+| **Total** | **3384** |

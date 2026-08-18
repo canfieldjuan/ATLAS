@@ -163,7 +163,10 @@ class _CRM:
 
 
 def _config(
-    *, enabled: bool = True, previous_secret: str | None = None
+    *,
+    enabled: bool = True,
+    issuance_enabled: bool | None = None,
+    previous_secret: str | None = None,
 ) -> EOMFunnelConfig:
     values: dict[str, object] = {
         "api_enabled": True,
@@ -177,6 +180,8 @@ def _config(
                 "public_onboarding_hmac_secret": _PUBLIC_SECRET,
             }
         )
+    if issuance_enabled is not None:
+        values["public_onboarding_issuance_enabled"] = issuance_enabled
     if previous_secret is not None:
         values["public_onboarding_previous_hmac_secret"] = previous_secret
     return EOMFunnelConfig(**values)
@@ -186,6 +191,7 @@ def _app(
     crm: _CRM,
     *,
     enabled: bool = True,
+    issuance_enabled: bool | None = None,
     previous_secret: str | None = None,
     sender=None,
     history=None,
@@ -195,6 +201,7 @@ def _app(
     app.dependency_overrides[funnel_mod._crm_dependency] = lambda: crm
     app.dependency_overrides[auth_mod.get_eom_funnel_api_config] = lambda: _config(
         enabled=enabled,
+        issuance_enabled=issuance_enabled,
         previous_secret=previous_secret,
     )
     app.dependency_overrides[funnel_mod._onboarding_sender_dependency] = lambda: sender
@@ -357,7 +364,13 @@ def test_public_token_parser_accepts_one_previous_verifier_with_its_key_binding(
 
 
 def _public_onboarding_config_spec_oracle(
-    *, api_enabled: bool, enabled: bool, url: str, secret: str, previous_secret: str
+    *,
+    api_enabled: bool,
+    enabled: bool,
+    issuance_enabled: bool | None,
+    url: str,
+    secret: str,
+    previous_secret: str,
 ) -> bool:
     """Encode the configuration contract independently of the model validator."""
 
@@ -374,6 +387,8 @@ def _public_onboarding_config_spec_oracle(
     if has_previous_secret and not has_secret:
         return False
     if has_previous_secret and normalized_previous_secret == normalized_secret:
+        return False
+    if issuance_enabled is True and not enabled:
         return False
     if enabled and (not has_url or not api_enabled):
         return False
@@ -402,7 +417,7 @@ def _public_onboarding_config_spec_oracle(
 
 
 def test_public_onboarding_config_matches_the_safe_url_grammar_product():
-    """Generate URL families x secret/flag values and assert the contract oracle.
+    """Generate URL families x authority/issuance states and assert the oracle.
 
     Config is open operator input, so every unrecognized URL/configuration
     family must settle on the safe result: model construction fails before
@@ -441,6 +456,7 @@ def test_public_onboarding_config_matches_the_safe_url_grammar_product():
         secret,
         previous_secret,
         enabled,
+        issuance_enabled,
         api_enabled,
     ) in itertools.product(
         scheme_families,
@@ -450,12 +466,14 @@ def test_public_onboarding_config_matches_the_safe_url_grammar_product():
         secret_families,
         previous_secret_families,
         (False, True),
+        (None, False, True),
         (False, True),
     ):
         url = "" if scheme == "blank" else f"{scheme}://{authority}{port}{suffix}"
         expected = _public_onboarding_config_spec_oracle(
             api_enabled=api_enabled,
             enabled=enabled,
+            issuance_enabled=issuance_enabled,
             url=url,
             secret=secret,
             previous_secret=previous_secret,
@@ -465,6 +483,7 @@ def test_public_onboarding_config_matches_the_safe_url_grammar_product():
                 api_enabled=api_enabled,
                 service_token_sha256=_SERVICE.sha256,
                 public_onboarding_enabled=enabled,
+                public_onboarding_issuance_enabled=issuance_enabled,
                 public_onboarding_url=url,
                 public_onboarding_hmac_secret=secret,
                 public_onboarding_previous_hmac_secret=previous_secret,
@@ -482,10 +501,11 @@ def test_public_onboarding_config_matches_the_safe_url_grammar_product():
             secret,
             previous_secret,
             enabled,
+            issuance_enabled,
         )
         checked += 1
 
-    assert checked == 11520
+    assert checked == 34560
 
 
 def test_public_onboarding_config_requires_a_complete_safe_pair():
@@ -512,6 +532,15 @@ def test_public_onboarding_config_requires_a_complete_safe_pair():
     with pytest.raises(ValidationError, match="API_ENABLED=true"):
         EOMFunnelConfig(
             public_onboarding_enabled=True,
+            public_onboarding_url=_PUBLIC_URL,
+            public_onboarding_hmac_secret=_PUBLIC_SECRET,
+        )
+    with pytest.raises(ValidationError, match="issuance requires"):
+        EOMFunnelConfig(
+            api_enabled=True,
+            service_token_sha256=_SERVICE.sha256,
+            public_onboarding_enabled=False,
+            public_onboarding_issuance_enabled=True,
             public_onboarding_url=_PUBLIC_URL,
             public_onboarding_hmac_secret=_PUBLIC_SECRET,
         )
@@ -641,7 +670,7 @@ async def test_public_session_binds_a_previous_key_to_the_private_provider_call(
         ),
     ),
 )
-async def test_public_onboarding_routes_fail_closed_when_public_issuance_is_disabled(
+async def test_public_onboarding_routes_fail_closed_when_public_authority_is_disabled(
     path, payload
 ):
     crm = _CRM()
@@ -654,6 +683,39 @@ async def test_public_onboarding_routes_fail_closed_when_public_issuance_is_disa
     assert response.status_code == 503
     assert crm.session_calls == []
     assert crm.finalize_calls == []
+
+
+@pytest.mark.asyncio
+async def test_paused_public_onboarding_issuance_keeps_existing_links_redeemable():
+    crm = _CRM()
+    token = _token()
+    app = _app(crm, issuance_enabled=False)
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=app), base_url="http://test"
+    ) as client:
+        denied = await client.post(
+            "/eom-funnel/public-onboarding/session", json={"token": token}
+        )
+        session = await client.post(
+            "/eom-funnel/public-onboarding/session",
+            headers=_service_headers(),
+            json={"token": token},
+        )
+        finalized = await client.post(
+            "/eom-funnel/public-onboarding/finalize",
+            headers=_service_headers(),
+            json={
+                "token": token,
+                "tracker_customer_id": 12,
+                "tracker_site_id": 24,
+            },
+        )
+
+    assert denied.status_code == 401
+    assert session.status_code == 200
+    assert finalized.status_code == 201
+    assert len(crm.session_calls) == 1
+    assert len(crm.finalize_calls) == 1
 
 
 @pytest.mark.asyncio
@@ -739,6 +801,35 @@ async def test_enabled_approval_sends_fragment_link_without_persisting_bearer():
     assert "#token=eomob1." in sender.calls[0]["body"]
     assert "#token=" not in response.text
     assert "#token=" not in crm._draft["body"]
+    assert "#token=" not in history.created[0]["body"]
+
+
+@pytest.mark.asyncio
+async def test_paused_public_onboarding_issuance_keeps_approval_email_untokenized():
+    crm = _CRM()
+    sender = _Sender()
+    history = _History()
+    app = _app(crm, issuance_enabled=False, sender=sender, history=history)
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=app), base_url="http://test"
+    ) as client:
+        response = await client.post(
+            f"/eom-funnel/onboarding-drafts/{crm.draft_id}/approve-send",
+            headers=_service_headers(actor=True),
+        )
+
+    assert response.status_code == 201
+    assert crm.claim_calls == [
+        {
+            "draft_id": str(crm.draft_id),
+            "actor_id": 1,
+            "actor_name": "Juan Canfield",
+            "public_onboarding_base_url": None,
+            "public_onboarding_hmac_secret": None,
+        }
+    ]
+    assert sender.calls[0]["body"] == crm._draft["body"]
+    assert "#token=" not in sender.calls[0]["body"]
     assert "#token=" not in history.created[0]["body"]
 
 

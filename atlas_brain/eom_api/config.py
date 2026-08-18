@@ -180,8 +180,16 @@ class EOMFunnelConfig(BaseSettings):
     public_onboarding_enabled: bool = Field(
         default=False,
         description=(
-            "Enable the tracker-only authority for public EOM onboarding links; "
-            "disabled keeps approved onboarding email behavior unchanged"
+            "Enable the configured tracker-only authority that validates and "
+            "redeems public EOM onboarding links"
+        ),
+    )
+    public_onboarding_issuance_enabled: bool | None = Field(
+        default=None,
+        description=(
+            "Optional new-link issuance override; unset preserves the authority "
+            "flag's legacy behavior, while false pauses issuance without "
+            "disabling redemption of already-issued links"
         ),
     )
     public_onboarding_url: str = Field(
@@ -206,6 +214,20 @@ class EOMFunnelConfig(BaseSettings):
             "rotation are still active"
         ),
     )
+
+    @property
+    def public_onboarding_issuance_is_enabled(self) -> bool:
+        """Return the effective new-link issuance decision.
+
+        An unset override preserves configured deployments' original behavior:
+        enabling the public authority also enables issuance. Operators can set
+        the override false to drain outstanding links without disabling the
+        authority that validates and redeems them.
+        """
+
+        if self.public_onboarding_issuance_enabled is None:
+            return self.public_onboarding_enabled
+        return self.public_onboarding_issuance_enabled
 
     @model_validator(mode="after")
     def reject_raw_eom_funnel_service_token_env(self) -> "EOMFunnelConfig":
@@ -253,6 +275,11 @@ class EOMFunnelConfig(BaseSettings):
         if has_previous_secret and previous_secret == secret:
             raise ValueError(
                 "public onboarding previous HMAC secret must differ from the primary secret"
+            )
+        if self.public_onboarding_issuance_enabled and not self.public_onboarding_enabled:
+            raise ValueError(
+                "public onboarding issuance requires "
+                "ATLAS_EOM_FUNNEL_PUBLIC_ONBOARDING_ENABLED=true"
             )
         if self.public_onboarding_enabled and not has_url:
             raise ValueError(

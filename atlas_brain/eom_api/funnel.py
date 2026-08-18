@@ -1165,7 +1165,7 @@ async def approve_and_send_onboarding_draft(
     """
     public_onboarding = (
         require_eom_public_onboarding_config(config)
-        if config.public_onboarding_enabled
+        if config.public_onboarding_issuance_is_enabled
         else None
     )
     try:

@@ -108,7 +108,9 @@ def require_eom_public_onboarding_config(
     The parent service bearer dependency stays on every route that uses this.
     Keeping the feature gate separate lets the base private funnel continue its
     current office behavior while callers roll out ahead of the manual Atlas
-    deployment or before the operator explicitly enables public links.
+    deployment or before the operator explicitly enables public links. The
+    optional issuance override is intentionally not consulted here: it pauses
+    new links at approval time without breaking redemption of existing links.
     """
 
     if not config.public_onboarding_enabled:
