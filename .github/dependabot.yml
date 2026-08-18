@@ -48,6 +48,16 @@ updates:
         update-types: ["version-update:semver-major", "version-update:semver-minor", "version-update:semver-patch"]
       - dependency-name: "react-native-*"
         update-types: ["version-update:semver-major", "version-update:semver-minor", "version-update:semver-patch"]
+      # Scoped SDK-line-coupled packages that "react-native-*" does NOT match:
+      # @react-native/metro-config is pinned to the 0.81 line (moving it to 0.87
+      # while react-native stays 0.81 recreates the mixed-SDK build), and the Expo
+      # SDK 54 async-storage module. react / react-dom / @types/react are shared
+      # with the web-UI packages and are deliberately NOT ignored (React's own 19.x
+      # line, not the RN SDK line).
+      - dependency-name: "@react-native/*"
+        update-types: ["version-update:semver-major", "version-update:semver-minor", "version-update:semver-patch"]
+      - dependency-name: "@react-native-async-storage/*"
+        update-types: ["version-update:semver-major", "version-update:semver-minor", "version-update:semver-patch"]
       - dependency-name: "nativewind"
         update-types: ["version-update:semver-major", "version-update:semver-minor", "version-update:semver-patch"]
       - dependency-name: "@siteed/*"

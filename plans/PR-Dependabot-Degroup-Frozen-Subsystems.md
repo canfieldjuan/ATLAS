@@ -44,7 +44,11 @@ Ownership lane: dev-workflow/dependabot-config
 Slice phase: Workflow/process
 
 1. Add an `ignore` block (version-update-scoped) to the `npm` ecosystem entry for
-   `react-native`, `react-native-*`, `nativewind`, `@siteed/*`, `expo`, `expo-*`.
+   `react-native`, `react-native-*`, `@react-native/*`,
+   `@react-native-async-storage/*`, `nativewind`, `@siteed/*`, `expo`, `expo-*`.
+   (`@react-native/*` and `@react-native-async-storage/*` are scoped SDK-line
+   packages that `react-native-*` does not match; `react`/`react-dom`/`@types/react`
+   are shared with the web UI and deliberately left updatable.)
 2. Add an `ignore` block (version-update-scoped) to the `pip` ecosystem entry for
    `torch`, `torchaudio`, `torchvision`, `transformers`, `accelerate`,
    `bitsandbytes`, `sentence-transformers`, `datasets`, `cuda-toolkit`,
@@ -56,10 +60,15 @@ Slice phase: Workflow/process
   - The file is valid Dependabot v2 config -- settled by `python3 -c "import yaml;
     yaml.safe_load(open('.github/dependabot.yml'))"` (exit 0) and GitHub's own
     dependabot config validation on push.
-  - The npm ignore block covers exactly the atlas-mobile-only deps and no web-UI
-    dep -- settled by inspecting the diff: every ignored name (`react-native`,
-    `react-native-*`, `nativewind`, `@siteed/*`, `expo`, `expo-*`) exists only in
-    `atlas-mobile/package.json`, not in the other 5 UI packages.
+  - The npm ignore block covers every SDK-line-coupled atlas-mobile dep and no
+    web-UI dep -- settled by inspecting the diff: every ignored name
+    (`react-native`, `react-native-*`, `@react-native/*`,
+    `@react-native-async-storage/*`, `nativewind`, `@siteed/*`, `expo`, `expo-*`)
+    exists only in `atlas-mobile/package.json`, not in the other 5 UI packages;
+    the scoped `@react-native*` patterns close the gap that `react-native-*` (which
+    matches only unscoped names) leaves for `@react-native/metro-config` etc.
+    `react`/`react-dom`/`@types/react` are shared with the web UI and are NOT
+    ignored (React's own 19.x line, not the RN SDK line).
   - The pip ignore block covers exactly the version-locked ML/CUDA set implicated
     in the resolution conflict / import break -- settled by the #2404
     `ResolutionImpossible` log naming `torch==2.13.0` + `cuda-toolkit==13.3.1`,
@@ -147,6 +156,6 @@ Parked hardening: none.
 
 | File | LOC |
 |---|---:|
-| `.github/dependabot.yml` | 51 |
-| `plans/PR-Dependabot-Degroup-Frozen-Subsystems.md` | 150 |
-| **Total** | **201** |
+| `.github/dependabot.yml` | 61 |
+| `plans/PR-Dependabot-Degroup-Frozen-Subsystems.md` | 161 |
+| **Total** | **222** |
