@@ -12,7 +12,7 @@ import os
 import threading
 from contextlib import asynccontextmanager
 from datetime import date, datetime, timezone
-from decimal import Decimal
+from decimal import Decimal, ROUND_HALF_UP
 from itertools import product
 from pathlib import Path
 from types import SimpleNamespace
@@ -41,6 +41,10 @@ from atlas_brain.services.commercial_billing_runs import (
     CommercialBillingRunConflictError,
     CommercialBillingRunService,
 )
+from atlas_brain.services.commercial_billing_candidate_overrides import (
+    decorate_line_keys,
+)
+from atlas_brain.storage.repositories.invoice import InvoiceRepository
 
 
 def _fingerprint(value: object) -> str:
@@ -174,6 +178,7 @@ class _MemoryConnection:
         self.approvals_by_candidate: dict[tuple[str, str], dict] = {}
         self.insert_attempts = 0
         self.review_decision: dict | None = None
+        self.override: dict | None = None
 
     async def fetchval(self, query, *_args):
         assert "pg_advisory_xact_lock" in query
@@ -196,6 +201,8 @@ class _MemoryConnection:
             return self._view_row(approval) if approval else None
         if "FROM commercial_billing_candidate_review_decisions" in query:
             return self.review_decision
+        if "FROM commercial_billing_candidate_overrides" in query:
+            return self.override
         if "INSERT INTO invoices" in query:
             self.insert_attempts += 1
             invoice_id = args[0]
@@ -220,11 +227,11 @@ class _MemoryConnection:
         if "INSERT INTO commercial_billing_candidate_approvals" in query:
             approval = {
                 "approval_id": args[0], "billing_run_id": args[1], "candidate_key": args[2],
-                "source_fingerprint": args[3], "request_fingerprint": args[6],
-                "invoice_id": args[7], "state": "invoice_created", "approved_by": args[8],
-                "approved_at": args[9],
+                "source_fingerprint": args[3], "review_fingerprint": args[4],
+                "request_fingerprint": args[7], "invoice_id": args[8],
+                "state": "invoice_created", "approved_by": args[9], "approved_at": args[10],
             }
-            self.approvals_by_key[args[5]] = approval
+            self.approvals_by_key[args[6]] = approval
             self.approvals_by_candidate[(args[2], args[3])] = approval
             return {"id": args[0]}
         raise AssertionError(query)
@@ -298,6 +305,8 @@ async def _approval_database():
             "370_commercial_billing_runs.sql",
             "372_commercial_billing_candidate_approvals.sql",
             "380_commercial_billing_candidate_review_decisions.sql",
+            "381_commercial_billing_candidate_review_decisions_recovery.sql",
+            "382_commercial_billing_candidate_overrides.sql",
             "373_commercial_billing_invoice_pdf_artifacts.sql",
         ):
             await connection.execute((migrations / name).read_text())
@@ -501,6 +510,384 @@ async def test_manual_square_candidate_creates_draft_without_a_gmail_recipient()
 
 
 @pytest.mark.asyncio
+async def test_real_postgres_override_requires_a_fresh_include_and_retries_without_invoice_side_effects():
+    async with _approval_database() as (connection, schema):
+        run_id, candidate = uuid4(), _candidate(
+            candidate_key="commercial-billing:override:2026-03"
+        )
+        fingerprint = candidate["sourceFingerprint"]
+        contact_id = UUID(candidate["customer"]["contactId"])
+        await connection.execute("INSERT INTO contacts (id) VALUES ($1)", contact_id)
+        await connection.execute(
+            """
+            INSERT INTO commercial_billing_runs (
+                id, billing_period, state, candidate_contract_version,
+                snapshot_fingerprint, source, idempotency_key,
+                request_fingerprint, created_by
+            ) VALUES ($1, '2026-03', 'draft', 2, $2, 'eom_admin', 'override-run-1', $2, 'Juan')
+            """,
+            run_id,
+            fingerprint,
+        )
+        await connection.execute(
+            """
+            INSERT INTO commercial_billing_run_candidates (
+                id, billing_run_id, candidate_key, source_fingerprint,
+                display_order, snapshot
+            ) VALUES ($1, $2, $3, $4, 0, $5::jsonb)
+            """,
+            uuid4(),
+            run_id,
+            candidate["candidateKey"],
+            fingerprint,
+            json.dumps(candidate),
+        )
+
+        legacy_decision_id = uuid4()
+        await connection.execute(
+            """
+            INSERT INTO commercial_billing_candidate_review_decisions (
+                id, billing_run_id, candidate_key, source_fingerprint,
+                revision, decision, reason, source, idempotency_key,
+                request_fingerprint, decided_by
+            ) VALUES ($1, $2, $3, $4, 1, 'included',
+                      'A mixed rollout legacy writer omitted the new column.',
+                      'eom_admin', 'legacy-override-decision-1', $5, 'Juan')
+            """,
+            legacy_decision_id,
+            run_id,
+            candidate["candidateKey"],
+            fingerprint,
+            _fingerprint("legacy-override-decision"),
+        )
+        assert await connection.fetchval(
+            "SELECT review_fingerprint FROM commercial_billing_candidate_review_decisions WHERE id = $1",
+            legacy_decision_id,
+        ) == fingerprint
+
+        review_service = CommercialBillingRunService(pool=_SchemaPool(connection, schema))
+        line_key = decorate_line_keys(candidate)["lineItems"][0]["lineKey"]
+        created_override = await review_service.set_candidate_override(
+            billing_run_id=run_id,
+            candidate_key=candidate["candidateKey"],
+            expected_source_fingerprint=fingerprint,
+            expected_override_revision=0,
+            reason_code="additional_charge",
+            reason="The customer approved an after-hours access fee for this run.",
+            line_overrides=[{"lineKey": line_key, "quantity": 3}],
+            adjustment={
+                "kind": "charge",
+                "description": "After-hours access fee",
+                "amountCents": 17,
+            },
+            recipient=None,
+            delivery_method="gmail_pdf",
+            idempotency_key="override-1",
+            actor="Juan",
+        )
+        active_review_fingerprint = created_override["candidate"]["reviewFingerprint"]
+        assert active_review_fingerprint != fingerprint
+        assert created_override["candidate"]["lineItems"][0]["amountCents"] == 14_475
+        assert created_override["candidate"]["totalCents"] == 14_492
+        assert created_override["candidate"]["lineItems"][0]["lineKey"] == line_key
+        assert candidate["lineItems"][0]["quantity"] == 2
+        assert await connection.fetchval("SELECT COUNT(*) FROM invoices") == 0
+
+        replayed_override = await review_service.set_candidate_override(
+            billing_run_id=run_id,
+            candidate_key=candidate["candidateKey"],
+            expected_source_fingerprint=fingerprint,
+            expected_override_revision=0,
+            reason_code="additional_charge",
+            reason="The customer approved an after-hours access fee for this run.",
+            line_overrides=[{"lineKey": line_key, "quantity": 3}],
+            adjustment={
+                "kind": "charge",
+                "description": "After-hours access fee",
+                "amountCents": 17,
+            },
+            recipient=None,
+            delivery_method="gmail_pdf",
+            idempotency_key="override-1",
+            actor="Juan",
+        )
+        assert replayed_override == {**created_override, "replayed": True}
+        assert await connection.fetchval(
+            "SELECT COUNT(*) FROM commercial_billing_candidate_overrides"
+        ) == 1
+
+        revised_override = await review_service.set_candidate_override(
+            billing_run_id=run_id,
+            candidate_key=candidate["candidateKey"],
+            expected_source_fingerprint=fingerprint,
+            expected_override_revision=1,
+            reason_code="additional_charge",
+            reason="The final approved after-hours quantity is four visits for this run.",
+            line_overrides=[
+                {
+                    "lineKey": created_override["candidate"]["lineItems"][0]["lineKey"],
+                    "quantity": 4,
+                }
+            ],
+            adjustment={
+                "kind": "charge",
+                "description": "After-hours access fee",
+                "amountCents": 17,
+            },
+            recipient=None,
+            delivery_method="gmail_pdf",
+            idempotency_key="override-2",
+            actor="Juan",
+        )
+        active_review_fingerprint = revised_override["candidate"]["reviewFingerprint"]
+        assert revised_override["override"]["revision"] == 2
+        assert revised_override["candidate"]["lineItems"][0]["amountCents"] == 19_300
+        assert revised_override["candidate"]["totalCents"] == 19_317
+        assert await connection.fetchval(
+            "SELECT COUNT(*) FROM commercial_billing_candidate_overrides"
+        ) == 2
+
+        with pytest.raises(CommercialBillingRunConflictError, match="Idempotency key"):
+            await review_service.set_candidate_review_decision(
+                billing_run_id=run_id,
+                candidate_key=candidate["candidateKey"],
+                expected_source_fingerprint=fingerprint,
+                expected_review_fingerprint=active_review_fingerprint,
+                decision="included",
+                reason="A mixed rollout legacy writer omitted the new column.",
+                idempotency_key="legacy-override-decision-1",
+                actor="Juan",
+            )
+
+        with pytest.raises(CommercialBillingRunConflictError, match="override revision changed"):
+            await review_service.set_candidate_override(
+                billing_run_id=run_id,
+                candidate_key=candidate["candidateKey"],
+                expected_source_fingerprint=fingerprint,
+                expected_override_revision=0,
+                reason_code="additional_charge",
+                reason="A stale browser tab must not replace the active review evidence.",
+                line_overrides=[{"lineKey": line_key, "quantity": 4}],
+                adjustment=None,
+                recipient=None,
+                delivery_method=None,
+                idempotency_key="override-stale-1",
+                actor="Juan",
+            )
+
+        current_source = _CandidateService(candidate)
+        approval_service = _service(_SchemaPool(connection, schema), current_source)
+        with pytest.raises(
+            CommercialBillingApprovalConflictError,
+            match="requires an explicit include",
+        ):
+            await approval_service.approve(
+                billing_run_id=run_id,
+                candidate_key=candidate["candidateKey"],
+                expected_source_fingerprint=fingerprint,
+                expected_review_fingerprint=active_review_fingerprint,
+                idempotency_key="override-approval-before-include-1",
+                actor="Juan",
+            )
+        assert await connection.fetchval("SELECT COUNT(*) FROM invoices") == 0
+
+        with pytest.raises(CommercialBillingRunConflictError, match="review identity changed"):
+            await review_service.set_candidate_review_decision(
+                billing_run_id=run_id,
+                candidate_key=candidate["candidateKey"],
+                expected_source_fingerprint=fingerprint,
+                decision="included",
+                reason="A stale Include must be rejected.",
+                idempotency_key="override-include-stale-1",
+                actor="Juan",
+            )
+
+        included = await review_service.set_candidate_review_decision(
+            billing_run_id=run_id,
+            candidate_key=candidate["candidateKey"],
+            expected_source_fingerprint=fingerprint,
+            expected_review_fingerprint=active_review_fingerprint,
+            decision="included",
+            reason="The effective one-run adjustment was reviewed and approved.",
+            idempotency_key="override-include-1",
+            actor="Juan",
+        )
+        assert included["reviewDecision"]["decision"] == "included"
+
+        changed_source = copy.deepcopy(candidate)
+        changed_source["lineItems"][0]["description"] = "Changed source service evidence"
+        _refresh_fingerprint(changed_source)
+        current_source.candidate = changed_source
+        with pytest.raises(CommercialBillingApprovalStaleError, match="regenerate"):
+            await approval_service.approve(
+                billing_run_id=run_id,
+                candidate_key=candidate["candidateKey"],
+                expected_source_fingerprint=fingerprint,
+                expected_review_fingerprint=active_review_fingerprint,
+                idempotency_key="override-approval-stale-source-1",
+                actor="Juan",
+            )
+        assert await connection.fetchval("SELECT COUNT(*) FROM invoices") == 0
+        current_source.candidate = candidate
+
+        approved = await approval_service.approve(
+            billing_run_id=run_id,
+            candidate_key=candidate["candidateKey"],
+            expected_source_fingerprint=fingerprint,
+            expected_review_fingerprint=active_review_fingerprint,
+            idempotency_key="override-approval-1",
+            actor="Juan",
+        )
+        assert approved["replayed"] is False
+        assert approved["approval"]["reviewFingerprint"] == active_review_fingerprint
+        assert await connection.fetchval("SELECT COUNT(*) FROM invoices") == 1
+        invoice = await connection.fetchrow(
+            "SELECT metadata, total_amount FROM invoices"
+        )
+        invoice_metadata = json.loads(invoice["metadata"])
+        assert invoice_metadata["reviewFingerprint"] == active_review_fingerprint
+        assert invoice_metadata["commercialBillingExactLineAmounts"] is True
+        assert invoice["total_amount"] == Decimal("193.17")
+
+        with pytest.raises(CommercialBillingRunConflictError, match="cannot be overridden"):
+            await review_service.set_candidate_override(
+                billing_run_id=run_id,
+                candidate_key=candidate["candidateKey"],
+                expected_source_fingerprint=fingerprint,
+                expected_override_revision=2,
+                reason_code="additional_charge",
+                reason="Approved candidates are immutable.",
+                line_overrides=[{"lineKey": line_key, "quantity": 4}],
+                adjustment=None,
+                recipient=None,
+                delivery_method=None,
+                idempotency_key="override-after-approval-1",
+                actor="Juan",
+            )
+        asyncpg = pytest.importorskip("asyncpg")
+        with pytest.raises(asyncpg.PostgresError, match="append-only"):
+            await connection.execute(
+                "UPDATE commercial_billing_candidate_overrides SET reason = 'mutated'"
+            )
+
+
+@pytest.mark.asyncio
+async def test_real_postgres_concurrent_override_replays_one_committed_revision():
+    """Two same-key writers serialize at the operation lock and commit once."""
+
+    async with _approval_database() as (connection, schema):
+        run_id, candidate = uuid4(), _candidate(
+            candidate_key="commercial-billing:concurrent-override:2026-03"
+        )
+        fingerprint = candidate["sourceFingerprint"]
+        await connection.execute(
+            """
+            INSERT INTO commercial_billing_runs (
+                id, billing_period, state, candidate_contract_version,
+                snapshot_fingerprint, source, idempotency_key,
+                request_fingerprint, created_by
+            ) VALUES ($1, '2026-03', 'draft', 2, $2, 'eom_admin',
+                      'concurrent-override-run-1', $2, 'Juan')
+            """,
+            run_id,
+            fingerprint,
+        )
+        await connection.execute(
+            """
+            INSERT INTO commercial_billing_run_candidates (
+                id, billing_run_id, candidate_key, source_fingerprint,
+                display_order, snapshot
+            ) VALUES ($1, $2, $3, $4, 0, $5::jsonb)
+            """,
+            uuid4(),
+            run_id,
+            candidate["candidateKey"],
+            fingerprint,
+            json.dumps(candidate),
+        )
+
+        asyncpg = pytest.importorskip("asyncpg")
+        database_url = os.environ["ATLAS_RECEIVABLES_TEST_DATABASE_URL"]
+        operation_key = "override-concurrent-replay-1"
+        operation_lock = f"commercial-billing-run-override:eom_admin:{operation_key}"
+        locker = await asyncpg.connect(database_url)
+        await locker.fetchval(
+            "SELECT pg_advisory_lock(hashtextextended($1, 0))", operation_lock
+        )
+        first_task = None
+        second_task = None
+        lock_released = False
+        line_key = decorate_line_keys(candidate)["lineItems"][0]["lineKey"]
+        request = {
+            "billing_run_id": run_id,
+            "candidate_key": candidate["candidateKey"],
+            "expected_source_fingerprint": fingerprint,
+            "expected_override_revision": 0,
+            "reason_code": "additional_charge",
+            "reason": "The operator documented this one-time extra visit.",
+            "line_overrides": [{"lineKey": line_key, "quantity": 3}],
+            "adjustment": None,
+            "recipient": None,
+            "delivery_method": None,
+            "idempotency_key": operation_key,
+            "actor": "Juan",
+        }
+        try:
+            first_service = CommercialBillingRunService(
+                pool=_IsolatedSchemaPool(database_url, schema)
+            )
+            second_service = CommercialBillingRunService(
+                pool=_IsolatedSchemaPool(database_url, schema)
+            )
+            first_task = asyncio.create_task(
+                first_service.set_candidate_override(**request)
+            )
+            second_task = asyncio.create_task(
+                second_service.set_candidate_override(**request)
+            )
+            for _ in range(100):
+                waiting = await connection.fetchval(
+                    "SELECT COUNT(*) FROM pg_locks "
+                    "WHERE locktype = 'advisory' AND NOT granted"
+                )
+                if waiting >= 2:
+                    break
+                await asyncio.sleep(0.01)
+            else:
+                raise AssertionError(
+                    "both override calls did not wait on the operation lock"
+                )
+
+            await locker.fetchval(
+                "SELECT pg_advisory_unlock(hashtextextended($1, 0))", operation_lock
+            )
+            lock_released = True
+            first_result, second_result = await asyncio.wait_for(
+                asyncio.gather(first_task, second_task), timeout=5
+            )
+        finally:
+            if not lock_released:
+                await locker.fetchval(
+                    "SELECT pg_advisory_unlock(hashtextextended($1, 0))", operation_lock
+                )
+            await locker.close()
+            if first_task is not None and second_task is not None:
+                await asyncio.gather(first_task, second_task, return_exceptions=True)
+
+        assert {first_result["replayed"], second_result["replayed"]} == {False, True}
+        assert {
+            first_result["override"]["revision"],
+            second_result["override"]["revision"],
+        } == {1}
+        assert (
+            await connection.fetchval(
+                "SELECT COUNT(*) FROM commercial_billing_candidate_overrides"
+            )
+            == 1
+        )
+
+
+@pytest.mark.asyncio
 async def test_real_postgres_approval_is_atomic_and_reuses_same_candidate_across_runs():
     async with _approval_database() as (connection, schema):
         run_id, second_run_id, candidate = uuid4(), uuid4(), _candidate()
@@ -551,6 +938,272 @@ async def test_real_postgres_approval_is_atomic_and_reuses_same_candidate_across
         invoice = await connection.fetchrow("SELECT status, total_amount, amount_due FROM invoices")
         assert dict(invoice) == {"status": "draft", "total_amount": Decimal("96.50"), "amount_due": Decimal("96.50")}
         assert source.calls == ["2026-03", "2026-03"]
+
+
+@pytest.mark.asyncio
+async def test_real_postgres_override_identity_and_final_invoice_trigger_are_scoped_to_run():
+    """An override in one retained run cannot stale the same source in another."""
+
+    asyncpg = pytest.importorskip("asyncpg")
+    async with _approval_database() as (connection, schema):
+        first_run_id, second_run_id = uuid4(), uuid4()
+        candidate = _candidate(
+            candidate_key="commercial-billing:run-scoped-override:2026-03"
+        )
+        fingerprint = candidate["sourceFingerprint"]
+        contact_id = UUID(candidate["customer"]["contactId"])
+        await connection.execute("INSERT INTO contacts (id) VALUES ($1)", contact_id)
+        for run_id, operation_key in (
+            (first_run_id, "run-scope-a"),
+            (second_run_id, "run-scope-b"),
+        ):
+            await connection.execute(
+                """
+                INSERT INTO commercial_billing_runs (
+                    id, billing_period, state, candidate_contract_version,
+                    snapshot_fingerprint, source, idempotency_key,
+                    request_fingerprint, created_by
+                ) VALUES ($1, '2026-03', 'draft', 2, $2, 'eom_admin', $3, $2, 'Juan')
+                """,
+                run_id,
+                fingerprint,
+                operation_key,
+            )
+            await connection.execute(
+                """
+                INSERT INTO commercial_billing_run_candidates (
+                    id, billing_run_id, candidate_key, source_fingerprint,
+                    display_order, snapshot
+                ) VALUES ($1, $2, $3, $4, 0, $5::jsonb)
+                """,
+                uuid4(),
+                run_id,
+                candidate["candidateKey"],
+                fingerprint,
+                json.dumps(candidate),
+            )
+
+        review_service = CommercialBillingRunService(pool=_SchemaPool(connection, schema))
+        line_key = decorate_line_keys(candidate)["lineItems"][0]["lineKey"]
+        second_override = await review_service.set_candidate_override(
+            billing_run_id=second_run_id,
+            candidate_key=candidate["candidateKey"],
+            expected_source_fingerprint=fingerprint,
+            expected_override_revision=0,
+            reason_code="additional_charge",
+            reason="The second run includes a documented one-time extra visit.",
+            line_overrides=[{"lineKey": line_key, "quantity": 3}],
+            adjustment=None,
+            recipient=None,
+            delivery_method=None,
+            idempotency_key="run-scope-override-b",
+            actor="Juan",
+        )
+        assert second_override["candidate"]["reviewFingerprint"] != fingerprint
+
+        first_metadata = {
+            "candidateKey": candidate["candidateKey"],
+            "commercialBillingRunId": str(first_run_id),
+            "reviewFingerprint": fingerprint,
+            "sourceFingerprint": fingerprint,
+        }
+        await connection.execute(
+            """
+            INSERT INTO invoices (
+                id, invoice_number, contact_id, customer_name, line_items,
+                subtotal, tax_rate, tax_amount, total_amount, due_date,
+                source, source_ref, business_context_id, metadata
+            ) VALUES (
+                $1, 'INV-RUN-A-0001', $2, 'Acme Office', $3::jsonb,
+                96.50, 0, 0, 96.50, $4,
+                'eom_commercial_billing', 'run-scope-a-invoice', 'effingham_maids', $5::jsonb
+            )
+            """,
+            uuid4(),
+            contact_id,
+            json.dumps([]),
+            date(2026, 4, 16),
+            json.dumps(first_metadata),
+        )
+        assert await connection.fetchval("SELECT COUNT(*) FROM invoices") == 1
+
+        second_metadata = {
+            **first_metadata,
+            "commercialBillingRunId": str(second_run_id),
+        }
+        with pytest.raises(asyncpg.PostgresError, match="review identity is stale"):
+            await connection.execute(
+                """
+                INSERT INTO invoices (
+                    id, invoice_number, contact_id, customer_name, line_items,
+                    subtotal, tax_rate, tax_amount, total_amount, due_date,
+                    source, source_ref, business_context_id, metadata
+                ) VALUES (
+                    $1, 'INV-RUN-B-0001', $2, 'Acme Office', $3::jsonb,
+                    96.50, 0, 0, 96.50, $4,
+                    'eom_commercial_billing', 'run-scope-b-invoice', 'effingham_maids', $5::jsonb
+                )
+                """,
+                uuid4(),
+                contact_id,
+                json.dumps([]),
+                date(2026, 4, 16),
+                json.dumps(second_metadata),
+            )
+        assert await connection.fetchval("SELECT COUNT(*) FROM invoices") == 1
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("minutes", "rate_cents"),
+    ((1, 4825), (2, 4825), (17, 1999), (31, 1045), (59, 7999)),
+)
+async def test_notes_only_draft_edits_preserve_exact_hourly_line_amounts(
+    monkeypatch, minutes, rate_cents
+):
+    """Committed cents win over rounded display hours when lines are unchanged."""
+
+    invoice_id = uuid4()
+    exact_cents = int(
+        (Decimal(rate_cents) * Decimal(minutes) / Decimal(60)).quantize(
+            Decimal("1"), rounding=ROUND_HALF_UP
+        )
+    )
+    exact_amount = Decimal(exact_cents) / Decimal(100)
+    display_hours = f"{(Decimal(minutes) / Decimal(60)):.4f}".rstrip("0").rstrip(".")
+    line_item = {
+        "amount": f"{exact_amount:.2f}",
+        "date": "2026-03-03",
+        "description": "Hourly cleaning",
+        "quantity": display_hours,
+        "unit_price": f"{Decimal(rate_cents) / Decimal(100):.2f}",
+    }
+
+    class _UpdatePool:
+        is_initialized = True
+
+        def __init__(self) -> None:
+            self.arguments = None
+
+        async def fetchrow(self, query, *arguments):
+            assert "UPDATE invoices" in query
+            self.arguments = arguments
+            return {
+                "id": invoice_id,
+                "invoice_number": "INV-EXACT-HOURLY",
+                "status": "draft",
+                "line_items": arguments[1],
+                "due_date": arguments[2],
+                "notes": arguments[3],
+                "tax_rate": Decimal(str(arguments[4])),
+                "tax_amount": Decimal(str(arguments[5])),
+                "discount_amount": Decimal(str(arguments[6])),
+                "subtotal": Decimal(str(arguments[7])),
+                "total_amount": Decimal(str(arguments[8])),
+                "amount_paid": Decimal("0"),
+                "amount_due": Decimal(str(arguments[8])),
+                "metadata": arguments[11],
+            }
+
+    pool = _UpdatePool()
+    repository = InvoiceRepository(pool=pool)
+
+    async def _current(_invoice_id):
+        return {
+            "id": invoice_id,
+            "source": "eom_commercial_billing",
+            "status": "draft",
+            "line_items": [line_item],
+            "tax_rate": 0.0,
+            "discount_amount": 0.0,
+            "metadata": {"commercialBillingExactLineAmounts": True},
+        }
+
+    monkeypatch.setattr(repository, "get_by_id", _current)
+    updated = await repository.update_invoice(
+        invoice_id=invoice_id, notes="Operator added a non-financial note."
+    )
+
+    assert pool.arguments is not None
+    assert Decimal(str(pool.arguments[7])) == exact_amount
+    assert Decimal(str(pool.arguments[8])) == exact_amount
+    assert updated["line_items"] == [line_item]
+    assert Decimal(str(updated["subtotal"])) == exact_amount
+    assert Decimal(str(updated["total_amount"])) == exact_amount
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("source", "metadata"),
+    (
+        ("mcp_tool", {}),
+        ("eom_commercial_billing", {}),
+        ("mcp_tool", {"commercialBillingExactLineAmounts": True}),
+    ),
+)
+async def test_notes_only_draft_edits_recalculate_untrusted_recorded_amounts(
+    monkeypatch, source, metadata
+):
+    """Generic caller amounts cannot become authoritative after invoice creation."""
+
+    invoice_id = uuid4()
+    line_item = {
+        "amount": "1.00",
+        "description": "Caller supplied a stale amount",
+        "quantity": 2,
+        "unit_price": "50.00",
+    }
+
+    class _UpdatePool:
+        is_initialized = True
+
+        def __init__(self) -> None:
+            self.arguments = None
+
+        async def fetchrow(self, query, *arguments):
+            assert "UPDATE invoices" in query
+            self.arguments = arguments
+            return {
+                "id": invoice_id,
+                "invoice_number": "INV-UNTRUSTED-AMOUNT",
+                "status": "draft",
+                "line_items": arguments[1],
+                "due_date": arguments[2],
+                "notes": arguments[3],
+                "tax_rate": Decimal(str(arguments[4])),
+                "tax_amount": Decimal(str(arguments[5])),
+                "discount_amount": Decimal(str(arguments[6])),
+                "subtotal": Decimal(str(arguments[7])),
+                "total_amount": Decimal(str(arguments[8])),
+                "amount_paid": Decimal("0"),
+                "amount_due": Decimal(str(arguments[8])),
+                "metadata": arguments[11],
+            }
+
+    pool = _UpdatePool()
+    repository = InvoiceRepository(pool=pool)
+
+    async def _current(_invoice_id):
+        return {
+            "id": invoice_id,
+            "source": source,
+            "status": "draft",
+            "line_items": [line_item],
+            "tax_rate": 0.0,
+            "discount_amount": 0.0,
+            "metadata": metadata,
+        }
+
+    monkeypatch.setattr(repository, "get_by_id", _current)
+    updated = await repository.update_invoice(
+        invoice_id=invoice_id, notes="Operator added a non-financial note."
+    )
+
+    assert pool.arguments is not None
+    assert Decimal(str(pool.arguments[7])) == Decimal("100.00")
+    assert Decimal(str(pool.arguments[8])) == Decimal("100.00")
+    assert Decimal(str(updated["subtotal"])) == Decimal("100.00")
+    assert Decimal(str(updated["total_amount"])) == Decimal("100.00")
 
 
 @pytest.mark.asyncio
@@ -757,6 +1410,7 @@ async def test_real_postgres_global_review_decision_fences_duplicate_runs_and_ol
                 json.dumps(
                     {
                         "candidateKey": candidate["candidateKey"],
+                        "commercialBillingRunId": str(second_run_id),
                         "sourceFingerprint": fingerprint,
                     }
                 ),
@@ -872,6 +1526,75 @@ async def test_real_postgres_invoice_trigger_rejects_noncanonical_or_nonstring_r
                 ) VALUES (
                     $1, 'INV-GUARD-0001', 'Guarded commercial invoice', $2,
                     'eom_commercial_billing', 'guard1', $3::jsonb
+                )
+                """,
+                uuid4(),
+                date(2026, 4, 16),
+                json.dumps(metadata),
+            )
+        assert await connection.fetchval("SELECT COUNT(*) FROM invoices") == 0
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "billing_run_identity",
+    (None, "", "not-a-uuid", 7, "00000000-0000-0000-0000-000000000099"),
+)
+async def test_real_postgres_invoice_trigger_rejects_invalid_or_unretained_run_identity(
+    billing_run_identity,
+):
+    """Final invoice admission cannot borrow an override scope from another run."""
+
+    asyncpg = pytest.importorskip("asyncpg")
+    async with _approval_database() as (connection, _schema):
+        run_id = uuid4()
+        candidate_key = "commercial-billing:run-identity-guard:2026-03"
+        source_fingerprint = "b" * 64
+        await connection.execute(
+            """
+            INSERT INTO commercial_billing_runs (
+                id, billing_period, state, candidate_contract_version,
+                snapshot_fingerprint, source, idempotency_key,
+                request_fingerprint, created_by
+            ) VALUES ($1, '2026-03', 'draft', 2, $2, 'eom_admin', $3, $2, 'Juan')
+            """,
+            run_id,
+            source_fingerprint,
+            f"run-identity-{run_id.hex}",
+        )
+        await connection.execute(
+            """
+            INSERT INTO commercial_billing_run_candidates (
+                id, billing_run_id, candidate_key, source_fingerprint,
+                display_order, snapshot
+            ) VALUES ($1, $2, $3, $4, 0, $5::jsonb)
+            """,
+            uuid4(),
+            run_id,
+            candidate_key,
+            source_fingerprint,
+            json.dumps(
+                {
+                    "candidateKey": candidate_key,
+                    "sourceFingerprint": source_fingerprint,
+                }
+            ),
+        )
+        metadata = {
+            "candidateKey": candidate_key,
+            "sourceFingerprint": source_fingerprint,
+        }
+        if billing_run_identity is not None:
+            metadata["commercialBillingRunId"] = billing_run_identity
+        with pytest.raises(asyncpg.PostgresError, match="review identity is invalid"):
+            await connection.execute(
+                """
+                INSERT INTO invoices (
+                    id, invoice_number, customer_name, due_date,
+                    source, source_ref, metadata
+                ) VALUES (
+                    $1, 'INV-RUN-GUARD-0001', 'Guarded commercial invoice', $2,
+                    'eom_commercial_billing', 'run-guard-1', $3::jsonb
                 )
                 """,
                 uuid4(),

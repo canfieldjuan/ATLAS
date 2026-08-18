@@ -198,6 +198,7 @@ async def _billing_run_database():
             "372_commercial_billing_candidate_approvals.sql",
             "380_commercial_billing_candidate_review_decisions.sql",
             "381_commercial_billing_candidate_review_decisions_recovery.sql",
+            "382_commercial_billing_candidate_overrides.sql",
         ):
             await conn.execute((migrations / name).read_text(encoding="utf-8"))
         yield conn, schema, database_url
@@ -351,6 +352,43 @@ def _service(pool, candidate_service: _CandidateService) -> CommercialBillingRun
     return CommercialBillingRunService(
         pool=pool,
         candidate_service_loader=lambda: candidate_service,
+    )
+
+
+async def _insert_legacy_run_candidate(
+    conn,
+    *,
+    run_id: UUID,
+    candidate: dict,
+    idempotency_key: str,
+) -> None:
+    """Seed a pre-382 run without asking current provider code to serve it."""
+
+    fingerprint = candidate["sourceFingerprint"]
+    await conn.execute(
+        """
+        INSERT INTO commercial_billing_runs (
+            id, billing_period, state, candidate_contract_version,
+            snapshot_fingerprint, source, idempotency_key,
+            request_fingerprint, created_by
+        ) VALUES ($1, '2026-03', 'draft', 2, $2, 'eom_admin', $3, $2, 'Migration recovery test')
+        """,
+        run_id,
+        fingerprint,
+        idempotency_key,
+    )
+    await conn.execute(
+        """
+        INSERT INTO commercial_billing_run_candidates (
+            id, billing_run_id, candidate_key, source_fingerprint,
+            display_order, snapshot
+        ) VALUES ($1, $2, $3, $4, 0, $5::jsonb)
+        """,
+        uuid4(),
+        run_id,
+        candidate["candidateKey"],
+        fingerprint,
+        json.dumps(candidate),
     )
 
 
@@ -727,6 +765,59 @@ async def test_real_postgres_review_decisions_are_append_only_idempotent_and_der
             )
             == before_updated_at
         )
+
+
+@pytest.mark.asyncio
+async def test_real_postgres_review_idempotency_canonicalizes_no_override_identity_variants():
+    """Omitted and explicit legacy identities are the same retry request."""
+
+    async with _billing_run_database() as (conn, schema, _database_url):
+        candidate = _candidate(
+            "commercial-billing:review-idempotency:2026-03", _fingerprint("a")
+        )
+        service = _service(_SchemaPool(conn, schema), _CandidateService(_preview(candidate)))
+        created_run = await service.create_run(
+            billing_period="2026-03",
+            idempotency_key="billing-run-review-idempotency-1",
+            actor="Juan Canfield",
+        )
+        run_id = UUID(created_run["billingRun"]["id"])
+        source_fingerprint = candidate["sourceFingerprint"]
+
+        for index, (first_identity, retry_identity, decision) in enumerate(
+            (
+                (None, source_fingerprint, "excluded"),
+                (source_fingerprint, None, "included"),
+            ),
+            start=1,
+        ):
+            created = await service.set_candidate_review_decision(
+                billing_run_id=run_id,
+                candidate_key=candidate["candidateKey"],
+                expected_source_fingerprint=source_fingerprint,
+                expected_review_fingerprint=first_identity,
+                decision=decision,
+                reason=f"Canonical retry identity case {index}.",
+                idempotency_key=f"review-identity-{index}",
+                actor="Juan Canfield",
+            )
+            replayed = await service.set_candidate_review_decision(
+                billing_run_id=run_id,
+                candidate_key=candidate["candidateKey"],
+                expected_source_fingerprint=source_fingerprint,
+                expected_review_fingerprint=retry_identity,
+                decision=decision,
+                reason=f"Canonical retry identity case {index}.",
+                idempotency_key=f"review-identity-{index}",
+                actor="Juan Canfield",
+            )
+
+            assert created["replayed"] is False
+            assert replayed == {**created, "replayed": True}
+
+        assert await conn.fetchval(
+            "SELECT COUNT(*) FROM commercial_billing_candidate_review_decisions"
+        ) == 2
 
 
 @pytest.mark.asyncio
@@ -1128,6 +1219,7 @@ class _RouteRunService:
     def __init__(self) -> None:
         self.create_calls: list[tuple[str, str, str]] = []
         self.decision_calls: list[dict] = []
+        self.override_calls: list[dict] = []
         self.get_calls: list[UUID] = []
         self.reconcile_calls: list[UUID] = []
 
@@ -1153,6 +1245,14 @@ class _RouteRunService:
                 "id": "review-decision-1",
                 "isExplicit": True,
             },
+            "replayed": False,
+        }
+
+    async def set_candidate_override(self, **kwargs):
+        self.override_calls.append(kwargs)
+        return {
+            "candidate": {"reviewFingerprint": _fingerprint("b")},
+            "override": {"revision": 1},
             "replayed": False,
         }
 
@@ -1311,6 +1411,110 @@ async def test_review_decision_route_requires_auth_actor_shape_and_idempotency()
             "decision": "excluded",
             "reason": "Resolve a customer question before approval.",
             "idempotency_key": "route-1",
+            "actor": "Juan Canfield",
+        }
+    ]
+
+
+@pytest.mark.asyncio
+async def test_candidate_override_route_bounds_the_operator_edit_surface_and_actor_audit():
+    service = _RouteRunService()
+    app, token = _route_app(service)
+    run_id = "00000000-0000-0000-0000-000000000001"
+    candidate_key = "commercial-billing:acme:2026-03"
+    path = (
+        f"/receivables/commercial-billing-runs/{run_id}/candidates/"
+        f"{candidate_key}/override"
+    )
+    line_key = _fingerprint("c")
+    body = {
+        "expected_source_fingerprint": _fingerprint("a"),
+        "expected_override_revision": 0,
+        "reason_code": "one_time_service_variation",
+        "reason": "The customer asked for 75 minutes after hours.",
+        "line_overrides": [
+            {
+                "line_key": line_key,
+                "description": "After-hours cleaning",
+                "rate_cents": 4825,
+                "quantity_minutes": 75,
+            }
+        ],
+        "adjustment": {
+            "kind": "charge",
+            "description": "One-time access fee",
+            "amount_cents": 17,
+        },
+        "recipient": {"display_name": "Acme AP", "email": "billing@example.test"},
+        "delivery_method": "gmail_pdf",
+    }
+    headers = {
+        "Authorization": f"Bearer {token}",
+        "Idempotency-Key": "override-route-1",
+        "X-EOM-Actor": "Juan Canfield",
+    }
+    transport = httpx.ASGITransport(app=app)
+    async with httpx.AsyncClient(
+        transport=transport,
+        base_url="http://receivables.test",
+    ) as client:
+        assert (await client.post(path, json=body)).status_code == 401
+        assert service.override_calls == []
+        assert (
+            await client.post(
+                path,
+                json=body,
+                headers={"Authorization": f"Bearer {token}", "Idempotency-Key": "override-route-1"},
+            )
+        ).status_code == 422
+        assert service.override_calls == []
+        assert (
+            await client.post(
+                path,
+                json={**body, "source_date": "2026-03-04"},
+                headers=headers,
+            )
+        ).status_code == 422
+        assert service.override_calls == []
+        assert (
+            await client.post(
+                path,
+                json={
+                    **body,
+                    "line_overrides": [{"line_key": line_key, "quantity_minutes": 75.0}],
+                },
+                headers=headers,
+            )
+        ).status_code == 422
+        assert service.override_calls == []
+        accepted = await client.post(path, json=body, headers=headers)
+
+    assert accepted.status_code == 201
+    assert accepted.json()["override"] == {"revision": 1}
+    assert service.override_calls == [
+        {
+            "billing_run_id": UUID(run_id),
+            "candidate_key": candidate_key,
+            "expected_source_fingerprint": _fingerprint("a"),
+            "expected_override_revision": 0,
+            "reason_code": "one_time_service_variation",
+            "reason": "The customer asked for 75 minutes after hours.",
+            "line_overrides": [
+                {
+                    "lineKey": line_key,
+                    "description": "After-hours cleaning",
+                    "rateCents": 4825,
+                    "quantityMinutes": 75,
+                }
+            ],
+            "adjustment": {
+                "kind": "charge",
+                "description": "One-time access fee",
+                "amountCents": 17,
+            },
+            "recipient": {"displayName": "Acme AP", "email": "billing@example.test"},
+            "delivery_method": "gmail_pdf",
+            "idempotency_key": "override-route-1",
             "actor": "Juan Canfield",
         }
     ]
@@ -1938,22 +2142,31 @@ async def test_current_380_schema_runs_pending_381_once_without_rewriting_catalo
         ] == expected_ledger[:-1]
 
         candidate = _candidate("commercial-billing:current-380:2026-03", _fingerprint("a"))
-        service = _service(_SchemaPool(conn, schema), _CandidateService(_preview(candidate)))
-        created = await service.create_run(
-            billing_period="2026-03",
+        run_id = uuid4()
+        await _insert_legacy_run_candidate(
+            conn,
+            run_id=run_id,
+            candidate=candidate,
             idempotency_key="billing-run-current-380-pending-381",
-            actor="Migration recovery test",
         )
-        recorded = await service.set_candidate_review_decision(
-            billing_run_id=UUID(created["billingRun"]["id"]),
-            candidate_key=candidate["candidateKey"],
-            expected_source_fingerprint=candidate["sourceFingerprint"],
-            decision="included",
-            reason="Preserve the current-schema review decision during recovery.",
-            idempotency_key="current-380-pending-381-decision",
-            actor="Migration recovery test",
+        decision_id = uuid4()
+        await conn.execute(
+            """
+            INSERT INTO commercial_billing_candidate_review_decisions (
+                id, billing_run_id, candidate_key, source_fingerprint,
+                revision, decision, reason, source, idempotency_key,
+                request_fingerprint, decided_by
+            ) VALUES ($1, $2, $3, $4, 1, 'included', $5, 'eom_admin', $6, $7,
+                      'Migration recovery test')
+            """,
+            decision_id,
+            run_id,
+            candidate["candidateKey"],
+            candidate["sourceFingerprint"],
+            "Preserve the current-schema review decision during recovery.",
+            "current-380-pending-381-decision",
+            _fingerprint("c"),
         )
-        decision_id = UUID(recorded["reviewDecision"]["id"])
         history_before = dict(
             await conn.fetchrow(
                 """
@@ -2073,22 +2286,31 @@ async def test_recorded_380_recovery_restores_review_decision_enforcement():
         ) is False
 
         candidate = _candidate("commercial-billing:recovery:2026-03", _fingerprint("a"))
-        service = _service(_SchemaPool(conn, schema), _CandidateService(_preview(candidate)))
-        created = await service.create_run(
-            billing_period="2026-03",
+        run_id = uuid4()
+        await _insert_legacy_run_candidate(
+            conn,
+            run_id=run_id,
+            candidate=candidate,
             idempotency_key="billing-run-recorded-380-recovery",
-            actor="Migration recovery test",
         )
-        legacy_recorded = await service.set_candidate_review_decision(
-            billing_run_id=UUID(created["billingRun"]["id"]),
-            candidate_key=candidate["candidateKey"],
-            expected_source_fingerprint=candidate["sourceFingerprint"],
-            decision="included",
-            reason="Preserve the legacy review decision during recovery.",
-            idempotency_key="legacy-review-1",
-            actor="Migration recovery test",
+        legacy_decision_id = uuid4()
+        await conn.execute(
+            """
+            INSERT INTO commercial_billing_candidate_review_decisions (
+                id, billing_run_id, candidate_key, source_fingerprint,
+                revision, decision, reason, source, idempotency_key,
+                request_fingerprint, decided_by
+            ) VALUES ($1, $2, $3, $4, 1, 'included', $5, 'eom_admin', $6, $7,
+                      'Migration recovery test')
+            """,
+            legacy_decision_id,
+            run_id,
+            candidate["candidateKey"],
+            candidate["sourceFingerprint"],
+            "Preserve the legacy review decision during recovery.",
+            "legacy-review-1",
+            _fingerprint("c"),
         )
-        legacy_decision_id = UUID(legacy_recorded["reviewDecision"]["id"])
         legacy_history_before = await conn.fetchrow(
             """
             SELECT id, billing_run_id, candidate_key, source_fingerprint, revision,
@@ -2178,8 +2400,14 @@ async def test_recorded_380_recovery_restores_review_decision_enforcement():
             ),
         }
 
+        await run_migrations(
+            pool,
+            migrations_dir=migrations_dir,
+            only={"382_commercial_billing_candidate_overrides"},
+        )
+        service = _service(_SchemaPool(conn, schema), _CandidateService(_preview(candidate)))
         recorded = await service.set_candidate_review_decision(
-            billing_run_id=UUID(created["billingRun"]["id"]),
+            billing_run_id=run_id,
             candidate_key=candidate["candidateKey"],
             expected_source_fingerprint=candidate["sourceFingerprint"],
             decision="excluded",
@@ -2212,6 +2440,7 @@ async def test_recorded_380_recovery_restores_review_decision_enforcement():
                 json.dumps(
                     {
                         "candidateKey": candidate["candidateKey"],
+                        "commercialBillingRunId": str(run_id),
                         "sourceFingerprint": candidate["sourceFingerprint"],
                     }
                 ),
@@ -2273,20 +2502,20 @@ async def test_recorded_380_recovery_rejects_ambiguous_global_revision_history()
         )
         pool, migrations_dir = await _recorded_380_legacy_schema(conn, schema)
         candidate = _candidate("commercial-billing:conflict:2026-03", _fingerprint("b"))
-        service = _service(_SchemaPool(conn, schema), _CandidateService(_preview(candidate)))
-        first = await service.create_run(
-            billing_period="2026-03",
-            idempotency_key="billing-run-recorded-380-conflict-1",
-            actor="Migration recovery test",
-        )
-        second = await service.create_run(
-            billing_period="2026-03",
-            idempotency_key="billing-run-recorded-380-conflict-2",
-            actor="Migration recovery test",
-        )
-        for run, key, fingerprint in (
-            (first, "recorded-380-conflict-decision-1", _fingerprint("c")),
-            (second, "recorded-380-conflict-decision-2", _fingerprint("d")),
+        first_run_id, second_run_id = uuid4(), uuid4()
+        for run_id, key in (
+            (first_run_id, "billing-run-recorded-380-conflict-1"),
+            (second_run_id, "billing-run-recorded-380-conflict-2"),
+        ):
+            await _insert_legacy_run_candidate(
+                conn,
+                run_id=run_id,
+                candidate=candidate,
+                idempotency_key=key,
+            )
+        for run_id, key, fingerprint in (
+            (first_run_id, "recorded-380-conflict-decision-1", _fingerprint("c")),
+            (second_run_id, "recorded-380-conflict-decision-2", _fingerprint("d")),
         ):
             await conn.execute(
                 """
@@ -2299,7 +2528,7 @@ async def test_recorded_380_recovery_rejects_ambiguous_global_revision_history()
                           $6, 'Migration recovery test')
                 """,
                 uuid4(),
-                UUID(run["billingRun"]["id"]),
+                run_id,
                 candidate["candidateKey"],
                 candidate["sourceFingerprint"],
                 key,
@@ -2406,10 +2635,14 @@ def test_invoicing_workflow_enrolls_billing_run_contract_for_pr_and_main_push():
 
     for path in (
         "atlas_brain/services/commercial_billing_runs.py",
+        "atlas_brain/services/commercial_billing_candidate_overrides.py",
         "atlas_brain/storage/migrations/370_commercial_billing_runs.sql",
         "atlas_brain/storage/migrations/380_commercial_billing_candidate_review_decisions.sql",
         "atlas_brain/storage/migrations/381_commercial_billing_candidate_review_decisions_recovery.sql",
+        "atlas_brain/storage/migrations/382_commercial_billing_candidate_overrides.sql",
         "tests/test_commercial_billing_runs.py",
+        "tests/test_commercial_billing_candidate_overrides.py",
     ):
         assert workflow.count(f'      - "{path}"') == 2
     assert "tests/test_commercial_billing_runs.py \\" in workflow
+    assert "tests/test_commercial_billing_candidate_overrides.py \\" in workflow

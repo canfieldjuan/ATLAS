@@ -45,7 +45,7 @@ _SECURITY_CONTACT_URL = "https://github.com/canfieldjuan/ATLAS/security/advisori
 _SECURITY_POLICY_URL = "https://github.com/canfieldjuan/ATLAS/blob/main/SECURITY.md"
 _SECURITY_TXT_MAX_AGE_DAYS = 180
 _COMMERCIAL_BILLING_REVIEW_RECOVERY_MIGRATION = (
-    "381_commercial_billing_candidate_review_decisions_recovery"
+    "382_commercial_billing_candidate_overrides"
 )
 
 
@@ -316,7 +316,7 @@ async def _start_asr_server() -> subprocess.Popen | None:
 
 
 async def _commercial_billing_review_recovery_is_recorded(pool: object) -> bool:
-    """Return whether the recovery migration is durably present in the ledger."""
+    """Return whether the current review-safety migration is durably recorded."""
     try:
         return bool(
             await pool.fetchval(

@@ -31,6 +31,7 @@ on:
       - "atlas_brain/services/crm_provider.py"
       - "atlas_brain/services/commercial_billing_candidates.py"
       - "atlas_brain/services/commercial_billing_runs.py"
+      - "atlas_brain/services/commercial_billing_candidate_overrides.py"
       - "atlas_brain/services/commercial_billing_approvals.py"
       - "atlas_brain/services/commercial_billing_invoice_pdfs.py"
       - "atlas_brain/services/commercial_billing_invoice_gmail_drafts.py"
@@ -60,6 +61,7 @@ on:
       - "atlas_brain/storage/migrations/377_commercial_billing_gmail_draft_replacements.sql"
       - "atlas_brain/storage/migrations/380_commercial_billing_candidate_review_decisions.sql"
       - "atlas_brain/storage/migrations/381_commercial_billing_candidate_review_decisions_recovery.sql"
+      - "atlas_brain/storage/migrations/382_commercial_billing_candidate_overrides.sql"
       - "atlas_brain/storage/repositories/invoice.py"
       - "atlas_brain/templates/email/__init__.py"
       - "atlas_brain/templates/email/estimate_confirmation.py"
@@ -73,6 +75,7 @@ on:
       - "tests/test_residential_payment_receipt_delivery.py"
       - "tests/test_commercial_billing_candidates.py"
       - "tests/test_commercial_billing_runs.py"
+      - "tests/test_commercial_billing_candidate_overrides.py"
       - "tests/test_commercial_billing_approvals.py"
       - "tests/test_commercial_billing_gmail_drafts.py"
       - "tests/test_commercial_billing_manual_square_invoices.py"
@@ -111,6 +114,7 @@ on:
       - "atlas_brain/services/crm_provider.py"
       - "atlas_brain/services/commercial_billing_candidates.py"
       - "atlas_brain/services/commercial_billing_runs.py"
+      - "atlas_brain/services/commercial_billing_candidate_overrides.py"
       - "atlas_brain/services/commercial_billing_approvals.py"
       - "atlas_brain/services/commercial_billing_invoice_pdfs.py"
       - "atlas_brain/services/commercial_billing_invoice_gmail_drafts.py"
@@ -140,6 +144,7 @@ on:
       - "atlas_brain/storage/migrations/377_commercial_billing_gmail_draft_replacements.sql"
       - "atlas_brain/storage/migrations/380_commercial_billing_candidate_review_decisions.sql"
       - "atlas_brain/storage/migrations/381_commercial_billing_candidate_review_decisions_recovery.sql"
+      - "atlas_brain/storage/migrations/382_commercial_billing_candidate_overrides.sql"
       - "atlas_brain/storage/repositories/invoice.py"
       - "atlas_brain/templates/email/__init__.py"
       - "atlas_brain/templates/email/estimate_confirmation.py"
@@ -153,6 +158,7 @@ on:
       - "tests/test_residential_payment_receipt_delivery.py"
       - "tests/test_commercial_billing_candidates.py"
       - "tests/test_commercial_billing_runs.py"
+      - "tests/test_commercial_billing_candidate_overrides.py"
       - "tests/test_commercial_billing_approvals.py"
       - "tests/test_commercial_billing_gmail_drafts.py"
       - "tests/test_commercial_billing_manual_square_invoices.py"
@@ -214,6 +220,7 @@ jobs:
             tests/test_eom_payment_receipts.py \
             tests/test_residential_payment_receipt_delivery.py \
             tests/test_commercial_billing_candidates.py \
+            tests/test_commercial_billing_candidate_overrides.py \
             tests/test_commercial_billing_runs.py \
             tests/test_commercial_billing_approvals.py \
             tests/test_commercial_billing_gmail_drafts.py \
