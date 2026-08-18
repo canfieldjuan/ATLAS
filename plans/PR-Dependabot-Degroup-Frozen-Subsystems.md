@@ -21,6 +21,13 @@ are 100% blocked:
   log on head 79dbc1069); the same `torch` 2.13.0 also broke the launcher import
   chain in #2350. One version-locked subsystem blocks all the security patches.
 
+**Over-budget justification (indivisible):** the slice runs ~490 LOC, over the 400
+target, but the actual config change is ~110 lines in one file. The overage is the
+mandatory AGENTS.md plan doc plus the CI regression test the reviewer required
+(Codex R2), and the test must ship WITH the config it guards -- splitting it into a
+separate PR would leave the config unguarded on merge and defeat the review's own
+request. The remainder is the plan doc, which is not separable from the slice.
+
 ### Problem-derived contract
 
 - Root cause: `.github/dependabot.yml` groups **every** dependency (`patterns: ["*"]`,
@@ -42,7 +49,7 @@ are 100% blocked:
 
 Ownership lane: dev-workflow/dependabot-config
 Slice phase: Workflow/process
-Max files: 3
+Max files: 4
 
 1. Split the single `npm` entry into two: (a) the 5 web-UI directories with NO
    ignores (react/react-dom/@types/react and the toolchain update freely), and
@@ -77,15 +84,14 @@ Max files: 3
   - The file is valid Dependabot v2 config -- settled by `python3 -c "import yaml;
     yaml.safe_load(open('.github/dependabot.yml'))"` (exit 0) and GitHub's own
     dependabot config validation on push.
-  - The npm ignore block covers every SDK-line-coupled atlas-mobile dep and no
-    web-UI dep -- settled by inspecting the diff: every ignored name
-    (`react-native`, `react-native-*`, `@react-native/*`,
-    `@react-native-async-storage/*`, `nativewind`, `@siteed/*`, `expo`, `expo-*`)
-    exists only in `atlas-mobile/package.json`, not in the other 5 UI packages;
-    the scoped `@react-native*` patterns close the gap that `react-native-*` (which
-    matches only unscoped names) leaves for `@react-native/metro-config` etc.
-    `react`/`react-dom`/`@types/react` are shared with the web UI and are NOT
-    ignored (React's own 19.x line, not the RN SDK line).
+  - The atlas-mobile npm entry freezes the WHOLE mobile stack and no web-UI update
+    is suppressed -- settled by the regression test: every dependency in
+    `atlas-mobile/package.json` is matched by an ignore pattern on the atlas-mobile
+    entry (react-native / @react-native/* / expo / react / react-dom / @types/react /
+    typescript / tailwindcss / zustand, etc.), while `react`/`react-dom`/`@types/react`
+    and the toolchain still update via the SEPARATE web-UI npm entry (which carries
+    no ignores). Isolating mobile into its own entry is what lets its Expo-owned
+    React be frozen without touching the web packages.
   - The pip ignore block covers exactly the version-locked ML/CUDA set implicated
     in the resolution conflict / import break -- settled by the #2404
     `ResolutionImpossible` log naming `torch==2.13.0` + `cuda-toolkit==13.3.1`,
@@ -143,6 +149,7 @@ guard or admission path.
 ### Files touched
 
 - `.github/dependabot.yml`
+- `.github/workflows/atlas_security_policy_docs_checks.yml`
 - `plans/PR-Dependabot-Degroup-Frozen-Subsystems.md`
 - `tests/test_security_policy_docs.py`
 
@@ -150,12 +157,14 @@ guard or admission path.
 
 Dependabot reads the `updates` list from the config on the default branch.
 
-- **npm:** atlas-mobile becomes its own `updates` entry. Its `ignore` (each rule
-  scoped to `version-update:semver-{major,minor,patch}`) freezes the full Expo SDK
-  stack -- including `react`/`react-dom`/`@types/react`, which are Expo-owned in
-  the mobile package but shared and freely-updatable in the separate web-UI entry.
-  The recreated `npm-security-and-patches` group is therefore the web-UI packages
-  only, and is mergeable; the mobile entry only proposes its non-SDK deps.
+- **npm:** atlas-mobile becomes its own `updates` entry whose `ignore` (each rule
+  scoped to `version-update:semver-{major,minor,patch}`) freezes its ENTIRE stack --
+  React Native / Expo / React and the Expo-migration-coupled tooling (typescript,
+  tailwindcss, zustand). `react`/`react-dom`/`@types/react` and the toolchain still
+  update through the SEPARATE web-UI entry (no ignores). The recreated
+  `npm-security-and-patches` group is therefore the web-UI packages only, and is
+  mergeable; the mobile entry proposes no version updates (only security updates,
+  which the `version-update:*` scoping leaves untouched).
 - **pip:** dropping root `/` from `directories` stops Dependabot touching the
   generated `constraints.root-asr.txt`/`requirements.txt` surface (which it cannot
   recompile), so it no longer opens root PRs that fail the constraints check. The
@@ -212,6 +221,7 @@ Parked hardening: none.
 | File | LOC |
 |---|---:|
 | `.github/dependabot.yml` | 109 |
-| `plans/PR-Dependabot-Degroup-Frozen-Subsystems.md` | 217 |
-| `tests/test_security_policy_docs.py` | 144 |
-| **Total** | **470** |
+| `.github/workflows/atlas_security_policy_docs_checks.yml` | 2 |
+| `plans/PR-Dependabot-Degroup-Frozen-Subsystems.md` | 225 |
+| `tests/test_security_policy_docs.py` | 153 |
+| **Total** | **489** |

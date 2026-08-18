@@ -478,6 +478,15 @@ def _dependabot_update_blocks(config_text: str) -> list[dict[str, object]]:
         if stripped in section_headers:
             section = section_headers[stripped]
             continue
+        # Dependabot also accepts the singular scalar form `directory: "/path"`.
+        # Treat it as a one-element directory set so the root-exclusion guard cannot
+        # be defeated by re-adding root as `directory: "/"` instead of `directories:`.
+        if stripped.startswith("directory:"):
+            current["directories"].add(  # type: ignore[union-attr]
+                stripped.split(":", 1)[1].strip().strip('"')
+            )
+            section = None
+            continue
         if stripped in reset_headers:
             section = None
             continue
