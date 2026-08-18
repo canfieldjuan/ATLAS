@@ -437,14 +437,15 @@ def _literal_incident_type(node: ast.Call) -> str | None:
 
 ATLAS_MOBILE_PACKAGE_JSON = REPO_ROOT / "atlas-mobile" / "package.json"
 
-# atlas-mobile is frozen on Expo SDK 54. These are its only dependencies that are
-# NOT Expo/React-Native-SDK-coupled and may therefore auto-update via Dependabot.
-# Every other atlas-mobile dependency MUST be frozen by an ignore pattern in the
-# atlas-mobile npm entry. This set is the closure declaration for the mobile freeze:
-# adding a new atlas-mobile dependency forces a decision -- add it to the ignore
-# (Expo/RN SDK-coupled) or add it here (safe to auto-update) -- so a new SDK-coupled
-# package cannot silently slip past the freeze.
-ATLAS_MOBILE_NON_SDK_DEPS = frozenset({"tailwindcss", "typescript", "zustand"})
+# atlas-mobile is frozen on Expo SDK 54 and is not under active development, so its
+# ENTIRE dependency set is version-frozen: every dependency must be matched by an
+# ignore pattern on the atlas-mobile npm entry (React Native / Expo / React are
+# SDK-coupled; typescript and tailwindcss are Expo-migration-coupled too -- TS 6 is
+# rejected by Expo and Tailwind v4 needs a coordinated NativeWind migration). This
+# allowlist is therefore empty: adding a new atlas-mobile dependency FAILS the test
+# until it is added to the freeze, so nothing can silently rejoin the update stream.
+# (Security updates still flow -- the ignores are scoped to version-update types.)
+ATLAS_MOBILE_NON_SDK_DEPS: frozenset[str] = frozenset()
 
 
 def _dependabot_update_blocks(config_text: str) -> list[dict[str, object]]:

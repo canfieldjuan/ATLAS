@@ -114,15 +114,19 @@ Max files: 3
 The npm mobile-freeze ignore set and the pip root-exclusion are decision-driving
 member sets. Closure declaration (R13):
 
-- **atlas-mobile freeze set: CLOSED.** Canonical source of truth = the union of
-  the ignore patterns on the atlas-mobile npm entry, cross-checked against
-  `atlas-mobile/package.json` by `tests/test_security_policy_docs.py::
-  test_atlas_mobile_freezes_full_expo_sdk_stack`. Every atlas-mobile dependency
-  must be either matched by an ignore pattern (Expo/RN SDK-coupled) or listed in
-  `ATLAS_MOBILE_NON_SDK_DEPS` (currently tailwindcss, typescript, zustand). A new
-  unlisted dependency FAILS the test until classified -- so a new SDK-coupled
-  package cannot silently rejoin the update stream (this is the second-side guard
-  for the `@react-native/*` omission Codex found).
+- **atlas-mobile freeze set: CLOSED (whole stack).** atlas-mobile is frozen on
+  Expo SDK 54 and not under active development, so its ENTIRE dependency set is
+  version-frozen -- React Native / Expo / React are SDK-coupled, and typescript /
+  tailwindcss are Expo-migration-coupled too (TS 6 rejected by Expo; Tailwind v4
+  needs a coordinated NativeWind migration, per the archived plans). Canonical
+  source of truth = the ignore patterns on the atlas-mobile npm entry, cross-checked
+  against `atlas-mobile/package.json` by `tests/test_security_policy_docs.py::
+  test_atlas_mobile_freezes_full_expo_sdk_stack`; `ATLAS_MOBILE_NON_SDK_DEPS` is
+  EMPTY. Every atlas-mobile dependency must be matched by an ignore pattern; a new
+  unlisted dependency FAILS the test until added to the freeze -- so nothing can
+  silently rejoin the update stream (the second-side guard for the `@react-native/*`
+  and typescript/tailwindcss omissions Codex found). Security updates still surface
+  (the ignores are version-update-scoped).
 - **pip root exclusion: CLOSED.** Root `/` is removed from the pip `directories`;
   `test_root_excluded_from_pip_updates` fails if any pip entry re-adds `/`. The
   ML/CUDA ignore set is a defense-in-depth version-lock guard for the remaining
@@ -207,7 +211,7 @@ Parked hardening: none.
 
 | File | LOC |
 |---|---:|
-| `.github/dependabot.yml` | 97 |
-| `plans/PR-Dependabot-Degroup-Frozen-Subsystems.md` | 211 |
-| `tests/test_security_policy_docs.py` | 143 |
-| **Total** | **451** |
+| `.github/dependabot.yml` | 109 |
+| `plans/PR-Dependabot-Degroup-Frozen-Subsystems.md` | 217 |
+| `tests/test_security_policy_docs.py` | 144 |
+| **Total** | **470** |

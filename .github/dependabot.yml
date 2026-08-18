@@ -93,6 +93,18 @@ updates:
         update-types: ["version-update:semver-major", "version-update:semver-minor", "version-update:semver-patch"]
       - dependency-name: "@types/react"
         update-types: ["version-update:semver-major", "version-update:semver-minor", "version-update:semver-patch"]
+      # The remaining atlas-mobile tooling is also Expo-SDK-54-migration-coupled:
+      # TypeScript 6 is rejected by Expo (plans/archive/PR-TypeScript-Major-Batch.md)
+      # and Tailwind v4 needs a coordinated NativeWind migration
+      # (plans/archive/PR-Atlas-Intel-UI-Tailwind-v4-Migration.md). atlas-mobile is
+      # frozen on Expo SDK 54, so its whole stack moves only on a deliberate SDK
+      # upgrade -- freeze all version updates here (security updates still surface).
+      - dependency-name: "typescript"
+        update-types: ["version-update:semver-major", "version-update:semver-minor", "version-update:semver-patch"]
+      - dependency-name: "tailwindcss"
+        update-types: ["version-update:semver-major", "version-update:semver-minor", "version-update:semver-patch"]
+      - dependency-name: "zustand"
+        update-types: ["version-update:semver-major", "version-update:semver-minor", "version-update:semver-patch"]
 
   - package-ecosystem: "pip"
     # Root "/" is intentionally excluded: its requirements.txt is bound to the
