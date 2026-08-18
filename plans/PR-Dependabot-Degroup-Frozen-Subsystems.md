@@ -220,8 +220,8 @@ Parked hardening: none.
 
 | File | LOC |
 |---|---:|
-| `.github/dependabot.yml` | 109 |
+| `.github/dependabot.yml` | 111 |
 | `.github/workflows/atlas_security_policy_docs_checks.yml` | 2 |
-| `plans/PR-Dependabot-Degroup-Frozen-Subsystems.md` | 225 |
-| `tests/test_security_policy_docs.py` | 153 |
-| **Total** | **489** |
+| `plans/PR-Dependabot-Degroup-Frozen-Subsystems.md` | 227 |
+| `tests/test_security_policy_docs.py` | 161 |
+| **Total** | **501** |

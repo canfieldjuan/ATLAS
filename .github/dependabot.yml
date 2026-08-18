@@ -48,10 +48,12 @@ updates:
     # @react-native-async-storage/* are scoped SDK-line packages the unscoped
     # react-native-* pattern misses. This whole set moves only on a deliberate
     # Expo-SDK upgrade, not one package at a time (closed PRs #2356 mobile leg /
-    # #2400 / #2401; blocked #2397). Block VERSION updates so the mobile build stays
-    # SDK-consistent; genuine security updates still surface (update-types scopes to
-    # version updates only). Non-SDK deps (tailwindcss, typescript, zustand) still
-    # receive updates.
+    # #2400 / #2401; blocked #2397). atlas-mobile is not under active development, so
+    # its ENTIRE stack is version-frozen -- typescript and tailwindcss are also
+    # Expo-migration-coupled (TS 6 rejected by Expo; Tailwind v4 needs a NativeWind
+    # migration), and zustand is frozen with them. Block VERSION updates so the
+    # mobile build stays SDK-consistent; genuine security updates still surface
+    # (update-types scopes to version updates only).
     directories:
       - "/atlas-mobile"
     schedule:

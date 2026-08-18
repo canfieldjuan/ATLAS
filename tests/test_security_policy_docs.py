@@ -555,9 +555,17 @@ class DependabotFrozenSubsystemPolicyTest(unittest.TestCase):
     def test_atlas_mobile_freezes_full_expo_sdk_stack(self) -> None:
         ignore = self._atlas_mobile_block()["ignore"]
         package = json.loads(ATLAS_MOBILE_PACKAGE_JSON.read_text(encoding="utf-8"))
-        deps = set(package.get("dependencies", {})) | set(
-            package.get("devDependencies", {})
-        )
+        # Cover every npm dependency section Dependabot can update, not just
+        # dependencies/devDependencies -- a package under optionalDependencies or
+        # peerDependencies would otherwise escape the freeze guard.
+        deps: set[str] = set()
+        for section in (
+            "dependencies",
+            "devDependencies",
+            "optionalDependencies",
+            "peerDependencies",
+        ):
+            deps |= set(package.get(section, {}))
         self.assertTrue(deps, "expected atlas-mobile to declare dependencies")
         unclassified = [
             dep
