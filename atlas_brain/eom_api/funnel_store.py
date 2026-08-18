@@ -135,7 +135,7 @@ async def require_eom_funnel_data_store(
                       AND atttypid = 'bigint'::regtype
                 ) AS onboarding_drafts_required_columns_ready,
                 -- Public routes remain dormant until explicitly enabled, so an
-                -- Atlas code deployment can precede migration 382 safely. Once
+                -- Atlas code deployment can precede migration 383 safely. Once
                 -- enabled, every durable token column, constraint, active-link
                 -- index, and runtime DML privilege must exist before a draft
                 -- claim could mint a bearer.

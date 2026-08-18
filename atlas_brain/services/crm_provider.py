@@ -4807,7 +4807,7 @@ class DatabaseCRMProvider:
     ) -> None:
         """Fence office conversion while an issued public link owns the lead.
 
-        A code deployment can precede migration 382 while the feature is
+        A code deployment can precede migration 383 while the feature is
         disabled. The relation probe preserves the existing office handoff in
         that deliberately dormant state; once the table exists, the matching
         row is locked under the same sorted advisory-lock vocabulary as both

@@ -158,7 +158,7 @@ async def _prepare_schema(
         await _provision_nocodb_login(conn)
         migration_names.append("354_eom_customer_handoff_privileges.sql")
     if apply_public_onboarding_migration:
-        migration_names.append("382_eom_public_onboarding_tokens.sql")
+        migration_names.append("383_eom_public_onboarding_tokens.sql")
     for name in migration_names:
         if name == "367_contacts_customer_type_revision.sql":
             async with conn.transaction():
@@ -4864,13 +4864,13 @@ async def test_public_onboarding_readiness_requires_its_migration_only_when_enab
         await run_migrations(
             _MigrationPool(),
             migrations_dir=MIGRATIONS,
-            only={"382_eom_public_onboarding_tokens"},
+            only={"383_eom_public_onboarding_tokens"},
         )
         assert await conn.fetchval(
             """
             SELECT EXISTS (
                 SELECT 1 FROM schema_migrations
-                WHERE name = '382_eom_public_onboarding_tokens'
+                WHERE name = '383_eom_public_onboarding_tokens'
             )
             """
         )

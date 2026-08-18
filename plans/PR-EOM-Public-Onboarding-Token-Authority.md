@@ -170,6 +170,38 @@ proof that its public and office completion paths cannot race.
   production configuration, or any unrelated EOM lifecycle, payroll, QR/GPS,
   scheduling, payment, or email-copy behavior.
 
+### Current-head CI recovery contract
+
+- Root cause: This unmerged PR assigned numeric migration prefix `382` to the
+  EOM public-onboarding schema while `origin/main` already contains
+  `382_commercial_billing_candidate_overrides.sql`. The migration runner treats
+  the prefix as its primary version and the repository test deliberately admits
+  only historic collisions, so the newly introduced collision fails both the
+  dedicated migration-runner check and the EOM pipeline that includes it. In a
+  separate policy defect, the PR body describes why this 3,437-line safety
+  boundary is indivisible but omits the exact visible `Diff-budget override:`
+  decision marker required by the diff-budget gate.
+- Correct remediation must:
+  1. Rename the unmerged EOM migration to the next free positive prefix after
+     the current `origin/main` maximum (`383`) rather than add this new collision
+     to the historic-exception allowlist.
+  2. Update every direct filename and canonical migration-name reference in the
+     EOM workflow enrollment, integration migration setup, focused migration
+     proof, plan, and PR body so the migration is discovered, applied, and
+     recorded consistently as `383_eom_public_onboarding_tokens`.
+  3. Add one visible, substantive `Diff-budget override:` line to the PR body
+     using the already-established indivisibility rationale, so the gate records
+     the deliberate overage instead of inferring one from unrelated prose.
+  4. Prove the repository-wide duplicate-prefix policy and exact EOM workflow
+     test list pass locally; the existing collision test is the regression proof
+     that the new migration no longer becomes a silently accepted duplicate.
+- Must not change: the migration SQL/schema and its transactional semantics,
+  migration-runner collision recovery or historic allowlist, public-onboarding
+  token/configuration/authorization behavior, production migration state, EOM
+  test selection other than renamed path enrollment, or the diff-budget
+  threshold/gate policy. Do not split or broaden the product slice solely to
+  silence this metadata and naming repair.
+
 ## Scope (this PR)
 
 Ownership lane: eom-public-onboarding-token-authority
@@ -189,6 +221,8 @@ Max files: 13
    durable authority, datastore-readiness, or handoff state machine.
 6. Reject link-breaking whitespace at public-onboarding URL admission without
    canonicalizing operator input or changing the enabled delivery flow.
+7. Repair the unmerged migration's numeric-prefix collision and record the
+   existing indivisibility rationale in the canonical PR-body diff-budget form.
 
 ### Review Contract
 
@@ -255,6 +289,10 @@ Max files: 13
       rejected before parsing or email construction; its independent grammar
       oracle rejects the same families, while a valid configured URL retains the
       existing issuance behavior.
+  11. The public-onboarding migration has a unique positive prefix against the
+      current repository migration set; its EOM workflow trigger and integration
+      proof reference that same canonical name. The PR body carries a visible,
+      substantive diff-budget override rather than changing the soft-cap policy.
 - Reachability proof: `tests/test_eom_public_onboarding.py` uses an ASGI
   transport against the registered `/eom-funnel/public-onboarding/*` routes;
   `tests/test_eom_lead_conversion_integration.py` uses a disposable Postgres
@@ -403,7 +441,7 @@ fallback changes; otherwise write "N/A - no guard/config boundary change."
 - `atlas_brain/services/crm_provider.py`
 - `atlas_brain/services/eom_onboarding_drafts.py`
 - `atlas_brain/services/eom_public_onboarding_tokens.py`
-- `atlas_brain/storage/migrations/382_eom_public_onboarding_tokens.sql`
+- `atlas_brain/storage/migrations/383_eom_public_onboarding_tokens.sql`
 - `plans/PR-EOM-Public-Onboarding-Token-Authority.md`
 - `tests/test_eom_lead_conversion_integration.py`
 - `tests/test_eom_public_onboarding.py`
@@ -489,7 +527,7 @@ shortcut. If public onboarding has ever been enabled, the release manager must:
    `revoke-link` for its draft, and retain the revoked row as audit evidence.
 3. Verify `SELECT count(*) FROM eom_public_onboarding_tokens WHERE status =
    'issued'` is zero. Do not roll back while any issued row remains.
-4. Only then deploy the earlier application revision; retain migration 382 and
+4. Only then deploy the earlier application revision; retain migration 383 and
    its terminal audit rows. A later re-enable is a new rollout decision, not a
    rollback side effect.
 
@@ -521,12 +559,17 @@ blocks the safety of this vertical path.
 
 - Passed locally:
   - `pytest -q tests/test_eom_public_onboarding.py` -- 30 passed.
+  - `pytest -q tests/test_migrations_runner.py` -- 30 passed, 1 skipped;
+    its repository-wide duplicate-prefix policy admits only the established
+    historic collisions and rejects the new `382` collision.
   - The exact `Run EOM lead pipeline checks` file list in
     `.github/workflows/atlas_eom_lead_pipeline_checks.yml`, run locally with
     `ATLAS_MIGRATION_TEST_DATABASE_URL` pointed at a fresh disposable
-    `postgres:16-alpine` instance -- 1105 passed, 5 skipped.
-  - `python -m compileall -q` over every changed Python module/test,
-    `ruff check` over the same paths, and `git diff --check` -- passed.
+    `postgres:16-alpine` instance -- 1100 passed, 5 skipped.
+  - `python -m compileall -q` over the changed Python modules/test,
+    `ruff check` over the same paths, `git diff --check`, and
+    `python scripts/check_diff_budget.py --additions 3437 --body-file <PR body>`
+    -- passed.
   - `python scripts/check_guard_class_closure.py --base origin/main --strict`
     -- advisory lint passed with no guard-shaped change lacking property proof.
 - The disposable `postgres:16-alpine` container was local-only and removed after
@@ -548,9 +591,9 @@ blocks the safety of this vertical path.
 | `atlas_brain/services/crm_provider.py` | 650 |
 | `atlas_brain/services/eom_onboarding_drafts.py` | 47 |
 | `atlas_brain/services/eom_public_onboarding_tokens.py` | 169 |
-| `atlas_brain/storage/migrations/382_eom_public_onboarding_tokens.sql` | 72 |
-| `plans/PR-EOM-Public-Onboarding-Token-Authority.md` | 556 |
+| `atlas_brain/storage/migrations/383_eom_public_onboarding_tokens.sql` | 72 |
+| `plans/PR-EOM-Public-Onboarding-Token-Authority.md` | 599 |
 | `tests/test_eom_lead_conversion_integration.py` | 558 |
 | `tests/test_eom_public_onboarding.py` | 889 |
 | `tests/test_eom_render_profile.py` | 11 |
-| **Total** | **3463** |
+| **Total** | **3506** |
