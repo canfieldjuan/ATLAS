@@ -81,12 +81,25 @@ def evaluate_baseline_rotation(
         return Decision(True, "Gitleaks baseline and ignore fingerprints unchanged.")
 
     if rotation_label not in labels:
+        if ignore_requires_rotation:
+            reason = (
+                "Gitleaks ignore growth requires the "
+                f"`{rotation_label}` PR label after provider credential "
+                "rotation/revocation. Reviewed false-positive evidence is "
+                "limited to exact scanner-generated baseline fingerprints and "
+                "does not authorize ignore growth; see "
+                "docs/SECURITY_GUARDRAILS.md."
+            )
+        else:
+            reason = (
+                "Gitleaks baseline changes require the "
+                f"`{rotation_label}` PR label after either provider credential "
+                "rotation/revocation or the documented reviewed-false-positive "
+                "evidence in docs/SECURITY_GUARDRAILS.md."
+            )
         return Decision(
             False,
-            (
-                "Gitleaks baseline changes or ignore growth require the "
-                f"`{rotation_label}` PR label after provider rotation/revocation."
-            ),
+            reason,
             added_ignore_fingerprints=tuple(sorted(added_ignores)),
         )
 
