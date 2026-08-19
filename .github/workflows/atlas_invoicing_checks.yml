@@ -66,6 +66,7 @@ on:
       - "atlas_brain/templates/email/__init__.py"
       - "atlas_brain/templates/email/estimate_confirmation.py"
       - "atlas_brain/templates/email/payment_receipt.py"
+      - "tests/test_legacy_monthly_autoinvoice_opt_in.py"
       - "tests/test_monthly_invoice_generation.py"
       - "tests/test_invoice_repository.py"
       - "tests/test_invoice_pdf.py"
@@ -149,6 +150,7 @@ on:
       - "atlas_brain/templates/email/__init__.py"
       - "atlas_brain/templates/email/estimate_confirmation.py"
       - "atlas_brain/templates/email/payment_receipt.py"
+      - "tests/test_legacy_monthly_autoinvoice_opt_in.py"
       - "tests/test_monthly_invoice_generation.py"
       - "tests/test_invoice_repository.py"
       - "tests/test_invoice_pdf.py"
@@ -209,6 +211,12 @@ jobs:
           python -m pytest \
             tests/test_monthly_invoice_generation.py \
             -k "update_invoice_clears_needs_hours_when_line_items_are_billable or line_items_are_billable_requires_all_positive_quantities" \
+            -q
+
+      - name: Run legacy monthly auto-invoice opt-in contract tests
+        run: |
+          python -m pytest \
+            tests/test_legacy_monthly_autoinvoice_opt_in.py \
             -q
 
       - name: Run receivables ledger and repository tests

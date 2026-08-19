@@ -35,7 +35,7 @@ explicit operator choice.
 
 Ownership lane: eom/billing-payments-security-hardening
 Slice phase: Production hardening
-Max files: 4
+Max files: 5
 
 1. Default `auto_invoice_enabled` and `auto_invoice_send_email` to false and
    describe both as legacy explicit opt-ins.
@@ -47,6 +47,10 @@ Max files: 4
    path coverage rather than depending on global defaults.
 4. Preserve the cron task and all explicit-true behavior; this PR changes no
    production configuration or financial record.
+5. Enroll the new no-DB contract file in both
+   `.github/workflows/atlas_invoicing_checks.yml` trigger lists and an explicit
+   pytest step, so every PR and `main` push that changes the file runs the
+   claimed fail-safe proof.
 
 ### Review Contract
 
@@ -63,18 +67,21 @@ Max files: 4
   - Existing direct billing-month/contact-filter task tests explicitly enable
     their legacy operating path before `run()`, so their old enabled behavior
     remains tested without relying on a default.
+  - The new fail-safe contract file is in both the invoicing workflow's
+    pull-request and `main` push paths and is executed by a dedicated pytest
+    step; a changed default cannot bypass its per-PR regression proof.
   - The scheduler registration and task code remain unchanged; a diff check
-    proves this config/test-only slice did not alter them.
+    proves this config/test/workflow slice did not alter them.
   - The active deployment is not mutated. Its current explicit false value
     keeps behavior unchanged while the default protects a future absent setting.
 - Reachability proof: `InvoicingConfig` is the live API settings model and the
   focused async test calls the real legacy task entrypoint, observing its skip
   result with provider imports guarded.
 - Affected surfaces: `atlas_brain/config.py`, the unchanged legacy task direct
-  caller, and focused configuration/task tests.
+  caller, focused configuration/task tests, and the explicit invoicing CI job.
 - Risk areas: accidental invoice/PDF/mail creation, explicit legacy opt-in
   compatibility, settings precedence, deployment rollback.
-- Reviewer rules triggered: R1, R2, R3, R4, R11, R12, R14.
+- Reviewer rules triggered: R1, R2, R3, R4, R6, R11, R12, R14.
 
 ### Boundary-change enumeration
 
@@ -106,8 +113,8 @@ Max files: 4
   fails if any writeful provider import occurs; no live service, financial row,
   Gmail account, or credential is used.
 - Side-effect ordering: the task returns at its existing flag check before it
-  imports calendar/CRM/repository providers. The config-only change adds no
-  writer, migration, or restart.
+  imports calendar/CRM/repository providers. The config/workflow change adds
+  no writer, migration, or restart.
 
 ### Closure declaration
 
@@ -119,6 +126,7 @@ Max files: 4
 
 ### Files touched
 
+- `.github/workflows/atlas_invoicing_checks.yml`
 - `atlas_brain/config.py`
 - `plans/PR-EOM-Legacy-Monthly-Autoinvoice-Opt-In-Recovery.md`
 - `tests/test_legacy_monthly_autoinvoice_opt_in.py`
@@ -131,7 +139,9 @@ This slice leaves that branch and scheduler untouched but reverses the unsafe
 configuration default. An absent setting now returns through the established
 skip before any financial/delivery collaborator is imported. An intentionally
 operated legacy workflow still sets its flag(s) true; automatic email needs its
-own opt-in and the existing review-mode condition to allow sending.
+own opt-in and the existing review-mode condition to allow sending. The
+dedicated invoicing CI step executes the new no-DB contract whenever its
+source, the settings model, or the workflow changes.
 
 ## Intentional
 
@@ -141,6 +151,9 @@ own opt-in and the existing review-mode condition to allow sending.
   later false review-mode setting must not inherit send consent silently.
 - Do not modify the active `.env`, restart the API, or exercise production data.
   The live explicit false setting already has the desired behavior.
+- The P1 CI enrollment repair is limited to this contract file's existing
+  invoicing workflow; it does not broaden coverage into scheduler or financial
+  integration behavior.
 
 ## Deferred
 
@@ -178,6 +191,10 @@ Parked hardening: none.
   plans/PR-EOM-Legacy-Monthly-Autoinvoice-Opt-In-Recovery.md --check` and
   `python scripts/audit_plan_doc.py
   plans/PR-EOM-Legacy-Monthly-Autoinvoice-Opt-In-Recovery.md` -- passed.
+- P1 CI-enrollment repair: focused new-file proof and the existing selected
+  invoicing blocker test both passed; a standard-library workflow-text probe
+  confirmed two trigger paths plus one dedicated pytest invocation. A new
+  managed PR gate and hosted `atlas-invoicing-checks` run remain pending.
 - Skipped: real-database bodies in `tests/test_monthly_invoice_generation.py`.
   They can create then void invoice rows; no explicitly isolated test database
   was verified for this run, and H-21's deterministic no-DB proof covers the
@@ -192,8 +209,9 @@ Parked hardening: none.
 
 | File | LOC |
 |---|---:|
+| `.github/workflows/atlas_invoicing_checks.yml` | 8 |
 | `atlas_brain/config.py` | 16 |
-| `plans/PR-EOM-Legacy-Monthly-Autoinvoice-Opt-In-Recovery.md` | 199 |
+| `plans/PR-EOM-Legacy-Monthly-Autoinvoice-Opt-In-Recovery.md` | 217 |
 | `tests/test_legacy_monthly_autoinvoice_opt_in.py` | 78 |
 | `tests/test_monthly_invoice_generation.py` | 18 |
-| **Total** | **311** |
+| **Total** | **337** |
