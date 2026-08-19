@@ -18,15 +18,20 @@ current migration ledger recording the public-onboarding migration.
   EXISTS`, so PostgreSQL left that pre-existing relation unchanged while the
   runner recorded 383 as applied. The live, empty relation consequently lacks
   the immutable signing and prefill fields that enabled public-onboarding
-  readiness requires.
+  readiness requires. Separately, the required real-PostgreSQL regression
+  proof was local-only: the existing migration-check workflow neither started
+  PostgreSQL nor supplied `ATLAS_MIGRATION_TEST_DATABASE_URL`, so this test's
+  explicit environment guard skipped every case in CI.
 - Correct fix must touch/change: add one new, atomic, forward-only migration
   that detects the known incomplete table shape, refuses to invent immutable
   values for a nonempty legacy relation, and repairs the empty relation in
   place with the exact signing/prefill column semantics required by migration
   383. Add a real-PostgreSQL regression test that uses the migration runner to
   prove both the empty-table repair and the nonempty-table fail-closed fence.
-  The migration must be a new normal ledger entry; it must not alter migration
-  history.
+  Enroll that regression test in the existing migration-check workflow with a
+  disposable PostgreSQL service and `ATLAS_MIGRATION_TEST_DATABASE_URL`, so
+  the required CI evidence executes rather than skips. The migration must be a
+  new normal ledger entry; it must not alter migration history.
 - Must not change: `382_*` and `383_*`; Website and Tracker code; public-route,
   HMAC, bearer, issuance, redemption, revocation, email, customer-handoff,
   payroll, receivables, commercial-billing, or CRM lifecycle semantics; and
@@ -37,13 +42,16 @@ current migration ledger recording the public-onboarding migration.
 
 Ownership lane: eom-public-onboarding/schema-repair
 Slice phase: Production hardening
-Max files: 3
+Max files: 4
 
 1. Repair an empty legacy `eom_public_onboarding_tokens` relation whose
    migration ledger already records 383 but whose immutable public-onboarding
    projection columns are absent.
 2. Add database-level regression proof for the repair, fail-closed nonempty
    legacy state, and no-op behavior on an already complete relation.
+3. Make the existing migration-check workflow provide the disposable PostgreSQL
+   URL and invoke that proof on pull requests that change this migration or its
+   test.
 
 ### Review Contract
 
@@ -69,14 +77,19 @@ Max files: 3
   6. The migration is run through `run_migrations(..., only={...})`, so its
      DDL and ledger record are proven together under the production runner's
      atomic-bookkeeping path rather than by executing a copied SQL string.
+  7. The migration-check workflow starts a disposable PostgreSQL service,
+     supplies `ATLAS_MIGRATION_TEST_DATABASE_URL`, and invokes
+     `tests/test_eom_public_onboarding_migration_repair.py`; the test therefore
+     cannot skip in required CI for lack of a database URL.
 - Reachability proof: after merge/deployment, the live `atlas-api` startup
   runner applies 384 before public-onboarding configuration is set. With the
   explicit public settings then present, a Tracker public-session request with
   a fake bearer must traverse the configured service and return the expected
   unavailable-link `404`, not the current configuration-disabled `503`.
 - Affected surfaces: Atlas migration ledger; the durable public-onboarding
-  token relation required by `require_eom_funnel_data_store`; and the deployed
-  Website → Tracker → Atlas onboarding handoff only.
+  token relation required by `require_eom_funnel_data_store`; the migration
+  workflow's disposable PostgreSQL test environment; and the deployed Website
+  → Tracker → Atlas onboarding handoff only.
 - Risk areas: destructive schema repair, impossible immutable-data backfill,
   migration/ledger atomicity, legacy relation compatibility, and accidental
   configuration activation before datastore readiness.
@@ -98,6 +111,7 @@ service startup; it is not a PR code change.
 
 ### Files touched
 
+- `.github/workflows/atlas_migrations_runner_checks.yml`
 - `atlas_brain/storage/migrations/384_eom_public_onboarding_tokens_schema_repair.sql`
 - `plans/PR-EOM-Public-Onboarding-Schema-Repair.md`
 - `tests/test_eom_public_onboarding_migration_repair.py`
@@ -111,6 +125,9 @@ the snapshot values can be reconstructed truthfully. For the observed empty
 legacy relation, it adds the missing columns with the same type, nullability,
 and fingerprint check used by 383. The atomic-bookkeeping marker makes the
 schema changes and new ledger row one transaction under the existing runner.
+The existing migration-check workflow supplies the test's database URL through
+an isolated PostgreSQL service and runs the repair proof alongside the
+runner-level checks.
 
 ## Intentional
 
@@ -133,10 +150,11 @@ Parked hardening: none.
 
 ## Verification
 
-- Passed: `ATLAS_MIGRATION_TEST_DATABASE_URL=... pytest -q
-  tests/test_eom_public_onboarding_migration_repair.py` — 3 passed against a
-  disposable schema in the local development PostgreSQL database.
-- Passed: `pytest -q tests/test_migrations_runner.py` — 30 passed, 1 skipped.
+- Passed: local workflow-equivalent `ATLAS_MIGRATION_TEST_DATABASE_URL=...
+  python -m pytest -q tests/test_migrations_runner.py
+  tests/test_eom_public_onboarding_migration_repair.py` — 34 passed against a
+  disposable PostgreSQL schema; the repair proof executed rather than skipped.
+- Passed: workflow YAML parse with Python's YAML loader.
 - Passed: `pytest -q tests/test_eom_public_onboarding.py` — 39 passed.
 - Passed: Ruff check and formatter checks for
   `tests/test_eom_public_onboarding_migration_repair.py`.
@@ -149,7 +167,8 @@ Parked hardening: none.
 
 | File | LOC |
 |---|---:|
+| `.github/workflows/atlas_migrations_runner_checks.yml` | 29 |
 | `atlas_brain/storage/migrations/384_eom_public_onboarding_tokens_schema_repair.sql` | 55 |
-| `plans/PR-EOM-Public-Onboarding-Schema-Repair.md` | 155 |
+| `plans/PR-EOM-Public-Onboarding-Schema-Repair.md` | 174 |
 | `tests/test_eom_public_onboarding_migration_repair.py` | 400 |
-| **Total** | **610** |
+| **Total** | **658** |
