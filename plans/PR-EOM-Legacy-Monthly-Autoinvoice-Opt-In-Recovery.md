@@ -64,6 +64,9 @@ Max files: 5
     disabled returns `{"_skip_synthesis": "Auto-invoicing disabled"}` before
     calendar, CRM, invoice, PDF, email, service-invoiced, or notification
     collaborators can be imported; failure sentinels prove the import boundary.
+    The sentinel resolves `__import__` relative names from the actual name,
+    level, and task module package, then self-proves rejection of the task's
+    level-three calendar-provider import shape.
   - Existing direct billing-month/contact-filter task tests explicitly enable
     their legacy operating path before `run()`, so their old enabled behavior
     remains tested without relying on a default.
@@ -76,7 +79,8 @@ Max files: 5
     keeps behavior unchanged while the default protects a future absent setting.
 - Reachability proof: `InvoicingConfig` is the live API settings model and the
   focused async test calls the real legacy task entrypoint, observing its skip
-  result with provider imports guarded.
+  result with provider imports guarded; its sentinel first proves it would
+  reject the task's actual relative provider import shape.
 - Affected surfaces: `atlas_brain/config.py`, the unchanged legacy task direct
   caller, focused configuration/task tests, and the explicit invoicing CI job.
 - Risk areas: accidental invoice/PDF/mail creation, explicit legacy opt-in
@@ -175,6 +179,9 @@ Parked hardening: none.
 
 - `python -m pytest tests/test_legacy_monthly_autoinvoice_opt_in.py -q` -- 3
   passed (no database, provider, Gmail, or financial record).
+- R2 sentinel repair: the same focused test resolves the real
+  `services.calendar_provider` level-three import against the task package and
+  asserts the interceptor raises before the disabled task call runs.
 - `python -m pytest tests/test_monthly_invoice_generation.py -k 'resolver or
   per_hour_line_items or notification_lines' -q` -- 13 passed, 30 deselected
   (pure existing helper coverage).
@@ -211,7 +218,7 @@ Parked hardening: none.
 |---|---:|
 | `.github/workflows/atlas_invoicing_checks.yml` | 8 |
 | `atlas_brain/config.py` | 16 |
-| `plans/PR-EOM-Legacy-Monthly-Autoinvoice-Opt-In-Recovery.md` | 217 |
-| `tests/test_legacy_monthly_autoinvoice_opt_in.py` | 78 |
+| `plans/PR-EOM-Legacy-Monthly-Autoinvoice-Opt-In-Recovery.md` | 224 |
+| `tests/test_legacy_monthly_autoinvoice_opt_in.py` | 101 |
 | `tests/test_monthly_invoice_generation.py` | 18 |
-| **Total** | **337** |
+| **Total** | **367** |

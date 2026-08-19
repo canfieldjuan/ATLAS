@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import builtins
 import importlib
+from importlib.util import resolve_name
 from types import SimpleNamespace
 
 import pytest
@@ -14,6 +15,16 @@ _LEGACY_WRITEFUL_PROVIDER_MODULES = {
     "atlas_brain.storage.repositories.customer_service",
     "atlas_brain.storage.repositories.invoice",
 }
+
+
+def _resolve_import_name(name: str, module_globals: object, level: int) -> str:
+    """Normalize the relative-import shape passed to ``__import__``."""
+    if level == 0 or not isinstance(module_globals, dict):
+        return name
+    package = module_globals.get("__package__")
+    if not isinstance(package, str) or not package:
+        return name
+    return resolve_name("." * level + name, package)
 
 
 def test_legacy_monthly_automatic_write_flags_default_off_without_environment(
@@ -62,14 +73,26 @@ async def test_disabled_legacy_task_returns_before_writeful_provider_imports(
 
     def fail_if_legacy_writer_is_imported(
         name: str,
-        globals: object = None,
+        module_globals: object = None,
         locals: object = None,
         fromlist: object = (),
         level: int = 0,
     ) -> object:
-        if name in _LEGACY_WRITEFUL_PROVIDER_MODULES:
-            raise AssertionError(f"disabled task imported writeful provider: {name}")
-        return original_import(name, globals, locals, fromlist, level)
+        resolved_name = _resolve_import_name(name, module_globals, level)
+        if resolved_name in _LEGACY_WRITEFUL_PROVIDER_MODULES:
+            raise AssertionError(
+                f"disabled task imported writeful provider: {resolved_name}"
+            )
+        return original_import(name, module_globals, locals, fromlist, level)
+
+    with pytest.raises(AssertionError, match="atlas_brain.services.calendar_provider"):
+        fail_if_legacy_writer_is_imported(
+            "services.calendar_provider",
+            task_module.__dict__,
+            None,
+            ("get_calendar_provider",),
+            3,
+        )
 
     monkeypatch.setattr(builtins, "__import__", fail_if_legacy_writer_is_imported)
 
