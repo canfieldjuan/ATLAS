@@ -29,18 +29,26 @@ are blocked before a commit is created and hook output does not print raw secret
 values. This complements the PR-time Gitleaks scan; it does not replace CI and
 does not rotate historical credentials.
 
-Legitimate baseline rotations are allowed only through a narrow controlled
-path: rotate or revoke the exposed provider credential first, add the
-`security-rotation` PR label, and keep the diff limited to
+Legitimate baseline changes are allowed only through one of two narrow,
+controlled paths. For an exposed provider credential, rotate or revoke that
+credential first. For a reviewed scanner false positive, credential rotation is
+not applicable only when the PR records all of the following: the redacted
+source evidence establishes that the matched text is not a credential; the
+candidate is an exact scanner-generated `Fingerprint` record rather than a
+rule, ignore-list, or wildcard exception; the pinned full-history scan is
+shown both without the candidate baseline and with it; and the candidate
+preserves every trusted-base fingerprint. Both paths require the
+`security-rotation` PR label and a diff limited to
 `docs/security/gitleaks-baseline.json`, `docs/SECURITY_GUARDRAILS.md`,
 `HARDENING.md`, and the slice plan under `plans/PR-*.md`. The label alone is
-not enough; product-code or workflow changes in the same PR still fail the
-baseline guard. The baseline guard has its own `pull_request_target`-only
-workflow so the required `Gitleaks baseline growth guard` context cannot be
-satisfied by a skipped `pull_request` job. It runs from trusted base-branch
-workflow code, fetches the PR head only as git data, parses labels from
-GitHub's JSON event payload, and rejects candidate baselines that drop
-trusted-base fingerprints.
+not enough: false-positive changes must not alter product code, Gitleaks rules,
+or workflow behavior, and product-code or workflow changes in any baseline PR
+still fail the baseline guard. The baseline guard has its own
+`pull_request_target`-only workflow so the required `Gitleaks baseline growth
+guard` context cannot be satisfied by a skipped `pull_request` job. It runs
+from trusted base-branch workflow code, fetches the PR head only as git data,
+parses labels from GitHub's JSON event payload, and rejects candidate baselines
+that drop trusted-base fingerprints.
 
 Current blocking posture: new unbaselined secrets block PRs; Semgrep, Trivy,
 Checkov, pip-audit, and OSV are advisory/report-only until their adoption
