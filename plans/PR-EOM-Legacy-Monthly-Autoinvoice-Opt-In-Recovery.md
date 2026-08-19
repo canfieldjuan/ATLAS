@@ -80,6 +80,8 @@ Max files: 6
     derived task package, then executes module-scope relative-import probes for
     every named collaborator: calendar, CRM, customer-service and invoice
     repositories, invoice PDF, email provider/template, and notification tool.
+    The detector also resolves a protected child represented by a parent-module
+    import plus `fromlist`, as `from ...services import calendar_provider` does.
   - Existing billing-month/contact-filter legacy-writer tests explicitly
     disable the writer and pass as no-write admission probes. Their exact node
     ids are removed from the unit-gate baseline only after direct pass proof.
@@ -206,7 +208,8 @@ Parked hardening: none.
 - R2 sentinel repair: the same focused test installs the interceptor before a
   forced fresh import of the real task, then executes each collaborator's real
   package-relative module-scope import and asserts the interceptor raises before
-  the disabled task call runs.
+  the disabled task call runs, including the parent-module plus `fromlist`
+  child-import shape.
 - `python -m pytest tests/test_monthly_invoice_generation.py -k 'resolver or
   per_hour_line_items or notification_lines' -q` -- 13 passed, 30 deselected
   (pure existing helper coverage).
@@ -245,8 +248,8 @@ Parked hardening: none.
 |---|---:|
 | `.github/workflows/atlas_invoicing_checks.yml` | 10 |
 | `atlas_brain/config.py` | 16 |
-| `plans/PR-EOM-Legacy-Monthly-Autoinvoice-Opt-In-Recovery.md` | 252 |
-| `tests/test_legacy_monthly_autoinvoice_opt_in.py` | 144 |
+| `plans/PR-EOM-Legacy-Monthly-Autoinvoice-Opt-In-Recovery.md` | 255 |
+| `tests/test_legacy_monthly_autoinvoice_opt_in.py` | 170 |
 | `tests/test_monthly_invoice_generation.py` | 111 |
 | `tests/unit_gate_baseline.txt` | 3 |
-| **Total** | **536** |
+| **Total** | **565** |

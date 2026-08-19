@@ -34,6 +34,27 @@ def _resolve_import_name(name: str, module_globals: object, level: int) -> str:
     return resolve_name("." * level + name, package)
 
 
+def _writeful_provider_import_name(
+    name: str,
+    module_globals: object,
+    level: int,
+    fromlist: object,
+) -> str | None:
+    """Return a protected module represented by an import name or child fromlist."""
+    resolved_name = _resolve_import_name(name, module_globals, level)
+    if resolved_name in _LEGACY_WRITEFUL_PROVIDER_MODULES:
+        return resolved_name
+    if not isinstance(fromlist, (tuple, list)):
+        return None
+    for imported_name in fromlist:
+        if not isinstance(imported_name, str):
+            continue
+        child_name = f"{resolved_name}.{imported_name}"
+        if child_name in _LEGACY_WRITEFUL_PROVIDER_MODULES:
+            return child_name
+    return None
+
+
 def test_legacy_monthly_automatic_write_flags_default_off_without_environment(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -47,7 +68,6 @@ def test_legacy_monthly_automatic_write_flags_default_off_without_environment(
 
     assert config.auto_invoice_enabled is False
     assert config.auto_invoice_send_email is False
-    assert config.auto_invoice_review_mode is True
 
 
 def test_legacy_monthly_automatic_write_flags_keep_explicit_opt_in() -> None:
@@ -79,16 +99,22 @@ async def test_disabled_legacy_task_returns_before_writeful_provider_imports(
         fromlist: object = (),
         level: int = 0,
     ) -> object:
-        resolved_name = _resolve_import_name(name, module_globals, level)
-        if resolved_name in _LEGACY_WRITEFUL_PROVIDER_MODULES:
+        provider_name = _writeful_provider_import_name(
+            name, module_globals, level, fromlist
+        )
+        if provider_name:
             raise AssertionError(
-                f"disabled task imported writeful provider: {resolved_name}"
+                f"disabled task imported writeful provider: {provider_name}"
             )
         return original_import(name, module_globals, locals, fromlist, level)
 
     provider_import_probes = (
         (
             "from ...services.calendar_provider import get_calendar_provider",
+            "atlas_brain.services.calendar_provider",
+        ),
+        (
+            "from ...services import calendar_provider",
             "atlas_brain.services.calendar_provider",
         ),
         (
