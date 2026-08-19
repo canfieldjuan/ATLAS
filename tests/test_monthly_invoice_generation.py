@@ -285,14 +285,14 @@ async def test_all_service_agreements_have_required_fields():
 
 
 @pytest.mark.asyncio
-@pytest.mark.skip(
-    reason="H-23: legacy writer tests require isolated database and provider seams"
-)
-async def test_billing_month_override():
-    """Task should respect billing_month metadata override."""
+async def test_billing_month_override(monkeypatch: pytest.MonkeyPatch):
+    """A valid billing month cannot bypass the disabled legacy write guard."""
     from atlas_brain.autonomous.tasks.monthly_invoice_generation import run
+    from atlas_brain.config import settings
     from atlas_brain.storage.models import ScheduledTask
-    from atlas_brain.storage.database import init_database, close_database
+
+    monkeypatch.setattr(settings.invoicing, "enabled", True)
+    monkeypatch.setattr(settings.invoicing, "auto_invoice_enabled", False)
 
     task = ScheduledTask(
         id=uuid4(),
@@ -303,24 +303,20 @@ async def test_billing_month_override():
         metadata={"billing_month": "2026-03"},
     )
 
-    await init_database()
-    try:
-        result = await run(task)
-        # Should use March 2026 as the billing period
-        assert result.get("period") == "2026-03", f"Expected period 2026-03, got {result.get('period')}"
-    finally:
-        await close_database()
+    result = await run(task)
+
+    assert result == {"_skip_synthesis": "Auto-invoicing disabled"}
 
 
 @pytest.mark.asyncio
-@pytest.mark.skip(
-    reason="H-23: legacy writer tests require isolated database and provider seams"
-)
-async def test_billing_month_invalid_format():
-    """Task should reject invalid billing_month format."""
+async def test_billing_month_invalid_format(monkeypatch: pytest.MonkeyPatch):
+    """Malformed metadata cannot force provider construction or a legacy write."""
     from atlas_brain.autonomous.tasks.monthly_invoice_generation import run
+    from atlas_brain.config import settings
     from atlas_brain.storage.models import ScheduledTask
-    from atlas_brain.storage.database import init_database, close_database
+
+    monkeypatch.setattr(settings.invoicing, "enabled", True)
+    monkeypatch.setattr(settings.invoicing, "auto_invoice_enabled", False)
 
     task = ScheduledTask(
         id=uuid4(),
@@ -331,74 +327,36 @@ async def test_billing_month_invalid_format():
         metadata={"billing_month": "March"},
     )
 
-    await init_database()
-    try:
-        result = await run(task)
-        assert "_skip_synthesis" in result
-        assert "Invalid billing_month" in result["_skip_synthesis"]
-    finally:
-        await close_database()
+    result = await run(task)
+
+    assert result == {"_skip_synthesis": "Auto-invoicing disabled"}
 
 
 @pytest.mark.asyncio
-@pytest.mark.skip(
-    reason="H-23: legacy writer tests require isolated database and provider seams"
-)
-async def test_contact_ids_filter():
-    """Task should only invoice services matching contact_ids filter."""
-    from atlas_brain.storage.database import init_database, get_db_pool, close_database
+async def test_contact_ids_filter(monkeypatch: pytest.MonkeyPatch):
+    """A contact filter cannot admit the write path without legacy opt-in."""
+    from atlas_brain.autonomous.tasks.monthly_invoice_generation import run
+    from atlas_brain.config import settings
+    from atlas_brain.storage.models import ScheduledTask
 
-    await init_database()
-    try:
-        from atlas_brain.storage.repositories.customer_service import get_customer_service_repo
+    monkeypatch.setattr(settings.invoicing, "enabled", True)
+    monkeypatch.setattr(settings.invoicing, "auto_invoice_enabled", False)
 
-        svc_repo = get_customer_service_repo()
-        services = await svc_repo.list_active()
-        assert len(services) >= 2, "Need at least 2 services to test filtering"
+    task = ScheduledTask(
+        id=uuid4(),
+        name="monthly_invoice_generation",
+        task_type="builtin",
+        schedule_type="cron",
+        cron_expression="0 8 1 * *",
+        metadata={
+            "billing_month": "2026-03",
+            "contact_ids": ["must-not-be-read-before-the-disabled-guard"],
+        },
+    )
 
-        # Pick one contact_id to filter on
-        target_contact = str(services[0]["contact_id"])
+    result = await run(task)
 
-        from atlas_brain.autonomous.tasks.monthly_invoice_generation import run
-        from atlas_brain.storage.models import ScheduledTask
-
-        task = ScheduledTask(
-            id=uuid4(),
-            name="monthly_invoice_generation",
-            task_type="builtin",
-            schedule_type="cron",
-            cron_expression="0 8 1 * *",
-            metadata={
-                "billing_month": "2026-03",
-                "contact_ids": [target_contact],
-            },
-        )
-
-        result = await run(task)
-
-        # Should only process services for the filtered contact
-        for detail in result.get("details", []):
-            assert "error" not in detail, f"Invoice error: {detail}"
-
-        # If invoices were created, they should all be for the target contact
-        if result.get("invoices_created", 0) > 0:
-            from atlas_brain.storage.repositories.invoice import get_invoice_repo
-            inv_repo = get_invoice_repo()
-            pool = get_db_pool()
-            for detail in result["details"]:
-                inv = await inv_repo.get_by_number(detail["invoice_number"])
-                if inv:
-                    assert str(inv["contact_id"]) == target_contact, (
-                        f"Invoice {detail['invoice_number']} contact mismatch: "
-                        f"expected {target_contact}, got {inv.get('contact_id')}"
-                    )
-                    # Clean up: void the test invoice
-                    await pool.execute(
-                        "UPDATE invoices SET status = 'void', void_reason = 'test cleanup' WHERE id = $1",
-                        inv["id"],
-                    )
-    finally:
-        await close_database()
+    assert result == {"_skip_synthesis": "Auto-invoicing disabled"}
 
 
 @pytest.mark.asyncio

@@ -31,7 +31,9 @@ without durable regression coverage or a claimed boundary without enforcement.
   explicit deployment opt-in.
 - Correct fix must touch/change: change only the two legacy automatic-write
   defaults in `InvoicingConfig`, clarify their opt-in descriptions, and add
-  isolated default, explicit-true, and pre-provider skip proof.
+  isolated default, explicit-true, and pre-provider skip proof. Reclassify the
+  three baselined legacy-writer tests as no-write admission probes and remove
+  only their now-genuinely-passing unit-gate entries.
 - Must not change: scheduler registration, explicit-true legacy behavior,
   current production environment values, database/migrations, financial
   history, commercial candidate/run/approval routes, Gmail recovery, Manual
@@ -41,22 +43,25 @@ without durable regression coverage or a claimed boundary without enforcement.
 
 Ownership lane: eom/billing-payments-security-hardening
 Slice phase: Production hardening
-Max files: 5
+Max files: 6
 
 1. Default `auto_invoice_enabled` and `auto_invoice_send_email` to false and
    describe both as legacy explicit opt-ins.
 2. Add a no-DB contract suite proving absent configuration is fail-safe,
    explicit true remains valid, and the real disabled task returns before any
    provider import.
-3. Safety-gate the three existing direct legacy-writer metadata tests with a
-   clear H-23 skip until an isolated database and non-delivery provider harness
-   exists; no test in this slice enables the writer.
+3. Reclassify the three baselined direct legacy-writer metadata tests as
+   deterministic no-write admission probes: they explicitly disable the writer
+   and prove valid, malformed, and filtered metadata cannot bypass the guard.
 4. Preserve the cron task and all explicit-true behavior; this PR changes no
    production configuration or financial record.
 5. Enroll the new no-DB contract file in both
    `.github/workflows/atlas_invoicing_checks.yml` trigger lists and an explicit
    pytest step, so every PR and `main` push that changes the contract file,
    settings model, guarded task, or workflow runs the claimed fail-safe proof.
+6. Remove only the three matching unit-gate baseline entries after their exact
+   unchanged node ids pass with no skips, keeping the ratchet honest without
+   admitting the writer.
 
 ### Review Contract
 
@@ -75,9 +80,9 @@ Max files: 5
     derived task package, then executes module-scope relative-import probes for
     every named collaborator: calendar, CRM, customer-service and invoice
     repositories, invoice PDF, email provider/template, and notification tool.
-  - Existing billing-month/contact-filter legacy-writer tests are explicitly
-    skipped pending H-23's isolated harness; no test in this slice admits the
-    real writer.
+  - Existing billing-month/contact-filter legacy-writer tests explicitly
+    disable the writer and pass as no-write admission probes. Their exact node
+    ids are removed from the unit-gate baseline only after direct pass proof.
   - The new fail-safe contract file is in both the invoicing workflow's
     pull-request and `main` push paths alongside the guarded task, and is
     executed by a dedicated pytest step; a changed default or task cannot
@@ -92,7 +97,8 @@ Max files: 5
   module-scope probes use the same package-relative imports to prove each named
   collaborator is rejected before the disabled-task call.
 - Affected surfaces: `atlas_brain/config.py`, the unchanged legacy task direct
-  caller, focused configuration/task tests, and the explicit invoicing CI job.
+  caller, focused configuration/task tests, the three-row unit-gate baseline
+  shrink, and the explicit invoicing CI job.
 - Risk areas: accidental invoice/PDF/mail creation, explicit legacy opt-in
   compatibility, settings precedence, deployment rollback.
 - Reviewer rules triggered: R1, R2, R3, R4, R6, R11, R12, R14.
@@ -145,6 +151,7 @@ Max files: 5
 - `plans/PR-EOM-Legacy-Monthly-Autoinvoice-Opt-In-Recovery.md`
 - `tests/test_legacy_monthly_autoinvoice_opt_in.py`
 - `tests/test_monthly_invoice_generation.py`
+- `tests/unit_gate_baseline.txt`
 
 ## Mechanism
 
@@ -168,9 +175,9 @@ source, the settings model, the guarded task, or the workflow changes.
 - The P1 CI enrollment repair is limited to this contract file's existing
   invoicing workflow; it does not broaden coverage into scheduler or financial
   integration behavior.
-- The former metadata writer tests are explicitly skipped rather than granted
-  write permission. H-23 must add an isolated database, non-delivery provider
-  seams, and cleanup before it may re-enable them.
+- The former metadata writer tests now exercise only the no-write admission
+  branch. Their three stale baseline entries shrink only after direct execution
+  proves genuine passes; H-23 must add isolated writer infrastructure separately.
 
 ## Deferred
 
@@ -184,7 +191,8 @@ source, the settings model, the guarded task, or the workflow changes.
   provisioned isolated Postgres target, non-delivery provider seams, and full
   cleanup/rollback. It was discovered by H-21/#2439 review and is tracked in
   [#2363 H-23](https://github.com/canfieldjuan/ATLAS/issues/2363#issuecomment-5348396034);
-  the existing writer tests remain explicitly skipped until then.
+  the existing writer tests exercise only their no-write admission branch until
+  then.
 
 Parking predicate: unrelated financial workflow, scheduler/data migration, UI,
 and harness changes are parked unless required to prove these two defaults.
@@ -204,8 +212,8 @@ Parked hardening: none.
   (pure existing helper coverage).
 - `python -m pytest tests/test_monthly_invoice_generation.py -k
   'billing_month_override or billing_month_invalid_format or contact_ids_filter'
-  -q` -- three historical writer tests are explicitly skipped for H-23; none
-  initializes a database or enables the writer.
+  -q` -- three no-write metadata admission probes pass without a database or
+  writer opt-in; the matching baseline entries then shrink with direct proof.
 - `python -m ruff check atlas_brain/config.py
   tests/test_legacy_monthly_autoinvoice_opt_in.py` -- passed.
 - `python -m py_compile atlas_brain/config.py
@@ -223,8 +231,8 @@ Parked hardening: none.
   run remain pending.
 - Deferred: legacy writer integration bodies require an explicitly isolated
   database plus non-delivery provider seams and cleanup; H-23 tracks that
-  separate financial test-harness slice. They remain skipped, so H-21's
-  deterministic no-DB proof covers the changed default without admitting writes.
+  separate financial test-harness slice. H-21's no-write probes cover the
+  changed default without admitting writes.
 - Skipped: Black check for `atlas_brain/config.py`. The installed formatter
   proposes thousands of unrelated existing rewrites in that legacy file; the
   source diff was manually limited to the two intended fields and passed Ruff,
@@ -237,7 +245,8 @@ Parked hardening: none.
 |---|---:|
 | `.github/workflows/atlas_invoicing_checks.yml` | 10 |
 | `atlas_brain/config.py` | 16 |
-| `plans/PR-EOM-Legacy-Monthly-Autoinvoice-Opt-In-Recovery.md` | 243 |
+| `plans/PR-EOM-Legacy-Monthly-Autoinvoice-Opt-In-Recovery.md` | 252 |
 | `tests/test_legacy_monthly_autoinvoice_opt_in.py` | 144 |
-| `tests/test_monthly_invoice_generation.py` | 9 |
-| **Total** | **422** |
+| `tests/test_monthly_invoice_generation.py` | 111 |
+| `tests/unit_gate_baseline.txt` | 3 |
+| **Total** | **536** |
