@@ -49,8 +49,8 @@ Max files: 5
    production configuration or financial record.
 5. Enroll the new no-DB contract file in both
    `.github/workflows/atlas_invoicing_checks.yml` trigger lists and an explicit
-   pytest step, so every PR and `main` push that changes the file runs the
-   claimed fail-safe proof.
+   pytest step, so every PR and `main` push that changes the contract file,
+   settings model, guarded task, or workflow runs the claimed fail-safe proof.
 
 ### Review Contract
 
@@ -65,22 +65,24 @@ Max files: 5
     calendar, CRM, invoice, PDF, email, service-invoiced, or notification
     collaborators can be imported; failure sentinels prove the import boundary.
     The sentinel resolves `__import__` relative names from the actual name,
-    level, and task module package, then self-proves rejection of the task's
-    level-three calendar-provider import shape.
+    level, and task module package, then self-proves rejection of every named
+    task collaborator: calendar, CRM, customer-service and invoice repositories,
+    invoice PDF, email provider/template, and notification tool.
   - Existing direct billing-month/contact-filter task tests explicitly enable
     their legacy operating path before `run()`, so their old enabled behavior
     remains tested without relying on a default.
   - The new fail-safe contract file is in both the invoicing workflow's
-    pull-request and `main` push paths and is executed by a dedicated pytest
-    step; a changed default cannot bypass its per-PR regression proof.
+    pull-request and `main` push paths alongside the guarded task, and is
+    executed by a dedicated pytest step; a changed default or task cannot
+    bypass its per-PR regression proof.
   - The scheduler registration and task code remain unchanged; a diff check
     proves this config/test/workflow slice did not alter them.
   - The active deployment is not mutated. Its current explicit false value
     keeps behavior unchanged while the default protects a future absent setting.
 - Reachability proof: `InvoicingConfig` is the live API settings model and the
   focused async test calls the real legacy task entrypoint, observing its skip
-  result with provider imports guarded; its sentinel first proves it would
-  reject the task's actual relative provider import shape.
+  result with provider imports guarded; its sentinel first proves it rejects
+  every named task collaborator's actual relative provider import shape.
 - Affected surfaces: `atlas_brain/config.py`, the unchanged legacy task direct
   caller, focused configuration/task tests, and the explicit invoicing CI job.
 - Risk areas: accidental invoice/PDF/mail creation, explicit legacy opt-in
@@ -145,7 +147,7 @@ skip before any financial/delivery collaborator is imported. An intentionally
 operated legacy workflow still sets its flag(s) true; automatic email needs its
 own opt-in and the existing review-mode condition to allow sending. The
 dedicated invoicing CI step executes the new no-DB contract whenever its
-source, the settings model, or the workflow changes.
+source, the settings model, the guarded task, or the workflow changes.
 
 ## Intentional
 
@@ -181,7 +183,9 @@ Parked hardening: none.
   passed (no database, provider, Gmail, or financial record).
 - R2 sentinel repair: the same focused test resolves the real
   `services.calendar_provider` level-three import against the task package and
-  asserts the interceptor raises before the disabled task call runs.
+  asserts the interceptor raises for each calendar, CRM, repository, PDF,
+  email, template, and notification collaborator before the disabled task call
+  runs.
 - `python -m pytest tests/test_monthly_invoice_generation.py -k 'resolver or
   per_hour_line_items or notification_lines' -q` -- 13 passed, 30 deselected
   (pure existing helper coverage).
@@ -200,8 +204,9 @@ Parked hardening: none.
   plans/PR-EOM-Legacy-Monthly-Autoinvoice-Opt-In-Recovery.md` -- passed.
 - P1 CI-enrollment repair: focused new-file proof and the existing selected
   invoicing blocker test both passed; a standard-library workflow-text probe
-  confirmed two trigger paths plus one dedicated pytest invocation. A new
-  managed PR gate and hosted `atlas-invoicing-checks` run remain pending.
+  confirmed both contract and guarded-task trigger paths plus one dedicated
+  pytest invocation. A new managed PR gate and hosted `atlas-invoicing-checks`
+  run remain pending.
 - Skipped: real-database bodies in `tests/test_monthly_invoice_generation.py`.
   They can create then void invoice rows; no explicitly isolated test database
   was verified for this run, and H-21's deterministic no-DB proof covers the
@@ -216,9 +221,9 @@ Parked hardening: none.
 
 | File | LOC |
 |---|---:|
-| `.github/workflows/atlas_invoicing_checks.yml` | 8 |
+| `.github/workflows/atlas_invoicing_checks.yml` | 10 |
 | `atlas_brain/config.py` | 16 |
-| `plans/PR-EOM-Legacy-Monthly-Autoinvoice-Opt-In-Recovery.md` | 224 |
-| `tests/test_legacy_monthly_autoinvoice_opt_in.py` | 101 |
+| `plans/PR-EOM-Legacy-Monthly-Autoinvoice-Opt-In-Recovery.md` | 229 |
+| `tests/test_legacy_monthly_autoinvoice_opt_in.py` | 148 |
 | `tests/test_monthly_invoice_generation.py` | 18 |
-| **Total** | **367** |
+| **Total** | **421** |

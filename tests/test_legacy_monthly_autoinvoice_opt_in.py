@@ -14,6 +14,10 @@ _LEGACY_WRITEFUL_PROVIDER_MODULES = {
     "atlas_brain.services.crm_provider",
     "atlas_brain.storage.repositories.customer_service",
     "atlas_brain.storage.repositories.invoice",
+    "atlas_brain.services.invoice_pdf",
+    "atlas_brain.services.email_provider",
+    "atlas_brain.templates.email.invoice",
+    "atlas_brain.tools.notify",
 }
 
 
@@ -85,14 +89,57 @@ async def test_disabled_legacy_task_returns_before_writeful_provider_imports(
             )
         return original_import(name, module_globals, locals, fromlist, level)
 
-    with pytest.raises(AssertionError, match="atlas_brain.services.calendar_provider"):
-        fail_if_legacy_writer_is_imported(
+    provider_import_shapes = (
+        (
             "services.calendar_provider",
-            task_module.__dict__,
-            None,
             ("get_calendar_provider",),
-            3,
-        )
+            "atlas_brain.services.calendar_provider",
+        ),
+        (
+            "services.crm_provider",
+            ("get_crm_provider",),
+            "atlas_brain.services.crm_provider",
+        ),
+        (
+            "storage.repositories.customer_service",
+            ("get_customer_service_repo",),
+            "atlas_brain.storage.repositories.customer_service",
+        ),
+        (
+            "storage.repositories.invoice",
+            ("get_invoice_repo",),
+            "atlas_brain.storage.repositories.invoice",
+        ),
+        (
+            "services.invoice_pdf",
+            ("render_invoice_pdf",),
+            "atlas_brain.services.invoice_pdf",
+        ),
+        (
+            "services.email_provider",
+            ("get_email_provider",),
+            "atlas_brain.services.email_provider",
+        ),
+        (
+            "templates.email.invoice",
+            ("BUSINESS_NAME", "BUSINESS_SIGNATURE"),
+            "atlas_brain.templates.email.invoice",
+        ),
+        (
+            "tools.notify",
+            ("notify_tool",),
+            "atlas_brain.tools.notify",
+        ),
+    )
+    for relative_name, fromlist, expected_name in provider_import_shapes:
+        with pytest.raises(AssertionError, match=expected_name):
+            fail_if_legacy_writer_is_imported(
+                relative_name,
+                task_module.__dict__,
+                None,
+                fromlist,
+                3,
+            )
 
     monkeypatch.setattr(builtins, "__import__", fail_if_legacy_writer_is_imported)
 
