@@ -285,11 +285,15 @@ async def test_all_service_agreements_have_required_fields():
 
 
 @pytest.mark.asyncio
-async def test_billing_month_override():
+async def test_billing_month_override(monkeypatch: pytest.MonkeyPatch):
     """Task should respect billing_month metadata override."""
     from atlas_brain.autonomous.tasks.monthly_invoice_generation import run
+    from atlas_brain.config import settings
     from atlas_brain.storage.models import ScheduledTask
     from atlas_brain.storage.database import init_database, close_database
+
+    monkeypatch.setattr(settings.invoicing, "enabled", True)
+    monkeypatch.setattr(settings.invoicing, "auto_invoice_enabled", True)
 
     task = ScheduledTask(
         id=uuid4(),
@@ -310,11 +314,15 @@ async def test_billing_month_override():
 
 
 @pytest.mark.asyncio
-async def test_billing_month_invalid_format():
+async def test_billing_month_invalid_format(monkeypatch: pytest.MonkeyPatch):
     """Task should reject invalid billing_month format."""
     from atlas_brain.autonomous.tasks.monthly_invoice_generation import run
+    from atlas_brain.config import settings
     from atlas_brain.storage.models import ScheduledTask
     from atlas_brain.storage.database import init_database, close_database
+
+    monkeypatch.setattr(settings.invoicing, "enabled", True)
+    monkeypatch.setattr(settings.invoicing, "auto_invoice_enabled", True)
 
     task = ScheduledTask(
         id=uuid4(),
@@ -335,13 +343,17 @@ async def test_billing_month_invalid_format():
 
 
 @pytest.mark.asyncio
-async def test_contact_ids_filter():
+async def test_contact_ids_filter(monkeypatch: pytest.MonkeyPatch):
     """Task should only invoice services matching contact_ids filter."""
     from atlas_brain.storage.database import init_database, get_db_pool, close_database
 
     await init_database()
     try:
+        from atlas_brain.config import settings
         from atlas_brain.storage.repositories.customer_service import get_customer_service_repo
+
+        monkeypatch.setattr(settings.invoicing, "enabled", True)
+        monkeypatch.setattr(settings.invoicing, "auto_invoice_enabled", True)
 
         svc_repo = get_customer_service_repo()
         services = await svc_repo.list_active()
