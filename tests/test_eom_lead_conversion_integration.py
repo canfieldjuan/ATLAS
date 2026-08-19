@@ -4521,6 +4521,24 @@ async def test_public_onboarding_claim_redeems_once_through_the_existing_handoff
             )
         assert mismatched_verifier.value.status_code == 404
 
+        tracker_context = await provider.get_eom_public_onboarding_tracker_context(
+            token_id=str(token_id),
+            signing_key_fingerprint=_PUBLIC_ONBOARDING_KEY_FINGERPRINT,
+        )
+        assert tracker_context == {
+            "status": "ready",
+            "token_id": str(token_id),
+            "draft_id": draft_id,
+            "contact_id": str(contact_id),
+            "full_name": "Won Lead",
+            "email": "won-lead@example.com",
+            "phone": None,
+            "address": None,
+            "city": None,
+            "state": None,
+            "zip": None,
+            "customer_type": "unknown",
+        }
         ready = await provider.get_eom_public_onboarding_session(
             token_id=str(token_id),
             signing_key_fingerprint=_PUBLIC_ONBOARDING_KEY_FINGERPRINT,
@@ -4612,6 +4630,280 @@ async def test_public_onboarding_claim_redeems_once_through_the_existing_handoff
                 tracker_site_id=203,
             )
     finally:
+        await conn.execute(f'DROP SCHEMA IF EXISTS "{schema}" CASCADE')
+        await conn.close()
+
+
+@pytest.mark.asyncio
+async def test_public_onboarding_recovery_finishes_each_durable_token_state_once():
+    """Staff recovery needs stored IDs, not the raw browser bearer."""
+
+    database_url = _database_url_or_skip()
+    schema = f"atlas_eom_public_onboarding_recovery_{uuid.uuid4().hex}"
+    conn = await asyncpg.connect(database_url)
+    try:
+        await _prepare_schema(conn, schema, apply_public_onboarding_migration=True)
+        provider = DatabaseCRMProvider(pool=conn)
+
+        issued_contact_id, issued_draft_id = await _book_first_clean_draft(
+            conn, provider
+        )
+        _, issued_token_id = await _claim_public_onboarding_token(
+            provider, draft_id=issued_draft_id
+        )
+        recovered = await provider.recover_eom_public_onboarding(
+            token_id=str(issued_token_id),
+            contact_id=str(issued_contact_id),
+            tracker_customer_id=101,
+            tracker_site_id=202,
+            actor_id=1,
+            actor_name="Juan Canfield",
+        )
+        assert recovered["status"] == "completed"
+        assert recovered["contact_id"] == str(issued_contact_id)
+        assert recovered["tracker_customer_id"] == 101
+        assert recovered["tracker_site_id"] == 202
+        assert recovered["idempotent"] is False
+        assert await _contact_state(conn, issued_contact_id) == (
+            {
+                "business_context_id": "effingham_maids",
+                "contact_type": "customer",
+                "lead_stage": None,
+                "status": "active",
+            },
+            1,
+            1,
+        )
+        assert dict(
+            await conn.fetchrow(
+                """
+                SELECT status, handoff_id, revoked_at IS NOT NULL AS is_revoked
+                FROM eom_public_onboarding_tokens WHERE id = $1
+                """,
+                issued_token_id,
+            )
+        ) == {
+            "status": "revoked",
+            "handoff_id": None,
+            "is_revoked": True,
+        }
+        recovery_event = await conn.fetchrow(
+            """
+            SELECT actor, operation_key, metadata
+            FROM eom_lead_lifecycle_events
+            WHERE contact_id = $1 AND event_type = 'customer_approved'
+            """,
+            issued_contact_id,
+        )
+        assert recovery_event is not None
+        assert recovery_event["actor"] == "employee:1:Juan Canfield"
+        assert recovery_event["operation_key"] == (
+            f"eom-public-onboarding-recovery:{issued_token_id}"
+        )
+        assert _metadata_dict(recovery_event["metadata"])["completion_channel"] == "office"
+        replay = await provider.recover_eom_public_onboarding(
+            token_id=str(issued_token_id),
+            contact_id=str(issued_contact_id),
+            tracker_customer_id=101,
+            tracker_site_id=202,
+            actor_id=1,
+            actor_name="Juan Canfield",
+        )
+        assert replay == {**recovered, "idempotent": True}
+        with pytest.raises(EOMLeadConversionError, match="different customer handoff"):
+            await provider.recover_eom_public_onboarding(
+                token_id=str(issued_token_id),
+                contact_id=str(issued_contact_id),
+                tracker_customer_id=101,
+                tracker_site_id=203,
+                actor_id=1,
+                actor_name="Juan Canfield",
+            )
+
+        redeemed_contact_id, redeemed_draft_id = await _book_first_clean_draft(
+            conn, provider
+        )
+        _, redeemed_token_id = await _claim_public_onboarding_token(
+            provider, draft_id=redeemed_draft_id
+        )
+        await provider.complete_eom_public_onboarding(
+            token_id=str(redeemed_token_id),
+            signing_key_fingerprint=_PUBLIC_ONBOARDING_KEY_FINGERPRINT,
+            tracker_customer_id=303,
+            tracker_site_id=404,
+        )
+        redeemed_replay = await provider.recover_eom_public_onboarding(
+            token_id=str(redeemed_token_id),
+            contact_id=str(redeemed_contact_id),
+            tracker_customer_id=303,
+            tracker_site_id=404,
+            actor_id=1,
+            actor_name="Juan Canfield",
+        )
+        assert redeemed_replay["status"] == "completed"
+        assert redeemed_replay["idempotent"] is True
+        assert (
+            await conn.fetchval(
+                "SELECT status FROM eom_public_onboarding_tokens WHERE id = $1",
+                redeemed_token_id,
+            )
+            == "redeemed"
+        )
+
+        revoked_contact_id, revoked_draft_id = await _book_first_clean_draft(
+            conn, provider
+        )
+        _, revoked_token_id = await _claim_public_onboarding_token(
+            provider, draft_id=revoked_draft_id
+        )
+        await provider.revoke_eom_public_onboarding_token(draft_id=revoked_draft_id)
+        revoked_recovery = await provider.recover_eom_public_onboarding(
+            token_id=str(revoked_token_id),
+            contact_id=str(revoked_contact_id),
+            tracker_customer_id=505,
+            tracker_site_id=606,
+            actor_id=1,
+            actor_name="Juan Canfield",
+        )
+        assert revoked_recovery["status"] == "completed"
+        assert revoked_recovery["idempotent"] is False
+        assert await _contact_state(conn, revoked_contact_id) == (
+            {
+                "business_context_id": "effingham_maids",
+                "contact_type": "customer",
+                "lead_stage": None,
+                "status": "active",
+            },
+            1,
+            1,
+        )
+    finally:
+        await conn.execute(f'DROP SCHEMA IF EXISTS "{schema}" CASCADE')
+        await conn.close()
+
+
+@pytest.mark.asyncio
+async def test_public_onboarding_recovery_rolls_back_token_revocation_on_handoff_conflict():
+    """A failed recovery leaves its issued token retryable rather than stranded."""
+
+    database_url = _database_url_or_skip()
+    schema = f"atlas_eom_public_onboarding_recovery_rollback_{uuid.uuid4().hex}"
+    conn = await asyncpg.connect(database_url)
+    try:
+        await _prepare_schema(conn, schema, apply_public_onboarding_migration=True)
+        provider = DatabaseCRMProvider(pool=conn)
+        contact_id, draft_id = await _book_first_clean_draft(conn, provider)
+        _, token_id = await _claim_public_onboarding_token(provider, draft_id=draft_id)
+
+        conflicting_contact_id = uuid.uuid4()
+        await _insert_contact(conn, contact_id=conflicting_contact_id)
+        await provider.finalize_eom_customer_handoff(
+            contact_id=str(conflicting_contact_id),
+            tracker_customer_id=101,
+            tracker_site_id=202,
+            approval_key=_approval_key(),
+            actor_id=1,
+            actor_name="Juan Canfield",
+        )
+
+        with pytest.raises(EOMLeadConversionError, match="Tracker Customer or Site"):
+            await provider.recover_eom_public_onboarding(
+                token_id=str(token_id),
+                contact_id=str(contact_id),
+                tracker_customer_id=101,
+                tracker_site_id=202,
+                actor_id=1,
+                actor_name="Juan Canfield",
+            )
+
+        assert (
+            await conn.fetchval(
+                "SELECT status FROM eom_public_onboarding_tokens WHERE id = $1",
+                token_id,
+            )
+            == "issued"
+        )
+        assert await _contact_state(conn, contact_id) == (
+            {
+                "business_context_id": "effingham_maids",
+                "contact_type": "lead",
+                "lead_stage": "won",
+                "status": "active",
+            },
+            0,
+            0,
+        )
+    finally:
+        await conn.execute(f'DROP SCHEMA IF EXISTS "{schema}" CASCADE')
+        await conn.close()
+
+
+@pytest.mark.asyncio
+async def test_public_onboarding_recovery_and_bearer_completion_serialize_one_handoff():
+    """The shared locks admit either winner, never two handoffs or a deadlock."""
+
+    database_url = _database_url_or_skip()
+    schema = f"atlas_eom_public_onboarding_recovery_race_{uuid.uuid4().hex}"
+    conn = await asyncpg.connect(database_url)
+    pool = None
+    try:
+        await _prepare_schema(conn, schema, apply_public_onboarding_migration=True)
+        pool = await asyncpg.create_pool(
+            database_url,
+            min_size=2,
+            max_size=2,
+            server_settings={"search_path": f"{schema}, public"},
+        )
+        provider = DatabaseCRMProvider(pool=pool)
+        contact_id, draft_id = await _book_first_clean_draft(conn, provider)
+        _, token_id = await _claim_public_onboarding_token(provider, draft_id=draft_id)
+
+        public_result, recovery_result = await asyncio.gather(
+            provider.complete_eom_public_onboarding(
+                token_id=str(token_id),
+                signing_key_fingerprint=_PUBLIC_ONBOARDING_KEY_FINGERPRINT,
+                tracker_customer_id=101,
+                tracker_site_id=202,
+            ),
+            provider.recover_eom_public_onboarding(
+                token_id=str(token_id),
+                contact_id=str(contact_id),
+                tracker_customer_id=101,
+                tracker_site_id=202,
+                actor_id=1,
+                actor_name="Juan Canfield",
+            ),
+            return_exceptions=True,
+        )
+
+        token_status = await conn.fetchval(
+            "SELECT status FROM eom_public_onboarding_tokens WHERE id = $1",
+            token_id,
+        )
+        assert token_status in ("redeemed", "revoked")
+        assert await _contact_state(conn, contact_id) == (
+            {
+                "business_context_id": "effingham_maids",
+                "contact_type": "customer",
+                "lead_stage": None,
+                "status": "active",
+            },
+            1,
+            1,
+        )
+        if token_status == "redeemed":
+            assert isinstance(public_result, dict)
+            assert public_result["status"] == "completed"
+            assert isinstance(recovery_result, dict)
+            assert recovery_result["idempotent"] is True
+        else:
+            assert isinstance(recovery_result, dict)
+            assert recovery_result["status"] == "completed"
+            assert isinstance(public_result, EOMLeadConversionError)
+            assert public_result.status_code == 409
+    finally:
+        if pool is not None:
+            await pool.close()
         await conn.execute(f'DROP SCHEMA IF EXISTS "{schema}" CASCADE')
         await conn.close()
 

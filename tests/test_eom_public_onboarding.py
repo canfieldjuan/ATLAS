@@ -63,9 +63,13 @@ class _Sender:
 class _CRM:
     def __init__(self) -> None:
         self.session_calls: list[dict[str, str]] = []
+        self.context_calls: list[dict[str, str]] = []
         self.finalize_calls: list[dict[str, object]] = []
+        self.recovery_calls: list[dict[str, object]] = []
         self.revoke_calls: list[str] = []
         self.claim_calls: list[dict[str, object]] = []
+        self.context_status = "ready"
+        self.recovery_idempotent = False
         self.draft_id = uuid4()
         self.contact_id = uuid4()
         self._draft = {
@@ -114,6 +118,52 @@ class _CRM:
             "tracker_site_id": kwargs["tracker_site_id"],
             "handoff_id": str(uuid4()),
             "idempotent": False,
+        }
+
+    async def get_eom_public_onboarding_tracker_context(
+        self, *, token_id: str, signing_key_fingerprint: str
+    ):
+        self.context_calls.append(
+            {
+                "token_id": token_id,
+                "signing_key_fingerprint": signing_key_fingerprint,
+            }
+        )
+        if self.context_status == "completed":
+            return {
+                "status": "completed",
+                "token_id": token_id,
+                "draft_id": str(self.draft_id),
+                "contact_id": str(self.contact_id),
+                "tracker_customer_id": 12,
+                "tracker_site_id": 24,
+                "handoff_id": str(uuid4()),
+                "idempotent": True,
+            }
+        return {
+            "status": "ready",
+            "token_id": token_id,
+            "draft_id": str(self.draft_id),
+            "contact_id": str(self.contact_id),
+            "full_name": "Customer Name",
+            "email": "customer@example.com",
+            "phone": "2175550100",
+            "address": "100 Main St",
+            "city": "Effingham",
+            "state": "IL",
+            "zip": "62401",
+            "customer_type": "residential",
+        }
+
+    async def recover_eom_public_onboarding(self, **kwargs):
+        self.recovery_calls.append(kwargs)
+        return {
+            "status": "completed",
+            "contact_id": kwargs["contact_id"],
+            "tracker_customer_id": kwargs["tracker_customer_id"],
+            "tracker_site_id": kwargs["tracker_site_id"],
+            "handoff_id": str(uuid4()),
+            "idempotent": self.recovery_idempotent,
         }
 
     async def revoke_eom_public_onboarding_token(self, *, draft_id: str):
@@ -653,11 +703,12 @@ async def test_public_session_requires_service_auth_and_never_requires_an_actor(
             headers=_service_headers(),
             json={"token": token},
         )
-
     assert denied.status_code == 401
     assert accepted.status_code == 200
     assert accepted.json()["status"] == "ready"
     assert "contact_id" not in accepted.json()
+    assert "draft_id" not in accepted.json()
+    assert "token_id" not in accepted.json()
     assert "handoff_id" not in accepted.json()
     assert crm.session_calls == [
         {
@@ -703,10 +754,173 @@ async def test_public_session_binds_a_previous_key_to_the_private_provider_call(
 
 
 @pytest.mark.asyncio
+async def test_public_tracker_context_requires_service_auth_and_returns_private_ids():
+    crm = _CRM()
+    token = _token()
+    app = _app(crm)
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=app), base_url="http://test"
+    ) as client:
+        denied = await client.post(
+            "/eom-funnel/public-onboarding/tracker-context", json={"token": token}
+        )
+        accepted = await client.post(
+            "/eom-funnel/public-onboarding/tracker-context",
+            headers=_service_headers(),
+            json={"token": token},
+        )
+        crm.context_status = "completed"
+        completed = await client.post(
+            "/eom-funnel/public-onboarding/tracker-context",
+            headers=_service_headers(),
+            json={"token": token},
+        )
+
+    expected_token_id = str(
+        parse_eom_public_onboarding_token(token=token, secret=_PUBLIC_SECRET)
+    )
+    assert denied.status_code == 401
+    assert accepted.status_code == 200
+    assert accepted.json() == {
+        "success": True,
+        "status": "ready",
+        "token_id": expected_token_id,
+        "draft_id": str(crm.draft_id),
+        "contact_id": str(crm.contact_id),
+        "full_name": "Customer Name",
+        "email": "customer@example.com",
+        "phone": "2175550100",
+        "address": "100 Main St",
+        "city": "Effingham",
+        "state": "IL",
+        "zip": "62401",
+        "customer_type": "residential",
+    }
+    assert crm.context_calls == [
+        {
+            "token_id": expected_token_id,
+            "signing_key_fingerprint": eom_public_onboarding_hmac_key_fingerprint(
+                secret=_PUBLIC_SECRET
+            ),
+        },
+        {
+            "token_id": expected_token_id,
+            "signing_key_fingerprint": eom_public_onboarding_hmac_key_fingerprint(
+                secret=_PUBLIC_SECRET
+            ),
+        },
+    ]
+    assert completed.status_code == 200
+    assert completed.json() == {
+        "success": True,
+        "status": "completed",
+        "token_id": expected_token_id,
+        "draft_id": str(crm.draft_id),
+        "contact_id": str(crm.contact_id),
+        "tracker_customer_id": 12,
+        "tracker_site_id": 24,
+        "idempotent": True,
+    }
+
+
+@pytest.mark.asyncio
+async def test_public_onboarding_recovery_requires_actor_and_survives_authority_disable():
+    crm = _CRM()
+    disabled_crm = _CRM()
+    app = _app(crm)
+    disabled_app = _app(disabled_crm, enabled=False)
+    payload = {
+        "token_id": str(uuid4()),
+        "contact_id": str(crm.contact_id),
+        "tracker_customer_id": 12,
+        "tracker_site_id": 24,
+    }
+    disabled_payload = {**payload, "contact_id": str(disabled_crm.contact_id)}
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=app), base_url="http://test"
+    ) as client:
+        no_service = await client.post(
+            "/eom-funnel/public-onboarding/recover", json=payload
+        )
+        no_actor = await client.post(
+            "/eom-funnel/public-onboarding/recover",
+            headers=_service_headers(),
+            json=payload,
+        )
+        malformed = await client.post(
+            "/eom-funnel/public-onboarding/recover",
+            headers=_service_headers(actor=True),
+            json={**payload, "tracker_customer_id": 0},
+        )
+        recovered = await client.post(
+            "/eom-funnel/public-onboarding/recover",
+            headers=_service_headers(actor=True),
+            json=payload,
+        )
+        crm.recovery_idempotent = True
+        replay = await client.post(
+            "/eom-funnel/public-onboarding/recover",
+            headers=_service_headers(actor=True),
+            json=payload,
+        )
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=disabled_app), base_url="http://test"
+    ) as client:
+        disabled = await client.post(
+            "/eom-funnel/public-onboarding/recover",
+            headers=_service_headers(actor=True),
+            json=disabled_payload,
+        )
+
+    assert no_service.status_code == 401
+    assert no_actor.status_code == 422
+    assert malformed.status_code == 422
+    assert recovered.status_code == 201
+    assert recovered.json() == {
+        "success": True,
+        "status": "completed",
+        "tracker_customer_id": 12,
+        "tracker_site_id": 24,
+        "idempotent": False,
+    }
+    assert "contact_id" not in recovered.json()
+    assert "handoff_id" not in recovered.json()
+    assert replay.status_code == 200
+    assert replay.json() == {
+        "success": True,
+        "status": "completed",
+        "tracker_customer_id": 12,
+        "tracker_site_id": 24,
+        "idempotent": True,
+    }
+    assert disabled.status_code == 201
+    expected_recovery_call = {
+        "token_id": payload["token_id"],
+        "contact_id": payload["contact_id"],
+        "tracker_customer_id": 12,
+        "tracker_site_id": 24,
+        "actor_id": 1,
+        "actor_name": "Juan Canfield",
+    }
+    assert crm.recovery_calls == [expected_recovery_call, expected_recovery_call]
+    assert disabled_crm.recovery_calls == [
+        {
+            "token_id": disabled_payload["token_id"],
+            "contact_id": disabled_payload["contact_id"],
+            "tracker_customer_id": 12,
+            "tracker_site_id": 24,
+            "actor_id": 1,
+            "actor_name": "Juan Canfield",
+        }
+    ]
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize(
     ("path", "payload"),
     (
         ("/eom-funnel/public-onboarding/session", {"token": "not-used"}),
+        ("/eom-funnel/public-onboarding/tracker-context", {"token": "not-used"}),
         (
             "/eom-funnel/public-onboarding/finalize",
             {"token": "not-used", "tracker_customer_id": 12, "tracker_site_id": 24},
@@ -725,6 +939,7 @@ async def test_public_onboarding_routes_fail_closed_when_public_authority_is_dis
 
     assert response.status_code == 503
     assert crm.session_calls == []
+    assert crm.context_calls == []
     assert crm.finalize_calls == []
 
 
@@ -744,6 +959,11 @@ async def test_paused_public_onboarding_issuance_keeps_existing_links_redeemable
             headers=_service_headers(),
             json={"token": token},
         )
+        context = await client.post(
+            "/eom-funnel/public-onboarding/tracker-context",
+            headers=_service_headers(),
+            json={"token": token},
+        )
         finalized = await client.post(
             "/eom-funnel/public-onboarding/finalize",
             headers=_service_headers(),
@@ -756,24 +976,33 @@ async def test_paused_public_onboarding_issuance_keeps_existing_links_redeemable
 
     assert denied.status_code == 401
     assert session.status_code == 200
+    assert context.status_code == 200
     assert finalized.status_code == 201
     assert len(crm.session_calls) == 1
+    assert len(crm.context_calls) == 1
     assert len(crm.finalize_calls) == 1
 
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
-    "token",
-    ("eomob1.not-a-token", 42, "x" * 512, {"not": "a bearer"}),
+    ("path", "token"),
+    [
+        (path, token)
+        for path in (
+            "/eom-funnel/public-onboarding/session",
+            "/eom-funnel/public-onboarding/tracker-context",
+        )
+        for token in ("eomob1.not-a-token", 42, "x" * 512, {"not": "a bearer"})
+    ],
 )
-async def test_public_session_rejects_bad_bearer_before_the_crm_lookup(token):
+async def test_public_session_rejects_bad_bearer_before_the_crm_lookup(path, token):
     crm = _CRM()
     app = _app(crm)
     async with httpx.AsyncClient(
         transport=httpx.ASGITransport(app=app), base_url="http://test"
     ) as client:
         response = await client.post(
-            "/eom-funnel/public-onboarding/session",
+            path,
             headers=_service_headers(),
             json={"token": token},
         )
@@ -781,6 +1010,7 @@ async def test_public_session_rejects_bad_bearer_before_the_crm_lookup(token):
     assert response.status_code == 404
     assert response.json()["detail"] == "Public onboarding link is unavailable"
     assert crm.session_calls == []
+    assert crm.context_calls == []
 
 
 @pytest.mark.asyncio

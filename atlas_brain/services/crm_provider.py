@@ -4053,14 +4053,15 @@ class DatabaseCRMProvider:
             409, "EOM onboarding draft was already sent and cannot be revoked"
         )
 
-    async def get_eom_public_onboarding_session(
+    async def _get_eom_public_onboarding_session_result(
         self, *, token_id: str, signing_key_fingerprint: str
     ) -> dict[str, Any]:
-        """Return a token-bound prefill projection for the tracker bridge.
+        """Read one durable token state for the public session projections.
 
-        This is intentionally an internal, bearer-authenticated API result. The
-        tracker chooses the smaller browser projection; no browser request ever
-        reads Atlas directly or learns a CRM mutation capability.
+        The sibling public methods intentionally choose their own output
+        allowlists. The browser-safe session keeps Atlas identifiers out of its
+        response, while the tracker-only context route needs those opaque IDs
+        to retain a recoverable local reservation.
         """
 
         from .eom_lead_conversion import EOMLeadConversionError
@@ -4070,6 +4071,8 @@ class DatabaseCRMProvider:
         row = await pool.fetchrow(
             """
             SELECT
+                token.id AS token_id,
+                token.draft_id,
                 token.status AS token_status,
                 token.handoff_id,
                 draft.status AS draft_status,
@@ -4112,6 +4115,8 @@ class DatabaseCRMProvider:
                 )
             return {
                 "status": "completed",
+                "token_id": str(row["token_id"]),
+                "draft_id": str(row["draft_id"]),
                 "contact_id": str(row["contact_id"]),
                 "tracker_customer_id": int(row["tracker_customer_id"]),
                 "tracker_site_id": int(row["tracker_site_id"]),
@@ -4130,6 +4135,8 @@ class DatabaseCRMProvider:
             raise EOMLeadConversionError(404, "Public onboarding link is unavailable")
         return {
             "status": "ready",
+            "token_id": str(row["token_id"]),
+            "draft_id": str(row["draft_id"]),
             "contact_id": str(row["contact_id"]),
             "full_name": str(row["prefill_full_name"]),
             "email": row["prefill_email"],
@@ -4140,6 +4147,53 @@ class DatabaseCRMProvider:
             "zip": row["prefill_zip"],
             "customer_type": row["prefill_customer_type"],
         }
+
+    async def get_eom_public_onboarding_session(
+        self, *, token_id: str, signing_key_fingerprint: str
+    ) -> dict[str, Any]:
+        """Return the existing browser-safe token-bound projection."""
+
+        result = await self._get_eom_public_onboarding_session_result(
+            token_id=token_id,
+            signing_key_fingerprint=signing_key_fingerprint,
+        )
+        if result["status"] == "completed":
+            return {
+                field: result[field]
+                for field in (
+                    "status",
+                    "contact_id",
+                    "tracker_customer_id",
+                    "tracker_site_id",
+                    "handoff_id",
+                    "idempotent",
+                )
+            }
+        return {
+            field: result[field]
+            for field in (
+                "status",
+                "contact_id",
+                "full_name",
+                "email",
+                "phone",
+                "address",
+                "city",
+                "state",
+                "zip",
+                "customer_type",
+            )
+        }
+
+    async def get_eom_public_onboarding_tracker_context(
+        self, *, token_id: str, signing_key_fingerprint: str
+    ) -> dict[str, Any]:
+        """Return the private token/draft/contact context for the Tracker only."""
+
+        return await self._get_eom_public_onboarding_session_result(
+            token_id=token_id,
+            signing_key_fingerprint=signing_key_fingerprint,
+        )
 
     async def complete_eom_public_onboarding(
         self,
@@ -4297,6 +4351,201 @@ class DatabaseCRMProvider:
                 "handoff_id": str(redeemed["handoff_id"]),
                 "idempotent": bool(handoff["idempotent"]),
             }
+
+    async def recover_eom_public_onboarding(
+        self,
+        *,
+        token_id: str,
+        contact_id: str,
+        tracker_customer_id: int,
+        tracker_site_id: int,
+        actor_id: int,
+        actor_name: str,
+    ) -> dict[str, Any]:
+        """Finish a Tracker-local reservation without retaining a raw bearer.
+
+        The recovery operation owns one token/contact/Tracker-ID decision. It
+        uses the same sorted handoff lock vocabulary as public and office
+        finalizers, plus the token's draft lock. An issued token is revoked and
+        finalized through the existing office path in the same transaction, so
+        a failed handoff cannot strand it in a new terminal state.
+        """
+
+        from .eom_lead_conversion import EOMLeadConversionError
+        from .eom_lead_ingress import EOM_BUSINESS_CONTEXT_ID
+
+        def _completed(handoff_id: object, *, idempotent: bool) -> dict[str, Any]:
+            return {
+                "status": "completed",
+                "contact_id": contact_id,
+                "tracker_customer_id": tracker_customer_id,
+                "tracker_site_id": tracker_site_id,
+                "handoff_id": str(handoff_id),
+                "idempotent": idempotent,
+            }
+
+        recovery_approval_key = f"eom-public-onboarding-recovery:{token_id}"
+        pool = self._get_pool()
+        async with _transaction_connection(pool) as conn:
+            if not await conn.fetchval(
+                "SELECT to_regclass('eom_public_onboarding_tokens') IS NOT NULL"
+            ):
+                raise EOMLeadConversionError(
+                    503, "Public onboarding token storage is unavailable"
+                )
+            token_hint = await conn.fetchrow(
+                """
+                SELECT draft_id
+                FROM eom_public_onboarding_tokens
+                WHERE id = $1::uuid
+                  AND contact_id = $2::uuid
+                """,
+                token_id,
+                contact_id,
+            )
+            if token_hint is None:
+                raise EOMLeadConversionError(
+                    404, "Public onboarding recovery was not found"
+                )
+            lock_keys = _eom_customer_handoff_lock_keys(
+                approval_key=recovery_approval_key,
+                contact_id=contact_id,
+                tracker_customer_id=tracker_customer_id,
+                tracker_site_id=tracker_site_id,
+            )
+            lock_keys.append(
+                f"eom-public-onboarding:draft:{token_hint['draft_id']}"
+            )
+            for lock_key in sorted(set(lock_keys)):
+                await conn.execute(
+                    "SELECT pg_advisory_xact_lock(hashtextextended($1, 0))",
+                    lock_key,
+                )
+            row = await conn.fetchrow(
+                """
+                SELECT
+                    token.id AS token_id,
+                    token.status AS token_status,
+                    token.approval_key,
+                    token.handoff_id,
+                    draft.status AS draft_status,
+                    contact.id AS contact_id,
+                    contact.business_context_id,
+                    contact.contact_type,
+                    contact.lead_stage,
+                    contact.status AS contact_status,
+                    handoff.tracker_customer_id,
+                    handoff.tracker_site_id,
+                    handoff.approval_key AS handoff_approval_key
+                FROM eom_public_onboarding_tokens AS token
+                JOIN eom_onboarding_email_drafts AS draft ON draft.id = token.draft_id
+                JOIN contacts AS contact ON contact.id = token.contact_id
+                LEFT JOIN eom_customer_handoffs AS handoff ON handoff.id = token.handoff_id
+                WHERE token.id = $1::uuid
+                  AND token.contact_id = $2::uuid
+                FOR UPDATE OF token, draft, contact
+                """,
+                token_id,
+                contact_id,
+            )
+            if row is None:
+                raise RuntimeError("public onboarding token changed during recovery")
+            token_status = str(row["token_status"])
+            if token_status == "redeemed":
+                if (
+                    row["handoff_id"] is None
+                    or row["tracker_customer_id"] is None
+                    or row["tracker_site_id"] is None
+                    or str(row["handoff_approval_key"]) != str(row["approval_key"])
+                ):
+                    raise EOMLeadConversionError(
+                        409, "Public onboarding completion evidence is incomplete"
+                    )
+                if (
+                    int(row["tracker_customer_id"]) != tracker_customer_id
+                    or int(row["tracker_site_id"]) != tracker_site_id
+                ):
+                    raise EOMLeadConversionError(
+                        409,
+                        "Public onboarding link was already completed for different tracker records",
+                    )
+                return _completed(row["handoff_id"], idempotent=True)
+            if token_status not in ("issued", "revoked"):
+                raise EOMLeadConversionError(
+                    409, "Public onboarding recovery is unavailable"
+                )
+
+            existing_handoff = await conn.fetchrow(
+                """
+                SELECT id, tracker_customer_id, tracker_site_id
+                FROM eom_customer_handoffs
+                WHERE contact_id = $1::uuid
+                FOR UPDATE
+                """,
+                contact_id,
+            )
+            if existing_handoff is not None:
+                if (
+                    int(existing_handoff["tracker_customer_id"])
+                    != tracker_customer_id
+                    or int(existing_handoff["tracker_site_id"]) != tracker_site_id
+                ):
+                    raise EOMLeadConversionError(
+                        409,
+                        "EOM lead already has a different customer handoff",
+                    )
+                if token_status == "issued":
+                    revoked = await conn.fetchrow(
+                        """
+                        UPDATE eom_public_onboarding_tokens
+                           SET status = 'revoked', revoked_at = NOW()
+                         WHERE id = $1::uuid
+                           AND status = 'issued'
+                         RETURNING id
+                        """,
+                        token_id,
+                    )
+                    if revoked is None:
+                        raise RuntimeError(
+                            "public onboarding token changed during recovery"
+                        )
+                return _completed(existing_handoff["id"], idempotent=True)
+
+            if (
+                row["draft_status"] not in ("sending", "sent")
+                or row["business_context_id"] != EOM_BUSINESS_CONTEXT_ID
+                or row["contact_status"] != "active"
+                or row["contact_type"] != "lead"
+                or row["lead_stage"] != "won"
+            ):
+                raise EOMLeadConversionError(
+                    409, "Public onboarding recovery is unavailable"
+                )
+            if token_status == "issued":
+                revoked = await conn.fetchrow(
+                    """
+                    UPDATE eom_public_onboarding_tokens
+                       SET status = 'revoked', revoked_at = NOW()
+                     WHERE id = $1::uuid
+                       AND status = 'issued'
+                     RETURNING id
+                    """,
+                    token_id,
+                )
+                if revoked is None:
+                    raise RuntimeError("public onboarding token changed during recovery")
+            handoff = await self.finalize_eom_customer_handoff(
+                contact_id=str(row["contact_id"]),
+                tracker_customer_id=tracker_customer_id,
+                tracker_site_id=tracker_site_id,
+                approval_key=recovery_approval_key,
+                actor_id=actor_id,
+                actor_name=actor_name,
+                connection=conn,
+            )
+            return _completed(
+                handoff["handoff_id"], idempotent=bool(handoff["idempotent"])
+            )
 
     async def revoke_eom_public_onboarding_token(
         self, *, draft_id: str
