@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import builtins
 import importlib
+import sys
 from importlib.util import resolve_name
 from types import SimpleNamespace
 
@@ -19,6 +20,8 @@ _LEGACY_WRITEFUL_PROVIDER_MODULES = {
     "atlas_brain.templates.email.invoice",
     "atlas_brain.tools.notify",
 }
+_LEGACY_TASK_MODULE = "atlas_brain.autonomous.tasks.monthly_invoice_generation"
+_LEGACY_TASK_PACKAGE = _LEGACY_TASK_MODULE.rpartition(".")[0]
 
 
 def _resolve_import_name(name: str, module_globals: object, level: int) -> str:
@@ -67,12 +70,6 @@ async def test_disabled_legacy_task_returns_before_writeful_provider_imports(
 ) -> None:
     """The real task exit happens before it can reach financial collaborators."""
     config_module = importlib.import_module("atlas_brain.config")
-    task_module = importlib.import_module(
-        "atlas_brain.autonomous.tasks.monthly_invoice_generation"
-    )
-    monkeypatch.setattr(config_module.settings.invoicing, "enabled", True)
-    monkeypatch.setattr(config_module.settings.invoicing, "auto_invoice_enabled", False)
-
     original_import = builtins.__import__
 
     def fail_if_legacy_writer_is_imported(
@@ -89,59 +86,58 @@ async def test_disabled_legacy_task_returns_before_writeful_provider_imports(
             )
         return original_import(name, module_globals, locals, fromlist, level)
 
-    provider_import_shapes = (
+    provider_import_probes = (
         (
-            "services.calendar_provider",
-            ("get_calendar_provider",),
+            "from ...services.calendar_provider import get_calendar_provider",
             "atlas_brain.services.calendar_provider",
         ),
         (
-            "services.crm_provider",
-            ("get_crm_provider",),
+            "from ...services.crm_provider import get_crm_provider",
             "atlas_brain.services.crm_provider",
         ),
         (
-            "storage.repositories.customer_service",
-            ("get_customer_service_repo",),
+            "from ...storage.repositories.customer_service import get_customer_service_repo",
             "atlas_brain.storage.repositories.customer_service",
         ),
         (
-            "storage.repositories.invoice",
-            ("get_invoice_repo",),
+            "from ...storage.repositories.invoice import get_invoice_repo",
             "atlas_brain.storage.repositories.invoice",
         ),
         (
-            "services.invoice_pdf",
-            ("render_invoice_pdf",),
+            "from ...services.invoice_pdf import render_invoice_pdf",
             "atlas_brain.services.invoice_pdf",
         ),
         (
-            "services.email_provider",
-            ("get_email_provider",),
+            "from ...services.email_provider import get_email_provider",
             "atlas_brain.services.email_provider",
         ),
         (
-            "templates.email.invoice",
-            ("BUSINESS_NAME", "BUSINESS_SIGNATURE"),
+            "from ...templates.email.invoice import BUSINESS_NAME, BUSINESS_SIGNATURE",
             "atlas_brain.templates.email.invoice",
         ),
         (
-            "tools.notify",
-            ("notify_tool",),
+            "from ...tools.notify import notify_tool",
             "atlas_brain.tools.notify",
         ),
     )
-    for relative_name, fromlist, expected_name in provider_import_shapes:
-        with pytest.raises(AssertionError, match=expected_name):
-            fail_if_legacy_writer_is_imported(
-                relative_name,
-                task_module.__dict__,
-                None,
-                fromlist,
-                3,
-            )
-
     monkeypatch.setattr(builtins, "__import__", fail_if_legacy_writer_is_imported)
+    # Import the actual task only after the sentinel is live. A future hoisted
+    # provider import must fail during module load rather than hiding behind the
+    # disabled run() result below.
+    monkeypatch.delitem(sys.modules, _LEGACY_TASK_MODULE, raising=False)
+    task_module = importlib.import_module(_LEGACY_TASK_MODULE)
+    assert task_module.__package__ == _LEGACY_TASK_PACKAGE
+
+    for module_scope_import, expected_name in provider_import_probes:
+        module_scope_globals = {
+            "__name__": f"{_LEGACY_TASK_MODULE}_provider_import_probe",
+            "__package__": _LEGACY_TASK_PACKAGE,
+        }
+        with pytest.raises(AssertionError, match=expected_name):
+            exec(module_scope_import, module_scope_globals)
+
+    monkeypatch.setattr(config_module.settings.invoicing, "enabled", True)
+    monkeypatch.setattr(config_module.settings.invoicing, "auto_invoice_enabled", False)
 
     result = await task_module.run(SimpleNamespace())
 
