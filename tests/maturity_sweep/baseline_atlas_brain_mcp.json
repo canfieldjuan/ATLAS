@@ -168,9 +168,9 @@
   "atlas_brain/mcp/invoicing_draft_writer_server.py": {
     "counts": {
       "ASSERT_AS_VALIDATION": 1,
-      "INTERNAL_MOCK": 9
+      "INTERNAL_MOCK": 11
     },
-    "score": 39
+    "score": 47
   },
   "atlas_brain/mcp/invoicing_readonly_oauth.py": {
     "counts": {

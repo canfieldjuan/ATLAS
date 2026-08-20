@@ -1136,10 +1136,10 @@ async def test_real_postgres_approval_rejects_a_quarantined_backfill_collision_p
             """
             INSERT INTO invoices (
                 id, invoice_number, contact_id, customer_name, due_date,
-                status, source, billing_period, metadata
+                status, source, billing_period, billing_period_legacy_null, metadata
             ) VALUES
-                ($1, 'INV-QUARANTINE-A', $3, 'Acme Office', CURRENT_DATE, 'draft', 'monthly_auto', NULL, $4::jsonb),
-                ($2, 'INV-QUARANTINE-B', $3, 'Acme Office', CURRENT_DATE, 'draft', 'monthly_auto', NULL, $4::jsonb)
+                ($1, 'INV-QUARANTINE-A', $3, 'Acme Office', CURRENT_DATE, 'draft', 'monthly_auto', NULL, true, $4::jsonb),
+                ($2, 'INV-QUARANTINE-B', $3, 'Acme Office', CURRENT_DATE, 'draft', 'monthly_auto', NULL, true, $4::jsonb)
             """,
             uuid4(), uuid4(), contact_id,
             json.dumps({
@@ -1275,11 +1275,11 @@ async def test_real_postgres_override_identity_and_final_invoice_trigger_are_sco
             INSERT INTO invoices (
                 id, invoice_number, contact_id, customer_name, line_items,
                 subtotal, tax_rate, tax_amount, total_amount, due_date,
-                source, source_ref, business_context_id, metadata
+                source, source_ref, business_context_id, metadata, billing_period
             ) VALUES (
                 $1, 'INV-RUN-A-0001', $2, 'Acme Office', $3::jsonb,
                 96.50, 0, 0, 96.50, $4,
-                'eom_commercial_billing', 'run-scope-a-invoice', 'effingham_maids', $5::jsonb
+                'eom_commercial_billing', 'run-scope-a-invoice', 'effingham_maids', $5::jsonb, '2026-03'
             )
             """,
             uuid4(),
@@ -1300,11 +1300,11 @@ async def test_real_postgres_override_identity_and_final_invoice_trigger_are_sco
                 INSERT INTO invoices (
                     id, invoice_number, contact_id, customer_name, line_items,
                     subtotal, tax_rate, tax_amount, total_amount, due_date,
-                    source, source_ref, business_context_id, metadata
+                    source, source_ref, business_context_id, metadata, billing_period
                 ) VALUES (
                     $1, 'INV-RUN-B-0001', $2, 'Acme Office', $3::jsonb,
                     96.50, 0, 0, 96.50, $4,
-                    'eom_commercial_billing', 'run-scope-b-invoice', 'effingham_maids', $5::jsonb
+                    'eom_commercial_billing', 'run-scope-b-invoice', 'effingham_maids', $5::jsonb, '2026-03'
                 )
                 """,
                 uuid4(),

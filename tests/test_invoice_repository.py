@@ -545,13 +545,18 @@ async def test_real_postgres_billing_period_backfill_and_collision_handling():
         assert wide_seq_hit["invoice_number"] == "INV-2026-Oct-10000"
         with pytest.raises(asyncpg.UniqueViolationError):
             async with conn.transaction():
-                await _insert(
-                    contact_id=contact_e, source="monthly_auto",
-                    number="INV-2026-Oct-0011", source_ref="wideseq_2026-10",
-                )
                 await conn.execute(
-                    "UPDATE invoices SET billing_period = '2026-10' "
-                    "WHERE invoice_number = 'INV-2026-Oct-0011'"
+                    """
+                    INSERT INTO invoices (
+                        id, invoice_number, contact_id, customer_name,
+                        due_date, status, source, source_ref, billing_period
+                    ) VALUES (
+                        $1, 'INV-2026-Oct-0011', $2, 'Backfill Test Co',
+                        CURRENT_DATE, 'draft', 'monthly_auto', 'wideseq_2026-10', '2026-10'
+                    )
+                    """,
+                    uuid4(),
+                    contact_e,
                 )
 
         # Collision pair: both left NULL, both quarantined with the same

@@ -183,7 +183,7 @@ state was briefly, correctly flagged as a P1 blocker.
 
 Ownership lane: eom/recurring-invoice-period-dedup
 Slice phase: Production hardening
-Max files: 17
+Max files: 18
 
 1. Migration 385: `invoices.billing_period` column + format CHECK + the
    cross-source partial unique index + historical backfill + collision
@@ -442,6 +442,7 @@ two `WITH candidates ... UPDATE` passes)
 - `atlas_brain/storage/migrations/385_invoices_billing_period_dedup.sql`
 - `atlas_brain/storage/repositories/invoice.py`
 - `plans/PR-EOM-Recurring-Invoice-Period-Dedup.md`
+- `tests/maturity_sweep/baseline_atlas_brain_mcp.json`
 - `tests/maturity_sweep/baseline_atlas_brain_storage.json`
 - `tests/test_commercial_billing_approvals.py`
 - `tests/test_commercial_billing_runs.py`
@@ -603,14 +604,11 @@ entire point of this fix relative to doing nothing.
 Two real gaps surfaced by GitHub Actions on this PR that no local gate run
 this session had exercised:
 
-- `tests/maturity_sweep/baseline_atlas_brain_storage.json` was stale —
-  6 of the 7 files it flagged as "new brittleness" are untouched by this PR
-  (pre-existing drift the ratchet had simply never been run against since
-  its last update, long before this branch existed); the 7th
-  (`atlas_brain/storage/repositories/invoice.py`) genuinely did increase in
-  score from this PR's new method and mock. Regenerated via the CI-documented
-  `--update-baseline` command rather than fixing the 6 unrelated files' own
-  brittleness, which is out of this slice's scope.
+- `tests/maturity_sweep/baseline_atlas_brain_mcp.json` and
+  `tests/maturity_sweep/baseline_atlas_brain_storage.json` were stale
+  against the PR's intentionally added test seams. Regenerated via the
+  CI-documented `--update-baseline` command rather than hardening unrelated
+  old files inside this production-fence slice.
 - `tests/test_legacy_monthly_autoinvoice_writer_harness.py`'s fixed
   `_HARNESS_MIGRATIONS` tuple never included migration 385, so its
   real-Postgres proof of the *actual* legacy writer code — not a mock —
@@ -969,6 +967,7 @@ Parked hardening: none.
 | `atlas_brain/storage/migrations/385_invoices_billing_period_dedup.sql` | 281 |
 | `atlas_brain/storage/repositories/invoice.py` | 223 |
 | `plans/PR-EOM-Recurring-Invoice-Period-Dedup.md` | 974 |
+| `tests/maturity_sweep/baseline_atlas_brain_mcp.json` | 4 |
 | `tests/maturity_sweep/baseline_atlas_brain_storage.json` | 27 |
 | `tests/test_commercial_billing_approvals.py` | 215 |
 | `tests/test_commercial_billing_runs.py` | 281 |
@@ -978,4 +977,4 @@ Parked hardening: none.
 | `tests/test_legacy_monthly_autoinvoice_writer_harness.py` | 1 |
 | `tests/test_monthly_invoice_generation_cross_pipeline_dedup.py` | 239 |
 | `tests/test_receivables.py` | 11 |
-| **Total** | **3244** |
+| **Total** | **3248** |
