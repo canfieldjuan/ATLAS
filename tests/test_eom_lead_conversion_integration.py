@@ -5829,6 +5829,114 @@ async def test_public_onboarding_issued_link_projection_excludes_terminal_tokens
 
 
 @pytest.mark.asyncio
+async def test_public_onboarding_issued_link_projection_matches_session_readiness():
+    """The office queue includes exactly the rows a public session can open."""
+
+    database_url = _database_url_or_skip()
+    schema = f"atlas_eom_public_onboarding_issued_link_readiness_{uuid.uuid4().hex}"
+    conn = await asyncpg.connect(database_url)
+    try:
+        await _prepare_schema(conn, schema, apply_public_onboarding_migration=True)
+        provider = DatabaseCRMProvider(pool=conn)
+
+        async def issued(full_name: str) -> tuple[uuid.UUID, str, uuid.UUID]:
+            contact_id, draft_id = await _book_first_clean_draft(
+                conn, provider, full_name=full_name
+            )
+            _, token_id = await _claim_public_onboarding_token(
+                provider, draft_id=draft_id
+            )
+            return contact_id, draft_id, token_id
+
+        sending_contact_id, sending_draft_id, sending_token_id = await issued(
+            "Sending Link"
+        )
+        sent_contact_id, sent_draft_id, sent_token_id = await issued("Sent Link")
+        inactive_contact_id, _, inactive_token_id = await issued("Inactive Link")
+        archived_contact_id, _, archived_token_id = await issued("Archived Link")
+        other_context_contact_id, _, other_context_token_id = await issued(
+            "Other Context Link"
+        )
+        non_lead_contact_id, _, non_lead_token_id = await issued("Customer Link")
+        non_won_contact_id, _, non_won_token_id = await issued("Non-won Link")
+        _, pending_draft_id, pending_token_id = await issued("Pending Draft Link")
+        _, revoked_draft_id, revoked_draft_token_id = await issued("Revoked Draft Link")
+
+        await conn.execute(
+            "UPDATE eom_onboarding_email_drafts SET status = 'sent', sent_at = NOW() "
+            "WHERE id = $1::uuid",
+            sent_draft_id,
+        )
+        await conn.execute(
+            "UPDATE contacts SET status = 'inactive' WHERE id = $1", inactive_contact_id
+        )
+        await conn.execute(
+            "UPDATE contacts SET status = 'archived' WHERE id = $1", archived_contact_id
+        )
+        await conn.execute(
+            "UPDATE contacts SET business_context_id = 'other_business' WHERE id = $1",
+            other_context_contact_id,
+        )
+        await conn.execute(
+            "UPDATE contacts SET contact_type = 'customer' WHERE id = $1",
+            non_lead_contact_id,
+        )
+        await conn.execute(
+            "UPDATE contacts SET lead_stage = 'qualified' WHERE id = $1",
+            non_won_contact_id,
+        )
+        await conn.execute(
+            "UPDATE eom_onboarding_email_drafts SET status = 'pending' WHERE id = $1::uuid",
+            pending_draft_id,
+        )
+        await conn.execute(
+            "UPDATE eom_onboarding_email_drafts SET status = 'revoked', revoked_at = NOW() "
+            "WHERE id = $1::uuid",
+            revoked_draft_id,
+        )
+
+        for token_id in (
+            inactive_token_id,
+            archived_token_id,
+            other_context_token_id,
+            non_lead_token_id,
+            non_won_token_id,
+            pending_token_id,
+            revoked_draft_token_id,
+        ):
+            with pytest.raises(EOMLeadConversionError) as exc_info:
+                await provider.get_eom_public_onboarding_session(
+                    token_id=str(token_id),
+                    signing_key_fingerprint=_PUBLIC_ONBOARDING_KEY_FINGERPRINT,
+                )
+            assert exc_info.value.status_code == 404
+
+        for token_id in (sending_token_id, sent_token_id):
+            session = await provider.get_eom_public_onboarding_session(
+                token_id=str(token_id),
+                signing_key_fingerprint=_PUBLIC_ONBOARDING_KEY_FINGERPRINT,
+            )
+            assert session["status"] == "ready"
+
+        links = await provider.list_eom_public_onboarding_issued_links(
+            accepted_signing_key_fingerprints=(_PUBLIC_ONBOARDING_KEY_FINGERPRINT,),
+            limit=100,
+        )
+
+        assert {str(row["draft_id"]) for row in links} == {
+            sending_draft_id,
+            sent_draft_id,
+        }
+        assert {str(row["contact_id"]) for row in links} == {
+            str(sending_contact_id),
+            str(sent_contact_id),
+        }
+    finally:
+        await conn.execute(f'DROP SCHEMA IF EXISTS "{schema}" CASCADE')
+        await conn.close()
+
+
+@pytest.mark.asyncio
 async def test_public_onboarding_issued_link_projection_pages_current_and_previous_keys():
     """Only keys that can authenticate now enter a complete newest-first queue."""
 

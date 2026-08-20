@@ -3680,20 +3680,22 @@ class DatabaseCRMProvider:
         """Return current issued-token evidence for the private office queue.
 
         Draft ``sent`` state proves delivery evidence, not whether the customer
-        can still use the link. The token row plus an accepted signing-key
-        fingerprint owns that decision. This read deliberately exposes no token
-        ID, signing material, approval key, or bearer.
+        can still use the link. The token row, accepted signing-key fingerprint,
+        and current draft/contact readiness predicate jointly own that decision.
+        This read deliberately exposes no token ID, signing material, approval
+        key, or bearer.
         """
 
         from .eom_lead_conversion import EOMLeadConversionError
+        from .eom_lead_ingress import EOM_BUSINESS_CONTEXT_ID
 
         accepted_fingerprints = tuple(accepted_signing_key_fingerprints)
         if not accepted_fingerprints:
             return []
         cursor_clause = ""
-        params: list[Any] = [accepted_fingerprints, limit]
+        params: list[Any] = [accepted_fingerprints, limit, EOM_BUSINESS_CONTEXT_ID]
         if cursor_issued_at is not None and cursor_draft_id is not None:
-            cursor_clause = "AND (token.issued_at, token.draft_id) < ($3::timestamptz, $4::uuid)"
+            cursor_clause = "AND (token.issued_at, token.draft_id) < ($4::timestamptz, $5::uuid)"
             params.extend([cursor_issued_at, cursor_draft_id])
         pool = self._get_pool()
         if not await pool.fetchval(
@@ -3716,6 +3718,11 @@ class DatabaseCRMProvider:
             JOIN contacts AS contact ON contact.id = token.contact_id
             WHERE token.status = 'issued'
               AND token.signing_key_fingerprint = ANY($1::varchar[])
+              AND draft.status IN ('sending', 'sent')
+              AND contact.business_context_id = $3
+              AND contact.status = 'active'
+              AND contact.contact_type = 'lead'
+              AND contact.lead_stage = 'won'
               {cursor_clause}
             ORDER BY token.issued_at DESC, token.draft_id DESC
             LIMIT $2

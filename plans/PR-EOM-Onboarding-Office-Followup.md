@@ -28,16 +28,20 @@ the Tracker can safely consume it.
 ### Problem-derived contract
 
 - Root cause: `eom_onboarding_email_drafts.status = 'sent'` describes email
-  delivery, while `eom_public_onboarding_tokens.status` plus the currently
-  accepted signing-key fingerprints own whether a link is currently usable.
+  delivery, while `eom_public_onboarding_tokens.status`, the currently
+  accepted signing-key fingerprints, and the canonical draft/contact predicate
+  together own whether a link is currently usable.
   The existing draft list therefore cannot identify active links for a safe
   revoke control; the initial issued-token projection also admitted retired
-  signing-key rows and exposed only a first page.
+  signing-key rows, exposed only a first page, and did not apply the canonical
+  public-session readiness predicate after a contact or draft later changed.
 - Correct fix must touch/change:
   1. Add a service-and-actor authenticated Atlas read projection that joins the
      existing token, draft, and contact records and admits only `issued` rows
      signed by the current primary or configured previous public-onboarding
-     key. It must fail closed when public onboarding authority is unavailable.
+     key that satisfy the canonical public-session predicate: a `sending` or
+     `sent` draft plus an active EOM `lead` at `won`. It must fail closed when
+     public onboarding authority is unavailable.
   2. Return exactly the office fields needed to identify and revoke that
      record: `draftId`, `contactId`, `fullName`, `recipientEmail`, `issuedAt`,
      and fixed `status: 'issued'`. Do not return the token ID, raw bearer,
@@ -71,8 +75,8 @@ Max files: 8
    derived capability route signatures that the Tracker can relay.
 2. Add focused provider and FastAPI tests proving authorization, the additive
    closed response shape (including derived capability routes),
-   current/previous-key authority filtering, cursor behavior, capability
-   reachability, and CI enrollment.
+   current/previous-key authority filtering, canonical public-session
+   readiness, cursor behavior, capability reachability, and CI enrollment.
 3. Leave Tracker and Website rendering/actions to their coordinated follow-up
    PRs; this API remains additive and independently deployable.
 
@@ -86,8 +90,9 @@ Max files: 8
     `tests/test_eom_public_onboarding.py` ASGI route tests.
   - [x] The provider projection joins the existing token/draft/contact rows,
     selects only `status = 'issued'` under an accepted current/previous signing
-    key, orders newest issued evidence first with an opaque next cursor, and
-    does not select or serialize raw token material; settled by
+    key whose draft/contact state satisfies the canonical public-session
+    predicate, orders newest issued evidence first with an opaque next cursor,
+    and does not select or serialize raw token material; settled by
     `tests/test_eom_lead_conversion_integration.py` disposable-Postgres test.
   - [x] Issued-link list/revoke/recovery capabilities and route signatures are
     advertised only when their exact registered routes exist; settled by
@@ -126,8 +131,10 @@ that disposition is added. No generic `defer` disposition is permitted.
   bearer is an admitted request or response field at this seam.
 - Caller x input shape: authenticated Tracker service plus valid office actor
   gets only issued-link metadata; absent service/actor rejects before provider
-  access; current/previous-key issued rows return issued only; retired-key,
-  redeemed, and revoked rows do not enter the active queue.
+  access; current/previous-key issued rows return issued only when their
+  `sending`/`sent` draft and active EOM won-lead state remain valid; retired-key,
+  terminal, inactive, archived, cross-context, and non-won rows do not enter
+  the active queue.
 
 ### Capability-set closure declaration
 
@@ -173,9 +180,10 @@ that disposition is added. No generic `defer` disposition is permitted.
 `DatabaseCRMProvider.list_eom_public_onboarding_issued_links` reads the durable
 `eom_public_onboarding_tokens` state and joins its draft/contact identity. It
 projects no token identifier or bearer, returns only `issued` rows whose
-signing-key fingerprint is current or configured as previous, and pages with
-`issued_at DESC, draft_id DESC` through the existing opaque cursor grammar. The
-router derives fingerprints from the configured public-onboarding authority,
+signing-key fingerprint is current or configured as previous and whose
+draft/contact state remains valid for the canonical public session, and pages
+with `issued_at DESC, draft_id DESC` through the existing opaque cursor grammar.
+The router derives fingerprints from the configured public-onboarding authority,
 validates the closed model, and exposes it behind the existing EOM service and
 actor dependencies. The capability map derives three controls and their
 method/path signatures from registered routes: issued-link list, issued-link
@@ -191,8 +199,9 @@ for recovery; this endpoint neither sends a replacement nor changes a token.
 - The response omits token IDs as well as raw tokens. A revoke action already
   addresses the durable record by `draftId`; the browser does not need another
   correlator.
-- The new list does not reuse `sent` drafts. Email-delivery state and usable
-  token state are intentionally distinct.
+- The new list does not treat `sent` draft state alone as authority. It
+  intersects the canonical `sending`/`sent` draft/contact predicate with live
+  issued-token state and current signing authority.
 - The limit remains bounded. A cursor is added only to make the active queue
   complete; it does not turn this slice into a token history browser.
 - The list/revoke/recovery routes remain usable after issuance is paused; they
@@ -219,18 +228,21 @@ Parked hardening: none.
 
 - `python -m compileall -q atlas_brain/eom_api/funnel.py
   atlas_brain/services/crm_provider.py tests/test_eom_public_onboarding.py
-  tests/test_eom_funnel_capability_manifest.py
+  tests/test_eom_funnel_capability_manifest.py tests/test_eom_lead_conversion.py
   tests/test_eom_lead_conversion_integration.py` — passed.
 - `python -m pytest -q tests/test_eom_public_onboarding.py
-  tests/test_eom_funnel_capability_manifest.py` — 49 passed.
+  tests/test_eom_funnel_capability_manifest.py
+  tests/test_eom_lead_conversion.py::test_full_atlas_app_serves_public_intake_and_private_handoff_together
+  tests/test_eom_lead_conversion.py::test_private_lead_review_forwards_keyset_cursor_for_continuation
+  tests/test_eom_lead_conversion.py::test_private_lead_review_returns_only_the_closed_projection` — 52 passed.
 - `ATLAS_MIGRATION_TEST_DATABASE_URL=<isolated local PostgreSQL container>
   python -m pytest -q tests/test_eom_lead_conversion_integration.py -k
-  'public_onboarding_issued_link_projection'` — 2 passed, 90 deselected. The
+  'public_onboarding_issued_link_projection'` — 3 passed, 90 deselected. The
   temporary disposable container was removed
   afterward.
 - ruff check atlas_brain/eom_api/funnel.py
   atlas_brain/services/crm_provider.py tests/test_eom_public_onboarding.py
-  tests/test_eom_funnel_capability_manifest.py
+  tests/test_eom_funnel_capability_manifest.py tests/test_eom_lead_conversion.py
   tests/test_eom_lead_conversion_integration.py — passed.
 - `git diff --check` — passed.
 - Cold diff audit: route/provider/manifest/test changes trace only to the
@@ -243,10 +255,10 @@ Parked hardening: none.
 |---|---:|
 | `.github/workflows/atlas_eom_lead_pipeline_checks.yml` | 1 |
 | `atlas_brain/eom_api/funnel.py` | 156 |
-| `atlas_brain/services/crm_provider.py` | 55 |
-| `plans/PR-EOM-Onboarding-Office-Followup.md` | 252 |
+| `atlas_brain/services/crm_provider.py` | 62 |
+| `plans/PR-EOM-Onboarding-Office-Followup.md` | 264 |
 | `tests/test_eom_funnel_capability_manifest.py` | 24 |
 | `tests/test_eom_lead_conversion.py` | 12 |
-| `tests/test_eom_lead_conversion_integration.py` | 160 |
+| `tests/test_eom_lead_conversion_integration.py` | 268 |
 | `tests/test_eom_public_onboarding.py` | 182 |
-| **Total** | **842** |
+| **Total** | **969** |
