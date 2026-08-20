@@ -3669,6 +3669,46 @@ class DatabaseCRMProvider:
         )
         return [dict(row) for row in rows]
 
+    async def list_eom_public_onboarding_issued_links(
+        self, *, limit: int = 100
+    ) -> list[dict[str, Any]]:
+        """Return current issued-token evidence for the private office queue.
+
+        Draft ``sent`` state proves delivery evidence, not whether the customer
+        can still use the link.  The token row owns that decision, and this
+        read deliberately exposes no token ID, signing material, approval key,
+        or bearer.
+        """
+
+        from .eom_lead_conversion import EOMLeadConversionError
+
+        pool = self._get_pool()
+        if not await pool.fetchval(
+            "SELECT to_regclass('eom_public_onboarding_tokens') IS NOT NULL"
+        ):
+            raise EOMLeadConversionError(
+                503, "Public onboarding token storage is unavailable"
+            )
+        rows = await pool.fetch(
+            """
+            SELECT
+                token.draft_id,
+                token.contact_id,
+                contact.full_name,
+                draft.recipient_email,
+                token.status,
+                token.issued_at
+            FROM eom_public_onboarding_tokens AS token
+            JOIN eom_onboarding_email_drafts AS draft ON draft.id = token.draft_id
+            JOIN contacts AS contact ON contact.id = token.contact_id
+            WHERE token.status = 'issued'
+            ORDER BY token.issued_at DESC, token.id DESC
+            LIMIT $1
+            """,
+            limit,
+        )
+        return [dict(row) for row in rows]
+
     async def get_eom_onboarding_draft(self, draft_id: str) -> dict[str, Any] | None:
         pool = self._get_pool()
         row = await pool.fetchrow(

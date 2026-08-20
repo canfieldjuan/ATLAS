@@ -5767,6 +5767,65 @@ async def test_onboarding_draft_list_projection_filters_and_paginates():
 
 
 @pytest.mark.asyncio
+async def test_public_onboarding_issued_link_projection_excludes_terminal_tokens():
+    database_url = _database_url_or_skip()
+    schema = f"atlas_eom_public_onboarding_issued_links_{uuid.uuid4().hex}"
+    conn = await asyncpg.connect(database_url)
+    try:
+        await _prepare_schema(conn, schema, apply_public_onboarding_migration=True)
+        provider = DatabaseCRMProvider(pool=conn)
+        issued_contact_id, issued_draft_id = await _book_first_clean_draft(
+            conn, provider, full_name="Issued Link"
+        )
+        _, issued_token_id = await _claim_public_onboarding_token(
+            provider, draft_id=issued_draft_id
+        )
+        redeemed_contact_id, redeemed_draft_id = await _book_first_clean_draft(
+            conn, provider, full_name="Redeemed Link"
+        )
+        _, redeemed_token_id = await _claim_public_onboarding_token(
+            provider, draft_id=redeemed_draft_id
+        )
+        await conn.execute(
+            """
+            UPDATE eom_public_onboarding_tokens
+               SET status = 'redeemed', redeemed_at = NOW(), handoff_id = $2::uuid
+             WHERE id = $1::uuid
+            """,
+            redeemed_token_id,
+            uuid.uuid4(),
+        )
+        revoked_contact_id, revoked_draft_id = await _book_first_clean_draft(
+            conn, provider, full_name="Revoked Link"
+        )
+        _, revoked_token_id = await _claim_public_onboarding_token(
+            provider, draft_id=revoked_draft_id
+        )
+        revoked = await provider.revoke_eom_public_onboarding_token(
+            draft_id=revoked_draft_id
+        )
+
+        links = await provider.list_eom_public_onboarding_issued_links(limit=100)
+
+        assert [{str(row["draft_id"]), str(row["contact_id"])} for row in links] == [
+            {issued_draft_id, str(issued_contact_id)}
+        ]
+        assert links[0]["full_name"] == "Issued Link"
+        assert links[0]["recipient_email"] == "won-lead@example.com"
+        assert links[0]["status"] == "issued"
+        assert "id" not in links[0]
+        assert str(issued_token_id) not in str(links[0])
+        assert revoked["status"] == "revoked"
+        assert str(redeemed_contact_id) not in str(links)
+        assert str(revoked_contact_id) not in str(links)
+        assert str(redeemed_token_id) not in str(links)
+        assert str(revoked_token_id) not in str(links)
+    finally:
+        await conn.execute(f'DROP SCHEMA IF EXISTS "{schema}" CASCADE')
+        await conn.close()
+
+
+@pytest.mark.asyncio
 async def test_mark_lead_lost_records_reason_is_idempotent_and_reopens():
     database_url = _database_url_or_skip()
     schema = f"atlas_eom_lead_lost_{uuid.uuid4().hex}"

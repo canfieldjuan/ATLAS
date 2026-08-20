@@ -152,6 +152,9 @@ async def test_lead_review_response_advertises_lost_and_reopen() -> None:
     capabilities = response.json()["capabilities"]
     assert "lead.lost" in capabilities
     assert "lead.reopen" in capabilities
+    assert "onboarding.public_link.list" in capabilities
+    assert "onboarding.public_link.revoke" in capabilities
+    assert "onboarding.public_handoff.recover" in capabilities
 
 
 @pytest.mark.asyncio

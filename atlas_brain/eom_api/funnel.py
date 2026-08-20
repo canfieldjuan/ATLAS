@@ -410,6 +410,35 @@ class EOMOnboardingDraftListResponse(BaseModel):
     )
 
 
+class EOMPublicOnboardingIssuedLinkItem(BaseModel):
+    """Closed office projection of one currently usable onboarding link.
+
+    The durable token row is the lifecycle authority.  The opaque token ID and
+    raw bearer are deliberately absent: office revocation already addresses the
+    record through its draft ID, so neither value has a browser use here.
+    """
+
+    model_config = ConfigDict(extra="forbid", populate_by_name=True)
+
+    draft_id: UUID = Field(serialization_alias="draftId")
+    contact_id: UUID = Field(serialization_alias="contactId")
+    full_name: str = Field(serialization_alias="fullName")
+    recipient_email: str | None = Field(
+        default=None, serialization_alias="recipientEmail"
+    )
+    status: Literal["issued"]
+    issued_at: datetime = Field(serialization_alias="issuedAt")
+
+
+class EOMPublicOnboardingIssuedLinkListResponse(BaseModel):
+    """Bounded current-state list for the office follow-up queue."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    links: list[EOMPublicOnboardingIssuedLinkItem]
+    limit: Annotated[int, Field(ge=1, le=_MAX_LEAD_REVIEW_LIMIT)]
+
+
 def _crm_dependency(request: Request) -> Any:
     provider_factory = getattr(request.app.state, "eom_funnel_crm_provider", None)
     if callable(provider_factory):
@@ -593,6 +622,18 @@ _CAPABILITY_ROUTES: dict[str, tuple[str, str]] = {
     "onboarding.draft.confirm_sent": (
         "POST",
         "/eom-funnel/onboarding-drafts/{draft_id}/confirm-sent",
+    ),
+    "onboarding.public_link.list": (
+        "GET",
+        "/eom-funnel/public-onboarding/issued-links",
+    ),
+    "onboarding.public_link.revoke": (
+        "POST",
+        "/eom-funnel/onboarding-drafts/{draft_id}/revoke-link",
+    ),
+    "onboarding.public_handoff.recover": (
+        "POST",
+        "/eom-funnel/public-onboarding/recover",
     ),
     "contact.link_verification": ("GET", "/eom-funnel/known-contacts"),
 }
@@ -1153,6 +1194,37 @@ async def recover_eom_public_onboarding(
             status.HTTP_200_OK if bool(result.get("idempotent")) else status.HTTP_201_CREATED
         ),
         content=_public_onboarding_recovery_content(result),
+    )
+
+
+@router.get(
+    "/public-onboarding/issued-links",
+    response_model=EOMPublicOnboardingIssuedLinkListResponse,
+    dependencies=[Depends(require_eom_funnel_api)],
+)
+async def list_eom_public_onboarding_issued_links(
+    limit: Annotated[
+        int,
+        Query(ge=1, le=_MAX_LEAD_REVIEW_LIMIT),
+    ] = _DEFAULT_LEAD_REVIEW_LIMIT,
+    _actor: dict[str, object] = Depends(require_eom_funnel_actor),
+    crm: Any = Depends(_crm_dependency),
+) -> EOMPublicOnboardingIssuedLinkListResponse:
+    """List only durable tokens that remain issued for office follow-up.
+
+    A sent onboarding draft is not sufficient evidence here: the customer may
+    have redeemed its token, or an operator may have revoked it.  This
+    projection reads the token lifecycle authority and alters no handoff,
+    delivery, or token state.
+    """
+
+    try:
+        rows = await crm.list_eom_public_onboarding_issued_links(limit=limit)
+    except EOMLeadConversionError as exc:
+        raise HTTPException(status_code=exc.status_code, detail=str(exc)) from exc
+    return EOMPublicOnboardingIssuedLinkListResponse(
+        links=[EOMPublicOnboardingIssuedLinkItem.model_validate(row) for row in rows],
+        limit=limit,
     )
 
 

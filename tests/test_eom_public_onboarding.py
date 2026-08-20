@@ -68,6 +68,7 @@ class _CRM:
         self.recovery_calls: list[dict[str, object]] = []
         self.revoke_calls: list[str] = []
         self.claim_calls: list[dict[str, object]] = []
+        self.issued_link_calls: list[int] = []
         self.context_status = "ready"
         self.recovery_idempotent = False
         self.draft_id = uuid4()
@@ -86,6 +87,19 @@ class _CRM:
             "revoked_at": None,
             "approved_by_name": "Juan Canfield",
         }
+
+    async def list_eom_public_onboarding_issued_links(self, *, limit: int):
+        self.issued_link_calls.append(limit)
+        return [
+            {
+                "draft_id": self.draft_id,
+                "contact_id": self.contact_id,
+                "full_name": "Customer Name",
+                "recipient_email": "customer@example.com",
+                "status": "issued",
+                "issued_at": datetime(2026, 8, 19, tzinfo=timezone.utc),
+            }
+        ]
 
     async def get_eom_public_onboarding_session(
         self, *, token_id: str, signing_key_fingerprint: str
@@ -1136,3 +1150,58 @@ async def test_staff_link_revocation_requires_an_actor_and_survives_feature_disa
     assert disabled.status_code == 201
     assert crm.revoke_calls == [str(crm.draft_id)]
     assert disabled_crm.revoke_calls == [str(disabled_crm.draft_id)]
+
+
+@pytest.mark.asyncio
+async def test_staff_issued_link_list_requires_office_auth_and_exposes_no_token_material():
+    crm = _CRM()
+    app = _app(crm)
+    disabled_crm = _CRM()
+    disabled_app = _app(disabled_crm, enabled=False)
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=app), base_url="http://test"
+    ) as client:
+        no_service = await client.get("/eom-funnel/public-onboarding/issued-links")
+        no_actor = await client.get(
+            "/eom-funnel/public-onboarding/issued-links",
+            headers=_service_headers(),
+        )
+        invalid_limit = await client.get(
+            "/eom-funnel/public-onboarding/issued-links?limit=0",
+            headers=_service_headers(actor=True),
+        )
+        listed = await client.get(
+            "/eom-funnel/public-onboarding/issued-links?limit=1",
+            headers=_service_headers(actor=True),
+        )
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=disabled_app), base_url="http://test"
+    ) as client:
+        listed_while_disabled = await client.get(
+            "/eom-funnel/public-onboarding/issued-links?limit=1",
+            headers=_service_headers(actor=True),
+        )
+
+    assert no_service.status_code == 401
+    assert no_actor.status_code == 422
+    assert invalid_limit.status_code == 422
+    assert listed.status_code == 200
+    assert listed_while_disabled.status_code == 200
+    assert listed.json() == {
+        "links": [
+            {
+                "draftId": str(crm.draft_id),
+                "contactId": str(crm.contact_id),
+                "fullName": "Customer Name",
+                "recipientEmail": "customer@example.com",
+                "status": "issued",
+                "issuedAt": "2026-08-19T00:00:00Z",
+            }
+        ],
+        "limit": 1,
+    }
+    assert {"tokenId", "token", "link", "approvalKey"}.isdisjoint(
+        listed.json()["links"][0]
+    )
+    assert crm.issued_link_calls == [1]
+    assert disabled_crm.issued_link_calls == [1]
