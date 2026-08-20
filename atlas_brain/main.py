@@ -404,7 +404,24 @@ async def _run_database_migration_check(
         raise error
 
     if receivables_api_enabled or auto_invoice_enabled:
-        if not await recurring_ready(pool):
+        try:
+            recurring_dedup_ready = await recurring_ready(pool)
+        except Exception as exc:
+            try:
+                await closer()
+            except Exception as close_exc:
+                logger.error(
+                    "Error closing database after recurring invoice dedup "
+                    "readiness verification error: %s",
+                    close_exc,
+                    exc_info=True,
+                )
+            error = RecurringInvoiceDedupMigrationUnavailableError(
+                "Recurring-invoice billing_period dedup schema must be ready "
+                "before an enabled recurring invoice writer can start"
+            )
+            raise error from exc
+        if not recurring_dedup_ready:
             try:
                 await closer()
             except Exception as close_exc:

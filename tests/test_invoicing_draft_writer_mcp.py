@@ -1,7 +1,9 @@
 from __future__ import annotations
 
 import json
+import os
 from types import SimpleNamespace
+from uuid import uuid4
 
 import pytest
 
@@ -64,6 +66,25 @@ class _FakeRepo:
 
 def _tool_names() -> set[str]:
     return set(draft_writer.mcp._tool_manager._tools)
+
+
+class _SchemaPool:
+    is_initialized = True
+
+    def __init__(self, connection, schema: str) -> None:
+        self.connection = connection
+        self.schema = schema
+
+    async def acquire(self):
+        await self.connection.execute(f'SET search_path TO "{self.schema}", public')
+        return self.connection
+
+    async def release(self, released) -> None:
+        assert released is self.connection
+
+    async def fetchval(self, query, *args):
+        await self.connection.execute(f'SET search_path TO "{self.schema}", public')
+        return await self.connection.fetchval(query, *args)
 
 
 def test_invoicing_draft_writer_exposes_exact_safe_tool_surface():
@@ -362,3 +383,32 @@ async def test_draft_writer_lifespan_blocks_on_incomplete_schema(monkeypatch):
             raise AssertionError("incomplete schema must not serve")
 
     assert closed == [True]
+
+
+@pytest.mark.asyncio
+async def test_draft_writer_curated_migrations_apply_to_empty_schema():
+    """The curated draft-writer migration set is dependency-closed on a clean
+    component schema, including the 012_appointments prerequisite that
+    035_contacts alters."""
+    asyncpg = pytest.importorskip("asyncpg")
+    database_url = os.environ.get("ATLAS_RECEIVABLES_TEST_DATABASE_URL")
+    if not database_url:
+        pytest.skip("ATLAS_RECEIVABLES_TEST_DATABASE_URL not set")
+
+    from atlas_brain.storage.migrations import run_migrations
+
+    schema = f"draft_writer_{uuid4().hex}"
+    connection = await asyncpg.connect(database_url)
+    pool = _SchemaPool(connection, schema)
+    try:
+        await connection.execute(f'CREATE SCHEMA "{schema}"')
+        await run_migrations(
+            pool,
+            only=draft_writer._DRAFT_WRITER_INVOICE_MIGRATIONS,
+        )
+
+        assert await draft_writer._draft_invoice_schema_ready(pool) is True
+    finally:
+        await connection.execute("SET search_path TO public")
+        await connection.execute(f'DROP SCHEMA IF EXISTS "{schema}" CASCADE')
+        await connection.close()

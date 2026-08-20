@@ -2020,6 +2020,48 @@ async def test_full_atlas_migration_check_blocks_enabled_auto_invoice_without_de
 
 
 @pytest.mark.asyncio
+async def test_full_atlas_migration_check_blocks_when_dedup_readiness_query_errors():
+    """A broken readiness query is not a soft warning. If a recurring writer is
+    enabled, inability to verify migration 385 is the same startup safety class
+    as an explicit false readiness result: close the pool and fail closed."""
+    from atlas_brain import main
+
+    events: list[str] = []
+
+    class _Pool:
+        pass
+
+    async def run_migrations(pool: object) -> None:
+        assert isinstance(pool, _Pool)
+        events.append("migrate")
+
+    async def close_database() -> None:
+        events.append("close")
+
+    async def recurring_ready(pool: object) -> bool:
+        assert isinstance(pool, _Pool)
+        events.append("recurring-ready")
+        raise RuntimeError("permission denied")
+
+    with pytest.raises(
+        main.RecurringInvoiceDedupMigrationUnavailableError,
+        match="Recurring-invoice billing_period dedup schema",
+    ) as exc_info:
+        await main._run_database_migration_check(
+            _Pool(),
+            receivables_api_enabled=False,
+            auto_invoice_enabled=True,
+            run_migrations_fn=run_migrations,
+            close_database_fn=close_database,
+            recurring_dedup_ready_fn=recurring_ready,
+        )
+
+    assert isinstance(exc_info.value.__cause__, RuntimeError)
+    assert str(exc_info.value.__cause__) == "permission denied"
+    assert events == ["migrate", "recurring-ready", "close"]
+
+
+@pytest.mark.asyncio
 async def test_full_atlas_migration_check_allows_auto_invoice_when_dedup_schema_ready():
     """Negative control for the positive-fence test above: the same
     auto_invoice_enabled-only shape does NOT false-positive-block a healthy

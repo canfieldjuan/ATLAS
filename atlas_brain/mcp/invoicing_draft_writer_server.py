@@ -56,6 +56,7 @@ _MAX_LINE_ITEMS = 100
 _SOURCE = "chatgpt_draft_writer"
 _SOURCE_REF_PREFIX = "chatgpt_draft_writer"
 _DRAFT_WRITER_INVOICE_MIGRATIONS = (
+    "012_appointments",
     "035_contacts",
     "045_invoices",
     "047_invoice_extra_fields",
