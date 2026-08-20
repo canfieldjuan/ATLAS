@@ -22,6 +22,7 @@ import asyncpg
 
 from ..storage.database import DatabasePool, get_db_pool
 from ..storage.exceptions import DatabaseOperationError, DatabaseUnavailableError
+from ..storage.repositories.invoice import recurring_invoice_dedup_schema_ready
 from .commercial_billing_candidates import (
     CommercialBillingCandidateService,
     CommercialBillingCandidatesUnavailableError,
@@ -622,6 +623,10 @@ class CommercialBillingApprovalService:
                 existing = await self._find_by_candidate(conn, selected, expected_source_fingerprint)
                 if existing is not None:
                     return {"approval": self._view(existing), "replayed": True}
+                if not await recurring_invoice_dedup_schema_ready(conn):
+                    raise CommercialBillingApprovalUnavailableError(
+                        "Recurring invoice dedup schema is unavailable"
+                    )
                 conflicting = await self._find_recurring_period_conflict(
                     conn,
                     contact_id=draft.contact_id,

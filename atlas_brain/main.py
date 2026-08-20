@@ -47,7 +47,6 @@ _SECURITY_TXT_MAX_AGE_DAYS = 180
 _COMMERCIAL_BILLING_REVIEW_RECOVERY_MIGRATION = (
     "382_commercial_billing_candidate_overrides"
 )
-_INVOICES_BILLING_PERIOD_DEDUP_MIGRATION = "385_invoices_billing_period_dedup"
 
 
 class _DatabaseMigrationFenceError(RuntimeError):
@@ -59,9 +58,7 @@ class CommercialBillingReviewRecoveryUnavailableError(_DatabaseMigrationFenceErr
 
 
 class RecurringInvoiceDedupMigrationUnavailableError(_DatabaseMigrationFenceError):
-    """A recurring-invoice writer (receivables API or the legacy monthly
-    auto-invoice task) cannot safely create invoices without the
-    cross-pipeline billing_period dedup migration."""
+    """A recurring-invoice writer cannot safely serve without period dedup."""
 
 
 def _setting_text(config: object, name: str) -> str:
@@ -349,14 +346,15 @@ async def _run_database_migration_check(
     auto_invoice_enabled: bool = False,
     run_migrations_fn=None,
     close_database_fn=None,
+    recurring_dedup_ready_fn=None,
 ) -> None:
     """Run generic migrations, fencing unsafe writer-path failures.
 
-    receivables_api_enabled requires both the commercial billing review
-    recovery migration (382) and the recurring-invoice billing_period dedup
-    migration (385): the receivables-mounted approval writer reaches both.
-    auto_invoice_enabled requires only 385: the legacy monthly auto-invoice
-    task reaches billing_period but never touches the review-recovery table.
+    receivables_api_enabled requires the commercial billing review recovery
+    migration (382). A recurring-invoice writer is reachable when either the
+    receivables-mounted commercial-billing approval writer or the legacy
+    monthly auto-invoice task is enabled; only that writer surface is fenced
+    against the writer-only billing_period dedup schema.
     """
     if run_migrations_fn is None:
         from .storage.migrations import run_migrations
@@ -365,6 +363,12 @@ async def _run_database_migration_check(
     else:
         runner = run_migrations_fn
     closer = close_database if close_database_fn is None else close_database_fn
+    if recurring_dedup_ready_fn is None:
+        from .storage.repositories.invoice import recurring_invoice_dedup_schema_ready
+
+        recurring_ready = recurring_invoice_dedup_schema_ready
+    else:
+        recurring_ready = recurring_dedup_ready_fn
 
     migration_error = None
     try:
@@ -382,17 +386,6 @@ async def _run_database_migration_check(
                 "before the enabled receivables API can start",
             )
         )
-    if receivables_api_enabled or auto_invoice_enabled:
-        required.append(
-            (
-                _INVOICES_BILLING_PERIOD_DEDUP_MIGRATION,
-                RecurringInvoiceDedupMigrationUnavailableError,
-                "Recurring-invoice billing_period dedup migration must "
-                "complete before an enabled invoice writer (receivables API "
-                "or the legacy monthly auto-invoice task) can start",
-            )
-        )
-
     for migration_name, error_cls, message in required:
         if await _migration_is_recorded(pool, migration_name):
             continue
@@ -409,6 +402,25 @@ async def _run_database_migration_check(
         if migration_error is not None:
             raise error from migration_error
         raise error
+
+    if receivables_api_enabled or auto_invoice_enabled:
+        if not await recurring_ready(pool):
+            try:
+                await closer()
+            except Exception as close_exc:
+                logger.error(
+                    "Error closing database after recurring invoice dedup "
+                    "readiness failure: %s",
+                    close_exc,
+                    exc_info=True,
+                )
+            error = RecurringInvoiceDedupMigrationUnavailableError(
+                "Recurring-invoice billing_period dedup schema must be ready "
+                "before an enabled recurring invoice writer can start"
+            )
+            if migration_error is not None:
+                raise error from migration_error
+            raise error
 
     if migration_error is not None:
         logger.warning("Database migration check failed: %s", migration_error)

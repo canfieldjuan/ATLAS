@@ -55,7 +55,53 @@ _PLACEHOLDER_HTTP_AUTH_TOKENS = {
 _MAX_LINE_ITEMS = 100
 _SOURCE = "chatgpt_draft_writer"
 _SOURCE_REF_PREFIX = "chatgpt_draft_writer"
+_DRAFT_WRITER_INVOICE_MIGRATIONS = (
+    "035_contacts",
+    "045_invoices",
+    "047_invoice_extra_fields",
+)
 _oauth_provider: InvoicingDraftWriterOAuthProvider | None = None
+
+
+async def _draft_invoice_schema_ready(pool: Any) -> bool:
+    return bool(
+        await pool.fetchval(
+            """
+            SELECT NOT EXISTS (
+                SELECT 1
+                FROM (
+                    VALUES
+                        ('invoices', 'id'),
+                        ('invoices', 'invoice_number'),
+                        ('invoices', 'customer_name'),
+                        ('invoices', 'line_items'),
+                        ('invoices', 'issue_date'),
+                        ('invoices', 'due_date'),
+                        ('invoices', 'status'),
+                        ('invoices', 'source'),
+                        ('invoices', 'source_ref'),
+                        ('invoices', 'invoice_for'),
+                        ('invoices', 'contact_name')
+                ) AS required(table_name, column_name)
+                WHERE NOT EXISTS (
+                    SELECT 1
+                    FROM information_schema.columns AS actual
+                    WHERE actual.table_schema = current_schema()
+                      AND actual.table_name = required.table_name
+                      AND actual.column_name = required.column_name
+                )
+            )
+            """
+        )
+    )
+
+
+async def _require_draft_invoice_schema_ready(pool: Any) -> bool:
+    if not await _draft_invoice_schema_ready(pool):
+        raise RuntimeError(
+            "Draft-writer invoicing MCP requires a complete draft invoice schema"
+        )
+    return True
 
 
 @asynccontextmanager
@@ -65,19 +111,19 @@ async def _lifespan(server):
     module already reuses its other internals via the ``_full`` import) so
     this narrower write surface gets the same migration/readiness fence
     rather than a bare, unverified ``init_database()``. A draft invoice
-    write reaches the same ``InvoiceRepository.create()`` and the same
-    ``invoices`` columns as the full server's writers, so it needs the same
-    guarantee that required schema (e.g. billing_period, migration 385) is
-    actually present before accepting a request."""
-    from ..services.receivables import ReceivablesService
+    write reaches ``InvoiceRepository.create()`` and must verify the minimal
+    ``invoices`` columns it writes before accepting a request."""
     from ..storage.database import close_database, get_db_pool, init_database
     from ..storage.migrations import run_migrations
+
+    async def run_draft_writer_migrations(pool: Any) -> None:
+        await run_migrations(pool, only=_DRAFT_WRITER_INVOICE_MIGRATIONS)
 
     async with _full._database_lifespan(
         init_database_fn=init_database,
         get_db_pool_fn=get_db_pool,
-        run_migrations_fn=run_migrations,
-        receivables_ready_fn=lambda pool: ReceivablesService(pool).is_ready(),
+        run_migrations_fn=run_draft_writer_migrations,
+        receivables_ready_fn=_require_draft_invoice_schema_ready,
         close_database_fn=close_database,
     ):
         logger.info("Draft-writer invoicing MCP: DB pool initialized")

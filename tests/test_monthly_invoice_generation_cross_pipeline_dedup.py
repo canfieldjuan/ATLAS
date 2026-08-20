@@ -164,7 +164,10 @@ async def test_legacy_writer_fails_closed_when_cross_pipeline_check_errors(
     unprotected duplicate the reservation table exists to prevent. Negative
     control: a second, healthy contact in the same run still creates
     normally -- the failure is per-contact, not a run-wide abort."""
-    from atlas_brain.autonomous.tasks.monthly_invoice_generation import run
+    from atlas_brain.autonomous.tasks.monthly_invoice_generation import (
+        _build_notification_lines,
+        run,
+    )
     from atlas_brain.config import settings
     from atlas_brain.storage.models import ScheduledTask
     import atlas_brain.services.calendar_provider as calendar_provider_mod
@@ -220,6 +223,17 @@ async def test_legacy_writer_fails_closed_when_cross_pipeline_check_errors(
     assert result["invoices_created"] == 1
     assert result["invoices_skipped_dedup"] == 0
     assert result["invoices_skipped_dedup_check_failed"] == 1
+    assert result["dedup_check_failed_details"] == [
+        {
+            "contact_id": str(flaky_contact),
+            "customer": str(flaky_contact),
+            "services": ["Office Cleaning"],
+            "error": "transient read error",
+        }
+    ]
     assert len(fake_inv_repo.create_calls) == 1
     assert fake_inv_repo.create_calls[0]["contact_id"] == healthy_contact
     assert flaky_contact not in {c["contact_id"] for c in fake_inv_repo.create_calls}
+    lines = _build_notification_lines(result)
+    assert "DEDUP CHECK FAILED (1) -- invoice writes skipped:" in lines
+    assert f"  {flaky_contact} [Office Cleaning]: transient read error" in lines

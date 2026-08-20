@@ -160,9 +160,10 @@ state was briefly, correctly flagged as a P1 blocker.
   `status <> 'void'`; add an app-level pre-check in both writers for a clean
   skip/reject path ahead of that constraint; backfill historical rows where
   the period is mechanically derivable, quarantining (not guessing at)
-  anything that would collide; fence every process that can reach
-  `InvoiceRepository.create()`/the raw `invoices` INSERT against migration
-  385 not being recorded.
+  anything that would collide; fence recurring invoice writers against the
+  writer-only dedup schema being unavailable, without making ad-hoc invoice,
+  draft invoice, payment/receivables, or EOM funnel startup depend on that
+  recurring-only schema.
 - Must not change: the `mcp_tool` ad-hoc invoice path (no `billing_period`,
   outside the source allowlist); the `invoicing_mcp` source (confirmed during
   research to be a *payment*-record source, unrelated to `invoices.source`);
@@ -173,39 +174,44 @@ state was briefly, correctly flagged as a P1 blocker.
   `test_approval_service_does_not_import_delivery_or_legacy_monthly_writers`
   (neither writer imports the other — this design doesn't either, both only
   reach the shared `invoices` table); the existing review-recovery fence for
-  migration 382 (extended, not replaced); `invoicing_server.py`'s own code
-  (its existing readiness-check hook picks up the new requirement without any
-  edit there).
+  migration 382 (preserved, not replaced); base `ReceivablesService.is_ready()`
+  readiness for check/ACH/Square payment tracking; EOM slim receivables
+  startup; and the draft-writer MCP's ability to create an ad-hoc invoice on
+  the minimal invoice schema.
 
 ## Scope (this PR)
 
 Ownership lane: eom/recurring-invoice-period-dedup
 Slice phase: Production hardening
-Max files: 18
+Max files: 17
 
 1. Migration 385: `invoices.billing_period` column + format CHECK + the
    cross-source partial unique index + historical backfill + collision
-   quarantine, wrapped atomically (see Amendment: historical backfill).
+   quarantine. This migration intentionally does **not** opt into
+   `-- atlas: atomic-bookkeeping`; it uses `CREATE/DROP INDEX CONCURRENTLY`
+   and `NOT VALID` constraints so production does not combine a backfill and
+   long index build inside one ACCESS-EXCLUSIVE transaction.
 2. Persist `billing_period` in both writers' existing `INSERT`s, reusing each
    writer's already-computed period value — zero new parameters on either
    `InvoiceRepository.create()` or `_InvoiceDraft`.
 3. `InvoiceRepository.get_by_contact_and_period` and a matching
    transaction-scoped lookup in `commercial_billing_approvals.py`; call both
    from their respective writers as a pre-check ahead of the new constraint.
-4. `atlas_brain/main.py`: generalize the existing migration-recovery fence to
-   also require migration 385 whenever `receivables_api_enabled` or
-   `auto_invoice_enabled` is true (see Amendment: startup fence).
-5. `atlas_brain/services/receivables.py`: extend the existing
-   `_RECEIVABLES_REQUIRED_COLUMNS`/`_RECEIVABLES_REQUIRED_INDEXES` readiness
-   contract with `invoices.billing_period` and the new index, which fences
-   `invoicing_server.py` for free (it already calls this check).
-6. `atlas_brain/mcp/invoicing_draft_writer_server.py`: replace its bare,
-   unverified `_lifespan` (no migration run, no schema check at all) with a
-   reuse of `invoicing_server.py`'s own `_database_lifespan`, matching this
-   file's existing convention of reusing that module's internals.
-7. `atlas_brain/main_eom.py`: add migration 385 to the curated
-   `EOM_RECEIVABLES_READINESS_MIGRATIONS` tuple — that file's own comment
-   requires this for any new receivables readiness requirement.
+4. `atlas_brain/main.py`: keep the existing migration-382 receivables fence,
+   then separately require the recurring-dedup schema only when a recurring
+   writer is enabled (`receivables_api_enabled` for approval writes or the
+   master-enabled legacy auto-invoice task).
+5. Current base receivables readiness is already recurring-free on refreshed
+   `origin/main`; this PR keeps that boundary and removes migration 385 from
+   `atlas_brain/main_eom.py`'s curated EOM receivables migration set so EOM
+   slim startup is not over-gated by a writer it does not run.
+6. `atlas_brain/mcp/invoicing_draft_writer_server.py`: run only the invoice
+   schema migrations the draft writer actually needs and verify that minimal
+   draft-invoice schema, instead of pulling the full receivables stack into an
+   ad-hoc draft surface.
+7. `atlas_brain/autonomous/tasks/monthly_invoice_generation.py`: make recurring
+   dedup readiness failures and per-contact dedup lookup failures fail closed
+   and visible in the notification summary.
 8. Tests proving: the index rejects a raw cross-source duplicate insert
    independent of any app code; an `mcp_tool` invoice doesn't block a
    recurring one; a voided invoice doesn't block reissuance; the approval
@@ -215,11 +221,10 @@ Max files: 18
    still creates normally for an un-invoiced contact in the same pass;
    historical backfill derives the right period per source and quarantines
    real collisions without falsely flagging unrelated NULL-contact_id rows;
-   the startup fence blocks both the receivables path and the
-   auto-invoice-only path when migration 385 is missing, and does not
-   false-positive-block either when it's present; the draft-writer MCP
-   server's lifespan now migrates and verifies readiness instead of silently
-   starting unchecked.
+   the recurring-writer fence blocks only the recurring writer surface when
+   the dedup schema is unavailable; EOM/base receivables readiness no longer
+   requires migration 385; the draft-writer MCP server migrates only its
+   invoice prerequisites and verifies the minimal draft schema.
 
 ### Review Contract
 
@@ -245,11 +250,13 @@ Max files: 18
     creates normally for a second, un-invoiced contact in the same pass —
     settled by
     `test_monthly_invoice_generation_cross_pipeline_dedup.py::test_legacy_writer_skips_contact_the_new_pipeline_already_invoiced`.
-  - Migration content is additive and correctly scoped (no `DROP`, references
-    both recurring sources and the void exclusion, indexes
+  - Migration content is additive and correctly scoped for production rollout:
+    it references both recurring sources and the void exclusion, indexes
     `(contact_id, billing_period)` alone — not `source` — since source
-    belongs only in the predicate, opts into atomic-bookkeeping, and includes
-    the collision-quarantine marker) — settled by
+    belongs only in the predicate, omits the atomic-bookkeeping marker,
+    uses `CREATE INDEX CONCURRENTLY`/`DROP INDEX CONCURRENTLY`, adds `NOT VALID`
+    checks, validates producer years, and includes the collision-quarantine
+    marker) — settled by
     `test_invoice_repository.py::test_invoices_billing_period_dedup_migration_is_additive_and_scoped`.
   - Historical rows backfill correctly per source, quarantine real
     collisions, leave void/mcp_tool/unparseable rows untouched, and do not
@@ -259,19 +266,21 @@ Max files: 18
     which also proves the migration is idempotent on replay and that the
     backfilled row closes the transition-window gap end to end (findable by
     the pre-check; a second insert for the same contact+period is rejected).
-  - The startup fence blocks `receivables_api_enabled` and, independently,
-    `auto_invoice_enabled` when migration 385 is unrecorded, and does not
-    block either when it is recorded — settled by four tests in
+  - The startup fence preserves migration-382 receivables recovery and blocks
+    enabled recurring writers when the recurring dedup schema is unavailable,
+    using a schema readiness check rather than a broad migration-ledger proxy —
+    settled by four tests in
     `test_commercial_billing_runs.py`
     (`test_full_atlas_migration_check_allows_recovered_or_disabled_receivables`,
-    `test_full_atlas_migration_check_blocks_enabled_auto_invoice_without_dedup_migration`,
-    `test_full_atlas_migration_check_allows_auto_invoice_when_dedup_migration_recorded`,
-    `test_full_atlas_lifespan_fences_auto_invoice_only_deployment_without_dedup_migration`),
+    `test_full_atlas_migration_check_blocks_enabled_auto_invoice_without_dedup_readiness`,
+    `test_full_atlas_migration_check_allows_auto_invoice_when_dedup_schema_ready`,
+    `test_full_atlas_lifespan_fences_auto_invoice_only_deployment_without_dedup_readiness`),
     the last exercised through the real `main.lifespan(...)` end to end, not
     only the unit-level check function.
-  - The draft-writer MCP server's `_lifespan` now runs migrations and
-    verifies readiness instead of silently starting unchecked, and blocks on
-    an incomplete schema — settled by
+  - The draft-writer MCP server's `_lifespan` now runs only draft-invoice
+    prerequisite migrations and verifies the minimal draft schema instead of
+    requiring full receivables readiness; it blocks on an incomplete draft
+    schema — settled by
     `test_invoicing_draft_writer_mcp.py::test_draft_writer_lifespan_now_migrates_and_verifies_readiness`
     and `::test_draft_writer_lifespan_blocks_on_incomplete_schema`.
 - Reachability proof: exercised through the real entry points — the legacy
@@ -283,8 +292,9 @@ Max files: 18
   proof for a specific branch (e.g. the four-way fence matrix).
 - Affected surfaces: `invoices` table schema; both recurring invoice-creation
   call sites; the shared migration-recovery startup fence in
-  `atlas_brain/main.py`; the receivables readiness contract in
-  `atlas_brain/services/receivables.py`; the draft-writer MCP server's
+  `atlas_brain/main.py`; the recurring dedup readiness helper in
+  `atlas_brain/storage/repositories/invoice.py`; the base receivables readiness
+  contract in `atlas_brain/services/receivables.py`; the draft-writer MCP server's
   lifespan; the EOM profile's curated readiness-migration set in
   `atlas_brain/main_eom.py`. No route signatures, no config, no new
   environment variables.
@@ -296,12 +306,10 @@ Max files: 18
   partial unique index rather than a bare check-then-act); a pre-deploy
   invoice for an old period going unprotected (mitigated by the backfill,
   with quarantine rather than guessing for genuine ambiguity); the migration
-  failing partway and leaving inconsistent state (mitigated by
-  atomic-bookkeeping, verified by forcing a real mid-migration failure and
-  confirming full rollback); code depending on the new column/index starting
-  before the migration applied, across three independent processes
-  (mitigated by extending the existing fence pattern to all three, reusing
-  house convention rather than inventing new mechanisms per process).
+  causing production lock pressure (mitigated by concurrent index operations
+  and NOT VALID constraints); code depending on the new column/index starting
+  before the migration applied (mitigated by a recurring-writer schema
+  readiness fence instead of a broad receivables/startup gate).
 - Reviewer rules triggered: **R1 (requirements match —
   `invoicing_draft_writer_server.py`'s `_lifespan` now runs migrations and
   verifies readiness where it previously did neither; this is an intentional
@@ -395,58 +403,54 @@ two `WITH candidates ... UPDATE` passes)
   backfill, and the ledger record together, and that a clean retry then
   succeeds.
 
-**Seam 4 — startup fence for migration 385** (`atlas_brain/main.py`
-`_run_database_migration_check`; `atlas_brain/services/receivables.py`
-`_RECEIVABLES_REQUIRED_COLUMNS`/`_RECEIVABLES_REQUIRED_INDEXES`;
-`atlas_brain/mcp/invoicing_draft_writer_server.py` `_lifespan`)
+**Seam 4 — recurring-writer schema fence** (`atlas_brain/main.py`
+`_run_database_migration_check`; `atlas_brain/storage/repositories/invoice.py`
+`recurring_invoice_dedup_schema_ready`; `atlas_brain/mcp/invoicing_draft_writer_server.py`
+`_lifespan`)
 
 - Replaced behavior: the existing fence in `main.py` checked only migration
-  382, only under `receivables_api_enabled` — never migration 385, and never
-  under `auto_invoice_enabled` (an independent flag the legacy cron alone
-  depends on). `invoicing_server.py` already called a general readiness
-  check but that check didn't know about `billing_period`/the new index
-  yet. `invoicing_draft_writer_server.py` had no migration run or schema
-  check of any kind.
+  382 under `receivables_api_enabled` — never the recurring dedup schema, and
+  never under `auto_invoice_enabled` (an independent flag the legacy cron alone
+  depends on). A later review found the broad migration-385/readiness fence was
+  too blunt: it would also block ad-hoc/draft invoice and base receivables
+  surfaces that do not create recurring invoices.
 - Guard-relevant fields: `settings.invoicing.receivables_api_enabled`,
-  `settings.invoicing.auto_invoice_enabled`, `schema_migrations` (ledger
-  record for `385_invoices_billing_period_dedup`).
-- Caller x input: {receivables_api_enabled=true x 385 recorded/unrecorded,
-  auto_invoice_enabled=true x 385 recorded/unrecorded, both flags false (no
-  fence should fire, matching current no-op behavior), the real
-  `main.lifespan(...)` end to end for the auto-invoice-only shape, the
-  draft-writer server's real `_lifespan` with a ready/not-ready schema}.
+  `settings.invoicing.auto_invoice_enabled`, the recurring-dedup schema shape
+  (`invoices.billing_period`, reservations table columns, both invoice checks,
+  and a valid/ready unique index).
+- Caller x input: {receivables_api_enabled=true x recurring schema ready/not
+  ready, auto_invoice_enabled=true x recurring schema ready/not ready, both
+  flags false (no recurring fence should fire), the real `main.lifespan(...)`
+  end to end for the auto-invoice-only shape, the draft-writer server's real
+  `_lifespan` with a ready/not-ready draft schema}.
 - Disposition: every class above is asserted across
   `test_full_atlas_migration_check_allows_recovered_or_disabled_receivables`,
-  `test_full_atlas_migration_check_blocks_enabled_auto_invoice_without_dedup_migration`,
-  `test_full_atlas_migration_check_allows_auto_invoice_when_dedup_migration_recorded`,
-  `test_full_atlas_lifespan_fences_auto_invoice_only_deployment_without_dedup_migration`,
-  and the two new `test_invoicing_draft_writer_mcp.py` lifespan tests.
-  `invoicing_server.py` needed no test changes — it already calls the
-  general readiness check, which `test_receivables.py`'s existing real-schema
-  test (`test_eom_receivables_readiness_migration_set_builds_ready_schema`,
-  `assert await service.is_ready() is True`) now proves is `True` only once
-  migration 385 has actually applied.
+  `test_full_atlas_migration_check_blocks_enabled_auto_invoice_without_dedup_readiness`,
+  `test_full_atlas_migration_check_allows_auto_invoice_when_dedup_schema_ready`,
+  `test_full_atlas_lifespan_fences_auto_invoice_only_deployment_without_dedup_readiness`,
+  the two `test_invoicing_draft_writer_mcp.py` lifespan tests, the new
+  invoice repository create tests, and the EOM/receivables readiness tests
+  that now prove migration 385 is not part of base receivables readiness.
 
 ### Files touched
 
-- `atlas_brain/storage/migrations/385_invoices_billing_period_dedup.sql`
-- `atlas_brain/storage/repositories/invoice.py`
 - `atlas_brain/autonomous/tasks/monthly_invoice_generation.py`
-- `atlas_brain/services/commercial_billing_approvals.py`
 - `atlas_brain/main.py`
 - `atlas_brain/main_eom.py`
-- `atlas_brain/services/receivables.py`
 - `atlas_brain/mcp/invoicing_draft_writer_server.py`
-- `tests/test_invoice_repository.py`
+- `atlas_brain/services/commercial_billing_approvals.py`
+- `atlas_brain/storage/migrations/385_invoices_billing_period_dedup.sql`
+- `atlas_brain/storage/repositories/invoice.py`
+- `plans/PR-EOM-Recurring-Invoice-Period-Dedup.md`
+- `tests/maturity_sweep/baseline_atlas_brain_storage.json`
 - `tests/test_commercial_billing_approvals.py`
+- `tests/test_commercial_billing_runs.py`
+- `tests/test_eom_render_profile.py`
+- `tests/test_invoice_repository.py`
+- `tests/test_invoicing_draft_writer_mcp.py`
+- `tests/test_legacy_monthly_autoinvoice_writer_harness.py`
 - `tests/test_monthly_invoice_generation_cross_pipeline_dedup.py`
 - `tests/test_receivables.py`
-- `tests/test_commercial_billing_runs.py`
-- `tests/test_invoicing_draft_writer_mcp.py`
-- `tests/test_eom_render_profile.py`
-- `tests/maturity_sweep/baseline_atlas_brain_storage.json`
-- `tests/test_legacy_monthly_autoinvoice_writer_harness.py`
-- `plans/PR-EOM-Recurring-Invoice-Period-Dedup.md`
 
 ## Mechanism
 
@@ -511,70 +515,40 @@ same period. Verified directly: a NULL-`contact_id` pair sharing a derived
 period backfills independently, with no quarantine metadata, exactly as the
 real index would allow.
 
-The migration opts into this repo's `-- atlas: atomic-bookkeeping` marker
-(literal first line; nine other migrations already use it, including 384,
-the one immediately preceding this one) so the column add, CHECK constraint,
-both backfill passes, and the index creation commit or roll back together
-with the `schema_migrations` ledger write, in one real transaction. This was
-verified empirically, not assumed: forcing a division-by-zero failure between
-the backfill and the index creation, on a schema that already had a
-pre-migration row, confirmed the column, the backfilled data, and the ledger
-record all roll back completely, then a clean retry applies correctly. A
-second run of the same test *without* the marker showed the SQL itself was
-already atomic even then — asyncpg's simple-query protocol wraps a
-multi-statement string in an implicit transaction regardless. What the
-marker actually, distinctly adds is narrower: it closes the crash window
-between "SQL committed" and "ledger row written," where a process crash
-between the two would leave the migration correctly applied but reported as
-still pending — safe, since every statement is idempotent, but it would
-break the "recorded implies applied" invariant the startup fence below
-depends on. The migration's own header comment states this precisely rather
-than overclaiming a stronger guarantee than what was actually verified.
+The migration deliberately does **not** opt into this repo's
+`-- atlas: atomic-bookkeeping` marker. Migration 385 is a production-facing
+backfill plus uniqueness rollout, so it uses `CREATE INDEX CONCURRENTLY` /
+`DROP INDEX CONCURRENTLY` and `NOT VALID` constraints. That shape avoids
+packing a backfill and index build into one long table-locking transaction.
+The startup guard therefore checks the schema objects that recurring writers
+actually need (`billing_period`, reservation columns, checks, and a
+valid/ready unique index) rather than treating a migration-ledger row as the
+only readiness signal.
 
 ### Amendment: startup fence
 
-`atlas_brain/main.py`'s existing `_commercial_billing_review_recovery_is_recorded`/
-`_run_database_migration_check` pair is generalized: the specific
-single-migration check becomes `_migration_is_recorded(pool, migration_name)`,
-and `_run_database_migration_check` now builds an ordered list of required
-migrations — migration 382 when `receivables_api_enabled`, migration 385 when
-`receivables_api_enabled` **or** `auto_invoice_enabled` — checking each in
-turn and closing the pool before raising a specific
-`_DatabaseMigrationFenceError` subclass on the first one missing. Both
-existing and new exception classes share that common base so the two
-`except` sites in `lifespan()` catch either without listing two types.
+`atlas_brain/main.py` keeps the migration-382 ledger fence for the receivables
+review-recovery table. Separately, when either recurring writer is reachable
+(`receivables_api_enabled` for approval writes, or the master-enabled legacy
+auto-invoice task), it calls
+`recurring_invoice_dedup_schema_ready(pool)` and fails closed if the schema
+objects are not ready. This is a recurring-writer fence, not a general
+receivables startup requirement.
 
-Adversarial re-review of the first draft of this fix (confined to
-`atlas_brain/main.py`) found it structurally could not protect two other,
-independent OS processes that also reach `InvoiceRepository.create()`:
-`atlas_brain/mcp/invoicing_server.py` (its own lifespan, own migration run,
-`settings.mcp.invoicing_enabled` defaults `True`) and
-`atlas_brain/mcp/invoicing_draft_writer_server.py` (had no migration run or
-schema check at all). Rather than duplicate `main.py`'s fence into each
-process, the fix reuses the house convention each already had a hook for:
-`invoicing_server.py`'s `_lifespan` already calls
-`ReceivablesService(pool).is_ready()`, which checks
-`_RECEIVABLES_REQUIRED_COLUMNS`/`_RECEIVABLES_REQUIRED_INDEXES` — extending
-that dict/tuple with `invoices.billing_period` and the new index fences that
-process **for free**, no code change needed there.
-`invoicing_draft_writer_server.py` had no such hook, but already imports the
-full `invoicing_server` module (`from . import invoicing_server as _full`)
-and freely reuses its other internals (`_full._is_uuid`, `_full._uuid`,
-`_full.update_invoice`, ...) — so its `_lifespan` now reuses
-`_full._database_lifespan` directly, the exact same contract already proven
-in `tests/test_receivables.py`'s `test_standalone_mcp_*` tests, rather than
-hand-rolling a third implementation.
+The broad readiness side effect is removed from
+`atlas_brain/services/receivables.py`, so payment tracking and the full
+invoicing MCP's base readiness do not require recurring-only columns/indexes.
+`InvoiceRepository.create()` also omits the `billing_period` column entirely
+when no recurring billing period is supplied, preserving pre-385 ad-hoc/draft
+invoice writes on schemas that only need the base invoice fields.
 
-`atlas_brain/main_eom.py` maintains its own separately curated, explicitly
-"CLOSED and ENUMERATED" tuple of migrations (`EOM_RECEIVABLES_READINESS_MIGRATIONS`)
-for the EOM deployment profile — its own header comment requires updating it
-for any new receivables readiness requirement, so migration 385 is added
-there too; this was discovered by running the existing real-schema readiness
-test for that profile and watching it fail, not predicted in advance. A
-second, independent static test in `tests/test_eom_render_profile.py`
-(`test_eom_startup_migrations_are_curated_for_receivables_readiness`) pins
-the tuple's exact contents and needed the same one-line update — caught by
-the full local unit-gate mirror, not anticipated from reading either file.
+`atlas_brain/mcp/invoicing_draft_writer_server.py` reuses the full MCP
+lifespan wrapper but provides a smaller migration/readiness pair: only the
+contact/invoice migrations needed to insert a draft invoice, and a
+`_draft_invoice_schema_ready()` check over the invoice columns that surface
+actually writes. `atlas_brain/main_eom.py` likewise leaves migration 385 out
+of `EOM_RECEIVABLES_READINESS_MIGRATIONS`, because that profile's payment
+readiness does not by itself create recurring invoices.
 
 ### Amendment: quarantine reservation
 
@@ -672,30 +646,16 @@ Negative-control proof that this is a real regression test, not a
 tautology: the fix was reverted locally, the same test re-run, and it failed
 exactly as expected (`billing_period` stayed `NULL`) before being restored.
 
-**Finding #5 — `main_eom.py` independent readiness fence.** This profile's
-`eom_profile_settings.run_migrations` defaults to `False`
-(`atlas_brain/eom_api/config.py`), and unlike `main.py` (ledger-based
-`_migration_is_recorded`) or the two MCP servers
-(`ReceivablesService.is_ready()`), this lifespan had *no* readiness check of
-any kind independent of that flag — an enabled receivables API would start
-serving requests against whatever schema state happened to exist. Confirmed
-this is a live-reachable gap, not theoretical: this file does
-`app.include_router(receivables_router, prefix="/api/v1")` unconditionally,
-so the commercial-billing approval endpoint is mounted whenever this
-process runs (`receivables_api_enabled` gates individual request handling
-via `require_receivables_api()`, not whether the router is mounted).
-`render.eom.yaml`'s own header comment confirms this profile's Render
-deployment is still a draft ("deliberately not named render.yaml yet ...
-should be connected manually ... after the branch is reviewed") — not live
-today, but the fence protects the moment it is. Fixed by adding
-`_require_receivables_schema_ready()`, called from `lifespan()` when
-`db_settings.enabled and invoicing_settings.receivables_api_enabled`,
-reusing the exact `ReceivablesService(pool).is_ready()` hook the MCP
-servers already use rather than inventing a fourth mechanism. Verified with
-two new tests mirroring this file's existing lifespan-test pattern
-(`tests/test_eom_render_profile.py`): a not-ready schema raises
-`ReceivablesSchemaUnavailableError` and the pool still closes (positive
-fence); a ready schema serves normally (negative control).
+**Finding #5 — `main_eom.py` readiness scope corrected after later review.**
+An earlier round added migration 385 to EOM receivables readiness because the
+EOM profile can mount receivables routes. The class-level repair narrows that:
+EOM/base receivables readiness may require the payment/receipt schema, but it
+must not require the recurring-invoice dedup schema unless that process is
+actually running a recurring invoice writer. This PR therefore leaves
+`385_invoices_billing_period_dedup` out of
+`EOM_RECEIVABLES_READINESS_MIGRATIONS` and removes the recurring
+`billing_period` column/index from the base `ReceivablesService.is_ready()`
+contract.
 
 **Finding #6 — rolling-deployment skew: investigated and waived, not fixed.**
 Checked fresh against this machine's actual running deployment, not
@@ -748,7 +708,7 @@ this file's unrelated LLM-loading/evidence-engine startup surface) —
 asserts the captured `auto_invoice_enabled` is `False` despite the stale
 flag being `True`, given `invoicing.enabled=False`. Negative control: the
 pre-existing
-`test_full_atlas_lifespan_fences_auto_invoice_only_deployment_without_dedup_migration`
+`test_full_atlas_lifespan_fences_auto_invoice_only_deployment_without_dedup_readiness`
 (now updated to set `invoicing.enabled=True` explicitly, matching the
 healthy-deployment shape it was already meant to model) proves the fence
 still fires when the master gate is genuinely on.
@@ -920,18 +880,17 @@ Parked hardening: none.
   - A NULL-`contact_id` pair sharing a derived period backfills
     independently, uncounted as a collision — proving the collision CTE's
     NULL-safety fix, not merely that it compiles.
-  - A forced mid-migration failure (division by zero, injected after the
-    backfill and before the index creation) rolls back the column, the
-    backfill data, and the ledger record completely; a clean retry then
-    applies correctly — run against real Postgres via the actual Python
-    migration runner, not raw `psql`.
-  - The startup fence: `auto_invoice_enabled=True` with migration 385
-    unrecorded raises and closes the pool; the identical shape with 385
-    recorded returns normally; the real `main.lifespan(...)` end to end
-    raises for the auto-invoice-only deployment shape with 385 unrecorded.
-  - The draft-writer MCP server's lifespan: a ready schema serves normally
-    (init → migrate → ready-check → serving → close, in order); an
-    incomplete schema raises and closes before serving.
+  - Migration 385 is explicitly non-atomic and production-shaped: the static
+    migration test asserts no `-- atlas: atomic-bookkeeping` marker, asserts
+    `CREATE INDEX CONCURRENTLY`/`DROP INDEX CONCURRENTLY`, and asserts
+    `NOT VALID` constraints plus a non-zero-year period recognizer.
+  - The startup fence: `auto_invoice_enabled=True` with recurring dedup schema
+    not ready raises and closes the pool; the identical shape with schema ready
+    returns normally; the real `main.lifespan(...)` end to end raises for the
+    auto-invoice-only deployment shape with recurring schema not ready.
+  - The draft-writer MCP server's lifespan: a ready minimal draft-invoice
+    schema serves normally (init → curated migrations → ready-check → serving
+    → close); an incomplete draft schema raises and closes before serving.
   - The quarantine reservation: a raw third insert with `billing_period` set
     explicitly to a quarantined period's value succeeds cleanly with no
     constraint violation before this fix (proving the gap), then the
@@ -973,39 +932,50 @@ Parked hardening: none.
   different-source pair and found to admit both rows, which is how the
   final index (source in the predicate only) was arrived at rather than
   shipped incorrectly.
-- The atomic-bookkeeping marker's actual, narrower benefit (closing the
-  ledger-write crash window, not preventing partial SQL application — see
-  Amendment: historical backfill) was established by comparing forced-failure
-  behavior with and without the marker, not assumed from the marker's name.
+- Current repair verification: `python -m pytest tests/test_invoice_repository.py
+  tests/test_monthly_invoice_generation_cross_pipeline_dedup.py
+  tests/test_invoicing_draft_writer_mcp.py
+  tests/test_eom_render_profile.py::test_eom_startup_migrations_are_curated_for_receivables_readiness
+  tests/test_eom_render_profile.py::test_eom_lifespan_rejects_enabled_receivables_without_ready_schema
+  tests/test_eom_render_profile.py::test_eom_lifespan_accepts_enabled_receivables_with_ready_schema
+  tests/test_receivables.py::test_eom_receivables_readiness_migration_set_builds_ready_schema
+  tests/test_receivables.py::test_eom_readiness_migration_set_is_closed_over_receivables_dependencies
+  tests/test_commercial_billing_runs.py::test_full_atlas_migration_check_allows_recovered_or_disabled_receivables
+  tests/test_commercial_billing_runs.py::test_full_atlas_migration_check_blocks_enabled_auto_invoice_without_dedup_readiness
+  tests/test_commercial_billing_runs.py::test_full_atlas_migration_check_allows_auto_invoice_when_dedup_schema_ready
+  tests/test_commercial_billing_runs.py::test_full_atlas_lifespan_fences_auto_invoice_only_deployment_without_dedup_readiness -q`
+  passed locally: **31 passed, 4 skipped, 1 warning**.
+- Regression repair verification after the full local unit gate surfaced two
+  approval fake regressions: `python -m pytest
+  tests/test_commercial_billing_approvals.py -q` passed locally:
+  **81 passed, 31 skipped, 1 warning**.
+- Current repair lint: `python -m ruff check` over the touched modules/tests
+  except baseline-noisy entrypoints `atlas_brain/main.py` and
+  `atlas_brain/main_eom.py` passed with **All checks passed!**. Running ruff
+  with those two entrypoints included reports the pre-existing 41 E402
+  findings already documented above, and no recurrence of the unrelated
+  `invoicing_server.py` F841 baseline noise after removing that file from this
+  repair surface.
 
 ## Estimated diff size
 
 | File | LOC |
 |---|---:|
-| `atlas_brain/storage/migrations/385_invoices_billing_period_dedup.sql` | 270 |
-| `atlas_brain/storage/repositories/invoice.py` | 60 |
-| `atlas_brain/autonomous/tasks/monthly_invoice_generation.py` | 43 |
-| `atlas_brain/services/commercial_billing_approvals.py` | 45 |
-| `atlas_brain/main.py` | 103 |
-| `atlas_brain/main_eom.py` | 31 |
-| `atlas_brain/services/receivables.py` | 13 |
-| `atlas_brain/mcp/invoicing_draft_writer_server.py` | 29 |
-| `tests/test_invoice_repository.py` | 342 |
-| `tests/test_commercial_billing_approvals.py` | 215 |
-| `tests/test_monthly_invoice_generation_cross_pipeline_dedup.py` | 225 |
-| `tests/test_receivables.py` | 31 |
-| `tests/test_commercial_billing_runs.py` | 269 |
-| `tests/test_invoicing_draft_writer_mcp.py` | 106 |
-| `tests/test_eom_render_profile.py` | 91 |
+| `atlas_brain/autonomous/tasks/monthly_invoice_generation.py` | 86 |
+| `atlas_brain/main.py` | 115 |
+| `atlas_brain/main_eom.py` | 30 |
+| `atlas_brain/mcp/invoicing_draft_writer_server.py` | 75 |
+| `atlas_brain/services/commercial_billing_approvals.py` | 50 |
+| `atlas_brain/storage/migrations/385_invoices_billing_period_dedup.sql` | 281 |
+| `atlas_brain/storage/repositories/invoice.py` | 223 |
+| `plans/PR-EOM-Recurring-Invoice-Period-Dedup.md` | 974 |
 | `tests/maturity_sweep/baseline_atlas_brain_storage.json` | 27 |
+| `tests/test_commercial_billing_approvals.py` | 215 |
+| `tests/test_commercial_billing_runs.py` | 281 |
+| `tests/test_eom_render_profile.py` | 90 |
+| `tests/test_invoice_repository.py` | 452 |
+| `tests/test_invoicing_draft_writer_mcp.py` | 94 |
 | `tests/test_legacy_monthly_autoinvoice_writer_harness.py` | 1 |
-| `plans/PR-EOM-Recurring-Invoice-Period-Dedup.md` | 997 |
-| **Total** | **2898** |
-
-Round 3 (four Codex findings across two pushes: #4/#5/#7 fixed together,
-then #8 found on a follow-up thread sweep and fixed separately) added
-~557 LOC on top of round 2's 2341-line total — proportionate to four
-confirmed real findings across a migration, two other startup fences, and
-two legacy-task call sites, each with its own real-Postgres or
-lifespan-level proof, plus a fifth finding (#6, rolling-deployment skew)
-investigated and waived rather than fixed.
+| `tests/test_monthly_invoice_generation_cross_pipeline_dedup.py` | 239 |
+| `tests/test_receivables.py` | 11 |
+| **Total** | **3244** |

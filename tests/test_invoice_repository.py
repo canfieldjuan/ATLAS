@@ -23,6 +23,13 @@ class _SchemaPool:
         self.conn = conn
         self.schema = schema
 
+    async def acquire(self):
+        await self.conn.execute(f'SET search_path TO "{self.schema}"')
+        return self.conn
+
+    async def release(self, released) -> None:
+        assert released is self.conn
+
     @asynccontextmanager
     async def transaction(self):
         async with self.conn.transaction():
@@ -39,6 +46,11 @@ class _SchemaPool:
             await self.conn.execute(f'SET LOCAL search_path TO "{self.schema}"')
             return await self.conn.fetchrow(query, *args)
 
+    async def fetchval(self, query, *args):
+        async with self.conn.transaction():
+            await self.conn.execute(f'SET LOCAL search_path TO "{self.schema}"')
+            return await self.conn.fetchval(query, *args)
+
     async def execute(self, query, *args):
         async with self.conn.transaction():
             await self.conn.execute(f'SET LOCAL search_path TO "{self.schema}"')
@@ -49,6 +61,92 @@ def _migration_sql(name: str) -> str:
     return (
         Path(__file__).parents[1] / f"atlas_brain/storage/migrations/{name}"
     ).read_text(encoding="utf-8")
+
+
+async def _run_migration(conn, schema: str, name: str) -> None:
+    from atlas_brain.storage.migrations import run_migrations
+
+    migrations_dir = Path(__file__).parents[1] / "atlas_brain/storage/migrations"
+    await run_migrations(
+        _SchemaPool(conn, schema),
+        migrations_dir=migrations_dir,
+        only={Path(name).stem},
+    )
+
+
+class _CaptureCreatePool:
+    is_initialized = True
+
+    def __init__(self) -> None:
+        self.queries: list[str] = []
+
+    async def fetchrow(self, query, *args):
+        self.queries.append(query)
+        return {
+            "id": args[0],
+            "invoice_number": "INV-2026-Aug-0001",
+            "contact_id": args[1],
+            "customer_name": args[2],
+            "customer_email": args[3],
+            "customer_phone": args[4],
+            "customer_address": args[5],
+            "line_items": args[6],
+            "subtotal": Decimal("10.00"),
+            "tax_rate": Decimal("0"),
+            "tax_amount": Decimal("0"),
+            "discount_amount": Decimal("0"),
+            "total_amount": Decimal("10.00"),
+            "amount_paid": Decimal("0"),
+            "amount_due": Decimal("10.00"),
+            "issue_date": args[12],
+            "due_date": args[13],
+            "status": "draft",
+            "source": args[14],
+            "source_ref": args[15],
+            "appointment_id": args[16],
+            "business_context_id": args[17],
+            "notes": args[19],
+            "metadata": args[20],
+            "invoice_for": args[21],
+            "contact_name": args[22],
+            "created_at": args[23],
+            "updated_at": args[23],
+        }
+
+
+@pytest.mark.asyncio
+async def test_invoice_create_omits_writer_only_billing_period_column_for_generic_invoices():
+    pool = _CaptureCreatePool()
+    repository = invoice_repo_mod.InvoiceRepository(pool=pool)
+
+    await repository.create(
+        customer_name="Draft Customer",
+        due_date=date(2026, 8, 31),
+        issue_date=date(2026, 8, 1),
+        line_items=[{"description": "Cleaning", "quantity": 1, "unit_price": 10}],
+        source="chatgpt_draft_writer",
+        source_ref="draft:1",
+    )
+
+    assert "billing_period" not in pool.queries[0]
+
+
+@pytest.mark.asyncio
+async def test_invoice_create_persists_billing_period_only_for_recurring_writer():
+    pool = _CaptureCreatePool()
+    repository = invoice_repo_mod.InvoiceRepository(pool=pool)
+
+    await repository.create(
+        customer_name="Recurring Customer",
+        due_date=date(2026, 9, 30),
+        issue_date=date(2026, 9, 1),
+        line_items=[{"description": "Cleaning", "quantity": 1, "unit_price": 10}],
+        source="monthly_auto",
+        source_ref="service_2026-08",
+        billing_period=date(2026, 8, 1),
+    )
+
+    assert "billing_period" in pool.queries[0]
 
 
 @pytest.mark.asyncio
@@ -253,7 +351,7 @@ async def test_real_postgres_billing_period_dedup_scoping_and_void_exclusion():
         await conn.execute(f'SET search_path TO "{schema}"')
         await conn.execute("CREATE TABLE contacts (id uuid PRIMARY KEY)")
         await conn.execute(_migration_sql("045_invoices.sql"))
-        await conn.execute(_migration_sql("385_invoices_billing_period_dedup.sql"))
+        await _run_migration(conn, schema, "385_invoices_billing_period_dedup.sql")
 
         contact_a = uuid4()
         contact_b = uuid4()
@@ -362,9 +460,10 @@ async def test_real_postgres_billing_period_backfill_and_collision_handling():
         contact_c = uuid4()   # collision pair, both sources
         contact_d = uuid4()   # void / mcp_tool / garbage-month -- all inert
         contact_e = uuid4()   # eom_commercial_billing, sequence width > 9999
+        contact_f = uuid4()   # semantically invalid 0000 year stays inert
         await conn.execute(
-            "INSERT INTO contacts (id) VALUES ($1), ($2), ($3), ($4), ($5)",
-            contact_a, contact_b, contact_c, contact_d, contact_e,
+            "INSERT INTO contacts (id) VALUES ($1), ($2), ($3), ($4), ($5), ($6)",
+            contact_a, contact_b, contact_c, contact_d, contact_e, contact_f,
         )
 
         # Pre-migration rows -- billing_period doesn't exist on this table yet.
@@ -403,6 +502,14 @@ async def test_real_postgres_billing_period_backfill_and_collision_handling():
             contact_id=contact_e, source="eom_commercial_billing",
             number="INV-2026-Oct-10000",
         )
+        await _insert(
+            contact_id=contact_f, source="monthly_auto",
+            number="INV-0000-Jan-0012", source_ref="zeroyear_0000-01",
+        )
+        await _insert(
+            contact_id=contact_f, source="eom_commercial_billing",
+            number="INV-0000-Jan-0013",
+        )
         # NULL contact_id pair, same derivable period, different sources --
         # must NOT be treated as colliding: the real unique index treats
         # every NULL contact_id as distinct from every other, unlike SQL's
@@ -413,7 +520,7 @@ async def test_real_postgres_billing_period_backfill_and_collision_handling():
         )
         await _insert(contact_id=None, source="eom_commercial_billing", number="INV-2026-Sep-0010")
 
-        await conn.execute(_migration_sql("385_invoices_billing_period_dedup.sql"))
+        await _run_migration(conn, schema, "385_invoices_billing_period_dedup.sql")
 
         rows = {
             row["invoice_number"]: row
@@ -480,6 +587,8 @@ async def test_real_postgres_billing_period_backfill_and_collision_handling():
         assert rows["INV-2026-Jul-0005"]["billing_period"] is None
         assert rows["INV-2026-Aug-0007"]["billing_period"] is None
         assert rows["INV-2026-Xyz-0008"]["billing_period"] is None
+        assert rows["INV-0000-Jan-0012"]["billing_period"] is None
+        assert rows["INV-0000-Jan-0013"]["billing_period"] is None
 
         # NULL-contact_id pair: backfilled independently, NOT quarantined --
         # negative control for the collision-detection NULL-safety fix.
@@ -511,7 +620,7 @@ async def test_real_postgres_billing_period_backfill_and_collision_handling():
         before = await conn.fetch(
             "SELECT invoice_number, billing_period, metadata FROM invoices ORDER BY invoice_number"
         )
-        await conn.execute(_migration_sql("385_invoices_billing_period_dedup.sql"))
+        await _run_migration(conn, schema, "385_invoices_billing_period_dedup.sql")
         after = await conn.fetch(
             "SELECT invoice_number, billing_period, metadata FROM invoices ORDER BY invoice_number"
         )
@@ -530,6 +639,10 @@ def test_invoices_billing_period_dedup_migration_is_additive_and_scoped():
     assert "ADD COLUMN IF NOT EXISTS billing_period" in migration
     assert "invoices_billing_period_check" in migration
     assert "idx_invoices_recurring_contact_period_source" in migration
+    assert "CREATE UNIQUE INDEX CONCURRENTLY idx_invoices_recurring_contact_period_source" in migration
+    assert "DROP INDEX CONCURRENTLY IF EXISTS idx_invoices_recurring_contact_period_source" in migration
+    assert "NOT VALID" in migration
+    assert "000[1-9]" in migration
     assert "status <> 'void'" in migration
     assert "'monthly_auto'" in migration
     assert "'eom_commercial_billing'" in migration
@@ -539,9 +652,6 @@ def test_invoices_billing_period_dedup_migration_is_additive_and_scoped():
     assert "ON invoices (contact_id, billing_period)" in migration
     assert "billing_period_backfill_collision" in migration
     assert "HAVING count(*) > 1" in migration
-    assert "-- atlas: atomic-bookkeeping" in migration.splitlines()[0]
+    assert "-- atlas: atomic-bookkeeping" not in migration
     assert "CREATE TABLE IF NOT EXISTS invoices_billing_period_reservations" in migration
     assert "PRIMARY KEY (contact_id, billing_period)" in migration
-    assert "DROP" not in "\n".join(
-        line for line in migration.splitlines() if not line.lstrip().startswith("--")
-    )

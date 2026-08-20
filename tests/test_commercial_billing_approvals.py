@@ -183,6 +183,12 @@ class _MemoryConnection:
         self.recurring_period_conflict: dict | None = None
 
     async def fetchval(self, query, *_args):
+        if (
+            "information_schema.columns" in query
+            or "pg_constraint" in query
+            or "pg_index" in query
+        ):
+            return True
         assert "pg_advisory_xact_lock" in query
         return None
 

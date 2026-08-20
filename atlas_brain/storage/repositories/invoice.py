@@ -23,6 +23,94 @@ logger = logging.getLogger("atlas.storage.invoice")
 # non-financial draft edit must preserve those exact cents rather than multiply
 # a rounded display quantity by its unit price again.
 _COMMERCIAL_BILLING_EXACT_LINE_AMOUNTS_MARKER = "commercialBillingExactLineAmounts"
+_RECURRING_INVOICE_DEDUP_INDEX = "idx_invoices_recurring_contact_period_source"
+_RECURRING_INVOICE_DEDUP_CONSTRAINTS = (
+    "invoices_billing_period_check",
+    "invoices_recurring_billing_period_required_check",
+)
+
+
+async def recurring_invoice_dedup_schema_ready(conn: Any) -> bool:
+    """Return whether recurring invoice writers can safely rely on period dedup.
+
+    This is deliberately separate from receivables/payment readiness. Check,
+    ACH, Square, ad-hoc invoice, and EOM funnel surfaces do not create
+    ``monthly_auto`` or ``eom_commercial_billing`` invoices and must not be
+    blocked by this writer-only schema requirement.
+    """
+    columns_ready = bool(
+        await conn.fetchval(
+            """
+            SELECT NOT EXISTS (
+                SELECT 1
+                FROM (
+                    VALUES
+                        ('invoices', 'billing_period'),
+                        ('invoices_billing_period_reservations', 'contact_id'),
+                        ('invoices_billing_period_reservations', 'billing_period')
+                ) AS required(table_name, column_name)
+                WHERE NOT EXISTS (
+                    SELECT 1
+                    FROM information_schema.columns AS actual
+                    WHERE actual.table_schema = current_schema()
+                      AND actual.table_name = required.table_name
+                      AND actual.column_name = required.column_name
+                )
+            )
+            """
+        )
+    )
+    if not columns_ready:
+        return False
+
+    constraints_ready = bool(
+        await conn.fetchval(
+            """
+            SELECT NOT EXISTS (
+                SELECT 1
+                FROM unnest($1::text[]) AS required(conname)
+                WHERE NOT EXISTS (
+                    SELECT 1
+                    FROM pg_constraint AS actual
+                    JOIN pg_class AS table_class
+                      ON table_class.oid = actual.conrelid
+                    JOIN pg_namespace AS table_namespace
+                      ON table_namespace.oid = table_class.relnamespace
+                    WHERE table_namespace.nspname = current_schema()
+                      AND actual.conname = required.conname
+                      AND table_class.relname = 'invoices'
+                )
+            )
+            """,
+            list(_RECURRING_INVOICE_DEDUP_CONSTRAINTS),
+        )
+    )
+    if not constraints_ready:
+        return False
+
+    return bool(
+        await conn.fetchval(
+            """
+            SELECT EXISTS (
+                SELECT 1
+                FROM pg_index AS index_state
+                JOIN pg_class AS table_class
+                  ON table_class.oid = index_state.indrelid
+                JOIN pg_namespace AS table_namespace
+                  ON table_namespace.oid = table_class.relnamespace
+                JOIN pg_class AS index_class
+                  ON index_class.oid = index_state.indexrelid
+                WHERE table_namespace.nspname = current_schema()
+                  AND table_class.relname = 'invoices'
+                  AND index_class.relname = $1
+                  AND index_state.indisunique
+                  AND index_state.indisvalid
+                  AND index_state.indisready
+            )
+            """,
+            _RECURRING_INVOICE_DEDUP_INDEX,
+        )
+    )
 
 
 @dataclass(frozen=True)
@@ -138,6 +226,13 @@ class InvoiceRepository:
 
         return get_receivables_service()
 
+    async def recurring_dedup_ready(self) -> bool:
+        """Return whether recurring-source invoice writes are safely fenced."""
+        pool = self._get_pool()
+        if not pool.is_initialized:
+            raise DatabaseUnavailableError("recurring invoice dedup readiness")
+        return await recurring_invoice_dedup_schema_ready(pool)
+
     # -- Invoice CRUD ----------------------------------------------
 
     async def create(
@@ -199,27 +294,7 @@ class InvoiceRepository:
                 )
 
         try:
-            row = await pool.fetchrow(
-                """
-                INSERT INTO invoices (
-                    id, invoice_number,
-                    contact_id, customer_name, customer_email, customer_phone, customer_address,
-                    line_items, subtotal, tax_rate, tax_amount, discount_amount, total_amount,
-                    issue_date, due_date, status, source, source_ref, appointment_id,
-                    business_context_id, notes, metadata, invoice_for, contact_name,
-                    created_at, updated_at, billing_period
-                )
-                VALUES (
-                    $1,
-                    (SELECT $19 || '-' || to_char(COALESCE($25::date, $13::date), 'YYYY-Mon') || '-' || lpad(nextval('invoice_number_seq')::text, 4, '0')),
-                    $2, $3, $4, $5, $6,
-                    $7::jsonb, $8, $9, $10, $11, $12,
-                    $13, $14, 'draft', $15, $16, $17,
-                    $18, $20, $21::jsonb, $22, $23,
-                    $24, $24, to_char($25::date, 'YYYY-MM')
-                )
-                RETURNING *
-                """,
+            args = (
                 invoice_id,
                 contact_id,
                 customer_name,
@@ -244,8 +319,56 @@ class InvoiceRepository:
                 invoice_for,
                 contact_name,
                 now,
-                billing_period,
             )
+            if billing_period is None:
+                row = await pool.fetchrow(
+                    """
+                    INSERT INTO invoices (
+                        id, invoice_number,
+                        contact_id, customer_name, customer_email, customer_phone, customer_address,
+                        line_items, subtotal, tax_rate, tax_amount, discount_amount, total_amount,
+                        issue_date, due_date, status, source, source_ref, appointment_id,
+                        business_context_id, notes, metadata, invoice_for, contact_name,
+                        created_at, updated_at
+                    )
+                    VALUES (
+                        $1,
+                        (SELECT $19 || '-' || to_char($13::date, 'YYYY-Mon') || '-' || lpad(nextval('invoice_number_seq')::text, 4, '0')),
+                        $2, $3, $4, $5, $6,
+                        $7::jsonb, $8, $9, $10, $11, $12,
+                        $13, $14, 'draft', $15, $16, $17,
+                        $18, $20, $21::jsonb, $22, $23,
+                        $24, $24
+                    )
+                    RETURNING *
+                    """,
+                    *args,
+                )
+            else:
+                row = await pool.fetchrow(
+                    """
+                    INSERT INTO invoices (
+                        id, invoice_number,
+                        contact_id, customer_name, customer_email, customer_phone, customer_address,
+                        line_items, subtotal, tax_rate, tax_amount, discount_amount, total_amount,
+                        issue_date, due_date, status, source, source_ref, appointment_id,
+                        business_context_id, notes, metadata, invoice_for, contact_name,
+                        created_at, updated_at, billing_period
+                    )
+                    VALUES (
+                        $1,
+                        (SELECT $19 || '-' || to_char($25::date, 'YYYY-Mon') || '-' || lpad(nextval('invoice_number_seq')::text, 4, '0')),
+                        $2, $3, $4, $5, $6,
+                        $7::jsonb, $8, $9, $10, $11, $12,
+                        $13, $14, 'draft', $15, $16, $17,
+                        $18, $20, $21::jsonb, $22, $23,
+                        $24, $24, to_char($25::date, 'YYYY-MM')
+                    )
+                    RETURNING *
+                    """,
+                    *args,
+                    billing_period,
+                )
             if row:
                 logger.info("Created invoice %s number=%s total=%.2f", invoice_id, row["invoice_number"], total)
                 return self._row_to_dict(row)

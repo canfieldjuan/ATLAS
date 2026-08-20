@@ -141,6 +141,29 @@ async def run(task: ScheduledTask) -> dict:
     calendar_id = settings.invoicing.auto_invoice_calendar_id or None
     save_base = os.path.expanduser(settings.invoicing.auto_invoice_save_path)
 
+    recurring_dedup_ready = getattr(inv_repo, "recurring_dedup_ready", None)
+    if recurring_dedup_ready is not None:
+        try:
+            if not await recurring_dedup_ready():
+                return {
+                    "_skip_synthesis": (
+                        "Recurring invoice dedup schema is unavailable; "
+                        f"skipping monthly invoice generation for {period_label}"
+                    )
+                }
+        except Exception as e:
+            logger.warning(
+                "Recurring invoice dedup readiness check failed for %s: %s",
+                period_label,
+                e,
+            )
+            return {
+                "_skip_synthesis": (
+                    "Recurring invoice dedup schema could not be verified; "
+                    f"skipping monthly invoice generation for {period_label}"
+                )
+            }
+
     # Load active auto-invoice services
     try:
         services = await svc_repo.list_active(auto_invoice_only=True)
@@ -168,6 +191,7 @@ async def run(task: ScheduledTask) -> dict:
         "invoices_sent": 0,
         "invoices_skipped_dedup": 0,
         "invoices_skipped_dedup_check_failed": 0,
+        "dedup_check_failed_details": [],
         "invoices_skipped_no_events": 0,
         "skipped_no_events_details": [],
         "needs_hours": [],
@@ -353,6 +377,14 @@ async def run(task: ScheduledTask) -> dict:
             )
         except Exception as e:
             results["invoices_skipped_dedup_check_failed"] += 1
+            results["dedup_check_failed_details"].append(
+                {
+                    "contact_id": contact_id,
+                    "customer": contact_id,
+                    "services": list(bundle["service_names"]),
+                    "error": str(e),
+                }
+            )
             logger.warning(
                 "Cross-pipeline dedup check failed for %s: %s -- skipping "
                 "this run rather than risking an unprotected duplicate",
@@ -583,6 +615,17 @@ def _build_notification_lines(results: dict) -> list[str]:
         lines.append(f"NEEDS HOURS ({len(needs_hours)}):")
         for nh in needs_hours:
             lines.append(f"  {nh['service']} @ ${nh['rate']:.2f}/hr")
+
+    dedup_failures = results.get("dedup_check_failed_details", [])
+    if dedup_failures:
+        lines.append("")
+        lines.append(
+            f"DEDUP CHECK FAILED ({results.get('invoices_skipped_dedup_check_failed', len(dedup_failures))}) -- invoice writes skipped:"
+        )
+        for failure in dedup_failures:
+            services = ", ".join(failure.get("services") or [])
+            suffix = f" [{services}]" if services else ""
+            lines.append(f"  {failure.get('customer') or failure.get('contact_id')}{suffix}: {failure.get('error')}")
 
     collisions = results.get("keyword_collisions", [])
     if collisions:

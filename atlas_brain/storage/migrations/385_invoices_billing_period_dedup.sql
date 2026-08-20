@@ -1,4 +1,3 @@
--- atlas: atomic-bookkeeping
 -- 385: cross-pipeline recurring-invoice dedup for commercial customers.
 --
 -- Two independent writers auto-create commercial-customer invoices: the legacy
@@ -74,22 +73,12 @@
 -- need to be audited against this table too. This narrower guarantee is
 -- disclosed here, not silently absent.
 --
--- This migration is marked atomic-bookkeeping (see
--- atlas_brain/storage/migrations/__init__.py), matching the convention
--- already used by migration 384 (the migration immediately preceding this
--- one) and nine others. This file's SQL is already atomic even without the
--- marker -- asyncpg's simple-query protocol runs a multi-statement string as
--- one implicit transaction, verified directly by forcing a failure between
--- the backfill and the index creation and confirming zero partial state
--- persisted either way. What the marker actually adds is narrower and still
--- real: it wraps the schema_migrations ledger write in the SAME transaction
--- as this file's SQL, closing the crash window between "SQL committed" and
--- "ledger row written" where a process crash between the two would leave the
--- migration applied but reported as still pending, causing an unnecessary
--- (though safe, since every statement below is idempotent) re-run on the
--- next deploy, and -- more importantly -- keeping the "recorded implies
--- applied" invariant the startup fence in atlas_brain/main.py depends on
--- exactly true rather than approximately true.
+-- This migration deliberately is NOT marked atomic-bookkeeping. It builds the
+-- recurring unique index with CREATE INDEX CONCURRENTLY so invoice reads/writes
+-- are not blocked behind one long ACCESS EXCLUSIVE lock while the historical
+-- backfill scans accumulated invoice history. Every statement below is
+-- idempotent so the runner can safely retry if a later statement fails before
+-- schema_migrations is recorded.
 --
 -- ROLLBACK: revert application code first (both writers keep working with
 -- billing_period simply unpersisted/unchecked) and leave this column and
@@ -112,7 +101,27 @@ BEGIN
     ) THEN
         ALTER TABLE invoices
             ADD CONSTRAINT invoices_billing_period_check
-            CHECK (billing_period ~ '^[0-9]{4}-(0[1-9]|1[0-2])$');
+            CHECK (billing_period ~ '^(000[1-9]|00[1-9][0-9]|0[1-9][0-9]{2}|[1-9][0-9]{3})-(0[1-9]|1[0-2])$')
+            NOT VALID;
+    END IF;
+END $$;
+
+DO $$
+BEGIN
+    IF NOT EXISTS (
+        SELECT 1
+        FROM pg_constraint
+        WHERE conname = 'invoices_recurring_billing_period_required_check'
+          AND conrelid = 'invoices'::regclass
+    ) THEN
+        ALTER TABLE invoices
+            ADD CONSTRAINT invoices_recurring_billing_period_required_check
+            CHECK (
+                source NOT IN ('monthly_auto', 'eom_commercial_billing')
+                OR status = 'void'
+                OR billing_period IS NOT NULL
+            )
+            NOT VALID;
     END IF;
 END $$;
 
@@ -155,13 +164,13 @@ WITH candidates AS (
         id, contact_id,
         CASE
             WHEN source = 'monthly_auto'
-                 AND source_ref ~ '_(\d{4}-(0[1-9]|1[0-2]))$'
-                THEN substring(source_ref FROM '_(\d{4}-(?:0[1-9]|1[0-2]))$')
+                 AND source_ref ~ '_((000[1-9]|00[1-9][0-9]|0[1-9][0-9]{2}|[1-9][0-9]{3})-(0[1-9]|1[0-2]))$'
+                THEN substring(source_ref FROM '_((?:000[1-9]|00[1-9][0-9]|0[1-9][0-9]{2}|[1-9][0-9]{3})-(?:0[1-9]|1[0-2]))$')
             WHEN source = 'eom_commercial_billing'
-                 AND invoice_number ~ '^INV-\d{4}-(Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)-\d{4,}$'
+                 AND invoice_number ~ '^INV-(000[1-9]|00[1-9][0-9]|0[1-9][0-9]{2}|[1-9][0-9]{3})-(Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)-\d{4,}$'
                 THEN to_char(
                          to_date(
-                             substring(invoice_number FROM '^INV-(\d{4}-(?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec))-\d{4,}$'),
+                             substring(invoice_number FROM '^INV-((?:000[1-9]|00[1-9][0-9]|0[1-9][0-9]{2}|[1-9][0-9]{3})-(?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec))-\d{4,}$'),
                              'YYYY-Mon'
                          ),
                          'YYYY-MM'
@@ -210,13 +219,13 @@ WITH candidates AS (
         id, contact_id,
         CASE
             WHEN source = 'monthly_auto'
-                 AND source_ref ~ '_(\d{4}-(0[1-9]|1[0-2]))$'
-                THEN substring(source_ref FROM '_(\d{4}-(?:0[1-9]|1[0-2]))$')
+                 AND source_ref ~ '_((000[1-9]|00[1-9][0-9]|0[1-9][0-9]{2}|[1-9][0-9]{3})-(0[1-9]|1[0-2]))$'
+                THEN substring(source_ref FROM '_((?:000[1-9]|00[1-9][0-9]|0[1-9][0-9]{2}|[1-9][0-9]{3})-(?:0[1-9]|1[0-2]))$')
             WHEN source = 'eom_commercial_billing'
-                 AND invoice_number ~ '^INV-\d{4}-(Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)-\d{4,}$'
+                 AND invoice_number ~ '^INV-(000[1-9]|00[1-9][0-9]|0[1-9][0-9]{2}|[1-9][0-9]{3})-(Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)-\d{4,}$'
                 THEN to_char(
                          to_date(
-                             substring(invoice_number FROM '^INV-(\d{4}-(?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec))-\d{4,}$'),
+                             substring(invoice_number FROM '^INV-((?:000[1-9]|00[1-9][0-9]|0[1-9][0-9]{2}|[1-9][0-9]{3})-(?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec))-\d{4,}$'),
                              'YYYY-Mon'
                          ),
                          'YYYY-MM'
@@ -260,7 +269,9 @@ INSERT INTO invoices_billing_period_reservations (contact_id, billing_period)
 SELECT DISTINCT contact_id, billing_period FROM quarantined
 ON CONFLICT (contact_id, billing_period) DO NOTHING;
 
-CREATE UNIQUE INDEX IF NOT EXISTS idx_invoices_recurring_contact_period_source
+DROP INDEX CONCURRENTLY IF EXISTS idx_invoices_recurring_contact_period_source;
+
+CREATE UNIQUE INDEX CONCURRENTLY idx_invoices_recurring_contact_period_source
     ON invoices (contact_id, billing_period)
     WHERE billing_period IS NOT NULL
       AND status <> 'void'

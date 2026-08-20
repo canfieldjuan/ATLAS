@@ -1477,11 +1477,6 @@ async def _create_pre_receivables_schema(conn, schema: str) -> None:
         Path(__file__).parents[1] / "atlas_brain/storage/migrations/045_invoices.sql"
     ).read_text(encoding="utf-8")
     await conn.execute(invoice_migration)
-    billing_period_migration = (
-        Path(__file__).parents[1]
-        / "atlas_brain/storage/migrations/385_invoices_billing_period_dedup.sql"
-    ).read_text(encoding="utf-8")
-    await conn.execute(billing_period_migration)
 
 
 def _receivables_migration_sql(
@@ -2356,15 +2351,12 @@ async def test_real_migration_backfills_and_adopts_late_rolling_writer_checks():
         receipt_delivery_tables = set(_RECEIPT_DELIVERY_REQUIRED_COLUMNS) | set(
             _RECEIPT_DISPATCH_REQUIRED_COLUMNS
         )
-        # invoice_payments and invoices both predate the receivables migration
-        # set scanned above (invoice_payments is only ALTERed by 344;
-        # invoices is created by 045 and only ALTERed, via migration 385, to
-        # add billing_period for cross-pipeline recurring-invoice dedup) --
-        # neither is a CREATE TABLE this scan will find, so both are named
-        # explicitly rather than discovered.
+        # invoice_payments predates the receivables migration set scanned above
+        # and is only ALTERed by 344, so it is named explicitly rather than
+        # discovered from CREATE TABLE statements.
         assert set(_RECEIVABLES_REQUIRED_COLUMNS) == (
             created_tables - receipt_delivery_tables
-        ) | {"invoice_payments", "invoices"}
+        ) | {"invoice_payments"}
         assert "payment_receipt_deliveries" in created_tables
 
         for table_name, required_columns in _RECEIVABLES_REQUIRED_COLUMNS.items():
@@ -2385,9 +2377,9 @@ async def test_real_migration_backfills_and_adopts_late_rolling_writer_checks():
             if table_name == "invoices":
                 # invoices predates receivables entirely and carries many
                 # columns unrelated to this readiness contract (customer
-                # fields, amounts, PDF/delivery tracking, ...) -- required
-                # here is a subset of billing_period-and-friends, not the
-                # table's full column set.
+                # fields, amounts, PDF/delivery tracking, recurring
+                # billing_period dedup, ...) -- required here is only the
+                # receivables/payment subset, not the table's full column set.
                 assert set(required_columns) <= actual_columns
                 continue
             assert actual_columns == set(required_columns)
@@ -2514,19 +2506,11 @@ async def test_real_migration_backfills_and_adopts_late_rolling_writer_checks():
             index_name
             for _table_name, index_name, *_rest in _RECEIPT_DISPATCH_REQUIRED_INDEXES
         }
-        # idx_invoices_recurring_contact_period_source lives on invoices,
-        # created by migration 385 (cross-pipeline recurring-invoice dedup),
-        # not by the receivables-specific migration files scanned into
-        # migration_index_names above -- same "predates receivables" carve-out
-        # as the invoices column check.
-        billing_period_dedup_index_names = {
-            "idx_invoices_recurring_contact_period_source"
-        }
         assert (
             required_index_names
             | receipt_delivery_index_names
             | receipt_dispatch_index_names
-            == migration_index_names | billing_period_dedup_index_names
+            == migration_index_names
         )
         for index_name in sorted(required_index_names):
             transaction = conn.transaction()
