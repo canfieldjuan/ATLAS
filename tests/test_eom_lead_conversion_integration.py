@@ -166,6 +166,7 @@ async def _prepare_schema(
         migration_names.append("354_eom_customer_handoff_privileges.sql")
     if apply_public_onboarding_migration:
         migration_names.append("383_eom_public_onboarding_tokens.sql")
+    migration_names.append("386_eom_won_loss_nocodb_fence.sql")
     for name in migration_names:
         if name == "367_contacts_customer_type_revision.sql":
             async with conn.transaction():
@@ -6402,7 +6403,7 @@ async def test_won_lead_loss_rejects_reused_prewon_lost_key_before_calendar_dele
 
 
 @pytest.mark.asyncio
-async def test_won_lead_loss_retries_an_uncertain_delete_without_false_loss():
+async def test_won_lead_loss_rejects_second_key_while_cancellation_is_unsettled():
     database_url = _database_url_or_skip()
     schema = f"atlas_eom_won_loss_retry_{uuid.uuid4().hex}"
     conn = await asyncpg.connect(database_url)
@@ -6452,6 +6453,33 @@ async def test_won_lead_loss_retries_an_uncertain_delete_without_false_loss():
             FROM eom_lead_lifecycle_events
             WHERE contact_id = $1
               AND event_type = 'first_clean_cancellation_calendar_unsettled'
+            """,
+            contact_id,
+        ) == 1
+
+        with pytest.raises(
+            EOMLeadConversionError, match="cancellation requires reconciliation"
+        ) as second_key:
+            await mark_eom_lead_lost_with_won_teardown(
+                provider,
+                calendar,
+                EOMLeadLost(
+                    contact_id=str(contact_id),
+                    reason_code="no_response",
+                    note=None,
+                    operation_key=f"office-won-loss-{uuid.uuid4().hex}",
+                    actor_id=1,
+                    actor_name="Juan Canfield",
+                ),
+            )
+        assert second_key.value.status_code == 409
+        assert len(calendar.calls) == 1
+        assert await conn.fetchval(
+            """
+            SELECT COUNT(*)
+            FROM eom_lead_lifecycle_events
+            WHERE contact_id = $1
+              AND event_type = 'first_clean_cancellation_requested'
             """,
             contact_id,
         ) == 1
@@ -6619,6 +6647,114 @@ async def test_won_lead_loss_fences_durable_cancellation_from_generic_contact_st
             "SELECT status FROM contacts WHERE id = $1", contact_id
         ) == "active"
     finally:
+        await conn.execute(f'DROP SCHEMA IF EXISTS "{schema}" CASCADE')
+        await conn.close()
+
+
+@pytest.mark.asyncio
+async def test_nocodb_cannot_mutate_won_lead_with_unsettled_cancellation():
+    """The direct CRM login cannot bypass a prepared won-loss cancellation."""
+
+    from atlas_brain.storage.migrations import run_migrations
+
+    database_url = _database_url_or_skip()
+    schema = f"atlas_eom_won_loss_nocodb_fence_{uuid.uuid4().hex}"
+    conn = await asyncpg.connect(database_url)
+    nocodb_conn = None
+    try:
+        await _prepare_schema(conn, schema)
+
+        class _MigrationPool:
+            async def acquire(self):
+                return conn
+
+            async def release(self, released) -> None:
+                assert released is conn
+
+        await run_migrations(
+            _MigrationPool(),
+            migrations_dir=MIGRATIONS,
+            only={"386_eom_won_loss_nocodb_fence"},
+        )
+        assert await conn.fetchval(
+            "SELECT EXISTS (SELECT 1 FROM schema_migrations WHERE name = $1)",
+            "386_eom_won_loss_nocodb_fence",
+        )
+
+        provider = DatabaseCRMProvider(pool=conn)
+        contact_id, _ = await _book_first_clean_draft(conn, provider)
+        command = EOMLeadLost(
+            contact_id=str(contact_id),
+            reason_code="no_response",
+            note=None,
+            operation_key=f"office-won-loss-{uuid.uuid4().hex}",
+            actor_id=1,
+            actor_name="Juan Canfield",
+        )
+        calendar = _WonLossCalendar(
+            results=[
+                ToolResult(
+                    success=False,
+                    error="API_ERROR",
+                    data={"request_phase": "delete", "status_code": 503},
+                    message="Calendar API error: 503",
+                ),
+                ToolResult(
+                    success=True,
+                    data={"already_absent": True},
+                    message="Calendar event was already absent",
+                ),
+            ]
+        )
+
+        with pytest.raises(EOMLeadConversionError, match="Calendar API error: 503"):
+            await mark_eom_lead_lost_with_won_teardown(provider, calendar, command)
+
+        nocodb_conn = await asyncpg.connect(
+            database_url,
+            user="atlas_nocodb",
+            password=_NOCODB_TEST_PASSWORD,
+        )
+        await nocodb_conn.execute(
+            f"SET search_path TO {_quote_ident(schema)}, public"
+        )
+        assert await nocodb_conn.fetchval("SELECT session_user") == "atlas_nocodb"
+
+        with pytest.raises(
+            asyncpg.exceptions.RaiseError,
+            match="cancellation requires reconciliation",
+        ):
+            await nocodb_conn.execute(
+                "UPDATE contacts SET status = 'inactive' WHERE id = $1",
+                contact_id,
+            )
+        with pytest.raises(
+            asyncpg.exceptions.RaiseError,
+            match="cancellation requires reconciliation",
+        ):
+            await nocodb_conn.execute("DELETE FROM contacts WHERE id = $1", contact_id)
+
+        await nocodb_conn.execute(
+            "UPDATE contacts SET notes = 'ordinary NocoDB edit' WHERE id = $1",
+            contact_id,
+        )
+        assert await conn.fetchval(
+            "SELECT status FROM contacts WHERE id = $1", contact_id
+        ) == "active"
+        assert await conn.fetchval(
+            "SELECT notes FROM contacts WHERE id = $1", contact_id
+        ) == "ordinary NocoDB edit"
+
+        completed = await mark_eom_lead_lost_with_won_teardown(
+            provider, calendar, command
+        )
+        assert completed["lead_stage"] == "lost"
+        assert await conn.fetchval(
+            "SELECT lead_stage FROM contacts WHERE id = $1", contact_id
+        ) == "lost"
+    finally:
+        if nocodb_conn is not None:
+            await nocodb_conn.close()
         await conn.execute(f'DROP SCHEMA IF EXISTS "{schema}" CASCADE')
         await conn.close()
 

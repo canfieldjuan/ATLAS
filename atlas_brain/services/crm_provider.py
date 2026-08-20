@@ -5335,6 +5335,7 @@ class DatabaseCRMProvider:
         conn: Any,
         *,
         contact_id: str,
+        permitted_operation_key: str | None = None,
     ) -> None:
         """Block competing writes while a durable won-loss cancellation is open.
 
@@ -5342,7 +5343,9 @@ class DatabaseCRMProvider:
         the executor crashes or returns after an uncertain Calendar DELETE. The
         requested lifecycle row survives that exit and is the authoritative
         fence until the same operation records its atomic cancellation/loss
-        completion.
+        completion. ``permitted_operation_key`` is used only by prepare: a
+        retry may reuse its own evidence, but no second key may start another
+        cancellation for the same contact.
         """
 
         from .eom_lead_conversion import EOMLeadConversionError
@@ -5353,6 +5356,10 @@ class DatabaseCRMProvider:
             FROM eom_lead_lifecycle_events AS requested
             WHERE requested.contact_id = $1::uuid
               AND requested.event_type = $2::varchar
+              AND (
+                  $4::varchar IS NULL
+                  OR requested.operation_key IS DISTINCT FROM $4::varchar
+              )
               AND NOT EXISTS (
                   SELECT 1
                   FROM eom_lead_lifecycle_events AS completed
@@ -5368,6 +5375,7 @@ class DatabaseCRMProvider:
             contact_id,
             _EOM_WON_LOSS_CANCELLATION_REQUESTED_EVENT,
             _EOM_WON_LOSS_CANCELLATION_COMPLETED_EVENT,
+            permitted_operation_key,
         )
         if unresolved is not None:
             raise EOMLeadConversionError(
@@ -5766,6 +5774,12 @@ class DatabaseCRMProvider:
             events_by_type = {str(event["event_type"]): event for event in key_events}
             completed = events_by_type.get(_EOM_WON_LOSS_CANCELLATION_COMPLETED_EVENT)
             lost = events_by_type.get("lead_lost")
+            if contact["lead_stage"] == "won":
+                await self._assert_eom_won_lead_loss_cancellation_fence(
+                    conn,
+                    contact_id=contact_id,
+                    permitted_operation_key=operation_key,
+                )
             won_protocol_candidate = completed is not None or (
                 lost is not None and lost["from_stage"] == "won"
             ) or contact["lead_stage"] == "won"
