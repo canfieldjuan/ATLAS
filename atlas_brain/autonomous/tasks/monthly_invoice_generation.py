@@ -35,11 +35,33 @@ _PER_HOUR_PLACEHOLDER_DESC_SUFFIX = " (hours TBD - update before sending)"
 _PER_HOUR_PLACEHOLDER_QTY = 0
 
 
+def _parse_billing_month_override(value: object) -> tuple[int, int] | None:
+    """Return an exact, calendar-valid ``YYYY-MM`` override or ``None``."""
+    if not isinstance(value, str) or len(value) != 7 or value[4] != "-":
+        return None
+
+    year_text = value[:4]
+    month_text = value[5:]
+    if not (
+        year_text.isascii()
+        and year_text.isdigit()
+        and month_text.isascii()
+        and month_text.isdigit()
+    ):
+        return None
+
+    year = int(year_text)
+    month = int(month_text)
+    if not (date.min.year <= year <= date.max.year and 1 <= month <= 12):
+        return None
+    return year, month
+
+
 async def run(task: ScheduledTask) -> dict:
     """Generate monthly invoices from calendar events matched to service agreements.
 
     Supports task.metadata overrides:
-        billing_month: "YYYY-MM" to invoice a specific month instead of prior month
+        billing_month: exact ASCII "YYYY-MM" for a specific month instead of prior month
         contact_ids: ["uuid1", ...] to invoice only specific customers
     """
     from ...config import settings
@@ -50,6 +72,30 @@ async def run(task: ScheduledTask) -> dict:
     if not settings.invoicing.auto_invoice_enabled:
         return {"_skip_synthesis": "Auto-invoicing disabled"}
 
+    meta = task.metadata or {}
+
+    # Compute billing period: metadata override or prior calendar month.
+    # Validate a supplied override before constructing any financial/delivery
+    # provider so malformed persisted task metadata remains a no-write skip.
+    today = date.today()
+    billing_month_override = meta.get("billing_month")
+    if billing_month_override is not None:
+        billing_period = _parse_billing_month_override(billing_month_override)
+        if billing_period is None:
+            return {
+                "_skip_synthesis": (
+                    f"Invalid billing_month format: {billing_month_override!r} "
+                    "(expected YYYY-MM)"
+                )
+            }
+        period_year, period_month = billing_period
+    elif today.month == 1:
+        period_year = today.year - 1
+        period_month = 12
+    else:
+        period_year = today.year
+        period_month = today.month - 1
+
     from ...services.calendar_provider import get_calendar_provider
     from ...services.crm_provider import get_crm_provider
     from ...storage.repositories.customer_service import get_customer_service_repo
@@ -59,25 +105,6 @@ async def run(task: ScheduledTask) -> dict:
     svc_repo = get_customer_service_repo()
     inv_repo = get_invoice_repo()
     crm = get_crm_provider()
-
-    meta = task.metadata or {}
-
-    # Compute billing period: metadata override or prior calendar month
-    today = date.today()
-    billing_month_override = meta.get("billing_month")
-    if billing_month_override:
-        try:
-            parts = billing_month_override.split("-")
-            period_year = int(parts[0])
-            period_month = int(parts[1])
-        except (ValueError, IndexError):
-            return {"_skip_synthesis": f"Invalid billing_month format: {billing_month_override!r} (expected YYYY-MM)"}
-    elif today.month == 1:
-        period_year = today.year - 1
-        period_month = 12
-    else:
-        period_year = today.year
-        period_month = today.month - 1
 
     # Optional contact_ids filter
     contact_id_filter: set[str] | None = None
