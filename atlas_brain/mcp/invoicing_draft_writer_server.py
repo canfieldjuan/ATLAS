@@ -60,13 +60,28 @@ _oauth_provider: InvoicingDraftWriterOAuthProvider | None = None
 
 @asynccontextmanager
 async def _lifespan(server):
-    """Initialize DB pool on startup, close on shutdown."""
-    from ..storage.database import close_database, init_database
+    """Initialize, migrate, and schema-verify the DB before serving, then
+    close on shutdown -- reusing the full invoicing MCP's own lifespan (this
+    module already reuses its other internals via the ``_full`` import) so
+    this narrower write surface gets the same migration/readiness fence
+    rather than a bare, unverified ``init_database()``. A draft invoice
+    write reaches the same ``InvoiceRepository.create()`` and the same
+    ``invoices`` columns as the full server's writers, so it needs the same
+    guarantee that required schema (e.g. billing_period, migration 385) is
+    actually present before accepting a request."""
+    from ..services.receivables import ReceivablesService
+    from ..storage.database import close_database, get_db_pool, init_database
+    from ..storage.migrations import run_migrations
 
-    await init_database()
-    logger.info("Draft-writer invoicing MCP: DB pool initialized")
-    yield
-    await close_database()
+    async with _full._database_lifespan(
+        init_database_fn=init_database,
+        get_db_pool_fn=get_db_pool,
+        run_migrations_fn=run_migrations,
+        receivables_ready_fn=lambda pool: ReceivablesService(pool).is_ready(),
+        close_database_fn=close_database,
+    ):
+        logger.info("Draft-writer invoicing MCP: DB pool initialized")
+        yield
 
 
 mcp = FastMCP(

@@ -94,6 +94,9 @@ _RECEIVABLES_REQUIRED_COLUMNS = {
         "metadata",
         "created_at",
     ),
+    "invoices": (
+        "billing_period",
+    ),
 }
 _RECEIVABLES_REQUIRED_INDEXES = (
     (
@@ -222,6 +225,16 @@ _RECEIVABLES_REQUIRED_INDEXES = (
         False,
         ("idempotency_key",),
         "idempotency_key IS NOT NULL",
+        None,
+    ),
+    (
+        "invoices",
+        "idx_invoices_recurring_contact_period_source",
+        True,
+        ("contact_id", "billing_period"),
+        "((billing_period IS NOT NULL) AND ((status)::text <> 'void'::text) AND "
+        "((source)::text = ANY ((ARRAY['monthly_auto'::character varying, "
+        "'eom_commercial_billing'::character varying])::text[])))",
         None,
     ),
 )

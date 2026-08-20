@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import os
 from contextlib import asynccontextmanager
 from datetime import date
@@ -317,6 +318,158 @@ async def test_real_postgres_billing_period_dedup_scoping_and_void_exclusion():
         await conn.close()
 
 
+@pytest.mark.asyncio
+async def test_real_postgres_billing_period_backfill_and_collision_handling():
+    """Migration 385's backfill (added after Codex P1 review on ATLAS #2448):
+    historical monthly_auto/eom_commercial_billing rows had billing_period =
+    NULL before this migration, which is invisible to both the app-level
+    pre-check and the partial unique index (NULL = 'x' is NULL, not true) --
+    so a pre-deploy legacy invoice for an old period was NOT protected
+    against a same-period duplicate approved after deploy, even though
+    nothing bounds how far in the past an admin can approve a
+    commercial-billing candidate. This backfills the period from data each
+    writer already persisted, quarantining (not guessing at) any row whose
+    derived period would itself collide with another row's."""
+    asyncpg = pytest.importorskip("asyncpg")
+    database_url = os.environ.get("ATLAS_RECEIVABLES_TEST_DATABASE_URL")
+    if not database_url:
+        pytest.skip("ATLAS_RECEIVABLES_TEST_DATABASE_URL not set")
+
+    schema = f"invoice_repository_backfill_{uuid4().hex}"
+    conn = await asyncpg.connect(database_url)
+
+    async def _insert(
+        *, contact_id, source, number, status="draft", source_ref=None,
+    ):
+        await conn.execute(
+            """
+            INSERT INTO invoices (
+                id, invoice_number, contact_id, customer_name, due_date,
+                status, source, source_ref
+            ) VALUES ($1, $2, $3, 'Backfill Test Co', CURRENT_DATE, $4, $5, $6)
+            """,
+            uuid4(), number, contact_id, status, source, source_ref,
+        )
+
+    try:
+        await conn.execute(f'CREATE SCHEMA "{schema}"')
+        await conn.execute(f'SET search_path TO "{schema}"')
+        await conn.execute("CREATE TABLE contacts (id uuid PRIMARY KEY)")
+        await conn.execute(_migration_sql("045_invoices.sql"))
+
+        contact_a = uuid4()   # unambiguous monthly_auto
+        contact_b = uuid4()   # unambiguous eom_commercial_billing
+        contact_c = uuid4()   # collision pair, both sources
+        contact_d = uuid4()   # void / mcp_tool / garbage-month -- all inert
+        await conn.execute(
+            "INSERT INTO contacts (id) VALUES ($1), ($2), ($3), ($4)",
+            contact_a, contact_b, contact_c, contact_d,
+        )
+
+        # Pre-migration rows -- billing_period doesn't exist on this table yet.
+        await _insert(
+            contact_id=contact_a, source="monthly_auto",
+            number="INV-2026-Apr-0001", source_ref="abcuuid_2026-04",
+        )
+        await _insert(
+            contact_id=contact_b, source="eom_commercial_billing",
+            number="INV-2026-Jun-0002",
+        )
+        await _insert(
+            contact_id=contact_c, source="monthly_auto",
+            number="INV-2026-May-0003", source_ref="xyzuuid_2026-05",
+        )
+        await _insert(
+            contact_id=contact_c, source="eom_commercial_billing",
+            number="INV-2026-May-0004",
+        )
+        await _insert(
+            contact_id=contact_d, source="monthly_auto", status="void",
+            number="INV-2026-Jul-0005", source_ref="voiduuid_2026-07",
+        )
+        await _insert(contact_id=contact_d, source="mcp_tool", number="INV-2026-Aug-0007")
+        await _insert(
+            contact_id=contact_d, source="eom_commercial_billing",
+            number="INV-2026-Xyz-0008",
+        )
+        # NULL contact_id pair, same derivable period, different sources --
+        # must NOT be treated as colliding: the real unique index treats
+        # every NULL contact_id as distinct from every other, unlike SQL's
+        # GROUP BY, which would otherwise falsely group them together.
+        await _insert(
+            contact_id=None, source="monthly_auto",
+            number="INV-2026-Sep-0009", source_ref="nulluuid1_2026-09",
+        )
+        await _insert(contact_id=None, source="eom_commercial_billing", number="INV-2026-Sep-0010")
+
+        await conn.execute(_migration_sql("385_invoices_billing_period_dedup.sql"))
+
+        rows = {
+            row["invoice_number"]: row
+            for row in await conn.fetch(
+                "SELECT invoice_number, billing_period, metadata FROM invoices"
+            )
+        }
+
+        assert rows["INV-2026-Apr-0001"]["billing_period"] == "2026-04"
+        assert rows["INV-2026-Jun-0002"]["billing_period"] == "2026-06"
+
+        # Collision pair: both left NULL, both quarantined with the same
+        # candidate period -- not deleted, not guessed at.
+        for number in ("INV-2026-May-0003", "INV-2026-May-0004"):
+            assert rows[number]["billing_period"] is None
+            metadata = json.loads(rows[number]["metadata"])
+            assert metadata["billing_period_backfill_collision"] is True
+            assert metadata["billing_period_backfill_candidate_period"] == "2026-05"
+
+        # Void, mcp_tool, and garbage-month rows: untouched, no crash.
+        assert rows["INV-2026-Jul-0005"]["billing_period"] is None
+        assert rows["INV-2026-Aug-0007"]["billing_period"] is None
+        assert rows["INV-2026-Xyz-0008"]["billing_period"] is None
+
+        # NULL-contact_id pair: backfilled independently, NOT quarantined --
+        # negative control for the collision-detection NULL-safety fix.
+        assert rows["INV-2026-Sep-0009"]["billing_period"] == "2026-09"
+        assert rows["INV-2026-Sep-0010"]["billing_period"] == "2026-09"
+        assert json.loads(rows["INV-2026-Sep-0009"]["metadata"]) == {}
+        assert json.loads(rows["INV-2026-Sep-0010"]["metadata"]) == {}
+
+        # Gap-closure proof: the backfilled legacy row is now findable by the
+        # app-level pre-check, and a second recurring invoice for the same
+        # contact+period is rejected by the database itself.
+        pool = _SchemaPool(conn, schema)
+        repository = invoice_repo_mod.InvoiceRepository(pool=pool)
+        found = await repository.get_by_contact_and_period(contact_a, "2026-04")
+        assert found is not None
+        assert found["invoice_number"] == "INV-2026-Apr-0001"
+
+        with pytest.raises(asyncpg.UniqueViolationError):
+            async with conn.transaction():
+                await _insert(
+                    contact_id=contact_a, source="eom_commercial_billing",
+                    number="INV-2026-Apr-9999",
+                )
+                await conn.execute(
+                    "UPDATE invoices SET billing_period = '2026-04' "
+                    "WHERE invoice_number = 'INV-2026-Apr-9999'"
+                )
+
+        # Idempotency: re-running the migration against the already-migrated
+        # schema changes nothing and does not raise.
+        before = await conn.fetch(
+            "SELECT invoice_number, billing_period, metadata FROM invoices ORDER BY invoice_number"
+        )
+        await conn.execute(_migration_sql("385_invoices_billing_period_dedup.sql"))
+        after = await conn.fetch(
+            "SELECT invoice_number, billing_period, metadata FROM invoices ORDER BY invoice_number"
+        )
+        assert [dict(r) for r in before] == [dict(r) for r in after]
+    finally:
+        await conn.execute("SET search_path TO public")
+        await conn.execute(f'DROP SCHEMA IF EXISTS "{schema}" CASCADE')
+        await conn.close()
+
+
 def test_invoices_billing_period_dedup_migration_is_additive_and_scoped():
     migration = (
         Path(__file__).parents[1]
@@ -332,6 +485,9 @@ def test_invoices_billing_period_dedup_migration_is_additive_and_scoped():
     # belongs only in the WHERE predicate, or the two recurring sources would
     # each get an independent slot per contact+period and never collide.
     assert "ON invoices (contact_id, billing_period)" in migration
+    assert "billing_period_backfill_collision" in migration
+    assert "HAVING count(*) > 1" in migration
+    assert "-- atlas: atomic-bookkeeping" in migration.splitlines()[0]
     assert "DROP" not in "\n".join(
         line for line in migration.splitlines() if not line.lstrip().startswith("--")
     )

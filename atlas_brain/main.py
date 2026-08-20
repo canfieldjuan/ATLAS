@@ -47,10 +47,21 @@ _SECURITY_TXT_MAX_AGE_DAYS = 180
 _COMMERCIAL_BILLING_REVIEW_RECOVERY_MIGRATION = (
     "382_commercial_billing_candidate_overrides"
 )
+_INVOICES_BILLING_PERIOD_DEDUP_MIGRATION = "385_invoices_billing_period_dedup"
 
 
-class CommercialBillingReviewRecoveryUnavailableError(RuntimeError):
+class _DatabaseMigrationFenceError(RuntimeError):
+    """Base for startup fences that must block serving on a missing migration."""
+
+
+class CommercialBillingReviewRecoveryUnavailableError(_DatabaseMigrationFenceError):
     """The enabled receivables API cannot safely serve commercial billing."""
+
+
+class RecurringInvoiceDedupMigrationUnavailableError(_DatabaseMigrationFenceError):
+    """A recurring-invoice writer (receivables API or the legacy monthly
+    auto-invoice task) cannot safely create invoices without the
+    cross-pipeline billing_period dedup migration."""
 
 
 def _setting_text(config: object, name: str) -> str:
@@ -315,19 +326,18 @@ async def _start_asr_server() -> subprocess.Popen | None:
     return None
 
 
-async def _commercial_billing_review_recovery_is_recorded(pool: object) -> bool:
-    """Return whether the current review-safety migration is durably recorded."""
+async def _migration_is_recorded(pool: object, migration_name: str) -> bool:
+    """Return whether the given migration is durably recorded in schema_migrations."""
     try:
         return bool(
             await pool.fetchval(
                 "SELECT EXISTS (SELECT 1 FROM schema_migrations WHERE name = $1)",
-                _COMMERCIAL_BILLING_REVIEW_RECOVERY_MIGRATION,
+                migration_name,
             )
         )
     except Exception as exc:
         logger.warning(
-            "Could not confirm commercial billing review recovery migration: %s",
-            exc,
+            "Could not confirm migration %s is recorded: %s", migration_name, exc
         )
         return False
 
@@ -336,10 +346,18 @@ async def _run_database_migration_check(
     pool: object,
     *,
     receivables_api_enabled: bool,
+    auto_invoice_enabled: bool = False,
     run_migrations_fn=None,
     close_database_fn=None,
 ) -> None:
-    """Run generic migrations, fencing unsafe receivables recovery failures."""
+    """Run generic migrations, fencing unsafe writer-path failures.
+
+    receivables_api_enabled requires both the commercial billing review
+    recovery migration (382) and the recurring-invoice billing_period dedup
+    migration (385): the receivables-mounted approval writer reaches both.
+    auto_invoice_enabled requires only 385: the legacy monthly auto-invoice
+    task reaches billing_period but never touches the review-recovery table.
+    """
     if run_migrations_fn is None:
         from .storage.migrations import run_migrations
 
@@ -354,35 +372,48 @@ async def _run_database_migration_check(
     except Exception as exc:
         migration_error = exc
 
-    if not receivables_api_enabled:
-        if migration_error is not None:
-            logger.warning("Database migration check failed: %s", migration_error)
-        else:
-            logger.info("Database migrations checked")
-        return
-
-    if await _commercial_billing_review_recovery_is_recorded(pool):
-        if migration_error is not None:
-            logger.warning("Database migration check failed: %s", migration_error)
-        else:
-            logger.info("Database migrations checked")
-        return
-
-    try:
-        await closer()
-    except Exception as close_exc:
-        logger.error(
-            "Error closing database after commercial billing recovery failure: %s",
-            close_exc,
-            exc_info=True,
+    required: list[tuple[str, type[_DatabaseMigrationFenceError], str]] = []
+    if receivables_api_enabled:
+        required.append(
+            (
+                _COMMERCIAL_BILLING_REVIEW_RECOVERY_MIGRATION,
+                CommercialBillingReviewRecoveryUnavailableError,
+                "Commercial billing review recovery migration must complete "
+                "before the enabled receivables API can start",
+            )
         )
-    error = CommercialBillingReviewRecoveryUnavailableError(
-        "Commercial billing review recovery migration must complete before "
-        "the enabled receivables API can start"
-    )
+    if receivables_api_enabled or auto_invoice_enabled:
+        required.append(
+            (
+                _INVOICES_BILLING_PERIOD_DEDUP_MIGRATION,
+                RecurringInvoiceDedupMigrationUnavailableError,
+                "Recurring-invoice billing_period dedup migration must "
+                "complete before an enabled invoice writer (receivables API "
+                "or the legacy monthly auto-invoice task) can start",
+            )
+        )
+
+    for migration_name, error_cls, message in required:
+        if await _migration_is_recorded(pool, migration_name):
+            continue
+        try:
+            await closer()
+        except Exception as close_exc:
+            logger.error(
+                "Error closing database after %s failure: %s",
+                migration_name,
+                close_exc,
+                exc_info=True,
+            )
+        error = error_cls(message)
+        if migration_error is not None:
+            raise error from migration_error
+        raise error
+
     if migration_error is not None:
-        raise error from migration_error
-    raise error
+        logger.warning("Database migration check failed: %s", migration_error)
+    else:
+        logger.info("Database migrations checked")
 
 
 @asynccontextmanager
@@ -410,12 +441,13 @@ async def lifespan(app: FastAPI):
                     await _run_database_migration_check(
                         pool,
                         receivables_api_enabled=settings.invoicing.receivables_api_enabled,
+                        auto_invoice_enabled=settings.invoicing.auto_invoice_enabled,
                     )
-            except CommercialBillingReviewRecoveryUnavailableError:
+            except _DatabaseMigrationFenceError:
                 raise
             except Exception as e:
                 logger.warning("Database migration check failed: %s", e)
-        except CommercialBillingReviewRecoveryUnavailableError:
+        except _DatabaseMigrationFenceError:
             raise
         except Exception as e:
             logger.error("Failed to initialize database: %s", e, exc_info=True)

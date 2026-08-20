@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+from types import SimpleNamespace
 
 import pytest
 
@@ -268,3 +269,108 @@ def test_invoicing_draft_writer_http_rejects_short_tokens(monkeypatch):
 
     with pytest.raises(RuntimeError, match="at least 24 characters"):
         draft_writer._streamable_http_app()
+
+
+@pytest.mark.asyncio
+async def test_draft_writer_lifespan_now_migrates_and_verifies_readiness(monkeypatch):
+    """Before ATLAS #2448's startup-fence extension, this server's _lifespan
+    did nothing but init_database() -- no migration run, no schema check --
+    even though its create_draft_invoice/update_draft_invoice tools reach
+    the same InvoiceRepository.create() and invoices.billing_period column
+    as the full invoicing server. It now reuses invoicing_server's own
+    _database_lifespan, the same contract already proven directly in
+    tests/test_receivables.py's test_standalone_mcp_* tests -- this test
+    proves THIS server's _lifespan actually wires into that contract
+    (migrate + readiness-check on the real init_database/get_db_pool/
+    run_migrations path), not that the contract itself is sound."""
+    import atlas_brain.services.receivables as receivables_mod
+    import atlas_brain.storage.database as database_mod
+    import atlas_brain.storage.migrations as migrations_mod
+
+    events: list[str] = []
+    pool = SimpleNamespace(is_initialized=True)
+
+    async def initialize() -> None:
+        events.append("initialize")
+
+    def get_pool() -> object:
+        events.append("get-pool")
+        return pool
+
+    async def migrate(candidate: object) -> None:
+        assert candidate is pool
+        events.append("migrate")
+
+    async def close() -> None:
+        events.append("close")
+
+    class _ReadyReceivablesService:
+        def __init__(self, candidate: object) -> None:
+            assert candidate is pool
+
+        async def is_ready(self) -> bool:
+            events.append("ready")
+            return True
+
+    monkeypatch.setattr(database_mod, "init_database", initialize)
+    monkeypatch.setattr(database_mod, "get_db_pool", get_pool)
+    monkeypatch.setattr(database_mod, "close_database", close)
+    monkeypatch.setattr(migrations_mod, "run_migrations", migrate)
+    monkeypatch.setattr(receivables_mod, "ReceivablesService", _ReadyReceivablesService)
+
+    async with draft_writer._lifespan(object()):
+        events.append("serving")
+
+    assert events == [
+        "initialize",
+        "get-pool",
+        "migrate",
+        "ready",
+        "serving",
+        "close",
+    ]
+
+
+@pytest.mark.asyncio
+async def test_draft_writer_lifespan_blocks_on_incomplete_schema(monkeypatch):
+    """Negative control: an incomplete schema (e.g. migration 385 not yet
+    recorded) now aborts this server's startup instead of silently serving
+    with a missing billing_period column, matching the full invoicing
+    server's existing behavior."""
+    import atlas_brain.services.receivables as receivables_mod
+    import atlas_brain.storage.database as database_mod
+    import atlas_brain.storage.migrations as migrations_mod
+
+    pool = SimpleNamespace(is_initialized=True)
+    closed: list[bool] = []
+
+    async def initialize() -> None:
+        pass
+
+    def get_pool() -> object:
+        return pool
+
+    async def migrate(candidate: object) -> None:
+        assert candidate is pool
+
+    async def close() -> None:
+        closed.append(True)
+
+    class _NotReadyReceivablesService:
+        def __init__(self, candidate: object) -> None:
+            assert candidate is pool
+
+        async def is_ready(self) -> bool:
+            return False
+
+    monkeypatch.setattr(database_mod, "init_database", initialize)
+    monkeypatch.setattr(database_mod, "get_db_pool", get_pool)
+    monkeypatch.setattr(database_mod, "close_database", close)
+    monkeypatch.setattr(migrations_mod, "run_migrations", migrate)
+    monkeypatch.setattr(receivables_mod, "ReceivablesService", _NotReadyReceivablesService)
+
+    with pytest.raises(RuntimeError, match="complete receivables schema"):
+        async with draft_writer._lifespan(object()):
+            raise AssertionError("incomplete schema must not serve")
+
+    assert closed == [True]

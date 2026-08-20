@@ -27,66 +27,122 @@ each of which scoped itself away from it. H-21's completion comment states:
 *"The legacy monthly-invoice/billing-run safety concern remains deferred to
 its own evidence-backed financial slice."* This is that slice.
 
+**Amendment after initial review.** `chatgpt-codex-connector` left two P1/
+BLOCKER threads on the opened PR (#2448), both confirmed real by independent
+investigation and an adversarial second pass before any fix was written:
+
+1. **Historical rows were left `billing_period = NULL`** (the original design
+   deferred backfilling them). `NULL = 'x'` is `NULL`, not true, in SQL, so a
+   pre-migration legacy invoice for an old period is invisible to both the
+   app-level pre-check and the partial unique index — and nothing bounds how
+   far in the past an admin can approve a commercial-billing candidate, so
+   this transition window is a live risk, not a theoretical one. Fixed by
+   backfilling `billing_period` from data each writer already persisted,
+   with non-destructive collision quarantine for any historical row that
+   would itself collide. See "Amendment: historical backfill" below.
+2. **No startup fence existed for migration 385.** The existing
+   `atlas_brain/main.py` fence protects only migration 382 under
+   `receivables_api_enabled`; it never checked migration 385, and the legacy
+   cron reaches `billing_period` through an entirely independent flag
+   (`auto_invoice_enabled`) the old fence never looked at. Adversarial
+   re-review found the true scope larger than the original fix: two more
+   independent OS processes — `atlas_brain/mcp/invoicing_server.py` and
+   `atlas_brain/mcp/invoicing_draft_writer_server.py` — also reach
+   `InvoiceRepository.create()` and were unfenced (one already had a general
+   readiness-check hook that just didn't know about the new column/index yet;
+   the other had no schema check of any kind). See "Amendment: startup
+   fence" below.
+
 ### Diff budget
 
-Over the ~400-line soft cap (873 total per `git diff --numstat`, including
-this plan document). The implementation itself is small —
-~168 lines across the migration and three production-file edits, most of
-which is the migration's root-cause documentation. The overage is entirely
-test coverage: this repo's real-Postgres fixture-per-test convention
-(isolated schema, migrations applied, explicit teardown) plus this being
-guard-shaped, billing-adjacent code, which requires a negative control for
-every acceptance claim (REVIEWER_RULES.md boundary-probe rule; AGENTS.md
-§3i). Trimming coverage to hit the cap on a change whose entire job is
-"prevent a real duplicate invoice" is the wrong trade — this mirrors the
-precedent in `plans/PR-EOM-Billing-Recipients.md`, which went over the same
-cap for the same reason (tests + plan doc, not code) and declined to split
-rather than review the same disclosure decision twice in halves.
+Well over the ~400-line soft cap (1972 total per `git diff --numstat
+origin/main...HEAD`, including this plan document). The core fix (migration +
+dedup pre-checks in the two writers) is ~168 lines; the two post-review
+amendments below are what pushed this over, and both are real, reviewer-found
+correctness/safety gaps in the original design, not scope creep — declining
+to fold them into this PR would mean shipping a dedup migration that (a) still
+admits the exact cross-pipeline duplicate this slice exists to prevent for
+any pre-existing period, and (b) has no protection if it fails to apply on
+two of the three processes that depend on it. Splitting them into follow-up
+PRs was considered and rejected: each is a direct, evidence-backed fix to a
+BLOCKER finding on the *same* migration this PR introduces, reviewable only
+against the migration itself, and a fix-after-merge would mean the merged
+state was briefly, correctly flagged as a P1 blocker.
 
 ### Problem-derived contract
 
 - Root cause: no persisted, queryable covered-period column on `invoices`;
-  each recurring writer's dedup is scoped only to its own `source`.
+  each recurring writer's dedup is scoped only to its own `source`; no
+  startup verification that the migration providing that column actually
+  applied before code that depends on it starts serving.
 - Correct fix must touch/change: persist the already-computed in-memory
   period value (`period_label` in the legacy task, `_InvoiceDraft.billing_period`
   in the approval writer) as a real `invoices.billing_period VARCHAR(7)`
   column; add a partial unique index on `(contact_id, billing_period)` scoped
   by `source IN ('monthly_auto','eom_commercial_billing')` and
   `status <> 'void'`; add an app-level pre-check in both writers for a clean
-  skip/reject path ahead of that constraint.
+  skip/reject path ahead of that constraint; backfill historical rows where
+  the period is mechanically derivable, quarantining (not guessing at)
+  anything that would collide; fence every process that can reach
+  `InvoiceRepository.create()`/the raw `invoices` INSERT against migration
+  385 not being recorded.
 - Must not change: the `mcp_tool` ad-hoc invoice path (no `billing_period`,
   outside the source allowlist); the `invoicing_mcp` source (confirmed during
   research to be a *payment*-record source, unrelated to `invoices.source`);
-  historical invoice rows (left `NULL`, no backfill); void-status invoices
-  (excluded, so void-and-reissue keeps working); each writer's existing
-  own-source dedup (`get_by_source_ref`, the `(source, source_ref)` partial
-  index from migration 372, idempotency-key replay); the architectural
-  boundary asserted by
+  void-status invoices (excluded, so void-and-reissue keeps working); each
+  writer's existing own-source dedup (`get_by_source_ref`, the `(source,
+  source_ref)` partial index from migration 372, idempotency-key replay); the
+  architectural boundary asserted by
   `test_approval_service_does_not_import_delivery_or_legacy_monthly_writers`
   (neither writer imports the other — this design doesn't either, both only
-  reach the shared `invoices` table).
+  reach the shared `invoices` table); the existing review-recovery fence for
+  migration 382 (extended, not replaced); `invoicing_server.py`'s own code
+  (its existing readiness-check hook picks up the new requirement without any
+  edit there).
 
 ## Scope (this PR)
 
 Ownership lane: eom/recurring-invoice-period-dedup
 Slice phase: Production hardening
-Max files: 8
+Max files: 16
 
 1. Migration 385: `invoices.billing_period` column + format CHECK + the
-   cross-source partial unique index.
+   cross-source partial unique index + historical backfill + collision
+   quarantine, wrapped atomically (see Amendment: historical backfill).
 2. Persist `billing_period` in both writers' existing `INSERT`s, reusing each
    writer's already-computed period value — zero new parameters on either
    `InvoiceRepository.create()` or `_InvoiceDraft`.
 3. `InvoiceRepository.get_by_contact_and_period` and a matching
    transaction-scoped lookup in `commercial_billing_approvals.py`; call both
    from their respective writers as a pre-check ahead of the new constraint.
-4. Tests proving: the index rejects a raw cross-source duplicate insert
+4. `atlas_brain/main.py`: generalize the existing migration-recovery fence to
+   also require migration 385 whenever `receivables_api_enabled` or
+   `auto_invoice_enabled` is true (see Amendment: startup fence).
+5. `atlas_brain/services/receivables.py`: extend the existing
+   `_RECEIVABLES_REQUIRED_COLUMNS`/`_RECEIVABLES_REQUIRED_INDEXES` readiness
+   contract with `invoices.billing_period` and the new index, which fences
+   `invoicing_server.py` for free (it already calls this check).
+6. `atlas_brain/mcp/invoicing_draft_writer_server.py`: replace its bare,
+   unverified `_lifespan` (no migration run, no schema check at all) with a
+   reuse of `invoicing_server.py`'s own `_database_lifespan`, matching this
+   file's existing convention of reusing that module's internals.
+7. `atlas_brain/main_eom.py`: add migration 385 to the curated
+   `EOM_RECEIVABLES_READINESS_MIGRATIONS` tuple — that file's own comment
+   requires this for any new receivables readiness requirement.
+8. Tests proving: the index rejects a raw cross-source duplicate insert
    independent of any app code; an `mcp_tool` invoice doesn't block a
    recurring one; a voided invoice doesn't block reissuance; the approval
    writer rejects when the legacy writer already invoiced the period (and
    does not when the period differs); the legacy writer's `run()` skips a
    contact the new pipeline already invoiced without calling `create()`, and
-   still creates normally for an un-invoiced contact in the same pass.
+   still creates normally for an un-invoiced contact in the same pass;
+   historical backfill derives the right period per source and quarantines
+   real collisions without falsely flagging unrelated NULL-contact_id rows;
+   the startup fence blocks both the receivables path and the
+   auto-invoice-only path when migration 385 is missing, and does not
+   false-positive-block either when it's present; the draft-writer MCP
+   server's lifespan now migrates and verifies readiness instead of silently
+   starting unchecked.
 
 ### Review Contract
 
@@ -115,31 +171,86 @@ Max files: 8
   - Migration content is additive and correctly scoped (no `DROP`, references
     both recurring sources and the void exclusion, indexes
     `(contact_id, billing_period)` alone — not `source` — since source
-    belongs only in the predicate) — settled by
+    belongs only in the predicate, opts into atomic-bookkeeping, and includes
+    the collision-quarantine marker) — settled by
     `test_invoice_repository.py::test_invoices_billing_period_dedup_migration_is_additive_and_scoped`.
+  - Historical rows backfill correctly per source, quarantine real
+    collisions, leave void/mcp_tool/unparseable rows untouched, and do not
+    falsely quarantine unrelated NULL-`contact_id` rows that share a derived
+    period — settled by
+    `test_invoice_repository.py::test_real_postgres_billing_period_backfill_and_collision_handling`,
+    which also proves the migration is idempotent on replay and that the
+    backfilled row closes the transition-window gap end to end (findable by
+    the pre-check; a second insert for the same contact+period is rejected).
+  - The startup fence blocks `receivables_api_enabled` and, independently,
+    `auto_invoice_enabled` when migration 385 is unrecorded, and does not
+    block either when it is recorded — settled by four tests in
+    `test_commercial_billing_runs.py`
+    (`test_full_atlas_migration_check_allows_recovered_or_disabled_receivables`,
+    `test_full_atlas_migration_check_blocks_enabled_auto_invoice_without_dedup_migration`,
+    `test_full_atlas_migration_check_allows_auto_invoice_when_dedup_migration_recorded`,
+    `test_full_atlas_lifespan_fences_auto_invoice_only_deployment_without_dedup_migration`),
+    the last exercised through the real `main.lifespan(...)` end to end, not
+    only the unit-level check function.
+  - The draft-writer MCP server's `_lifespan` now runs migrations and
+    verifies readiness instead of silently starting unchecked, and blocks on
+    an incomplete schema — settled by
+    `test_invoicing_draft_writer_mcp.py::test_draft_writer_lifespan_now_migrates_and_verifies_readiness`
+    and `::test_draft_writer_lifespan_blocks_on_incomplete_schema`.
 - Reachability proof: exercised through the real entry points — the legacy
-  writer's `run()` (autonomous task) and the approval writer's `approve()`
-  (`atlas_brain/mcp` / admin-facing approval flow) — not through the repo
-  methods in isolation.
+  writer's `run()` (autonomous task), the approval writer's `approve()`
+  (`atlas_brain/mcp` / admin-facing approval flow), the real
+  `atlas_brain.main.lifespan(...)` startup handler, and the draft-writer MCP
+  server's real `_lifespan` — not through the repo methods or check functions
+  in isolation, except where a function-level unit test is the more precise
+  proof for a specific branch (e.g. the four-way fence matrix).
 - Affected surfaces: `invoices` table schema; both recurring invoice-creation
-  call sites; no route signatures, no config, no new environment variables.
+  call sites; the shared migration-recovery startup fence in
+  `atlas_brain/main.py`; the receivables readiness contract in
+  `atlas_brain/services/receivables.py`; the draft-writer MCP server's
+  lifespan; the EOM profile's curated readiness-migration set in
+  `atlas_brain/main_eom.py`. No route signatures, no config, no new
+  environment variables.
 - Risk areas: a naive dedup signal wrongly blocking a legitimate ad-hoc
   invoice (mitigated by source-scoping, proven negative control); the
   cross-system check silently failing open and never firing (mitigated by
   the DB-level unique index as the actual backstop, independent of the
   app-level pre-check); a race between the two writers (mitigated by the
-  partial unique index rather than a bare check-then-act).
-- Reviewer rules triggered: R2 (test evidence, every acceptance criterion has
+  partial unique index rather than a bare check-then-act); a pre-deploy
+  invoice for an old period going unprotected (mitigated by the backfill,
+  with quarantine rather than guessing for genuine ambiguity); the migration
+  failing partway and leaving inconsistent state (mitigated by
+  atomic-bookkeeping, verified by forcing a real mid-migration failure and
+  confirming full rollback); code depending on the new column/index starting
+  before the migration applied, across three independent processes
+  (mitigated by extending the existing fence pattern to all three, reusing
+  house convention rather than inventing new mechanisms per process).
+- Reviewer rules triggered: **R1 (requirements match —
+  `invoicing_draft_writer_server.py`'s `_lifespan` now runs migrations and
+  verifies readiness where it previously did neither; this is an intentional
+  fix to the startup-fence gap, not scope creep, and is covered by two new
+  tests)**, R2 (test evidence, every acceptance criterion has
   a negative control run and shown to fail, not just the happy path), R3
   (invoicing/billing code), **R4 (data and migration safety — migration 385
-  adds a nullable column with no backfill requirement, guards every DDL
-  statement with `IF NOT EXISTS`/existence checks, and documents its rollback
-  order in-file)**, R6 (secondary-write error handling — the approval
+  adds a nullable column and a historical backfill; atomicity was verified,
+  not assumed, by forcing a real mid-migration failure and confirming zero
+  partial state persisted, then confirming the marker closes the narrower
+  SQL-succeeds/ledger-write-fails crash window that a bare multi-statement
+  `execute()` does not)**, **R5 (backward compatibility — the draft-writer
+  MCP server's startup contract changes from "always starts" to "can refuse
+  to start on an incomplete schema"; this is the intended, narrow behavior
+  change the fence exists to add, not an accidental break, and both
+  directions — refuses when incomplete, still starts when ready — are
+  tested)**, R6 (secondary-write error handling — the approval
   writer's existing broad `UniqueViolationError` handler is the backstop and
   needed no new code), **R8 (concurrency/idempotency — the partial unique
-  index is the actual fix, not the app-level pre-check)**, R14 (verified
-  against `origin/main` @ `cd899b03c`, not cached line numbers — H-21/H-22/H-23
-  had shifted them since this was first scoped).
+  index is the actual fix, not the app-level pre-check)**, **R12 (deployment
+  safety — a startup gate that can now refuse to boot three independent
+  processes rather than only one; proven with both a positive fence test and
+  a negative "does not false-positive-block a healthy deploy" control for
+  each)**, R14 (verified against `origin/main` at the exact commit Codex
+  reviewed, `bd9a1bfdec8066774d94acc879be99bfaefd7f84`, not cached line
+  numbers or assumed file contents).
 
 ### Boundary-change enumeration
 
@@ -181,15 +292,81 @@ Max files: 8
   `billing_period` back via `get_by_contact_and_period`; the `NULL` case
   (MCP tool) is proven by the mcp_tool-does-not-block assertions.
 
+**Seam 3 — historical backfill and collision quarantine** (migration 385's
+two `WITH candidates ... UPDATE` passes)
+
+- Replaced behavior: none; historical rows were left permanently `NULL` in
+  the original design, which Codex correctly identified as leaving the
+  transition window (pre-migration invoices vs. post-migration candidate
+  approvals for the same old period) unprotected.
+- Guard-relevant fields: `source_ref` (monthly_auto derivation),
+  `invoice_number` (eom_commercial_billing derivation), `contact_id`
+  (collision grouping key — nullable, and Postgres's per-row-distinct NULL
+  semantics for unique indexes do **not** match SQL `GROUP BY`'s
+  NULLs-group-together semantics, which the collision CTE must and does
+  correct for).
+- Caller x input: {unambiguous monthly_auto row, unambiguous
+  eom_commercial_billing row, a genuine historical collision pair across
+  both sources, a void row, an unparseable legacy-format `invoice_number`, an
+  `mcp_tool` row, a syntactically-shaped but invalid month abbreviation
+  (`INV-2026-Xyz-0008`, which an unconstrained regex would crash Postgres's
+  `to_date` on), a NULL-`contact_id` pair sharing a derived period}.
+- Disposition: every class above is asserted in
+  `test_real_postgres_billing_period_backfill_and_collision_handling`,
+  including a real-Postgres proof that a forced mid-migration failure (after
+  the backfill already ran, before the index) rolls back the column, the
+  backfill, and the ledger record together, and that a clean retry then
+  succeeds.
+
+**Seam 4 — startup fence for migration 385** (`atlas_brain/main.py`
+`_run_database_migration_check`; `atlas_brain/services/receivables.py`
+`_RECEIVABLES_REQUIRED_COLUMNS`/`_RECEIVABLES_REQUIRED_INDEXES`;
+`atlas_brain/mcp/invoicing_draft_writer_server.py` `_lifespan`)
+
+- Replaced behavior: the existing fence in `main.py` checked only migration
+  382, only under `receivables_api_enabled` — never migration 385, and never
+  under `auto_invoice_enabled` (an independent flag the legacy cron alone
+  depends on). `invoicing_server.py` already called a general readiness
+  check but that check didn't know about `billing_period`/the new index
+  yet. `invoicing_draft_writer_server.py` had no migration run or schema
+  check of any kind.
+- Guard-relevant fields: `settings.invoicing.receivables_api_enabled`,
+  `settings.invoicing.auto_invoice_enabled`, `schema_migrations` (ledger
+  record for `385_invoices_billing_period_dedup`).
+- Caller x input: {receivables_api_enabled=true x 385 recorded/unrecorded,
+  auto_invoice_enabled=true x 385 recorded/unrecorded, both flags false (no
+  fence should fire, matching current no-op behavior), the real
+  `main.lifespan(...)` end to end for the auto-invoice-only shape, the
+  draft-writer server's real `_lifespan` with a ready/not-ready schema}.
+- Disposition: every class above is asserted across
+  `test_full_atlas_migration_check_allows_recovered_or_disabled_receivables`,
+  `test_full_atlas_migration_check_blocks_enabled_auto_invoice_without_dedup_migration`,
+  `test_full_atlas_migration_check_allows_auto_invoice_when_dedup_migration_recorded`,
+  `test_full_atlas_lifespan_fences_auto_invoice_only_deployment_without_dedup_migration`,
+  and the two new `test_invoicing_draft_writer_mcp.py` lifespan tests.
+  `invoicing_server.py` needed no test changes — it already calls the
+  general readiness check, which `test_receivables.py`'s existing real-schema
+  test (`test_eom_receivables_readiness_migration_set_builds_ready_schema`,
+  `assert await service.is_ready() is True`) now proves is `True` only once
+  migration 385 has actually applied.
+
 ### Files touched
 
 - `atlas_brain/storage/migrations/385_invoices_billing_period_dedup.sql`
 - `atlas_brain/storage/repositories/invoice.py`
 - `atlas_brain/autonomous/tasks/monthly_invoice_generation.py`
 - `atlas_brain/services/commercial_billing_approvals.py`
+- `atlas_brain/main.py`
+- `atlas_brain/main_eom.py`
+- `atlas_brain/services/receivables.py`
+- `atlas_brain/mcp/invoicing_draft_writer_server.py`
 - `tests/test_invoice_repository.py`
 - `tests/test_commercial_billing_approvals.py`
 - `tests/test_monthly_invoice_generation_cross_pipeline_dedup.py`
+- `tests/test_receivables.py`
+- `tests/test_commercial_billing_runs.py`
+- `tests/test_invoicing_draft_writer_mcp.py`
+- `tests/test_eom_render_profile.py`
 - `plans/PR-EOM-Recurring-Invoice-Period-Dedup.md`
 
 ## Mechanism
@@ -225,6 +402,101 @@ legacy task's existing fail-open-on-check-error behavior is preserved — a
 check failure logs and falls through to `create()`, where the new
 constraint is now a real backstop where none existed before.
 
+### Amendment: historical backfill
+
+The two backfill passes derive `billing_period` for pre-migration rows from
+data each writer already persisted: `monthly_auto`'s `source_ref` always ends
+`_{YYYY-MM}` (stable since the writer's first commit); `eom_commercial_billing`'s
+`invoice_number` always has the shape `INV-{YYYY-Mon}-{seq}` (every row of
+this source postdates that format's introduction). The month-abbreviation set
+is enumerated literally, not matched by shape alone, because Postgres's
+`to_date` raises on an unrecognized abbreviation rather than failing safe — an earlier
+draft using a shape-only regex was verified to crash on exactly this input
+before the fix. A row whose format predates either convention is left `NULL`
+— inert, not guessed at.
+
+Before backfilling, both passes compute a `collisions` CTE: any `(contact_id,
+candidate_period)` pair with more than one otherwise-backfillable row (across
+or within a source — the unique index doesn't key on `source`, so two
+`monthly_auto` rows for the same contact+period would also collide) is
+excluded from the backfill and instead stamped with a `metadata` marker
+(`billing_period_backfill_collision`, `billing_period_backfill_candidate_period`)
+so an operator can find and manually reconcile a genuine historical
+duplicate rather than have it silently deleted, guessed at, or left to abort
+the whole migration. The collision CTE explicitly excludes `contact_id IS
+NULL` rows from grouping against each other: SQL's `GROUP BY` treats multiple
+`NULL`s as one group, but Postgres's unique index treats every `NULL`
+`contact_id` as distinct from every other — grouping them the naive way would
+falsely quarantine unrelated customers' invoices that happen to derive the
+same period. Verified directly: a NULL-`contact_id` pair sharing a derived
+period backfills independently, with no quarantine metadata, exactly as the
+real index would allow.
+
+The migration opts into this repo's `-- atlas: atomic-bookkeeping` marker
+(literal first line; nine other migrations already use it, including 384,
+the one immediately preceding this one) so the column add, CHECK constraint,
+both backfill passes, and the index creation commit or roll back together
+with the `schema_migrations` ledger write, in one real transaction. This was
+verified empirically, not assumed: forcing a division-by-zero failure between
+the backfill and the index creation, on a schema that already had a
+pre-migration row, confirmed the column, the backfilled data, and the ledger
+record all roll back completely, then a clean retry applies correctly. A
+second run of the same test *without* the marker showed the SQL itself was
+already atomic even then — asyncpg's simple-query protocol wraps a
+multi-statement string in an implicit transaction regardless. What the
+marker actually, distinctly adds is narrower: it closes the crash window
+between "SQL committed" and "ledger row written," where a process crash
+between the two would leave the migration correctly applied but reported as
+still pending — safe, since every statement is idempotent, but it would
+break the "recorded implies applied" invariant the startup fence below
+depends on. The migration's own header comment states this precisely rather
+than overclaiming a stronger guarantee than what was actually verified.
+
+### Amendment: startup fence
+
+`atlas_brain/main.py`'s existing `_commercial_billing_review_recovery_is_recorded`/
+`_run_database_migration_check` pair is generalized: the specific
+single-migration check becomes `_migration_is_recorded(pool, migration_name)`,
+and `_run_database_migration_check` now builds an ordered list of required
+migrations — migration 382 when `receivables_api_enabled`, migration 385 when
+`receivables_api_enabled` **or** `auto_invoice_enabled` — checking each in
+turn and closing the pool before raising a specific
+`_DatabaseMigrationFenceError` subclass on the first one missing. Both
+existing and new exception classes share that common base so the two
+`except` sites in `lifespan()` catch either without listing two types.
+
+Adversarial re-review of the first draft of this fix (confined to
+`atlas_brain/main.py`) found it structurally could not protect two other,
+independent OS processes that also reach `InvoiceRepository.create()`:
+`atlas_brain/mcp/invoicing_server.py` (its own lifespan, own migration run,
+`settings.mcp.invoicing_enabled` defaults `True`) and
+`atlas_brain/mcp/invoicing_draft_writer_server.py` (had no migration run or
+schema check at all). Rather than duplicate `main.py`'s fence into each
+process, the fix reuses the house convention each already had a hook for:
+`invoicing_server.py`'s `_lifespan` already calls
+`ReceivablesService(pool).is_ready()`, which checks
+`_RECEIVABLES_REQUIRED_COLUMNS`/`_RECEIVABLES_REQUIRED_INDEXES` — extending
+that dict/tuple with `invoices.billing_period` and the new index fences that
+process **for free**, no code change needed there.
+`invoicing_draft_writer_server.py` had no such hook, but already imports the
+full `invoicing_server` module (`from . import invoicing_server as _full`)
+and freely reuses its other internals (`_full._is_uuid`, `_full._uuid`,
+`_full.update_invoice`, ...) — so its `_lifespan` now reuses
+`_full._database_lifespan` directly, the exact same contract already proven
+in `tests/test_receivables.py`'s `test_standalone_mcp_*` tests, rather than
+hand-rolling a third implementation.
+
+`atlas_brain/main_eom.py` maintains its own separately curated, explicitly
+"CLOSED and ENUMERATED" tuple of migrations (`EOM_RECEIVABLES_READINESS_MIGRATIONS`)
+for the EOM deployment profile — its own header comment requires updating it
+for any new receivables readiness requirement, so migration 385 is added
+there too; this was discovered by running the existing real-schema readiness
+test for that profile and watching it fail, not predicted in advance. A
+second, independent static test in `tests/test_eom_render_profile.py`
+(`test_eom_startup_migrations_are_curated_for_receivables_readiness`) pins
+the tuple's exact contents and needed the same one-line update — caught by
+the full local unit-gate mirror, not anticipated from reading either file.
+
 ## Intentional
 
 - No new parameter on `InvoiceRepository.create()` or `_InvoiceDraft`: both
@@ -237,9 +509,9 @@ constraint is now a real backstop where none existed before.
 - The partial unique index intentionally omits `source` from its column list
   — see Mechanism. This is the one design detail in this PR that is easy to
   get backwards and silently ship a no-op guard.
-- No backfill of `billing_period` on historical rows — the fix only needs to
-  work forward from deploy; a backfill is a separate, riskier historical-data
-  slice.
+- Historical `billing_period` IS backfilled, revised from an earlier draft of
+  this plan that deferred it — see Amendment: historical backfill for the
+  full reasoning and Codex's original finding.
 - The approval writer's pre-check queries via the same transaction
   connection (`conn`), not a separate pool, to stay inside the same
   transaction/advisory-lock scope as the rest of `approve()`.
@@ -250,10 +522,21 @@ constraint is now a real backstop where none existed before.
   a disposable schema) or only exercise the early settings-gate return
   (never reaching this code). It is also not an extension of
   `tests/test_legacy_monthly_autoinvoice_writer_harness.py` — see Deferred.
+- The startup fence is generalized in-place (a parameterized check function,
+  a shared exception base) rather than adopting the migration-content-hash
+  infrastructure a concurrently-open, unrelated PR (#2447) was building —
+  confirmed via `git merge-base --is-ancestor` that PR had not merged to
+  `origin/main` as of this work; depending on unmerged code was rejected.
+- `invoicing_draft_writer_server.py`'s fix now also runs `run_migrations` on
+  that process, not only a readiness check — this is a real behavior
+  addition (that process previously ran zero migration logic), but it is
+  exactly what `invoicing_server.py`'s own lifespan already does today for
+  the identical concern, and `run_migrations` is idempotent and
+  advisory-lock-serialized against concurrent callers by design, so a second
+  process calling it is the established pattern, not a new risk.
 
 ## Deferred
 
-- Backfilling `billing_period` on historical invoice rows.
 - The pre-existing void-filter gap in `InvoiceRepository.get_by_source_ref`
   and `.search()` (neither excludes `status='void'` today) — real, but
   unrelated to this slice's cross-pipeline scope.
@@ -267,11 +550,15 @@ constraint is now a real backstop where none existed before.
   slice's research as a *payment*-record source
   (`record_customer_payment`, `atlas_brain/mcp/invoicing_server.py:554`),
   not an invoice-creation source; no further action needed.
+- Adopting PR #2447's migration-content-hash verification infrastructure for
+  this fence — that PR had not merged as of this work; the generalized
+  one-off pattern here is a smaller, immediately-available fix and does not
+  block adopting the more general infrastructure later if #2447 lands.
 
 Parking predicate: hardening beyond the two recurring sources' cross-
-awareness (broader financial-integrity auditing, backfills, the unrelated
-void-filter gap) is parked unless necessary to prove this specific
-constraint. Nothing here qualifies.
+awareness (broader financial-integrity auditing, the unrelated void-filter
+gap) is parked unless necessary to prove this specific constraint or one of
+the two amendments above. Nothing here qualifies.
 
 Parked hardening: none.
 
@@ -279,22 +566,31 @@ Parked hardening: none.
 
 - `ATLAS_RECEIVABLES_TEST_DATABASE_URL=postgresql://atlas:atlas@127.0.0.1:<port>/atlas
   pytest tests/test_invoice_repository.py tests/test_commercial_billing_approvals.py
-  tests/test_monthly_invoice_generation_cross_pipeline_dedup.py -q`
-  against a throwaway `postgres:16` container (not the shared dev DB): **115
-  passed**, 0 failed. This includes every pre-existing test in
-  `test_commercial_billing_approvals.py` (111 of the 115) — confirming the
-  new pre-check does not regress the existing approval contract tests, which
-  required adding migration 385 to that file's shared `_approval_database`
-  fixture (its `invoices.billing_period` column did not otherwise exist for
-  those schemas, and 8 of them failed with
-  `CommercialBillingApprovalUnavailableError` wrapping a real
-  `UndefinedColumnError` until this was fixed — caught by running the full
-  file, not just the new test).
-- The three pre-existing settings-gate tests in `tests/test_monthly_invoice_generation.py`
-  (`test_billing_month_override`, `test_billing_month_invalid_format`,
-  `test_contact_ids_filter`) re-run clean: **3 passed**.
-- `ruff check` on all seven changed files: **all checks passed**, zero
-  findings.
+  tests/test_monthly_invoice_generation_cross_pipeline_dedup.py
+  tests/test_receivables.py tests/test_commercial_billing_runs.py
+  tests/test_invoicing_draft_writer_mcp.py tests/test_invoicing_draft_writer_oauth.py
+  tests/test_check_invoicing_draft_writer_funnel_routes.py
+  tests/test_check_invoicing_draft_writer_live_write.py
+  tests/test_check_invoicing_draft_writer_mcp_connector.py
+  tests/test_check_invoicing_draft_writer_oauth_discovery.py
+  tests/test_check_invoicing_draft_writer_oauth_e2e.py
+  tests/test_start_invoicing_draft_writer_oauth_server.py
+  tests/test_invoicing_readonly_mcp.py tests/test_invoicing_readonly_oauth.py
+  tests/test_eom_render_profile.py -q`
+  against a throwaway `postgres:16` container (not the shared dev DB): **459
+  passed**, 0 failed. This is every test file touched by either the original
+  slice or the two amendments, run together, including all pre-existing
+  tests in each — confirming no regression anywhere the changes could
+  plausibly reach. `test_eom_render_profile.py` was added to this list after
+  the repo's full local unit-gate mirror caught a real regression this list
+  didn't originally include: a second, independent static test pinning
+  `EOM_RECEIVABLES_READINESS_MIGRATIONS`'s exact contents, in a different
+  file than the real-schema readiness test already covered here.
+- `ruff check` on all fifteen changed source/test files: zero new findings.
+  `atlas_brain/main.py` and `atlas_brain/main_eom.py` each carry pre-existing
+  E402 findings (intentional `load_dotenv`-before-imports pattern) —
+  confirmed identical counts (26 and 15 respectively) against each file's
+  `origin/main` baseline before concluding these are not new.
 - **Negative controls, all run and restored, not merely asserted:**
   - Same shape as an existing `monthly_auto` recurring row but re-inserted
     for the same contact+period raises `asyncpg.UniqueViolationError`
@@ -311,23 +607,50 @@ Parked hardening: none.
   - The legacy writer's pre-check is called for every bundle in a run, not
     only the one that hits — asserted directly against both call arguments,
     not inferred from the skip count alone.
+  - A NULL-`contact_id` pair sharing a derived period backfills
+    independently, uncounted as a collision — proving the collision CTE's
+    NULL-safety fix, not merely that it compiles.
+  - A forced mid-migration failure (division by zero, injected after the
+    backfill and before the index creation) rolls back the column, the
+    backfill data, and the ledger record completely; a clean retry then
+    applies correctly — run against real Postgres via the actual Python
+    migration runner, not raw `psql`.
+  - The startup fence: `auto_invoice_enabled=True` with migration 385
+    unrecorded raises and closes the pool; the identical shape with 385
+    recorded returns normally; the real `main.lifespan(...)` end to end
+    raises for the auto-invoice-only deployment shape with 385 unrecorded.
+  - The draft-writer MCP server's lifespan: a ready schema serves normally
+    (init → migrate → ready-check → serving → close, in order); an
+    incomplete schema raises and closes before serving.
 - The unique-index design itself was verified against the exact duplicate
   scenario before being implemented: a draft with `source` inside the
   index's column list was checked against a same-contact/period,
   different-source pair and found to admit both rows, which is how the
   final index (source in the predicate only) was arrived at rather than
   shipped incorrectly.
+- The atomic-bookkeeping marker's actual, narrower benefit (closing the
+  ledger-write crash window, not preventing partial SQL application — see
+  Amendment: historical backfill) was established by comparing forced-failure
+  behavior with and without the marker, not assumed from the marker's name.
 
 ## Estimated diff size
 
 | File | LOC |
 |---|---:|
-| `atlas_brain/storage/migrations/385_invoices_billing_period_dedup.sql` | 74 |
+| `atlas_brain/storage/migrations/385_invoices_billing_period_dedup.sql` | 228 |
 | `atlas_brain/storage/repositories/invoice.py` | 45 |
 | `atlas_brain/autonomous/tasks/monthly_invoice_generation.py` | 15 |
 | `atlas_brain/services/commercial_billing_approvals.py` | 34 |
-| `tests/test_invoice_repository.py` | 132 |
+| `atlas_brain/main.py` | 100 |
+| `atlas_brain/main_eom.py` | 1 |
+| `atlas_brain/services/receivables.py` | 13 |
+| `atlas_brain/mcp/invoicing_draft_writer_server.py` | 29 |
+| `tests/test_invoice_repository.py` | 288 |
 | `tests/test_commercial_billing_approvals.py` | 97 |
 | `tests/test_monthly_invoice_generation_cross_pipeline_dedup.py` | 147 |
-| `plans/PR-EOM-Recurring-Invoice-Period-Dedup.md` | 327 |
-| **Total** | **873** |
+| `tests/test_receivables.py` | 31 |
+| `tests/test_commercial_billing_runs.py` | 202 |
+| `tests/test_invoicing_draft_writer_mcp.py` | 106 |
+| `tests/test_eom_render_profile.py` | 1 |
+| `plans/PR-EOM-Recurring-Invoice-Period-Dedup.md` | 680 |
+| **Total** | **2017** |
