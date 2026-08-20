@@ -183,16 +183,51 @@ class _MemoryConnection:
         self.recurring_period_conflict: dict | None = None
 
     async def fetchval(self, query, *_args):
-        if (
-            "information_schema.columns" in query
-            or "pg_constraint" in query
-            or "pg_index" in query
-        ):
+        if "information_schema.columns" in query:
             return True
         assert "pg_advisory_xact_lock" in query
         return None
 
+    async def fetch(self, query, *_args):
+        if "pg_get_constraintdef" in query:
+            return [
+                {
+                    "conname": "invoices_billing_period_check",
+                    "definition": (
+                        "CHECK (((billing_period)::text ~ "
+                        "'^(000[1-9]|00[1-9][0-9]|0[1-9][0-9]{2}|"
+                        "[1-9][0-9]{3})-(0[1-9]|1[0-2])$'::text)) NOT VALID"
+                    ),
+                },
+                {
+                    "conname": "invoices_recurring_billing_period_required_check",
+                    "definition": (
+                        "CHECK ((((source)::text <> ALL "
+                        "(ARRAY['monthly_auto'::text, 'eom_commercial_billing'::text])) "
+                        "OR ((status)::text = 'void'::text) "
+                        "OR (billing_period IS NOT NULL) "
+                        "OR billing_period_legacy_null)) NOT VALID"
+                    ),
+                },
+            ]
+        raise AssertionError(query)
+
     async def fetchrow(self, query, *args):
+        if "pg_get_expr(index_state.indpred" in query:
+            return {
+                "indisunique": True,
+                "indisvalid": True,
+                "indisready": True,
+                "indnkeyatts": 2,
+                "key_column_1": "contact_id",
+                "key_column_2": "billing_period",
+                "predicate": (
+                    "((billing_period IS NOT NULL) "
+                    "AND ((source)::text = ANY "
+                    "(ARRAY['monthly_auto'::text, 'eom_commercial_billing'::text])) "
+                    "AND ((status)::text <> 'void'::text))"
+                ),
+            }
         if "FROM commercial_billing_runs AS run" in query:
             if args == (self.run_id, self.candidate["candidateKey"]):
                 return {
