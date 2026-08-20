@@ -418,6 +418,108 @@ async def test_real_postgres_billing_period_dedup_scoping_and_void_exclusion():
 
 
 @pytest.mark.asyncio
+async def test_real_postgres_recurring_dedup_readiness_rejects_drifted_definitions():
+    """Readiness must prove definitions, not names.
+
+    An externally managed schema can contain same-named valid constraints or
+    indexes with weaker definitions than migration 385. Same name + valid flag
+    is not enough to protect cross-source recurring invoice dedup.
+    """
+    asyncpg = pytest.importorskip("asyncpg")
+    database_url = os.environ.get("ATLAS_RECEIVABLES_TEST_DATABASE_URL")
+    if not database_url:
+        pytest.skip("ATLAS_RECEIVABLES_TEST_DATABASE_URL not set")
+
+    schema = f"invoice_repository_ready_defs_{uuid4().hex}"
+    conn = await asyncpg.connect(database_url)
+
+    try:
+        await conn.execute(f'CREATE SCHEMA "{schema}"')
+        await conn.execute(f'SET search_path TO "{schema}"')
+        await conn.execute("CREATE TABLE contacts (id uuid PRIMARY KEY)")
+        await conn.execute(_migration_sql("045_invoices.sql"))
+        await _run_migration(conn, schema, "385_invoices_billing_period_dedup.sql")
+
+        assert await invoice_repo_mod.recurring_invoice_dedup_schema_ready(conn) is True
+
+        await conn.execute(
+            "DROP INDEX CONCURRENTLY IF EXISTS idx_invoices_recurring_contact_period_source"
+        )
+        await conn.execute(
+            """
+            CREATE UNIQUE INDEX CONCURRENTLY idx_invoices_recurring_contact_period_source
+            ON invoices (contact_id, billing_period, source)
+            WHERE source IN ('monthly_auto', 'eom_commercial_billing')
+              AND status <> 'void'
+            """
+        )
+        assert await invoice_repo_mod.recurring_invoice_dedup_schema_ready(conn) is False
+
+        await conn.execute(
+            "DROP INDEX CONCURRENTLY IF EXISTS idx_invoices_recurring_contact_period_source"
+        )
+        await conn.execute(
+            """
+            CREATE UNIQUE INDEX CONCURRENTLY idx_invoices_recurring_contact_period_source
+            ON invoices (contact_id, billing_period)
+            WHERE source IN ('monthly_auto', 'eom_commercial_billing')
+              AND status <> 'void'
+            """
+        )
+        assert await invoice_repo_mod.recurring_invoice_dedup_schema_ready(conn) is True
+
+        await conn.execute(
+            "DROP INDEX CONCURRENTLY IF EXISTS idx_invoices_recurring_contact_period_source"
+        )
+        await conn.execute(
+            """
+            CREATE UNIQUE INDEX CONCURRENTLY idx_invoices_recurring_contact_period_source
+            ON invoices (contact_id, billing_period)
+            WHERE billing_period IS NOT NULL
+              AND source IN ('monthly_auto', 'eom_commercial_billing')
+              AND status <> 'void'
+              AND source = 'never'
+            """
+        )
+        assert await invoice_repo_mod.recurring_invoice_dedup_schema_ready(conn) is False
+
+        await conn.execute(
+            "DROP INDEX CONCURRENTLY IF EXISTS idx_invoices_recurring_contact_period_source"
+        )
+        await conn.execute(
+            """
+            CREATE UNIQUE INDEX CONCURRENTLY idx_invoices_recurring_contact_period_source
+            ON invoices (contact_id, billing_period)
+            WHERE source IN ('monthly_auto', 'eom_commercial_billing')
+              AND status <> 'void'
+            """
+        )
+        assert await invoice_repo_mod.recurring_invoice_dedup_schema_ready(conn) is True
+
+        await conn.execute(
+            "ALTER TABLE invoices DROP CONSTRAINT IF EXISTS "
+            "invoices_recurring_billing_period_required_check"
+        )
+        await conn.execute(
+            """
+            ALTER TABLE invoices
+                ADD CONSTRAINT invoices_recurring_billing_period_required_check
+                CHECK (
+                    source NOT IN ('monthly_auto', 'eom_commercial_billing')
+                    OR status = 'void'
+                    OR billing_period IS NOT NULL
+                )
+                NOT VALID
+            """
+        )
+        assert await invoice_repo_mod.recurring_invoice_dedup_schema_ready(conn) is False
+    finally:
+        await conn.execute("SET search_path TO public")
+        await conn.execute(f'DROP SCHEMA IF EXISTS "{schema}" CASCADE')
+        await conn.close()
+
+
+@pytest.mark.asyncio
 async def test_real_postgres_billing_period_backfill_and_collision_handling():
     """Migration 385's backfill (added after Codex P1 review on ATLAS #2448):
     historical monthly_auto/eom_commercial_billing rows had billing_period =
@@ -743,3 +845,24 @@ def test_invoice_status_update_blocks_quarantined_void_resurrection_in_repositor
     assert "status = 'void'" in source
     assert "$2 <> 'void'" in source
     assert "source IN ('monthly_auto', 'eom_commercial_billing')" in source
+
+
+def test_recurring_dedup_predicate_readiness_rejects_extra_clauses():
+    good = (
+        "(((source)::text = ANY "
+        "(ARRAY['monthly_auto'::text, 'eom_commercial_billing'::text])) "
+        "AND ((status)::text <> 'void'::text))"
+    )
+    impossible_extra_clause = (
+        "((billing_period IS NOT NULL) "
+        "AND ((source)::text = ANY "
+        "(ARRAY['monthly_auto'::text, 'eom_commercial_billing'::text])) "
+        "AND ((status)::text <> 'void'::text) "
+        "AND ((source)::text = 'never'::text))"
+    )
+
+    assert invoice_repo_mod._recurring_index_predicate_ready(good) is True
+    assert (
+        invoice_repo_mod._recurring_index_predicate_ready(impossible_extra_clause)
+        is False
+    )

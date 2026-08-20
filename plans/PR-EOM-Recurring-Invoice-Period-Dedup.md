@@ -221,9 +221,12 @@ Max files: 19
    historical backfill derives the right period per source and quarantines
    real collisions without falsely flagging unrelated NULL-contact_id rows;
    the recurring-writer fence blocks only the recurring writer surface when
-   the dedup schema is unavailable; EOM/base receivables readiness no longer
-   requires migration 385; the draft-writer MCP server migrates only its
-   draft-runtime invoice/payment prerequisites and verifies that schema.
+   the dedup schema is unavailable; the standalone monthly task-level fence
+   stops before invoice lookup/create when dedup readiness is false or raises;
+   the recurring readiness helper verifies actual index/constraint definitions,
+   not just object names; EOM/base receivables readiness no longer requires
+   migration 385; the draft-writer MCP server migrates only its draft-runtime
+   invoice/payment prerequisites and verifies that schema.
 
 ### Review Contract
 
@@ -249,6 +252,19 @@ Max files: 19
     creates normally for a second, un-invoiced contact in the same pass —
     settled by
     `test_monthly_invoice_generation_cross_pipeline_dedup.py::test_legacy_writer_skips_contact_the_new_pipeline_already_invoiced`.
+  - The standalone monthly task-level recurring-dedup readiness fence fails
+    closed before service loading, cross-pipeline invoice lookup, or invoice
+    creation when readiness returns `False` or raises — settled by
+    `test_monthly_invoice_generation_cross_pipeline_dedup.py::test_legacy_writer_fails_closed_when_task_level_dedup_schema_not_ready`
+    and
+    `::test_legacy_writer_fails_closed_when_task_level_dedup_schema_check_raises`.
+  - The recurring-dedup readiness helper verifies actual schema definitions,
+    not just same-named objects: a same-named valid unique index with
+    `(contact_id, billing_period, source)` is rejected, and a same-named
+    required-period CHECK missing the legacy-null exemption is rejected —
+    settled by
+    `test_invoice_repository.py::test_real_postgres_recurring_dedup_readiness_rejects_drifted_definitions`
+    when real Postgres is configured.
   - Migration content is additive and correctly scoped for production rollout:
     it references both recurring sources and the void exclusion, indexes
     `(contact_id, billing_period)` alone — not `source` — since source
@@ -831,6 +847,54 @@ that file and runs it in the receivables/repository job, so the required PR
 checks exercise the monthly writer hit and fail-closed branches instead of
 leaving them to the scheduled repo-wide backstop.
 
+**Finding #16 — recurring dedup readiness must verify definitions, not just
+names.** Review round 7 found that an externally managed schema could contain
+same-named, valid, ready objects with weaker definitions — for example a
+unique index on `(contact_id, billing_period, source)`, which would allow the
+two recurring sources to coexist for the same contact+period. Fixed in this
+repair commit: `recurring_invoice_dedup_schema_ready()` now reads
+Postgres catalog definition text through the `pg_get_constraintdef` and
+`pg_get_indexdef` built-ins and verifies the actual required CHECK/index
+shapes, including the two-column index key and recurring source/void
+predicate. Verified by
+`tests/test_invoice_repository.py::test_real_postgres_recurring_dedup_readiness_rejects_drifted_definitions`
+when real Postgres is configured.
+
+**Finding #17 — the standalone monthly task-level readiness fence needed
+direct run evidence.** Review round 7 found that the new early-return and
+exception branches were not exercised by the monthly writer tests because the
+fake invoice repository had no `recurring_dedup_ready()` method. Fixed in this
+repair commit: the fake repo now implements that method, and two direct
+`run()` tests assert that readiness `False` or readiness exceptions stop
+before service loading, cross-pipeline lookup, or invoice creation.
+
+**Finding #18 — recurring dedup readiness must compare complete index
+semantics.** Review round 8 found the previous definition-readiness repair
+still used token fragments, so a same-named valid index on the correct columns
+but with an impossible extra predicate clause could pass readiness while
+indexing no recurring rows. Fixed in this repair commit:
+`recurring_invoice_dedup_schema_ready()` now reads catalog key columns and
+predicate expression separately, requires exactly `(contact_id,
+billing_period)`, and compares the normalized predicate clause set exactly.
+Verified by
+`tests/test_invoice_repository.py::test_recurring_dedup_predicate_readiness_rejects_extra_clauses`
+and the real-Postgres drift test when configured.
+
+**Finding #19 — migration 385 must trigger the invoicing workflow.** Review
+round 8 found that the workflow ran the new regression tests but did not list
+`atlas_brain/storage/migrations/385_invoices_billing_period_dedup.sql` in
+either the pull-request or push path filters. Fixed in this repair commit:
+both filter lists now include migration 385, so migration-only follow-ups run
+the invoice repository, approval, monthly-writer, and harness proofs.
+
+**Finding #20 — verification must not claim atomic rollback for a non-atomic
+migration.** Review round 8 found an obsolete verification sentence still
+claimed a forced mid-migration failure rolled back the column/table/ledger
+together. That contradicts migration 385's intentional non-atomic concurrent
+index shape. Fixed in this repair commit: the verification text now describes
+the actual recovery proof — idempotent retry and no duplicate/changed state
+after re-running the already-applied migration — rather than atomic rollback.
+
 ## Intentional
 
 - No new parameter on `InvoiceRepository.create()` or `_InvoiceDraft`: both
@@ -980,11 +1044,13 @@ Parked hardening: none.
     constraint violation before this fix (proving the gap), then the
     app-level pre-check in both writers correctly returns/raises a
     `quarantined_collision` hit after it; the same contact with a different
-    (unreserved) period is not a conflict and approves normally; a forced
-    mid-migration failure with the reservation table already added to the
-    file still rolls back the column, the new table, and the ledger record
-    together, then a clean retry produces the expected single reservation
-    row for the collision pair.
+    (unreserved) period is not a conflict and approves normally. Migration
+    385 is non-atomic by design, so recovery evidence is idempotent retry
+    rather than rollback: the migration uses `IF NOT EXISTS`/drop-recreate
+    guards around persistent objects, freezes collision membership inside
+    the active migration session, and the real-Postgres backfill test reruns
+    the already-applied migration and proves it produces no duplicate or
+    changed invoice/reservation state.
   - Round 3, finding #4: a five-digit (`>9999`) `eom_commercial_billing`
     invoice-number sequence now backfills `billing_period` correctly and is
     protected by the same collision/reservation machinery — proven by
