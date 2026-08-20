@@ -30,6 +30,7 @@ _HARNESS_MIGRATIONS = (
     "045_invoices.sql",
     "047_invoice_extra_fields.sql",
     "048_customer_services.sql",
+    "385_invoices_billing_period_dedup.sql",
 )
 
 

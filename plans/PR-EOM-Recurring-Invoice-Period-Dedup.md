@@ -116,7 +116,7 @@ state was briefly, correctly flagged as a P1 blocker.
 
 Ownership lane: eom/recurring-invoice-period-dedup
 Slice phase: Production hardening
-Max files: 16
+Max files: 18
 
 1. Migration 385: `invoices.billing_period` column + format CHECK + the
    cross-source partial unique index + historical backfill + collision
@@ -379,6 +379,8 @@ two `WITH candidates ... UPDATE` passes)
 - `tests/test_commercial_billing_runs.py`
 - `tests/test_invoicing_draft_writer_mcp.py`
 - `tests/test_eom_render_profile.py`
+- `tests/maturity_sweep/baseline_atlas_brain_storage.json`
+- `tests/test_legacy_monthly_autoinvoice_writer_harness.py`
 - `plans/PR-EOM-Recurring-Invoice-Period-Dedup.md`
 
 ## Mechanism
@@ -557,6 +559,32 @@ guarantee than the unambiguous-period case gets from the partial unique
 index, and it is disclosed as such, not silently absent — which is the
 entire point of this fix relative to doing nothing.
 
+### CI-caught fixes (not Codex findings, discovered by live CI on the pushed branch)
+
+Two real gaps surfaced by GitHub Actions on this PR that no local gate run
+this session had exercised:
+
+- `tests/maturity_sweep/baseline_atlas_brain_storage.json` was stale —
+  6 of the 7 files it flagged as "new brittleness" are untouched by this PR
+  (pre-existing drift the ratchet had simply never been run against since
+  its last update, long before this branch existed); the 7th
+  (`atlas_brain/storage/repositories/invoice.py`) genuinely did increase in
+  score from this PR's new method and mock. Regenerated via the CI-documented
+  `--update-baseline` command rather than fixing the 6 unrelated files' own
+  brittleness, which is out of this slice's scope.
+- `tests/test_legacy_monthly_autoinvoice_writer_harness.py`'s fixed
+  `_HARNESS_MIGRATIONS` tuple never included migration 385, so its
+  real-Postgres proof of the *actual* legacy writer code — not a mock —
+  hit `column "billing_period" does not exist` the moment that code tried
+  to persist an invoice. This is different from the harness-level dedup
+  proof this plan's Deferred section already declined to add (a *new*
+  capability this PR chose not to extend that armed harness with); this is
+  the *existing* harness breaking because the legacy writer it exercises now
+  unconditionally references a column that harness's fixture didn't have.
+  Not optional to fix. Verified against a harness-compliant container
+  (loopback, port 5432, database `atlas_receivables_test`, `ATLAS_LEGACY_MONTHLY_AUTOINVOICE_WRITER_HARNESS=1`):
+  9 passed, matching CI's own count.
+
 ## Intentional
 
 - No new parameter on `InvoiceRepository.create()` or `_InvoiceDraft`: both
@@ -712,20 +740,22 @@ Parked hardening: none.
 
 | File | LOC |
 |---|---:|
-| `atlas_brain/storage/migrations/385_invoices_billing_period_dedup.sql` | ~298 |
-| `atlas_brain/storage/repositories/invoice.py` | ~66 |
+| `atlas_brain/storage/migrations/385_invoices_billing_period_dedup.sql` | 270 |
+| `atlas_brain/storage/repositories/invoice.py` | 60 |
 | `atlas_brain/autonomous/tasks/monthly_invoice_generation.py` | 15 |
-| `atlas_brain/services/commercial_billing_approvals.py` | ~51 |
+| `atlas_brain/services/commercial_billing_approvals.py` | 45 |
 | `atlas_brain/main.py` | 100 |
 | `atlas_brain/main_eom.py` | 1 |
 | `atlas_brain/services/receivables.py` | 13 |
 | `atlas_brain/mcp/invoicing_draft_writer_server.py` | 29 |
-| `tests/test_invoice_repository.py` | ~318 |
-| `tests/test_commercial_billing_approvals.py` | ~215 |
+| `tests/test_invoice_repository.py` | 314 |
+| `tests/test_commercial_billing_approvals.py` | 215 |
 | `tests/test_monthly_invoice_generation_cross_pipeline_dedup.py` | 147 |
 | `tests/test_receivables.py` | 31 |
-| `tests/test_commercial_billing_runs.py` | 202 |
+| `tests/test_commercial_billing_runs.py` | 206 |
 | `tests/test_invoicing_draft_writer_mcp.py` | 106 |
 | `tests/test_eom_render_profile.py` | 1 |
-| `plans/PR-EOM-Recurring-Invoice-Period-Dedup.md` | ~800 |
-| **Total** | **~2393 (estimate -- parent session: please re-run `python3 scripts/audit_plan_doc_diff_size.py plans/PR-EOM-Recurring-Invoice-Period-Dedup.md origin/main` after committing and true up this table + total exactly, as done for the first two amendment rounds)** |
+| `tests/maturity_sweep/baseline_atlas_brain_storage.json` | 27 |
+| `tests/test_legacy_monthly_autoinvoice_writer_harness.py` | 1 |
+| `plans/PR-EOM-Recurring-Invoice-Period-Dedup.md` | 760 |
+| **Total** | **2341** |
