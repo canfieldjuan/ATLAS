@@ -144,9 +144,11 @@ schema, sets that schema first in the search path, creates the minimal
 schema. `finally` restores the search path, drops only the generated schema,
 and closes the connection.
 
-The task receives real repository instances backed by a schema-scoped pool.
-Calendar and CRM are deterministic in-memory adapters; PDF rendering returns
-test bytes into `tmp_path`; the notification function records locally; and the
+The task resolves its unmodified customer-service and invoice repository
+factories against a temporarily bound schema-scoped database singleton, which
+is restored before normal schema teardown and by a failure finalizer. Calendar
+and CRM are deterministic in-memory adapters; PDF rendering returns test bytes
+into `tmp_path`; the notification function records locally; and the
 email-provider factory is a sentinel that fails if review mode ever tries to
 use it. A single active per-visit service and two same-day events create a
 deterministic draft. Running the unchanged task again proves its existing
@@ -201,6 +203,9 @@ Parked hardening: none.
   `0` `legacy_monthly_writer_*` schemas and the owned container was removed.
 - Ruff check and Ruff format --check on
   `tests/test_legacy_monthly_autoinvoice_writer_harness.py` — passed.
+- The exact `atlas-brain-b2c-core-risk` maturity-ratchet command — passed.
+  The harness binds the isolated database singleton rather than patching either
+  first-party repository factory, so it introduces no new storage mock debt.
 - `/home/juan-canfield/Desktop/Atlas/.venv/bin/python -m pytest
   tests/test_legacy_monthly_autoinvoice_opt_in.py
   tests/test_monthly_invoice_generation.py -k
@@ -214,7 +219,8 @@ Parked hardening: none.
 - `python scripts/sync_pr_plan.py`, plan-doc/files-touched/diff-size audits,
   plan/code-consistency audit, strict guard-closure lint, and `git diff --check
   origin/main...HEAD` — passed.
-- Pending before push: the managed local PR review bundle.
+- The managed local full PR review passed before ready-for-review publication;
+  `scripts/push_pr.sh` reruns that same bundle whenever the PR head changes.
 - Hosted CI is supplemental evidence; the required implementation proof is
   runnable locally against the exact loopback test target and cannot mutate a
   production namespace.
@@ -224,6 +230,6 @@ Parked hardening: none.
 | File | LOC |
 |---|---:|
 | `.github/workflows/atlas_invoicing_checks.yml` | 44 |
-| `plans/PR-EOM-Legacy-Monthly-Writer-Harness.md` | 229 |
-| `tests/test_legacy_monthly_autoinvoice_writer_harness.py` | 458 |
-| **Total** | **731** |
+| `plans/PR-EOM-Legacy-Monthly-Writer-Harness.md` | 235 |
+| `tests/test_legacy_monthly_autoinvoice_writer_harness.py` | 477 |
+| **Total** | **756** |

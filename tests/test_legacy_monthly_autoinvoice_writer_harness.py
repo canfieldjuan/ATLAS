@@ -9,12 +9,12 @@ from __future__ import annotations
 
 import itertools
 import os
-from contextlib import asynccontextmanager
+from contextlib import ExitStack, asynccontextmanager, contextmanager
 from dataclasses import dataclass
 from datetime import date, datetime, timezone
 from pathlib import Path
 from types import SimpleNamespace
-from typing import Any, AsyncIterator
+from typing import Any, AsyncIterator, Iterator
 from urllib.parse import urlsplit
 from uuid import uuid4
 
@@ -167,6 +167,19 @@ class _SchemaPool:
         return await self._in_schema("fetchrow", query, *args)
 
 
+@contextmanager
+def _bind_harness_database_pool(pool: _SchemaPool) -> Iterator[None]:
+    """Bind the real repository singleton to the isolated schema pool."""
+    from atlas_brain.storage import database
+
+    previous_pool = database._db_pool
+    database._db_pool = pool
+    try:
+        yield
+    finally:
+        database._db_pool = previous_pool
+
+
 @dataclass(frozen=True)
 class _WriterHarnessDatabase:
     conn: Any
@@ -278,6 +291,7 @@ def _scheduled_monthly_task():
 @pytest.mark.asyncio
 async def test_isolated_legacy_writer_creates_one_draft_and_deduplicates(
     monkeypatch: pytest.MonkeyPatch,
+    request: pytest.FixtureRequest,
     tmp_path: Path,
 ) -> None:
     """Exercise the real writer/repositories without ambient data or delivery."""
@@ -296,13 +310,20 @@ async def test_isolated_legacy_writer_creates_one_draft_and_deduplicates(
             email_provider,
             invoice_pdf,
         )
-        from atlas_brain.storage.repositories import customer_service, invoice
+        from atlas_brain.storage.repositories.customer_service import (
+            CustomerServiceRepository,
+        )
+        from atlas_brain.storage.repositories.invoice import InvoiceRepository
 
         contact_id = uuid4()
         await harness.conn.execute("INSERT INTO contacts (id) VALUES ($1)", contact_id)
 
-        service_repo = customer_service.CustomerServiceRepository()
-        invoice_repo = invoice.InvoiceRepository(pool=harness.pool)
+        cleanup = ExitStack()
+        request.addfinalizer(cleanup.close)
+        cleanup.enter_context(_bind_harness_database_pool(harness.pool))
+
+        service_repo = CustomerServiceRepository()
+        invoice_repo = InvoiceRepository()
         calendar = _HarnessCalendar(
             [
                 _confirmed_event("Horizon Fixture cleaning", date(2026, 4, 8)),
@@ -327,11 +348,6 @@ async def test_isolated_legacy_writer_creates_one_draft_and_deduplicates(
         async def capture_notification(results: dict, _task: object) -> None:
             notifications.append(dict(results))
 
-        monkeypatch.setattr(customer_service, "get_db_pool", lambda: harness.pool)
-        monkeypatch.setattr(
-            customer_service, "get_customer_service_repo", lambda: service_repo
-        )
-        monkeypatch.setattr(invoice, "get_invoice_repo", lambda: invoice_repo)
         monkeypatch.setattr(
             calendar_provider, "get_calendar_provider", lambda: calendar
         )
@@ -434,6 +450,9 @@ async def test_isolated_legacy_writer_creates_one_draft_and_deduplicates(
         assert email_factory_calls == []
         assert len(crm.interactions) == 1
         assert len(notifications) == 2
+
+        # Restore before the schema context tears down; the finalizer covers failures.
+        cleanup.close()
 
     assert schema is not None
     assert not await _schema_exists(database_url, schema)
