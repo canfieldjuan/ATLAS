@@ -2478,8 +2478,20 @@ class InvoicingConfig(BaseSettings):
     reminder_interval_days: int = Field(default=7, ge=1, le=90, description="Days between reminders (legacy fallback when reminder_intervals is empty)")
     notify_enabled: bool = Field(default=True, description="Push ntfy for invoice events")
     invoice_number_prefix: str = Field(default="INV", description="Prefix for invoice numbers")
-    auto_invoice_enabled: bool = Field(default=True, description="Monthly auto-invoice generation")
-    auto_invoice_send_email: bool = Field(default=True, description="Auto-send invoices via email")
+    auto_invoice_enabled: bool = Field(
+        default=False,
+        description=(
+            "Enable the legacy monthly auto-invoice task. Disabled by default; "
+            "set true only for an explicitly approved legacy operation."
+        ),
+    )
+    auto_invoice_send_email: bool = Field(
+        default=False,
+        description=(
+            "Allow the legacy monthly auto-invoice task to send email when review "
+            "mode is disabled. Disabled by default; requires explicit operator opt-in."
+        ),
+    )
     auto_invoice_due_days: int = Field(default=30, ge=1, le=365, description="Payment terms for auto-invoices")
     auto_invoice_calendar_id: str = Field(default="", description="Google Calendar ID for commercial cleaning events")
     auto_invoice_review_mode: bool = Field(default=True, description="Hold invoices as draft for review instead of auto-sending")
