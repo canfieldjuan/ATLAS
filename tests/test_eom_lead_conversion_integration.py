@@ -4623,6 +4623,19 @@ async def test_completed_explicit_primary_first_clean_replay_skips_identity_look
         first = await schedule_eom_first_clean_booking(provider, first_calendar, command)
         assert first["idempotent"] is False
         assert first_calendar.resolve_calls == [{"calendar_id": "primary"}]
+        requested = await conn.fetchrow(
+            """
+            SELECT metadata
+            FROM eom_lead_lifecycle_events
+            WHERE contact_id = $1
+              AND operation_key = $2
+              AND event_type = 'first_clean_booking_requested'
+            """,
+            contact_id,
+            booking_key,
+        )
+        assert requested is not None
+        assert _metadata_dict(requested["metadata"])["requested_calendar_id"] == "primary"
 
         replay_calendar = _UnavailableIdentityCalendar(
             resolved_calendar_id="different-owner@example.com"
@@ -4644,6 +4657,87 @@ async def test_completed_explicit_primary_first_clean_replay_skips_identity_look
                     scheduled_end=command.scheduled_end,
                     calendar_id="primary",
                     notes="Different notes",
+                    booking_key=command.booking_key,
+                    actor_id=command.actor_id,
+                    actor_name=command.actor_name,
+                ),
+            )
+        assert replay_calendar.resolve_calls == []
+        assert replay_calendar.create_calls == []
+    finally:
+        await conn.execute(f'DROP SCHEMA IF EXISTS "{schema}" CASCADE')
+        await conn.close()
+
+
+@pytest.mark.asyncio
+async def test_completed_concrete_first_clean_rejects_primary_replay():
+    """A changed primary alias cannot replace a concrete original request."""
+
+    class _UnavailableIdentityCalendar(_FirstCleanIdentityCalendar):
+        async def resolve_calendar_id(self, *, calendar_id: str) -> ToolResult:
+            self.resolve_calls.append({"calendar_id": calendar_id})
+            return ToolResult(
+                success=False,
+                error="API_ERROR",
+                data={"request_phase": "calendar_identity", "status_code": 503},
+                message="Calendar identity unavailable",
+            )
+
+    database_url = _database_url_or_skip()
+    schema = f"atlas_eom_concrete_primary_replay_{uuid.uuid4().hex}"
+    conn = await asyncpg.connect(database_url)
+    try:
+        await _prepare_schema(conn, schema, apply_privilege_migration=False)
+        provider = DatabaseCRMProvider(pool=conn)
+        contact_id = uuid.uuid4()
+        await _insert_contact(conn, contact_id=contact_id)
+        booking_key = f"office-first-clean-{uuid.uuid4().hex}"
+        command = EOMFirstCleanBooking(
+            contact_id=str(contact_id),
+            scheduled_start=datetime(2026, 8, 11, 14, 0, tzinfo=timezone.utc),
+            scheduled_end=datetime(2026, 8, 11, 17, 0, tzinfo=timezone.utc),
+            calendar_id="team@example.com",
+            notes="Bring first-clean checklist",
+            booking_key=booking_key,
+            actor_id=1,
+            actor_name="Juan Canfield",
+        )
+        first_calendar = _FirstCleanIdentityCalendar(
+            resolved_calendar_id="office-owner@example.com"
+        )
+        first = await schedule_eom_first_clean_booking(provider, first_calendar, command)
+        assert first["idempotent"] is False
+        assert first_calendar.resolve_calls == []
+
+        requested = await conn.fetchrow(
+            """
+            SELECT metadata
+            FROM eom_lead_lifecycle_events
+            WHERE contact_id = $1
+              AND operation_key = $2
+              AND event_type = 'first_clean_booking_requested'
+            """,
+            contact_id,
+            booking_key,
+        )
+        assert requested is not None
+        assert _metadata_dict(requested["metadata"])["requested_calendar_id"] == (
+            "team@example.com"
+        )
+
+        replay_calendar = _UnavailableIdentityCalendar(
+            resolved_calendar_id="team@example.com"
+        )
+        with pytest.raises(EOMLeadConversionError, match="different first clean booking"):
+            await schedule_eom_first_clean_booking(
+                provider,
+                replay_calendar,
+                EOMFirstCleanBooking(
+                    contact_id=command.contact_id,
+                    scheduled_start=command.scheduled_start,
+                    scheduled_end=command.scheduled_end,
+                    calendar_id="primary",
+                    notes=command.notes,
                     booking_key=command.booking_key,
                     actor_id=command.actor_id,
                     actor_name=command.actor_name,

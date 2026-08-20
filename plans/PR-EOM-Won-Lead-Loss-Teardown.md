@@ -99,9 +99,13 @@ adds no table, worker, queue, generic saga framework, or product surface.
     `status`, both facts canonical completion requires after the external
     delete. A completed same-key first-clean booking submitted as `primary`
     still takes the live identity branch before its stored booked outcome, so a
-    Calendar outage can break replay without any unfinished work. Finally, the
-    EOM workflow path filters do not name the new won-loss service or migration,
-    so their tests can be skipped by a future isolated change.
+    Calendar outage can break replay without any unfinished work. That repair
+    initially persists only the resolved concrete ID, however, so it cannot
+    prove that an original completed request used `primary`: a concrete booking
+    could change its retry to `primary` and bypass the immutable Calendar-ID
+    comparison. Finally, the EOM workflow path filters do not name the new
+    won-loss service or migration, so their tests can be skipped by a future
+    isolated change.
 - Correct fix must touch/change:
   1. Add a narrow, durable won-loss orchestration service that reuses the
      existing PostgreSQL lifecycle ledger and advisory-lock component: prepare
@@ -201,6 +205,12 @@ adds no table, worker, queue, generic saga framework, or product surface.
       pipeline path filters, and prove that enrollment in the already-run EOM
       unit test file. Keep the existing workflow job and its test command
       unchanged.
+  20. Persist the original requested Calendar identifier in the existing
+      first-clean request metadata before the resolved concrete target replaces
+      it. Normalize a completed `primary` retry only when that immutable field
+      proves the original request used `primary`; a concrete-original booking
+      retried as `primary` must conflict before any Calendar call. Legacy rows
+      without that field retain the existing identity-preflight path.
 - Must not change:
   1. The existing `new` and `estimate_booked` loss/reopen state machine,
      response shape, reasons, lifecycle evidence, and idempotency behavior.
@@ -213,10 +223,11 @@ adds no table, worker, queue, generic saga framework, or product surface.
   3. Customer/Site creation, Tracker handoff payloads, public onboarding token
      format/issuance/redemption, onboarding email copy/transport, and all
      payroll, QR/GPS, Home Base, receivables, Website, and tracker lanes.
-  4. The public-product shape: no new UI, email, data field, API route,
+  4. The public-product shape: no new UI, email, API field or route,
      table/column shape, dependency, configuration setting, or background
-     worker. The one permitted additive migration is a narrow direct-SQL
-     trigger; it is not a data-model, role-grant, or product-surface change.
+     worker. The existing opaque lifecycle metadata may retain the original
+     Calendar identifier required to prove a replay invariant; it is not a
+     schema, role-grant, or product-surface change.
   5. Reopening a newly lost `won` lead. Restoring `won` would falsely resurrect
      a cancelled appointment and revoked draft; the existing reopen admission
      remains intentionally limited to pre-won stages.
@@ -358,6 +369,10 @@ Max files: 12
     proves both the pull-request and main-push filters enroll the won-loss
     service and migration, while the workflow keeps running its existing EOM
     test command.
+18. `tests/test_eom_lead_conversion_integration.py::test_completed_concrete_first_clean_rejects_primary_replay`
+    proves the request metadata retains a concrete original Calendar ID and a
+    same-key `primary` retry returns 409 before identity resolution or event
+    creation.
 
 - Reachability proof: authenticated private funnel route -> service
   orchestration -> CRM lifecycle state + Calendar delete result; the route test
@@ -461,11 +476,13 @@ Calendar pair and returns that pair.
 
 Before a new or unfinished first-clean CRM prepare, the booking service resolves
 the selected Calendar ID through the current OAuth principal. It persists and
-creates only against that concrete returned ID. A completed exact-key request
-that originally named `primary` instead normalizes that alias to its immutable
-stored ID for the existing payload comparison, then returns its persisted replay
-without contacting Calendar; different immutable fields still conflict. The
-loss service invokes DELETE using that
+creates only against that concrete returned ID, while the existing request
+metadata retains the original requested identifier. A completed exact-key
+request normalizes `primary` to the immutable stored ID only when that metadata
+proves the original request used `primary`; a concrete-original request changed
+to `primary` conflicts before Calendar. The admitted primary replay returns its
+persisted result without contacting Calendar; different immutable fields still
+conflict. The loss service invokes DELETE using that
 immutable pair only when its persisted Calendar ID is concrete rather than
 credential-relative. The Calendar tool first verifies that the current
 principal can resolve that exact ID; only then can 404/410 mean the exact event
@@ -644,8 +661,9 @@ Parked hardening: none within the stated predicate.
   current-protocol completion.
 - The completed explicit-`primary` same-key proof must pass with a Calendar
   identity failure fake and show no replay-time lookup/create; its changed-notes
-  variant must still return the existing conflict. The EOM unit suite also pins
-  the service and migration in both pipeline path filters.
+  variant must still return the existing conflict. A concrete-original booking
+  retried as `primary` must likewise conflict before lookup/create. The EOM unit
+  suite also pins the service and migration in both pipeline path filters.
 - Pending before push: the wrapper-owned Atlas local PR review, which will run
   through `scripts/push_pr.sh` exactly once with the final PR body and its
   isolated unit-gate database environment.
@@ -656,14 +674,14 @@ Parked hardening: none within the stated predicate.
 |---|---:|
 | `.github/workflows/atlas_eom_lead_pipeline_checks.yml` | 4 |
 | `atlas_brain/eom_api/funnel.py` | 12 |
-| `atlas_brain/services/crm_provider.py` | 1028 |
-| `atlas_brain/services/eom_estimate_booking.py` | 87 |
+| `atlas_brain/services/crm_provider.py` | 1060 |
+| `atlas_brain/services/eom_estimate_booking.py` | 96 |
 | `atlas_brain/services/eom_won_lead_loss.py` | 120 |
 | `atlas_brain/storage/migrations/386_eom_won_loss_nocodb_fence.sql` | 68 |
 | `atlas_brain/tools/calendar.py` | 284 |
-| `plans/PR-EOM-Won-Lead-Loss-Teardown.md` | 669 |
+| `plans/PR-EOM-Won-Lead-Loss-Teardown.md` | 687 |
 | `tests/contact_write_boundary/baseline.json` | 1 |
 | `tests/test_contact_write_boundary.py` | 8 |
-| `tests/test_eom_lead_conversion.py` | 548 |
-| `tests/test_eom_lead_conversion_integration.py` | 1086 |
-| **Total** | **3915** |
+| `tests/test_eom_lead_conversion.py` | 551 |
+| `tests/test_eom_lead_conversion_integration.py` | 1180 |
+| **Total** | **4071** |

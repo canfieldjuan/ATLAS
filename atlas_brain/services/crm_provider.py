@@ -2590,6 +2590,7 @@ class DatabaseCRMProvider:
         calendar_id: str,
         notes: str | None,
         expected_calendar_event_id: str,
+        requested_calendar_id: str | None = None,
         calendar_event: dict[str, Any] | None = None,
         calendar_event_id: str | None = None,
         actor_id: int | None = None,
@@ -2601,6 +2602,8 @@ class DatabaseCRMProvider:
             "notes": notes or "",
             "expected_calendar_event_id": expected_calendar_event_id,
         }
+        if requested_calendar_id is not None:
+            metadata["requested_calendar_id"] = requested_calendar_id
         if calendar_event is not None:
             metadata["calendar_event"] = calendar_event
         if calendar_event_id is not None:
@@ -2848,6 +2851,7 @@ class DatabaseCRMProvider:
         actor_id: int,
         actor_name: str,
         calendar_id_explicit: bool = True,
+        requested_calendar_id: str | None = None,
     ) -> dict[str, Any]:
         """Claim one lead/booking key before the first-clean Calendar write."""
         return await self._prepare_eom_booking(
@@ -2862,6 +2866,7 @@ class DatabaseCRMProvider:
             actor_id=actor_id,
             actor_name=actor_name,
             calendar_id_explicit=calendar_id_explicit,
+            requested_calendar_id=requested_calendar_id,
         )
 
     async def _prepare_eom_booking(
@@ -2878,6 +2883,7 @@ class DatabaseCRMProvider:
         actor_id: int,
         actor_name: str,
         calendar_id_explicit: bool = True,
+        requested_calendar_id: str | None = None,
     ) -> dict[str, Any]:
         """Claim one lead/booking key before the external Calendar side effect.
 
@@ -3036,6 +3042,10 @@ class DatabaseCRMProvider:
                     booked_for_key is not None
                     and family.enqueues_onboarding_draft
                     and str(calendar_id).strip().casefold() == "primary"
+                    and str(
+                        request_metadata.get("requested_calendar_id") or ""
+                    ).strip().casefold()
+                    == "primary"
                 ):
                     # A completed same-key replay is closed from immutable
                     # lifecycle metadata.  Do not make it depend on today's
@@ -3049,6 +3059,23 @@ class DatabaseCRMProvider:
                     ).strip()
                     if snapshot_calendar_id:
                         calendar_id = snapshot_calendar_id
+                elif (
+                    booked_for_key is not None
+                    and family.enqueues_onboarding_draft
+                    and str(calendar_id).strip().casefold() == "primary"
+                    and str(
+                        request_metadata.get("requested_calendar_id") or ""
+                    ).strip()
+                ):
+                    # `primary` is an alias only when the immutable request
+                    # snapshot proves the original call used it. A concrete
+                    # original request must not accept a changed alias simply
+                    # because today's primary happens to resolve to that ID.
+                    raise EOMLeadConversionError(
+                        409,
+                        "Booking key already belongs to a different "
+                        f"{family.label} booking",
+                    )
                 elif (
                     family.enqueues_onboarding_draft
                     and str(calendar_id).strip().casefold() == "primary"
@@ -3199,6 +3226,11 @@ class DatabaseCRMProvider:
                         calendar_id=calendar_id,
                         notes=notes,
                         expected_calendar_event_id=expected_calendar_event_id,
+                        requested_calendar_id=(
+                            requested_calendar_id
+                            if family.enqueues_onboarding_draft
+                            else None
+                        ),
                         calendar_event=calendar_event,
                         actor_id=actor_id,
                     )

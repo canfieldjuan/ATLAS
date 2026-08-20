@@ -2135,6 +2135,9 @@ async def test_private_first_clean_booking_resolves_and_persists_concrete_calend
         "primary",
         "office-owner@example.com",
     ]
+    assert [
+        call["requested_calendar_id"] for call in crm.first_clean_prepare_calls
+    ] == [None, None]
     assert calendar.calls[0]["calendar_id"] == "office-owner@example.com"
     assert crm.first_clean_complete_calls[0]["calendar_id"] == "office-owner@example.com"
 

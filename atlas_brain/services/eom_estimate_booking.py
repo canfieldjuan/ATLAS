@@ -360,17 +360,26 @@ async def _run_eom_booking(
     effective_calendar_id = _effective_calendar_id(command.calendar_id, calendar)
 
     async def _prepare(calendar_id: str) -> dict[str, Any]:
+        prepare_kwargs: dict[str, Any] = {
+            "contact_id": command.contact_id,
+            "scheduled_start": command.scheduled_start,
+            "scheduled_end": command.scheduled_end,
+            "calendar_id": calendar_id,
+            "calendar_id_explicit": bool(requested_calendar_id),
+            "notes": command.notes,
+            "booking_key": command.booking_key,
+            "expected_calendar_event_id": expected_event_id,
+            "actor_id": command.actor_id,
+            "actor_name": command.actor_name,
+        }
+        if binding.requires_concrete_calendar_identity:
+            # The first call may use `primary`, but the second call records the
+            # resolved concrete ID. Keep the original caller identifier so a
+            # completed retry can distinguish an original alias from a changed
+            # concrete-calendar request.
+            prepare_kwargs["requested_calendar_id"] = requested_calendar_id or None
         return await preparer(
-            contact_id=command.contact_id,
-            scheduled_start=command.scheduled_start,
-            scheduled_end=command.scheduled_end,
-            calendar_id=calendar_id,
-            calendar_id_explicit=bool(requested_calendar_id),
-            notes=command.notes,
-            booking_key=command.booking_key,
-            expected_calendar_event_id=expected_event_id,
-            actor_id=command.actor_id,
-            actor_name=command.actor_name,
+            **prepare_kwargs,
         )
 
     prepared = await _prepare(effective_calendar_id)
