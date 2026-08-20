@@ -146,6 +146,27 @@ def test_writer_harness_opt_in_is_exact() -> None:
         assert not _is_harness_armed(value)
 
 
+@pytest.mark.asyncio
+async def test_unarmed_harness_stops_before_asyncpg_import(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The unarmed context must skip before it can load a database driver."""
+    monkeypatch.delenv(_HARNESS_ENABLED_ENV, raising=False)
+    monkeypatch.delenv(_HARNESS_DATABASE_URL_ENV, raising=False)
+    asyncpg_loader_calls = 0
+
+    def forbidden_asyncpg_loader() -> Any:
+        nonlocal asyncpg_loader_calls
+        asyncpg_loader_calls += 1
+        raise AssertionError("unarmed harness reached asyncpg import")
+
+    with pytest.raises(pytest.skip.Exception, match=rf"{_HARNESS_ENABLED_ENV}=1"):
+        async with _writer_harness_database(asyncpg_loader=forbidden_asyncpg_loader):
+            raise AssertionError("unarmed harness opened a context")
+
+    assert asyncpg_loader_calls == 0
+
+
 def test_writer_harness_settings_use_typed_invoicing_config(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -370,6 +391,7 @@ async def test_isolated_legacy_writer_creates_one_draft_and_deduplicates(
         from atlas_brain.autonomous.tasks import (
             monthly_invoice_generation as task_module,
         )
+        from atlas_brain.autonomous.config import autonomous_config
         from atlas_brain.config import settings
         from atlas_brain.services import (
             calendar_provider,
@@ -381,6 +403,7 @@ async def test_isolated_legacy_writer_creates_one_draft_and_deduplicates(
             CustomerServiceRepository,
         )
         from atlas_brain.storage.repositories.invoice import InvoiceRepository
+        from atlas_brain.tools.notify import notify_tool
 
         contact_id = uuid4()
         await harness.conn.execute("INSERT INTO contacts (id) VALUES ($1)", contact_id)
@@ -400,6 +423,7 @@ async def test_isolated_legacy_writer_creates_one_draft_and_deduplicates(
         crm = _HarnessCRM()
         rendered_invoice_numbers: list[str] = []
         email_factory_calls: list[None] = []
+        notification_calls: list[dict[str, Any]] = []
 
         def render_harness_pdf(rendered_invoice: dict) -> bytes:
             rendered_invoice_numbers.append(rendered_invoice["invoice_number"])
@@ -411,6 +435,9 @@ async def test_isolated_legacy_writer_creates_one_draft_and_deduplicates(
                 "review-mode writer attempted to construct an email provider"
             )
 
+        async def forbidden_notification(*args: Any, **kwargs: Any) -> None:
+            notification_calls.append({"args": args, "kwargs": kwargs})
+
         monkeypatch.setattr(
             calendar_provider, "get_calendar_provider", lambda: calendar
         )
@@ -419,6 +446,9 @@ async def test_isolated_legacy_writer_creates_one_draft_and_deduplicates(
         monkeypatch.setattr(
             email_provider, "get_email_provider", forbidden_email_provider
         )
+        assert autonomous_config.notify_results is True
+        monkeypatch.setattr(settings.alerts, "ntfy_enabled", True)
+        monkeypatch.setattr(notify_tool, "_send_notification", forbidden_notification)
         monkeypatch.setattr(settings.invoicing, "enabled", True)
         monkeypatch.setattr(settings.invoicing, "auto_invoice_enabled", True)
         monkeypatch.setattr(settings.invoicing, "auto_invoice_review_mode", True)
@@ -494,6 +524,7 @@ async def test_isolated_legacy_writer_creates_one_draft_and_deduplicates(
         assert pdf_path.read_bytes() == b"%PDF-harness"
         assert rendered_invoice_numbers == [persisted_invoice["invoice_number"]]
         assert email_factory_calls == []
+        assert notification_calls == []
         assert len(crm.interactions) == 1
 
         second = await task_module.run(task)
@@ -509,6 +540,7 @@ async def test_isolated_legacy_writer_creates_one_draft_and_deduplicates(
         )
         assert rendered_invoice_numbers == [persisted_invoice["invoice_number"]]
         assert email_factory_calls == []
+        assert notification_calls == []
         assert len(crm.interactions) == 1
 
         # Restore before the schema context tears down; the finalizer covers failures.
