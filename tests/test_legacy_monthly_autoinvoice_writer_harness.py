@@ -192,6 +192,19 @@ def test_writer_harness_settings_use_typed_invoicing_config(
     assert config.legacy_monthly_writer_harness_database_url == database_url
 
 
+def test_writer_harness_workflow_enrolls_autonomous_notification_config() -> None:
+    """Both workflow triggers must exercise the task's notification config gate."""
+    workflow = (
+        Path(__file__).parents[1] / ".github/workflows/atlas_invoicing_checks.yml"
+    ).read_text(encoding="utf-8")
+    entry = '      - "atlas_brain/autonomous/config.py"\n'
+    pull_request_paths, separator, push_paths = workflow.partition("  push:\n")
+
+    assert separator == "  push:\n"
+    assert entry in pull_request_paths
+    assert entry in push_paths
+
+
 @pytest.mark.asyncio
 async def test_unsafe_harness_target_stops_before_asyncpg_import(
     monkeypatch: pytest.MonkeyPatch,

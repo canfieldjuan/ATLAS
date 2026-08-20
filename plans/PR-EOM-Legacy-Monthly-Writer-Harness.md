@@ -15,8 +15,8 @@ justified by a money-safety risk: a regression in invoice creation, dedup, or
 review-mode delivery could otherwise only be checked against ambient data or
 not checked at all.
 
-The 939-line proof is deliberately indivisible: safe admission needs the typed
-controls plus URL/driver/context ordering tests; persistence safety needs the
+This over-budget proof is deliberately indivisible: safe admission needs the
+typed controls plus URL/driver/context ordering tests; persistence safety needs the
 same harness to create and always drop its schema around real repositories;
 writer correctness needs the real task's draft, deduplication, PDF, and
 service-state observations; and delivery safety needs active-gate outer-seam
@@ -73,9 +73,9 @@ Fix-loop allowed files: `.github/workflows/atlas_invoicing_checks.yml`,
    disposable schema is dropped both after a successful writer run and after a
    synthetic failure inside the harness context.
 5. Enroll the test under a dedicated, explicitly armed local-Postgres workflow
-   job; use an admitted loopback host and include the task, repository,
-   database-model, migration, and external-seam dependencies in both
-   pull-request and main-push triggers.
+   job; use an admitted loopback host and include the task, autonomous
+   notification configuration, repository, database-model, migration, and
+   external-seam dependencies in both pull-request and main-push triggers.
 
 ### Review Contract
 
@@ -107,8 +107,9 @@ Fix-loop allowed files: `.github/workflows/atlas_invoicing_checks.yml`,
   6. `.github/workflows/atlas_invoicing_checks.yml` provisions a local
      PostgreSQL service for the dedicated harness job, explicitly sets the two
      harness-only environment variables to the admitted `127.0.0.1` target,
-     and runs this test file whenever any of its direct source dependencies
-     changes.
+     and runs this test file whenever any of its direct source dependencies,
+     including `atlas_brain/autonomous/config.py`, changes. A focused test
+     proves that dependency stays in both trigger blocks.
 - Reachability proof: the real async entrypoint is
   `atlas_brain.autonomous.tasks.monthly_invoice_generation.run`; observable
   effects are persisted invoice/service rows in the disposable schema, a
@@ -206,7 +207,9 @@ deterministic draft. Running the unchanged task again proves its existing
 
 The workflow gives this test its own PostgreSQL service and harness-only
 environment variables, so it cannot inherit `ATLAS_DB_*` or run merely because
-someone executes a broad local test command.
+someone executes a broad local test command. Its pull-request and main-push
+filters include the task's `autonomous_config` source because the notification
+gate is part of the real writer proof.
 
 ## Intentional
 
@@ -250,14 +253,15 @@ Parked hardening: none.
 - `env -u ATLAS_LEGACY_MONTHLY_AUTOINVOICE_WRITER_HARNESS -u
   ATLAS_LEGACY_MONTHLY_AUTOINVOICE_WRITER_TEST_DATABASE_URL
   /home/juan-canfield/Desktop/Atlas/.venv/bin/python -m pytest
-  tests/test_legacy_monthly_autoinvoice_writer_harness.py -q` — `6 passed, 2
+  tests/test_legacy_monthly_autoinvoice_writer_harness.py -q` — `7 passed, 2
   skipped`; the unarmed context-entry proof skips before its forbidden
   `asyncpg` loader, so ordinary local invocation cannot open the harness
-  database.
+  database; the static workflow test proves both trigger blocks retain
+  `atlas_brain/autonomous/config.py`.
 - `ATLAS_LEGACY_MONTHLY_AUTOINVOICE_WRITER_HARNESS=1
   ATLAS_LEGACY_MONTHLY_AUTOINVOICE_WRITER_TEST_DATABASE_URL=postgresql://postgres:postgres@127.0.0.1:5432/atlas_receivables_test
   /home/juan-canfield/Desktop/Atlas/.venv/bin/python -m pytest
-  tests/test_legacy_monthly_autoinvoice_writer_harness.py -q` — `8 passed` on
+  tests/test_legacy_monthly_autoinvoice_writer_harness.py -q` — `9 passed` on
   a disposable local PostgreSQL 16 container. The post-run catalog query found
   `0` `legacy_monthly_writer_*` schemas and the owned container was removed;
   its enabled-gate notification sentinel remained untouched.
@@ -299,8 +303,8 @@ Parked hardening: none.
 
 | File | LOC |
 |---|---:|
-| `.github/workflows/atlas_invoicing_checks.yml` | 60 |
+| `.github/workflows/atlas_invoicing_checks.yml` | 62 |
 | `atlas_brain/config.py` | 10 |
-| `plans/PR-EOM-Legacy-Monthly-Writer-Harness.md` | 306 |
-| `tests/test_legacy_monthly_autoinvoice_writer_harness.py` | 576 |
-| **Total** | **952** |
+| `plans/PR-EOM-Legacy-Monthly-Writer-Harness.md` | 310 |
+| `tests/test_legacy_monthly_autoinvoice_writer_harness.py` | 589 |
+| **Total** | **971** |
