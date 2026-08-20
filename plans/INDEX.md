@@ -1,6 +1,6 @@
 # Plan archive index
 
-1531 archived plan doc(s). Merged plan docs are moved under `archive/` and listed below; once the archive sweep has run, the `plans/` root holds only in-flight slices.
+1532 archived plan doc(s). Merged plan docs are moved under `archive/` and listed below; once the archive sweep has run, the `plans/` root holds only in-flight slices.
 
 - [PR-ASR-Pip-Audit-Egg-Fragment](archive/PR-ASR-Pip-Audit-Egg-Fragment.md) - lane: security/workflow | phase: Production hardening
 - [PR-ASR-Requirements-Audit-Pin](archive/PR-ASR-Requirements-Audit-Pin.md) - lane: security/workflow | phase: Production hardening
@@ -1022,6 +1022,7 @@
 - [PR-EOM-Lead-Pipeline](archive/PR-EOM-Lead-Pipeline.md) - lane: eom-crm/lead-funnel | phase: Vertical slice
 - [PR-EOM-Legacy-Billing-Month-Admission](archive/PR-EOM-Legacy-Billing-Month-Admission.md) - lane: eom/billing-payments-security-hardening | phase: Production hardening
 - [PR-EOM-Legacy-Monthly-Autoinvoice-Opt-In-Recovery](archive/PR-EOM-Legacy-Monthly-Autoinvoice-Opt-In-Recovery.md) - lane: eom/billing-payments-security-hardening | phase: Production hardening
+- [PR-EOM-Legacy-Monthly-Writer-Harness](archive/PR-EOM-Legacy-Monthly-Writer-Harness.md) - lane: eom/billing-payments-security-hardening | phase: Production hardening
 - [PR-EOM-Live-Calendar-Import](archive/PR-EOM-Live-Calendar-Import.md) - lane: eom-crm/lead-funnel | phase: vertical slice
 - [PR-EOM-Mailbox-Context-Binding](archive/PR-EOM-Mailbox-Context-Binding.md) - lane: eom-crm/email-tenancy | phase: Production hardening
 - [PR-EOM-Office-Conversion-Handoff](archive/PR-EOM-Office-Conversion-Handoff.md) - lane: eom-crm/lead-funnel | phase: Vertical slice
