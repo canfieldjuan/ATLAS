@@ -769,6 +769,91 @@ class CalendarTool:
                 message="Calendar event creation failed",
             )
 
+    async def _resolve_calendar_id_with_headers(
+        self, *, requested_calendar_id: str, force_refresh: bool = False
+    ) -> tuple[ToolResult, dict[str, str]]:
+        """Resolve a validated Calendar ID and return the header that proved it.
+
+        Irreversible callers must use this exact header for their next request:
+        a second independent header lookup can refresh a rotated credential and
+        make an earlier principal's identity proof stale.
+        """
+        request_phase = "calendar_identity"
+        try:
+            client = await self._ensure_client()
+            headers = await self._get_auth_header(force_refresh=force_refresh)
+            url = (
+                f"{CALENDAR_API_BASE}/users/me/calendarList/"
+                f"{quote(requested_calendar_id, safe='')}"
+            )
+            response = await client.get(url, headers=headers)
+            if response.status_code == 401:
+                logger.warning(
+                    "Calendar identity lookup 401 -- forcing token refresh"
+                )
+                self._invalidate_access_token()
+                headers = await self._get_auth_header(force_refresh=True)
+                response = await client.get(url, headers=headers)
+            response.raise_for_status()
+            payload = response.json()
+            resolved_calendar_id = (
+                str(payload.get("id") or "").strip()
+                if isinstance(payload, dict)
+                else ""
+            )
+            if not resolved_calendar_id or _is_relative_calendar_id(
+                resolved_calendar_id
+            ):
+                return ToolResult(
+                    success=False,
+                    error="API_ERROR",
+                    data={"request_phase": request_phase},
+                    message="Calendar identity lookup did not return a concrete calendar id",
+                ), {}
+            return (
+                ToolResult(
+                    success=True,
+                    data={"calendar_id": resolved_calendar_id},
+                    message="Calendar identity resolved",
+                ),
+                headers,
+            )
+        except CalendarAuthError:
+            return (
+                ToolResult(
+                    success=False,
+                    error="AUTH_ERROR",
+                    data={"request_phase": request_phase},
+                    message="Calendar authentication failed. Refresh token needs renewal.",
+                ),
+                {},
+            )
+        except httpx.HTTPStatusError as exc:
+            logger.error("Calendar identity lookup HTTP error: %s", exc)
+            return (
+                ToolResult(
+                    success=False,
+                    error="API_ERROR",
+                    data={
+                        "request_phase": request_phase,
+                        "status_code": exc.response.status_code,
+                    },
+                    message=f"Calendar API error: {exc.response.status_code}",
+                ),
+                {},
+            )
+        except Exception:
+            logger.exception("Calendar identity lookup error")
+            return (
+                ToolResult(
+                    success=False,
+                    error="EXECUTION_ERROR",
+                    data={"request_phase": request_phase},
+                    message="Calendar identity resolution failed",
+                ),
+                {},
+            )
+
     async def resolve_calendar_id(self, *, calendar_id: str) -> ToolResult:
         """Resolve one Calendar identifier to the current principal's concrete ID.
 
@@ -797,69 +882,10 @@ class CalendarTool:
                 message="Calendar identity resolution requires a calendar id",
             )
 
-        request_phase = "calendar_identity"
-        try:
-            client = await self._ensure_client()
-            headers = await self._get_auth_header()
-            url = (
-                f"{CALENDAR_API_BASE}/users/me/calendarList/"
-                f"{quote(requested_calendar_id, safe='')}"
-            )
-            response = await client.get(url, headers=headers)
-            if response.status_code == 401:
-                logger.warning(
-                    "Calendar identity lookup 401 -- forcing token refresh"
-                )
-                self._invalidate_access_token()
-                headers = await self._get_auth_header(force_refresh=True)
-                response = await client.get(url, headers=headers)
-            response.raise_for_status()
-            payload = response.json()
-            resolved_calendar_id = (
-                str(payload.get("id") or "").strip()
-                if isinstance(payload, dict)
-                else ""
-            )
-            if not resolved_calendar_id or _is_relative_calendar_id(
-                resolved_calendar_id
-            ):
-                return ToolResult(
-                    success=False,
-                    error="API_ERROR",
-                    data={"request_phase": request_phase},
-                    message="Calendar identity lookup did not return a concrete calendar id",
-                )
-            return ToolResult(
-                success=True,
-                data={"calendar_id": resolved_calendar_id},
-                message="Calendar identity resolved",
-            )
-        except CalendarAuthError:
-            return ToolResult(
-                success=False,
-                error="AUTH_ERROR",
-                data={"request_phase": request_phase},
-                message="Calendar authentication failed. Refresh token needs renewal.",
-            )
-        except httpx.HTTPStatusError as exc:
-            logger.error("Calendar identity lookup HTTP error: %s", exc)
-            return ToolResult(
-                success=False,
-                error="API_ERROR",
-                data={
-                    "request_phase": request_phase,
-                    "status_code": exc.response.status_code,
-                },
-                message=f"Calendar API error: {exc.response.status_code}",
-            )
-        except Exception:
-            logger.exception("Calendar identity lookup error")
-            return ToolResult(
-                success=False,
-                error="EXECUTION_ERROR",
-                data={"request_phase": request_phase},
-                message="Calendar identity resolution failed",
-            )
+        identity, _headers = await self._resolve_calendar_id_with_headers(
+            requested_calendar_id=requested_calendar_id
+        )
+        return identity
 
     async def delete_event(
         self,
@@ -906,7 +932,9 @@ class CalendarTool:
                 message="Calendar cancellation requires a concrete calendar id",
             )
 
-        identity = await self.resolve_calendar_id(calendar_id=cal_id)
+        identity, headers = await self._resolve_calendar_id_with_headers(
+            requested_calendar_id=cal_id
+        )
         if not identity.success:
             return identity
         identity_data = identity.data if isinstance(identity.data, dict) else {}
@@ -922,18 +950,21 @@ class CalendarTool:
         request_phase = "auth"
         try:
             client = await self._ensure_client()
-            headers = await self._get_auth_header()
             url = f"{CALENDAR_API_BASE}/calendars/{cal_id}/events/{persisted_event_id}"
             request_phase = "delete"
             response = await client.delete(url, headers=headers)
             # A 401 proves this DELETE was rejected. Refreshing before the
-            # single retry cannot turn it into an uncertain first attempt.
+            # single retry cannot turn it into an uncertain first attempt. The
+            # refreshed lookup returns the exact header that proves identity,
+            # and that same header makes the sole retry.
             if response.status_code == 401:
                 logger.warning("Calendar delete 401 -- forcing token refresh")
                 self._invalidate_access_token()
-                request_phase = "auth"
-                await self._get_auth_header(force_refresh=True)
-                refreshed_identity = await self.resolve_calendar_id(calendar_id=cal_id)
+                refreshed_identity, headers = (
+                    await self._resolve_calendar_id_with_headers(
+                        requested_calendar_id=cal_id, force_refresh=True
+                    )
+                )
                 if not refreshed_identity.success:
                     return refreshed_identity
                 refreshed_identity_data = (
@@ -951,10 +982,6 @@ class CalendarTool:
                         data={"request_phase": "calendar_identity"},
                         message="Calendar identity no longer matches the persisted calendar id",
                     )
-                # resolve_calendar_id may itself have refreshed after its own
-                # rejected request, so reacquire the header that made the final
-                # exact-calendar proof before retrying DELETE.
-                headers = await self._get_auth_header()
                 request_phase = "delete"
                 response = await client.delete(url, headers=headers)
 

@@ -1,5 +1,5 @@
--- Fence the direct NocoDB CRM role while a won lead's Calendar cancellation
--- remains unresolved. The provider fence cannot cover this database client.
+-- Fence direct CRM SQL while a won lead's Calendar cancellation remains
+-- unresolved. The provider fence cannot cover operational database clients.
 --
 -- The function is SECURITY DEFINER because atlas_nocodb intentionally has no
 -- direct access to immutable lifecycle evidence. Its fixed schema-qualified
@@ -18,8 +18,7 @@ BEGIN
         SET search_path = pg_catalog, %1$I
         AS $function$
         BEGIN
-            IF session_user = 'atlas_nocodb'
-               AND OLD.business_context_id = 'effingham_maids'
+            IF OLD.business_context_id = 'effingham_maids'
                AND OLD.contact_type = 'lead'
                AND OLD.lead_stage = 'won'
                AND EXISTS (
@@ -37,7 +36,7 @@ BEGIN
                )
             THEN
                 RAISE EXCEPTION
-                    'EOM won lead loss cancellation requires reconciliation before NocoDB can change the contact';
+                    'EOM won lead loss cancellation requires reconciliation before direct contact mutation';
             END IF;
 
             IF TG_OP = 'DELETE' THEN
@@ -56,7 +55,7 @@ BEGIN
     );
     EXECUTE format(
         'CREATE TRIGGER trg_reject_nocodb_eom_won_loss_mutation '
-        || 'BEFORE UPDATE OF status OR DELETE ON %I.contacts '
+        || 'BEFORE UPDATE OF status, contact_type OR DELETE ON %I.contacts '
         || 'FOR EACH ROW EXECUTE FUNCTION %I.reject_nocodb_eom_won_loss_mutation()',
         schema_name,
         schema_name

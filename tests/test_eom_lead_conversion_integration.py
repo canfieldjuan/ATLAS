@@ -3208,6 +3208,13 @@ async def test_enabled_shared_guard_handles_missing_required_contact_column(
         await _prepare_schema(conn, schema, apply_privilege_migration=False)
         await _provision_handoff_guard(conn)
         await _provision_nocodb_login(conn)
+        if missing_column == "contact_type":
+            # Migration 386 correctly declares this trigger dependency. This
+            # fixture intentionally tears down an already-migrated schema to
+            # exercise readiness validation for a historical partial schema.
+            await conn.execute(
+                "DROP TRIGGER IF EXISTS trg_reject_nocodb_eom_won_loss_mutation ON contacts"
+            )
         await conn.execute(
             f"ALTER TABLE contacts DROP COLUMN {_quote_ident(missing_column)}"
         )
@@ -6658,6 +6665,7 @@ async def test_nocodb_cannot_mutate_won_lead_with_unsettled_cancellation():
     schema = f"atlas_eom_won_loss_nocodb_fence_{uuid.uuid4().hex}"
     conn = await asyncpg.connect(database_url)
     nocodb_conn = None
+    direct_conn = None
     try:
         await _prepare_schema(conn, schema)
 
@@ -6713,6 +6721,9 @@ async def test_nocodb_cannot_mutate_won_lead_with_unsettled_cancellation():
             f"SET search_path TO {_quote_ident(schema)}, public"
         )
         assert await nocodb_conn.fetchval("SELECT session_user") == "atlas_nocodb"
+        direct_conn = await asyncpg.connect(database_url)
+        await direct_conn.execute(f"SET search_path TO {_quote_ident(schema)}, public")
+        assert await direct_conn.fetchval("SELECT session_user") != "atlas_nocodb"
 
         loss_task = asyncio.create_task(
             mark_eom_lead_lost_with_won_teardown(provider, calendar, command)
@@ -6732,6 +6743,21 @@ async def test_nocodb_cannot_mutate_won_lead_with_unsettled_cancellation():
             match="cancellation requires reconciliation",
         ):
             await nocodb_conn.execute("DELETE FROM contacts WHERE id = $1", contact_id)
+        with pytest.raises(
+            asyncpg.exceptions.RaiseError,
+            match="cancellation requires reconciliation",
+        ):
+            await direct_conn.execute(
+                "UPDATE contacts SET status = 'inactive' WHERE id = $1", contact_id
+            )
+        with pytest.raises(
+            asyncpg.exceptions.RaiseError,
+            match="cancellation requires reconciliation",
+        ):
+            await direct_conn.execute(
+                "UPDATE contacts SET contact_type = 'customer' WHERE id = $1",
+                contact_id,
+            )
         assert not loss_task.done()
 
         calendar.release.set()
@@ -6751,6 +6777,21 @@ async def test_nocodb_cannot_mutate_won_lead_with_unsettled_cancellation():
             match="cancellation requires reconciliation",
         ):
             await nocodb_conn.execute("DELETE FROM contacts WHERE id = $1", contact_id)
+        with pytest.raises(
+            asyncpg.exceptions.RaiseError,
+            match="cancellation requires reconciliation",
+        ):
+            await direct_conn.execute(
+                "UPDATE contacts SET status = 'inactive' WHERE id = $1", contact_id
+            )
+        with pytest.raises(
+            asyncpg.exceptions.RaiseError,
+            match="cancellation requires reconciliation",
+        ):
+            await direct_conn.execute(
+                "UPDATE contacts SET contact_type = 'customer' WHERE id = $1",
+                contact_id,
+            )
 
         await nocodb_conn.execute(
             "UPDATE contacts SET notes = 'ordinary NocoDB edit' WHERE id = $1",
@@ -6770,6 +6811,12 @@ async def test_nocodb_cannot_mutate_won_lead_with_unsettled_cancellation():
         assert await conn.fetchval(
             "SELECT lead_stage FROM contacts WHERE id = $1", contact_id
         ) == "lost"
+        await direct_conn.execute(
+            "UPDATE contacts SET status = 'inactive' WHERE id = $1", contact_id
+        )
+        assert await conn.fetchval(
+            "SELECT status FROM contacts WHERE id = $1", contact_id
+        ) == "inactive"
         await nocodb_conn.execute(
             "UPDATE contacts SET status = 'inactive' WHERE id = $1", contact_id
         )
@@ -6777,6 +6824,8 @@ async def test_nocodb_cannot_mutate_won_lead_with_unsettled_cancellation():
             "SELECT status FROM contacts WHERE id = $1", contact_id
         ) == "inactive"
     finally:
+        if direct_conn is not None:
+            await direct_conn.close()
         if nocodb_conn is not None:
             await nocodb_conn.close()
         await conn.execute(f'DROP SCHEMA IF EXISTS "{schema}" CASCADE')

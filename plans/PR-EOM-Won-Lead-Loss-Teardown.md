@@ -84,7 +84,14 @@ adds no table, worker, queue, generic saga framework, or product surface.
   persisted calendar is re-resolved first. Finally, migration 386 installs a
   persistent SECURITY DEFINER function and trigger but needs an explicit
   forward-only operational policy so a rollback cannot strand unresolved
-  cancellation evidence behind a retained database fence.
+  cancellation evidence behind a retained database fence. Even after the
+  401-specific repair, the first identity lookup and first DELETE independently
+  acquire authorization headers; a near-expiry refresh between them can reload
+  a different principal, so the Calendar proof must be bound to the exact
+  header that DELETE uses. The NocoDB-only trigger also leaves the operational
+  import and portal-sync scripts outside the durable fence even though their
+  matched-row updates can change a won lead's `contact_type` or `status`, both
+  facts canonical completion requires after the external delete.
 - Correct fix must touch/change:
   1. Add a narrow, durable won-loss orchestration service that reuses the
      existing PostgreSQL lifecycle ledger and advisory-lock component: prepare
@@ -157,11 +164,11 @@ adds no table, worker, queue, generic saga framework, or product surface.
       accessor must retain its configured-global fallback, while an explicitly
       injected provider pool stays intact so real-PostgreSQL proof does not
       mock a first-party storage dependency.
-  15. After `CalendarTool.delete_event` receives a DELETE 401 and forces a
-      credential refresh, re-resolve the exact persisted calendar with the
-      refreshed credential before retrying DELETE or accepting a 404/410 as
-      idempotent absence. Any refreshed-identity failure or mismatch must
-      remain a non-success result so the durable cancellation cannot complete.
+  15. Bind every `CalendarTool.delete_event` exact-calendar proof to the same
+      authorization header that makes DELETE. After a DELETE 401, repeat that
+      paired refresh/identity/delete sequence. A refreshed-identity failure or
+      mismatch must remain a non-success result, and no independently acquired
+      header may turn an earlier identity proof into a 404/410 completion.
   16. Record migration 386 as a forward-only fence: before an application
       downgrade, resolve every requested-but-uncompleted cancellation through
       the current protocol; retain its immutable lifecycle evidence and do not
@@ -169,6 +176,12 @@ adds no table, worker, queue, generic saga framework, or product surface.
       destructive database rollback, if ever separately approved after that
       zero-unresolved precondition, must drop the trigger before its function
       and still preserve the ledger evidence.
+  17. Make migration 386 enforce its existing unresolved-cancellation predicate
+      for every direct SQL caller that updates `status` or `contact_type`, or
+      deletes a won EOM lead. The canonical completion changes only
+      `lead_stage`, and ordinary non-state direct edits remain outside the
+      trigger, so this closes the evidenced import/portal bypass without a
+      role-grant, script, or lifecycle-schema redesign.
 - Must not change:
   1. The existing `new` and `estimate_booked` loss/reopen state machine,
      response shape, reasons, lifecycle evidence, and idempotency behavior.
@@ -201,6 +214,10 @@ adds no table, worker, queue, generic saga framework, or product surface.
      proof runs only after a rejected DELETE has forced credential refresh; it
      does not broaden accepted response codes or add another external action
      on the ordinary successful/absent path.
+  10. The import and portal-sync scripts, their matching rules, data payloads,
+      receipts, and command interfaces. The database boundary—not a duplicate
+      script-specific protocol—must reject only a conflicting state mutation
+      while durable cancellation evidence is unresolved.
 
 ## Scope (this PR)
 
@@ -448,16 +465,25 @@ transaction-capable pool is honored while production still falls back to the
 configured global pool.
 
 The Calendar identity proof must belong to the credential that makes the
-decision. A DELETE 401 is safe to retry only after a forced refresh and a
-second exact-calendar lookup with that refreshed credential; only then can a
+decision. Its exact-calendar lookup and DELETE use one acquired header; a
+DELETE 401 repeats that paired sequence with a forced refresh. Only then can a
 retry 404/410 mean that the persisted event is absent. A failed or mismatched
-second lookup leaves the durable cancellation unresolved. Migration 386 is
+lookup leaves the durable cancellation unresolved. Migration 386 is
 forward-only: the current protocol first settles every requested cancellation
 before an application downgrade, while the trigger/function and append-only
 evidence remain in place. There is no automatic destructive rollback. If a
 separately approved database recovery is required after the zero-unresolved
 precondition, it drops the trigger before its function and preserves the
 lifecycle ledger.
+
+The same migration is the narrow boundary for every direct SQL caller, not
+only the NocoDB login: while a won EOM lead has requested-but-uncompleted
+cancellation evidence, it rejects only `status`/`contact_type` updates and
+deletes. The canonical completion updates `lead_stage` and inserts completion
+evidence in its existing transaction, while ordinary notes/tags/contact-detail
+edits are not blocked. This lets the import and portal-sync scripts retain
+their existing commands and matching logic without allowing a post-Calendar
+state mutation to strand the protocol.
 
 Execution model: PostgreSQL session advisory locking is the selected
 closed-surface component. One lock spans the only non-transactional Calendar
@@ -508,6 +534,10 @@ that statement, so the write cannot appear as an unreviewed exception.
   trigger/function remain intact and immutable lifecycle evidence is retained.
   A destructive database recovery is a separately approved, trigger-before-
   function operation only after that zero-unresolved condition.
+- The generalized trigger does not turn into a direct-writer framework: it
+  guards only the three existing completion-sensitive mutation forms and does
+  not change script-specific behavior, credentials, grants, or ordinary direct
+  contact-detail edits.
 - The contact-write guard's policy does not broaden: only its reviewed
   inventory and exact count acknowledge the new statement in the already
   approved provider module.
@@ -533,7 +563,7 @@ Parked hardening: none within the stated predicate.
 
 ## Verification
 
-- `pytest -q tests/test_eom_lead_conversion.py` -> 222 passed (local; one
+- `pytest -q tests/test_eom_lead_conversion.py` -> 223 passed (local; one
   pre-existing `pynvml` deprecation warning).
 - `ATLAS_MIGRATION_TEST_DATABASE_URL=<isolated-local-test-db> pytest -q
   tests/test_eom_lead_conversion_integration.py` -> 106 passed against an
@@ -558,13 +588,17 @@ Parked hardening: none within the stated predicate.
 - The maturity sweep must remain at the existing storage baseline. The two
   won-loss real-PostgreSQL tests use injected provider pools directly rather
   than monkeypatching `atlas_brain.storage.database.get_db_pool`.
-- A DELETE 401 followed by credential refresh must revalidate the exact
-  persisted calendar. The unit proof covers both a failed refreshed identity
-  (no second DELETE and no idempotent completion) and a matching refreshed
-  identity (the retry may accept 404/410 as absent).
+- Every DELETE header must be the one that made the exact-calendar proof. Unit
+  proof covers a header refresh between initial identity and DELETE, a DELETE
+  401 refresh, a failed refreshed identity (no second DELETE/no completion),
+  and a matching refreshed identity (retry 404/410 may be absent).
 - The direct-NocoDB migration proof must show that current-protocol completion
   clears the unresolved predicate before ordinary NocoDB status edits resume;
   that is the executable counterpart of the forward-only recovery policy.
+- The same real-PostgreSQL proof must show that an ordinary application-role
+  direct `status`/`contact_type` mutation is rejected both during a live
+  cancellation and after an uncertain executor exit, then resumes only after
+  current-protocol completion.
 - Pending before push: the wrapper-owned Atlas local PR review, which will run
   through `scripts/push_pr.sh` exactly once with the final PR body and its
   isolated unit-gate database environment.
@@ -577,11 +611,11 @@ Parked hardening: none within the stated predicate.
 | `atlas_brain/services/crm_provider.py` | 1011 |
 | `atlas_brain/services/eom_estimate_booking.py` | 87 |
 | `atlas_brain/services/eom_won_lead_loss.py` | 120 |
-| `atlas_brain/storage/migrations/386_eom_won_loss_nocodb_fence.sql` | 69 |
-| `atlas_brain/tools/calendar.py` | 257 |
-| `plans/PR-EOM-Won-Lead-Loss-Teardown.md` | 587 |
+| `atlas_brain/storage/migrations/386_eom_won_loss_nocodb_fence.sql` | 68 |
+| `atlas_brain/tools/calendar.py` | 284 |
+| `plans/PR-EOM-Won-Lead-Loss-Teardown.md` | 621 |
 | `tests/contact_write_boundary/baseline.json` | 1 |
 | `tests/test_contact_write_boundary.py` | 8 |
-| `tests/test_eom_lead_conversion.py` | 490 |
-| `tests/test_eom_lead_conversion_integration.py` | 965 |
-| **Total** | **3607** |
+| `tests/test_eom_lead_conversion.py` | 531 |
+| `tests/test_eom_lead_conversion_integration.py` | 1014 |
+| **Total** | **3757** |

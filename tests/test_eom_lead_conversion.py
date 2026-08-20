@@ -2642,6 +2642,47 @@ async def test_calendar_delete_event_treats_an_absent_event_as_idempotent_cancel
 
 
 @pytest.mark.asyncio
+async def test_calendar_delete_event_uses_the_identity_header_for_first_delete(
+    monkeypatch,
+):
+    tool = CalendarTool()
+    tool._config = SimpleNamespace(
+        calendar_enabled=True, calendar_refresh_token="refresh"
+    )
+    client = _CalendarClient(
+        post_response=_CalendarResponse(status_code=200, payload={}),
+        get_response=_CalendarResponse(
+            status_code=200, payload={"id": "first-clean-calendar"}
+        ),
+        delete_response=_CalendarResponse(status_code=204, payload={}),
+    )
+    header_calls: list[dict[str, object]] = []
+
+    async def ensure_client():
+        return client
+
+    async def auth_header(**kwargs):
+        header_calls.append(dict(kwargs))
+        token = "identity-token" if len(header_calls) == 1 else "rotated-token"
+        return {"Authorization": f"Bearer {token}"}
+
+    monkeypatch.setattr(tool, "_ensure_client", ensure_client)
+    monkeypatch.setattr(tool, "_get_auth_header", auth_header)
+
+    result = await tool.delete_event(
+        calendar_id="first-clean-calendar",
+        event_id="eomfclpersistedevent",
+    )
+
+    assert result.success is True
+    assert header_calls == [{"force_refresh": False}]
+    assert client.get_calls[0]["headers"] == {"Authorization": "Bearer identity-token"}
+    assert client.delete_calls[0]["headers"] == {
+        "Authorization": "Bearer identity-token"
+    }
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize("status_code", [404, 410])
 async def test_calendar_delete_event_revalidates_refreshed_identity_before_absence(
     monkeypatch, status_code
