@@ -403,7 +403,7 @@ async def test_isolated_legacy_writer_creates_one_draft_and_deduplicates(
             CustomerServiceRepository,
         )
         from atlas_brain.storage.repositories.invoice import InvoiceRepository
-        from atlas_brain.tools.notify import notify_tool
+        import httpx
 
         contact_id = uuid4()
         await harness.conn.execute("INSERT INTO contacts (id) VALUES ($1)", contact_id)
@@ -423,7 +423,7 @@ async def test_isolated_legacy_writer_creates_one_draft_and_deduplicates(
         crm = _HarnessCRM()
         rendered_invoice_numbers: list[str] = []
         email_factory_calls: list[None] = []
-        notification_calls: list[dict[str, Any]] = []
+        notification_transport_posts: list[dict[str, Any]] = []
 
         def render_harness_pdf(rendered_invoice: dict) -> bytes:
             rendered_invoice_numbers.append(rendered_invoice["invoice_number"])
@@ -435,8 +435,13 @@ async def test_isolated_legacy_writer_creates_one_draft_and_deduplicates(
                 "review-mode writer attempted to construct an email provider"
             )
 
-        async def forbidden_notification(*args: Any, **kwargs: Any) -> None:
-            notification_calls.append({"args": args, "kwargs": kwargs})
+        async def forbidden_notification_transport_post(
+            *args: Any, **kwargs: Any
+        ) -> Any:
+            notification_transport_posts.append({"args": args, "kwargs": kwargs})
+            raise AssertionError(
+                "review-mode writer attempted to post an ntfy notification"
+            )
 
         monkeypatch.setattr(
             calendar_provider, "get_calendar_provider", lambda: calendar
@@ -448,7 +453,9 @@ async def test_isolated_legacy_writer_creates_one_draft_and_deduplicates(
         )
         assert autonomous_config.notify_results is True
         monkeypatch.setattr(settings.alerts, "ntfy_enabled", True)
-        monkeypatch.setattr(notify_tool, "_send_notification", forbidden_notification)
+        monkeypatch.setattr(
+            httpx.AsyncClient, "post", forbidden_notification_transport_post
+        )
         monkeypatch.setattr(settings.invoicing, "enabled", True)
         monkeypatch.setattr(settings.invoicing, "auto_invoice_enabled", True)
         monkeypatch.setattr(settings.invoicing, "auto_invoice_review_mode", True)
@@ -524,7 +531,7 @@ async def test_isolated_legacy_writer_creates_one_draft_and_deduplicates(
         assert pdf_path.read_bytes() == b"%PDF-harness"
         assert rendered_invoice_numbers == [persisted_invoice["invoice_number"]]
         assert email_factory_calls == []
-        assert notification_calls == []
+        assert notification_transport_posts == []
         assert len(crm.interactions) == 1
 
         second = await task_module.run(task)
@@ -540,7 +547,7 @@ async def test_isolated_legacy_writer_creates_one_draft_and_deduplicates(
         )
         assert rendered_invoice_numbers == [persisted_invoice["invoice_number"]]
         assert email_factory_calls == []
-        assert notification_calls == []
+        assert notification_transport_posts == []
         assert len(crm.interactions) == 1
 
         # Restore before the schema context tears down; the finalizer covers failures.

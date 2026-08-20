@@ -40,9 +40,9 @@ proof, not a general testing-framework expansion.
   armed run if its PostgreSQL driver is unavailable, create/drop a UUID schema,
   install only the invoice/service DDL it needs, invoke the real task and real
    repositories, replace only calendar, CRM, PDF rendering, email, and
-   notification outer seams, and use the task's normal `notify: false` metadata
-   gate to prevent notification transport even when its surrounding config gates
-   are enabled.
+   notification's concrete external HTTP transport seam, and use the task's
+   normal `notify: false` metadata gate to prevent notification transport even
+   when its surrounding config gates are enabled.
 - Must not change: `monthly_invoice_generation` production logic, scheduler
   registration, existing settings defaults, migrations, invoices outside the
   disposable schema, Gmail/email/ntfy delivery, PDFs outside `tmp_path`,
@@ -97,8 +97,9 @@ Fix-loop allowed files: `.github/workflows/atlas_invoicing_checks.yml`,
      mode never invokes the email-provider factory while calendar, CRM, and PDF
      outer seams are deterministic and the unchanged task's `notify: false`
      metadata gate prevents notification transport while the surrounding
-     notification settings are enabled and a forbidden `notify_tool` send seam
-     remains untouched.
+     notification settings are enabled and the forbidden external
+     `httpx.AsyncClient.post` transport seam used by `notify_tool` remains
+     untouched.
   4. An explicitly armed harness fails if `asyncpg` cannot import; it cannot
      silently reduce the required writer/cleanup proof to only pure tests.
   5. The test's observer-connection assertions prove its UUID schema is absent
@@ -195,9 +196,10 @@ is restored before normal schema teardown and by a failure finalizer. Calendar
 and CRM are deterministic in-memory adapters; PDF rendering returns test bytes
 into `tmp_path`; the email-provider factory is a sentinel that fails if review
 mode ever tries to use it. The harness deliberately enables the surrounding
-notification gates and replaces only `notify_tool._send_notification` with a
-sentinel, so the unchanged task's normal `notify: false` metadata gate must
-prevent notification transport. A single active per-visit service and two
+notification gates and replaces only the external `httpx.AsyncClient.post`
+transport used by `notify_tool` with a sentinel, so the unchanged task's normal
+`notify: false` metadata gate must prevent notification transport. A single
+active per-visit service and two
 same-day events create a
 deterministic draft. Running the unchanged task again proves its existing
 `source_ref` lookup reuses that invoice rather than writing another one.
@@ -217,9 +219,9 @@ someone executes a broad local test command.
   to prove the legacy task's draft/no-email behavior rather than exercise real
   email delivery.
 - The harness intentionally enables notification configuration only after
-  replacing the outer send seam; this proves the task metadata gate rather than
-  the ambient default, while keeping all notification transport local and
-  forbidden.
+  replacing the external HTTP post seam; this proves the task metadata gate
+  rather than the ambient default, while keeping all notification transport
+  local and forbidden without patching first-party notification code.
 - The PDF renderer is an outer seam and returns a deterministic byte string;
   invoice-PDF rendering quality remains covered by its existing focused tests.
 - This does not rehabilitate or expand the historical ambient-database test
@@ -267,6 +269,10 @@ Parked hardening: none.
 - The exact `atlas-brain-autonomous` maturity-ratchet command — passed. The
   task uses its existing `notify: false` metadata gate rather than a patched
   notification internal, so it adds no new autonomous-task mock debt.
+- The exact `atlas-brain-b2d-runtime-control` maturity-ratchet command —
+  passed. The notification proof patches only `httpx.AsyncClient.post`, the
+  concrete external transport used by the unchanged first-party notification
+  tool, so it adds no new tools-lane `INTERNAL_MOCK` debt.
 - `/home/juan-canfield/Desktop/Atlas/.venv/bin/python -m pytest
   tests/test_legacy_monthly_autoinvoice_opt_in.py
   tests/test_monthly_invoice_generation.py -k
@@ -295,6 +301,6 @@ Parked hardening: none.
 |---|---:|
 | `.github/workflows/atlas_invoicing_checks.yml` | 60 |
 | `atlas_brain/config.py` | 10 |
-| `plans/PR-EOM-Legacy-Monthly-Writer-Harness.md` | 300 |
-| `tests/test_legacy_monthly_autoinvoice_writer_harness.py` | 569 |
-| **Total** | **939** |
+| `plans/PR-EOM-Legacy-Monthly-Writer-Harness.md` | 306 |
+| `tests/test_legacy_monthly_autoinvoice_writer_harness.py` | 576 |
+| **Total** | **952** |
