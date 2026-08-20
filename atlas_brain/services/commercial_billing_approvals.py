@@ -851,15 +851,26 @@ class CommercialBillingApprovalService:
         conn: Any, *, contact_id: UUID, billing_period: str
     ) -> Any | None:
         """Non-void recurring invoice for this contact/period from either
-        recurring writer. See migration 385 / ATLAS #2363: this is the
-        app-level pre-check ahead of idx_invoices_recurring_contact_period_source,
-        which is the authoritative DB-enforced guarantee."""
+        recurring writer, or a synthetic hit if that contact/period is
+        quarantined (an ambiguous historical collision -- see migration 385's
+        Backfill 2/2 and invoices_billing_period_reservations). See migration
+        385 / ATLAS #2363: this is the app-level pre-check ahead of
+        idx_invoices_recurring_contact_period_source, which is the
+        authoritative DB-enforced guarantee for every UNAMBIGUOUS period -- a
+        quarantined period has no row claiming that index slot by design, so
+        this pre-check is that period's only guard."""
         return await conn.fetchrow(
             """
             SELECT source, invoice_number FROM invoices
             WHERE contact_id = $1 AND billing_period = $2
               AND source IN ('monthly_auto', 'eom_commercial_billing')
               AND status <> 'void'
+            UNION ALL
+            SELECT
+                'quarantined_collision' AS source,
+                'historical billing_period collision for this contact+period -- see invoices.metadata.billing_period_backfill_collision' AS invoice_number
+            FROM invoices_billing_period_reservations
+            WHERE contact_id = $1 AND billing_period = $2
             LIMIT 1
             """,
             contact_id, billing_period,

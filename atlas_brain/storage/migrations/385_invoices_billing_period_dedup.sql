@@ -52,6 +52,28 @@
 --     invoice for that same old period must be visible to the dedup check,
 --     not just invoices created after this migration runs.
 --
+-- A quarantined collision group (Backfill 2/2) leaves EVERY row in the group
+-- billing_period = NULL, which is inert against both the partial index
+-- (WHERE billing_period IS NOT NULL) and the app-level pre-check (WHERE
+-- billing_period = $2, which NULL never matches) -- so without more, a
+-- THIRD invoice for that same contact+period would go unblocked, despite the
+-- period being known and stored in the quarantine metadata. Verified
+-- directly: inserting a collision pair, then a third row with
+-- billing_period set explicitly to the shared period, succeeds cleanly with
+-- no constraint violation. invoices_billing_period_reservations (below)
+-- closes this: one reservation row per quarantined (contact_id,
+-- billing_period) group, checked by both writers' pre-checks alongside the
+-- invoices table. This is deliberately NOT a third invoice row or a
+-- billing_period value written onto one of the ambiguous historical
+-- invoices -- either would silently crown one historical row "the real
+-- one," which is exactly the guess this migration's whole backfill design
+-- exists to avoid. The tradeoff this accepts: the reservation is enforced by
+-- the two writers' pre-checks, not by the partial unique index itself (nothing
+-- can index-enforce a slot without a real row claiming it) -- any future
+-- writer that creates invoices directly, bypassing both pre-checks, would
+-- need to be audited against this table too. This narrower guarantee is
+-- disclosed here, not silently absent.
+--
 -- This migration is marked atomic-bookkeeping (see
 -- atlas_brain/storage/migrations/__init__.py), matching the convention
 -- already used by migration 384 (the migration immediately preceding this
@@ -93,6 +115,17 @@ BEGIN
             CHECK (billing_period ~ '^[0-9]{4}-(0[1-9]|1[0-2])$');
     END IF;
 END $$;
+
+CREATE TABLE IF NOT EXISTS invoices_billing_period_reservations (
+    contact_id      UUID NOT NULL,
+    billing_period  VARCHAR(7) NOT NULL,
+    reason          VARCHAR(32) NOT NULL DEFAULT 'backfill_collision',
+    created_at      TIMESTAMPTZ NOT NULL DEFAULT now(),
+    PRIMARY KEY (contact_id, billing_period)
+);
+
+COMMENT ON TABLE invoices_billing_period_reservations IS
+    'One row per (contact_id, billing_period) whose historical backfill was ambiguous (see invoices.metadata.billing_period_backfill_collision). Checked by both recurring writers'' pre-checks alongside invoices, so a third invoice for an already-quarantined period is refused even though the slot cannot be enforced by idx_invoices_recurring_contact_period_source itself (no row claims it). Rows are never deleted by application code -- resolving a reservation is a manual reconciliation action.';
 
 -- Backfill 1/2: derive billing_period for historical rows from data each
 -- writer already persisted, so the transition window (invoices created
@@ -202,21 +235,30 @@ collisions AS (
       AND contact_id IS NOT NULL
     GROUP BY contact_id, candidate_period
     HAVING count(*) > 1
+),
+-- Chained via a writable CTE (not a third scan) so the exact set of rows
+-- just quarantined is also exactly the set reserved below -- the two can
+-- never drift apart from each other.
+quarantined AS (
+    UPDATE invoices AS inv
+    SET metadata = COALESCE(inv.metadata, '{}'::jsonb)
+        || jsonb_build_object(
+             'billing_period_backfill_collision', true,
+             'billing_period_backfill_candidate_period', c.candidate_period
+           )
+    FROM candidates AS c
+    WHERE inv.id = c.id
+      AND c.candidate_period IS NOT NULL
+      AND EXISTS (
+          SELECT 1 FROM collisions x
+          WHERE x.contact_id IS NOT DISTINCT FROM c.contact_id
+            AND x.candidate_period = c.candidate_period
+      )
+    RETURNING inv.contact_id, c.candidate_period AS billing_period
 )
-UPDATE invoices AS inv
-SET metadata = COALESCE(inv.metadata, '{}'::jsonb)
-    || jsonb_build_object(
-         'billing_period_backfill_collision', true,
-         'billing_period_backfill_candidate_period', c.candidate_period
-       )
-FROM candidates AS c
-WHERE inv.id = c.id
-  AND c.candidate_period IS NOT NULL
-  AND EXISTS (
-      SELECT 1 FROM collisions x
-      WHERE x.contact_id IS NOT DISTINCT FROM c.contact_id
-        AND x.candidate_period = c.candidate_period
-  );
+INSERT INTO invoices_billing_period_reservations (contact_id, billing_period)
+SELECT DISTINCT contact_id, billing_period FROM quarantined
+ON CONFLICT (contact_id, billing_period) DO NOTHING;
 
 CREATE UNIQUE INDEX IF NOT EXISTS idx_invoices_recurring_contact_period_source
     ON invoices (contact_id, billing_period)

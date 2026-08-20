@@ -27,9 +27,10 @@ each of which scoped itself away from it. H-21's completion comment states:
 *"The legacy monthly-invoice/billing-run safety concern remains deferred to
 its own evidence-backed financial slice."* This is that slice.
 
-**Amendment after initial review.** `chatgpt-codex-connector` left two P1/
-BLOCKER threads on the opened PR (#2448), both confirmed real by independent
-investigation and an adversarial second pass before any fix was written:
+**Amendment after initial review.** `chatgpt-codex-connector` left three P1/
+BLOCKER threads on the opened PR (#2448) across two review rounds, all
+confirmed real by independent investigation (including empirical proof
+against real Postgres) before any fix was written:
 
 1. **Historical rows were left `billing_period = NULL`** (the original design
    deferred backfilling them). `NULL = 'x'` is `NULL`, not true, in SQL, so a
@@ -52,8 +53,19 @@ investigation and an adversarial second pass before any fix was written:
    readiness-check hook that just didn't know about the new column/index yet;
    the other had no schema check of any kind). See "Amendment: startup
    fence" below.
-
-### Diff budget
+3. **A quarantined collision group had no protection at all, going
+   forward.** Fix #1's collision quarantine leaves every row in an ambiguous
+   group `billing_period = NULL` permanently, which is inert against both
+   the partial index and the app-level pre-checks (`WHERE billing_period =
+   $2` never matches `NULL`) — so a THIRD invoice for that same
+   contact+period would go unblocked, despite the period being known and
+   recorded in the quarantine metadata. Verified empirically: inserting a
+   collision pair, then a third row with `billing_period` set explicitly to
+   the shared period, succeeded with no constraint violation. Fixed by a
+   small `invoices_billing_period_reservations` table — Codex's own
+   suggested shape, "one database-visible reservation per quarantined
+   period" — populated by the same backfill pass, checked by both writers'
+   pre-checks. See "Amendment: quarantine reservation" below.
 
 Well over the ~400-line soft cap (1972 total per `git diff --numstat
 origin/main...HEAD`, including this plan document). The core fix (migration +
@@ -497,6 +509,54 @@ second, independent static test in `tests/test_eom_render_profile.py`
 the tuple's exact contents and needed the same one-line update — caught by
 the full local unit-gate mirror, not anticipated from reading either file.
 
+### Amendment: quarantine reservation
+
+A new `invoices_billing_period_reservations` table (`(contact_id,
+billing_period)` as a real primary key) is created inside migration 385,
+before the backfill. Backfill 2/2's collision-quarantine `UPDATE` is
+rewritten as a writable CTE chain: the same `UPDATE ... RETURNING` that
+stamps `metadata` on each ambiguous row now feeds directly into `INSERT INTO
+invoices_billing_period_reservations ... SELECT DISTINCT ... FROM
+quarantined ON CONFLICT DO NOTHING`, so the exact set of rows just
+quarantined is also exactly the set reserved — the two can never drift apart
+from a third scan recomputing `collisions` differently.
+
+Both `InvoiceRepository.get_by_contact_and_period` and
+`CommercialBillingApprovalService._find_recurring_period_conflict` are
+extended from a plain `SELECT ... FROM invoices` to a `UNION ALL` with a
+second branch reading the reservation table, synthesizing `source =
+'quarantined_collision'` and a `invoice_number` string that names the real
+diagnostic query — so a hit on a quarantined period reads distinctly in
+logs/error messages from a hit on a real invoice, without either caller
+needing a second code path (both callers already only read the `source`/
+`invoice_number` keys of the returned dict). `get_by_contact_and_period`'s
+`SELECT *` was narrowed to `SELECT source, invoice_number` for this — the
+only two fields either caller ever reads — so the two `UNION ALL` branches
+have a compatible shape without projecting placeholder values into every
+other column.
+
+This design was chosen over two alternatives, both rejected for reintroducing
+the exact problem the backfill's collision quarantine exists to avoid: (a)
+writing a real `billing_period` onto one specific quarantined row (whichever
+is "first" by some tiebreak) — this would make that specific historical
+invoice findable by `get_by_contact_and_period` as if it were the
+authoritative one, silently picking a winner among genuinely ambiguous
+records; (b) inserting a synthetic placeholder row into `invoices` itself to
+hold the real unique-index slot — this would pollute real invoice listings,
+revenue totals, and any dashboard that scans the `invoices` table, with a
+row that isn't a real invoice.
+
+The tradeoff this design accepts, stated directly in the migration's own
+comment rather than left implicit: the reservation is enforced by the two
+writers' pre-checks, not by `idx_invoices_recurring_contact_period_source`
+itself — no DB constraint can enforce a slot without a real row claiming it,
+and this design deliberately avoids creating one. A future writer that
+creates recurring invoices without going through either existing pre-check
+would need to be audited against this table too. This is a narrower
+guarantee than the unambiguous-period case gets from the partial unique
+index, and it is disclosed as such, not silently absent — which is the
+entire point of this fix relative to doing nothing.
+
 ## Intentional
 
 - No new parameter on `InvoiceRepository.create()` or `_InvoiceDraft`: both
@@ -534,6 +594,11 @@ the full local unit-gate mirror, not anticipated from reading either file.
   the identical concern, and `run_migrations` is idempotent and
   advisory-lock-serialized against concurrent callers by design, so a second
   process calling it is the established pattern, not a new risk.
+- The quarantine reservation is a dedicated small table, not a `billing_period`
+  value written onto one historical row and not a synthetic invoice row —
+  see Amendment: quarantine reservation for why both alternatives were
+  rejected as reintroducing the exact "guess a winner" problem the backfill's
+  collision quarantine exists to avoid.
 
 ## Deferred
 
@@ -577,9 +642,9 @@ Parked hardening: none.
   tests/test_start_invoicing_draft_writer_oauth_server.py
   tests/test_invoicing_readonly_mcp.py tests/test_invoicing_readonly_oauth.py
   tests/test_eom_render_profile.py -q`
-  against a throwaway `postgres:16` container (not the shared dev DB): **459
-  passed**, 0 failed. This is every test file touched by either the original
-  slice or the two amendments, run together, including all pre-existing
+  against a throwaway `postgres:16` container (not the shared dev DB): **460
+  passed**, 0 failed. This is every test file touched by any of the original
+  slice or the three amendments, run together, including all pre-existing
   tests in each — confirming no regression anywhere the changes could
   plausibly reach. `test_eom_render_profile.py` was added to this list after
   the repo's full local unit-gate mirror caught a real regression this list
@@ -622,6 +687,16 @@ Parked hardening: none.
   - The draft-writer MCP server's lifespan: a ready schema serves normally
     (init → migrate → ready-check → serving → close, in order); an
     incomplete schema raises and closes before serving.
+  - The quarantine reservation: a raw third insert with `billing_period` set
+    explicitly to a quarantined period's value succeeds cleanly with no
+    constraint violation before this fix (proving the gap), then the
+    app-level pre-check in both writers correctly returns/raises a
+    `quarantined_collision` hit after it; the same contact with a different
+    (unreserved) period is not a conflict and approves normally; a forced
+    mid-migration failure with the reservation table already added to the
+    file still rolls back the column, the new table, and the ledger record
+    together, then a clean retry produces the expected single reservation
+    row for the collision pair.
 - The unique-index design itself was verified against the exact duplicate
   scenario before being implemented: a draft with `source` inside the
   index's column list was checked against a same-contact/period,
@@ -637,20 +712,20 @@ Parked hardening: none.
 
 | File | LOC |
 |---|---:|
-| `atlas_brain/storage/migrations/385_invoices_billing_period_dedup.sql` | 228 |
-| `atlas_brain/storage/repositories/invoice.py` | 45 |
+| `atlas_brain/storage/migrations/385_invoices_billing_period_dedup.sql` | ~298 |
+| `atlas_brain/storage/repositories/invoice.py` | ~66 |
 | `atlas_brain/autonomous/tasks/monthly_invoice_generation.py` | 15 |
-| `atlas_brain/services/commercial_billing_approvals.py` | 34 |
+| `atlas_brain/services/commercial_billing_approvals.py` | ~51 |
 | `atlas_brain/main.py` | 100 |
 | `atlas_brain/main_eom.py` | 1 |
 | `atlas_brain/services/receivables.py` | 13 |
 | `atlas_brain/mcp/invoicing_draft_writer_server.py` | 29 |
-| `tests/test_invoice_repository.py` | 288 |
-| `tests/test_commercial_billing_approvals.py` | 97 |
+| `tests/test_invoice_repository.py` | ~318 |
+| `tests/test_commercial_billing_approvals.py` | ~215 |
 | `tests/test_monthly_invoice_generation_cross_pipeline_dedup.py` | 147 |
 | `tests/test_receivables.py` | 31 |
 | `tests/test_commercial_billing_runs.py` | 202 |
 | `tests/test_invoicing_draft_writer_mcp.py` | 106 |
 | `tests/test_eom_render_profile.py` | 1 |
-| `plans/PR-EOM-Recurring-Invoice-Period-Dedup.md` | 680 |
-| **Total** | **2017** |
+| `plans/PR-EOM-Recurring-Invoice-Period-Dedup.md` | ~800 |
+| **Total** | **~2393 (estimate -- parent session: please re-run `python3 scripts/audit_plan_doc_diff_size.py plans/PR-EOM-Recurring-Invoice-Period-Dedup.md origin/main` after committing and true up this table + total exactly, as done for the first two amendment rounds)** |

@@ -289,14 +289,23 @@ class InvoiceRepository:
     async def get_by_contact_and_period(
         self, contact_id: UUID, billing_period: str
     ) -> Optional[dict]:
-        """Return an existing non-void recurring invoice for one contact/period.
+        """Return an existing non-void recurring invoice for one contact/period,
+        or a synthetic hit if that contact/period is quarantined (an
+        ambiguous historical collision -- see migration 385's Backfill 2/2)
+        rather than backfilled.
 
         Scoped to the two recurring auto-invoice sources (monthly_auto,
         eom_commercial_billing) so ad-hoc mcp_tool invoices and voided
         invoices never block a new recurring invoice. Used by both recurring
         writers as an app-level pre-check ahead of
         idx_invoices_recurring_contact_period_source (migration 385), which
-        is the authoritative DB-enforced guarantee.
+        is the authoritative DB-enforced guarantee for every UNAMBIGUOUS
+        period. A quarantined period has no row claiming
+        idx_invoices_recurring_contact_period_source's slot (nothing does,
+        by design -- see invoices_billing_period_reservations' migration
+        comment), so this pre-check is that period's only guard; callers only
+        read the returned dict's "source"/"invoice_number" keys, which the
+        reservation branch synthesizes with a clearly-labeled placeholder.
         """
         pool = self._get_pool()
         if not pool.is_initialized:
@@ -305,11 +314,17 @@ class InvoiceRepository:
         try:
             row = await pool.fetchrow(
                 """
-                SELECT * FROM invoices
+                SELECT source, invoice_number FROM invoices
                 WHERE contact_id = $1
                   AND billing_period = $2
                   AND source IN ('monthly_auto', 'eom_commercial_billing')
                   AND status <> 'void'
+                UNION ALL
+                SELECT
+                    'quarantined_collision' AS source,
+                    'historical billing_period collision for this contact+period -- see invoices.metadata.billing_period_backfill_collision' AS invoice_number
+                FROM invoices_billing_period_reservations
+                WHERE contact_id = $1 AND billing_period = $2
                 LIMIT 1
                 """,
                 contact_id,

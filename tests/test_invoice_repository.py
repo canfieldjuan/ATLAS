@@ -410,6 +410,8 @@ async def test_real_postgres_billing_period_backfill_and_collision_handling():
                 "SELECT invoice_number, billing_period, metadata FROM invoices"
             )
         }
+        pool = _SchemaPool(conn, schema)
+        repository = invoice_repo_mod.InvoiceRepository(pool=pool)
 
         assert rows["INV-2026-Apr-0001"]["billing_period"] == "2026-04"
         assert rows["INV-2026-Jun-0002"]["billing_period"] == "2026-06"
@@ -421,6 +423,30 @@ async def test_real_postgres_billing_period_backfill_and_collision_handling():
             metadata = json.loads(rows[number]["metadata"])
             assert metadata["billing_period_backfill_collision"] is True
             assert metadata["billing_period_backfill_candidate_period"] == "2026-05"
+
+        # Quarantine-reservation gap-closure proof (Codex P1, second review
+        # round on ATLAS #2448): a quarantined (contact_id, period) pair is
+        # left billing_period=NULL forever, which is invisible to both the
+        # unique index and a naive app-level pre-check -- a THIRD invoice for
+        # the same contact+period would otherwise go unblocked. Verify a
+        # reservation row was recorded and the pre-check now catches it.
+        reservation = await conn.fetchrow(
+            "SELECT reason FROM invoices_billing_period_reservations "
+            "WHERE contact_id = $1 AND billing_period = '2026-05'",
+            contact_c,
+        )
+        assert reservation is not None
+        assert reservation["reason"] == "backfill_collision"
+
+        quarantined_hit = await repository.get_by_contact_and_period(contact_c, "2026-05")
+        assert quarantined_hit is not None
+        assert quarantined_hit["source"] == "quarantined_collision"
+
+        # Negative controls: the reservation is scoped to this exact
+        # contact+period, not a blanket block on the contact or the period
+        # for everyone.
+        assert await repository.get_by_contact_and_period(contact_c, "2026-06") is None
+        assert await repository.get_by_contact_and_period(contact_a, "2026-05") is None
 
         # Void, mcp_tool, and garbage-month rows: untouched, no crash.
         assert rows["INV-2026-Jul-0005"]["billing_period"] is None
@@ -437,8 +463,6 @@ async def test_real_postgres_billing_period_backfill_and_collision_handling():
         # Gap-closure proof: the backfilled legacy row is now findable by the
         # app-level pre-check, and a second recurring invoice for the same
         # contact+period is rejected by the database itself.
-        pool = _SchemaPool(conn, schema)
-        repository = invoice_repo_mod.InvoiceRepository(pool=pool)
         found = await repository.get_by_contact_and_period(contact_a, "2026-04")
         assert found is not None
         assert found["invoice_number"] == "INV-2026-Apr-0001"
@@ -488,6 +512,8 @@ def test_invoices_billing_period_dedup_migration_is_additive_and_scoped():
     assert "billing_period_backfill_collision" in migration
     assert "HAVING count(*) > 1" in migration
     assert "-- atlas: atomic-bookkeeping" in migration.splitlines()[0]
+    assert "CREATE TABLE IF NOT EXISTS invoices_billing_period_reservations" in migration
+    assert "PRIMARY KEY (contact_id, billing_period)" in migration
     assert "DROP" not in "\n".join(
         line for line in migration.splitlines() if not line.lstrip().startswith("--")
     )
