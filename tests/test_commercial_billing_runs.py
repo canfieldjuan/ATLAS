@@ -1984,6 +1984,9 @@ async def test_full_atlas_lifespan_uses_enabled_receivables_recovery_fence(monke
             if "CREATE TABLE IF NOT EXISTS schema_migrations" in query:
                 events.append("ensure")
                 return "CREATE TABLE"
+            if "ADD COLUMN IF NOT EXISTS content_sha256" in query:
+                events.append("ensure-content-identity")
+                return "ALTER TABLE"
             assert query == "SELECT pg_advisory_unlock($1)"
             assert args
             events.append("unlock")
@@ -2032,6 +2035,7 @@ async def test_full_atlas_lifespan_uses_enabled_receivables_recovery_fence(monke
         "acquire",
         "lock",
         "ensure",
+        "ensure-content-identity",
         "migrate",
         "unlock",
         "release",
