@@ -68,10 +68,21 @@ class _CRM:
         self.recovery_calls: list[dict[str, object]] = []
         self.revoke_calls: list[str] = []
         self.claim_calls: list[dict[str, object]] = []
+        self.issued_link_calls: list[dict[str, object]] = []
         self.context_status = "ready"
         self.recovery_idempotent = False
         self.draft_id = uuid4()
         self.contact_id = uuid4()
+        self.issued_link_rows = [
+            {
+                "draft_id": self.draft_id,
+                "contact_id": self.contact_id,
+                "full_name": "Customer Name",
+                "recipient_email": "customer@example.com",
+                "status": "issued",
+                "issued_at": datetime(2026, 8, 19, tzinfo=timezone.utc),
+            }
+        ]
         self._draft = {
             "draft_id": str(self.draft_id),
             "contact_id": str(self.contact_id),
@@ -86,6 +97,36 @@ class _CRM:
             "revoked_at": None,
             "approved_by_name": "Juan Canfield",
         }
+
+    async def list_eom_public_onboarding_issued_links(
+        self,
+        *,
+        accepted_signing_key_fingerprints: tuple[str, ...],
+        limit: int,
+        cursor_issued_at: datetime | None,
+        cursor_draft_id: UUID | None,
+    ):
+        self.issued_link_calls.append(
+            {
+                "accepted_signing_key_fingerprints": accepted_signing_key_fingerprints,
+                "limit": limit,
+                "cursor_issued_at": cursor_issued_at,
+                "cursor_draft_id": cursor_draft_id,
+            }
+        )
+        rows = sorted(
+            self.issued_link_rows,
+            key=lambda row: (row["issued_at"], row["draft_id"]),
+            reverse=True,
+        )
+        if cursor_issued_at is not None and cursor_draft_id is not None:
+            rows = [
+                row
+                for row in rows
+                if (row["issued_at"], row["draft_id"])
+                < (cursor_issued_at, cursor_draft_id)
+            ]
+        return rows[:limit]
 
     async def get_eom_public_onboarding_session(
         self, *, token_id: str, signing_key_fingerprint: str
@@ -1136,3 +1177,144 @@ async def test_staff_link_revocation_requires_an_actor_and_survives_feature_disa
     assert disabled.status_code == 201
     assert crm.revoke_calls == [str(crm.draft_id)]
     assert disabled_crm.revoke_calls == [str(disabled_crm.draft_id)]
+
+
+@pytest.mark.asyncio
+async def test_staff_issued_link_list_requires_office_auth_and_live_public_authority():
+    crm = _CRM()
+    app = _app(crm)
+    disabled_crm = _CRM()
+    disabled_app = _app(disabled_crm, enabled=False)
+    paused_crm = _CRM()
+    paused_app = _app(paused_crm, issuance_enabled=False)
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=app), base_url="http://test"
+    ) as client:
+        no_service = await client.get("/eom-funnel/public-onboarding/issued-links")
+        no_actor = await client.get(
+            "/eom-funnel/public-onboarding/issued-links",
+            headers=_service_headers(),
+        )
+        invalid_limit = await client.get(
+            "/eom-funnel/public-onboarding/issued-links?limit=0",
+            headers=_service_headers(actor=True),
+        )
+        listed = await client.get(
+            "/eom-funnel/public-onboarding/issued-links?limit=1",
+            headers=_service_headers(actor=True),
+        )
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=disabled_app), base_url="http://test"
+    ) as client:
+        listed_while_disabled = await client.get(
+            "/eom-funnel/public-onboarding/issued-links?limit=1",
+            headers=_service_headers(actor=True),
+        )
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=paused_app), base_url="http://test"
+    ) as client:
+        listed_while_issuance_paused = await client.get(
+            "/eom-funnel/public-onboarding/issued-links?limit=1",
+            headers=_service_headers(actor=True),
+        )
+
+    assert no_service.status_code == 401
+    assert no_actor.status_code == 422
+    assert invalid_limit.status_code == 422
+    assert listed.status_code == 200
+    assert listed_while_disabled.status_code == 503
+    assert listed_while_issuance_paused.status_code == 200
+    assert listed.json() == {
+        "links": [
+            {
+                "draftId": str(crm.draft_id),
+                "contactId": str(crm.contact_id),
+                "fullName": "Customer Name",
+                "recipientEmail": "customer@example.com",
+                "status": "issued",
+                "issuedAt": "2026-08-19T00:00:00Z",
+            }
+        ],
+        "limit": 1,
+        "cursor": None,
+        "hasMore": False,
+        "nextCursor": None,
+    }
+    assert {"tokenId", "token", "link", "approvalKey"}.isdisjoint(
+        listed.json()["links"][0]
+    )
+    assert crm.issued_link_calls == [
+        {
+            "accepted_signing_key_fingerprints": (
+                eom_public_onboarding_hmac_key_fingerprint(secret=_PUBLIC_SECRET),
+            ),
+            "limit": 2,
+            "cursor_issued_at": None,
+            "cursor_draft_id": None,
+        }
+    ]
+    assert disabled_crm.issued_link_calls == []
+    assert paused_crm.issued_link_calls == [
+        {
+            "accepted_signing_key_fingerprints": (
+                eom_public_onboarding_hmac_key_fingerprint(secret=_PUBLIC_SECRET),
+            ),
+            "limit": 2,
+            "cursor_issued_at": None,
+            "cursor_draft_id": None,
+        }
+    ]
+
+
+@pytest.mark.asyncio
+async def test_staff_issued_link_list_pages_by_issued_at_and_draft_id():
+    crm = _CRM()
+    newest_draft_id = uuid4()
+    older_draft_id = uuid4()
+    crm.issued_link_rows = [
+        {
+            "draft_id": older_draft_id,
+            "contact_id": uuid4(),
+            "full_name": "Older Link",
+            "recipient_email": "older@example.com",
+            "status": "issued",
+            "issued_at": datetime(2026, 8, 18, tzinfo=timezone.utc),
+        },
+        {
+            "draft_id": newest_draft_id,
+            "contact_id": uuid4(),
+            "full_name": "Newest Link",
+            "recipient_email": "newest@example.com",
+            "status": "issued",
+            "issued_at": datetime(2026, 8, 19, tzinfo=timezone.utc),
+        },
+    ]
+    app = _app(crm, previous_secret=_PREVIOUS_PUBLIC_SECRET)
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=app), base_url="http://test"
+    ) as client:
+        first = await client.get(
+            "/eom-funnel/public-onboarding/issued-links?limit=1",
+            headers=_service_headers(actor=True),
+        )
+        first_body = first.json()
+        second = await client.get(
+            "/eom-funnel/public-onboarding/issued-links",
+            params={"limit": 1, "cursor": first_body["nextCursor"]},
+            headers=_service_headers(actor=True),
+        )
+
+    assert first.status_code == 200
+    assert first_body["links"][0]["draftId"] == str(newest_draft_id)
+    assert first_body["hasMore"] is True
+    assert isinstance(first_body["nextCursor"], str)
+    assert second.status_code == 200
+    assert second.json()["links"][0]["draftId"] == str(older_draft_id)
+    assert second.json()["hasMore"] is False
+    assert crm.issued_link_calls[0]["limit"] == 2
+    assert crm.issued_link_calls[1]["limit"] == 2
+    assert crm.issued_link_calls[1]["cursor_draft_id"] == newest_draft_id
+    assert crm.issued_link_calls[0]["accepted_signing_key_fingerprints"] == (
+        eom_public_onboarding_hmac_key_fingerprint(secret=_PUBLIC_SECRET),
+        eom_public_onboarding_hmac_key_fingerprint(secret=_PREVIOUS_PUBLIC_SECRET),
+    )
