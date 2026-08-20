@@ -1,0 +1,310 @@
+# PR-EOM-Legacy-Monthly-Writer-Harness
+
+## Why this slice exists
+
+H-23 in [ATLAS #2363](https://github.com/canfieldjuan/ATLAS/issues/2363)
+was discovered while H-21 made the legacy monthly writer explicit opt-in. The
+older `tests/test_monthly_invoice_generation.py` calls `init_database()` and
+can reach the inherited `ATLAS_DB_*` target, while its admitted writer paths
+can call calendar, CRM, PDF, email, and notification collaborators. That makes
+those historical tests unsuitable as a safe proof of the enabled legacy writer.
+
+This production-hardening slice unblocks a truthful regression proof for the
+legacy writer without enabling it in production or changing its behavior. It is
+justified by a money-safety risk: a regression in invoice creation, dedup, or
+review-mode delivery could otherwise only be checked against ambient data or
+not checked at all.
+
+This over-budget proof is deliberately indivisible: safe admission needs the
+typed controls plus URL/driver/context ordering tests; persistence safety needs the
+same harness to create and always drop its schema around real repositories;
+writer correctness needs the real task's draft, deduplication, PDF, and
+service-state observations; and delivery safety needs active-gate outer-seam
+sentinels plus the dedicated CI enrollment. Splitting those pieces would leave
+an intermediate PR either unable to run the proof, able to target ambient data,
+or falsely claiming writer/delivery coverage without its corresponding safety
+boundary. The four files therefore form one independently deployable test-only
+proof, not a general testing-framework expansion.
+
+### Problem-derived contract
+
+- Root cause: there is no explicitly armed, fail-closed integration harness
+  that invokes `monthly_invoice_generation.run` with real service/invoice
+  repositories against a disposable database namespace while blocking all
+  delivery boundaries. The legacy test module's ambient database initialization
+  cannot establish that property.
+- Correct fix must touch/change: add typed, empty-default test-harness fields
+  to `InvoicingConfig`, one isolated-schema writer-harness test module, and its
+  `atlas_invoicing_checks.yml` enrollment. The harness must reject an unarmed
+  or non-loopback/non-test-database target before `asyncpg.connect`, fail an
+  armed run if its PostgreSQL driver is unavailable, create/drop a UUID schema,
+  install only the invoice/service DDL it needs, invoke the real task and real
+   repositories, replace only calendar, CRM, PDF rendering, email, and
+   notification's concrete external HTTP transport seam, and use the task's
+   normal `notify: false` metadata gate to prevent notification transport even
+   when its surrounding config gates are enabled.
+- Must not change: `monthly_invoice_generation` production logic, scheduler
+  registration, existing settings defaults, migrations, invoices outside the
+  disposable schema, Gmail/email/ntfy delivery, PDFs outside `tmp_path`,
+  customer data, product copy, and the new commercial billing-run workflow.
+
+## Scope (this PR)
+
+Ownership lane: eom/billing-payments-security-hardening
+Slice phase: Production hardening
+Max files: 4
+Fix-loop allowed files: `.github/workflows/atlas_invoicing_checks.yml`,
+`atlas_brain/config.py`, `plans/PR-EOM-Legacy-Monthly-Writer-Harness.md`, and
+`tests/test_legacy_monthly_autoinvoice_writer_harness.py`.
+
+1. Add typed, empty-default `InvoicingConfig` aliases for the harness-only
+   opt-in marker and database URL, while retaining exact-marker and URL
+   validation in the test harness itself.
+2. Add an opt-in integration harness that makes a deterministic service and
+   calendar fixture flow through the real legacy monthly task, customer-service
+   repository, and invoice repository in a UUID-named schema.
+3. Prove one review-mode run writes one draft invoice, its PDF test artifact,
+   and the service's invoiced markers; prove a second identical run deduplicates
+   without creating another invoice or delivery action while active email and
+   notification outer-seam sentinels remain untouched.
+4. Prove unsafe/unarmed targets cannot open a database connection: an unarmed
+   context entry must skip before the `asyncpg` loader, an armed run cannot skip
+   a missing `asyncpg` dependency, and the
+   disposable schema is dropped both after a successful writer run and after a
+   synthetic failure inside the harness context.
+5. Enroll the test under a dedicated, explicitly armed local-Postgres workflow
+   job; use an admitted loopback host and include the task, autonomous
+   notification configuration, repository, database-model, migration, and
+   external-seam dependencies in both pull-request and main-push triggers.
+
+### Review Contract
+
+- Acceptance criteria:
+  1. `atlas_brain/config.py` owns the two `ATLAS_*` harness aliases with empty
+     defaults, and `tests/test_legacy_monthly_autoinvoice_writer_harness.py`
+     reads them through `InvoicingConfig`, preserves the exact-marker rule, and
+     accepts only the exact loopback
+     `atlas_receivables_test` PostgreSQL target before any `asyncpg.connect`;
+     its pure rejection cases settle malformed, remote, non-test, and
+     non-PostgreSQL targets, while an unarmed context-entry test proves it
+     skips before a forbidden `asyncpg` loader can run.
+  2. The same test module's real `monthly_invoice_generation.run` fixture uses
+     `CustomerServiceRepository` and `InvoiceRepository` over its UUID schema,
+     and assertions settle one draft invoice, exact source-ref deduplication,
+     the expected service lifecycle markers, and no sent status.
+  3. The delivery controls in
+     `tests/test_legacy_monthly_autoinvoice_writer_harness.py` prove review
+     mode never invokes the email-provider factory while calendar, CRM, and PDF
+     outer seams are deterministic and the unchanged task's `notify: false`
+     metadata gate prevents notification transport while the surrounding
+     notification settings are enabled and the forbidden external
+     `httpx.AsyncClient.post` transport seam used by `notify_tool` remains
+     untouched.
+  4. An explicitly armed harness fails if `asyncpg` cannot import; it cannot
+     silently reduce the required writer/cleanup proof to only pure tests.
+  5. The test's observer-connection assertions prove its UUID schema is absent
+     after both normal completion and a synthetic context-body failure.
+  6. `.github/workflows/atlas_invoicing_checks.yml` provisions a local
+     PostgreSQL service for the dedicated harness job, explicitly sets the two
+     harness-only environment variables to the admitted `127.0.0.1` target,
+     and runs this test file whenever any of its direct source dependencies,
+     including `atlas_brain/autonomous/config.py`, changes. A focused test
+     proves that dependency stays in both trigger blocks.
+- Reachability proof: the real async entrypoint is
+  `atlas_brain.autonomous.tasks.monthly_invoice_generation.run`; observable
+  effects are persisted invoice/service rows in the disposable schema, a
+  `tmp_path` PDF, captured local CRM calls, the email-factory sentinel remaining
+  untouched, the unchanged `notify: false` task gate, and post-teardown catalog
+  absence.
+- Affected surfaces: a new test-only isolated database harness and the
+  invoicing workflow's test enrollment. No runtime, API, customer-facing, or
+  migration surface is affected.
+- Risk areas: accidental ambient/production database connection; unscoped DDL
+  cleanup; legacy writer duplication; draft-versus-sent state; accidental
+  external delivery; CI test enrollment; fixture non-determinism.
+- Reviewer rules triggered: R1 requirements match, R2 test evidence, R3
+  security/authorization, R4 data safety, R5 compatibility, R6 error/cleanup,
+  R8 idempotency, R10 maintainability, R11 configuration/dependencies, R12
+  deployment/CI, and R14 codebase verification.
+
+### Boundary-change enumeration
+
+- Boundary path/seam: typed `InvoicingConfig` aliases provide the test-only
+  values to `_require_writer_harness_database_url()`, the sole database-
+  admission choke point; it runs before the harness imports or calls
+  `asyncpg.connect`.
+- Replaced-path behaviors: none. The production task and production database
+  initialization path are not modified or called.
+- Guard-relevant fields: the exact opt-in marker and the harness-only database
+  URL's scheme, host, port, database name, query, and fragment.
+- Caller x input shape: the dedicated workflow job supplies the armed marker
+  and admitted `127.0.0.1` loopback test URL through typed configuration; an
+  ordinary local pytest invocation is skipped; a direct unarmed context-entry
+  test proves that skip occurs before the loader, while pure-validator tests
+  cover unsafe strings and a missing armed driver without a connection.
+  A grammar-derived cross-product test covers the URL component combinations,
+  rather than a review-targeted URL fixture list.
+
+### Guard class-closure declaration
+
+- Input class: OPEN. The harness-only URL environment value is arbitrary text,
+  but the database-admission verdict is a strict allowlist-shaped grammar.
+- Closed dependency: `_LOOPBACK_HOSTS` is CLOSED and canonical in the new test
+  module: `127.0.0.1` and `::1` are the only accepted host forms for this
+  deliberately local CI harness. The exact PostgreSQL scheme, port `5432`,
+  database path `/atlas_receivables_test`, and empty query/fragment are likewise
+  fixed grammar terminals, not a product inventory.
+- Out-of-set behavior: every malformed, remote, non-PostgreSQL, non-test,
+  non-default-port, query-bearing, or fragment-bearing value raises before any
+  `asyncpg` import or connection; a missing/nonexact opt-in marker skips before
+  the URL is consulted. Failing closed is cheaper than even an attempted
+  connection to an ambient financial database.
+- Evidence gate: the new grammar-derived cross-product test generates terminal
+  combinations and asserts only the exact grammar admits. It is paired with an
+  async probe that substitutes a forbidden `pytest.importorskip` and proves an
+  unsafe URL cannot reach the connection-import step.
+
+### Deployed-config probing
+
+The two typed `InvoicingConfig` fields default to empty and are not consumed by
+any runtime task, API, scheduler, or deployed resolver. Their only use is the
+test harness and its dedicated CI job or intentionally armed local command, so
+existing deployed financial behavior remains unchanged.
+
+### Files touched
+
+- `.github/workflows/atlas_invoicing_checks.yml`
+- `atlas_brain/config.py`
+- `plans/PR-EOM-Legacy-Monthly-Writer-Harness.md`
+- `tests/test_legacy_monthly_autoinvoice_writer_harness.py`
+
+## Mechanism
+
+`InvoicingConfig` owns two typed, empty-default aliases for the test-only
+opt-in marker and database URL. The harness is inactive unless its marker is
+exactly enabled. Before opening a connection, it parses the configured URL and
+permits only a plain `127.0.0.1` or `::1` PostgreSQL URL for the explicitly
+named receivables test database. An armed run fails if `asyncpg` is unavailable;
+it never reports a green skip for the writer proof. It then opens one
+`asyncpg` connection, creates a randomly named schema, sets that schema first
+in the search path, creates the minimal `contacts` anchor, and executes
+migrations 045, 047, and 048 inside that schema. `finally` restores the search
+path, drops only the generated schema, and closes the connection.
+
+The task resolves its unmodified customer-service and invoice repository
+factories against a temporarily bound schema-scoped database singleton, which
+is restored before normal schema teardown and by a failure finalizer. Calendar
+and CRM are deterministic in-memory adapters; PDF rendering returns test bytes
+into `tmp_path`; the email-provider factory is a sentinel that fails if review
+mode ever tries to use it. The harness deliberately enables the surrounding
+notification gates and replaces only the external `httpx.AsyncClient.post`
+transport used by `notify_tool` with a sentinel, so the unchanged task's normal
+`notify: false` metadata gate must prevent notification transport. A single
+active per-visit service and two
+same-day events create a
+deterministic draft. Running the unchanged task again proves its existing
+`source_ref` lookup reuses that invoice rather than writing another one.
+
+The workflow gives this test its own PostgreSQL service and harness-only
+environment variables, so it cannot inherit `ATLAS_DB_*` or run merely because
+someone executes a broad local test command. Its pull-request and main-push
+filters include the task's `autonomous_config` source because the notification
+gate is part of the real writer proof.
+
+## Intentional
+
+- The harness writes real invoice/service rows only inside its UUID schema;
+  faking those repositories would not prove the money-writing path.
+- The typed harness fields intentionally default to empty and are read only by
+  test code; adding them does not enable a runtime writer or alter existing
+  production configuration defaults.
+- Review mode remains enabled even though the send flag is true, specifically
+  to prove the legacy task's draft/no-email behavior rather than exercise real
+  email delivery.
+- The harness intentionally enables notification configuration only after
+  replacing the external HTTP post seam; this proves the task metadata gate
+  rather than the ambient default, while keeping all notification transport
+  local and forbidden without patching first-party notification code.
+- The PDF renderer is an outer seam and returns a deterministic byte string;
+  invoice-PDF rendering quality remains covered by its existing focused tests.
+- This does not rehabilitate or expand the historical ambient-database test
+  module. It creates a separate, explicitly safe writer proof.
+- A dedicated workflow job is intentionally duplicated rather than sharing an
+  ambient test database contract; that makes the writer proof's opt-in and
+  target visible at the CI boundary.
+
+## Deferred
+
+- Legacy task financial behavior (float normalization, billing-run cross-dedup,
+  actual production enablement, scheduler retirement, and delivery semantics)
+  remains outside this test-only harness and stays tracked by #2363 / #2362.
+- A reusable repository-wide disposable-schema test library is deferred: it
+  would be new test infrastructure beyond this one writer's safety proof.
+
+Parking predicate: harness abstractions, coverage for unrelated legacy task
+branches, and cross-product test infrastructure are parked unless they are
+necessary to prove this harness cannot use an ambient database or delivery
+system.
+
+Parked hardening: none.
+
+## Verification
+
+- `env -u ATLAS_LEGACY_MONTHLY_AUTOINVOICE_WRITER_HARNESS -u
+  ATLAS_LEGACY_MONTHLY_AUTOINVOICE_WRITER_TEST_DATABASE_URL
+  /home/juan-canfield/Desktop/Atlas/.venv/bin/python -m pytest
+  tests/test_legacy_monthly_autoinvoice_writer_harness.py -q` — `7 passed, 2
+  skipped`; the unarmed context-entry proof skips before its forbidden
+  `asyncpg` loader, so ordinary local invocation cannot open the harness
+  database; the static workflow test proves both trigger blocks retain
+  `atlas_brain/autonomous/config.py`.
+- `ATLAS_LEGACY_MONTHLY_AUTOINVOICE_WRITER_HARNESS=1
+  ATLAS_LEGACY_MONTHLY_AUTOINVOICE_WRITER_TEST_DATABASE_URL=postgresql://postgres:postgres@127.0.0.1:5432/atlas_receivables_test
+  /home/juan-canfield/Desktop/Atlas/.venv/bin/python -m pytest
+  tests/test_legacy_monthly_autoinvoice_writer_harness.py -q` — `9 passed` on
+  a disposable local PostgreSQL 16 container. The post-run catalog query found
+  `0` `legacy_monthly_writer_*` schemas and the owned container was removed;
+  its enabled-gate notification sentinel remained untouched.
+- Ruff check on `atlas_brain/config.py`; Ruff check and format --check on
+  `tests/test_legacy_monthly_autoinvoice_writer_harness.py` — passed.
+- The exact `atlas-brain-b2c-core-risk` maturity-ratchet command — passed.
+  The harness binds the isolated database singleton rather than patching either
+  first-party repository factory, so it introduces no new storage mock debt.
+- The exact `atlas-brain-autonomous` maturity-ratchet command — passed. The
+  task uses its existing `notify: false` metadata gate rather than a patched
+  notification internal, so it adds no new autonomous-task mock debt.
+- The exact `atlas-brain-b2d-runtime-control` maturity-ratchet command —
+  passed. The notification proof patches only `httpx.AsyncClient.post`, the
+  concrete external transport used by the unchanged first-party notification
+  tool, so it adds no new tools-lane `INTERNAL_MOCK` debt.
+- `/home/juan-canfield/Desktop/Atlas/.venv/bin/python -m pytest
+  tests/test_legacy_monthly_autoinvoice_opt_in.py
+  tests/test_monthly_invoice_generation.py -k
+  'legacy_monthly_autoinvoice_opt_in or
+  update_invoice_clears_needs_hours_when_line_items_are_billable or
+  line_items_are_billable_requires_all_positive_quantities' -q` — `13 passed,
+  41 deselected`.
+- `/home/juan-canfield/Desktop/Atlas/.venv/bin/python -c 'from pathlib import
+  Path; import yaml; yaml.safe_load(Path(".github/workflows/atlas_invoicing_checks.yml").read_text(encoding="utf-8"));
+  print("workflow_yaml=valid")'` — `workflow_yaml=valid`.
+- `/home/juan-canfield/Desktop/Atlas/.venv/bin/python -m pytest
+  tests/test_maturity_sweep_advisory_workflow.py -q` — `3 passed`; the
+  workflow trigger-enrollment guard accepts the direct dependency paths.
+- `python scripts/sync_pr_plan.py`, plan-doc/files-touched/diff-size audits,
+  plan/code-consistency audit, strict guard-closure lint, and `git diff --check
+  origin/main...HEAD` — passed.
+- The managed local full PR review passed before ready-for-review publication;
+  `scripts/push_pr.sh` reruns that same bundle whenever the PR head changes.
+- Hosted CI is supplemental evidence; the required implementation proof is
+  runnable locally against the exact loopback test target and cannot mutate a
+  production namespace.
+
+## Estimated diff size
+
+| File | LOC |
+|---|---:|
+| `.github/workflows/atlas_invoicing_checks.yml` | 62 |
+| `atlas_brain/config.py` | 10 |
+| `plans/PR-EOM-Legacy-Monthly-Writer-Harness.md` | 310 |
+| `tests/test_legacy_monthly_autoinvoice_writer_harness.py` | 589 |
+| **Total** | **971** |
