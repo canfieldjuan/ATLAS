@@ -2496,6 +2496,16 @@ class InvoicingConfig(BaseSettings):
     auto_invoice_calendar_id: str = Field(default="", description="Google Calendar ID for commercial cleaning events")
     auto_invoice_review_mode: bool = Field(default=True, description="Hold invoices as draft for review instead of auto-sending")
     auto_invoice_save_path: str = Field(default="~/Desktop/Atlas-Invoices", description="Base path for saving invoice PDFs")
+    legacy_monthly_writer_harness_opt_in: str = Field(
+        default="",
+        validation_alias=AliasChoices("ATLAS_LEGACY_MONTHLY_AUTOINVOICE_WRITER_HARNESS"),
+        description="TEST ONLY: exact marker `1` arms the isolated legacy monthly-writer PostgreSQL harness; any other value leaves it inactive.",
+    )
+    legacy_monthly_writer_harness_database_url: str = Field(
+        default="",
+        validation_alias=AliasChoices("ATLAS_LEGACY_MONTHLY_AUTOINVOICE_WRITER_TEST_DATABASE_URL"),
+        description="TEST ONLY: isolated legacy monthly-writer PostgreSQL target. The harness separately accepts only its exact loopback test URL.",
+    )
 
 
 class ExternalDataConfig(BaseSettings):
