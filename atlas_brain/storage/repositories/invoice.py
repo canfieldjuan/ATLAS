@@ -168,6 +168,12 @@ class InvoiceRepository:
         number. Defaults to issue_date if not given. Set this to the first
         day of the period when invoicing past work (e.g. April 1 for an
         April-billing invoice issued in early May).
+
+        Also persisted verbatim (as YYYY-MM) to invoices.billing_period for
+        cross-pipeline recurring-invoice dedup (migration 385). Leave unset
+        for ad-hoc/non-recurring invoices (e.g. the MCP create_invoice tool)
+        so they never participate in the recurring-source uniqueness
+        constraint.
         """
         pool = self._get_pool()
         if not pool.is_initialized:
@@ -201,7 +207,7 @@ class InvoiceRepository:
                     line_items, subtotal, tax_rate, tax_amount, discount_amount, total_amount,
                     issue_date, due_date, status, source, source_ref, appointment_id,
                     business_context_id, notes, metadata, invoice_for, contact_name,
-                    created_at, updated_at
+                    created_at, updated_at, billing_period
                 )
                 VALUES (
                     $1,
@@ -210,7 +216,7 @@ class InvoiceRepository:
                     $7::jsonb, $8, $9, $10, $11, $12,
                     $13, $14, 'draft', $15, $16, $17,
                     $18, $20, $21::jsonb, $22, $23,
-                    $24, $24
+                    $24, $24, to_char($25::date, 'YYYY-MM')
                 )
                 RETURNING *
                 """,
@@ -279,6 +285,41 @@ class InvoiceRepository:
             raise
         except Exception as e:
             raise DatabaseOperationError("get invoice by source_ref", e)
+
+    async def get_by_contact_and_period(
+        self, contact_id: UUID, billing_period: str
+    ) -> Optional[dict]:
+        """Return an existing non-void recurring invoice for one contact/period.
+
+        Scoped to the two recurring auto-invoice sources (monthly_auto,
+        eom_commercial_billing) so ad-hoc mcp_tool invoices and voided
+        invoices never block a new recurring invoice. Used by both recurring
+        writers as an app-level pre-check ahead of
+        idx_invoices_recurring_contact_period_source (migration 385), which
+        is the authoritative DB-enforced guarantee.
+        """
+        pool = self._get_pool()
+        if not pool.is_initialized:
+            raise DatabaseUnavailableError("get invoice by contact and period")
+
+        try:
+            row = await pool.fetchrow(
+                """
+                SELECT * FROM invoices
+                WHERE contact_id = $1
+                  AND billing_period = $2
+                  AND source IN ('monthly_auto', 'eom_commercial_billing')
+                  AND status <> 'void'
+                LIMIT 1
+                """,
+                contact_id,
+                billing_period,
+            )
+            return self._row_to_dict(row) if row else None
+        except DatabaseUnavailableError:
+            raise
+        except Exception as e:
+            raise DatabaseOperationError("get invoice by contact and period", e)
 
     async def get_by_number(self, invoice_number: str) -> Optional[dict]:
         """Get an invoice by invoice number (e.g. INV-2026-0001)."""

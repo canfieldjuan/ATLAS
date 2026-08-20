@@ -332,6 +332,21 @@ async def run(task: ScheduledTask) -> dict:
                     contact_id, period_label, existing["invoice_number"],
                 )
                 continue
+
+            # Cross-pipeline dedup: skip if the newer commercial-billing
+            # approval writer already invoiced this contact for this period.
+            # See migration 385 / ATLAS #2363.
+            cross_pipeline = await inv_repo.get_by_contact_and_period(
+                UUID(contact_id), period_label,
+            )
+            if cross_pipeline:
+                results["invoices_skipped_dedup"] += 1
+                logger.info(
+                    "Customer %s: already invoiced for %s by source=%s (%s), skipping",
+                    contact_id, period_label, cross_pipeline["source"],
+                    cross_pipeline["invoice_number"],
+                )
+                continue
         except Exception as e:
             logger.warning("Dedup check failed for %s: %s", contact_id, e)
 

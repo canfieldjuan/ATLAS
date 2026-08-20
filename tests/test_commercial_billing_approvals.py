@@ -180,6 +180,7 @@ class _MemoryConnection:
         self.insert_attempts = 0
         self.review_decision: dict | None = None
         self.override: dict | None = None
+        self.recurring_period_conflict: dict | None = None
 
     async def fetchval(self, query, *_args):
         assert "pg_advisory_xact_lock" in query
@@ -204,6 +205,8 @@ class _MemoryConnection:
             return self.review_decision
         if "FROM commercial_billing_candidate_overrides" in query:
             return self.override
+        if "SELECT source, invoice_number FROM invoices" in query:
+            return self.recurring_period_conflict
         if "INSERT INTO invoices" in query:
             self.insert_attempts += 1
             invoice_id = args[0]
@@ -309,6 +312,7 @@ async def _approval_database():
             "381_commercial_billing_candidate_review_decisions_recovery.sql",
             "382_commercial_billing_candidate_overrides.sql",
             "373_commercial_billing_invoice_pdf_artifacts.sql",
+            "385_invoices_billing_period_dedup.sql",
         ):
             await connection.execute((migrations / name).read_text())
         yield connection, schema
@@ -939,6 +943,99 @@ async def test_real_postgres_approval_is_atomic_and_reuses_same_candidate_across
         invoice = await connection.fetchrow("SELECT status, total_amount, amount_due FROM invoices")
         assert dict(invoice) == {"status": "draft", "total_amount": Decimal("96.50"), "amount_due": Decimal("96.50")}
         assert source.calls == ["2026-03", "2026-03"]
+
+
+@pytest.mark.asyncio
+async def test_real_postgres_approval_rejects_when_legacy_monthly_writer_already_invoiced_the_period():
+    """Cross-pipeline recurring-invoice dedup (migration 385): the approval
+    writer refuses to create a second recurring invoice for a contact+period
+    the legacy monthly_auto cron already invoiced. Negative control: the
+    same contact with a DIFFERENT billing period is not a conflict and
+    succeeds normally -- proves the check discriminates on period, not just
+    contact."""
+    async with _approval_database() as (connection, schema):
+        run_id, candidate = uuid4(), _candidate(
+            candidate_key="commercial-billing:cross-pipeline-dedup:2026-03"
+        )
+        fingerprint = candidate["sourceFingerprint"]
+        contact_id = UUID(candidate["customer"]["contactId"])
+        await connection.execute("INSERT INTO contacts (id) VALUES ($1)", contact_id)
+        await connection.execute(
+            """
+            INSERT INTO commercial_billing_runs (
+                id, billing_period, state, candidate_contract_version,
+                snapshot_fingerprint, source, idempotency_key,
+                request_fingerprint, created_by
+            ) VALUES ($1, '2026-03', 'draft', 2, $2, 'eom_admin', 'cross-pipeline-run', $2, 'Juan')
+            """,
+            run_id, fingerprint,
+        )
+        await connection.execute(
+            """
+            INSERT INTO commercial_billing_run_candidates (
+                id, billing_run_id, candidate_key, source_fingerprint,
+                display_order, snapshot
+            ) VALUES ($1, $2, $3, $4, 0, $5::jsonb)
+            """,
+            uuid4(), run_id, candidate["candidateKey"], fingerprint, json.dumps(candidate),
+        )
+
+        # The legacy cron already invoiced this contact for this period.
+        await connection.execute(
+            """
+            INSERT INTO invoices (
+                id, invoice_number, contact_id, customer_name, due_date,
+                status, source, billing_period
+            ) VALUES ($1, 'INV-LEGACY-2026-03', $2, 'Acme Office', CURRENT_DATE,
+                      'draft', 'monthly_auto', '2026-03')
+            """,
+            uuid4(), contact_id,
+        )
+
+        service = _service(_SchemaPool(connection, schema), _CandidateService(candidate))
+        with pytest.raises(
+            CommercialBillingApprovalConflictError, match="recurring invoice already exists"
+        ):
+            await service.approve(
+                billing_run_id=run_id, candidate_key=candidate["candidateKey"],
+                expected_source_fingerprint=fingerprint, idempotency_key="cross-pipeline-1", actor="Juan",
+            )
+        assert await connection.fetchval("SELECT COUNT(*) FROM invoices") == 1
+
+        # Negative control: same contact, different period -> not a conflict.
+        other_run_id = uuid4()
+        other_candidate = _candidate(
+            candidate_key="commercial-billing:cross-pipeline-dedup-other-period:2026-04",
+        )
+        other_candidate["billingPeriod"] = "2026-04"
+        other_fingerprint = _refresh_fingerprint(other_candidate)
+        await connection.execute(
+            """
+            INSERT INTO commercial_billing_runs (
+                id, billing_period, state, candidate_contract_version,
+                snapshot_fingerprint, source, idempotency_key,
+                request_fingerprint, created_by
+            ) VALUES ($1, '2026-04', 'draft', 2, $2, 'eom_admin', 'cross-pipeline-run-2', $2, 'Juan')
+            """,
+            other_run_id, other_fingerprint,
+        )
+        await connection.execute(
+            """
+            INSERT INTO commercial_billing_run_candidates (
+                id, billing_run_id, candidate_key, source_fingerprint,
+                display_order, snapshot
+            ) VALUES ($1, $2, $3, $4, 0, $5::jsonb)
+            """,
+            uuid4(), other_run_id, other_candidate["candidateKey"], other_fingerprint,
+            json.dumps(other_candidate),
+        )
+        other_service = _service(_SchemaPool(connection, schema), _CandidateService(other_candidate))
+        approved = await other_service.approve(
+            billing_run_id=other_run_id, candidate_key=other_candidate["candidateKey"],
+            expected_source_fingerprint=other_fingerprint, idempotency_key="cross-pipeline-2", actor="Juan",
+        )
+        assert approved["replayed"] is False
+        assert await connection.fetchval("SELECT COUNT(*) FROM invoices") == 2
 
 
 @pytest.mark.asyncio

@@ -622,6 +622,16 @@ class CommercialBillingApprovalService:
                 existing = await self._find_by_candidate(conn, selected, expected_source_fingerprint)
                 if existing is not None:
                     return {"approval": self._view(existing), "replayed": True}
+                conflicting = await self._find_recurring_period_conflict(
+                    conn,
+                    contact_id=draft.contact_id,
+                    billing_period=f"{draft.billing_period:%Y-%m}",
+                )
+                if conflicting is not None:
+                    raise CommercialBillingApprovalConflictError(
+                        f"A recurring invoice already exists for this contact and billing "
+                        f"period (source={conflicting['source']}, invoice={conflicting['invoice_number']})"
+                    )
                 invoice = await self._insert_invoice(conn, draft)
                 if invoice is None:
                     raise CommercialBillingApprovalConflictError(
@@ -837,6 +847,25 @@ class CommercialBillingApprovalService:
         )
 
     @staticmethod
+    async def _find_recurring_period_conflict(
+        conn: Any, *, contact_id: UUID, billing_period: str
+    ) -> Any | None:
+        """Non-void recurring invoice for this contact/period from either
+        recurring writer. See migration 385 / ATLAS #2363: this is the
+        app-level pre-check ahead of idx_invoices_recurring_contact_period_source,
+        which is the authoritative DB-enforced guarantee."""
+        return await conn.fetchrow(
+            """
+            SELECT source, invoice_number FROM invoices
+            WHERE contact_id = $1 AND billing_period = $2
+              AND source IN ('monthly_auto', 'eom_commercial_billing')
+              AND status <> 'void'
+            LIMIT 1
+            """,
+            contact_id, billing_period,
+        )
+
+    @staticmethod
     def _assert_request(
         row: Any, request_fingerprint: str, legacy_request_fingerprint: str | None = None
     ) -> None:
@@ -856,12 +885,13 @@ class CommercialBillingApprovalService:
                 id, invoice_number, contact_id, customer_name, customer_email,
                 line_items, subtotal, tax_rate, tax_amount, discount_amount,
                 total_amount, issue_date, due_date, status, source, source_ref,
-                business_context_id, notes, metadata, invoice_for, created_at, updated_at
+                business_context_id, notes, metadata, invoice_for, created_at, updated_at,
+                billing_period
             )
             VALUES (
                 $1, 'INV-' || to_char($2::date, 'YYYY-Mon') || '-' || lpad(nextval('invoice_number_seq')::text, 4, '0'),
                 $3, $4, $5, $6::jsonb, $7, $8, $9, 0, $10, $11, $12, 'draft',
-                $13, $14, $15, $16, $17::jsonb, $18, $19, $19
+                $13, $14, $15, $16, $17::jsonb, $18, $19, $19, to_char($2::date, 'YYYY-MM')
             )
             ON CONFLICT (source, source_ref)
                 WHERE source = 'eom_commercial_billing' AND source_ref IS NOT NULL
