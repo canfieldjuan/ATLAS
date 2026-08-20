@@ -566,12 +566,16 @@ from a third scan recomputing `collisions` differently.
 Both `InvoiceRepository.get_by_contact_and_period` and
 `CommercialBillingApprovalService._find_recurring_period_conflict` are
 extended from a plain `SELECT ... FROM invoices` to a `UNION ALL` with a
-second branch reading the reservation table, synthesizing `source =
-'quarantined_collision'` and a `invoice_number` string that names the real
-diagnostic query — so a hit on a quarantined period reads distinctly in
-logs/error messages from a hit on a real invoice, without either caller
-needing a second code path (both callers already only read the `source`/
-`invoice_number` keys of the returned dict). `get_by_contact_and_period`'s
+second branch reading the reservation table, scoped to reservations that
+still have at least one matching non-void quarantined invoice. That branch
+synthesizes `source = 'quarantined_collision'` and a `invoice_number` string
+that names the real diagnostic query — so a hit on a quarantined period
+reads distinctly in logs/error messages from a hit on a real invoice,
+without either caller needing a second code path (both callers already only
+read the `source`/`invoice_number` keys of the returned dict). When every
+matching quarantined invoice is voided, the reservation remains as
+historical evidence but stops blocking a clean reissue, matching the partial
+unique index's `status <> 'void'` contract. `get_by_contact_and_period`'s
 `SELECT *` was narrowed to `SELECT source, invoice_number` for this — the
 only two fields either caller ever reads — so the two `UNION ALL` branches
 have a compatible shape without projecting placeholder values into every
@@ -744,6 +748,48 @@ a `create()` call, while a second, healthy contact in the same run still
 creates normally — proven as a genuine regression, not a tautology, by
 temporarily stashing the fix and confirming the test fails
 (`assert 2 == 1`, i.e. the flaky contact WAS created) before restoring it.
+
+**Finding #9 — migration replay must preserve a valid recurring-dedup index.**
+Review round 4 found a replay hole: if migration 385 had already built a
+valid `idx_invoices_recurring_contact_period_source` but failed before the
+ledger row was recorded, a later replay could drop the valid index while a
+recurring writer was already allowed to run by schema readiness. Fixed in
+`c19168bfcacd0f8ef3ee8997edce1b87d03b7982`: migration 385 now drops only a
+renamed invalid remnant and creates the index with `CREATE UNIQUE INDEX
+CONCURRENTLY IF NOT EXISTS`, so a valid live fence stays in place during
+replay. Verified by
+`tests/test_invoice_repository.py::test_invoices_billing_period_dedup_migration_is_additive_and_scoped`.
+
+**Finding #10 — rollback order must remove the fresh-write fence before old
+writers resume.** Review round 4 correctly contradicted the earlier rollback
+comment: old recurring writers omit both `billing_period` and
+`billing_period_legacy_null`, so leaving
+`invoices_recurring_billing_period_required_check` in place would reject their
+fresh inserts. Fixed in `c19168bfcacd0f8ef3ee8997edce1b87d03b7982`: the
+migration rollback note now explicitly drops that constraint before old
+writers resume, while leaving inert period columns/indexes/reservations in
+place. Verified by the same migration contract test.
+
+**Finding #11 — draft-writer readiness must check non-column dependencies.**
+Review round 4 found the minimal draft schema probe checked invoice columns
+but not `invoice_number_seq` or `invoice_payments`, even though
+`InvoiceRepository.create()` and `get_payments()` use them. Fixed in
+`c19168bfcacd0f8ef3ee8997edce1b87d03b7982`: `_draft_invoice_schema_ready()`
+now requires those relations in the active schema. Verified by
+`tests/test_invoicing_draft_writer_mcp.py::test_draft_invoice_schema_ready_requires_runtime_dependencies`
+and the real-Postgres curated-migration smoke when
+`ATLAS_RECEIVABLES_TEST_DATABASE_URL` is available.
+
+**Finding #12 — quarantine reservations must follow the non-void invariant.**
+Review round 4 found that reservation rows were permanent blockers even after
+an operator voided every invoice in the historical collision group. Fixed in
+`c19168bfcacd0f8ef3ee8997edce1b87d03b7982`:
+`InvoiceRepository.get_by_contact_and_period()` and the approval service's
+transaction-scoped conflict query now treat a reservation as a block only
+while a matching non-void quarantined invoice still exists. Verified
+by `tests/test_invoice_repository.py::test_real_postgres_billing_period_backfill_and_collision_handling`
+when real Postgres is configured; in the local no-URL environment, that test
+is collected but skipped.
 
 ## Intentional
 
@@ -960,21 +1006,21 @@ Parked hardening: none.
 | File | LOC |
 |---|---:|
 | `atlas_brain/autonomous/tasks/monthly_invoice_generation.py` | 86 |
-| `atlas_brain/main.py` | 115 |
+| `atlas_brain/main.py` | 132 |
 | `atlas_brain/main_eom.py` | 30 |
-| `atlas_brain/mcp/invoicing_draft_writer_server.py` | 75 |
-| `atlas_brain/services/commercial_billing_approvals.py` | 50 |
-| `atlas_brain/storage/migrations/385_invoices_billing_period_dedup.sql` | 281 |
-| `atlas_brain/storage/repositories/invoice.py` | 223 |
-| `plans/PR-EOM-Recurring-Invoice-Period-Dedup.md` | 974 |
+| `atlas_brain/mcp/invoicing_draft_writer_server.py` | 95 |
+| `atlas_brain/services/commercial_billing_approvals.py` | 64 |
+| `atlas_brain/storage/migrations/385_invoices_billing_period_dedup.sql` | 311 |
+| `atlas_brain/storage/repositories/invoice.py` | 240 |
+| `plans/PR-EOM-Recurring-Invoice-Period-Dedup.md` | 1038 |
 | `tests/maturity_sweep/baseline_atlas_brain_mcp.json` | 4 |
 | `tests/maturity_sweep/baseline_atlas_brain_storage.json` | 27 |
-| `tests/test_commercial_billing_approvals.py` | 215 |
-| `tests/test_commercial_billing_runs.py` | 281 |
+| `tests/test_commercial_billing_approvals.py` | 292 |
+| `tests/test_commercial_billing_runs.py` | 323 |
 | `tests/test_eom_render_profile.py` | 90 |
-| `tests/test_invoice_repository.py` | 452 |
-| `tests/test_invoicing_draft_writer_mcp.py` | 94 |
-| `tests/test_legacy_monthly_autoinvoice_writer_harness.py` | 1 |
+| `tests/test_invoice_repository.py` | 518 |
+| `tests/test_invoicing_draft_writer_mcp.py` | 158 |
+| `tests/test_legacy_monthly_autoinvoice_writer_harness.py` | 44 |
 | `tests/test_monthly_invoice_generation_cross_pipeline_dedup.py` | 239 |
 | `tests/test_receivables.py` | 11 |
-| **Total** | **3248** |
+| **Total** | **3702** |
