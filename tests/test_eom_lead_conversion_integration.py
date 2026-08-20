@@ -6770,6 +6770,12 @@ async def test_nocodb_cannot_mutate_won_lead_with_unsettled_cancellation():
         assert await conn.fetchval(
             "SELECT lead_stage FROM contacts WHERE id = $1", contact_id
         ) == "lost"
+        await nocodb_conn.execute(
+            "UPDATE contacts SET status = 'inactive' WHERE id = $1", contact_id
+        )
+        assert await conn.fetchval(
+            "SELECT status FROM contacts WHERE id = $1", contact_id
+        ) == "inactive"
     finally:
         if nocodb_conn is not None:
             await nocodb_conn.close()

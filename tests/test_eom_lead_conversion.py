@@ -559,10 +559,14 @@ class _CalendarClient:
         post_response: _CalendarResponse,
         get_response: _CalendarResponse | None = None,
         delete_response: _CalendarResponse | None = None,
+        get_responses: list[_CalendarResponse] | None = None,
+        delete_responses: list[_CalendarResponse] | None = None,
     ) -> None:
         self.post_response = post_response
         self.get_response = get_response
         self.delete_response = delete_response
+        self.get_responses = list(get_responses or [])
+        self.delete_responses = list(delete_responses or [])
         self.post_calls: list[dict[str, object]] = []
         self.get_calls: list[dict[str, object]] = []
         self.delete_calls: list[dict[str, object]] = []
@@ -575,11 +579,15 @@ class _CalendarClient:
 
     async def get(self, url: str, *, headers: dict[str, str]):
         self.get_calls.append({"url": url, "headers": dict(headers)})
+        if self.get_responses:
+            return self.get_responses.pop(0)
         assert self.get_response is not None
         return self.get_response
 
     async def delete(self, url: str, *, headers: dict[str, str]):
         self.delete_calls.append({"url": url, "headers": dict(headers)})
+        if self.delete_responses:
+            return self.delete_responses.pop(0)
         assert self.delete_response is not None
         return self.delete_response
 
@@ -2630,6 +2638,108 @@ async def test_calendar_delete_event_treats_an_absent_event_as_idempotent_cancel
             ),
             "headers": {"Authorization": "Bearer token"},
         }
+    ]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("status_code", [404, 410])
+async def test_calendar_delete_event_revalidates_refreshed_identity_before_absence(
+    monkeypatch, status_code
+):
+    tool = CalendarTool()
+    tool._config = SimpleNamespace(
+        calendar_enabled=True, calendar_refresh_token="refresh"
+    )
+    client = _CalendarClient(
+        post_response=_CalendarResponse(status_code=200, payload={}),
+        get_responses=[
+            _CalendarResponse(
+                status_code=200, payload={"id": "first-clean-calendar"}
+            ),
+            _CalendarResponse(
+                status_code=200, payload={"id": "first-clean-calendar"}
+            ),
+        ],
+        delete_responses=[
+            _CalendarResponse(status_code=401, payload={}),
+            _CalendarResponse(status_code=status_code, payload={}),
+        ],
+    )
+    token = {"value": "old-token"}
+
+    async def ensure_client():
+        return client
+
+    async def auth_header(**kwargs):
+        if kwargs.get("force_refresh"):
+            token["value"] = "refreshed-token"
+        return {"Authorization": f"Bearer {token['value']}"}
+
+    monkeypatch.setattr(tool, "_ensure_client", ensure_client)
+    monkeypatch.setattr(tool, "_get_auth_header", auth_header)
+
+    result = await tool.delete_event(
+        calendar_id="first-clean-calendar",
+        event_id="eomfclpersistedevent",
+    )
+
+    assert result.success is True
+    assert result.data["already_absent"] is True
+    assert [call["headers"] for call in client.get_calls] == [
+        {"Authorization": "Bearer old-token"},
+        {"Authorization": "Bearer refreshed-token"},
+    ]
+    assert [call["headers"] for call in client.delete_calls] == [
+        {"Authorization": "Bearer old-token"},
+        {"Authorization": "Bearer refreshed-token"},
+    ]
+
+
+@pytest.mark.asyncio
+async def test_calendar_delete_event_rejects_absence_when_refreshed_identity_fails(
+    monkeypatch,
+):
+    tool = CalendarTool()
+    tool._config = SimpleNamespace(
+        calendar_enabled=True, calendar_refresh_token="refresh"
+    )
+    client = _CalendarClient(
+        post_response=_CalendarResponse(status_code=200, payload={}),
+        get_responses=[
+            _CalendarResponse(
+                status_code=200, payload={"id": "first-clean-calendar"}
+            ),
+            _CalendarResponse(status_code=404, payload={}),
+        ],
+        delete_responses=[_CalendarResponse(status_code=401, payload={})],
+    )
+    token = {"value": "old-token"}
+
+    async def ensure_client():
+        return client
+
+    async def auth_header(**kwargs):
+        if kwargs.get("force_refresh"):
+            token["value"] = "refreshed-token"
+        return {"Authorization": f"Bearer {token['value']}"}
+
+    monkeypatch.setattr(tool, "_ensure_client", ensure_client)
+    monkeypatch.setattr(tool, "_get_auth_header", auth_header)
+
+    result = await tool.delete_event(
+        calendar_id="first-clean-calendar",
+        event_id="eomfclpersistedevent",
+    )
+
+    assert result.success is False
+    assert result.error == "API_ERROR"
+    assert result.data == {"request_phase": "calendar_identity", "status_code": 404}
+    assert [call["headers"] for call in client.get_calls] == [
+        {"Authorization": "Bearer old-token"},
+        {"Authorization": "Bearer refreshed-token"},
+    ]
+    assert [call["headers"] for call in client.delete_calls] == [
+        {"Authorization": "Bearer old-token"}
     ]
 
 

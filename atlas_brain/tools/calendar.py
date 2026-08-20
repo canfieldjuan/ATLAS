@@ -932,7 +932,29 @@ class CalendarTool:
                 logger.warning("Calendar delete 401 -- forcing token refresh")
                 self._invalidate_access_token()
                 request_phase = "auth"
-                headers = await self._get_auth_header(force_refresh=True)
+                await self._get_auth_header(force_refresh=True)
+                refreshed_identity = await self.resolve_calendar_id(calendar_id=cal_id)
+                if not refreshed_identity.success:
+                    return refreshed_identity
+                refreshed_identity_data = (
+                    refreshed_identity.data
+                    if isinstance(refreshed_identity.data, dict)
+                    else {}
+                )
+                refreshed_calendar_id = str(
+                    refreshed_identity_data.get("calendar_id") or ""
+                ).strip()
+                if refreshed_calendar_id != cal_id:
+                    return ToolResult(
+                        success=False,
+                        error="API_ERROR",
+                        data={"request_phase": "calendar_identity"},
+                        message="Calendar identity no longer matches the persisted calendar id",
+                    )
+                # resolve_calendar_id may itself have refreshed after its own
+                # rejected request, so reacquire the header that made the final
+                # exact-calendar proof before retrying DELETE.
+                headers = await self._get_auth_header()
                 request_phase = "delete"
                 response = await client.delete(url, headers=headers)
 
