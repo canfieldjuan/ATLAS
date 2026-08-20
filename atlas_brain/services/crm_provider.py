@@ -3007,6 +3007,25 @@ class DatabaseCRMProvider:
                     ).strip()
                     if snapshot_calendar_id:
                         calendar_id = snapshot_calendar_id
+                elif (
+                    family.enqueues_onboarding_draft
+                    and str(calendar_id).strip().casefold() == "primary"
+                ):
+                    # A caller that explicitly supplied ``primary`` needs the
+                    # booking service to resolve the current principal before
+                    # this payload can be compared to the stored concrete ID.
+                    # This read-only preflight also keeps a replay from ever
+                    # changing an existing booking's Calendar target.
+                    return {
+                        "contact_id": str(contact["id"]),
+                        "lead_stage": str(contact["lead_stage"]),
+                        "status": "calendar_identity_required",
+                        "calendar_event_id": None,
+                        "expected_calendar_event_id": expected_calendar_event_id,
+                        "idempotent": True,
+                        "requires_calendar_identity": True,
+                        "contact": dict(contact),
+                    }
                 if not self._eom_estimate_booking_payload_matches(
                     request_metadata,
                     scheduled_start=scheduled_start,
@@ -3092,6 +3111,23 @@ class DatabaseCRMProvider:
                     409,
                     f"EOM lead already has a different {family.label} booking",
                 )
+            if (
+                family.enqueues_onboarding_draft
+                and str(calendar_id).strip().casefold() == "primary"
+            ):
+                # Do not write an ambiguous alias into first-clean lifecycle
+                # evidence. The booking service resolves it through Calendar
+                # and calls prepare again with the concrete ID.
+                return {
+                    "contact_id": str(contact["id"]),
+                    "lead_stage": str(contact["lead_stage"]),
+                    "status": "calendar_identity_required",
+                    "calendar_event_id": None,
+                    "expected_calendar_event_id": expected_calendar_event_id,
+                    "idempotent": False,
+                    "requires_calendar_identity": True,
+                    "contact": dict(contact),
+                }
 
             calendar_event = self._eom_booking_calendar_event(
                 family,
@@ -3902,11 +3938,13 @@ class DatabaseCRMProvider:
                     str(draft_id),
                 )
                 if draft_hint is not None:
+                    draft_contact_id = str(draft_hint["contact_id"])
                     await conn.execute(
                         "SELECT pg_advisory_xact_lock(hashtextextended($1, 0))",
-                        _eom_won_lead_loss_execution_lock_key(
-                            str(draft_hint["contact_id"])
-                        ),
+                        _eom_won_lead_loss_execution_lock_key(draft_contact_id),
+                    )
+                    await self._assert_eom_won_lead_loss_cancellation_fence(
+                        conn, contact_id=draft_contact_id
                     )
                 row = await conn.fetchrow(
                     """
@@ -3970,18 +4008,20 @@ class DatabaseCRMProvider:
                     str(draft_id),
                 )
                 if draft_hint is not None:
+                    draft_contact_id = str(draft_hint["contact_id"])
                     for lock_key in sorted(
                         {
-                            f"eom-customer-handoff:contact:{draft_hint['contact_id']}",
-                            _eom_won_lead_loss_execution_lock_key(
-                                str(draft_hint["contact_id"])
-                            ),
+                            f"eom-customer-handoff:contact:{draft_contact_id}",
+                            _eom_won_lead_loss_execution_lock_key(draft_contact_id),
                         }
                     ):
                         await conn.execute(
                             "SELECT pg_advisory_xact_lock(hashtextextended($1, 0))",
                             lock_key,
                         )
+                    await self._assert_eom_won_lead_loss_cancellation_fence(
+                        conn, contact_id=draft_contact_id
+                    )
                 row = await conn.fetchrow(
                     """
                     UPDATE eom_onboarding_email_drafts AS d
@@ -4403,6 +4443,9 @@ class DatabaseCRMProvider:
                     "SELECT pg_advisory_xact_lock(hashtextextended($1, 0))",
                     lock_key,
                 )
+            await self._assert_eom_won_lead_loss_cancellation_fence(
+                conn, contact_id=str(token_hint["contact_id"])
+            )
             row = await conn.fetchrow(
                 """
                 SELECT
@@ -4578,6 +4621,9 @@ class DatabaseCRMProvider:
                     "SELECT pg_advisory_xact_lock(hashtextextended($1, 0))",
                     lock_key,
                 )
+            await self._assert_eom_won_lead_loss_cancellation_fence(
+                conn, contact_id=contact_id
+            )
             row = await conn.fetchrow(
                 """
                 SELECT
@@ -5257,6 +5303,52 @@ class DatabaseCRMProvider:
             "An active public onboarding link must be revoked before office approval",
         )
 
+    async def _assert_eom_won_lead_loss_cancellation_fence(
+        self,
+        conn: Any,
+        *,
+        contact_id: str,
+    ) -> None:
+        """Block competing writes while a durable won-loss cancellation is open.
+
+        The shared advisory lock serializes a live executor, but it vanishes if
+        the executor crashes or returns after an uncertain Calendar DELETE. The
+        requested lifecycle row survives that exit and is the authoritative
+        fence until the same operation records its atomic cancellation/loss
+        completion.
+        """
+
+        from .eom_lead_conversion import EOMLeadConversionError
+
+        unresolved = await conn.fetchrow(
+            """
+            SELECT requested.operation_key
+            FROM eom_lead_lifecycle_events AS requested
+            WHERE requested.contact_id = $1::uuid
+              AND requested.event_type = $2::varchar
+              AND NOT EXISTS (
+                  SELECT 1
+                  FROM eom_lead_lifecycle_events AS completed
+                  WHERE completed.contact_id = requested.contact_id
+                    AND completed.event_type = $3::varchar
+                    AND completed.operation_key = requested.operation_key
+              )
+            ORDER BY requested.lifecycle_sequence DESC NULLS LAST,
+                     requested.created_at DESC, requested.id DESC
+            LIMIT 1
+            FOR UPDATE OF requested
+            """,
+            contact_id,
+            _EOM_WON_LOSS_CANCELLATION_REQUESTED_EVENT,
+            _EOM_WON_LOSS_CANCELLATION_COMPLETED_EVENT,
+        )
+        if unresolved is not None:
+            raise EOMLeadConversionError(
+                409,
+                "EOM won lead loss cancellation requires reconciliation before "
+                "the lead can change",
+            )
+
     async def finalize_eom_customer_handoff(
         self,
         *,
@@ -5320,6 +5412,9 @@ class DatabaseCRMProvider:
                     "SELECT pg_advisory_xact_lock(hashtextextended($1, 0))",
                     lock_key,
                 )
+            await self._assert_eom_won_lead_loss_cancellation_fence(
+                conn, contact_id=contact_id
+            )
             await self._assert_eom_public_onboarding_fence(
                 conn,
                 contact_id=contact_id,
@@ -5705,6 +5800,13 @@ class DatabaseCRMProvider:
                 return {"mode": "pre_won"}
             if any(
                 str(event["event_type"]) not in _EOM_WON_LOSS_EVENT_TYPES
+                or (
+                    str(event["event_type"]) == "lead_lost"
+                    and (
+                        event["from_stage"] != "won"
+                        or event["to_stage"] != "lost"
+                    )
+                )
                 for event in key_events
             ):
                 raise EOMLeadConversionError(
@@ -5754,6 +5856,12 @@ class DatabaseCRMProvider:
                 raise EOMLeadConversionError(
                     409,
                     "EOM first-clean booking lacks a reconciled Calendar event",
+                )
+            if calendar_id.casefold() == "primary":
+                raise EOMLeadConversionError(
+                    409,
+                    "EOM first-clean booking uses a relative Calendar identifier; "
+                    "reconcile the Calendar principal before marking this won lead lost",
                 )
 
             draft = await conn.fetchrow(

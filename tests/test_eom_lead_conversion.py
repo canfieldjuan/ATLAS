@@ -216,6 +216,20 @@ class _CRM:
 
     async def prepare_eom_first_clean_booking(self, **kwargs):
         self.first_clean_prepare_calls.append(kwargs)
+        if str(kwargs["calendar_id"]).strip().casefold() == "primary":
+            return {
+                "contact_id": kwargs["contact_id"],
+                "lead_stage": "estimate_booked",
+                "status": "calendar_identity_required",
+                "calendar_event_id": None,
+                "expected_calendar_event_id": kwargs["expected_calendar_event_id"],
+                "idempotent": False,
+                "requires_calendar_identity": True,
+                "contact": {
+                    "full_name": "Review Queue Lead",
+                    "address": "100 Main St",
+                },
+            }
         return {
             "contact_id": kwargs["contact_id"],
             "lead_stage": "estimate_booked",
@@ -455,14 +469,36 @@ class _Calendar:
         error: str = "API_ERROR",
         message: str = "Calendar API error: 503",
         data: dict[str, object] | None = None,
+        resolved_calendar_id: str | None = None,
+        resolve_success: bool = True,
     ) -> None:
         self.success = success
         self.event_id = event_id
         self.error = error
         self.message = message
         self.data = data or {}
+        self.resolved_calendar_id = resolved_calendar_id
+        self.resolve_success = resolve_success
         self.calls: list[dict[str, object]] = []
         self.delete_calls: list[dict[str, object]] = []
+        self.resolve_calls: list[dict[str, object]] = []
+
+    async def resolve_calendar_id(self, **kwargs):
+        self.resolve_calls.append(kwargs)
+        if not self.resolve_success:
+            return ToolResult(
+                success=False,
+                error=self.error,
+                data=self.data,
+                message=self.message,
+            )
+        return ToolResult(
+            success=True,
+            data={
+                "calendar_id": self.resolved_calendar_id or kwargs["calendar_id"]
+            },
+            message="Calendar identity resolved",
+        )
 
     async def create_event(self, **kwargs):
         self.calls.append(kwargs)
@@ -2049,6 +2085,64 @@ async def test_private_first_clean_booking_prepares_calendar_and_completes_in_or
 
 
 @pytest.mark.asyncio
+async def test_private_first_clean_booking_resolves_and_persists_concrete_calendar_identity():
+    """The configured `primary` alias never reaches durable booking evidence."""
+
+    crm = _CRM()
+    calendar = _Calendar(resolved_calendar_id="office-owner@example.com")
+    calendar._config = SimpleNamespace(calendar_id="primary")
+    app = _app(crm, _enabled_config(), calendar=calendar)
+    contact_id = uuid4()
+    booking_key = f"office-first-clean-{uuid4().hex}"
+
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=app), base_url="http://test"
+    ) as client:
+        response = await client.post(
+            f"/eom-funnel/leads/{contact_id}/first-clean-bookings",
+            headers=_headers(approval_key=booking_key),
+            json=_booking_payload(calendar_id=None),
+        )
+
+    assert response.status_code == 201
+    assert calendar.resolve_calls == [{"calendar_id": "primary"}]
+    assert [call["calendar_id"] for call in crm.first_clean_prepare_calls] == [
+        "primary",
+        "office-owner@example.com",
+    ]
+    assert calendar.calls[0]["calendar_id"] == "office-owner@example.com"
+    assert crm.first_clean_complete_calls[0]["calendar_id"] == "office-owner@example.com"
+
+
+@pytest.mark.asyncio
+async def test_private_first_clean_booking_stops_before_calendar_create_when_identity_unresolved():
+    """A failed identity lookup leaves no event creation or completion attempt."""
+
+    crm = _CRM()
+    calendar = _Calendar(
+        resolve_success=False,
+        message="Calendar API error: 404",
+        data={"request_phase": "calendar_identity", "status_code": 404},
+    )
+    calendar._config = SimpleNamespace(calendar_id="primary")
+    app = _app(crm, _enabled_config(), calendar=calendar)
+
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=app), base_url="http://test"
+    ) as client:
+        response = await client.post(
+            f"/eom-funnel/leads/{uuid4()}/first-clean-bookings",
+            headers=_headers(approval_key=f"office-first-clean-{uuid4().hex}"),
+            json=_booking_payload(calendar_id=None),
+        )
+
+    assert response.status_code == 502
+    assert calendar.resolve_calls == [{"calendar_id": "primary"}]
+    assert calendar.calls == []
+    assert crm.first_clean_complete_calls == []
+
+
+@pytest.mark.asyncio
 async def test_private_first_clean_booking_shares_the_execution_lock_namespace():
     """Both families serialize through the same execution lock so the handoff
     fence sees an in-flight first-clean booking exactly like an estimate."""
@@ -2453,6 +2547,45 @@ async def test_calendar_create_event_sends_optional_deterministic_event_id(monke
 
 
 @pytest.mark.asyncio
+async def test_calendar_resolve_calendar_id_expands_primary_to_concrete_identity(
+    monkeypatch,
+):
+    tool = CalendarTool()
+    tool._config = SimpleNamespace(
+        calendar_enabled=True, calendar_refresh_token="refresh"
+    )
+    client = _CalendarClient(
+        post_response=_CalendarResponse(status_code=200, payload={}),
+        get_response=_CalendarResponse(
+            status_code=200, payload={"id": "office-owner@example.com"}
+        ),
+    )
+
+    async def ensure_client():
+        return client
+
+    async def auth_header(**_kwargs):
+        return {"Authorization": "Bearer token"}
+
+    monkeypatch.setattr(tool, "_ensure_client", ensure_client)
+    monkeypatch.setattr(tool, "_get_auth_header", auth_header)
+
+    result = await tool.resolve_calendar_id(calendar_id="primary")
+
+    assert result.success is True
+    assert result.data == {"calendar_id": "office-owner@example.com"}
+    assert client.get_calls == [
+        {
+            "url": (
+                "https://www.googleapis.com/calendar/v3/users/me/calendarList/"
+                "primary"
+            ),
+            "headers": {"Authorization": "Bearer token"},
+        }
+    ]
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize("status_code", [404, 410])
 async def test_calendar_delete_event_treats_an_absent_event_as_idempotent_cancellation(
     monkeypatch, status_code
@@ -2463,6 +2596,9 @@ async def test_calendar_delete_event_treats_an_absent_event_as_idempotent_cancel
     )
     client = _CalendarClient(
         post_response=_CalendarResponse(status_code=200, payload={}),
+        get_response=_CalendarResponse(
+            status_code=200, payload={"id": "first-clean-calendar"}
+        ),
         delete_response=_CalendarResponse(status_code=status_code, payload={}),
     )
 
@@ -2495,6 +2631,39 @@ async def test_calendar_delete_event_treats_an_absent_event_as_idempotent_cancel
             "headers": {"Authorization": "Bearer token"},
         }
     ]
+
+
+@pytest.mark.asyncio
+async def test_calendar_delete_event_rejects_an_unresolvable_calendar_before_delete(
+    monkeypatch,
+):
+    tool = CalendarTool()
+    tool._config = SimpleNamespace(
+        calendar_enabled=True, calendar_refresh_token="refresh"
+    )
+    client = _CalendarClient(
+        post_response=_CalendarResponse(status_code=200, payload={}),
+        get_response=_CalendarResponse(status_code=404, payload={}),
+    )
+
+    async def ensure_client():
+        return client
+
+    async def auth_header(**_kwargs):
+        return {"Authorization": "Bearer token"}
+
+    monkeypatch.setattr(tool, "_ensure_client", ensure_client)
+    monkeypatch.setattr(tool, "_get_auth_header", auth_header)
+
+    result = await tool.delete_event(
+        calendar_id="office-owner@example.com",
+        event_id="eomfclpersistedevent",
+    )
+
+    assert result.success is False
+    assert result.error == "API_ERROR"
+    assert result.data == {"request_phase": "calendar_identity", "status_code": 404}
+    assert client.delete_calls == []
 
 
 @pytest.mark.asyncio
