@@ -4436,8 +4436,8 @@ class _FirstCleanIdentityCalendar:
 
 
 class _BlockingWonLossCalendar(_WonLossCalendar):
-    def __init__(self) -> None:
-        super().__init__()
+    def __init__(self, *, results: list[ToolResult] | None = None) -> None:
+        super().__init__(results=results)
         self.started = asyncio.Event()
         self.release = asyncio.Event()
 
@@ -4445,6 +4445,8 @@ class _BlockingWonLossCalendar(_WonLossCalendar):
         self.calls.append({"calendar_id": calendar_id, "event_id": event_id})
         self.started.set()
         await self.release.wait()
+        if self.results:
+            return self.results.pop(0)
         return ToolResult(
             success=True,
             data={
@@ -6691,7 +6693,7 @@ async def test_nocodb_cannot_mutate_won_lead_with_unsettled_cancellation():
             actor_id=1,
             actor_name="Juan Canfield",
         )
-        calendar = _WonLossCalendar(
+        calendar = _BlockingWonLossCalendar(
             results=[
                 ToolResult(
                     success=False,
@@ -6707,9 +6709,6 @@ async def test_nocodb_cannot_mutate_won_lead_with_unsettled_cancellation():
             ]
         )
 
-        with pytest.raises(EOMLeadConversionError, match="Calendar API error: 503"):
-            await mark_eom_lead_lost_with_won_teardown(provider, calendar, command)
-
         nocodb_conn = await asyncpg.connect(
             database_url,
             user="atlas_nocodb",
@@ -6719,6 +6718,30 @@ async def test_nocodb_cannot_mutate_won_lead_with_unsettled_cancellation():
             f"SET search_path TO {_quote_ident(schema)}, public"
         )
         assert await nocodb_conn.fetchval("SELECT session_user") == "atlas_nocodb"
+
+        loss_task = asyncio.create_task(
+            mark_eom_lead_lost_with_won_teardown(provider, calendar, command)
+        )
+        await asyncio.wait_for(calendar.started.wait(), timeout=3)
+
+        with pytest.raises(
+            asyncpg.exceptions.RaiseError,
+            match="cancellation requires reconciliation",
+        ):
+            await nocodb_conn.execute(
+                "UPDATE contacts SET status = 'inactive' WHERE id = $1",
+                contact_id,
+            )
+        with pytest.raises(
+            asyncpg.exceptions.RaiseError,
+            match="cancellation requires reconciliation",
+        ):
+            await nocodb_conn.execute("DELETE FROM contacts WHERE id = $1", contact_id)
+        assert not loss_task.done()
+
+        calendar.release.set()
+        with pytest.raises(EOMLeadConversionError, match="Calendar API error: 503"):
+            await loss_task
 
         with pytest.raises(
             asyncpg.exceptions.RaiseError,

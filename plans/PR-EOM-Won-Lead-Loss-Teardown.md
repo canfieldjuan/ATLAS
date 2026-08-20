@@ -500,5 +500,5 @@ Parked hardening: none within the stated predicate.
 | `tests/contact_write_boundary/baseline.json` | 1 |
 | `tests/test_contact_write_boundary.py` | 8 |
 | `tests/test_eom_lead_conversion.py` | 380 |
-| `tests/test_eom_lead_conversion_integration.py` | 946 |
-| **Total** | **3370** |
+| `tests/test_eom_lead_conversion_integration.py` | 969 |
+| **Total** | **3393** |
