@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 from contextlib import asynccontextmanager
 from datetime import datetime, timedelta, timezone
+from pathlib import Path
 from types import SimpleNamespace
 from uuid import UUID, uuid4
 
@@ -610,6 +611,22 @@ def _enabled_config() -> EOMFunnelConfig:
         api_enabled=True,
         service_token_sha256=_SERVICE_TOKEN_SHA256,
     )
+
+
+def test_eom_lead_pipeline_workflow_enrolls_won_loss_runtime_paths():
+    """A standalone won-loss change must run the EOM pipeline proof."""
+
+    workflow = (
+        Path(__file__).resolve().parent.parent
+        / ".github"
+        / "workflows"
+        / "atlas_eom_lead_pipeline_checks.yml"
+    ).read_text()
+    for path in (
+        "atlas_brain/services/eom_won_lead_loss.py",
+        "atlas_brain/storage/migrations/386_eom_won_loss_nocodb_fence.sql",
+    ):
+        assert workflow.count(f'      - "{path}"') == 2
 
 
 def _approval_key() -> str:

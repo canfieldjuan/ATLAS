@@ -3033,6 +3033,23 @@ class DatabaseCRMProvider:
                     if snapshot_calendar_id:
                         calendar_id = snapshot_calendar_id
                 elif (
+                    booked_for_key is not None
+                    and family.enqueues_onboarding_draft
+                    and str(calendar_id).strip().casefold() == "primary"
+                ):
+                    # A completed same-key replay is closed from immutable
+                    # lifecycle metadata.  Do not make it depend on today's
+                    # OAuth principal: ``primary`` is only the caller's
+                    # original alias, while the booked request already holds
+                    # the concrete Calendar target.  Normalizing it here keeps
+                    # the existing full payload comparison, then the replay
+                    # returns before the booking service can call Calendar.
+                    snapshot_calendar_id = str(
+                        request_metadata.get("calendar_id") or ""
+                    ).strip()
+                    if snapshot_calendar_id:
+                        calendar_id = snapshot_calendar_id
+                elif (
                     family.enqueues_onboarding_draft
                     and str(calendar_id).strip().casefold() == "primary"
                 ):

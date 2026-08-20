@@ -25,8 +25,13 @@ key remained unsettled, and the deployed NocoDB role could directly change a
 contact's `status` without the provider fence. The direct-NocoDB hard-delete
 subclaim is overstated: the immutable lifecycle foreign key is `ON DELETE
 RESTRICT`; status mutation is nevertheless reachable and unsafe. These are
-root-cause fixes to the protocol and its database boundary, not UI or
-recovery-workflow changes.
+    root-cause fixes to the protocol and its database boundary, not UI or
+    recovery-workflow changes. A later review also found that a completed
+    first-clean request explicitly submitted as `primary` reaches a live
+    identity lookup before its stored booked replay, allowing a Calendar outage
+    to turn a completed idempotency key into an error. The EOM pipeline
+    workflow likewise omits the new won-loss service and migration from both
+    path filters, so a future isolated change could skip its safety suite.
 
 ### Diff-budget exception
 
@@ -39,7 +44,7 @@ them would either leave the currently blocked rehearsal blocked, or worse,
 expose a partial route that can lose a lead without the atomic draft/Calendar
 teardown or silently add an unreviewed `contacts` writer. The implementation
 is deliberately constrained to existing ledger, advisory-lock, Calendar, and
-contact-write-boundary components plus one additive NocoDB-only trigger. It
+    contact-write-boundary components plus one additive direct-SQL trigger. It
 adds no table, worker, queue, generic saga framework, or product surface.
 
 ### Problem-derived contract
@@ -88,10 +93,15 @@ adds no table, worker, queue, generic saga framework, or product surface.
   401-specific repair, the first identity lookup and first DELETE independently
   acquire authorization headers; a near-expiry refresh between them can reload
   a different principal, so the Calendar proof must be bound to the exact
-  header that DELETE uses. The NocoDB-only trigger also leaves the operational
-  import and portal-sync scripts outside the durable fence even though their
-  matched-row updates can change a won lead's `contact_type` or `status`, both
-  facts canonical completion requires after the external delete.
+    header that DELETE uses. The initial NocoDB-only trigger also leaves the
+    operational import and portal-sync scripts outside the durable fence even
+    though their matched-row updates can change a won lead's `contact_type` or
+    `status`, both facts canonical completion requires after the external
+    delete. A completed same-key first-clean booking submitted as `primary`
+    still takes the live identity branch before its stored booked outcome, so a
+    Calendar outage can break replay without any unfinished work. Finally, the
+    EOM workflow path filters do not name the new won-loss service or migration,
+    so their tests can be skipped by a future isolated change.
 - Correct fix must touch/change:
   1. Add a narrow, durable won-loss orchestration service that reuses the
      existing PostgreSQL lifecycle ledger and advisory-lock component: prepare
@@ -148,13 +158,12 @@ adds no table, worker, queue, generic saga framework, or product surface.
       key. The original key remains the sole retry owner; the check must use
       the existing contact lock and append-only ledger before any Calendar
       call, not a key-local lookup or a cleanup side effect.
-  12. Add one additive database trigger that runs only for the direct NocoDB
-      session identity. It must reject NocoDB `status` updates and deletes of a
-      won EOM lead with requested-but-uncompleted cancellation evidence before
-      that direct mutation. The trigger must safely read the protected ledger,
-      leave the canonical Atlas completion transaction and ordinary NocoDB CRM
-      edits intact, and leave existing role grants and table/column shape
-      unchanged.
+  12. Add one additive database trigger that rejects every direct SQL
+      `status`/`contact_type` update or delete of a won EOM lead with
+      requested-but-uncompleted cancellation evidence before that mutation. The
+      trigger must safely read the protected ledger, leave canonical Atlas
+      completion and ordinary non-state direct edits intact, and leave existing
+      role grants and table/column shape unchanged.
   13. Make the durable cancellation-fence query use only columns present in
       the base lifecycle migration. It needs only an unresolved-record
       predicate, so it must not depend on `lifecycle_sequence` or expand a
@@ -182,20 +191,31 @@ adds no table, worker, queue, generic saga framework, or product surface.
       `lead_stage`, and ordinary non-state direct edits remain outside the
       trigger, so this closes the evidenced import/portal bypass without a
       role-grant, script, or lifecycle-schema redesign.
+  18. For a completed same-key first-clean booking that was explicitly submitted
+      as `primary`, normalize that request only to its persisted concrete
+      Calendar ID for the existing immutable-payload comparison, then return
+      the stored booked/draft replay before the service can call Calendar. An
+      unfinished request must retain its current identity preflight, and a
+      different start/end/notes/event payload must still conflict.
+  19. Enroll `eom_won_lead_loss.py` and migration 386 in both existing EOM
+      pipeline path filters, and prove that enrollment in the already-run EOM
+      unit test file. Keep the existing workflow job and its test command
+      unchanged.
 - Must not change:
   1. The existing `new` and `estimate_booked` loss/reopen state machine,
      response shape, reasons, lifecycle evidence, and idempotency behavior.
   2. Estimate booking behavior, deterministic IDs, and the first-clean
      prepare/create/complete transaction contract. First-clean booking gains
      only the read-only Calendar-identity preflight required to persist the
-     concrete existing `calendar_id`; no new Calendar event or identity record
-     is introduced.
+     concrete existing `calendar_id`. A completed exact-key `primary` replay
+     returns its stored result without another Calendar call; no new Calendar
+     event or identity record is introduced.
   3. Customer/Site creation, Tracker handoff payloads, public onboarding token
      format/issuance/redemption, onboarding email copy/transport, and all
      payroll, QR/GPS, Home Base, receivables, Website, and tracker lanes.
   4. The public-product shape: no new UI, email, data field, API route,
      table/column shape, dependency, configuration setting, or background
-     worker. The one permitted additive migration is a narrow NocoDB-session
+     worker. The one permitted additive migration is a narrow direct-SQL
      trigger; it is not a data-model, role-grant, or product-surface change.
   5. Reopening a newly lost `won` lead. Restoring `won` would falsely resurrect
      a cancelled appointment and revoked draft; the existing reopen admission
@@ -209,7 +229,8 @@ adds no table, worker, queue, generic saga framework, or product surface.
      second MCP-specific lifecycle policy.
   8. The maturity-sweep baseline and its rules. This repair removes the
      newly-introduced internal mocks instead of accepting or recalibrating
-     them, and it does not alter any GitHub workflow or required-check policy.
+     them, and it does not alter any required-check policy, workflow job, or
+     workflow test command.
   9. Normal single-credential Calendar deletion semantics. The extra identity
      proof runs only after a rejected DELETE has forced credential refresh; it
      does not broaden accepted response codes or add another external action
@@ -224,7 +245,7 @@ adds no table, worker, queue, generic saga framework, or product surface.
 Ownership lane: eom-public-onboarding-lifecycle-safety
 Slice phase: Production hardening
 
-Max files: 11
+Max files: 12
 
 1. Permit the existing lost-lead route to dispose of a `won` EOM lead only
    through a persisted cancellation operation that removes its exact persisted
@@ -235,22 +256,23 @@ Max files: 11
    default-configured bookings remain eligible.
 2. Use the current append-only lifecycle ledger, database advisory locks, and
    Calendar tool rather than a new table, queue, worker, or generic saga
-   framework. One additive NocoDB-only trigger migration is required because
-   the direct database role bypasses the provider boundary.
+   framework. One additive direct-SQL trigger migration is required because
+   direct database callers bypass the provider boundary.
 3. Preserve the direct pre-won loss path and make competing approval/handoff
    and generic status/archive writers wait behind the won-loss execution
    decision, then reject durable incomplete cancellation evidence before their
-   first mutation. The direct NocoDB status/delete path receives the equivalent
-   durable fence at the database boundary.
-4. Add focused HTTP, Calendar-boundary, and real-Postgres tests that prove the
-   existing route is wired and that the state transition is safe under retries
-   and the admitted concurrent writer interleavings.
+   first mutation. Direct SQL `status`/`contact_type`/delete paths receive the
+   equivalent durable fence at the database boundary.
+4. Add focused HTTP, Calendar-boundary, workflow-enrollment, and real-Postgres
+   tests that prove the existing route is wired and that the state transition is
+   safe under retries and the admitted concurrent writer interleavings.
 5. Record the one new provider-owned `UPDATE contacts` statement in the
    existing contact-write inventory without changing the guard's admission
    policy or any other writer.
 
 ### Files touched
 
+- `.github/workflows/atlas_eom_lead_pipeline_checks.yml`
 - `atlas_brain/eom_api/funnel.py`
 - `atlas_brain/services/crm_provider.py`
 - `atlas_brain/services/eom_estimate_booking.py`
@@ -323,10 +345,19 @@ Max files: 11
     uncertain Calendar delete, before a second Calendar call; retry of the
     original key remains the only admitted recovery.
 15. `tests/test_eom_lead_conversion_integration.py::test_nocodb_cannot_mutate_won_lead_with_unsettled_cancellation`
-    proves, through the real `atlas_nocodb` login and the applied additive
-    migration, that direct status and delete statements reject while an EOM
-    won-loss cancellation is unsettled, while ordinary NocoDB edits and the
-    canonical application completion remain unaffected.
+    proves, through real NocoDB and ordinary application database roles plus
+    the applied additive migration, that direct completion-sensitive mutations
+    reject while an EOM won-loss cancellation is unsettled, while ordinary
+    non-state edits and canonical application completion remain unaffected.
+16. `tests/test_eom_lead_conversion_integration.py::test_completed_explicit_primary_first_clean_replay_skips_identity_lookup`
+    proves a completed explicit-`primary` first-clean key returns its stored
+    result through a simulated Calendar identity outage, without another
+    identity lookup or event creation, while a changed immutable payload still
+    returns 409.
+17. `tests/test_eom_lead_conversion.py::test_eom_lead_pipeline_workflow_enrolls_won_loss_runtime_paths`
+    proves both the pull-request and main-push filters enroll the won-loss
+    service and migration, while the workflow keeps running its existing EOM
+    test command.
 
 - Reachability proof: authenticated private funnel route -> service
   orchestration -> CRM lifecycle state + Calendar delete result; the route test
@@ -335,8 +366,8 @@ Max files: 11
   one intentionally faked third-party boundary.
 - Affected surfaces: existing private lost-lead route; CRM lifecycle ledger;
   onboarding-draft claim/handoff and generic contact-status writers; Calendar
-  tool delete boundary; EOM unit and integration tests; existing contact-write
-  inventory proof.
+  tool delete boundary; EOM unit and integration tests; EOM pipeline path
+  enrollment; existing contact-write inventory proof.
 - Risk areas: customer-facing email delivery, Calendar appointment loss,
   idempotency-key replay, crash/retry between external and DB effects,
   customer-handoff and generic contact-status races, public onboarding token
@@ -367,6 +398,9 @@ Max files: 11
   - first-clean booking + configured/requested relative Calendar ID -> one
     read-only identity resolution, then CRM prepare/create/complete only with
     the returned concrete ID;
+  - completed first-clean booking + exact same key explicitly resubmitted as
+    `primary` -> immutable stored replay, no Calendar identity lookup or event
+    creation; a changed immutable payload still conflicts;
   - private route + won/relative `primary` Calendar evidence -> 409, no
     Calendar call and no loss mutation;
   - private route + same loss key after successful completion -> closed replay;
@@ -377,9 +411,10 @@ Max files: 11
   - generic archive or status update + requested-but-uncompleted cancellation
     evidence -> 409 before `UPDATE contacts`; all other generic update fields
     retain their existing path.
-  - direct NocoDB status update or delete + requested-but-uncompleted
+  - direct SQL status/contact-type update or delete + requested-but-uncompleted
     cancellation evidence for a won EOM lead -> database exception before the
-    direct mutation; ordinary NocoDB CRM fields retain their existing path.
+    direct mutation; ordinary non-state direct CRM fields retain their existing
+    path.
 
 #### Boundary path/seam: Calendar delete result
 
@@ -424,9 +459,13 @@ requested-but-uncompleted cancellation evidence for that contact; it writes
 append-only `first_clean_cancellation_requested` evidence with the persisted
 Calendar pair and returns that pair.
 
-Before a new first-clean CRM prepare, the booking service resolves the selected
-Calendar ID through the current OAuth principal. It persists and creates only
-against that concrete returned ID. The loss service invokes DELETE using that
+Before a new or unfinished first-clean CRM prepare, the booking service resolves
+the selected Calendar ID through the current OAuth principal. It persists and
+creates only against that concrete returned ID. A completed exact-key request
+that originally named `primary` instead normalizes that alias to its immutable
+stored ID for the existing payload comparison, then returns its persisted replay
+without contacting Calendar; different immutable fields still conflict. The
+loss service invokes DELETE using that
 immutable pair only when its persisted Calendar ID is concrete rather than
 credential-relative. The Calendar tool first verifies that the current
 principal can resolve that exact ID; only then can 404/410 mean the exact event
@@ -446,11 +485,11 @@ before their first update and reject any requested-but-uncompleted cancellation
 after acquiring it, so neither an in-flight executor nor its
 crash/uncertain-result residue can cross the external cancellation window.
 
-The existing NocoDB role is not a caller of the provider, so an additive
-database trigger gives its direct `status`/delete path the same durable
-admission. It runs only when `session_user` is `atlas_nocodb`, securely consults
-the append-only evidence, and rejects only a won EOM contact with an unresolved
-cancellation. Direct hard deletion is already disallowed by the lifecycle
+Direct SQL callers are not callers of the provider, so an additive database
+trigger gives their direct `status`/`contact_type`/delete paths the same durable
+admission. It securely consults the append-only evidence and rejects only a won
+EOM contact with an unresolved cancellation. Direct hard deletion is already
+disallowed by the lifecycle
 foreign key; the trigger makes the intended cancellation fence explicit and
 blocks status before completion could observe a changed contact. Atlas's
 canonical completion runs under its application session and remains the sole
@@ -525,10 +564,11 @@ that statement, so the write cannot appear as an unreviewed exception.
 - No MCP command rewrite: all archive and generic-status callers meet the same
   provider-owned fence, so command signatures, response shape, tenant checks,
   and authorization stay unchanged.
-- No NocoDB capability rewrite: ordinary direct CRM edits retain their existing
-  grants and behavior. The additive trigger is limited to a direct `status` or
-  delete mutation of a won EOM lead with unresolved cancellation evidence; it
-  adds neither a role membership nor a new bypass token.
+- No direct-writer capability rewrite: ordinary direct CRM edits retain their
+  existing grants and behavior. The additive trigger is limited to direct
+  `status`/`contact_type`/delete mutations of a won EOM lead with unresolved
+  cancellation evidence; it adds neither a role membership nor a new bypass
+  token.
 - Migration 386 is intentionally not rolled back with an application deploy.
   The current build must reconcile unresolved cancellation records first; the
   trigger/function remain intact and immutable lifecycle evidence is retained.
@@ -538,6 +578,9 @@ that statement, so the write cannot appear as an unreviewed exception.
   guards only the three existing completion-sensitive mutation forms and does
   not change script-specific behavior, credentials, grants, or ordinary direct
   contact-detail edits.
+- The EOM pipeline workflow keeps its existing job and test command. Its two
+  path filters merely name the won-loss service and migration so an isolated
+  safety change cannot skip the already-selected tests.
 - The contact-write guard's policy does not broaden: only its reviewed
   inventory and exact count acknowledge the new statement in the already
   approved provider module.
@@ -563,10 +606,10 @@ Parked hardening: none within the stated predicate.
 
 ## Verification
 
-- `pytest -q tests/test_eom_lead_conversion.py` -> 223 passed (local; one
+- `pytest -q tests/test_eom_lead_conversion.py` -> 224 passed (local; one
   pre-existing `pynvml` deprecation warning).
 - `ATLAS_MIGRATION_TEST_DATABASE_URL=<isolated-local-test-db> pytest -q
-  tests/test_eom_lead_conversion_integration.py` -> 106 passed against an
+  tests/test_eom_lead_conversion_integration.py` -> 107 passed against an
   isolated temporary PostgreSQL 16 container (local; container removed after
   the run).
 - Focused route, Calendar boundary, success/replay, unsafe-delivery,
@@ -599,6 +642,10 @@ Parked hardening: none within the stated predicate.
   direct `status`/`contact_type` mutation is rejected both during a live
   cancellation and after an uncertain executor exit, then resumes only after
   current-protocol completion.
+- The completed explicit-`primary` same-key proof must pass with a Calendar
+  identity failure fake and show no replay-time lookup/create; its changed-notes
+  variant must still return the existing conflict. The EOM unit suite also pins
+  the service and migration in both pipeline path filters.
 - Pending before push: the wrapper-owned Atlas local PR review, which will run
   through `scripts/push_pr.sh` exactly once with the final PR body and its
   isolated unit-gate database environment.
@@ -607,15 +654,16 @@ Parked hardening: none within the stated predicate.
 
 | File | LOC |
 |---|---:|
+| `.github/workflows/atlas_eom_lead_pipeline_checks.yml` | 4 |
 | `atlas_brain/eom_api/funnel.py` | 12 |
-| `atlas_brain/services/crm_provider.py` | 1011 |
+| `atlas_brain/services/crm_provider.py` | 1028 |
 | `atlas_brain/services/eom_estimate_booking.py` | 87 |
 | `atlas_brain/services/eom_won_lead_loss.py` | 120 |
 | `atlas_brain/storage/migrations/386_eom_won_loss_nocodb_fence.sql` | 68 |
 | `atlas_brain/tools/calendar.py` | 284 |
-| `plans/PR-EOM-Won-Lead-Loss-Teardown.md` | 621 |
+| `plans/PR-EOM-Won-Lead-Loss-Teardown.md` | 669 |
 | `tests/contact_write_boundary/baseline.json` | 1 |
 | `tests/test_contact_write_boundary.py` | 8 |
-| `tests/test_eom_lead_conversion.py` | 531 |
-| `tests/test_eom_lead_conversion_integration.py` | 1014 |
-| **Total** | **3757** |
+| `tests/test_eom_lead_conversion.py` | 548 |
+| `tests/test_eom_lead_conversion_integration.py` | 1086 |
+| **Total** | **3915** |
