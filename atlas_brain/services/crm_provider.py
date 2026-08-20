@@ -1886,6 +1886,7 @@ class DatabaseCRMProvider:
         updates = {k: v for k, v in data.items() if k in allowed}
         lifecycle_requested = bool({"contact_type", "lead_stage"} & updates.keys())
         ownership_requested = "business_context_id" in updates
+        status_requested = "status" in updates
         pipeline_requested = any(
             key in updates for key in ("lead_stage", "lead_owner", "next_follow_up_at")
         )
@@ -1955,23 +1956,38 @@ class DatabaseCRMProvider:
             )
             return dict(row) if row else None
 
-        if lifecycle_requested or ownership_requested:
-            # This row lock is the ownership decision's linearization point:
-            # validation and the permitted write share one transaction with
-            # `claim_contact`'s compare-and-set UPDATE.
+        if lifecycle_requested or ownership_requested or status_requested:
+            # Lifecycle/ownership validation and status fencing share the
+            # permitted write's transaction. Ownership still uses the contact
+            # row lock as its linearization point; status uses the won-loss
+            # advisory lock before the mutation.
             async with _transaction_connection(pool) as conn:
-                existing = await conn.fetchrow(
-                    """
-                    SELECT business_context_id, contact_type, lead_stage
-                    FROM contacts
-                    WHERE id = $1
-                    FOR UPDATE
-                    """,
-                    contact_id,
-                )
-                if existing is None:
-                    return None
-                _validate_eom_transition(existing)
+                if status_requested:
+                    # A generic status write can make won-loss completion fail
+                    # after Calendar DELETE just as an archive can. The shared
+                    # advisory lock and durable fence are owned here rather
+                    # than at an MCP caller so every provider caller observes
+                    # the same closed lifecycle boundary.
+                    await conn.execute(
+                        "SELECT pg_advisory_xact_lock(hashtextextended($1, 0))",
+                        _eom_won_lead_loss_execution_lock_key(contact_id),
+                    )
+                    await self._assert_eom_won_lead_loss_cancellation_fence(
+                        conn, contact_id=contact_id
+                    )
+                if lifecycle_requested or ownership_requested:
+                    existing = await conn.fetchrow(
+                        """
+                        SELECT business_context_id, contact_type, lead_stage
+                        FROM contacts
+                        WHERE id = $1
+                        FOR UPDATE
+                        """,
+                        contact_id,
+                    )
+                    if existing is None:
+                        return None
+                    _validate_eom_transition(existing)
                 return await _write(conn)
 
         row = await _write(pool)
@@ -2007,10 +2023,21 @@ class DatabaseCRMProvider:
         from ..storage.database import get_db_pool
 
         pool = get_db_pool()
-        result = await pool.execute(
-            "UPDATE contacts SET status = 'archived', updated_at = NOW() WHERE id = $1",
-            contact_id,
-        )
+        async with _transaction_connection(pool) as conn:
+            # Archive is a generic status mutation. It must share the won-loss
+            # execution boundary so it cannot strand a prepared cancellation
+            # after Calendar DELETE or an uncertain external result.
+            await conn.execute(
+                "SELECT pg_advisory_xact_lock(hashtextextended($1, 0))",
+                _eom_won_lead_loss_execution_lock_key(contact_id),
+            )
+            await self._assert_eom_won_lead_loss_cancellation_fence(
+                conn, contact_id=contact_id
+            )
+            result = await conn.execute(
+                "UPDATE contacts SET status = 'archived', updated_at = NOW() WHERE id = $1",
+                contact_id,
+            )
         return "UPDATE 1" in (result or "")
 
     async def list_contacts(

@@ -15,24 +15,25 @@ safety blocker exposed by that attempted vertical proof. It does not add a new
 buyer-facing flow.
 
 The initial implementation correctly introduced a durable prepare/delete/
-complete path, but review found three safety gaps in that new protocol: a
+complete path, but review found four safety gaps in that new protocol: a
 legacy pre-won `lead_lost` key could be mistaken for a won-loss key, competing
 writers trusted only the lifetime lock rather than durable unfinished
-cancellation evidence, and a persisted credential-relative Calendar alias
-could make a later `404` refer to a different Google principal. These are
-root-cause fixes to the protocol, not UI or recovery-workflow changes.
+cancellation evidence, generic contact-status writers could bypass that fence,
+and a persisted credential-relative Calendar alias could make a later `404`
+refer to a different Google principal. These are root-cause fixes to the
+protocol, not UI or recovery-workflow changes.
 
 ### Diff-budget exception
 
 This slice is expected to exceed Atlas' 400-LOC soft target. The externally
 visible safety guarantee is indivisible: the private route, canonical Calendar
-boundary, authoritative CRM prepare/complete writer, the two existing
-competing writers, and the existing contact-writer inventory proof must land
-together, with real-Postgres proof of their shared lock. Splitting them would
-either leave the currently blocked rehearsal blocked, or worse, expose a
-partial route that can lose a lead without the atomic draft/Calendar teardown
-or silently add an unreviewed `contacts` writer. The implementation is
-deliberately constrained to existing ledger, advisory-lock, Calendar, and
+boundary, authoritative CRM prepare/complete writer, competing draft/handoff
+and generic status writers, and the existing contact-writer inventory proof
+must land together, with real-Postgres proof of their shared lock. Splitting
+them would either leave the currently blocked rehearsal blocked, or worse,
+expose a partial route that can lose a lead without the atomic draft/Calendar
+teardown or silently add an unreviewed `contacts` writer. The implementation
+is deliberately constrained to existing ledger, advisory-lock, Calendar, and
 contact-write-boundary components rather than adding a new table, worker, or
 framework.
 
@@ -51,7 +52,11 @@ framework.
   current configured booking default, so a loss-time-only rejection would make
   the newly admitted path unusable for ordinary first cleans. Those are unsafe
   defaults: old pre-won evidence, a crash/uncertain delete, or a rotated Google
-  principal can make the next action describe the wrong external state.
+  principal can make the next action describe the wrong external state. The
+  generic `delete_contact` archive and `update_contact` status writers also
+  mutate a won contact without taking the shared execution lock or consulting
+  that durable evidence; either can make completion reject only after the
+  external event has been removed.
 - Correct fix must touch/change:
   1. Add a narrow, durable won-loss orchestration service that reuses the
      existing PostgreSQL lifecycle ledger and advisory-lock component: prepare
@@ -97,6 +102,12 @@ framework.
      persisted exact ID before treating an event 404/410 as an idempotent
      absence. This must be read-only Calendar work and reuse the existing
      metadata field; it adds no schema or configuration surface.
+  10. At the generic provider status-mutation boundary, acquire the same
+      contact execution lock and assert the durable cancellation fence before
+      the first `UPDATE contacts`. This must cover both `delete_contact`'s
+      archive update and `update_contact` requests that contain `status`, so
+      every caller of those provider methods is protected without changing an
+      MCP command signature, response shape, or authorization model.
 - Must not change:
   1. The existing `new` and `estimate_booked` loss/reopen state machine,
      response shape, reasons, lifecycle evidence, and idempotency behavior.
@@ -116,6 +127,10 @@ framework.
   6. The existing `tests/unit_gate_baseline.txt` entries and unrelated
      monthly-invoice test behavior. Those environment-bound known failures are
      neither evidence for nor a dependency of won-lead loss safety.
+  7. Generic contact updates that do not request `status`, and all MCP command
+     signatures, copy, tenant checks, and authorization behavior. The provider
+     fence is the shared mutation boundary; this slice does not create a
+     second MCP-specific lifecycle policy.
 
 ## Scope (this PR)
 
@@ -134,8 +149,9 @@ Max files: 10
    Calendar tool rather than a new table, migration, queue, worker, or generic
    saga framework.
 3. Preserve the direct pre-won loss path and make competing approval/handoff
-   writers wait behind the won-loss execution decision, then reject durable
-   incomplete cancellation evidence before their first mutation.
+   and generic status/archive writers wait behind the won-loss execution
+   decision, then reject durable incomplete cancellation evidence before their
+   first mutation.
 4. Add focused HTTP, Calendar-boundary, and real-Postgres tests that prove the
    existing route is wired and that the state transition is safe under retries
    and the admitted concurrent writer interleavings.
@@ -176,12 +192,13 @@ Max files: 10
    that replaying the same operation can complete exactly once after a
    determinate idempotent delete result.
 5. The execution model is one Postgres session advisory lock keyed by contact
-   across `prepare -> Calendar DELETE -> complete`; the draft-claim and
-   handoff writers acquire the same key before their first mutation. Its
-   invariant is: in every admitted interleaving, exactly one writer observes a
-   terminal contact/draft state, and no writer can claim/send or finalize a
-   contact after this operation commits `lost`. It is settled by
-   `tests/test_eom_lead_conversion_integration.py::test_won_lead_loss_execution_fences_claim_and_handoff`.
+   across `prepare -> Calendar DELETE -> complete`; the draft-claim, handoff,
+   and generic status/archive writers acquire the same key before their first
+   mutation. Its invariant is: in every admitted interleaving, no writer can
+   mutate the contact/draft while Calendar cancellation is in flight; after
+   completion, existing terminal-state rules decide its own outcome. It is
+   settled by
+   `tests/test_eom_lead_conversion_integration.py::test_won_lead_loss_execution_fences_claim_handoff_and_status_writers`.
 6. `tests/test_eom_lead_conversion.py::test_calendar_delete_event_treats_an_absent_event_as_idempotent_cancellation`
    proves the Calendar boundary considers the exact persisted event absent
    after a 404/410 response, not a false successful event creation or loss.
@@ -207,19 +224,23 @@ Max files: 10
 12. `tests/test_eom_lead_conversion_integration.py::test_won_lead_loss_rejects_relative_calendar_identifier_before_delete`
     proves a legacy `primary` booking cannot convert a 404 from another
     credential principal into a lost lead; it is rejected before Calendar.
+13. `tests/test_eom_lead_conversion_integration.py::test_won_lead_loss_fences_durable_cancellation_from_generic_contact_status_writes`
+    proves both provider-owned archive and generic status updates reject a
+    requested-but-uncompleted cancellation before changing the contact.
 
 - Reachability proof: authenticated private funnel route -> service
   orchestration -> CRM lifecycle state + Calendar delete result; the route test
   exercises the real FastAPI entrypoint, while the integration test verifies
   the provider's persisted state through real Postgres. Calendar remains the
   one intentionally faked third-party boundary.
-- Affected surfaces: existing private lost-lead route; CRM lifecycle ledger and
-  onboarding-draft claim/handoff writers; Calendar tool delete boundary; EOM
-  unit and integration tests; existing contact-write inventory proof.
+- Affected surfaces: existing private lost-lead route; CRM lifecycle ledger;
+  onboarding-draft claim/handoff and generic contact-status writers; Calendar
+  tool delete boundary; EOM unit and integration tests; existing contact-write
+  inventory proof.
 - Risk areas: customer-facing email delivery, Calendar appointment loss,
   idempotency-key replay, crash/retry between external and DB effects,
-  customer-handoff race, public onboarding token state, and legacy pre-won
-  behavior.
+  customer-handoff and generic contact-status races, public onboarding token
+  state, and legacy pre-won behavior.
 - Reviewer rules triggered: R1, R2, R3, R5, R6, R8, R10, R14.
 
 ### Boundary-change enumeration
@@ -250,6 +271,9 @@ Max files: 10
     then read the terminal revoked/lost state;
   - draft approval or office/public handoff + requested-but-uncompleted
     cancellation evidence after executor exit -> 409 before any mutation.
+  - generic archive or status update + requested-but-uncompleted cancellation
+    evidence -> 409 before `UPDATE contacts`; all other generic update fields
+    retain their existing path.
 
 #### Boundary path/seam: Calendar delete result
 
@@ -308,21 +332,21 @@ After a determinate delete, CRM completion revalidates every prepared fact in
 one PostgreSQL transaction. It revokes a pending draft (or accepts an already
 revoked one), rejects `sending`/`sent`/issued-link state, changes `won` to
 `lost`, and appends cancellation-complete plus lost lifecycle evidence in that
-same transaction. Existing claim and customer-handoff writers acquire the same
-execution advisory key before their first update and reject any
-requested-but-uncompleted cancellation after acquiring it, so neither an
-in-flight executor nor its crash/uncertain-result residue can cross the
-external cancellation window.
+same transaction. Existing claim and customer-handoff writers, plus generic
+provider `status`/archive writes, acquire the same execution advisory key
+before their first update and reject any requested-but-uncompleted cancellation
+after acquiring it, so neither an in-flight executor nor its
+crash/uncertain-result residue can cross the external cancellation window.
 
 Execution model: PostgreSQL session advisory locking is the selected
 closed-surface component. One lock spans the only non-transactional Calendar
-step; transaction-scoped acquisitions by claim/handoff serialize behind it.
-The ledger provides restart evidence, and the fixed Calendar pair makes DELETE
-replay idempotent. Assumption: after Calendar's identity lookup confirms access
-to the exact recorded calendar, Google Calendar's delete endpoint applies a
-DELETE to that `(calendar_id, event_id)` pair and its 404/410 response means
-that pair is absent. No new lease, queue, clock, retry worker, or table is
-introduced.
+step; transaction-scoped acquisitions by claim/handoff/status writers serialize
+behind it. The ledger provides restart evidence, and the fixed Calendar pair
+makes DELETE replay idempotent. Assumption: after Calendar's identity lookup
+confirms access to the exact recorded calendar, Google Calendar's delete
+endpoint applies a DELETE to that `(calendar_id, event_id)` pair and its
+404/410 response means that pair is absent. No new lease, queue, clock, retry
+worker, or table is introduced.
 
 The resulting `UPDATE contacts SET lead_stage = 'lost'` is still inside the
 canonical `DatabaseCRMProvider`, the only existing allowed contact-writer
@@ -351,6 +375,9 @@ that statement, so the write cannot appear as an unreviewed exception.
 - No generic Calendar-provider rewrite: the existing portal uses
   `CalendarTool`, so identity resolution and delete verification stay at that
   canonical boundary only.
+- No MCP command rewrite: all archive and generic-status callers meet the same
+  provider-owned fence, so command signatures, response shape, tenant checks,
+  and authorization stay unchanged.
 - The contact-write guard's policy does not broaden: only its reviewed
   inventory and exact count acknowledge the new statement in the already
   approved provider module.
@@ -379,12 +406,13 @@ Parked hardening: none within the stated predicate.
 - `pytest -q tests/test_eom_lead_conversion.py` -> 219 passed (local; one
   pre-existing `pynvml` deprecation warning).
 - `ATLAS_MIGRATION_TEST_DATABASE_URL=<isolated-local-test-db> pytest -q
-  tests/test_eom_lead_conversion_integration.py` -> 104 passed against an
+  tests/test_eom_lead_conversion_integration.py` -> 105 passed against an
   isolated temporary PostgreSQL 16 container (local; container removed after
   the run).
 - Focused route, Calendar boundary, success/replay, unsafe-delivery,
   uncertain-delete, execution-fence, reused-key, relative-calendar, and
-  concrete-calendar-identity cases passed before the full suites.
+  concrete-calendar-identity and generic-status-fence cases passed before the
+  full suites.
 - Full `ruff check` on the changed files reports only four pre-existing `F841`
   violations in unchanged `atlas_brain/tools/calendar.py` blocks inherited from
   the base. The scoped check with that known baseline code excluded passes; no
@@ -403,13 +431,13 @@ Parked hardening: none within the stated predicate.
 | File | LOC |
 |---|---:|
 | `atlas_brain/eom_api/funnel.py` | 12 |
-| `atlas_brain/services/crm_provider.py` | 927 |
+| `atlas_brain/services/crm_provider.py` | 994 |
 | `atlas_brain/services/eom_estimate_booking.py` | 87 |
 | `atlas_brain/services/eom_won_lead_loss.py` | 120 |
 | `atlas_brain/tools/calendar.py` | 235 |
-| `plans/PR-EOM-Won-Lead-Loss-Teardown.md` | 415 |
+| `plans/PR-EOM-Won-Lead-Loss-Teardown.md` | 443 |
 | `tests/contact_write_boundary/baseline.json` | 1 |
 | `tests/test_contact_write_boundary.py` | 8 |
 | `tests/test_eom_lead_conversion.py` | 380 |
-| `tests/test_eom_lead_conversion_integration.py` | 734 |
-| **Total** | **2919** |
+| `tests/test_eom_lead_conversion_integration.py` | 810 |
+| **Total** | **3090** |

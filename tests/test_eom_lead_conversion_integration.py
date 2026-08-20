@@ -6567,6 +6567,63 @@ async def test_won_lead_loss_fences_durable_unsettled_cancellation_from_claim_an
 
 
 @pytest.mark.asyncio
+async def test_won_lead_loss_fences_durable_cancellation_from_generic_contact_status_writes(
+    monkeypatch,
+):
+    """Archive and generic status writes cannot strand Calendar teardown."""
+
+    database_url = _database_url_or_skip()
+    schema = f"atlas_eom_won_loss_generic_status_fence_{uuid.uuid4().hex}"
+    conn = await asyncpg.connect(database_url)
+    try:
+        await _prepare_schema(conn, schema, apply_privilege_migration=False)
+        provider = DatabaseCRMProvider(pool=conn)
+        contact_id, _ = await _book_first_clean_draft(conn, provider)
+        command = EOMLeadLost(
+            contact_id=str(contact_id),
+            reason_code="no_response",
+            note=None,
+            operation_key=f"office-won-loss-{uuid.uuid4().hex}",
+            actor_id=1,
+            actor_name="Juan Canfield",
+        )
+        calendar = _WonLossCalendar(
+            results=[
+                ToolResult(
+                    success=False,
+                    error="API_ERROR",
+                    data={"request_phase": "delete", "status_code": 503},
+                    message="Calendar API error: 503",
+                )
+            ]
+        )
+
+        with pytest.raises(EOMLeadConversionError, match="Calendar API error: 503"):
+            await mark_eom_lead_lost_with_won_teardown(provider, calendar, command)
+
+        monkeypatch.setattr(
+            "atlas_brain.storage.database.get_db_pool", lambda: conn
+        )
+        with pytest.raises(
+            EOMLeadConversionError, match="cancellation requires reconciliation"
+        ) as archive:
+            await provider.delete_contact(str(contact_id))
+        assert archive.value.status_code == 409
+
+        with pytest.raises(
+            EOMLeadConversionError, match="cancellation requires reconciliation"
+        ) as status_update:
+            await provider.update_contact(str(contact_id), {"status": "inactive"})
+        assert status_update.value.status_code == 409
+        assert await conn.fetchval(
+            "SELECT status FROM contacts WHERE id = $1", contact_id
+        ) == "active"
+    finally:
+        await conn.execute(f'DROP SCHEMA IF EXISTS "{schema}" CASCADE')
+        await conn.close()
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize("relative_calendar_id", ("primary", "PRIMARY"))
 async def test_won_lead_loss_rejects_relative_calendar_identifier_before_delete(
     relative_calendar_id: str,
@@ -6645,7 +6702,9 @@ async def test_won_lead_loss_rejects_relative_calendar_identifier_before_delete(
 
 
 @pytest.mark.asyncio
-async def test_won_lead_loss_execution_fences_claim_and_handoff():
+async def test_won_lead_loss_execution_fences_claim_handoff_and_status_writers(
+    monkeypatch,
+):
     database_url = _database_url_or_skip()
     schema = f"atlas_eom_won_loss_fence_{uuid.uuid4().hex}"
     conn = await asyncpg.connect(database_url)
@@ -6653,6 +6712,8 @@ async def test_won_lead_loss_execution_fences_claim_and_handoff():
     loss_task = None
     claim_task = None
     handoff_task = None
+    status_task = None
+    archive_task = None
     calendar = _BlockingWonLossCalendar()
     try:
         await _prepare_schema(conn, schema, apply_privilege_migration=False)
@@ -6663,6 +6724,9 @@ async def test_won_lead_loss_execution_fences_claim_and_handoff():
             server_settings={"search_path": f'"{schema}", public'},
         )
         provider = DatabaseCRMProvider(pool=pool)
+        monkeypatch.setattr(
+            "atlas_brain.storage.database.get_db_pool", lambda: pool
+        )
         contact_id, draft_id = await _book_first_clean_draft(conn, provider)
         command = EOMLeadLost(
             contact_id=str(contact_id),
@@ -6694,9 +6758,15 @@ async def test_won_lead_loss_execution_fences_claim_and_handoff():
                 actor_name="Mayra Canfield",
             )
         )
+        status_task = asyncio.create_task(
+            provider.update_contact(str(contact_id), {"status": "inactive"})
+        )
+        archive_task = asyncio.create_task(provider.delete_contact(str(contact_id)))
         await asyncio.sleep(0.1)
         assert not claim_task.done()
         assert not handoff_task.done()
+        assert not status_task.done()
+        assert not archive_task.done()
 
         calendar.release.set()
         completed = await asyncio.wait_for(loss_task, timeout=5)
@@ -6707,9 +6777,15 @@ async def test_won_lead_loss_execution_fences_claim_and_handoff():
         with pytest.raises(EOMLeadConversionError) as handoff_exc:
             await asyncio.wait_for(handoff_task, timeout=5)
         assert handoff_exc.value.status_code == 409
+        status_result, archived = await asyncio.gather(
+            asyncio.wait_for(status_task, timeout=5),
+            asyncio.wait_for(archive_task, timeout=5),
+        )
+        assert status_result is not None
+        assert archived is True
     finally:
         calendar.release.set()
-        for task in (loss_task, claim_task, handoff_task):
+        for task in (loss_task, claim_task, handoff_task, status_task, archive_task):
             if task is not None and not task.done():
                 task.cancel()
                 with suppress(asyncio.CancelledError):
