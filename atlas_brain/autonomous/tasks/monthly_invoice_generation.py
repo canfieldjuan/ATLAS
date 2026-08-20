@@ -34,9 +34,17 @@ logger = logging.getLogger("atlas.autonomous.tasks.monthly_invoice_generation")
 _PER_HOUR_PLACEHOLDER_DESC_SUFFIX = " (hours TBD - update before sending)"
 _PER_HOUR_PLACEHOLDER_QTY = 0
 
+# Include late-evening US events that land in the following UTC date.  Keep the
+# admission bound derived from this same extension so an override cannot reach
+# provider construction and then overflow the calendar range calculation.
+_BILLING_PERIOD_END_EXTENSION = timedelta(hours=30)
+_LATEST_EXECUTABLE_BILLING_RANGE_START = (
+    datetime.max.replace(tzinfo=timezone.utc) - _BILLING_PERIOD_END_EXTENSION
+)
+
 
 def _parse_billing_month_override(value: object) -> tuple[int, int] | None:
-    """Return an exact, calendar-valid ``YYYY-MM`` override or ``None``."""
+    """Return an exact, executable ``YYYY-MM`` override or ``None``."""
     if not isinstance(value, str) or len(value) != 7 or value[4] != "-":
         return None
 
@@ -53,6 +61,11 @@ def _parse_billing_month_override(value: object) -> tuple[int, int] | None:
     year = int(year_text)
     month = int(month_text)
     if not (date.min.year <= year <= date.max.year and 1 <= month <= 12):
+        return None
+
+    last_day = monthrange(year, month)[1]
+    range_start = datetime(year, month, last_day, tzinfo=timezone.utc)
+    if range_start > _LATEST_EXECUTABLE_BILLING_RANGE_START:
         return None
     return year, month
 
@@ -116,7 +129,10 @@ async def run(task: ScheduledTask) -> dict:
     period_start = datetime(period_year, period_month, 1, tzinfo=timezone.utc)
     # Extend end into next day UTC to capture late-evening events in US timezones
     # (e.g., 9pm CDT on March 31 = 2am UTC April 1)
-    period_end = datetime(period_year, period_month, last_day, tzinfo=timezone.utc) + timedelta(hours=30)
+    period_end = (
+        datetime(period_year, period_month, last_day, tzinfo=timezone.utc)
+        + _BILLING_PERIOD_END_EXTENSION
+    )
     period_label = f"{period_year}-{period_month:02d}"
 
     review_mode = settings.invoicing.auto_invoice_review_mode

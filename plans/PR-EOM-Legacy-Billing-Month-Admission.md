@@ -11,6 +11,12 @@ the documented deterministic invalid-period skip.  That ordering is unsafe for
 an invoice/PDF/mail writer: invalid admission must finish before it can reach
 any financial or delivery collaborator.
 
+The same admission boundary must also reject a wire-format/calendar-valid
+period when this task's existing `last_day + 30 hours` UTC range construction
+cannot represent it.  Otherwise `9999-12` reaches provider construction and
+then raises `OverflowError`; executable-range admission belongs at the same
+pre-provider seam rather than at a later calendar call.
+
 The predecessor hardening slice [#2439](https://github.com/canfieldjuan/ATLAS/pull/2439)
 made the legacy writer an explicit deployment opt-in and preserved its existing
 task registration.  Read-only deployment probing on 2026-08-19 confirmed the
@@ -23,19 +29,21 @@ or admit any writer.
 
 This slice is intentionally over the 400-LOC soft target because its inseparable
 proof centralizes the pre-provider sentinel, checks the grammar's acceptance
-and rejection classes, and calls the real async task entrypoint under explicit
-opt-in.  Splitting that proof would leave either a financial admission change
-without no-write reachability evidence or duplicated sentinel logic.
+and rejection/executable-range classes, and calls the real async task entrypoint
+under explicit opt-in.  Splitting that proof would leave either a financial
+admission change without no-write reachability evidence or duplicated sentinel
+logic.
 
 ### Problem-derived contract
 
 - Root cause: `monthly_invoice_generation.run` constructs write-capable
   provider seams before proving that the open `task.metadata.billing_month`
-  value is an exact, calendar-valid billing period.
+  value is an exact, calendar-valid, executable billing period.
 - Correct fix must touch/change: place one exact billing-month admission parser
   after the existing feature-flag exits and before every provider import or
-  construction; add no-provider regression tests that exercise the real task
-  entrypoint and the parser's accepted grammar/rejected complement.
+  construction; make its executable bound derive from the existing UTC
+  range-end calculation; add no-provider regression tests that exercise the
+  real task entrypoint and the parser's accepted grammar/rejected complement.
 - Must not change: feature-flag ordering or messages; scheduler registration;
   valid explicit and implicit billing-period behavior; contact filters;
   invoice/PDF/Gmail behavior after a valid admission; configuration defaults;
@@ -48,15 +56,18 @@ Ownership lane: eom/billing-payments-security-hardening
 Slice phase: Production hardening
 Max files: 3
 
-1. Validate a supplied legacy `billing_month` as exact ASCII `YYYY-MM` plus a
-   real calendar year/month before importing or constructing any provider.
+1. Validate a supplied legacy `billing_month` as exact ASCII `YYYY-MM`, a real
+   calendar year/month, and a representable existing `last_day + 30 hours` UTC
+   range before importing or constructing any provider.
 2. Keep missing `billing_month` on the established previous-calendar-month
    path, and retain both existing disabled-task exits before metadata parsing.
 3. Prove malformed metadata returns the existing invalid-period skip without a
    provider import, while valid/missing metadata still reaches the first
    provider seam only when the legacy writer is deliberately enabled.
-4. Add grammar-derived acceptance/rejection tests with no database, Gmail,
-   calendar, CRM, invoice, PDF, or financial-record interaction.
+4. Add an independent grammar oracle over every exact numeric wire form and a
+   structural-equivalence product (including non-string values), plus real-task
+   pre-provider rejection proof, with no database, Gmail, calendar, CRM,
+   invoice, PDF, or financial-record interaction.
 5. Keep H-23's isolated legacy-writer integration harness deferred in #2363;
    do not add a scheduler, configuration, CI, migration, or runtime change.
 
@@ -65,23 +76,31 @@ Max files: 3
 - Acceptance criteria:
   - The existing `Invoicing disabled` and `Auto-invoicing disabled` exits in
     `monthly_invoice_generation.run` remain the first two operational
-    decisions; focused sentinel tests prove their no-provider behavior rather
-    than exercising a writer.
+    decisions.  One parameterized real-task sentinel test exercises both flag
+    shapes and proves each no-provider result rather than exercising a writer.
   - When both legacy feature flags admit the task, an explicit
     `billing_month` is admitted only if it is a string with exact ASCII
     `YYYY-MM` structure, a year within `date.min.year` through
-    `date.max.year`, and a month from 1 through 12.  The private parser is the
-    single choke point; ambiguous, non-string, malformed, and calendar-invalid
+    `date.max.year`, a month from 1 through 12, and an existing month-end UTC
+    range start that remains representable after the task's established
+    30-hour extension.  The private parser is the single choke point;
+    ambiguous, non-string, malformed, calendar-invalid, and non-executable
     input returns the established
     `Invalid billing_month format: ... (expected YYYY-MM)` skip by default.
   - The malformed-input regression calls the real async task entrypoint with
     the legacy writer explicitly enabled, installs its import sentinel before
     a forced fresh task-module import, and proves no writeful provider can be
     imported before the deterministic skip is observed.
-  - The parser test derives accepted values from the fixed-width ASCII grammar
-    and calendar bounds, then perturbs structure, digit class, separators, and
-    calendar range to prove the input class rather than only the reported
-    example.
+  - The parser test compares all 1,000,000 exact ASCII numeric `YYYY-MM` wire
+    forms against an independent regex/calendar/executable-range oracle.  A
+    separate finite Cartesian basis spans each parser-relevant
+    character/length equivalence class plus non-string values.  The production
+    parser does not enumerate those samples; every value without affirmative
+    recognition fails closed.
+  - The import sentinel derives every non-config function-local `ImportFrom`
+    statement from the checked-out task AST, executes each source import form
+    under the same package-relative interpreter shape, and blocks it before a
+    provider implementation can load.
   - Missing `billing_month` and an exact valid override preserve their prior
     admission behavior: with flags explicitly enabled they proceed to the
     calendar-provider seam, where the sentinel stops the test before any real
@@ -127,8 +146,9 @@ Max files: 3
     before metadata or provider work.
   - Both flags true + missing/null `billing_month` -> unchanged prior-month
     derivation, then the existing provider path.
-  - Both flags true + exact calendar-valid ASCII `YYYY-MM` -> unchanged
-    explicit-period admission, then the existing provider path.
+  - Both flags true + exact calendar-valid ASCII `YYYY-MM` whose existing
+    month-end +30-hour UTC range is representable -> unchanged explicit-period
+    admission, then the existing provider path.
   - Both flags true + every other value shape -> existing invalid-format skip
     before provider import/construction.
 
@@ -155,12 +175,19 @@ Max files: 3
 
 - `billing_month` values are **OPEN** because persisted task metadata stores a
   producer-supplied `Any`, not a finite enum.  Recognition is **DERIVED** at
-  the one parser from the task contract's exact `YYYY-MM` wire grammar and
-  Python `date` year domain plus Gregorian 1-through-12 month semantics; no
-  literal denylist decides admission.  Every value without affirmative
-  structural and calendar evidence takes the existing no-write invalid-format
+  the one parser from the task contract's exact `YYYY-MM` wire grammar, Python
+  `date` year domain, Gregorian 1-through-12 month semantics, and the existing
+  UTC month-end-plus-30-hour range's `datetime.max` bound; no literal denylist
+  decides admission.  Every value without affirmative structural, calendar,
+  and executable-range evidence takes the existing no-write invalid-format
   skip.  That default is safer and cheaper than initializing financial/delivery
   providers for an invalid task.
+- The task's local non-config import surface is **CLOSED** for the checked-out
+  task AST and is **DERIVED** on every test run from every function-local
+  `ImportFrom` node.  Only targets ending in `.config` are setup imports; every
+  other local import is blocked by the sentinel.  A source edit that adds a
+  non-config local import enters the derived set automatically, rather than
+  relying on a manually maintained provider inventory.
 
 ### Files touched
 
@@ -172,15 +199,19 @@ Max files: 3
 
 The task continues to honor its two feature-flag exits first.  Only an enabled
 legacy task reads metadata.  A small private parser recognizes exactly seven
-ASCII characters in `YYYY-MM` form and checks the `date` type's exact year
-domain with the Gregorian month domain; it returns a year/month tuple only on
-affirmative recognition without an exception path.
+ASCII characters in `YYYY-MM` form, checks the `date` type's exact year domain
+with the Gregorian month domain, and derives the latest representable
+month-end range start from `datetime.max - timedelta(hours=30)`; it returns a
+year/month tuple only on affirmative recognition without an exception path.
 `run` treats every other supplied value as its existing `_skip_synthesis`
 response, then imports providers only after the billing period is known valid.
-The contract suite intercepts every legacy writeful provider import before a
-fresh task-module import.  It proves malformed metadata never crosses that
-boundary, and that valid/missing metadata still does when explicitly enabled;
-the sentinel halts the latter before a provider can be constructed.
+The contract suite derives and intercepts every non-config function-local task
+import before a fresh task-module import.  It proves malformed metadata never
+crosses that boundary, and that valid/missing metadata still does when
+explicitly enabled; the sentinel halts the latter before a provider can be
+constructed.  Its independent grammar oracle checks every exact numeric wire
+form; a finite structural Cartesian basis covers the remaining parser-relevant
+classes without embedding a production-parser decision table in the test.
 
 ## Intentional
 
@@ -193,6 +224,14 @@ the sentinel halts the latter before a provider can be constructed.
 - Derive the supported year range from `date.min.year` and `date.max.year`,
   then use the Gregorian month domain directly, so the parser closes the
   grammar/calendar class without a throw-and-catch admission path.
+- Derive the executable upper bound from the same 30-hour end extension the
+  existing task uses, rather than special-casing a terminal wire value.  This
+  preserves the task's exact downstream range semantics while making an
+  unrepresentable override a pre-provider no-write skip.
+- Use a finite character/length equivalence basis outside the one-million
+  exact numeric forms because the parser's decision branches are type, length,
+  separator position, ASCII digit class, and calendar domain; no production
+  result is used to choose those samples.
 - Keep provider imports inside `run` and move them only after admission; do not
   refactor task registration or the financial writer while proving this narrow
   ordering invariant.
@@ -222,7 +261,7 @@ Parked hardening: none.
 
 ## Verification
 
-- Focused pytest for `tests/test_legacy_monthly_autoinvoice_opt_in.py` -- 26
+- Focused pytest for `tests/test_legacy_monthly_autoinvoice_opt_in.py` -- 11
   passed.  The suite
   uses only synthetic tasks, patched in-process settings, and provider-import
   sentinels; it never constructs a provider or financial record.
@@ -248,17 +287,19 @@ Parked hardening: none.
 - The exact `atlas_brain/autonomous` maturity-sweep ratchet invocation used by
   CI, with `tests/maturity_sweep/baseline_atlas_brain_autonomous.json` and its
   invoicing-sensitive globs, passed with no new brittleness above baseline.
-- Pending final pre-push: `python scripts/sync_pr_plan.py
-  plans/PR-EOM-Legacy-Billing-Month-Admission.md --check`, `python
-  scripts/audit_plan_doc.py plans/PR-EOM-Legacy-Billing-Month-Admission.md`,
-  `git diff --check`, and managed local PR review with the final body and
-  checked-out branch head.
+- `python scripts/sync_pr_plan.py
+  plans/PR-EOM-Legacy-Billing-Month-Admission.md --check` -- passed.
+- `python scripts/audit_plan_doc.py
+  plans/PR-EOM-Legacy-Billing-Month-Admission.md` -- passed.
+- `git diff --check` -- passed.
+- Managed local PR review passed through `scripts/push_pr.sh`; the same
+  wrapper runs once again against every published amended head.
 
 ## Estimated diff size
 
 | File | LOC |
 |---|---:|
-| `atlas_brain/autonomous/tasks/monthly_invoice_generation.py` | 65 |
-| `plans/PR-EOM-Legacy-Billing-Month-Admission.md` | 264 |
-| `tests/test_legacy_monthly_autoinvoice_opt_in.py` | 236 |
-| **Total** | **565** |
+| `atlas_brain/autonomous/tasks/monthly_invoice_generation.py` | 83 |
+| `plans/PR-EOM-Legacy-Billing-Month-Admission.md` | 305 |
+| `tests/test_legacy_monthly_autoinvoice_opt_in.py` | 330 |
+| **Total** | **718** |
