@@ -34,12 +34,47 @@ logger = logging.getLogger("atlas.autonomous.tasks.monthly_invoice_generation")
 _PER_HOUR_PLACEHOLDER_DESC_SUFFIX = " (hours TBD - update before sending)"
 _PER_HOUR_PLACEHOLDER_QTY = 0
 
+# Include late-evening US events that land in the following UTC date.  Keep the
+# admission bound derived from this same extension so an override cannot reach
+# provider construction and then overflow the calendar range calculation.
+_BILLING_PERIOD_END_EXTENSION = timedelta(hours=30)
+_LATEST_EXECUTABLE_BILLING_RANGE_START = (
+    datetime.max.replace(tzinfo=timezone.utc) - _BILLING_PERIOD_END_EXTENSION
+)
+
+
+def _parse_billing_month_override(value: object) -> tuple[int, int] | None:
+    """Return an exact, executable ``YYYY-MM`` override or ``None``."""
+    if not isinstance(value, str) or len(value) != 7 or value[4] != "-":
+        return None
+
+    year_text = value[:4]
+    month_text = value[5:]
+    if not (
+        year_text.isascii()
+        and year_text.isdigit()
+        and month_text.isascii()
+        and month_text.isdigit()
+    ):
+        return None
+
+    year = int(year_text)
+    month = int(month_text)
+    if not (date.min.year <= year <= date.max.year and 1 <= month <= 12):
+        return None
+
+    last_day = monthrange(year, month)[1]
+    range_start = datetime(year, month, last_day, tzinfo=timezone.utc)
+    if range_start > _LATEST_EXECUTABLE_BILLING_RANGE_START:
+        return None
+    return year, month
+
 
 async def run(task: ScheduledTask) -> dict:
     """Generate monthly invoices from calendar events matched to service agreements.
 
     Supports task.metadata overrides:
-        billing_month: "YYYY-MM" to invoice a specific month instead of prior month
+        billing_month: exact ASCII "YYYY-MM" for a specific month instead of prior month
         contact_ids: ["uuid1", ...] to invoice only specific customers
     """
     from ...config import settings
@@ -49,6 +84,30 @@ async def run(task: ScheduledTask) -> dict:
 
     if not settings.invoicing.auto_invoice_enabled:
         return {"_skip_synthesis": "Auto-invoicing disabled"}
+
+    meta = task.metadata or {}
+
+    # Compute billing period: metadata override or prior calendar month.
+    # Validate a supplied override before constructing any financial/delivery
+    # provider so malformed persisted task metadata remains a no-write skip.
+    today = date.today()
+    billing_month_override = meta.get("billing_month")
+    if billing_month_override is not None:
+        billing_period = _parse_billing_month_override(billing_month_override)
+        if billing_period is None:
+            return {
+                "_skip_synthesis": (
+                    f"Invalid billing_month format: {billing_month_override!r} "
+                    "(expected YYYY-MM)"
+                )
+            }
+        period_year, period_month = billing_period
+    elif today.month == 1:
+        period_year = today.year - 1
+        period_month = 12
+    else:
+        period_year = today.year
+        period_month = today.month - 1
 
     from ...services.calendar_provider import get_calendar_provider
     from ...services.crm_provider import get_crm_provider
@@ -60,25 +119,6 @@ async def run(task: ScheduledTask) -> dict:
     inv_repo = get_invoice_repo()
     crm = get_crm_provider()
 
-    meta = task.metadata or {}
-
-    # Compute billing period: metadata override or prior calendar month
-    today = date.today()
-    billing_month_override = meta.get("billing_month")
-    if billing_month_override:
-        try:
-            parts = billing_month_override.split("-")
-            period_year = int(parts[0])
-            period_month = int(parts[1])
-        except (ValueError, IndexError):
-            return {"_skip_synthesis": f"Invalid billing_month format: {billing_month_override!r} (expected YYYY-MM)"}
-    elif today.month == 1:
-        period_year = today.year - 1
-        period_month = 12
-    else:
-        period_year = today.year
-        period_month = today.month - 1
-
     # Optional contact_ids filter
     contact_id_filter: set[str] | None = None
     raw_cids = meta.get("contact_ids")
@@ -89,7 +129,10 @@ async def run(task: ScheduledTask) -> dict:
     period_start = datetime(period_year, period_month, 1, tzinfo=timezone.utc)
     # Extend end into next day UTC to capture late-evening events in US timezones
     # (e.g., 9pm CDT on March 31 = 2am UTC April 1)
-    period_end = datetime(period_year, period_month, last_day, tzinfo=timezone.utc) + timedelta(hours=30)
+    period_end = (
+        datetime(period_year, period_month, last_day, tzinfo=timezone.utc)
+        + _BILLING_PERIOD_END_EXTENSION
+    )
     period_label = f"{period_year}-{period_month:02d}"
 
     review_mode = settings.invoicing.auto_invoice_review_mode
