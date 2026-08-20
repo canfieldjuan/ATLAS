@@ -167,6 +167,7 @@ async def run(task: ScheduledTask) -> dict:
         "invoices_created": 0,
         "invoices_sent": 0,
         "invoices_skipped_dedup": 0,
+        "invoices_skipped_dedup_check_failed": 0,
         "invoices_skipped_no_events": 0,
         "skipped_no_events_details": [],
         "needs_hours": [],
@@ -332,23 +333,40 @@ async def run(task: ScheduledTask) -> dict:
                     contact_id, period_label, existing["invoice_number"],
                 )
                 continue
+        except Exception as e:
+            logger.warning("Dedup check failed for %s: %s", contact_id, e)
 
-            # Cross-pipeline dedup: skip if the newer commercial-billing
-            # approval writer already invoiced this contact for this period.
-            # See migration 385 / ATLAS #2363.
+        # Cross-pipeline dedup: skip if the newer commercial-billing
+        # approval writer already invoiced this contact for this period.
+        # See migration 385 / ATLAS #2363. Unlike the same-source check
+        # above, a quarantined historical collision is protected only by
+        # invoices_billing_period_reservations, not by the partial unique
+        # index (both leave billing_period = NULL, so the index's WHERE
+        # billing_period IS NOT NULL predicate never sees them) -- so a
+        # transient failure here must fail closed (skip this contact this
+        # run) rather than fail open into create(), which would otherwise
+        # admit the exact unprotected third-duplicate this reservation
+        # table exists to prevent.
+        try:
             cross_pipeline = await inv_repo.get_by_contact_and_period(
                 UUID(contact_id), period_label,
             )
-            if cross_pipeline:
-                results["invoices_skipped_dedup"] += 1
-                logger.info(
-                    "Customer %s: already invoiced for %s by source=%s (%s), skipping",
-                    contact_id, period_label, cross_pipeline["source"],
-                    cross_pipeline["invoice_number"],
-                )
-                continue
         except Exception as e:
-            logger.warning("Dedup check failed for %s: %s", contact_id, e)
+            results["invoices_skipped_dedup_check_failed"] += 1
+            logger.warning(
+                "Cross-pipeline dedup check failed for %s: %s -- skipping "
+                "this run rather than risking an unprotected duplicate",
+                contact_id, e,
+            )
+            continue
+        if cross_pipeline:
+            results["invoices_skipped_dedup"] += 1
+            logger.info(
+                "Customer %s: already invoiced for %s by source=%s (%s), skipping",
+                contact_id, period_label, cross_pipeline["source"],
+                cross_pipeline["invoice_number"],
+            )
+            continue
 
         # Look up contact details via CRM
         contact = None
@@ -508,18 +526,24 @@ async def run(task: ScheduledTask) -> dict:
 
     results["total_amount"] = round(results["total_amount"], 2)
 
-    if results["invoices_created"] == 0 and results["invoices_skipped_dedup"] == 0:
+    if (
+        results["invoices_created"] == 0
+        and results["invoices_skipped_dedup"] == 0
+        and results["invoices_skipped_dedup_check_failed"] == 0
+    ):
         if results["needs_hours"]:
             pass  # still notify about hourly services
         else:
             return {"_skip_synthesis": f"No invoices generated for {period_label}"}
 
     logger.info(
-        "Monthly invoicing for %s: %d created, %d sent, %d dedup-skipped, %d needs-hours, $%.2f total",
+        "Monthly invoicing for %s: %d created, %d sent, %d dedup-skipped, "
+        "%d dedup-check-failed, %d needs-hours, $%.2f total",
         period_label,
         results["invoices_created"],
         results["invoices_sent"],
         results["invoices_skipped_dedup"],
+        results["invoices_skipped_dedup_check_failed"],
         len(results["needs_hours"]),
         results["total_amount"],
     )

@@ -111,20 +111,37 @@ evidence rather than fixed:
    `auto_invoice_enabled` input to `settings.invoicing.enabled and
    settings.invoicing.auto_invoice_enabled`, matching the condition the
    legacy task itself already gates on.
+8. **The legacy writer's cross-pipeline dedup check failed open on error.**
+   The new `get_by_contact_and_period` pre-check (Amendment: startup
+   fence's sibling change to `monthly_invoice_generation.py`) shared a
+   catch-all `try/except` with the pre-existing `get_by_source_ref` check —
+   any exception, including a transient DB read error, was logged and
+   fell through to `create()`. For a quarantined historical collision
+   (protected only by `invoices_billing_period_reservations`, not the
+   partial unique index — both leave `billing_period = NULL`), a check
+   failure at exactly the wrong moment would admit the unprotected third
+   duplicate this reservation table exists to prevent. Fixed by splitting
+   the two checks into separate `try/except` blocks: the pre-existing
+   `get_by_source_ref` check keeps its original fail-open behavior (safe,
+   real DB constraint backstop either way), while the new
+   `get_by_contact_and_period` check now fails closed — skips this contact
+   this run rather than proceeding to `create()`. See "Amendment: round 3
+   hardening" below.
 
-Well over the ~400-line soft cap (2733 total per `git diff --numstat
-origin/main...HEAD`, including this plan document — see Estimated diff size
-below for the per-file breakdown across all three rounds). The core fix
-(migration + dedup pre-checks in the two writers) is ~168 lines; the
-post-review amendments below are what pushed this over, and all seven are
-real, reviewer- or CI-found correctness/safety gaps in the original design,
-not scope creep — declining to fold them into this PR would mean shipping a
-dedup migration that (a) still admits the exact cross-pipeline duplicate
-this slice exists to prevent for any pre-existing period, (b) has no
-protection if it fails to apply on three of the four processes that depend
-on it, and (c) silently excludes a real class of invoice numbers from that
-protection once a sequence counter passes 9999. Splitting them into follow-up
-PRs was considered and rejected: each is a direct, evidence-backed fix to a
+Well over the ~400-line soft cap (per `git diff --numstat origin/main...HEAD`,
+including this plan document — see Estimated diff size below for the
+per-file breakdown across all rounds). The core fix (migration + dedup
+pre-checks in the two writers) is ~168 lines; the post-review amendments
+below are what pushed this over, and all eight are real, reviewer- or
+CI-found correctness/safety gaps in the original design, not scope creep —
+declining to fold them into this PR would mean shipping a dedup migration
+that (a) still admits the exact cross-pipeline duplicate this slice exists
+to prevent for any pre-existing period, (b) has no protection if it fails
+to apply on three of the four processes that depend on it, (c) silently
+excludes a real class of invoice numbers from that protection once a
+sequence counter passes 9999, and (d) can be defeated by a single transient
+DB read error on a quarantined period. Splitting them into follow-up PRs
+was considered and rejected: each is a direct, evidence-backed fix to a
 BLOCKER finding on the *same* migration this PR introduces, reviewable only
 against the migration itself, and a fix-after-merge would mean the merged
 state was briefly, correctly flagged as a P1 blocker.
@@ -736,6 +753,40 @@ pre-existing
 healthy-deployment shape it was already meant to model) proves the fence
 still fires when the master gate is genuinely on.
 
+**Finding #8 — cross-pipeline dedup check now fails closed.** Discovered
+on a follow-up sweep of the review threads after findings #4/#5/#7 were
+already pushed. `monthly_invoice_generation.py`'s per-bundle dedup logic
+originally wrapped both the pre-existing `get_by_source_ref` check and the
+new `get_by_contact_and_period` check in one `try/except Exception: logger.warning(...)`
+— any exception from either call was logged and the code fell through to
+`create()`. That fail-open behavior was already correct and intentional
+for `get_by_source_ref` (its own gap is closed by the pre-existing
+`(source, source_ref)` partial unique index from migration 372 regardless
+of whether the app-level check ran), but is not correct for
+`get_by_contact_and_period`: a quarantined historical collision (Amendment:
+quarantine reservation, above) is protected only by
+`invoices_billing_period_reservations`, a table with no DB-level constraint
+enforcement of its own — the whole point of that table's design, disclosed
+in the migration's own header comment, is that the two writers' pre-checks
+*are* the enforcement for that narrower case. A transient read error on
+`get_by_contact_and_period` at exactly the wrong moment would silently
+admit the unprotected third duplicate the reservation table exists to
+prevent. Fixed by splitting the shared `try/except` into two: the
+`get_by_source_ref` block keeps its original fail-open behavior unchanged;
+`get_by_contact_and_period` now fails closed on any exception — increments
+a new `invoices_skipped_dedup_check_failed` counter, logs a distinct
+warning, and `continue`s past `create()` for that contact this run, rather
+than proceeding. The run-level "no invoices generated" early-return gate is
+extended to also check this new counter, so a run where every contact hits
+this failure mode still logs its summary line rather than returning early
+with no trace of what happened. Verified with a new test
+(`tests/test_monthly_invoice_generation_cross_pipeline_dedup.py::test_legacy_writer_fails_closed_when_cross_pipeline_check_errors`):
+a contact whose `get_by_contact_and_period` call raises is skipped without
+a `create()` call, while a second, healthy contact in the same run still
+creates normally — proven as a genuine regression, not a tautology, by
+temporarily stashing the fix and confirming the test fails
+(`assert 2 == 1`, i.e. the flaky contact WAS created) before restoring it.
+
 ## Intentional
 
 - No new parameter on `InvoiceRepository.create()` or `_InvoiceDraft`: both
@@ -829,24 +880,27 @@ Parked hardening: none.
   tests/test_start_invoicing_draft_writer_oauth_server.py
   tests/test_invoicing_readonly_mcp.py tests/test_invoicing_readonly_oauth.py
   tests/test_eom_render_profile.py -q`
-  against a throwaway `postgres:16` container (not the shared dev DB): **463
-  passed**, 0 failed (re-run after round 3's three fixes; was 460 after the
-  two round-2 amendments). This is every test file touched by any of the
-  original slice, the round-2 amendments, or round 3's fixes, run together,
-  including all pre-existing tests in each — confirming no regression
-  anywhere the changes could plausibly reach. `test_eom_render_profile.py`
-  was added to this list after the repo's full local unit-gate mirror caught
-  a real regression this list didn't originally include: a second,
-  independent static test pinning `EOM_RECEIVABLES_READINESS_MIGRATIONS`'s
-  exact contents, in a different file than the real-schema readiness test
-  already covered here; it now also carries round 3's two new
-  `main_eom.py` readiness-fence lifespan tests.
+  against a throwaway `postgres:16` container (not the shared dev DB): **464
+  passed**, 0 failed (re-run after finding #8's fix; was 463 after findings
+  #4/#5/#7, and 460 after the two round-2 amendments). This is every test
+  file touched by any of the original slice, the round-2 amendments, or
+  round 3's fixes, run together, including all pre-existing tests in each —
+  confirming no regression anywhere the changes could plausibly reach.
+  `test_eom_render_profile.py` was added to this list after the repo's full
+  local unit-gate mirror caught a real regression this list didn't
+  originally include: a second, independent static test pinning
+  `EOM_RECEIVABLES_READINESS_MIGRATIONS`'s exact contents, in a different
+  file than the real-schema readiness test already covered here; it now
+  also carries round 3's two new `main_eom.py` readiness-fence lifespan
+  tests. `tests/test_monthly_invoice_generation_cross_pipeline_dedup.py`
+  now also carries finding #8's fail-closed regression test.
 - `ruff check` on all seventeen changed source/test files: zero new
   findings. `atlas_brain/main.py` and `atlas_brain/main_eom.py` each carry
   pre-existing E402 findings (intentional `load_dotenv`-before-imports
   pattern) — confirmed identical counts (26 and 15 respectively, 41 total)
   against each file's `origin/main` baseline before concluding these are
-  not new, re-checked again after round 3's edits to both files.
+  not new, re-checked again after every round 3 edit, including finding
+  #8's.
 - **Negative controls, all run and restored, not merely asserted:**
   - Same shape as an existing `monthly_auto` recurring row but re-inserted
     for the same contact+period raises `asyncpg.UniqueViolationError`
@@ -905,6 +959,14 @@ Parked hardening: none.
     the sibling healthy-deployment test (`invoicing.enabled=True`) still
     fires the fence, proving the master gate didn't just disable the fence
     outright.
+  - Round 3, finding #8: a contact whose `get_by_contact_and_period` call
+    raises is skipped without a `create()` call, incrementing the new
+    `invoices_skipped_dedup_check_failed` counter; a second, healthy
+    contact in the same run still creates normally, proving the failure is
+    per-contact, not a run-wide abort. Proven as a genuine regression, not
+    a tautology, by temporarily stashing the fix and confirming the test
+    fails (`assert 2 == 1`, i.e. the flaky contact was created) before
+    restoring it.
 - The unique-index design itself was verified against the exact duplicate
   scenario before being implemented: a draft with `source` inside the
   index's column list was checked against a same-contact/period,
@@ -922,7 +984,7 @@ Parked hardening: none.
 |---|---:|
 | `atlas_brain/storage/migrations/385_invoices_billing_period_dedup.sql` | 270 |
 | `atlas_brain/storage/repositories/invoice.py` | 60 |
-| `atlas_brain/autonomous/tasks/monthly_invoice_generation.py` | 15 |
+| `atlas_brain/autonomous/tasks/monthly_invoice_generation.py` | 43 |
 | `atlas_brain/services/commercial_billing_approvals.py` | 45 |
 | `atlas_brain/main.py` | 103 |
 | `atlas_brain/main_eom.py` | 31 |
@@ -930,17 +992,20 @@ Parked hardening: none.
 | `atlas_brain/mcp/invoicing_draft_writer_server.py` | 29 |
 | `tests/test_invoice_repository.py` | 342 |
 | `tests/test_commercial_billing_approvals.py` | 215 |
-| `tests/test_monthly_invoice_generation_cross_pipeline_dedup.py` | 147 |
+| `tests/test_monthly_invoice_generation_cross_pipeline_dedup.py` | 225 |
 | `tests/test_receivables.py` | 31 |
 | `tests/test_commercial_billing_runs.py` | 269 |
 | `tests/test_invoicing_draft_writer_mcp.py` | 106 |
 | `tests/test_eom_render_profile.py` | 91 |
 | `tests/maturity_sweep/baseline_atlas_brain_storage.json` | 27 |
 | `tests/test_legacy_monthly_autoinvoice_writer_harness.py` | 1 |
-| `plans/PR-EOM-Recurring-Invoice-Period-Dedup.md` | 938 |
-| **Total** | **2733** |
+| `plans/PR-EOM-Recurring-Invoice-Period-Dedup.md` | 997 |
+| **Total** | **2898** |
 
-Round 3 added ~392 LOC (3 fixes + 4 regression tests + this section) on top
-of round 2's 2341-line total — proportionate to three confirmed real
-findings across a migration, two other startup fences, and a legacy-task
-call site, each with its own real-Postgres or lifespan-level proof.
+Round 3 (four Codex findings across two pushes: #4/#5/#7 fixed together,
+then #8 found on a follow-up thread sweep and fixed separately) added
+~557 LOC on top of round 2's 2341-line total — proportionate to four
+confirmed real findings across a migration, two other startup fences, and
+two legacy-task call sites, each with its own real-Postgres or
+lifespan-level proof, plus a fifth finding (#6, rolling-deployment skew)
+investigated and waived rather than fixed.
