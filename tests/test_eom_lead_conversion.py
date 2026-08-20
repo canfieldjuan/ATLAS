@@ -19,7 +19,10 @@ from atlas_brain.services.eom_estimate_booking import (
     deterministic_eom_estimate_calendar_event_id,
     deterministic_eom_first_clean_calendar_event_id,
 )
-from atlas_brain.services.eom_lead_conversion import EOMLeadConversionError
+from atlas_brain.services.eom_lead_conversion import EOMLeadConversionError, EOMLeadLost
+from atlas_brain.services.eom_won_lead_loss import (
+    mark_eom_lead_lost_with_won_teardown,
+)
 from atlas_brain.tools.base import ToolResult
 from atlas_brain.tools.calendar import CalendarAuthError, CalendarTool
 
@@ -40,6 +43,12 @@ class _CRM:
         self.first_clean_complete_calls: list[dict[str, object]] = []
         self.first_clean_ambiguous_calls: list[dict[str, object]] = []
         self.first_clean_failed_calls: list[dict[str, object]] = []
+        self.won_loss_execution_contacts: list[str] = []
+        self.won_loss_prepare_calls: list[dict[str, object]] = []
+        self.won_loss_complete_calls: list[dict[str, object]] = []
+        self.won_loss_unsettled_calls: list[dict[str, object]] = []
+        self.won_loss_prepared: dict[str, object] | None = None
+        self.won_loss_complete_result: dict[str, object] | None = None
         self.onboarding_draft_id = "0b8db22e-16b1-4a30-a15f-6c78ee9204a5"
         self.execution_lock_keys: list[str] = []
         self.review_leads = review_leads or []
@@ -61,6 +70,33 @@ class _CRM:
     async def eom_estimate_booking_execution_lock(self, *, booking_key: str):
         self.execution_lock_keys.append(booking_key)
         yield
+
+    @asynccontextmanager
+    async def eom_won_lead_loss_execution_lock(self, *, contact_id: str):
+        self.won_loss_execution_contacts.append(contact_id)
+        yield self
+
+    async def prepare_eom_won_lead_loss(self, **kwargs: object) -> dict[str, object]:
+        self.won_loss_prepare_calls.append(kwargs)
+        if self.won_loss_prepared is not None:
+            return dict(self.won_loss_prepared)
+        return {"mode": "pre_won"}
+
+    async def complete_eom_won_lead_loss(self, **kwargs: object) -> dict[str, object]:
+        self.won_loss_complete_calls.append(kwargs)
+        if self.won_loss_complete_result is not None:
+            return dict(self.won_loss_complete_result)
+        return {
+            "contact_id": kwargs["contact_id"],
+            "lead_stage": "lost",
+            "status": "lost",
+            "reason_code": kwargs["reason_code"],
+            "from_stage": "won",
+            "idempotent": False,
+        }
+
+    async def mark_eom_won_lead_loss_calendar_unsettled(self, **kwargs: object) -> None:
+        self.won_loss_unsettled_calls.append(kwargs)
 
     async def mutate_eom_operator_contact_atomic(self, *, command):
         self.operator_contact_calls.append(command)
@@ -426,6 +462,7 @@ class _Calendar:
         self.message = message
         self.data = data or {}
         self.calls: list[dict[str, object]] = []
+        self.delete_calls: list[dict[str, object]] = []
 
     async def create_event(self, **kwargs):
         self.calls.append(kwargs)
@@ -440,6 +477,25 @@ class _Calendar:
             success=True,
             data={"event_id": self.event_id or kwargs["event_id"]},
             message="Created event",
+        )
+
+    async def delete_event(self, **kwargs):
+        self.delete_calls.append(kwargs)
+        if not self.success:
+            return ToolResult(
+                success=False,
+                error=self.error,
+                data=self.data,
+                message=self.message,
+            )
+        return ToolResult(
+            success=True,
+            data={
+                "calendar_id": kwargs["calendar_id"],
+                "event_id": kwargs["event_id"],
+                "already_absent": False,
+            },
+            message="Calendar event deleted",
         )
 
 
@@ -466,11 +522,14 @@ class _CalendarClient:
         *,
         post_response: _CalendarResponse,
         get_response: _CalendarResponse | None = None,
+        delete_response: _CalendarResponse | None = None,
     ) -> None:
         self.post_response = post_response
         self.get_response = get_response
+        self.delete_response = delete_response
         self.post_calls: list[dict[str, object]] = []
         self.get_calls: list[dict[str, object]] = []
+        self.delete_calls: list[dict[str, object]] = []
 
     async def post(self, url: str, *, headers: dict[str, str], json: dict[str, object]):
         self.post_calls.append(
@@ -482,6 +541,11 @@ class _CalendarClient:
         self.get_calls.append({"url": url, "headers": dict(headers)})
         assert self.get_response is not None
         return self.get_response
+
+    async def delete(self, url: str, *, headers: dict[str, str]):
+        self.delete_calls.append({"url": url, "headers": dict(headers)})
+        assert self.delete_response is not None
+        return self.delete_response
 
 
 def _app(
@@ -2389,6 +2453,51 @@ async def test_calendar_create_event_sends_optional_deterministic_event_id(monke
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("status_code", [404, 410])
+async def test_calendar_delete_event_treats_an_absent_event_as_idempotent_cancellation(
+    monkeypatch, status_code
+):
+    tool = CalendarTool()
+    tool._config = SimpleNamespace(
+        calendar_enabled=True, calendar_refresh_token="refresh"
+    )
+    client = _CalendarClient(
+        post_response=_CalendarResponse(status_code=200, payload={}),
+        delete_response=_CalendarResponse(status_code=status_code, payload={}),
+    )
+
+    async def ensure_client():
+        return client
+
+    async def auth_header(**_kwargs):
+        return {"Authorization": "Bearer token"}
+
+    monkeypatch.setattr(tool, "_ensure_client", ensure_client)
+    monkeypatch.setattr(tool, "_get_auth_header", auth_header)
+
+    result = await tool.delete_event(
+        calendar_id="first-clean-calendar",
+        event_id="eomfclpersistedevent",
+    )
+
+    assert result.success is True
+    assert result.data == {
+        "calendar_id": "first-clean-calendar",
+        "event_id": "eomfclpersistedevent",
+        "already_absent": True,
+    }
+    assert client.delete_calls == [
+        {
+            "url": (
+                "https://www.googleapis.com/calendar/v3/calendars/"
+                "first-clean-calendar/events/eomfclpersistedevent"
+            ),
+            "headers": {"Authorization": "Bearer token"},
+        }
+    ]
+
+
+@pytest.mark.asyncio
 async def test_calendar_create_event_propagates_http_status_for_failure_classifier(
     monkeypatch,
 ):
@@ -3783,6 +3892,106 @@ async def test_private_mark_lead_lost_records_reason_note_and_actor():
     assert crm.lost_calls[0]["operation_key"] == op_key
     assert crm.lost_calls[0]["actor_id"] == 1
     assert crm.lost_calls[0]["actor_name"] == "Juan Canfield"
+
+
+@pytest.mark.asyncio
+async def test_private_mark_lead_lost_runs_won_teardown():
+    """The real private route sends only persisted first-clean facts to DELETE."""
+    crm = _CRM()
+    contact_id = uuid4()
+    op_key = f"office-lost-{uuid4().hex}"
+    crm.won_loss_prepared = {
+        "mode": "won",
+        "contact_id": str(contact_id),
+        "calendar_id": "first-clean-calendar",
+        "calendar_event_id": "eomfclpersistedevent",
+        "expected_calendar_event_id": "eomfclpersistedevent",
+        "onboarding_draft_id": str(uuid4()),
+        "booking_operation_key": f"first-clean-{uuid4().hex}",
+        "reason_code": "no_response",
+        "idempotent": False,
+    }
+    crm.won_loss_complete_result = {
+        "contact_id": str(contact_id),
+        "lead_stage": "lost",
+        "status": "lost",
+        "reason_code": "no_response",
+        "from_stage": "won",
+        "idempotent": False,
+    }
+    calendar = _Calendar()
+    app = _app(crm, _enabled_config(), calendar)
+
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=app), base_url="http://test"
+    ) as client:
+        response = await client.post(
+            f"/eom-funnel/leads/{contact_id}/lost",
+            headers=_headers(approval_key=op_key),
+            json={"reason_code": "no_response"},
+        )
+
+    assert response.status_code == 201
+    assert response.json() == {
+        "success": True,
+        "contact_id": str(contact_id),
+        "lead_stage": "lost",
+        "status": "lost",
+        "reason_code": "no_response",
+        "from_stage": "won",
+        "idempotent": False,
+    }
+    assert crm.lost_calls == []
+    assert crm.won_loss_execution_contacts == [str(contact_id)]
+    assert crm.won_loss_prepare_calls[0]["operation_key"] == op_key
+    assert calendar.delete_calls == [
+        {
+            "calendar_id": "first-clean-calendar",
+            "event_id": "eomfclpersistedevent",
+        }
+    ]
+    assert crm.won_loss_complete_calls[0]["calendar_id"] == "first-clean-calendar"
+    assert crm.won_loss_complete_calls[0]["calendar_event_id"] == "eomfclpersistedevent"
+
+
+@pytest.mark.asyncio
+async def test_won_lead_loss_retries_an_uncertain_delete_without_false_loss():
+    """A failed DELETE stays prepared-only; a same-key retry may complete once."""
+    crm = _CRM()
+    contact_id = str(uuid4())
+    command = EOMLeadLost(
+        contact_id=contact_id,
+        reason_code="no_response",
+        note=None,
+        operation_key=f"office-lost-{uuid4().hex}",
+        actor_id=1,
+        actor_name="Juan Canfield",
+    )
+    crm.won_loss_prepared = {
+        "mode": "won",
+        "contact_id": contact_id,
+        "calendar_id": "first-clean-calendar",
+        "calendar_event_id": "eomfclpersistedevent",
+    }
+    calendar = _Calendar(
+        success=False,
+        error="API_ERROR",
+        message="Calendar API error: 503",
+        data={"request_phase": "delete", "status_code": 503},
+    )
+
+    with pytest.raises(EOMLeadConversionError, match="Calendar API error: 503") as exc:
+        await mark_eom_lead_lost_with_won_teardown(crm, calendar, command)
+    assert exc.value.status_code == 502
+    assert crm.won_loss_complete_calls == []
+    assert len(crm.won_loss_unsettled_calls) == 1
+
+    calendar.success = True
+    completed = await mark_eom_lead_lost_with_won_teardown(crm, calendar, command)
+    assert completed["lead_stage"] == "lost"
+    assert completed["idempotent"] is False
+    assert len(calendar.delete_calls) == 2
+    assert len(crm.won_loss_complete_calls) == 1
 
 
 @pytest.mark.asyncio

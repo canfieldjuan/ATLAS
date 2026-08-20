@@ -762,6 +762,120 @@ class CalendarTool:
                 message="Calendar event creation failed",
             )
 
+    async def delete_event(
+        self,
+        *,
+        calendar_id: str,
+        event_id: str,
+    ) -> ToolResult:
+        """Delete one exact persisted Calendar event.
+
+        The EOM won-lead-loss path supplies identifiers recorded when the
+        first clean was booked.  A 404/410 therefore means that exact pair is
+        already absent and is a determinate, idempotent cancellation.  Every
+        other non-success result remains closed so callers cannot promote a
+        database state after an uncertain external DELETE.
+        """
+        if not self._config.calendar_enabled:
+            return ToolResult(
+                success=False,
+                error="TOOL_DISABLED",
+                message="Calendar tool is disabled",
+            )
+        if not self._config.calendar_refresh_token:
+            return ToolResult(
+                success=False,
+                error="NOT_CONFIGURED",
+                message="Calendar not configured. Run calendar setup first.",
+            )
+
+        cal_id = calendar_id.strip()
+        persisted_event_id = event_id.strip()
+        if not cal_id or not persisted_event_id:
+            return ToolResult(
+                success=False,
+                error="INVALID_ARGUMENT",
+                message="Calendar cancellation requires a calendar and event id",
+            )
+
+        request_phase = "auth"
+        try:
+            client = await self._ensure_client()
+            headers = await self._get_auth_header()
+            url = f"{CALENDAR_API_BASE}/calendars/{cal_id}/events/{persisted_event_id}"
+            request_phase = "delete"
+            response = await client.delete(url, headers=headers)
+            # A 401 proves this DELETE was rejected. Refreshing before the
+            # single retry cannot turn it into an uncertain first attempt.
+            if response.status_code == 401:
+                logger.warning("Calendar delete 401 -- forcing token refresh")
+                self._invalidate_access_token()
+                request_phase = "auth"
+                headers = await self._get_auth_header(force_refresh=True)
+                request_phase = "delete"
+                response = await client.delete(url, headers=headers)
+
+            if response.status_code in (200, 204, 404, 410):
+                self._cache.last_updated = 0.0
+                already_absent = response.status_code in (404, 410)
+                logger.info(
+                    "%s calendar event: %s",
+                    "Confirmed absent" if already_absent else "Deleted",
+                    persisted_event_id,
+                )
+                return ToolResult(
+                    success=True,
+                    data={
+                        "calendar_id": cal_id,
+                        "event_id": persisted_event_id,
+                        "already_absent": already_absent,
+                    },
+                    message=(
+                        "Calendar event was already absent"
+                        if already_absent
+                        else "Calendar event deleted"
+                    ),
+                )
+            response.raise_for_status()
+            # Google normally returns 204.  A different 2xx is not silently
+            # accepted because deletion's response contract is intentionally
+            # narrow and no body is needed to establish the state transition.
+            return ToolResult(
+                success=False,
+                error="API_ERROR",
+                data={
+                    "request_phase": request_phase,
+                    "status_code": response.status_code,
+                },
+                message=f"Calendar API error: {response.status_code}",
+            )
+        except CalendarAuthError:
+            return ToolResult(
+                success=False,
+                error="AUTH_ERROR",
+                data={"request_phase": request_phase},
+                message="Calendar authentication failed. Refresh token needs renewal.",
+            )
+        except httpx.HTTPStatusError as exc:
+            logger.error("Calendar delete event HTTP error: %s", exc)
+            return ToolResult(
+                success=False,
+                error="API_ERROR",
+                data={
+                    "request_phase": request_phase,
+                    "status_code": exc.response.status_code,
+                },
+                message=f"Calendar API error: {exc.response.status_code}",
+            )
+        except Exception:
+            logger.exception("Calendar delete event error")
+            return ToolResult(
+                success=False,
+                error="EXECUTION_ERROR",
+                data={"request_phase": request_phase},
+                message="Calendar event cancellation failed",
+            )
+
     async def verify_credentials(self) -> bool:
         """Verify refresh token is valid. Call on startup."""
         if not self._config.calendar_enabled:
