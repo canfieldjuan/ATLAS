@@ -8,13 +8,13 @@ repository write to a UUID-named schema that is dropped in ``finally``.
 from __future__ import annotations
 
 import itertools
-import os
 from contextlib import ExitStack, asynccontextmanager, contextmanager
 from dataclasses import dataclass
 from datetime import date, datetime, timezone
+from importlib import import_module
 from pathlib import Path
 from types import SimpleNamespace
-from typing import Any, AsyncIterator, Iterator
+from typing import Any, AsyncIterator, Callable, Iterator
 from urllib.parse import urlsplit
 from uuid import uuid4
 
@@ -36,6 +36,13 @@ _HARNESS_MIGRATIONS = (
 def _is_harness_armed(value: str | None) -> bool:
     """Accept only the explicit marker that authorizes disposable test writes."""
     return value == "1"
+
+
+def _writer_harness_invoicing_config() -> Any:
+    """Read the test-only harness controls through the canonical config model."""
+    from atlas_brain.config import InvoicingConfig
+
+    return InvoicingConfig()
 
 
 def _validate_writer_harness_database_url(database_url: object) -> str:
@@ -68,11 +75,27 @@ def _validate_writer_harness_database_url(database_url: object) -> str:
 
 def _require_writer_harness_database_url() -> str:
     """Skip ordinary local runs; reject an unsafe explicit target before import."""
-    if not _is_harness_armed(os.environ.get(_HARNESS_ENABLED_ENV)):
+    harness_config = _writer_harness_invoicing_config()
+    if not _is_harness_armed(harness_config.legacy_monthly_writer_harness_opt_in):
         pytest.skip(f"{_HARNESS_ENABLED_ENV}=1 is required for writer-harness tests")
     return _validate_writer_harness_database_url(
-        os.environ.get(_HARNESS_DATABASE_URL_ENV)
+        harness_config.legacy_monthly_writer_harness_database_url
     )
+
+
+def _load_writer_harness_asyncpg(
+    importer: Callable[[str], Any] = import_module,
+) -> Any:
+    """Fail an armed proof if its required PostgreSQL driver is unavailable."""
+    try:
+        return importer("asyncpg")
+    except ImportError:
+        harness_config = _writer_harness_invoicing_config()
+        if _is_harness_armed(harness_config.legacy_monthly_writer_harness_opt_in):
+            pytest.fail(
+                "explicitly armed legacy monthly writer harness requires asyncpg"
+            )
+        pytest.skip("asyncpg is required for legacy monthly writer harness tests")
 
 
 def _url_from_grammar(
@@ -123,6 +146,31 @@ def test_writer_harness_opt_in_is_exact() -> None:
         assert not _is_harness_armed(value)
 
 
+def test_writer_harness_settings_use_typed_invoicing_config(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from atlas_brain.config import InvoicingConfig
+
+    database_url = (
+        "postgresql://postgres:postgres@127.0.0.1:5432/atlas_receivables_test"
+    )
+    monkeypatch.delenv(_HARNESS_ENABLED_ENV, raising=False)
+    monkeypatch.delenv(_HARNESS_DATABASE_URL_ENV, raising=False)
+
+    inactive_config = InvoicingConfig(_env_file=None)
+
+    assert inactive_config.legacy_monthly_writer_harness_opt_in == ""
+    assert inactive_config.legacy_monthly_writer_harness_database_url == ""
+
+    monkeypatch.setenv(_HARNESS_ENABLED_ENV, "1")
+    monkeypatch.setenv(_HARNESS_DATABASE_URL_ENV, database_url)
+
+    config = InvoicingConfig(_env_file=None)
+
+    assert config.legacy_monthly_writer_harness_opt_in == "1"
+    assert config.legacy_monthly_writer_harness_database_url == database_url
+
+
 @pytest.mark.asyncio
 async def test_unsafe_harness_target_stops_before_asyncpg_import(
     monkeypatch: pytest.MonkeyPatch,
@@ -134,13 +182,30 @@ async def test_unsafe_harness_target_stops_before_asyncpg_import(
         "postgresql://postgres:postgres@db.internal:5432/atlas_receivables_test",
     )
 
-    def forbidden_import(*_args: object, **_kwargs: object) -> None:
+    def forbidden_asyncpg_loader() -> Any:
         raise AssertionError("unsafe harness target reached asyncpg import")
 
-    monkeypatch.setattr(pytest, "importorskip", forbidden_import)
     with pytest.raises(ValueError):
-        async with _writer_harness_database():
+        async with _writer_harness_database(asyncpg_loader=forbidden_asyncpg_loader):
             raise AssertionError("unsafe harness target opened a context")
+
+
+def test_armed_harness_missing_asyncpg_fails(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv(_HARNESS_ENABLED_ENV, "1")
+    monkeypatch.setenv(
+        _HARNESS_DATABASE_URL_ENV,
+        "postgresql://postgres:postgres@127.0.0.1:5432/atlas_receivables_test",
+    )
+
+    def missing_asyncpg(_module_name: str) -> Any:
+        raise ImportError("simulated missing asyncpg")
+
+    with pytest.raises(
+        pytest.fail.Exception, match="explicitly armed.*requires asyncpg"
+    ):
+        _load_writer_harness_asyncpg(missing_asyncpg)
 
 
 class _SchemaPool:
@@ -189,10 +254,12 @@ class _WriterHarnessDatabase:
 
 
 @asynccontextmanager
-async def _writer_harness_database() -> AsyncIterator[_WriterHarnessDatabase]:
+async def _writer_harness_database(
+    *, asyncpg_loader: Callable[[], Any] = _load_writer_harness_asyncpg
+) -> AsyncIterator[_WriterHarnessDatabase]:
     """Create and always drop one randomly named schema in the safe test DB."""
     database_url = _require_writer_harness_database_url()
-    asyncpg = pytest.importorskip("asyncpg")
+    asyncpg = asyncpg_loader()
     schema = f"legacy_monthly_writer_{uuid4().hex}"
     conn = await asyncpg.connect(database_url)
     migrations = Path(__file__).parents[1] / "atlas_brain/storage/migrations"
@@ -220,7 +287,7 @@ async def _writer_harness_database() -> AsyncIterator[_WriterHarnessDatabase]:
 
 
 async def _schema_exists(database_url: str, schema: str) -> bool:
-    asyncpg = pytest.importorskip("asyncpg")
+    asyncpg = _load_writer_harness_asyncpg()
     conn = await asyncpg.connect(database_url)
     try:
         return bool(
@@ -283,7 +350,7 @@ def _scheduled_monthly_task():
         task_type="builtin",
         schedule_type="cron",
         cron_expression="0 8 1 * *",
-        metadata={"billing_month": "2026-04", "notify": True},
+        metadata={"billing_month": "2026-04", "notify": False},
     )
 
 
@@ -333,7 +400,6 @@ async def test_isolated_legacy_writer_creates_one_draft_and_deduplicates(
         crm = _HarnessCRM()
         rendered_invoice_numbers: list[str] = []
         email_factory_calls: list[None] = []
-        notifications: list[dict[str, object]] = []
 
         def render_harness_pdf(rendered_invoice: dict) -> bytes:
             rendered_invoice_numbers.append(rendered_invoice["invoice_number"])
@@ -345,9 +411,6 @@ async def test_isolated_legacy_writer_creates_one_draft_and_deduplicates(
                 "review-mode writer attempted to construct an email provider"
             )
 
-        async def capture_notification(results: dict, _task: object) -> None:
-            notifications.append(dict(results))
-
         monkeypatch.setattr(
             calendar_provider, "get_calendar_provider", lambda: calendar
         )
@@ -356,7 +419,6 @@ async def test_isolated_legacy_writer_creates_one_draft_and_deduplicates(
         monkeypatch.setattr(
             email_provider, "get_email_provider", forbidden_email_provider
         )
-        monkeypatch.setattr(task_module, "_send_notification", capture_notification)
         monkeypatch.setattr(settings.invoicing, "enabled", True)
         monkeypatch.setattr(settings.invoicing, "auto_invoice_enabled", True)
         monkeypatch.setattr(settings.invoicing, "auto_invoice_review_mode", True)
@@ -433,7 +495,6 @@ async def test_isolated_legacy_writer_creates_one_draft_and_deduplicates(
         assert rendered_invoice_numbers == [persisted_invoice["invoice_number"]]
         assert email_factory_calls == []
         assert len(crm.interactions) == 1
-        assert len(notifications) == 1
 
         second = await task_module.run(task)
 
@@ -449,7 +510,6 @@ async def test_isolated_legacy_writer_creates_one_draft_and_deduplicates(
         assert rendered_invoice_numbers == [persisted_invoice["invoice_number"]]
         assert email_factory_calls == []
         assert len(crm.interactions) == 1
-        assert len(notifications) == 2
 
         # Restore before the schema context tears down; the finalizer covers failures.
         cleanup.close()
