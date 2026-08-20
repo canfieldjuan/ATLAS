@@ -279,7 +279,7 @@ Max files: 11
   idempotency-key replay, crash/retry between external and DB effects,
   customer-handoff and generic contact-status races, public onboarding token
   state, and legacy pre-won behavior.
-- Reviewer rules triggered: R1, R2, R3, R5, R6, R8, R10, R14.
+- Reviewer rules triggered: R1, R2, R3, R4, R5, R6, R8, R10, R14.
 
 ### Boundary-change enumeration
 
