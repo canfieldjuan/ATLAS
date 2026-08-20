@@ -20,7 +20,7 @@ The review findings expose one cross-repository contract defect, not unrelated
 polish: the office queue must represent links that remain publicly authorized,
 must page beyond the first response, and must let the downstream relay prove
 the exact registered controls it may invoke. Atlas, Tracker, and Website each
-change only their part of that same contract. The larger seven-file Atlas
+change only their part of that same contract. The larger eight-file Atlas
 budget is indivisible because the provider, public response, route capability
 projection, CI enrollment, and focused route/provider tests must agree before
 the Tracker can safely consume it.
@@ -65,13 +65,14 @@ the Tracker can safely consume it.
 
 Ownership lane: eom-public-onboarding
 Slice phase: Vertical slice
-Max files: 7
+Max files: 8
 
 1. Add the publicly-authorized, keyset-paged Atlas office projection and
    derived capability route signatures that the Tracker can relay.
-2. Add focused provider and FastAPI tests proving authorization, closed
-   response shape, current/previous-key authority filtering, cursor behavior,
-   capability reachability, and CI enrollment.
+2. Add focused provider and FastAPI tests proving authorization, the additive
+   closed response shape (including derived capability routes),
+   current/previous-key authority filtering, cursor behavior, capability
+   reachability, and CI enrollment.
 3. Leave Tracker and Website rendering/actions to their coordinated follow-up
    PRs; this API remains additive and independently deployable.
 
@@ -92,14 +93,16 @@ Max files: 7
     advertised only when their exact registered routes exist; settled by
     `tests/test_eom_funnel_capability_manifest.py`.
   - [x] Existing public browser and private recovery routes retain their
-    response/error behavior; settled by focused public-onboarding route tests
-    and the cold diff reconstruction.
+    response/error behavior; the private lead-review response advances only
+    additively with derived `capabilityRoutes`, settled by focused
+    public-onboarding and lead-review route tests plus the cold diff
+    reconstruction.
 - Reachability proof: ASGI tests call the registered issued-links route and
   observe the safe JSON response; the provider test persists token states and
   observes that only the issued record is returned.
 - Affected surfaces: `atlas_brain/eom_api/funnel.py`,
   `atlas_brain/services/crm_provider.py`, the EOM capability manifest, and
-  focused public-onboarding/provider tests.
+  focused public-onboarding, lead-review, and provider tests.
 - Risk areas: service/actor authorization, browser/private data separation,
   capability deployment skew, token lifecycle truth, and response compatibility.
 - Reviewer rules triggered: R1, R2, R3, R5, R6, R8, R10, R12, R14.
@@ -161,6 +164,7 @@ that disposition is added. No generic `defer` disposition is permitted.
 - `atlas_brain/services/crm_provider.py`
 - `plans/PR-EOM-Onboarding-Office-Followup.md`
 - `tests/test_eom_funnel_capability_manifest.py`
+- `tests/test_eom_lead_conversion.py`
 - `tests/test_eom_lead_conversion_integration.py`
 - `tests/test_eom_public_onboarding.py`
 
@@ -240,8 +244,9 @@ Parked hardening: none.
 | `.github/workflows/atlas_eom_lead_pipeline_checks.yml` | 1 |
 | `atlas_brain/eom_api/funnel.py` | 156 |
 | `atlas_brain/services/crm_provider.py` | 55 |
-| `plans/PR-EOM-Onboarding-Office-Followup.md` | 247 |
+| `plans/PR-EOM-Onboarding-Office-Followup.md` | 252 |
 | `tests/test_eom_funnel_capability_manifest.py` | 24 |
+| `tests/test_eom_lead_conversion.py` | 12 |
 | `tests/test_eom_lead_conversion_integration.py` | 160 |
 | `tests/test_eom_public_onboarding.py` | 182 |
-| **Total** | **825** |
+| **Total** | **842** |
