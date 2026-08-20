@@ -414,9 +414,9 @@ class InvoiceRepository:
         self, contact_id: UUID, billing_period: str
     ) -> Optional[dict]:
         """Return an existing non-void recurring invoice for one contact/period,
-        or a synthetic hit if that contact/period is quarantined (an
-        ambiguous historical collision -- see migration 385's Backfill 2/2)
-        rather than backfilled.
+        or a synthetic hit if that contact/period still has a non-void
+        quarantined invoice from an ambiguous historical collision (see
+        migration 385's Backfill 2/2) rather than a backfilled period.
 
         Scoped to the two recurring auto-invoice sources (monthly_auto,
         eom_commercial_billing) so ad-hoc mcp_tool invoices and voided
@@ -430,6 +430,9 @@ class InvoiceRepository:
         comment), so this pre-check is that period's only guard; callers only
         read the returned dict's "source"/"invoice_number" keys, which the
         reservation branch synthesizes with a clearly-labeled placeholder.
+        When every matching quarantined invoice is voided, the reservation
+        stops blocking reissuance so it follows the same non-void invariant as
+        the partial unique index.
         """
         pool = self._get_pool()
         if not pool.is_initialized:
@@ -448,7 +451,20 @@ class InvoiceRepository:
                     'quarantined_collision' AS source,
                     'historical billing_period collision for this contact+period -- see invoices.metadata.billing_period_backfill_collision' AS invoice_number
                 FROM invoices_billing_period_reservations
-                WHERE contact_id = $1 AND billing_period = $2
+                WHERE contact_id = $1
+                  AND billing_period = $2
+                  AND EXISTS (
+                      SELECT 1
+                      FROM invoices AS quarantined
+                      WHERE quarantined.contact_id = invoices_billing_period_reservations.contact_id
+                        AND quarantined.billing_period IS NULL
+                        AND quarantined.billing_period_legacy_null
+                        AND quarantined.status <> 'void'
+                        AND quarantined.source IN ('monthly_auto', 'eom_commercial_billing')
+                        AND quarantined.metadata->>'billing_period_backfill_collision' = 'true'
+                        AND quarantined.metadata->>'billing_period_backfill_candidate_period' =
+                            invoices_billing_period_reservations.billing_period
+                  )
                 LIMIT 1
                 """,
                 contact_id,

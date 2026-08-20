@@ -1202,6 +1202,28 @@ async def test_real_postgres_approval_rejects_a_quarantined_backfill_collision_p
         assert approved["replayed"] is False
         assert await connection.fetchval("SELECT COUNT(*) FROM invoices") == 3
 
+        # Review round 4: the reservation remains as historical evidence, but
+        # once every matching quarantined invoice is voided it must no longer
+        # block the approval writer from cleanly reissuing that period.
+        await connection.execute(
+            """
+            UPDATE invoices
+            SET status = 'void'
+            WHERE contact_id = $1
+              AND metadata->>'billing_period_backfill_collision' = 'true'
+              AND metadata->>'billing_period_backfill_candidate_period' = '2026-05'
+            """,
+            contact_id,
+        )
+        reissue = await service.approve(
+            billing_run_id=run_id, candidate_key=candidate["candidateKey"],
+            expected_source_fingerprint=fingerprint,
+            idempotency_key="quarantine-void-release",
+            actor="Juan",
+        )
+        assert reissue["replayed"] is False
+        assert await connection.fetchval("SELECT COUNT(*) FROM invoices") == 4
+
 
 @pytest.mark.asyncio
 async def test_real_postgres_override_identity_and_final_invoice_trigger_are_scoped_to_run():

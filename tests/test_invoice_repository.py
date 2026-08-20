@@ -592,6 +592,38 @@ async def test_real_postgres_billing_period_backfill_and_collision_handling():
         assert await repository.get_by_contact_and_period(contact_c, "2026-06") is None
         assert await repository.get_by_contact_and_period(contact_a, "2026-05") is None
 
+        # Review round 4: reservation blocking must follow the same non-void
+        # invariant as the unique index. Once every quarantined invoice for
+        # the contact+period is voided, the reservation remains as historical
+        # evidence but no longer blocks a clean reissue.
+        await conn.execute(
+            """
+            UPDATE invoices
+            SET status = 'void'
+            WHERE contact_id = $1
+              AND metadata->>'billing_period_backfill_collision' = 'true'
+              AND metadata->>'billing_period_backfill_candidate_period' = '2026-05'
+            """,
+            contact_c,
+        )
+        assert await repository.get_by_contact_and_period(contact_c, "2026-05") is None
+        await conn.execute(
+            """
+            INSERT INTO invoices (
+                id, invoice_number, contact_id, customer_name, due_date,
+                status, source, source_ref, billing_period
+            ) VALUES (
+                $1, 'INV-2026-May-9998', $2, 'Backfill Test Co', CURRENT_DATE,
+                'draft', 'eom_commercial_billing', 'reissue_2026-05', '2026-05'
+            )
+            """,
+            uuid4(),
+            contact_c,
+        )
+        reissued = await repository.get_by_contact_and_period(contact_c, "2026-05")
+        assert reissued is not None
+        assert reissued["invoice_number"] == "INV-2026-May-9998"
+
         # Void, mcp_tool, and garbage-month rows: untouched, no crash.
         assert rows["INV-2026-Jul-0005"]["billing_period"] is None
         assert rows["INV-2026-Jul-0005"]["billing_period_legacy_null"] is False
@@ -669,8 +701,9 @@ def test_invoices_billing_period_dedup_migration_is_additive_and_scoped():
     assert "ADD COLUMN IF NOT EXISTS billing_period_legacy_null" in migration
     assert "invoices_billing_period_check" in migration
     assert "idx_invoices_recurring_contact_period_source" in migration
-    assert "CREATE UNIQUE INDEX CONCURRENTLY idx_invoices_recurring_contact_period_source" in migration
-    assert "DROP INDEX CONCURRENTLY IF EXISTS idx_invoices_recurring_contact_period_source" in migration
+    assert "CREATE UNIQUE INDEX CONCURRENTLY IF NOT EXISTS idx_invoices_recurring_contact_period_source" in migration
+    assert "DROP INDEX CONCURRENTLY IF EXISTS idx_invoices_recurring_contact_period_source_invalid" in migration
+    assert "NOT (index_state.indisvalid AND index_state.indisready)" in migration
     assert "NOT VALID" in migration
     assert "000[1-9]" in migration
     assert "status <> 'void'" in migration
@@ -685,5 +718,6 @@ def test_invoices_billing_period_dedup_migration_is_additive_and_scoped():
     assert "OR billing_period_legacy_null" in migration
     assert "HAVING count(*) > 1" in migration
     assert "-- atlas: atomic-bookkeeping" not in migration
+    assert "ALTER TABLE invoices DROP CONSTRAINT IF EXISTS invoices_recurring_billing_period_required_check" in migration
     assert "CREATE TABLE IF NOT EXISTS invoices_billing_period_reservations" in migration
     assert "PRIMARY KEY (contact_id, billing_period)" in migration

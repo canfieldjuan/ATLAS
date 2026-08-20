@@ -293,6 +293,20 @@ def test_invoicing_draft_writer_http_rejects_short_tokens(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_draft_invoice_schema_ready_requires_runtime_dependencies():
+    class _Pool:
+        is_initialized = True
+
+        async def fetchval(self, query):
+            assert "invoice_number_seq" in query
+            assert "invoice_payments" in query
+            assert "invoice_number" in query
+            return True
+
+    assert await draft_writer._draft_invoice_schema_ready(_Pool()) is True
+
+
+@pytest.mark.asyncio
 async def test_draft_writer_lifespan_now_migrates_and_verifies_readiness(monkeypatch):
     """Before ATLAS #2448's startup-fence extension, this server's _lifespan
     did nothing but init_database() -- no migration run, no schema check --

@@ -80,13 +80,15 @@
 -- idempotent so the runner can safely retry if a later statement fails before
 -- schema_migrations is recorded.
 --
--- ROLLBACK: revert application code first (both writers keep working with
--- billing_period simply unpersisted/unchecked) and leave this column and
--- index in place; they are inert once nothing writes billing_period.
--- Destructive teardown (DROP INDEX / DROP COLUMN) is a separately authorized
--- operation, not a normal rollback -- it discards the only queryable period
--- ATLAS has ever recorded for these invoices, including the backfilled
--- history below.
+-- ROLLBACK: if reverting to old writers that do not supply billing_period,
+-- first remove the fresh-write admission fence:
+--   ALTER TABLE invoices DROP CONSTRAINT IF EXISTS invoices_recurring_billing_period_required_check;
+-- Then old writers can resume while leaving billing_period, reservations, and
+-- the partial index in place; they are inert for fresh old-writer rows because
+-- those rows leave billing_period NULL. Destructive teardown (DROP INDEX /
+-- DROP COLUMN) is a separately authorized operation, not a normal rollback --
+-- it discards the only queryable period ATLAS has ever recorded for these
+-- invoices, including the backfilled history below.
 
 ALTER TABLE invoices
     ADD COLUMN IF NOT EXISTS billing_period VARCHAR(7);
@@ -137,7 +139,7 @@ CREATE TABLE IF NOT EXISTS invoices_billing_period_reservations (
 );
 
 COMMENT ON TABLE invoices_billing_period_reservations IS
-    'One row per (contact_id, billing_period) whose historical backfill was ambiguous (see invoices.metadata.billing_period_backfill_collision). Checked by both recurring writers'' pre-checks alongside invoices, so a third invoice for an already-quarantined period is refused even though the slot cannot be enforced by idx_invoices_recurring_contact_period_source itself (no row claims it). Rows are never deleted by application code -- resolving a reservation is a manual reconciliation action.';
+    'One row per (contact_id, billing_period) whose historical backfill was ambiguous (see invoices.metadata.billing_period_backfill_collision). Checked by both recurring writers'' pre-checks alongside invoices, so a third invoice for an already-quarantined period is refused while any matching non-void quarantined invoice remains, even though the slot cannot be enforced by idx_invoices_recurring_contact_period_source itself (no row claims it). Voiding every matching quarantined invoice releases the reservation at read time.';
 
 -- Backfill 1/2: derive billing_period for historical rows from data each
 -- writer already persisted, so the transition window (invoices created
@@ -274,9 +276,29 @@ WHERE is_collision
   AND candidate_period IS NOT NULL
 ON CONFLICT (contact_id, billing_period) DO NOTHING;
 
-DROP INDEX CONCURRENTLY IF EXISTS idx_invoices_recurring_contact_period_source;
+DROP INDEX CONCURRENTLY IF EXISTS idx_invoices_recurring_contact_period_source_invalid;
 
-CREATE UNIQUE INDEX CONCURRENTLY idx_invoices_recurring_contact_period_source
+DO $$
+BEGIN
+    IF EXISTS (
+        SELECT 1
+        FROM pg_index AS index_state
+        JOIN pg_class AS index_class
+          ON index_class.oid = index_state.indexrelid
+        JOIN pg_namespace AS index_namespace
+          ON index_namespace.oid = index_class.relnamespace
+        WHERE index_namespace.nspname = current_schema()
+          AND index_class.relname = 'idx_invoices_recurring_contact_period_source'
+          AND NOT (index_state.indisvalid AND index_state.indisready)
+    ) THEN
+        ALTER INDEX idx_invoices_recurring_contact_period_source
+            RENAME TO idx_invoices_recurring_contact_period_source_invalid;
+    END IF;
+END $$;
+
+DROP INDEX CONCURRENTLY IF EXISTS idx_invoices_recurring_contact_period_source_invalid;
+
+CREATE UNIQUE INDEX CONCURRENTLY IF NOT EXISTS idx_invoices_recurring_contact_period_source
     ON invoices (contact_id, billing_period)
     WHERE billing_period IS NOT NULL
       AND status <> 'void'

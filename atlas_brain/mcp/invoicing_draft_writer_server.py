@@ -68,28 +68,47 @@ async def _draft_invoice_schema_ready(pool: Any) -> bool:
     return bool(
         await pool.fetchval(
             """
+            WITH required_columns(table_name, column_name) AS (
+                VALUES
+                    ('invoices', 'id'),
+                    ('invoices', 'invoice_number'),
+                    ('invoices', 'customer_name'),
+                    ('invoices', 'line_items'),
+                    ('invoices', 'issue_date'),
+                    ('invoices', 'due_date'),
+                    ('invoices', 'status'),
+                    ('invoices', 'source'),
+                    ('invoices', 'source_ref'),
+                    ('invoices', 'invoice_for'),
+                    ('invoices', 'contact_name')
+            ),
+            required_relations(relkind, relname) AS (
+                VALUES
+                    ('S', 'invoice_number_seq'),
+                    ('r', 'invoice_payments')
+            )
             SELECT NOT EXISTS (
                 SELECT 1
-                FROM (
-                    VALUES
-                        ('invoices', 'id'),
-                        ('invoices', 'invoice_number'),
-                        ('invoices', 'customer_name'),
-                        ('invoices', 'line_items'),
-                        ('invoices', 'issue_date'),
-                        ('invoices', 'due_date'),
-                        ('invoices', 'status'),
-                        ('invoices', 'source'),
-                        ('invoices', 'source_ref'),
-                        ('invoices', 'invoice_for'),
-                        ('invoices', 'contact_name')
-                ) AS required(table_name, column_name)
+                FROM required_columns AS required
                 WHERE NOT EXISTS (
                     SELECT 1
                     FROM information_schema.columns AS actual
                     WHERE actual.table_schema = current_schema()
                       AND actual.table_name = required.table_name
                       AND actual.column_name = required.column_name
+                )
+            )
+            AND NOT EXISTS (
+                SELECT 1
+                FROM required_relations AS required
+                WHERE NOT EXISTS (
+                    SELECT 1
+                    FROM pg_class AS actual
+                    JOIN pg_namespace AS actual_schema
+                      ON actual_schema.oid = actual.relnamespace
+                    WHERE actual_schema.nspname = current_schema()
+                      AND actual.relname = required.relname
+                      AND actual.relkind = required.relkind
                 )
             )
             """

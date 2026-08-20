@@ -863,7 +863,8 @@ class CommercialBillingApprovalService:
         idx_invoices_recurring_contact_period_source, which is the
         authoritative DB-enforced guarantee for every UNAMBIGUOUS period -- a
         quarantined period has no row claiming that index slot by design, so
-        this pre-check is that period's only guard."""
+        this pre-check is that period's only guard while at least one matching
+        quarantined invoice remains non-void."""
         return await conn.fetchrow(
             """
             SELECT source, invoice_number FROM invoices
@@ -875,7 +876,20 @@ class CommercialBillingApprovalService:
                 'quarantined_collision' AS source,
                 'historical billing_period collision for this contact+period -- see invoices.metadata.billing_period_backfill_collision' AS invoice_number
             FROM invoices_billing_period_reservations
-            WHERE contact_id = $1 AND billing_period = $2
+            WHERE contact_id = $1
+              AND billing_period = $2
+              AND EXISTS (
+                  SELECT 1
+                  FROM invoices AS quarantined
+                  WHERE quarantined.contact_id = invoices_billing_period_reservations.contact_id
+                    AND quarantined.billing_period IS NULL
+                    AND quarantined.billing_period_legacy_null
+                    AND quarantined.status <> 'void'
+                    AND quarantined.source IN ('monthly_auto', 'eom_commercial_billing')
+                    AND quarantined.metadata->>'billing_period_backfill_collision' = 'true'
+                    AND quarantined.metadata->>'billing_period_backfill_candidate_period' =
+                        invoices_billing_period_reservations.billing_period
+              )
             LIMIT 1
             """,
             contact_id, billing_period,
