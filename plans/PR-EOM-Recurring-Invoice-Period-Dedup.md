@@ -183,7 +183,7 @@ state was briefly, correctly flagged as a P1 blocker.
 
 Ownership lane: eom/recurring-invoice-period-dedup
 Slice phase: Production hardening
-Max files: 18
+Max files: 19
 
 1. Migration 385: `invoices.billing_period` column + format CHECK + the
    cross-source partial unique index + historical backfill + collision
@@ -433,6 +433,7 @@ two `WITH candidates ... UPDATE` passes)
 
 ### Files touched
 
+- `.github/workflows/atlas_invoicing_checks.yml`
 - `atlas_brain/autonomous/tasks/monthly_invoice_generation.py`
 - `atlas_brain/main.py`
 - `atlas_brain/main_eom.py`
@@ -820,6 +821,16 @@ index proof now inserts a same-contact/same-period duplicate with
 `billing_period='2026-04'`, while the separate missing-period CHECK proof
 remains in place for raw recurring rows without the period.
 
+**Finding #15 — monthly cross-pipeline regression tests must be enrolled in
+PR CI.** Review round 6 found the new
+`tests/test_monthly_invoice_generation_cross_pipeline_dedup.py` file was
+referenced as Review Contract evidence but was not included in
+`.github/workflows/atlas_invoicing_checks.yml` path filters or its explicit
+pytest command. Fixed in this repair commit: the workflow now triggers on
+that file and runs it in the receivables/repository job, so the required PR
+checks exercise the monthly writer hit and fail-closed branches instead of
+leaving them to the scheduled repo-wide backstop.
+
 ## Intentional
 
 - No new parameter on `InvoiceRepository.create()` or `_InvoiceDraft`: both
@@ -1040,6 +1051,7 @@ Parked hardening: none.
 
 | File | LOC |
 |---|---:|
+| `.github/workflows/atlas_invoicing_checks.yml` | 3 |
 | `atlas_brain/autonomous/tasks/monthly_invoice_generation.py` | 86 |
 | `atlas_brain/main.py` | 132 |
 | `atlas_brain/main_eom.py` | 30 |
@@ -1047,7 +1059,7 @@ Parked hardening: none.
 | `atlas_brain/services/commercial_billing_approvals.py` | 64 |
 | `atlas_brain/storage/migrations/385_invoices_billing_period_dedup.sql` | 311 |
 | `atlas_brain/storage/repositories/invoice.py` | 303 |
-| `plans/PR-EOM-Recurring-Invoice-Period-Dedup.md` | 1054 |
+| `plans/PR-EOM-Recurring-Invoice-Period-Dedup.md` | 1061 |
 | `tests/maturity_sweep/baseline_atlas_brain_mcp.json` | 4 |
 | `tests/maturity_sweep/baseline_atlas_brain_storage.json` | 27 |
 | `tests/test_commercial_billing_approvals.py` | 292 |
@@ -1058,4 +1070,4 @@ Parked hardening: none.
 | `tests/test_legacy_monthly_autoinvoice_writer_harness.py` | 44 |
 | `tests/test_monthly_invoice_generation_cross_pipeline_dedup.py` | 239 |
 | `tests/test_receivables.py` | 11 |
-| **Total** | **3844** |
+| **Total** | **3854** |
