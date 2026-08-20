@@ -5767,6 +5767,274 @@ async def test_onboarding_draft_list_projection_filters_and_paginates():
 
 
 @pytest.mark.asyncio
+async def test_public_onboarding_issued_link_projection_excludes_terminal_tokens():
+    database_url = _database_url_or_skip()
+    schema = f"atlas_eom_public_onboarding_issued_links_{uuid.uuid4().hex}"
+    conn = await asyncpg.connect(database_url)
+    try:
+        await _prepare_schema(conn, schema, apply_public_onboarding_migration=True)
+        provider = DatabaseCRMProvider(pool=conn)
+        issued_contact_id, issued_draft_id = await _book_first_clean_draft(
+            conn, provider, full_name="Issued Link"
+        )
+        _, issued_token_id = await _claim_public_onboarding_token(
+            provider, draft_id=issued_draft_id
+        )
+        redeemed_contact_id, redeemed_draft_id = await _book_first_clean_draft(
+            conn, provider, full_name="Redeemed Link"
+        )
+        _, redeemed_token_id = await _claim_public_onboarding_token(
+            provider, draft_id=redeemed_draft_id
+        )
+        await conn.execute(
+            """
+            UPDATE eom_public_onboarding_tokens
+               SET status = 'redeemed', redeemed_at = NOW(), handoff_id = $2::uuid
+             WHERE id = $1::uuid
+            """,
+            redeemed_token_id,
+            uuid.uuid4(),
+        )
+        revoked_contact_id, revoked_draft_id = await _book_first_clean_draft(
+            conn, provider, full_name="Revoked Link"
+        )
+        _, revoked_token_id = await _claim_public_onboarding_token(
+            provider, draft_id=revoked_draft_id
+        )
+        revoked = await provider.revoke_eom_public_onboarding_token(
+            draft_id=revoked_draft_id
+        )
+
+        links = await provider.list_eom_public_onboarding_issued_links(
+            accepted_signing_key_fingerprints=(_PUBLIC_ONBOARDING_KEY_FINGERPRINT,),
+            limit=100,
+        )
+
+        assert [{str(row["draft_id"]), str(row["contact_id"])} for row in links] == [
+            {issued_draft_id, str(issued_contact_id)}
+        ]
+        assert links[0]["full_name"] == "Issued Link"
+        assert links[0]["recipient_email"] == "won-lead@example.com"
+        assert links[0]["status"] == "issued"
+        assert "id" not in links[0]
+        assert str(issued_token_id) not in str(links[0])
+        assert revoked["status"] == "revoked"
+        assert str(redeemed_contact_id) not in str(links)
+        assert str(revoked_contact_id) not in str(links)
+        assert str(redeemed_token_id) not in str(links)
+        assert str(revoked_token_id) not in str(links)
+    finally:
+        await conn.execute(f'DROP SCHEMA IF EXISTS "{schema}" CASCADE')
+        await conn.close()
+
+
+@pytest.mark.asyncio
+async def test_public_onboarding_issued_link_projection_matches_session_readiness():
+    """The office queue includes exactly the rows a public session can open."""
+
+    database_url = _database_url_or_skip()
+    schema = f"atlas_eom_public_onboarding_issued_link_readiness_{uuid.uuid4().hex}"
+    conn = await asyncpg.connect(database_url)
+    try:
+        await _prepare_schema(conn, schema, apply_public_onboarding_migration=True)
+        provider = DatabaseCRMProvider(pool=conn)
+
+        async def issued(full_name: str) -> tuple[uuid.UUID, str, uuid.UUID]:
+            contact_id, draft_id = await _book_first_clean_draft(
+                conn, provider, full_name=full_name
+            )
+            _, token_id = await _claim_public_onboarding_token(
+                provider, draft_id=draft_id
+            )
+            return contact_id, draft_id, token_id
+
+        sending_contact_id, sending_draft_id, sending_token_id = await issued(
+            "Sending Link"
+        )
+        sent_contact_id, sent_draft_id, sent_token_id = await issued("Sent Link")
+        inactive_contact_id, _, inactive_token_id = await issued("Inactive Link")
+        archived_contact_id, _, archived_token_id = await issued("Archived Link")
+        other_context_contact_id, _, other_context_token_id = await issued(
+            "Other Context Link"
+        )
+        non_lead_contact_id, _, non_lead_token_id = await issued("Customer Link")
+        non_won_contact_id, _, non_won_token_id = await issued("Non-won Link")
+        _, pending_draft_id, pending_token_id = await issued("Pending Draft Link")
+        _, revoked_draft_id, revoked_draft_token_id = await issued("Revoked Draft Link")
+
+        await conn.execute(
+            "UPDATE eom_onboarding_email_drafts SET status = 'sent', sent_at = NOW() "
+            "WHERE id = $1::uuid",
+            sent_draft_id,
+        )
+        await conn.execute(
+            "UPDATE contacts SET status = 'inactive' WHERE id = $1", inactive_contact_id
+        )
+        await conn.execute(
+            "UPDATE contacts SET status = 'archived' WHERE id = $1", archived_contact_id
+        )
+        await conn.execute(
+            "UPDATE contacts SET business_context_id = 'other_business' WHERE id = $1",
+            other_context_contact_id,
+        )
+        await conn.execute(
+            "UPDATE contacts SET contact_type = 'customer' WHERE id = $1",
+            non_lead_contact_id,
+        )
+        await conn.execute(
+            "UPDATE contacts SET lead_stage = 'qualified' WHERE id = $1",
+            non_won_contact_id,
+        )
+        await conn.execute(
+            "UPDATE eom_onboarding_email_drafts SET status = 'pending' WHERE id = $1::uuid",
+            pending_draft_id,
+        )
+        await conn.execute(
+            "UPDATE eom_onboarding_email_drafts SET status = 'revoked', revoked_at = NOW() "
+            "WHERE id = $1::uuid",
+            revoked_draft_id,
+        )
+
+        for token_id in (
+            inactive_token_id,
+            archived_token_id,
+            other_context_token_id,
+            non_lead_token_id,
+            non_won_token_id,
+            pending_token_id,
+            revoked_draft_token_id,
+        ):
+            with pytest.raises(EOMLeadConversionError) as exc_info:
+                await provider.get_eom_public_onboarding_session(
+                    token_id=str(token_id),
+                    signing_key_fingerprint=_PUBLIC_ONBOARDING_KEY_FINGERPRINT,
+                )
+            assert exc_info.value.status_code == 404
+
+        for token_id in (sending_token_id, sent_token_id):
+            session = await provider.get_eom_public_onboarding_session(
+                token_id=str(token_id),
+                signing_key_fingerprint=_PUBLIC_ONBOARDING_KEY_FINGERPRINT,
+            )
+            assert session["status"] == "ready"
+
+        links = await provider.list_eom_public_onboarding_issued_links(
+            accepted_signing_key_fingerprints=(_PUBLIC_ONBOARDING_KEY_FINGERPRINT,),
+            limit=100,
+        )
+
+        assert {str(row["draft_id"]) for row in links} == {
+            sending_draft_id,
+            sent_draft_id,
+        }
+        assert {str(row["contact_id"]) for row in links} == {
+            str(sending_contact_id),
+            str(sent_contact_id),
+        }
+    finally:
+        await conn.execute(f'DROP SCHEMA IF EXISTS "{schema}" CASCADE')
+        await conn.close()
+
+
+@pytest.mark.asyncio
+async def test_public_onboarding_issued_link_projection_pages_current_and_previous_keys():
+    """Only keys that can authenticate now enter a complete newest-first queue."""
+
+    previous_secret = "previous-test-only-public-onboarding-secret-value-654321"
+    retired_secret = "retired-test-only-public-onboarding-secret-value-987654"
+    previous_fingerprint = eom_public_onboarding_hmac_key_fingerprint(
+        secret=previous_secret
+    )
+    retired_fingerprint = eom_public_onboarding_hmac_key_fingerprint(
+        secret=retired_secret
+    )
+    database_url = _database_url_or_skip()
+    schema = f"atlas_eom_public_onboarding_issued_link_page_{uuid.uuid4().hex}"
+    conn = await asyncpg.connect(database_url)
+    try:
+        await _prepare_schema(conn, schema, apply_public_onboarding_migration=True)
+        provider = DatabaseCRMProvider(pool=conn)
+
+        newest_contact_id, newest_draft_id = await _book_first_clean_draft(
+            conn, provider, full_name="Current Newest"
+        )
+        _, newest_token_id = await _claim_public_onboarding_token(
+            provider, draft_id=newest_draft_id
+        )
+        previous_contact_id, previous_draft_id = await _book_first_clean_draft(
+            conn, provider, full_name="Previous Key"
+        )
+        _, previous_token_id = await _claim_public_onboarding_token(
+            provider,
+            draft_id=previous_draft_id,
+            hmac_secret=previous_secret,
+        )
+        older_contact_id, older_draft_id = await _book_first_clean_draft(
+            conn, provider, full_name="Current Older"
+        )
+        _, older_token_id = await _claim_public_onboarding_token(
+            provider, draft_id=older_draft_id
+        )
+        retired_contact_id, retired_draft_id = await _book_first_clean_draft(
+            conn, provider, full_name="Retired Key"
+        )
+        _, retired_token_id = await _claim_public_onboarding_token(
+            provider,
+            draft_id=retired_draft_id,
+            hmac_secret=retired_secret,
+        )
+        assert retired_fingerprint not in (
+            _PUBLIC_ONBOARDING_KEY_FINGERPRINT,
+            previous_fingerprint,
+        )
+
+        for token_id, issued_at in (
+            (newest_token_id, datetime(2026, 8, 19, 12, tzinfo=timezone.utc)),
+            (previous_token_id, datetime(2026, 8, 18, 12, tzinfo=timezone.utc)),
+            (older_token_id, datetime(2026, 8, 17, 12, tzinfo=timezone.utc)),
+            (retired_token_id, datetime(2026, 8, 20, 12, tzinfo=timezone.utc)),
+        ):
+            await conn.execute(
+                "UPDATE eom_public_onboarding_tokens SET issued_at = $2 WHERE id = $1",
+                token_id,
+                issued_at,
+            )
+
+        first_page = await provider.list_eom_public_onboarding_issued_links(
+            accepted_signing_key_fingerprints=(
+                _PUBLIC_ONBOARDING_KEY_FINGERPRINT,
+                previous_fingerprint,
+            ),
+            limit=2,
+        )
+        second_page = await provider.list_eom_public_onboarding_issued_links(
+            accepted_signing_key_fingerprints=(
+                _PUBLIC_ONBOARDING_KEY_FINGERPRINT,
+                previous_fingerprint,
+            ),
+            limit=2,
+            cursor_issued_at=first_page[-1]["issued_at"],
+            cursor_draft_id=first_page[-1]["draft_id"],
+        )
+
+        assert [str(row["draft_id"]) for row in first_page] == [
+            newest_draft_id,
+            previous_draft_id,
+        ]
+        assert [str(row["draft_id"]) for row in second_page] == [older_draft_id]
+        assert {str(row["contact_id"]) for row in first_page + second_page} == {
+            str(newest_contact_id),
+            str(previous_contact_id),
+            str(older_contact_id),
+        }
+        assert str(retired_contact_id) not in str(first_page + second_page)
+        assert str(retired_token_id) not in str(first_page + second_page)
+    finally:
+        await conn.execute(f'DROP SCHEMA IF EXISTS "{schema}" CASCADE')
+        await conn.close()
+
+
+@pytest.mark.asyncio
 async def test_mark_lead_lost_records_reason_is_idempotent_and_reopens():
     database_url = _database_url_or_skip()
     schema = f"atlas_eom_lead_lost_{uuid.uuid4().hex}"

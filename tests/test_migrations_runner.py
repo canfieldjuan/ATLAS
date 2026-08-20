@@ -1,4 +1,7 @@
 import asyncio
+import hashlib
+import itertools
+import logging
 import os
 import uuid
 from pathlib import Path
@@ -10,36 +13,65 @@ DATABASE_URL_ENV = "ATLAS_MIGRATION_TEST_DATABASE_URL"
 
 class FakeMigrationPool:
     def __init__(self, records=None):
-        self.records = list(records or [])
+        self.records = [
+            (record[0], record[1], record[2] if len(record) > 2 else None)
+            for record in (records or [])
+        ]
         self.inserted = []
+        self.inserted_with_digest = []
+        self.updated = []
 
     async def fetchval(self, query, *args):
         normalized = " ".join(query.split())
+        if normalized == "SELECT content_sha256 FROM schema_migrations WHERE name = $1":
+            name = args[0]
+            for _version, record_name, content_sha256 in self.records:
+                if record_name == name:
+                    return content_sha256
+            return None
         if "WHERE name = $1" in normalized:
             name = args[0]
-            for version, record_name in self.records:
+            for version, record_name, _content_sha256 in self.records:
                 if record_name == name:
                     return version
             return None
         if "WHERE version = $1" in normalized:
             version = args[0]
-            for record_version, name in self.records:
+            for record_version, name, _content_sha256 in self.records:
                 if record_version == version:
                     return name
             return None
         if "MIN(version)" in normalized:
             if not self.records:
                 return -1
-            min_version = min(version for version, _ in self.records)
+            min_version = min(version for version, _name, _digest in self.records)
             return min_version - 1 if min_version < 0 else -1
         raise AssertionError(f"Unexpected fetchval query: {query}")
 
+    async def fetch(self, query, *args):
+        assert query == "SELECT name, content_sha256 FROM schema_migrations"
+        return [
+            {"name": name, "content_sha256": content_sha256}
+            for _version, name, content_sha256 in self.records
+        ]
+
     async def execute(self, query, *args):
         normalized = " ".join(query.split())
+        if normalized.startswith("UPDATE schema_migrations SET content_sha256"):
+            name, content_sha256 = args
+            self.records = [
+                (version, record_name, content_sha256)
+                if record_name == name
+                else (version, record_name, existing_digest)
+                for version, record_name, existing_digest in self.records
+            ]
+            self.updated.append((name, content_sha256))
+            return
         if normalized.startswith("INSERT INTO schema_migrations"):
-            record = (args[0], args[1])
+            record = (args[0], args[1], args[2])
             self.records.append(record)
-            self.inserted.append(record)
+            self.inserted.append(record[:2])
+            self.inserted_with_digest.append(record)
             return
         raise AssertionError(f"Unexpected execute query: {query}")
 
@@ -49,10 +81,18 @@ async def test_record_migration_uses_prefix_version_when_available():
     from atlas_brain.storage.migrations import _record_migration
 
     pool = FakeMigrationPool(records=[(1, "001_initial_schema")])
+    content_sha256 = "a" * 64
 
-    await _record_migration(pool, "247_b2b_vendor_witness_packets.sql")
+    await _record_migration(
+        pool,
+        "247_b2b_vendor_witness_packets.sql",
+        content_sha256,
+    )
 
     assert pool.inserted == [(247, "247_b2b_vendor_witness_packets")]
+    assert pool.inserted_with_digest == [
+        (247, "247_b2b_vendor_witness_packets", content_sha256)
+    ]
 
 
 @pytest.mark.asyncio
@@ -64,13 +104,124 @@ async def test_record_migration_uses_negative_version_on_prefix_collision():
         (230, "230_scrape_target_checkpoints"),
     ])
 
-    await _record_migration(pool, "076_consumer_analytics_views.sql")
-    await _record_migration(pool, "230_b2b_reasoning_synthesis.sql")
+    await _record_migration(pool, "076_consumer_analytics_views.sql", "b" * 64)
+    await _record_migration(pool, "230_b2b_reasoning_synthesis.sql", "c" * 64)
 
     assert pool.inserted == [
         (-1, "076_consumer_analytics_views"),
         (-2, "230_b2b_reasoning_synthesis"),
     ]
+
+
+@pytest.mark.asyncio
+async def test_record_migration_leaves_existing_legacy_row_unchanged_without_pending_proof():
+    from atlas_brain.storage.migrations import _record_migration
+
+    pool = FakeMigrationPool(records=[(247, "247_probe", None)])
+
+    await _record_migration(pool, "247_probe.sql", "d" * 64)
+
+    assert pool.records == [(247, "247_probe", None)]
+    assert pool.updated == []
+
+
+@pytest.mark.asyncio
+async def test_migration_content_integrity_report_classifies_all_evidence_states(
+    tmp_path,
+    monkeypatch,
+):
+    from atlas_brain.storage.migrations import _migration_content_integrity_report
+
+    verified = tmp_path / "900_verified.sql"
+    legacy = tmp_path / "901_legacy.sql"
+    mismatched = tmp_path / "902_mismatched.sql"
+    unreadable = tmp_path / "903_unreadable.sql"
+    verified.write_bytes(b"SELECT 'verified';\n")
+    legacy.write_bytes(b"SELECT 'legacy';\n")
+    mismatched.write_bytes(b"SELECT 'mismatched';\n")
+    unreadable.write_bytes(b"SELECT 'unreadable';\n")
+    pool = FakeMigrationPool(records=[
+        (900, "900_verified", hashlib.sha256(verified.read_bytes()).hexdigest()),
+        (901, "901_legacy", None),
+        (902, "902_mismatched", "not-a-sha256"),
+        (903, "903_unreadable", None),
+        (904, "904_missing_source", "f" * 64),
+    ])
+
+    original_read_bytes = Path.read_bytes
+
+    def read_bytes_or_raise(path):
+        if path == unreadable:
+            raise PermissionError("migration source is unreadable")
+        return original_read_bytes(path)
+
+    monkeypatch.setattr(Path, "read_bytes", read_bytes_or_raise)
+
+    report = await _migration_content_integrity_report(
+        pool,
+        [verified, legacy, mismatched, unreadable],
+    )
+
+    assert report.verified == ("900_verified",)
+    assert report.legacy_unverified == ("901_legacy",)
+    assert report.mismatched == ("902_mismatched",)
+    assert report.missing_source == ("903_unreadable", "904_missing_source")
+
+
+@pytest.mark.parametrize(
+    ("sql", "expected"),
+    [
+        ("INSERT INTO schema_migrations (version, name) VALUES (1, '001');", True),
+        ('INSERT INTO "schema_migrations" (version, name) VALUES (1, \'001\');', True),
+        ("INSERT INTO public.schema_migrations (version, name) VALUES (1, '001');", True),
+        ('INSERT INTO "public"."schema_migrations" (version, name) VALUES (1, \'001\');', True),
+        ('INSERT INTO "SCHEMA_MIGRATIONS" (version, name) VALUES (1, \'001\');', False),
+        ("-- INSERT INTO schema_migrations (version, name) VALUES (1, '001');", False),
+        ("SELECT 'INSERT INTO schema_migrations (version, name)';", False),
+        ("INSERT INTO migration_audit (name) VALUES ('schema_migrations');", False),
+    ],
+)
+def test_self_recording_detector_only_admits_executable_ledger_inserts(sql, expected):
+    from atlas_brain.storage.migrations import _contains_executable_self_recording_insert
+
+    assert _contains_executable_self_recording_insert(sql) is expected
+
+
+def test_self_recording_detector_matches_static_sql_grammar_matrix():
+    """Derive expected admission from SQL token, context, and target axes."""
+    from atlas_brain.storage.migrations import _contains_executable_self_recording_insert
+
+    grammar_axes = {
+        "tokens": (("INSERT", True), ("insert", True), ("UPDATE", False)),
+        "containers": ("direct", "line-comment", "literal"),
+        "keys": (
+            ("schema_migrations", True),
+            ("SCHEMA_MIGRATIONS", True),
+            ('"schema_migrations"', True),
+            ('"SCHEMA_MIGRATIONS"', False),
+            ("public.schema_migrations", True),
+            ('"public"."schema_migrations"', True),
+            ('public."SCHEMA_MIGRATIONS"', False),
+            ("migration_audit", False),
+        ),
+    }
+
+    for (token, is_insert), container, (target, is_ledger) in itertools.product(
+        grammar_axes["tokens"],
+        grammar_axes["containers"],
+        grammar_axes["keys"],
+    ):
+        statement = f"{token} INTO ONLY {target} (version, name) VALUES (1, '001');"
+        if container == "direct":
+            sql = statement
+        elif container == "line-comment":
+            sql = f"-- {statement}"
+        else:
+            literal = statement.replace("'", "''")
+            sql = f"SELECT '{literal}'"
+
+        expected = is_insert and is_ledger and container == "direct"
+        assert _contains_executable_self_recording_insert(sql) is expected
 
 
 def test_find_duplicate_migration_prefixes_detects_repo_collisions():
@@ -601,6 +752,8 @@ class _SerializingPool(FakeMigrationPool):
         super().__init__()
         self.honor_lock = honor_lock
         self.applied_sql = []
+        self.atomic_transactions = 0
+        self.atomic_transaction_errors = 0
         self.acquired = 0
         self.max_acquired = 0
         self._gate = None
@@ -619,7 +772,10 @@ class _SerializingPool(FakeMigrationPool):
         # concurrent runner's write leak into this result and mask the race.
         import asyncio
 
-        snapshot = [{"name": name} for _version, name in self.records]
+        snapshot = [
+            {"name": name, "content_sha256": content_sha256}
+            for _version, name, content_sha256 in self.records
+        ]
         await asyncio.sleep(0)
         return snapshot
 
@@ -627,7 +783,11 @@ class _SerializingPool(FakeMigrationPool):
         normalized = " ".join(query.split())
         if normalized.startswith("CREATE TABLE IF NOT EXISTS schema_migrations"):
             return
+        if normalized.startswith("ALTER TABLE schema_migrations ADD COLUMN"):
+            return
         if normalized.startswith("INSERT INTO schema_migrations"):
+            return await super().execute(query, *args)
+        if normalized.startswith("UPDATE schema_migrations SET content_sha256"):
             return await super().execute(query, *args)
         self.applied_sql.append(normalized)
 
@@ -638,6 +798,40 @@ class _SerializingPool(FakeMigrationPool):
 
     async def release(self, conn):
         self.acquired -= 1
+
+    def transaction(self):
+        return _RollbackMigrationTransaction(self)
+
+
+class _RollbackMigrationTransaction:
+    """In-memory transaction seam that restores migration effects on failure."""
+
+    def __init__(self, pool):
+        self.pool = pool
+        self.snapshot = None
+
+    async def __aenter__(self):
+        self.pool.atomic_transactions += 1
+        self.snapshot = (
+            list(self.pool.records),
+            list(self.pool.inserted),
+            list(self.pool.inserted_with_digest),
+            list(self.pool.updated),
+            list(self.pool.applied_sql),
+        )
+        return self
+
+    async def __aexit__(self, exc_type, exc, traceback):
+        if exc_type is not None:
+            self.pool.atomic_transaction_errors += 1
+            (
+                self.pool.records,
+                self.pool.inserted,
+                self.pool.inserted_with_digest,
+                self.pool.updated,
+                self.pool.applied_sql,
+            ) = self.snapshot
+        return False
 
 
 class _Conn:
@@ -673,6 +867,9 @@ class _Conn:
             return True
         return await self.pool.fetchval(query, *args)
 
+    def transaction(self):
+        return self.pool.transaction()
+
 
 @pytest.mark.asyncio
 async def test_concurrent_runners_apply_each_migration_once(tmp_path):
@@ -694,6 +891,9 @@ async def test_concurrent_runners_apply_each_migration_once(tmp_path):
         "pending"
     )
     assert pool.inserted == [(900, "900_probe")]
+    assert pool.inserted_with_digest == [
+        (900, "900_probe", hashlib.sha256(b"SELECT 900").hexdigest())
+    ]
 
 
 @pytest.mark.asyncio
@@ -714,6 +914,268 @@ async def test_without_the_advisory_lock_both_runners_apply(tmp_path):
     assert len(pool.applied_sql) == 2, (
         "no-op lock must reproduce the double-apply race the real lock prevents"
     )
+
+
+@pytest.mark.asyncio
+async def test_pending_migration_hashes_and_executes_one_source_read(
+    tmp_path,
+    monkeypatch,
+):
+    from atlas_brain.storage.migrations import run_migrations
+
+    source_path = tmp_path / "900_one_read.sql"
+    source = b"SELECT 'one source read'"
+    expected_digest = hashlib.sha256(source).hexdigest()
+    source_path.write_bytes(source)
+    original_read_bytes = Path.read_bytes
+    reads = []
+
+    def read_bytes_once(path):
+        if path == source_path:
+            reads.append(path)
+            if len(reads) > 1:
+                raise AssertionError("pending migration source was read more than once")
+        return original_read_bytes(path)
+
+    monkeypatch.setattr(Path, "read_bytes", read_bytes_once)
+    pool = _SerializingPool()
+
+    await run_migrations(pool, migrations_dir=tmp_path)
+
+    assert reads == [source_path]
+    assert pool.applied_sql == [source.decode("utf-8")]
+    assert pool.inserted_with_digest == [(900, "900_one_read", expected_digest)]
+
+
+@pytest.mark.asyncio
+async def test_pending_self_recording_migration_receives_its_digest(tmp_path):
+    from atlas_brain.storage.migrations import run_migrations
+
+    source = (
+        "INSERT INTO schema_migrations (version, name, content_sha256) "
+        "VALUES (900, '900_self_recording', 'wrong-digest');"
+    )
+    (tmp_path / "900_self_recording.sql").write_text(source)
+
+    class _SelfRecordingPool(_SerializingPool):
+        async def execute(self, query, *args):
+            if query == source:
+                self.records.append((900, "900_self_recording", "wrong-digest"))
+                self.applied_sql.append(query)
+                return
+            return await super().execute(query, *args)
+
+    pool = _SelfRecordingPool()
+    await run_migrations(pool, migrations_dir=tmp_path)
+
+    expected_digest = hashlib.sha256(source.encode("utf-8")).hexdigest()
+    assert pool.records == [(900, "900_self_recording", expected_digest)]
+    assert pool.updated == [("900_self_recording", expected_digest)]
+    assert pool.atomic_transactions == 1
+    assert pool.atomic_transaction_errors == 0
+
+
+@pytest.mark.asyncio
+async def test_self_recording_digest_must_persist_before_transaction_commits(tmp_path):
+    """A silent UPDATE 0 cannot commit a stale self-recorded digest."""
+    from atlas_brain.storage.migrations import run_migrations
+
+    source = (
+        "CREATE TABLE self_recording_persistence_probe (id int);\n"
+        "INSERT INTO schema_migrations (version, name) "
+        "VALUES (900, '900_self_recording_persistence');"
+    )
+    (tmp_path / "900_self_recording_persistence.sql").write_text(source)
+
+    class _SuppressOnceDigestUpdatePool(_SerializingPool):
+        def __init__(self):
+            super().__init__()
+            self.suppress_next_digest_update = True
+
+        async def execute(self, query, *args):
+            if query == source:
+                self.records.append((900, "900_self_recording_persistence", None))
+                self.applied_sql.append(query)
+                return
+            normalized = " ".join(query.split())
+            if (
+                normalized.startswith("UPDATE schema_migrations SET content_sha256")
+                and self.suppress_next_digest_update
+            ):
+                self.suppress_next_digest_update = False
+                return "UPDATE 0"
+            return await super().execute(query, *args)
+
+    pool = _SuppressOnceDigestUpdatePool()
+    with pytest.raises(RuntimeError, match="did not persist its expected content SHA-256"):
+        await run_migrations(pool, migrations_dir=tmp_path)
+
+    assert pool.records == []
+    assert pool.applied_sql == []
+    assert pool.atomic_transactions == 1
+    assert pool.atomic_transaction_errors == 1
+
+    await run_migrations(pool, migrations_dir=tmp_path)
+
+    expected_digest = hashlib.sha256(source.encode("utf-8")).hexdigest()
+    assert pool.records == [
+        (900, "900_self_recording_persistence", expected_digest)
+    ]
+    assert pool.atomic_transactions == 2
+
+
+@pytest.mark.asyncio
+async def test_self_recording_digest_failure_rolls_back_and_retry_records_once(tmp_path):
+    """A failed digest update cannot leave a self-recorded row permanently legacy."""
+    from atlas_brain.storage.migrations import run_migrations
+
+    source = (
+        "CREATE TABLE self_recording_retry_probe (id int);\n"
+        "INSERT INTO schema_migrations (version, name) "
+        "VALUES (900, '900_self_recording_retry');"
+    )
+    (tmp_path / "900_self_recording_retry.sql").write_text(source)
+
+    class _FailOnceDigestUpdatePool(_SerializingPool):
+        def __init__(self):
+            super().__init__()
+            self.fail_next_digest_update = True
+
+        async def execute(self, query, *args):
+            if query == source:
+                self.records.append((900, "900_self_recording_retry", None))
+                self.applied_sql.append(query)
+                return
+            normalized = " ".join(query.split())
+            if (
+                normalized.startswith("UPDATE schema_migrations SET content_sha256")
+                and self.fail_next_digest_update
+            ):
+                self.fail_next_digest_update = False
+                raise RuntimeError("injected digest update failure")
+            return await super().execute(query, *args)
+
+    pool = _FailOnceDigestUpdatePool()
+    with pytest.raises(RuntimeError, match="injected digest update failure"):
+        await run_migrations(pool, migrations_dir=tmp_path)
+
+    assert pool.records == []
+    assert pool.applied_sql == []
+    assert pool.updated == []
+    assert pool.atomic_transactions == 1
+    assert pool.atomic_transaction_errors == 1
+
+    await run_migrations(pool, migrations_dir=tmp_path)
+
+    expected_digest = hashlib.sha256(source.encode("utf-8")).hexdigest()
+    assert pool.records == [(900, "900_self_recording_retry", expected_digest)]
+    assert pool.updated == [("900_self_recording_retry", expected_digest)]
+    assert pool.atomic_transactions == 2
+
+
+@pytest.mark.asyncio
+async def test_comment_or_literal_ledger_insert_does_not_force_a_transaction(tmp_path):
+    """Mentions are not self-recording SQL and preserve autocommit behavior."""
+    from atlas_brain.storage.migrations import run_migrations
+
+    (tmp_path / "900_mention_only.sql").write_text(
+        "CREATE TABLE mention_only_probe (id int);\n"
+        "-- INSERT INTO schema_migrations (version, name) VALUES (900, 'noop');\n"
+        "SELECT 'INSERT INTO schema_migrations (version, name)';"
+    )
+    pool = _SingleConnectionPool(tmp_path)
+
+    await run_migrations(pool, migrations_dir=tmp_path)
+
+    assert getattr(pool, "atomic_transactions", 0) == 0
+
+
+@pytest.mark.asyncio
+async def test_self_recording_concurrent_ddl_is_rejected_before_any_write(tmp_path):
+    """A self-recording concurrent-DDL migration cannot reopen the crash window."""
+    from atlas_brain.storage.migrations import run_migrations
+
+    source = (
+        "CREATE INDEX CONCURRENTLY idx_self_recording_probe ON probe (id);\n"
+        "INSERT INTO schema_migrations (version, name) "
+        "VALUES (900, '900_self_recording_concurrent');"
+    )
+    (tmp_path / "900_self_recording_concurrent.sql").write_text(source)
+    pool = _SingleConnectionPool(tmp_path)
+
+    with pytest.raises(
+        RuntimeError, match="atomic-bookkeeping migration cannot use CONCURRENTLY"
+    ):
+        await run_migrations(pool, migrations_dir=tmp_path)
+
+    assert getattr(pool, "atomic_transactions", 0) == 0
+    assert source not in pool.applied_sql
+
+
+@pytest.mark.asyncio
+async def test_mixed_case_quoted_ledger_lookalike_preserves_concurrent_autocommit(tmp_path):
+    """A distinct quoted table does not select the atomic/concurrent guard."""
+    from atlas_brain.storage.migrations import run_migrations
+
+    source = (
+        "CREATE INDEX CONCURRENTLY idx_quoted_ledger_lookalike ON probe (id);\n"
+        'INSERT INTO "SCHEMA_MIGRATIONS" (version, name) '
+        "VALUES (900, '900_quoted_ledger_lookalike');"
+    )
+    (tmp_path / "900_quoted_ledger_lookalike.sql").write_text(source)
+    pool = _SingleConnectionPool(tmp_path)
+
+    await run_migrations(pool, migrations_dir=tmp_path)
+
+    assert getattr(pool, "atomic_transactions", 0) == 0
+    assert source not in pool.applied_sql
+    assert any("CREATE INDEX CONCURRENTLY" in sql for sql in pool.applied_sql)
+
+
+@pytest.mark.asyncio
+async def test_mismatch_is_logged_without_blocking_a_later_pending_migration(
+    tmp_path,
+    caplog,
+):
+    from atlas_brain.storage.migrations import run_migrations
+
+    (tmp_path / "900_recorded.sql").write_text("SELECT 900")
+    (tmp_path / "901_pending.sql").write_text("SELECT 901")
+    pool = _SerializingPool(honor_lock=True)
+    pool.records.append((900, "900_recorded", "f" * 64))
+    caplog.set_level(logging.ERROR, logger="atlas.storage.migrations")
+
+    await run_migrations(pool, migrations_dir=tmp_path)
+
+    assert any("mismatched=900_recorded" in message for message in caplog.messages)
+    assert pool.applied_sql == ["SELECT 901"]
+    assert pool.records[0] == (900, "900_recorded", "f" * 64)
+    assert pool.inserted_with_digest == [
+        (901, "901_pending", hashlib.sha256(b"SELECT 901").hexdigest())
+    ]
+
+
+@pytest.mark.asyncio
+async def test_legacy_null_row_is_reported_but_never_backfilled_by_a_later_run(
+    tmp_path,
+    caplog,
+):
+    from atlas_brain.storage.migrations import run_migrations
+
+    (tmp_path / "900_legacy.sql").write_text("SELECT 900")
+    (tmp_path / "901_pending.sql").write_text("SELECT 901")
+    pool = _SerializingPool(honor_lock=True)
+    pool.records.append((900, "900_legacy", None))
+    caplog.set_level(logging.INFO, logger="atlas.storage.migrations")
+
+    await run_migrations(pool, migrations_dir=tmp_path)
+
+    assert any(
+        "unavailable for 1 legacy ledger rows" in message
+        for message in caplog.messages
+    )
+    assert pool.records[0] == (900, "900_legacy", None)
+    assert pool.updated == []
 
 
 class _SingleConnectionPool:
@@ -1031,7 +1493,6 @@ async def test_real_postgres_concurrent_runners_apply_each_migration_once(tmp_pa
     session-lock design exists to provide. Skips when no database is wired,
     same as the other real-PostgreSQL probes in this repo."""
     import asyncpg
-
     from atlas_brain.storage.migrations import run_migrations
 
     database_url = os.environ.get(DATABASE_URL_ENV)
@@ -1045,19 +1506,25 @@ async def test_real_postgres_concurrent_runners_apply_each_migration_once(tmp_pa
     try:
         await admin.execute(f'CREATE SCHEMA "{schema}"')
 
-        (tmp_path / "001_first.sql").write_text(
-            "CREATE TABLE migration_lock_probe_a (id integer primary key);"
+        first_source = b"CREATE TABLE migration_lock_probe_a (id integer primary key);"
+        second_source = b"CREATE TABLE migration_lock_probe_b (id integer primary key);"
+        concurrent_index_source = (
+            b"CREATE INDEX CONCURRENTLY migration_lock_probe_idx "
+            b"ON migration_lock_probe_a (id);"
         )
-        (tmp_path / "002_second.sql").write_text(
-            "CREATE TABLE migration_lock_probe_b (id integer primary key);"
+        self_recording_source = (
+            b"CREATE TABLE migration_lock_probe_self_recording "
+            b"(id integer primary key);\n"
+            b"INSERT INTO schema_migrations (version, name, content_sha256) "
+            b"VALUES (4, '004_self_recording', 'wrong-digest');"
         )
+        (tmp_path / "001_first.sql").write_bytes(first_source)
+        (tmp_path / "002_second.sql").write_bytes(second_source)
         # Statement Postgres refuses inside a transaction block: it passes only
         # because the run holds a SESSION-level lock on an autocommit
         # connection, not a transaction-scoped one.
-        (tmp_path / "003_concurrent_index.sql").write_text(
-            "CREATE INDEX CONCURRENTLY migration_lock_probe_idx "
-            "ON migration_lock_probe_a (id);"
-        )
+        (tmp_path / "003_concurrent_index.sql").write_bytes(concurrent_index_source)
+        (tmp_path / "004_self_recording.sql").write_bytes(self_recording_source)
 
         # TWO INDEPENDENT pools -> two independent backend sessions. A single
         # max_size=1 pool would serialize the runners in acquire() before they
@@ -1087,13 +1554,16 @@ async def test_real_postgres_concurrent_runners_apply_each_migration_once(tmp_pa
 
         await admin.execute(f'SET search_path TO "{schema}", public')
         applied = await admin.fetch(
-            "SELECT name FROM schema_migrations ORDER BY name"
+            "SELECT name, content_sha256 FROM schema_migrations ORDER BY name"
         )
-        assert [r["name"] for r in applied] == [
-            "001_first",
-            "002_second",
-            "003_concurrent_index",
-        ], "each migration must be recorded exactly once"
+        assert {
+            row["name"]: row["content_sha256"] for row in applied
+        } == {
+            "001_first": hashlib.sha256(first_source).hexdigest(),
+            "002_second": hashlib.sha256(second_source).hexdigest(),
+            "003_concurrent_index": hashlib.sha256(concurrent_index_source).hexdigest(),
+            "004_self_recording": hashlib.sha256(self_recording_source).hexdigest(),
+        }, "each migration must be recorded exactly once with its exact source identity"
 
         index_rows = await admin.fetch(
             "SELECT indexname FROM pg_indexes "
@@ -1105,6 +1575,71 @@ async def test_real_postgres_concurrent_runners_apply_each_migration_once(tmp_pa
             "CREATE INDEX CONCURRENTLY must have run -- if the runner opened a "
             "transaction, Postgres would have rejected it"
         )
+
+        retry_source = (
+            b"CREATE TABLE migration_lock_probe_retry (id integer primary key);\n"
+            b"INSERT INTO schema_migrations (version, name) "
+            b"VALUES (5, '005_self_recording_retry');"
+        )
+        (tmp_path / "005_self_recording_retry.sql").write_bytes(retry_source)
+        await admin.execute(
+            """
+            CREATE OR REPLACE FUNCTION suppress_self_recording_retry_digest()
+            RETURNS trigger
+            LANGUAGE plpgsql
+            AS $$
+            BEGIN
+                IF NEW.name = '005_self_recording_retry'
+                   AND NEW.content_sha256 IS NOT NULL THEN
+                    RETURN NULL;
+                END IF;
+                RETURN NEW;
+            END;
+            $$
+            """
+        )
+        await admin.execute(
+            """
+            CREATE TRIGGER suppress_self_recording_retry_digest_trigger
+            BEFORE UPDATE OF content_sha256 ON schema_migrations
+            FOR EACH ROW
+            EXECUTE FUNCTION suppress_self_recording_retry_digest()
+            """
+        )
+
+        with pytest.raises(RuntimeError, match="did not persist its expected content SHA-256"):
+            await run_migrations(
+                pool,
+                migrations_dir=tmp_path,
+                only={"005_self_recording_retry"},
+            )
+
+        assert await admin.fetchval(
+            "SELECT to_regclass($1)", "migration_lock_probe_retry"
+        ) is None
+        assert await admin.fetch(
+            "SELECT name FROM schema_migrations WHERE name = $1",
+            "005_self_recording_retry",
+        ) == []
+
+        await admin.execute(
+            "DROP TRIGGER suppress_self_recording_retry_digest_trigger "
+            "ON schema_migrations"
+        )
+        await admin.execute("DROP FUNCTION suppress_self_recording_retry_digest()")
+        await run_migrations(
+            pool,
+            migrations_dir=tmp_path,
+            only={"005_self_recording_retry"},
+        )
+
+        assert await admin.fetchval(
+            "SELECT to_regclass($1)", "migration_lock_probe_retry"
+        ) is not None
+        assert await admin.fetchval(
+            "SELECT content_sha256 FROM schema_migrations WHERE name = $1",
+            "005_self_recording_retry",
+        ) == hashlib.sha256(retry_source).hexdigest()
 
         # The SESSION lock outlives its transaction, so it must be released
         # explicitly or the pooled connection carries it into unrelated work.
