@@ -240,6 +240,7 @@ jobs:
             tests/test_eom_billing_recipients.py \
             tests/test_eom_lead_conversion.py \
             tests/test_eom_lead_conversion_integration.py \
+            tests/test_eom_funnel_capability_manifest.py \
             tests/test_eom_public_onboarding.py \
             tests/test_eom_write_boundary_audit.py \
             tests/test_eom_lead_pipeline_integration.py \

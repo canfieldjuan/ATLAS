@@ -3670,18 +3670,31 @@ class DatabaseCRMProvider:
         return [dict(row) for row in rows]
 
     async def list_eom_public_onboarding_issued_links(
-        self, *, limit: int = 100
+        self,
+        *,
+        accepted_signing_key_fingerprints: Collection[str],
+        limit: int = 100,
+        cursor_issued_at: datetime | None = None,
+        cursor_draft_id: UUID | None = None,
     ) -> list[dict[str, Any]]:
         """Return current issued-token evidence for the private office queue.
 
         Draft ``sent`` state proves delivery evidence, not whether the customer
-        can still use the link.  The token row owns that decision, and this
-        read deliberately exposes no token ID, signing material, approval key,
-        or bearer.
+        can still use the link. The token row plus an accepted signing-key
+        fingerprint owns that decision. This read deliberately exposes no token
+        ID, signing material, approval key, or bearer.
         """
 
         from .eom_lead_conversion import EOMLeadConversionError
 
+        accepted_fingerprints = tuple(accepted_signing_key_fingerprints)
+        if not accepted_fingerprints:
+            return []
+        cursor_clause = ""
+        params: list[Any] = [accepted_fingerprints, limit]
+        if cursor_issued_at is not None and cursor_draft_id is not None:
+            cursor_clause = "AND (token.issued_at, token.draft_id) < ($3::timestamptz, $4::uuid)"
+            params.extend([cursor_issued_at, cursor_draft_id])
         pool = self._get_pool()
         if not await pool.fetchval(
             "SELECT to_regclass('eom_public_onboarding_tokens') IS NOT NULL"
@@ -3690,7 +3703,7 @@ class DatabaseCRMProvider:
                 503, "Public onboarding token storage is unavailable"
             )
         rows = await pool.fetch(
-            """
+            f"""
             SELECT
                 token.draft_id,
                 token.contact_id,
@@ -3702,10 +3715,12 @@ class DatabaseCRMProvider:
             JOIN eom_onboarding_email_drafts AS draft ON draft.id = token.draft_id
             JOIN contacts AS contact ON contact.id = token.contact_id
             WHERE token.status = 'issued'
-            ORDER BY token.issued_at DESC, token.id DESC
-            LIMIT $1
+              AND token.signing_key_fingerprint = ANY($1::varchar[])
+              {cursor_clause}
+            ORDER BY token.issued_at DESC, token.draft_id DESC
+            LIMIT $2
             """,
-            limit,
+            *params,
         )
         return [dict(row) for row in rows]
 

@@ -44,6 +44,7 @@ from ..services.eom_public_onboarding_tokens import (
     AuthenticatedEOMPublicOnboardingToken,
     EOMPublicOnboardingTokenError,
     authenticate_eom_public_onboarding_token,
+    eom_public_onboarding_hmac_key_fingerprint,
 )
 from ..services.crm_provider import get_crm_provider
 from .funnel_auth import (
@@ -285,6 +286,23 @@ class EOMLeadReviewResponse(BaseModel):
     # (Render) auto-deploy from main; Atlas deploys by hand, so callers
     # routinely run ahead of it. See ATLAS #2275 and website #112.
     capabilities: list[str] = Field(default_factory=list)
+    # Names alone are a presentation convenience. The Tracker derives the
+    # public-onboarding controls from these registered route signatures so it
+    # cannot accidentally treat a copied capability spelling as deployment
+    # evidence.
+    capability_routes: list["EOMFunnelCapabilityRoute"] = Field(
+        default_factory=list,
+        serialization_alias="capabilityRoutes",
+    )
+
+
+class EOMFunnelCapabilityRoute(BaseModel):
+    """One registered method/path signature behind an advertised capability."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    method: str
+    path: str
 
 
 class EOMKnownContactsResponse(BaseModel):
@@ -437,6 +455,12 @@ class EOMPublicOnboardingIssuedLinkListResponse(BaseModel):
 
     links: list[EOMPublicOnboardingIssuedLinkItem]
     limit: Annotated[int, Field(ge=1, le=_MAX_LEAD_REVIEW_LIMIT)]
+    cursor: str | None = None
+    has_more: bool = Field(serialization_alias="hasMore")
+    next_cursor: str | None = Field(
+        default=None,
+        serialization_alias="nextCursor",
+    )
 
 
 def _crm_dependency(request: Request) -> Any:
@@ -465,6 +489,21 @@ def _authenticated_public_onboarding_token(
             status_code=404,
             detail="Public onboarding link is unavailable",
         ) from exc
+
+
+def _accepted_public_onboarding_signing_key_fingerprints(
+    public_onboarding: EOMPublicOnboardingConfig,
+) -> tuple[str, ...]:
+    """Return the only durable key identities that can authenticate now."""
+
+    secrets = (public_onboarding.hmac_secret, public_onboarding.previous_hmac_secret)
+    return tuple(
+        dict.fromkeys(
+            eom_public_onboarding_hmac_key_fingerprint(secret=secret)
+            for secret in secrets
+            if secret is not None
+        )
+    )
 
 
 def _public_onboarding_session_content(result: Mapping[str, Any]) -> dict[str, Any]:
@@ -665,6 +704,17 @@ def served_capabilities() -> tuple[str, ...]:
     return _served_capabilities_cache
 
 
+def served_capability_routes() -> tuple[tuple[str, str], ...]:
+    """Registered signatures for the same derived capability set.
+
+    Keep this projection mechanically tied to ``served_capabilities``: callers
+    may use the names for existing generic controls, but new cross-service
+    controls must derive their proof from the registered method/path pair.
+    """
+
+    return tuple(_CAPABILITY_ROUTES[name] for name in served_capabilities())
+
+
 def _operator_contact_fields(payload: EOMOperatorContactRequest) -> dict[str, Any]:
     model_to_contact = {
         "full_name": "full_name",
@@ -804,6 +854,10 @@ async def list_eom_lead_review_items(
         has_more=has_more,
         next_cursor=next_cursor,
         capabilities=list(served_capabilities()),
+        capability_routes=[
+            EOMFunnelCapabilityRoute(method=method, path=path)
+            for method, path in served_capability_routes()
+        ],
     )
 
 
@@ -1207,24 +1261,54 @@ async def list_eom_public_onboarding_issued_links(
         int,
         Query(ge=1, le=_MAX_LEAD_REVIEW_LIMIT),
     ] = _DEFAULT_LEAD_REVIEW_LIMIT,
+    cursor: Annotated[str | None, Query(min_length=16, max_length=512)] = None,
     _actor: dict[str, object] = Depends(require_eom_funnel_actor),
+    public_onboarding: EOMPublicOnboardingConfig = Depends(
+        require_eom_public_onboarding_config
+    ),
     crm: Any = Depends(_crm_dependency),
 ) -> EOMPublicOnboardingIssuedLinkListResponse:
     """List only durable tokens that remain issued for office follow-up.
 
     A sent onboarding draft is not sufficient evidence here: the customer may
-    have redeemed its token, or an operator may have revoked it.  This
-    projection reads the token lifecycle authority and alters no handoff,
-    delivery, or token state.
+    have redeemed its token, an operator may have revoked it, or its signing
+    key may no longer be accepted. This projection reads that live authority
+    and alters no handoff, delivery, or token state.
     """
 
+    decoded_cursor = _decode_lead_review_cursor(cursor)
     try:
-        rows = await crm.list_eom_public_onboarding_issued_links(limit=limit)
+        rows = await crm.list_eom_public_onboarding_issued_links(
+            accepted_signing_key_fingerprints=(
+                _accepted_public_onboarding_signing_key_fingerprints(public_onboarding)
+            ),
+            limit=limit + 1,
+            cursor_issued_at=(
+                decoded_cursor["created_at"] if decoded_cursor is not None else None
+            ),
+            cursor_draft_id=(
+                decoded_cursor["contact_id"] if decoded_cursor is not None else None
+            ),
+        )
     except EOMLeadConversionError as exc:
         raise HTTPException(status_code=exc.status_code, detail=str(exc)) from exc
+    page_rows = rows[:limit]
+    has_more = len(rows) > limit
+    next_cursor = None
+    if has_more and page_rows:
+        last_row = EOMPublicOnboardingIssuedLinkItem.model_validate(page_rows[-1])
+        next_cursor = _encode_lead_review_cursor(
+            created_at=last_row.issued_at,
+            contact_id=last_row.draft_id,
+        )
     return EOMPublicOnboardingIssuedLinkListResponse(
-        links=[EOMPublicOnboardingIssuedLinkItem.model_validate(row) for row in rows],
+        links=[
+            EOMPublicOnboardingIssuedLinkItem.model_validate(row) for row in page_rows
+        ],
         limit=limit,
+        cursor=cursor,
+        has_more=has_more,
+        next_cursor=next_cursor,
     )
 
 

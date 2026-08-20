@@ -5805,7 +5805,10 @@ async def test_public_onboarding_issued_link_projection_excludes_terminal_tokens
             draft_id=revoked_draft_id
         )
 
-        links = await provider.list_eom_public_onboarding_issued_links(limit=100)
+        links = await provider.list_eom_public_onboarding_issued_links(
+            accepted_signing_key_fingerprints=(_PUBLIC_ONBOARDING_KEY_FINGERPRINT,),
+            limit=100,
+        )
 
         assert [{str(row["draft_id"]), str(row["contact_id"])} for row in links] == [
             {issued_draft_id, str(issued_contact_id)}
@@ -5820,6 +5823,104 @@ async def test_public_onboarding_issued_link_projection_excludes_terminal_tokens
         assert str(revoked_contact_id) not in str(links)
         assert str(redeemed_token_id) not in str(links)
         assert str(revoked_token_id) not in str(links)
+    finally:
+        await conn.execute(f'DROP SCHEMA IF EXISTS "{schema}" CASCADE')
+        await conn.close()
+
+
+@pytest.mark.asyncio
+async def test_public_onboarding_issued_link_projection_pages_current_and_previous_keys():
+    """Only keys that can authenticate now enter a complete newest-first queue."""
+
+    previous_secret = "previous-test-only-public-onboarding-secret-value-654321"
+    retired_secret = "retired-test-only-public-onboarding-secret-value-987654"
+    previous_fingerprint = eom_public_onboarding_hmac_key_fingerprint(
+        secret=previous_secret
+    )
+    retired_fingerprint = eom_public_onboarding_hmac_key_fingerprint(
+        secret=retired_secret
+    )
+    database_url = _database_url_or_skip()
+    schema = f"atlas_eom_public_onboarding_issued_link_page_{uuid.uuid4().hex}"
+    conn = await asyncpg.connect(database_url)
+    try:
+        await _prepare_schema(conn, schema, apply_public_onboarding_migration=True)
+        provider = DatabaseCRMProvider(pool=conn)
+
+        newest_contact_id, newest_draft_id = await _book_first_clean_draft(
+            conn, provider, full_name="Current Newest"
+        )
+        _, newest_token_id = await _claim_public_onboarding_token(
+            provider, draft_id=newest_draft_id
+        )
+        previous_contact_id, previous_draft_id = await _book_first_clean_draft(
+            conn, provider, full_name="Previous Key"
+        )
+        _, previous_token_id = await _claim_public_onboarding_token(
+            provider,
+            draft_id=previous_draft_id,
+            hmac_secret=previous_secret,
+        )
+        older_contact_id, older_draft_id = await _book_first_clean_draft(
+            conn, provider, full_name="Current Older"
+        )
+        _, older_token_id = await _claim_public_onboarding_token(
+            provider, draft_id=older_draft_id
+        )
+        retired_contact_id, retired_draft_id = await _book_first_clean_draft(
+            conn, provider, full_name="Retired Key"
+        )
+        _, retired_token_id = await _claim_public_onboarding_token(
+            provider,
+            draft_id=retired_draft_id,
+            hmac_secret=retired_secret,
+        )
+        assert retired_fingerprint not in (
+            _PUBLIC_ONBOARDING_KEY_FINGERPRINT,
+            previous_fingerprint,
+        )
+
+        for token_id, issued_at in (
+            (newest_token_id, datetime(2026, 8, 19, 12, tzinfo=timezone.utc)),
+            (previous_token_id, datetime(2026, 8, 18, 12, tzinfo=timezone.utc)),
+            (older_token_id, datetime(2026, 8, 17, 12, tzinfo=timezone.utc)),
+            (retired_token_id, datetime(2026, 8, 20, 12, tzinfo=timezone.utc)),
+        ):
+            await conn.execute(
+                "UPDATE eom_public_onboarding_tokens SET issued_at = $2 WHERE id = $1",
+                token_id,
+                issued_at,
+            )
+
+        first_page = await provider.list_eom_public_onboarding_issued_links(
+            accepted_signing_key_fingerprints=(
+                _PUBLIC_ONBOARDING_KEY_FINGERPRINT,
+                previous_fingerprint,
+            ),
+            limit=2,
+        )
+        second_page = await provider.list_eom_public_onboarding_issued_links(
+            accepted_signing_key_fingerprints=(
+                _PUBLIC_ONBOARDING_KEY_FINGERPRINT,
+                previous_fingerprint,
+            ),
+            limit=2,
+            cursor_issued_at=first_page[-1]["issued_at"],
+            cursor_draft_id=first_page[-1]["draft_id"],
+        )
+
+        assert [str(row["draft_id"]) for row in first_page] == [
+            newest_draft_id,
+            previous_draft_id,
+        ]
+        assert [str(row["draft_id"]) for row in second_page] == [older_draft_id]
+        assert {str(row["contact_id"]) for row in first_page + second_page} == {
+            str(newest_contact_id),
+            str(previous_contact_id),
+            str(older_contact_id),
+        }
+        assert str(retired_contact_id) not in str(first_page + second_page)
+        assert str(retired_token_id) not in str(first_page + second_page)
     finally:
         await conn.execute(f'DROP SCHEMA IF EXISTS "{schema}" CASCADE')
         await conn.close()

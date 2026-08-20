@@ -155,6 +155,25 @@ async def test_lead_review_response_advertises_lost_and_reopen() -> None:
     assert "onboarding.public_link.list" in capabilities
     assert "onboarding.public_link.revoke" in capabilities
     assert "onboarding.public_handoff.recover" in capabilities
+    capability_routes = {
+        (route["method"], route["path"])
+        for route in response.json()["capabilityRoutes"]
+    }
+    assert capability_routes == {
+        funnel_mod._CAPABILITY_ROUTES[name] for name in capabilities
+    }
+    assert (
+        "GET",
+        "/eom-funnel/public-onboarding/issued-links",
+    ) in capability_routes
+    assert (
+        "POST",
+        "/eom-funnel/onboarding-drafts/{draft_id}/revoke-link",
+    ) in capability_routes
+    assert (
+        "POST",
+        "/eom-funnel/public-onboarding/recover",
+    ) in capability_routes
 
 
 @pytest.mark.asyncio
@@ -192,6 +211,7 @@ async def test_pre_manifest_caller_still_reads_every_field_it_knew() -> None:
     body = response.json()
     for key in ("leads", "limit", "cursor", "hasMore", "nextCursor"):
         assert key in body, key
+    assert "capabilityRoutes" in body
     lead = body["leads"][0]
     for key in (
         "contactId",
@@ -216,3 +236,4 @@ def test_response_model_defaults_capabilities_for_a_caller_that_omits_it() -> No
         leads=[], limit=25, cursor=None, has_more=False, next_cursor=None
     )
     assert response.capabilities == []
+    assert response.capability_routes == []
