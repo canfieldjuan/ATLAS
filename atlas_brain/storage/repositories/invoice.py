@@ -46,6 +46,7 @@ async def recurring_invoice_dedup_schema_ready(conn: Any) -> bool:
                 FROM (
                     VALUES
                         ('invoices', 'billing_period'),
+                        ('invoices', 'billing_period_legacy_null'),
                         ('invoices_billing_period_reservations', 'contact_id'),
                         ('invoices_billing_period_reservations', 'billing_period')
                 ) AS required(table_name, column_name)

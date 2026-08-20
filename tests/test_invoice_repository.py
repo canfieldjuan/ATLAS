@@ -525,18 +525,21 @@ async def test_real_postgres_billing_period_backfill_and_collision_handling():
         rows = {
             row["invoice_number"]: row
             for row in await conn.fetch(
-                "SELECT invoice_number, billing_period, metadata FROM invoices"
+                "SELECT invoice_number, billing_period, billing_period_legacy_null, metadata FROM invoices"
             )
         }
         pool = _SchemaPool(conn, schema)
         repository = invoice_repo_mod.InvoiceRepository(pool=pool)
 
         assert rows["INV-2026-Apr-0001"]["billing_period"] == "2026-04"
+        assert rows["INV-2026-Apr-0001"]["billing_period_legacy_null"] is False
         assert rows["INV-2026-Jun-0002"]["billing_period"] == "2026-06"
+        assert rows["INV-2026-Jun-0002"]["billing_period_legacy_null"] is False
 
         # Finding #4 fix proof: a >9999 sequence number still backfills and
         # is protected, not silently excluded.
         assert rows["INV-2026-Oct-10000"]["billing_period"] == "2026-10"
+        assert rows["INV-2026-Oct-10000"]["billing_period_legacy_null"] is False
         wide_seq_hit = await repository.get_by_contact_and_period(contact_e, "2026-10")
         assert wide_seq_hit is not None
         assert wide_seq_hit["invoice_number"] == "INV-2026-Oct-10000"
@@ -555,6 +558,7 @@ async def test_real_postgres_billing_period_backfill_and_collision_handling():
         # candidate period -- not deleted, not guessed at.
         for number in ("INV-2026-May-0003", "INV-2026-May-0004"):
             assert rows[number]["billing_period"] is None
+            assert rows[number]["billing_period_legacy_null"] is True
             metadata = json.loads(rows[number]["metadata"])
             assert metadata["billing_period_backfill_collision"] is True
             assert metadata["billing_period_backfill_candidate_period"] == "2026-05"
@@ -585,10 +589,30 @@ async def test_real_postgres_billing_period_backfill_and_collision_handling():
 
         # Void, mcp_tool, and garbage-month rows: untouched, no crash.
         assert rows["INV-2026-Jul-0005"]["billing_period"] is None
+        assert rows["INV-2026-Jul-0005"]["billing_period_legacy_null"] is False
         assert rows["INV-2026-Aug-0007"]["billing_period"] is None
+        assert rows["INV-2026-Aug-0007"]["billing_period_legacy_null"] is False
         assert rows["INV-2026-Xyz-0008"]["billing_period"] is None
+        assert rows["INV-2026-Xyz-0008"]["billing_period_legacy_null"] is True
         assert rows["INV-0000-Jan-0012"]["billing_period"] is None
+        assert rows["INV-0000-Jan-0012"]["billing_period_legacy_null"] is True
         assert rows["INV-0000-Jan-0013"]["billing_period"] is None
+        assert rows["INV-0000-Jan-0013"]["billing_period_legacy_null"] is True
+
+        # The NOT VALID write-time guard still permits updates to legacy rows
+        # explicitly marked by this migration, but rejects fresh recurring
+        # invoice rows that do not claim a billing_period.
+        await conn.execute(
+            "UPDATE invoices SET status = 'sent' WHERE invoice_number = 'INV-2026-Xyz-0008'"
+        )
+        with pytest.raises(asyncpg.CheckViolationError):
+            async with conn.transaction():
+                await _insert(
+                    contact_id=contact_a,
+                    source="monthly_auto",
+                    number="INV-2026-Nov-0001",
+                    source_ref="fresh_2026-11",
+                )
 
         # NULL-contact_id pair: backfilled independently, NOT quarantined --
         # negative control for the collision-detection NULL-safety fix.
@@ -637,6 +661,7 @@ def test_invoices_billing_period_dedup_migration_is_additive_and_scoped():
         / "atlas_brain/storage/migrations/385_invoices_billing_period_dedup.sql"
     ).read_text()
     assert "ADD COLUMN IF NOT EXISTS billing_period" in migration
+    assert "ADD COLUMN IF NOT EXISTS billing_period_legacy_null" in migration
     assert "invoices_billing_period_check" in migration
     assert "idx_invoices_recurring_contact_period_source" in migration
     assert "CREATE UNIQUE INDEX CONCURRENTLY idx_invoices_recurring_contact_period_source" in migration
@@ -651,6 +676,8 @@ def test_invoices_billing_period_dedup_migration_is_additive_and_scoped():
     # each get an independent slot per contact+period and never collide.
     assert "ON invoices (contact_id, billing_period)" in migration
     assert "billing_period_backfill_collision" in migration
+    assert "invoices_billing_period_backfill_candidates" in migration
+    assert "OR billing_period_legacy_null" in migration
     assert "HAVING count(*) > 1" in migration
     assert "-- atlas: atomic-bookkeeping" not in migration
     assert "CREATE TABLE IF NOT EXISTS invoices_billing_period_reservations" in migration

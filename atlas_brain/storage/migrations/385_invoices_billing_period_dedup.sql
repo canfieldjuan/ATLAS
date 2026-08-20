@@ -91,6 +91,9 @@
 ALTER TABLE invoices
     ADD COLUMN IF NOT EXISTS billing_period VARCHAR(7);
 
+ALTER TABLE invoices
+    ADD COLUMN IF NOT EXISTS billing_period_legacy_null BOOLEAN NOT NULL DEFAULT false;
+
 DO $$
 BEGIN
     IF NOT EXISTS (
@@ -106,24 +109,24 @@ BEGIN
     END IF;
 END $$;
 
-DO $$
-BEGIN
-    IF NOT EXISTS (
-        SELECT 1
-        FROM pg_constraint
-        WHERE conname = 'invoices_recurring_billing_period_required_check'
-          AND conrelid = 'invoices'::regclass
-    ) THEN
-        ALTER TABLE invoices
-            ADD CONSTRAINT invoices_recurring_billing_period_required_check
-            CHECK (
-                source NOT IN ('monthly_auto', 'eom_commercial_billing')
-                OR status = 'void'
-                OR billing_period IS NOT NULL
-            )
-            NOT VALID;
-    END IF;
-END $$;
+UPDATE invoices
+SET billing_period_legacy_null = true
+WHERE billing_period IS NULL
+  AND status <> 'void'
+  AND source IN ('monthly_auto', 'eom_commercial_billing');
+
+ALTER TABLE invoices
+    DROP CONSTRAINT IF EXISTS invoices_recurring_billing_period_required_check;
+
+ALTER TABLE invoices
+    ADD CONSTRAINT invoices_recurring_billing_period_required_check
+    CHECK (
+        source NOT IN ('monthly_auto', 'eom_commercial_billing')
+        OR status = 'void'
+        OR billing_period IS NOT NULL
+        OR billing_period_legacy_null
+    )
+    NOT VALID;
 
 CREATE TABLE IF NOT EXISTS invoices_billing_period_reservations (
     contact_id      UUID NOT NULL,
@@ -149,16 +152,24 @@ COMMENT ON TABLE invoices_billing_period_reservations IS
 -- abbreviation rather than failing safe -- an unconstrained regex would crash
 -- this migration on a single malformed legacy row.
 --
--- Excludes any (contact_id, candidate period) pair that would itself collide
--- across rows -- see Backfill 2/2 -- so this statement can never leave data
--- that violates the unique index below. contact_id IS NULL rows (a linked
--- CRM contact later deleted, ON DELETE SET NULL) are backfilled individually
--- without collision-checking against each other: the unique index treats
--- every NULL contact_id as distinct from every other, so two such rows can
--- never violate it regardless of period, and grouping them together in the
--- collision CTE below would falsely quarantine unrelated customers' invoices
--- on SQL's "NULL groups with NULL" GROUP BY semantics, which do not match
--- the index's per-row-distinct NULL semantics.
+-- The candidate/collision decision is captured once into a session-local temp
+-- table and both backfill passes read that frozen snapshot. This migration is
+-- intentionally non-transactional so CREATE INDEX CONCURRENTLY can run; without
+-- a single snapshot here, live invoice edits between the two UPDATE statements
+-- could change which rows are considered colliding and leave a known historical
+-- duplicate neither backfilled nor reserved.
+CREATE TEMP TABLE IF NOT EXISTS invoices_billing_period_backfill_candidates (
+    id               UUID PRIMARY KEY,
+    contact_id       UUID,
+    candidate_period VARCHAR(7),
+    is_collision     BOOLEAN NOT NULL
+) ON COMMIT PRESERVE ROWS;
+
+TRUNCATE invoices_billing_period_backfill_candidates;
+
+INSERT INTO invoices_billing_period_backfill_candidates (
+    id, contact_id, candidate_period, is_collision
+)
 WITH candidates AS (
     SELECT
         id, contact_id,
@@ -190,16 +201,34 @@ collisions AS (
     GROUP BY contact_id, candidate_period
     HAVING count(*) > 1
 )
+SELECT
+    c.id,
+    c.contact_id,
+    c.candidate_period,
+    EXISTS (
+        SELECT 1 FROM collisions x
+        WHERE x.contact_id IS NOT DISTINCT FROM c.contact_id
+          AND x.candidate_period = c.candidate_period
+    ) AS is_collision
+FROM candidates AS c;
+
+-- Excludes any (contact_id, candidate period) pair that would itself collide
+-- across rows -- see Backfill 2/2 -- so this statement can never leave data
+-- that violates the unique index below. contact_id IS NULL rows (a linked
+-- CRM contact later deleted, ON DELETE SET NULL) are backfilled individually
+-- without collision-checking against each other: the unique index treats
+-- every NULL contact_id as distinct from every other, so two such rows can
+-- never violate it regardless of period, and grouping them together in the
+-- collision CTE above would falsely quarantine unrelated customers' invoices
+-- on SQL's "NULL groups with NULL" GROUP BY semantics, which do not match
+-- the index's per-row-distinct NULL semantics.
 UPDATE invoices AS inv
-SET billing_period = c.candidate_period
-FROM candidates AS c
+SET billing_period = c.candidate_period,
+    billing_period_legacy_null = false
+FROM invoices_billing_period_backfill_candidates AS c
 WHERE inv.id = c.id
   AND c.candidate_period IS NOT NULL
-  AND NOT EXISTS (
-      SELECT 1 FROM collisions x
-      WHERE x.contact_id IS NOT DISTINCT FROM c.contact_id
-        AND x.candidate_period = c.candidate_period
-  );
+  AND NOT c.is_collision;
 
 -- Backfill 2/2: a duplicate this migration exists to prevent may already
 -- have happened historically (one monthly_auto row and one
@@ -214,59 +243,35 @@ WHERE inv.id = c.id
 -- Only contact_id IS NOT NULL collisions are stamped here, matching Backfill
 -- 1/2's grouping -- a NULL contact_id can never actually violate the index,
 -- so there is nothing to quarantine or report for those rows.
-WITH candidates AS (
-    SELECT
-        id, contact_id,
-        CASE
-            WHEN source = 'monthly_auto'
-                 AND source_ref ~ '_((000[1-9]|00[1-9][0-9]|0[1-9][0-9]{2}|[1-9][0-9]{3})-(0[1-9]|1[0-2]))$'
-                THEN substring(source_ref FROM '_((?:000[1-9]|00[1-9][0-9]|0[1-9][0-9]{2}|[1-9][0-9]{3})-(?:0[1-9]|1[0-2]))$')
-            WHEN source = 'eom_commercial_billing'
-                 AND invoice_number ~ '^INV-(000[1-9]|00[1-9][0-9]|0[1-9][0-9]{2}|[1-9][0-9]{3})-(Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)-\d{4,}$'
-                THEN to_char(
-                         to_date(
-                             substring(invoice_number FROM '^INV-((?:000[1-9]|00[1-9][0-9]|0[1-9][0-9]{2}|[1-9][0-9]{3})-(?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec))-\d{4,}$'),
-                             'YYYY-Mon'
-                         ),
-                         'YYYY-MM'
-                     )
-            ELSE NULL
-        END AS candidate_period
-    FROM invoices
-    WHERE billing_period IS NULL
-      AND status <> 'void'
-      AND source IN ('monthly_auto', 'eom_commercial_billing')
-),
-collisions AS (
-    SELECT contact_id, candidate_period
-    FROM candidates
-    WHERE candidate_period IS NOT NULL
-      AND contact_id IS NOT NULL
-    GROUP BY contact_id, candidate_period
-    HAVING count(*) > 1
-),
--- Chained via a writable CTE (not a third scan) so the exact set of rows
--- just quarantined is also exactly the set reserved below -- the two can
--- never drift apart from each other.
-quarantined AS (
-    UPDATE invoices AS inv
-    SET metadata = COALESCE(inv.metadata, '{}'::jsonb)
+UPDATE invoices AS inv
+SET metadata = COALESCE(inv.metadata, '{}'::jsonb)
         || jsonb_build_object(
              'billing_period_backfill_collision', true,
              'billing_period_backfill_candidate_period', c.candidate_period
-           )
-    FROM candidates AS c
-    WHERE inv.id = c.id
-      AND c.candidate_period IS NOT NULL
-      AND EXISTS (
-          SELECT 1 FROM collisions x
-          WHERE x.contact_id IS NOT DISTINCT FROM c.contact_id
-            AND x.candidate_period = c.candidate_period
-      )
-    RETURNING inv.contact_id, c.candidate_period AS billing_period
-)
+           ),
+    billing_period_legacy_null = true
+FROM invoices_billing_period_backfill_candidates AS c
+WHERE inv.id = c.id
+  AND c.candidate_period IS NOT NULL
+  AND c.is_collision;
+
+UPDATE invoices AS inv
+SET metadata = COALESCE(inv.metadata, '{}'::jsonb)
+    || jsonb_build_object('billing_period_legacy_null', true),
+    billing_period_legacy_null = true
+FROM invoices_billing_period_backfill_candidates AS c
+WHERE inv.id = c.id
+  AND inv.billing_period IS NULL
+  AND c.candidate_period IS NULL
+  AND inv.status <> 'void'
+  AND inv.source IN ('monthly_auto', 'eom_commercial_billing');
+
 INSERT INTO invoices_billing_period_reservations (contact_id, billing_period)
-SELECT DISTINCT contact_id, billing_period FROM quarantined
+SELECT DISTINCT contact_id, candidate_period
+FROM invoices_billing_period_backfill_candidates
+WHERE is_collision
+  AND contact_id IS NOT NULL
+  AND candidate_period IS NOT NULL
 ON CONFLICT (contact_id, billing_period) DO NOTHING;
 
 DROP INDEX CONCURRENTLY IF EXISTS idx_invoices_recurring_contact_period_source;
@@ -279,3 +284,6 @@ CREATE UNIQUE INDEX CONCURRENTLY idx_invoices_recurring_contact_period_source
 
 COMMENT ON COLUMN invoices.billing_period IS
     'YYYY-MM covered billing period. Backfilled on historical rows where mechanically derivable from source_ref (monthly_auto) or invoice_number (eom_commercial_billing); NULL where unparseable or where two historical rows collided (see metadata.billing_period_backfill_collision). Source-of-truth for cross-pipeline recurring-invoice dedup; see idx_invoices_recurring_contact_period_source.';
+
+COMMENT ON COLUMN invoices.billing_period_legacy_null IS
+    'Database-owned exemption for pre-migration recurring invoice rows whose billing_period remains NULL because the historical period was unparseable or collision-quarantined. New recurring writers do not set this column, so invoices_recurring_billing_period_required_check rejects fresh NULL-period recurring invoices while preserving later edits to explicit legacy exceptions.';

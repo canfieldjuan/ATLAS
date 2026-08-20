@@ -280,6 +280,13 @@ class _SchemaPool:
         self.connection = connection
         self.schema = schema
 
+    async def acquire(self):
+        await self.connection.execute(f'SET search_path TO "{self.schema}"')
+        return self.connection
+
+    async def release(self, released) -> None:
+        assert released is self.connection
+
     @asynccontextmanager
     async def transaction(self):
         async with self.connection.transaction():
@@ -295,6 +302,36 @@ class _SchemaPool:
         async with self.connection.transaction():
             await self.connection.execute(f'SET LOCAL search_path TO "{self.schema}"')
             return await self.connection.fetch(query, *args)
+
+    async def fetchval(self, query, *args):
+        async with self.connection.transaction():
+            await self.connection.execute(f'SET LOCAL search_path TO "{self.schema}"')
+            return await self.connection.fetchval(query, *args)
+
+    async def execute(self, query, *args):
+        async with self.connection.transaction():
+            await self.connection.execute(f'SET LOCAL search_path TO "{self.schema}"')
+            return await self.connection.execute(query, *args)
+
+
+async def _run_migration(connection, schema: str, name: str) -> None:
+    from atlas_brain.storage.migrations import run_migrations
+
+    migrations = Path(__file__).parents[1] / "atlas_brain/storage/migrations"
+    await run_migrations(
+        _SchemaPool(connection, schema),
+        migrations_dir=migrations,
+        only={Path(name).stem},
+    )
+
+
+def test_approval_database_uses_runner_for_concurrent_dedup_migration():
+    source = inspect.getsource(_approval_database)
+
+    assert '"385_invoices_billing_period_dedup.sql"' not in source.split(
+        "await _run_migration", maxsplit=1
+    )[0]
+    assert 'await _run_migration(\n            connection,\n            schema,\n            "385_invoices_billing_period_dedup.sql",' in source
 
 
 @asynccontextmanager
@@ -318,9 +355,13 @@ async def _approval_database():
             "381_commercial_billing_candidate_review_decisions_recovery.sql",
             "382_commercial_billing_candidate_overrides.sql",
             "373_commercial_billing_invoice_pdf_artifacts.sql",
-            "385_invoices_billing_period_dedup.sql",
         ):
             await connection.execute((migrations / name).read_text())
+        await _run_migration(
+            connection,
+            schema,
+            "385_invoices_billing_period_dedup.sql",
+        )
         yield connection, schema
     finally:
         await connection.execute("SET search_path TO public")
