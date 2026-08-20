@@ -68,6 +68,15 @@ adds no table, worker, queue, generic saga framework, or product surface.
   column-level `status` grant and bypasses those provider methods. Its direct
   delete is already blocked by the existing lifecycle FK, but its direct status
   write can still produce the same completion-after-delete failure.
+  The repair pass must also preserve every existing lifecycle-table consumer:
+  its generic durable-fence probe currently orders by `lifecycle_sequence`, a
+  column introduced only by migration 363, even though valid integration
+  schemas use the base migration 351 table. Because the probe only decides
+  whether any unresolved record exists, that newer ordering is neither needed
+  nor safe. Finally, `delete_contact` bypasses its provider's injected pool for
+  the global pool; the resulting real-PostgreSQL proof must monkeypatch a
+  first-party storage module even when the provider was deliberately given an
+  isolated pool, which the maturity ratchet correctly rejects.
 - Correct fix must touch/change:
   1. Add a narrow, durable won-loss orchestration service that reuses the
      existing PostgreSQL lifecycle ledger and advisory-lock component: prepare
@@ -131,6 +140,15 @@ adds no table, worker, queue, generic saga framework, or product surface.
       leave the canonical Atlas completion transaction and ordinary NocoDB CRM
       edits intact, and leave existing role grants and table/column shape
       unchanged.
+  13. Make the durable cancellation-fence query use only columns present in
+      the base lifecycle migration. It needs only an unresolved-record
+      predicate, so it must not depend on `lifecycle_sequence` or expand a
+      fixture schema merely to make a generic status/archive mutation work.
+  14. Make `delete_contact` acquire its store through the provider's existing
+      `_get_pool` accessor, just like the other provider mutations. The
+      accessor must retain its configured-global fallback, while an explicitly
+      injected provider pool stays intact so real-PostgreSQL proof does not
+      mock a first-party storage dependency.
 - Must not change:
   1. The existing `new` and `estimate_booked` loss/reopen state machine,
      response shape, reasons, lifecycle evidence, and idempotency behavior.
@@ -156,6 +174,9 @@ adds no table, worker, queue, generic saga framework, or product surface.
      signatures, copy, tenant checks, and authorization behavior. The provider
      fence is the shared mutation boundary; this slice does not create a
      second MCP-specific lifecycle policy.
+  8. The maturity-sweep baseline and its rules. This repair removes the
+     newly-introduced internal mocks instead of accepting or recalibrating
+     them, and it does not alter any GitHub workflow or required-check policy.
 
 ## Scope (this PR)
 
@@ -394,6 +415,14 @@ blocks status before completion could observe a changed contact. Atlas's
 canonical completion runs under its application session and remains the sole
 writer that can settle the prepared operation.
 
+The durable-fence predicate is intentionally compatible with the lifecycle
+table as created by migration 351: it only asks whether an unresolved request
+exists and orders, when needed, by base-table timestamps and ID rather than the
+later migration-363 sequence. `delete_contact` likewise takes its database
+handle from the provider's established accessor, so an explicitly supplied
+transaction-capable pool is honored while production still falls back to the
+configured global pool.
+
 Execution model: PostgreSQL session advisory locking is the selected
 closed-surface component. One lock spans the only non-transactional Calendar
 step; transaction-scoped acquisitions by claim/handoff/status writers serialize
@@ -482,6 +511,12 @@ Parked hardening: none within the stated predicate.
 - `python scripts/check_contact_write_boundary.py --baseline
   tests/contact_write_boundary/baseline.json` -> passed; 47 contact writes
   are inside approved modules or recorded in the reviewed inventory (local).
+- The EOM lead-pipeline integration fixtures that stop at migration 352 must
+  continue to archive without a `lifecycle_sequence` lookup failure; the
+  existing concurrent-archive and delivery-replay cases prove that boundary.
+- The maturity sweep must remain at the existing storage baseline. The two
+  won-loss real-PostgreSQL tests use injected provider pools directly rather
+  than monkeypatching `atlas_brain.storage.database.get_db_pool`.
 - Pending before push: the wrapper-owned Atlas local PR review, which will run
   through `scripts/push_pr.sh` exactly once with the final PR body and its
   isolated unit-gate database environment.
@@ -491,14 +526,14 @@ Parked hardening: none within the stated predicate.
 | File | LOC |
 |---|---:|
 | `atlas_brain/eom_api/funnel.py` | 12 |
-| `atlas_brain/services/crm_provider.py` | 1008 |
+| `atlas_brain/services/crm_provider.py` | 1011 |
 | `atlas_brain/services/eom_estimate_booking.py` | 87 |
 | `atlas_brain/services/eom_won_lead_loss.py` | 120 |
 | `atlas_brain/storage/migrations/386_eom_won_loss_nocodb_fence.sql` | 69 |
 | `atlas_brain/tools/calendar.py` | 235 |
-| `plans/PR-EOM-Won-Lead-Loss-Teardown.md` | 504 |
+| `plans/PR-EOM-Won-Lead-Loss-Teardown.md` | 539 |
 | `tests/contact_write_boundary/baseline.json` | 1 |
 | `tests/test_contact_write_boundary.py` | 8 |
 | `tests/test_eom_lead_conversion.py` | 380 |
-| `tests/test_eom_lead_conversion_integration.py` | 969 |
-| **Total** | **3393** |
+| `tests/test_eom_lead_conversion_integration.py` | 959 |
+| **Total** | **3421** |

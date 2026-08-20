@@ -6597,9 +6597,7 @@ async def test_won_lead_loss_fences_durable_unsettled_cancellation_from_claim_an
 
 
 @pytest.mark.asyncio
-async def test_won_lead_loss_fences_durable_cancellation_from_generic_contact_status_writes(
-    monkeypatch,
-):
+async def test_won_lead_loss_fences_durable_cancellation_from_generic_contact_status_writes():
     """Archive and generic status writes cannot strand Calendar teardown."""
 
     database_url = _database_url_or_skip()
@@ -6631,9 +6629,6 @@ async def test_won_lead_loss_fences_durable_cancellation_from_generic_contact_st
         with pytest.raises(EOMLeadConversionError, match="Calendar API error: 503"):
             await mark_eom_lead_lost_with_won_teardown(provider, calendar, command)
 
-        monkeypatch.setattr(
-            "atlas_brain.storage.database.get_db_pool", lambda: conn
-        )
         with pytest.raises(
             EOMLeadConversionError, match="cancellation requires reconciliation"
         ) as archive:
@@ -6861,9 +6856,7 @@ async def test_won_lead_loss_rejects_relative_calendar_identifier_before_delete(
 
 
 @pytest.mark.asyncio
-async def test_won_lead_loss_execution_fences_claim_handoff_and_status_writers(
-    monkeypatch,
-):
+async def test_won_lead_loss_execution_fences_claim_handoff_and_status_writers():
     database_url = _database_url_or_skip()
     schema = f"atlas_eom_won_loss_fence_{uuid.uuid4().hex}"
     conn = await asyncpg.connect(database_url)
@@ -6883,9 +6876,6 @@ async def test_won_lead_loss_execution_fences_claim_handoff_and_status_writers(
             server_settings={"search_path": f'"{schema}", public'},
         )
         provider = DatabaseCRMProvider(pool=pool)
-        monkeypatch.setattr(
-            "atlas_brain.storage.database.get_db_pool", lambda: pool
-        )
         contact_id, draft_id = await _book_first_clean_draft(conn, provider)
         command = EOMLeadLost(
             contact_id=str(contact_id),

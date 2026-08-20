@@ -2020,9 +2020,7 @@ class DatabaseCRMProvider:
         return dict(row) if row else None
 
     async def delete_contact(self, contact_id: str) -> bool:
-        from ..storage.database import get_db_pool
-
-        pool = get_db_pool()
+        pool = self._get_pool()
         async with _transaction_connection(pool) as conn:
             # Archive is a generic status mutation. It must share the won-loss
             # execution boundary so it cannot strand a prepared cancellation
@@ -5367,8 +5365,7 @@ class DatabaseCRMProvider:
                     AND completed.event_type = $3::varchar
                     AND completed.operation_key = requested.operation_key
               )
-            ORDER BY requested.lifecycle_sequence DESC NULLS LAST,
-                     requested.created_at DESC, requested.id DESC
+            ORDER BY requested.created_at DESC, requested.id DESC
             LIMIT 1
             FOR UPDATE OF requested
             """,
