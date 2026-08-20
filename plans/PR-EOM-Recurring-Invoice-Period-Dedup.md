@@ -67,15 +67,63 @@ against real Postgres) before any fix was written:
    period" — populated by the same backfill pass, checked by both writers'
    pre-checks. See "Amendment: quarantine reservation" below.
 
-Well over the ~400-line soft cap (1972 total per `git diff --numstat
-origin/main...HEAD`, including this plan document). The core fix (migration +
-dedup pre-checks in the two writers) is ~168 lines; the two post-review
-amendments below are what pushed this over, and both are real, reviewer-found
-correctness/safety gaps in the original design, not scope creep — declining
-to fold them into this PR would mean shipping a dedup migration that (a) still
-admits the exact cross-pipeline duplicate this slice exists to prevent for
-any pre-existing period, and (b) has no protection if it fails to apply on
-two of the three processes that depend on it. Splitting them into follow-up
+**Amendment after live CI + a third review round.** After the round-2 fixes
+above were pushed, CI surfaced two real gaps (see "CI-caught fixes" below) and
+`chatgpt-codex-connector` posted four more findings against the pushed
+commit, three confirmed real and fixed, one investigated and waived with
+evidence rather than fixed:
+
+4. **The `eom_commercial_billing` backfill regex required exactly 4 digits
+   for the invoice-number sequence** (`-\d{4}$`), but the writer that
+   produces those numbers (`commercial_billing_approvals.py`'s
+   `lpad(nextval(...)::text, 4, '0')`) only guarantees a *minimum* of 4 —
+   once the sequence passes 9999, a real invoice number like
+   `INV-2026-Oct-10000` silently failed the backfill regex and was excluded
+   from both collision detection and the partial unique index, with no
+   error, warning, or quarantine marker. Fixed by widening both occurrences
+   to `\d{4,}` (the match and the extraction substring, in both backfill
+   passes). See "Amendment: round 3 hardening" below.
+5. **`atlas_brain/main_eom.py`'s lifespan had no independent readiness fence
+   at all**, in either of the two other processes' patterns (`main.py`'s
+   ledger-based `_migration_is_recorded`, or the MCP servers'
+   `ReceivablesService.is_ready()` hook) — it ran migrations only when
+   `eom_profile_settings.run_migrations` is true, which **defaults to
+   `False`**, and otherwise proceeded straight to serving requests
+   regardless of schema state. This file does mount `receivables_router`,
+   so the commercial-billing approval endpoint is genuinely reachable
+   through this process once its still-draft Render blueprint
+   (`render.eom.yaml`) is connected. Fixed by adding the same
+   `ReceivablesService(pool).is_ready()` fence the MCP servers already use,
+   gated on `receivables_api_enabled`.
+6. **Rolling-deployment code/schema skew was raised as a concern** for both
+   writer processes. Investigated fresh against this machine's actual
+   running units (not assumed from memory) and disposed — see "Amendment:
+   round 3 hardening" for the evidence and the waiver rationale.
+7. **`main.py`'s auto-invoice fence over-triggered**: it required migration
+   385 whenever `settings.invoicing.auto_invoice_enabled` was true, without
+   checking the master `settings.invoicing.enabled` gate the legacy task
+   itself checks first (`monthly_invoice_generation.py` returns `"Invoicing
+   disabled"` before ever reaching `auto_invoice_enabled` or
+   `billing_period` when `enabled=False`) — so a deployment with invoicing
+   entirely disabled but a stale `auto_invoice_enabled=True` left over in
+   config would be false-positive-blocked from starting at all, for a code
+   path that can never actually run. Fixed by scoping the fence's
+   `auto_invoice_enabled` input to `settings.invoicing.enabled and
+   settings.invoicing.auto_invoice_enabled`, matching the condition the
+   legacy task itself already gates on.
+
+Well over the ~400-line soft cap (2733 total per `git diff --numstat
+origin/main...HEAD`, including this plan document — see Estimated diff size
+below for the per-file breakdown across all three rounds). The core fix
+(migration + dedup pre-checks in the two writers) is ~168 lines; the
+post-review amendments below are what pushed this over, and all seven are
+real, reviewer- or CI-found correctness/safety gaps in the original design,
+not scope creep — declining to fold them into this PR would mean shipping a
+dedup migration that (a) still admits the exact cross-pipeline duplicate
+this slice exists to prevent for any pre-existing period, (b) has no
+protection if it fails to apply on three of the four processes that depend
+on it, and (c) silently excludes a real class of invoice numbers from that
+protection once a sequence counter passes 9999. Splitting them into follow-up
 PRs was considered and rejected: each is a direct, evidence-backed fix to a
 BLOCKER finding on the *same* migration this PR introduces, reviewable only
 against the migration itself, and a fix-after-merge would mean the merged
@@ -585,6 +633,109 @@ this session had exercised:
   (loopback, port 5432, database `atlas_receivables_test`, `ATLAS_LEGACY_MONTHLY_AUTOINVOICE_WRITER_HARNESS=1`):
   9 passed, matching CI's own count.
 
+### Amendment: round 3 hardening
+
+**Finding #4 — sequence-width fix.** Both backfill passes' `eom_commercial_billing`
+branch matched `^INV-\d{4}-(Jan|...|Dec)-\d{4}$` and extracted with the
+matching `\d{4}` group. `commercial_billing_approvals.py`'s number generator
+(`lpad(nextval('invoice_number_seq')::text, 4, '0')`) only guarantees a
+*minimum* width of 4 — `lpad` does not truncate a longer string, so a
+sequence value of 10000+ produces `INV-2026-Oct-10000`, five digits, which
+the old regex's exact `\d{4}$` anchor rejected outright (no partial match,
+no error — the row simply fell through to `ELSE NULL` like a genuinely
+unparseable legacy row, indistinguishable from one). Fixed by widening both
+occurrences (the match and the extraction substring, in both backfill
+passes) from `\d{4}` to `\d{4,}`. Verified against real Postgres: a
+`>9999`-sequence invoice number now backfills its `billing_period`
+correctly and is protected by the same collision/reservation machinery as
+every other row —
+`test_invoice_repository.py::test_real_postgres_billing_period_backfill_and_collision_handling`,
+extended with a fifth contact whose sole invoice uses a five-digit sequence.
+Negative-control proof that this is a real regression test, not a
+tautology: the fix was reverted locally, the same test re-run, and it failed
+exactly as expected (`billing_period` stayed `NULL`) before being restored.
+
+**Finding #5 — `main_eom.py` independent readiness fence.** This profile's
+`eom_profile_settings.run_migrations` defaults to `False`
+(`atlas_brain/eom_api/config.py`), and unlike `main.py` (ledger-based
+`_migration_is_recorded`) or the two MCP servers
+(`ReceivablesService.is_ready()`), this lifespan had *no* readiness check of
+any kind independent of that flag — an enabled receivables API would start
+serving requests against whatever schema state happened to exist. Confirmed
+this is a live-reachable gap, not theoretical: this file does
+`app.include_router(receivables_router, prefix="/api/v1")` unconditionally,
+so the commercial-billing approval endpoint is mounted whenever this
+process runs (`receivables_api_enabled` gates individual request handling
+via `require_receivables_api()`, not whether the router is mounted).
+`render.eom.yaml`'s own header comment confirms this profile's Render
+deployment is still a draft ("deliberately not named render.yaml yet ...
+should be connected manually ... after the branch is reviewed") — not live
+today, but the fence protects the moment it is. Fixed by adding
+`_require_receivables_schema_ready()`, called from `lifespan()` when
+`db_settings.enabled and invoicing_settings.receivables_api_enabled`,
+reusing the exact `ReceivablesService(pool).is_ready()` hook the MCP
+servers already use rather than inventing a fourth mechanism. Verified with
+two new tests mirroring this file's existing lifespan-test pattern
+(`tests/test_eom_render_profile.py`): a not-ready schema raises
+`ReceivablesSchemaUnavailableError` and the pool still closes (positive
+fence); a ready schema serves normally (negative control).
+
+**Finding #6 — rolling-deployment skew: investigated and waived, not fixed.**
+Checked fresh against this machine's actual running deployment, not
+recalled from memory. `atlas-api.service` (`main.py`'s real production
+unit) is a systemd user service, `Type=simple`, a single `MainPID`,
+`ExecStart=... uvicorn atlas_brain.main:app --host 127.0.0.1 --port 8012`.
+Its own deployment history (recorded as dated comments in the unit file
+itself, one per past "Provider cutover") shows every prior deploy repoints
+`WorkingDirectory` to a new worktree, then `daemon-reload && restart` — a
+hard stop-then-start cutover, never two instances of this process running
+concurrently against the same port. There is no rolling-deployment
+mechanism in this process's actual production topology for old-code/
+new-schema or new-code/old-schema overlap to occur in. `main_eom.py`'s
+Render `pserv` blueprint (which theoretically supports Render's rolling
+deploys) is, per the finding-#5 investigation above, still an unconnected
+draft — confirmed fresh via `render.eom.yaml`'s header comment and the
+absence of any local systemd unit or other process currently running
+`main_eom:app`. Disposition: **waived as speculative for `main.py`** (its
+real deployment mechanism categorically cannot rolling-deploy) and
+**deferred for `main_eom.py`** (not yet connected; when it is, the
+finding-#5 fence already closes the new-code/old-schema half of the skew
+window, since a freshly-started instance now fails closed on an unready
+schema instead of serving against it — the old-code/new-schema half, if
+Render's rolling deploy keeps a prior instance alive during a migration
+window, would need its own follow-up once this profile is actually
+connected and using real rolling deploys). See Deferred.
+
+**Finding #7 — auto-invoice fence scoped to the master gate.** The fence's
+call site in `main.py`'s `lifespan()` passed
+`auto_invoice_enabled=settings.invoicing.auto_invoice_enabled` directly,
+without the master `settings.invoicing.enabled` gate the legacy task itself
+checks first — `monthly_invoice_generation.py` (lines 82-86) returns
+`{"_skip_synthesis": "Invoicing disabled"}` before ever reading
+`auto_invoice_enabled` or touching `billing_period` when `enabled=False`.
+(By contrast, `receivables_api_enabled` alone is already a correct,
+complete reachability condition — `require_receivables_api()`
+(`atlas_brain/api/invoicing/auth.py`) depends only on that flag, not on
+`invoicing.enabled`, so no equivalent gap exists on that side; verified by
+reading both call sites, not assumed from symmetry.) So a deployment with
+invoicing entirely disabled but a stale `auto_invoice_enabled=True` left in
+config — a state that costs nothing to reach, since the two flags are
+independent settings — was false-positive-blocked from starting at all, for
+a code path proven unreachable by the task's own first line. Fixed by
+scoping the call site to `settings.invoicing.enabled and
+settings.invoicing.auto_invoice_enabled`. Verified with a new test driving
+the real `main.lifespan(...)` with a mocked `_run_database_migration_check`
+that captures its kwargs then raises immediately (avoiding the need to mock
+this file's unrelated LLM-loading/evidence-engine startup surface) —
+`test_commercial_billing_runs.py::test_full_atlas_lifespan_scopes_auto_invoice_fence_to_master_invoicing_gate`
+asserts the captured `auto_invoice_enabled` is `False` despite the stale
+flag being `True`, given `invoicing.enabled=False`. Negative control: the
+pre-existing
+`test_full_atlas_lifespan_fences_auto_invoice_only_deployment_without_dedup_migration`
+(now updated to set `invoicing.enabled=True` explicitly, matching the
+healthy-deployment shape it was already meant to model) proves the fence
+still fires when the master gate is genuinely on.
+
 ## Intentional
 
 - No new parameter on `InvoiceRepository.create()` or `_InvoiceDraft`: both
@@ -647,6 +798,14 @@ this session had exercised:
   this fence — that PR had not merged as of this work; the generalized
   one-off pattern here is a smaller, immediately-available fix and does not
   block adopting the more general infrastructure later if #2447 lands.
+- Rolling-deployment old-code/new-schema skew protection for
+  `main_eom.py`'s Render `pserv` blueprint (round-3 finding #6) — that
+  blueprint is still an unconnected draft (`render.eom.yaml`), so there is
+  no live rolling-deploy window today; the new-code/old-schema half is
+  already closed by this PR's finding-#5 fence. Revisit once that profile
+  is actually connected and Render's rolling-deploy behavior for it is
+  configured, not before — fixing it now would be speculative hardening
+  against a deployment shape that does not yet exist.
 
 Parking predicate: hardening beyond the two recurring sources' cross-
 awareness (broader financial-integrity auditing, the unrelated void-filter
@@ -670,20 +829,24 @@ Parked hardening: none.
   tests/test_start_invoicing_draft_writer_oauth_server.py
   tests/test_invoicing_readonly_mcp.py tests/test_invoicing_readonly_oauth.py
   tests/test_eom_render_profile.py -q`
-  against a throwaway `postgres:16` container (not the shared dev DB): **460
-  passed**, 0 failed. This is every test file touched by any of the original
-  slice or the three amendments, run together, including all pre-existing
-  tests in each — confirming no regression anywhere the changes could
-  plausibly reach. `test_eom_render_profile.py` was added to this list after
-  the repo's full local unit-gate mirror caught a real regression this list
-  didn't originally include: a second, independent static test pinning
-  `EOM_RECEIVABLES_READINESS_MIGRATIONS`'s exact contents, in a different
-  file than the real-schema readiness test already covered here.
-- `ruff check` on all fifteen changed source/test files: zero new findings.
-  `atlas_brain/main.py` and `atlas_brain/main_eom.py` each carry pre-existing
-  E402 findings (intentional `load_dotenv`-before-imports pattern) —
-  confirmed identical counts (26 and 15 respectively) against each file's
-  `origin/main` baseline before concluding these are not new.
+  against a throwaway `postgres:16` container (not the shared dev DB): **463
+  passed**, 0 failed (re-run after round 3's three fixes; was 460 after the
+  two round-2 amendments). This is every test file touched by any of the
+  original slice, the round-2 amendments, or round 3's fixes, run together,
+  including all pre-existing tests in each — confirming no regression
+  anywhere the changes could plausibly reach. `test_eom_render_profile.py`
+  was added to this list after the repo's full local unit-gate mirror caught
+  a real regression this list didn't originally include: a second,
+  independent static test pinning `EOM_RECEIVABLES_READINESS_MIGRATIONS`'s
+  exact contents, in a different file than the real-schema readiness test
+  already covered here; it now also carries round 3's two new
+  `main_eom.py` readiness-fence lifespan tests.
+- `ruff check` on all seventeen changed source/test files: zero new
+  findings. `atlas_brain/main.py` and `atlas_brain/main_eom.py` each carry
+  pre-existing E402 findings (intentional `load_dotenv`-before-imports
+  pattern) — confirmed identical counts (26 and 15 respectively, 41 total)
+  against each file's `origin/main` baseline before concluding these are
+  not new, re-checked again after round 3's edits to both files.
 - **Negative controls, all run and restored, not merely asserted:**
   - Same shape as an existing `monthly_auto` recurring row but re-inserted
     for the same contact+period raises `asyncpg.UniqueViolationError`
@@ -725,6 +888,23 @@ Parked hardening: none.
     file still rolls back the column, the new table, and the ledger record
     together, then a clean retry produces the expected single reservation
     row for the collision pair.
+  - Round 3, finding #4: a five-digit (`>9999`) `eom_commercial_billing`
+    invoice-number sequence now backfills `billing_period` correctly and is
+    protected by the same collision/reservation machinery — proven by
+    reverting the regex-width fix locally, re-running the same test, and
+    watching it fail exactly as expected (`billing_period` stayed `NULL`),
+    then restoring the fix and confirming it passes again.
+  - Round 3, finding #5: `main_eom.py`'s new readiness fence raises and
+    closes the pool on an unready schema, and serves normally once ready —
+    both directions exercised through the real `main_eom.lifespan(...)`,
+    mirroring the file's existing lifespan-test pattern.
+  - Round 3, finding #7: the real `main.lifespan(...)` computes
+    `auto_invoice_enabled=False` for the migration-385 fence when
+    `invoicing.enabled=False`, even with the stale flag `auto_invoice_enabled=True`
+    still set — proving the false-positive block is gone. Negative control:
+    the sibling healthy-deployment test (`invoicing.enabled=True`) still
+    fires the fence, proving the master gate didn't just disable the fence
+    outright.
 - The unique-index design itself was verified against the exact duplicate
   scenario before being implemented: a draft with `source` inside the
   index's column list was checked against a same-contact/period,
@@ -744,18 +924,23 @@ Parked hardening: none.
 | `atlas_brain/storage/repositories/invoice.py` | 60 |
 | `atlas_brain/autonomous/tasks/monthly_invoice_generation.py` | 15 |
 | `atlas_brain/services/commercial_billing_approvals.py` | 45 |
-| `atlas_brain/main.py` | 100 |
-| `atlas_brain/main_eom.py` | 1 |
+| `atlas_brain/main.py` | 103 |
+| `atlas_brain/main_eom.py` | 31 |
 | `atlas_brain/services/receivables.py` | 13 |
 | `atlas_brain/mcp/invoicing_draft_writer_server.py` | 29 |
-| `tests/test_invoice_repository.py` | 314 |
+| `tests/test_invoice_repository.py` | 342 |
 | `tests/test_commercial_billing_approvals.py` | 215 |
 | `tests/test_monthly_invoice_generation_cross_pipeline_dedup.py` | 147 |
 | `tests/test_receivables.py` | 31 |
-| `tests/test_commercial_billing_runs.py` | 206 |
+| `tests/test_commercial_billing_runs.py` | 269 |
 | `tests/test_invoicing_draft_writer_mcp.py` | 106 |
-| `tests/test_eom_render_profile.py` | 1 |
+| `tests/test_eom_render_profile.py` | 91 |
 | `tests/maturity_sweep/baseline_atlas_brain_storage.json` | 27 |
 | `tests/test_legacy_monthly_autoinvoice_writer_harness.py` | 1 |
-| `plans/PR-EOM-Recurring-Invoice-Period-Dedup.md` | 760 |
-| **Total** | **2341** |
+| `plans/PR-EOM-Recurring-Invoice-Period-Dedup.md` | 938 |
+| **Total** | **2733** |
+
+Round 3 added ~392 LOC (3 fixes + 4 regression tests + this section) on top
+of round 2's 2341-line total — proportionate to three confirmed real
+findings across a migration, two other startup fences, and a legacy-task
+call site, each with its own real-Postgres or lifespan-level proof.

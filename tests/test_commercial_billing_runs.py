@@ -2109,6 +2109,7 @@ async def test_full_atlas_lifespan_uses_enabled_receivables_recovery_fence(monke
         "settings",
         SimpleNamespace(
             invoicing=SimpleNamespace(
+                enabled=True,
                 receivables_api_enabled=True,
                 auto_invoice_enabled=False,
                 receivables_service_token="",
@@ -2206,6 +2207,7 @@ async def test_full_atlas_lifespan_fences_auto_invoice_only_deployment_without_d
         "settings",
         SimpleNamespace(
             invoicing=SimpleNamespace(
+                enabled=True,
                 receivables_api_enabled=False,
                 auto_invoice_enabled=True,
                 receivables_service_token="",
@@ -2238,6 +2240,67 @@ async def test_full_atlas_lifespan_fences_auto_invoice_only_deployment_without_d
         "ledger",
         "close",
     ]
+
+
+@pytest.mark.asyncio
+async def test_full_atlas_lifespan_scopes_auto_invoice_fence_to_master_invoicing_gate(
+    monkeypatch,
+):
+    """Finding #7 regression: a stale auto_invoice_enabled=True must not
+    fence startup once the master invoicing.enabled gate is off. The legacy
+    monthly task checks settings.invoicing.enabled first and returns
+    "Invoicing disabled" before ever reaching auto_invoice_enabled or
+    billing_period (monthly_invoice_generation.py), so requiring migration
+    385 in that shape is a false-positive block on a healthy,
+    invoicing-disabled deployment. Negative control:
+    test_full_atlas_lifespan_fences_auto_invoice_only_deployment_without_dedup_migration
+    (invoicing.enabled=True) proves the fence still fires when the master
+    gate is actually on."""
+    from atlas_brain import main
+
+    captured: dict[str, object] = {}
+
+    async def fake_run_database_migration_check(pool, **kwargs) -> None:
+        captured.update(kwargs)
+        raise main.RecurringInvoiceDedupMigrationUnavailableError("stop-after-capture")
+
+    class _Pool:
+        is_initialized = True
+
+    async def init_database() -> None:
+        pass
+
+    monkeypatch.setattr(
+        main,
+        "settings",
+        SimpleNamespace(
+            invoicing=SimpleNamespace(
+                enabled=False,
+                receivables_api_enabled=False,
+                auto_invoice_enabled=True,
+                receivables_service_token="",
+                receivables_service_token_sha256="",
+            )
+        ),
+    )
+    monkeypatch.setattr(main, "db_settings", SimpleNamespace(enabled=True))
+    monkeypatch.setattr(main, "_enforce_paid_funnel_alert_channel", lambda _settings: None)
+    monkeypatch.setattr(main, "init_database", init_database)
+    monkeypatch.setattr(main, "get_db_pool", lambda: _Pool())
+    monkeypatch.setattr(
+        main, "_run_database_migration_check", fake_run_database_migration_check
+    )
+
+    with pytest.raises(
+        main.RecurringInvoiceDedupMigrationUnavailableError, match="stop-after-capture"
+    ):
+        async with main.lifespan(FastAPI()):
+            raise AssertionError("should not reach yield")
+
+    assert captured == {
+        "receivables_api_enabled": False,
+        "auto_invoice_enabled": False,
+    }
 
 
 def test_billing_run_migration_is_additive_and_preserves_draft_evidence():

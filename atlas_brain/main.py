@@ -441,7 +441,10 @@ async def lifespan(app: FastAPI):
                     await _run_database_migration_check(
                         pool,
                         receivables_api_enabled=settings.invoicing.receivables_api_enabled,
-                        auto_invoice_enabled=settings.invoicing.auto_invoice_enabled,
+                        auto_invoice_enabled=(
+                            settings.invoicing.enabled
+                            and settings.invoicing.auto_invoice_enabled
+                        ),
                     )
             except _DatabaseMigrationFenceError:
                 raise

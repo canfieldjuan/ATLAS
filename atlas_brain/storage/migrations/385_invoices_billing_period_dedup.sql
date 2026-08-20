@@ -158,10 +158,10 @@ WITH candidates AS (
                  AND source_ref ~ '_(\d{4}-(0[1-9]|1[0-2]))$'
                 THEN substring(source_ref FROM '_(\d{4}-(?:0[1-9]|1[0-2]))$')
             WHEN source = 'eom_commercial_billing'
-                 AND invoice_number ~ '^INV-\d{4}-(Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)-\d{4}$'
+                 AND invoice_number ~ '^INV-\d{4}-(Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)-\d{4,}$'
                 THEN to_char(
                          to_date(
-                             substring(invoice_number FROM '^INV-(\d{4}-(?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec))-\d{4}$'),
+                             substring(invoice_number FROM '^INV-(\d{4}-(?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec))-\d{4,}$'),
                              'YYYY-Mon'
                          ),
                          'YYYY-MM'
@@ -213,10 +213,10 @@ WITH candidates AS (
                  AND source_ref ~ '_(\d{4}-(0[1-9]|1[0-2]))$'
                 THEN substring(source_ref FROM '_(\d{4}-(?:0[1-9]|1[0-2]))$')
             WHEN source = 'eom_commercial_billing'
-                 AND invoice_number ~ '^INV-\d{4}-(Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)-\d{4}$'
+                 AND invoice_number ~ '^INV-\d{4}-(Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)-\d{4,}$'
                 THEN to_char(
                          to_date(
-                             substring(invoice_number FROM '^INV-(\d{4}-(?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec))-\d{4}$'),
+                             substring(invoice_number FROM '^INV-(\d{4}-(?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec))-\d{4,}$'),
                              'YYYY-Mon'
                          ),
                          'YYYY-MM'

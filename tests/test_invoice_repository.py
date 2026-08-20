@@ -361,9 +361,10 @@ async def test_real_postgres_billing_period_backfill_and_collision_handling():
         contact_b = uuid4()   # unambiguous eom_commercial_billing
         contact_c = uuid4()   # collision pair, both sources
         contact_d = uuid4()   # void / mcp_tool / garbage-month -- all inert
+        contact_e = uuid4()   # eom_commercial_billing, sequence width > 9999
         await conn.execute(
-            "INSERT INTO contacts (id) VALUES ($1), ($2), ($3), ($4)",
-            contact_a, contact_b, contact_c, contact_d,
+            "INSERT INTO contacts (id) VALUES ($1), ($2), ($3), ($4), ($5)",
+            contact_a, contact_b, contact_c, contact_d, contact_e,
         )
 
         # Pre-migration rows -- billing_period doesn't exist on this table yet.
@@ -392,6 +393,16 @@ async def test_real_postgres_billing_period_backfill_and_collision_handling():
             contact_id=contact_d, source="eom_commercial_billing",
             number="INV-2026-Xyz-0008",
         )
+        # Codex finding #4 (round 3): invoice_number's sequence segment is
+        # zero-padded to a MINIMUM of 4 digits (lpad(..., 4, '0')), not a
+        # fixed 4 -- once the sequence exceeds 9999, a real invoice number
+        # like this one used to fail the backfill regex entirely and be
+        # silently excluded from both collision detection and the partial
+        # unique index.
+        await _insert(
+            contact_id=contact_e, source="eom_commercial_billing",
+            number="INV-2026-Oct-10000",
+        )
         # NULL contact_id pair, same derivable period, different sources --
         # must NOT be treated as colliding: the real unique index treats
         # every NULL contact_id as distinct from every other, unlike SQL's
@@ -415,6 +426,23 @@ async def test_real_postgres_billing_period_backfill_and_collision_handling():
 
         assert rows["INV-2026-Apr-0001"]["billing_period"] == "2026-04"
         assert rows["INV-2026-Jun-0002"]["billing_period"] == "2026-06"
+
+        # Finding #4 fix proof: a >9999 sequence number still backfills and
+        # is protected, not silently excluded.
+        assert rows["INV-2026-Oct-10000"]["billing_period"] == "2026-10"
+        wide_seq_hit = await repository.get_by_contact_and_period(contact_e, "2026-10")
+        assert wide_seq_hit is not None
+        assert wide_seq_hit["invoice_number"] == "INV-2026-Oct-10000"
+        with pytest.raises(asyncpg.UniqueViolationError):
+            async with conn.transaction():
+                await _insert(
+                    contact_id=contact_e, source="monthly_auto",
+                    number="INV-2026-Oct-0011", source_ref="wideseq_2026-10",
+                )
+                await conn.execute(
+                    "UPDATE invoices SET billing_period = '2026-10' "
+                    "WHERE invoice_number = 'INV-2026-Oct-0011'"
+                )
 
         # Collision pair: both left NULL, both quarantined with the same
         # candidate period -- not deleted, not guessed at.
