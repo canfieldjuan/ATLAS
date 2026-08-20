@@ -40,6 +40,10 @@ not checked at all.
 
 Ownership lane: eom/billing-payments-security-hardening
 Slice phase: Production hardening
+Max files: 4
+Fix-loop allowed files: `.github/workflows/atlas_invoicing_checks.yml`,
+`atlas_brain/config.py`, `plans/PR-EOM-Legacy-Monthly-Writer-Harness.md`, and
+`tests/test_legacy_monthly_autoinvoice_writer_harness.py`.
 
 1. Add typed, empty-default `InvoicingConfig` aliases for the harness-only
    opt-in marker and database URL, while retaining exact-marker and URL
@@ -264,6 +268,6 @@ Parked hardening: none.
 |---|---:|
 | `.github/workflows/atlas_invoicing_checks.yml` | 60 |
 | `atlas_brain/config.py` | 10 |
-| `plans/PR-EOM-Legacy-Monthly-Writer-Harness.md` | 269 |
+| `plans/PR-EOM-Legacy-Monthly-Writer-Harness.md` | 273 |
 | `tests/test_legacy_monthly_autoinvoice_writer_harness.py` | 537 |
-| **Total** | **876** |
+| **Total** | **880** |
