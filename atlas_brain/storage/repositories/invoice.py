@@ -532,8 +532,42 @@ class InvoiceRepository:
             raise DatabaseUnavailableError("update invoice status")
 
         try:
-            await pool.execute(
+            legacy_period_guard_ready = bool(
+                await pool.fetchval(
+                    """
+                    SELECT NOT EXISTS (
+                        SELECT 1
+                        FROM (
+                            VALUES
+                                ('billing_period'),
+                                ('billing_period_legacy_null')
+                        ) AS required(column_name)
+                        WHERE NOT EXISTS (
+                            SELECT 1
+                            FROM information_schema.columns AS actual
+                            WHERE actual.table_schema = current_schema()
+                              AND actual.table_name = 'invoices'
+                              AND actual.column_name = required.column_name
+                        )
+                    )
+                    """
+                )
+            )
+
+            mutation_guard = ""
+            if legacy_period_guard_ready:
+                mutation_guard = """
+                AND NOT (
+                    status = 'void'
+                    AND $2 <> 'void'
+                    AND source IN ('monthly_auto', 'eom_commercial_billing')
+                    AND billing_period IS NULL
+                    AND billing_period_legacy_null
+                )
                 """
+
+            result = await pool.execute(
+                f"""
                 UPDATE invoices
                 SET status = $2,
                     sent_at = COALESCE($3, sent_at),
@@ -543,6 +577,7 @@ class InvoiceRepository:
                     void_reason = COALESCE($7, void_reason),
                     updated_at = $8
                 WHERE id = $1
+                {mutation_guard}
                 """,
                 invoice_id,
                 status,
@@ -553,7 +588,33 @@ class InvoiceRepository:
                 void_reason,
                 datetime.now(timezone.utc),
             )
+            if result == "UPDATE 0" and legacy_period_guard_ready:
+                row = await pool.fetchrow(
+                    """
+                    SELECT status, source, billing_period, billing_period_legacy_null
+                    FROM invoices
+                    WHERE id = $1
+                    """,
+                    invoice_id,
+                )
+                if (
+                    row
+                    and row["status"] == "void"
+                    and status != "void"
+                    and row["source"] in ("monthly_auto", "eom_commercial_billing")
+                    and row["billing_period"] is None
+                    and row["billing_period_legacy_null"]
+                ):
+                    raise DatabaseOperationError(
+                        "update invoice status",
+                        Exception(
+                            "Cannot reactivate a voided legacy recurring invoice "
+                            "whose billing period was quarantined during backfill"
+                        ),
+                    )
         except DatabaseUnavailableError:
+            raise
+        except DatabaseOperationError:
             raise
         except Exception as e:
             raise DatabaseOperationError("update invoice status", e)

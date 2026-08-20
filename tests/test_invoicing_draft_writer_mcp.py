@@ -294,13 +294,28 @@ def test_invoicing_draft_writer_http_rejects_short_tokens(monkeypatch):
 
 @pytest.mark.asyncio
 async def test_draft_invoice_schema_ready_requires_runtime_dependencies():
+    assert "344_receivables_payments" in draft_writer._DRAFT_WRITER_INVOICE_MIGRATIONS
+
     class _Pool:
         is_initialized = True
 
         async def fetchval(self, query):
             assert "invoice_number_seq" in query
             assert "invoice_payments" in query
+            assert "customer_payments" in query
             assert "invoice_number" in query
+            assert "customer_email" in query
+            assert "customer_phone" in query
+            assert "customer_address" in query
+            assert "subtotal" in query
+            assert "tax_rate" in query
+            assert "tax_amount" in query
+            assert "discount_amount" in query
+            assert "total_amount" in query
+            assert "business_context_id" in query
+            assert "metadata" in query
+            assert "payment_id" in query
+            assert "reversed_at" in query
             return True
 
     assert await draft_writer._draft_invoice_schema_ready(_Pool()) is True

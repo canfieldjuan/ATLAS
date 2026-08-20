@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import inspect
 import json
 import os
 from contextlib import asynccontextmanager
@@ -525,7 +526,8 @@ async def test_real_postgres_billing_period_backfill_and_collision_handling():
         rows = {
             row["invoice_number"]: row
             for row in await conn.fetch(
-                "SELECT invoice_number, billing_period, billing_period_legacy_null, metadata FROM invoices"
+                "SELECT id, invoice_number, status, billing_period, "
+                "billing_period_legacy_null, metadata FROM invoices"
             )
         }
         pool = _SchemaPool(conn, schema)
@@ -623,6 +625,12 @@ async def test_real_postgres_billing_period_backfill_and_collision_handling():
         reissued = await repository.get_by_contact_and_period(contact_c, "2026-05")
         assert reissued is not None
         assert reissued["invoice_number"] == "INV-2026-May-9998"
+        with pytest.raises(invoice_repo_mod.DatabaseOperationError):
+            await repository.update_status(rows["INV-2026-May-0003"]["id"], "sent")
+        resurrected = await conn.fetchrow(
+            "SELECT status FROM invoices WHERE invoice_number = 'INV-2026-May-0003'"
+        )
+        assert resurrected["status"] == "void"
 
         # Void, mcp_tool, and garbage-month rows: untouched, no crash.
         assert rows["INV-2026-Jul-0005"]["billing_period"] is None
@@ -667,13 +675,18 @@ async def test_real_postgres_billing_period_backfill_and_collision_handling():
 
         with pytest.raises(asyncpg.UniqueViolationError):
             async with conn.transaction():
-                await _insert(
-                    contact_id=contact_a, source="eom_commercial_billing",
-                    number="INV-2026-Apr-9999",
-                )
                 await conn.execute(
-                    "UPDATE invoices SET billing_period = '2026-04' "
-                    "WHERE invoice_number = 'INV-2026-Apr-9999'"
+                    """
+                    INSERT INTO invoices (
+                        id, invoice_number, contact_id, customer_name, due_date,
+                        status, source, billing_period
+                    ) VALUES (
+                        $1, 'INV-2026-Apr-9999', $2, 'Backfill Test Co',
+                        CURRENT_DATE, 'draft', 'eom_commercial_billing', '2026-04'
+                    )
+                    """,
+                    uuid4(),
+                    contact_a,
                 )
 
         # Idempotency: re-running the migration against the already-migrated
@@ -721,3 +734,12 @@ def test_invoices_billing_period_dedup_migration_is_additive_and_scoped():
     assert "ALTER TABLE invoices DROP CONSTRAINT IF EXISTS invoices_recurring_billing_period_required_check" in migration
     assert "CREATE TABLE IF NOT EXISTS invoices_billing_period_reservations" in migration
     assert "PRIMARY KEY (contact_id, billing_period)" in migration
+
+
+def test_invoice_status_update_blocks_quarantined_void_resurrection_in_repository():
+    source = inspect.getsource(invoice_repo_mod.InvoiceRepository.update_status)
+    assert "billing_period_legacy_null" in source
+    assert "billing_period IS NULL" in source
+    assert "status = 'void'" in source
+    assert "$2 <> 'void'" in source
+    assert "source IN ('monthly_auto', 'eom_commercial_billing')" in source

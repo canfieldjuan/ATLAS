@@ -205,10 +205,9 @@ Max files: 18
    `origin/main`; this PR keeps that boundary and removes migration 385 from
    `atlas_brain/main_eom.py`'s curated EOM receivables migration set so EOM
    slim startup is not over-gated by a writer it does not run.
-6. `atlas_brain/mcp/invoicing_draft_writer_server.py`: run only the invoice
-   schema migrations the draft writer actually needs and verify that minimal
-   draft-invoice schema, instead of pulling the full receivables stack into an
-   ad-hoc draft surface.
+6. `atlas_brain/mcp/invoicing_draft_writer_server.py`: run only the
+   draft-runtime schema migrations the exposed tools actually need and verify
+   that schema, without requiring recurring-dedup migration 385.
 7. `atlas_brain/autonomous/tasks/monthly_invoice_generation.py`: make recurring
    dedup readiness failures and per-contact dedup lookup failures fail closed
    and visible in the notification summary.
@@ -224,7 +223,7 @@ Max files: 18
    the recurring-writer fence blocks only the recurring writer surface when
    the dedup schema is unavailable; EOM/base receivables readiness no longer
    requires migration 385; the draft-writer MCP server migrates only its
-   invoice prerequisites and verifies the minimal draft schema.
+   draft-runtime invoice/payment prerequisites and verifies that schema.
 
 ### Review Contract
 
@@ -277,10 +276,10 @@ Max files: 18
     `test_full_atlas_lifespan_fences_auto_invoice_only_deployment_without_dedup_readiness`),
     the last exercised through the real `main.lifespan(...)` end to end, not
     only the unit-level check function.
-  - The draft-writer MCP server's `_lifespan` now runs only draft-invoice
-    prerequisite migrations and verifies the minimal draft schema instead of
-    requiring full receivables readiness; it blocks on an incomplete draft
-    schema — settled by
+  - The draft-writer MCP server's `_lifespan` now runs only draft-runtime
+    prerequisite migrations and verifies that schema instead of requiring
+    recurring-dedup readiness; it blocks on an incomplete runtime schema —
+    settled by
     `test_invoicing_draft_writer_mcp.py::test_draft_writer_lifespan_now_migrates_and_verifies_readiness`
     and `::test_draft_writer_lifespan_blocks_on_incomplete_schema`.
 - Reachability proof: exercised through the real entry points — the legacy
@@ -770,12 +769,20 @@ migration rollback note now explicitly drops that constraint before old
 writers resume, while leaving inert period columns/indexes/reservations in
 place. Verified by the same migration contract test.
 
-**Finding #11 — draft-writer readiness must check non-column dependencies.**
+**Finding #11 — draft-writer readiness must check the full draft-runtime
+schema.**
 Review round 4 found the minimal draft schema probe checked invoice columns
-but not `invoice_number_seq` or `invoice_payments`, even though
-`InvoiceRepository.create()` and `get_payments()` use them. Fixed in
-`c19168bfcacd0f8ef3ee8997edce1b87d03b7982`: `_draft_invoice_schema_ready()`
-now requires those relations in the active schema. Verified by
+too narrowly: `InvoiceRepository.create()` needs invoice number, customer,
+amount, source, metadata, and timestamp columns; `update_invoice()` needs
+amount and metadata columns; `get_invoice()` reaches `get_payments()`, which
+joins `invoice_payments` to `customer_payments` and expects the post-344
+allocation columns. Fixed in
+`c19168bfcacd0f8ef3ee8997edce1b87d03b7982` and completed in this repair
+commit:
+`_draft_invoice_schema_ready()` now requires the complete draft-runtime
+column/relation set, and the draft writer's curated migration set includes
+`344_receivables_payments` because the tool already exposes `get_invoice`.
+Verified by
 `tests/test_invoicing_draft_writer_mcp.py::test_draft_invoice_schema_ready_requires_runtime_dependencies`
 and the real-Postgres curated-migration smoke when
 `ATLAS_RECEIVABLES_TEST_DATABASE_URL` is available.
@@ -790,6 +797,28 @@ while a matching non-void quarantined invoice still exists. Verified
 by `tests/test_invoice_repository.py::test_real_postgres_billing_period_backfill_and_collision_handling`
 when real Postgres is configured; in the local no-URL environment, that test
 is collected but skipped.
+
+**Finding #13 — voided quarantine rows must not be resurrectable through the
+shared status updater.** Review round 5 found a caller-independent hole:
+after every quarantined collision invoice was voided, a clean reissue could
+be created, but the old voided NULL-period invoice could still be marked
+`sent` through the shared `InvoiceRepository.update_status()` path. Because
+the old row still has `billing_period=NULL`, the partial unique index cannot
+collide it with the clean replacement. Fixed in this repair commit:
+`update_status()` now activates a migration-aware guard when
+`billing_period`/`billing_period_legacy_null` exist and rejects
+`void -> non-void` transitions for legacy recurring NULL-period rows. Verified
+by the real Postgres backfill/collision test and
+`tests/test_invoice_repository.py::test_invoice_status_update_blocks_quarantined_void_resurrection_in_repository`.
+
+**Finding #14 — the duplicate-index regression test must target the right
+failure layer.** CI showed the test still inserted a fresh recurring duplicate
+without `billing_period`, so migration 385's new required-period CHECK rejected
+it before the unique index was reached. That is correct behavior for a raw old
+writer, but it no longer proves the index. Fixed in this repair commit: the unique
+index proof now inserts a same-contact/same-period duplicate with
+`billing_period='2026-04'`, while the separate missing-period CHECK proof
+remains in place for raw recurring rows without the period.
 
 ## Intentional
 
@@ -932,9 +961,9 @@ Parked hardening: none.
     not ready raises and closes the pool; the identical shape with schema ready
     returns normally; the real `main.lifespan(...)` end to end raises for the
     auto-invoice-only deployment shape with recurring schema not ready.
-  - The draft-writer MCP server's lifespan: a ready minimal draft-invoice
-    schema serves normally (init → curated migrations → ready-check → serving
-    → close); an incomplete draft schema raises and closes before serving.
+  - The draft-writer MCP server's lifespan: a ready draft-runtime schema
+    serves normally (init → curated migrations → ready-check → serving →
+    close); an incomplete runtime schema raises and closes before serving.
   - The quarantine reservation: a raw third insert with `billing_period` set
     explicitly to a quarantined period's value succeeds cleanly with no
     constraint violation before this fix (proving the gap), then the
@@ -976,6 +1005,13 @@ Parked hardening: none.
   different-source pair and found to admit both rows, which is how the
   final index (source in the predicate only) was arrived at rather than
   shipped incorrectly.
+- Focused round-5 repair verification: `python -m pytest
+  tests/test_invoicing_draft_writer_mcp.py::test_draft_invoice_schema_ready_requires_runtime_dependencies
+  tests/test_invoicing_draft_writer_mcp.py::test_draft_writer_curated_migrations_apply_to_empty_schema
+  tests/test_invoice_repository.py::test_real_postgres_billing_period_backfill_and_collision_handling
+  tests/test_invoice_repository.py::test_invoices_billing_period_dedup_migration_is_additive_and_scoped
+  tests/test_invoice_repository.py::test_invoice_status_update_blocks_quarantined_void_resurrection_in_repository -q`
+  passed locally: **3 passed, 2 skipped**.
 - Current repair verification: `python -m pytest tests/test_invoice_repository.py
   tests/test_monthly_invoice_generation_cross_pipeline_dedup.py
   tests/test_invoicing_draft_writer_mcp.py
@@ -986,13 +1022,12 @@ Parked hardening: none.
   tests/test_receivables.py::test_eom_readiness_migration_set_is_closed_over_receivables_dependencies
   tests/test_commercial_billing_runs.py::test_full_atlas_migration_check_allows_recovered_or_disabled_receivables
   tests/test_commercial_billing_runs.py::test_full_atlas_migration_check_blocks_enabled_auto_invoice_without_dedup_readiness
+  tests/test_commercial_billing_runs.py::test_full_atlas_migration_check_blocks_when_dedup_readiness_query_errors
   tests/test_commercial_billing_runs.py::test_full_atlas_migration_check_allows_auto_invoice_when_dedup_schema_ready
-  tests/test_commercial_billing_runs.py::test_full_atlas_lifespan_fences_auto_invoice_only_deployment_without_dedup_readiness -q`
-  passed locally: **31 passed, 4 skipped, 1 warning**.
-- Regression repair verification after the full local unit gate surfaced two
-  approval fake regressions: `python -m pytest
-  tests/test_commercial_billing_approvals.py -q` passed locally:
-  **81 passed, 31 skipped, 1 warning**.
+  tests/test_commercial_billing_runs.py::test_full_atlas_lifespan_fences_auto_invoice_only_deployment_without_dedup_readiness
+  tests/test_commercial_billing_approvals.py
+  tests/test_legacy_monthly_autoinvoice_writer_harness.py -q`
+  passed locally: **124 passed, 38 skipped, 1 warning**.
 - Current repair lint: `python -m ruff check` over the touched modules/tests
   except baseline-noisy entrypoints `atlas_brain/main.py` and
   `atlas_brain/main_eom.py` passed with **All checks passed!**. Running ruff
@@ -1008,19 +1043,19 @@ Parked hardening: none.
 | `atlas_brain/autonomous/tasks/monthly_invoice_generation.py` | 86 |
 | `atlas_brain/main.py` | 132 |
 | `atlas_brain/main_eom.py` | 30 |
-| `atlas_brain/mcp/invoicing_draft_writer_server.py` | 95 |
+| `atlas_brain/mcp/invoicing_draft_writer_server.py` | 121 |
 | `atlas_brain/services/commercial_billing_approvals.py` | 64 |
 | `atlas_brain/storage/migrations/385_invoices_billing_period_dedup.sql` | 311 |
-| `atlas_brain/storage/repositories/invoice.py` | 240 |
-| `plans/PR-EOM-Recurring-Invoice-Period-Dedup.md` | 1038 |
+| `atlas_brain/storage/repositories/invoice.py` | 303 |
+| `plans/PR-EOM-Recurring-Invoice-Period-Dedup.md` | 1054 |
 | `tests/maturity_sweep/baseline_atlas_brain_mcp.json` | 4 |
 | `tests/maturity_sweep/baseline_atlas_brain_storage.json` | 27 |
 | `tests/test_commercial_billing_approvals.py` | 292 |
 | `tests/test_commercial_billing_runs.py` | 323 |
 | `tests/test_eom_render_profile.py` | 90 |
-| `tests/test_invoice_repository.py` | 518 |
-| `tests/test_invoicing_draft_writer_mcp.py` | 158 |
+| `tests/test_invoice_repository.py` | 540 |
+| `tests/test_invoicing_draft_writer_mcp.py` | 173 |
 | `tests/test_legacy_monthly_autoinvoice_writer_harness.py` | 44 |
 | `tests/test_monthly_invoice_generation_cross_pipeline_dedup.py` | 239 |
 | `tests/test_receivables.py` | 11 |
-| **Total** | **3702** |
+| **Total** | **3844** |

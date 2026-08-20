@@ -60,6 +60,7 @@ _DRAFT_WRITER_INVOICE_MIGRATIONS = (
     "035_contacts",
     "045_invoices",
     "047_invoice_extra_fields",
+    "344_receivables_payments",
 )
 _oauth_provider: InvoicingDraftWriterOAuthProvider | None = None
 
@@ -72,20 +73,45 @@ async def _draft_invoice_schema_ready(pool: Any) -> bool:
                 VALUES
                     ('invoices', 'id'),
                     ('invoices', 'invoice_number'),
+                    ('invoices', 'contact_id'),
                     ('invoices', 'customer_name'),
+                    ('invoices', 'customer_email'),
+                    ('invoices', 'customer_phone'),
+                    ('invoices', 'customer_address'),
                     ('invoices', 'line_items'),
+                    ('invoices', 'subtotal'),
+                    ('invoices', 'tax_rate'),
+                    ('invoices', 'tax_amount'),
+                    ('invoices', 'discount_amount'),
+                    ('invoices', 'total_amount'),
                     ('invoices', 'issue_date'),
                     ('invoices', 'due_date'),
                     ('invoices', 'status'),
                     ('invoices', 'source'),
                     ('invoices', 'source_ref'),
+                    ('invoices', 'appointment_id'),
+                    ('invoices', 'business_context_id'),
+                    ('invoices', 'notes'),
+                    ('invoices', 'metadata'),
                     ('invoices', 'invoice_for'),
-                    ('invoices', 'contact_name')
+                    ('invoices', 'contact_name'),
+                    ('invoices', 'created_at'),
+                    ('invoices', 'updated_at'),
+                    ('invoice_payments', 'invoice_id'),
+                    ('invoice_payments', 'amount'),
+                    ('invoice_payments', 'payment_date'),
+                    ('invoice_payments', 'payment_method'),
+                    ('invoice_payments', 'payment_id'),
+                    ('invoice_payments', 'reversed_at'),
+                    ('customer_payments', 'id'),
+                    ('customer_payments', 'status'),
+                    ('customer_payments', 'total_amount')
             ),
             required_relations(relkind, relname) AS (
                 VALUES
                     ('S', 'invoice_number_seq'),
-                    ('r', 'invoice_payments')
+                    ('r', 'invoice_payments'),
+                    ('r', 'customer_payments')
             )
             SELECT NOT EXISTS (
                 SELECT 1
