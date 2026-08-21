@@ -452,16 +452,19 @@ def _dependabot_update_blocks(config_text: str) -> list[dict[str, object]]:
     """Parse dependabot.yml text into per-entry blocks (no PyYAML dependency).
 
     Returns one record per entry. ``allow``/``ignore`` hold dependency names;
-    their companion maps hold each dependency's configured update types.
+    their companion maps hold each dependency's configured update types. Only
+    direct children of an update entry can open a parsed section.
     """
     blocks: list[dict[str, object]] = []
     current: dict[str, object] | None = None
     section: str | None = None
     current_dependency: str | None = None
+    entry_child_indent: int | None = None
     section_headers = {"directories:": "directories", "allow:": "allow", "ignore:": "ignore"}
     reset_headers = {"schedule:", "labels:", "groups:", "open-pull-requests-limit:"}
     for raw_line in config_text.splitlines():
         stripped = raw_line.strip()
+        indent = len(raw_line) - len(raw_line.lstrip(" "))
         if not stripped or stripped.startswith("#"):
             continue
         if stripped.startswith("- package-ecosystem:"):
@@ -477,36 +480,49 @@ def _dependabot_update_blocks(config_text: str) -> list[dict[str, object]]:
             }
             section = None
             current_dependency = None
+            entry_child_indent = indent + 2
             continue
-        if current is None:
+        if current is None or entry_child_indent is None:
             continue
-        if stripped in section_headers:
+        if indent == entry_child_indent and stripped in section_headers:
             section = section_headers[stripped]
             current_dependency = None
             continue
         # Dependabot also accepts the singular scalar form `directory: "/path"`.
         # Treat it as a one-element directory set so the root-exclusion guard cannot
         # be defeated by re-adding root as `directory: "/"` instead of `directories:`.
-        if stripped.startswith("directory:"):
+        if indent == entry_child_indent and stripped.startswith("directory:"):
             current["directories"].add(  # type: ignore[union-attr]
                 stripped.split(":", 1)[1].strip().strip('"')
             )
             section = None
             current_dependency = None
             continue
-        if stripped in reset_headers:
+        if indent == entry_child_indent and stripped in reset_headers:
             section = None
             current_dependency = None
             continue
-        if section == "directories" and stripped.startswith("- "):
+        if (
+            section == "directories"
+            and indent == entry_child_indent + 2
+            and stripped.startswith("- ")
+        ):
             current["directories"].add(stripped[2:].strip().strip('"'))  # type: ignore[union-attr]
             continue
-        if section in {"allow", "ignore"} and stripped.startswith("- dependency-name:"):
+        if (
+            section in {"allow", "ignore"}
+            and indent == entry_child_indent + 2
+            and stripped.startswith("- dependency-name:")
+        ):
             current_dependency = stripped.split(":", 1)[1].strip().strip('"')
             current[section].add(current_dependency)  # type: ignore[union-attr]
             current[f"{section}_update_types"][current_dependency] = set()  # type: ignore[index]
             continue
-        if section in {"allow", "ignore"} and current_dependency is not None:
+        if (
+            section in {"allow", "ignore"}
+            and current_dependency is not None
+            and indent > entry_child_indent + 2
+        ):
             update_types = set(
                 re.findall(r"version-update:semver-(?:major|minor|patch)", stripped)
             )
@@ -637,6 +653,32 @@ class DependabotFrozenSubsystemPolicyTest(unittest.TestCase):
 
         self.assertEqual(web_allows, {"*": routine})
         self.assertEqual(pip_allows, {"*": routine})
+
+    def test_routine_version_policy_rejects_allow_nested_under_group(self) -> None:
+        malformed = "\n".join(
+            [
+                "version: 2",
+                "updates:",
+                '  - package-ecosystem: "npm"',
+                "    directories:",
+                '      - "/atlas-ui"',
+                "    groups:",
+                "      routine:",
+                "        allow:",
+                '          - dependency-name: "*"',
+                "            update-types:",
+                '              - "version-update:semver-minor"',
+                '              - "version-update:semver-patch"',
+            ]
+        )
+
+        blocks = _dependabot_update_blocks(malformed)
+
+        self.assertEqual(
+            blocks[0]["allow_update_types"],
+            {},
+            "allow must be a direct child of the Dependabot update entry",
+        )
 
 
 if __name__ == "__main__":

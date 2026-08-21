@@ -37,6 +37,7 @@ the individual PRs leaves the weekly schedule free to recreate the same class.
 
 Ownership lane: dev-workflow/dependabot-config
 Slice phase: Workflow/process
+Max files: 3
 
 1. Admit only semver-minor and semver-patch ordinary version updates for the
    five web UI directories and five leaf-service Python directories.
@@ -120,10 +121,11 @@ still created independently. The existing patch/minor groups and frozen-stack
 ignores remain byte-for-byte unchanged.
 
 The policy parser now records the update types attached to `allow` and `ignore`
-dependency rules instead of proving only that an ignored dependency name is
-present. The regression test requires the exact wildcard patch/minor set on
-both entries, rejecting a missing rule, an accidentally admitted major, or a
-policy narrowed to selected package names.
+dependency rules only when the section is a direct child of its update entry,
+instead of proving only that an ignored dependency name is present. The regression
+test requires the exact wildcard patch/minor set on both entries, rejecting a
+missing rule, an accidentally admitted major, a policy narrowed to selected
+package names, or a rule incorrectly nested under a group.
 
 ## Intentional
 
@@ -157,7 +159,7 @@ Parked hardening: none.
 - `python3 -c "import yaml; yaml.safe_load(open('.github/dependabot.yml', encoding='utf-8'))"`
   — passed.
 - `python3 -m pytest tests/test_security_policy_docs.py::DependabotFrozenSubsystemPolicyTest -q`
-  — `4 passed in 0.01s`.
+  — `5 passed in 0.37s`.
 - `python scripts/sync_pr_plan.py plans/PR-Dependabot-Major-Compatibility-Guard.md origin/main --check`
   — passed after synchronizing the generated diff-size table.
 - `python scripts/audit_plan_doc.py plans/PR-Dependabot-Major-Compatibility-Guard.md`
@@ -171,6 +173,6 @@ Parked hardening: none.
 | File | LOC |
 |---|---:|
 | `.github/dependabot.yml` | 16 |
-| `plans/PR-Dependabot-Major-Compatibility-Guard.md` | 176 |
-| `tests/test_security_policy_docs.py` | 57 |
-| **Total** | **249** |
+| `plans/PR-Dependabot-Major-Compatibility-Guard.md` | 178 |
+| `tests/test_security_policy_docs.py` | 109 |
+| **Total** | **303** |
