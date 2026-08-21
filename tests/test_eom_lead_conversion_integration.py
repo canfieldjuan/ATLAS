@@ -373,6 +373,11 @@ async def test_operator_contact_mutation_creates_replays_and_records_actor():
         # values to creates.
         assert "previous_values" not in metadata
         assert "changed_fields" not in metadata
+        # The #254 tri-state key is update-only by the same rule: a create
+        # overwrote (and cleared) nothing, and consumers distinguish
+        # pre-slice events from new-format ones by key presence, so a create
+        # emitting the key would corrupt that signal.
+        assert "cleared_fields" not in metadata
 
         replay = await mutate_eom_operator_contact(provider, command)
 

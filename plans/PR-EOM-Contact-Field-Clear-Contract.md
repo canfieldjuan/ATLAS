@@ -26,6 +26,17 @@ PR:
    an older Atlas serves the same route. Downstream (tracker, website) must
    gate clearing on a versioned capability or they cannot deploy fail-closed.
 
+Diff-budget override: 592 added lines are 21 production LOC (one
+capability-map entry + one additive audit metadata key) plus the mandated
+plan doc and the tri-state proof tests. The slice is genuinely indivisible:
+the #254 contract requires the tri-state PROVEN at the write authority before
+any downstream leg ships, so the capability (the advertisement), the audit
+key (the semantics being advertised), and the tests (the proof) must land
+atomically -- a capability advertised without its proven audit contract is
+exactly the over-advertising failure the manifest exists to prevent, and
+tests split into a follow-up would leave a live, advertised semantics
+unproven in the window between merges.
+
 ### Problem-derived contract
 
 - Root cause: the operator-mutation audit under-describes intent (old values
@@ -74,6 +85,8 @@ Slice phase: vertical slice
 3. Prove the locked tri-state contract with route-tier, manifest, and
    DB-integration tests.
 
+Max files: 6
+
 ### Review Contract
 
 - Acceptance criteria:
@@ -102,11 +115,11 @@ Slice phase: vertical slice
         map) -- settled by the `"new_values" not in metadata` assertion in the
         tri-state test plus the `cleared_fields` implementation at its
         `crm_provider.py` insertion point.
-  - [ ] Creates are unaffected: the create path still omits
-        `changed_fields`/`previous_values` (and therefore `cleared_fields`) --
-        settled by the pre-existing
-        `tests/test_eom_lead_conversion_integration.py::test_operator_contact_mutation_creates_replays_and_records_actor`
-        assertions.
+  - [ ] Creates are unaffected: the create path omits
+        `changed_fields`, `previous_values`, AND the new `cleared_fields` --
+        settled by the direct `"cleared_fields" not in metadata` assertion
+        added to
+        `tests/test_eom_lead_conversion_integration.py::test_operator_contact_mutation_creates_replays_and_records_actor`.
 - Reachability proof: real ASGI POST to `/eom-funnel/operator-contacts` with a
   present-null field (route-tier test above) plus DB-backed provider tests
   asserting the persisted contact row NULL and the lifecycle event metadata.
@@ -238,8 +251,8 @@ Parked hardening: none.
 |---|---:|
 | `atlas_brain/eom_api/funnel.py` | 8 |
 | `atlas_brain/services/crm_provider.py` | 10 |
-| `plans/PR-EOM-Contact-Field-Clear-Contract.md` | 245 |
+| `plans/PR-EOM-Contact-Field-Clear-Contract.md` | 258 |
 | `tests/test_eom_funnel_capability_manifest.py` | 25 |
 | `tests/test_eom_lead_conversion.py` | 31 |
-| `tests/test_eom_lead_conversion_integration.py` | 273 |
-| **Total** | **592** |
+| `tests/test_eom_lead_conversion_integration.py` | 278 |
+| **Total** | **610** |
