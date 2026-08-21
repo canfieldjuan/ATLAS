@@ -241,6 +241,26 @@ async def test_an_overlong_search_is_rejected():
 
 
 @pytest.mark.asyncio
+async def test_a_database_unrepresentable_search_fails_closed():
+    """NUL cannot live in a Postgres text parameter: it must 422 at the
+    boundary, never 500 mid-query."""
+    crm = _CRM()
+    response = await _get(crm, "?search=%00")
+    assert response.status_code == 422
+    embedded = await _get(crm, "?search=ada%00lovelace")
+    assert embedded.status_code == 422
+    assert crm.calls == [], "an invalid search must never reach the provider"
+
+
+def test_the_directory_kind_set_is_derived_from_the_operator_boundary():
+    """The route and provider read the canonical mutation kind set, so a kind
+    the write boundary admits can never be born write-only in the directory."""
+    from atlas_brain.services.eom_crm_mutations import EOM_OPERATOR_CONTACT_TYPES
+
+    assert funnel_mod._CONTACT_DIRECTORY_KINDS == ("all", *EOM_OPERATOR_CONTACT_TYPES)
+
+
+@pytest.mark.asyncio
 async def test_search_is_forwarded_stripped():
     crm = _CRM()
     response = await _get(crm, "?search=%20Ada%20Operator%20")
@@ -380,31 +400,49 @@ async def test_the_lead_review_response_advertises_the_directory():
     ]
 
 
+def _deployed_apps():
+    """Every application object a real deployment starts.
+
+    ``atlas_brain.main:app`` is what the live systemd unit runs today
+    (atlas-api.service, uvicorn atlas_brain.main:app); ``main_eom:app`` is the
+    slim EOM topology render.eom.yaml starts and the one that pins the
+    dedicated funnel CRM provider. A reachability proof that exercises only
+    one of them stays green while the other drops the route.
+    """
+    from atlas_brain.main import app as aggregate_app
+    from atlas_brain.main_eom import app as eom_app
+
+    return [("main", aggregate_app), ("main_eom", eom_app)]
+
+
 @pytest.mark.asyncio
-async def test_the_real_aggregate_serves_the_route_at_its_deployed_path():
+async def test_every_deployed_entrypoint_serves_the_route_at_its_path():
     """Every other test mounts the router on a fresh app; this one proves the
-    application that actually ships mounts it under /api/v1."""
-    from atlas_brain.main import app
-
-    crm = _CRM([_row()])
-    original_overrides = dict(app.dependency_overrides)
-    app.dependency_overrides[funnel_mod._crm_dependency] = lambda: crm
-    app.dependency_overrides[auth_mod.get_eom_funnel_api_config] = lambda: (
-        EOMFunnelConfig(api_enabled=True, service_token_sha256=_SERVICE_TOKEN_SHA256)
-    )
-    try:
-        async with httpx.AsyncClient(
-            transport=httpx.ASGITransport(app=app), base_url="http://test"
-        ) as client:
-            response = await client.get(
-                "/api/v1/eom-funnel/contact-directory", headers=_headers()
+    applications that actually ship mount it under /api/v1."""
+    for name, app in _deployed_apps():
+        crm = _CRM([_row()])
+        original_overrides = dict(app.dependency_overrides)
+        app.dependency_overrides[funnel_mod._crm_dependency] = lambda: crm
+        app.dependency_overrides[auth_mod.get_eom_funnel_api_config] = lambda: (
+            EOMFunnelConfig(
+                api_enabled=True, service_token_sha256=_SERVICE_TOKEN_SHA256
             )
-    finally:
-        app.dependency_overrides.clear()
-        app.dependency_overrides.update(original_overrides)
+        )
+        try:
+            async with httpx.AsyncClient(
+                transport=httpx.ASGITransport(app=app), base_url="http://test"
+            ) as client:
+                response = await client.get(
+                    "/api/v1/eom-funnel/contact-directory", headers=_headers()
+                )
+        finally:
+            app.dependency_overrides.clear()
+            app.dependency_overrides.update(original_overrides)
 
-    assert response.status_code == 200, "the deployed path must serve this route"
-    assert len(response.json()["contacts"]) == 1
+        assert response.status_code == 200, (
+            f"{name} must serve the deployed path, not 404"
+        )
+        assert len(response.json()["contacts"]) == 1, name
 
 
 # ---------------------------------------------------------------------------

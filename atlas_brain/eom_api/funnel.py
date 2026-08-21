@@ -77,6 +77,11 @@ _MAX_LEAD_REVIEW_LIMIT = 200
 # directory while looking filtered.
 _CONTACT_DIRECTORY_QUERY_PARAMS = frozenset({"limit", "cursor", "search", "kind"})
 _MAX_CONTACT_DIRECTORY_SEARCH_LENGTH = 120
+# DERIVED from the canonical operator-mutation kind set, not re-enumerated:
+# if the write boundary ever admits another contact kind, the directory must
+# widen with it in the same commit, or that kind's records become write-only
+# -- the exact defect this slice exists to close (website #240).
+_CONTACT_DIRECTORY_KINDS = ("all", *EOM_OPERATOR_CONTACT_TYPES)
 # Ids ride in the query string, so the cap is a URL-length budget rather than a
 # database one: 100 ids costs roughly 4.8 KB of `contact_id=<uuid>&`, comfortably
 # inside the 8 KB request line every proxy in front of this accepts. Callers with
@@ -1019,7 +1024,9 @@ async def list_eom_contact_directory(
         str | None,
         Query(min_length=1, max_length=_MAX_CONTACT_DIRECTORY_SEARCH_LENGTH),
     ] = None,
-    kind: Annotated[Literal["all", "lead", "customer"], Query()] = "all",
+    # A plain string validated against the DERIVED kind tuple below, rather
+    # than a Literal that would re-enumerate the canonical set a third time.
+    kind: Annotated[str, Query(min_length=1, max_length=32)] = "all",
     _actor: dict[str, object] = Depends(require_eom_funnel_actor),
     crm: Any = Depends(_crm_dependency),
 ) -> EOMContactDirectoryResponse:
@@ -1036,9 +1043,19 @@ async def list_eom_contact_directory(
     route directly. Reading this projection alters no CRM state.
     """
     _reject_unknown_contact_directory_filters(request)
+    if kind not in _CONTACT_DIRECTORY_KINDS:
+        raise HTTPException(status_code=422, detail="kind is not supported")
     normalized_search = search.strip() if search is not None else None
     if search is not None and not normalized_search:
         raise HTTPException(status_code=422, detail="search must not be blank")
+    # NUL and lone surrogates cannot reach an asyncpg text parameter (they
+    # would 500 mid-query instead of failing closed here). Routed through the
+    # module's one surrogate choke point so this is not a second copy of the
+    # database-invalid character class.
+    if normalized_search is not None and "\x00" in _route_surrogates_to_safe_text(
+        normalized_search
+    ):
+        raise HTTPException(status_code=422, detail="search must be valid text")
     decoded_cursor = _decode_lead_review_cursor(cursor)
     rows = await crm.list_eom_contact_directory(
         limit=limit + 1,

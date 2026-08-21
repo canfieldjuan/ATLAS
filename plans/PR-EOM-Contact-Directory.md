@@ -83,9 +83,11 @@ Max files: 6
     findable with its stage -- settled by
     ::test_both_contact_kinds_come_back_and_the_projection_is_closed and
     ::test_a_lost_lead_is_rendered_with_its_stage.
-  - The kind filter is closed and forwarded verbatim -- settled by
-    ::test_the_kind_filter_is_closed (negative control: loosening the route
-    Literal to str makes it fail) and
+  - The kind filter is closed, DERIVED from the canonical operator
+    mutation kind set, and forwarded verbatim -- settled by
+    ::test_the_kind_filter_is_closed (negative control: removing the derived
+    membership check makes it fail),
+    ::test_the_directory_kind_set_is_derived_from_the_operator_boundary, and
     ::test_each_admitted_kind_is_forwarded_verbatim.
   - Unknown query-parameter names are rejected 422 -- settled by
     ::test_an_unknown_query_parameter_is_rejected_not_ignored (negative
@@ -122,14 +124,25 @@ Max files: 6
     ::test_the_lead_review_response_advertises_the_directory, with the
     existing manifest suite (tests/test_eom_funnel_capability_manifest.py)
     still green.
-  - The deployed aggregate serves the route under /api/v1 -- settled by
-    ::test_the_real_aggregate_serves_the_route_at_its_deployed_path.
+  - Database-unrepresentable search input (NUL, lone surrogates) fails
+    closed 422 at the route instead of 500 mid-query -- settled by
+    ::test_a_database_unrepresentable_search_fails_closed, routed through the
+    module's one surrogate choke point (R3).
+  - Every deployed entrypoint (atlas_brain.main:app, the live systemd
+    topology, and atlas_brain.main_eom:app, the render.eom.yaml topology)
+    serves the route under /api/v1 -- settled by
+    ::test_every_deployed_entrypoint_serves_the_route_at_its_path.
+  - The workflow enrollment change is itself evidence-bearing (R12): the new
+    test file joins atlas_eom_lead_pipeline_checks paths (x2) and its pytest
+    command, so CI runs it with the real Postgres service.
 - Reachability proof: the tracker's `_atlas_funnel_read` calls
   `{ATLAS_FUNNEL_BASE_URL}/eom-funnel/contact-directory` once the follow-up
   tracker PR allow-lists the path; until then the route is reachable at
   `/api/v1/eom-funnel/contact-directory` on the deployed aggregate
-  (atlas_brain/api/__init__.py:111 mounts the funnel router), proven by
-  tests/test_eom_contact_directory.py::test_the_real_aggregate_serves_the_route_at_its_deployed_path.
+  (atlas_brain/api/__init__.py:111 mounts the funnel router) and on the
+  render.eom.yaml topology (atlas_brain/main_eom.py mounts it at /api/v1),
+  proven by
+  tests/test_eom_contact_directory.py::test_every_deployed_entrypoint_serves_the_route_at_its_path.
 - Affected surfaces: atlas_brain/eom_api/funnel.py (new route + capability
   entry; existing routes untouched), atlas_brain/services/crm_provider.py
   (new read-only method + three module-level search helpers; existing methods
@@ -139,7 +152,7 @@ Max files: 6
   metacharacter injection into the search pattern; keyset drop/duplicate under
   traversal; capability over-advertising; accidental writes from a read path;
   regression of the untouched `/eom-funnel/leads` contract.
-- Reviewer rules triggered: R1, R2, R5, R14
+- Reviewer rules triggered: R1, R2, R3, R5, R12, R14
 
 ### Boundary-change enumeration
 
@@ -170,12 +183,13 @@ existing boundary is modified.
 
 ### Closure declarations (GUARD_CLASS_CLOSURE)
 
-- Directory kind filter `{all, lead, customer}`: CLOSED -- 'all' plus the
-  operator boundary's own EOM_OPERATOR_CONTACT_TYPES; sourced DERIVED for the
-  SQL admission (`_EOM_DIRECTORY_CONTACT_KINDS` mirrors the canonical pair and
-  the response validator reads EOM_OPERATOR_CONTACT_TYPES directly).
-  Out-of-set input -> 422 at the route Literal (safe side: refuse, never
-  widen a filter silently).
+- Directory kind filter: CLOSED and DERIVED -- 'all' plus the operator
+  boundary's own EOM_OPERATOR_CONTACT_TYPES, read from that canonical name at
+  every decision point (`_CONTACT_DIRECTORY_KINDS` in the route, the
+  function-level import in the provider, and the response validators), so a
+  kind the write boundary admits can never be born write-only here.
+  Out-of-set input -> 422 at the route's derived membership check (safe side:
+  refuse, never widen a filter silently).
 - Phone punctuation family `" ()+.-"` + 4-digit minimum: CLOSED, authored
   here as the search contract (no upstream source exists). Out-of-set
   character -> the digit fallback does not run and the query is matched as
@@ -289,8 +303,8 @@ Parked hardening: none.
 | File | LOC |
 |---|---:|
 | `.github/workflows/atlas_eom_lead_pipeline_checks.yml` | 3 |
-| `atlas_brain/eom_api/funnel.py` | 151 |
+| `atlas_brain/eom_api/funnel.py` | 168 |
 | `atlas_brain/services/crm_provider.py` | 131 |
-| `plans/PR-EOM-Contact-Directory.md` | 296 |
-| `tests/test_eom_contact_directory.py` | 763 |
-| **Total** | **1344** |
+| `plans/PR-EOM-Contact-Directory.md` | 310 |
+| `tests/test_eom_contact_directory.py` | 801 |
+| **Total** | **1413** |

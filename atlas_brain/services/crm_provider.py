@@ -182,10 +182,6 @@ def _eom_identity_lock_key(channel: str, value: str) -> str:
     return f"eom-contact-identity:{channel}:{value}"
 
 
-# The only contact kinds the operator directory admits. A tenant row whose
-# contact_type is outside this set (e.g. legacy 'prospect' or 'vendor') is not
-# part of the lead/customer CRM surface and stays invisible to the directory.
-_EOM_DIRECTORY_CONTACT_KINDS = ("lead", "customer")
 # Punctuation an operator plausibly types or pastes as part of a phone number.
 # Any other character means the query is a name or email, and the digit
 # fallback must not run (an incidental digit run like the "2026" in
@@ -2232,15 +2228,19 @@ class DatabaseCRMProvider:
 
         Reading this projection alters nothing.
         """
+        # DERIVED from the canonical operator-mutation kind set: a kind the
+        # write boundary admits must be discoverable here in the same commit,
+        # or its records become write-only -- the defect this read closes.
+        from .eom_crm_mutations import EOM_OPERATOR_CONTACT_TYPES
         from .eom_lead_ingress import EOM_BUSINESS_CONTEXT_ID
 
-        if kind not in ("all", *_EOM_DIRECTORY_CONTACT_KINDS):
-            raise ValueError("kind must be one of: all, lead, customer")
+        if kind not in ("all", *EOM_OPERATOR_CONTACT_TYPES):
+            raise ValueError("kind must be 'all' or an operator contact kind")
 
         conditions = ["c.business_context_id = $2", "c.status = 'active'"]
         params: list[Any] = [limit, EOM_BUSINESS_CONTEXT_ID]
         if kind == "all":
-            params.append(list(_EOM_DIRECTORY_CONTACT_KINDS))
+            params.append(list(EOM_OPERATOR_CONTACT_TYPES))
             conditions.append(f"c.contact_type = ANY(${len(params)}::varchar[])")
         else:
             params.append(kind)
