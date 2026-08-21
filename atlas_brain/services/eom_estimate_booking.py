@@ -53,6 +53,7 @@ class _EOMBookingServiceBinding:
     completer_name: str
     ambiguous_marker_name: str
     failed_marker_name: str
+    requires_concrete_calendar_identity: bool
 
 
 _ESTIMATE_SERVICE_BINDING = _EOMBookingServiceBinding(
@@ -64,6 +65,7 @@ _ESTIMATE_SERVICE_BINDING = _EOMBookingServiceBinding(
     completer_name="complete_eom_estimate_booking",
     ambiguous_marker_name="mark_eom_estimate_booking_calendar_ambiguous",
     failed_marker_name="mark_eom_estimate_booking_calendar_failed",
+    requires_concrete_calendar_identity=False,
 )
 
 _FIRST_CLEAN_SERVICE_BINDING = _EOMBookingServiceBinding(
@@ -75,6 +77,7 @@ _FIRST_CLEAN_SERVICE_BINDING = _EOMBookingServiceBinding(
     completer_name="complete_eom_first_clean_booking",
     ambiguous_marker_name="mark_eom_first_clean_booking_calendar_ambiguous",
     failed_marker_name="mark_eom_first_clean_booking_calendar_failed",
+    requires_concrete_calendar_identity=True,
 )
 
 
@@ -126,6 +129,43 @@ def _effective_calendar_id(value: str | None, calendar: Any) -> str:
     if requested:
         return requested
     return _configured_calendar_id(calendar)
+
+
+async def _resolve_concrete_calendar_identity(calendar: Any, *, calendar_id: str) -> str:
+    """Resolve a first-clean target before CRM records an external event.
+
+    ``primary`` belongs to whichever Google principal owns the current refresh
+    token. A first-clean booking therefore cannot persist it as if it were the
+    historical event's concrete resource identifier. The Calendar boundary
+    supplies the canonical ID before this service writes preparation evidence.
+    """
+
+    resolve_calendar_id = getattr(calendar, "resolve_calendar_id", None)
+    if not callable(resolve_calendar_id):
+        raise RuntimeError(
+            "Configured Calendar provider cannot resolve EOM first-clean identity"
+        )
+    result = await resolve_calendar_id(calendar_id=calendar_id)
+    if not bool(getattr(result, "success", False)):
+        raise EOMEstimateBookingError(
+            502,
+            str(
+                getattr(result, "message", None)
+                or "Calendar identity resolution failed"
+            ),
+        )
+    data = getattr(result, "data", None)
+    resolved_calendar_id = (
+        str(data.get("calendar_id") or "").strip()
+        if isinstance(data, dict)
+        else ""
+    )
+    if not resolved_calendar_id or resolved_calendar_id.casefold() == "primary":
+        raise EOMEstimateBookingError(
+            502,
+            "Calendar identity resolution did not return a concrete calendar id",
+        )
+    return resolved_calendar_id
 
 
 def _event_summary(
@@ -318,18 +358,42 @@ async def _run_eom_booking(
     )
     requested_calendar_id = (command.calendar_id or "").strip()
     effective_calendar_id = _effective_calendar_id(command.calendar_id, calendar)
-    prepared = await preparer(
-        contact_id=command.contact_id,
-        scheduled_start=command.scheduled_start,
-        scheduled_end=command.scheduled_end,
-        calendar_id=effective_calendar_id,
-        calendar_id_explicit=bool(requested_calendar_id),
-        notes=command.notes,
-        booking_key=command.booking_key,
-        expected_calendar_event_id=expected_event_id,
-        actor_id=command.actor_id,
-        actor_name=command.actor_name,
-    )
+
+    async def _prepare(calendar_id: str) -> dict[str, Any]:
+        prepare_kwargs: dict[str, Any] = {
+            "contact_id": command.contact_id,
+            "scheduled_start": command.scheduled_start,
+            "scheduled_end": command.scheduled_end,
+            "calendar_id": calendar_id,
+            "calendar_id_explicit": bool(requested_calendar_id),
+            "notes": command.notes,
+            "booking_key": command.booking_key,
+            "expected_calendar_event_id": expected_event_id,
+            "actor_id": command.actor_id,
+            "actor_name": command.actor_name,
+        }
+        if binding.requires_concrete_calendar_identity:
+            # The first call may use `primary`, but the second call records the
+            # resolved concrete ID. Keep the original caller identifier so a
+            # completed retry can distinguish an original alias from a changed
+            # concrete-calendar request.
+            prepare_kwargs["requested_calendar_id"] = requested_calendar_id or None
+        return await preparer(
+            **prepare_kwargs,
+        )
+
+    prepared = await _prepare(effective_calendar_id)
+    if bool(prepared.get("requires_calendar_identity")):
+        if not binding.requires_concrete_calendar_identity:
+            raise RuntimeError(
+                "CRM provider requested Calendar identity for an unsupported booking"
+            )
+        effective_calendar_id = await _resolve_concrete_calendar_identity(
+            calendar, calendar_id=effective_calendar_id
+        )
+        prepared = await _prepare(effective_calendar_id)
+        if bool(prepared.get("requires_calendar_identity")):
+            raise RuntimeError("CRM provider did not accept resolved Calendar identity")
     if bool(prepared.get("idempotent")) and prepared.get("status") == binding.booked_status:
         return _booking_result(prepared)
 
@@ -346,6 +410,14 @@ async def _run_eom_booking(
         effective_calendar_id=effective_calendar_id,
         expected_event_id=expected_event_id,
     )
+    if (
+        binding.requires_concrete_calendar_identity
+        and str(calendar_event["calendar_id"]).strip().casefold() == "primary"
+    ):
+        raise EOMEstimateBookingError(
+            409,
+            "EOM first-clean booking requires Calendar identity reconciliation",
+        )
     if calendar_event["event_id"] != expected_event_id:
         await marker(
             contact_id=command.contact_id,
