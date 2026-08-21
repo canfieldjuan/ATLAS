@@ -45,7 +45,13 @@ Max files: 7
 - Boundary path/seam: `scripts/check_migration_content_integrity.py:main` admits an opt-in reconciliation read only after the existing exact `--expected-target` confirmation; `--show-target` remains connection-free and rejects the incompatible opt-in.
 - Replaced-path behaviors: none. With no opt-in, the current target confirmation, report categories, JSON fields, and exit mapping remain unchanged. With opt-in, mismatched/missing-source remains unresolved drift rather than becoming a policy exception.
 - Guard-relevant fields: `--show-target`, `--expected-target`, `--attest-known-reconciliations`; immutable 387 migration name/digests/timestamps; catalog readiness and aggregate result.
-- Caller x input shape: CLI with no target, incorrect target, correct target without opt-in, correct target with opt-in, and `--show-target` plus opt-in. The latter must reject before opening a connection.
+- Caller x input-shape evidence matrix (not exhaustive; see the closure declaration below): CLI with no target, incorrect target, correct target without opt-in, correct target with opt-in, and `--show-target` plus opt-in. The latter must reject before opening a connection.
+
+### Closure declaration
+
+1. **Closed or open:** the CLI caller/input-shape inventory is **OPEN**. `--expected-target` accepts free text, and valid combinations also include the parser's output-format compatibility flag (`--json`), so the listed matrix is decision evidence rather than a complete grammar.
+2. **Membership source:** the admitted grammar is **DERIVED** from `scripts/check_migration_content_integrity.py:_parse_args` (the canonical `argparse` parser). The matrix above selects only the forms whose target confirmation or attestation state is changed or safety-critical in this slice.
+3. **Outside-the-matrix behavior:** unknown or incompatible parser combinations fail in `argparse` before any database connection; every valid but unlisted combination follows `main`'s existing target-admission path. In particular, `--json` is output-compatible and cannot change admission, a missing or mismatched target returns before connection, and only an exact target may reach the existing read-only preflight. This defaults incomplete/novel input shapes to no catalog read, the safer financial-history outcome.
 
 ### Deployed-config probing
 
