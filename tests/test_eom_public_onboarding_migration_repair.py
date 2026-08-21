@@ -10,13 +10,18 @@ import pytest
 
 asyncpg = pytest.importorskip("asyncpg")
 
-from atlas_brain.storage.migrations import run_migrations  # noqa: E402
+from atlas_brain.storage.migrations import (  # noqa: E402
+    PendingMigrationContentIntegrityError,
+    run_migrations,
+)
 
 
 ROOT = Path(__file__).resolve().parent.parent
 MIGRATIONS = ROOT / "atlas_brain" / "storage" / "migrations"
 DATABASE_URL_ENV = "ATLAS_MIGRATION_TEST_DATABASE_URL"
 MIGRATION_STEM = "384_eom_public_onboarding_tokens_schema_repair"
+_LEGACY_SOURCE_STEM = "382_eom_public_onboarding_tokens"
+_COMPLETE_SCHEMA_STEM = "383_eom_public_onboarding_tokens"
 
 _EXPECTED_REPAIRED_COLUMNS = {
     "signing_key_fingerprint": ("character varying", 64, "NO"),
@@ -51,6 +56,29 @@ class _MigrationPool:
 
     async def release(self, released) -> None:
         assert released is self._conn
+
+
+def _test_owned_legacy_repair_catalog(tmp_path: Path) -> Path:
+    """Return a readable fixture catalog for the schema-only repair contract.
+
+    The real package intentionally has no source named
+    ``382_eom_public_onboarding_tokens``: it now has an unrelated 382 prefix
+    collision and the original source bytes were not retained. The admission
+    policy must reject that real package; a neighboring test covers it. These
+    older DDL tests instead need only a readable null-digest legacy record so
+    they can keep exercising migration 384's schema behavior through the real
+    runner without inventing a production reconciliation.
+    """
+    catalog = tmp_path / "readable_legacy_migrations"
+    catalog.mkdir()
+    (catalog / f"{_LEGACY_SOURCE_STEM}.sql").write_text(
+        "-- test-only readable source sentinel for a legacy null-digest row\n"
+    )
+    for stem in (_COMPLETE_SCHEMA_STEM, MIGRATION_STEM):
+        (catalog / f"{stem}.sql").write_bytes(
+            (MIGRATIONS / f"{stem}.sql").read_bytes()
+        )
+    return catalog
 
 
 async def _prepare_known_legacy_schema(conn, schema: str) -> None:
@@ -135,10 +163,10 @@ async def _prepare_complete_schema(conn, schema: str) -> None:
     )
 
 
-async def _run_schema_repair(conn) -> None:
+async def _run_schema_repair(conn, *, migrations_dir: Path = MIGRATIONS) -> None:
     await run_migrations(
         _MigrationPool(conn),
-        migrations_dir=MIGRATIONS,
+        migrations_dir=migrations_dir,
         only={MIGRATION_STEM},
     )
 
@@ -158,13 +186,18 @@ async def _legacy_columns(conn, schema: str) -> set[str]:
 
 
 @pytest.mark.asyncio
-async def test_schema_repair_adds_383_immutable_projection_to_empty_legacy_table():
+async def test_schema_repair_adds_383_immutable_projection_to_empty_legacy_table(
+    tmp_path,
+):
     database_url = _database_url_or_skip()
     schema = f"eom_public_repair_{uuid.uuid4().hex}"
     conn = await asyncpg.connect(database_url)
     try:
         await _prepare_known_legacy_schema(conn, schema)
-        await _run_schema_repair(conn)
+        await _run_schema_repair(
+            conn,
+            migrations_dir=_test_owned_legacy_repair_catalog(tmp_path),
+        )
 
         assert (
             await conn.fetchval(
@@ -273,7 +306,9 @@ async def test_schema_repair_adds_383_immutable_projection_to_empty_legacy_table
 
 
 @pytest.mark.asyncio
-async def test_schema_repair_fails_without_mutating_nonempty_legacy_table():
+async def test_schema_repair_fails_without_mutating_nonempty_legacy_table(
+    tmp_path,
+):
     database_url = _database_url_or_skip()
     schema = f"eom_public_repair_nonempty_{uuid.uuid4().hex}"
     conn = await asyncpg.connect(database_url)
@@ -305,7 +340,10 @@ async def test_schema_repair_fails_without_mutating_nonempty_legacy_table():
             asyncpg.RaiseError,
             match="cannot safely repair nonempty eom_public_onboarding_tokens",
         ):
-            await _run_schema_repair(conn)
+            await _run_schema_repair(
+                conn,
+                migrations_dir=_test_owned_legacy_repair_catalog(tmp_path),
+            )
 
         assert await _legacy_columns(conn, schema) == columns_before
         assert (
@@ -319,6 +357,35 @@ async def test_schema_repair_fails_without_mutating_nonempty_legacy_table():
             FROM schema_migrations
             WHERE name = $1
             """,
+                MIGRATION_STEM,
+            )
+            == 0
+        )
+    finally:
+        await conn.execute(f"DROP SCHEMA IF EXISTS {_quote_ident(schema)} CASCADE")
+        await conn.close()
+
+
+@pytest.mark.asyncio
+async def test_schema_repair_refuses_observed_missing_382_source_before_sql():
+    """The real packaged catalog cannot bypass the H-18 source-evidence gate."""
+    database_url = _database_url_or_skip()
+    schema = f"eom_repair_missing_source_{uuid.uuid4().hex}"
+    conn = await asyncpg.connect(database_url)
+    try:
+        await _prepare_known_legacy_schema(conn, schema)
+        columns_before = await _legacy_columns(conn, schema)
+
+        with pytest.raises(
+            PendingMigrationContentIntegrityError,
+            match=f"missing_source={_LEGACY_SOURCE_STEM}",
+        ):
+            await _run_schema_repair(conn)
+
+        assert await _legacy_columns(conn, schema) == columns_before
+        assert (
+            await conn.fetchval(
+                "SELECT COUNT(*) FROM schema_migrations WHERE name = $1",
                 MIGRATION_STEM,
             )
             == 0

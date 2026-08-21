@@ -8,7 +8,19 @@ from pathlib import Path
 
 import pytest
 
+from atlas_brain.storage import recurring_invoice_schema
+
 DATABASE_URL_ENV = "ATLAS_MIGRATION_TEST_DATABASE_URL"
+
+
+def _migration_387_source() -> bytes:
+    return (
+        Path(__file__).resolve().parents[1]
+        / "atlas_brain"
+        / "storage"
+        / "migrations"
+        / "387_eom_recurring_invoice_dedup_recovery.sql"
+    ).read_bytes()
 
 
 class FakeMigrationPool:
@@ -803,6 +815,71 @@ class _SerializingPool(FakeMigrationPool):
         return _RollbackMigrationTransaction(self)
 
 
+class _AttestedReconciliationPool(_SerializingPool):
+    """Runner fixture that answers the real 387 catalog-attestation queries."""
+
+    def __init__(
+        self,
+        *,
+        recurring_schema_ready: bool = True,
+        zero_active_null_period_rows: bool = True,
+    ):
+        super().__init__()
+        self.recurring_schema_ready = recurring_schema_ready
+        self.zero_active_null_period_rows = zero_active_null_period_rows
+        self.reconciliation_rows: list[dict[str, object]] = []
+
+    async def fetch(self, query, *args):
+        from atlas_brain.storage.migrations.reconciliation import (
+            MIGRATION_387_RECONCILIATION,
+        )
+
+        normalized = " ".join(query.split())
+        if normalized == (
+            "SELECT content_sha256, applied_at FROM schema_migrations "
+            "WHERE name = $1 LIMIT 2"
+        ):
+            assert args == (MIGRATION_387_RECONCILIATION.migration_name,)
+            return list(self.reconciliation_rows)
+        if "FROM pg_constraint AS actual" in query:
+            assert args == (
+                list(recurring_invoice_schema._RECURRING_INVOICE_DEDUP_CONSTRAINTS),
+            )
+            return [
+                {"conname": name, "definition": definition}
+                for name, definition in (
+                    recurring_invoice_schema._RECURRING_INVOICE_DEDUP_CONSTRAINT_EXPRESSIONS.items()
+                )
+            ]
+        return await super().fetch(query, *args)
+
+    async def fetchrow(self, query, *args):
+        assert "FROM pg_index AS index_state" in query
+        assert args == (recurring_invoice_schema._RECURRING_INVOICE_DEDUP_INDEX,)
+        return {
+            "indisunique": True,
+            "indisvalid": True,
+            "indisready": True,
+            "indnkeyatts": 2,
+            "key_column_1": "contact_id",
+            "key_column_2": "billing_period",
+            "predicate": (
+                "(billing_period IS NOT NULL) AND "
+                "(source = ANY (ARRAY['monthly_auto', 'eom_commercial_billing'])) "
+                "AND (status <> 'void')"
+            ),
+        }
+
+    async def fetchval(self, query, *args):
+        if "information_schema.columns AS actual" in query:
+            assert args == ()
+            return self.recurring_schema_ready
+        if "FROM invoices" in query:
+            assert args == ()
+            return self.zero_active_null_period_rows
+        return await super().fetchval(query, *args)
+
+
 class _RollbackMigrationTransaction:
     """In-memory transaction seam that restores migration effects on failure."""
 
@@ -866,6 +943,9 @@ class _Conn:
             self.held = True
             return True
         return await self.pool.fetchval(query, *args)
+
+    async def fetchrow(self, query, *args):
+        return await self.pool.fetchrow(query, *args)
 
     def transaction(self):
         return self.pool.transaction()
@@ -1132,27 +1212,210 @@ async def test_mixed_case_quoted_ledger_lookalike_preserves_concurrent_autocommi
     assert any("CREATE INDEX CONCURRENTLY" in sql for sql in pool.applied_sql)
 
 
+def _stage_historical_387_mismatch(tmp_path, pool):
+    from atlas_brain.storage.migrations.reconciliation import (
+        MIGRATION_387_RECONCILIATION,
+    )
+
+    record = MIGRATION_387_RECONCILIATION
+    (tmp_path / f"{record.migration_name}.sql").write_bytes(_migration_387_source())
+    pool.records.append((387, record.migration_name, record.historical_ledger_sha256))
+    if hasattr(pool, "reconciliation_rows"):
+        pool.reconciliation_rows = [{
+            "content_sha256": record.historical_ledger_sha256,
+            "applied_at": record.observed_applied_at,
+        }]
+    return record
+
+
 @pytest.mark.asyncio
-async def test_mismatch_is_logged_without_blocking_a_later_pending_migration(
+@pytest.mark.parametrize(
+    ("case", "source_present", "expected_category"),
+    [
+        ("digest mismatch", True, "mismatched=900_recorded"),
+        ("missing packaged source", False, "missing_source=900_recorded"),
+    ],
+)
+async def test_unresolved_content_evidence_blocks_pending_migration_before_sql(
+    tmp_path,
+    case,
+    source_present,
+    expected_category,
+):
+    from atlas_brain.storage.migrations import (
+        PendingMigrationContentIntegrityError,
+        run_migrations,
+    )
+
+    if source_present:
+        (tmp_path / "900_recorded.sql").write_text("SELECT 900")
+    (tmp_path / "901_pending.sql").write_text("SELECT 901")
+    pool = _SerializingPool(honor_lock=True)
+    pool.records.append((900, "900_recorded", "f" * 64))
+
+    with pytest.raises(PendingMigrationContentIntegrityError) as exc_info:
+        await run_migrations(pool, migrations_dir=tmp_path)
+
+    assert expected_category in str(exc_info.value), case
+    assert pool.applied_sql == [], case
+    assert pool.records == [(900, "900_recorded", "f" * 64)], case
+    assert pool.inserted_with_digest == [], case
+
+
+@pytest.mark.asyncio
+async def test_attested_historical_mismatch_admits_targeted_pending_migration(tmp_path):
+    from atlas_brain.storage.migrations import run_migrations
+
+    pool = _AttestedReconciliationPool()
+    _stage_historical_387_mismatch(tmp_path, pool)
+    (tmp_path / "901_pending.sql").write_text("SELECT 901")
+
+    await run_migrations(
+        pool,
+        migrations_dir=tmp_path,
+        only={"901_pending"},
+    )
+
+    assert pool.applied_sql == ["SELECT 901"]
+    assert pool.inserted_with_digest == [
+        (901, "901_pending", hashlib.sha256(b"SELECT 901").hexdigest())
+    ]
+
+
+@pytest.mark.asyncio
+async def test_failed_historical_attestation_blocks_then_retry_applies_once(tmp_path):
+    from atlas_brain.storage.migrations import (
+        PendingMigrationContentIntegrityError,
+        run_migrations,
+    )
+
+    pool = _AttestedReconciliationPool(zero_active_null_period_rows=False)
+    _stage_historical_387_mismatch(tmp_path, pool)
+    (tmp_path / "901_pending.sql").write_text("SELECT 901")
+
+    with pytest.raises(PendingMigrationContentIntegrityError, match="mismatched="):
+        await run_migrations(pool, migrations_dir=tmp_path)
+
+    assert pool.applied_sql == []
+    assert pool.inserted == []
+    assert pool.inserted_with_digest == []
+    assert pool.updated == []
+
+    pool.zero_active_null_period_rows = True
+    await run_migrations(pool, migrations_dir=tmp_path)
+
+    assert pool.applied_sql == ["SELECT 901"]
+    assert pool.inserted_with_digest == [
+        (901, "901_pending", hashlib.sha256(b"SELECT 901").hexdigest())
+    ]
+
+
+@pytest.mark.asyncio
+async def test_attestation_transport_failure_blocks_then_retry_applies_once(tmp_path):
+    """Attestation transport failures fail closed and release the runner lock."""
+    from atlas_brain.storage.migrations import (
+        PendingMigrationContentIntegrityError,
+        run_migrations,
+    )
+
+    class _FailingAttestationTransportPool(_AttestedReconciliationPool):
+        def __init__(self):
+            super().__init__()
+            self.fail_attestation_transport = True
+
+        async def fetchrow(self, query, *args):
+            if self.fail_attestation_transport:
+                raise RuntimeError("injected 387 attestation transport failure")
+            return await super().fetchrow(query, *args)
+
+    pool = _FailingAttestationTransportPool()
+    _stage_historical_387_mismatch(tmp_path, pool)
+    (tmp_path / "901_pending.sql").write_text("SELECT 901")
+
+    with pytest.raises(
+        PendingMigrationContentIntegrityError,
+        match="known historical migration evidence could not be attested",
+    ):
+        await run_migrations(pool, migrations_dir=tmp_path)
+
+    assert pool.applied_sql == []
+    assert pool.inserted == []
+    assert pool.inserted_with_digest == []
+    assert pool.updated == []
+    assert not pool._lock().locked()
+    assert pool.acquired == 0
+
+    pool.fail_attestation_transport = False
+    await run_migrations(pool, migrations_dir=tmp_path)
+
+    assert pool.applied_sql == ["SELECT 901"]
+    assert pool.inserted_with_digest == [
+        (901, "901_pending", hashlib.sha256(b"SELECT 901").hexdigest())
+    ]
+    assert not pool._lock().locked()
+    assert pool.acquired == 0
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("case", "other_source_present", "expected_category"),
+    [
+        ("unknown digest mismatch", True, "mismatched=900_other_recorded"),
+        ("missing packaged source", False, "missing_source=900_other_recorded"),
+    ],
+)
+async def test_attested_known_mismatch_cannot_clear_other_content_evidence(
+    tmp_path,
+    case,
+    other_source_present,
+    expected_category,
+):
+    """A successful 387 attestation clears only its exact reviewed mismatch."""
+    from atlas_brain.storage.migrations import (
+        PendingMigrationContentIntegrityError,
+        run_migrations,
+    )
+
+    pool = _AttestedReconciliationPool()
+    record = _stage_historical_387_mismatch(tmp_path, pool)
+    pool.records.append((900, "900_other_recorded", "f" * 64))
+    if other_source_present:
+        (tmp_path / "900_other_recorded.sql").write_text("SELECT 900")
+    (tmp_path / "901_pending.sql").write_text("SELECT 901")
+
+    with pytest.raises(PendingMigrationContentIntegrityError) as exc_info:
+        await run_migrations(pool, migrations_dir=tmp_path)
+
+    message = str(exc_info.value)
+    assert expected_category in message, case
+    assert record.migration_name not in message, case
+    assert pool.applied_sql == [], case
+    assert pool.inserted == [], case
+    assert pool.inserted_with_digest == [], case
+    assert pool.updated == [], case
+    assert not pool._lock().locked(), case
+    assert pool.acquired == 0, case
+
+
+@pytest.mark.asyncio
+async def test_historical_mismatch_without_pending_migration_remains_available(
     tmp_path,
     caplog,
 ):
     from atlas_brain.storage.migrations import run_migrations
 
-    (tmp_path / "900_recorded.sql").write_text("SELECT 900")
-    (tmp_path / "901_pending.sql").write_text("SELECT 901")
     pool = _SerializingPool(honor_lock=True)
-    pool.records.append((900, "900_recorded", "f" * 64))
+    _stage_historical_387_mismatch(tmp_path, pool)
     caplog.set_level(logging.ERROR, logger="atlas.storage.migrations")
 
     await run_migrations(pool, migrations_dir=tmp_path)
 
-    assert any("mismatched=900_recorded" in message for message in caplog.messages)
-    assert pool.applied_sql == ["SELECT 901"]
-    assert pool.records[0] == (900, "900_recorded", "f" * 64)
-    assert pool.inserted_with_digest == [
-        (901, "901_pending", hashlib.sha256(b"SELECT 901").hexdigest())
-    ]
+    assert any(
+        "mismatched=387_eom_recurring_invoice_dedup_recovery" in message
+        for message in caplog.messages
+    )
+    assert pool.applied_sql == []
+    assert pool.inserted_with_digest == []
 
 
 @pytest.mark.asyncio

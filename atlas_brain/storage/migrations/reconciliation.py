@@ -103,6 +103,17 @@ MIGRATION_387_RECONCILIATION = HistoricalMigrationReconciliation(
     ),
 )
 
+
+def known_historical_migration_reconciliation_names() -> frozenset[str]:
+    """Return the reviewed migration names eligible for current attestation.
+
+    The runner derives this closed set from the source-controlled evidence
+    module instead of maintaining a second exception list. Adding another name
+    still requires its own reviewed record and catalog predicate here.
+    """
+    return frozenset((MIGRATION_387_RECONCILIATION.migration_name,))
+
+
 def _packaged_migration_digest(
     migration_files: Collection[Path],
     migration_name: str,
