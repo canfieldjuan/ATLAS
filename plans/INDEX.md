@@ -1,6 +1,6 @@
 # Plan archive index
 
-1536 archived plan doc(s). Merged plan docs are moved under `archive/` and listed below; once the archive sweep has run, the `plans/` root holds only in-flight slices.
+1537 archived plan doc(s). Merged plan docs are moved under `archive/` and listed below; once the archive sweep has run, the `plans/` root holds only in-flight slices.
 
 - [PR-ASR-Pip-Audit-Egg-Fragment](archive/PR-ASR-Pip-Audit-Egg-Fragment.md) - lane: security/workflow | phase: Production hardening
 - [PR-ASR-Requirements-Audit-Pin](archive/PR-ASR-Requirements-Audit-Pin.md) - lane: security/workflow | phase: Production hardening
@@ -1025,6 +1025,7 @@
 - [PR-EOM-Legacy-Monthly-Writer-Harness](archive/PR-EOM-Legacy-Monthly-Writer-Harness.md) - lane: eom/billing-payments-security-hardening | phase: Production hardening
 - [PR-EOM-Live-Calendar-Import](archive/PR-EOM-Live-Calendar-Import.md) - lane: eom-crm/lead-funnel | phase: vertical slice
 - [PR-EOM-Mailbox-Context-Binding](archive/PR-EOM-Mailbox-Context-Binding.md) - lane: eom-crm/email-tenancy | phase: Production hardening
+- [PR-EOM-Migration-Admission-Policy](archive/PR-EOM-Migration-Admission-Policy.md) - lane: eom/migration-content-integrity | phase: Production hardening
 - [PR-EOM-Migration-Content-Integrity](archive/PR-EOM-Migration-Content-Integrity.md) - lane: eom/billing-payments-security-hardening | phase: Production hardening
 - [PR-EOM-Migration-Content-Preflight](archive/PR-EOM-Migration-Content-Preflight.md) - lane: eom/migration-content-integrity | phase: Production hardening
 - [PR-EOM-Migration-Reconciliation-Evidence](archive/PR-EOM-Migration-Reconciliation-Evidence.md) - lane: eom/migration-content-integrity | phase: Production hardening
