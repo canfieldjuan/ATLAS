@@ -26,9 +26,9 @@ from ..services.eom_lead_conversion import (
     EOMLeadLost,
     EOMLeadReopen,
     finalize_eom_customer_handoff,
-    mark_eom_lead_lost,
     reopen_eom_lead,
 )
+from ..services.eom_won_lead_loss import mark_eom_lead_lost_with_won_teardown
 from ..services.eom_crm_mutations import (
     EOMOperatorContactMutation,
     EOMOperatorContactMutationError,
@@ -1052,14 +1052,18 @@ async def mark_lead_lost(
     operation_key: str = Depends(_approval_key_dependency),
     actor: dict[str, object] = Depends(require_eom_funnel_actor),
     crm: Any = Depends(_crm_dependency),
+    calendar: Any = Depends(_calendar_dependency),
 ) -> JSONResponse:
     """Disposition a lead that will not convert; it leaves the review queue.
 
-    Reversible via the reopen endpoint. Records a reason on the lifecycle
-    ledger. No calendar or customer/site side effect."""
+    Pre-won leads retain the reversible direct disposition. A won lead first
+    cancels its persisted first-clean Calendar event and revokes its unsent
+    onboarding draft; it is never reported lost after an uncertain cancellation.
+    """
     try:
-        result = await mark_eom_lead_lost(
+        result = await mark_eom_lead_lost_with_won_teardown(
             crm,
+            calendar,
             EOMLeadLost(
                 contact_id=str(contact_id),
                 reason_code=payload.reason_code,

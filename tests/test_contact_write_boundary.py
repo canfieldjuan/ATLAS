@@ -509,14 +509,14 @@ def test_repository_has_exactly_the_known_insert_sites() -> None:
     assert {f.path for f in inserts} == {"atlas_brain/services/crm_provider.py"}
     assert len(inserts) == 2, f"expected 2 provider INSERT sites, found {len(inserts)}"
 
-    # Ground truth: `grep -c 'UPDATE contacts' crm_provider.py` == 10. Pinning
+    # Ground truth: `grep -c 'UPDATE contacts' crm_provider.py` == 11. Pinning
     # the count catches a recognizer regression that silently drops one.
     provider_updates = [
         f for f in findings
         if f.operation == "UPDATE" and f.path == "atlas_brain/services/crm_provider.py"
     ]
-    assert len(provider_updates) == 10, (
-        f"expected 10 provider UPDATE statements, found {len(provider_updates)}"
+    assert len(provider_updates) == 11, (
+        f"expected 11 provider UPDATE statements, found {len(provider_updates)}"
     )
 
 
@@ -548,7 +548,7 @@ def test_baseline_inventory_is_not_vacuous() -> None:
     inserts = [entry for entry in inventory if "::INSERT::" in entry]
     updates = [entry for entry in inventory if "::UPDATE::" in entry]
     assert len(inserts) == 2, "expected both provider INSERT sites in the inventory"
-    assert len(updates) >= 10, "expected the known UPDATE surface in the inventory"
+    assert len(updates) >= 11, "expected the known UPDATE surface in the inventory"
 
 
 # ---------------------------------------------------------------------------
