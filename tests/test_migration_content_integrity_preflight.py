@@ -10,7 +10,7 @@ from pathlib import Path
 import pytest
 
 from atlas_brain.storage.migrations import reconciliation as reconciliation_mod
-from atlas_brain.storage.repositories import invoice as invoice_repository
+from atlas_brain.storage import recurring_invoice_schema
 
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -75,18 +75,18 @@ class FakeConnection:
             assert args == (reconciliation_mod.MIGRATION_387_RECONCILIATION.migration_name,)
             return self.reconciliation_rows
         assert "FROM pg_constraint AS actual" in query
-        assert args == (list(invoice_repository._RECURRING_INVOICE_DEDUP_CONSTRAINTS),)
+        assert args == (list(recurring_invoice_schema._RECURRING_INVOICE_DEDUP_CONSTRAINTS),)
         return [
             {"conname": name, "definition": definition}
             for name, definition in (
-                invoice_repository._RECURRING_INVOICE_DEDUP_CONSTRAINT_EXPRESSIONS.items()
+                recurring_invoice_schema._RECURRING_INVOICE_DEDUP_CONSTRAINT_EXPRESSIONS.items()
             )
         ]
 
     async def fetchrow(self, query: str, *args: object) -> dict[str, object] | None:
         self.fetchrow_calls.append((query, args))
         assert "FROM pg_index AS index_state" in query
-        assert args == (invoice_repository._RECURRING_INVOICE_DEDUP_INDEX,)
+        assert args == (recurring_invoice_schema._RECURRING_INVOICE_DEDUP_INDEX,)
         return {
             "indisunique": True,
             "indisvalid": True,

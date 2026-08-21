@@ -151,7 +151,7 @@ async def _migration_387_catalog_evidence(executor: Any) -> tuple[bool, bool | N
 
 async def _recurring_invoice_dedup_schema_ready(executor: Any) -> bool:
     """Load the writer-owned readiness predicate only for the opted-in probe."""
-    from ..repositories.invoice import recurring_invoice_dedup_schema_ready
+    from ..recurring_invoice_schema import recurring_invoice_dedup_schema_ready
 
     return await recurring_invoice_dedup_schema_ready(executor)
 
