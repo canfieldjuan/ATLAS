@@ -42,6 +42,7 @@ class MigrationReconciliationAttestation:
 
     reconciliation_id: str
     migration_name: str
+    exactly_one_ledger_row: bool
     ledger_digest_matches_record: bool
     packaged_digest_matches_record: bool
     applied_at_matches_record: bool
@@ -57,6 +58,7 @@ class MigrationReconciliationAttestation:
     @property
     def status(self) -> str:
         if all((
+            self.exactly_one_ledger_row,
             self.ledger_digest_matches_record,
             self.packaged_digest_matches_record,
             self.applied_at_matches_record,
@@ -73,6 +75,7 @@ class MigrationReconciliationAttestation:
             "reconciliation_id": self.reconciliation_id,
             "migration_name": self.migration_name,
             "source_verification": self.source_verification,
+            "exactly_one_ledger_row": self.exactly_one_ledger_row,
             "ledger_digest_matches_record": self.ledger_digest_matches_record,
             "packaged_digest_matches_record": self.packaged_digest_matches_record,
             "applied_at_matches_record": self.applied_at_matches_record,
@@ -159,10 +162,12 @@ async def _attest_migration_387(
 ) -> MigrationReconciliationAttestation:
     """Attest the one reviewed 387 discrepancy without source verification."""
     record = MIGRATION_387_RECONCILIATION
-    ledger_row = await executor.fetchrow(
-        "SELECT content_sha256, applied_at FROM schema_migrations WHERE name = $1",
+    ledger_rows = await executor.fetch(
+        "SELECT content_sha256, applied_at FROM schema_migrations WHERE name = $1 LIMIT 2",
         record.migration_name,
     )
+    exactly_one_ledger_row = len(ledger_rows) == 1
+    ledger_row = ledger_rows[0] if exactly_one_ledger_row else None
     recorded_digest = ledger_row["content_sha256"] if ledger_row is not None else None
     applied_at = _normalize_utc(ledger_row["applied_at"] if ledger_row is not None else None)
     packaged_digest = _packaged_migration_digest(migration_files, record.migration_name)
@@ -173,6 +178,7 @@ async def _attest_migration_387(
     return MigrationReconciliationAttestation(
         reconciliation_id=record.reconciliation_id,
         migration_name=record.migration_name,
+        exactly_one_ledger_row=exactly_one_ledger_row,
         ledger_digest_matches_record=recorded_digest == record.historical_ledger_sha256,
         packaged_digest_matches_record=packaged_digest == record.final_packaged_sha256,
         applied_at_matches_record=applied_at == record.observed_applied_at,

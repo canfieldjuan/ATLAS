@@ -10,6 +10,7 @@ from pathlib import Path
 import pytest
 
 from atlas_brain.storage.migrations import reconciliation as reconciliation_mod
+from atlas_brain.storage.repositories import invoice as invoice_repository
 
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -39,13 +40,16 @@ class FakeConnection:
         self,
         records: list[tuple[str, str | None]],
         *,
-        reconciliation_row: dict[str, object] | None = None,
+        reconciliation_rows: list[dict[str, object]] | None = None,
+        recurring_schema_ready: bool = True,
         zero_active_null_period_rows: bool = True,
     ):
         self.records = records
-        self.reconciliation_row = reconciliation_row
+        self.reconciliation_rows = reconciliation_rows or []
+        self.recurring_schema_ready = recurring_schema_ready
         self.zero_active_null_period_rows = zero_active_null_period_rows
         self.queries: list[str] = []
+        self.fetch_calls: list[tuple[str, tuple[object, ...]]] = []
         self.fetchrow_calls: list[tuple[str, tuple[object, ...]]] = []
         self.fetchval_calls: list[tuple[str, tuple[object, ...]]] = []
         self.transaction_readonly: list[bool] = []
@@ -55,24 +59,54 @@ class FakeConnection:
     def transaction(self, *, readonly: bool = False) -> FakeReadOnlyTransaction:
         return FakeReadOnlyTransaction(self, readonly)
 
-    async def fetch(self, query: str):
+    async def fetch(self, query: str, *args: object):
         self.queries.append(query)
-        assert query == "SELECT name, content_sha256 FROM schema_migrations"
+        self.fetch_calls.append((query, args))
+        if query == "SELECT name, content_sha256 FROM schema_migrations":
+            assert args == ()
+            return [
+                {"name": name, "content_sha256": content_sha256}
+                for name, content_sha256 in self.records
+            ]
+        if query == (
+            "SELECT content_sha256, applied_at FROM schema_migrations "
+            "WHERE name = $1 LIMIT 2"
+        ):
+            assert args == (reconciliation_mod.MIGRATION_387_RECONCILIATION.migration_name,)
+            return self.reconciliation_rows
+        assert "FROM pg_constraint AS actual" in query
+        assert args == (list(invoice_repository._RECURRING_INVOICE_DEDUP_CONSTRAINTS),)
         return [
-            {"name": name, "content_sha256": content_sha256}
-            for name, content_sha256 in self.records
+            {"conname": name, "definition": definition}
+            for name, definition in (
+                invoice_repository._RECURRING_INVOICE_DEDUP_CONSTRAINT_EXPRESSIONS.items()
+            )
         ]
 
     async def fetchrow(self, query: str, *args: object) -> dict[str, object] | None:
         self.fetchrow_calls.append((query, args))
-        assert query == "SELECT content_sha256, applied_at FROM schema_migrations WHERE name = $1"
-        assert args == (reconciliation_mod.MIGRATION_387_RECONCILIATION.migration_name,)
-        return self.reconciliation_row
+        assert "FROM pg_index AS index_state" in query
+        assert args == (invoice_repository._RECURRING_INVOICE_DEDUP_INDEX,)
+        return {
+            "indisunique": True,
+            "indisvalid": True,
+            "indisready": True,
+            "indnkeyatts": 2,
+            "key_column_1": "contact_id",
+            "key_column_2": "billing_period",
+            "predicate": (
+                "(billing_period IS NOT NULL) AND "
+                "(source = ANY (ARRAY['monthly_auto', 'eom_commercial_billing'])) "
+                "AND (status <> 'void')"
+            ),
+        }
 
     async def fetchval(self, query: str, *args: object) -> bool:
         self.fetchval_calls.append((query, args))
-        assert "SELECT NOT EXISTS" in query
         assert args == ()
+        if "information_schema.columns AS actual" in query:
+            return self.recurring_schema_ready
+        assert "FROM invoices" in query
         return self.zero_active_null_period_rows
 
     async def execute(self, query: str, *args) -> None:
@@ -103,17 +137,20 @@ def _migration_387_connection(
     *,
     ledger_digest: str | None = None,
     applied_at: object | None = None,
+    recurring_schema_ready: bool = True,
     zero_active_null_period_rows: bool = True,
 ) -> FakeConnection:
     record = reconciliation_mod.MIGRATION_387_RECONCILIATION
     actual_digest = ledger_digest or record.historical_ledger_sha256
     actual_applied_at = record.observed_applied_at if applied_at is None else applied_at
+    reconciliation_row = {
+        "content_sha256": actual_digest,
+        "applied_at": actual_applied_at,
+    }
     return FakeConnection(
         [(record.migration_name, actual_digest)],
-        reconciliation_row={
-            "content_sha256": actual_digest,
-            "applied_at": actual_applied_at,
-        },
+        reconciliation_rows=[reconciliation_row],
+        recurring_schema_ready=recurring_schema_ready,
         zero_active_null_period_rows=zero_active_null_period_rows,
     )
 
@@ -203,21 +240,10 @@ def test_migration_387_reconciliation_record_matches_checked_in_final_source() -
 @pytest.mark.asyncio
 async def test_known_387_reconciliation_attests_catalog_without_verifying_source(
     tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     record = reconciliation_mod.MIGRATION_387_RECONCILIATION
     _write_migration(tmp_path, record.migration_name, _migration_387_source())
     connection = _migration_387_connection()
-
-    async def schema_ready(executor: FakeConnection) -> bool:
-        assert executor is connection
-        return True
-
-    monkeypatch.setattr(
-        reconciliation_mod,
-        "_recurring_invoice_dedup_schema_ready",
-        schema_ready,
-    )
 
     code, payload = await module.run_migration_content_integrity_preflight(
         connection,
@@ -232,6 +258,7 @@ async def test_known_387_reconciliation_attests_catalog_without_verifying_source
         "reconciliation_id": record.reconciliation_id,
         "migration_name": record.migration_name,
         "source_verification": reconciliation_mod.HISTORICAL_SOURCE_UNAVAILABLE,
+        "exactly_one_ledger_row": True,
         "ledger_digest_matches_record": True,
         "packaged_digest_matches_record": True,
         "applied_at_matches_record": True,
@@ -240,12 +267,16 @@ async def test_known_387_reconciliation_attests_catalog_without_verifying_source
         "zero_active_null_period_recurring_rows": True,
         "status": "attested",
     }]
-    assert connection.queries == ["SELECT name, content_sha256 FROM schema_migrations"]
-    assert connection.fetchrow_calls == [(
-        "SELECT content_sha256, applied_at FROM schema_migrations WHERE name = $1",
+    assert connection.fetch_calls[0] == (
+        "SELECT name, content_sha256 FROM schema_migrations",
+        (),
+    )
+    assert connection.fetch_calls[1] == (
+        "SELECT content_sha256, applied_at FROM schema_migrations WHERE name = $1 LIMIT 2",
         (record.migration_name,),
-    )]
-    assert len(connection.fetchval_calls) == 1
+    )
+    assert len(connection.fetchrow_calls) == 1
+    assert len(connection.fetchval_calls) == 2
     assert connection.transaction_readonly == [True]
     assert connection.execute_calls == []
 
@@ -318,7 +349,6 @@ async def test_known_387_reconciliation_remains_not_attested_when_evidence_chang
     zero_rows: bool,
     fields: tuple[str, ...],
     tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     record = reconciliation_mod.MIGRATION_387_RECONCILIATION
     _write_migration(
@@ -329,17 +359,8 @@ async def test_known_387_reconciliation_remains_not_attested_when_evidence_chang
     connection = _migration_387_connection(
         ledger_digest=ledger_digest,
         applied_at=applied_at,
+        recurring_schema_ready=schema_is_ready,
         zero_active_null_period_rows=zero_rows,
-    )
-
-    async def schema_ready(executor: FakeConnection) -> bool:
-        assert executor is connection
-        return schema_is_ready
-
-    monkeypatch.setattr(
-        reconciliation_mod,
-        "_recurring_invoice_dedup_schema_ready",
-        schema_ready,
     )
 
     code, payload = await module.run_migration_content_integrity_preflight(
@@ -355,7 +376,44 @@ async def test_known_387_reconciliation_remains_not_attested_when_evidence_chang
     assert evidence["status"] == "not_attested", case
     assert connection.execute_calls == []
     if not schema_is_ready:
-        assert connection.fetchval_calls == []
+        assert len(connection.fetchval_calls) == 1
+
+
+@pytest.mark.asyncio
+async def test_known_387_reconciliation_rejects_duplicate_ledger_rows(
+    tmp_path: Path,
+) -> None:
+    record = reconciliation_mod.MIGRATION_387_RECONCILIATION
+    _write_migration(tmp_path, record.migration_name, _migration_387_source())
+    expected_row = {
+        "content_sha256": record.historical_ledger_sha256,
+        "applied_at": record.observed_applied_at,
+    }
+    conflicting_row = {
+        "content_sha256": "a" * 64,
+        "applied_at": record.earliest_retained_source_commit_at,
+    }
+    connection = FakeConnection(
+        [
+            (record.migration_name, expected_row["content_sha256"]),
+            (record.migration_name, conflicting_row["content_sha256"]),
+        ],
+        reconciliation_rows=[expected_row, conflicting_row],
+    )
+
+    code, payload = await module.run_migration_content_integrity_preflight(
+        connection,
+        migrations_dir=tmp_path,
+        attest_known_reconciliations=True,
+    )
+
+    evidence = payload["known_reconciliation_evidence"][0]
+    assert code == module.UNRESOLVED_DRIFT_EXIT
+    assert evidence["exactly_one_ledger_row"] is False
+    assert evidence["ledger_digest_matches_record"] is False
+    assert evidence["applied_at_matches_record"] is False
+    assert evidence["status"] == "not_attested"
+    assert connection.execute_calls == []
 
 
 @pytest.mark.asyncio

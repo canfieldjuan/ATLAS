@@ -20,16 +20,16 @@ Ownership lane: eom/migration-content-integrity
 Slice phase: Production hardening
 
 1. Add one immutable, named reconciliation record for the documented migration-387 historical source gap, including the two exact digests, observed UTC application instant, retained-source cutoff, and the permanent `historical_source_unavailable` source-evidence state.
-2. Add `--attest-known-reconciliations` to the existing target-confirmed, read-only operator preflight. The opt-in result reports only whether the known record's ledger/package/time/catalog predicates are currently attested; it never changes report categories, relabels 387 as verified, or makes a mismatched run exit zero.
+2. Add `--attest-known-reconciliations` to the existing target-confirmed, read-only operator preflight. The opt-in result reports only whether exactly one named ledger row and the known record's ledger/package/time/catalog predicates are currently attested; it never changes report categories, relabels 387 as verified, or makes a mismatched run exit zero.
 3. Reuse the existing recurring-invoice schema-readiness predicate and a bounded aggregate for active NULL-period recurring rows. The data probe runs only after schema readiness succeeds and returns no customer, invoice, payment, or credential data.
 4. Add focused tests for the attested path, every false evidence side represented by the record, no-write/read-only execution, opt-in target admission, and the unchanged default output.
 
 ### Review Contract
 
 - Acceptance criteria:
-  - [ ] `run_migration_content_integrity_preflight(..., attest_known_reconciliations=True)` emits one named 387 reconciliation result only when the stored digest, observed application instant, packaged digest, retained-source ordering, `recurring_invoice_dedup_schema_ready`, and zero-active-NULL predicate all match; `tests/test_migration_content_integrity_preflight.py` proves the full attested result.
+  - [ ] `run_migration_content_integrity_preflight(..., attest_known_reconciliations=True)` emits one named 387 reconciliation result only when exactly one named ledger row, its stored digest, observed application instant, packaged digest, retained-source ordering, `recurring_invoice_dedup_schema_ready`, and zero-active-NULL predicate all match; `tests/test_migration_content_integrity_preflight.py` proves the full attested result.
   - [ ] The attested result retains `source_verification="historical_source_unavailable"`, keeps 387 in `report.mismatched`, and returns `UNRESOLVED_DRIFT_EXIT`; `tests/test_migration_content_integrity_preflight.py` asserts each observable field and exit code.
-  - [ ] A changed ledger digest, application instant, package bytes, source-cutoff ordering, readiness result, or NULL-period aggregate produces `not_attested`, never a verified source claim; parametrized focused tests exercise the predicate failures.
+  - [ ] Duplicate ledger rows, a changed ledger digest, application instant, package bytes, source-cutoff ordering, readiness result, or NULL-period aggregate produce `not_attested`, never a verified source claim; focused tests exercise the predicate failures.
   - [ ] The new catalog reads occur inside the existing `connection.transaction(readonly=True)` and perform no `execute`; the fake connection's query and write receipts settle that invariant.
   - [ ] Without the opt-in flag, the command's existing JSON payload and behavior are byte-for-byte unchanged in the established default tests; `--show-target` plus the attestation flag is rejected before any database connection.
   - [ ] The existing migration-integrity CI workflow runs the updated focused test file because `.github/workflows/atlas_migrations_runner_checks.yml` already watches `atlas_brain/storage/migrations/**`, `scripts/check_migration_content_integrity.py`, and `tests/test_migration_content_integrity_preflight.py`.
@@ -62,7 +62,7 @@ Slice phase: Production hardening
 
 ## Mechanism
 
-`atlas_brain.storage.migrations.reconciliation` will hold a frozen dataclass for this one historical incident. It stores the exact ledger digest, packaged digest, observed UTC application instant, earliest retained-source cutoff, and literal source-evidence state. Its attestation helper reads the one ledger row, hashes only the packaged 387 source file, verifies both time predicates, and then asks the existing recurring-invoice readiness helper whether the final catalog is valid. Only if that readiness check succeeds does it execute a `NOT EXISTS` aggregate for active, NULL-period `monthly_auto` / `eom_commercial_billing` invoices.
+`atlas_brain.storage.migrations.reconciliation` will hold a frozen dataclass for this one historical incident. It stores the exact ledger digest, packaged digest, observed UTC application instant, earliest retained-source cutoff, and literal source-evidence state. Its attestation helper reads at most two named ledger rows and accepts evidence only when exactly one exists, hashes only the packaged 387 source file, verifies both time predicates, and then asks the existing recurring-invoice readiness helper whether the final catalog is valid. Only if that readiness check succeeds does it execute a `NOT EXISTS` aggregate for active, NULL-period `monthly_auto` / `eom_commercial_billing` invoices.
 
 The helper returns an evidence-oriented JSON-safe result with individual predicate states and `attested` / `not_attested`; it never returns `verified` for the unavailable historical source. The CLI calls it only behind `--attest-known-reconciliations` in the same already read-only transaction as the generic classifier. `_report_payload` continues to determine the status and exit code exclusively from the generic classifier, so a known historical attestation remains an explicitly documented mismatch for Slice 3 to policy-gate later.
 
@@ -88,17 +88,22 @@ Parked hardening: none.
 
 ## Verification
 
-- Pending before push: `pytest -q tests/test_migration_content_integrity_preflight.py`.
-- Pending before push: `python -m compileall -q atlas_brain/storage/migrations scripts/check_migration_content_integrity.py`.
-- Pending before push: `python scripts/sync_pr_plan.py --check plans/PR-EOM-Migration-Reconciliation-Evidence.md`.
+- Executed before the original push: `pytest -q tests/test_migration_content_integrity_preflight.py` — 18 passed.
+- Executed before the original push: Ruff check covering `atlas_brain/storage/migrations/reconciliation.py`, `scripts/check_migration_content_integrity.py`, and `tests/test_migration_content_integrity_preflight.py` — passed.
+- Executed before the original push: `python -m compileall -q atlas_brain/storage/migrations scripts/check_migration_content_integrity.py` — passed.
+- Executed before the original push: `python scripts/sync_pr_plan.py --check plans/PR-EOM-Migration-Reconciliation-Evidence.md`, plan-shape/code/file/diff-size/reviewer-rule audits, `git diff --check`, and safe CLI target-admission probes — passed.
+- Executed for the review repair: `pytest -q tests/test_migration_content_integrity_preflight.py` — 19 passed.
+- Executed for the review repair: Ruff check covering `atlas_brain/storage/migrations/reconciliation.py`, `scripts/check_migration_content_integrity.py`, and `tests/test_migration_content_integrity_preflight.py`; `python -m compileall -q atlas_brain/storage/migrations scripts/check_migration_content_integrity.py`; and `git diff --check` — passed.
+- Executed for the review repair: `python scripts/maturity_sweep.py atlas_brain/storage --tests-root tests --baseline tests/maturity_sweep/baseline_atlas_brain_storage.json --min-score 8 --sensitive-glob '**/billing/**' --sensitive-glob '**/billing/*.py' --sensitive-glob 'atlas_brain/storage/**'` — passed with no baseline update; the two new first-party mocks caused the prior ratchet failure and were removed.
+- Executed for the review repair: `python scripts/sync_pr_plan.py --check plans/PR-EOM-Migration-Reconciliation-Evidence.md` — passed after this plan synchronization.
 - GitHub CI will run the full migration-runner workflow and repository-required checks; per Juan's direction, do not duplicate broad GitHub suites locally.
 
 ## Estimated diff size
 
 | File | LOC |
 |---|---:|
-| `atlas_brain/storage/migrations/reconciliation.py` | 197 |
-| `plans/PR-EOM-Migration-Reconciliation-Evidence.md` | 104 |
+| `atlas_brain/storage/migrations/reconciliation.py` | 203 |
+| `plans/PR-EOM-Migration-Reconciliation-Evidence.md` | 109 |
 | `scripts/check_migration_content_integrity.py` | 46 |
-| `tests/test_migration_content_integrity_preflight.py` | 278 |
-| **Total** | **625** |
+| `tests/test_migration_content_integrity_preflight.py` | 344 |
+| **Total** | **702** |
