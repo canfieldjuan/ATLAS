@@ -8,7 +8,9 @@ on:
     paths:
       - ".github/workflows/atlas_migrations_runner_checks.yml"
       - "atlas_brain/storage/migrations/**"
+      - "scripts/check_migration_content_integrity.py"
       - "tests/test_migrations_runner.py"
+      - "tests/test_migration_content_integrity_preflight.py"
       - "tests/test_eom_public_onboarding_migration_repair.py"
   push:
     branches:
@@ -16,7 +18,9 @@ on:
     paths:
       - ".github/workflows/atlas_migrations_runner_checks.yml"
       - "atlas_brain/storage/migrations/**"
+      - "scripts/check_migration_content_integrity.py"
       - "tests/test_migrations_runner.py"
+      - "tests/test_migration_content_integrity_preflight.py"
       - "tests/test_eom_public_onboarding_migration_repair.py"
 
 jobs:
@@ -59,5 +63,6 @@ jobs:
         run: |
           python -m pytest \
             tests/test_migrations_runner.py \
+            tests/test_migration_content_integrity_preflight.py \
             tests/test_eom_public_onboarding_migration_repair.py \
             -q
