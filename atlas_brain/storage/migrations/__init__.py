@@ -150,7 +150,7 @@ def _migration_content_sha256(source: bytes) -> str:
     return hashlib.sha256(source).hexdigest()
 
 
-async def _migration_content_integrity_report(
+async def migration_content_integrity_report(
     executor,
     migration_files: Collection[Path],
 ) -> MigrationContentIntegrityReport:
@@ -195,6 +195,14 @@ async def _migration_content_integrity_report(
         mismatched=tuple(sorted(mismatched)),
         missing_source=tuple(sorted(missing_source)),
     )
+
+
+async def _migration_content_integrity_report(
+    executor,
+    migration_files: Collection[Path],
+) -> MigrationContentIntegrityReport:
+    """Backward-compatible internal alias for the canonical read-only report."""
+    return await migration_content_integrity_report(executor, migration_files)
 
 
 def _log_migration_content_integrity(report: MigrationContentIntegrityReport) -> None:
@@ -560,7 +568,7 @@ async def run_migrations(
 
             migration_files = sorted(directory.glob("*.sql"))
             _log_migration_content_integrity(
-                await _migration_content_integrity_report(conn, migration_files)
+                await migration_content_integrity_report(conn, migration_files)
             )
             if only is not None:
                 requested = set(only)
