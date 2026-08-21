@@ -237,3 +237,28 @@ def test_response_model_defaults_capabilities_for_a_caller_that_omits_it() -> No
     )
     assert response.capabilities == []
     assert response.capability_routes == []
+
+
+def test_field_clear_capability_versions_the_operator_mutation_semantics() -> None:
+    """`contact.field_clear` shares the operator-mutation route ON PURPOSE.
+
+    The name versions the route's SEMANTICS (audited present-null clearing,
+    website #254), not its existence: an older build serves the same POST
+    route but never advertises this name because the dict entry ships with
+    the clearing contract. Pin the pairing so a route move or a well-meaning
+    'dedupe' of the shared signature breaks loudly instead of silently
+    un-advertising field-clearing.
+    """
+    assert funnel_mod._CAPABILITY_ROUTES["contact.field_clear"] == (
+        "POST",
+        "/eom-funnel/operator-contacts",
+    )
+    assert (
+        funnel_mod._CAPABILITY_ROUTES["contact.field_clear"]
+        == funnel_mod._CAPABILITY_ROUTES["contact.operator_mutation"]
+    )
+    served = funnel_mod.served_capabilities()
+    assert ("contact.field_clear" in served) == (
+        "contact.operator_mutation" in served
+    ), "shared route means shared availability"
+    assert "contact.field_clear" in served
