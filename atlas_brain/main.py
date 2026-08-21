@@ -49,8 +49,16 @@ _COMMERCIAL_BILLING_REVIEW_RECOVERY_MIGRATION = (
 )
 
 
-class CommercialBillingReviewRecoveryUnavailableError(RuntimeError):
+class _DatabaseMigrationFenceError(RuntimeError):
+    """Base for startup fences that must block serving on a missing migration."""
+
+
+class CommercialBillingReviewRecoveryUnavailableError(_DatabaseMigrationFenceError):
     """The enabled receivables API cannot safely serve commercial billing."""
+
+
+class RecurringInvoiceDedupMigrationUnavailableError(_DatabaseMigrationFenceError):
+    """A recurring-invoice writer cannot safely serve without period dedup."""
 
 
 def _setting_text(config: object, name: str) -> str:
@@ -315,19 +323,18 @@ async def _start_asr_server() -> subprocess.Popen | None:
     return None
 
 
-async def _commercial_billing_review_recovery_is_recorded(pool: object) -> bool:
-    """Return whether the current review-safety migration is durably recorded."""
+async def _migration_is_recorded(pool: object, migration_name: str) -> bool:
+    """Return whether the given migration is durably recorded in schema_migrations."""
     try:
         return bool(
             await pool.fetchval(
                 "SELECT EXISTS (SELECT 1 FROM schema_migrations WHERE name = $1)",
-                _COMMERCIAL_BILLING_REVIEW_RECOVERY_MIGRATION,
+                migration_name,
             )
         )
     except Exception as exc:
         logger.warning(
-            "Could not confirm commercial billing review recovery migration: %s",
-            exc,
+            "Could not confirm migration %s is recorded: %s", migration_name, exc
         )
         return False
 
@@ -336,10 +343,19 @@ async def _run_database_migration_check(
     pool: object,
     *,
     receivables_api_enabled: bool,
+    auto_invoice_enabled: bool = False,
     run_migrations_fn=None,
     close_database_fn=None,
+    recurring_dedup_ready_fn=None,
 ) -> None:
-    """Run generic migrations, fencing unsafe receivables recovery failures."""
+    """Run generic migrations, fencing unsafe writer-path failures.
+
+    receivables_api_enabled requires the commercial billing review recovery
+    migration (382). A recurring-invoice writer is reachable when either the
+    receivables-mounted commercial-billing approval writer or the legacy
+    monthly auto-invoice task is enabled; only that writer surface is fenced
+    against the writer-only billing_period dedup schema.
+    """
     if run_migrations_fn is None:
         from .storage.migrations import run_migrations
 
@@ -347,6 +363,12 @@ async def _run_database_migration_check(
     else:
         runner = run_migrations_fn
     closer = close_database if close_database_fn is None else close_database_fn
+    if recurring_dedup_ready_fn is None:
+        from .storage.repositories.invoice import recurring_invoice_dedup_schema_ready
+
+        recurring_ready = recurring_invoice_dedup_schema_ready
+    else:
+        recurring_ready = recurring_dedup_ready_fn
 
     migration_error = None
     try:
@@ -354,35 +376,73 @@ async def _run_database_migration_check(
     except Exception as exc:
         migration_error = exc
 
-    if not receivables_api_enabled:
-        if migration_error is not None:
-            logger.warning("Database migration check failed: %s", migration_error)
-        else:
-            logger.info("Database migrations checked")
-        return
-
-    if await _commercial_billing_review_recovery_is_recorded(pool):
-        if migration_error is not None:
-            logger.warning("Database migration check failed: %s", migration_error)
-        else:
-            logger.info("Database migrations checked")
-        return
-
-    try:
-        await closer()
-    except Exception as close_exc:
-        logger.error(
-            "Error closing database after commercial billing recovery failure: %s",
-            close_exc,
-            exc_info=True,
+    required: list[tuple[str, type[_DatabaseMigrationFenceError], str]] = []
+    if receivables_api_enabled:
+        required.append(
+            (
+                _COMMERCIAL_BILLING_REVIEW_RECOVERY_MIGRATION,
+                CommercialBillingReviewRecoveryUnavailableError,
+                "Commercial billing review recovery migration must complete "
+                "before the enabled receivables API can start",
+            )
         )
-    error = CommercialBillingReviewRecoveryUnavailableError(
-        "Commercial billing review recovery migration must complete before "
-        "the enabled receivables API can start"
-    )
+    for migration_name, error_cls, message in required:
+        if await _migration_is_recorded(pool, migration_name):
+            continue
+        try:
+            await closer()
+        except Exception as close_exc:
+            logger.error(
+                "Error closing database after %s failure: %s",
+                migration_name,
+                close_exc,
+                exc_info=True,
+            )
+        error = error_cls(message)
+        if migration_error is not None:
+            raise error from migration_error
+        raise error
+
+    if receivables_api_enabled or auto_invoice_enabled:
+        try:
+            recurring_dedup_ready = await recurring_ready(pool)
+        except Exception as exc:
+            try:
+                await closer()
+            except Exception as close_exc:
+                logger.error(
+                    "Error closing database after recurring invoice dedup "
+                    "readiness verification error: %s",
+                    close_exc,
+                    exc_info=True,
+                )
+            error = RecurringInvoiceDedupMigrationUnavailableError(
+                "Recurring-invoice billing_period dedup schema must be ready "
+                "before an enabled recurring invoice writer can start"
+            )
+            raise error from exc
+        if not recurring_dedup_ready:
+            try:
+                await closer()
+            except Exception as close_exc:
+                logger.error(
+                    "Error closing database after recurring invoice dedup "
+                    "readiness failure: %s",
+                    close_exc,
+                    exc_info=True,
+                )
+            error = RecurringInvoiceDedupMigrationUnavailableError(
+                "Recurring-invoice billing_period dedup schema must be ready "
+                "before an enabled recurring invoice writer can start"
+            )
+            if migration_error is not None:
+                raise error from migration_error
+            raise error
+
     if migration_error is not None:
-        raise error from migration_error
-    raise error
+        logger.warning("Database migration check failed: %s", migration_error)
+    else:
+        logger.info("Database migrations checked")
 
 
 @asynccontextmanager
@@ -410,12 +470,16 @@ async def lifespan(app: FastAPI):
                     await _run_database_migration_check(
                         pool,
                         receivables_api_enabled=settings.invoicing.receivables_api_enabled,
+                        auto_invoice_enabled=(
+                            settings.invoicing.enabled
+                            and settings.invoicing.auto_invoice_enabled
+                        ),
                     )
-            except CommercialBillingReviewRecoveryUnavailableError:
+            except _DatabaseMigrationFenceError:
                 raise
             except Exception as e:
                 logger.warning("Database migration check failed: %s", e)
-        except CommercialBillingReviewRecoveryUnavailableError:
+        except _DatabaseMigrationFenceError:
             raise
         except Exception as e:
             logger.error("Failed to initialize database: %s", e, exc_info=True)

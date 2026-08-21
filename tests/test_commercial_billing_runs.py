@@ -1907,32 +1907,41 @@ async def test_full_atlas_migration_check_blocks_enabled_receivables_without_rec
     (
         "migration_fails",
         "receivables_api_enabled",
-        "ledger_recorded",
+        "recovery_recorded",
+        "dedup_ready",
         "expected_events",
+        "expected_ledger_migrations",
     ),
     (
-        (True, True, True, ["migrate", "ledger"]),
-        (False, True, True, ["migrate", "ledger"]),
-        (True, False, False, ["migrate"]),
-        (False, False, False, ["migrate"]),
+        # receivables_api_enabled=True requires review-recovery migration 382
+        # plus recurring-writer dedup readiness, not a base receivables
+        # migration-385 ledger check.
+        (True, True, True, True, ["migrate", "ledger", "recurring-ready"], "recovery"),
+        (False, True, True, True, ["migrate", "ledger", "recurring-ready"], "recovery"),
+        (True, False, False, False, ["migrate"], "none"),
+        (False, False, False, False, ["migrate"], "none"),
     ),
 )
 async def test_full_atlas_migration_check_allows_recovered_or_disabled_receivables(
     migration_fails: bool,
     receivables_api_enabled: bool,
-    ledger_recorded: bool,
+    recovery_recorded: bool,
+    dedup_ready: bool,
     expected_events: list[str],
+    expected_ledger_migrations: str,
 ):
     from atlas_brain import main
 
     events: list[str] = []
+    ledger_queries: list[str] = []
 
     class _Pool:
         async def fetchval(self, query: str, *args: object) -> bool:
             assert query == "SELECT EXISTS (SELECT 1 FROM schema_migrations WHERE name = $1)"
             assert args == (main._COMMERCIAL_BILLING_REVIEW_RECOVERY_MIGRATION,)
+            ledger_queries.append(args[0])
             events.append("ledger")
-            return ledger_recorded
+            return recovery_recorded
 
     async def fail_migrations(pool: object) -> None:
         assert isinstance(pool, _Pool)
@@ -1943,14 +1952,149 @@ async def test_full_atlas_migration_check_allows_recovered_or_disabled_receivabl
     async def close_database() -> None:
         events.append("close")
 
+    async def recurring_ready(pool: object) -> bool:
+        assert isinstance(pool, _Pool)
+        events.append("recurring-ready")
+        return dedup_ready
+
     await main._run_database_migration_check(
         _Pool(),
         receivables_api_enabled=receivables_api_enabled,
         run_migrations_fn=fail_migrations,
         close_database_fn=close_database,
+        recurring_dedup_ready_fn=recurring_ready,
     )
 
     assert events == expected_events
+    if expected_ledger_migrations == "recovery":
+        assert ledger_queries == [
+            main._COMMERCIAL_BILLING_REVIEW_RECOVERY_MIGRATION,
+        ]
+    else:
+        assert ledger_queries == []
+
+
+@pytest.mark.asyncio
+async def test_full_atlas_migration_check_blocks_enabled_auto_invoice_without_dedup_readiness():
+    """The legacy monthly auto-invoice task reaches invoices.billing_period
+    exactly like the receivables-mounted approval writer does, but through a
+    completely independent flag (auto_invoice_enabled) that the review-
+    recovery fence never checked. Positive-fence proof: this path is now
+    fenced too, not only receivables_api_enabled."""
+    from atlas_brain import main
+
+    events: list[str] = []
+    queries: list[tuple[str, tuple[object, ...]]] = []
+
+    class _Pool:
+        pass
+
+    async def run_migrations(pool: object) -> None:
+        assert isinstance(pool, _Pool)
+        events.append("migrate")
+
+    async def close_database() -> None:
+        events.append("close")
+
+    async def recurring_ready(pool: object) -> bool:
+        assert isinstance(pool, _Pool)
+        events.append("recurring-ready")
+        return False
+
+    with pytest.raises(
+        main.RecurringInvoiceDedupMigrationUnavailableError,
+        match="Recurring-invoice billing_period dedup schema",
+    ) as exc_info:
+        await main._run_database_migration_check(
+            _Pool(),
+            receivables_api_enabled=False,
+            auto_invoice_enabled=True,
+            run_migrations_fn=run_migrations,
+            close_database_fn=close_database,
+            recurring_dedup_ready_fn=recurring_ready,
+        )
+
+    assert exc_info.value.__cause__ is None
+    assert events == ["migrate", "recurring-ready", "close"]
+    assert queries == []
+
+
+@pytest.mark.asyncio
+async def test_full_atlas_migration_check_blocks_when_dedup_readiness_query_errors():
+    """A broken readiness query is not a soft warning. If a recurring writer is
+    enabled, inability to verify migration 385 is the same startup safety class
+    as an explicit false readiness result: close the pool and fail closed."""
+    from atlas_brain import main
+
+    events: list[str] = []
+
+    class _Pool:
+        pass
+
+    async def run_migrations(pool: object) -> None:
+        assert isinstance(pool, _Pool)
+        events.append("migrate")
+
+    async def close_database() -> None:
+        events.append("close")
+
+    async def recurring_ready(pool: object) -> bool:
+        assert isinstance(pool, _Pool)
+        events.append("recurring-ready")
+        raise RuntimeError("permission denied")
+
+    with pytest.raises(
+        main.RecurringInvoiceDedupMigrationUnavailableError,
+        match="Recurring-invoice billing_period dedup schema",
+    ) as exc_info:
+        await main._run_database_migration_check(
+            _Pool(),
+            receivables_api_enabled=False,
+            auto_invoice_enabled=True,
+            run_migrations_fn=run_migrations,
+            close_database_fn=close_database,
+            recurring_dedup_ready_fn=recurring_ready,
+        )
+
+    assert isinstance(exc_info.value.__cause__, RuntimeError)
+    assert str(exc_info.value.__cause__) == "permission denied"
+    assert events == ["migrate", "recurring-ready", "close"]
+
+
+@pytest.mark.asyncio
+async def test_full_atlas_migration_check_allows_auto_invoice_when_dedup_schema_ready():
+    """Negative control for the positive-fence test above: the same
+    auto_invoice_enabled-only shape does NOT false-positive-block a healthy
+    deploy once the recurring dedup schema is ready."""
+    from atlas_brain import main
+
+    events: list[str] = []
+
+    class _Pool:
+        pass
+
+    async def run_migrations(pool: object) -> None:
+        assert isinstance(pool, _Pool)
+        events.append("migrate")
+
+    async def close_database() -> None:
+        events.append("close")
+
+    async def recurring_ready(pool: object) -> bool:
+        assert isinstance(pool, _Pool)
+        events.append("recurring-ready")
+        return True
+
+    await main._run_database_migration_check(
+        _Pool(),
+        receivables_api_enabled=False,
+        auto_invoice_enabled=True,
+        run_migrations_fn=run_migrations,
+        close_database_fn=close_database,
+        recurring_dedup_ready_fn=recurring_ready,
+    )
+
+    assert events == ["migrate", "recurring-ready"]
 
 
 @pytest.mark.asyncio
@@ -2011,7 +2155,9 @@ async def test_full_atlas_lifespan_uses_enabled_receivables_recovery_fence(monke
         "settings",
         SimpleNamespace(
             invoicing=SimpleNamespace(
+                enabled=True,
                 receivables_api_enabled=True,
+                auto_invoice_enabled=False,
                 receivables_service_token="",
                 receivables_service_token_sha256=generated.sha256,
             )
@@ -2042,6 +2188,169 @@ async def test_full_atlas_lifespan_uses_enabled_receivables_recovery_fence(monke
         "ledger",
         "close",
     ]
+
+
+@pytest.mark.asyncio
+async def test_full_atlas_lifespan_fences_auto_invoice_only_deployment_without_dedup_readiness(
+    monkeypatch,
+):
+    """The legacy-cron-only deployment shape (auto_invoice_enabled=True,
+    receivables_api_enabled=False -- no reason to ever run the receivables
+    API just to auto-invoice) is fenced end-to-end through the real
+    main.lifespan(...), not only at the _run_database_migration_check unit
+    level. Mirrors test_full_atlas_lifespan_uses_enabled_receivables_recovery_fence."""
+    from atlas_brain import main
+    from atlas_brain.storage.repositories import invoice as invoice_mod
+
+    events: list[str] = []
+
+    class _Pool:
+        is_initialized = True
+
+        async def acquire(self) -> _Pool:
+            events.append("acquire")
+            return self
+
+        async def release(self, connection: object) -> None:
+            assert connection is self
+            events.append("release")
+
+        async def fetchval(self, query: str, *args: object) -> bool:
+            if query == "SELECT pg_try_advisory_lock($1)":
+                events.append("lock")
+                return True
+            raise AssertionError(f"Unexpected fetchval query: {query}")
+
+        async def execute(self, query: str, *args: object) -> str:
+            if "CREATE TABLE IF NOT EXISTS schema_migrations" in query:
+                events.append("ensure")
+                return "CREATE TABLE"
+            if "ADD COLUMN IF NOT EXISTS content_sha256" in query:
+                events.append("ensure-content-identity")
+                return "ALTER TABLE"
+            assert query == "SELECT pg_advisory_unlock($1)"
+            assert args
+            events.append("unlock")
+            return "SELECT 1"
+
+        async def fetch(self, query: str) -> list[object]:
+            assert query == "SELECT name FROM schema_migrations"
+            events.append("migrate")
+            raise RuntimeError("migration failed")
+
+    pool = _Pool()
+
+    async def init_database() -> None:
+        events.append("init")
+
+    async def close_database() -> None:
+        events.append("close")
+
+    async def recurring_ready(candidate) -> bool:
+        assert candidate is pool
+        events.append("recurring-ready")
+        return False
+
+    monkeypatch.setattr(
+        main,
+        "settings",
+        SimpleNamespace(
+            invoicing=SimpleNamespace(
+                enabled=True,
+                receivables_api_enabled=False,
+                auto_invoice_enabled=True,
+                receivables_service_token="",
+                receivables_service_token_sha256="",
+            )
+        ),
+    )
+    monkeypatch.setattr(main, "db_settings", SimpleNamespace(enabled=True))
+    monkeypatch.setattr(main, "_enforce_paid_funnel_alert_channel", lambda _settings: None)
+    monkeypatch.setattr(main, "init_database", init_database)
+    monkeypatch.setattr(main, "get_db_pool", lambda: pool)
+    monkeypatch.setattr(main, "close_database", close_database)
+    monkeypatch.setattr(invoice_mod, "recurring_invoice_dedup_schema_ready", recurring_ready)
+
+    with pytest.raises(
+        main.RecurringInvoiceDedupMigrationUnavailableError,
+        match="Recurring-invoice billing_period dedup schema",
+    ):
+        async with main.lifespan(FastAPI()):
+            raise AssertionError("unsafe auto-invoice startup must not serve")
+
+    assert events == [
+        "init",
+        "acquire",
+        "lock",
+        "ensure",
+        "ensure-content-identity",
+        "migrate",
+        "unlock",
+        "release",
+        "recurring-ready",
+        "close",
+    ]
+
+
+@pytest.mark.asyncio
+async def test_full_atlas_lifespan_scopes_auto_invoice_fence_to_master_invoicing_gate(
+    monkeypatch,
+):
+    """Finding #7 regression: a stale auto_invoice_enabled=True must not
+    fence startup once the master invoicing.enabled gate is off. The legacy
+    monthly task checks settings.invoicing.enabled first and returns
+    "Invoicing disabled" before ever reaching auto_invoice_enabled or
+    billing_period (monthly_invoice_generation.py), so requiring migration
+    385 in that shape is a false-positive block on a healthy,
+    invoicing-disabled deployment. Negative control:
+    test_full_atlas_lifespan_fences_auto_invoice_only_deployment_without_dedup_readiness
+    (invoicing.enabled=True) proves the fence still fires when the master
+    gate is actually on."""
+    from atlas_brain import main
+
+    captured: dict[str, object] = {}
+
+    async def fake_run_database_migration_check(pool, **kwargs) -> None:
+        captured.update(kwargs)
+        raise main.RecurringInvoiceDedupMigrationUnavailableError("stop-after-capture")
+
+    class _Pool:
+        is_initialized = True
+
+    async def init_database() -> None:
+        pass
+
+    monkeypatch.setattr(
+        main,
+        "settings",
+        SimpleNamespace(
+            invoicing=SimpleNamespace(
+                enabled=False,
+                receivables_api_enabled=False,
+                auto_invoice_enabled=True,
+                receivables_service_token="",
+                receivables_service_token_sha256="",
+            )
+        ),
+    )
+    monkeypatch.setattr(main, "db_settings", SimpleNamespace(enabled=True))
+    monkeypatch.setattr(main, "_enforce_paid_funnel_alert_channel", lambda _settings: None)
+    monkeypatch.setattr(main, "init_database", init_database)
+    monkeypatch.setattr(main, "get_db_pool", lambda: _Pool())
+    monkeypatch.setattr(
+        main, "_run_database_migration_check", fake_run_database_migration_check
+    )
+
+    with pytest.raises(
+        main.RecurringInvoiceDedupMigrationUnavailableError, match="stop-after-capture"
+    ):
+        async with main.lifespan(FastAPI()):
+            raise AssertionError("should not reach yield")
+
+    assert captured == {
+        "receivables_api_enabled": False,
+        "auto_invoice_enabled": False,
+    }
 
 
 def test_billing_run_migration_is_additive_and_preserves_draft_evidence():

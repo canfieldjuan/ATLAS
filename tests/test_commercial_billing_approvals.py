@@ -180,12 +180,54 @@ class _MemoryConnection:
         self.insert_attempts = 0
         self.review_decision: dict | None = None
         self.override: dict | None = None
+        self.recurring_period_conflict: dict | None = None
 
     async def fetchval(self, query, *_args):
+        if "information_schema.columns" in query:
+            return True
         assert "pg_advisory_xact_lock" in query
         return None
 
+    async def fetch(self, query, *_args):
+        if "pg_get_constraintdef" in query:
+            return [
+                {
+                    "conname": "invoices_billing_period_check",
+                    "definition": (
+                        "CHECK (((billing_period)::text ~ "
+                        "'^(000[1-9]|00[1-9][0-9]|0[1-9][0-9]{2}|"
+                        "[1-9][0-9]{3})-(0[1-9]|1[0-2])$'::text)) NOT VALID"
+                    ),
+                },
+                {
+                    "conname": "invoices_recurring_billing_period_required_check",
+                    "definition": (
+                        "CHECK ((((source)::text <> ALL "
+                        "(ARRAY['monthly_auto'::text, 'eom_commercial_billing'::text])) "
+                        "OR ((status)::text = 'void'::text) "
+                        "OR (billing_period IS NOT NULL) "
+                        "OR billing_period_legacy_null)) NOT VALID"
+                    ),
+                },
+            ]
+        raise AssertionError(query)
+
     async def fetchrow(self, query, *args):
+        if "pg_get_expr(index_state.indpred" in query:
+            return {
+                "indisunique": True,
+                "indisvalid": True,
+                "indisready": True,
+                "indnkeyatts": 2,
+                "key_column_1": "contact_id",
+                "key_column_2": "billing_period",
+                "predicate": (
+                    "((billing_period IS NOT NULL) "
+                    "AND ((source)::text = ANY "
+                    "(ARRAY['monthly_auto'::text, 'eom_commercial_billing'::text])) "
+                    "AND ((status)::text <> 'void'::text))"
+                ),
+            }
         if "FROM commercial_billing_runs AS run" in query:
             if args == (self.run_id, self.candidate["candidateKey"]):
                 return {
@@ -204,6 +246,8 @@ class _MemoryConnection:
             return self.review_decision
         if "FROM commercial_billing_candidate_overrides" in query:
             return self.override
+        if "SELECT source, invoice_number FROM invoices" in query:
+            return self.recurring_period_conflict
         if "INSERT INTO invoices" in query:
             self.insert_attempts += 1
             invoice_id = args[0]
@@ -271,6 +315,13 @@ class _SchemaPool:
         self.connection = connection
         self.schema = schema
 
+    async def acquire(self):
+        await self.connection.execute(f'SET search_path TO "{self.schema}"')
+        return self.connection
+
+    async def release(self, released) -> None:
+        assert released is self.connection
+
     @asynccontextmanager
     async def transaction(self):
         async with self.connection.transaction():
@@ -286,6 +337,36 @@ class _SchemaPool:
         async with self.connection.transaction():
             await self.connection.execute(f'SET LOCAL search_path TO "{self.schema}"')
             return await self.connection.fetch(query, *args)
+
+    async def fetchval(self, query, *args):
+        async with self.connection.transaction():
+            await self.connection.execute(f'SET LOCAL search_path TO "{self.schema}"')
+            return await self.connection.fetchval(query, *args)
+
+    async def execute(self, query, *args):
+        async with self.connection.transaction():
+            await self.connection.execute(f'SET LOCAL search_path TO "{self.schema}"')
+            return await self.connection.execute(query, *args)
+
+
+async def _run_migration(connection, schema: str, name: str) -> None:
+    from atlas_brain.storage.migrations import run_migrations
+
+    migrations = Path(__file__).parents[1] / "atlas_brain/storage/migrations"
+    await run_migrations(
+        _SchemaPool(connection, schema),
+        migrations_dir=migrations,
+        only={Path(name).stem},
+    )
+
+
+def test_approval_database_uses_runner_for_concurrent_dedup_migration():
+    source = inspect.getsource(_approval_database)
+
+    assert '"385_invoices_billing_period_dedup.sql"' not in source.split(
+        "await _run_migration", maxsplit=1
+    )[0]
+    assert 'await _run_migration(\n            connection,\n            schema,\n            "385_invoices_billing_period_dedup.sql",' in source
 
 
 @asynccontextmanager
@@ -311,6 +392,11 @@ async def _approval_database():
             "373_commercial_billing_invoice_pdf_artifacts.sql",
         ):
             await connection.execute((migrations / name).read_text())
+        await _run_migration(
+            connection,
+            schema,
+            "385_invoices_billing_period_dedup.sql",
+        )
         yield connection, schema
     finally:
         await connection.execute("SET search_path TO public")
@@ -942,6 +1028,239 @@ async def test_real_postgres_approval_is_atomic_and_reuses_same_candidate_across
 
 
 @pytest.mark.asyncio
+async def test_real_postgres_approval_rejects_when_legacy_monthly_writer_already_invoiced_the_period():
+    """Cross-pipeline recurring-invoice dedup (migration 385): the approval
+    writer refuses to create a second recurring invoice for a contact+period
+    the legacy monthly_auto cron already invoiced. Negative control: the
+    same contact with a DIFFERENT billing period is not a conflict and
+    succeeds normally -- proves the check discriminates on period, not just
+    contact."""
+    async with _approval_database() as (connection, schema):
+        run_id, candidate = uuid4(), _candidate(
+            candidate_key="commercial-billing:cross-pipeline-dedup:2026-03"
+        )
+        fingerprint = candidate["sourceFingerprint"]
+        contact_id = UUID(candidate["customer"]["contactId"])
+        await connection.execute("INSERT INTO contacts (id) VALUES ($1)", contact_id)
+        await connection.execute(
+            """
+            INSERT INTO commercial_billing_runs (
+                id, billing_period, state, candidate_contract_version,
+                snapshot_fingerprint, source, idempotency_key,
+                request_fingerprint, created_by
+            ) VALUES ($1, '2026-03', 'draft', 2, $2, 'eom_admin', 'cross-pipeline-run', $2, 'Juan')
+            """,
+            run_id, fingerprint,
+        )
+        await connection.execute(
+            """
+            INSERT INTO commercial_billing_run_candidates (
+                id, billing_run_id, candidate_key, source_fingerprint,
+                display_order, snapshot
+            ) VALUES ($1, $2, $3, $4, 0, $5::jsonb)
+            """,
+            uuid4(), run_id, candidate["candidateKey"], fingerprint, json.dumps(candidate),
+        )
+
+        # The legacy cron already invoiced this contact for this period.
+        await connection.execute(
+            """
+            INSERT INTO invoices (
+                id, invoice_number, contact_id, customer_name, due_date,
+                status, source, billing_period
+            ) VALUES ($1, 'INV-LEGACY-2026-03', $2, 'Acme Office', CURRENT_DATE,
+                      'draft', 'monthly_auto', '2026-03')
+            """,
+            uuid4(), contact_id,
+        )
+
+        service = _service(_SchemaPool(connection, schema), _CandidateService(candidate))
+        with pytest.raises(
+            CommercialBillingApprovalConflictError, match="recurring invoice already exists"
+        ):
+            await service.approve(
+                billing_run_id=run_id, candidate_key=candidate["candidateKey"],
+                expected_source_fingerprint=fingerprint, idempotency_key="cross-pipeline-1", actor="Juan",
+            )
+        assert await connection.fetchval("SELECT COUNT(*) FROM invoices") == 1
+
+        # Negative control: same contact, different period -> not a conflict.
+        other_run_id = uuid4()
+        other_candidate = _candidate(
+            candidate_key="commercial-billing:cross-pipeline-dedup-other-period:2026-04",
+        )
+        other_candidate["billingPeriod"] = "2026-04"
+        other_fingerprint = _refresh_fingerprint(other_candidate)
+        await connection.execute(
+            """
+            INSERT INTO commercial_billing_runs (
+                id, billing_period, state, candidate_contract_version,
+                snapshot_fingerprint, source, idempotency_key,
+                request_fingerprint, created_by
+            ) VALUES ($1, '2026-04', 'draft', 2, $2, 'eom_admin', 'cross-pipeline-run-2', $2, 'Juan')
+            """,
+            other_run_id, other_fingerprint,
+        )
+        await connection.execute(
+            """
+            INSERT INTO commercial_billing_run_candidates (
+                id, billing_run_id, candidate_key, source_fingerprint,
+                display_order, snapshot
+            ) VALUES ($1, $2, $3, $4, 0, $5::jsonb)
+            """,
+            uuid4(), other_run_id, other_candidate["candidateKey"], other_fingerprint,
+            json.dumps(other_candidate),
+        )
+        other_service = _service(_SchemaPool(connection, schema), _CandidateService(other_candidate))
+        approved = await other_service.approve(
+            billing_run_id=other_run_id, candidate_key=other_candidate["candidateKey"],
+            expected_source_fingerprint=other_fingerprint, idempotency_key="cross-pipeline-2", actor="Juan",
+        )
+        assert approved["replayed"] is False
+        assert await connection.fetchval("SELECT COUNT(*) FROM invoices") == 2
+
+
+@pytest.mark.asyncio
+async def test_real_postgres_approval_rejects_a_quarantined_backfill_collision_period():
+    """Codex P1, second review round on ATLAS #2448: a quarantined
+    (contact_id, billing_period) -- an ambiguous historical collision the
+    backfill left billing_period=NULL for both rows, rather than guess which
+    is real -- has no row claiming idx_invoices_recurring_contact_period_source's
+    slot, so without invoices_billing_period_reservations a third invoice for
+    that same contact+period would go unblocked. Negative control: the same
+    contact with a DIFFERENT period (no reservation) is not a conflict and
+    succeeds normally."""
+    async with _approval_database() as (connection, schema):
+        run_id, candidate = uuid4(), _candidate(
+            candidate_key="commercial-billing:quarantine-reservation:2026-05"
+        )
+        candidate["billingPeriod"] = "2026-05"
+        fingerprint = _refresh_fingerprint(candidate)
+        contact_id = UUID(candidate["customer"]["contactId"])
+        await connection.execute("INSERT INTO contacts (id) VALUES ($1)", contact_id)
+        await connection.execute(
+            """
+            INSERT INTO commercial_billing_runs (
+                id, billing_period, state, candidate_contract_version,
+                snapshot_fingerprint, source, idempotency_key,
+                request_fingerprint, created_by
+            ) VALUES ($1, '2026-05', 'draft', 2, $2, 'eom_admin', 'quarantine-run', $2, 'Juan')
+            """,
+            run_id, fingerprint,
+        )
+        await connection.execute(
+            """
+            INSERT INTO commercial_billing_run_candidates (
+                id, billing_run_id, candidate_key, source_fingerprint,
+                display_order, snapshot
+            ) VALUES ($1, $2, $3, $4, 0, $5::jsonb)
+            """,
+            uuid4(), run_id, candidate["candidateKey"], fingerprint, json.dumps(candidate),
+        )
+
+        # Two ambiguous historical invoices already exist for this
+        # contact+period (this is what a real collision-quarantine leaves
+        # behind: billing_period=NULL on both, plus a reservation row --
+        # inserted directly here rather than re-running the full backfill,
+        # to isolate the approval-writer's own consumption of the
+        # reservation table). Both use source='monthly_auto': a real
+        # eom_commercial_billing row is subject to this schema's own
+        # review-identity trigger (migration 380/381/382), which is
+        # orthogonal to what this test is proving.
+        await connection.execute(
+            """
+            INSERT INTO invoices (
+                id, invoice_number, contact_id, customer_name, due_date,
+                status, source, billing_period, billing_period_legacy_null, metadata
+            ) VALUES
+                ($1, 'INV-QUARANTINE-A', $3, 'Acme Office', CURRENT_DATE, 'draft', 'monthly_auto', NULL, true, $4::jsonb),
+                ($2, 'INV-QUARANTINE-B', $3, 'Acme Office', CURRENT_DATE, 'draft', 'monthly_auto', NULL, true, $4::jsonb)
+            """,
+            uuid4(), uuid4(), contact_id,
+            json.dumps({
+                "billing_period_backfill_collision": True,
+                "billing_period_backfill_candidate_period": "2026-05",
+            }),
+        )
+        await connection.execute(
+            "INSERT INTO invoices_billing_period_reservations (contact_id, billing_period) "
+            "VALUES ($1, '2026-05')",
+            contact_id,
+        )
+
+        service = _service(_SchemaPool(connection, schema), _CandidateService(candidate))
+        with pytest.raises(
+            CommercialBillingApprovalConflictError, match="recurring invoice already exists"
+        ):
+            await service.approve(
+                billing_run_id=run_id, candidate_key=candidate["candidateKey"],
+                expected_source_fingerprint=fingerprint, idempotency_key="quarantine-1", actor="Juan",
+            )
+        # Still exactly the 2 pre-existing ambiguous rows -- no third invoice
+        # was created, and neither existing row was touched.
+        assert await connection.fetchval("SELECT COUNT(*) FROM invoices") == 2
+
+        # Negative control: same contact, a period with NO reservation ->
+        # not a conflict, approves normally.
+        other_run_id = uuid4()
+        other_candidate = _candidate(
+            candidate_key="commercial-billing:quarantine-reservation-other-period:2026-06",
+        )
+        other_candidate["customer"]["contactId"] = str(contact_id)
+        other_candidate["billingPeriod"] = "2026-06"
+        other_fingerprint = _refresh_fingerprint(other_candidate)
+        await connection.execute(
+            """
+            INSERT INTO commercial_billing_runs (
+                id, billing_period, state, candidate_contract_version,
+                snapshot_fingerprint, source, idempotency_key,
+                request_fingerprint, created_by
+            ) VALUES ($1, '2026-06', 'draft', 2, $2, 'eom_admin', 'quarantine-run-2', $2, 'Juan')
+            """,
+            other_run_id, other_fingerprint,
+        )
+        await connection.execute(
+            """
+            INSERT INTO commercial_billing_run_candidates (
+                id, billing_run_id, candidate_key, source_fingerprint,
+                display_order, snapshot
+            ) VALUES ($1, $2, $3, $4, 0, $5::jsonb)
+            """,
+            uuid4(), other_run_id, other_candidate["candidateKey"], other_fingerprint,
+            json.dumps(other_candidate),
+        )
+        other_service = _service(_SchemaPool(connection, schema), _CandidateService(other_candidate))
+        approved = await other_service.approve(
+            billing_run_id=other_run_id, candidate_key=other_candidate["candidateKey"],
+            expected_source_fingerprint=other_fingerprint, idempotency_key="quarantine-2", actor="Juan",
+        )
+        assert approved["replayed"] is False
+        assert await connection.fetchval("SELECT COUNT(*) FROM invoices") == 3
+
+        # Review round 4: the reservation remains as historical evidence, but
+        # once every matching quarantined invoice is voided it must no longer
+        # block the approval writer from cleanly reissuing that period.
+        await connection.execute(
+            """
+            UPDATE invoices
+            SET status = 'void'
+            WHERE contact_id = $1
+              AND metadata->>'billing_period_backfill_collision' = 'true'
+              AND metadata->>'billing_period_backfill_candidate_period' = '2026-05'
+            """,
+            contact_id,
+        )
+        reissue = await service.approve(
+            billing_run_id=run_id, candidate_key=candidate["candidateKey"],
+            expected_source_fingerprint=fingerprint,
+            idempotency_key="quarantine-void-release",
+            actor="Juan",
+        )
+        assert reissue["replayed"] is False
+        assert await connection.fetchval("SELECT COUNT(*) FROM invoices") == 4
+
+
+@pytest.mark.asyncio
 async def test_real_postgres_override_identity_and_final_invoice_trigger_are_scoped_to_run():
     """An override in one retained run cannot stale the same source in another."""
 
@@ -1013,11 +1332,11 @@ async def test_real_postgres_override_identity_and_final_invoice_trigger_are_sco
             INSERT INTO invoices (
                 id, invoice_number, contact_id, customer_name, line_items,
                 subtotal, tax_rate, tax_amount, total_amount, due_date,
-                source, source_ref, business_context_id, metadata
+                source, source_ref, business_context_id, metadata, billing_period
             ) VALUES (
                 $1, 'INV-RUN-A-0001', $2, 'Acme Office', $3::jsonb,
                 96.50, 0, 0, 96.50, $4,
-                'eom_commercial_billing', 'run-scope-a-invoice', 'effingham_maids', $5::jsonb
+                'eom_commercial_billing', 'run-scope-a-invoice', 'effingham_maids', $5::jsonb, '2026-03'
             )
             """,
             uuid4(),
@@ -1038,11 +1357,11 @@ async def test_real_postgres_override_identity_and_final_invoice_trigger_are_sco
                 INSERT INTO invoices (
                     id, invoice_number, contact_id, customer_name, line_items,
                     subtotal, tax_rate, tax_amount, total_amount, due_date,
-                    source, source_ref, business_context_id, metadata
+                    source, source_ref, business_context_id, metadata, billing_period
                 ) VALUES (
                     $1, 'INV-RUN-B-0001', $2, 'Acme Office', $3::jsonb,
                     96.50, 0, 0, 96.50, $4,
-                    'eom_commercial_billing', 'run-scope-b-invoice', 'effingham_maids', $5::jsonb
+                    'eom_commercial_billing', 'run-scope-b-invoice', 'effingham_maids', $5::jsonb, '2026-03'
                 )
                 """,
                 uuid4(),

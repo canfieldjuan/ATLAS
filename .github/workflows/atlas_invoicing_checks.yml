@@ -69,6 +69,7 @@ on:
       - "atlas_brain/storage/migrations/380_commercial_billing_candidate_review_decisions.sql"
       - "atlas_brain/storage/migrations/381_commercial_billing_candidate_review_decisions_recovery.sql"
       - "atlas_brain/storage/migrations/382_commercial_billing_candidate_overrides.sql"
+      - "atlas_brain/storage/migrations/385_invoices_billing_period_dedup.sql"
       - "atlas_brain/storage/database.py"
       - "atlas_brain/storage/models.py"
       - "atlas_brain/storage/repositories/customer_service.py"
@@ -79,6 +80,7 @@ on:
       - "tests/test_legacy_monthly_autoinvoice_opt_in.py"
       - "tests/test_legacy_monthly_autoinvoice_writer_harness.py"
       - "tests/test_monthly_invoice_generation.py"
+      - "tests/test_monthly_invoice_generation_cross_pipeline_dedup.py"
       - "tests/test_invoice_repository.py"
       - "tests/test_invoice_pdf.py"
       - "tests/test_receivables.py"
@@ -164,6 +166,7 @@ on:
       - "atlas_brain/storage/migrations/380_commercial_billing_candidate_review_decisions.sql"
       - "atlas_brain/storage/migrations/381_commercial_billing_candidate_review_decisions_recovery.sql"
       - "atlas_brain/storage/migrations/382_commercial_billing_candidate_overrides.sql"
+      - "atlas_brain/storage/migrations/385_invoices_billing_period_dedup.sql"
       - "atlas_brain/storage/database.py"
       - "atlas_brain/storage/models.py"
       - "atlas_brain/storage/repositories/customer_service.py"
@@ -174,6 +177,7 @@ on:
       - "tests/test_legacy_monthly_autoinvoice_opt_in.py"
       - "tests/test_legacy_monthly_autoinvoice_writer_harness.py"
       - "tests/test_monthly_invoice_generation.py"
+      - "tests/test_monthly_invoice_generation_cross_pipeline_dedup.py"
       - "tests/test_invoice_repository.py"
       - "tests/test_invoice_pdf.py"
       - "tests/test_receivables.py"
@@ -256,6 +260,7 @@ jobs:
             tests/test_commercial_billing_gmail_drafts.py \
             tests/test_commercial_billing_manual_square_invoices.py \
             tests/test_invoice_repository.py \
+            tests/test_monthly_invoice_generation_cross_pipeline_dedup.py \
             tests/test_invoice_pdf.py \
             -q
 

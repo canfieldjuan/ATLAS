@@ -1,4 +1,10 @@
 {
+  "atlas_brain/storage/__init__.py": {
+    "counts": {
+      "INTERNAL_MOCK": 2
+    },
+    "score": 8
+  },
   "atlas_brain/storage/config.py": {
     "counts": {
       "INTERNAL_MOCK": 1
@@ -8,9 +14,9 @@
   "atlas_brain/storage/database.py": {
     "counts": {
       "HAPPY_PATH_TESTS": 1,
-      "INTERNAL_MOCK": 44
+      "INTERNAL_MOCK": 50
     },
-    "score": 180
+    "score": 204
   },
   "atlas_brain/storage/models.py": {
     "counts": {
@@ -56,6 +62,12 @@
     },
     "score": 17
   },
+  "atlas_brain/storage/repositories/customer_service.py": {
+    "counts": {
+      "INTERNAL_MOCK": 2
+    },
+    "score": 8
+  },
   "atlas_brain/storage/repositories/device.py": {
     "counts": {
       "UNGUARDED_INDEX": 1,
@@ -88,11 +100,10 @@
   "atlas_brain/storage/repositories/invoice.py": {
     "counts": {
       "HAPPY_PATH_TESTS": 1,
-      "INTERNAL_MOCK": 4,
-      "NO_RAISES_TESTS": 1,
+      "INTERNAL_MOCK": 7,
       "SWALLOWED_EXCEPT": 1
     },
-    "score": 28
+    "score": 37
   },
   "atlas_brain/storage/repositories/reminder.py": {
     "counts": {
@@ -133,12 +144,6 @@
       "UNGUARDED_INPUT": 2
     },
     "score": 19
-  },
-  "atlas_brain/storage/repositories/vector.py": {
-    "counts": {
-      "NO_TEST_FILE": 1
-    },
-    "score": 6
   },
   "atlas_brain/storage/repositories/vision.py": {
     "counts": {

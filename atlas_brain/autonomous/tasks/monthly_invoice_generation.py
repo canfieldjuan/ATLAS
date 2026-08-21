@@ -141,6 +141,29 @@ async def run(task: ScheduledTask) -> dict:
     calendar_id = settings.invoicing.auto_invoice_calendar_id or None
     save_base = os.path.expanduser(settings.invoicing.auto_invoice_save_path)
 
+    recurring_dedup_ready = getattr(inv_repo, "recurring_dedup_ready", None)
+    if recurring_dedup_ready is not None:
+        try:
+            if not await recurring_dedup_ready():
+                return {
+                    "_skip_synthesis": (
+                        "Recurring invoice dedup schema is unavailable; "
+                        f"skipping monthly invoice generation for {period_label}"
+                    )
+                }
+        except Exception as e:
+            logger.warning(
+                "Recurring invoice dedup readiness check failed for %s: %s",
+                period_label,
+                e,
+            )
+            return {
+                "_skip_synthesis": (
+                    "Recurring invoice dedup schema could not be verified; "
+                    f"skipping monthly invoice generation for {period_label}"
+                )
+            }
+
     # Load active auto-invoice services
     try:
         services = await svc_repo.list_active(auto_invoice_only=True)
@@ -167,6 +190,8 @@ async def run(task: ScheduledTask) -> dict:
         "invoices_created": 0,
         "invoices_sent": 0,
         "invoices_skipped_dedup": 0,
+        "invoices_skipped_dedup_check_failed": 0,
+        "dedup_check_failed_details": [],
         "invoices_skipped_no_events": 0,
         "skipped_no_events_details": [],
         "needs_hours": [],
@@ -335,6 +360,46 @@ async def run(task: ScheduledTask) -> dict:
         except Exception as e:
             logger.warning("Dedup check failed for %s: %s", contact_id, e)
 
+        # Cross-pipeline dedup: skip if the newer commercial-billing
+        # approval writer already invoiced this contact for this period.
+        # See migration 385 / ATLAS #2363. Unlike the same-source check
+        # above, a quarantined historical collision is protected only by
+        # invoices_billing_period_reservations, not by the partial unique
+        # index (both leave billing_period = NULL, so the index's WHERE
+        # billing_period IS NOT NULL predicate never sees them) -- so a
+        # transient failure here must fail closed (skip this contact this
+        # run) rather than fail open into create(), which would otherwise
+        # admit the exact unprotected third-duplicate this reservation
+        # table exists to prevent.
+        try:
+            cross_pipeline = await inv_repo.get_by_contact_and_period(
+                UUID(contact_id), period_label,
+            )
+        except Exception as e:
+            results["invoices_skipped_dedup_check_failed"] += 1
+            results["dedup_check_failed_details"].append(
+                {
+                    "contact_id": contact_id,
+                    "customer": contact_id,
+                    "services": list(bundle["service_names"]),
+                    "error": str(e),
+                }
+            )
+            logger.warning(
+                "Cross-pipeline dedup check failed for %s: %s -- skipping "
+                "this run rather than risking an unprotected duplicate",
+                contact_id, e,
+            )
+            continue
+        if cross_pipeline:
+            results["invoices_skipped_dedup"] += 1
+            logger.info(
+                "Customer %s: already invoiced for %s by source=%s (%s), skipping",
+                contact_id, period_label, cross_pipeline["source"],
+                cross_pipeline["invoice_number"],
+            )
+            continue
+
         # Look up contact details via CRM
         contact = None
         try:
@@ -493,18 +558,24 @@ async def run(task: ScheduledTask) -> dict:
 
     results["total_amount"] = round(results["total_amount"], 2)
 
-    if results["invoices_created"] == 0 and results["invoices_skipped_dedup"] == 0:
+    if (
+        results["invoices_created"] == 0
+        and results["invoices_skipped_dedup"] == 0
+        and results["invoices_skipped_dedup_check_failed"] == 0
+    ):
         if results["needs_hours"]:
             pass  # still notify about hourly services
         else:
             return {"_skip_synthesis": f"No invoices generated for {period_label}"}
 
     logger.info(
-        "Monthly invoicing for %s: %d created, %d sent, %d dedup-skipped, %d needs-hours, $%.2f total",
+        "Monthly invoicing for %s: %d created, %d sent, %d dedup-skipped, "
+        "%d dedup-check-failed, %d needs-hours, $%.2f total",
         period_label,
         results["invoices_created"],
         results["invoices_sent"],
         results["invoices_skipped_dedup"],
+        results["invoices_skipped_dedup_check_failed"],
         len(results["needs_hours"]),
         results["total_amount"],
     )
@@ -544,6 +615,17 @@ def _build_notification_lines(results: dict) -> list[str]:
         lines.append(f"NEEDS HOURS ({len(needs_hours)}):")
         for nh in needs_hours:
             lines.append(f"  {nh['service']} @ ${nh['rate']:.2f}/hr")
+
+    dedup_failures = results.get("dedup_check_failed_details", [])
+    if dedup_failures:
+        lines.append("")
+        lines.append(
+            f"DEDUP CHECK FAILED ({results.get('invoices_skipped_dedup_check_failed', len(dedup_failures))}) -- invoice writes skipped:"
+        )
+        for failure in dedup_failures:
+            services = ", ".join(failure.get("services") or [])
+            suffix = f" [{services}]" if services else ""
+            lines.append(f"  {failure.get('customer') or failure.get('contact_id')}{suffix}: {failure.get('error')}")
 
     collisions = results.get("keyword_collisions", [])
     if collisions:

@@ -6,6 +6,7 @@ Provides CRUD operations for invoices and payments stored in PostgreSQL.
 
 import json
 import logging
+import re
 from dataclasses import dataclass
 from datetime import date, datetime, timezone
 from decimal import Decimal, InvalidOperation
@@ -23,6 +24,165 @@ logger = logging.getLogger("atlas.storage.invoice")
 # non-financial draft edit must preserve those exact cents rather than multiply
 # a rounded display quantity by its unit price again.
 _COMMERCIAL_BILLING_EXACT_LINE_AMOUNTS_MARKER = "commercialBillingExactLineAmounts"
+_RECURRING_INVOICE_DEDUP_INDEX = "idx_invoices_recurring_contact_period_source"
+_RECURRING_INVOICE_DEDUP_INDEX_KEYS = ("contact_id", "billing_period")
+_RECURRING_INVOICE_DEDUP_INDEX_PREDICATE_CLAUSES = frozenset(
+    {
+        "billing_period is not null",
+        "source = any array monthly_auto eom_commercial_billing",
+        "status <> void",
+    }
+)
+_RECURRING_INVOICE_DEDUP_CONSTRAINTS = (
+    "invoices_billing_period_check",
+    "invoices_recurring_billing_period_required_check",
+)
+
+
+def _normalize_schema_definition(definition: object) -> str:
+    """Return a stable lower-case representation of catalog DDL text."""
+    return " ".join(str(definition or "").lower().split())
+
+
+def _schema_definition_contains(definition: object, *required_fragments: str) -> bool:
+    normalized = _normalize_schema_definition(definition)
+    return all(fragment.lower() in normalized for fragment in required_fragments)
+
+
+def _canonicalize_catalog_expression(expression: object) -> str:
+    """Return a compact comparable form for Postgres expression text."""
+    normalized = _normalize_schema_definition(expression)
+    normalized = re.sub(
+        r"::(?:character varying|varchar|text|name)(?:\[\])?",
+        "",
+        normalized,
+    )
+    normalized = normalized.replace("'", "")
+    normalized = re.sub(r"[\[\](),]", " ", normalized)
+    return " ".join(normalized.split())
+
+
+def _recurring_index_predicate_ready(predicate: object) -> bool:
+    clauses = frozenset(
+        clause.strip()
+        for clause in re.split(r"\s+and\s+", _canonicalize_catalog_expression(predicate))
+        if clause.strip()
+    )
+    return clauses == _RECURRING_INVOICE_DEDUP_INDEX_PREDICATE_CLAUSES
+
+
+async def recurring_invoice_dedup_schema_ready(conn: Any) -> bool:
+    """Return whether recurring invoice writers can safely rely on period dedup.
+
+    This is deliberately separate from receivables/payment readiness. Check,
+    ACH, Square, ad-hoc invoice, and EOM funnel surfaces do not create
+    ``monthly_auto`` or ``eom_commercial_billing`` invoices and must not be
+    blocked by this writer-only schema requirement.
+    """
+    columns_ready = bool(
+        await conn.fetchval(
+            """
+            SELECT NOT EXISTS (
+                SELECT 1
+                FROM (
+                    VALUES
+                        ('invoices', 'billing_period'),
+                        ('invoices', 'billing_period_legacy_null'),
+                        ('invoices_billing_period_reservations', 'contact_id'),
+                        ('invoices_billing_period_reservations', 'billing_period')
+                ) AS required(table_name, column_name)
+                WHERE NOT EXISTS (
+                    SELECT 1
+                    FROM information_schema.columns AS actual
+                    WHERE actual.table_schema = current_schema()
+                      AND actual.table_name = required.table_name
+                      AND actual.column_name = required.column_name
+                )
+            )
+            """
+        )
+    )
+    if not columns_ready:
+        return False
+
+    constraint_rows = await conn.fetch(
+        """
+        SELECT actual.conname, pg_get_constraintdef(actual.oid) AS definition
+        FROM pg_constraint AS actual
+        JOIN pg_class AS table_class
+          ON table_class.oid = actual.conrelid
+        JOIN pg_namespace AS table_namespace
+          ON table_namespace.oid = table_class.relnamespace
+        WHERE table_namespace.nspname = current_schema()
+          AND table_class.relname = 'invoices'
+          AND actual.conname = ANY($1::text[])
+        """,
+        list(_RECURRING_INVOICE_DEDUP_CONSTRAINTS),
+    )
+    constraint_definitions = {
+        row["conname"]: row["definition"]
+        for row in constraint_rows
+    }
+    constraints_ready = (
+        _schema_definition_contains(
+            constraint_definitions.get("invoices_billing_period_check"),
+            "check",
+            "billing_period",
+            "^(000[1-9]",
+            "1[0-2]",
+        )
+        and _schema_definition_contains(
+            constraint_definitions.get("invoices_recurring_billing_period_required_check"),
+            "check",
+            "source",
+            "monthly_auto",
+            "eom_commercial_billing",
+            "status",
+            "void",
+            "billing_period is not null",
+            "billing_period_legacy_null",
+        )
+    )
+    if not constraints_ready:
+        return False
+
+    index_row = await conn.fetchrow(
+        """
+        SELECT
+            index_state.indisunique,
+            index_state.indisvalid,
+            index_state.indisready,
+            index_state.indnkeyatts,
+            pg_get_indexdef(index_state.indexrelid, 1, true) AS key_column_1,
+            pg_get_indexdef(index_state.indexrelid, 2, true) AS key_column_2,
+            pg_get_expr(index_state.indpred, index_state.indrelid) AS predicate
+        FROM pg_index AS index_state
+        JOIN pg_class AS table_class
+          ON table_class.oid = index_state.indrelid
+        JOIN pg_namespace AS table_namespace
+          ON table_namespace.oid = table_class.relnamespace
+        JOIN pg_class AS index_class
+          ON index_class.oid = index_state.indexrelid
+        WHERE table_namespace.nspname = current_schema()
+          AND table_class.relname = 'invoices'
+          AND index_class.relname = $1
+        """,
+        _RECURRING_INVOICE_DEDUP_INDEX,
+    )
+    if not index_row:
+        return False
+    key_columns = (
+        str(index_row["key_column_1"] or ""),
+        str(index_row["key_column_2"] or ""),
+    )
+    return (
+        bool(index_row["indisunique"])
+        and bool(index_row["indisvalid"])
+        and bool(index_row["indisready"])
+        and int(index_row["indnkeyatts"] or 0) == len(_RECURRING_INVOICE_DEDUP_INDEX_KEYS)
+        and key_columns == _RECURRING_INVOICE_DEDUP_INDEX_KEYS
+        and _recurring_index_predicate_ready(index_row["predicate"])
+    )
 
 
 @dataclass(frozen=True)
@@ -138,6 +298,13 @@ class InvoiceRepository:
 
         return get_receivables_service()
 
+    async def recurring_dedup_ready(self) -> bool:
+        """Return whether recurring-source invoice writes are safely fenced."""
+        pool = self._get_pool()
+        if not pool.is_initialized:
+            raise DatabaseUnavailableError("recurring invoice dedup readiness")
+        return await recurring_invoice_dedup_schema_ready(pool)
+
     # -- Invoice CRUD ----------------------------------------------
 
     async def create(
@@ -168,6 +335,12 @@ class InvoiceRepository:
         number. Defaults to issue_date if not given. Set this to the first
         day of the period when invoicing past work (e.g. April 1 for an
         April-billing invoice issued in early May).
+
+        Also persisted verbatim (as YYYY-MM) to invoices.billing_period for
+        cross-pipeline recurring-invoice dedup (migration 385). Leave unset
+        for ad-hoc/non-recurring invoices (e.g. the MCP create_invoice tool)
+        so they never participate in the recurring-source uniqueness
+        constraint.
         """
         pool = self._get_pool()
         if not pool.is_initialized:
@@ -193,27 +366,7 @@ class InvoiceRepository:
                 )
 
         try:
-            row = await pool.fetchrow(
-                """
-                INSERT INTO invoices (
-                    id, invoice_number,
-                    contact_id, customer_name, customer_email, customer_phone, customer_address,
-                    line_items, subtotal, tax_rate, tax_amount, discount_amount, total_amount,
-                    issue_date, due_date, status, source, source_ref, appointment_id,
-                    business_context_id, notes, metadata, invoice_for, contact_name,
-                    created_at, updated_at
-                )
-                VALUES (
-                    $1,
-                    (SELECT $19 || '-' || to_char(COALESCE($25::date, $13::date), 'YYYY-Mon') || '-' || lpad(nextval('invoice_number_seq')::text, 4, '0')),
-                    $2, $3, $4, $5, $6,
-                    $7::jsonb, $8, $9, $10, $11, $12,
-                    $13, $14, 'draft', $15, $16, $17,
-                    $18, $20, $21::jsonb, $22, $23,
-                    $24, $24
-                )
-                RETURNING *
-                """,
+            args = (
                 invoice_id,
                 contact_id,
                 customer_name,
@@ -238,8 +391,56 @@ class InvoiceRepository:
                 invoice_for,
                 contact_name,
                 now,
-                billing_period,
             )
+            if billing_period is None:
+                row = await pool.fetchrow(
+                    """
+                    INSERT INTO invoices (
+                        id, invoice_number,
+                        contact_id, customer_name, customer_email, customer_phone, customer_address,
+                        line_items, subtotal, tax_rate, tax_amount, discount_amount, total_amount,
+                        issue_date, due_date, status, source, source_ref, appointment_id,
+                        business_context_id, notes, metadata, invoice_for, contact_name,
+                        created_at, updated_at
+                    )
+                    VALUES (
+                        $1,
+                        (SELECT $19 || '-' || to_char($13::date, 'YYYY-Mon') || '-' || lpad(nextval('invoice_number_seq')::text, 4, '0')),
+                        $2, $3, $4, $5, $6,
+                        $7::jsonb, $8, $9, $10, $11, $12,
+                        $13, $14, 'draft', $15, $16, $17,
+                        $18, $20, $21::jsonb, $22, $23,
+                        $24, $24
+                    )
+                    RETURNING *
+                    """,
+                    *args,
+                )
+            else:
+                row = await pool.fetchrow(
+                    """
+                    INSERT INTO invoices (
+                        id, invoice_number,
+                        contact_id, customer_name, customer_email, customer_phone, customer_address,
+                        line_items, subtotal, tax_rate, tax_amount, discount_amount, total_amount,
+                        issue_date, due_date, status, source, source_ref, appointment_id,
+                        business_context_id, notes, metadata, invoice_for, contact_name,
+                        created_at, updated_at, billing_period
+                    )
+                    VALUES (
+                        $1,
+                        (SELECT $19 || '-' || to_char($25::date, 'YYYY-Mon') || '-' || lpad(nextval('invoice_number_seq')::text, 4, '0')),
+                        $2, $3, $4, $5, $6,
+                        $7::jsonb, $8, $9, $10, $11, $12,
+                        $13, $14, 'draft', $15, $16, $17,
+                        $18, $20, $21::jsonb, $22, $23,
+                        $24, $24, to_char($25::date, 'YYYY-MM')
+                    )
+                    RETURNING *
+                    """,
+                    *args,
+                    billing_period,
+                )
             if row:
                 logger.info("Created invoice %s number=%s total=%.2f", invoice_id, row["invoice_number"], total)
                 return self._row_to_dict(row)
@@ -279,6 +480,72 @@ class InvoiceRepository:
             raise
         except Exception as e:
             raise DatabaseOperationError("get invoice by source_ref", e)
+
+    async def get_by_contact_and_period(
+        self, contact_id: UUID, billing_period: str
+    ) -> Optional[dict]:
+        """Return an existing non-void recurring invoice for one contact/period,
+        or a synthetic hit if that contact/period still has a non-void
+        quarantined invoice from an ambiguous historical collision (see
+        migration 385's Backfill 2/2) rather than a backfilled period.
+
+        Scoped to the two recurring auto-invoice sources (monthly_auto,
+        eom_commercial_billing) so ad-hoc mcp_tool invoices and voided
+        invoices never block a new recurring invoice. Used by both recurring
+        writers as an app-level pre-check ahead of
+        idx_invoices_recurring_contact_period_source (migration 385), which
+        is the authoritative DB-enforced guarantee for every UNAMBIGUOUS
+        period. A quarantined period has no row claiming
+        idx_invoices_recurring_contact_period_source's slot (nothing does,
+        by design -- see invoices_billing_period_reservations' migration
+        comment), so this pre-check is that period's only guard; callers only
+        read the returned dict's "source"/"invoice_number" keys, which the
+        reservation branch synthesizes with a clearly-labeled placeholder.
+        When every matching quarantined invoice is voided, the reservation
+        stops blocking reissuance so it follows the same non-void invariant as
+        the partial unique index.
+        """
+        pool = self._get_pool()
+        if not pool.is_initialized:
+            raise DatabaseUnavailableError("get invoice by contact and period")
+
+        try:
+            row = await pool.fetchrow(
+                """
+                SELECT source, invoice_number FROM invoices
+                WHERE contact_id = $1
+                  AND billing_period = $2
+                  AND source IN ('monthly_auto', 'eom_commercial_billing')
+                  AND status <> 'void'
+                UNION ALL
+                SELECT
+                    'quarantined_collision' AS source,
+                    'historical billing_period collision for this contact+period -- see invoices.metadata.billing_period_backfill_collision' AS invoice_number
+                FROM invoices_billing_period_reservations
+                WHERE contact_id = $1
+                  AND billing_period = $2
+                  AND EXISTS (
+                      SELECT 1
+                      FROM invoices AS quarantined
+                      WHERE quarantined.contact_id = invoices_billing_period_reservations.contact_id
+                        AND quarantined.billing_period IS NULL
+                        AND quarantined.billing_period_legacy_null
+                        AND quarantined.status <> 'void'
+                        AND quarantined.source IN ('monthly_auto', 'eom_commercial_billing')
+                        AND quarantined.metadata->>'billing_period_backfill_collision' = 'true'
+                        AND quarantined.metadata->>'billing_period_backfill_candidate_period' =
+                            invoices_billing_period_reservations.billing_period
+                  )
+                LIMIT 1
+                """,
+                contact_id,
+                billing_period,
+            )
+            return self._row_to_dict(row) if row else None
+        except DatabaseUnavailableError:
+            raise
+        except Exception as e:
+            raise DatabaseOperationError("get invoice by contact and period", e)
 
     async def get_by_number(self, invoice_number: str) -> Optional[dict]:
         """Get an invoice by invoice number (e.g. INV-2026-0001)."""
@@ -336,8 +603,42 @@ class InvoiceRepository:
             raise DatabaseUnavailableError("update invoice status")
 
         try:
-            await pool.execute(
+            legacy_period_guard_ready = bool(
+                await pool.fetchval(
+                    """
+                    SELECT NOT EXISTS (
+                        SELECT 1
+                        FROM (
+                            VALUES
+                                ('billing_period'),
+                                ('billing_period_legacy_null')
+                        ) AS required(column_name)
+                        WHERE NOT EXISTS (
+                            SELECT 1
+                            FROM information_schema.columns AS actual
+                            WHERE actual.table_schema = current_schema()
+                              AND actual.table_name = 'invoices'
+                              AND actual.column_name = required.column_name
+                        )
+                    )
+                    """
+                )
+            )
+
+            mutation_guard = ""
+            if legacy_period_guard_ready:
+                mutation_guard = """
+                AND NOT (
+                    status = 'void'
+                    AND $2 <> 'void'
+                    AND source IN ('monthly_auto', 'eom_commercial_billing')
+                    AND billing_period IS NULL
+                    AND billing_period_legacy_null
+                )
                 """
+
+            result = await pool.execute(
+                f"""
                 UPDATE invoices
                 SET status = $2,
                     sent_at = COALESCE($3, sent_at),
@@ -347,6 +648,7 @@ class InvoiceRepository:
                     void_reason = COALESCE($7, void_reason),
                     updated_at = $8
                 WHERE id = $1
+                {mutation_guard}
                 """,
                 invoice_id,
                 status,
@@ -357,7 +659,33 @@ class InvoiceRepository:
                 void_reason,
                 datetime.now(timezone.utc),
             )
+            if result == "UPDATE 0" and legacy_period_guard_ready:
+                row = await pool.fetchrow(
+                    """
+                    SELECT status, source, billing_period, billing_period_legacy_null
+                    FROM invoices
+                    WHERE id = $1
+                    """,
+                    invoice_id,
+                )
+                if (
+                    row
+                    and row["status"] == "void"
+                    and status != "void"
+                    and row["source"] in ("monthly_auto", "eom_commercial_billing")
+                    and row["billing_period"] is None
+                    and row["billing_period_legacy_null"]
+                ):
+                    raise DatabaseOperationError(
+                        "update invoice status",
+                        Exception(
+                            "Cannot reactivate a voided legacy recurring invoice "
+                            "whose billing period was quarantined during backfill"
+                        ),
+                    )
         except DatabaseUnavailableError:
+            raise
+        except DatabaseOperationError:
             raise
         except Exception as e:
             raise DatabaseOperationError("update invoice status", e)

@@ -30,6 +30,7 @@ _HARNESS_MIGRATIONS = (
     "045_invoices.sql",
     "047_invoice_extra_fields.sql",
     "048_customer_services.sql",
+    "385_invoices_billing_period_dedup.sql",
 )
 
 
@@ -251,6 +252,13 @@ class _SchemaPool:
         self.conn = conn
         self.schema = schema
 
+    async def acquire(self) -> Any:
+        await self.conn.execute(f'SET search_path TO "{self.schema}", public')
+        return self.conn
+
+    async def release(self, released: Any) -> None:
+        assert released is self.conn
+
     async def _in_schema(self, method: str, query: str, *args: object) -> Any:
         async with self.conn.transaction():
             await self.conn.execute(f'SET LOCAL search_path TO "{self.schema}", public')
@@ -264,6 +272,30 @@ class _SchemaPool:
 
     async def fetchrow(self, query: str, *args: object) -> Any:
         return await self._in_schema("fetchrow", query, *args)
+
+    async def fetchval(self, query: str, *args: object) -> Any:
+        return await self._in_schema("fetchval", query, *args)
+
+
+async def _run_harness_migration(
+    pool: _SchemaPool, migrations_dir: Path, migration_name: str
+) -> None:
+    from atlas_brain.storage.migrations import run_migrations
+
+    await run_migrations(
+        pool,
+        migrations_dir=migrations_dir,
+        only={Path(migration_name).stem},
+    )
+
+
+def test_writer_harness_uses_runner_for_concurrent_dedup_migration() -> None:
+    import inspect
+
+    source = inspect.getsource(_writer_harness_database)
+
+    assert 'migration_name == "385_invoices_billing_period_dedup.sql"' in source
+    assert "await _run_harness_migration(pool, migrations, migration_name)" in source
 
 
 @contextmanager
@@ -302,14 +334,18 @@ async def _writer_harness_database(
         await conn.execute(f'CREATE SCHEMA "{schema}"')
         await conn.execute(f'SET search_path TO "{schema}", public')
         await conn.execute("CREATE TABLE contacts (id UUID PRIMARY KEY)")
+        pool = _SchemaPool(conn, schema)
         for migration_name in _HARNESS_MIGRATIONS:
-            await conn.execute(
-                (migrations / migration_name).read_text(encoding="utf-8")
-            )
+            if migration_name == "385_invoices_billing_period_dedup.sql":
+                await _run_harness_migration(pool, migrations, migration_name)
+            else:
+                await conn.execute(
+                    (migrations / migration_name).read_text(encoding="utf-8")
+                )
         yield _WriterHarnessDatabase(
             conn=conn,
             schema=schema,
-            pool=_SchemaPool(conn, schema),
+            pool=pool,
             database_url=database_url,
         )
     finally:

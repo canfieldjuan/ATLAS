@@ -1680,6 +1680,96 @@ def test_eom_lifespan_initializes_database_without_running_migrations(monkeypatc
     assert events == ["init", "inside", "close"]
 
 
+def test_eom_lifespan_rejects_enabled_receivables_without_ready_schema(monkeypatch):
+    """Independent readiness fence for finding #5: this profile does not
+    always run migrations on startup (run_migrations defaults to False), so
+    an enabled receivables API must still fail closed on an unready schema
+    rather than silently serving requests against it."""
+    from atlas_brain import main_eom
+    from atlas_brain.eom_api import auth as receivables_auth
+    from atlas_brain.services import receivables as receivables_module
+
+    events: list[str] = []
+    generated = receivables_auth.generate_receivables_service_token()
+
+    async def init_database():
+        events.append("init")
+
+    async def close_database():
+        events.append("close")
+
+    async def fake_is_ready(self, conn=None):
+        events.append("readiness-check")
+        return False
+
+    async def drive_lifespan():
+        async with main_eom.lifespan(FastAPI()):
+            events.append("inside")
+
+    monkeypatch.setattr(main_eom, "db_settings", SimpleNamespace(enabled=True))
+    monkeypatch.setattr(main_eom, "get_db_pool", lambda: SimpleNamespace(is_initialized=True))
+    monkeypatch.setattr(main_eom, "init_database", init_database)
+    monkeypatch.setattr(main_eom, "close_database", close_database)
+    monkeypatch.setattr(main_eom.eom_profile_settings, "run_migrations", False)
+    monkeypatch.setattr(main_eom.invoicing_settings, "receivables_api_enabled", True)
+    monkeypatch.setattr(
+        main_eom.invoicing_settings,
+        "receivables_service_token_sha256",
+        generated.sha256,
+    )
+    monkeypatch.setattr(main_eom.funnel_settings, "api_enabled", False)
+    monkeypatch.setattr(receivables_module.ReceivablesService, "is_ready", fake_is_ready)
+
+    with pytest.raises(main_eom.ReceivablesSchemaUnavailableError):
+        asyncio.run(drive_lifespan())
+
+    assert events == ["init", "readiness-check", "close"]
+    assert "inside" not in events
+
+
+def test_eom_lifespan_accepts_enabled_receivables_with_ready_schema(monkeypatch):
+    """Negative control for the above: a genuinely ready schema must not be
+    blocked by the new fence."""
+    from atlas_brain import main_eom
+    from atlas_brain.eom_api import auth as receivables_auth
+    from atlas_brain.services import receivables as receivables_module
+
+    events: list[str] = []
+    generated = receivables_auth.generate_receivables_service_token()
+
+    async def init_database():
+        events.append("init")
+
+    async def close_database():
+        events.append("close")
+
+    async def fake_is_ready(self, conn=None):
+        events.append("readiness-check")
+        return True
+
+    async def drive_lifespan():
+        async with main_eom.lifespan(FastAPI()):
+            events.append("inside")
+
+    monkeypatch.setattr(main_eom, "db_settings", SimpleNamespace(enabled=True))
+    monkeypatch.setattr(main_eom, "get_db_pool", lambda: SimpleNamespace(is_initialized=True))
+    monkeypatch.setattr(main_eom, "init_database", init_database)
+    monkeypatch.setattr(main_eom, "close_database", close_database)
+    monkeypatch.setattr(main_eom.eom_profile_settings, "run_migrations", False)
+    monkeypatch.setattr(main_eom.invoicing_settings, "receivables_api_enabled", True)
+    monkeypatch.setattr(
+        main_eom.invoicing_settings,
+        "receivables_service_token_sha256",
+        generated.sha256,
+    )
+    monkeypatch.setattr(main_eom.funnel_settings, "api_enabled", False)
+    monkeypatch.setattr(receivables_module.ReceivablesService, "is_ready", fake_is_ready)
+
+    asyncio.run(drive_lifespan())
+
+    assert events == ["init", "readiness-check", "inside", "close"]
+
+
 def test_eom_lifespan_closes_generic_database_when_funnel_close_fails(monkeypatch):
     from atlas_brain import main_eom
     from atlas_brain.eom_api import funnel_auth

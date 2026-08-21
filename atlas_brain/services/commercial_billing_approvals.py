@@ -22,6 +22,7 @@ import asyncpg
 
 from ..storage.database import DatabasePool, get_db_pool
 from ..storage.exceptions import DatabaseOperationError, DatabaseUnavailableError
+from ..storage.repositories.invoice import recurring_invoice_dedup_schema_ready
 from .commercial_billing_candidates import (
     CommercialBillingCandidateService,
     CommercialBillingCandidatesUnavailableError,
@@ -622,6 +623,20 @@ class CommercialBillingApprovalService:
                 existing = await self._find_by_candidate(conn, selected, expected_source_fingerprint)
                 if existing is not None:
                     return {"approval": self._view(existing), "replayed": True}
+                if not await recurring_invoice_dedup_schema_ready(conn):
+                    raise CommercialBillingApprovalUnavailableError(
+                        "Recurring invoice dedup schema is unavailable"
+                    )
+                conflicting = await self._find_recurring_period_conflict(
+                    conn,
+                    contact_id=draft.contact_id,
+                    billing_period=f"{draft.billing_period:%Y-%m}",
+                )
+                if conflicting is not None:
+                    raise CommercialBillingApprovalConflictError(
+                        f"A recurring invoice already exists for this contact and billing "
+                        f"period (source={conflicting['source']}, invoice={conflicting['invoice_number']})"
+                    )
                 invoice = await self._insert_invoice(conn, draft)
                 if invoice is None:
                     raise CommercialBillingApprovalConflictError(
@@ -837,6 +852,50 @@ class CommercialBillingApprovalService:
         )
 
     @staticmethod
+    async def _find_recurring_period_conflict(
+        conn: Any, *, contact_id: UUID, billing_period: str
+    ) -> Any | None:
+        """Non-void recurring invoice for this contact/period from either
+        recurring writer, or a synthetic hit if that contact/period is
+        quarantined (an ambiguous historical collision -- see migration 385's
+        Backfill 2/2 and invoices_billing_period_reservations). See migration
+        385 / ATLAS #2363: this is the app-level pre-check ahead of
+        idx_invoices_recurring_contact_period_source, which is the
+        authoritative DB-enforced guarantee for every UNAMBIGUOUS period -- a
+        quarantined period has no row claiming that index slot by design, so
+        this pre-check is that period's only guard while at least one matching
+        quarantined invoice remains non-void."""
+        return await conn.fetchrow(
+            """
+            SELECT source, invoice_number FROM invoices
+            WHERE contact_id = $1 AND billing_period = $2
+              AND source IN ('monthly_auto', 'eom_commercial_billing')
+              AND status <> 'void'
+            UNION ALL
+            SELECT
+                'quarantined_collision' AS source,
+                'historical billing_period collision for this contact+period -- see invoices.metadata.billing_period_backfill_collision' AS invoice_number
+            FROM invoices_billing_period_reservations
+            WHERE contact_id = $1
+              AND billing_period = $2
+              AND EXISTS (
+                  SELECT 1
+                  FROM invoices AS quarantined
+                  WHERE quarantined.contact_id = invoices_billing_period_reservations.contact_id
+                    AND quarantined.billing_period IS NULL
+                    AND quarantined.billing_period_legacy_null
+                    AND quarantined.status <> 'void'
+                    AND quarantined.source IN ('monthly_auto', 'eom_commercial_billing')
+                    AND quarantined.metadata->>'billing_period_backfill_collision' = 'true'
+                    AND quarantined.metadata->>'billing_period_backfill_candidate_period' =
+                        invoices_billing_period_reservations.billing_period
+              )
+            LIMIT 1
+            """,
+            contact_id, billing_period,
+        )
+
+    @staticmethod
     def _assert_request(
         row: Any, request_fingerprint: str, legacy_request_fingerprint: str | None = None
     ) -> None:
@@ -856,12 +915,13 @@ class CommercialBillingApprovalService:
                 id, invoice_number, contact_id, customer_name, customer_email,
                 line_items, subtotal, tax_rate, tax_amount, discount_amount,
                 total_amount, issue_date, due_date, status, source, source_ref,
-                business_context_id, notes, metadata, invoice_for, created_at, updated_at
+                business_context_id, notes, metadata, invoice_for, created_at, updated_at,
+                billing_period
             )
             VALUES (
                 $1, 'INV-' || to_char($2::date, 'YYYY-Mon') || '-' || lpad(nextval('invoice_number_seq')::text, 4, '0'),
                 $3, $4, $5, $6::jsonb, $7, $8, $9, 0, $10, $11, $12, 'draft',
-                $13, $14, $15, $16, $17::jsonb, $18, $19, $19
+                $13, $14, $15, $16, $17::jsonb, $18, $19, $19, to_char($2::date, 'YYYY-MM')
             )
             ON CONFLICT (source, source_ref)
                 WHERE source = 'eom_commercial_billing' AND source_ref IS NOT NULL

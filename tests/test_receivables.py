@@ -2351,6 +2351,9 @@ async def test_real_migration_backfills_and_adopts_late_rolling_writer_checks():
         receipt_delivery_tables = set(_RECEIPT_DELIVERY_REQUIRED_COLUMNS) | set(
             _RECEIPT_DISPATCH_REQUIRED_COLUMNS
         )
+        # invoice_payments predates the receivables migration set scanned above
+        # and is only ALTERed by 344, so it is named explicitly rather than
+        # discovered from CREATE TABLE statements.
         assert set(_RECEIVABLES_REQUIRED_COLUMNS) == (
             created_tables - receipt_delivery_tables
         ) | {"invoice_payments"}
@@ -2371,6 +2374,14 @@ async def test_real_migration_backfills_and_adopts_late_rolling_writer_checks():
             }
             if table_name == "invoice_payments":
                 actual_columns -= pre_migration_invoice_payment_columns
+            if table_name == "invoices":
+                # invoices predates receivables entirely and carries many
+                # columns unrelated to this readiness contract (customer
+                # fields, amounts, PDF/delivery tracking, recurring
+                # billing_period dedup, ...) -- required here is only the
+                # receivables/payment subset, not the table's full column set.
+                assert set(required_columns) <= actual_columns
+                continue
             assert actual_columns == set(required_columns)
 
         for table_name, required_columns in _RECEIPT_DISPATCH_REQUIRED_COLUMNS.items():
