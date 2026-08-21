@@ -120,8 +120,8 @@ Parked hardening: none.
 | `atlas_brain/storage/migrations/reconciliation.py` | 203 |
 | `atlas_brain/storage/recurring_invoice_schema.py` | 177 |
 | `atlas_brain/storage/repositories/invoice.py` | 195 |
-| `plans/PR-EOM-Migration-Reconciliation-Evidence.md` | 121 |
+| `plans/PR-EOM-Migration-Reconciliation-Evidence.md` | 127 |
 | `scripts/check_migration_content_integrity.py` | 46 |
 | `tests/test_invoice_repository.py` | 16 |
 | `tests/test_migration_content_integrity_preflight.py` | 344 |
-| **Total** | **1102** |
+| **Total** | **1108** |
