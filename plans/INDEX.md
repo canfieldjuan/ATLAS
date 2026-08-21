@@ -1,6 +1,6 @@
 # Plan archive index
 
-1533 archived plan doc(s). Merged plan docs are moved under `archive/` and listed below; once the archive sweep has run, the `plans/` root holds only in-flight slices.
+1534 archived plan doc(s). Merged plan docs are moved under `archive/` and listed below; once the archive sweep has run, the `plans/` root holds only in-flight slices.
 
 - [PR-ASR-Pip-Audit-Egg-Fragment](archive/PR-ASR-Pip-Audit-Egg-Fragment.md) - lane: security/workflow | phase: Production hardening
 - [PR-ASR-Requirements-Audit-Pin](archive/PR-ASR-Requirements-Audit-Pin.md) - lane: security/workflow | phase: Production hardening
@@ -1039,6 +1039,7 @@
 - [PR-EOM-Receivables-Schema-Readiness](archive/PR-EOM-Receivables-Schema-Readiness.md) - lane: eom-render/receivables-schema-readiness | phase: Vertical slice
 - [PR-EOM-Receivables-Unapplied-Payments](archive/PR-EOM-Receivables-Unapplied-Payments.md) - lane: eom/receivables | phase: Vertical slice
 - [PR-EOM-Recurring-Appointments](archive/PR-EOM-Recurring-Appointments.md) - lane: eom-crm/appointments | phase: Vertical slice
+- [PR-EOM-Recurring-Invoice-Dedup-Recovery](archive/PR-EOM-Recurring-Invoice-Dedup-Recovery.md) - lane: eom/billing-payments-recurring-dedup-recovery | phase: Production hardening
 - [PR-EOM-Render-DB](archive/PR-EOM-Render-DB.md) - lane: eom/render-db | phase: vertical slice
 - [PR-EOM-Render-Profile](archive/PR-EOM-Render-Profile.md) - lane: eom/render-profile | phase: vertical slice
 - [PR-EOM-Render-Receivables-Auth](archive/PR-EOM-Render-Receivables-Auth.md) - lane: eom/render-receivables-auth | phase: vertical slice
