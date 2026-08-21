@@ -7113,6 +7113,24 @@ class DatabaseCRMProvider:
                 contact_id,
                 operation_key,
             )
+            contact = await conn.fetchrow(
+                """
+                SELECT id, business_context_id, contact_type, lead_stage, status
+                FROM contacts
+                WHERE id = $1
+                FOR UPDATE
+                """,
+                contact_id,
+            )
+            # Tenancy resolves BEFORE key ownership: a foreign-tenant or
+            # nonexistent target must read as the same 404 whether the key is
+            # fresh or already owned elsewhere -- a 409 here would disclose
+            # the key's existence to a caller with no right to the target.
+            if (
+                contact is None
+                or contact["business_context_id"] != EOM_BUSINESS_CONTEXT_ID
+            ):
+                raise EOMLeadConversionError(404, "EOM contact was not found")
             foreign_key_owner = await conn.fetchval(
                 """
                 SELECT EXISTS (
@@ -7129,20 +7147,6 @@ class DatabaseCRMProvider:
                 raise EOMLeadConversionError(
                     409, "Idempotency-Key already belongs to another EOM contact"
                 )
-            contact = await conn.fetchrow(
-                """
-                SELECT id, business_context_id, contact_type, lead_stage, status
-                FROM contacts
-                WHERE id = $1
-                FOR UPDATE
-                """,
-                contact_id,
-            )
-            if (
-                contact is None
-                or contact["business_context_id"] != EOM_BUSINESS_CONTEXT_ID
-            ):
-                raise EOMLeadConversionError(404, "EOM contact was not found")
             if replay is not None:
                 if (
                     replay["from_stage"] != "active"
@@ -7300,6 +7304,24 @@ class DatabaseCRMProvider:
                 contact_id,
                 operation_key,
             )
+            contact = await conn.fetchrow(
+                """
+                SELECT id, business_context_id, contact_type, lead_stage, status
+                FROM contacts
+                WHERE id = $1
+                FOR UPDATE
+                """,
+                contact_id,
+            )
+            # Tenancy resolves BEFORE key ownership: a foreign-tenant or
+            # nonexistent target must read as the same 404 whether the key is
+            # fresh or already owned elsewhere -- a 409 here would disclose
+            # the key's existence to a caller with no right to the target.
+            if (
+                contact is None
+                or contact["business_context_id"] != EOM_BUSINESS_CONTEXT_ID
+            ):
+                raise EOMLeadConversionError(404, "EOM contact was not found")
             foreign_key_owner = await conn.fetchval(
                 """
                 SELECT EXISTS (
@@ -7316,20 +7338,6 @@ class DatabaseCRMProvider:
                 raise EOMLeadConversionError(
                     409, "Idempotency-Key already belongs to another EOM contact"
                 )
-            contact = await conn.fetchrow(
-                """
-                SELECT id, business_context_id, contact_type, lead_stage, status
-                FROM contacts
-                WHERE id = $1
-                FOR UPDATE
-                """,
-                contact_id,
-            )
-            if (
-                contact is None
-                or contact["business_context_id"] != EOM_BUSINESS_CONTEXT_ID
-            ):
-                raise EOMLeadConversionError(404, "EOM contact was not found")
             if replay is not None:
                 if (
                     replay["from_stage"] != "archived"

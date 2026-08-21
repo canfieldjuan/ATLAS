@@ -783,3 +783,161 @@ async def test_directory_lifecycle_views_are_disjoint_and_restore_returns_once(
 
     with pytest.raises(ValueError):
         await provider.list_eom_contact_directory(limit=50, lifecycle="junk")
+
+
+# Grammar axes for the disclosure-ordering matrix: target containers x key
+# provenance tokens x operation families. Separate from the admission matrix
+# above because its oracle is about WHICH refusal wins, not whether one fires.
+_TARGET_CONTAINERS = ("eom", "foreign", "missing")
+_KEY_PROVENANCE_TOKENS = ("fresh", "foreign-owned")
+
+
+def _ordering_oracle(target, provenance):
+    """Spec-derived verdict: tenancy resolves before key ownership, so a
+    foreign or missing target reads 404 regardless of the key's provenance;
+    only a legitimate EOM target may learn of an ownership conflict."""
+    if target in ("foreign", "missing"):
+        return ("error", 404)
+    if provenance == "foreign-owned":
+        return ("error", 409)
+    return ("ok", None)
+
+
+@pytest.mark.asyncio
+async def test_tenancy_resolves_before_key_ownership_across_targets_and_keys(
+    _archive_provider,
+):
+    """Class-closure proof for the refusal ORDER: cases are generated over
+    operation families x target containers x key-provenance tokens and judged
+    by the oracle above. A foreign-owned key must never convert a 404 target
+    into a 409 -- that would disclose the key's existence to a caller with no
+    right to the target."""
+    provider, pool = _archive_provider
+    for operation, target, provenance in product(
+        _OPERATION_FAMILIES, _TARGET_CONTAINERS, _KEY_PROVENANCE_TOKENS
+    ):
+        case = (operation, target, provenance)
+        key = f"order-{uuid4().hex}"
+        if provenance == "foreign-owned":
+            # The key already belongs to ANOTHER EOM contact's receipt of
+            # this same operation.
+            owner = await _seed(
+                pool,
+                full_name="Key Owner",
+                status="active" if operation == "archive" else "archived",
+            )
+            method = (
+                provider.archive_eom_contact
+                if operation == "archive"
+                else provider.restore_eom_contact
+            )
+            await method(contact_id=str(owner), operation_key=key, **_ACTOR)
+        if target == "missing":
+            target_id = uuid4()
+        else:
+            target_id = await _seed(
+                pool,
+                business_context_id=TENANT if target == "eom" else FOREIGN_TENANT,
+                status="active" if operation == "archive" else "archived",
+            )
+        method = (
+            provider.archive_eom_contact
+            if operation == "archive"
+            else provider.restore_eom_contact
+        )
+        expected = _ordering_oracle(target, provenance)
+        if expected[0] == "error":
+            with pytest.raises(EOMLeadConversionError) as err:
+                await method(contact_id=str(target_id), operation_key=key, **_ACTOR)
+            assert err.value.status_code == expected[1], case
+            if expected[1] == 404:
+                assert "was not found" in str(err.value), case
+        else:
+            result = await method(
+                contact_id=str(target_id), operation_key=key, **_ACTOR
+            )
+            assert result["idempotent"] is False, case
+
+
+def _split_migration_statements(sql: str) -> list[str]:
+    """Strip comments and split on ';' so CONCURRENTLY statements can run
+    outside a transaction block, mirroring the runner's own handling."""
+    lines = [
+        line for line in sql.splitlines() if not line.strip().startswith("--")
+    ]
+    return [
+        statement.strip()
+        for statement in "\n".join(lines).split(";")
+        if statement.strip()
+    ]
+
+
+@pytest.mark.asyncio
+async def test_migration_388_replaces_the_disposition_index_and_replays():
+    """Real-PostgreSQL proof for the 362 -> 388 index replacement: the
+    resulting partial index is VALID and its predicate covers all four
+    disposition event types, and the drop-then-recreate pair replays cleanly
+    (the canceled-startup recovery path the header documents)."""
+    asyncpg = pytest.importorskip("asyncpg")
+    database_url = _database_url_or_skip()
+    schema = f"atlas_eom_m388_{uuid.uuid4().hex}"
+    conn = await asyncpg.connect(database_url)
+    try:
+        await conn.execute(f'CREATE SCHEMA "{schema}"')
+        await conn.execute(f'SET search_path TO "{schema}", public')
+        for name in (
+            "001_initial_schema.sql",
+            "012_appointments.sql",
+            "030_call_transcripts.sql",
+            "035_contacts.sql",
+            "346_contact_lead_pipeline.sql",
+            "351_eom_lead_lifecycle_events.sql",
+        ):
+            await conn.execute((MIGRATIONS / name).read_text())
+
+        async def apply_split(name):
+            for statement in _split_migration_statements(
+                (MIGRATIONS / name).read_text()
+            ):
+                await conn.execute(statement)
+
+        async def index_row():
+            return await conn.fetchrow(
+                """
+                SELECT i.indisvalid, pg_get_indexdef(i.indexrelid) AS indexdef
+                FROM pg_index AS i
+                JOIN pg_class AS c ON c.oid = i.indexrelid
+                JOIN pg_namespace AS n ON n.oid = c.relnamespace
+                WHERE n.nspname = $1
+                  AND c.relname = 'idx_eom_lead_lifecycle_disposition_operation_key'
+                """,
+                schema,
+            )
+
+        await apply_split("362_eom_lead_disposition_operation_key_index.sql")
+        before = await index_row()
+        assert before is not None and before["indisvalid"] is True
+        assert "contact_archived" not in before["indexdef"]
+
+        await apply_split("388_eom_contact_archive_disposition_index.sql")
+        after = await index_row()
+        assert after is not None, "388 must leave the disposition index present"
+        assert after["indisvalid"] is True, "the replacement must be VALID"
+        for event_type in (
+            "lead_lost",
+            "lead_reopened",
+            "contact_archived",
+            "contact_restored",
+        ):
+            assert event_type in after["indexdef"], event_type
+        assert "operation_key IS NOT NULL" in after["indexdef"]
+
+        # Replay: the drop-then-recreate pair must recover cleanly when run
+        # again (the same guarantee the runner relies on after a canceled
+        # startup left any prior state behind).
+        await apply_split("388_eom_contact_archive_disposition_index.sql")
+        replayed = await index_row()
+        assert replayed is not None and replayed["indisvalid"] is True
+    finally:
+        await conn.execute(f'DROP SCHEMA IF EXISTS "{schema}" CASCADE')
+        await conn.close()

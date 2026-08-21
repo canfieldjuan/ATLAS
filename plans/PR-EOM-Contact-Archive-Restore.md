@@ -68,8 +68,9 @@ Slice phase: Vertical slice
     `itertools.product` over four grammar axes and judged by the
     spec-derived `_transition_oracle`, not a sampled fixture list -- settled
     by the same matrix test.
-  - A fresh transition writes exactly one sequenced receipt with actor,
-    operation key, previous/resulting status, and stage snapshot -- settled
+  - A fresh transition writes exactly one sequenced receipt naming the
+    actor, the Idempotency-Key, the prior and new status values, and the
+    stage snapshot -- settled
     by `test_archive_writes_a_sequenced_receipt_and_replays_truthfully`.
   - A replay is truthful: 200-idempotent only while the row still holds the
     receipt's status and no later disposition owns it; the ABA shape
@@ -107,9 +108,10 @@ Slice phase: Vertical slice
   replacement on a ledger table; interaction with the won-loss cancellation
   protocol.
 - Reviewer rules triggered: R1 (tenant/auth boundary), R2 (migration/index
-  replacement on a ledger table), R3 (idempotency and replay truthfulness),
-  R4 (SQL/schema change), R5 (migration safety), R7 (capability
-  truthfulness), R11 (guard class closure per 3k.3).
+  replacement on a ledger table), R3 (replay truthfulness and echo
+  contracts), R4 (SQL/schema change), R5 (migration safety), R7 (capability
+  truthfulness), R8 (advisory-lock/transaction execution model, declared
+  below), R11 (guard class closure per 3k.3).
 
 ### Boundary-change enumeration
 
@@ -125,6 +127,33 @@ Slice phase: Vertical slice
 - Guard-relevant fields: `business_context_id`, `contact_type`,
   `lead_stage`, `status`, `operation_key`, `lifecycle_sequence`,
   `event_type`, `lifecycle` query parameter.
+- Closure declarations (one per decision-driving set; membership /
+  source / outside-set behavior):
+  - Directory lifecycle values: CLOSED, ENUMERATED as
+    `_CONTACT_DIRECTORY_LIFECYCLES = ("active", "archived")` (funnel) and
+    `_EOM_CONTACT_DIRECTORY_LIFECYCLES` (provider); outside-set -> 422 at
+    the route, ValueError at the provider, and the page-homogeneity check
+    500s any row whose status is outside the requested member.
+  - Archive-disposition event types: CLOSED, ENUMERATED as
+    `_EOM_CONTACT_ARCHIVE_DISPOSITION_EVENTS = ("contact_archived",
+    "contact_restored")`; outside-set events are invisible to the
+    supersession query by design (the legacy MCP writers that bypass
+    receipts are the #247 unification item, recorded in Deferred).
+  - Directory query parameters: CLOSED, ENUMERATED as
+    `_CONTACT_DIRECTORY_QUERY_PARAMS` (now including `lifecycle`);
+    outside-set names -> 422 via
+    `_reject_unknown_contact_directory_filters`, which is also the
+    deploy-skew defense on older builds.
+  - Capability names: CLOSED, ENUMERATED as `_CAPABILITY_ROUTES` keys with
+    membership DERIVED from registered routes at serve time; outside-set
+    names are simply absent and every consumer treats absence as
+    disable-the-control.
+  - Admitted contact kinds for the transitions: CLOSED, DERIVED from
+    `EOM_OPERATOR_CONTACT_TYPES`; outside-set kinds -> typed 409.
+  - Transition status preconditions: CLOSED, ENUMERATED per direction
+    (archive admits only `active`; restore admits only `archived`);
+    outside-set current status -> typed 409, with the won-stage active
+    lead carved out toward the lost flow by a dedicated 409.
 - Caller x input shape: tracker proxy (the only caller) x
   {archive|restore} x {active, archived, foreign-tenant, missing, won-lead,
   non-directory-kind rows} x {fresh key, replayed key, foreign-owned key,
@@ -178,8 +207,8 @@ sequence is treated as superseded); refuses invalid fresh transitions with
 typed 409s (already archived/active under a different key, non-directory
 kind, won-stage lead toward the lost flow); asserts the won-loss cancellation
 fence; then performs a state-scoped UPDATE and inserts the receipt event
-recording actor, source, operation key, previous/resulting status, and the
-stage snapshot in one transaction. The directory read parameterizes its
+recording the actor, the source, the Idempotency-Key, the prior and new
+status values, and the stage snapshot in one transaction. The directory read parameterizes its
 status predicate with the closed `lifecycle` filter; the route validates the
 filter against the closed set, forwards it, and fails closed (500) on any
 returned row whose status differs from the requested lifecycle -- the second
@@ -188,6 +217,47 @@ derived from registered routes as before; `contact.directory.archived` maps
 to the directory GET deliberately, because only a build carrying the map
 entry (and therefore the `lifecycle` code) can advertise it, and an older
 build 422s the unknown parameter anyway.
+
+### Execution model (3k.4)
+
+Admitted execution model: one PostgreSQL transaction per transition call on
+one connection. Seams and the guarantee that closes each:
+
+- Same-contact concurrency (archive vs archive, archive vs restore):
+  serialized by `pg_advisory_xact_lock` on the shared
+  `eom-contact-archive:contact:{id}` key, taken in sorted order with the
+  operation-key lock before any read; the locks release only at
+  commit/rollback, so admission checks and the UPDATE+INSERT pair are
+  atomic with respect to every other transition on that contact.
+- Same-key concurrency across contacts: the operation-key advisory lock
+  serializes two calls reusing one key, and the partial unique index
+  `(contact_id, event_type, operation_key)` is the durable backstop -- even
+  a writer that somehow bypassed the locks cannot commit two receipts for
+  one key+type on one contact.
+- Lost-update on the row: the `FOR UPDATE` read pins the row version; the
+  final UPDATE re-asserts the full observed state (tenant, type, stage via
+  IS NOT DISTINCT FROM, status), so any interleaved change that slipped a
+  guard turns the UPDATE into zero rows and a loud RuntimeError rollback
+  rather than a silent overwrite.
+- Replay chronology: `lifecycle_sequence` is a database-owned nextval
+  default (migration 363), so receipt ordering is total and monotonic per
+  append regardless of application clocks; the supersession probe compares
+  only sequences of the two receipt event types (closure declared above).
+- Won-loss teardown interaction: the `eom-won-lead-loss:execution:{id}`
+  advisory lock plus the requested/completed lifecycle-event fence refuse a
+  status flip while a Calendar cancellation is executing or unreconciled,
+  in BOTH directions.
+- Invariants across every admitted interleaving: (1) at most one receipt
+  per (contact, event type, key); (2) a 200 replay implies the row
+  currently holds the receipt's resulting status AND no later
+  archive-family receipt exists; (3) a fresh 201 implies exactly one
+  receipt was appended in the same transaction as its status flip; (4) a
+  foreign-tenant or missing target reads 404 before any key-ownership
+  disclosure.
+- Explicit assumption: writers outside the receipt system (legacy MCP
+  `delete_contact` / `update_contact` status writes) do not advance this
+  chronology; their unification is the #247 item recorded in Deferred, and
+  invariant (2) is stated over the receipted writers this slice ships.
 
 ## Intentional
 
@@ -238,13 +308,13 @@ Parked hardening: none.
 |---|---:|
 | `.github/workflows/atlas_eom_lead_pipeline_checks.yml` | 5 |
 | `atlas_brain/eom_api/funnel.py` | 110 |
-| `atlas_brain/services/crm_provider.py` | 421 |
+| `atlas_brain/services/crm_provider.py` | 429 |
 | `atlas_brain/services/eom_lead_conversion.py` | 46 |
 | `atlas_brain/storage/migrations/388_eom_contact_archive_disposition_index.sql` | 43 |
-| `plans/PR-EOM-Contact-Archive-Restore.md` | 246 |
+| `plans/PR-EOM-Contact-Archive-Restore.md` | 320 |
 | `tests/contact_write_boundary/baseline.json` | 2 |
 | `tests/test_contact_write_boundary.py` | 8 |
-| `tests/test_eom_contact_archive.py` | 785 |
+| `tests/test_eom_contact_archive.py` | 943 |
 | `tests/test_eom_contact_directory.py` | 38 |
 | `tests/test_eom_lead_conversion.py` | 1 |
-| **Total** | **1705** |
+| **Total** | **1945** |
