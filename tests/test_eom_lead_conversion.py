@@ -625,6 +625,7 @@ def test_eom_lead_pipeline_workflow_enrolls_won_loss_runtime_paths():
     for path in (
         "atlas_brain/services/eom_won_lead_loss.py",
         "atlas_brain/storage/migrations/386_eom_won_loss_nocodb_fence.sql",
+        "atlas_brain/storage/migrations/388_eom_contact_archive_disposition_index.sql",
     ):
         assert workflow.count(f'      - "{path}"') == 2
 

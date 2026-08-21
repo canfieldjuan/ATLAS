@@ -21,12 +21,16 @@ from ..services.eom_estimate_booking import (
     schedule_eom_first_clean_booking,
 )
 from ..services.eom_lead_conversion import (
+    EOMContactArchive,
+    EOMContactRestore,
     EOMCustomerHandoff,
     EOMLeadConversionError,
     EOMLeadLost,
     EOMLeadReopen,
+    archive_eom_contact,
     finalize_eom_customer_handoff,
     reopen_eom_lead,
+    restore_eom_contact,
 )
 from ..services.eom_won_lead_loss import mark_eom_lead_lost_with_won_teardown
 from ..services.eom_crm_mutations import (
@@ -75,8 +79,14 @@ _MAX_LEAD_REVIEW_LIMIT = 200
 # are rejected rather than tolerated: the directory is new and has exactly one
 # caller, and a typoed filter silently ignored would return the unfiltered
 # directory while looking filtered.
-_CONTACT_DIRECTORY_QUERY_PARAMS = frozenset({"limit", "cursor", "search", "kind"})
+_CONTACT_DIRECTORY_QUERY_PARAMS = frozenset(
+    {"limit", "cursor", "search", "kind", "lifecycle"}
+)
 _MAX_CONTACT_DIRECTORY_SEARCH_LENGTH = 120
+# The status axis the directory may select over. Closed on purpose: admission
+# is one value per page, so an active view can never leak an archived row and
+# the archived view is a real server-side read, not a client-side filter.
+_CONTACT_DIRECTORY_LIFECYCLES = ("active", "archived")
 # DERIVED from the canonical operator-mutation kind set, not re-enumerated:
 # if the write boundary ever admits another contact kind, the directory must
 # widen with it in the same commit, or that kind's records become write-only
@@ -377,10 +387,11 @@ class EOMContactDirectoryItem(BaseModel):
     contact_type: str = Field(serialization_alias="contactType")
     customer_type: str = Field(serialization_alias="customerType")
     lead_stage: str | None = Field(default=None, serialization_alias="leadStage")
-    # The WHERE clause pins admission to active rows; this Literal makes the
-    # response model a second, independent enforcement of the same invariant,
-    # so a widened query can never silently leak an archived row.
-    status: Literal["active"]
+    # The WHERE clause pins admission to the one status the requested
+    # lifecycle selects; this Literal plus the route's page-homogeneity check
+    # make the response a second, independent enforcement of the same
+    # invariant, so neither lifecycle view can silently leak the other's rows.
+    status: Literal["active", "archived"]
     source: str | None = None
     created_at: datetime = Field(serialization_alias="createdAt")
     updated_at: datetime | None = Field(default=None, serialization_alias="updatedAt")
@@ -750,6 +761,14 @@ _CAPABILITY_ROUTES: dict[str, tuple[str, str]] = {
     ),
     "contact.link_verification": ("GET", "/eom-funnel/known-contacts"),
     "contact.directory": ("GET", "/eom-funnel/contact-directory"),
+    "contact.archive": ("POST", "/eom-funnel/contacts/{contact_id}/archive"),
+    "contact.restore": ("POST", "/eom-funnel/contacts/{contact_id}/restore"),
+    # Same registered route as contact.directory, deliberately: the name
+    # asserts THIS build's directory understands the closed `lifecycle`
+    # filter. An older build never carries this map entry, so it can never
+    # advertise the name -- and its unknown-parameter 422 rejects the filter
+    # outright, so a stale deployment fails closed twice over.
+    "contact.directory.archived": ("GET", "/eom-funnel/contact-directory"),
 }
 
 _served_capabilities_cache: tuple[str, ...] | None = None
@@ -1027,6 +1046,7 @@ async def list_eom_contact_directory(
     # A plain string validated against the DERIVED kind tuple below, rather
     # than a Literal that would re-enumerate the canonical set a third time.
     kind: Annotated[str, Query(min_length=1, max_length=32)] = "all",
+    lifecycle: Annotated[str, Query(min_length=1, max_length=32)] = "active",
     _actor: dict[str, object] = Depends(require_eom_funnel_actor),
     crm: Any = Depends(_crm_dependency),
 ) -> EOMContactDirectoryResponse:
@@ -1045,6 +1065,8 @@ async def list_eom_contact_directory(
     _reject_unknown_contact_directory_filters(request)
     if kind not in _CONTACT_DIRECTORY_KINDS:
         raise HTTPException(status_code=422, detail="kind is not supported")
+    if lifecycle not in _CONTACT_DIRECTORY_LIFECYCLES:
+        raise HTTPException(status_code=422, detail="lifecycle is not supported")
     normalized_search = search.strip() if search is not None else None
     if search is not None and not normalized_search:
         raise HTTPException(status_code=422, detail="search must not be blank")
@@ -1060,6 +1082,7 @@ async def list_eom_contact_directory(
     rows = await crm.list_eom_contact_directory(
         limit=limit + 1,
         kind=kind,
+        lifecycle=lifecycle,
         search=normalized_search,
         cursor_created_at=(
             decoded_cursor["created_at"] if decoded_cursor is not None else None
@@ -1068,6 +1091,16 @@ async def list_eom_contact_directory(
             decoded_cursor["contact_id"] if decoded_cursor is not None else None
         ),
     )
+    # Page homogeneity is the second enforcement behind the widened status
+    # Literal: every admitted row must carry exactly the requested lifecycle.
+    # A mixed page is a provider admission bug, and serving it would leak one
+    # view's rows into the other, so it fails closed instead of rendering.
+    for row in rows:
+        if str(row.get("status")) != lifecycle:
+            raise HTTPException(
+                status_code=500,
+                detail="contact directory page violated lifecycle admission",
+            )
     page_rows = rows[:limit]
     has_more = len(rows) > limit
     next_cursor = None
@@ -1262,6 +1295,73 @@ async def reopen_lead(
         result = await reopen_eom_lead(
             crm,
             EOMLeadReopen(
+                contact_id=str(contact_id),
+                operation_key=operation_key,
+                actor_id=int(actor["id"]),
+                actor_name=str(actor["name"]),
+            ),
+        )
+    except EOMLeadConversionError as exc:
+        raise HTTPException(status_code=exc.status_code, detail=str(exc)) from exc
+    return _draft_action_response(result)
+
+
+@router.post(
+    "/contacts/{contact_id}/archive",
+    status_code=status.HTTP_201_CREATED,
+    dependencies=[Depends(require_eom_funnel_api)],
+)
+async def archive_contact(
+    contact_id: UUID,
+    operation_key: str = Depends(_approval_key_dependency),
+    actor: dict[str, object] = Depends(require_eom_funnel_actor),
+    crm: Any = Depends(_crm_dependency),
+) -> JSONResponse:
+    """Reversibly park a contact out of the active directory.
+
+    A status-axis soft archive -- never a delete. Both directory kinds are
+    admitted; an active won-stage lead is refused toward the lost flow, whose
+    Calendar teardown owns that transition. The response echoes the contact's
+    identity and resulting status so the caller can validate the target.
+    """
+    try:
+        result = await archive_eom_contact(
+            crm,
+            EOMContactArchive(
+                contact_id=str(contact_id),
+                operation_key=operation_key,
+                actor_id=int(actor["id"]),
+                actor_name=str(actor["name"]),
+            ),
+        )
+    except EOMLeadConversionError as exc:
+        raise HTTPException(status_code=exc.status_code, detail=str(exc)) from exc
+    return _draft_action_response(result)
+
+
+@router.post(
+    "/contacts/{contact_id}/restore",
+    status_code=status.HTTP_201_CREATED,
+    dependencies=[Depends(require_eom_funnel_api)],
+)
+async def restore_contact(
+    contact_id: UUID,
+    operation_key: str = Depends(_approval_key_dependency),
+    actor: dict[str, object] = Depends(require_eom_funnel_actor),
+    crm: Any = Depends(_crm_dependency),
+) -> JSONResponse:
+    """Return one archived contact to the active directory, exactly as it was.
+
+    Archive never touches the stage axis, so restore is a pure status flip
+    with the same receipt discipline. Duplicate-identity ambiguity after a
+    restore is not re-checked here by design: contact info is not identity
+    (#105/#107), no uniqueness constraint can be violated, and the operator
+    mutation boundary already 409s ambiguous matches where they matter.
+    """
+    try:
+        result = await restore_eom_contact(
+            crm,
+            EOMContactRestore(
                 contact_id=str(contact_id),
                 operation_key=operation_key,
                 actor_id=int(actor["id"]),
