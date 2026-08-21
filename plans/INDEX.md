@@ -1,6 +1,6 @@
 # Plan archive index
 
-1522 archived plan doc(s). Merged plan docs are moved under `archive/` and listed below; once the archive sweep has run, the `plans/` root holds only in-flight slices.
+1533 archived plan doc(s). Merged plan docs are moved under `archive/` and listed below; once the archive sweep has run, the `plans/` root holds only in-flight slices.
 
 - [PR-ASR-Pip-Audit-Egg-Fragment](archive/PR-ASR-Pip-Audit-Egg-Fragment.md) - lane: security/workflow | phase: Production hardening
 - [PR-ASR-Requirements-Audit-Pin](archive/PR-ASR-Requirements-Audit-Pin.md) - lane: security/workflow | phase: Production hardening
@@ -1007,27 +1007,37 @@
 - [PR-Docs-Only-Live-Reconciliation](archive/PR-Docs-Only-Live-Reconciliation.md) - lane: workflow/docs-only-live-reconciliation | phase: Workflow/process
 - [PR-Docs-Preserve-Product-Audit-Notes](archive/PR-Docs-Preserve-Product-Audit-Notes.md) - lane: docs/product-history-preservation | phase: Workflow/process
 - [PR-EOM-API-Contacts-Auth](archive/PR-EOM-API-Contacts-Auth.md) - lane: eom-crm/api-auth | phase: Production hardening
+- [PR-EOM-Approved-Invoice-PDF-Artifact](archive/PR-EOM-Approved-Invoice-PDF-Artifact.md) - lane: eom/billing-approved-gmail-drafts | phase: Vertical slice
 - [PR-EOM-Atomic-Portal-Reconciliation](archive/PR-EOM-Atomic-Portal-Reconciliation.md) - lane: eom-crm/lead-funnel | phase: production hardening
 - [PR-EOM-B2B-Omission-Flag-Pin](archive/PR-EOM-B2B-Omission-Flag-Pin.md) - lane: eom-crm/read-scoping | phase: robust testing
+- [PR-EOM-Billing-Candidate-Approval-Invoices](archive/PR-EOM-Billing-Candidate-Approval-Invoices.md) - lane: eom/billing-approved-gmail-drafts | phase: Vertical slice
 - [PR-EOM-Calendar-Demotion-Guard](archive/PR-EOM-Calendar-Demotion-Guard.md) - lane: eom-crm/lead-funnel | phase: vertical slice
 - [PR-EOM-Calendar-Email-Veto](archive/PR-EOM-Calendar-Email-Veto.md) - lane: eom-crm/calendar-veto | phase: production hardening
+- [PR-EOM-Commercial-Billing-Candidate-Exclusions](archive/PR-EOM-Commercial-Billing-Candidate-Exclusions.md) - lane: eom/commercial-billing-candidate-exclusions | phase: Vertical slice
+- [PR-EOM-Commercial-Billing-Candidate-Overrides](archive/PR-EOM-Commercial-Billing-Candidate-Overrides.md) - lane: eom-commercial-billing/candidate-overrides | phase: Vertical slice
 - [PR-EOM-Complaints-Tracking](archive/PR-EOM-Complaints-Tracking.md) - lane: eom-crm/complaints | phase: Vertical slice
 - [PR-EOM-Funnel-Canonical-CRM-Runtime](archive/PR-EOM-Funnel-Canonical-CRM-Runtime.md) - lane: eom-funnel | phase: production hardening
 - [PR-EOM-Funnel-Ingress](archive/PR-EOM-Funnel-Ingress.md) - lane: eom-crm/lead-funnel | phase: Vertical slice
 - [PR-EOM-Lead-Intake](archive/PR-EOM-Lead-Intake.md) - lane: eom-crm/lead-funnel | phase: vertical slice
 - [PR-EOM-Lead-Pipeline](archive/PR-EOM-Lead-Pipeline.md) - lane: eom-crm/lead-funnel | phase: Vertical slice
+- [PR-EOM-Legacy-Billing-Month-Admission](archive/PR-EOM-Legacy-Billing-Month-Admission.md) - lane: eom/billing-payments-security-hardening | phase: Production hardening
+- [PR-EOM-Legacy-Monthly-Autoinvoice-Opt-In-Recovery](archive/PR-EOM-Legacy-Monthly-Autoinvoice-Opt-In-Recovery.md) - lane: eom/billing-payments-security-hardening | phase: Production hardening
+- [PR-EOM-Legacy-Monthly-Writer-Harness](archive/PR-EOM-Legacy-Monthly-Writer-Harness.md) - lane: eom/billing-payments-security-hardening | phase: Production hardening
 - [PR-EOM-Live-Calendar-Import](archive/PR-EOM-Live-Calendar-Import.md) - lane: eom-crm/lead-funnel | phase: vertical slice
 - [PR-EOM-Mailbox-Context-Binding](archive/PR-EOM-Mailbox-Context-Binding.md) - lane: eom-crm/email-tenancy | phase: Production hardening
+- [PR-EOM-Migration-Content-Integrity](archive/PR-EOM-Migration-Content-Integrity.md) - lane: eom/billing-payments-security-hardening | phase: Production hardening
 - [PR-EOM-Office-Conversion-Handoff](archive/PR-EOM-Office-Conversion-Handoff.md) - lane: eom-crm/lead-funnel | phase: Vertical slice
 - [PR-EOM-Office-Lead-Review](archive/PR-EOM-Office-Lead-Review.md) - lane: eom-crm/lead-funnel | phase: Vertical slice
 - [PR-EOM-Onboarding-Draft-Approval](archive/PR-EOM-Onboarding-Draft-Approval.md) - lane: eom-lead-funnel-onboarding-approval | phase: vertical slice
 - [PR-EOM-Operator-Mutation-Contract](archive/PR-EOM-Operator-Mutation-Contract.md) - lane: eom-crm/lead-funnel | phase: vertical slice
 - [PR-EOM-Portal-Customer-Sync](archive/PR-EOM-Portal-Customer-Sync.md) - lane: eom-crm/lead-funnel | phase: vertical slice
 - [PR-EOM-Portal-Reconciliation](archive/PR-EOM-Portal-Reconciliation.md) - lane: eom/portal-reconciliation | phase: Vertical slice
+- [PR-EOM-Public-Onboarding-Token-Authority](archive/PR-EOM-Public-Onboarding-Token-Authority.md) - lane: eom-public-onboarding-token-authority | phase: vertical slice
 - [PR-EOM-Read-Scoping-Fixes](archive/PR-EOM-Read-Scoping-Fixes.md) - lane: eom-crm/read-scoping | phase: production hardening
 - [PR-EOM-Read-Scoping-Test-Evidence](archive/PR-EOM-Read-Scoping-Test-Evidence.md) - lane: eom-crm/read-scoping | phase: robust testing
 - [PR-EOM-Read-Scoping](archive/PR-EOM-Read-Scoping.md) - lane: eom-crm/lead-funnel | phase: vertical slice
 - [PR-EOM-Receivables-Schema-Readiness](archive/PR-EOM-Receivables-Schema-Readiness.md) - lane: eom-render/receivables-schema-readiness | phase: Vertical slice
+- [PR-EOM-Receivables-Unapplied-Payments](archive/PR-EOM-Receivables-Unapplied-Payments.md) - lane: eom/receivables | phase: Vertical slice
 - [PR-EOM-Recurring-Appointments](archive/PR-EOM-Recurring-Appointments.md) - lane: eom-crm/appointments | phase: Vertical slice
 - [PR-EOM-Render-DB](archive/PR-EOM-Render-DB.md) - lane: eom/render-db | phase: vertical slice
 - [PR-EOM-Render-Profile](archive/PR-EOM-Render-Profile.md) - lane: eom/render-profile | phase: vertical slice
@@ -1501,6 +1511,7 @@
 - [PR-Support-Ticket-Smoke-Draft-Export-Ids](archive/PR-Support-Ticket-Smoke-Draft-Export-Ids.md) - lane: content-ops/support-ticket-input-provider | phase: Functional validation
 - [PR-Support-Ticket-Source-Context-Live-Validation](archive/PR-Support-Ticket-Source-Context-Live-Validation.md) - lane: content-ops/support-ticket-input-provider | phase: functional validation
 - [PR-Test-Collection-Fixes](archive/PR-Test-Collection-Fixes.md) - lane: ci/coverage | phase: Production hardening
+- [PR-Test-Git-Hermetic-Isolation](archive/PR-Test-Git-Hermetic-Isolation.md) - lane: local-pr-review-tooling | phase: production hardening
 - [PR-Track-Preflight-Dotenv-Fix](archive/PR-Track-Preflight-Dotenv-Fix.md) - lane: content-ops/deflection-tracking | phase: workflow/process
 - [PR-Trusted-Base-Gate-Execution](archive/PR-Trusted-Base-Gate-Execution.md) - lane: Workflow/process | phase: Vertical slice
 - [PR-Trusted-Base-Pre-Push-Audit](archive/PR-Trusted-Base-Pre-Push-Audit.md) - lane: workflow/process | phase: Vertical slice

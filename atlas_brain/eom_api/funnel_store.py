@@ -21,14 +21,24 @@ async def require_eom_funnel_data_store(
     pool = get_db_pool_fn()
     if not pool.is_initialized:
         raise RuntimeError("EOM funnel requires an initialized Atlas database pool")
+    public_onboarding_enabled = bool(
+        getattr(config, "public_onboarding_enabled", False)
+    )
+    # The value is a locally derived boolean, not caller input. Inlining it
+    # retains compatibility with the lightweight readiness-pool test seam while
+    # still making the migration requirement part of the one startup query.
+    public_onboarding_enabled_sql = (
+        "TRUE" if public_onboarding_enabled else "FALSE"
+    )
     ready = await pool.fetchval(
-        """
+        f"""
         WITH readiness_relations AS (
             SELECT
                 to_regclass('contacts') AS contacts_rel,
                 to_regclass('eom_lead_lifecycle_events') AS lifecycle_rel,
                 to_regclass('eom_customer_handoffs') AS handoff_rel,
-                to_regclass('eom_onboarding_email_drafts') AS onboarding_drafts_rel
+                to_regclass('eom_onboarding_email_drafts') AS onboarding_drafts_rel,
+                to_regclass('eom_public_onboarding_tokens') AS public_onboarding_tokens_rel
         ),
         readiness_columns AS (
             SELECT
@@ -53,6 +63,31 @@ async def require_eom_funnel_data_store(
                     WHERE attrelid = readiness_relations.contacts_rel
                       AND attname = 'lead_stage'
                       AND NOT attisdropped
+                )
+                -- The operator contact INSERT names customer_type explicitly
+                -- (migration 366). Startup catches a failed migration and
+                -- continues, so without this the funnel would be admitted
+                -- against a contacts table lacking the column and every
+                -- operator create would fail at the write instead of at the
+                -- readiness gate.
+                AND EXISTS (
+                    SELECT 1
+                    FROM pg_attribute
+                    WHERE attrelid = readiness_relations.contacts_rel
+                      AND attname = 'customer_type'
+                      AND NOT attisdropped
+                )
+                -- known-contacts publishes the database-owned source revision
+                -- for customer_type (migration 367). A partially migrated
+                -- store would otherwise pass startup then fail only when a
+                -- tracker refresh asks the provider to read it.
+                AND EXISTS (
+                    SELECT 1
+                    FROM pg_attribute
+                    WHERE attrelid = readiness_relations.contacts_rel
+                      AND attname = 'customer_type_revision'
+                      AND NOT attisdropped
+                      AND atttypid = 'bigint'::regtype
                 ) AS contacts_required_columns_ready,
                 -- Reopen orders lost-stage evidence by migration 363's
                 -- database-owned append sequence. Serving without it would turn
@@ -98,16 +133,116 @@ async def require_eom_funnel_data_store(
                       AND attname = 'approved_by_employee_id'
                       AND NOT attisdropped
                       AND atttypid = 'bigint'::regtype
-                ) AS onboarding_drafts_required_columns_ready
+                ) AS onboarding_drafts_required_columns_ready,
+                -- A disabled authority may safely precede migration 383. Once
+                -- the relation exists, however, the ordinary office fence and
+                -- private revoke-link recovery path still SELECT ... FOR UPDATE
+                -- and UPDATE it. Check that smaller unconditional surface even
+                -- while issuance is dormant, so those paths cannot first fail
+                -- on a partial migration or missing runtime DML privilege.
+                (
+                    readiness_relations.public_onboarding_tokens_rel IS NULL
+                    OR (
+                        NOT EXISTS (
+                            SELECT required.attname
+                            FROM unnest(ARRAY[
+                                'id', 'draft_id', 'contact_id', 'status', 'revoked_at'
+                            ]) AS required(attname)
+                            WHERE NOT EXISTS (
+                                SELECT 1
+                                FROM pg_attribute
+                                WHERE attrelid = readiness_relations.public_onboarding_tokens_rel
+                                  AND attname = required.attname
+                                  AND NOT attisdropped
+                            )
+                        )
+                        AND has_table_privilege(
+                            current_user,
+                            readiness_relations.public_onboarding_tokens_rel,
+                            'SELECT'
+                        )
+                        AND has_table_privilege(
+                            current_user,
+                            readiness_relations.public_onboarding_tokens_rel,
+                            'UPDATE'
+                        )
+                    )
+                ) AS public_onboarding_recovery_ready,
+                -- Issuance itself remains explicitly enabled-only. It needs the
+                -- full immutable projection, durable constraints/index, and
+                -- INSERT in addition to the recovery surface above.
+                CASE WHEN {public_onboarding_enabled_sql} THEN (
+                    readiness_relations.public_onboarding_tokens_rel IS NOT NULL
+                    AND NOT EXISTS (
+                        SELECT required.attname
+                        FROM unnest(ARRAY[
+                            'id', 'draft_id', 'contact_id',
+                            'signing_key_fingerprint', 'prefill_full_name',
+                            'prefill_email', 'prefill_phone', 'prefill_address',
+                            'prefill_city', 'prefill_state', 'prefill_zip',
+                            'prefill_customer_type', 'approval_key', 'status',
+                            'approved_by_employee_id', 'approved_by_name',
+                            'issued_at', 'redeemed_at', 'revoked_at', 'handoff_id'
+                        ]) AS required(attname)
+                        WHERE NOT EXISTS (
+                            SELECT 1
+                            FROM pg_attribute
+                            WHERE attrelid = readiness_relations.public_onboarding_tokens_rel
+                              AND attname = required.attname
+                              AND NOT attisdropped
+                        )
+                    )
+                    AND (
+                        SELECT COUNT(DISTINCT token_constraint.conname) = 6
+                        FROM pg_constraint AS token_constraint
+                        WHERE token_constraint.conrelid = readiness_relations.public_onboarding_tokens_rel
+                          AND token_constraint.conname = ANY(ARRAY[
+                              'pk_eom_public_onboarding_tokens',
+                              'uq_eom_public_onboarding_tokens_draft',
+                              'uq_eom_public_onboarding_tokens_approval',
+                              'uq_eom_public_onboarding_tokens_handoff',
+                              'ck_eom_public_onboarding_tokens_status',
+                              'ck_eom_public_onboarding_tokens_terminal_state'
+                          ])
+                    )
+                    AND EXISTS (
+                        SELECT 1
+                        FROM pg_index AS token_index
+                        JOIN pg_class AS token_index_relation
+                          ON token_index_relation.oid = token_index.indexrelid
+                        WHERE token_index.indrelid = readiness_relations.public_onboarding_tokens_rel
+                          AND token_index_relation.relname = 'uq_eom_public_onboarding_tokens_issued_contact'
+                          AND token_index.indisunique
+                          AND token_index.indpred IS NOT NULL
+                    )
+                    AND has_table_privilege(
+                        current_user,
+                        readiness_relations.public_onboarding_tokens_rel,
+                        'SELECT'
+                    )
+                    AND has_table_privilege(
+                        current_user,
+                        readiness_relations.public_onboarding_tokens_rel,
+                        'INSERT'
+                    )
+                    AND has_table_privilege(
+                        current_user,
+                        readiness_relations.public_onboarding_tokens_rel,
+                        'UPDATE'
+                    )
+                ) ELSE TRUE END AS public_onboarding_issuance_ready
             FROM readiness_relations
         )
         SELECT readiness_relations.contacts_rel IS NOT NULL
            AND readiness_relations.lifecycle_rel IS NOT NULL
            AND readiness_relations.handoff_rel IS NOT NULL
            AND readiness_relations.onboarding_drafts_rel IS NOT NULL
+           AND (NOT {public_onboarding_enabled_sql} OR readiness_relations.public_onboarding_tokens_rel IS NOT NULL)
            AND readiness_columns.contacts_required_columns_ready
            AND readiness_columns.lifecycle_required_columns_ready
            AND readiness_columns.onboarding_drafts_required_columns_ready
+           AND readiness_columns.public_onboarding_recovery_ready
+           AND readiness_columns.public_onboarding_issuance_ready
            AND EXISTS (
                SELECT 1
                FROM pg_class AS handoff_table

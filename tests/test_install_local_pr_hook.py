@@ -6,7 +6,21 @@ import stat
 import subprocess
 from pathlib import Path
 
+import pytest
+
 REPO_ROOT = Path(__file__).resolve().parents[1]
+
+
+@pytest.fixture(autouse=True)
+def _review_guard_absent(monkeypatch: pytest.MonkeyPatch) -> None:
+    """These tests assert the installed hook RUNS the review.
+
+    conftest preserves ATLAS_SKIP_LOCAL_PR_REVIEW so a pushing test cannot
+    re-enter the review -> unit gate -> pytest cycle, but that same value makes
+    the hook under test skip. Clear it for this module only; the test that
+    exercises the skip path passes it explicitly, which still wins.
+    """
+    monkeypatch.delenv("ATLAS_SKIP_LOCAL_PR_REVIEW", raising=False)
 
 
 def test_installs_managed_pre_push_hook(tmp_path):

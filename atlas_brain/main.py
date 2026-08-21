@@ -13,14 +13,17 @@ load_dotenv(_env_root / ".env", override=True)
 load_dotenv(_env_root / ".env.local", override=True)
 
 import asyncio
+import json
 import logging
 import subprocess
 from contextlib import asynccontextmanager
 from datetime import datetime, timedelta, timezone
 from urllib.parse import urlparse
 
-from fastapi import FastAPI
-from fastapi.responses import JSONResponse, PlainTextResponse
+from fastapi import FastAPI, Request
+from fastapi.encoders import jsonable_encoder
+from fastapi.exceptions import RequestValidationError
+from fastapi.responses import JSONResponse, PlainTextResponse, Response
 
 from .api import router as api_router
 from .config import settings
@@ -41,6 +44,21 @@ logger = logging.getLogger("atlas.main")
 _SECURITY_CONTACT_URL = "https://github.com/canfieldjuan/ATLAS/security/advisories/new"
 _SECURITY_POLICY_URL = "https://github.com/canfieldjuan/ATLAS/blob/main/SECURITY.md"
 _SECURITY_TXT_MAX_AGE_DAYS = 180
+_COMMERCIAL_BILLING_REVIEW_RECOVERY_MIGRATION = (
+    "382_commercial_billing_candidate_overrides"
+)
+
+
+class _DatabaseMigrationFenceError(RuntimeError):
+    """Base for startup fences that must block serving on a missing migration."""
+
+
+class CommercialBillingReviewRecoveryUnavailableError(_DatabaseMigrationFenceError):
+    """The enabled receivables API cannot safely serve commercial billing."""
+
+
+class RecurringInvoiceDedupMigrationUnavailableError(_DatabaseMigrationFenceError):
+    """A recurring-invoice writer cannot safely serve without period dedup."""
 
 
 def _setting_text(config: object, name: str) -> str:
@@ -305,6 +323,128 @@ async def _start_asr_server() -> subprocess.Popen | None:
     return None
 
 
+async def _migration_is_recorded(pool: object, migration_name: str) -> bool:
+    """Return whether the given migration is durably recorded in schema_migrations."""
+    try:
+        return bool(
+            await pool.fetchval(
+                "SELECT EXISTS (SELECT 1 FROM schema_migrations WHERE name = $1)",
+                migration_name,
+            )
+        )
+    except Exception as exc:
+        logger.warning(
+            "Could not confirm migration %s is recorded: %s", migration_name, exc
+        )
+        return False
+
+
+async def _run_database_migration_check(
+    pool: object,
+    *,
+    receivables_api_enabled: bool,
+    auto_invoice_enabled: bool = False,
+    run_migrations_fn=None,
+    close_database_fn=None,
+    recurring_dedup_ready_fn=None,
+) -> None:
+    """Run generic migrations, fencing unsafe writer-path failures.
+
+    receivables_api_enabled requires the commercial billing review recovery
+    migration (382). A recurring-invoice writer is reachable when either the
+    receivables-mounted commercial-billing approval writer or the legacy
+    monthly auto-invoice task is enabled; only that writer surface is fenced
+    against the writer-only billing_period dedup schema.
+    """
+    if run_migrations_fn is None:
+        from .storage.migrations import run_migrations
+
+        runner = run_migrations
+    else:
+        runner = run_migrations_fn
+    closer = close_database if close_database_fn is None else close_database_fn
+    if recurring_dedup_ready_fn is None:
+        from .storage.repositories.invoice import recurring_invoice_dedup_schema_ready
+
+        recurring_ready = recurring_invoice_dedup_schema_ready
+    else:
+        recurring_ready = recurring_dedup_ready_fn
+
+    migration_error = None
+    try:
+        await runner(pool)
+    except Exception as exc:
+        migration_error = exc
+
+    required: list[tuple[str, type[_DatabaseMigrationFenceError], str]] = []
+    if receivables_api_enabled:
+        required.append(
+            (
+                _COMMERCIAL_BILLING_REVIEW_RECOVERY_MIGRATION,
+                CommercialBillingReviewRecoveryUnavailableError,
+                "Commercial billing review recovery migration must complete "
+                "before the enabled receivables API can start",
+            )
+        )
+    for migration_name, error_cls, message in required:
+        if await _migration_is_recorded(pool, migration_name):
+            continue
+        try:
+            await closer()
+        except Exception as close_exc:
+            logger.error(
+                "Error closing database after %s failure: %s",
+                migration_name,
+                close_exc,
+                exc_info=True,
+            )
+        error = error_cls(message)
+        if migration_error is not None:
+            raise error from migration_error
+        raise error
+
+    if receivables_api_enabled or auto_invoice_enabled:
+        try:
+            recurring_dedup_ready = await recurring_ready(pool)
+        except Exception as exc:
+            try:
+                await closer()
+            except Exception as close_exc:
+                logger.error(
+                    "Error closing database after recurring invoice dedup "
+                    "readiness verification error: %s",
+                    close_exc,
+                    exc_info=True,
+                )
+            error = RecurringInvoiceDedupMigrationUnavailableError(
+                "Recurring-invoice billing_period dedup schema must be ready "
+                "before an enabled recurring invoice writer can start"
+            )
+            raise error from exc
+        if not recurring_dedup_ready:
+            try:
+                await closer()
+            except Exception as close_exc:
+                logger.error(
+                    "Error closing database after recurring invoice dedup "
+                    "readiness failure: %s",
+                    close_exc,
+                    exc_info=True,
+                )
+            error = RecurringInvoiceDedupMigrationUnavailableError(
+                "Recurring-invoice billing_period dedup schema must be ready "
+                "before an enabled recurring invoice writer can start"
+            )
+            if migration_error is not None:
+                raise error from migration_error
+            raise error
+
+    if migration_error is not None:
+        logger.warning("Database migration check failed: %s", migration_error)
+    else:
+        logger.info("Database migrations checked")
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """
@@ -325,14 +465,22 @@ async def lifespan(app: FastAPI):
             await init_database()
             logger.info("Database connection pool initialized")
             try:
-                from .storage.migrations import run_migrations
-
                 pool = get_db_pool()
                 if pool.is_initialized:
-                    await run_migrations(pool)
-                    logger.info("Database migrations checked")
+                    await _run_database_migration_check(
+                        pool,
+                        receivables_api_enabled=settings.invoicing.receivables_api_enabled,
+                        auto_invoice_enabled=(
+                            settings.invoicing.enabled
+                            and settings.invoicing.auto_invoice_enabled
+                        ),
+                    )
+            except _DatabaseMigrationFenceError:
+                raise
             except Exception as e:
                 logger.warning("Database migration check failed: %s", e)
+        except _DatabaseMigrationFenceError:
+            raise
         except Exception as e:
             logger.error("Failed to initialize database: %s", e, exc_info=True)
             # Continue without database - service can still function
@@ -914,6 +1062,30 @@ app = FastAPI(
     version="0.2.0",
     lifespan=lifespan,
 )
+
+
+async def _request_validation_error_handler(
+    _request: Request, exc: RequestValidationError
+) -> Response:
+    """Return 422 even when malformed JSON text cannot be emitted as UTF-8."""
+
+    content = {"detail": jsonable_encoder(exc.errors())}
+    try:
+        return JSONResponse(status_code=422, content=content)
+    except UnicodeEncodeError:
+        return Response(
+            content=json.dumps(
+                content,
+                ensure_ascii=True,
+                allow_nan=False,
+                separators=(",", ":"),
+            ),
+            status_code=422,
+            media_type="application/json",
+        )
+
+
+app.add_exception_handler(RequestValidationError, _request_validation_error_handler)
 
 # Campaign email webhook receiver (Resend ESP events) at root /webhooks/*
 from .api.campaign_webhooks import router as campaign_webhook_router

@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 from contextlib import asynccontextmanager
 from datetime import datetime, timedelta, timezone
+from pathlib import Path
 from types import SimpleNamespace
 from uuid import UUID, uuid4
 
@@ -19,7 +20,10 @@ from atlas_brain.services.eom_estimate_booking import (
     deterministic_eom_estimate_calendar_event_id,
     deterministic_eom_first_clean_calendar_event_id,
 )
-from atlas_brain.services.eom_lead_conversion import EOMLeadConversionError
+from atlas_brain.services.eom_lead_conversion import EOMLeadConversionError, EOMLeadLost
+from atlas_brain.services.eom_won_lead_loss import (
+    mark_eom_lead_lost_with_won_teardown,
+)
 from atlas_brain.tools.base import ToolResult
 from atlas_brain.tools.calendar import CalendarAuthError, CalendarTool
 
@@ -40,6 +44,12 @@ class _CRM:
         self.first_clean_complete_calls: list[dict[str, object]] = []
         self.first_clean_ambiguous_calls: list[dict[str, object]] = []
         self.first_clean_failed_calls: list[dict[str, object]] = []
+        self.won_loss_execution_contacts: list[str] = []
+        self.won_loss_prepare_calls: list[dict[str, object]] = []
+        self.won_loss_complete_calls: list[dict[str, object]] = []
+        self.won_loss_unsettled_calls: list[dict[str, object]] = []
+        self.won_loss_prepared: dict[str, object] | None = None
+        self.won_loss_complete_result: dict[str, object] | None = None
         self.onboarding_draft_id = "0b8db22e-16b1-4a30-a15f-6c78ee9204a5"
         self.execution_lock_keys: list[str] = []
         self.review_leads = review_leads or []
@@ -61,6 +71,33 @@ class _CRM:
     async def eom_estimate_booking_execution_lock(self, *, booking_key: str):
         self.execution_lock_keys.append(booking_key)
         yield
+
+    @asynccontextmanager
+    async def eom_won_lead_loss_execution_lock(self, *, contact_id: str):
+        self.won_loss_execution_contacts.append(contact_id)
+        yield self
+
+    async def prepare_eom_won_lead_loss(self, **kwargs: object) -> dict[str, object]:
+        self.won_loss_prepare_calls.append(kwargs)
+        if self.won_loss_prepared is not None:
+            return dict(self.won_loss_prepared)
+        return {"mode": "pre_won"}
+
+    async def complete_eom_won_lead_loss(self, **kwargs: object) -> dict[str, object]:
+        self.won_loss_complete_calls.append(kwargs)
+        if self.won_loss_complete_result is not None:
+            return dict(self.won_loss_complete_result)
+        return {
+            "contact_id": kwargs["contact_id"],
+            "lead_stage": "lost",
+            "status": "lost",
+            "reason_code": kwargs["reason_code"],
+            "from_stage": "won",
+            "idempotent": False,
+        }
+
+    async def mark_eom_won_lead_loss_calendar_unsettled(self, **kwargs: object) -> None:
+        self.won_loss_unsettled_calls.append(kwargs)
 
     async def mutate_eom_operator_contact_atomic(self, *, command):
         self.operator_contact_calls.append(command)
@@ -85,6 +122,11 @@ class _CRM:
                 "zip": command.fields.get("zip"),
                 "notes": command.fields.get("notes"),
                 "contact_type": command.contact_type or "customer",
+                # The real provider returns the stored row (RETURNING *), where
+                # an unspecified customer_type is the column default rather than
+                # NULL. Modelling that here keeps the fake honest about what the
+                # route actually echoes.
+                "customer_type": command.fields.get("customer_type", "unknown"),
                 "lead_stage": "new" if command.contact_type == "lead" else None,
                 "status": "active",
                 "source": command.contact_source,
@@ -175,6 +217,20 @@ class _CRM:
 
     async def prepare_eom_first_clean_booking(self, **kwargs):
         self.first_clean_prepare_calls.append(kwargs)
+        if str(kwargs["calendar_id"]).strip().casefold() == "primary":
+            return {
+                "contact_id": kwargs["contact_id"],
+                "lead_stage": "estimate_booked",
+                "status": "calendar_identity_required",
+                "calendar_event_id": None,
+                "expected_calendar_event_id": kwargs["expected_calendar_event_id"],
+                "idempotent": False,
+                "requires_calendar_identity": True,
+                "contact": {
+                    "full_name": "Review Queue Lead",
+                    "address": "100 Main St",
+                },
+            }
         return {
             "contact_id": kwargs["contact_id"],
             "lead_stage": "estimate_booked",
@@ -414,13 +470,36 @@ class _Calendar:
         error: str = "API_ERROR",
         message: str = "Calendar API error: 503",
         data: dict[str, object] | None = None,
+        resolved_calendar_id: str | None = None,
+        resolve_success: bool = True,
     ) -> None:
         self.success = success
         self.event_id = event_id
         self.error = error
         self.message = message
         self.data = data or {}
+        self.resolved_calendar_id = resolved_calendar_id
+        self.resolve_success = resolve_success
         self.calls: list[dict[str, object]] = []
+        self.delete_calls: list[dict[str, object]] = []
+        self.resolve_calls: list[dict[str, object]] = []
+
+    async def resolve_calendar_id(self, **kwargs):
+        self.resolve_calls.append(kwargs)
+        if not self.resolve_success:
+            return ToolResult(
+                success=False,
+                error=self.error,
+                data=self.data,
+                message=self.message,
+            )
+        return ToolResult(
+            success=True,
+            data={
+                "calendar_id": self.resolved_calendar_id or kwargs["calendar_id"]
+            },
+            message="Calendar identity resolved",
+        )
 
     async def create_event(self, **kwargs):
         self.calls.append(kwargs)
@@ -435,6 +514,25 @@ class _Calendar:
             success=True,
             data={"event_id": self.event_id or kwargs["event_id"]},
             message="Created event",
+        )
+
+    async def delete_event(self, **kwargs):
+        self.delete_calls.append(kwargs)
+        if not self.success:
+            return ToolResult(
+                success=False,
+                error=self.error,
+                data=self.data,
+                message=self.message,
+            )
+        return ToolResult(
+            success=True,
+            data={
+                "calendar_id": kwargs["calendar_id"],
+                "event_id": kwargs["event_id"],
+                "already_absent": False,
+            },
+            message="Calendar event deleted",
         )
 
 
@@ -461,11 +559,18 @@ class _CalendarClient:
         *,
         post_response: _CalendarResponse,
         get_response: _CalendarResponse | None = None,
+        delete_response: _CalendarResponse | None = None,
+        get_responses: list[_CalendarResponse] | None = None,
+        delete_responses: list[_CalendarResponse] | None = None,
     ) -> None:
         self.post_response = post_response
         self.get_response = get_response
+        self.delete_response = delete_response
+        self.get_responses = list(get_responses or [])
+        self.delete_responses = list(delete_responses or [])
         self.post_calls: list[dict[str, object]] = []
         self.get_calls: list[dict[str, object]] = []
+        self.delete_calls: list[dict[str, object]] = []
 
     async def post(self, url: str, *, headers: dict[str, str], json: dict[str, object]):
         self.post_calls.append(
@@ -475,8 +580,17 @@ class _CalendarClient:
 
     async def get(self, url: str, *, headers: dict[str, str]):
         self.get_calls.append({"url": url, "headers": dict(headers)})
+        if self.get_responses:
+            return self.get_responses.pop(0)
         assert self.get_response is not None
         return self.get_response
+
+    async def delete(self, url: str, *, headers: dict[str, str]):
+        self.delete_calls.append({"url": url, "headers": dict(headers)})
+        if self.delete_responses:
+            return self.delete_responses.pop(0)
+        assert self.delete_response is not None
+        return self.delete_response
 
 
 def _app(
@@ -497,6 +611,22 @@ def _enabled_config() -> EOMFunnelConfig:
         api_enabled=True,
         service_token_sha256=_SERVICE_TOKEN_SHA256,
     )
+
+
+def test_eom_lead_pipeline_workflow_enrolls_won_loss_runtime_paths():
+    """A standalone won-loss change must run the EOM pipeline proof."""
+
+    workflow = (
+        Path(__file__).resolve().parent.parent
+        / ".github"
+        / "workflows"
+        / "atlas_eom_lead_pipeline_checks.yml"
+    ).read_text()
+    for path in (
+        "atlas_brain/services/eom_won_lead_loss.py",
+        "atlas_brain/storage/migrations/386_eom_won_loss_nocodb_fence.sql",
+    ):
+        assert workflow.count(f'      - "{path}"') == 2
 
 
 def _approval_key() -> str:
@@ -606,6 +736,10 @@ async def test_full_atlas_app_serves_public_intake_and_private_handoff_together(
         "hasMore": False,
         "nextCursor": None,
         "capabilities": list(funnel_mod.served_capabilities()),
+        "capabilityRoutes": [
+            {"method": method, "path": path}
+            for method, path in funnel_mod.served_capability_routes()
+        ],
     }
     assert crm.review_calls == [
         {"limit": 101, "cursor_created_at": None, "cursor_contact_id": None}
@@ -952,6 +1086,10 @@ async def test_private_lead_review_returns_only_the_closed_projection():
         "hasMore": True,
         "nextCursor": expected_cursor,
         "capabilities": list(funnel_mod.served_capabilities()),
+        "capabilityRoutes": [
+            {"method": method, "path": path}
+            for method, path in funnel_mod.served_capability_routes()
+        ],
     }
     assert crm.review_calls == [
         {"limit": 2, "cursor_created_at": None, "cursor_contact_id": None}
@@ -984,6 +1122,10 @@ async def test_private_lead_review_forwards_keyset_cursor_for_continuation():
         "hasMore": False,
         "nextCursor": None,
         "capabilities": list(funnel_mod.served_capabilities()),
+        "capabilityRoutes": [
+            {"method": method, "path": path}
+            for method, path in funnel_mod.served_capability_routes()
+        ],
     }
     assert crm.review_calls == [
         {
@@ -1968,6 +2110,67 @@ async def test_private_first_clean_booking_prepares_calendar_and_completes_in_or
 
 
 @pytest.mark.asyncio
+async def test_private_first_clean_booking_resolves_and_persists_concrete_calendar_identity():
+    """The configured `primary` alias never reaches durable booking evidence."""
+
+    crm = _CRM()
+    calendar = _Calendar(resolved_calendar_id="office-owner@example.com")
+    calendar._config = SimpleNamespace(calendar_id="primary")
+    app = _app(crm, _enabled_config(), calendar=calendar)
+    contact_id = uuid4()
+    booking_key = f"office-first-clean-{uuid4().hex}"
+
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=app), base_url="http://test"
+    ) as client:
+        response = await client.post(
+            f"/eom-funnel/leads/{contact_id}/first-clean-bookings",
+            headers=_headers(approval_key=booking_key),
+            json=_booking_payload(calendar_id=None),
+        )
+
+    assert response.status_code == 201
+    assert calendar.resolve_calls == [{"calendar_id": "primary"}]
+    assert [call["calendar_id"] for call in crm.first_clean_prepare_calls] == [
+        "primary",
+        "office-owner@example.com",
+    ]
+    assert [
+        call["requested_calendar_id"] for call in crm.first_clean_prepare_calls
+    ] == [None, None]
+    assert calendar.calls[0]["calendar_id"] == "office-owner@example.com"
+    assert crm.first_clean_complete_calls[0]["calendar_id"] == "office-owner@example.com"
+
+
+@pytest.mark.asyncio
+async def test_private_first_clean_booking_stops_before_calendar_create_when_identity_unresolved():
+    """A failed identity lookup leaves no event creation or completion attempt."""
+
+    crm = _CRM()
+    calendar = _Calendar(
+        resolve_success=False,
+        message="Calendar API error: 404",
+        data={"request_phase": "calendar_identity", "status_code": 404},
+    )
+    calendar._config = SimpleNamespace(calendar_id="primary")
+    app = _app(crm, _enabled_config(), calendar=calendar)
+
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=app), base_url="http://test"
+    ) as client:
+        response = await client.post(
+            f"/eom-funnel/leads/{uuid4()}/first-clean-bookings",
+            headers=_headers(approval_key=f"office-first-clean-{uuid4().hex}"),
+            json=_booking_payload(calendar_id=None),
+        )
+
+    assert response.status_code == 502
+    assert calendar.resolve_calls == [{"calendar_id": "primary"}]
+    assert calendar.calls == []
+    assert crm.first_clean_complete_calls == []
+
+
+@pytest.mark.asyncio
 async def test_private_first_clean_booking_shares_the_execution_lock_namespace():
     """Both families serialize through the same execution lock so the handoff
     fence sees an in-flight first-clean booking exactly like an estimate."""
@@ -2369,6 +2572,269 @@ async def test_calendar_create_event_sends_optional_deterministic_event_id(monke
     assert result.success is True
     assert result.data["event_id"] == "eomestabc123"
     assert client.post_calls[0]["json"]["id"] == "eomestabc123"
+
+
+@pytest.mark.asyncio
+async def test_calendar_resolve_calendar_id_expands_primary_to_concrete_identity(
+    monkeypatch,
+):
+    tool = CalendarTool()
+    tool._config = SimpleNamespace(
+        calendar_enabled=True, calendar_refresh_token="refresh"
+    )
+    client = _CalendarClient(
+        post_response=_CalendarResponse(status_code=200, payload={}),
+        get_response=_CalendarResponse(
+            status_code=200, payload={"id": "office-owner@example.com"}
+        ),
+    )
+
+    async def ensure_client():
+        return client
+
+    async def auth_header(**_kwargs):
+        return {"Authorization": "Bearer token"}
+
+    monkeypatch.setattr(tool, "_ensure_client", ensure_client)
+    monkeypatch.setattr(tool, "_get_auth_header", auth_header)
+
+    result = await tool.resolve_calendar_id(calendar_id="primary")
+
+    assert result.success is True
+    assert result.data == {"calendar_id": "office-owner@example.com"}
+    assert client.get_calls == [
+        {
+            "url": (
+                "https://www.googleapis.com/calendar/v3/users/me/calendarList/"
+                "primary"
+            ),
+            "headers": {"Authorization": "Bearer token"},
+        }
+    ]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("status_code", [404, 410])
+async def test_calendar_delete_event_treats_an_absent_event_as_idempotent_cancellation(
+    monkeypatch, status_code
+):
+    tool = CalendarTool()
+    tool._config = SimpleNamespace(
+        calendar_enabled=True, calendar_refresh_token="refresh"
+    )
+    client = _CalendarClient(
+        post_response=_CalendarResponse(status_code=200, payload={}),
+        get_response=_CalendarResponse(
+            status_code=200, payload={"id": "first-clean-calendar"}
+        ),
+        delete_response=_CalendarResponse(status_code=status_code, payload={}),
+    )
+
+    async def ensure_client():
+        return client
+
+    async def auth_header(**_kwargs):
+        return {"Authorization": "Bearer token"}
+
+    monkeypatch.setattr(tool, "_ensure_client", ensure_client)
+    monkeypatch.setattr(tool, "_get_auth_header", auth_header)
+
+    result = await tool.delete_event(
+        calendar_id="first-clean-calendar",
+        event_id="eomfclpersistedevent",
+    )
+
+    assert result.success is True
+    assert result.data == {
+        "calendar_id": "first-clean-calendar",
+        "event_id": "eomfclpersistedevent",
+        "already_absent": True,
+    }
+    assert client.delete_calls == [
+        {
+            "url": (
+                "https://www.googleapis.com/calendar/v3/calendars/"
+                "first-clean-calendar/events/eomfclpersistedevent"
+            ),
+            "headers": {"Authorization": "Bearer token"},
+        }
+    ]
+
+
+@pytest.mark.asyncio
+async def test_calendar_delete_event_uses_the_identity_header_for_first_delete(
+    monkeypatch,
+):
+    tool = CalendarTool()
+    tool._config = SimpleNamespace(
+        calendar_enabled=True, calendar_refresh_token="refresh"
+    )
+    client = _CalendarClient(
+        post_response=_CalendarResponse(status_code=200, payload={}),
+        get_response=_CalendarResponse(
+            status_code=200, payload={"id": "first-clean-calendar"}
+        ),
+        delete_response=_CalendarResponse(status_code=204, payload={}),
+    )
+    header_calls: list[dict[str, object]] = []
+
+    async def ensure_client():
+        return client
+
+    async def auth_header(**kwargs):
+        header_calls.append(dict(kwargs))
+        token = "identity-token" if len(header_calls) == 1 else "rotated-token"
+        return {"Authorization": f"Bearer {token}"}
+
+    monkeypatch.setattr(tool, "_ensure_client", ensure_client)
+    monkeypatch.setattr(tool, "_get_auth_header", auth_header)
+
+    result = await tool.delete_event(
+        calendar_id="first-clean-calendar",
+        event_id="eomfclpersistedevent",
+    )
+
+    assert result.success is True
+    assert header_calls == [{"force_refresh": False}]
+    assert client.get_calls[0]["headers"] == {"Authorization": "Bearer identity-token"}
+    assert client.delete_calls[0]["headers"] == {
+        "Authorization": "Bearer identity-token"
+    }
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("status_code", [404, 410])
+async def test_calendar_delete_event_revalidates_refreshed_identity_before_absence(
+    monkeypatch, status_code
+):
+    tool = CalendarTool()
+    tool._config = SimpleNamespace(
+        calendar_enabled=True, calendar_refresh_token="refresh"
+    )
+    client = _CalendarClient(
+        post_response=_CalendarResponse(status_code=200, payload={}),
+        get_responses=[
+            _CalendarResponse(
+                status_code=200, payload={"id": "first-clean-calendar"}
+            ),
+            _CalendarResponse(
+                status_code=200, payload={"id": "first-clean-calendar"}
+            ),
+        ],
+        delete_responses=[
+            _CalendarResponse(status_code=401, payload={}),
+            _CalendarResponse(status_code=status_code, payload={}),
+        ],
+    )
+    token = {"value": "old-token"}
+
+    async def ensure_client():
+        return client
+
+    async def auth_header(**kwargs):
+        if kwargs.get("force_refresh"):
+            token["value"] = "refreshed-token"
+        return {"Authorization": f"Bearer {token['value']}"}
+
+    monkeypatch.setattr(tool, "_ensure_client", ensure_client)
+    monkeypatch.setattr(tool, "_get_auth_header", auth_header)
+
+    result = await tool.delete_event(
+        calendar_id="first-clean-calendar",
+        event_id="eomfclpersistedevent",
+    )
+
+    assert result.success is True
+    assert result.data["already_absent"] is True
+    assert [call["headers"] for call in client.get_calls] == [
+        {"Authorization": "Bearer old-token"},
+        {"Authorization": "Bearer refreshed-token"},
+    ]
+    assert [call["headers"] for call in client.delete_calls] == [
+        {"Authorization": "Bearer old-token"},
+        {"Authorization": "Bearer refreshed-token"},
+    ]
+
+
+@pytest.mark.asyncio
+async def test_calendar_delete_event_rejects_absence_when_refreshed_identity_fails(
+    monkeypatch,
+):
+    tool = CalendarTool()
+    tool._config = SimpleNamespace(
+        calendar_enabled=True, calendar_refresh_token="refresh"
+    )
+    client = _CalendarClient(
+        post_response=_CalendarResponse(status_code=200, payload={}),
+        get_responses=[
+            _CalendarResponse(
+                status_code=200, payload={"id": "first-clean-calendar"}
+            ),
+            _CalendarResponse(status_code=404, payload={}),
+        ],
+        delete_responses=[_CalendarResponse(status_code=401, payload={})],
+    )
+    token = {"value": "old-token"}
+
+    async def ensure_client():
+        return client
+
+    async def auth_header(**kwargs):
+        if kwargs.get("force_refresh"):
+            token["value"] = "refreshed-token"
+        return {"Authorization": f"Bearer {token['value']}"}
+
+    monkeypatch.setattr(tool, "_ensure_client", ensure_client)
+    monkeypatch.setattr(tool, "_get_auth_header", auth_header)
+
+    result = await tool.delete_event(
+        calendar_id="first-clean-calendar",
+        event_id="eomfclpersistedevent",
+    )
+
+    assert result.success is False
+    assert result.error == "API_ERROR"
+    assert result.data == {"request_phase": "calendar_identity", "status_code": 404}
+    assert [call["headers"] for call in client.get_calls] == [
+        {"Authorization": "Bearer old-token"},
+        {"Authorization": "Bearer refreshed-token"},
+    ]
+    assert [call["headers"] for call in client.delete_calls] == [
+        {"Authorization": "Bearer old-token"}
+    ]
+
+
+@pytest.mark.asyncio
+async def test_calendar_delete_event_rejects_an_unresolvable_calendar_before_delete(
+    monkeypatch,
+):
+    tool = CalendarTool()
+    tool._config = SimpleNamespace(
+        calendar_enabled=True, calendar_refresh_token="refresh"
+    )
+    client = _CalendarClient(
+        post_response=_CalendarResponse(status_code=200, payload={}),
+        get_response=_CalendarResponse(status_code=404, payload={}),
+    )
+
+    async def ensure_client():
+        return client
+
+    async def auth_header(**_kwargs):
+        return {"Authorization": "Bearer token"}
+
+    monkeypatch.setattr(tool, "_ensure_client", ensure_client)
+    monkeypatch.setattr(tool, "_get_auth_header", auth_header)
+
+    result = await tool.delete_event(
+        calendar_id="office-owner@example.com",
+        event_id="eomfclpersistedevent",
+    )
+
+    assert result.success is False
+    assert result.error == "API_ERROR"
+    assert result.data == {"request_phase": "calendar_identity", "status_code": 404}
+    assert client.delete_calls == []
 
 
 @pytest.mark.asyncio
@@ -3769,6 +4235,106 @@ async def test_private_mark_lead_lost_records_reason_note_and_actor():
 
 
 @pytest.mark.asyncio
+async def test_private_mark_lead_lost_runs_won_teardown():
+    """The real private route sends only persisted first-clean facts to DELETE."""
+    crm = _CRM()
+    contact_id = uuid4()
+    op_key = f"office-lost-{uuid4().hex}"
+    crm.won_loss_prepared = {
+        "mode": "won",
+        "contact_id": str(contact_id),
+        "calendar_id": "first-clean-calendar",
+        "calendar_event_id": "eomfclpersistedevent",
+        "expected_calendar_event_id": "eomfclpersistedevent",
+        "onboarding_draft_id": str(uuid4()),
+        "booking_operation_key": f"first-clean-{uuid4().hex}",
+        "reason_code": "no_response",
+        "idempotent": False,
+    }
+    crm.won_loss_complete_result = {
+        "contact_id": str(contact_id),
+        "lead_stage": "lost",
+        "status": "lost",
+        "reason_code": "no_response",
+        "from_stage": "won",
+        "idempotent": False,
+    }
+    calendar = _Calendar()
+    app = _app(crm, _enabled_config(), calendar)
+
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=app), base_url="http://test"
+    ) as client:
+        response = await client.post(
+            f"/eom-funnel/leads/{contact_id}/lost",
+            headers=_headers(approval_key=op_key),
+            json={"reason_code": "no_response"},
+        )
+
+    assert response.status_code == 201
+    assert response.json() == {
+        "success": True,
+        "contact_id": str(contact_id),
+        "lead_stage": "lost",
+        "status": "lost",
+        "reason_code": "no_response",
+        "from_stage": "won",
+        "idempotent": False,
+    }
+    assert crm.lost_calls == []
+    assert crm.won_loss_execution_contacts == [str(contact_id)]
+    assert crm.won_loss_prepare_calls[0]["operation_key"] == op_key
+    assert calendar.delete_calls == [
+        {
+            "calendar_id": "first-clean-calendar",
+            "event_id": "eomfclpersistedevent",
+        }
+    ]
+    assert crm.won_loss_complete_calls[0]["calendar_id"] == "first-clean-calendar"
+    assert crm.won_loss_complete_calls[0]["calendar_event_id"] == "eomfclpersistedevent"
+
+
+@pytest.mark.asyncio
+async def test_won_lead_loss_retries_an_uncertain_delete_without_false_loss():
+    """A failed DELETE stays prepared-only; a same-key retry may complete once."""
+    crm = _CRM()
+    contact_id = str(uuid4())
+    command = EOMLeadLost(
+        contact_id=contact_id,
+        reason_code="no_response",
+        note=None,
+        operation_key=f"office-lost-{uuid4().hex}",
+        actor_id=1,
+        actor_name="Juan Canfield",
+    )
+    crm.won_loss_prepared = {
+        "mode": "won",
+        "contact_id": contact_id,
+        "calendar_id": "first-clean-calendar",
+        "calendar_event_id": "eomfclpersistedevent",
+    }
+    calendar = _Calendar(
+        success=False,
+        error="API_ERROR",
+        message="Calendar API error: 503",
+        data={"request_phase": "delete", "status_code": 503},
+    )
+
+    with pytest.raises(EOMLeadConversionError, match="Calendar API error: 503") as exc:
+        await mark_eom_lead_lost_with_won_teardown(crm, calendar, command)
+    assert exc.value.status_code == 502
+    assert crm.won_loss_complete_calls == []
+    assert len(crm.won_loss_unsettled_calls) == 1
+
+    calendar.success = True
+    completed = await mark_eom_lead_lost_with_won_teardown(crm, calendar, command)
+    assert completed["lead_stage"] == "lost"
+    assert completed["idempotent"] is False
+    assert len(calendar.delete_calls) == 2
+    assert len(crm.won_loss_complete_calls) == 1
+
+
+@pytest.mark.asyncio
 async def test_private_mark_lead_lost_rejects_unknown_reason_code():
     crm = _CRM()
     app = _app(crm, _enabled_config())
@@ -3829,3 +4395,75 @@ async def test_private_reopen_lead_surfaces_restored_stage():
     assert crm.reopen_calls[0]["contact_id"] == str(contact_id)
     assert crm.reopen_calls[0]["operation_key"] == op_key
     assert crm.reopen_calls[0]["actor_id"] == 1
+
+
+@pytest.mark.asyncio
+async def test_operator_contact_route_carries_customer_type_end_to_end():
+    """The alias, the command, and the response -- through the real route.
+
+    Everything else proving customer_type constructs
+    `EOMOperatorContactMutation` directly, which skips exactly the layer that
+    can silently drop the field: Pydantic alias resolution and
+    `model_fields_set`. A `customerType` the model forbade, or an alias that
+    never reached `_operator_contact_fields`, would leave every one of those
+    tests green while the deployed endpoint ignored the value.
+    """
+    crm = _CRM()
+    app = _app(crm, _enabled_config())
+    payload = _operator_contact_payload(customerType="Commercial")
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=app), base_url="http://test"
+    ) as client:
+        response = await client.post(
+            "/eom-funnel/operator-contacts",
+            headers=_headers(approval_key=f"office-ctype-{uuid4().hex}"),
+            json=payload,
+        )
+
+    assert response.status_code == 201
+    # Reached the command, case-folded on the way.
+    command = crm.operator_contact_calls[0]
+    assert command.fields["customer_type"] == "commercial"
+    # And comes back out, which is what the tracker mirror will read.
+    assert response.json()["contact"]["customerType"] == "commercial"
+
+
+@pytest.mark.asyncio
+async def test_operator_contact_route_rejects_a_bad_customer_type_as_422():
+    """A caller sending nonsense gets a validation error, not a 500."""
+    crm = _CRM()
+    app = _app(crm, _enabled_config())
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=app), base_url="http://test"
+    ) as client:
+        response = await client.post(
+            "/eom-funnel/operator-contacts",
+            headers=_headers(approval_key=f"office-ctype-bad-{uuid4().hex}"),
+            json=_operator_contact_payload(customerType="bogus"),
+        )
+
+    assert response.status_code == 422
+    assert crm.operator_contact_calls == [], "the boundary must refuse before the provider"
+
+
+@pytest.mark.asyncio
+async def test_operator_contact_route_omits_customer_type_when_not_sent():
+    """An absent field must not be sent as a value, or every edit would reset it.
+
+    `_operator_contact_fields` filters on `model_fields_set`; if that filter
+    stopped working the default None would arrive as an explicit field and the
+    boundary would 422 every request that simply did not mention the type.
+    """
+    crm = _CRM()
+    app = _app(crm, _enabled_config())
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=app), base_url="http://test"
+    ) as client:
+        response = await client.post(
+            "/eom-funnel/operator-contacts",
+            headers=_headers(approval_key=f"office-ctype-absent-{uuid4().hex}"),
+            json=_operator_contact_payload(),
+        )
+
+    assert response.status_code == 201
+    assert "customer_type" not in crm.operator_contact_calls[0].fields

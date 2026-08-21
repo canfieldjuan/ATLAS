@@ -6,7 +6,7 @@ import asyncio
 import json
 import os
 import uuid
-from contextlib import asynccontextmanager
+from contextlib import asynccontextmanager, suppress
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -24,21 +24,37 @@ from atlas_brain.services.eom_crm_mutations import (  # noqa: E402
     mutate_eom_operator_contact,
 )
 from atlas_brain.services.eom_estimate_booking import (  # noqa: E402
+    EOMFirstCleanBooking,
     deterministic_eom_estimate_calendar_event_id,
     deterministic_eom_first_clean_calendar_event_id,
+    schedule_eom_first_clean_booking,
 )
 from atlas_brain.services.eom_lead_conversion import (  # noqa: E402
     EOMLeadConversionError,
+    EOMLeadLost,
+)
+from atlas_brain.services.eom_won_lead_loss import (  # noqa: E402
+    mark_eom_lead_lost_with_won_teardown,
 )
 from atlas_brain.services.eom_lead_ingress import (  # noqa: E402
     resolve_or_create_eom_inbound_lead,
 )
+from atlas_brain.services.eom_public_onboarding_tokens import (  # noqa: E402
+    eom_public_onboarding_hmac_key_fingerprint,
+    parse_eom_public_onboarding_token,
+)
+from atlas_brain.tools.base import ToolResult  # noqa: E402
 
 ROOT = Path(__file__).resolve().parent.parent
 MIGRATIONS = ROOT / "atlas_brain" / "storage" / "migrations"
 DATABASE_URL_ENV = "ATLAS_MIGRATION_TEST_DATABASE_URL"
 _NOCODB_TEST_PASSWORD = "test-only-nocodb-password"
 _NON_SUPERUSER_TEST_PASSWORD = "test-only-migrator-password"
+_PUBLIC_ONBOARDING_URL = "https://effinghamofficemaids.com/onboarding"
+_PUBLIC_ONBOARDING_SECRET = "test-only-public-onboarding-secret-value-123456"
+_PUBLIC_ONBOARDING_KEY_FINGERPRINT = eom_public_onboarding_hmac_key_fingerprint(
+    secret=_PUBLIC_ONBOARDING_SECRET
+)
 
 
 def _database_url_or_skip() -> str:
@@ -105,6 +121,8 @@ async def _prepare_schema(
     *,
     apply_privilege_migration: bool = True,
     apply_lifecycle_sequence_migration: bool = True,
+    apply_customer_type_revision_migration: bool = True,
+    apply_public_onboarding_migration: bool = False,
 ) -> None:
     await conn.execute(f'CREATE SCHEMA "{schema}"')
     await conn.execute(f'SET search_path TO "{schema}", public')
@@ -135,14 +153,26 @@ async def _prepare_schema(
         "353_eom_customer_handoffs.sql",
         "360_eom_onboarding_email_drafts.sql",
         "361_eom_onboarding_draft_actor_bigint.sql",
+        # The provider's contact INSERT names customer_type explicitly, so the
+        # column has to exist for any operator write in these tests.
+        "366_contacts_customer_type.sql",
     ]
+    if apply_customer_type_revision_migration:
+        migration_names.append("367_contacts_customer_type_revision.sql")
     if apply_lifecycle_sequence_migration:
         migration_names.append("363_eom_lead_lifecycle_sequence.sql")
     if apply_privilege_migration:
         await _provision_nocodb_login(conn)
         migration_names.append("354_eom_customer_handoff_privileges.sql")
+    if apply_public_onboarding_migration:
+        migration_names.append("383_eom_public_onboarding_tokens.sql")
+    migration_names.append("386_eom_won_loss_nocodb_fence.sql")
     for name in migration_names:
-        await conn.execute((MIGRATIONS / name).read_text())
+        if name == "367_contacts_customer_type_revision.sql":
+            async with conn.transaction():
+                await conn.execute((MIGRATIONS / name).read_text())
+        else:
+            await conn.execute((MIGRATIONS / name).read_text())
 
 
 async def _insert_contact(
@@ -2591,10 +2621,43 @@ async def test_nocodb_role_cannot_bypass_handoff_or_lifecycle_guards():
                     await nocodb_conn.execute(statement)
 
             contact_id = uuid.uuid4()
+            # The security-definer trigger may consume the sequence for an
+            # ordinary NocoDB insert, but that does not grant the NocoDB login
+            # direct access to either the sequence or the protected evidence
+            # column. Pin both catalog capabilities and their executable
+            # denial paths so a future ACL widening cannot pass on the happy
+            # path alone.
+            assert not await nocodb_conn.fetchval(
+                "SELECT has_sequence_privilege("
+                "'contacts_customer_type_revision_seq'::regclass, 'USAGE')"
+            )
+            assert not await nocodb_conn.fetchval(
+                "SELECT has_column_privilege("
+                "'contacts'::regclass, 'customer_type_revision', 'INSERT')"
+            )
+            assert not await nocodb_conn.fetchval(
+                "SELECT has_column_privilege("
+                "'contacts'::regclass, 'customer_type_revision', 'UPDATE')"
+            )
+            with pytest.raises(asyncpg.exceptions.InsufficientPrivilegeError):
+                await nocodb_conn.fetchval(
+                    "SELECT nextval('contacts_customer_type_revision_seq'::regclass)"
+                )
+            with pytest.raises(asyncpg.exceptions.InsufficientPrivilegeError):
+                await nocodb_conn.execute(
+                    "INSERT INTO contacts (id, full_name, customer_type_revision) "
+                    "VALUES ($1, 'Forged revision', 1)",
+                    contact_id,
+                )
             await nocodb_conn.execute(
                 "INSERT INTO contacts (id, full_name, notes) VALUES ($1, 'NocoDB CRM', 'before')",
                 contact_id,
             )
+            revision_after_insert = await nocodb_conn.fetchval(
+                "SELECT customer_type_revision FROM contacts WHERE id = $1",
+                contact_id,
+            )
+            assert revision_after_insert > 0
             await nocodb_conn.execute(
                 "UPDATE contacts SET notes = 'ordinary edit' WHERE id = $1",
                 contact_id,
@@ -2605,6 +2668,18 @@ async def test_nocodb_role_cannot_bypass_handoff_or_lifecycle_guards():
                 )
                 == "ordinary edit"
             )
+            assert (
+                await nocodb_conn.fetchval(
+                    "SELECT customer_type_revision FROM contacts WHERE id = $1",
+                    contact_id,
+                )
+                == revision_after_insert
+            )
+            with pytest.raises(asyncpg.exceptions.InsufficientPrivilegeError):
+                await nocodb_conn.execute(
+                    "UPDATE contacts SET customer_type_revision = 1 WHERE id = $1",
+                    contact_id,
+                )
             await nocodb_conn.execute(
                 """
                 INSERT INTO contact_interactions (id, contact_id, interaction_type)
@@ -3133,6 +3208,13 @@ async def test_enabled_shared_guard_handles_missing_required_contact_column(
         await _prepare_schema(conn, schema, apply_privilege_migration=False)
         await _provision_handoff_guard(conn)
         await _provision_nocodb_login(conn)
+        if missing_column == "contact_type":
+            # Migration 386 correctly declares this trigger dependency. This
+            # fixture intentionally tears down an already-migrated schema to
+            # exercise readiness validation for a historical partial schema.
+            await conn.execute(
+                "DROP TRIGGER IF EXISTS trg_reject_nocodb_eom_won_loss_mutation ON contacts"
+            )
         await conn.execute(
             f"ALTER TABLE contacts DROP COLUMN {_quote_ident(missing_column)}"
         )
@@ -3717,14 +3799,14 @@ async def test_first_clean_draft_enqueue_records_no_email_blocker_and_one_pendin
 async def test_first_clean_draft_recipient_follows_latest_intake_projection():
     """Ingress leaves contacts.email unchanged when an existing contact
     re-submits with a new address (the new address lives in the web_form
-    interaction metadata), so the draft recipient must resolve through the
-    same latest-intake projection the office review queue shows -- not the
-    stale contact column."""
+    interaction metadata), so the draft recipient and issued token prefill
+    must resolve through the same latest-intake projection the office review
+    queue shows -- not the stale contact column."""
     database_url = _database_url_or_skip()
     schema = f"atlas_eom_first_clean_recipient_{uuid.uuid4().hex}"
     conn = await asyncpg.connect(database_url)
     try:
-        await _prepare_schema(conn, schema)
+        await _prepare_schema(conn, schema, apply_public_onboarding_migration=True)
         provider = DatabaseCRMProvider(pool=conn)
         contact_id = uuid.uuid4()
         first_clean_key = f"office-first-clean-{uuid.uuid4().hex}"
@@ -3803,6 +3885,20 @@ async def test_first_clean_draft_recipient_follows_latest_intake_projection():
         )
         assert draft["recipient_email"] == "latest-address@example.com"
         assert draft["blocker"] is None
+
+        _, token_id = await _claim_public_onboarding_token(
+            provider, draft_id=str(completed["onboarding_draft_id"])
+        )
+        assert await conn.fetchval(
+            "SELECT prefill_email FROM eom_public_onboarding_tokens WHERE id = $1",
+            token_id,
+        ) == "latest-address@example.com"
+        assert (
+            await provider.get_eom_public_onboarding_session(
+                token_id=str(token_id),
+                signing_key_fingerprint=_PUBLIC_ONBOARDING_KEY_FINGERPRINT,
+            )
+        )["email"] == "latest-address@example.com"
     finally:
         await conn.execute(f'DROP SCHEMA IF EXISTS "{schema}" CASCADE')
         await conn.close()
@@ -4297,15 +4393,93 @@ class _RecordingDraftSender:
         return {"message_id": "resend-msg-1", "idempotent_replay": False}
 
 
+class _WonLossCalendar:
+    """A narrow Calendar boundary fake: Postgres remains the system under test."""
+
+    def __init__(self, *, results: list[ToolResult] | None = None) -> None:
+        self.results = list(results or [])
+        self.calls: list[dict[str, str]] = []
+
+    async def delete_event(self, *, calendar_id: str, event_id: str) -> ToolResult:
+        self.calls.append({"calendar_id": calendar_id, "event_id": event_id})
+        if self.results:
+            return self.results.pop(0)
+        return ToolResult(
+            success=True,
+            data={
+                "calendar_id": calendar_id,
+                "event_id": event_id,
+                "already_absent": False,
+            },
+            message="Calendar event deleted",
+        )
+
+
+class _FirstCleanIdentityCalendar:
+    """Record identity resolution and creation while Postgres owns lifecycle proof."""
+
+    configured_calendar_id = "primary"
+
+    def __init__(self, *, resolved_calendar_id: str) -> None:
+        self.resolved_calendar_id = resolved_calendar_id
+        self.resolve_calls: list[dict[str, str]] = []
+        self.create_calls: list[dict[str, object]] = []
+
+    async def resolve_calendar_id(self, *, calendar_id: str) -> ToolResult:
+        self.resolve_calls.append({"calendar_id": calendar_id})
+        return ToolResult(
+            success=True,
+            data={"calendar_id": self.resolved_calendar_id},
+            message="Calendar identity resolved",
+        )
+
+    async def create_event(self, **kwargs: object) -> ToolResult:
+        self.create_calls.append(kwargs)
+        return ToolResult(
+            success=True,
+            data={"event_id": kwargs["event_id"]},
+            message="Calendar event created",
+        )
+
+
+class _BlockingWonLossCalendar(_WonLossCalendar):
+    def __init__(self, *, results: list[ToolResult] | None = None) -> None:
+        super().__init__(results=results)
+        self.started = asyncio.Event()
+        self.release = asyncio.Event()
+
+    async def delete_event(self, *, calendar_id: str, event_id: str) -> ToolResult:
+        self.calls.append({"calendar_id": calendar_id, "event_id": event_id})
+        self.started.set()
+        await self.release.wait()
+        if self.results:
+            return self.results.pop(0)
+        return ToolResult(
+            success=True,
+            data={
+                "calendar_id": calendar_id,
+                "event_id": event_id,
+                "already_absent": False,
+            },
+            message="Calendar event deleted",
+        )
+
+
 async def _book_first_clean_draft(
     conn,
     provider,
     *,
     email: str | None = "won-lead@example.com",
     full_name: str = "Won Lead",
+    contact_id: uuid.UUID | None = None,
+    calendar_id: str = "estimate-calendar",
 ) -> tuple[uuid.UUID, str]:
     """Insert a lead and complete a first-clean booking; return its draft."""
-    contact_id = uuid.uuid4()
+    if contact_id is None:
+        contact_id = uuid.uuid4()
+        await _insert_contact(
+            conn, contact_id=contact_id, email=email, full_name=full_name
+        )
     booking_key = f"office-first-clean-{uuid.uuid4().hex}"
     event_id = deterministic_eom_first_clean_calendar_event_id(
         contact_id=str(contact_id),
@@ -4313,14 +4487,11 @@ async def _book_first_clean_draft(
     )
     start = datetime(2026, 8, 11, 14, 0, tzinfo=timezone.utc)
     end = datetime(2026, 8, 11, 17, 0, tzinfo=timezone.utc)
-    await _insert_contact(
-        conn, contact_id=contact_id, email=email, full_name=full_name
-    )
     await provider.prepare_eom_first_clean_booking(
         contact_id=str(contact_id),
         scheduled_start=start,
         scheduled_end=end,
-        calendar_id="estimate-calendar",
+        calendar_id=calendar_id,
         notes=None,
         booking_key=booking_key,
         expected_calendar_event_id=event_id,
@@ -4331,7 +4502,7 @@ async def _book_first_clean_draft(
         contact_id=str(contact_id),
         scheduled_start=start,
         scheduled_end=end,
-        calendar_id="estimate-calendar",
+        calendar_id=calendar_id,
         notes=None,
         booking_key=booking_key,
         expected_calendar_event_id=event_id,
@@ -4340,6 +4511,1207 @@ async def _book_first_clean_draft(
         actor_name="Juan Canfield",
     )
     return contact_id, str(completed["onboarding_draft_id"])
+
+
+@pytest.mark.asyncio
+async def test_first_clean_booking_persists_resolved_calendar_identity_for_won_loss():
+    """A default alias binds before persistence and teardown uses that same ID."""
+
+    database_url = _database_url_or_skip()
+    schema = f"atlas_eom_first_clean_identity_{uuid.uuid4().hex}"
+    conn = await asyncpg.connect(database_url)
+    try:
+        await _prepare_schema(conn, schema, apply_privilege_migration=False)
+        provider = DatabaseCRMProvider(pool=conn)
+        contact_id = uuid.uuid4()
+        await _insert_contact(conn, contact_id=contact_id)
+        calendar = _FirstCleanIdentityCalendar(
+            resolved_calendar_id="office-owner@example.com"
+        )
+        booking_key = f"office-first-clean-{uuid.uuid4().hex}"
+        result = await schedule_eom_first_clean_booking(
+            provider,
+            calendar,
+            EOMFirstCleanBooking(
+                contact_id=str(contact_id),
+                scheduled_start=datetime(2026, 8, 11, 14, 0, tzinfo=timezone.utc),
+                scheduled_end=datetime(2026, 8, 11, 17, 0, tzinfo=timezone.utc),
+                calendar_id=None,
+                notes=None,
+                booking_key=booking_key,
+                actor_id=1,
+                actor_name="Juan Canfield",
+            ),
+        )
+
+        assert result["lead_stage"] == "won"
+        assert calendar.resolve_calls == [{"calendar_id": "primary"}]
+        assert calendar.create_calls[0]["calendar_id"] == "office-owner@example.com"
+        booking = await conn.fetchrow(
+            """
+            SELECT metadata
+            FROM eom_lead_lifecycle_events
+            WHERE contact_id = $1
+              AND event_type = 'first_clean_booked'
+            """,
+            contact_id,
+        )
+        assert booking is not None
+        booking_metadata = _metadata_dict(booking["metadata"])
+        assert booking_metadata["calendar_id"] == "office-owner@example.com"
+
+        loss_calendar = _WonLossCalendar()
+        await mark_eom_lead_lost_with_won_teardown(
+            provider,
+            loss_calendar,
+            EOMLeadLost(
+                contact_id=str(contact_id),
+                reason_code="no_response",
+                note=None,
+                operation_key=f"office-won-loss-{uuid.uuid4().hex}",
+                actor_id=1,
+                actor_name="Juan Canfield",
+            ),
+        )
+        assert loss_calendar.calls == [
+            {
+                "calendar_id": "office-owner@example.com",
+                "event_id": str(booking_metadata["calendar_event_id"]),
+            }
+        ]
+    finally:
+        await conn.execute(f'DROP SCHEMA IF EXISTS "{schema}" CASCADE')
+        await conn.close()
+
+
+@pytest.mark.asyncio
+async def test_completed_explicit_primary_first_clean_replay_skips_identity_lookup():
+    """A completed operation replays its persisted target through an outage."""
+
+    class _UnavailableIdentityCalendar(_FirstCleanIdentityCalendar):
+        async def resolve_calendar_id(self, *, calendar_id: str) -> ToolResult:
+            self.resolve_calls.append({"calendar_id": calendar_id})
+            return ToolResult(
+                success=False,
+                error="API_ERROR",
+                data={"request_phase": "calendar_identity", "status_code": 503},
+                message="Calendar identity unavailable",
+            )
+
+    database_url = _database_url_or_skip()
+    schema = f"atlas_eom_completed_primary_replay_{uuid.uuid4().hex}"
+    conn = await asyncpg.connect(database_url)
+    try:
+        await _prepare_schema(conn, schema, apply_privilege_migration=False)
+        provider = DatabaseCRMProvider(pool=conn)
+        contact_id = uuid.uuid4()
+        await _insert_contact(conn, contact_id=contact_id)
+        booking_key = f"office-first-clean-{uuid.uuid4().hex}"
+        command = EOMFirstCleanBooking(
+            contact_id=str(contact_id),
+            scheduled_start=datetime(2026, 8, 11, 14, 0, tzinfo=timezone.utc),
+            scheduled_end=datetime(2026, 8, 11, 17, 0, tzinfo=timezone.utc),
+            calendar_id="primary",
+            notes="Bring first-clean checklist",
+            booking_key=booking_key,
+            actor_id=1,
+            actor_name="Juan Canfield",
+        )
+        first_calendar = _FirstCleanIdentityCalendar(
+            resolved_calendar_id="office-owner@example.com"
+        )
+        first = await schedule_eom_first_clean_booking(provider, first_calendar, command)
+        assert first["idempotent"] is False
+        assert first_calendar.resolve_calls == [{"calendar_id": "primary"}]
+        requested = await conn.fetchrow(
+            """
+            SELECT metadata
+            FROM eom_lead_lifecycle_events
+            WHERE contact_id = $1
+              AND operation_key = $2
+              AND event_type = 'first_clean_booking_requested'
+            """,
+            contact_id,
+            booking_key,
+        )
+        assert requested is not None
+        assert _metadata_dict(requested["metadata"])["requested_calendar_id"] == "primary"
+
+        replay_calendar = _UnavailableIdentityCalendar(
+            resolved_calendar_id="different-owner@example.com"
+        )
+        replay = await schedule_eom_first_clean_booking(provider, replay_calendar, command)
+        assert replay["idempotent"] is True
+        assert replay["calendar_event_id"] == first["calendar_event_id"]
+        assert replay["onboarding_draft_id"] == first["onboarding_draft_id"]
+        assert replay_calendar.resolve_calls == []
+        assert replay_calendar.create_calls == []
+
+        with pytest.raises(EOMLeadConversionError, match="different first clean booking"):
+            await schedule_eom_first_clean_booking(
+                provider,
+                replay_calendar,
+                EOMFirstCleanBooking(
+                    contact_id=command.contact_id,
+                    scheduled_start=command.scheduled_start,
+                    scheduled_end=command.scheduled_end,
+                    calendar_id="primary",
+                    notes="Different notes",
+                    booking_key=command.booking_key,
+                    actor_id=command.actor_id,
+                    actor_name=command.actor_name,
+                ),
+            )
+        assert replay_calendar.resolve_calls == []
+        assert replay_calendar.create_calls == []
+    finally:
+        await conn.execute(f'DROP SCHEMA IF EXISTS "{schema}" CASCADE')
+        await conn.close()
+
+
+@pytest.mark.asyncio
+async def test_completed_concrete_first_clean_rejects_primary_replay():
+    """A changed primary alias cannot replace a concrete original request."""
+
+    class _UnavailableIdentityCalendar(_FirstCleanIdentityCalendar):
+        async def resolve_calendar_id(self, *, calendar_id: str) -> ToolResult:
+            self.resolve_calls.append({"calendar_id": calendar_id})
+            return ToolResult(
+                success=False,
+                error="API_ERROR",
+                data={"request_phase": "calendar_identity", "status_code": 503},
+                message="Calendar identity unavailable",
+            )
+
+    database_url = _database_url_or_skip()
+    schema = f"atlas_eom_concrete_primary_replay_{uuid.uuid4().hex}"
+    conn = await asyncpg.connect(database_url)
+    try:
+        await _prepare_schema(conn, schema, apply_privilege_migration=False)
+        provider = DatabaseCRMProvider(pool=conn)
+        contact_id = uuid.uuid4()
+        await _insert_contact(conn, contact_id=contact_id)
+        booking_key = f"office-first-clean-{uuid.uuid4().hex}"
+        command = EOMFirstCleanBooking(
+            contact_id=str(contact_id),
+            scheduled_start=datetime(2026, 8, 11, 14, 0, tzinfo=timezone.utc),
+            scheduled_end=datetime(2026, 8, 11, 17, 0, tzinfo=timezone.utc),
+            calendar_id="team@example.com",
+            notes="Bring first-clean checklist",
+            booking_key=booking_key,
+            actor_id=1,
+            actor_name="Juan Canfield",
+        )
+        first_calendar = _FirstCleanIdentityCalendar(
+            resolved_calendar_id="office-owner@example.com"
+        )
+        first = await schedule_eom_first_clean_booking(provider, first_calendar, command)
+        assert first["idempotent"] is False
+        assert first_calendar.resolve_calls == []
+
+        requested = await conn.fetchrow(
+            """
+            SELECT metadata
+            FROM eom_lead_lifecycle_events
+            WHERE contact_id = $1
+              AND operation_key = $2
+              AND event_type = 'first_clean_booking_requested'
+            """,
+            contact_id,
+            booking_key,
+        )
+        assert requested is not None
+        assert _metadata_dict(requested["metadata"])["requested_calendar_id"] == (
+            "team@example.com"
+        )
+
+        replay_calendar = _UnavailableIdentityCalendar(
+            resolved_calendar_id="team@example.com"
+        )
+        with pytest.raises(EOMLeadConversionError, match="different first clean booking"):
+            await schedule_eom_first_clean_booking(
+                provider,
+                replay_calendar,
+                EOMFirstCleanBooking(
+                    contact_id=command.contact_id,
+                    scheduled_start=command.scheduled_start,
+                    scheduled_end=command.scheduled_end,
+                    calendar_id="primary",
+                    notes=command.notes,
+                    booking_key=command.booking_key,
+                    actor_id=command.actor_id,
+                    actor_name=command.actor_name,
+                ),
+            )
+        assert replay_calendar.resolve_calls == []
+        assert replay_calendar.create_calls == []
+    finally:
+        await conn.execute(f'DROP SCHEMA IF EXISTS "{schema}" CASCADE')
+        await conn.close()
+
+
+async def _claim_public_onboarding_token(
+    provider,
+    *,
+    draft_id: str,
+    actor_id: int = 7,
+    actor_name: str = "Mayra Canfield",
+    hmac_secret: str = _PUBLIC_ONBOARDING_SECRET,
+) -> tuple[dict[str, object], uuid.UUID]:
+    """Claim a won lead's draft and recover only the test bearer UUID."""
+
+    claim = await provider.claim_eom_onboarding_draft(
+        draft_id=draft_id,
+        actor_id=actor_id,
+        actor_name=actor_name,
+        public_onboarding_base_url=_PUBLIC_ONBOARDING_URL,
+        public_onboarding_hmac_secret=hmac_secret,
+    )
+    assert claim["claimed"] is True
+    link = str(claim["public_onboarding_link"])
+    assert link.startswith(f"{_PUBLIC_ONBOARDING_URL}#token=eomob1.")
+    bearer = link.partition("#token=")[2]
+    return claim, parse_eom_public_onboarding_token(
+        token=bearer,
+        secret=hmac_secret,
+    )
+
+
+@pytest.mark.asyncio
+async def test_public_onboarding_claim_redeems_once_through_the_existing_handoff():
+    """One token owns one won lead, then atomically becomes its handoff evidence."""
+    database_url = _database_url_or_skip()
+    schema = f"atlas_eom_public_onboarding_{uuid.uuid4().hex}"
+    conn = await asyncpg.connect(database_url)
+    try:
+        await _prepare_schema(conn, schema, apply_public_onboarding_migration=True)
+        provider = DatabaseCRMProvider(pool=conn)
+        contact_id, draft_id = await _book_first_clean_draft(conn, provider)
+
+        claim, token_id = await _claim_public_onboarding_token(
+            provider, draft_id=draft_id
+        )
+        token_row = await conn.fetchrow(
+            """
+            SELECT draft_id, contact_id, approval_key, status,
+                   approved_by_employee_id, approved_by_name, handoff_id,
+                   signing_key_fingerprint, prefill_full_name, prefill_email,
+                   prefill_phone, prefill_address, prefill_city, prefill_state,
+                   prefill_zip, prefill_customer_type
+            FROM eom_public_onboarding_tokens
+            WHERE id = $1
+            """,
+            token_id,
+        )
+        assert token_row is not None
+        assert dict(token_row) == {
+            "draft_id": uuid.UUID(draft_id),
+            "contact_id": contact_id,
+            "approval_key": token_row["approval_key"],
+            "status": "issued",
+            "approved_by_employee_id": 7,
+            "approved_by_name": "Mayra Canfield",
+            "handoff_id": None,
+            "signing_key_fingerprint": _PUBLIC_ONBOARDING_KEY_FINGERPRINT,
+            "prefill_full_name": "Won Lead",
+            "prefill_email": "won-lead@example.com",
+            "prefill_phone": None,
+            "prefill_address": None,
+            "prefill_city": None,
+            "prefill_state": None,
+            "prefill_zip": None,
+            "prefill_customer_type": "unknown",
+        }
+        assert await conn.fetchval(
+            "SELECT body FROM eom_onboarding_email_drafts WHERE id = $1::uuid",
+            draft_id,
+        ) == claim["draft"]["body"]
+        assert "#token=" not in str(claim["draft"]["body"])
+
+        await conn.execute(
+            """
+            UPDATE contacts
+               SET full_name = 'Corrected Lead', email = 'corrected@example.com',
+                   phone = '2175550199', address = '200 Updated St',
+                   city = 'Chicago', state = 'IL', zip = '60601',
+                   customer_type = 'commercial'
+             WHERE id = $1
+            """,
+            contact_id,
+        )
+        with pytest.raises(EOMLeadConversionError) as mismatched_verifier:
+            await provider.get_eom_public_onboarding_session(
+                token_id=str(token_id),
+                signing_key_fingerprint=eom_public_onboarding_hmac_key_fingerprint(
+                    secret="different-test-only-public-onboarding-secret-value-987654"
+                ),
+            )
+        assert mismatched_verifier.value.status_code == 404
+
+        tracker_context = await provider.get_eom_public_onboarding_tracker_context(
+            token_id=str(token_id),
+            signing_key_fingerprint=_PUBLIC_ONBOARDING_KEY_FINGERPRINT,
+        )
+        assert tracker_context == {
+            "status": "ready",
+            "token_id": str(token_id),
+            "draft_id": draft_id,
+            "contact_id": str(contact_id),
+            "full_name": "Won Lead",
+            "email": "won-lead@example.com",
+            "phone": None,
+            "address": None,
+            "city": None,
+            "state": None,
+            "zip": None,
+            "customer_type": "unknown",
+        }
+        ready = await provider.get_eom_public_onboarding_session(
+            token_id=str(token_id),
+            signing_key_fingerprint=_PUBLIC_ONBOARDING_KEY_FINGERPRINT,
+        )
+        assert ready == {
+            "status": "ready",
+            "contact_id": str(contact_id),
+            "full_name": "Won Lead",
+            "email": "won-lead@example.com",
+            "phone": None,
+            "address": None,
+            "city": None,
+            "state": None,
+            "zip": None,
+            "customer_type": "unknown",
+        }
+
+        completed = await provider.complete_eom_public_onboarding(
+            token_id=str(token_id),
+            signing_key_fingerprint=_PUBLIC_ONBOARDING_KEY_FINGERPRINT,
+            tracker_customer_id=101,
+            tracker_site_id=202,
+        )
+        assert completed["status"] == "completed"
+        assert completed["idempotent"] is False
+        assert completed["contact_id"] == str(contact_id)
+        assert await _contact_state(conn, contact_id) == (
+            {
+                "business_context_id": "effingham_maids",
+                "contact_type": "customer",
+                "lead_stage": None,
+                "status": "active",
+            },
+            1,
+            1,
+        )
+        lifecycle_metadata = _metadata_dict(
+            await conn.fetchval(
+                """
+                SELECT metadata
+                FROM eom_lead_lifecycle_events
+                WHERE contact_id = $1
+                  AND event_type = 'customer_approved'
+                  AND operation_key = $2
+                """,
+                contact_id,
+                token_row["approval_key"],
+            )
+        )
+        assert lifecycle_metadata["completion_channel"] == "public_onboarding"
+        assert lifecycle_metadata["approved_by_employee_id"] == 7
+        redeemed_row = await conn.fetchrow(
+            """
+            SELECT status, handoff_id IS NOT NULL AS has_handoff,
+                   redeemed_at IS NOT NULL AS is_redeemed
+            FROM eom_public_onboarding_tokens WHERE id = $1
+            """,
+            token_id,
+        )
+        assert dict(redeemed_row) == {
+            "status": "redeemed",
+            "has_handoff": True,
+            "is_redeemed": True,
+        }
+
+        replay = await provider.complete_eom_public_onboarding(
+            token_id=str(token_id),
+            signing_key_fingerprint=_PUBLIC_ONBOARDING_KEY_FINGERPRINT,
+            tracker_customer_id=101,
+            tracker_site_id=202,
+        )
+        assert replay == {**completed, "idempotent": True}
+        assert await provider.get_eom_public_onboarding_session(
+            token_id=str(token_id),
+            signing_key_fingerprint=_PUBLIC_ONBOARDING_KEY_FINGERPRINT,
+        ) == {
+            "status": "completed",
+            "contact_id": str(contact_id),
+            "tracker_customer_id": 101,
+            "tracker_site_id": 202,
+            "handoff_id": completed["handoff_id"],
+            "idempotent": True,
+        }
+        with pytest.raises(EOMLeadConversionError, match="different tracker records"):
+            await provider.complete_eom_public_onboarding(
+                token_id=str(token_id),
+                signing_key_fingerprint=_PUBLIC_ONBOARDING_KEY_FINGERPRINT,
+                tracker_customer_id=101,
+                tracker_site_id=203,
+            )
+    finally:
+        await conn.execute(f'DROP SCHEMA IF EXISTS "{schema}" CASCADE')
+        await conn.close()
+
+
+@pytest.mark.asyncio
+async def test_public_onboarding_recovery_finishes_each_durable_token_state_once():
+    """Staff recovery needs stored IDs, not the raw browser bearer."""
+
+    database_url = _database_url_or_skip()
+    schema = f"atlas_eom_public_onboarding_recovery_{uuid.uuid4().hex}"
+    conn = await asyncpg.connect(database_url)
+    try:
+        await _prepare_schema(conn, schema, apply_public_onboarding_migration=True)
+        provider = DatabaseCRMProvider(pool=conn)
+
+        issued_contact_id, issued_draft_id = await _book_first_clean_draft(
+            conn, provider
+        )
+        _, issued_token_id = await _claim_public_onboarding_token(
+            provider, draft_id=issued_draft_id
+        )
+        recovered = await provider.recover_eom_public_onboarding(
+            token_id=str(issued_token_id),
+            contact_id=str(issued_contact_id),
+            tracker_customer_id=101,
+            tracker_site_id=202,
+            actor_id=1,
+            actor_name="Juan Canfield",
+        )
+        assert recovered["status"] == "completed"
+        assert recovered["contact_id"] == str(issued_contact_id)
+        assert recovered["tracker_customer_id"] == 101
+        assert recovered["tracker_site_id"] == 202
+        assert recovered["idempotent"] is False
+        assert await _contact_state(conn, issued_contact_id) == (
+            {
+                "business_context_id": "effingham_maids",
+                "contact_type": "customer",
+                "lead_stage": None,
+                "status": "active",
+            },
+            1,
+            1,
+        )
+        assert dict(
+            await conn.fetchrow(
+                """
+                SELECT status, handoff_id, revoked_at IS NOT NULL AS is_revoked
+                FROM eom_public_onboarding_tokens WHERE id = $1
+                """,
+                issued_token_id,
+            )
+        ) == {
+            "status": "revoked",
+            "handoff_id": None,
+            "is_revoked": True,
+        }
+        recovery_event = await conn.fetchrow(
+            """
+            SELECT actor, operation_key, metadata
+            FROM eom_lead_lifecycle_events
+            WHERE contact_id = $1 AND event_type = 'customer_approved'
+            """,
+            issued_contact_id,
+        )
+        assert recovery_event is not None
+        assert recovery_event["actor"] == "employee:1:Juan Canfield"
+        assert recovery_event["operation_key"] == (
+            f"eom-public-onboarding-recovery:{issued_token_id}"
+        )
+        assert _metadata_dict(recovery_event["metadata"])["completion_channel"] == "office"
+        replay = await provider.recover_eom_public_onboarding(
+            token_id=str(issued_token_id),
+            contact_id=str(issued_contact_id),
+            tracker_customer_id=101,
+            tracker_site_id=202,
+            actor_id=1,
+            actor_name="Juan Canfield",
+        )
+        assert replay == {**recovered, "idempotent": True}
+        with pytest.raises(EOMLeadConversionError, match="different customer handoff"):
+            await provider.recover_eom_public_onboarding(
+                token_id=str(issued_token_id),
+                contact_id=str(issued_contact_id),
+                tracker_customer_id=101,
+                tracker_site_id=203,
+                actor_id=1,
+                actor_name="Juan Canfield",
+            )
+
+        redeemed_contact_id, redeemed_draft_id = await _book_first_clean_draft(
+            conn, provider
+        )
+        _, redeemed_token_id = await _claim_public_onboarding_token(
+            provider, draft_id=redeemed_draft_id
+        )
+        await provider.complete_eom_public_onboarding(
+            token_id=str(redeemed_token_id),
+            signing_key_fingerprint=_PUBLIC_ONBOARDING_KEY_FINGERPRINT,
+            tracker_customer_id=303,
+            tracker_site_id=404,
+        )
+        redeemed_replay = await provider.recover_eom_public_onboarding(
+            token_id=str(redeemed_token_id),
+            contact_id=str(redeemed_contact_id),
+            tracker_customer_id=303,
+            tracker_site_id=404,
+            actor_id=1,
+            actor_name="Juan Canfield",
+        )
+        assert redeemed_replay["status"] == "completed"
+        assert redeemed_replay["idempotent"] is True
+        assert (
+            await conn.fetchval(
+                "SELECT status FROM eom_public_onboarding_tokens WHERE id = $1",
+                redeemed_token_id,
+            )
+            == "redeemed"
+        )
+
+        revoked_contact_id, revoked_draft_id = await _book_first_clean_draft(
+            conn, provider
+        )
+        _, revoked_token_id = await _claim_public_onboarding_token(
+            provider, draft_id=revoked_draft_id
+        )
+        await provider.revoke_eom_public_onboarding_token(draft_id=revoked_draft_id)
+        revoked_recovery = await provider.recover_eom_public_onboarding(
+            token_id=str(revoked_token_id),
+            contact_id=str(revoked_contact_id),
+            tracker_customer_id=505,
+            tracker_site_id=606,
+            actor_id=1,
+            actor_name="Juan Canfield",
+        )
+        assert revoked_recovery["status"] == "completed"
+        assert revoked_recovery["idempotent"] is False
+        assert await _contact_state(conn, revoked_contact_id) == (
+            {
+                "business_context_id": "effingham_maids",
+                "contact_type": "customer",
+                "lead_stage": None,
+                "status": "active",
+            },
+            1,
+            1,
+        )
+    finally:
+        await conn.execute(f'DROP SCHEMA IF EXISTS "{schema}" CASCADE')
+        await conn.close()
+
+
+@pytest.mark.asyncio
+async def test_public_onboarding_recovery_rolls_back_token_revocation_on_handoff_conflict():
+    """A failed recovery leaves its issued token retryable rather than stranded."""
+
+    database_url = _database_url_or_skip()
+    schema = f"atlas_eom_public_onboarding_recovery_rollback_{uuid.uuid4().hex}"
+    conn = await asyncpg.connect(database_url)
+    try:
+        await _prepare_schema(conn, schema, apply_public_onboarding_migration=True)
+        provider = DatabaseCRMProvider(pool=conn)
+        contact_id, draft_id = await _book_first_clean_draft(conn, provider)
+        _, token_id = await _claim_public_onboarding_token(provider, draft_id=draft_id)
+
+        conflicting_contact_id = uuid.uuid4()
+        await _insert_contact(conn, contact_id=conflicting_contact_id)
+        await provider.finalize_eom_customer_handoff(
+            contact_id=str(conflicting_contact_id),
+            tracker_customer_id=101,
+            tracker_site_id=202,
+            approval_key=_approval_key(),
+            actor_id=1,
+            actor_name="Juan Canfield",
+        )
+
+        with pytest.raises(EOMLeadConversionError, match="Tracker Customer or Site"):
+            await provider.recover_eom_public_onboarding(
+                token_id=str(token_id),
+                contact_id=str(contact_id),
+                tracker_customer_id=101,
+                tracker_site_id=202,
+                actor_id=1,
+                actor_name="Juan Canfield",
+            )
+
+        assert (
+            await conn.fetchval(
+                "SELECT status FROM eom_public_onboarding_tokens WHERE id = $1",
+                token_id,
+            )
+            == "issued"
+        )
+        assert await _contact_state(conn, contact_id) == (
+            {
+                "business_context_id": "effingham_maids",
+                "contact_type": "lead",
+                "lead_stage": "won",
+                "status": "active",
+            },
+            0,
+            0,
+        )
+    finally:
+        await conn.execute(f'DROP SCHEMA IF EXISTS "{schema}" CASCADE')
+        await conn.close()
+
+
+@pytest.mark.asyncio
+async def test_public_onboarding_recovery_and_bearer_completion_serialize_one_handoff():
+    """The shared locks admit either winner, never two handoffs or a deadlock."""
+
+    database_url = _database_url_or_skip()
+    schema = f"atlas_eom_public_onboarding_recovery_race_{uuid.uuid4().hex}"
+    conn = await asyncpg.connect(database_url)
+    pool = None
+    try:
+        await _prepare_schema(conn, schema, apply_public_onboarding_migration=True)
+        pool = await asyncpg.create_pool(
+            database_url,
+            min_size=2,
+            max_size=2,
+            server_settings={"search_path": f"{schema}, public"},
+        )
+        provider = DatabaseCRMProvider(pool=pool)
+        contact_id, draft_id = await _book_first_clean_draft(conn, provider)
+        _, token_id = await _claim_public_onboarding_token(provider, draft_id=draft_id)
+
+        public_result, recovery_result = await asyncio.gather(
+            provider.complete_eom_public_onboarding(
+                token_id=str(token_id),
+                signing_key_fingerprint=_PUBLIC_ONBOARDING_KEY_FINGERPRINT,
+                tracker_customer_id=101,
+                tracker_site_id=202,
+            ),
+            provider.recover_eom_public_onboarding(
+                token_id=str(token_id),
+                contact_id=str(contact_id),
+                tracker_customer_id=101,
+                tracker_site_id=202,
+                actor_id=1,
+                actor_name="Juan Canfield",
+            ),
+            return_exceptions=True,
+        )
+
+        token_status = await conn.fetchval(
+            "SELECT status FROM eom_public_onboarding_tokens WHERE id = $1",
+            token_id,
+        )
+        assert token_status in ("redeemed", "revoked")
+        assert await _contact_state(conn, contact_id) == (
+            {
+                "business_context_id": "effingham_maids",
+                "contact_type": "customer",
+                "lead_stage": None,
+                "status": "active",
+            },
+            1,
+            1,
+        )
+        if token_status == "redeemed":
+            assert isinstance(public_result, dict)
+            assert public_result["status"] == "completed"
+            assert isinstance(recovery_result, dict)
+            assert recovery_result["idempotent"] is True
+        else:
+            assert isinstance(recovery_result, dict)
+            assert recovery_result["status"] == "completed"
+            assert isinstance(public_result, EOMLeadConversionError)
+            assert public_result.status_code == 409
+    finally:
+        if pool is not None:
+            await pool.close()
+        await conn.execute(f'DROP SCHEMA IF EXISTS "{schema}" CASCADE')
+        await conn.close()
+
+
+@pytest.mark.asyncio
+async def test_public_onboarding_session_accepts_only_the_key_that_minted_the_row():
+    """A controlled rotation keeps an old link valid without cross-key replay."""
+
+    previous_secret = "previous-test-only-public-onboarding-secret-value-654321"
+    previous_fingerprint = eom_public_onboarding_hmac_key_fingerprint(
+        secret=previous_secret
+    )
+    database_url = _database_url_or_skip()
+    schema = f"atlas_eom_public_onboarding_key_rotation_{uuid.uuid4().hex}"
+    conn = await asyncpg.connect(database_url)
+    try:
+        await _prepare_schema(conn, schema, apply_public_onboarding_migration=True)
+        provider = DatabaseCRMProvider(pool=conn)
+        _, draft_id = await _book_first_clean_draft(conn, provider)
+        _, token_id = await _claim_public_onboarding_token(
+            provider,
+            draft_id=draft_id,
+            hmac_secret=previous_secret,
+        )
+
+        ready = await provider.get_eom_public_onboarding_session(
+            token_id=str(token_id),
+            signing_key_fingerprint=previous_fingerprint,
+        )
+        assert ready["status"] == "ready"
+        with pytest.raises(EOMLeadConversionError) as wrong_key:
+            await provider.get_eom_public_onboarding_session(
+                token_id=str(token_id),
+                signing_key_fingerprint=_PUBLIC_ONBOARDING_KEY_FINGERPRINT,
+            )
+        assert wrong_key.value.status_code == 404
+    finally:
+        await conn.execute(f'DROP SCHEMA IF EXISTS "{schema}" CASCADE')
+        await conn.close()
+
+
+@pytest.mark.asyncio
+async def test_public_onboarding_claim_waits_for_the_office_contact_lock_before_minting():
+    """Issuance cannot mint a link after an office handoff has started."""
+    database_url = _database_url_or_skip()
+    schema = f"atlas_eom_public_onboarding_claim_lock_{uuid.uuid4().hex}"
+    conn = await asyncpg.connect(database_url)
+    lock_conn = None
+    pool = None
+    claim_task = None
+    try:
+        await _prepare_schema(conn, schema, apply_public_onboarding_migration=True)
+        setup_provider = DatabaseCRMProvider(pool=conn)
+        contact_id, draft_id = await _book_first_clean_draft(conn, setup_provider)
+        pool = await asyncpg.create_pool(
+            database_url,
+            min_size=1,
+            max_size=1,
+            server_settings={"search_path": f"{schema}, public"},
+        )
+        issuer = DatabaseCRMProvider(pool=pool)
+        lock_conn = await asyncpg.connect(database_url)
+
+        async with lock_conn.transaction():
+            await lock_conn.execute(
+                "SELECT pg_advisory_xact_lock(hashtextextended($1, 0))",
+                f"eom-customer-handoff:contact:{contact_id}",
+            )
+            claim_task = asyncio.create_task(
+                _claim_public_onboarding_token(issuer, draft_id=draft_id)
+            )
+            waiting_for_contact_lock = False
+            for _ in range(100):
+                waiting_for_contact_lock = bool(
+                    await conn.fetchval(
+                        """
+                        SELECT EXISTS (
+                            SELECT 1
+                            FROM pg_stat_activity
+                            WHERE datname = current_database()
+                              AND pid <> pg_backend_pid()
+                              AND query LIKE 'SELECT pg_advisory_xact_lock%'
+                              AND wait_event_type = 'Lock'
+                        )
+                        """
+                    )
+                )
+                if waiting_for_contact_lock:
+                    break
+                await asyncio.sleep(0.01)
+            assert waiting_for_contact_lock
+            assert not claim_task.done()
+            assert (
+                await conn.fetchval(
+                    "SELECT status FROM eom_onboarding_email_drafts WHERE id = $1::uuid",
+                    draft_id,
+                )
+                == "pending"
+            )
+            assert (
+                await conn.fetchval(
+                    "SELECT COUNT(*) FROM eom_public_onboarding_tokens"
+                )
+                == 0
+            )
+
+        claim, token_id = await claim_task
+        assert claim["claimed"] is True
+        assert await conn.fetchval(
+            "SELECT status FROM eom_public_onboarding_tokens WHERE id = $1",
+            token_id,
+        ) == "issued"
+        with pytest.raises(EOMLeadConversionError, match="active public onboarding"):
+            await issuer.finalize_eom_customer_handoff(
+                contact_id=str(contact_id),
+                tracker_customer_id=101,
+                tracker_site_id=202,
+                approval_key=_approval_key(),
+                actor_id=1,
+                actor_name="Juan Canfield",
+            )
+    finally:
+        if claim_task is not None and not claim_task.done():
+            claim_task.cancel()
+            with suppress(asyncio.CancelledError):
+                await claim_task
+        if lock_conn is not None:
+            await lock_conn.close()
+        if pool is not None:
+            await pool.close()
+        await conn.execute(f'DROP SCHEMA IF EXISTS "{schema}" CASCADE')
+        await conn.close()
+
+
+@pytest.mark.asyncio
+async def test_public_onboarding_revocation_releases_office_handoff_and_stale_draft_revoke():
+    """Either explicit link revocation or stale-draft reconciliation fences safely."""
+    database_url = _database_url_or_skip()
+    schema = f"atlas_eom_public_onboarding_revoke_{uuid.uuid4().hex}"
+    conn = await asyncpg.connect(database_url)
+    try:
+        await _prepare_schema(conn, schema, apply_public_onboarding_migration=True)
+        provider = DatabaseCRMProvider(pool=conn)
+        contact_id, draft_id = await _book_first_clean_draft(conn, provider)
+        _, token_id = await _claim_public_onboarding_token(provider, draft_id=draft_id)
+
+        with pytest.raises(EOMLeadConversionError, match="active public onboarding"):
+            await provider.finalize_eom_customer_handoff(
+                contact_id=str(contact_id),
+                tracker_customer_id=101,
+                tracker_site_id=202,
+                approval_key=_approval_key(),
+                actor_id=1,
+                actor_name="Juan Canfield",
+            )
+        revoked = await provider.revoke_eom_public_onboarding_token(draft_id=draft_id)
+        assert revoked["status"] == "revoked"
+        assert revoked["idempotent"] is False
+        assert (
+            await conn.fetchval(
+                "SELECT status FROM eom_public_onboarding_tokens WHERE id = $1",
+                token_id,
+            )
+            == "revoked"
+        )
+        with pytest.raises(EOMLeadConversionError) as unavailable:
+            await provider.get_eom_public_onboarding_session(
+                token_id=str(token_id),
+                signing_key_fingerprint=_PUBLIC_ONBOARDING_KEY_FINGERPRINT,
+            )
+        assert unavailable.value.status_code == 404
+
+        office = await provider.finalize_eom_customer_handoff(
+            contact_id=str(contact_id),
+            tracker_customer_id=101,
+            tracker_site_id=202,
+            approval_key=_approval_key(),
+            actor_id=1,
+            actor_name="Juan Canfield",
+        )
+        assert office["idempotent"] is False
+
+        stale_contact_id, stale_draft_id = await _book_first_clean_draft(conn, provider)
+        _, stale_token_id = await _claim_public_onboarding_token(
+            provider, draft_id=stale_draft_id
+        )
+        await conn.execute(
+            """
+            UPDATE eom_onboarding_email_drafts
+               SET claimed_at = NOW() - INTERVAL '20 minutes'
+             WHERE id = $1::uuid
+            """,
+            stale_draft_id,
+        )
+        stale_revoke = await provider.revoke_eom_onboarding_draft(
+            draft_id=stale_draft_id
+        )
+        assert stale_revoke["status"] == "revoked"
+        assert (
+            await conn.fetchval(
+                "SELECT status FROM eom_public_onboarding_tokens WHERE id = $1",
+                stale_token_id,
+            )
+            == "revoked"
+        )
+        assert await _contact_state(conn, stale_contact_id) == (
+            {
+                "business_context_id": "effingham_maids",
+                "contact_type": "lead",
+                "lead_stage": "won",
+                "status": "active",
+            },
+            0,
+            0,
+        )
+    finally:
+        await conn.execute(f'DROP SCHEMA IF EXISTS "{schema}" CASCADE')
+        await conn.close()
+
+
+@pytest.mark.asyncio
+async def test_public_onboarding_readiness_requires_its_migration_only_when_enabled():
+    """A dormant deploy may lack the table or issuance-only fields; enabled
+    issuance fails closed until the full token shape exists."""
+    from atlas_brain.eom_api.funnel_store import require_eom_funnel_data_store
+    from atlas_brain.storage.migrations import run_migrations
+
+    database_url = _database_url_or_skip()
+    schema = f"atlas_eom_public_onboarding_readiness_{uuid.uuid4().hex}"
+    conn = await asyncpg.connect(database_url)
+    try:
+        await _prepare_schema(conn, schema)
+        provider = DatabaseCRMProvider(pool=conn)
+
+        class _Pool:
+            is_initialized = True
+
+            async def fetchval(self, query: str) -> bool:
+                return bool(await conn.fetchval(query))
+
+        class _MigrationPool:
+            async def acquire(self):
+                return conn
+
+            async def release(self, released) -> None:
+                assert released is conn
+
+        disabled = type(
+            "Config", (), {"api_enabled": True, "public_onboarding_enabled": False}
+        )()
+        enabled = type(
+            "Config", (), {"api_enabled": True, "public_onboarding_enabled": True}
+        )()
+        await require_eom_funnel_data_store(
+            disabled, database_enabled=True, get_db_pool_fn=lambda: _Pool()
+        )
+        with pytest.raises(RuntimeError, match="CRM lifecycle and handoff schema"):
+            await require_eom_funnel_data_store(
+                enabled, database_enabled=True, get_db_pool_fn=lambda: _Pool()
+            )
+        with pytest.raises(EOMLeadConversionError, match="token storage") as exc_info:
+            await provider.revoke_eom_public_onboarding_token(draft_id=str(uuid.uuid4()))
+        assert exc_info.value.status_code == 503
+
+        await run_migrations(
+            _MigrationPool(),
+            migrations_dir=MIGRATIONS,
+            only={"383_eom_public_onboarding_tokens"},
+        )
+        assert await conn.fetchval(
+            """
+            SELECT EXISTS (
+                SELECT 1 FROM schema_migrations
+                WHERE name = '383_eom_public_onboarding_tokens'
+            )
+            """
+        )
+        await require_eom_funnel_data_store(
+            disabled, database_enabled=True, get_db_pool_fn=lambda: _Pool()
+        )
+        await require_eom_funnel_data_store(
+            enabled, database_enabled=True, get_db_pool_fn=lambda: _Pool()
+        )
+        await conn.execute(
+            "ALTER TABLE eom_public_onboarding_tokens DROP COLUMN prefill_email"
+        )
+        await require_eom_funnel_data_store(
+            disabled, database_enabled=True, get_db_pool_fn=lambda: _Pool()
+        )
+        with pytest.raises(RuntimeError, match="CRM lifecycle and handoff schema"):
+            await require_eom_funnel_data_store(
+                enabled, database_enabled=True, get_db_pool_fn=lambda: _Pool()
+            )
+    finally:
+        await conn.execute(f'DROP SCHEMA IF EXISTS "{schema}" CASCADE')
+        await conn.close()
+
+
+@pytest.mark.asyncio
+async def test_disabled_public_onboarding_readiness_requires_present_recovery_columns():
+    """Once migration 383 exists, dormant startup still protects the columns
+    that the office fence and private revoke-link recovery command use."""
+    from atlas_brain.eom_api.funnel_store import require_eom_funnel_data_store
+
+    database_url = _database_url_or_skip()
+    schema = f"atlas_eom_public_onboarding_recovery_columns_{uuid.uuid4().hex}"
+    conn = await asyncpg.connect(database_url)
+    try:
+        await _prepare_schema(conn, schema, apply_public_onboarding_migration=True)
+
+        class _Pool:
+            is_initialized = True
+
+            async def fetchval(self, query: str) -> bool:
+                return bool(await conn.fetchval(query))
+
+        disabled = type(
+            "Config", (), {"api_enabled": True, "public_onboarding_enabled": False}
+        )()
+        await require_eom_funnel_data_store(
+            disabled, database_enabled=True, get_db_pool_fn=lambda: _Pool()
+        )
+        await conn.execute(
+            "ALTER TABLE eom_public_onboarding_tokens "
+            "RENAME COLUMN revoked_at TO missing_revoked_at"
+        )
+        with pytest.raises(RuntimeError, match="CRM lifecycle and handoff schema"):
+            await require_eom_funnel_data_store(
+                disabled, database_enabled=True, get_db_pool_fn=lambda: _Pool()
+            )
+    finally:
+        await conn.execute(f'DROP SCHEMA IF EXISTS "{schema}" CASCADE')
+        await conn.close()
+
+
+@pytest.mark.asyncio
+async def test_disabled_public_onboarding_readiness_requires_present_recovery_privileges():
+    """A deployed token relation must grant the runtime its fence/revoke
+    SELECT and UPDATE surface even when issuance is disabled."""
+    from atlas_brain.eom_api.funnel_store import require_eom_funnel_data_store
+
+    database_url = _database_url_or_skip()
+    schema = f"atlas_eom_public_onboarding_recovery_privileges_{uuid.uuid4().hex}"
+    runtime_role = f"atlas_eom_public_token_runtime_{uuid.uuid4().hex}"
+    schema_ident = _quote_ident(schema)
+    runtime_ident = _quote_ident(runtime_role)
+    database_name: str | None = None
+    role_created = False
+    runtime_conn = None
+    conn = await asyncpg.connect(database_url)
+    try:
+        await _require_disposable_role_administration(conn)
+        await _prepare_schema(conn, schema, apply_public_onboarding_migration=True)
+        database_name = await conn.fetchval("SELECT current_database()")
+        await conn.execute(
+            f"CREATE ROLE {runtime_ident} LOGIN NOINHERIT "
+            f"PASSWORD '{_NON_SUPERUSER_TEST_PASSWORD}'"
+        )
+        role_created = True
+        await conn.execute(
+            f"GRANT CONNECT ON DATABASE {_quote_ident(database_name)} TO {runtime_ident}"
+        )
+        await conn.execute(f"GRANT USAGE ON SCHEMA {schema_ident} TO {runtime_ident}")
+
+        runtime_conn = await asyncpg.connect(
+            database_url,
+            user=runtime_role,
+            password=_NON_SUPERUSER_TEST_PASSWORD,
+        )
+        await runtime_conn.execute(f"SET search_path TO {schema_ident}, public")
+
+        class _Pool:
+            is_initialized = True
+
+            async def fetchval(self, query: str) -> bool:
+                return bool(await runtime_conn.fetchval(query))
+
+        disabled = type(
+            "Config", (), {"api_enabled": True, "public_onboarding_enabled": False}
+        )()
+        with pytest.raises(RuntimeError, match="CRM lifecycle and handoff schema"):
+            await require_eom_funnel_data_store(
+                disabled, database_enabled=True, get_db_pool_fn=lambda: _Pool()
+            )
+
+        await conn.execute(
+            "GRANT SELECT ON TABLE "
+            f"{schema_ident}.eom_public_onboarding_tokens TO {runtime_ident}"
+        )
+        with pytest.raises(RuntimeError, match="CRM lifecycle and handoff schema"):
+            await require_eom_funnel_data_store(
+                disabled, database_enabled=True, get_db_pool_fn=lambda: _Pool()
+            )
+
+        await conn.execute(
+            "GRANT UPDATE ON TABLE "
+            f"{schema_ident}.eom_public_onboarding_tokens TO {runtime_ident}"
+        )
+        assert not await runtime_conn.fetchval(
+            "SELECT has_table_privilege("
+            "current_user, 'eom_public_onboarding_tokens', 'INSERT')"
+        )
+        await require_eom_funnel_data_store(
+            disabled, database_enabled=True, get_db_pool_fn=lambda: _Pool()
+        )
+    finally:
+        if runtime_conn is not None:
+            await runtime_conn.close()
+        await conn.execute(f"DROP SCHEMA IF EXISTS {schema_ident} CASCADE")
+        if role_created:
+            assert database_name is not None
+            await conn.execute(
+                f"REVOKE CONNECT ON DATABASE {_quote_ident(database_name)} "
+                f"FROM {runtime_ident}"
+            )
+            await conn.execute(f"DROP ROLE IF EXISTS {runtime_ident}")
+        await conn.close()
+
+
+@pytest.mark.asyncio
+async def test_public_onboarding_and_office_finalizers_serialize_on_one_contact():
+    """An issued link wins the shared contact decision; office cannot make a second handoff."""
+    database_url = _database_url_or_skip()
+    schema = f"atlas_eom_public_onboarding_race_{uuid.uuid4().hex}"
+    conn = await asyncpg.connect(database_url)
+    pool = None
+    try:
+        await _prepare_schema(conn, schema, apply_public_onboarding_migration=True)
+        pool = await asyncpg.create_pool(
+            database_url,
+            min_size=2,
+            max_size=2,
+            server_settings={"search_path": f"{schema}, public"},
+        )
+        provider = DatabaseCRMProvider(pool=pool)
+        contact_id, draft_id = await _book_first_clean_draft(conn, provider)
+        _, token_id = await _claim_public_onboarding_token(provider, draft_id=draft_id)
+
+        public_result, office_result = await asyncio.gather(
+            provider.complete_eom_public_onboarding(
+                token_id=str(token_id),
+                signing_key_fingerprint=_PUBLIC_ONBOARDING_KEY_FINGERPRINT,
+                tracker_customer_id=101,
+                tracker_site_id=202,
+            ),
+            provider.finalize_eom_customer_handoff(
+                contact_id=str(contact_id),
+                tracker_customer_id=303,
+                tracker_site_id=404,
+                approval_key=_approval_key(),
+                actor_id=1,
+                actor_name="Juan Canfield",
+            ),
+            return_exceptions=True,
+        )
+        assert isinstance(public_result, dict)
+        assert public_result["status"] == "completed"
+        assert isinstance(office_result, EOMLeadConversionError)
+        assert office_result.status_code == 409
+        assert await _contact_state(conn, contact_id) == (
+            {
+                "business_context_id": "effingham_maids",
+                "contact_type": "customer",
+                "lead_stage": None,
+                "status": "active",
+            },
+            1,
+            1,
+        )
+        assert (
+            await conn.fetchval(
+                "SELECT status FROM eom_public_onboarding_tokens WHERE id = $1",
+                token_id,
+            )
+            == "redeemed"
+        )
+    finally:
+        if pool is not None:
+            await pool.close()
+        await conn.execute(f'DROP SCHEMA IF EXISTS "{schema}" CASCADE')
+        await conn.close()
 
 
 @pytest.mark.asyncio
@@ -4716,6 +6088,1115 @@ async def test_onboarding_draft_list_projection_filters_and_paginates():
         sending = await provider.list_eom_onboarding_drafts(status="sending")
         assert [str(row["draft_id"]) for row in sending] == [draft_a]
         assert sending[0]["approved_by_name"] == "Juan Canfield"
+    finally:
+        await conn.execute(f'DROP SCHEMA IF EXISTS "{schema}" CASCADE')
+        await conn.close()
+
+
+@pytest.mark.asyncio
+async def test_public_onboarding_issued_link_projection_excludes_terminal_tokens():
+    database_url = _database_url_or_skip()
+    schema = f"atlas_eom_public_onboarding_issued_links_{uuid.uuid4().hex}"
+    conn = await asyncpg.connect(database_url)
+    try:
+        await _prepare_schema(conn, schema, apply_public_onboarding_migration=True)
+        provider = DatabaseCRMProvider(pool=conn)
+        issued_contact_id, issued_draft_id = await _book_first_clean_draft(
+            conn, provider, full_name="Issued Link"
+        )
+        _, issued_token_id = await _claim_public_onboarding_token(
+            provider, draft_id=issued_draft_id
+        )
+        redeemed_contact_id, redeemed_draft_id = await _book_first_clean_draft(
+            conn, provider, full_name="Redeemed Link"
+        )
+        _, redeemed_token_id = await _claim_public_onboarding_token(
+            provider, draft_id=redeemed_draft_id
+        )
+        await conn.execute(
+            """
+            UPDATE eom_public_onboarding_tokens
+               SET status = 'redeemed', redeemed_at = NOW(), handoff_id = $2::uuid
+             WHERE id = $1::uuid
+            """,
+            redeemed_token_id,
+            uuid.uuid4(),
+        )
+        revoked_contact_id, revoked_draft_id = await _book_first_clean_draft(
+            conn, provider, full_name="Revoked Link"
+        )
+        _, revoked_token_id = await _claim_public_onboarding_token(
+            provider, draft_id=revoked_draft_id
+        )
+        revoked = await provider.revoke_eom_public_onboarding_token(
+            draft_id=revoked_draft_id
+        )
+
+        links = await provider.list_eom_public_onboarding_issued_links(
+            accepted_signing_key_fingerprints=(_PUBLIC_ONBOARDING_KEY_FINGERPRINT,),
+            limit=100,
+        )
+
+        assert [{str(row["draft_id"]), str(row["contact_id"])} for row in links] == [
+            {issued_draft_id, str(issued_contact_id)}
+        ]
+        assert links[0]["full_name"] == "Issued Link"
+        assert links[0]["recipient_email"] == "won-lead@example.com"
+        assert links[0]["status"] == "issued"
+        assert "id" not in links[0]
+        assert str(issued_token_id) not in str(links[0])
+        assert revoked["status"] == "revoked"
+        assert str(redeemed_contact_id) not in str(links)
+        assert str(revoked_contact_id) not in str(links)
+        assert str(redeemed_token_id) not in str(links)
+        assert str(revoked_token_id) not in str(links)
+    finally:
+        await conn.execute(f'DROP SCHEMA IF EXISTS "{schema}" CASCADE')
+        await conn.close()
+
+
+@pytest.mark.asyncio
+async def test_public_onboarding_issued_link_projection_matches_session_readiness():
+    """The office queue includes exactly the rows a public session can open."""
+
+    database_url = _database_url_or_skip()
+    schema = f"atlas_eom_public_onboarding_issued_link_readiness_{uuid.uuid4().hex}"
+    conn = await asyncpg.connect(database_url)
+    try:
+        await _prepare_schema(conn, schema, apply_public_onboarding_migration=True)
+        provider = DatabaseCRMProvider(pool=conn)
+
+        async def issued(full_name: str) -> tuple[uuid.UUID, str, uuid.UUID]:
+            contact_id, draft_id = await _book_first_clean_draft(
+                conn, provider, full_name=full_name
+            )
+            _, token_id = await _claim_public_onboarding_token(
+                provider, draft_id=draft_id
+            )
+            return contact_id, draft_id, token_id
+
+        sending_contact_id, sending_draft_id, sending_token_id = await issued(
+            "Sending Link"
+        )
+        sent_contact_id, sent_draft_id, sent_token_id = await issued("Sent Link")
+        inactive_contact_id, _, inactive_token_id = await issued("Inactive Link")
+        archived_contact_id, _, archived_token_id = await issued("Archived Link")
+        other_context_contact_id, _, other_context_token_id = await issued(
+            "Other Context Link"
+        )
+        non_lead_contact_id, _, non_lead_token_id = await issued("Customer Link")
+        non_won_contact_id, _, non_won_token_id = await issued("Non-won Link")
+        _, pending_draft_id, pending_token_id = await issued("Pending Draft Link")
+        _, revoked_draft_id, revoked_draft_token_id = await issued("Revoked Draft Link")
+
+        await conn.execute(
+            "UPDATE eom_onboarding_email_drafts SET status = 'sent', sent_at = NOW() "
+            "WHERE id = $1::uuid",
+            sent_draft_id,
+        )
+        await conn.execute(
+            "UPDATE contacts SET status = 'inactive' WHERE id = $1", inactive_contact_id
+        )
+        await conn.execute(
+            "UPDATE contacts SET status = 'archived' WHERE id = $1", archived_contact_id
+        )
+        await conn.execute(
+            "UPDATE contacts SET business_context_id = 'other_business' WHERE id = $1",
+            other_context_contact_id,
+        )
+        await conn.execute(
+            "UPDATE contacts SET contact_type = 'customer' WHERE id = $1",
+            non_lead_contact_id,
+        )
+        await conn.execute(
+            "UPDATE contacts SET lead_stage = 'qualified' WHERE id = $1",
+            non_won_contact_id,
+        )
+        await conn.execute(
+            "UPDATE eom_onboarding_email_drafts SET status = 'pending' WHERE id = $1::uuid",
+            pending_draft_id,
+        )
+        await conn.execute(
+            "UPDATE eom_onboarding_email_drafts SET status = 'revoked', revoked_at = NOW() "
+            "WHERE id = $1::uuid",
+            revoked_draft_id,
+        )
+
+        for token_id in (
+            inactive_token_id,
+            archived_token_id,
+            other_context_token_id,
+            non_lead_token_id,
+            non_won_token_id,
+            pending_token_id,
+            revoked_draft_token_id,
+        ):
+            with pytest.raises(EOMLeadConversionError) as exc_info:
+                await provider.get_eom_public_onboarding_session(
+                    token_id=str(token_id),
+                    signing_key_fingerprint=_PUBLIC_ONBOARDING_KEY_FINGERPRINT,
+                )
+            assert exc_info.value.status_code == 404
+
+        for token_id in (sending_token_id, sent_token_id):
+            session = await provider.get_eom_public_onboarding_session(
+                token_id=str(token_id),
+                signing_key_fingerprint=_PUBLIC_ONBOARDING_KEY_FINGERPRINT,
+            )
+            assert session["status"] == "ready"
+
+        links = await provider.list_eom_public_onboarding_issued_links(
+            accepted_signing_key_fingerprints=(_PUBLIC_ONBOARDING_KEY_FINGERPRINT,),
+            limit=100,
+        )
+
+        assert {str(row["draft_id"]) for row in links} == {
+            sending_draft_id,
+            sent_draft_id,
+        }
+        assert {str(row["contact_id"]) for row in links} == {
+            str(sending_contact_id),
+            str(sent_contact_id),
+        }
+    finally:
+        await conn.execute(f'DROP SCHEMA IF EXISTS "{schema}" CASCADE')
+        await conn.close()
+
+
+@pytest.mark.asyncio
+async def test_public_onboarding_issued_link_projection_pages_current_and_previous_keys():
+    """Only keys that can authenticate now enter a complete newest-first queue."""
+
+    previous_secret = "previous-test-only-public-onboarding-secret-value-654321"
+    retired_secret = "retired-test-only-public-onboarding-secret-value-987654"
+    previous_fingerprint = eom_public_onboarding_hmac_key_fingerprint(
+        secret=previous_secret
+    )
+    retired_fingerprint = eom_public_onboarding_hmac_key_fingerprint(
+        secret=retired_secret
+    )
+    database_url = _database_url_or_skip()
+    schema = f"atlas_eom_public_onboarding_issued_link_page_{uuid.uuid4().hex}"
+    conn = await asyncpg.connect(database_url)
+    try:
+        await _prepare_schema(conn, schema, apply_public_onboarding_migration=True)
+        provider = DatabaseCRMProvider(pool=conn)
+
+        newest_contact_id, newest_draft_id = await _book_first_clean_draft(
+            conn, provider, full_name="Current Newest"
+        )
+        _, newest_token_id = await _claim_public_onboarding_token(
+            provider, draft_id=newest_draft_id
+        )
+        previous_contact_id, previous_draft_id = await _book_first_clean_draft(
+            conn, provider, full_name="Previous Key"
+        )
+        _, previous_token_id = await _claim_public_onboarding_token(
+            provider,
+            draft_id=previous_draft_id,
+            hmac_secret=previous_secret,
+        )
+        older_contact_id, older_draft_id = await _book_first_clean_draft(
+            conn, provider, full_name="Current Older"
+        )
+        _, older_token_id = await _claim_public_onboarding_token(
+            provider, draft_id=older_draft_id
+        )
+        retired_contact_id, retired_draft_id = await _book_first_clean_draft(
+            conn, provider, full_name="Retired Key"
+        )
+        _, retired_token_id = await _claim_public_onboarding_token(
+            provider,
+            draft_id=retired_draft_id,
+            hmac_secret=retired_secret,
+        )
+        assert retired_fingerprint not in (
+            _PUBLIC_ONBOARDING_KEY_FINGERPRINT,
+            previous_fingerprint,
+        )
+
+        for token_id, issued_at in (
+            (newest_token_id, datetime(2026, 8, 19, 12, tzinfo=timezone.utc)),
+            (previous_token_id, datetime(2026, 8, 18, 12, tzinfo=timezone.utc)),
+            (older_token_id, datetime(2026, 8, 17, 12, tzinfo=timezone.utc)),
+            (retired_token_id, datetime(2026, 8, 20, 12, tzinfo=timezone.utc)),
+        ):
+            await conn.execute(
+                "UPDATE eom_public_onboarding_tokens SET issued_at = $2 WHERE id = $1",
+                token_id,
+                issued_at,
+            )
+
+        first_page = await provider.list_eom_public_onboarding_issued_links(
+            accepted_signing_key_fingerprints=(
+                _PUBLIC_ONBOARDING_KEY_FINGERPRINT,
+                previous_fingerprint,
+            ),
+            limit=2,
+        )
+        second_page = await provider.list_eom_public_onboarding_issued_links(
+            accepted_signing_key_fingerprints=(
+                _PUBLIC_ONBOARDING_KEY_FINGERPRINT,
+                previous_fingerprint,
+            ),
+            limit=2,
+            cursor_issued_at=first_page[-1]["issued_at"],
+            cursor_draft_id=first_page[-1]["draft_id"],
+        )
+
+        assert [str(row["draft_id"]) for row in first_page] == [
+            newest_draft_id,
+            previous_draft_id,
+        ]
+        assert [str(row["draft_id"]) for row in second_page] == [older_draft_id]
+        assert {str(row["contact_id"]) for row in first_page + second_page} == {
+            str(newest_contact_id),
+            str(previous_contact_id),
+            str(older_contact_id),
+        }
+        assert str(retired_contact_id) not in str(first_page + second_page)
+        assert str(retired_token_id) not in str(first_page + second_page)
+    finally:
+        await conn.execute(f'DROP SCHEMA IF EXISTS "{schema}" CASCADE')
+        await conn.close()
+
+
+@pytest.mark.asyncio
+async def test_won_lead_loss_cancels_first_clean_and_revokes_pending_draft():
+    database_url = _database_url_or_skip()
+    schema = f"atlas_eom_won_loss_{uuid.uuid4().hex}"
+    conn = await asyncpg.connect(database_url)
+    try:
+        await _prepare_schema(conn, schema, apply_privilege_migration=False)
+        provider = DatabaseCRMProvider(pool=conn)
+        contact_id, draft_id = await _book_first_clean_draft(conn, provider)
+        booking = await conn.fetchrow(
+            """
+            SELECT metadata
+            FROM eom_lead_lifecycle_events
+            WHERE contact_id = $1
+              AND event_type = 'first_clean_booked'
+            """,
+            contact_id,
+        )
+        assert booking is not None
+        booking_metadata = _metadata_dict(booking["metadata"])
+        calendar_event_id = str(booking_metadata["calendar_event_id"])
+        calendar = _WonLossCalendar()
+        command = EOMLeadLost(
+            contact_id=str(contact_id),
+            reason_code="no_response",
+            note="Could not reach customer",
+            operation_key=f"office-won-loss-{uuid.uuid4().hex}",
+            actor_id=1,
+            actor_name="Juan Canfield",
+        )
+
+        completed = await mark_eom_lead_lost_with_won_teardown(
+            provider, calendar, command
+        )
+
+        assert completed == {
+            "contact_id": str(contact_id),
+            "lead_stage": "lost",
+            "status": "lost",
+            "reason_code": "no_response",
+            "from_stage": "won",
+            "idempotent": False,
+        }
+        assert calendar.calls == [
+            {
+                "calendar_id": "estimate-calendar",
+                "event_id": calendar_event_id,
+            }
+        ]
+        assert await conn.fetchval(
+            "SELECT lead_stage FROM contacts WHERE id = $1", contact_id
+        ) == "lost"
+        assert await conn.fetchval(
+            "SELECT status FROM eom_onboarding_email_drafts WHERE id = $1::uuid",
+            draft_id,
+        ) == "revoked"
+        assert await conn.fetchval(
+            """
+            SELECT COUNT(*)
+            FROM eom_lead_lifecycle_events
+            WHERE contact_id = $1
+              AND event_type = 'first_clean_cancelled'
+            """,
+            contact_id,
+        ) == 1
+        assert await conn.fetchval(
+            """
+            SELECT COUNT(*)
+            FROM eom_lead_lifecycle_events
+            WHERE contact_id = $1
+              AND event_type = 'lead_lost'
+            """,
+            contact_id,
+        ) == 1
+
+        replay = await mark_eom_lead_lost_with_won_teardown(
+            provider, calendar, command
+        )
+        assert replay["idempotent"] is True
+        assert replay["reason_code"] == "no_response"
+        assert len(calendar.calls) == 1
+    finally:
+        await conn.execute(f'DROP SCHEMA IF EXISTS "{schema}" CASCADE')
+        await conn.close()
+
+
+@pytest.mark.asyncio
+async def test_won_lead_loss_blocks_sending_or_sent_draft_before_calendar_delete():
+    database_url = _database_url_or_skip()
+    schema = f"atlas_eom_won_loss_delivery_{uuid.uuid4().hex}"
+    conn = await asyncpg.connect(database_url)
+    try:
+        await _prepare_schema(conn, schema, apply_privilege_migration=False)
+        provider = DatabaseCRMProvider(pool=conn)
+        for draft_status in ("sending", "sent"):
+            contact_id, draft_id = await _book_first_clean_draft(conn, provider)
+            await conn.execute(
+                """
+                UPDATE eom_onboarding_email_drafts
+                SET status = $2::varchar,
+                    claimed_at = CASE
+                        WHEN $2::varchar = 'sending' THEN NOW()
+                        ELSE claimed_at
+                    END,
+                    sent_at = CASE WHEN $2::varchar = 'sent' THEN NOW() ELSE sent_at END
+                WHERE id = $1::uuid
+                """,
+                draft_id,
+                draft_status,
+            )
+            calendar = _WonLossCalendar()
+            with pytest.raises(
+                EOMLeadConversionError, match="delivery must be reconciled"
+            ) as exc:
+                await mark_eom_lead_lost_with_won_teardown(
+                    provider,
+                    calendar,
+                    EOMLeadLost(
+                        contact_id=str(contact_id),
+                        reason_code="no_response",
+                        note=None,
+                        operation_key=f"office-won-loss-{uuid.uuid4().hex}",
+                        actor_id=1,
+                        actor_name="Juan Canfield",
+                    ),
+                )
+            assert exc.value.status_code == 409
+            assert calendar.calls == []
+            assert await conn.fetchval(
+                "SELECT lead_stage FROM contacts WHERE id = $1", contact_id
+            ) == "won"
+            assert await conn.fetchval(
+                "SELECT status FROM eom_onboarding_email_drafts WHERE id = $1::uuid",
+                draft_id,
+            ) == draft_status
+    finally:
+        await conn.execute(f'DROP SCHEMA IF EXISTS "{schema}" CASCADE')
+        await conn.close()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("pre_won_stage", "reason_code"),
+    (("new", "spam"), ("estimate_booked", "declined_after_estimate")),
+)
+async def test_won_lead_loss_rejects_reused_prewon_lost_key_before_calendar_delete(
+    pre_won_stage: str, reason_code: str
+):
+    """A pre-won loss key remains permanently incompatible with won teardown."""
+
+    database_url = _database_url_or_skip()
+    schema = f"atlas_eom_won_loss_reused_key_{uuid.uuid4().hex}"
+    conn = await asyncpg.connect(database_url)
+    try:
+        await _prepare_schema(conn, schema, apply_privilege_migration=False)
+        provider = DatabaseCRMProvider(pool=conn)
+        contact_id = uuid.uuid4()
+        await _insert_contact(
+            conn,
+            contact_id=contact_id,
+            lead_stage=pre_won_stage,
+            email="reused-key@example.com",
+        )
+        legacy_loss_key = f"office-legacy-loss-{uuid.uuid4().hex}"
+        lost = await provider.mark_eom_lead_lost(
+            contact_id=str(contact_id),
+            reason_code=reason_code,
+            note="Original pre-won disposition",
+            operation_key=legacy_loss_key,
+            actor_id=1,
+            actor_name="Juan Canfield",
+        )
+        assert lost["from_stage"] == pre_won_stage
+        reopened = await provider.reopen_eom_lead(
+            contact_id=str(contact_id),
+            operation_key=f"office-reopen-{uuid.uuid4().hex}",
+            actor_id=1,
+            actor_name="Juan Canfield",
+        )
+        assert reopened["lead_stage"] == pre_won_stage
+        _, draft_id = await _book_first_clean_draft(
+            conn, provider, contact_id=contact_id
+        )
+        calendar = _WonLossCalendar()
+
+        with pytest.raises(
+            EOMLeadConversionError,
+            match="Idempotency-Key already belongs to another EOM operation",
+        ) as exc:
+            await mark_eom_lead_lost_with_won_teardown(
+                provider,
+                calendar,
+                EOMLeadLost(
+                    contact_id=str(contact_id),
+                    reason_code="no_response",
+                    note=None,
+                    operation_key=legacy_loss_key,
+                    actor_id=1,
+                    actor_name="Juan Canfield",
+                ),
+            )
+
+        assert exc.value.status_code == 409
+        assert calendar.calls == []
+        assert await conn.fetchval(
+            "SELECT lead_stage FROM contacts WHERE id = $1", contact_id
+        ) == "won"
+        assert await conn.fetchval(
+            "SELECT status FROM eom_onboarding_email_drafts WHERE id = $1::uuid",
+            draft_id,
+        ) == "pending"
+    finally:
+        await conn.execute(f'DROP SCHEMA IF EXISTS "{schema}" CASCADE')
+        await conn.close()
+
+
+@pytest.mark.asyncio
+async def test_won_lead_loss_rejects_second_key_while_cancellation_is_unsettled():
+    database_url = _database_url_or_skip()
+    schema = f"atlas_eom_won_loss_retry_{uuid.uuid4().hex}"
+    conn = await asyncpg.connect(database_url)
+    try:
+        await _prepare_schema(conn, schema, apply_privilege_migration=False)
+        provider = DatabaseCRMProvider(pool=conn)
+        contact_id, draft_id = await _book_first_clean_draft(conn, provider)
+        command = EOMLeadLost(
+            contact_id=str(contact_id),
+            reason_code="no_response",
+            note=None,
+            operation_key=f"office-won-loss-{uuid.uuid4().hex}",
+            actor_id=1,
+            actor_name="Juan Canfield",
+        )
+        calendar = _WonLossCalendar(
+            results=[
+                ToolResult(
+                    success=False,
+                    error="API_ERROR",
+                    data={"request_phase": "delete", "status_code": 503},
+                    message="Calendar API error: 503",
+                ),
+                ToolResult(
+                    success=True,
+                    data={"already_absent": True},
+                    message="Calendar event was already absent",
+                ),
+            ]
+        )
+
+        with pytest.raises(
+            EOMLeadConversionError, match="Calendar API error: 503"
+        ) as exc:
+            await mark_eom_lead_lost_with_won_teardown(provider, calendar, command)
+        assert exc.value.status_code == 502
+        assert await conn.fetchval(
+            "SELECT lead_stage FROM contacts WHERE id = $1", contact_id
+        ) == "won"
+        assert await conn.fetchval(
+            "SELECT status FROM eom_onboarding_email_drafts WHERE id = $1::uuid",
+            draft_id,
+        ) == "pending"
+        assert await conn.fetchval(
+            """
+            SELECT COUNT(*)
+            FROM eom_lead_lifecycle_events
+            WHERE contact_id = $1
+              AND event_type = 'first_clean_cancellation_calendar_unsettled'
+            """,
+            contact_id,
+        ) == 1
+
+        with pytest.raises(
+            EOMLeadConversionError, match="cancellation requires reconciliation"
+        ) as second_key:
+            await mark_eom_lead_lost_with_won_teardown(
+                provider,
+                calendar,
+                EOMLeadLost(
+                    contact_id=str(contact_id),
+                    reason_code="no_response",
+                    note=None,
+                    operation_key=f"office-won-loss-{uuid.uuid4().hex}",
+                    actor_id=1,
+                    actor_name="Juan Canfield",
+                ),
+            )
+        assert second_key.value.status_code == 409
+        assert len(calendar.calls) == 1
+        assert await conn.fetchval(
+            """
+            SELECT COUNT(*)
+            FROM eom_lead_lifecycle_events
+            WHERE contact_id = $1
+              AND event_type = 'first_clean_cancellation_requested'
+            """,
+            contact_id,
+        ) == 1
+
+        completed = await mark_eom_lead_lost_with_won_teardown(
+            provider, calendar, command
+        )
+        assert completed["idempotent"] is False
+        assert await conn.fetchval(
+            "SELECT lead_stage FROM contacts WHERE id = $1", contact_id
+        ) == "lost"
+        assert await conn.fetchval(
+            "SELECT status FROM eom_onboarding_email_drafts WHERE id = $1::uuid",
+            draft_id,
+        ) == "revoked"
+        assert len(calendar.calls) == 2
+    finally:
+        await conn.execute(f'DROP SCHEMA IF EXISTS "{schema}" CASCADE')
+        await conn.close()
+
+
+@pytest.mark.asyncio
+async def test_won_lead_loss_fences_durable_unsettled_cancellation_from_claim_and_handoff():
+    """A released executor lock does not erase unfinished cancellation work."""
+
+    database_url = _database_url_or_skip()
+    schema = f"atlas_eom_won_loss_durable_fence_{uuid.uuid4().hex}"
+    conn = await asyncpg.connect(database_url)
+    try:
+        await _prepare_schema(
+            conn,
+            schema,
+            apply_privilege_migration=False,
+            apply_public_onboarding_migration=True,
+        )
+        provider = DatabaseCRMProvider(pool=conn)
+        contact_id, draft_id = await _book_first_clean_draft(conn, provider)
+        command = EOMLeadLost(
+            contact_id=str(contact_id),
+            reason_code="no_response",
+            note=None,
+            operation_key=f"office-won-loss-{uuid.uuid4().hex}",
+            actor_id=1,
+            actor_name="Juan Canfield",
+        )
+        calendar = _WonLossCalendar(
+            results=[
+                ToolResult(
+                    success=False,
+                    error="API_ERROR",
+                    data={"request_phase": "delete", "status_code": 503},
+                    message="Calendar API error: 503",
+                )
+            ]
+        )
+
+        with pytest.raises(EOMLeadConversionError, match="Calendar API error: 503"):
+            await mark_eom_lead_lost_with_won_teardown(provider, calendar, command)
+
+        with pytest.raises(
+            EOMLeadConversionError, match="cancellation requires reconciliation"
+        ) as standard_claim:
+            await provider.claim_eom_onboarding_draft(
+                draft_id=draft_id,
+                actor_id=2,
+                actor_name="Mayra Canfield",
+            )
+        assert standard_claim.value.status_code == 409
+
+        with pytest.raises(
+            EOMLeadConversionError, match="cancellation requires reconciliation"
+        ) as public_claim:
+            await provider.claim_eom_onboarding_draft(
+                draft_id=draft_id,
+                actor_id=2,
+                actor_name="Mayra Canfield",
+                public_onboarding_base_url=_PUBLIC_ONBOARDING_URL,
+                public_onboarding_hmac_secret=_PUBLIC_ONBOARDING_SECRET,
+            )
+        assert public_claim.value.status_code == 409
+
+        with pytest.raises(
+            EOMLeadConversionError, match="cancellation requires reconciliation"
+        ) as handoff:
+            await provider.finalize_eom_customer_handoff(
+                contact_id=str(contact_id),
+                tracker_customer_id=981,
+                tracker_site_id=1981,
+                approval_key=f"office-handoff-{uuid.uuid4().hex}",
+                actor_id=2,
+                actor_name="Mayra Canfield",
+            )
+        assert handoff.value.status_code == 409
+        assert len(calendar.calls) == 1
+        assert await conn.fetchval(
+            "SELECT lead_stage FROM contacts WHERE id = $1", contact_id
+        ) == "won"
+        assert await conn.fetchval(
+            "SELECT status FROM eom_onboarding_email_drafts WHERE id = $1::uuid",
+            draft_id,
+        ) == "pending"
+        assert await conn.fetchval(
+            "SELECT COUNT(*) FROM eom_public_onboarding_tokens WHERE draft_id = $1::uuid",
+            draft_id,
+        ) == 0
+        assert await conn.fetchval(
+            "SELECT COUNT(*) FROM eom_customer_handoffs WHERE contact_id = $1::uuid",
+            contact_id,
+        ) == 0
+    finally:
+        await conn.execute(f'DROP SCHEMA IF EXISTS "{schema}" CASCADE')
+        await conn.close()
+
+
+@pytest.mark.asyncio
+async def test_won_lead_loss_fences_durable_cancellation_from_generic_contact_status_writes():
+    """Archive and generic status writes cannot strand Calendar teardown."""
+
+    database_url = _database_url_or_skip()
+    schema = f"atlas_eom_won_loss_generic_status_fence_{uuid.uuid4().hex}"
+    conn = await asyncpg.connect(database_url)
+    try:
+        await _prepare_schema(conn, schema, apply_privilege_migration=False)
+        provider = DatabaseCRMProvider(pool=conn)
+        contact_id, _ = await _book_first_clean_draft(conn, provider)
+        command = EOMLeadLost(
+            contact_id=str(contact_id),
+            reason_code="no_response",
+            note=None,
+            operation_key=f"office-won-loss-{uuid.uuid4().hex}",
+            actor_id=1,
+            actor_name="Juan Canfield",
+        )
+        calendar = _WonLossCalendar(
+            results=[
+                ToolResult(
+                    success=False,
+                    error="API_ERROR",
+                    data={"request_phase": "delete", "status_code": 503},
+                    message="Calendar API error: 503",
+                )
+            ]
+        )
+
+        with pytest.raises(EOMLeadConversionError, match="Calendar API error: 503"):
+            await mark_eom_lead_lost_with_won_teardown(provider, calendar, command)
+
+        with pytest.raises(
+            EOMLeadConversionError, match="cancellation requires reconciliation"
+        ) as archive:
+            await provider.delete_contact(str(contact_id))
+        assert archive.value.status_code == 409
+
+        with pytest.raises(
+            EOMLeadConversionError, match="cancellation requires reconciliation"
+        ) as status_update:
+            await provider.update_contact(str(contact_id), {"status": "inactive"})
+        assert status_update.value.status_code == 409
+        assert await conn.fetchval(
+            "SELECT status FROM contacts WHERE id = $1", contact_id
+        ) == "active"
+    finally:
+        await conn.execute(f'DROP SCHEMA IF EXISTS "{schema}" CASCADE')
+        await conn.close()
+
+
+@pytest.mark.asyncio
+async def test_nocodb_cannot_mutate_won_lead_with_unsettled_cancellation():
+    """The direct CRM login cannot bypass a prepared won-loss cancellation."""
+
+    from atlas_brain.storage.migrations import run_migrations
+
+    database_url = _database_url_or_skip()
+    schema = f"atlas_eom_won_loss_nocodb_fence_{uuid.uuid4().hex}"
+    conn = await asyncpg.connect(database_url)
+    nocodb_conn = None
+    direct_conn = None
+    try:
+        await _prepare_schema(conn, schema)
+
+        class _MigrationPool:
+            async def acquire(self):
+                return conn
+
+            async def release(self, released) -> None:
+                assert released is conn
+
+        await run_migrations(
+            _MigrationPool(),
+            migrations_dir=MIGRATIONS,
+            only={"386_eom_won_loss_nocodb_fence"},
+        )
+        assert await conn.fetchval(
+            "SELECT EXISTS (SELECT 1 FROM schema_migrations WHERE name = $1)",
+            "386_eom_won_loss_nocodb_fence",
+        )
+
+        provider = DatabaseCRMProvider(pool=conn)
+        contact_id, _ = await _book_first_clean_draft(conn, provider)
+        command = EOMLeadLost(
+            contact_id=str(contact_id),
+            reason_code="no_response",
+            note=None,
+            operation_key=f"office-won-loss-{uuid.uuid4().hex}",
+            actor_id=1,
+            actor_name="Juan Canfield",
+        )
+        calendar = _BlockingWonLossCalendar(
+            results=[
+                ToolResult(
+                    success=False,
+                    error="API_ERROR",
+                    data={"request_phase": "delete", "status_code": 503},
+                    message="Calendar API error: 503",
+                ),
+                ToolResult(
+                    success=True,
+                    data={"already_absent": True},
+                    message="Calendar event was already absent",
+                ),
+            ]
+        )
+
+        nocodb_conn = await asyncpg.connect(
+            database_url,
+            user="atlas_nocodb",
+            password=_NOCODB_TEST_PASSWORD,
+        )
+        await nocodb_conn.execute(
+            f"SET search_path TO {_quote_ident(schema)}, public"
+        )
+        assert await nocodb_conn.fetchval("SELECT session_user") == "atlas_nocodb"
+        direct_conn = await asyncpg.connect(database_url)
+        await direct_conn.execute(f"SET search_path TO {_quote_ident(schema)}, public")
+        assert await direct_conn.fetchval("SELECT session_user") != "atlas_nocodb"
+
+        loss_task = asyncio.create_task(
+            mark_eom_lead_lost_with_won_teardown(provider, calendar, command)
+        )
+        await asyncio.wait_for(calendar.started.wait(), timeout=3)
+
+        with pytest.raises(
+            asyncpg.exceptions.RaiseError,
+            match="cancellation requires reconciliation",
+        ):
+            await nocodb_conn.execute(
+                "UPDATE contacts SET status = 'inactive' WHERE id = $1",
+                contact_id,
+            )
+        with pytest.raises(
+            asyncpg.exceptions.RaiseError,
+            match="cancellation requires reconciliation",
+        ):
+            await nocodb_conn.execute("DELETE FROM contacts WHERE id = $1", contact_id)
+        with pytest.raises(
+            asyncpg.exceptions.RaiseError,
+            match="cancellation requires reconciliation",
+        ):
+            await direct_conn.execute(
+                "UPDATE contacts SET status = 'inactive' WHERE id = $1", contact_id
+            )
+        with pytest.raises(
+            asyncpg.exceptions.RaiseError,
+            match="cancellation requires reconciliation",
+        ):
+            await direct_conn.execute(
+                "UPDATE contacts SET contact_type = 'customer' WHERE id = $1",
+                contact_id,
+            )
+        assert not loss_task.done()
+
+        calendar.release.set()
+        with pytest.raises(EOMLeadConversionError, match="Calendar API error: 503"):
+            await loss_task
+
+        with pytest.raises(
+            asyncpg.exceptions.RaiseError,
+            match="cancellation requires reconciliation",
+        ):
+            await nocodb_conn.execute(
+                "UPDATE contacts SET status = 'inactive' WHERE id = $1",
+                contact_id,
+            )
+        with pytest.raises(
+            asyncpg.exceptions.RaiseError,
+            match="cancellation requires reconciliation",
+        ):
+            await nocodb_conn.execute("DELETE FROM contacts WHERE id = $1", contact_id)
+        with pytest.raises(
+            asyncpg.exceptions.RaiseError,
+            match="cancellation requires reconciliation",
+        ):
+            await direct_conn.execute(
+                "UPDATE contacts SET status = 'inactive' WHERE id = $1", contact_id
+            )
+        with pytest.raises(
+            asyncpg.exceptions.RaiseError,
+            match="cancellation requires reconciliation",
+        ):
+            await direct_conn.execute(
+                "UPDATE contacts SET contact_type = 'customer' WHERE id = $1",
+                contact_id,
+            )
+
+        await nocodb_conn.execute(
+            "UPDATE contacts SET notes = 'ordinary NocoDB edit' WHERE id = $1",
+            contact_id,
+        )
+        assert await conn.fetchval(
+            "SELECT status FROM contacts WHERE id = $1", contact_id
+        ) == "active"
+        assert await conn.fetchval(
+            "SELECT notes FROM contacts WHERE id = $1", contact_id
+        ) == "ordinary NocoDB edit"
+
+        completed = await mark_eom_lead_lost_with_won_teardown(
+            provider, calendar, command
+        )
+        assert completed["lead_stage"] == "lost"
+        assert await conn.fetchval(
+            "SELECT lead_stage FROM contacts WHERE id = $1", contact_id
+        ) == "lost"
+        await direct_conn.execute(
+            "UPDATE contacts SET status = 'inactive' WHERE id = $1", contact_id
+        )
+        assert await conn.fetchval(
+            "SELECT status FROM contacts WHERE id = $1", contact_id
+        ) == "inactive"
+        await nocodb_conn.execute(
+            "UPDATE contacts SET status = 'inactive' WHERE id = $1", contact_id
+        )
+        assert await conn.fetchval(
+            "SELECT status FROM contacts WHERE id = $1", contact_id
+        ) == "inactive"
+    finally:
+        if direct_conn is not None:
+            await direct_conn.close()
+        if nocodb_conn is not None:
+            await nocodb_conn.close()
+        await conn.execute(f'DROP SCHEMA IF EXISTS "{schema}" CASCADE')
+        await conn.close()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("relative_calendar_id", ("primary", "PRIMARY"))
+async def test_won_lead_loss_rejects_relative_calendar_identifier_before_delete(
+    relative_calendar_id: str,
+):
+    """A credential-relative booking alias cannot turn another account's 404 into loss."""
+
+    database_url = _database_url_or_skip()
+    schema = f"atlas_eom_won_loss_relative_calendar_{uuid.uuid4().hex}"
+    conn = await asyncpg.connect(database_url)
+    try:
+        await _prepare_schema(conn, schema, apply_privilege_migration=False)
+        provider = DatabaseCRMProvider(pool=conn)
+        contact_id, draft_id = await _book_first_clean_draft(conn, provider)
+        # Model rows booked before the concrete-identity contract. Both the
+        # prepare and completed evidence carried the relative alias then; a
+        # current service must reject the historical state rather than creating
+        # another event or treating a different principal's 404 as success.
+        await conn.execute(
+            "ALTER TABLE eom_lead_lifecycle_events DISABLE TRIGGER USER"
+        )
+        try:
+            await conn.execute(
+                """
+                UPDATE eom_lead_lifecycle_events
+                SET metadata = jsonb_set(metadata, '{calendar_id}', to_jsonb($2::text))
+                WHERE contact_id = $1
+                  AND event_type = ANY($3::varchar[])
+                """,
+                contact_id,
+                relative_calendar_id,
+                ["first_clean_booking_requested", "first_clean_booked"],
+            )
+        finally:
+            await conn.execute(
+                "ALTER TABLE eom_lead_lifecycle_events ENABLE TRIGGER USER"
+            )
+        calendar = _WonLossCalendar()
+
+        with pytest.raises(
+            EOMLeadConversionError, match="relative Calendar identifier"
+        ) as exc:
+            await mark_eom_lead_lost_with_won_teardown(
+                provider,
+                calendar,
+                EOMLeadLost(
+                    contact_id=str(contact_id),
+                    reason_code="no_response",
+                    note=None,
+                    operation_key=f"office-won-loss-{uuid.uuid4().hex}",
+                    actor_id=1,
+                    actor_name="Juan Canfield",
+                ),
+            )
+
+        assert exc.value.status_code == 409
+        assert calendar.calls == []
+        assert await conn.fetchval(
+            "SELECT lead_stage FROM contacts WHERE id = $1", contact_id
+        ) == "won"
+        assert await conn.fetchval(
+            "SELECT status FROM eom_onboarding_email_drafts WHERE id = $1::uuid",
+            draft_id,
+        ) == "pending"
+        assert await conn.fetchval(
+            """
+            SELECT COUNT(*)
+            FROM eom_lead_lifecycle_events
+            WHERE contact_id = $1
+              AND event_type = 'first_clean_cancellation_requested'
+            """,
+            contact_id,
+        ) == 0
+    finally:
+        await conn.execute(f'DROP SCHEMA IF EXISTS "{schema}" CASCADE')
+        await conn.close()
+
+
+@pytest.mark.asyncio
+async def test_won_lead_loss_execution_fences_claim_handoff_and_status_writers():
+    database_url = _database_url_or_skip()
+    schema = f"atlas_eom_won_loss_fence_{uuid.uuid4().hex}"
+    conn = await asyncpg.connect(database_url)
+    pool = None
+    loss_task = None
+    claim_task = None
+    handoff_task = None
+    status_task = None
+    archive_task = None
+    calendar = _BlockingWonLossCalendar()
+    try:
+        await _prepare_schema(conn, schema, apply_privilege_migration=False)
+        pool = await asyncpg.create_pool(
+            database_url,
+            min_size=3,
+            max_size=6,
+            server_settings={"search_path": f'"{schema}", public'},
+        )
+        provider = DatabaseCRMProvider(pool=pool)
+        contact_id, draft_id = await _book_first_clean_draft(conn, provider)
+        command = EOMLeadLost(
+            contact_id=str(contact_id),
+            reason_code="no_response",
+            note=None,
+            operation_key=f"office-won-loss-{uuid.uuid4().hex}",
+            actor_id=1,
+            actor_name="Juan Canfield",
+        )
+        loss_task = asyncio.create_task(
+            mark_eom_lead_lost_with_won_teardown(provider, calendar, command)
+        )
+        await asyncio.wait_for(calendar.started.wait(), timeout=5)
+
+        claim_task = asyncio.create_task(
+            provider.claim_eom_onboarding_draft(
+                draft_id=draft_id,
+                actor_id=2,
+                actor_name="Mayra Canfield",
+            )
+        )
+        handoff_task = asyncio.create_task(
+            provider.finalize_eom_customer_handoff(
+                contact_id=str(contact_id),
+                tracker_customer_id=981,
+                tracker_site_id=1981,
+                approval_key=f"office-handoff-{uuid.uuid4().hex}",
+                actor_id=2,
+                actor_name="Mayra Canfield",
+            )
+        )
+        status_task = asyncio.create_task(
+            provider.update_contact(str(contact_id), {"status": "inactive"})
+        )
+        archive_task = asyncio.create_task(provider.delete_contact(str(contact_id)))
+        await asyncio.sleep(0.1)
+        assert not claim_task.done()
+        assert not handoff_task.done()
+        assert not status_task.done()
+        assert not archive_task.done()
+
+        calendar.release.set()
+        completed = await asyncio.wait_for(loss_task, timeout=5)
+        assert completed["lead_stage"] == "lost"
+        with pytest.raises(EOMLeadConversionError, match="revoked") as claim_exc:
+            await asyncio.wait_for(claim_task, timeout=5)
+        assert claim_exc.value.status_code == 409
+        with pytest.raises(EOMLeadConversionError) as handoff_exc:
+            await asyncio.wait_for(handoff_task, timeout=5)
+        assert handoff_exc.value.status_code == 409
+        status_result, archived = await asyncio.gather(
+            asyncio.wait_for(status_task, timeout=5),
+            asyncio.wait_for(archive_task, timeout=5),
+        )
+        assert status_result is not None
+        assert archived is True
+    finally:
+        calendar.release.set()
+        for task in (loss_task, claim_task, handoff_task, status_task, archive_task):
+            if task is not None and not task.done():
+                task.cancel()
+                with suppress(asyncio.CancelledError):
+                    await task
+        if pool is not None:
+            await pool.close()
+        await conn.execute(f'DROP SCHEMA IF EXISTS "{schema}" CASCADE')
+        await conn.close()
+
+
+@pytest.mark.asyncio
+async def test_pre_won_lead_loss_retains_the_direct_replay_without_calendar():
+    """Routing through the safety service cannot alter pre-won loss semantics."""
+    database_url = _database_url_or_skip()
+    schema = f"atlas_eom_pre_won_loss_{uuid.uuid4().hex}"
+    conn = await asyncpg.connect(database_url)
+    try:
+        await _prepare_schema(conn, schema, apply_privilege_migration=False)
+        provider = DatabaseCRMProvider(pool=conn)
+        contact_id = uuid.uuid4()
+        await _insert_contact(conn, contact_id=contact_id, lead_stage="estimate_booked")
+        calendar = _WonLossCalendar()
+        command = EOMLeadLost(
+            contact_id=str(contact_id),
+            reason_code="declined_after_estimate",
+            note="Price did not fit",
+            operation_key=f"office-pre-won-loss-{uuid.uuid4().hex}",
+            actor_id=1,
+            actor_name="Juan Canfield",
+        )
+
+        first = await mark_eom_lead_lost_with_won_teardown(provider, calendar, command)
+        replay = await mark_eom_lead_lost_with_won_teardown(
+            provider, calendar, command
+        )
+
+        assert first["from_stage"] == "estimate_booked"
+        assert first["idempotent"] is False
+        assert replay["from_stage"] == "estimate_booked"
+        assert replay["idempotent"] is True
+        assert calendar.calls == []
     finally:
         await conn.execute(f'DROP SCHEMA IF EXISTS "{schema}" CASCADE')
         await conn.close()
@@ -5881,4 +8362,415 @@ async def test_operator_contact_records_the_identity_it_overwrote_on_a_phone_mat
         assert "full_name" in metadata["changed_fields"]
         assert metadata["previous_values"]["full_name"] == "Cal Import Label"
     finally:
+        await conn.close()
+
+
+@pytest.mark.asyncio
+async def test_operator_create_persists_customer_type_rather_than_defaulting():
+    """A create that states a type must store it, not silently fall back.
+
+    The provider's contact INSERT names its columns explicitly, so a column the
+    statement omits is written from its DEFAULT and the caller's value is lost
+    with no error. 'commercial' landing as 'unknown' is exactly the silent
+    downgrade this slice exists to make impossible.
+    """
+    database_url = _database_url_or_skip()
+    schema = f"atlas_eom_ctype_create_{uuid.uuid4().hex}"
+    conn = await asyncpg.connect(database_url)
+    try:
+        await _prepare_schema(conn, schema, apply_privilege_migration=False)
+        provider = DatabaseCRMProvider(pool=conn)
+        command = EOMOperatorContactMutation.from_raw(
+            operation_key=f"ctype-create-{uuid.uuid4().hex}",
+            actor_id=7,
+            actor_name="Mayra Canfield",
+            source_channel="time_tracker",
+            source_ref="customer:401",
+            contact_type="customer",
+            fields={"full_name": "Commercial Create", "customer_type": "commercial"},
+        )
+
+        created = await mutate_eom_operator_contact(provider, command)
+
+        contact = await conn.fetchrow(
+            "SELECT * FROM contacts WHERE id = $1", uuid.UUID(created["contact_id"])
+        )
+        assert contact["customer_type"] == "commercial"
+        assert contact["customer_type_revision"] > 0
+    finally:
+        await conn.execute(f'DROP SCHEMA IF EXISTS "{schema}" CASCADE')
+        await conn.close()
+
+
+@pytest.mark.asyncio
+async def test_operator_create_without_a_type_is_unknown_not_guessed():
+    """Silence means unknown. The boundary must not infer a type."""
+    database_url = _database_url_or_skip()
+    schema = f"atlas_eom_ctype_absent_{uuid.uuid4().hex}"
+    conn = await asyncpg.connect(database_url)
+    try:
+        await _prepare_schema(conn, schema, apply_privilege_migration=False)
+        provider = DatabaseCRMProvider(pool=conn)
+        command = EOMOperatorContactMutation.from_raw(
+            operation_key=f"ctype-absent-{uuid.uuid4().hex}",
+            actor_id=7,
+            actor_name="Mayra Canfield",
+            source_channel="time_tracker",
+            source_ref="customer:402",
+            contact_type="customer",
+            fields={"full_name": "AKRA Builders LLC"},
+        )
+
+        created = await mutate_eom_operator_contact(provider, command)
+
+        contact = await conn.fetchrow(
+            "SELECT * FROM contacts WHERE id = $1", uuid.UUID(created["contact_id"])
+        )
+        assert contact["customer_type"] == "unknown", (
+            "a company-shaped name must not be guessed into 'commercial'"
+        )
+    finally:
+        await conn.execute(f'DROP SCHEMA IF EXISTS "{schema}" CASCADE')
+        await conn.close()
+
+
+@pytest.mark.asyncio
+async def test_operator_update_changes_customer_type_and_audits_the_old_value():
+    """Both directions of the change, and the prior value recorded.
+
+    There is no contact history table, so if the lifecycle event does not carry
+    previous_values the overwritten type exists nowhere once the UPDATE commits.
+    """
+    database_url = _database_url_or_skip()
+    schema = f"atlas_eom_ctype_update_{uuid.uuid4().hex}"
+    conn = await asyncpg.connect(database_url)
+    try:
+        await _prepare_schema(conn, schema, apply_privilege_migration=False)
+        provider = DatabaseCRMProvider(pool=conn)
+        created = await mutate_eom_operator_contact(
+            provider,
+            EOMOperatorContactMutation.from_raw(
+                operation_key=f"ctype-seed-{uuid.uuid4().hex}",
+                actor_id=7,
+                actor_name="Mayra Canfield",
+                source_channel="time_tracker",
+                source_ref="customer:403",
+                contact_type="customer",
+                fields={"full_name": "Type Flip", "customer_type": "residential"},
+            ),
+        )
+        contact_id = created["contact_id"]
+        before = await conn.fetchval(
+            "SELECT customer_type_revision FROM contacts WHERE id = $1",
+            uuid.UUID(contact_id),
+        )
+
+        updated = await mutate_eom_operator_contact(
+            provider,
+            EOMOperatorContactMutation.from_raw(
+                operation_key=f"ctype-flip-{uuid.uuid4().hex}",
+                actor_id=7,
+                actor_name="Mayra Canfield",
+                source_channel="time_tracker",
+                source_ref="customer:403",
+                contact_id=contact_id,
+                contact_type="customer",
+                fields={"customer_type": "commercial"},
+            ),
+        )
+
+        assert updated["operation"] == "contact_updated"
+        contact = await conn.fetchrow(
+            "SELECT * FROM contacts WHERE id = $1", uuid.UUID(contact_id)
+        )
+        assert contact["customer_type"] == "commercial"
+        assert contact["customer_type_revision"] > before
+
+        event = await conn.fetchrow(
+            """
+            SELECT metadata FROM eom_lead_lifecycle_events
+            WHERE contact_id = $1 AND event_type = 'contact_updated'
+            ORDER BY created_at DESC LIMIT 1
+            """,
+            uuid.UUID(contact_id),
+        )
+        metadata = _metadata_dict(event["metadata"])
+        assert "customer_type" in metadata["changed_fields"]
+        assert metadata["previous_values"]["customer_type"] == "residential"
+    finally:
+        await conn.execute(f'DROP SCHEMA IF EXISTS "{schema}" CASCADE')
+        await conn.close()
+
+
+@pytest.mark.asyncio
+async def test_the_database_refuses_a_customer_type_outside_the_set():
+    """The constraint is the enforcement; the boundary is only the front door.
+
+    Application validation can be bypassed by a future writer. This asserts
+    Postgres itself rejects the value, which is why the CHECK exists.
+    """
+    database_url = _database_url_or_skip()
+    schema = f"atlas_eom_ctype_check_{uuid.uuid4().hex}"
+    conn = await asyncpg.connect(database_url)
+    try:
+        await _prepare_schema(conn, schema, apply_privilege_migration=False)
+        row = await conn.fetchrow(
+            """
+            INSERT INTO contacts (full_name, business_context_id)
+            VALUES ('Check Probe', 'effingham_maids') RETURNING id
+            """
+        )
+        for accepted in ("residential", "commercial", "unknown"):
+            await conn.execute(
+                "UPDATE contacts SET customer_type = $2 WHERE id = $1",
+                row["id"],
+                accepted,
+            )
+
+        with pytest.raises(asyncpg.exceptions.CheckViolationError):
+            await conn.execute(
+                "UPDATE contacts SET customer_type = 'bogus' WHERE id = $1", row["id"]
+            )
+    finally:
+        await conn.execute(f'DROP SCHEMA IF EXISTS "{schema}" CASCADE')
+        await conn.close()
+
+
+def test_the_boundary_refuses_a_bad_customer_type_before_the_database_sees_it():
+    """422 from the contract, not a 500 from the CHECK.
+
+    The constraint is the durable enforcement, but a value that only the
+    database rejects reaches the caller as a server error instead of a
+    validation error. Both layers must agree on the same set.
+    """
+
+    def _command(value):
+        return EOMOperatorContactMutation.from_raw(
+            operation_key=f"ctype-guard-{uuid.uuid4().hex}",
+            actor_id=7,
+            actor_name="Mayra Canfield",
+            source_channel="time_tracker",
+            source_ref="customer:404",
+            contact_type="customer",
+            fields={"full_name": "Guard Probe", "customer_type": value},
+        )
+
+    # The tracker stores these capitalised; refusing them would make the
+    # boundary reject the exact values the backfill reads.
+    assert _command("Residential").fields["customer_type"] == "residential"
+    assert _command("  COMMERCIAL  ").fields["customer_type"] == "commercial"
+    assert _command("unknown").fields["customer_type"] == "unknown"
+
+    for rejected in ("bogus", "", "   ", None, 3):
+        with pytest.raises(EOMOperatorContactMutationError) as caught:
+            _command(rejected)
+        assert caught.value.status_code == 422
+
+
+@pytest.mark.asyncio
+async def test_funnel_readiness_refuses_a_contacts_table_without_customer_type_or_revision():
+    """Migrations 366 and 367 are readiness preconditions, not nice-to-haves.
+
+    Startup catches a failed migration and continues into the readiness guard.
+    The provider's contact INSERT names customer_type explicitly and the
+    known-contacts read names customer_type_revision. Admitting the funnel
+    against a table missing either field would move failure from the gate --
+    where it is one controlled error -- to a later write or tracker refresh.
+    """
+    from atlas_brain.eom_api.funnel_store import require_eom_funnel_data_store
+
+    database_url = _database_url_or_skip()
+    schema = f"atlas_eom_ctype_readiness_{uuid.uuid4().hex}"
+    conn = await asyncpg.connect(database_url)
+    try:
+        # Privilege migration applied (the default), because that is the
+        # arrangement the readiness query accepts -- see
+        # test_privilege_migration_satisfies_the_enabled_full_app_startup_guard.
+        await _prepare_schema(conn, schema)
+
+        class _Pool:
+            is_initialized = True
+
+            async def fetchval(self, query: str) -> bool:
+                return bool(await conn.fetchval(query))
+
+        # Ready while the column is present...
+        await require_eom_funnel_data_store(
+            type("Config", (), {"api_enabled": True})(),
+            database_enabled=True,
+            get_db_pool_fn=lambda: _Pool(),
+        )
+
+        # ...and refused once either field is gone, which is the state a failed
+        # migration leaves.
+        await conn.execute("ALTER TABLE contacts DROP COLUMN customer_type")
+        with pytest.raises(RuntimeError, match="CRM lifecycle and handoff schema"):
+            await require_eom_funnel_data_store(
+                type("Config", (), {"api_enabled": True})(),
+                database_enabled=True,
+                get_db_pool_fn=lambda: _Pool(),
+            )
+
+        await conn.execute("ALTER TABLE contacts ADD COLUMN customer_type VARCHAR(16)")
+        await conn.execute("ALTER TABLE contacts DROP COLUMN customer_type_revision")
+        with pytest.raises(RuntimeError, match="CRM lifecycle and handoff schema"):
+            await require_eom_funnel_data_store(
+                type("Config", (), {"api_enabled": True})(),
+                database_enabled=True,
+                get_db_pool_fn=lambda: _Pool(),
+            )
+
+        # A present but incompatible value would satisfy a name-only guard, yet
+        # cannot support the BIGINT source-version contract. The type check is
+        # therefore a real fail-closed branch, not an incidental refinement.
+        await conn.execute(
+            "ALTER TABLE contacts ADD COLUMN customer_type_revision INTEGER"
+        )
+        with pytest.raises(RuntimeError, match="CRM lifecycle and handoff schema"):
+            await require_eom_funnel_data_store(
+                type("Config", (), {"api_enabled": True})(),
+                database_enabled=True,
+                get_db_pool_fn=lambda: _Pool(),
+            )
+    finally:
+        await conn.execute(f'DROP SCHEMA IF EXISTS "{schema}" CASCADE')
+        await conn.close()
+
+
+@pytest.mark.asyncio
+async def test_a_generic_contact_insert_still_works_without_migration_366():
+    """The shared insert helper must not regress callers that never asked.
+
+    `_insert_contact_row` is used by every contact writer -- the MCP
+    create_contact tool and inbound find_or_create_contact among them -- and
+    startup deliberately continues after a failed migration. Naming
+    customer_type unconditionally would turn a pending 366 into
+    UndefinedColumnError for those callers, a regression they did not sign up
+    for. Omitting the column when the caller did not supply it keeps them on
+    exactly the behaviour they had before this PR.
+    """
+    database_url = _database_url_or_skip()
+    schema = f"atlas_eom_ctype_pre366_{uuid.uuid4().hex}"
+    conn = await asyncpg.connect(database_url)
+    try:
+        await _prepare_schema(
+            conn,
+            schema,
+            apply_privilege_migration=False,
+            apply_customer_type_revision_migration=False,
+        )
+        # The state a pending or failed migration 366 leaves behind.
+        await conn.execute("ALTER TABLE contacts DROP COLUMN customer_type")
+        provider = DatabaseCRMProvider(pool=conn)
+
+        row = await provider._insert_contact_row(
+            conn,
+            {
+                "full_name": "Pre-366 Caller",
+                "business_context_id": "effingham_maids",
+                "contact_type": "customer",
+            },
+        )
+
+        assert row["full_name"] == "Pre-366 Caller"
+
+        # A caller that DOES specify the type still fails loudly, because its
+        # intent cannot be honoured against a table without the column.
+        with pytest.raises(asyncpg.exceptions.UndefinedColumnError):
+            await provider._insert_contact_row(
+                conn,
+                {
+                    "full_name": "Wants A Type",
+                    "business_context_id": "effingham_maids",
+                    "contact_type": "customer",
+                },
+                customer_type="commercial",
+            )
+    finally:
+        await conn.execute(f'DROP SCHEMA IF EXISTS "{schema}" CASCADE')
+        await conn.close()
+
+
+@pytest.mark.asyncio
+async def test_a_generic_create_cannot_set_customer_type():
+    """Only the operator boundary may classify an account.
+
+    customer_type drives billing shape. A generic writer dropping the key into
+    the insert dict would bypass _normalize_customer_type, the authenticated
+    funnel boundary, and the lifecycle event recording who changed it -- so the
+    field is a keyword the operator path passes, and its presence in `data` is
+    refused outright rather than ignored. Silently dropping it would be the
+    same class of silent loss this slice exists to remove.
+    """
+    database_url = _database_url_or_skip()
+    schema = f"atlas_eom_ctype_generic_{uuid.uuid4().hex}"
+    conn = await asyncpg.connect(database_url)
+    try:
+        await _prepare_schema(conn, schema, apply_privilege_migration=False)
+        provider = DatabaseCRMProvider(pool=conn)
+
+        # The private insert refuses...
+        with pytest.raises(ValueError, match="operator mutation"):
+            await provider._insert_contact_row(
+                conn,
+                {
+                    "full_name": "Sneaky Generic Writer",
+                    "business_context_id": "effingham_maids",
+                    "contact_type": "customer",
+                    "customer_type": "commercial",
+                },
+            )
+
+        # ...and so does the PUBLIC door, which is the one that matters:
+        # create_contact returns through a dedup/merge branch that never
+        # reaches the insert, so a contact matched by phone or email would
+        # otherwise report success while the classification was dropped.
+        await provider._insert_contact_row(
+            conn,
+            {
+                "full_name": "Already Here",
+                "phone": "2175550190",
+                "business_context_id": "effingham_maids",
+                "contact_type": "customer",
+            },
+        )
+        with pytest.raises(ValueError, match="operator mutation"):
+            await provider.create_contact(
+                {
+                    "full_name": "Already Here",
+                    "phone": "2175550190",
+                    "business_context_id": "effingham_maids",
+                    "contact_type": "customer",
+                    "customer_type": "commercial",
+                }
+            )
+        with pytest.raises(ValueError, match="operator mutation"):
+            await provider.find_or_create_contact(
+                "Already Here",
+                phone="2175550190",
+                customer_type="commercial",
+            )
+        assert await conn.fetchval(
+            "SELECT customer_type FROM contacts WHERE full_name = $1", "Already Here"
+        ) == "unknown", "the matched contact must not be classified"
+
+        # Nothing was written.
+        assert await conn.fetchval(
+            "SELECT COUNT(*) FROM contacts WHERE full_name = $1",
+            "Sneaky Generic Writer",
+        ) == 0
+
+        # The operator path still classifies, through its keyword.
+        row = await provider._insert_contact_row(
+            conn,
+            {
+                "full_name": "Operator Classified",
+                "business_context_id": "effingham_maids",
+                "contact_type": "customer",
+            },
+            customer_type="commercial",
+        )
+        assert row["customer_type"] == "commercial"
+    finally:
+        await conn.execute(f'DROP SCHEMA IF EXISTS "{schema}" CASCADE')
         await conn.close()

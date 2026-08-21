@@ -11,14 +11,18 @@ from decimal import Decimal, InvalidOperation
 from typing import Any, Iterable, Optional
 from uuid import UUID, uuid4
 
+from ..templates.email.payment_receipt import render_residential_payment_receipt
 from ..storage.database import DatabasePool, get_db_pool
 from ..storage.exceptions import DatabaseUnavailableError
 
 ACTIVE_PAYMENT_STATUSES = ("legacy", "received", "deposited", "cleared")
 OPEN_INVOICE_STATUSES = ("sent", "partial", "overdue")
 API_PAYMENT_METHODS = ("check", "ach", "square")
+EOM_CUSTOMER_TYPES = ("residential", "commercial", "unknown")
+RESIDENTIAL_CUSTOMER_TYPE = "residential"
 _CENT = Decimal("0.01")
 _MAX_DATABASE_MONEY = Decimal("9999999999.99")
+_LEDGER_ALLOCATION_HISTORY_LIMIT = 100
 _RECEIVABLES_REQUIRED_COLUMNS = {
     "customer_payments": (
         "id",
@@ -28,6 +32,8 @@ _RECEIVABLES_REQUIRED_COLUMNS = {
         "payment_method",
         "reference",
         "received_date",
+        "check_date",
+        "received_through",
         "status",
         "source",
         "idempotency_key",
@@ -220,6 +226,175 @@ _RECEIVABLES_REQUIRED_INDEXES = (
     ),
 )
 
+# Receipt delivery is a capability layered onto the existing ledger.  It is
+# deliberately NOT part of the legacy receivables readiness set: full Atlas
+# and MCP callers must remain able to use the established payment lifecycle
+# while an EOM-only outbox migration rolls out.  The receipt-aware full and
+# slim EOM routes require this additive set explicitly.
+_RECEIPT_DELIVERY_REQUIRED_COLUMNS = {
+    "payment_receipt_deliveries": (
+        "id",
+        "payment_id",
+        "contact_id",
+        "receipt_number",
+        "recipient_email",
+        "delivery_status",
+        "skip_reason",
+        "subject",
+        "body",
+        "created_at",
+        "updated_at",
+    ),
+}
+_RECEIPT_DELIVERY_REQUIRED_INDEXES = (
+    (
+        "payment_receipt_deliveries",
+        "payment_receipt_deliveries_pkey",
+        True,
+        ("id",),
+        None,
+        "p",
+    ),
+    (
+        "payment_receipt_deliveries",
+        "payment_receipt_deliveries_payment_id_key",
+        True,
+        ("payment_id",),
+        None,
+        "u",
+    ),
+    (
+        "payment_receipt_deliveries",
+        "payment_receipt_deliveries_receipt_number_key",
+        True,
+        ("receipt_number",),
+        None,
+        "u",
+    ),
+    (
+        "payment_receipt_deliveries",
+        "idx_payment_receipt_deliveries_contact_created",
+        False,
+        ("contact_id", "created_at"),
+        None,
+        None,
+    ),
+    (
+        "payment_receipt_deliveries",
+        "idx_payment_receipt_deliveries_status_created",
+        False,
+        ("delivery_status", "created_at"),
+        None,
+        None,
+    ),
+)
+
+# Migration 378 turns the non-sending receipt outbox into the durable EOM
+# dispatch/reconciliation capability.  Keep this closed additive contract
+# separate from the migration-369 outbox requirements above: the legacy ledger
+# readiness probe must remain usable during the staged EOM-only rollout, while
+# the receipt-aware routes must fail closed until the full dispatch schema is
+# present.
+_RECEIPT_DISPATCH_REQUIRED_COLUMNS = {
+    "payment_receipt_deliveries": (
+        "rfc_message_id",
+        "gmail_message_id",
+        "gmail_thread_id",
+        "sent_at",
+        "last_attempt_by",
+        "last_attempt_at",
+        "last_failure_code",
+        "last_failure_at",
+        "recovery_required_at",
+    ),
+    "payment_receipt_delivery_operations": (
+        "id",
+        "receipt_delivery_id",
+        "source",
+        "idempotency_key",
+        "request_fingerprint",
+        "state",
+        "outcome",
+        "requested_by",
+        "requested_at",
+        "attempt_started_at",
+        "completed_at",
+        "recovery_required_at",
+        "result_delivery_status",
+        "result_sent_at",
+        "created_at",
+    ),
+    "payment_receipt_delivery_reconciliation_events": (
+        "id",
+        "receipt_delivery_id",
+        "operation_id",
+        "actor",
+        "outcome",
+        "reconciled_at",
+        "created_at",
+    ),
+}
+_RECEIPT_DISPATCH_REQUIRED_INDEXES = (
+    (
+        "payment_receipt_deliveries",
+        "idx_payment_receipt_deliveries_rfc_message_id",
+        True,
+        ("rfc_message_id",),
+        None,
+        None,
+    ),
+    (
+        "payment_receipt_delivery_operations",
+        "payment_receipt_delivery_operations_pkey",
+        True,
+        ("id",),
+        None,
+        "p",
+    ),
+    (
+        "payment_receipt_delivery_operations",
+        "payment_receipt_delivery_operations_source_key",
+        True,
+        ("source", "idempotency_key"),
+        None,
+        "u",
+    ),
+    (
+        "payment_receipt_delivery_operations",
+        "idx_payment_receipt_delivery_operations_record",
+        False,
+        ("receipt_delivery_id", "requested_at"),
+        None,
+        None,
+    ),
+    (
+        "payment_receipt_delivery_operations",
+        "idx_payment_receipt_delivery_operations_one_active",
+        True,
+        ("receipt_delivery_id",),
+        "((state)::text = ANY ((ARRAY['prepared'::character varying, "
+        "'attempting'::character varying, "
+        "'recovery_required'::character varying])::text[]))",
+        None,
+    ),
+    (
+        "payment_receipt_delivery_reconciliation_events",
+        "payment_receipt_delivery_reconciliation_events_pkey",
+        True,
+        ("id",),
+        None,
+        "p",
+    ),
+    (
+        "payment_receipt_delivery_reconciliation_events",
+        "idx_payment_receipt_delivery_reconciliation_events_record",
+        False,
+        ("receipt_delivery_id", "reconciled_at", "id"),
+        None,
+        None,
+    ),
+)
+
 
 @dataclass(frozen=True)
 class PaymentCreationOutcome:
@@ -227,6 +402,16 @@ class PaymentCreationOutcome:
 
     payment: dict[str, Any]
     replayed: bool
+
+
+@dataclass(frozen=True)
+class PaymentReceiptRecipient:
+    """Canonical customer snapshot used only by receipt-aware EOM routes."""
+
+    contact_id: UUID
+    customer_name: str
+    customer_type: str
+    recipient_email: Optional[str]
 
 
 class ReceivablesError(Exception):
@@ -247,8 +432,18 @@ class ReceivablesConflictError(ReceivablesError):
     code = "conflict"
 
 
-def money(value: Any) -> Decimal:
-    """Normalize a value to finite, two-decimal currency."""
+class ReceivablesSchemaUnavailableError(ReceivablesError):
+    code = "schema_unavailable"
+
+
+class ReceivablesReceiptContextRequiredError(ReceivablesError):
+    """An EOM route could not prove a new payment's canonical customer."""
+
+    code = "canonical_customer_unavailable"
+
+
+def _currency(value: Any, *, max_abs: Optional[Decimal]) -> Decimal:
+    """Normalize finite, cent-precise currency with an optional magnitude cap."""
     try:
         raw = Decimal(str(value))
     except (InvalidOperation, TypeError, ValueError) as exc:
@@ -261,14 +456,34 @@ def money(value: Any) -> Decimal:
         raise ReceivablesValidationError("Amount must be valid currency") from exc
     if raw != normalized:
         raise ReceivablesValidationError("Amount must use cent precision")
-    if abs(normalized) > _MAX_DATABASE_MONEY:
+    if max_abs is not None and abs(normalized) > max_abs:
         raise ReceivablesValidationError("Amount exceeds the supported currency range")
     return normalized
+
+
+def money(value: Any) -> Decimal:
+    """Normalize a persisted money value to finite, two-decimal currency."""
+    return _currency(value, max_abs=_MAX_DATABASE_MONEY)
 
 
 def cents(value: Any) -> int:
     """Convert a database currency value to integer cents."""
     return int(money(value) * 100)
+
+
+def aggregate_cents(value: Any) -> int:
+    """Convert a finite, cent-precise aggregate without a per-row storage cap."""
+    return int(_currency(value, max_abs=None) * 100)
+
+
+def _literal_ilike_pattern(value: str) -> str:
+    """Build a literal substring pattern for ledger ILIKE predicates."""
+    escaped = (
+        value.replace("\\", "\\\\")
+        .replace("%", "\\%")
+        .replace("_", "\\_")
+    )
+    return f"%{escaped}%"
 
 
 def _jsonable(value: Any) -> Any:
@@ -325,15 +540,99 @@ class ReceivablesService:
             raise DatabaseUnavailableError("receivables ledger")
         return pool
 
-    async def is_ready(self) -> bool:
-        """Return whether every required ledger column and index is usable."""
+    async def is_ready(self, conn: Any | None = None) -> bool:
+        """Return whether the established receivables ledger is usable.
+
+        This remains the compatibility readiness probe for full Atlas and MCP
+        callers.  Receipt delivery is an EOM-only additive capability and is
+        checked by :meth:`is_receipt_delivery_ready` instead.
+        """
+        return await self._schema_objects_ready(
+            conn,
+            required_columns=_RECEIVABLES_REQUIRED_COLUMNS,
+            required_indexes=_RECEIVABLES_REQUIRED_INDEXES,
+        )
+
+    async def is_receipt_delivery_ready(self, conn: Any | None = None) -> bool:
+        """Return whether the ledger and full residential dispatch schema are usable."""
+        return (
+            await self.is_ready(conn)
+            and await self._schema_objects_ready(
+                conn,
+                required_columns=_RECEIPT_DELIVERY_REQUIRED_COLUMNS,
+                required_indexes=_RECEIPT_DELIVERY_REQUIRED_INDEXES,
+            )
+            and await self._schema_objects_ready(
+                conn,
+                required_columns=_RECEIPT_DISPATCH_REQUIRED_COLUMNS,
+                required_indexes=_RECEIPT_DISPATCH_REQUIRED_INDEXES,
+            )
+            and await self._receipt_delivery_operation_results_ready(conn)
+        )
+
+    async def _receipt_delivery_operation_results_ready(
+        self, conn: Any | None = None
+    ) -> bool:
+        """Require every persisted operation to have a replayable result shape.
+
+        The result-shape constraint is intentionally ``NOT VALID`` so a
+        forward-only migration can install it on an existing ledger.  Catalog
+        presence alone therefore cannot prove that legacy completed operations
+        can replay their immutable outcome.  Keep dispatch readiness closed
+        until every existing row satisfies the same shape.
+        """
+        executor = conn if conn is not None else self.pool
+        return bool(
+            await executor.fetchval(
+                """
+                SELECT NOT EXISTS (
+                    SELECT 1
+                    FROM payment_receipt_delivery_operations
+                    WHERE (
+                        (
+                            state <> 'completed'
+                            AND result_delivery_status IS NULL
+                            AND result_sent_at IS NULL
+                        )
+                        OR
+                        (
+                            state = 'completed'
+                            AND (
+                                (
+                                    outcome IN ('sent', 'already_sent')
+                                    AND result_delivery_status = 'sent'
+                                    AND result_sent_at IS NOT NULL
+                                )
+                                OR
+                                (
+                                    outcome = 'failed'
+                                    AND result_delivery_status = 'failed'
+                                    AND result_sent_at IS NULL
+                                )
+                            )
+                        )
+                    ) IS NOT TRUE
+                )
+                """
+            )
+        )
+
+    async def _schema_objects_ready(
+        self,
+        conn: Any | None = None,
+        *,
+        required_columns: dict[str, tuple[str, ...]],
+        required_indexes: tuple[tuple[Any, ...], ...],
+    ) -> bool:
+        """Probe one closed schema contract without broadening another one."""
+        executor = conn if conn is not None else self.pool
         required = [
             (table_name, column_name)
-            for table_name, columns in _RECEIVABLES_REQUIRED_COLUMNS.items()
+            for table_name, columns in required_columns.items()
             for column_name in columns
         ]
         columns_ready = bool(
-            await self.pool.fetchval(
+            await executor.fetchval(
                 """
                 SELECT NOT EXISTS (
                     SELECT 1
@@ -355,7 +654,7 @@ class ReceivablesService:
         if not columns_ready:
             return False
 
-        index_rows = await self.pool.fetch(
+        index_rows = await executor.fetch(
             """
             SELECT
                 table_class.relname AS table_name,
@@ -390,7 +689,7 @@ class ReceivablesService:
             """,
             [
                 index_name
-                for _table_name, index_name, *_rest in _RECEIVABLES_REQUIRED_INDEXES
+                for _table_name, index_name, *_rest in required_indexes
             ],
         )
         actual_indexes = {
@@ -423,7 +722,7 @@ class ReceivablesService:
                 key_columns,
                 predicate,
                 constraint_type,
-            ) in _RECEIVABLES_REQUIRED_INDEXES
+            ) in required_indexes
         )
 
     async def list_open_invoices(
@@ -493,6 +792,8 @@ class ReceivablesService:
         total_amount: Decimal,
         payment_method: str,
         received_date: date,
+        check_date: Optional[date] = None,
+        received_through: Optional[str] = None,
         allocations: list[dict[str, Any]],
         idempotency_key: str,
         reference: Optional[str] = None,
@@ -501,6 +802,10 @@ class ReceivablesService:
         source: str = "eom_admin",
         metadata: Optional[dict[str, Any]] = None,
         enforce_api_methods: bool = True,
+        allow_unapplied: bool = False,
+        unapplied_contact_context_id: Optional[str] = None,
+        receipt_recipient: Optional[PaymentReceiptRecipient] = None,
+        require_receipt_recipient: bool = False,
     ) -> dict[str, Any]:
         """Create one receipt and all of its allocations atomically."""
         outcome = await self.create_payment_with_outcome(
@@ -509,6 +814,8 @@ class ReceivablesService:
             total_amount=total_amount,
             payment_method=payment_method,
             received_date=received_date,
+            check_date=check_date,
+            received_through=received_through,
             allocations=allocations,
             idempotency_key=idempotency_key,
             reference=reference,
@@ -517,6 +824,10 @@ class ReceivablesService:
             source=source,
             metadata=metadata,
             enforce_api_methods=enforce_api_methods,
+            allow_unapplied=allow_unapplied,
+            unapplied_contact_context_id=unapplied_contact_context_id,
+            receipt_recipient=receipt_recipient,
+            require_receipt_recipient=require_receipt_recipient,
         )
         return outcome.payment
 
@@ -528,6 +839,8 @@ class ReceivablesService:
         total_amount: Decimal,
         payment_method: str,
         received_date: date,
+        check_date: Optional[date] = None,
+        received_through: Optional[str] = None,
         allocations: list[dict[str, Any]],
         idempotency_key: str,
         reference: Optional[str] = None,
@@ -536,6 +849,10 @@ class ReceivablesService:
         source: str = "eom_admin",
         metadata: Optional[dict[str, Any]] = None,
         enforce_api_methods: bool = True,
+        allow_unapplied: bool = False,
+        unapplied_contact_context_id: Optional[str] = None,
+        receipt_recipient: Optional[PaymentReceiptRecipient] = None,
+        require_receipt_recipient: bool = False,
     ) -> PaymentCreationOutcome:
         """Create a receipt and report whether this call replayed its first write."""
         total = money(total_amount)
@@ -556,14 +873,41 @@ class ReceivablesService:
             raise ReceivablesValidationError(
                 "Idempotency key must contain 1 to 128 characters"
             )
+        if allow_unapplied and not unapplied_contact_context_id:
+            raise ReceivablesValidationError(
+                "Unapplied payments require a canonical customer context"
+            )
+        self._assert_receipt_recipient_invariant(
+            contact_id=contact_id,
+            receipt_recipient=receipt_recipient,
+        )
+        is_residential_receipt = bool(
+            receipt_recipient is not None
+            and receipt_recipient.customer_type == RESIDENTIAL_CUSTOMER_TYPE
+        )
 
-        normalized = self._normalize_allocations(allocations)
+        normalized = self._normalize_allocations(
+            allocations, allow_empty=allow_unapplied
+        )
         allocated_total = sum((item["amount"] for item in normalized), Decimal("0"))
         if allocated_total > total:
             raise ReceivablesValidationError(
                 "Allocated amount cannot exceed the payment total"
             )
         initial_status = "received" if method == "check" else "cleared"
+        raw_received_through = received_through or ""
+        if len(raw_received_through) > 128:
+            raise ReceivablesValidationError(
+                "Received through must contain at most 128 characters"
+            )
+        normalized_received_through = raw_received_through.strip() or None
+        has_check_metadata = (
+            check_date is not None or normalized_received_through is not None
+        )
+        if has_check_metadata and method != "check":
+            raise ReceivablesValidationError(
+                "Check metadata requires a check payment method"
+            )
         payload = {
             "contact_id": contact_id,
             "payer_name": payer,
@@ -574,6 +918,17 @@ class ReceivablesService:
             "reference": (reference or "").strip() or None,
             "notes": (notes or "").strip() or None,
         }
+        if has_check_metadata:
+            if not await self.is_ready():
+                raise ReceivablesSchemaUnavailableError(
+                    "Receivables schema unavailable for check metadata"
+                )
+            payload.update(
+                {
+                    "check_date": check_date,
+                    "received_through": normalized_received_through,
+                }
+            )
         fingerprint = request_fingerprint(payload)
 
         async with self.pool.transaction() as conn:
@@ -594,8 +949,34 @@ class ReceivablesService:
             if existing:
                 self._assert_idempotent(existing, fingerprint)
                 return PaymentCreationOutcome(
-                    payment=await self._payment_view(conn, existing["id"]),
+                    payment=await self._payment_view(
+                        conn,
+                        existing["id"],
+                        include_receipt_delivery=(
+                            await self._has_replay_receipt_delivery(
+                                conn,
+                                payment_id=existing["id"],
+                                require_receipt_recipient=require_receipt_recipient,
+                            )
+                        ),
+                    ),
                     replayed=True,
+                )
+            if require_receipt_recipient and receipt_recipient is None:
+                # This check follows the first idempotency lookup on purpose:
+                # an unchanged retry must recover its original payment even if
+                # the canonical CRM contact has been edited or is unavailable
+                # after the original commit.  A new payment still fails before
+                # any financial row is inserted when an EOM route lacks an
+                # authoritative customer snapshot.
+                raise ReceivablesReceiptContextRequiredError(
+                    "Canonical customer data is required for a new EOM payment"
+                )
+            if is_residential_receipt and not await self.is_receipt_delivery_ready(
+                conn
+            ):
+                raise ReceivablesSchemaUnavailableError(
+                    "Receivables schema unavailable for payment receipt delivery"
                 )
             await self._assert_event_key_available(
                 conn, key=key, fingerprint=fingerprint
@@ -605,6 +986,7 @@ class ReceivablesService:
                 conn,
                 contact_id=contact_id,
                 allocations=normalized,
+                unapplied_contact_context_id=unapplied_contact_context_id,
             )
             # A same-key create can arrive while the first transaction is still
             # holding these invoice locks. Reconcile again after the wait, before
@@ -623,7 +1005,17 @@ class ReceivablesService:
             if existing:
                 self._assert_idempotent(existing, fingerprint)
                 return PaymentCreationOutcome(
-                    payment=await self._payment_view(conn, existing["id"]),
+                    payment=await self._payment_view(
+                        conn,
+                        existing["id"],
+                        include_receipt_delivery=(
+                            await self._has_replay_receipt_delivery(
+                                conn,
+                                payment_id=existing["id"],
+                                require_receipt_recipient=require_receipt_recipient,
+                            )
+                        ),
+                    ),
                     replayed=True,
                 )
 
@@ -636,41 +1028,81 @@ class ReceivablesService:
                     )
 
             payment_id = uuid4()
-            payment_row = await conn.fetchrow(
-                """
-                INSERT INTO customer_payments (
-                    id, contact_id, payer_name, total_amount, payment_method,
-                    reference, received_date, status, source, idempotency_key,
-                    request_fingerprint, notes, recorded_by, cleared_at,
-                    metadata, created_at, updated_at
+            if has_check_metadata:
+                payment_row = await conn.fetchrow(
+                    """
+                    INSERT INTO customer_payments (
+                        id, contact_id, payer_name, total_amount, payment_method,
+                        reference, received_date, check_date, received_through,
+                        status, source, idempotency_key, request_fingerprint,
+                        notes, recorded_by, cleared_at, metadata, created_at,
+                        updated_at
+                    )
+                    VALUES (
+                        $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12,
+                        $13, $14, $15, CASE WHEN $10::varchar = 'cleared'
+                            THEN $16::timestamptz ELSE NULL END,
+                        $17::jsonb, $16, $16
+                    )
+                    ON CONFLICT (source, idempotency_key)
+                        WHERE idempotency_key IS NOT NULL
+                    DO NOTHING
+                    RETURNING id
+                    """,
+                    payment_id,
+                    contact_id,
+                    payer,
+                    total,
+                    method,
+                    payload["reference"],
+                    received_date,
+                    payload["check_date"],
+                    payload["received_through"],
+                    initial_status,
+                    source,
+                    key,
+                    fingerprint,
+                    payload["notes"],
+                    recorded_by,
+                    datetime.now(timezone.utc),
+                    json.dumps(metadata or {}),
                 )
-                VALUES (
-                    $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12,
-                    $13, CASE WHEN $8::varchar = 'cleared'
-                        THEN $14::timestamptz ELSE NULL END,
-                    $15::jsonb, $14, $14
+            else:
+                payment_row = await conn.fetchrow(
+                    """
+                    INSERT INTO customer_payments (
+                        id, contact_id, payer_name, total_amount, payment_method,
+                        reference, received_date, status, source, idempotency_key,
+                        request_fingerprint, notes, recorded_by, cleared_at,
+                        metadata, created_at, updated_at
+                    )
+                    VALUES (
+                        $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12,
+                        $13, CASE WHEN $8::varchar = 'cleared'
+                            THEN $14::timestamptz ELSE NULL END,
+                        $15::jsonb, $14, $14
+                    )
+                    ON CONFLICT (source, idempotency_key)
+                        WHERE idempotency_key IS NOT NULL
+                    DO NOTHING
+                    RETURNING id
+                    """,
+                    payment_id,
+                    contact_id,
+                    payer,
+                    total,
+                    method,
+                    payload["reference"],
+                    received_date,
+                    initial_status,
+                    source,
+                    key,
+                    fingerprint,
+                    payload["notes"],
+                    recorded_by,
+                    datetime.now(timezone.utc),
+                    json.dumps(metadata or {}),
                 )
-                ON CONFLICT (source, idempotency_key)
-                    WHERE idempotency_key IS NOT NULL
-                DO NOTHING
-                RETURNING id
-                """,
-                payment_id,
-                contact_id,
-                payer,
-                total,
-                method,
-                payload["reference"],
-                received_date,
-                initial_status,
-                source,
-                key,
-                fingerprint,
-                payload["notes"],
-                recorded_by,
-                datetime.now(timezone.utc),
-                json.dumps(metadata or {}),
-            )
             if not payment_row:
                 existing = await conn.fetchrow(
                     """
@@ -686,11 +1118,36 @@ class ReceivablesService:
                     )
                 self._assert_idempotent(existing, fingerprint)
                 return PaymentCreationOutcome(
-                    payment=await self._payment_view(conn, existing["id"]),
+                    payment=await self._payment_view(
+                        conn,
+                        existing["id"],
+                        include_receipt_delivery=(
+                            await self._has_replay_receipt_delivery(
+                                conn,
+                                payment_id=existing["id"],
+                                require_receipt_recipient=require_receipt_recipient,
+                            )
+                        ),
+                    ),
                     replayed=True,
                 )
 
             now = datetime.now(timezone.utc)
+            if (
+                receipt_recipient is not None
+                and receipt_recipient.customer_type == RESIDENTIAL_CUSTOMER_TYPE
+            ):
+                await self._enqueue_residential_payment_receipt(
+                    conn,
+                    payment_id=payment_id,
+                    receipt_recipient=receipt_recipient,
+                    payer_name=payer,
+                    total_amount=total,
+                    payment_method=method,
+                    reference=payload["reference"],
+                    received_date=received_date,
+                    created_at=now,
+                )
             for allocation in normalized:
                 await conn.execute(
                     """
@@ -729,7 +1186,11 @@ class ReceivablesService:
                 conn, [item["invoice_id"] for item in normalized]
             )
             return PaymentCreationOutcome(
-                payment=await self._payment_view(conn, payment_id),
+                payment=await self._payment_view(
+                    conn,
+                    payment_id,
+                    include_receipt_delivery=is_residential_receipt,
+                ),
                 replayed=False,
             )
 
@@ -767,26 +1228,241 @@ class ReceivablesService:
         )
         if not rows:
             return []
-        payment_ids = [row["id"] for row in rows]
-        allocation_rows = await self.pool.fetch(
-            """
-            SELECT ip.payment_id, ip.id, ip.invoice_id, i.invoice_number,
-                   ip.amount, ip.payment_date, ip.payment_method, ip.reference,
-                   ip.notes, ip.recorded_by, ip.created_at, ip.metadata,
-                   ip.reversed_at, ip.reversal_reason
-            FROM invoice_payments ip
-            JOIN invoices i ON i.id = ip.invoice_id
-            WHERE ip.payment_id = ANY($1::uuid[])
-            ORDER BY i.due_date, i.invoice_number, ip.created_at
-            """,
-            payment_ids,
+        return await self._payment_views_for_rows(self.pool, rows)
+
+    async def list_customer_ledger(
+        self,
+        *,
+        contact_id: UUID,
+        payment_status: Optional[str] = None,
+        payment_method: Optional[str] = None,
+        search: Optional[str] = None,
+        from_date: Optional[date] = None,
+        to_date: Optional[date] = None,
+        limit: int = 100,
+        offset: int = 0,
+    ) -> dict[str, Any]:
+        """Return one bounded, receipt-aware ledger page for a customer.
+
+        Entries are a current financial snapshot, not a reconstructed historical
+        balance.  Invoices do not yet have an immutable lifecycle-event stream,
+        so the response names current invoice and unapplied-payment balances
+        explicitly instead of inferring a running balance from mutable rows.
+        """
+        if from_date is not None and to_date is not None and from_date > to_date:
+            raise ReceivablesValidationError(
+                "Ledger start date cannot be after end date"
+            )
+
+        normalized_search = (search or "").strip() or None
+        if payment_status is not None and not payment_status.strip():
+            raise ReceivablesValidationError("Payment status cannot be blank")
+        if payment_method is not None and not payment_method.strip():
+            raise ReceivablesValidationError("Payment method cannot be blank")
+        normalized_status = payment_status.strip() if payment_status is not None else None
+        normalized_method = payment_method.strip() if payment_method is not None else None
+        page_size = max(1, min(limit, 200))
+        page_offset = max(0, offset)
+        search_pattern = (
+            _literal_ilike_pattern(normalized_search) if normalized_search else None
         )
-        grouped: dict[str, list[Any]] = {str(item): [] for item in payment_ids}
-        for allocation in allocation_rows:
-            grouped[str(allocation["payment_id"])].append(allocation)
-        return [
-            self._compose_payment(row, grouped.get(str(row["id"]), [])) for row in rows
-        ]
+
+        async with self.pool.transaction() as conn:
+            await conn.execute(
+                "SET TRANSACTION ISOLATION LEVEL REPEATABLE READ, READ ONLY"
+            )
+            if not await self.is_receipt_delivery_ready(conn):
+                raise ReceivablesSchemaUnavailableError(
+                    "Receivables schema unavailable for customer ledger"
+                )
+
+            entry_rows = await conn.fetch(
+                """
+                WITH ledger_entries AS (
+                    SELECT 'invoice'::text AS entry_type,
+                           i.id AS entry_id,
+                           i.created_at,
+                           i.issue_date AS occurred_date
+                    FROM invoices i
+                    WHERE i.contact_id = $1
+                      AND ($2::date IS NULL OR i.issue_date >= $2)
+                      AND ($3::date IS NULL OR i.issue_date <= $3)
+                      AND ($5::varchar IS NULL AND $6::varchar IS NULL)
+                      AND (
+                          $4::text IS NULL
+                          OR i.invoice_number ILIKE $4 ESCAPE E'\\\\'
+                          OR i.customer_name ILIKE $4 ESCAPE E'\\\\'
+                      )
+
+                    UNION ALL
+
+                    SELECT 'payment'::text AS entry_type,
+                           cp.id AS entry_id,
+                           cp.created_at,
+                           cp.received_date AS occurred_date
+                    FROM customer_payments cp
+                    WHERE cp.contact_id = $1
+                      AND ($2::date IS NULL OR cp.received_date >= $2)
+                      AND ($3::date IS NULL OR cp.received_date <= $3)
+                      AND ($5::varchar IS NULL OR cp.status = $5)
+                      AND ($6::varchar IS NULL OR cp.payment_method = $6)
+                      AND (
+                          $4::text IS NULL
+                          OR cp.payer_name ILIKE $4 ESCAPE E'\\\\'
+                          OR cp.reference ILIKE $4 ESCAPE E'\\\\'
+                          OR EXISTS (
+                              SELECT 1
+                              FROM payment_receipt_deliveries prd
+                              WHERE prd.payment_id = cp.id
+                                AND prd.receipt_number ILIKE $4 ESCAPE E'\\\\'
+                          )
+                          OR EXISTS (
+                              SELECT 1
+                              FROM invoice_payments ip
+                              JOIN invoices i ON i.id = ip.invoice_id
+                              WHERE ip.payment_id = cp.id
+                                AND (
+                                    i.invoice_number ILIKE $4 ESCAPE E'\\\\'
+                                    OR i.customer_name ILIKE $4 ESCAPE E'\\\\'
+                                )
+                          )
+                      )
+                )
+                SELECT entry_type, entry_id, created_at, occurred_date
+                FROM ledger_entries
+                ORDER BY occurred_date DESC NULLS LAST,
+                         created_at DESC,
+                         entry_type DESC,
+                         entry_id DESC
+                LIMIT $7 OFFSET $8
+                """,
+                contact_id,
+                from_date,
+                to_date,
+                search_pattern,
+                normalized_status,
+                normalized_method,
+                page_size + 1,
+                page_offset,
+            )
+            page_rows = entry_rows[:page_size]
+            payment_ids = [
+                row["entry_id"] for row in page_rows if row["entry_type"] == "payment"
+            ]
+            invoice_ids = [
+                row["entry_id"] for row in page_rows if row["entry_type"] == "invoice"
+            ]
+            payment_rows = (
+                await conn.fetch(
+                    """
+                SELECT cp.*, pdi.batch_id
+                FROM customer_payments cp
+                LEFT JOIN payment_deposit_items pdi ON pdi.payment_id = cp.id
+                WHERE cp.id = ANY($1::uuid[])
+                """,
+                    payment_ids,
+                )
+                if payment_ids
+                else []
+            )
+            payment_views = {
+                view["id"]: view
+                for view in await self._payment_views_for_rows(
+                    conn,
+                    payment_rows,
+                    include_receipt_delivery=True,
+                    allocation_history_limit=_LEDGER_ALLOCATION_HISTORY_LIMIT,
+                )
+            }
+            invoice_rows = (
+                await conn.fetch(
+                    """
+                SELECT id, invoice_number, contact_id, customer_name, issue_date,
+                       due_date, status, total_amount, amount_paid, amount_due,
+                       sent_at, paid_at, voided_at, void_reason, source, source_ref,
+                       created_at, updated_at
+                FROM invoices
+                WHERE id = ANY($1::uuid[])
+                """,
+                    invoice_ids,
+                )
+                if invoice_ids
+                else []
+            )
+            invoice_views = {
+                view["id"]: view for view in map(self._invoice_view, invoice_rows)
+            }
+            balance_row = await conn.fetchrow(
+                """
+                WITH customer_payments_in_scope AS (
+                    SELECT cp.id, cp.total_amount, cp.status
+                    FROM customer_payments cp
+                    WHERE cp.contact_id = $1
+                ),
+                applied_by_payment AS (
+                    SELECT ip.payment_id, COALESCE(SUM(ip.amount), 0) AS allocated_amount
+                    FROM invoice_payments ip
+                    JOIN customer_payments_in_scope cp ON cp.id = ip.payment_id
+                    WHERE ip.reversed_at IS NULL
+                    GROUP BY ip.payment_id
+                ),
+                invoice_balance AS (
+                    SELECT COALESCE(SUM(i.amount_due), 0) AS open_invoice_balance
+                    FROM invoices i
+                    WHERE i.contact_id = $1
+                      AND i.status NOT IN ('draft', 'void')
+                ),
+                unapplied_balance AS (
+                    SELECT COALESCE(
+                        SUM(cp.total_amount - COALESCE(abp.allocated_amount, 0)),
+                        0
+                    ) AS unapplied_payment_balance
+                    FROM customer_payments_in_scope cp
+                    LEFT JOIN applied_by_payment abp ON abp.payment_id = cp.id
+                    WHERE cp.status = ANY($2::varchar[])
+                )
+                SELECT invoice_balance.open_invoice_balance,
+                       unapplied_balance.unapplied_payment_balance
+                FROM invoice_balance
+                CROSS JOIN unapplied_balance
+                """,
+                contact_id,
+                list(ACTIVE_PAYMENT_STATUSES),
+            )
+
+        entries: list[dict[str, Any]] = []
+        for row in page_rows:
+            entry_id = str(row["entry_id"])
+            entry_type = row["entry_type"]
+            entries.append(
+                {
+                    "entry_type": entry_type,
+                    "entry_id": entry_id,
+                    "created_at": row["created_at"],
+                    "occurred_date": row["occurred_date"],
+                    entry_type: (
+                        payment_views[entry_id]
+                        if entry_type == "payment"
+                        else invoice_views[entry_id]
+                    ),
+                }
+            )
+
+        return {
+            "contact_id": str(contact_id),
+            "entries": entries,
+            "next_offset": (
+                page_offset + page_size if len(entry_rows) > page_size else None
+            ),
+            "balances": {
+                "open_invoice_balance_cents": aggregate_cents(
+                    balance_row["open_invoice_balance"]
+                ),
+                "unapplied_payment_balance_cents": aggregate_cents(
+                    balance_row["unapplied_payment_balance"]
+                ),
+            },
+        }
 
     async def adjust_allocations(
         self,
@@ -1300,10 +1976,94 @@ class ReceivablesService:
             await self._recalculate_invoices(conn, [invoice_id])
 
     @staticmethod
+    def _assert_receipt_recipient_invariant(
+        *,
+        contact_id: Optional[UUID],
+        receipt_recipient: Optional[PaymentReceiptRecipient],
+    ) -> None:
+        """Reject malformed internal receipt context before a new write.
+
+        The public HTTP body never carries these fields: EOM routes resolve
+        them from their canonical CRM provider.  This defensive check keeps a
+        future direct caller from attaching one customer's receipt metadata to
+        another customer's payment.
+        """
+        if receipt_recipient is None:
+            return
+        if not isinstance(receipt_recipient, PaymentReceiptRecipient):
+            raise ReceivablesValidationError("Receipt customer context is invalid")
+        if contact_id is None or receipt_recipient.contact_id != contact_id:
+            raise ReceivablesValidationError(
+                "Receipt customer context must match the payment customer"
+            )
+        if receipt_recipient.customer_type not in EOM_CUSTOMER_TYPES:
+            raise ReceivablesValidationError("Receipt customer type is invalid")
+        if not receipt_recipient.customer_name.strip():
+            raise ReceivablesValidationError("Receipt customer name is required")
+        if receipt_recipient.recipient_email is not None:
+            from .eom_crm_mutations import normalize_contact_email
+
+            if (
+                normalize_contact_email(receipt_recipient.recipient_email)
+                != receipt_recipient.recipient_email
+            ):
+                raise ReceivablesValidationError("Receipt email is invalid")
+
+    @staticmethod
+    async def _enqueue_residential_payment_receipt(
+        conn: Any,
+        *,
+        payment_id: UUID,
+        receipt_recipient: PaymentReceiptRecipient,
+        payer_name: str,
+        total_amount: Decimal,
+        payment_method: str,
+        reference: Optional[str],
+        received_date: date,
+        created_at: datetime,
+    ) -> None:
+        """Persist one non-sending receipt record in the payment transaction."""
+        receipt_number, subject, body = render_residential_payment_receipt(
+            payment_id=payment_id,
+            customer_name=receipt_recipient.customer_name.strip(),
+            payer_name=payer_name,
+            total_amount=total_amount,
+            payment_method=payment_method,
+            reference=reference,
+            received_date=received_date,
+        )
+        recipient_email = receipt_recipient.recipient_email
+        status = "pending" if recipient_email else "skipped"
+        skip_reason = None if recipient_email else "no_email"
+        await conn.execute(
+            """
+            INSERT INTO payment_receipt_deliveries (
+                id, payment_id, contact_id, receipt_number, recipient_email,
+                delivery_status, skip_reason, subject, body, created_at, updated_at
+            )
+            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $10)
+            """,
+            uuid4(),
+            payment_id,
+            receipt_recipient.contact_id,
+            receipt_number,
+            recipient_email,
+            status,
+            skip_reason,
+            subject,
+            body,
+            created_at,
+        )
+
+    @staticmethod
     def _normalize_allocations(
         allocations: list[dict[str, Any]],
+        *,
+        allow_empty: bool = False,
     ) -> list[dict[str, Any]]:
         if not allocations:
+            if allow_empty and allocations == []:
+                return []
             raise ReceivablesValidationError(
                 "At least one invoice allocation is required"
             )
@@ -1335,9 +2095,31 @@ class ReceivablesService:
         allocations: list[dict[str, Any]],
         current_allocations: Optional[dict[str, Decimal]] = None,
         additional_invoice_ids: Optional[Iterable[UUID]] = None,
+        unapplied_contact_context_id: Optional[str] = None,
     ) -> list[Any]:
         allocated_ids = {item["invoice_id"] for item in allocations}
         invoice_ids = sorted(allocated_ids.union(additional_invoice_ids or []), key=str)
+        if not invoice_ids:
+            if contact_id is None:
+                raise ReceivablesValidationError(
+                    "A customer is required when a payment has no invoice allocations"
+                )
+            contact = await conn.fetchrow(
+                """
+                SELECT id
+                FROM contacts
+                WHERE id = $1
+                  AND business_context_id = $2
+                  AND contact_type = 'customer'
+                  AND status = 'active'
+                FOR SHARE
+                """,
+                contact_id,
+                unapplied_contact_context_id,
+            )
+            if not contact:
+                raise ReceivablesNotFoundError("Customer not found")
+            return []
         rows = await conn.fetch(
             """
             SELECT id, invoice_number, contact_id, status, amount_due
@@ -1515,7 +2297,13 @@ class ReceivablesService:
             datetime.now(timezone.utc),
         )
 
-    async def _payment_view(self, conn: Any, payment_id: UUID) -> dict[str, Any]:
+    async def _payment_view(
+        self,
+        conn: Any,
+        payment_id: UUID,
+        *,
+        include_receipt_delivery: bool = False,
+    ) -> dict[str, Any]:
         row = await conn.fetchrow(
             """
             SELECT cp.*, pdi.batch_id
@@ -1540,15 +2328,230 @@ class ReceivablesService:
             """,
             payment_id,
         )
-        return self._compose_payment(row, allocations)
+        receipt_delivery = None
+        if include_receipt_delivery:
+            receipt_delivery = await conn.fetchrow(
+                """
+                SELECT receipt_number, recipient_email,
+                       delivery_status AS status, skip_reason
+                FROM payment_receipt_deliveries
+                WHERE payment_id = $1
+                """,
+                payment_id,
+            )
+        return self._compose_payment(
+            row,
+            allocations,
+            receipt_delivery=receipt_delivery,
+            include_receipt_delivery=include_receipt_delivery,
+        )
+
+    async def _payment_views_for_rows(
+        self,
+        executor: Any,
+        rows: list[Any],
+        *,
+        include_receipt_delivery: bool = False,
+        allocation_history_limit: Optional[int] = None,
+    ) -> list[dict[str, Any]]:
+        """Hydrate payment list rows without changing their requested order."""
+        if not rows:
+            return []
+        payment_ids = [row["id"] for row in rows]
+        if allocation_history_limit is None:
+            allocation_rows = await executor.fetch(
+                """
+                SELECT ip.payment_id, ip.id, ip.invoice_id, i.invoice_number,
+                       ip.amount, ip.payment_date, ip.payment_method, ip.reference,
+                       ip.notes, ip.recorded_by, ip.created_at, ip.metadata,
+                       ip.reversed_at, ip.reversal_reason
+                FROM invoice_payments ip
+                JOIN invoices i ON i.id = ip.invoice_id
+                WHERE ip.payment_id = ANY($1::uuid[])
+                ORDER BY i.due_date, i.invoice_number, ip.created_at
+                """,
+                payment_ids,
+            )
+        else:
+            if allocation_history_limit < 1:
+                raise ValueError("allocation_history_limit must be positive")
+            allocation_rows = await executor.fetch(
+                """
+                WITH allocation_totals AS (
+                    SELECT ip.payment_id,
+                           COALESCE(SUM(ip.amount) FILTER (
+                               WHERE ip.reversed_at IS NULL
+                           ), 0) AS active_allocated_amount,
+                           COUNT(*) AS allocation_history_count
+                    FROM invoice_payments ip
+                    WHERE ip.payment_id = ANY($1::uuid[])
+                    GROUP BY ip.payment_id
+                ),
+                ranked_allocations AS (
+                    SELECT ip.payment_id, ip.id, ip.invoice_id, i.invoice_number,
+                           ip.amount, ip.payment_date, ip.payment_method,
+                           ip.reference, ip.notes, ip.recorded_by, ip.created_at,
+                           ip.metadata, ip.reversed_at, ip.reversal_reason,
+                           ROW_NUMBER() OVER (
+                               PARTITION BY ip.payment_id
+                               ORDER BY (ip.reversed_at IS NULL) DESC,
+                                        i.due_date,
+                                        i.invoice_number,
+                                        ip.created_at,
+                                        ip.id
+                           ) AS allocation_rank
+                    FROM invoice_payments ip
+                    JOIN invoices i ON i.id = ip.invoice_id
+                    WHERE ip.payment_id = ANY($1::uuid[])
+                )
+                SELECT ranked_allocations.payment_id,
+                       ranked_allocations.id,
+                       ranked_allocations.invoice_id,
+                       ranked_allocations.invoice_number,
+                       ranked_allocations.amount,
+                       ranked_allocations.payment_date,
+                       ranked_allocations.payment_method,
+                       ranked_allocations.reference,
+                       ranked_allocations.notes,
+                       ranked_allocations.recorded_by,
+                       ranked_allocations.created_at,
+                       ranked_allocations.metadata,
+                       ranked_allocations.reversed_at,
+                       ranked_allocations.reversal_reason,
+                       allocation_totals.active_allocated_amount,
+                       allocation_totals.allocation_history_count
+                FROM ranked_allocations
+                JOIN allocation_totals
+                  ON allocation_totals.payment_id = ranked_allocations.payment_id
+                WHERE ranked_allocations.allocation_rank <= $2
+                ORDER BY ranked_allocations.payment_id, ranked_allocations.allocation_rank
+                """,
+                payment_ids,
+                allocation_history_limit,
+            )
+        allocations_by_payment: dict[str, list[Any]] = {
+            str(payment_id): [] for payment_id in payment_ids
+        }
+        allocation_summaries_by_payment: dict[str, dict[str, Any]] = {}
+        for allocation in allocation_rows:
+            payment_id = str(allocation["payment_id"])
+            allocations_by_payment[payment_id].append(allocation)
+            if allocation_history_limit is not None:
+                allocation_summaries_by_payment[payment_id] = {
+                    "active_allocated_amount": allocation["active_allocated_amount"],
+                    "allocation_history_count": allocation["allocation_history_count"],
+                }
+
+        receipt_by_payment: dict[str, dict[str, Any]] = {}
+        if include_receipt_delivery:
+            receipt_rows = await executor.fetch(
+                """
+                SELECT payment_id, receipt_number, recipient_email,
+                       delivery_status AS status, skip_reason
+                FROM payment_receipt_deliveries
+                WHERE payment_id = ANY($1::uuid[])
+                """,
+                payment_ids,
+            )
+            receipt_by_payment = {
+                str(receipt["payment_id"]): {
+                    "receipt_number": receipt["receipt_number"],
+                    "recipient_email": receipt["recipient_email"],
+                    "status": receipt["status"],
+                    "skip_reason": receipt["skip_reason"],
+                }
+                for receipt in receipt_rows
+            }
+
+        payment_views: list[dict[str, Any]] = []
+        for row in rows:
+            payment_id = str(row["id"])
+            allocation_summary = allocation_summaries_by_payment.get(payment_id)
+            payment_views.append(
+                self._compose_payment(
+                    row,
+                    allocations_by_payment.get(payment_id, []),
+                    receipt_delivery=receipt_by_payment.get(payment_id),
+                    include_receipt_delivery=include_receipt_delivery,
+                    active_allocated_amount=(
+                        allocation_summary["active_allocated_amount"]
+                        if allocation_summary is not None
+                        else Decimal("0")
+                        if allocation_history_limit is not None
+                        else None
+                    ),
+                    allocation_history_count=(
+                        int(allocation_summary["allocation_history_count"])
+                        if allocation_summary is not None
+                        else 0
+                        if allocation_history_limit is not None
+                        else None
+                    ),
+                )
+            )
+        return payment_views
+
+    async def _has_replay_receipt_delivery(
+        self,
+        conn: Any,
+        *,
+        payment_id: UUID,
+        require_receipt_recipient: bool,
+    ) -> bool:
+        """Read a receipt projection only when an EOM replay can prove it exists.
+
+        The original receipt is immutable payment evidence, whereas the CRM
+        customer type is mutable.  An unchanged retry must therefore derive
+        its projection from the committed outbox row.  The held transaction
+        connection performs the readiness/catalog probe so this path never
+        tries to acquire a second pool connection.  A pre-369 ledger simply
+        returns no projection without querying its missing outbox table.
+        """
+        if not require_receipt_recipient:
+            return False
+        if not await self.is_receipt_delivery_ready(conn):
+            return False
+        return bool(
+            await conn.fetchval(
+                """
+                SELECT EXISTS (
+                    SELECT 1
+                    FROM payment_receipt_deliveries
+                    WHERE payment_id = $1
+                )
+                """,
+                payment_id,
+            )
+        )
 
     @staticmethod
-    def _compose_payment(row: Any, allocations: list[Any]) -> dict[str, Any]:
+    def _compose_payment(
+        row: Any,
+        allocations: list[Any],
+        *,
+        receipt_delivery: Optional[Any] = None,
+        include_receipt_delivery: bool = False,
+        active_allocated_amount: Optional[Decimal] = None,
+        allocation_history_count: Optional[int] = None,
+    ) -> dict[str, Any]:
         result = _serialize_row(row)
-        allocation_views = [_serialize_row(item) for item in allocations]
+        if include_receipt_delivery:
+            result["receipt_delivery"] = (
+                _serialize_row(receipt_delivery)
+                if receipt_delivery is not None
+                else None
+            )
+        allocation_views = []
+        for allocation in allocations:
+            view = _serialize_row(allocation)
+            view.pop("active_allocated_amount", None)
+            view.pop("allocation_history_count", None)
+            allocation_views.append(view)
         active_allocated = Decimal("0")
         is_active = row["status"] in ACTIVE_PAYMENT_STATUSES
-        if is_active:
+        if is_active and active_allocated_amount is not None:
+            active_allocated = money(active_allocated_amount)
+        elif is_active:
             active_allocated = sum(
                 (
                     money(item["amount"])
@@ -1568,6 +2571,11 @@ class ReceivablesService:
         for view in allocation_views:
             view["amount_cents"] = cents(view["amount"])
         result["allocations"] = allocation_views
+        if allocation_history_count is not None:
+            result["allocation_history_count"] = allocation_history_count
+            result["allocations_truncated"] = (
+                allocation_history_count > len(allocation_views)
+            )
         return result
 
     @staticmethod

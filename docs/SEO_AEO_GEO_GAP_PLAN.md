@@ -7,6 +7,17 @@
 
 ---
 
+**HISTORICAL — the Next.js app this plan targets (`_ARCHIVED_atlas-intel-next/`)
+was deleted from the repository.** Every `app/**` path below refers to code
+that no longer exists to inspect or modify; the "COMPLETE" statuses describe
+work done on that app before its deletion, not a verifiable current state.
+This document is retained as a record of the SEO/AEO/GEO remediation work
+performed, not as live guidance -- do not use these paths or gap statuses to
+plan new work. The live B2B frontend is `atlas-churn-ui`, which is not this
+plan's subject.
+
+---
+
 ## Gaps (ordered by severity)
 
 ### Gap 1: Homepage missing WebSite + Organization JSON-LD

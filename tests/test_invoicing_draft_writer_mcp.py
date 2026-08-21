@@ -1,6 +1,9 @@
 from __future__ import annotations
 
 import json
+import os
+from types import SimpleNamespace
+from uuid import uuid4
 
 import pytest
 
@@ -63,6 +66,25 @@ class _FakeRepo:
 
 def _tool_names() -> set[str]:
     return set(draft_writer.mcp._tool_manager._tools)
+
+
+class _SchemaPool:
+    is_initialized = True
+
+    def __init__(self, connection, schema: str) -> None:
+        self.connection = connection
+        self.schema = schema
+
+    async def acquire(self):
+        await self.connection.execute(f'SET search_path TO "{self.schema}", public')
+        return self.connection
+
+    async def release(self, released) -> None:
+        assert released is self.connection
+
+    async def fetchval(self, query, *args):
+        await self.connection.execute(f'SET search_path TO "{self.schema}", public')
+        return await self.connection.fetchval(query, *args)
 
 
 def test_invoicing_draft_writer_exposes_exact_safe_tool_surface():
@@ -268,3 +290,154 @@ def test_invoicing_draft_writer_http_rejects_short_tokens(monkeypatch):
 
     with pytest.raises(RuntimeError, match="at least 24 characters"):
         draft_writer._streamable_http_app()
+
+
+@pytest.mark.asyncio
+async def test_draft_invoice_schema_ready_requires_runtime_dependencies():
+    assert "344_receivables_payments" in draft_writer._DRAFT_WRITER_INVOICE_MIGRATIONS
+
+    class _Pool:
+        is_initialized = True
+
+        async def fetchval(self, query):
+            assert "invoice_number_seq" in query
+            assert "invoice_payments" in query
+            assert "customer_payments" in query
+            assert "invoice_number" in query
+            assert "customer_email" in query
+            assert "customer_phone" in query
+            assert "customer_address" in query
+            assert "subtotal" in query
+            assert "tax_rate" in query
+            assert "tax_amount" in query
+            assert "discount_amount" in query
+            assert "total_amount" in query
+            assert "business_context_id" in query
+            assert "metadata" in query
+            assert "payment_id" in query
+            assert "reversed_at" in query
+            return True
+
+    assert await draft_writer._draft_invoice_schema_ready(_Pool()) is True
+
+
+@pytest.mark.asyncio
+async def test_draft_writer_lifespan_now_migrates_and_verifies_readiness(monkeypatch):
+    """Before ATLAS #2448's startup-fence extension, this server's _lifespan
+    did nothing but init_database() -- no migration run, no schema check --
+    even though its create_draft_invoice/update_draft_invoice tools reach
+    InvoiceRepository.create(). It now uses a curated invoice-schema
+    migration set and a draft-invoice readiness probe, not the full
+    receivables chain."""
+    import atlas_brain.storage.database as database_mod
+    import atlas_brain.storage.migrations as migrations_mod
+
+    events: list[str] = []
+    pool = SimpleNamespace(is_initialized=True)
+
+    async def initialize() -> None:
+        events.append("initialize")
+
+    def get_pool() -> object:
+        events.append("get-pool")
+        return pool
+
+    async def migrate(candidate: object, *, only=None) -> None:
+        assert candidate is pool
+        assert tuple(only) == draft_writer._DRAFT_WRITER_INVOICE_MIGRATIONS
+        events.append("migrate")
+
+    async def close() -> None:
+        events.append("close")
+
+    async def ready(candidate: object) -> bool:
+        assert candidate is pool
+        events.append("ready")
+        return True
+
+    monkeypatch.setattr(database_mod, "init_database", initialize)
+    monkeypatch.setattr(database_mod, "get_db_pool", get_pool)
+    monkeypatch.setattr(database_mod, "close_database", close)
+    monkeypatch.setattr(migrations_mod, "run_migrations", migrate)
+    monkeypatch.setattr(draft_writer, "_draft_invoice_schema_ready", ready)
+
+    async with draft_writer._lifespan(object()):
+        events.append("serving")
+
+    assert events == [
+        "initialize",
+        "get-pool",
+        "migrate",
+        "ready",
+        "serving",
+        "close",
+    ]
+
+
+@pytest.mark.asyncio
+async def test_draft_writer_lifespan_blocks_on_incomplete_schema(monkeypatch):
+    """Negative control: an incomplete draft invoice schema now aborts this
+    server's startup instead of silently serving."""
+    import atlas_brain.storage.database as database_mod
+    import atlas_brain.storage.migrations as migrations_mod
+
+    pool = SimpleNamespace(is_initialized=True)
+    closed: list[bool] = []
+
+    async def initialize() -> None:
+        pass
+
+    def get_pool() -> object:
+        return pool
+
+    async def migrate(candidate: object, *, only=None) -> None:
+        assert candidate is pool
+        assert tuple(only) == draft_writer._DRAFT_WRITER_INVOICE_MIGRATIONS
+
+    async def close() -> None:
+        closed.append(True)
+
+    async def not_ready(candidate: object) -> bool:
+        assert candidate is pool
+        return False
+
+    monkeypatch.setattr(database_mod, "init_database", initialize)
+    monkeypatch.setattr(database_mod, "get_db_pool", get_pool)
+    monkeypatch.setattr(database_mod, "close_database", close)
+    monkeypatch.setattr(migrations_mod, "run_migrations", migrate)
+    monkeypatch.setattr(draft_writer, "_draft_invoice_schema_ready", not_ready)
+
+    with pytest.raises(RuntimeError, match="complete draft invoice schema"):
+        async with draft_writer._lifespan(object()):
+            raise AssertionError("incomplete schema must not serve")
+
+    assert closed == [True]
+
+
+@pytest.mark.asyncio
+async def test_draft_writer_curated_migrations_apply_to_empty_schema():
+    """The curated draft-writer migration set is dependency-closed on a clean
+    component schema, including the 012_appointments prerequisite that
+    035_contacts alters."""
+    asyncpg = pytest.importorskip("asyncpg")
+    database_url = os.environ.get("ATLAS_RECEIVABLES_TEST_DATABASE_URL")
+    if not database_url:
+        pytest.skip("ATLAS_RECEIVABLES_TEST_DATABASE_URL not set")
+
+    from atlas_brain.storage.migrations import run_migrations
+
+    schema = f"draft_writer_{uuid4().hex}"
+    connection = await asyncpg.connect(database_url)
+    pool = _SchemaPool(connection, schema)
+    try:
+        await connection.execute(f'CREATE SCHEMA "{schema}"')
+        await run_migrations(
+            pool,
+            only=draft_writer._DRAFT_WRITER_INVOICE_MIGRATIONS,
+        )
+
+        assert await draft_writer._draft_invoice_schema_ready(pool) is True
+    finally:
+        await connection.execute("SET search_path TO public")
+        await connection.execute(f'DROP SCHEMA IF EXISTS "{schema}" CASCADE')
+        await connection.close()

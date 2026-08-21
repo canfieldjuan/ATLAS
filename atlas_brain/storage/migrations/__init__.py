@@ -5,9 +5,11 @@ Tracks applied migrations in `schema_migrations` table to avoid re-running.
 """
 
 import asyncio
+import hashlib
 import logging
 import re
 from collections.abc import Collection
+from dataclasses import dataclass
 from pathlib import Path
 
 logger = logging.getLogger("atlas.storage.migrations")
@@ -46,9 +48,14 @@ async def _ensure_migrations_table(executor) -> None:
         CREATE TABLE IF NOT EXISTS schema_migrations (
             version INTEGER PRIMARY KEY,
             name VARCHAR(255) NOT NULL,
+            content_sha256 VARCHAR(64),
             applied_at TIMESTAMPTZ DEFAULT NOW()
         )
     """)
+    await executor.execute(
+        "ALTER TABLE schema_migrations "
+        "ADD COLUMN IF NOT EXISTS content_sha256 VARCHAR(64)"
+    )
 
 
 async def _get_applied_migrations(executor) -> set[str]:
@@ -57,17 +64,42 @@ async def _get_applied_migrations(executor) -> set[str]:
     return {row["name"] for row in rows}
 
 
-async def _record_migration(executor, filename: str) -> None:
+async def _record_migration(
+    executor,
+    filename: str,
+    content_sha256: str,
+    *,
+    fill_newly_self_recorded_digest: bool = False,
+) -> None:
     """Record that a migration has been applied.
 
     ``executor`` is a pool or a single acquired connection (see
-    _ensure_migrations_table)."""
+    _ensure_migrations_table). A migration may insert its own legacy ledger row
+    in SQL. Only the runner that just executed a pending file may fill that
+    newly-created row's digest; existing historical rows remain untouched.
+    """
     version, name = _parse_migration_identity(filename)
     existing_version = await executor.fetchval(
         "SELECT version FROM schema_migrations WHERE name = $1",
         name,
     )
     if existing_version is not None:
+        if fill_newly_self_recorded_digest:
+            await executor.execute(
+                "UPDATE schema_migrations SET content_sha256 = $2 "
+                "WHERE name = $1 AND content_sha256 IS DISTINCT FROM $2",
+                name,
+                content_sha256,
+            )
+            persisted_digest = await executor.fetchval(
+                "SELECT content_sha256 FROM schema_migrations WHERE name = $1",
+                name,
+            )
+            if persisted_digest != content_sha256:
+                raise RuntimeError(
+                    "self-recorded migration did not persist its expected "
+                    f"content SHA-256: {name}"
+                )
         return
 
     record_version = version
@@ -95,10 +127,89 @@ async def _record_migration(executor, filename: str) -> None:
         )
 
     await executor.execute(
-        "INSERT INTO schema_migrations (version, name) VALUES ($1, $2)",
+        "INSERT INTO schema_migrations (version, name, content_sha256) "
+        "VALUES ($1, $2, $3)",
         record_version,
         name,
+        content_sha256,
     )
+
+
+@dataclass(frozen=True)
+class MigrationContentIntegrityReport:
+    """Read-only migration-source identity classification for one run."""
+
+    verified: tuple[str, ...]
+    legacy_unverified: tuple[str, ...]
+    mismatched: tuple[str, ...]
+    missing_source: tuple[str, ...]
+
+
+def _migration_content_sha256(source: bytes) -> str:
+    """Return the deterministic identity for exactly one migration source."""
+    return hashlib.sha256(source).hexdigest()
+
+
+async def _migration_content_integrity_report(
+    executor,
+    migration_files: Collection[Path],
+) -> MigrationContentIntegrityReport:
+    """Classify stored migration identities without altering ledger rows."""
+    source_by_name = {path.stem: path for path in migration_files}
+    rows = await executor.fetch("SELECT name, content_sha256 FROM schema_migrations")
+    verified: list[str] = []
+    legacy_unverified: list[str] = []
+    mismatched: list[str] = []
+    missing_source: list[str] = []
+
+    for row in rows:
+        name = row["name"]
+        migration_file = source_by_name.get(name)
+        if migration_file is None:
+            missing_source.append(name)
+            continue
+
+        try:
+            source = migration_file.read_bytes()
+        except OSError:
+            # This phase is diagnostic-only. A deployment with no readable
+            # packaged source still has no evidence to verify, but it must not
+            # lose startup availability merely because the new report ran.
+            missing_source.append(name)
+            continue
+
+        recorded_digest = row["content_sha256"]
+        if recorded_digest is None:
+            legacy_unverified.append(name)
+            continue
+
+        current_digest = _migration_content_sha256(source)
+        if current_digest == recorded_digest:
+            verified.append(name)
+        else:
+            mismatched.append(name)
+
+    return MigrationContentIntegrityReport(
+        verified=tuple(sorted(verified)),
+        legacy_unverified=tuple(sorted(legacy_unverified)),
+        mismatched=tuple(sorted(mismatched)),
+        missing_source=tuple(sorted(missing_source)),
+    )
+
+
+def _log_migration_content_integrity(report: MigrationContentIntegrityReport) -> None:
+    """Expose evidence without making historical records a startup blocker."""
+    if report.legacy_unverified:
+        logger.info(
+            "Migration content identity is unavailable for %d legacy ledger rows",
+            len(report.legacy_unverified),
+        )
+    if report.mismatched or report.missing_source:
+        logger.error(
+            "Migration content integrity mismatch: mismatched=%s missing_source=%s",
+            ", ".join(report.mismatched) or "none",
+            ", ".join(report.missing_source) or "none",
+        )
 
 
 # Cluster-wide advisory key serializing migration runs. Concurrent first
@@ -111,19 +222,24 @@ _ATOMIC_BOOKKEEPING_MARKER = "-- atlas: atomic-bookkeeping"
 
 
 def _requires_atomic_bookkeeping(sql: str) -> bool:
-    """Return whether this migration opts into atomic SQL + ledger recording.
+    """Return whether SQL and its ledger identity must commit together.
 
     Most Atlas migrations remain deliberately autocommit: several use ``CREATE
     INDEX CONCURRENTLY``. A migration whose safety depends on its privilege or
     ownership changes committing with its ``schema_migrations`` record may opt
-    into this narrow execution mode with the first non-empty SQL line.
+    into this narrow execution mode with the first non-empty SQL line. A direct
+    insert into the ledger also requires it: otherwise its SQL can commit a
+    legacy-looking row before the runner attaches the source digest.
     """
     first_line = next((line.strip() for line in sql.splitlines() if line.strip()), "")
-    return first_line == _ATOMIC_BOOKKEEPING_MARKER
+    return (
+        first_line == _ATOMIC_BOOKKEEPING_MARKER
+        or _contains_executable_self_recording_insert(sql)
+    )
 
 
-def _contains_executable_concurrently(sql: str) -> bool:
-    """Return whether SQL uses CONCURRENTLY outside comments and literals."""
+def _executable_sql(sql: str, *, preserve_quoted_identifiers: bool = False) -> str:
+    """Mask comments and literals so recognizers see executable SQL only."""
     code: list[str] = []
     i = 0
     single_quote = False
@@ -177,9 +293,9 @@ def _contains_executable_concurrently(sql: str) -> bool:
             continue
 
         if double_quote:
-            code.append("\n" if ch == "\n" else " ")
+            code.append(ch if preserve_quoted_identifiers else ("\n" if ch == "\n" else " "))
             if ch == '"' and nxt == '"':
-                code.append(" ")
+                code.append(nxt if preserve_quoted_identifiers else " ")
                 i += 2
                 continue
             if ch == '"':
@@ -206,7 +322,7 @@ def _contains_executable_concurrently(sql: str) -> bool:
             continue
 
         if ch == '"':
-            code.append(" ")
+            code.append(ch if preserve_quoted_identifiers else " ")
             double_quote = True
             i += 1
             continue
@@ -222,7 +338,36 @@ def _contains_executable_concurrently(sql: str) -> bool:
         code.append(ch)
         i += 1
 
-    return bool(re.search(r"\bCONCURRENTLY\b", "".join(code), re.IGNORECASE))
+    return "".join(code)
+
+
+def _contains_executable_concurrently(sql: str) -> bool:
+    """Return whether SQL uses CONCURRENTLY outside comments and literals."""
+    return bool(re.search(r"\bCONCURRENTLY\b", _executable_sql(sql), re.IGNORECASE))
+
+
+_SELF_RECORDING_INSERT_RE = re.compile(
+    r"(?i:\bINSERT\s+INTO\s+(?:ONLY\s+)?)"
+    r"(?:(?:\"[A-Za-z_][A-Za-z0-9_$]*\"|[A-Za-z_][A-Za-z0-9_$]*)\s*\.\s*)?"
+    r"(?:(?i:schema_migrations)|\"schema_migrations\")(?![A-Za-z0-9_$])",
+)
+
+
+def _contains_executable_self_recording_insert(sql: str) -> bool:
+    """Return whether migration SQL directly inserts its ledger row.
+
+    The existing explicit marker remains the escape hatch for a migration that
+    performs equivalent bookkeeping through dynamic SQL. Direct inserts are
+    recognized automatically so legacy self-recording files get the same
+    rollback-safe SQL-plus-digest unit without rewriting their historical text.
+    Unquoted target identifiers use PostgreSQL's case-folding rules; quoted
+    targets must be the exact lowercase ledger identifier.
+    """
+    return bool(
+        _SELF_RECORDING_INSERT_RE.search(
+            _executable_sql(sql, preserve_quoted_identifiers=True)
+        )
+    )
 
 
 def _split_sql_statements(sql: str) -> list[str]:
@@ -414,6 +559,9 @@ async def run_migrations(
             applied = await _get_applied_migrations(conn)
 
             migration_files = sorted(directory.glob("*.sql"))
+            _log_migration_content_integrity(
+                await _migration_content_integrity_report(conn, migration_files)
+            )
             if only is not None:
                 requested = set(only)
                 migration_files = [
@@ -440,7 +588,9 @@ async def run_migrations(
             for migration_file in pending:
                 logger.info("Running migration: %s", migration_file.name)
 
-                sql = migration_file.read_text()
+                source = migration_file.read_bytes()
+                content_sha256 = _migration_content_sha256(source)
+                sql = source.decode("utf-8")
 
                 try:
                     if _requires_atomic_bookkeeping(sql):
@@ -454,14 +604,29 @@ async def run_migrations(
                             )
                         async with conn.transaction():
                             await conn.execute(sql)
-                            await _record_migration(conn, migration_file.name)
+                            await _record_migration(
+                                conn,
+                                migration_file.name,
+                                content_sha256,
+                                fill_newly_self_recorded_digest=True,
+                            )
                     elif _contains_executable_concurrently(sql):
                         for statement in _split_sql_statements(sql):
                             await conn.execute(statement)
-                        await _record_migration(conn, migration_file.name)
+                        await _record_migration(
+                            conn,
+                            migration_file.name,
+                            content_sha256,
+                            fill_newly_self_recorded_digest=True,
+                        )
                     else:
                         await conn.execute(sql)
-                        await _record_migration(conn, migration_file.name)
+                        await _record_migration(
+                            conn,
+                            migration_file.name,
+                            content_sha256,
+                            fill_newly_self_recorded_digest=True,
+                        )
                     logger.info("Migration %s completed successfully", migration_file.name)
                 except Exception as e:
                     logger.error("Migration %s failed: %s", migration_file.name, e)

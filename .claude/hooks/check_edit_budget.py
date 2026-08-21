@@ -16,9 +16,36 @@ enforces the file-count budget; this hook only enforces the allowed *set*.
 from __future__ import annotations
 
 import fnmatch
+import hashlib
 import json
 import os
+import re
+import subprocess
 import sys
+from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "scripts"))
+from fix_loop_trace_contract import (
+    is_placeholder_text,
+    normalize_repo_path,
+    source_trace_is_valid,
+    trace_endpoint_is_valid,
+)
+
+_REQUIRED_ROOT_TRACE_FIELDS = (
+    "activation_head",
+    "symptom",
+    "root_cause",
+    "source_trace",
+    "fix_strategy",
+    "upstream_files",
+)
+_FIX_STRATEGIES = {"upstream-root", "symptom-only-deferred"}
+_SUPPORT_PATHS = {"AGENTS.md", "CLAUDE.md", "docs/SESSION_STATE_TEMPLATE.md"}
+_SUPPORT_PREFIXES = ("tests/", "plans/", ".claude/skills/")
+_FINGERPRINT_RE = re.compile(
+    r"^index:(?:[0-9a-f]{40}|none|unknown)\|worktree:(?:[0-9a-f]{64}|missing)$"
+)
 
 
 def _project_dir() -> str:
@@ -52,10 +79,7 @@ def _relativize(path: str, project_dir: str) -> str:
     makes Windows `\\` separators match `/`-based globs.
     """
     try:
-        candidate = path.replace("\\", "/")
-        if os.path.isabs(path) or os.path.isabs(candidate):
-            candidate = os.path.relpath(path, project_dir)
-        return os.path.normpath(candidate).replace("\\", "/")
+        return normalize_repo_path(path, project_dir)
     except ValueError:
         return path
 
@@ -74,6 +98,264 @@ def _deny(reason: str) -> None:
     )
 
 
+def _has_text(value: object) -> bool:
+    return isinstance(value, str) and not is_placeholder_text(value)
+
+
+def _has_evidence_text(value: object) -> bool:
+    return _has_text(value) and trace_endpoint_is_valid(value)
+
+
+def _has_string_list(value: object) -> bool:
+    return isinstance(value, list) and any(_has_text(item) for item in value)
+
+
+def _string_list(value: object) -> list[str]:
+    if not isinstance(value, list):
+        return []
+    return [str(item).strip() for item in value if _has_text(item)]
+
+
+def _path_set(value: object, project_dir: str) -> set[str]:
+    paths: set[str] = set()
+    for raw in _string_list(value):
+        stripped = raw.strip().strip("`")
+        if (
+            not stripped
+            or any(ch.isspace() for ch in stripped)
+            or stripped.startswith(("<", "{"))
+            or stripped.endswith((">", "}"))
+        ):
+            continue
+        normalized = _relativize(stripped, project_dir)
+        parts = Path(normalized).parts
+        if (
+            not normalized
+            or normalized in {".", ".."}
+            or ".." in parts
+            or normalized.startswith("../")
+        ):
+            continue
+        paths.add(normalized)
+    return paths
+
+
+def _fingerprint_map(value: object, project_dir: str) -> dict[str, str]:
+    if not isinstance(value, dict):
+        return {}
+    fingerprints: dict[str, str] = {}
+    for raw_path, raw_fingerprint in value.items():
+        if not isinstance(raw_path, str) or not isinstance(raw_fingerprint, str):
+            continue
+        path = next(iter(_path_set([raw_path], project_dir)), "")
+        fingerprint = raw_fingerprint.strip()
+        if path and _FINGERPRINT_RE.fullmatch(fingerprint):
+            fingerprints[path] = fingerprint
+    return fingerprints
+
+
+def _file_sha(path: Path) -> str:
+    try:
+        return hashlib.sha256(path.read_bytes()).hexdigest()
+    except OSError:
+        return "missing"
+
+
+def _index_blob(project_dir: str, path: str) -> str:
+    proc = subprocess.run(
+        ["git", "ls-files", "-s", "--", path],
+        cwd=project_dir,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    if proc.returncode != 0 or not proc.stdout.strip():
+        return "none"
+    first = proc.stdout.splitlines()[0].split()
+    return first[1] if len(first) > 1 else "unknown"
+
+
+def _file_fingerprint(project_dir: str, path: str) -> str:
+    rel = _relativize(path, project_dir)
+    return f"index:{_index_blob(project_dir, rel)}|worktree:{_file_sha(Path(project_dir) / rel)}"
+
+
+def _receipt_set(value: object, project_dir: str) -> set[str]:
+    return set(_fingerprint_map(value, project_dir))
+
+
+def _activation_source_fingerprints(baton: dict, project_dir: str) -> dict[str, str]:
+    fingerprints = _fingerprint_map(baton.get("activation_source_fingerprints"), project_dir)
+    dirty_fingerprints = _fingerprint_map(baton.get("activation_dirty_fingerprints"), project_dir)
+    fingerprints.update(dirty_fingerprints)
+    return fingerprints
+
+
+def _valid_receipt_paths(baton: dict, project_dir: str) -> set[str]:
+    receipts = _fingerprint_map(baton.get("upstream_edit_receipts"), project_dir)
+    activation_fingerprints = _activation_source_fingerprints(baton, project_dir)
+    valid: set[str] = set()
+    for path, receipt_fingerprint in receipts.items():
+        current_fingerprint = _file_fingerprint(project_dir, path)
+        if current_fingerprint != receipt_fingerprint:
+            continue
+        if current_fingerprint == activation_fingerprints.get(path):
+            continue
+        valid.add(path)
+    return valid
+
+
+def _write_baton(path: str, baton: dict) -> None:
+    tmp_path = f"{path}.tmp"
+    with open(tmp_path, "w", encoding="utf-8") as handle:
+        json.dump(baton, handle, indent=2, sort_keys=True)
+        handle.write("\n")
+    os.replace(tmp_path, path)
+
+
+def _record_pending_upstream_edits(baton_path: str, baton: dict, project_dir: str, upstream_targets: set[str]) -> None:
+    if not upstream_targets:
+        return
+    pending = _fingerprint_map(baton.get("pending_upstream_edits"), project_dir)
+    for path in upstream_targets:
+        pending[path] = _file_fingerprint(project_dir, path)
+    if pending == _fingerprint_map(baton.get("pending_upstream_edits"), project_dir):
+        return
+    updated = dict(baton)
+    updated["pending_upstream_edits"] = dict(sorted(pending.items()))
+    _write_baton(baton_path, updated)
+
+
+def _finalize_upstream_edit_receipts(
+    baton_path: str,
+    baton: dict,
+    project_dir: str,
+    upstream_targets: set[str],
+) -> None:
+    pending = _fingerprint_map(baton.get("pending_upstream_edits"), project_dir)
+    changed_targets = {
+        path
+        for path in upstream_targets
+        if path in pending and _file_fingerprint(project_dir, path) != pending[path]
+    }
+    if not changed_targets:
+        return
+    activation_fingerprints = _activation_source_fingerprints(baton, project_dir)
+    receipts = _fingerprint_map(baton.get("upstream_edit_receipts"), project_dir)
+    for path in changed_targets:
+        current_fingerprint = _file_fingerprint(project_dir, path)
+        if current_fingerprint == activation_fingerprints.get(path):
+            receipts.pop(path, None)
+        else:
+            receipts[path] = current_fingerprint
+    remaining_pending = {path: fingerprint for path, fingerprint in pending.items() if path not in changed_targets}
+    updated = dict(baton)
+    if receipts:
+        updated["upstream_edit_receipts"] = dict(sorted(receipts.items()))
+    else:
+        updated.pop("upstream_edit_receipts", None)
+    if remaining_pending:
+        updated["pending_upstream_edits"] = dict(sorted(remaining_pending.items()))
+    else:
+        updated.pop("pending_upstream_edits", None)
+    _write_baton(baton_path, updated)
+
+
+def _root_trace_errors(baton: dict, project_dir: str) -> list[str]:
+    missing: list[str] = []
+    for field in _REQUIRED_ROOT_TRACE_FIELDS:
+        value = baton.get(field)
+        if field == "upstream_files":
+            if not _path_set(value, project_dir):
+                missing.append(field)
+        elif field in {"symptom", "root_cause"}:
+            if not _has_evidence_text(value):
+                missing.append(field)
+        elif not _has_text(value):
+            missing.append(field)
+    if missing:
+        return ["missing " + ", ".join(missing)]
+    activation_dirty_paths = _path_set(baton.get("activation_dirty_paths"), project_dir)
+    if not isinstance(baton.get("activation_dirty_paths"), list):
+        return ["activation_dirty_paths must snapshot staged/working/untracked paths when fix mode is armed"]
+    fingerprints = _fingerprint_map(baton.get("activation_dirty_fingerprints"), project_dir)
+    missing_fingerprints = sorted(path for path in activation_dirty_paths if path not in fingerprints)
+    if missing_fingerprints:
+        return [
+            "activation_dirty_fingerprints must snapshot file state for "
+            + ", ".join(missing_fingerprints)
+        ]
+    if not source_trace_is_valid(baton.get("source_trace")):
+        return ["source_trace must name the chain from symptom -> upstream source with non-placeholder endpoints"]
+
+    strategy = str(baton.get("fix_strategy", "")).strip().lower()
+    if strategy not in _FIX_STRATEGIES:
+        return [
+            "fix_strategy must be one of "
+            + ", ".join(sorted(_FIX_STRATEGIES))
+            + f", got {strategy!r}"
+        ]
+    upstream_files = _path_set(baton.get("upstream_files"), project_dir)
+    if strategy == "upstream-root":
+        source_fingerprints = _activation_source_fingerprints(baton, project_dir)
+        missing_sources = sorted(path for path in upstream_files if path not in source_fingerprints)
+        if missing_sources:
+            return [
+                "activation_source_fingerprints must snapshot declared upstream sources for "
+                + ", ".join(missing_sources)
+            ]
+    if strategy == "symptom-only-deferred":
+        symptom_missing = [
+            field
+            for field in ("symptom_only_reason", "follow_up")
+            if not _has_evidence_text(baton.get(field))
+        ]
+        if symptom_missing:
+            return ["symptom-only-deferred requires " + ", ".join(symptom_missing)]
+    return []
+
+
+def _is_support_path(path: str) -> bool:
+    return path in _SUPPORT_PATHS or path.startswith(_SUPPORT_PREFIXES)
+
+
+def _changed_paths(project_dir: str, base_ref: str | None) -> set[str]:
+    changed: set[str] = set()
+    commands = [
+        ["git", "diff", "--name-only", "--cached"],
+        ["git", "diff", "--name-only"],
+        ["git", "ls-files", "--others", "--exclude-standard"],
+    ]
+    if base_ref:
+        commands.insert(0, ["git", "diff", "--name-only", f"{base_ref}...HEAD"])
+    for command in commands:
+        proc = subprocess.run(command, cwd=project_dir, capture_output=True, text=True, check=False)
+        if proc.returncode != 0:
+            continue
+        changed.update(_relativize(line.strip(), project_dir) for line in proc.stdout.splitlines() if line.strip())
+    return changed
+
+
+def _upstream_source_is_changed(project_dir: str, baton: dict, upstream_files: set[str]) -> bool:
+    activation_head = str(baton.get("activation_head") or "").strip() or None
+    activation_dirty_paths = _path_set(baton.get("activation_dirty_paths"), project_dir)
+    receipts = _valid_receipt_paths(baton, project_dir)
+    current_pass_paths = _changed_paths(project_dir, activation_head).difference(activation_dirty_paths)
+    current_pass_paths.update(receipts)
+    return bool(current_pass_paths.intersection(upstream_files))
+
+
+def _load_active_baton(project_dir: str) -> tuple[str, dict | None]:
+    baton_path = os.path.join(project_dir, ".claude", "fix-mode-state.json")
+    if not os.path.isfile(baton_path):
+        return baton_path, None
+    with open(baton_path, encoding="utf-8") as fh:
+        baton = json.load(fh)
+    if not isinstance(baton, dict) or not baton.get("active"):
+        return baton_path, None
+    return baton_path, baton
+
+
 def main() -> int:
     try:
         payload = json.load(sys.stdin)
@@ -82,13 +364,8 @@ def main() -> int:
 
     try:
         project_dir = _project_dir()
-        baton_path = os.path.join(project_dir, ".claude", "fix-mode-state.json")
-        if not os.path.isfile(baton_path):
-            return 0
-
-        with open(baton_path, encoding="utf-8") as fh:
-            baton = json.load(fh)
-        if not isinstance(baton, dict) or not baton.get("active"):
+        baton_path, baton = _load_active_baton(project_dir)
+        if baton is None:
             return 0
 
         allowed = baton.get("allowed")
@@ -99,10 +376,46 @@ def main() -> int:
         if not isinstance(tool_input, dict):
             return 0
 
-        for target in _targets(tool_input):
+        targets = _targets(tool_input)
+        normal_targets = []
+        for target in targets:
             rel = _relativize(target, project_dir)
             if rel in _ALWAYS_ALLOWED:
                 continue  # control files stay editable so /fix-mode off + widen work
+            normal_targets.append(rel)
+        if not normal_targets:
+            return 0
+
+        event_name = str(payload.get("hook_event_name") or "PreToolUse")
+
+        trace_errors = _root_trace_errors(baton, project_dir)
+        if trace_errors:
+            if event_name == "PostToolUse":
+                return 0
+            _deny(
+                "fix-mode root-cause trace is incomplete ("
+                + "; ".join(trace_errors)
+                + "). Fill symptom, root_cause, source_trace, fix_strategy, "
+                "and upstream_files before editing; symptom-only-deferred also "
+                "requires symptom_only_reason and follow_up (AGENTS.md 3k)."
+            )
+            return 0
+
+        strategy = str(baton.get("fix_strategy", "")).strip().lower()
+        upstream_files = _path_set(baton.get("upstream_files"), project_dir)
+        if event_name == "PostToolUse":
+            if strategy == "upstream-root":
+                upstream_targets = {rel for rel in normal_targets if rel in upstream_files}
+                downstream_targets = [
+                    rel
+                    for rel in normal_targets
+                    if rel not in upstream_files and not _is_support_path(rel)
+                ]
+                if upstream_targets and not downstream_targets:
+                    _finalize_upstream_edit_receipts(baton_path, baton, project_dir, upstream_targets)
+            return 0
+
+        for rel in normal_targets:
             if not any(fnmatch.fnmatch(rel, str(pat)) for pat in allowed):
                 _deny(
                     f"{rel} is outside the fix-mode allowed set "
@@ -111,6 +424,23 @@ def main() -> int:
                     "before editing it."
                 )
                 return 0
+        if strategy == "upstream-root":
+            upstream_targets = {rel for rel in normal_targets if rel in upstream_files}
+            downstream_targets = [
+                rel
+                for rel in normal_targets
+                if rel not in upstream_files and not _is_support_path(rel)
+            ]
+            if downstream_targets and not _upstream_source_is_changed(project_dir, baton, upstream_files):
+                _deny(
+                    "fix-mode upstream-root requires editing the declared upstream "
+                    "source before downstream symptom targets. Edit one of "
+                    f"{', '.join(sorted(upstream_files))} first, or change the "
+                    "baton to symptom-only-deferred with reason and follow_up."
+                )
+                return 0
+            if upstream_targets and not downstream_targets:
+                _record_pending_upstream_edits(baton_path, baton, project_dir, upstream_targets)
         return 0
     except Exception:
         return 0  # never block on an unexpected hook error

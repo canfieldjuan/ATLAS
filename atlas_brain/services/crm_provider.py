@@ -20,8 +20,15 @@ import hashlib
 from contextlib import asynccontextmanager
 from dataclasses import dataclass
 from datetime import datetime, timezone
-from typing import Any, Mapping, Optional
+from enum import Enum
+from typing import Any, Collection, Mapping, Optional, Sequence
 from uuid import UUID, uuid4
+
+from .eom_public_onboarding_tokens import (
+    build_eom_public_onboarding_link,
+    eom_public_onboarding_hmac_key_fingerprint,
+    format_eom_public_onboarding_token,
+)
 
 logger = logging.getLogger("atlas.services.crm_provider")
 
@@ -158,19 +165,62 @@ _EOM_LOST_RESTORABLE_STAGES = ("new", "estimate_booked")
 _EOM_ACTIVE_LEAD_STAGES = ("new", "estimate_booked", "won")
 _EOM_LOST_REPLAY_DISPOSITION_EVENTS = ("lead_lost", "lead_reopened")
 _EOM_OPERATOR_CONTACT_SOURCES_METADATA_KEY = "eom_operator_contact_sources"
+_EOM_WON_LOSS_CANCELLATION_REQUESTED_EVENT = "first_clean_cancellation_requested"
+_EOM_WON_LOSS_CANCELLATION_UNSETTLED_EVENT = (
+    "first_clean_cancellation_calendar_unsettled"
+)
+_EOM_WON_LOSS_CANCELLATION_COMPLETED_EVENT = "first_clean_cancelled"
+_EOM_WON_LOSS_EVENT_TYPES = (
+    _EOM_WON_LOSS_CANCELLATION_REQUESTED_EVENT,
+    _EOM_WON_LOSS_CANCELLATION_UNSETTLED_EVENT,
+    _EOM_WON_LOSS_CANCELLATION_COMPLETED_EVENT,
+    "lead_lost",
+)
 
 
 def _eom_identity_lock_key(channel: str, value: str) -> str:
     return f"eom-contact-identity:{channel}:{value}"
 
 
+def _eom_won_lead_loss_execution_lock_key(contact_id: str) -> str:
+    """Return the one contact fence spanning a won-lead Calendar teardown."""
+
+    return f"eom-won-lead-loss:execution:{contact_id}"
+
+
+def _eom_customer_handoff_lock_keys(
+    *,
+    approval_key: str,
+    contact_id: str,
+    tracker_customer_id: int,
+    tracker_site_id: int,
+) -> list[str]:
+    """One sorted lock vocabulary shared by office and public finalizers."""
+
+    return sorted(
+        {
+            f"eom-customer-handoff:approval:{approval_key}",
+            f"eom-customer-handoff:contact:{contact_id}",
+            f"eom-customer-handoff:tracker-customer:{tracker_customer_id}",
+            f"eom-customer-handoff:tracker-site:{tracker_site_id}",
+            _eom_won_lead_loss_execution_lock_key(contact_id),
+        }
+    )
+
+
 @asynccontextmanager
-async def _transaction_connection(pool: Any):
+async def _transaction_connection(pool: Any, connection: Any | None = None):
     """Yield a transaction from Atlas' wrapper, asyncpg connection, or pool.
 
     Production uses ``DatabasePool.transaction``.  Supporting a raw asyncpg
     connection/pool keeps the migration integration proof on the real SQL path.
+    A caller that already owns a transaction supplies its connection so related
+    lifecycle writes remain one atomic operation rather than nesting a second
+    transaction.
     """
+    if connection is not None:
+        yield connection
+        return
     transaction = getattr(pool, "transaction", None)
     if callable(transaction):
         # ``asyncpg.Connection.transaction()`` enters as ``None``; the raw
@@ -431,6 +481,120 @@ async def _write_contact_interaction(
 # ---------------------------------------------------------------------------
 # DatabaseCRMProvider  (asyncpg direct)
 # ---------------------------------------------------------------------------
+
+
+# --------------------------------------------------------------------------
+# Billing recipients (EOM Slice 1A)
+# --------------------------------------------------------------------------
+
+BILLING_RECIPIENT_PAGE_SIZE = 500
+# Bounds the scan when eligible rows are sparse. 20 x 500 = 10k
+# candidates, far beyond the real EOM contact count.
+BILLING_RECIPIENT_MAX_PAGES = 20
+BILLING_RECIPIENT_ELIGIBLE_STATUS = "active"
+
+# Whitespace that makes an address unusable. btrim's one-argument form strips
+# SPACES ONLY, so an email of "\t" survived it and was reported eligible --
+# then handed to the mail path as a recipient. Every trim below names the set.
+BILLING_RECIPIENT_BLANK_CHARS = " \t\r\n\x0b\x0c"
+
+# Public reason tokens. `wrong_tenant` is deliberately absent: the lookup is
+# tenant-scoped in SQL, so a contact belonging to another tenant is simply not
+# found and this code never learns otherwise.
+# Only an account may be invoiced. A lead, prospect or vendor with an address
+# still satisfies "active with an email", and offering one as a billing
+# recipient would let an invoice be addressed to a party that is not a customer.
+# Verified against live data before encoding: every EOM contact that actually
+# receives invoices is contact_type='customer'; all leads have zero.
+BILLING_RECIPIENT_ELIGIBLE_CONTACT_TYPE = "customer"
+
+# Deliberately permissive: one @, no whitespace either side, and a dot in the
+# domain. Trimming alone let "not-an-address" through as a recipient, but a
+# stricter grammar would reject deliverable real-world addresses -- checked
+# against live data, this rejects none of the addresses currently invoiced.
+
+BILLING_RECIPIENT_REASONS = ("not_found", "inactive", "no_email")
+
+
+class EOMBillingDeliveryMethod(str, Enum):
+    """Explicit EOM billing-delivery policy values owned by canonical CRM."""
+
+    GMAIL_PDF = "gmail_pdf"
+    MANUAL_SQUARE = "manual_square"
+    NO_INVOICE_RESIDENTIAL_RECEIPT = "no_invoice_residential_receipt"
+
+
+EOM_BILLING_DELIVERY_METHODS = frozenset(
+    method.value for method in EOMBillingDeliveryMethod
+)
+
+
+def _require_eom_billing_delivery_method(value: Any) -> str:
+    """Return one closed delivery policy value or reject an unsafe direct call."""
+
+    if isinstance(value, EOMBillingDeliveryMethod):
+        return value.value
+    if isinstance(value, str) and value in EOM_BILLING_DELIVERY_METHODS:
+        return value
+    raise ValueError("delivery_method must be a supported EOM billing delivery method")
+
+
+def _eom_billing_delivery_preference_projection(
+    row: Any,
+    *,
+    changed: bool | None = None,
+) -> dict[str, Any]:
+    """Project one canonical preference without deriving a delivery fallback."""
+
+    result = {
+        "contactId": str(row["contact_id"]),
+        "deliveryMethod": (
+            str(row["delivery_method"])
+            if row["delivery_method"] is not None
+            else None
+        ),
+        "createdAt": row["created_at"],
+        "createdBy": row["created_by"],
+        "updatedAt": row["updated_at"],
+        "updatedBy": row["updated_by"],
+    }
+    if changed is not None:
+        result["changed"] = changed
+    return result
+
+
+def _billing_recipient_projection(row: Any, email: str) -> dict[str, Any]:
+    """Build the five-field public object from an ALREADY-ELIGIBLE row.
+
+    Eligibility is decided before this is called, never after. Constructing a
+    full contact response and blanking fields on the way out would make "never
+    a partial row" depend on every failure branch remembering to redact.
+
+    ``email`` is passed in as the CANONICAL form rather than read off the row:
+    validity and representation are one decision, and the stored column is not
+    the answer to either. SQL ``btrim`` leaves Unicode edge whitespace and does
+    not lowercase, so emitting the column would report
+    ``\u00a0ap@example.com\u00a0`` eligible while returning an address nothing
+    can send to.
+    """
+    return {
+        "contactId": str(row["id"]),
+        "displayName": row["full_name"],
+        "email": email,
+        "eligible": True,
+        "reason": None,
+    }
+
+
+def _billing_recipient_refusal(contact_id: Any, reason: str) -> dict[str, Any]:
+    """The only shape an ineligible answer may take: identity and cause only."""
+    return {
+        "contactId": str(contact_id),
+        "displayName": None,
+        "email": None,
+        "eligible": False,
+        "reason": reason,
+    }
 
 
 class DatabaseCRMProvider:
@@ -836,8 +1000,25 @@ class DatabaseCRMProvider:
         self,
         executor: Any,
         data: Mapping[str, Any],
+        *,
+        customer_type: str | None = None,
     ) -> dict[str, Any]:
-        """Insert one contact through the provider-owned persistence site."""
+        """Insert one contact through the provider-owned persistence site.
+
+        ``customer_type`` is a KEYWORD, not a member of ``data``, and only the
+        operator mutation path passes it. It drives billing shape, so a generic
+        writer must not be able to set it by dropping a key into the dict: that
+        would bypass ``_normalize_customer_type``, the authenticated funnel
+        boundary, and the lifecycle event that records who changed it. Passing
+        it inside ``data`` is a programming error and is refused outright
+        rather than ignored, because silently dropping a caller's intent is how
+        this field would end up wrong without anyone noticing.
+        """
+        if "customer_type" in data:
+            raise ValueError(
+                "customer_type must be set through the operator mutation "
+                "boundary, not through a generic contact insert"
+            )
 
         contact_id = str(uuid4())
         now = datetime.now(timezone.utc)
@@ -845,17 +1026,41 @@ class DatabaseCRMProvider:
         email = raw_email.lower() if raw_email else None
         metadata_json = json.dumps(data.get("metadata", {}))
 
+        # customer_type is named ONLY when the caller supplied it. This helper is
+        # shared by every contact writer -- the MCP create_contact tool and the
+        # inbound find_or_create_contact among them -- and startup deliberately
+        # continues after a failed migration. Naming the column unconditionally
+        # would turn a pending migration 366 into UndefinedColumnError for
+        # callers that never asked for the field, which is a regression they did
+        # not sign up for. Omitting it lets the column default apply, exactly as
+        # before this change; a caller that DOES pass it still fails loudly,
+        # which is correct because its intent cannot be honoured.
+        optional_columns: list[str] = []
+        optional_values: list[Any] = []
+        if customer_type is not None:
+            optional_columns.append("customer_type")
+            optional_values.append(customer_type)
+
+        column_sql = ", ".join(optional_columns)
+        if column_sql:
+            column_sql = ", " + column_sql
+        placeholder_sql = "".join(
+            f",${index}" for index in range(21, 21 + len(optional_values))
+        )
+        metadata_index = 23 + len(optional_values)
+
         row = await executor.fetchrow(
-            """
+            f"""
             INSERT INTO contacts (
                 id, full_name, first_name, last_name, email, phone,
                 address, city, state, zip, business_context_id,
                 contact_type, status, tags, notes, source, source_ref,
-                lead_stage, lead_owner, next_follow_up_at,
+                lead_stage, lead_owner, next_follow_up_at{column_sql},
                 created_at, updated_at, metadata
             ) VALUES (
                 $1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,
-                $18,$19,$20,$21,$22,$23::jsonb
+                $18,$19,$20{placeholder_sql},
+                ${metadata_index - 2},${metadata_index - 1},${metadata_index}::jsonb
             ) RETURNING *
             """,
             contact_id,
@@ -878,6 +1083,7 @@ class DatabaseCRMProvider:
             data.get("lead_stage"),
             data.get("lead_owner"),
             data.get("next_follow_up_at"),
+            *optional_values,
             now,
             now,
             metadata_json,
@@ -907,6 +1113,18 @@ class DatabaseCRMProvider:
         substring matcher is weaker than the portal sync's normalized resolver.
         The default preserves every existing caller's claim-and-merge behavior.
         """
+        # Refused HERE, at the public entry, not at the private insert.
+        # create_contact returns through a dedup/merge branch that never reaches
+        # _insert_contact_row, so a guard sited at the insert lets a matched
+        # contact report success while the classification is silently dropped.
+        # customer_type drives billing shape and belongs to the authenticated
+        # operator boundary alone; refusing it at every door is the only
+        # placement that holds for all of them.
+        if "customer_type" in data:
+            raise ValueError(
+                "customer_type must be set through the operator mutation "
+                "boundary, not through a generic contact create"
+            )
         pipeline_fields = ("lead_stage", "lead_owner", "next_follow_up_at")
         if (
             any(data.get(field) is not None for field in pipeline_fields)
@@ -1355,8 +1573,11 @@ class DatabaseCRMProvider:
                     422, "fullName is required when no existing contact matches"
                 )
             contact_type = command.contact_type or "customer"
+            fields = dict(command.fields)
+            # Lifted out of the dict on purpose -- see _insert_contact_row.
+            operator_customer_type = fields.pop("customer_type", None)
             data = {
-                **dict(command.fields),
+                **fields,
                 "full_name": full_name,
                 "business_context_id": EOM_BUSINESS_CONTEXT_ID,
                 "contact_type": contact_type,
@@ -1366,7 +1587,9 @@ class DatabaseCRMProvider:
                 "lead_stage": "new" if contact_type == "lead" else None,
                 "metadata": _operator_provenance_metadata({})[0],
             }
-            return await self._insert_contact_row(conn, data)
+            return await self._insert_contact_row(
+                conn, data, customer_type=operator_customer_type
+            )
 
         async def _write_lifecycle_event(
             conn: Any,
@@ -1514,6 +1737,11 @@ class DatabaseCRMProvider:
 
         Returns the contact dict (existing or newly created).
         """
+        if "customer_type" in extra:
+            raise ValueError(
+                "customer_type must be set through the operator mutation "
+                "boundary, not through find_or_create_contact"
+            )
         data: dict[str, Any] = {"full_name": full_name}
         if phone:
             data["phone"] = phone
@@ -1658,6 +1886,7 @@ class DatabaseCRMProvider:
         updates = {k: v for k, v in data.items() if k in allowed}
         lifecycle_requested = bool({"contact_type", "lead_stage"} & updates.keys())
         ownership_requested = "business_context_id" in updates
+        status_requested = "status" in updates
         pipeline_requested = any(
             key in updates for key in ("lead_stage", "lead_owner", "next_follow_up_at")
         )
@@ -1727,23 +1956,38 @@ class DatabaseCRMProvider:
             )
             return dict(row) if row else None
 
-        if lifecycle_requested or ownership_requested:
-            # This row lock is the ownership decision's linearization point:
-            # validation and the permitted write share one transaction with
-            # `claim_contact`'s compare-and-set UPDATE.
+        if lifecycle_requested or ownership_requested or status_requested:
+            # Lifecycle/ownership validation and status fencing share the
+            # permitted write's transaction. Ownership still uses the contact
+            # row lock as its linearization point; status uses the won-loss
+            # advisory lock before the mutation.
             async with _transaction_connection(pool) as conn:
-                existing = await conn.fetchrow(
-                    """
-                    SELECT business_context_id, contact_type, lead_stage
-                    FROM contacts
-                    WHERE id = $1
-                    FOR UPDATE
-                    """,
-                    contact_id,
-                )
-                if existing is None:
-                    return None
-                _validate_eom_transition(existing)
+                if status_requested:
+                    # A generic status write can make won-loss completion fail
+                    # after Calendar DELETE just as an archive can. The shared
+                    # advisory lock and durable fence are owned here rather
+                    # than at an MCP caller so every provider caller observes
+                    # the same closed lifecycle boundary.
+                    await conn.execute(
+                        "SELECT pg_advisory_xact_lock(hashtextextended($1, 0))",
+                        _eom_won_lead_loss_execution_lock_key(contact_id),
+                    )
+                    await self._assert_eom_won_lead_loss_cancellation_fence(
+                        conn, contact_id=contact_id
+                    )
+                if lifecycle_requested or ownership_requested:
+                    existing = await conn.fetchrow(
+                        """
+                        SELECT business_context_id, contact_type, lead_stage
+                        FROM contacts
+                        WHERE id = $1
+                        FOR UPDATE
+                        """,
+                        contact_id,
+                    )
+                    if existing is None:
+                        return None
+                    _validate_eom_transition(existing)
                 return await _write(conn)
 
         row = await _write(pool)
@@ -1776,13 +2020,22 @@ class DatabaseCRMProvider:
         return dict(row) if row else None
 
     async def delete_contact(self, contact_id: str) -> bool:
-        from ..storage.database import get_db_pool
-
-        pool = get_db_pool()
-        result = await pool.execute(
-            "UPDATE contacts SET status = 'archived', updated_at = NOW() WHERE id = $1",
-            contact_id,
-        )
+        pool = self._get_pool()
+        async with _transaction_connection(pool) as conn:
+            # Archive is a generic status mutation. It must share the won-loss
+            # execution boundary so it cannot strand a prepared cancellation
+            # after Calendar DELETE or an uncertain external result.
+            await conn.execute(
+                "SELECT pg_advisory_xact_lock(hashtextextended($1, 0))",
+                _eom_won_lead_loss_execution_lock_key(contact_id),
+            )
+            await self._assert_eom_won_lead_loss_cancellation_fence(
+                conn, contact_id=contact_id
+            )
+            result = await conn.execute(
+                "UPDATE contacts SET status = 'archived', updated_at = NOW() WHERE id = $1",
+                contact_id,
+            )
         return "UPDATE 1" in (result or "")
 
     async def list_contacts(
@@ -1919,6 +2172,416 @@ class DatabaseCRMProvider:
         )
         return [dict(row) for row in rows]
 
+    async def list_billing_recipients(
+        self,
+        *,
+        search: Optional[str] = None,
+        limit: int = 200,
+    ) -> list[dict[str, Any]]:
+        """List EOM contacts assignable as an invoice recipient. Eligible only.
+
+        Lives on the CRM provider, not the receivables service, because that is
+        where canonical EOM contact reads live -- get_eom_funnel_crm_provider()
+        pins this to the dedicated funnel CRM pool. ReceivablesService.pool
+        resolves the separate global DSN, which in the deployed slim topology is
+        a different database, so a contacts query there would read the wrong one.
+
+        Discloses display name and email deliberately: an operator choosing
+        where money-related mail goes has to see the address. It stays a narrow
+        billing projection -- no phone, address, notes, tags, source, lifecycle.
+        """
+        from .eom_crm_mutations import normalize_contact_email
+        from .eom_lead_ingress import EOM_BUSINESS_CONTEXT_ID
+
+        pool = self._get_pool()
+        requested = max(1, min(limit, 500))
+        base_conditions = [
+            "business_context_id = $1",
+            "status = $2",
+            "contact_type = $4",
+            "email IS NOT NULL",
+        ]
+        base_args: list[Any] = [
+            EOM_BUSINESS_CONTEXT_ID,
+            BILLING_RECIPIENT_ELIGIBLE_STATUS,
+            BILLING_RECIPIENT_BLANK_CHARS,
+            BILLING_RECIPIENT_ELIGIBLE_CONTACT_TYPE,
+        ]
+        if search and search.strip():
+            base_args.append(f"%{search.strip()}%")
+            base_conditions.append(
+                f"(full_name ILIKE ${len(base_args)} OR email ILIKE ${len(base_args)})"
+            )
+
+        # Page until `requested` ELIGIBLE rows are found, not until `requested`
+        # candidates have been read. The address grammar is decided in Python,
+        # so a single SQL LIMIT lets rejected rows displace eligible ones
+        # ordered after them -- 500 malformed rows followed by one valid
+        # recipient would return an empty list for limit=1.
+        #
+        # Keyset on `id`, which is IMMUTABLE. An OFFSET can skip or repeat a
+        # row under concurrent writes -- but so can a keyset built on a
+        # MUTABLE column: `full_name` is editable through the operator contact
+        # mutation, so renaming an unvisited row to sort before the cursor
+        # drops it, and renaming a visited row to sort after it emits the
+        # contact twice. Ordering for display is applied to the assembled
+        # result instead, which is bounded by `requested`.
+        results: list[dict[str, Any]] = []
+        cursor_id: Any = None
+        pages = 0
+        while len(results) < requested and pages < BILLING_RECIPIENT_MAX_PAGES:
+            pages += 1
+            conditions = list(base_conditions)
+            args = list(base_args)
+            if cursor_id is not None:
+                args.append(cursor_id)
+                conditions.append(f"id > ${len(args)}")
+            args.append(BILLING_RECIPIENT_PAGE_SIZE)
+            rows = await pool.fetch(
+                f"""
+                SELECT id, full_name, btrim(email, $3) AS email
+                FROM contacts
+                WHERE {' AND '.join(conditions)}
+                ORDER BY id
+                LIMIT ${len(args)}
+                """,
+                *args,
+            )
+            if not rows:
+                break
+            for row in rows:
+                canonical_email = normalize_contact_email(row["email"])
+                if canonical_email is None:
+                    continue
+                results.append(
+                    _billing_recipient_projection(row, canonical_email)
+                )
+                if len(results) == requested:
+                    break
+            cursor_id = rows[-1]["id"]
+            if len(rows) < BILLING_RECIPIENT_PAGE_SIZE:
+                break  # candidates exhausted
+
+        if len(results) < requested and pages >= BILLING_RECIPIENT_MAX_PAGES:
+            # Never truncate silently. Hitting this means the eligible rows are
+            # sparser than the scan budget, which is a data-quality signal, not
+            # a normal result.
+            logger.warning(
+                "billing recipients: scan cap reached after %d pages with "
+                "%d/%d eligible found; result is truncated",
+                pages,
+                len(results),
+                requested,
+            )
+        # Display order, applied once to the assembled page. The scan order is
+        # an implementation detail of stable paging and is not what an operator
+        # should see.
+        results.sort(key=lambda item: (item["displayName"] or "", item["contactId"]))
+        return results
+
+    async def get_eom_payment_customer(
+        self, contact_id: UUID
+    ) -> dict[str, Any] | None:
+        """Return the canonical active customer snapshot for an EOM payment.
+
+        This is intentionally not the public billing-recipient projection.  A
+        residential payment remains valid without an email address, so it must
+        carry the active-customer identity and classified type while preserving
+        a normalized email-or-``None`` outcome for the ledger receipt outbox.
+        The query is tenant-scoped and admits only active account records.
+        """
+        from .eom_crm_mutations import normalize_contact_email
+        from .eom_lead_ingress import EOM_BUSINESS_CONTEXT_ID
+
+        row = await self._get_pool().fetchrow(
+            """
+            SELECT id, full_name, customer_type,
+                   btrim(COALESCE(email, ''), $3) AS email
+            FROM contacts
+            WHERE id = $1
+              AND business_context_id = $2
+              AND status = $4
+              AND contact_type = $5
+            """,
+            contact_id,
+            EOM_BUSINESS_CONTEXT_ID,
+            BILLING_RECIPIENT_BLANK_CHARS,
+            BILLING_RECIPIENT_ELIGIBLE_STATUS,
+            BILLING_RECIPIENT_ELIGIBLE_CONTACT_TYPE,
+        )
+        if row is None:
+            return None
+        return {
+            "contact_id": row["id"],
+            "customer_name": str(row["full_name"] or "").strip() or "Customer",
+            "customer_type": str(row["customer_type"] or "unknown"),
+            "recipient_email": normalize_contact_email(row["email"]),
+        }
+
+    async def get_eom_billing_delivery_preference(
+        self,
+        contact_id: UUID,
+    ) -> dict[str, Any] | None:
+        """Return an active canonical customer's explicit delivery policy.
+
+        A missing profile row is intentionally distinct from a missing customer:
+        it returns the admitted contact with every preference field ``None``.
+        Callers must keep the candidate blocked rather than deriving Gmail or
+        Square from customer type, email, or historical invoice behavior.
+        """
+        preferences = await self.get_eom_billing_delivery_preferences((contact_id,))
+        return preferences.get(contact_id)
+
+    async def get_eom_billing_delivery_preferences(
+        self,
+        contact_ids: Collection[UUID],
+    ) -> dict[UUID, dict[str, Any]]:
+        """Return canonical delivery policies in one tenant-scoped read.
+
+        A caller receives only active EOM customers. Every admitted customer is
+        represented even when it has no profile row, so a missing map entry is
+        always non-canonical/not-current evidence rather than an inferred
+        delivery method. This keeps candidate preview reads bounded without
+        relaxing the single-customer route's identity boundary.
+        """
+        from .eom_lead_ingress import EOM_BUSINESS_CONTEXT_ID
+
+        requested = tuple(sorted(set(contact_ids), key=str))
+        if not requested:
+            return {}
+        rows = await self._get_pool().fetch(
+            """
+            SELECT c.id AS contact_id,
+                   p.delivery_method,
+                   p.created_at,
+                   p.created_by,
+                   p.updated_at,
+                   p.updated_by
+            FROM contacts AS c
+            LEFT JOIN eom_billing_delivery_preferences AS p
+              ON p.contact_id = c.id
+            WHERE c.id = ANY($1::uuid[])
+              AND c.business_context_id = $2
+              AND c.status = $3
+              AND c.contact_type = $4
+            """,
+            requested,
+            EOM_BUSINESS_CONTEXT_ID,
+            BILLING_RECIPIENT_ELIGIBLE_STATUS,
+            BILLING_RECIPIENT_ELIGIBLE_CONTACT_TYPE,
+        )
+        return {
+            row["contact_id"]: _eom_billing_delivery_preference_projection(row)
+            for row in rows
+        }
+
+    async def set_eom_billing_delivery_preference(
+        self,
+        *,
+        contact_id: UUID,
+        delivery_method: str | EOMBillingDeliveryMethod,
+        actor: str,
+    ) -> dict[str, Any] | None:
+        """Atomically set an explicit delivery policy for one active customer.
+
+        The canonical customer row is the transaction's linearization point.
+        Holding it `FOR UPDATE` makes the active-tenant admission decision and
+        profile upsert one operation for all callers of the primary CRM pool.
+        Equal-method retries deliberately return the existing evidence without
+        modifying its actor or timestamp.
+        """
+        from .eom_lead_ingress import EOM_BUSINESS_CONTEXT_ID
+
+        selected_method = _require_eom_billing_delivery_method(delivery_method)
+        if not isinstance(actor, str):
+            raise ValueError("actor must be a non-empty string")
+        normalized_actor = actor.strip()
+        if not normalized_actor or len(normalized_actor) > 128:
+            raise ValueError("actor must be a non-empty string of at most 128 characters")
+
+        pool = self._get_pool()
+        async with _transaction_connection(pool) as conn:
+            customer = await conn.fetchrow(
+                """
+                SELECT id
+                FROM contacts
+                WHERE id = $1
+                  AND business_context_id = $2
+                  AND status = $3
+                  AND contact_type = $4
+                FOR UPDATE
+                """,
+                contact_id,
+                EOM_BUSINESS_CONTEXT_ID,
+                BILLING_RECIPIENT_ELIGIBLE_STATUS,
+                BILLING_RECIPIENT_ELIGIBLE_CONTACT_TYPE,
+            )
+            if customer is None:
+                return None
+
+            existing = await conn.fetchrow(
+                """
+                SELECT contact_id, delivery_method, created_at, created_by,
+                       updated_at, updated_by
+                FROM eom_billing_delivery_preferences
+                WHERE contact_id = $1
+                """,
+                contact_id,
+            )
+            if existing is not None and existing["delivery_method"] == selected_method:
+                return _eom_billing_delivery_preference_projection(
+                    existing,
+                    changed=False,
+                )
+
+            if existing is None:
+                updated = await conn.fetchrow(
+                    """
+                    INSERT INTO eom_billing_delivery_preferences (
+                        contact_id, delivery_method, created_by, created_at,
+                        updated_by, updated_at
+                    )
+                    VALUES (
+                        $1, $2, $3, statement_timestamp(), $3, statement_timestamp()
+                    )
+                    RETURNING contact_id, delivery_method, created_at, created_by,
+                              updated_at, updated_by
+                    """,
+                    contact_id,
+                    selected_method,
+                    normalized_actor,
+                )
+            else:
+                updated = await conn.fetchrow(
+                    """
+                    UPDATE eom_billing_delivery_preferences
+                    SET delivery_method = $2,
+                        updated_by = $3,
+                        updated_at = statement_timestamp()
+                    WHERE contact_id = $1
+                    RETURNING contact_id, delivery_method, created_at, created_by,
+                              updated_at, updated_by
+                    """,
+                    contact_id,
+                    selected_method,
+                    normalized_actor,
+                )
+            if updated is None:
+                raise RuntimeError("EOM billing delivery preference write was lost")
+            return _eom_billing_delivery_preference_projection(updated, changed=True)
+
+    async def billing_recipients_schema_ready(self) -> bool:
+        """True when the billing-recipient and payment-customer reads work.
+
+        An initialized pool only proves a connection opened. A configured but
+        partially migrated database passes that check and then fails every
+        recipient read with an undefined column, so readiness has to name the
+        columns the queries depend on. LIMIT 0 validates them without reading
+        a row.
+        """
+        try:
+            await self._get_pool().fetch(
+                """
+                SELECT id, full_name, email, status, contact_type, customer_type,
+                       business_context_id
+                FROM contacts
+                LIMIT 0
+                """
+            )
+        except Exception:
+            return False
+        return True
+
+    async def get_billing_recipient(self, contact_id: UUID) -> dict[str, Any]:
+        """Answer whether ONE contact may receive invoices, and who it is.
+
+        The authoritative validation used before storing a billing contact and
+        again when resolving a recipient at invoice time -- eligibility can
+        lapse between those moments, which is why the resolver re-asks rather
+        than trusting a stored id.
+
+        The tenant predicate is IN the query. A contact under another tenant
+        returns no row and is reported not_found, identical to one that does not
+        exist, so no later branch or log can betray the difference.
+        """
+        from .eom_crm_mutations import normalize_contact_email
+        from .eom_lead_ingress import EOM_BUSINESS_CONTEXT_ID
+
+        pool = self._get_pool()
+        row = await pool.fetchrow(
+            """
+            SELECT id, full_name, status, contact_type,
+                   btrim(COALESCE(email, ''), $3) AS email
+            FROM contacts
+            WHERE id = $1 AND business_context_id = $2
+            """,
+            contact_id,
+            EOM_BUSINESS_CONTEXT_ID,
+            BILLING_RECIPIENT_BLANK_CHARS,
+        )
+        if row is None:
+            return _billing_recipient_refusal(contact_id, "not_found")
+        # Allow-list the single live status rather than deny-listing the others:
+        # the column carries no CHECK constraint, so enumerating would silently
+        # admit any future value.
+        if row["status"] != BILLING_RECIPIENT_ELIGIBLE_STATUS:
+            return _billing_recipient_refusal(contact_id, "inactive")
+        if row["contact_type"] != BILLING_RECIPIENT_ELIGIBLE_CONTACT_TYPE:
+            # Not an account. Reported as `inactive` rather than a new public
+            # token: from the caller's side it is the same answer -- this
+            # contact may not receive invoices -- and the reason set stays the
+            # four the contract declares.
+            return _billing_recipient_refusal(contact_id, "inactive")
+        # Nonblank is not usable, and usable is decided by the CANONICAL
+        # grammar rather than a second expression of it. An SQL regex here
+        # admitted `a@b..com` and `a@.b.com`, which the canonical validator
+        # rejects -- so a caller could be offered a recipient the canonical
+        # write path would refuse.
+        canonical_email = normalize_contact_email(row["email"])
+        if canonical_email is None:
+            return _billing_recipient_refusal(contact_id, "no_email")
+        return _billing_recipient_projection(row, canonical_email)
+
+    async def list_known_eom_contact_ids(
+        self,
+        *,
+        contact_ids: Sequence[UUID],
+    ) -> list[dict[str, Any]]:
+        """Return the subset of ``contact_ids`` that name a live EOM contact.
+
+        Answers link verification for systems that store an Atlas contact id of
+        their own. Tenant scope is part of the answer, not a filter applied
+        afterwards: an id belonging to another business context is simply not
+        in the result, so no caller can use this to probe outside EOM.
+
+        Archived and lost contacts still count as known. The question is
+        whether the link resolves, and a link to a contact that was closed is
+        intact -- it is a dangling or cross-tenant id that means the write
+        boundary was bypassed.
+
+        Returns rows of ``{id, customer_type, customer_type_revision}`` rather than bare
+        ids so a caller mirroring the classification can refresh it from the
+        same tenant-scoped read (ATLAS #2357). The revision is assigned by the
+        database on each customer_type change, so it lets that caller order the
+        observed type evidence without depending on an application clock. The
+        tenant predicate is unchanged and still part of the query, so a contact
+        in another business context is absent here exactly as before -- it
+        cannot leak a type it never returns an id for.
+        """
+        if not contact_ids:
+            return []
+        pool = self._get_pool()
+        rows = await pool.fetch(
+            """
+            SELECT c.id, c.customer_type, c.customer_type_revision
+            FROM contacts AS c
+            WHERE c.business_context_id = 'effingham_maids'
+              AND c.id = ANY($1::uuid[])
+            """,
+            list(contact_ids),
+        )
+        return [dict(row) for row in rows]
+
     @staticmethod
     def _eom_estimate_booking_metadata(
         *,
@@ -1927,6 +2590,7 @@ class DatabaseCRMProvider:
         calendar_id: str,
         notes: str | None,
         expected_calendar_event_id: str,
+        requested_calendar_id: str | None = None,
         calendar_event: dict[str, Any] | None = None,
         calendar_event_id: str | None = None,
         actor_id: int | None = None,
@@ -1938,6 +2602,8 @@ class DatabaseCRMProvider:
             "notes": notes or "",
             "expected_calendar_event_id": expected_calendar_event_id,
         }
+        if requested_calendar_id is not None:
+            metadata["requested_calendar_id"] = requested_calendar_id
         if calendar_event is not None:
             metadata["calendar_event"] = calendar_event
         if calendar_event_id is not None:
@@ -2094,6 +2760,55 @@ class DatabaseCRMProvider:
             if release is not None:
                 await release(conn)
 
+    @asynccontextmanager
+    async def eom_won_lead_loss_execution_lock(self, *, contact_id: str):
+        """Fence one won-lead teardown across its external Calendar DELETE.
+
+        A database transaction cannot contain an external Google Calendar
+        request.  This session advisory lock is therefore held across the
+        prepare -> DELETE -> complete span.  Draft claims and both customer
+        handoff paths take the same key transactionally before their first
+        mutation, so they wait for the terminal decision instead of racing a
+        welcome send or conversion through a cancellation window.
+
+        The yielded provider is bound to the locking pooled connection.  That
+        mirrors ``eom_estimate_booking_execution_lock``: using a second pooled
+        connection for prepare/complete could deadlock a small pool against the
+        session that owns the lock.
+        """
+        from .eom_lead_conversion import EOMLeadConversionError
+
+        lock_key = _eom_won_lead_loss_execution_lock_key(contact_id)
+        pool = self._get_pool()
+        acquire = getattr(pool, "acquire", None)
+        if callable(acquire):
+            conn = await pool.acquire()
+            release = pool.release
+        else:
+            conn = pool
+            release = None
+        acquired = False
+        try:
+            acquired = bool(
+                await conn.fetchval(
+                    "SELECT pg_try_advisory_lock(hashtextextended($1, 0))",
+                    lock_key,
+                )
+            )
+            if not acquired:
+                raise EOMLeadConversionError(
+                    409, "EOM won lead loss is already executing for this lead"
+                )
+            yield DatabaseCRMProvider(pool=conn)
+        finally:
+            if acquired:
+                await conn.fetchval(
+                    "SELECT pg_advisory_unlock(hashtextextended($1, 0))",
+                    lock_key,
+                )
+            if release is not None:
+                await release(conn)
+
     async def prepare_eom_estimate_booking(
         self,
         *,
@@ -2136,6 +2851,7 @@ class DatabaseCRMProvider:
         actor_id: int,
         actor_name: str,
         calendar_id_explicit: bool = True,
+        requested_calendar_id: str | None = None,
     ) -> dict[str, Any]:
         """Claim one lead/booking key before the first-clean Calendar write."""
         return await self._prepare_eom_booking(
@@ -2150,6 +2866,7 @@ class DatabaseCRMProvider:
             actor_id=actor_id,
             actor_name=actor_name,
             calendar_id_explicit=calendar_id_explicit,
+            requested_calendar_id=requested_calendar_id,
         )
 
     async def _prepare_eom_booking(
@@ -2166,6 +2883,7 @@ class DatabaseCRMProvider:
         actor_id: int,
         actor_name: str,
         calendar_id_explicit: bool = True,
+        requested_calendar_id: str | None = None,
     ) -> dict[str, Any]:
         """Claim one lead/booking key before the external Calendar side effect.
 
@@ -2320,6 +3038,63 @@ class DatabaseCRMProvider:
                     ).strip()
                     if snapshot_calendar_id:
                         calendar_id = snapshot_calendar_id
+                elif (
+                    booked_for_key is not None
+                    and family.enqueues_onboarding_draft
+                    and str(calendar_id).strip().casefold() == "primary"
+                    and str(
+                        request_metadata.get("requested_calendar_id") or ""
+                    ).strip().casefold()
+                    == "primary"
+                ):
+                    # A completed same-key replay is closed from immutable
+                    # lifecycle metadata.  Do not make it depend on today's
+                    # OAuth principal: ``primary`` is only the caller's
+                    # original alias, while the booked request already holds
+                    # the concrete Calendar target.  Normalizing it here keeps
+                    # the existing full payload comparison, then the replay
+                    # returns before the booking service can call Calendar.
+                    snapshot_calendar_id = str(
+                        request_metadata.get("calendar_id") or ""
+                    ).strip()
+                    if snapshot_calendar_id:
+                        calendar_id = snapshot_calendar_id
+                elif (
+                    booked_for_key is not None
+                    and family.enqueues_onboarding_draft
+                    and str(calendar_id).strip().casefold() == "primary"
+                    and str(
+                        request_metadata.get("requested_calendar_id") or ""
+                    ).strip()
+                ):
+                    # `primary` is an alias only when the immutable request
+                    # snapshot proves the original call used it. A concrete
+                    # original request must not accept a changed alias simply
+                    # because today's primary happens to resolve to that ID.
+                    raise EOMLeadConversionError(
+                        409,
+                        "Booking key already belongs to a different "
+                        f"{family.label} booking",
+                    )
+                elif (
+                    family.enqueues_onboarding_draft
+                    and str(calendar_id).strip().casefold() == "primary"
+                ):
+                    # A caller that explicitly supplied ``primary`` needs the
+                    # booking service to resolve the current principal before
+                    # this payload can be compared to the stored concrete ID.
+                    # This read-only preflight also keeps a replay from ever
+                    # changing an existing booking's Calendar target.
+                    return {
+                        "contact_id": str(contact["id"]),
+                        "lead_stage": str(contact["lead_stage"]),
+                        "status": "calendar_identity_required",
+                        "calendar_event_id": None,
+                        "expected_calendar_event_id": expected_calendar_event_id,
+                        "idempotent": True,
+                        "requires_calendar_identity": True,
+                        "contact": dict(contact),
+                    }
                 if not self._eom_estimate_booking_payload_matches(
                     request_metadata,
                     scheduled_start=scheduled_start,
@@ -2405,6 +3180,23 @@ class DatabaseCRMProvider:
                     409,
                     f"EOM lead already has a different {family.label} booking",
                 )
+            if (
+                family.enqueues_onboarding_draft
+                and str(calendar_id).strip().casefold() == "primary"
+            ):
+                # Do not write an ambiguous alias into first-clean lifecycle
+                # evidence. The booking service resolves it through Calendar
+                # and calls prepare again with the concrete ID.
+                return {
+                    "contact_id": str(contact["id"]),
+                    "lead_stage": str(contact["lead_stage"]),
+                    "status": "calendar_identity_required",
+                    "calendar_event_id": None,
+                    "expected_calendar_event_id": expected_calendar_event_id,
+                    "idempotent": False,
+                    "requires_calendar_identity": True,
+                    "contact": dict(contact),
+                }
 
             calendar_event = self._eom_booking_calendar_event(
                 family,
@@ -2434,6 +3226,11 @@ class DatabaseCRMProvider:
                         calendar_id=calendar_id,
                         notes=notes,
                         expected_calendar_event_id=expected_calendar_event_id,
+                        requested_calendar_id=(
+                            requested_calendar_id
+                            if family.enqueues_onboarding_draft
+                            else None
+                        ),
                         calendar_event=calendar_event,
                         actor_id=actor_id,
                     )
@@ -3049,6 +3846,68 @@ class DatabaseCRMProvider:
         )
         return [dict(row) for row in rows]
 
+    async def list_eom_public_onboarding_issued_links(
+        self,
+        *,
+        accepted_signing_key_fingerprints: Collection[str],
+        limit: int = 100,
+        cursor_issued_at: datetime | None = None,
+        cursor_draft_id: UUID | None = None,
+    ) -> list[dict[str, Any]]:
+        """Return current issued-token evidence for the private office queue.
+
+        Draft ``sent`` state proves delivery evidence, not whether the customer
+        can still use the link. The token row, accepted signing-key fingerprint,
+        and current draft/contact readiness predicate jointly own that decision.
+        This read deliberately exposes no token ID, signing material, approval
+        key, or bearer.
+        """
+
+        from .eom_lead_conversion import EOMLeadConversionError
+        from .eom_lead_ingress import EOM_BUSINESS_CONTEXT_ID
+
+        accepted_fingerprints = tuple(accepted_signing_key_fingerprints)
+        if not accepted_fingerprints:
+            return []
+        cursor_clause = ""
+        params: list[Any] = [accepted_fingerprints, limit, EOM_BUSINESS_CONTEXT_ID]
+        if cursor_issued_at is not None and cursor_draft_id is not None:
+            cursor_clause = "AND (token.issued_at, token.draft_id) < ($4::timestamptz, $5::uuid)"
+            params.extend([cursor_issued_at, cursor_draft_id])
+        pool = self._get_pool()
+        if not await pool.fetchval(
+            "SELECT to_regclass('eom_public_onboarding_tokens') IS NOT NULL"
+        ):
+            raise EOMLeadConversionError(
+                503, "Public onboarding token storage is unavailable"
+            )
+        rows = await pool.fetch(
+            f"""
+            SELECT
+                token.draft_id,
+                token.contact_id,
+                contact.full_name,
+                draft.recipient_email,
+                token.status,
+                token.issued_at
+            FROM eom_public_onboarding_tokens AS token
+            JOIN eom_onboarding_email_drafts AS draft ON draft.id = token.draft_id
+            JOIN contacts AS contact ON contact.id = token.contact_id
+            WHERE token.status = 'issued'
+              AND token.signing_key_fingerprint = ANY($1::varchar[])
+              AND draft.status IN ('sending', 'sent')
+              AND contact.business_context_id = $3
+              AND contact.status = 'active'
+              AND contact.contact_type = 'lead'
+              AND contact.lead_stage = 'won'
+              {cursor_clause}
+            ORDER BY token.issued_at DESC, token.draft_id DESC
+            LIMIT $2
+            """,
+            *params,
+        )
+        return [dict(row) for row in rows]
+
     async def get_eom_onboarding_draft(self, draft_id: str) -> dict[str, Any] | None:
         pool = self._get_pool()
         row = await pool.fetchrow(
@@ -3119,6 +3978,8 @@ class DatabaseCRMProvider:
         draft_id: str,
         actor_id: int,
         actor_name: str,
+        public_onboarding_base_url: str | None = None,
+        public_onboarding_hmac_secret: str | None = None,
     ) -> dict[str, Any]:
         """Atomically claim one pending draft into 'sending' (migration 360).
 
@@ -3129,34 +3990,178 @@ class DatabaseCRMProvider:
         """
         from .eom_lead_conversion import EOMLeadConversionError
 
+        if (public_onboarding_base_url is None) != (
+            public_onboarding_hmac_secret is None
+        ):
+            raise RuntimeError("public onboarding link configuration must be paired")
+
         pool = self._get_pool()
-        row = await pool.fetchrow(
-            """
-            UPDATE eom_onboarding_email_drafts AS d
-               SET status = 'sending', claimed_at = NOW(),
-                   approved_by_employee_id = $2, approved_by_name = $3
-             WHERE d.id = $1::uuid
-               AND d.status = 'pending'
-               AND d.blocker IS NULL
-               AND d.recipient_email IS NOT NULL
-               AND EXISTS (
-                   SELECT 1
-                   FROM contacts AS c
-                   WHERE c.id = d.contact_id
-                     AND c.business_context_id = 'effingham_maids'
-                     AND c.status = 'active'
-               )
-             RETURNING *
-            """,
-            str(draft_id),
-            actor_id,
-            actor_name,
-        )
-        if row is not None:
-            return {
-                "claimed": True,
-                "draft": self._eom_onboarding_draft_closed(row),
-            }
+        public_onboarding_enabled = public_onboarding_base_url is not None
+        if not public_onboarding_enabled:
+            # Read the contact only to acquire the shared teardown fence; the
+            # UPDATE remains the claim's atomic readiness predicate.  Without
+            # this lock a pending draft could move to sending while a won lead
+            # is between its durable cancellation prepare and Calendar DELETE.
+            async with _transaction_connection(pool) as conn:
+                draft_hint = await conn.fetchrow(
+                    """
+                    SELECT contact_id
+                    FROM eom_onboarding_email_drafts
+                    WHERE id = $1::uuid
+                    """,
+                    str(draft_id),
+                )
+                if draft_hint is not None:
+                    draft_contact_id = str(draft_hint["contact_id"])
+                    await conn.execute(
+                        "SELECT pg_advisory_xact_lock(hashtextextended($1, 0))",
+                        _eom_won_lead_loss_execution_lock_key(draft_contact_id),
+                    )
+                    await self._assert_eom_won_lead_loss_cancellation_fence(
+                        conn, contact_id=draft_contact_id
+                    )
+                row = await conn.fetchrow(
+                    """
+                    UPDATE eom_onboarding_email_drafts AS d
+                       SET status = 'sending', claimed_at = NOW(),
+                           approved_by_employee_id = $2, approved_by_name = $3
+                     WHERE d.id = $1::uuid
+                       AND d.status = 'pending'
+                       AND d.blocker IS NULL
+                       AND d.recipient_email IS NOT NULL
+                       AND EXISTS (
+                           SELECT 1
+                           FROM contacts AS c
+                           WHERE c.id = d.contact_id
+                             AND c.business_context_id = 'effingham_maids'
+                             AND c.status = 'active'
+                       )
+                     RETURNING *
+                    """,
+                    str(draft_id),
+                    actor_id,
+                    actor_name,
+                )
+            if row is not None:
+                return {
+                    "claimed": True,
+                    "draft": self._eom_onboarding_draft_closed(row),
+                }
+        else:
+            # Token issuance and the status claim share one transaction. A
+            # failed insert (including an unexpected live-token conflict) rolls
+            # the draft back to pending, so no email is ever sent with an
+            # unredeemable link.
+            token_id = uuid4()
+            approval_key = f"eom-public-onboarding:{token_id}"
+            raw_token = format_eom_public_onboarding_token(
+                token_id=token_id,
+                secret=str(public_onboarding_hmac_secret),
+            )
+            signing_key_fingerprint = eom_public_onboarding_hmac_key_fingerprint(
+                secret=str(public_onboarding_hmac_secret)
+            )
+            link = build_eom_public_onboarding_link(
+                base_url=str(public_onboarding_base_url),
+                token=raw_token,
+            )
+            async with _transaction_connection(pool) as conn:
+                # Token issuance is itself an alternate handoff admission path,
+                # not merely an email concern. Take the shared contact lock
+                # before changing the draft so a concurrent office handoff
+                # cannot finalize the lead between the enabled-claim predicate
+                # and token insertion. This hint deliberately takes no row lock:
+                # public redemption takes the contact lock before the draft lock,
+                # and reversing that order here would create a cycle.
+                draft_hint = await conn.fetchrow(
+                    """
+                    SELECT contact_id
+                    FROM eom_onboarding_email_drafts
+                    WHERE id = $1::uuid
+                    """,
+                    str(draft_id),
+                )
+                if draft_hint is not None:
+                    draft_contact_id = str(draft_hint["contact_id"])
+                    for lock_key in sorted(
+                        {
+                            f"eom-customer-handoff:contact:{draft_contact_id}",
+                            _eom_won_lead_loss_execution_lock_key(draft_contact_id),
+                        }
+                    ):
+                        await conn.execute(
+                            "SELECT pg_advisory_xact_lock(hashtextextended($1, 0))",
+                            lock_key,
+                        )
+                    await self._assert_eom_won_lead_loss_cancellation_fence(
+                        conn, contact_id=draft_contact_id
+                    )
+                row = await conn.fetchrow(
+                    """
+                    UPDATE eom_onboarding_email_drafts AS d
+                       SET status = 'sending', claimed_at = NOW(),
+                           approved_by_employee_id = $2, approved_by_name = $3
+                     WHERE d.id = $1::uuid
+                       AND d.status = 'pending'
+                       AND d.blocker IS NULL
+                       AND d.recipient_email IS NOT NULL
+                       AND EXISTS (
+                           SELECT 1
+                           FROM contacts AS c
+                           WHERE c.id = d.contact_id
+                             AND c.business_context_id = 'effingham_maids'
+                             AND c.status = 'active'
+                             AND c.contact_type = 'lead'
+                             AND c.lead_stage = 'won'
+                       )
+                     RETURNING *
+                    """,
+                    str(draft_id),
+                    actor_id,
+                    actor_name,
+                )
+                if row is not None:
+                    token_row = await conn.fetchrow(
+                        """
+                        INSERT INTO eom_public_onboarding_tokens (
+                            id, draft_id, contact_id, approval_key,
+                            approved_by_employee_id, approved_by_name,
+                            signing_key_fingerprint, prefill_full_name,
+                            prefill_email, prefill_phone, prefill_address,
+                            prefill_city, prefill_state, prefill_zip,
+                            prefill_customer_type
+                        )
+                        SELECT
+                            $1, $2::uuid, $3::uuid, $4, $5, $6, $7,
+                            contact.full_name, $8, contact.phone,
+                            contact.address, contact.city, contact.state,
+                            contact.zip, contact.customer_type
+                        FROM contacts AS contact
+                        WHERE contact.id = $3::uuid
+                        ON CONFLICT DO NOTHING
+                        RETURNING id
+                        """,
+                        token_id,
+                        str(draft_id),
+                        str(row["contact_id"]),
+                        approval_key,
+                        actor_id,
+                        actor_name,
+                        signing_key_fingerprint,
+                        str(row["recipient_email"]),
+                    )
+                    if token_row is None:
+                        raise EOMLeadConversionError(
+                            409,
+                            "EOM onboarding draft already has a public onboarding link",
+                        )
+                    return {
+                        "claimed": True,
+                        "draft": self._eom_onboarding_draft_closed(row),
+                        # Ephemeral transport material only. The raw bearer
+                        # never becomes part of the durable draft projection.
+                        "public_onboarding_link": link,
+                    }
         existing = await self.get_eom_onboarding_draft(draft_id)
         if existing is None:
             raise EOMLeadConversionError(404, "EOM onboarding draft not found")
@@ -3264,25 +4269,45 @@ class DatabaseCRMProvider:
         from .eom_lead_conversion import EOMLeadConversionError
 
         pool = self._get_pool()
-        row = await pool.fetchrow(
-            """
-            UPDATE eom_onboarding_email_drafts
-               SET status = 'revoked', revoked_at = NOW()
-             WHERE id = $1::uuid
-               AND (
-                   status = 'pending'
-                   OR (
-                       status = 'sending'
-                       AND claimed_at <= NOW() - make_interval(mins => $2)
+        async with _transaction_connection(pool) as conn:
+            # The public finalizer uses this exact lock before it locks the
+            # token/draft row. A stale-send reconciliation therefore cannot
+            # revoke a link between its validation and redemption.
+            await conn.execute(
+                "SELECT pg_advisory_xact_lock(hashtextextended($1, 0))",
+                f"eom-public-onboarding:draft:{draft_id}",
+            )
+            row = await conn.fetchrow(
+                """
+                UPDATE eom_onboarding_email_drafts
+                   SET status = 'revoked', revoked_at = NOW()
+                 WHERE id = $1::uuid
+                   AND (
+                       status = 'pending'
+                       OR (
+                           status = 'sending'
+                           AND claimed_at <= NOW() - make_interval(mins => $2)
+                       )
                    )
-               )
-             RETURNING *
-            """,
-            str(draft_id),
-            _EOM_ONBOARDING_SENDING_STALE_AFTER_MINUTES,
-        )
-        if row is not None:
-            return self._eom_onboarding_draft_closed(row)
+                 RETURNING *
+                """,
+                str(draft_id),
+                _EOM_ONBOARDING_SENDING_STALE_AFTER_MINUTES,
+            )
+            if row is not None:
+                if await conn.fetchval(
+                    "SELECT to_regclass('eom_public_onboarding_tokens') IS NOT NULL"
+                ):
+                    await conn.execute(
+                        """
+                        UPDATE eom_public_onboarding_tokens
+                           SET status = 'revoked', revoked_at = NOW()
+                         WHERE draft_id = $1::uuid
+                           AND status = 'issued'
+                        """,
+                        str(draft_id),
+                    )
+                return self._eom_onboarding_draft_closed(row)
         existing = await self.get_eom_onboarding_draft(draft_id)
         if existing is None:
             raise EOMLeadConversionError(404, "EOM onboarding draft not found")
@@ -3298,6 +4323,569 @@ class DatabaseCRMProvider:
         raise EOMLeadConversionError(
             409, "EOM onboarding draft was already sent and cannot be revoked"
         )
+
+    async def _get_eom_public_onboarding_session_result(
+        self, *, token_id: str, signing_key_fingerprint: str
+    ) -> dict[str, Any]:
+        """Read one durable token state for the public session projections.
+
+        The sibling public methods intentionally choose their own output
+        allowlists. The browser-safe session keeps Atlas identifiers out of its
+        response, while the tracker-only context route needs those opaque IDs
+        to retain a recoverable local reservation.
+        """
+
+        from .eom_lead_conversion import EOMLeadConversionError
+        from .eom_lead_ingress import EOM_BUSINESS_CONTEXT_ID
+
+        pool = self._get_pool()
+        row = await pool.fetchrow(
+            """
+            SELECT
+                token.id AS token_id,
+                token.draft_id,
+                token.status AS token_status,
+                token.handoff_id,
+                draft.status AS draft_status,
+                contact.id AS contact_id,
+                contact.business_context_id,
+                contact.contact_type,
+                contact.lead_stage,
+                contact.status AS contact_status,
+                token.prefill_full_name,
+                token.prefill_email,
+                token.prefill_phone,
+                token.prefill_address,
+                token.prefill_city,
+                token.prefill_state,
+                token.prefill_zip,
+                token.prefill_customer_type,
+                handoff.tracker_customer_id,
+                handoff.tracker_site_id
+            FROM eom_public_onboarding_tokens AS token
+            JOIN eom_onboarding_email_drafts AS draft ON draft.id = token.draft_id
+            JOIN contacts AS contact ON contact.id = token.contact_id
+            LEFT JOIN eom_customer_handoffs AS handoff ON handoff.id = token.handoff_id
+            WHERE token.id = $1::uuid
+              AND token.signing_key_fingerprint = $2
+            """,
+            token_id,
+            signing_key_fingerprint,
+        )
+        if row is None:
+            raise EOMLeadConversionError(404, "Public onboarding link is unavailable")
+        token_status = str(row["token_status"])
+        if token_status == "redeemed":
+            if (
+                row["handoff_id"] is None
+                or row["tracker_customer_id"] is None
+                or row["tracker_site_id"] is None
+            ):
+                raise EOMLeadConversionError(
+                    409, "Public onboarding completion evidence is incomplete"
+                )
+            return {
+                "status": "completed",
+                "token_id": str(row["token_id"]),
+                "draft_id": str(row["draft_id"]),
+                "contact_id": str(row["contact_id"]),
+                "tracker_customer_id": int(row["tracker_customer_id"]),
+                "tracker_site_id": int(row["tracker_site_id"]),
+                "handoff_id": str(row["handoff_id"]),
+                "idempotent": True,
+            }
+        if token_status != "issued":
+            raise EOMLeadConversionError(404, "Public onboarding link is unavailable")
+        if (
+            row["draft_status"] not in ("sending", "sent")
+            or row["business_context_id"] != EOM_BUSINESS_CONTEXT_ID
+            or row["contact_status"] != "active"
+            or row["contact_type"] != "lead"
+            or row["lead_stage"] != "won"
+        ):
+            raise EOMLeadConversionError(404, "Public onboarding link is unavailable")
+        return {
+            "status": "ready",
+            "token_id": str(row["token_id"]),
+            "draft_id": str(row["draft_id"]),
+            "contact_id": str(row["contact_id"]),
+            "full_name": str(row["prefill_full_name"]),
+            "email": row["prefill_email"],
+            "phone": row["prefill_phone"],
+            "address": row["prefill_address"],
+            "city": row["prefill_city"],
+            "state": row["prefill_state"],
+            "zip": row["prefill_zip"],
+            "customer_type": row["prefill_customer_type"],
+        }
+
+    async def get_eom_public_onboarding_session(
+        self, *, token_id: str, signing_key_fingerprint: str
+    ) -> dict[str, Any]:
+        """Return the existing browser-safe token-bound projection."""
+
+        result = await self._get_eom_public_onboarding_session_result(
+            token_id=token_id,
+            signing_key_fingerprint=signing_key_fingerprint,
+        )
+        if result["status"] == "completed":
+            return {
+                field: result[field]
+                for field in (
+                    "status",
+                    "contact_id",
+                    "tracker_customer_id",
+                    "tracker_site_id",
+                    "handoff_id",
+                    "idempotent",
+                )
+            }
+        return {
+            field: result[field]
+            for field in (
+                "status",
+                "contact_id",
+                "full_name",
+                "email",
+                "phone",
+                "address",
+                "city",
+                "state",
+                "zip",
+                "customer_type",
+            )
+        }
+
+    async def get_eom_public_onboarding_tracker_context(
+        self, *, token_id: str, signing_key_fingerprint: str
+    ) -> dict[str, Any]:
+        """Return the private token/draft/contact context for the Tracker only."""
+
+        return await self._get_eom_public_onboarding_session_result(
+            token_id=token_id,
+            signing_key_fingerprint=signing_key_fingerprint,
+        )
+
+    async def complete_eom_public_onboarding(
+        self,
+        *,
+        token_id: str,
+        signing_key_fingerprint: str,
+        tracker_customer_id: int,
+        tracker_site_id: int,
+    ) -> dict[str, Any]:
+        """Redeem one issued link into the existing immutable handoff.
+
+        The initial token read merely supplies the fixed lock vocabulary. The
+        decisive token/draft/contact read happens after all lock keys are held;
+        that is the linearization point shared with the ordinary office handoff.
+        ``finalize_eom_customer_handoff`` receives this same connection, so its
+        lead transition, lifecycle evidence, handoff insert, and token redemption
+        either all commit or all roll back together.
+        """
+
+        from .eom_lead_conversion import EOMLeadConversionError
+        from .eom_lead_ingress import EOM_BUSINESS_CONTEXT_ID
+
+        pool = self._get_pool()
+        async with _transaction_connection(pool) as conn:
+            token_hint = await conn.fetchrow(
+                """
+                SELECT draft_id, contact_id, approval_key
+                FROM eom_public_onboarding_tokens
+                WHERE id = $1::uuid
+                  AND signing_key_fingerprint = $2
+                """,
+                token_id,
+                signing_key_fingerprint,
+            )
+            if token_hint is None:
+                raise EOMLeadConversionError(
+                    404, "Public onboarding link is unavailable"
+                )
+            lock_keys = _eom_customer_handoff_lock_keys(
+                approval_key=str(token_hint["approval_key"]),
+                contact_id=str(token_hint["contact_id"]),
+                tracker_customer_id=tracker_customer_id,
+                tracker_site_id=tracker_site_id,
+            )
+            lock_keys.append(
+                f"eom-public-onboarding:draft:{token_hint['draft_id']}"
+            )
+            for lock_key in sorted(set(lock_keys)):
+                await conn.execute(
+                    "SELECT pg_advisory_xact_lock(hashtextextended($1, 0))",
+                    lock_key,
+                )
+            await self._assert_eom_won_lead_loss_cancellation_fence(
+                conn, contact_id=str(token_hint["contact_id"])
+            )
+            row = await conn.fetchrow(
+                """
+                SELECT
+                    token.id AS token_id,
+                    token.status AS token_status,
+                    token.approval_key,
+                    token.approved_by_employee_id,
+                    token.approved_by_name,
+                    token.handoff_id,
+                    draft.status AS draft_status,
+                    contact.id AS contact_id,
+                    contact.business_context_id,
+                    contact.contact_type,
+                    contact.lead_stage,
+                    contact.status AS contact_status,
+                    handoff.tracker_customer_id,
+                    handoff.tracker_site_id,
+                    handoff.approval_key AS handoff_approval_key
+                FROM eom_public_onboarding_tokens AS token
+                JOIN eom_onboarding_email_drafts AS draft ON draft.id = token.draft_id
+                JOIN contacts AS contact ON contact.id = token.contact_id
+                LEFT JOIN eom_customer_handoffs AS handoff ON handoff.id = token.handoff_id
+                WHERE token.id = $1::uuid
+                  AND token.signing_key_fingerprint = $2
+                FOR UPDATE OF token, draft, contact
+                """,
+                token_id,
+                signing_key_fingerprint,
+            )
+            if row is None:
+                raise EOMLeadConversionError(
+                    404, "Public onboarding link is unavailable"
+                )
+            token_status = str(row["token_status"])
+            if token_status == "redeemed":
+                if (
+                    row["handoff_id"] is None
+                    or row["tracker_customer_id"] is None
+                    or row["tracker_site_id"] is None
+                    or str(row["handoff_approval_key"]) != str(row["approval_key"])
+                ):
+                    raise EOMLeadConversionError(
+                        409, "Public onboarding completion evidence is incomplete"
+                    )
+                if (
+                    int(row["tracker_customer_id"]) != tracker_customer_id
+                    or int(row["tracker_site_id"]) != tracker_site_id
+                ):
+                    raise EOMLeadConversionError(
+                        409,
+                        "Public onboarding link was already completed for different tracker records",
+                    )
+                return {
+                    "status": "completed",
+                    "contact_id": str(row["contact_id"]),
+                    "tracker_customer_id": tracker_customer_id,
+                    "tracker_site_id": tracker_site_id,
+                    "handoff_id": str(row["handoff_id"]),
+                    "idempotent": True,
+                }
+            if token_status != "issued":
+                raise EOMLeadConversionError(
+                    409, "Public onboarding link is unavailable"
+                )
+            if (
+                row["draft_status"] not in ("sending", "sent")
+                or row["business_context_id"] != EOM_BUSINESS_CONTEXT_ID
+                or row["contact_status"] != "active"
+                or row["contact_type"] != "lead"
+                or row["lead_stage"] != "won"
+            ):
+                raise EOMLeadConversionError(
+                    409, "Public onboarding link is unavailable"
+                )
+            handoff = await self.finalize_eom_customer_handoff(
+                contact_id=str(row["contact_id"]),
+                tracker_customer_id=tracker_customer_id,
+                tracker_site_id=tracker_site_id,
+                approval_key=str(row["approval_key"]),
+                actor_id=int(row["approved_by_employee_id"]),
+                actor_name=str(row["approved_by_name"]),
+                connection=conn,
+                permitted_public_onboarding_token_id=str(row["token_id"]),
+            )
+            redeemed = await conn.fetchrow(
+                """
+                UPDATE eom_public_onboarding_tokens
+                   SET status = 'redeemed', redeemed_at = NOW(), handoff_id = $2::uuid
+                 WHERE id = $1::uuid
+                   AND status = 'issued'
+                 RETURNING id, contact_id, handoff_id
+                """,
+                token_id,
+                handoff["handoff_id"],
+            )
+            if redeemed is None:
+                raise RuntimeError("public onboarding token changed during finalization")
+            return {
+                "status": "completed",
+                "contact_id": str(redeemed["contact_id"]),
+                "tracker_customer_id": tracker_customer_id,
+                "tracker_site_id": tracker_site_id,
+                "handoff_id": str(redeemed["handoff_id"]),
+                "idempotent": bool(handoff["idempotent"]),
+            }
+
+    async def recover_eom_public_onboarding(
+        self,
+        *,
+        token_id: str,
+        contact_id: str,
+        tracker_customer_id: int,
+        tracker_site_id: int,
+        actor_id: int,
+        actor_name: str,
+    ) -> dict[str, Any]:
+        """Finish a Tracker-local reservation without retaining a raw bearer.
+
+        The recovery operation owns one token/contact/Tracker-ID decision. It
+        uses the same sorted handoff lock vocabulary as public and office
+        finalizers, plus the token's draft lock. An issued token is revoked and
+        finalized through the existing office path in the same transaction, so
+        a failed handoff cannot strand it in a new terminal state.
+        """
+
+        from .eom_lead_conversion import EOMLeadConversionError
+        from .eom_lead_ingress import EOM_BUSINESS_CONTEXT_ID
+
+        def _completed(handoff_id: object, *, idempotent: bool) -> dict[str, Any]:
+            return {
+                "status": "completed",
+                "contact_id": contact_id,
+                "tracker_customer_id": tracker_customer_id,
+                "tracker_site_id": tracker_site_id,
+                "handoff_id": str(handoff_id),
+                "idempotent": idempotent,
+            }
+
+        recovery_approval_key = f"eom-public-onboarding-recovery:{token_id}"
+        pool = self._get_pool()
+        async with _transaction_connection(pool) as conn:
+            if not await conn.fetchval(
+                "SELECT to_regclass('eom_public_onboarding_tokens') IS NOT NULL"
+            ):
+                raise EOMLeadConversionError(
+                    503, "Public onboarding token storage is unavailable"
+                )
+            token_hint = await conn.fetchrow(
+                """
+                SELECT draft_id
+                FROM eom_public_onboarding_tokens
+                WHERE id = $1::uuid
+                  AND contact_id = $2::uuid
+                """,
+                token_id,
+                contact_id,
+            )
+            if token_hint is None:
+                raise EOMLeadConversionError(
+                    404, "Public onboarding recovery was not found"
+                )
+            lock_keys = _eom_customer_handoff_lock_keys(
+                approval_key=recovery_approval_key,
+                contact_id=contact_id,
+                tracker_customer_id=tracker_customer_id,
+                tracker_site_id=tracker_site_id,
+            )
+            lock_keys.append(
+                f"eom-public-onboarding:draft:{token_hint['draft_id']}"
+            )
+            for lock_key in sorted(set(lock_keys)):
+                await conn.execute(
+                    "SELECT pg_advisory_xact_lock(hashtextextended($1, 0))",
+                    lock_key,
+                )
+            await self._assert_eom_won_lead_loss_cancellation_fence(
+                conn, contact_id=contact_id
+            )
+            row = await conn.fetchrow(
+                """
+                SELECT
+                    token.id AS token_id,
+                    token.status AS token_status,
+                    token.approval_key,
+                    token.handoff_id,
+                    draft.status AS draft_status,
+                    contact.id AS contact_id,
+                    contact.business_context_id,
+                    contact.contact_type,
+                    contact.lead_stage,
+                    contact.status AS contact_status,
+                    handoff.tracker_customer_id,
+                    handoff.tracker_site_id,
+                    handoff.approval_key AS handoff_approval_key
+                FROM eom_public_onboarding_tokens AS token
+                JOIN eom_onboarding_email_drafts AS draft ON draft.id = token.draft_id
+                JOIN contacts AS contact ON contact.id = token.contact_id
+                LEFT JOIN eom_customer_handoffs AS handoff ON handoff.id = token.handoff_id
+                WHERE token.id = $1::uuid
+                  AND token.contact_id = $2::uuid
+                FOR UPDATE OF token, draft, contact
+                """,
+                token_id,
+                contact_id,
+            )
+            if row is None:
+                raise RuntimeError("public onboarding token changed during recovery")
+            token_status = str(row["token_status"])
+            if token_status == "redeemed":
+                if (
+                    row["handoff_id"] is None
+                    or row["tracker_customer_id"] is None
+                    or row["tracker_site_id"] is None
+                    or str(row["handoff_approval_key"]) != str(row["approval_key"])
+                ):
+                    raise EOMLeadConversionError(
+                        409, "Public onboarding completion evidence is incomplete"
+                    )
+                if (
+                    int(row["tracker_customer_id"]) != tracker_customer_id
+                    or int(row["tracker_site_id"]) != tracker_site_id
+                ):
+                    raise EOMLeadConversionError(
+                        409,
+                        "Public onboarding link was already completed for different tracker records",
+                    )
+                return _completed(row["handoff_id"], idempotent=True)
+            if token_status not in ("issued", "revoked"):
+                raise EOMLeadConversionError(
+                    409, "Public onboarding recovery is unavailable"
+                )
+
+            existing_handoff = await conn.fetchrow(
+                """
+                SELECT id, tracker_customer_id, tracker_site_id
+                FROM eom_customer_handoffs
+                WHERE contact_id = $1::uuid
+                FOR UPDATE
+                """,
+                contact_id,
+            )
+            if existing_handoff is not None:
+                if (
+                    int(existing_handoff["tracker_customer_id"])
+                    != tracker_customer_id
+                    or int(existing_handoff["tracker_site_id"]) != tracker_site_id
+                ):
+                    raise EOMLeadConversionError(
+                        409,
+                        "EOM lead already has a different customer handoff",
+                    )
+                if token_status == "issued":
+                    revoked = await conn.fetchrow(
+                        """
+                        UPDATE eom_public_onboarding_tokens
+                           SET status = 'revoked', revoked_at = NOW()
+                         WHERE id = $1::uuid
+                           AND status = 'issued'
+                         RETURNING id
+                        """,
+                        token_id,
+                    )
+                    if revoked is None:
+                        raise RuntimeError(
+                            "public onboarding token changed during recovery"
+                        )
+                return _completed(existing_handoff["id"], idempotent=True)
+
+            if (
+                row["draft_status"] not in ("sending", "sent")
+                or row["business_context_id"] != EOM_BUSINESS_CONTEXT_ID
+                or row["contact_status"] != "active"
+                or row["contact_type"] != "lead"
+                or row["lead_stage"] != "won"
+            ):
+                raise EOMLeadConversionError(
+                    409, "Public onboarding recovery is unavailable"
+                )
+            if token_status == "issued":
+                revoked = await conn.fetchrow(
+                    """
+                    UPDATE eom_public_onboarding_tokens
+                       SET status = 'revoked', revoked_at = NOW()
+                     WHERE id = $1::uuid
+                       AND status = 'issued'
+                     RETURNING id
+                    """,
+                    token_id,
+                )
+                if revoked is None:
+                    raise RuntimeError("public onboarding token changed during recovery")
+            handoff = await self.finalize_eom_customer_handoff(
+                contact_id=str(row["contact_id"]),
+                tracker_customer_id=tracker_customer_id,
+                tracker_site_id=tracker_site_id,
+                approval_key=recovery_approval_key,
+                actor_id=actor_id,
+                actor_name=actor_name,
+                connection=conn,
+            )
+            return _completed(
+                handoff["handoff_id"], idempotent=bool(handoff["idempotent"])
+            )
+
+    async def revoke_eom_public_onboarding_token(
+        self, *, draft_id: str
+    ) -> dict[str, Any]:
+        """Revoke an issued public link without rewriting sent-email evidence."""
+
+        from .eom_lead_conversion import EOMLeadConversionError
+
+        pool = self._get_pool()
+        async with _transaction_connection(pool) as conn:
+            if not await conn.fetchval(
+                "SELECT to_regclass('eom_public_onboarding_tokens') IS NOT NULL"
+            ):
+                raise EOMLeadConversionError(
+                    503, "Public onboarding token storage is unavailable"
+                )
+            await conn.execute(
+                "SELECT pg_advisory_xact_lock(hashtextextended($1, 0))",
+                f"eom-public-onboarding:draft:{draft_id}",
+            )
+            row = await conn.fetchrow(
+                """
+                SELECT id, contact_id, status
+                FROM eom_public_onboarding_tokens
+                WHERE draft_id = $1::uuid
+                FOR UPDATE
+                """,
+                draft_id,
+            )
+            if row is None:
+                raise EOMLeadConversionError(
+                    404, "Public onboarding link was not found"
+                )
+            token_status = str(row["status"])
+            if token_status == "redeemed":
+                raise EOMLeadConversionError(
+                    409, "Completed public onboarding cannot be revoked"
+                )
+            if token_status == "revoked":
+                return {
+                    "token_id": str(row["id"]),
+                    "contact_id": str(row["contact_id"]),
+                    "status": "revoked",
+                    "idempotent": True,
+                }
+            revoked = await conn.fetchrow(
+                """
+                UPDATE eom_public_onboarding_tokens
+                   SET status = 'revoked', revoked_at = NOW()
+                 WHERE id = $1::uuid
+                   AND status = 'issued'
+                 RETURNING id, contact_id
+                """,
+                row["id"],
+            )
+            if revoked is None:
+                raise RuntimeError("public onboarding token changed during revocation")
+            return {
+                "token_id": str(revoked["id"]),
+                "contact_id": str(revoked["contact_id"]),
+                "status": "revoked",
+                "idempotent": False,
+            }
 
     async def open_customer_service_ticket(
         self,
@@ -3737,6 +5325,111 @@ class DatabaseCRMProvider:
             )
         return [dict(r) for r in rows]
 
+    async def _assert_eom_public_onboarding_fence(
+        self,
+        conn: Any,
+        *,
+        contact_id: str,
+        permitted_token_id: str | None,
+    ) -> None:
+        """Fence office conversion while an issued public link owns the lead.
+
+        A code deployment can precede migration 383 while the feature is
+        disabled. The relation probe preserves the existing office handoff in
+        that deliberately dormant state; once the table exists, the matching
+        row is locked under the same sorted advisory-lock vocabulary as both
+        finalizers, so either channel observes one serialized decision.
+        """
+
+        from .eom_lead_conversion import EOMLeadConversionError
+
+        relation_exists = await conn.fetchval(
+            "SELECT to_regclass('eom_public_onboarding_tokens') IS NOT NULL"
+        )
+        if not relation_exists:
+            if permitted_token_id is not None:
+                raise EOMLeadConversionError(
+                    503, "Public onboarding token storage is unavailable"
+                )
+            return
+        issued = await conn.fetchrow(
+            """
+            SELECT id
+            FROM eom_public_onboarding_tokens
+            WHERE contact_id = $1::uuid
+              AND status = 'issued'
+            FOR UPDATE
+            """,
+            contact_id,
+        )
+        if issued is None:
+            if permitted_token_id is not None:
+                raise EOMLeadConversionError(
+                    409, "Public onboarding link is no longer available"
+                )
+            return
+        if permitted_token_id is not None and str(issued["id"]) == str(
+            permitted_token_id
+        ):
+            return
+        raise EOMLeadConversionError(
+            409,
+            "An active public onboarding link must be revoked before office approval",
+        )
+
+    async def _assert_eom_won_lead_loss_cancellation_fence(
+        self,
+        conn: Any,
+        *,
+        contact_id: str,
+        permitted_operation_key: str | None = None,
+    ) -> None:
+        """Block competing writes while a durable won-loss cancellation is open.
+
+        The shared advisory lock serializes a live executor, but it vanishes if
+        the executor crashes or returns after an uncertain Calendar DELETE. The
+        requested lifecycle row survives that exit and is the authoritative
+        fence until the same operation records its atomic cancellation/loss
+        completion. ``permitted_operation_key`` is used only by prepare: a
+        retry may reuse its own evidence, but no second key may start another
+        cancellation for the same contact.
+        """
+
+        from .eom_lead_conversion import EOMLeadConversionError
+
+        unresolved = await conn.fetchrow(
+            """
+            SELECT requested.operation_key
+            FROM eom_lead_lifecycle_events AS requested
+            WHERE requested.contact_id = $1::uuid
+              AND requested.event_type = $2::varchar
+              AND (
+                  $4::varchar IS NULL
+                  OR requested.operation_key IS DISTINCT FROM $4::varchar
+              )
+              AND NOT EXISTS (
+                  SELECT 1
+                  FROM eom_lead_lifecycle_events AS completed
+                  WHERE completed.contact_id = requested.contact_id
+                    AND completed.event_type = $3::varchar
+                    AND completed.operation_key = requested.operation_key
+              )
+            ORDER BY requested.created_at DESC, requested.id DESC
+            LIMIT 1
+            FOR UPDATE OF requested
+            """,
+            contact_id,
+            _EOM_WON_LOSS_CANCELLATION_REQUESTED_EVENT,
+            _EOM_WON_LOSS_CANCELLATION_COMPLETED_EVENT,
+            permitted_operation_key,
+        )
+        if unresolved is not None:
+            raise EOMLeadConversionError(
+                409,
+                "EOM won lead loss cancellation requires reconciliation before "
+                "the lead can change",
+            )
+
     async def finalize_eom_customer_handoff(
         self,
         *,
@@ -3746,6 +5439,8 @@ class DatabaseCRMProvider:
         approval_key: str,
         actor_id: int,
         actor_name: str,
+        connection: Any | None = None,
+        permitted_public_onboarding_token_id: str | None = None,
     ) -> dict[str, Any]:
         """Atomically link a tracker Customer/Site and promote one EOM lead.
 
@@ -3776,21 +5471,36 @@ class DatabaseCRMProvider:
                 "idempotent": idempotent,
             }
 
+        # This is derived from the only alternate admission path. It is not an
+        # independently caller-controlled metadata field, so future internal
+        # callers cannot label an ordinary office conversion as public.
+        completion_channel = (
+            "public_onboarding"
+            if permitted_public_onboarding_token_id is not None
+            else "office"
+        )
+
         pool = self._get_pool()
-        async with _transaction_connection(pool) as conn:
-            lock_keys = sorted(
-                {
-                    f"eom-customer-handoff:approval:{approval_key}",
-                    f"eom-customer-handoff:contact:{contact_id}",
-                    f"eom-customer-handoff:tracker-customer:{tracker_customer_id}",
-                    f"eom-customer-handoff:tracker-site:{tracker_site_id}",
-                }
+        async with _transaction_connection(pool, connection) as conn:
+            lock_keys = _eom_customer_handoff_lock_keys(
+                approval_key=approval_key,
+                contact_id=contact_id,
+                tracker_customer_id=tracker_customer_id,
+                tracker_site_id=tracker_site_id,
             )
             for lock_key in lock_keys:
                 await conn.execute(
                     "SELECT pg_advisory_xact_lock(hashtextextended($1, 0))",
                     lock_key,
                 )
+            await self._assert_eom_won_lead_loss_cancellation_fence(
+                conn, contact_id=contact_id
+            )
+            await self._assert_eom_public_onboarding_fence(
+                conn,
+                contact_id=contact_id,
+                permitted_token_id=permitted_public_onboarding_token_id,
+            )
             existing_key = await conn.fetchrow(
                 """
                 SELECT id, contact_id, approval_key, tracker_customer_id, tracker_site_id
@@ -3998,7 +5708,8 @@ class DatabaseCRMProvider:
                         jsonb_build_object(
                             'tracker_customer_id', $4::bigint,
                             'tracker_site_id', $5::bigint,
-                            'approved_by_employee_id', $6::bigint
+                            'approved_by_employee_id', $6::bigint,
+                            'completion_channel', $8::text
                         ))
                 """,
                 contact_id,
@@ -4008,6 +5719,7 @@ class DatabaseCRMProvider:
                 tracker_site_id,
                 actor_id,
                 from_stage,
+                completion_channel,
             )
             handoff = await conn.fetchrow(
                 """
@@ -4026,6 +5738,688 @@ class DatabaseCRMProvider:
                 actor_name,
             )
             return _result(handoff, idempotent=False)
+
+    async def prepare_eom_won_lead_loss(
+        self,
+        *,
+        contact_id: str,
+        reason_code: str,
+        note: str | None,
+        operation_key: str,
+        actor_id: int,
+        actor_name: str,
+    ) -> dict[str, Any]:
+        """Persist the immutable facts required to lose a won EOM lead.
+
+        The normal pre-won disposition remains in ``mark_eom_lead_lost``.
+        A won lead is different because its first-clean event already exists
+        outside PostgreSQL and its welcome draft may be claimable.  This method
+        records the exact event/draft pair before the external DELETE, allowing
+        a retry to use the same facts rather than today's configured Calendar
+        or a rediscovered appointment.
+        """
+        from .eom_lead_conversion import EOMLeadConversionError
+        from .eom_lead_ingress import EOM_BUSINESS_CONTEXT_ID
+
+        def _result(*, idempotent: bool) -> dict[str, Any]:
+            return {
+                "contact_id": str(contact_id),
+                "lead_stage": "lost",
+                "status": "lost",
+                "reason_code": reason_code,
+                "from_stage": "won",
+                "idempotent": idempotent,
+            }
+
+        pool = self._get_pool()
+        async with _transaction_connection(pool) as conn:
+            for lock_key in sorted(
+                {
+                    f"eom-lead-lost:contact:{contact_id}",
+                    f"eom-lead-lost:operation:{operation_key}",
+                }
+            ):
+                await conn.execute(
+                    "SELECT pg_advisory_xact_lock(hashtextextended($1, 0))",
+                    lock_key,
+                )
+
+            contact = await conn.fetchrow(
+                """
+                SELECT id, business_context_id, contact_type, lead_stage, status
+                FROM contacts
+                WHERE id = $1::uuid
+                FOR UPDATE
+                """,
+                contact_id,
+            )
+            if (
+                contact is None
+                or contact["business_context_id"] != EOM_BUSINESS_CONTEXT_ID
+            ):
+                raise EOMLeadConversionError(404, "EOM lead was not found")
+
+            # Preserve the direct writer's pre-won state machine without
+            # acquiring or interpreting an unrelated operation's lifecycle
+            # rows. Only a current won lead, or a currently lost lead that
+            # might be a completed won-loss replay, needs this protocol.
+            if contact["lead_stage"] not in ("won", "lost"):
+                return {"mode": "pre_won"}
+
+            key_events = await conn.fetch(
+                """
+                SELECT event_type, from_stage, to_stage, reason, metadata
+                FROM eom_lead_lifecycle_events
+                WHERE contact_id = $1::uuid
+                  AND operation_key = $2
+                FOR UPDATE
+                """,
+                contact_id,
+                operation_key,
+            )
+            events_by_type = {str(event["event_type"]): event for event in key_events}
+            completed = events_by_type.get(_EOM_WON_LOSS_CANCELLATION_COMPLETED_EVENT)
+            lost = events_by_type.get("lead_lost")
+            if contact["lead_stage"] == "won":
+                await self._assert_eom_won_lead_loss_cancellation_fence(
+                    conn,
+                    contact_id=contact_id,
+                    permitted_operation_key=operation_key,
+                )
+            won_protocol_candidate = completed is not None or (
+                lost is not None and lost["from_stage"] == "won"
+            ) or contact["lead_stage"] == "won"
+            if won_protocol_candidate:
+                foreign_key_owner = await conn.fetchval(
+                    """
+                    SELECT EXISTS (
+                        SELECT 1
+                        FROM eom_lead_lifecycle_events
+                        WHERE operation_key = $1
+                          AND contact_id <> $2::uuid
+                    )
+                    """,
+                    operation_key,
+                    contact_id,
+                )
+                if foreign_key_owner:
+                    raise EOMLeadConversionError(
+                        409, "Idempotency-Key already belongs to another EOM lead"
+                    )
+            # A legacy/pre-won lead_lost row intentionally remains the direct
+            # writer's replay contract.  Only a won-shaped loss is owned by
+            # this protocol; otherwise merely routing through the service
+            # would turn an existing 200 replay into a new 409.
+            if completed is not None or (
+                lost is not None and lost["from_stage"] == "won"
+            ):
+                if (
+                    completed is None
+                    or lost is None
+                    or lost["from_stage"] != "won"
+                    or lost["to_stage"] != "lost"
+                    or contact["contact_type"] != "lead"
+                    or contact["lead_stage"] != "lost"
+                ):
+                    raise EOMLeadConversionError(
+                        409, "EOM won lead loss operation was superseded"
+                    )
+                lost_metadata = self._eom_estimate_booking_metadata_from_row(
+                    lost["metadata"]
+                )
+                return {
+                    "mode": "completed",
+                    "result": _result(
+                        idempotent=True,
+                    )
+                    | {
+                        "reason_code": str(
+                            lost_metadata.get("lost_reason_code") or reason_code
+                        )
+                    },
+                }
+
+            # The direct writer deliberately owns all legacy/pre-won behavior,
+            # including its replay and reason semantics.  The service retains
+            # its execution lock while it delegates, which keeps the newer
+            # fence vocabulary closed without changing that state machine.
+            if contact["lead_stage"] != "won":
+                return {"mode": "pre_won"}
+            if any(
+                str(event["event_type"]) not in _EOM_WON_LOSS_EVENT_TYPES
+                or (
+                    str(event["event_type"]) == "lead_lost"
+                    and (
+                        event["from_stage"] != "won"
+                        or event["to_stage"] != "lost"
+                    )
+                )
+                for event in key_events
+            ):
+                raise EOMLeadConversionError(
+                    409, "Idempotency-Key already belongs to another EOM operation"
+                )
+            if contact["contact_type"] != "lead":
+                raise EOMLeadConversionError(409, "EOM contact is not a lead")
+            if contact["status"] != "active":
+                raise EOMLeadConversionError(
+                    409, "EOM lead must be active to mark lost"
+                )
+
+            booked_events = await conn.fetch(
+                """
+                SELECT operation_key, metadata
+                FROM eom_lead_lifecycle_events
+                WHERE contact_id = $1::uuid
+                  AND event_type = 'first_clean_booked'
+                ORDER BY lifecycle_sequence DESC NULLS LAST, created_at DESC, id DESC
+                FOR UPDATE
+                """,
+                contact_id,
+            )
+            if len(booked_events) != 1:
+                raise EOMLeadConversionError(
+                    409,
+                    "EOM won lead requires one reconciled first-clean booking",
+                )
+            booked = booked_events[0]
+            booking_key = str(booked["operation_key"] or "").strip()
+            booking_metadata = self._eom_estimate_booking_metadata_from_row(
+                booked["metadata"]
+            )
+            calendar_id = str(booking_metadata.get("calendar_id") or "").strip()
+            expected_event_id = str(
+                booking_metadata.get("expected_calendar_event_id") or ""
+            ).strip()
+            calendar_event_id = str(
+                booking_metadata.get("calendar_event_id") or ""
+            ).strip()
+            if (
+                not booking_key
+                or not calendar_id
+                or not expected_event_id
+                or calendar_event_id != expected_event_id
+            ):
+                raise EOMLeadConversionError(
+                    409,
+                    "EOM first-clean booking lacks a reconciled Calendar event",
+                )
+            if calendar_id.casefold() == "primary":
+                raise EOMLeadConversionError(
+                    409,
+                    "EOM first-clean booking uses a relative Calendar identifier; "
+                    "reconcile the Calendar principal before marking this won lead lost",
+                )
+
+            draft = await conn.fetchrow(
+                """
+                SELECT id, operation_key, status
+                FROM eom_onboarding_email_drafts
+                WHERE contact_id = $1::uuid
+                  AND operation_key = $2
+                FOR UPDATE
+                """,
+                contact_id,
+                booking_key,
+            )
+            if draft is None:
+                raise EOMLeadConversionError(
+                    409, "EOM won lead lacks its first-clean onboarding draft"
+                )
+            draft_status = str(draft["status"])
+            if draft_status not in ("pending", "revoked"):
+                raise EOMLeadConversionError(
+                    409,
+                    "EOM onboarding draft delivery must be reconciled before "
+                    "marking this won lead lost",
+                )
+            draft_id = str(draft["id"])
+            if await conn.fetchval(
+                "SELECT to_regclass('eom_public_onboarding_tokens') IS NOT NULL"
+            ):
+                issued_public_link = await conn.fetchval(
+                    """
+                    SELECT EXISTS (
+                        SELECT 1
+                        FROM eom_public_onboarding_tokens
+                        WHERE draft_id = $1::uuid
+                          AND contact_id = $2::uuid
+                          AND status = 'issued'
+                    )
+                    """,
+                    draft_id,
+                    contact_id,
+                )
+                if issued_public_link:
+                    raise EOMLeadConversionError(
+                        409,
+                        "EOM onboarding draft has an issued public onboarding link",
+                    )
+
+            requested = events_by_type.get(_EOM_WON_LOSS_CANCELLATION_REQUESTED_EVENT)
+            facts = {
+                "booking_operation_key": booking_key,
+                "calendar_id": calendar_id,
+                "calendar_event_id": calendar_event_id,
+                "expected_calendar_event_id": expected_event_id,
+                "onboarding_draft_id": draft_id,
+                "lost_reason_code": reason_code,
+            }
+            if requested is not None:
+                requested_metadata = self._eom_estimate_booking_metadata_from_row(
+                    requested["metadata"]
+                )
+                if any(
+                    str(requested_metadata.get(key) or "") != str(value)
+                    for key, value in facts.items()
+                    if key != "lost_reason_code"
+                ):
+                    raise EOMLeadConversionError(
+                        409,
+                        "EOM won lead loss preparation no longer matches "
+                        "first-clean facts",
+                    )
+                # The same key is a retry.  Preserve its original reason just
+                # like the existing direct lost writer preserves its ledger
+                # reason on replay.
+                facts["lost_reason_code"] = str(
+                    requested_metadata.get("lost_reason_code") or reason_code
+                )
+            else:
+                await conn.execute(
+                    """
+                    INSERT INTO eom_lead_lifecycle_events (
+                        contact_id, event_type, from_stage, to_stage, actor,
+                        source, operation_key, reason, metadata
+                    )
+                    VALUES ($1::uuid, $2, 'won', 'won', $3, 'eom_office', $4,
+                            $5, $6::jsonb)
+                    """,
+                    contact_id,
+                    _EOM_WON_LOSS_CANCELLATION_REQUESTED_EVENT,
+                    f"employee:{actor_id}:{actor_name}",
+                    operation_key,
+                    note,
+                    json.dumps(facts),
+                )
+
+            return {
+                "mode": "won",
+                "contact_id": str(contact["id"]),
+                "calendar_id": calendar_id,
+                "calendar_event_id": calendar_event_id,
+                "expected_calendar_event_id": expected_event_id,
+                "onboarding_draft_id": draft_id,
+                "booking_operation_key": booking_key,
+                "reason_code": facts["lost_reason_code"],
+                "idempotent": requested is not None,
+            }
+
+    async def mark_eom_won_lead_loss_calendar_unsettled(
+        self,
+        *,
+        contact_id: str,
+        operation_key: str,
+        calendar_id: str,
+        calendar_event_id: str,
+        calendar_error: str | None,
+        calendar_message: str,
+        actor_id: int,
+        actor_name: str,
+    ) -> None:
+        """Append evidence of an uncertain DELETE without changing lead state."""
+        pool = self._get_pool()
+        async with _transaction_connection(pool) as conn:
+            await conn.execute(
+                "SELECT pg_advisory_xact_lock(hashtextextended($1, 0))",
+                f"eom-lead-lost:operation:{operation_key}",
+            )
+            await conn.execute(
+                """
+                INSERT INTO eom_lead_lifecycle_events (
+                    contact_id, event_type, from_stage, to_stage, actor,
+                    source, operation_key, reason, metadata
+                )
+                SELECT c.id, $2::varchar, c.lead_stage, c.lead_stage, $3::varchar,
+                       'eom_office', $4::varchar, $5::text,
+                       jsonb_build_object(
+                           'calendar_id', $6::text,
+                           'calendar_event_id', $7::text,
+                           'calendar_error', $8::text,
+                           'calendar_message', $5::text
+                       )
+                FROM contacts AS c
+                WHERE c.id = $1::uuid
+                  AND EXISTS (
+                      SELECT 1
+                      FROM eom_lead_lifecycle_events AS requested
+                      WHERE requested.contact_id = c.id
+                        AND requested.event_type = $9::varchar
+                        AND requested.operation_key = $4::varchar
+                  )
+                  AND NOT EXISTS (
+                      SELECT 1
+                      FROM eom_lead_lifecycle_events AS completed
+                      WHERE completed.contact_id = c.id
+                        AND completed.event_type = $10::varchar
+                        AND completed.operation_key = $4::varchar
+                  )
+                ON CONFLICT (contact_id, event_type, operation_key)
+                    WHERE operation_key IS NOT NULL
+                    DO NOTHING
+                """,
+                contact_id,
+                _EOM_WON_LOSS_CANCELLATION_UNSETTLED_EVENT,
+                f"employee:{actor_id}:{actor_name}",
+                operation_key,
+                calendar_message,
+                calendar_id,
+                calendar_event_id,
+                calendar_error,
+                _EOM_WON_LOSS_CANCELLATION_REQUESTED_EVENT,
+                _EOM_WON_LOSS_CANCELLATION_COMPLETED_EVENT,
+            )
+
+    async def complete_eom_won_lead_loss(
+        self,
+        *,
+        contact_id: str,
+        reason_code: str,
+        note: str | None,
+        operation_key: str,
+        calendar_id: str,
+        calendar_event_id: str,
+        actor_id: int,
+        actor_name: str,
+    ) -> dict[str, Any]:
+        """Atomically revoke a prepared draft and commit won -> lost.
+
+        This method is called only after Calendar returned a determinate DELETE
+        result.  It re-reads every fact prepared before that external call so a
+        stale/reused operation key cannot turn a different lead or draft into a
+        loss.
+        """
+        from .eom_lead_conversion import EOMLeadConversionError
+        from .eom_lead_ingress import EOM_BUSINESS_CONTEXT_ID
+
+        def _result(*, idempotent: bool, reason_code_value: str) -> dict[str, Any]:
+            return {
+                "contact_id": str(contact_id),
+                "lead_stage": "lost",
+                "status": "lost",
+                "reason_code": reason_code_value,
+                "from_stage": "won",
+                "idempotent": idempotent,
+            }
+
+        pool = self._get_pool()
+        async with _transaction_connection(pool) as conn:
+            for lock_key in sorted(
+                {
+                    f"eom-lead-lost:contact:{contact_id}",
+                    f"eom-lead-lost:operation:{operation_key}",
+                }
+            ):
+                await conn.execute(
+                    "SELECT pg_advisory_xact_lock(hashtextextended($1, 0))",
+                    lock_key,
+                )
+
+            contact = await conn.fetchrow(
+                """
+                SELECT id, business_context_id, contact_type, lead_stage, status
+                FROM contacts
+                WHERE id = $1::uuid
+                FOR UPDATE
+                """,
+                contact_id,
+            )
+            if (
+                contact is None
+                or contact["business_context_id"] != EOM_BUSINESS_CONTEXT_ID
+            ):
+                raise EOMLeadConversionError(404, "EOM lead was not found")
+
+            events = await conn.fetch(
+                """
+                SELECT event_type, from_stage, to_stage, reason, metadata
+                FROM eom_lead_lifecycle_events
+                WHERE contact_id = $1::uuid
+                  AND operation_key = $2
+                  AND event_type = ANY($3::varchar[])
+                FOR UPDATE
+                """,
+                contact_id,
+                operation_key,
+                list(_EOM_WON_LOSS_EVENT_TYPES),
+            )
+            events_by_type = {str(event["event_type"]): event for event in events}
+            requested = events_by_type.get(_EOM_WON_LOSS_CANCELLATION_REQUESTED_EVENT)
+            completed = events_by_type.get(_EOM_WON_LOSS_CANCELLATION_COMPLETED_EVENT)
+            lost = events_by_type.get("lead_lost")
+            if completed is not None or lost is not None:
+                if (
+                    completed is None
+                    or lost is None
+                    or lost["from_stage"] != "won"
+                    or lost["to_stage"] != "lost"
+                    or contact["contact_type"] != "lead"
+                    or contact["lead_stage"] != "lost"
+                ):
+                    raise EOMLeadConversionError(
+                        409, "EOM won lead loss operation was superseded"
+                    )
+                lost_metadata = self._eom_estimate_booking_metadata_from_row(
+                    lost["metadata"]
+                )
+                return _result(
+                    idempotent=True,
+                    reason_code_value=str(
+                        lost_metadata.get("lost_reason_code") or reason_code
+                    ),
+                )
+            if requested is None:
+                raise EOMLeadConversionError(
+                    409, "EOM won lead loss was not prepared for this operation"
+                )
+            requested_metadata = self._eom_estimate_booking_metadata_from_row(
+                requested["metadata"]
+            )
+            # An idempotent retry must retain the operator's original note in
+            # the ledger instead of allowing a later request body to rewrite
+            # the explanation attached to this prepared cancellation.
+            effective_note = requested["reason"]
+            prepared_calendar_id = str(
+                requested_metadata.get("calendar_id") or ""
+            ).strip()
+            prepared_event_id = str(
+                requested_metadata.get("calendar_event_id") or ""
+            ).strip()
+            booking_key = str(
+                requested_metadata.get("booking_operation_key") or ""
+            ).strip()
+            draft_id = str(
+                requested_metadata.get("onboarding_draft_id") or ""
+            ).strip()
+            if (
+                not prepared_calendar_id
+                or not prepared_event_id
+                or not booking_key
+                or not draft_id
+                or prepared_calendar_id != calendar_id
+                or prepared_event_id != calendar_event_id
+            ):
+                raise EOMLeadConversionError(
+                    409,
+                    "EOM won lead loss completion does not match prepared "
+                    "Calendar facts",
+                )
+            if (
+                contact["contact_type"] != "lead"
+                or contact["lead_stage"] != "won"
+                or contact["status"] != "active"
+            ):
+                raise EOMLeadConversionError(
+                    409, "EOM won lead changed before Calendar cancellation completed"
+                )
+
+            booked = await conn.fetchrow(
+                """
+                SELECT metadata
+                FROM eom_lead_lifecycle_events
+                WHERE contact_id = $1::uuid
+                  AND event_type = 'first_clean_booked'
+                  AND operation_key = $2
+                FOR UPDATE
+                """,
+                contact_id,
+                booking_key,
+            )
+            booked_metadata = (
+                self._eom_estimate_booking_metadata_from_row(booked["metadata"])
+                if booked is not None
+                else {}
+            )
+            if (
+                str(booked_metadata.get("calendar_id") or "").strip()
+                != prepared_calendar_id
+                or str(booked_metadata.get("calendar_event_id") or "").strip()
+                != prepared_event_id
+                or str(booked_metadata.get("expected_calendar_event_id") or "").strip()
+                != prepared_event_id
+            ):
+                raise EOMLeadConversionError(
+                    409,
+                    "EOM first-clean booking no longer matches cancellation facts",
+                )
+
+            draft = await conn.fetchrow(
+                """
+                SELECT id, contact_id, operation_key, status
+                FROM eom_onboarding_email_drafts
+                WHERE id = $1::uuid
+                  AND contact_id = $2::uuid
+                  AND operation_key = $3
+                FOR UPDATE
+                """,
+                draft_id,
+                contact_id,
+                booking_key,
+            )
+            if draft is None:
+                raise EOMLeadConversionError(
+                    409, "EOM won lead onboarding draft no longer matches booking"
+                )
+            draft_status = str(draft["status"])
+            if draft_status not in ("pending", "revoked"):
+                raise EOMLeadConversionError(
+                    409,
+                    "EOM onboarding draft delivery must be reconciled before "
+                    "marking this won lead lost",
+                )
+            if await conn.fetchval(
+                "SELECT to_regclass('eom_public_onboarding_tokens') IS NOT NULL"
+            ):
+                issued_public_link = await conn.fetchval(
+                    """
+                    SELECT EXISTS (
+                        SELECT 1
+                        FROM eom_public_onboarding_tokens
+                        WHERE draft_id = $1::uuid
+                          AND contact_id = $2::uuid
+                          AND status = 'issued'
+                    )
+                    """,
+                    draft_id,
+                    contact_id,
+                )
+                if issued_public_link:
+                    raise EOMLeadConversionError(
+                        409,
+                        "EOM onboarding draft has an issued public onboarding link",
+                    )
+            if draft_status == "pending":
+                revoked = await conn.fetchrow(
+                    """
+                    UPDATE eom_onboarding_email_drafts
+                    SET status = 'revoked', revoked_at = NOW()
+                    WHERE id = $1::uuid
+                      AND status = 'pending'
+                    RETURNING id
+                    """,
+                    draft_id,
+                )
+                if revoked is None:
+                    raise RuntimeError(
+                        "EOM onboarding draft changed during won lead loss"
+                    )
+
+            updated = await conn.fetchrow(
+                """
+                UPDATE contacts
+                SET lead_stage = 'lost', updated_at = NOW()
+                WHERE id = $1::uuid
+                  AND business_context_id = $2
+                  AND contact_type = 'lead'
+                  AND lead_stage = 'won'
+                  AND status = 'active'
+                RETURNING id
+                """,
+                contact_id,
+                EOM_BUSINESS_CONTEXT_ID,
+            )
+            if updated is None:
+                raise RuntimeError("EOM won lead changed during mark-lost completion")
+            cancellation_metadata = {
+                "booking_operation_key": booking_key,
+                "calendar_id": prepared_calendar_id,
+                "calendar_event_id": prepared_event_id,
+                "onboarding_draft_id": draft_id,
+            }
+            await conn.execute(
+                """
+                INSERT INTO eom_lead_lifecycle_events (
+                    contact_id, event_type, from_stage, to_stage, actor,
+                    source, operation_key, reason, metadata
+                )
+                VALUES ($1::uuid, $2::varchar, 'won', 'lost', $3::varchar,
+                        'eom_office', $4::varchar, $5::text, $6::jsonb)
+                """,
+                contact_id,
+                _EOM_WON_LOSS_CANCELLATION_COMPLETED_EVENT,
+                f"employee:{actor_id}:{actor_name}",
+                operation_key,
+                effective_note,
+                json.dumps(cancellation_metadata),
+            )
+            effective_reason_code = str(
+                requested_metadata.get("lost_reason_code") or reason_code
+            )
+            await conn.execute(
+                """
+                INSERT INTO eom_lead_lifecycle_events (
+                    contact_id, event_type, from_stage, to_stage, actor,
+                    source, operation_key, reason, metadata
+                )
+                VALUES ($1::uuid, 'lead_lost', 'won', 'lost', $2::varchar,
+                        'eom_office', $3::varchar, $4::text,
+                        jsonb_build_object(
+                            'lost_reason_code', $5::text,
+                            'lost_by_employee_id', $6::bigint,
+                            'first_clean_cancellation_operation_key', $7::text
+                        ))
+                """,
+                contact_id,
+                f"employee:{actor_id}:{actor_name}",
+                operation_key,
+                effective_note,
+                effective_reason_code,
+                actor_id,
+                operation_key,
+            )
+            return _result(
+                idempotent=False, reason_code_value=effective_reason_code
+            )
 
     async def mark_eom_lead_lost(
         self,
@@ -4047,12 +6441,11 @@ class DatabaseCRMProvider:
         from .eom_lead_conversion import EOMLeadConversionError
         from .eom_lead_ingress import EOM_BUSINESS_CONTEXT_ID
 
-        # 'won' is deliberately excluded: a won lead already has a booked
-        # first clean and an enqueued onboarding welcome draft, and marking it
-        # lost would need to atomically revoke that draft and cancel the
-        # calendar event. Neither of #2289's cases ('spam' at new,
-        # 'declined_after_estimate' at estimate_booked) is won; losing a won
-        # lead is deferred to a follow-up that owns the draft/calendar teardown.
+        # 'won' stays deliberately excluded from this direct writer. A won lead
+        # owns a booked first clean and an onboarding draft, so only
+        # eom_won_lead_loss may admit it after durable Calendar cancellation
+        # preparation. Keeping this guard prevents future internal callers from
+        # bypassing that external-side-effect protocol.
         admission = _EOM_LOST_RESTORABLE_STAGES
 
         def _result(

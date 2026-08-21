@@ -55,18 +55,125 @@ _PLACEHOLDER_HTTP_AUTH_TOKENS = {
 _MAX_LINE_ITEMS = 100
 _SOURCE = "chatgpt_draft_writer"
 _SOURCE_REF_PREFIX = "chatgpt_draft_writer"
+_DRAFT_WRITER_INVOICE_MIGRATIONS = (
+    "012_appointments",
+    "035_contacts",
+    "045_invoices",
+    "047_invoice_extra_fields",
+    "344_receivables_payments",
+)
 _oauth_provider: InvoicingDraftWriterOAuthProvider | None = None
+
+
+async def _draft_invoice_schema_ready(pool: Any) -> bool:
+    return bool(
+        await pool.fetchval(
+            """
+            WITH required_columns(table_name, column_name) AS (
+                VALUES
+                    ('invoices', 'id'),
+                    ('invoices', 'invoice_number'),
+                    ('invoices', 'contact_id'),
+                    ('invoices', 'customer_name'),
+                    ('invoices', 'customer_email'),
+                    ('invoices', 'customer_phone'),
+                    ('invoices', 'customer_address'),
+                    ('invoices', 'line_items'),
+                    ('invoices', 'subtotal'),
+                    ('invoices', 'tax_rate'),
+                    ('invoices', 'tax_amount'),
+                    ('invoices', 'discount_amount'),
+                    ('invoices', 'total_amount'),
+                    ('invoices', 'issue_date'),
+                    ('invoices', 'due_date'),
+                    ('invoices', 'status'),
+                    ('invoices', 'source'),
+                    ('invoices', 'source_ref'),
+                    ('invoices', 'appointment_id'),
+                    ('invoices', 'business_context_id'),
+                    ('invoices', 'notes'),
+                    ('invoices', 'metadata'),
+                    ('invoices', 'invoice_for'),
+                    ('invoices', 'contact_name'),
+                    ('invoices', 'created_at'),
+                    ('invoices', 'updated_at'),
+                    ('invoice_payments', 'invoice_id'),
+                    ('invoice_payments', 'amount'),
+                    ('invoice_payments', 'payment_date'),
+                    ('invoice_payments', 'payment_method'),
+                    ('invoice_payments', 'payment_id'),
+                    ('invoice_payments', 'reversed_at'),
+                    ('customer_payments', 'id'),
+                    ('customer_payments', 'status'),
+                    ('customer_payments', 'total_amount')
+            ),
+            required_relations(relkind, relname) AS (
+                VALUES
+                    ('S', 'invoice_number_seq'),
+                    ('r', 'invoice_payments'),
+                    ('r', 'customer_payments')
+            )
+            SELECT NOT EXISTS (
+                SELECT 1
+                FROM required_columns AS required
+                WHERE NOT EXISTS (
+                    SELECT 1
+                    FROM information_schema.columns AS actual
+                    WHERE actual.table_schema = current_schema()
+                      AND actual.table_name = required.table_name
+                      AND actual.column_name = required.column_name
+                )
+            )
+            AND NOT EXISTS (
+                SELECT 1
+                FROM required_relations AS required
+                WHERE NOT EXISTS (
+                    SELECT 1
+                    FROM pg_class AS actual
+                    JOIN pg_namespace AS actual_schema
+                      ON actual_schema.oid = actual.relnamespace
+                    WHERE actual_schema.nspname = current_schema()
+                      AND actual.relname = required.relname
+                      AND actual.relkind = required.relkind
+                )
+            )
+            """
+        )
+    )
+
+
+async def _require_draft_invoice_schema_ready(pool: Any) -> bool:
+    if not await _draft_invoice_schema_ready(pool):
+        raise RuntimeError(
+            "Draft-writer invoicing MCP requires a complete draft invoice schema"
+        )
+    return True
 
 
 @asynccontextmanager
 async def _lifespan(server):
-    """Initialize DB pool on startup, close on shutdown."""
-    from ..storage.database import close_database, init_database
+    """Initialize, migrate, and schema-verify the DB before serving, then
+    close on shutdown -- reusing the full invoicing MCP's own lifespan (this
+    module already reuses its other internals via the ``_full`` import) so
+    this narrower write surface gets the same migration/readiness fence
+    rather than a bare, unverified ``init_database()``. A draft invoice
+    write reaches ``InvoiceRepository.create()`` and must verify the minimal
+    ``invoices`` columns it writes before accepting a request."""
+    from ..storage.database import close_database, get_db_pool, init_database
+    from ..storage.migrations import run_migrations
 
-    await init_database()
-    logger.info("Draft-writer invoicing MCP: DB pool initialized")
-    yield
-    await close_database()
+    async def run_draft_writer_migrations(pool: Any) -> None:
+        await run_migrations(pool, only=_DRAFT_WRITER_INVOICE_MIGRATIONS)
+
+    async with _full._database_lifespan(
+        init_database_fn=init_database,
+        get_db_pool_fn=get_db_pool,
+        run_migrations_fn=run_draft_writer_migrations,
+        receivables_ready_fn=_require_draft_invoice_schema_ready,
+        close_database_fn=close_database,
+    ):
+        logger.info("Draft-writer invoicing MCP: DB pool initialized")
+        yield
 
 
 mcp = FastMCP(

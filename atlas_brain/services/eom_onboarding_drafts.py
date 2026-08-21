@@ -26,6 +26,7 @@ from ..templates.email.estimate_confirmation import (
     BUSINESS_EMAIL,
     BUSINESS_NAME,
 )
+from .eom_public_onboarding_tokens import append_eom_public_onboarding_invitation
 
 # NOTE: atlas_brain.config is imported lazily inside the functions that
 # need it. The slim EOM Render profile asserts that importing main_eom
@@ -235,28 +236,60 @@ async def approve_and_send_eom_onboarding_draft(
     *,
     sender: Callable[..., Awaitable[dict[str, Any]]] | None = None,
     email_history: Any | None = None,
+    public_onboarding_base_url: str | None = None,
+    public_onboarding_hmac_secret: str | None = None,
 ) -> dict[str, Any]:
-    """Claim, send, then confirm one onboarding draft (migration 360)."""
+    """Claim, send, then confirm one onboarding draft (migration 360).
+
+    Public-link configuration is optional and paired. When absent, the exact
+    legacy draft body reaches the transport. When present, the provider returns
+    a transient HMAC link after atomically minting its durable token; only the
+    outbound transport body receives that bearer, so the draft and sent-email
+    history remain safe to render to office users.
+    """
     claimer, confirmer = _draft_lifecycle_callables(crm)
     if sender is None:
         _require_transport_configured()
         sender = send_onboarding_email
 
-    claim = await claimer(
-        draft_id=command.draft_id,
-        actor_id=command.actor_id,
-        actor_name=command.actor_name,
-    )
+    if (public_onboarding_base_url is None) != (public_onboarding_hmac_secret is None):
+        raise RuntimeError("public onboarding link configuration must be paired")
+    claim_kwargs: dict[str, Any] = {
+        "draft_id": command.draft_id,
+        "actor_id": command.actor_id,
+        "actor_name": command.actor_name,
+    }
+    # Keeping the disabled invocation byte-for-byte compatible at this seam
+    # matters: existing CRM providers and focused fakes only implement the
+    # original draft lifecycle contract. The new capability is opt-in rather
+    # than an extra pair of ``None`` keyword arguments for every caller.
+    if public_onboarding_base_url is not None:
+        claim_kwargs.update(
+            {
+                "public_onboarding_base_url": public_onboarding_base_url,
+                "public_onboarding_hmac_secret": public_onboarding_hmac_secret,
+            }
+        )
+    claim = await claimer(**claim_kwargs)
     if not claim["claimed"]:
         # Already sent: idempotent replay, no second transport call.
         return claim["draft"]
     draft = claim["draft"]
+    delivery_body = str(draft["body"])
+    public_onboarding_link = claim.get("public_onboarding_link")
+    if public_onboarding_link is not None:
+        if not isinstance(public_onboarding_link, str) or not public_onboarding_link:
+            raise RuntimeError("CRM provider returned an invalid public onboarding link")
+        delivery_body = append_eom_public_onboarding_invitation(
+            body=delivery_body,
+            link=public_onboarding_link,
+        )
 
     try:
         send_result = await sender(
             to=str(draft["recipient_email"]),
             subject=str(draft["subject"]),
-            body=str(draft["body"]),
+            body=delivery_body,
             idempotency_key=onboarding_draft_idempotency_key(command.draft_id),
         )
     except Exception as exc:

@@ -5,8 +5,21 @@ import subprocess
 from pathlib import Path
 from shutil import copy2, which
 
+import pytest
+
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
+
+
+@pytest.fixture(autouse=True)
+def _review_guard_absent(monkeypatch: pytest.MonkeyPatch) -> None:
+    """push_pr.sh:80 branches on ATLAS_SKIP_LOCAL_PR_REVIEW.
+
+    conftest preserves that guard so a pushing test cannot re-enter the
+    review -> unit gate -> pytest cycle, but it would make the managed hook
+    look absent to these tests. Clear it for this module only.
+    """
+    monkeypatch.delenv("ATLAS_SKIP_LOCAL_PR_REVIEW", raising=False)
 SCRIPT = REPO_ROOT / "scripts" / "push_pr.sh"
 AUDIT_SCRIPT = REPO_ROOT / "scripts" / "audit_pr_body.py"
 AI_RECONCILIATION_SCRIPT = REPO_ROOT / "scripts" / "audit_ai_reconciliation.py"

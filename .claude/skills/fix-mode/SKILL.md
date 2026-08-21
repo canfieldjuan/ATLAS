@@ -24,8 +24,23 @@ Write `.claude/fix-mode-state.json` with:
   "pr": "<#number from the open PR>",
   "branch": "<git rev-parse --abbrev-ref HEAD>",
   "latest_commit": "<git rev-parse --short HEAD>",
+  "activation_head": "<git rev-parse HEAD when fix mode is armed>",
+  "activation_dirty_paths": ["<staged/working/untracked paths present when armed>"],
+  "activation_dirty_fingerprints": {
+    "<path>": "<index/worktree fingerprint for that path when armed>"
+  },
+  "activation_source_fingerprints": {
+    "<upstream path>": "<index/worktree fingerprint for each declared upstream source when armed>"
+  },
+  "pending_upstream_edits": {},
+  "upstream_edit_receipts": {},
   "allowed": ["scripts/*", "tests/test_x.py"],
   "max_files": 3,
+  "symptom": "<failing check or review claim being addressed>",
+  "root_cause": "<upstream defect, not the visible leaf symptom>",
+  "source_trace": "<symptom -> intermediate cause -> upstream source>",
+  "fix_strategy": "upstream-root",
+  "upstream_files": ["<repo-relative file(s) where the source is fixed>"],
   "failing_check": "<the red check / review thread>",
   "last_finding": "<the line that localized it>",
   "next_action": "<one sentence>",
@@ -34,9 +49,30 @@ Write `.claude/fix-mode-state.json` with:
 ```
 
 `allowed` entries are `fnmatch` globs against repo-relative paths. Set them to the
-failure source only, not "everything the symptom touches." Also mirror these
-fields into the `## PR Fix Mode` block of `SESSION_STATE.local.md` (the human
-baton).
+failure source only, not "everything the symptom touches." `activation_head`
+is the head SHA at the moment fix mode is armed. `activation_dirty_paths` is the
+repo-relative snapshot from `git diff --name-only --cached`, `git diff --name-only`,
+and `git ls-files --others --exclude-standard` at the same moment. For every path
+in that list, `activation_dirty_fingerprints` records the matching index/worktree
+fingerprint; the path does not count as current-pass source work from that
+baseline alone. For every declared upstream source, including clean or missing
+files, `activation_source_fingerprints` records the matching activation
+fingerprint; a post-tool receipt is discarded whenever the current fingerprint
+returns to that baseline. The pre-tool hook writes `pending_upstream_edits` for
+an admitted upstream-only edit attempt, and the post-tool hook promotes that
+record to `upstream_edit_receipts` with the verified fingerprint only when the
+file fingerprint actually changes.
+Downstream edits use only committed/current changed paths and finalized receipts,
+never pending attempts. Also mirror these fields into the `## PR Fix Mode` block
+of `SESSION_STATE.local.md` (the human baton).
+
+Root trace is mandatory for any active constrained fix-mode baton. The hook
+denies normal edits until `symptom`, `root_cause`, `source_trace`,
+`fix_strategy`, and `upstream_files` are populated. Use
+`"fix_strategy": "upstream-root"` by default. If a temporary symptom-only change
+is truly unavoidable, use `"fix_strategy": "symptom-only-deferred"` and also
+populate `symptom_only_reason` plus `follow_up`; that admission must be mirrored
+in the PR body's `## Fix-loop disposition preflight`.
 
 ## Widen (root-cause decision)
 

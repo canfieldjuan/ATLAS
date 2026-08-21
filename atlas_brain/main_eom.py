@@ -102,6 +102,10 @@ EOM_RECEIVABLES_READINESS_MIGRATIONS: tuple[str, ...] = (
     "045_invoices",
     "344_receivables_payments",
     "345_receivables_event_key_lookup",
+    "368_receivables_payment_check_metadata",
+    "369_receivables_payment_receipt_outbox",
+    "378_receivables_payment_receipt_delivery",
+    "379_receivables_payment_receipt_delivery_recovery",
 )
 
 
@@ -127,6 +131,34 @@ async def _run_startup_migrations() -> None:
             "EOM receivables readiness migrations checked: %s",
             ", ".join(EOM_RECEIVABLES_READINESS_MIGRATIONS),
         )
+
+
+class ReceivablesSchemaUnavailableError(RuntimeError):
+    """Raised when the enabled receivables API's schema prerequisites are missing.
+
+    ``eom_profile_settings.run_migrations`` defaults to False, so this
+    profile does not always run migrations on startup. An enabled
+    receivables API must still be fenced against serving requests on a
+    schema that is missing a required column/index -- mirrors the
+    ``receivables_ready_fn`` fence already used by the invoicing MCP
+    servers' ``_database_lifespan``.
+    """
+
+
+async def _require_receivables_schema_ready() -> None:
+    from .services.receivables import ReceivablesService
+
+    pool = get_db_pool()
+    if not pool.is_initialized:
+        return
+    if not await ReceivablesService(pool).is_ready():
+        raise ReceivablesSchemaUnavailableError(
+            "EOM API has receivables_api_enabled=true but the receivables "
+            "schema is not ready (a required column or index is missing). "
+            "Run pending migrations before starting this profile with the "
+            "receivables API enabled."
+        )
+    logger.info("EOM receivables schema readiness verified")
 
 
 async def _require_eom_funnel_data_store(
@@ -173,10 +205,18 @@ async def lifespan(app: FastAPI):
         await _validate_eom_funnel_startup()
         if db_settings.enabled and eom_profile_settings.run_migrations:
             await _run_startup_migrations()
+        if db_settings.enabled and invoicing_settings.receivables_api_enabled:
+            await _require_receivables_schema_ready()
         yield
     finally:
         try:
-            if funnel_settings.api_enabled:
+            # Mirrors init_eom_funnel_database's condition. Closing only when
+            # the funnel API is on would leak the pool in the deployment that
+            # opened it for receivables alone.
+            if funnel_settings.api_enabled or (
+                invoicing_settings.receivables_api_enabled
+                and funnel_settings.db_connection_string.strip()
+            ):
                 await close_eom_funnel_database()
         finally:
             if db_settings.enabled:

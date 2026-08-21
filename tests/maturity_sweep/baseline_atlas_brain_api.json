@@ -232,6 +232,12 @@
     },
     "score": 4
   },
+  "atlas_brain/api/invoicing/receivables.py": {
+    "counts": {
+      "INTERNAL_MOCK": 7
+    },
+    "score": 28
+  },
   "atlas_brain/api/llm_gateway.py": {
     "counts": {
       "HAPPY_PATH_TESTS": 1,

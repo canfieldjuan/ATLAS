@@ -715,8 +715,15 @@ class ToolsConfig(BaseSettings):
 
     # Google OAuth token file (shared by Calendar + Gmail)
     google_token_file: str = Field(
-        default="data/google_tokens.json",
-        description="Path to persistent Google OAuth token file",
+        default="~/.config/atlas/google_tokens.json",
+        description=(
+            "Path to the persistent Google OAuth token file. Defaults OUTSIDE "
+            "the repo on purpose: the API's WorkingDirectory is the deployed "
+            "git worktree, so any in-repo path is severed when the runtime "
+            "switches worktrees (five-day Calendar outage, 2026-08-05). The "
+            "legacy in-repo data/google_tokens.json is still read for upgrades "
+            "and warns to migrate (env: ATLAS_TOOLS_GOOGLE_TOKEN_FILE)"
+        ),
     )
 
     # Calendar tool (Google Calendar)
@@ -815,6 +822,26 @@ class AlertsConfig(BaseSettings):
     ntfy_topic: str = Field(default="atlas-alerts", description="ntfy topic for alerts")
     leads_ntfy_topic: str = Field(default="", description="Dedicated ntfy topic for new website-lead push notifications; empty disables them. It is the SOLE credential protecting lead PII on the public relay, so it must be [-_A-Za-z0-9] and >=20 chars with a random suffix (e.g. eom-leads-<12-hex>); shorter/weaker values fail closed (env: ATLAS_ALERTS_LEADS_NTFY_TOPIC)")
     leads_ntfy_url: str = Field(default="https://ntfy.sh", description="PINNED relay for new-lead pushes. Separate from ntfy_url ON PURPOSE: ntfy_url is runtime-mutable via the public PATCH /api/v1/settings/notifications endpoint, so lead PII must not be sent through it — this field is NOT in the settings API's mutable set and can only be set at deploy time (env: ATLAS_ALERTS_LEADS_NTFY_URL)")
+
+
+class SettingsAdminConfig(BaseSettings):
+    """Fail-closed auth config for the /api/v1/settings admin router (#2335).
+
+    The settings router mutates alert/email/LLM/integration destinations and
+    persists to .env.local, and it is reachable from the public Tailscale Funnel.
+    It therefore requires a deploy-time bearer service token. Digest-only, like
+    the receivables API: provision only the SHA-256 digest here and keep the raw
+    token on the caller side. When no digest is configured the router is
+    UNAVAILABLE (503), never open.
+    """
+
+    model_config = SettingsConfigDict(env_prefix="ATLAS_SETTINGS_ADMIN_", env_file=ENV_FILES, extra="ignore")
+
+    token_sha256: str = Field(default="", description="Lowercase SHA-256 hex digest of the settings-admin bearer token; empty => the /settings router returns 503 (fail-closed). Provision via ATLAS_SETTINGS_ADMIN_TOKEN_SHA256; keep the raw token on the caller (env: ATLAS_SETTINGS_ADMIN_TOKEN_SHA256)")
+
+    session_secret: str = Field(default="", description="INDEPENDENT high-entropy server secret (>=32 chars) for signing settings-admin session cookies. Deliberately NOT derived from token_sha256, so a read-only disclosure of the digest alone cannot forge a session cookie. Empty/short => the cookie login path is unavailable (bearer still works). Field name is `session_secret` so env_prefix ATLAS_SETTINGS_ADMIN_ derives exactly the advertised env var ATLAS_SETTINGS_ADMIN_SESSION_SECRET; keep it server-side only")
+
+    cookie_insecure: bool = Field(default=False, description="LOCAL DEV ONLY: drop the Secure flag on the session cookie so the login flow works over http://localhost (the Vite dev proxy). Default False (Secure ON) — MUST stay unset in prod, where the funnel is HTTPS. env: ATLAS_SETTINGS_ADMIN_COOKIE_INSECURE")
 
 
 class InboxMailboxBinding(BaseModel):
@@ -2474,12 +2501,34 @@ class InvoicingConfig(BaseSettings):
     reminder_interval_days: int = Field(default=7, ge=1, le=90, description="Days between reminders (legacy fallback when reminder_intervals is empty)")
     notify_enabled: bool = Field(default=True, description="Push ntfy for invoice events")
     invoice_number_prefix: str = Field(default="INV", description="Prefix for invoice numbers")
-    auto_invoice_enabled: bool = Field(default=True, description="Monthly auto-invoice generation")
-    auto_invoice_send_email: bool = Field(default=True, description="Auto-send invoices via email")
+    auto_invoice_enabled: bool = Field(
+        default=False,
+        description=(
+            "Enable the legacy monthly auto-invoice task. Disabled by default; "
+            "set true only for an explicitly approved legacy operation."
+        ),
+    )
+    auto_invoice_send_email: bool = Field(
+        default=False,
+        description=(
+            "Allow the legacy monthly auto-invoice task to send email when review "
+            "mode is disabled. Disabled by default; requires explicit operator opt-in."
+        ),
+    )
     auto_invoice_due_days: int = Field(default=30, ge=1, le=365, description="Payment terms for auto-invoices")
     auto_invoice_calendar_id: str = Field(default="", description="Google Calendar ID for commercial cleaning events")
     auto_invoice_review_mode: bool = Field(default=True, description="Hold invoices as draft for review instead of auto-sending")
     auto_invoice_save_path: str = Field(default="~/Desktop/Atlas-Invoices", description="Base path for saving invoice PDFs")
+    legacy_monthly_writer_harness_opt_in: str = Field(
+        default="",
+        validation_alias=AliasChoices("ATLAS_LEGACY_MONTHLY_AUTOINVOICE_WRITER_HARNESS"),
+        description="TEST ONLY: exact marker `1` arms the isolated legacy monthly-writer PostgreSQL harness; any other value leaves it inactive.",
+    )
+    legacy_monthly_writer_harness_database_url: str = Field(
+        default="",
+        validation_alias=AliasChoices("ATLAS_LEGACY_MONTHLY_AUTOINVOICE_WRITER_TEST_DATABASE_URL"),
+        description="TEST ONLY: isolated legacy monthly-writer PostgreSQL target. The harness separately accepts only its exact loopback test URL.",
+    )
 
 
 class ExternalDataConfig(BaseSettings):
@@ -6011,6 +6060,7 @@ class Settings(BaseSettings):
     tools: ToolsConfig = Field(default_factory=ToolsConfig)
     intent: IntentConfig = Field(default_factory=IntentConfig)
     alerts: AlertsConfig = Field(default_factory=AlertsConfig)
+    settings_admin: SettingsAdminConfig = Field(default_factory=SettingsAdminConfig)
     reminder: ReminderConfig = Field(default_factory=ReminderConfig)
     email: EmailConfig = Field(default_factory=EmailConfig)
     security: SecurityConfig = Field(default_factory=SecurityConfig)

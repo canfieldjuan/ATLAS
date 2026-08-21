@@ -169,7 +169,6 @@ atlas-ui/                       # Main conversational UI (React + Vite)
 atlas-intel-ui/                 # Consumer intelligence dashboard (React)
 atlas-churn-ui/                 # B2B churn intelligence dashboard (React)
 atlas-admin-ui/                 # Operations dashboard (React)
-atlas-intel-next/               # Next.js B2B dashboard (migration in progress)
 atlas-mobile/                   # Mobile app
 
 graphiti-wrapper/               # GraphRAG backend (FastAPI + Neo4j)

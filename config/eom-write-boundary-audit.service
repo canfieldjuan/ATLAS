@@ -1,0 +1,37 @@
+[Unit]
+Description=EOM write-boundary audit (alerts when a customer write bypasses the canonical Atlas boundary)
+# Standalone by design, like atlas-api-healthcheck: NOT bound to atlas-api.service,
+# so it still reports when that service is dead. The monitor must not share a
+# failure mode with the thing it monitors.
+
+[Service]
+Type=oneshot
+# Runs from an INSTALLED copy under ~/.local/bin, deliberately not from the
+# runtime worktree: that worktree was deleted once (2026-07-31) and took the API
+# down with it. A monitor living inside the thing it watches goes silent exactly
+# when it is needed. Install with:
+#   install -m 755 config/../scripts/eom_write_boundary_audit.py \
+#     ~/.local/bin/eom-write-boundary-audit.py
+#
+# Plain system python3 on purpose: the script is stdlib-only, so it does not
+# depend on the application venv either.
+#
+# Absolute path, and no systemd %-specifiers in the command: an unescaped % in a
+# unit file silently produced a wrong SHA-256 digest once already.
+ExecStart=/usr/bin/python3 /home/juan-canfield/.local/bin/eom-write-boundary-audit.py
+# notify-send needs a display for the desktop popup; the ntfy push does not.
+Environment=DISPLAY=:0
+Environment=DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/1000/bus
+# The ntfy topic is the channel credential, so it is supplied here at install
+# time and never committed. Written by the installer into a drop-in:
+#   systemctl --user edit eom-write-boundary-audit.service
+#   [Service]
+#   Environment=ATLAS_EOM_AUDIT_NTFY_TOPIC=<topic>
+# A blank topic makes the script exit non-zero rather than publish nowhere.
+
+# 2 is the script's measured-breach status. 1 is NOT accepted (Python exits 1
+# for an uncaught exception, so accepting it would let a crashed monitor record
+# Result=success), and neither is 3, which the script returns when an alert
+# could not be delivered -- if the push never lands, failed-unit monitoring has
+# to be the thing that notices.
+SuccessExitStatus=0 2

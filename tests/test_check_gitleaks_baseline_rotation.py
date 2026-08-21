@@ -51,6 +51,8 @@ def test_rejects_baseline_change_without_rotation_label() -> None:
 
     assert decision.allowed is False
     assert "security-rotation" in decision.reason
+    assert "provider credential rotation/revocation" in decision.reason
+    assert "reviewed-false-positive evidence" in decision.reason
 
 
 def test_allows_labeled_rotation_with_only_baseline_docs_and_plan() -> None:
@@ -155,6 +157,24 @@ def test_rejects_ignore_growth_without_rotation_label() -> None:
 
     assert decision.allowed is False
     assert "security-rotation" in decision.reason
+    assert "requires the `security-rotation` PR label after provider credential" in decision.reason
+    assert "does not authorize ignore growth" in decision.reason
+    assert decision.added_ignore_fingerprints == ("added",)
+
+
+def test_rejects_combined_baseline_and_ignore_growth_with_ignore_recovery_guidance() -> None:
+    checker = load_checker()
+    decision = checker.evaluate_baseline_rotation(
+        _changed(checker.BASELINE_PATH, checker.IGNORE_PATH),
+        labels=set(),
+        base_has_baseline=True,
+        base_ignore_fingerprints={"kept"},
+        candidate_ignore_fingerprints={"kept", "added"},
+    )
+
+    assert decision.allowed is False
+    assert "requires the `security-rotation` PR label after provider credential" in decision.reason
+    assert "does not authorize ignore growth" in decision.reason
     assert decision.added_ignore_fingerprints == ("added",)
 
 

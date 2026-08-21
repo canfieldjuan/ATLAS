@@ -6,21 +6,93 @@ import errno
 import socket
 from datetime import date
 from decimal import Decimal
-from typing import Annotated, Literal, Optional
+from typing import Annotated, Any, Literal, Optional
 from uuid import UUID
 
 import asyncpg
 from fastapi import APIRouter, Depends, Header, HTTPException, Query
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 from ...services.receivables import (
     ReceivablesConflictError,
     ReceivablesError,
     ReceivablesNotFoundError,
+    ReceivablesReceiptContextRequiredError,
+    ReceivablesSchemaUnavailableError,
     ReceivablesService,
     ReceivablesValidationError,
+    PaymentReceiptRecipient,
     get_receivables_service,
 )
+from ...services.residential_payment_receipt_delivery import (
+    ResidentialPaymentReceiptDeliveryConflictError,
+    ResidentialPaymentReceiptDeliveryNotFoundError,
+    ResidentialPaymentReceiptDeliveryService,
+    ResidentialPaymentReceiptDeliveryUnavailableError,
+    ResidentialPaymentReceiptDeliveryValidationError,
+    get_residential_payment_receipt_delivery_service,
+)
+from ...services.crm_provider import EOMBillingDeliveryMethod, get_crm_provider
+from ...services.commercial_billing_candidates import (
+    CommercialBillingCandidateService,
+    CommercialBillingCandidatesUnavailableError,
+    CommercialBillingCandidatesValidationError,
+    get_commercial_billing_candidate_service,
+)
+from ...services.commercial_billing_runs import (
+    CommercialBillingRunConflictError,
+    CommercialBillingRunNotFoundError,
+    CommercialBillingRunService,
+    CommercialBillingRunUnavailableError,
+    CommercialBillingRunValidationError,
+    get_commercial_billing_run_service,
+)
+from ...services.commercial_billing_approvals import (
+    CommercialBillingApprovalConflictError,
+    CommercialBillingApprovalNotFoundError,
+    CommercialBillingApprovalService,
+    CommercialBillingApprovalStaleError,
+    CommercialBillingApprovalUnavailableError,
+    CommercialBillingApprovalValidationError,
+    get_commercial_billing_approval_service,
+)
+from ...services.commercial_billing_invoice_pdfs import (
+    CommercialBillingInvoicePDFConflictError,
+    CommercialBillingInvoicePDFNotFoundError,
+    CommercialBillingInvoicePDFRenderError,
+    CommercialBillingInvoicePDFService,
+    CommercialBillingInvoicePDFUnavailableError,
+    CommercialBillingInvoicePDFValidationError,
+    get_commercial_billing_invoice_pdf_service,
+)
+from ...services.commercial_billing_invoice_gmail_drafts import (
+    CommercialBillingGmailDraftConflictError,
+    CommercialBillingGmailDraftNotFoundError,
+    CommercialBillingGmailDraftRecoveryRequiredError,
+    CommercialBillingInvoiceGmailDraftService,
+    CommercialBillingGmailDraftUnavailableError,
+    CommercialBillingGmailDraftValidationError,
+    get_commercial_billing_invoice_gmail_draft_service,
+)
+from ...services.commercial_billing_invoice_gmail_sent_reconciliation import (
+    MAX_DELIVERY_STATE_OFFSET,
+    CommercialBillingGmailDeliveryStateNotFoundError,
+    CommercialBillingGmailSentReconciliationConflictError,
+    CommercialBillingGmailSentReconciliationNotFoundError,
+    CommercialBillingGmailSentReconciliationUnavailableError,
+    CommercialBillingGmailSentReconciliationValidationError,
+    CommercialBillingInvoiceGmailSentReconciliationService,
+    get_commercial_billing_invoice_gmail_sent_reconciliation_service,
+)
+from ...services.commercial_billing_manual_square_invoices import (
+    CommercialBillingManualSquareInvoiceConflictError,
+    CommercialBillingManualSquareInvoiceNotFoundError,
+    CommercialBillingManualSquareInvoiceService,
+    CommercialBillingManualSquareInvoiceUnavailableError,
+    CommercialBillingManualSquareInvoiceValidationError,
+    get_commercial_billing_manual_square_invoice_service,
+)
+from ...services.eom_lead_ingress import EOM_BUSINESS_CONTEXT_ID
 from ...storage.exceptions import DatabaseUnavailableError
 from .auth import require_actor, require_receivables_api
 
@@ -31,6 +103,13 @@ _DATABASE_UNAVAILABLE_ERRORS = (
     asyncpg.TooManyConnectionsError,
     asyncpg.AdminShutdownError,
     asyncpg.CrashShutdownError,
+)
+_CANONICAL_CUSTOMER_UNAVAILABLE_ERRORS = _DATABASE_UNAVAILABLE_ERRORS + (
+    asyncpg.UndefinedTableError,
+    asyncpg.UndefinedColumnError,
+    asyncpg.InvalidSchemaNameError,
+    asyncpg.InsufficientPrivilegeError,
+    asyncpg.InvalidAuthorizationSpecificationError,
 )
 _UNAVAILABLE_INTERFACE_PREFIXES = (
     "connection is closed",
@@ -78,9 +157,25 @@ class CreatePaymentRequest(BaseModel):
     total_amount_cents: PositiveCents
     payment_method: Literal["check", "ach", "square"]
     received_date: date
-    reference: Optional[str] = Field(default=None, max_length=256)
+    check_date: Optional[date] = None
+    received_through: Optional[str] = Field(default=None, max_length=128)
+    reference: str = Field(min_length=1, max_length=256)
     notes: Optional[str] = None
-    allocations: list[AllocationRequest] = Field(min_length=1, max_length=100)
+    allocations: list[AllocationRequest] = Field(default_factory=list, max_length=100)
+
+    @field_validator("reference", mode="before")
+    @classmethod
+    def reference_must_identify_receipt(cls, value: Any) -> str:
+        if not isinstance(value, str):
+            raise ValueError(
+                "check number, ACH confirmation, or Square transaction ID is required"
+            )
+        normalized = value.strip()
+        if not normalized:
+            raise ValueError(
+                "check number, ACH confirmation, or Square transaction ID is required"
+            )
+        return normalized
 
 
 class AdjustAllocationsRequest(BaseModel):
@@ -96,6 +191,125 @@ class CreateDepositBatchRequest(BaseModel):
     payment_ids: list[UUID] = Field(min_length=1, max_length=500)
     deposit_date: date
     bank_reference: Optional[str] = Field(default=None, max_length=256)
+
+
+class CreateCommercialBillingRunRequest(BaseModel):
+    billing_period: str = Field(
+        min_length=7,
+        max_length=7,
+        pattern=r"^\d{4}-(0[1-9]|1[0-2])$",
+    )
+
+
+class ApproveCommercialBillingCandidateRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    candidate_key: str = Field(min_length=1, max_length=512)
+    expected_source_fingerprint: str = Field(
+        min_length=64,
+        max_length=64,
+        pattern=r"^[0-9a-f]{64}$",
+    )
+    expected_review_fingerprint: Optional[str] = Field(
+        default=None,
+        min_length=64,
+        max_length=64,
+        pattern=r"^[0-9a-f]{64}$",
+    )
+
+
+class SetCommercialBillingCandidateReviewDecisionRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    expected_source_fingerprint: str = Field(
+        min_length=64,
+        max_length=64,
+        pattern=r"^[0-9a-f]{64}$",
+    )
+    expected_review_fingerprint: Optional[str] = Field(
+        default=None,
+        min_length=64,
+        max_length=64,
+        pattern=r"^[0-9a-f]{64}$",
+    )
+    decision: Literal["included", "excluded"]
+    reason: str = Field(min_length=1, max_length=1000)
+
+    @field_validator("reason", mode="before")
+    @classmethod
+    def normalize_reason_before_length_validation(cls, value: Any) -> Any:
+        return value.strip() if isinstance(value, str) else value
+
+
+class CommercialBillingCandidateLineOverrideRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    line_key: str = Field(min_length=64, max_length=64, pattern=r"^[0-9a-f]{64}$")
+    description: Optional[str] = Field(default=None, min_length=1, max_length=512)
+    rate_cents: Optional[int] = Field(
+        default=None, strict=True, gt=0, le=999_999_999_999
+    )
+    quantity: Optional[int] = Field(
+        default=None, strict=True, gt=0, le=999_999_999_999
+    )
+    quantity_minutes: Optional[int] = Field(
+        default=None, strict=True, gt=0, le=999_999_999_999
+    )
+
+
+class CommercialBillingCandidateAdjustmentRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    kind: Literal["credit", "charge"]
+    description: str = Field(min_length=1, max_length=512)
+    amount_cents: int = Field(strict=True, gt=0, le=999_999_999_999)
+
+
+class CommercialBillingCandidateRecipientOverrideRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    display_name: Optional[str] = Field(default=None, min_length=1, max_length=256)
+    email: str = Field(min_length=3, max_length=256)
+
+
+class SetCommercialBillingCandidateOverrideRequest(BaseModel):
+    """One full, run-only effective-candidate revision; no source data is edited."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    expected_source_fingerprint: str = Field(
+        min_length=64, max_length=64, pattern=r"^[0-9a-f]{64}$"
+    )
+    expected_override_revision: int = Field(strict=True, ge=0)
+    reason_code: Literal[
+        "one_time_service_variation",
+        "partial_or_missed_service",
+        "approved_pricing_exception",
+        "customer_credit",
+        "additional_charge",
+        "source_correction_pending",
+        "billing_delivery_exception",
+    ]
+    reason: str = Field(min_length=1, max_length=1000)
+    line_overrides: list[CommercialBillingCandidateLineOverrideRequest] = Field(
+        default_factory=list, max_length=500
+    )
+    adjustment: Optional[CommercialBillingCandidateAdjustmentRequest] = None
+    recipient: Optional[CommercialBillingCandidateRecipientOverrideRequest] = None
+    delivery_method: Optional[Literal["gmail_pdf", "manual_square"]] = None
+
+    @field_validator("reason", mode="before")
+    @classmethod
+    def normalize_override_reason_before_length_validation(cls, value: Any) -> Any:
+        return value.strip() if isinstance(value, str) else value
+
+
+class SetCommercialBillingDeliveryPreferenceRequest(BaseModel):
+    delivery_method: EOMBillingDeliveryMethod
+
+
+class RecordCommercialBillingManualSquareReferenceRequest(BaseModel):
+    square_invoice_reference: str = Field(min_length=1, max_length=256)
 
 
 def _dollars(amount_cents: int) -> Decimal:
@@ -129,9 +343,27 @@ def _is_database_unavailable_error(exc: Exception) -> bool:
     return isinstance(exc, OSError) and exc.errno in _NETWORK_UNAVAILABLE_ERRNOS
 
 
+def _is_canonical_customer_unavailable_error(exc: Exception) -> bool:
+    """Classify canonical-CRM schema and connection failures for payment reads.
+
+    The payment route has a recovery path for a same-key replay when the
+    canonical customer read is unavailable.  A partially migrated or
+    permission-denied canonical CRM must therefore take that same controlled
+    path rather than escaping as an HTTP 500 before the ledger can reconcile
+    the existing payment.
+    """
+    return _is_database_unavailable_error(exc) or isinstance(
+        exc, _CANONICAL_CUSTOMER_UNAVAILABLE_ERRORS
+    )
+
+
 async def _call(awaitable):
     try:
         return await awaitable
+    except ReceivablesSchemaUnavailableError as exc:
+        raise HTTPException(
+            status_code=503, detail={"code": exc.code, "message": str(exc)}
+        ) from exc
     except ReceivablesValidationError as exc:
         raise HTTPException(
             status_code=422, detail={"code": exc.code, "message": str(exc)}
@@ -162,11 +394,279 @@ async def _call(awaitable):
         ) from exc
 
 
+async def _call_residential_payment_receipt_delivery(awaitable) -> dict:
+    """Translate the non-financial receipt dispatcher at this HTTP boundary."""
+
+    try:
+        return await awaitable
+    except ResidentialPaymentReceiptDeliveryValidationError as exc:
+        raise HTTPException(
+            status_code=422, detail={"code": exc.code, "message": str(exc)}
+        ) from exc
+    except ResidentialPaymentReceiptDeliveryNotFoundError as exc:
+        raise HTTPException(
+            status_code=404, detail={"code": exc.code, "message": str(exc)}
+        ) from exc
+    except ResidentialPaymentReceiptDeliveryConflictError as exc:
+        raise HTTPException(
+            status_code=409, detail={"code": exc.code, "message": str(exc)}
+        ) from exc
+    except ResidentialPaymentReceiptDeliveryUnavailableError as exc:
+        raise HTTPException(
+            status_code=503, detail={"code": exc.code, "message": str(exc)}
+        ) from exc
+    except Exception as exc:
+        if not _is_database_unavailable_error(exc):
+            raise
+        raise HTTPException(
+            status_code=503,
+            detail={
+                "code": "residential_payment_receipt_delivery_unavailable",
+                "message": "Residential payment receipt delivery database unavailable",
+            },
+        ) from exc
+
+
+async def _call_commercial_billing_run(awaitable):
+    try:
+        return await awaitable
+    except CommercialBillingCandidatesValidationError as exc:
+        raise HTTPException(
+            status_code=422,
+            detail={"code": exc.code, "message": str(exc)},
+        ) from exc
+    except CommercialBillingCandidatesUnavailableError as exc:
+        raise HTTPException(
+            status_code=503,
+            detail={"code": exc.code, "message": str(exc)},
+        ) from exc
+    except CommercialBillingRunValidationError as exc:
+        raise HTTPException(
+            status_code=422,
+            detail={"code": exc.code, "message": str(exc)},
+        ) from exc
+    except CommercialBillingRunNotFoundError as exc:
+        raise HTTPException(
+            status_code=404,
+            detail={"code": exc.code, "message": str(exc)},
+        ) from exc
+    except CommercialBillingRunConflictError as exc:
+        raise HTTPException(
+            status_code=409,
+            detail={"code": exc.code, "message": str(exc)},
+        ) from exc
+    except CommercialBillingRunUnavailableError as exc:
+        raise HTTPException(
+            status_code=503,
+            detail={"code": exc.code, "message": str(exc)},
+        ) from exc
+
+
+async def _call_commercial_billing_approval(awaitable):
+    try:
+        return await awaitable
+    except CommercialBillingApprovalValidationError as exc:
+        raise HTTPException(
+            status_code=422,
+            detail={"code": exc.code, "message": str(exc)},
+        ) from exc
+    except CommercialBillingApprovalNotFoundError as exc:
+        raise HTTPException(
+            status_code=404,
+            detail={"code": exc.code, "message": str(exc)},
+        ) from exc
+    except (CommercialBillingApprovalConflictError, CommercialBillingApprovalStaleError) as exc:
+        raise HTTPException(
+            status_code=409,
+            detail={"code": exc.code, "message": str(exc)},
+        ) from exc
+    except CommercialBillingApprovalUnavailableError as exc:
+        raise HTTPException(
+            status_code=503,
+            detail={"code": exc.code, "message": str(exc)},
+        ) from exc
+
+
+async def _call_commercial_billing_invoice_pdf(awaitable):
+    try:
+        return await awaitable
+    except CommercialBillingInvoicePDFValidationError as exc:
+        raise HTTPException(
+            status_code=422,
+            detail={"code": exc.code, "message": str(exc)},
+        ) from exc
+    except CommercialBillingInvoicePDFNotFoundError as exc:
+        raise HTTPException(
+            status_code=404,
+            detail={"code": exc.code, "message": str(exc)},
+        ) from exc
+    except CommercialBillingInvoicePDFConflictError as exc:
+        raise HTTPException(
+            status_code=409,
+            detail={"code": exc.code, "message": str(exc)},
+        ) from exc
+    except (
+        CommercialBillingInvoicePDFRenderError,
+        CommercialBillingInvoicePDFUnavailableError,
+    ) as exc:
+        raise HTTPException(
+            status_code=503,
+            detail={"code": exc.code, "message": str(exc)},
+        ) from exc
+
+
+async def _call_commercial_billing_gmail_draft(awaitable):
+    try:
+        return await awaitable
+    except CommercialBillingGmailDraftValidationError as exc:
+        raise HTTPException(
+            status_code=422,
+            detail={"code": exc.code, "message": str(exc)},
+        ) from exc
+    except CommercialBillingGmailDraftNotFoundError as exc:
+        raise HTTPException(
+            status_code=404,
+            detail={"code": exc.code, "message": str(exc)},
+        ) from exc
+    except (
+        CommercialBillingGmailDraftConflictError,
+        CommercialBillingGmailDraftRecoveryRequiredError,
+    ) as exc:
+        raise HTTPException(
+            status_code=409,
+            detail={"code": exc.code, "message": str(exc)},
+        ) from exc
+    except CommercialBillingGmailDraftUnavailableError as exc:
+        raise HTTPException(
+            status_code=503,
+            detail={"code": exc.code, "message": str(exc)},
+        ) from exc
+    except Exception as exc:
+        if not _is_database_unavailable_error(exc):
+            raise
+        raise HTTPException(
+            status_code=503,
+            detail={
+                "code": "commercial_billing_gmail_draft_unavailable",
+                "message": "Commercial billing Gmail draft database unavailable",
+            },
+        ) from exc
+
+
+async def _call_commercial_billing_gmail_sent_reconciliation(awaitable):
+    try:
+        return await awaitable
+    except CommercialBillingGmailDeliveryStateNotFoundError as exc:
+        raise HTTPException(
+            status_code=404,
+            detail={"code": exc.code, "message": str(exc)},
+        ) from exc
+    except CommercialBillingGmailSentReconciliationValidationError as exc:
+        raise HTTPException(
+            status_code=422,
+            detail={"code": exc.code, "message": str(exc)},
+        ) from exc
+    except CommercialBillingGmailSentReconciliationNotFoundError as exc:
+        raise HTTPException(
+            status_code=404,
+            detail={"code": exc.code, "message": str(exc)},
+        ) from exc
+    except CommercialBillingGmailSentReconciliationConflictError as exc:
+        raise HTTPException(
+            status_code=409,
+            detail={"code": exc.code, "message": str(exc)},
+        ) from exc
+    except CommercialBillingGmailSentReconciliationUnavailableError as exc:
+        raise HTTPException(
+            status_code=503,
+            detail={"code": exc.code, "message": str(exc)},
+        ) from exc
+    except Exception as exc:
+        if not _is_database_unavailable_error(exc):
+            raise
+        raise HTTPException(
+            status_code=503,
+            detail={
+                "code": "commercial_billing_gmail_sent_reconciliation_unavailable",
+                "message": "Commercial billing Gmail sent reconciliation database unavailable",
+            },
+        ) from exc
+
+
+async def _call_commercial_billing_manual_square_invoice(awaitable):
+    try:
+        return await awaitable
+    except CommercialBillingManualSquareInvoiceValidationError as exc:
+        raise HTTPException(
+            status_code=422,
+            detail={"code": exc.code, "message": str(exc)},
+        ) from exc
+    except CommercialBillingManualSquareInvoiceNotFoundError as exc:
+        raise HTTPException(
+            status_code=404,
+            detail={"code": exc.code, "message": str(exc)},
+        ) from exc
+    except CommercialBillingManualSquareInvoiceConflictError as exc:
+        raise HTTPException(
+            status_code=409,
+            detail={"code": exc.code, "message": str(exc)},
+        ) from exc
+    except CommercialBillingManualSquareInvoiceUnavailableError as exc:
+        raise HTTPException(
+            status_code=503,
+            detail={"code": exc.code, "message": str(exc)},
+        ) from exc
+    except Exception as exc:
+        if not _is_database_unavailable_error(exc):
+            raise
+        raise HTTPException(
+            status_code=503,
+            detail={
+                "code": "commercial_billing_manual_square_invoice_unavailable",
+                "message": "Commercial billing manual Square database unavailable",
+            },
+        ) from exc
+
+
+def _commercial_billing_delivery_preference_crm_dependency() -> Any:
+    """Expose the canonical CRM provider through an overrideable route seam."""
+
+    return get_crm_provider()
+
+
+async def _call_commercial_billing_delivery_preference(awaitable) -> dict:
+    """Map canonical profile failures without guessing a delivery policy."""
+
+    try:
+        result = await awaitable
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=422,
+            detail={"code": "invalid_billing_delivery_preference", "message": str(exc)},
+        ) from exc
+    except Exception as exc:
+        if not _is_canonical_customer_unavailable_error(exc):
+            raise
+        raise HTTPException(
+            status_code=503,
+            detail={
+                "code": "canonical_customer_unavailable",
+                "message": "Canonical EOM customer data is unavailable",
+            },
+        ) from exc
+    if result is None:
+        raise HTTPException(
+            status_code=404,
+            detail={"code": "not_found", "message": "Customer not found"},
+        )
+    return result
+
+
 @router.get("/ready")
 async def ready() -> dict:
     service = get_receivables_service()
     try:
-        schema_ready = await service.is_ready()
+        schema_ready = await service.is_receipt_delivery_ready()
     except Exception as exc:
         raise HTTPException(
             status_code=503, detail="Receivables database unavailable"
@@ -210,19 +710,122 @@ async def create_payment(
     ],
     service: ReceivablesService = Depends(get_receivables_service),
 ) -> dict:
-    return await _call(
-        service.create_payment(
-            contact_id=body.contact_id,
-            payer_name=body.payer_name,
-            total_amount=_dollars(body.total_amount_cents),
-            payment_method=body.payment_method,
-            received_date=body.received_date,
-            reference=body.reference,
-            notes=body.notes,
-            allocations=_allocations(body.allocations),
-            recorded_by=actor,
-            idempotency_key=idempotency_key,
+    """Record a payment from the deployed full EOM provider route.
+
+    The full application owns both the receivables ledger and canonical CRM
+    contacts through its primary database.  Resolve a narrow active-customer
+    snapshot before a new write, but defer a missing/unavailable CRM result to
+    the service's idempotency lookup so an unchanged retry can recover a
+    previously committed payment.
+    """
+    receipt_recipient: PaymentReceiptRecipient | None = None
+    canonical_failure: HTTPException | None = None
+    try:
+        customer = await get_crm_provider().get_eom_payment_customer(
+            body.contact_id
         )
+        if customer is None:
+            canonical_failure = HTTPException(
+                status_code=404,
+                detail={
+                    "code": "not_found",
+                    "message": "Customer not found",
+                },
+            )
+        else:
+            receipt_recipient = PaymentReceiptRecipient(
+                contact_id=UUID(str(customer["contact_id"])),
+                customer_name=str(customer["customer_name"]),
+                customer_type=str(customer["customer_type"]),
+                recipient_email=(
+                    str(customer["recipient_email"])
+                    if customer["recipient_email"] is not None
+                    else None
+                ),
+            )
+    except Exception as exc:
+        if not _is_canonical_customer_unavailable_error(exc):
+            raise
+        canonical_failure = HTTPException(
+            status_code=503,
+            detail={
+                "code": "canonical_customer_unavailable",
+                "message": "Canonical EOM customer data is unavailable",
+            },
+        )
+
+    async def _write_payment() -> dict:
+        try:
+            return await service.create_payment(
+                contact_id=body.contact_id,
+                payer_name=body.payer_name,
+                total_amount=_dollars(body.total_amount_cents),
+                payment_method=body.payment_method,
+                received_date=body.received_date,
+                check_date=body.check_date,
+                received_through=body.received_through,
+                reference=body.reference,
+                notes=body.notes,
+                allocations=_allocations(body.allocations),
+                recorded_by=actor,
+                idempotency_key=idempotency_key,
+                allow_unapplied=True,
+                unapplied_contact_context_id=EOM_BUSINESS_CONTEXT_ID,
+                receipt_recipient=receipt_recipient,
+                require_receipt_recipient=True,
+            )
+        except ReceivablesReceiptContextRequiredError:
+            if canonical_failure is not None:
+                raise canonical_failure
+            raise
+
+    return await _call(_write_payment())
+
+
+@router.post("/payments/{payment_id}/receipt-delivery")
+async def dispatch_residential_payment_receipt_delivery(
+    payment_id: UUID,
+    actor: Annotated[str, Depends(require_actor)],
+    idempotency_key: Annotated[
+        str, Header(alias="Idempotency-Key", min_length=1, max_length=128)
+    ],
+    service: ResidentialPaymentReceiptDeliveryService = Depends(
+        get_residential_payment_receipt_delivery_service
+    ),
+) -> dict:
+    """Explicitly send, recover, or replay one committed residential receipt.
+
+    This cannot alter a payment or other financial state.  The service commits
+    its attempt marker before Gmail I/O and refuses a second send when the
+    outcome is ambiguous; callers receive recovery state instead.
+    """
+
+    return await _call_residential_payment_receipt_delivery(
+        service.dispatch(
+            payment_id=payment_id,
+            idempotency_key=idempotency_key,
+            actor=actor,
+        )
+    )
+
+
+@router.post("/payments/{payment_id}/receipt-delivery/reconcile")
+async def reconcile_residential_payment_receipt_delivery(
+    payment_id: UUID,
+    actor: Annotated[str, Depends(require_actor)],
+    service: ResidentialPaymentReceiptDeliveryService = Depends(
+        get_residential_payment_receipt_delivery_service
+    ),
+) -> dict:
+    """Reconcile an ambiguous receipt only from Gmail Sent-mail evidence.
+
+    The route cannot dispatch an email or modify a financial record.  It is a
+    safe recovery boundary for an operator who no longer has the prior send
+    request's idempotency key.
+    """
+
+    return await _call_residential_payment_receipt_delivery(
+        service.reconcile(payment_id=payment_id, actor=actor)
     )
 
 
@@ -238,6 +841,458 @@ async def list_payments(
             status=status, search=search, limit=limit, offset=offset
         )
     )
+
+
+@router.get("/customers/{contact_id}/ledger")
+async def customer_ledger(
+    contact_id: UUID,
+    payment_status: Optional[str] = Query(default=None, max_length=16),
+    payment_method: Optional[str] = Query(default=None, max_length=32),
+    search: Optional[str] = Query(default=None, max_length=256),
+    from_date: Optional[date] = Query(default=None),
+    to_date: Optional[date] = Query(default=None),
+    limit: int = Query(default=100, ge=1, le=200),
+    offset: int = Query(default=0, ge=0),
+    service: ReceivablesService = Depends(get_receivables_service),
+) -> dict:
+    """Return one bounded, receipt-aware financial ledger page for a customer."""
+    return await _call(
+        service.list_customer_ledger(
+            contact_id=contact_id,
+            payment_status=payment_status,
+            payment_method=payment_method,
+            search=search,
+            from_date=from_date,
+            to_date=to_date,
+            limit=limit,
+            offset=offset,
+        )
+    )
+
+
+@router.get("/commercial-billing-candidates")
+async def commercial_billing_candidates(
+    billing_period: str = Query(
+        ...,
+        min_length=7,
+        max_length=7,
+        pattern=r"^\d{4}-(0[1-9]|1[0-2])$",
+    ),
+    service: CommercialBillingCandidateService = Depends(
+        get_commercial_billing_candidate_service
+    ),
+) -> dict:
+    """Return a pure commercial billing preview; approval lives in a later slice."""
+
+    try:
+        return await service.preview(billing_period=billing_period)
+    except CommercialBillingCandidatesValidationError as exc:
+        raise HTTPException(
+            status_code=422,
+            detail={"code": exc.code, "message": str(exc)},
+        ) from exc
+    except CommercialBillingCandidatesUnavailableError as exc:
+        raise HTTPException(
+            status_code=503,
+            detail={"code": exc.code, "message": str(exc)},
+        ) from exc
+
+
+@router.get("/commercial-billing-delivery-preferences/{contact_id}")
+async def get_commercial_billing_delivery_preference(
+    contact_id: UUID,
+    crm: Annotated[
+        Any,
+        Depends(_commercial_billing_delivery_preference_crm_dependency),
+    ],
+) -> dict:
+    """Read one explicit canonical delivery policy; absence is not inferred."""
+
+    return await _call_commercial_billing_delivery_preference(
+        crm.get_eom_billing_delivery_preference(contact_id)
+    )
+
+
+@router.put("/commercial-billing-delivery-preferences/{contact_id}")
+async def set_commercial_billing_delivery_preference(
+    contact_id: UUID,
+    body: SetCommercialBillingDeliveryPreferenceRequest,
+    actor: Annotated[str, Depends(require_actor)],
+    crm: Annotated[
+        Any,
+        Depends(_commercial_billing_delivery_preference_crm_dependency),
+    ],
+) -> dict:
+    """Store one actor-audited policy without creating any delivery effect."""
+
+    return await _call_commercial_billing_delivery_preference(
+        crm.set_eom_billing_delivery_preference(
+            contact_id=contact_id,
+            delivery_method=body.delivery_method.value,
+            actor=actor,
+        )
+    )
+
+
+@router.post("/commercial-billing-runs", status_code=201)
+async def create_commercial_billing_run(
+    body: CreateCommercialBillingRunRequest,
+    actor: Annotated[str, Depends(require_actor)],
+    idempotency_key: Annotated[
+        str, Header(alias="Idempotency-Key", min_length=1, max_length=128)
+    ],
+    service: CommercialBillingRunService = Depends(get_commercial_billing_run_service),
+) -> dict:
+    """Persist immutable review evidence; explicit approval remains a later slice."""
+
+    return await _call_commercial_billing_run(
+        service.create_run(
+            billing_period=body.billing_period,
+            idempotency_key=idempotency_key,
+            actor=actor,
+        )
+    )
+
+
+@router.post("/commercial-billing-runs/{billing_run_id}/approvals", status_code=201)
+async def approve_commercial_billing_candidate(
+    billing_run_id: UUID,
+    body: ApproveCommercialBillingCandidateRequest,
+    actor: Annotated[str, Depends(require_actor)],
+    idempotency_key: Annotated[
+        str, Header(alias="Idempotency-Key", min_length=1, max_length=128)
+    ],
+    service: CommercialBillingApprovalService = Depends(
+        get_commercial_billing_approval_service
+    ),
+) -> dict:
+    """Create or reuse one draft invoice only after explicit candidate approval."""
+
+    request = {
+        "billing_run_id": billing_run_id,
+        "candidate_key": body.candidate_key,
+        "expected_source_fingerprint": body.expected_source_fingerprint,
+        "idempotency_key": idempotency_key,
+        "actor": actor,
+    }
+    if body.expected_review_fingerprint is not None:
+        request["expected_review_fingerprint"] = body.expected_review_fingerprint
+    return await _call_commercial_billing_approval(service.approve(**request))
+
+
+@router.post(
+    "/commercial-billing-runs/{billing_run_id}/candidates/{candidate_key}/override",
+    status_code=201,
+)
+async def set_commercial_billing_candidate_override(
+    billing_run_id: UUID,
+    candidate_key: str,
+    body: SetCommercialBillingCandidateOverrideRequest,
+    actor: Annotated[str, Depends(require_actor)],
+    idempotency_key: Annotated[
+        str, Header(alias="Idempotency-Key", min_length=1, max_length=128)
+    ],
+    service: CommercialBillingRunService = Depends(get_commercial_billing_run_service),
+) -> dict:
+    """Append one audited candidate revision without financial or delivery work."""
+
+    line_overrides = [
+        {
+            **{"lineKey": item.line_key},
+            **({"description": item.description} if item.description is not None else {}),
+            **({"rateCents": item.rate_cents} if item.rate_cents is not None else {}),
+            **({"quantity": item.quantity} if item.quantity is not None else {}),
+            **(
+                {"quantityMinutes": item.quantity_minutes}
+                if item.quantity_minutes is not None
+                else {}
+            ),
+        }
+        for item in body.line_overrides
+    ]
+    adjustment = (
+        {
+            "kind": body.adjustment.kind,
+            "description": body.adjustment.description,
+            "amountCents": body.adjustment.amount_cents,
+        }
+        if body.adjustment is not None
+        else None
+    )
+    recipient = (
+        {
+            **(
+                {"displayName": body.recipient.display_name}
+                if body.recipient.display_name is not None
+                else {}
+            ),
+            "email": body.recipient.email,
+        }
+        if body.recipient is not None
+        else None
+    )
+    return await _call_commercial_billing_run(
+        service.set_candidate_override(
+            billing_run_id=billing_run_id,
+            candidate_key=candidate_key,
+            expected_source_fingerprint=body.expected_source_fingerprint,
+            expected_override_revision=body.expected_override_revision,
+            reason_code=body.reason_code,
+            reason=body.reason,
+            line_overrides=line_overrides,
+            adjustment=adjustment,
+            recipient=recipient,
+            delivery_method=body.delivery_method,
+            idempotency_key=idempotency_key,
+            actor=actor,
+        )
+    )
+
+
+@router.put(
+    "/commercial-billing-runs/{billing_run_id}/candidates/{candidate_key}/review-decision",
+)
+async def set_commercial_billing_candidate_review_decision(
+    billing_run_id: UUID,
+    candidate_key: str,
+    body: SetCommercialBillingCandidateReviewDecisionRequest,
+    actor: Annotated[str, Depends(require_actor)],
+    idempotency_key: Annotated[
+        str, Header(alias="Idempotency-Key", min_length=1)
+    ],
+    service: CommercialBillingRunService = Depends(get_commercial_billing_run_service),
+) -> dict:
+    """Append an audited include/exclude review decision without delivery work."""
+
+    request = {
+        "billing_run_id": billing_run_id,
+        "candidate_key": candidate_key,
+        "expected_source_fingerprint": body.expected_source_fingerprint,
+        "decision": body.decision,
+        "reason": body.reason,
+        "idempotency_key": idempotency_key,
+        "actor": actor,
+    }
+    if body.expected_review_fingerprint is not None:
+        request["expected_review_fingerprint"] = body.expected_review_fingerprint
+    return await _call_commercial_billing_run(
+        service.set_candidate_review_decision(**request)
+    )
+
+
+@router.post("/commercial-billing-approvals/{approval_id}/invoice-pdf", status_code=201)
+async def generate_commercial_billing_invoice_pdf(
+    approval_id: UUID,
+    actor: Annotated[str, Depends(require_actor)],
+    idempotency_key: Annotated[
+        str, Header(alias="Idempotency-Key", min_length=1, max_length=128)
+    ],
+    service: CommercialBillingInvoicePDFService = Depends(
+        get_commercial_billing_invoice_pdf_service
+    ),
+) -> dict:
+    """Create or reuse one durable PDF for an explicitly approved draft invoice."""
+
+    return await _call_commercial_billing_invoice_pdf(
+        service.generate_or_reuse(
+            approval_id=approval_id,
+            idempotency_key=idempotency_key,
+            actor=actor,
+        )
+    )
+
+
+@router.post("/commercial-billing-approvals/{approval_id}/gmail-draft", status_code=201)
+async def create_commercial_billing_invoice_gmail_draft(
+    approval_id: UUID,
+    actor: Annotated[str, Depends(require_actor)],
+    idempotency_key: Annotated[
+        str, Header(alias="Idempotency-Key", min_length=1, max_length=128)
+    ],
+    service: CommercialBillingInvoiceGmailDraftService = Depends(
+        get_commercial_billing_invoice_gmail_draft_service
+    ),
+) -> dict:
+    """Create, recover, or reuse one no-send Gmail draft for an approval PDF."""
+
+    return await _call_commercial_billing_gmail_draft(
+        service.create_or_reuse(
+            approval_id=approval_id,
+            idempotency_key=idempotency_key,
+            actor=actor,
+        )
+    )
+
+
+@router.post(
+    "/commercial-billing-approvals/{approval_id}/gmail-draft/replace-missing",
+    status_code=201,
+)
+async def replace_commercial_billing_missing_gmail_draft(
+    approval_id: UUID,
+    actor: Annotated[str, Depends(require_actor)],
+    idempotency_key: Annotated[
+        str, Header(alias="Idempotency-Key", min_length=1, max_length=128)
+    ],
+    service: CommercialBillingInvoiceGmailDraftService = Depends(
+        get_commercial_billing_invoice_gmail_draft_service
+    ),
+) -> dict:
+    """Replace only a reconciliation-proven missing Gmail draft; never send it."""
+
+    return await _call_commercial_billing_gmail_draft(
+        service.replace_missing(
+            approval_id=approval_id,
+            idempotency_key=idempotency_key,
+            actor=actor,
+        )
+    )
+
+
+@router.post("/commercial-billing-approvals/{approval_id}/gmail-draft/reconcile")
+async def reconcile_commercial_billing_invoice_gmail_draft_sent_mail(
+    approval_id: UUID,
+    actor: Annotated[str, Depends(require_actor)],
+    idempotency_key: Annotated[
+        str, Header(alias="Idempotency-Key", min_length=1, max_length=128)
+    ],
+    service: CommercialBillingInvoiceGmailSentReconciliationService = Depends(
+        get_commercial_billing_invoice_gmail_sent_reconciliation_service
+    ),
+) -> dict:
+    """Reconcile a manually sent Gmail draft from verifiable Sent-mail evidence."""
+
+    return await _call_commercial_billing_gmail_sent_reconciliation(
+        service.reconcile(
+            approval_id=approval_id,
+            idempotency_key=idempotency_key,
+            actor=actor,
+        )
+    )
+
+
+@router.get("/commercial-billing-runs/{billing_run_id}/gmail-delivery-state")
+async def list_commercial_billing_gmail_delivery_state(
+    billing_run_id: UUID,
+    limit: int = Query(default=50, ge=1, le=100),
+    offset: int = Query(default=0, ge=0, le=MAX_DELIVERY_STATE_OFFSET),
+    service: CommercialBillingInvoiceGmailSentReconciliationService = Depends(
+        get_commercial_billing_invoice_gmail_sent_reconciliation_service
+    ),
+) -> dict:
+    """Return durable Gmail delivery evidence for one immutable review run."""
+
+    return await _call_commercial_billing_gmail_sent_reconciliation(
+        service.list_delivery_state_for_run(
+            billing_run_id=billing_run_id,
+            limit=limit,
+            offset=offset,
+        )
+    )
+
+
+@router.get("/commercial-billing/manual-square-invoices")
+async def list_commercial_billing_manual_square_invoices(
+    limit: int = Query(default=50, ge=1, le=100),
+    offset: int = Query(default=0, ge=0),
+    service: CommercialBillingManualSquareInvoiceService = Depends(
+        get_commercial_billing_manual_square_invoice_service
+    ),
+) -> dict:
+    """List bounded manual-Square delivery work without changing financial state."""
+
+    return await _call_commercial_billing_manual_square_invoice(
+        service.list_needs_square_invoices(limit=limit, offset=offset)
+    )
+
+
+@router.post(
+    "/commercial-billing-approvals/{approval_id}/manual-square-invoice-reference",
+    status_code=201,
+)
+async def record_commercial_billing_manual_square_invoice_reference(
+    approval_id: UUID,
+    body: RecordCommercialBillingManualSquareReferenceRequest,
+    actor: Annotated[str, Depends(require_actor)],
+    idempotency_key: Annotated[
+        str, Header(alias="Idempotency-Key", min_length=1, max_length=128)
+    ],
+    service: CommercialBillingManualSquareInvoiceService = Depends(
+        get_commercial_billing_manual_square_invoice_service
+    ),
+) -> dict:
+    """Record one external Square reference without marking an invoice sent."""
+
+    return await _call_commercial_billing_manual_square_invoice(
+        service.record_reference(
+            approval_id=approval_id,
+            square_invoice_reference=body.square_invoice_reference,
+            idempotency_key=idempotency_key,
+            actor=actor,
+        )
+    )
+
+
+@router.post(
+    "/commercial-billing-approvals/{approval_id}/manual-square-invoice/mark-sent"
+)
+async def mark_commercial_billing_manual_square_invoice_sent(
+    approval_id: UUID,
+    actor: Annotated[str, Depends(require_actor)],
+    idempotency_key: Annotated[
+        str, Header(alias="Idempotency-Key", min_length=1, max_length=128)
+    ],
+    service: CommercialBillingManualSquareInvoiceService = Depends(
+        get_commercial_billing_manual_square_invoice_service
+    ),
+) -> dict:
+    """Explicitly mark one referenced manual-Square invoice sent via Square."""
+
+    return await _call_commercial_billing_manual_square_invoice(
+        service.mark_sent(
+            approval_id=approval_id,
+            idempotency_key=idempotency_key,
+            actor=actor,
+        )
+    )
+
+
+@router.get("/commercial-billing-runs")
+async def list_commercial_billing_runs(
+    billing_period: Optional[str] = Query(default=None),
+    limit: int = Query(default=50, ge=1, le=100),
+    offset: int = Query(default=0, ge=0),
+    service: CommercialBillingRunService = Depends(get_commercial_billing_run_service),
+) -> dict:
+    """List bounded durable review-run summaries without regenerating sources."""
+
+    return await _call_commercial_billing_run(
+        service.list_runs(
+            billing_period=billing_period,
+            limit=limit,
+            offset=offset,
+        )
+    )
+
+
+@router.get("/commercial-billing-runs/{billing_run_id}/reconciliation")
+async def reconcile_commercial_billing_run(
+    billing_run_id: UUID,
+    service: CommercialBillingRunService = Depends(get_commercial_billing_run_service),
+) -> dict:
+    """Compare durable evidence with fresh sources without writing either."""
+
+    return await _call_commercial_billing_run(service.reconcile_run(billing_run_id))
+
+
+@router.get("/commercial-billing-runs/{billing_run_id}")
+async def get_commercial_billing_run(
+    billing_run_id: UUID,
+    service: CommercialBillingRunService = Depends(get_commercial_billing_run_service),
+) -> dict:
+    """Return the immutable candidate snapshot retained for operator review."""
+
+    return await _call_commercial_billing_run(service.get_run(billing_run_id))
 
 
 @router.put("/payments/{payment_id}/allocations")

@@ -8,6 +8,7 @@ on:
     paths:
       - ".github/workflows/atlas_eom_lead_pipeline_checks.yml"
       - "docker-compose.yml"
+      - "scripts/eom_write_boundary_audit.py"
       - "atlas_brain/autonomous/tasks/gmail_digest.py"
       - "atlas_brain/config.py"
       - "atlas_brain/main.py"
@@ -24,12 +25,17 @@ on:
       - "atlas_brain/services/crm_provider.py"
       - "atlas_brain/services/email_provider.py"
       - "atlas_brain/services/eom_estimate_booking.py"
+      - "atlas_brain/services/eom_won_lead_loss.py"
       - "atlas_brain/services/eom_lead_conversion.py"
+      - "atlas_brain/services/eom_crm_mutations.py"
+      - "scripts/check_contact_write_boundary.py"
       - "atlas_brain/services/eom_lead_ingress.py"
       - "atlas_brain/services/eom_onboarding_drafts.py"
+      - "atlas_brain/services/eom_public_onboarding_tokens.py"
       - "atlas_brain/templates/email/__init__.py"
       - "atlas_brain/templates/email/estimate_confirmation.py"
       - "atlas_brain/templates/email/onboarding_welcome.py"
+      - "atlas_brain/templates/email/request_acknowledgement.py"
       - "atlas_brain/eom_api/config.py"
       - "atlas_brain/eom_api/auth.py"
       - "atlas_brain/eom_api/funnel.py"
@@ -59,15 +65,22 @@ on:
       - "atlas_brain/storage/migrations/359_eom_booking_operation_key_index_first_clean.sql"
       - "atlas_brain/storage/migrations/360_eom_onboarding_email_drafts.sql"
       - "atlas_brain/storage/migrations/361_eom_onboarding_draft_actor_bigint.sql"
+      - "atlas_brain/storage/migrations/383_eom_public_onboarding_tokens.sql"
+      - "atlas_brain/storage/migrations/386_eom_won_loss_nocodb_fence.sql"
       - "atlas_brain/tools/calendar.py"
       - "atlas_brain/tools/scheduling.py"
+      - "tests/test_ack_commercial_templates.py"
       - "tests/test_ack_variant_classification.py"
       - "tests/test_call_intelligence.py"
       - "tests/test_crm_read_scoping.py"
       - "tests/test_eom_complaints_integration.py"
       - "tests/test_eom_contacts_api_tenant_scope.py"
+      - "tests/test_backfill_eom_customer_type.py"
+      - "tests/test_eom_link_verification.py"
       - "tests/test_eom_lead_conversion.py"
       - "tests/test_eom_lead_conversion_integration.py"
+      - "tests/test_eom_public_onboarding.py"
+      - "tests/test_eom_write_boundary_audit.py"
       - "tests/test_eom_lead_pipeline_integration.py"
       - "tests/test_eom_mailbox_context_binding.py"
       - "tests/test_eom_lead_ingress.py"
@@ -80,12 +93,16 @@ on:
       - "tests/test_migrations_runner.py"
       - "tests/test_migration_365_business_context_fk.py"
       - "atlas_brain/storage/migrations/365_contacts_business_context_registry_fk.sql"
+      - "atlas_brain/storage/migrations/366_contacts_customer_type.sql"
+      - "atlas_brain/storage/migrations/367_contacts_customer_type_revision.sql"
+      - "scripts/backfill_eom_customer_type.py"
   push:
     branches:
       - main
     paths:
       - ".github/workflows/atlas_eom_lead_pipeline_checks.yml"
       - "docker-compose.yml"
+      - "scripts/eom_write_boundary_audit.py"
       - "atlas_brain/autonomous/tasks/gmail_digest.py"
       - "atlas_brain/config.py"
       - "atlas_brain/main.py"
@@ -102,12 +119,17 @@ on:
       - "atlas_brain/services/crm_provider.py"
       - "atlas_brain/services/email_provider.py"
       - "atlas_brain/services/eom_estimate_booking.py"
+      - "atlas_brain/services/eom_won_lead_loss.py"
       - "atlas_brain/services/eom_lead_conversion.py"
+      - "atlas_brain/services/eom_crm_mutations.py"
+      - "scripts/check_contact_write_boundary.py"
       - "atlas_brain/services/eom_lead_ingress.py"
       - "atlas_brain/services/eom_onboarding_drafts.py"
+      - "atlas_brain/services/eom_public_onboarding_tokens.py"
       - "atlas_brain/templates/email/__init__.py"
       - "atlas_brain/templates/email/estimate_confirmation.py"
       - "atlas_brain/templates/email/onboarding_welcome.py"
+      - "atlas_brain/templates/email/request_acknowledgement.py"
       - "atlas_brain/eom_api/config.py"
       - "atlas_brain/eom_api/auth.py"
       - "atlas_brain/eom_api/funnel.py"
@@ -137,15 +159,22 @@ on:
       - "atlas_brain/storage/migrations/359_eom_booking_operation_key_index_first_clean.sql"
       - "atlas_brain/storage/migrations/360_eom_onboarding_email_drafts.sql"
       - "atlas_brain/storage/migrations/361_eom_onboarding_draft_actor_bigint.sql"
+      - "atlas_brain/storage/migrations/383_eom_public_onboarding_tokens.sql"
+      - "atlas_brain/storage/migrations/386_eom_won_loss_nocodb_fence.sql"
       - "atlas_brain/tools/calendar.py"
       - "atlas_brain/tools/scheduling.py"
+      - "tests/test_ack_commercial_templates.py"
       - "tests/test_ack_variant_classification.py"
       - "tests/test_call_intelligence.py"
       - "tests/test_crm_read_scoping.py"
       - "tests/test_eom_complaints_integration.py"
       - "tests/test_eom_contacts_api_tenant_scope.py"
+      - "tests/test_backfill_eom_customer_type.py"
+      - "tests/test_eom_link_verification.py"
       - "tests/test_eom_lead_conversion.py"
       - "tests/test_eom_lead_conversion_integration.py"
+      - "tests/test_eom_public_onboarding.py"
+      - "tests/test_eom_write_boundary_audit.py"
       - "tests/test_eom_lead_pipeline_integration.py"
       - "tests/test_eom_mailbox_context_binding.py"
       - "tests/test_eom_lead_ingress.py"
@@ -158,6 +187,9 @@ on:
       - "tests/test_migrations_runner.py"
       - "tests/test_migration_365_business_context_fk.py"
       - "atlas_brain/storage/migrations/365_contacts_business_context_registry_fk.sql"
+      - "atlas_brain/storage/migrations/366_contacts_customer_type.sql"
+      - "atlas_brain/storage/migrations/367_contacts_customer_type_revision.sql"
+      - "scripts/backfill_eom_customer_type.py"
 
 jobs:
   eom-lead-pipeline:
@@ -196,14 +228,25 @@ jobs:
 
       - name: Run EOM lead pipeline checks
         run: |
+          # test_eom_billing_recipients.py is enrolled here as well as in the
+          # invoicing workflow: eom_crm_mutations triggers THIS workflow, and
+          # its normalize_contact_email decides billing-recipient eligibility
+          # and the address those routes return.
           python -m pytest \
+            tests/test_ack_commercial_templates.py \
             tests/test_ack_variant_classification.py \
             tests/test_call_intelligence.py \
             tests/test_crm_read_scoping.py \
             tests/test_eom_complaints_integration.py \
             tests/test_eom_contacts_api_tenant_scope.py \
+            tests/test_backfill_eom_customer_type.py \
+            tests/test_eom_link_verification.py \
+            tests/test_eom_billing_recipients.py \
             tests/test_eom_lead_conversion.py \
             tests/test_eom_lead_conversion_integration.py \
+            tests/test_eom_funnel_capability_manifest.py \
+            tests/test_eom_public_onboarding.py \
+            tests/test_eom_write_boundary_audit.py \
             tests/test_eom_lead_pipeline_integration.py \
             tests/test_eom_mailbox_context_binding.py \
             tests/test_eom_lead_ingress.py \

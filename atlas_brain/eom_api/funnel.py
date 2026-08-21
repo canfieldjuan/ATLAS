@@ -26,9 +26,9 @@ from ..services.eom_lead_conversion import (
     EOMLeadLost,
     EOMLeadReopen,
     finalize_eom_customer_handoff,
-    mark_eom_lead_lost,
     reopen_eom_lead,
 )
+from ..services.eom_won_lead_loss import mark_eom_lead_lost_with_won_teardown
 from ..services.eom_crm_mutations import (
     EOMOperatorContactMutation,
     EOMOperatorContactMutationError,
@@ -40,8 +40,20 @@ from ..services.eom_onboarding_drafts import (
     approve_and_send_eom_onboarding_draft,
     record_operator_confirmed_send_evidence,
 )
+from ..services.eom_public_onboarding_tokens import (
+    AuthenticatedEOMPublicOnboardingToken,
+    EOMPublicOnboardingTokenError,
+    authenticate_eom_public_onboarding_token,
+    eom_public_onboarding_hmac_key_fingerprint,
+)
 from ..services.crm_provider import get_crm_provider
-from .funnel_auth import require_eom_funnel_actor, require_eom_funnel_api
+from .funnel_auth import (
+    EOMPublicOnboardingConfig,
+    get_eom_funnel_api_config,
+    require_eom_funnel_actor,
+    require_eom_funnel_api,
+    require_eom_public_onboarding_config,
+)
 
 router = APIRouter(prefix="/eom-funnel", tags=["eom-funnel"])
 
@@ -57,6 +69,11 @@ _RFC3339_DATETIME_PATTERN = re.compile(
 _MAX_SIGNED_BIGINT = 2**63 - 1
 _DEFAULT_LEAD_REVIEW_LIMIT = 100
 _MAX_LEAD_REVIEW_LIMIT = 200
+# Ids ride in the query string, so the cap is a URL-length budget rather than a
+# database one: 100 ids costs roughly 4.8 KB of `contact_id=<uuid>&`, comfortably
+# inside the 8 KB request line every proxy in front of this accepts. Callers with
+# more links to check page through them.
+_MAX_KNOWN_CONTACT_IDS = 100
 # Same conservative shape the public intake boundary accepts
 # (atlas_brain/api/leads.py), so an office-corrected recipient can never be
 # stricter or looser than an intake-submitted one.
@@ -86,6 +103,31 @@ class EOMCustomerHandoffRequest(BaseModel):
     contact_id: UUID
     tracker_customer_id: Annotated[int, Field(strict=True, gt=0, le=_MAX_SIGNED_BIGINT)]
     tracker_site_id: Annotated[int, Field(strict=True, gt=0, le=_MAX_SIGNED_BIGINT)]
+
+
+class EOMPublicOnboardingSessionRequest(BaseModel):
+    """Opaque bearer supplied by the tracker after the Website reads a fragment."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    # Deliberately accept the JSON shape here and hand every supplied value to
+    # the canonical parser. It is the one bearer-admission choke point, so a
+    # non-string or oversized value receives the same unavailable result before
+    # any CRM access rather than becoming a second token validator in Pydantic.
+    token: object
+
+
+class EOMPublicOnboardingFinalizeRequest(EOMPublicOnboardingSessionRequest):
+    """Tracker-owned local IDs for the one-time Atlas finalizer."""
+
+    tracker_customer_id: Annotated[int, Field(strict=True, gt=0, le=_MAX_SIGNED_BIGINT)]
+    tracker_site_id: Annotated[int, Field(strict=True, gt=0, le=_MAX_SIGNED_BIGINT)]
+
+
+class EOMPublicOnboardingRecoveryRequest(EOMCustomerHandoffRequest):
+    """Stored IDs for staff recovery when raw-bearer redemption cannot finish."""
+
+    token_id: UUID
 
 
 class EOMEstimateBookingRequest(BaseModel):
@@ -166,6 +208,15 @@ class EOMOperatorContactRequest(BaseModel):
     state: Annotated[str | None, Field(default=None, max_length=64)]
     zip: Annotated[str | None, Field(default=None, max_length=16)]
     notes: Annotated[str | None, Field(default=None, max_length=4000)]
+    # Bounded here, but the admitted VALUES are decided once in
+    # eom_crm_mutations.EOM_CUSTOMER_TYPES, which is bound to the
+    # chk_contacts_customer_type CHECK. A Literal here would be a third copy of
+    # that set and would reject the capitalised 'Residential'/'Commercial' the
+    # tracker actually stores, before the case-folding normalizer ever runs.
+    customer_type: Annotated[
+        str | None,
+        Field(default=None, max_length=32, alias="customerType"),
+    ]
     source_channel: Annotated[
         str,
         Field(min_length=1, max_length=64, alias="sourceChannel"),
@@ -235,6 +286,63 @@ class EOMLeadReviewResponse(BaseModel):
     # (Render) auto-deploy from main; Atlas deploys by hand, so callers
     # routinely run ahead of it. See ATLAS #2275 and website #112.
     capabilities: list[str] = Field(default_factory=list)
+    # Names alone are a presentation convenience. The Tracker derives the
+    # public-onboarding controls from these registered route signatures so it
+    # cannot accidentally treat a copied capability spelling as deployment
+    # evidence.
+    capability_routes: list["EOMFunnelCapabilityRoute"] = Field(
+        default_factory=list,
+        serialization_alias="capabilityRoutes",
+    )
+
+
+class EOMFunnelCapabilityRoute(BaseModel):
+    """One registered method/path signature behind an advertised capability."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    method: str
+    path: str
+
+
+class EOMKnownContactsResponse(BaseModel):
+    """Which submitted ids name a live EOM contact, its type, and its source version.
+
+    Still not an identity read: no name, email, phone or address is disclosed.
+    A caller holding a stored contact id is asking whether its link resolves
+    and what kind of account it points at, and both answers are available
+    without any of that.
+
+    ``customerType`` was added deliberately rather than incidentally. This
+    route was introduced id-only, so widening it is a disclosure decision, not
+    a formatting one. It is included because: the value is not personal data,
+    it is a classification the operator themselves set; the credential is
+    already EOM-scoped, so no cross-tenant information is exposed; and the
+    alternative is a mirror that can never self-correct, which is the concrete
+    defect this closes (ATLAS #2357).
+
+    ``knownContactIds`` keeps its exact prior shape. The tracker's link audit
+    already consumes it, and changing a list of ids into a list of objects
+    would break that consumer for no gain -- so the types arrive alongside it
+    as a parallel mapping instead.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    known_contact_ids: list[UUID] = Field(serialization_alias="knownContactIds")
+    # Keyed by the same ids, so a caller can answer "does it resolve" and
+    # "what is it" from one response. Only ever contains ids that appear in
+    # known_contact_ids above.
+    customer_types: dict[str, str] = Field(
+        default_factory=dict, serialization_alias="customerTypes"
+    )
+    # Database-owned and monotonic for this contact's customer_type evidence.
+    # Keep it parallel so legacy fields retain their shapes.
+    customer_type_revisions: dict[str, int] = Field(
+        default_factory=dict, serialization_alias="customerTypeRevisions"
+    )
+    checked: int
+    limit: Annotated[int, Field(ge=1, le=_MAX_KNOWN_CONTACT_IDS)]
 
 
 class EOMOnboardingDraftEditRequest(BaseModel):
@@ -320,11 +428,143 @@ class EOMOnboardingDraftListResponse(BaseModel):
     )
 
 
+class EOMPublicOnboardingIssuedLinkItem(BaseModel):
+    """Closed office projection of one currently usable onboarding link.
+
+    The durable token row is the lifecycle authority.  The opaque token ID and
+    raw bearer are deliberately absent: office revocation already addresses the
+    record through its draft ID, so neither value has a browser use here.
+    """
+
+    model_config = ConfigDict(extra="forbid", populate_by_name=True)
+
+    draft_id: UUID = Field(serialization_alias="draftId")
+    contact_id: UUID = Field(serialization_alias="contactId")
+    full_name: str = Field(serialization_alias="fullName")
+    recipient_email: str | None = Field(
+        default=None, serialization_alias="recipientEmail"
+    )
+    status: Literal["issued"]
+    issued_at: datetime = Field(serialization_alias="issuedAt")
+
+
+class EOMPublicOnboardingIssuedLinkListResponse(BaseModel):
+    """Bounded current-state list for the office follow-up queue."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    links: list[EOMPublicOnboardingIssuedLinkItem]
+    limit: Annotated[int, Field(ge=1, le=_MAX_LEAD_REVIEW_LIMIT)]
+    cursor: str | None = None
+    has_more: bool = Field(serialization_alias="hasMore")
+    next_cursor: str | None = Field(
+        default=None,
+        serialization_alias="nextCursor",
+    )
+
+
 def _crm_dependency(request: Request) -> Any:
     provider_factory = getattr(request.app.state, "eom_funnel_crm_provider", None)
     if callable(provider_factory):
         return provider_factory()
     return get_crm_provider()
+
+
+def _authenticated_public_onboarding_token(
+    token: object,
+    public_onboarding: EOMPublicOnboardingConfig,
+) -> AuthenticatedEOMPublicOnboardingToken:
+    """Authenticate and bind a raw bearer before it reaches the CRM provider."""
+
+    try:
+        return authenticate_eom_public_onboarding_token(
+            token=token,
+            secret=public_onboarding.hmac_secret,
+            previous_secret=public_onboarding.previous_hmac_secret,
+        )
+    except EOMPublicOnboardingTokenError as exc:
+        # The same result as an unknown/revoked durable token avoids telling a
+        # caller whether its grammar or MAC was the rejected component.
+        raise HTTPException(
+            status_code=404,
+            detail="Public onboarding link is unavailable",
+        ) from exc
+
+
+def _accepted_public_onboarding_signing_key_fingerprints(
+    public_onboarding: EOMPublicOnboardingConfig,
+) -> tuple[str, ...]:
+    """Return the only durable key identities that can authenticate now."""
+
+    secrets = (public_onboarding.hmac_secret, public_onboarding.previous_hmac_secret)
+    return tuple(
+        dict.fromkeys(
+            eom_public_onboarding_hmac_key_fingerprint(secret=secret)
+            for secret in secrets
+            if secret is not None
+        )
+    )
+
+
+def _public_onboarding_session_content(result: Mapping[str, Any]) -> dict[str, Any]:
+    """Whitelist the token-bound projection the tracker may bridge onward."""
+
+    state = str(result["status"])
+    content: dict[str, Any] = {"success": True, "status": state}
+    if state == "ready":
+        for field in (
+            "full_name",
+            "email",
+            "phone",
+            "address",
+            "city",
+            "state",
+            "zip",
+            "customer_type",
+        ):
+            content[field] = result[field]
+        return content
+    if state == "completed":
+        for field in ("tracker_customer_id", "tracker_site_id", "idempotent"):
+            content[field] = result[field]
+        return content
+    raise RuntimeError("CRM provider returned an invalid public onboarding session")
+
+
+def _public_onboarding_tracker_context_content(
+    result: Mapping[str, Any],
+) -> dict[str, Any]:
+    """Add durable Atlas IDs only to the tracker-only context projection."""
+
+    content = _public_onboarding_session_content(result)
+    content.update(
+        {
+            "token_id": result["token_id"],
+            "draft_id": result["draft_id"],
+            "contact_id": result["contact_id"],
+        }
+    )
+    return content
+
+
+def _public_onboarding_finalize_content(result: Mapping[str, Any]) -> dict[str, Any]:
+    """Return only completion evidence the tracker can reconcile locally."""
+
+    if str(result["status"]) != "completed":
+        raise RuntimeError("CRM provider returned an invalid public onboarding completion")
+    return {
+        "success": True,
+        "status": "completed",
+        "tracker_customer_id": result["tracker_customer_id"],
+        "tracker_site_id": result["tracker_site_id"],
+        "idempotent": result["idempotent"],
+    }
+
+
+def _public_onboarding_recovery_content(result: Mapping[str, Any]) -> dict[str, Any]:
+    """Return only completion evidence after an actor-audited recovery."""
+
+    return _public_onboarding_finalize_content(result)
 
 
 def _calendar_dependency() -> Any:
@@ -422,6 +662,19 @@ _CAPABILITY_ROUTES: dict[str, tuple[str, str]] = {
         "POST",
         "/eom-funnel/onboarding-drafts/{draft_id}/confirm-sent",
     ),
+    "onboarding.public_link.list": (
+        "GET",
+        "/eom-funnel/public-onboarding/issued-links",
+    ),
+    "onboarding.public_link.revoke": (
+        "POST",
+        "/eom-funnel/onboarding-drafts/{draft_id}/revoke-link",
+    ),
+    "onboarding.public_handoff.recover": (
+        "POST",
+        "/eom-funnel/public-onboarding/recover",
+    ),
+    "contact.link_verification": ("GET", "/eom-funnel/known-contacts"),
 }
 
 _served_capabilities_cache: tuple[str, ...] | None = None
@@ -451,6 +704,17 @@ def served_capabilities() -> tuple[str, ...]:
     return _served_capabilities_cache
 
 
+def served_capability_routes() -> tuple[tuple[str, str], ...]:
+    """Registered signatures for the same derived capability set.
+
+    Keep this projection mechanically tied to ``served_capabilities``: callers
+    may use the names for existing generic controls, but new cross-service
+    controls must derive their proof from the registered method/path pair.
+    """
+
+    return tuple(_CAPABILITY_ROUTES[name] for name in served_capabilities())
+
+
 def _operator_contact_fields(payload: EOMOperatorContactRequest) -> dict[str, Any]:
     model_to_contact = {
         "full_name": "full_name",
@@ -461,6 +725,7 @@ def _operator_contact_fields(payload: EOMOperatorContactRequest) -> dict[str, An
         "state": "state",
         "zip": "zip",
         "notes": "notes",
+        "customer_type": "customer_type",
     }
     return {
         contact_field: getattr(payload, model_field)
@@ -489,6 +754,7 @@ def _operator_contact_item(contact: Mapping[str, Any]) -> dict[str, Any]:
         "zip": contact.get("zip"),
         "notes": contact.get("notes"),
         "contactType": contact.get("contact_type"),
+        "customerType": contact.get("customer_type"),
         "leadStage": contact.get("lead_stage"),
         "status": contact.get("status"),
         "source": contact.get("source"),
@@ -588,6 +854,67 @@ async def list_eom_lead_review_items(
         has_more=has_more,
         next_cursor=next_cursor,
         capabilities=list(served_capabilities()),
+        capability_routes=[
+            EOMFunnelCapabilityRoute(method=method, path=path)
+            for method, path in served_capability_routes()
+        ],
+    )
+
+
+@router.get(
+    "/known-contacts",
+    response_model=EOMKnownContactsResponse,
+    dependencies=[Depends(require_eom_funnel_api)],
+)
+async def list_known_eom_contacts(
+    contact_id: Annotated[
+        list[UUID],
+        Query(min_length=1, max_length=_MAX_KNOWN_CONTACT_IDS),
+    ],
+    _actor: dict[str, object] = Depends(require_eom_funnel_actor),
+    crm: Any = Depends(_crm_dependency),
+) -> EOMKnownContactsResponse:
+    """Report which submitted contact ids still name a live EOM contact.
+
+    A system holding its own copy of a contact id -- the tracker's
+    ``customers.atlas_contact_id`` -- cannot tell a good link from a dangling
+    one on its own, so a link to a contact that no longer exists stays silent
+    until someone opens the record. This answers that question and nothing
+    else: an id comes back only when it names an ``effingham_maids`` contact.
+    Lifecycle is not part of the answer -- an archived or lost contact is still
+    a link that resolves.
+
+    An id that exists under a different tenant is reported the same way as one
+    that does not exist at all. The distinction would be more useful to the
+    caller and is deliberately withheld: this credential is scoped to EOM, and
+    confirming the existence of another tenant's contact would make this route
+    a cross-tenant existence oracle. Either answer means the same thing to the
+    caller anyway -- the link does not point at an EOM contact.
+
+    Reading this projection alters nothing.
+    """
+    requested = list(dict.fromkeys(contact_id))
+    known = await crm.list_known_eom_contact_ids(contact_ids=requested)
+    # Answer in terms of what was asked rather than echoing the provider's rows:
+    # an id the caller never submitted must never appear in the response, or the
+    # route would report a verdict the caller cannot attribute to a link it holds.
+    # The same filter governs the types, so neither field can carry an id the
+    # other does not.
+    by_id = {UUID(str(row["id"])): row for row in known}
+    known_ids = [value for value in requested if value in by_id]
+    customer_types = {
+        str(value): str(by_id[value].get("customer_type") or "unknown")
+        for value in known_ids
+    }
+    customer_type_revisions = {
+        str(value): int(by_id[value]["customer_type_revision"]) for value in known_ids
+    }
+    return EOMKnownContactsResponse(
+        known_contact_ids=known_ids,
+        customer_types=customer_types,
+        customer_type_revisions=customer_type_revisions,
+        checked=len(requested),
+        limit=_MAX_KNOWN_CONTACT_IDS,
     )
 
 
@@ -725,14 +1052,18 @@ async def mark_lead_lost(
     operation_key: str = Depends(_approval_key_dependency),
     actor: dict[str, object] = Depends(require_eom_funnel_actor),
     crm: Any = Depends(_crm_dependency),
+    calendar: Any = Depends(_calendar_dependency),
 ) -> JSONResponse:
     """Disposition a lead that will not convert; it leaves the review queue.
 
-    Reversible via the reopen endpoint. Records a reason on the lifecycle
-    ledger. No calendar or customer/site side effect."""
+    Pre-won leads retain the reversible direct disposition. A won lead first
+    cancels its persisted first-clean Calendar event and revokes its unsent
+    onboarding draft; it is never reported lost after an uncertain cancellation.
+    """
     try:
-        result = await mark_eom_lead_lost(
+        result = await mark_eom_lead_lost_with_won_teardown(
             crm,
+            calendar,
             EOMLeadLost(
                 contact_id=str(contact_id),
                 reason_code=payload.reason_code,
@@ -783,6 +1114,205 @@ def _draft_action_response(result: dict[str, Any]) -> JSONResponse:
             else status.HTTP_201_CREATED
         ),
         content={"success": True, **result},
+    )
+
+
+@router.post(
+    "/public-onboarding/session",
+    dependencies=[Depends(require_eom_funnel_api)],
+)
+async def get_eom_public_onboarding_session(
+    payload: EOMPublicOnboardingSessionRequest,
+    public_onboarding: EOMPublicOnboardingConfig = Depends(
+        require_eom_public_onboarding_config
+    ),
+    crm: Any = Depends(_crm_dependency),
+) -> JSONResponse:
+    """Resolve a valid public link for the tracker, never for a browser directly."""
+
+    authenticated_token = _authenticated_public_onboarding_token(
+        payload.token, public_onboarding
+    )
+    try:
+        result = await crm.get_eom_public_onboarding_session(
+            token_id=str(authenticated_token.token_id),
+            signing_key_fingerprint=authenticated_token.signing_key_fingerprint,
+        )
+    except EOMLeadConversionError as exc:
+        # Durable invalid/revoked/contact-state outcomes deliberately have the
+        # same external text as a malformed bearer.
+        if exc.status_code in (404, 409):
+            raise HTTPException(
+                status_code=404,
+                detail="Public onboarding link is unavailable",
+            ) from exc
+        raise HTTPException(status_code=exc.status_code, detail=str(exc)) from exc
+    return JSONResponse(
+        status_code=status.HTTP_200_OK,
+        content=_public_onboarding_session_content(result),
+    )
+
+
+@router.post(
+    "/public-onboarding/tracker-context",
+    dependencies=[Depends(require_eom_funnel_api)],
+)
+async def get_eom_public_onboarding_tracker_context(
+    payload: EOMPublicOnboardingSessionRequest,
+    public_onboarding: EOMPublicOnboardingConfig = Depends(
+        require_eom_public_onboarding_config
+    ),
+    crm: Any = Depends(_crm_dependency),
+) -> JSONResponse:
+    """Resolve private token context for the Tracker, never for a browser."""
+
+    authenticated_token = _authenticated_public_onboarding_token(
+        payload.token, public_onboarding
+    )
+    try:
+        result = await crm.get_eom_public_onboarding_tracker_context(
+            token_id=str(authenticated_token.token_id),
+            signing_key_fingerprint=authenticated_token.signing_key_fingerprint,
+        )
+    except EOMLeadConversionError as exc:
+        if exc.status_code in (404, 409):
+            raise HTTPException(
+                status_code=404,
+                detail="Public onboarding link is unavailable",
+            ) from exc
+        raise HTTPException(status_code=exc.status_code, detail=str(exc)) from exc
+    return JSONResponse(
+        status_code=status.HTTP_200_OK,
+        content=_public_onboarding_tracker_context_content(result),
+    )
+
+
+@router.post(
+    "/public-onboarding/finalize",
+    dependencies=[Depends(require_eom_funnel_api)],
+)
+async def finalize_eom_public_onboarding(
+    payload: EOMPublicOnboardingFinalizeRequest,
+    public_onboarding: EOMPublicOnboardingConfig = Depends(
+        require_eom_public_onboarding_config
+    ),
+    crm: Any = Depends(_crm_dependency),
+) -> JSONResponse:
+    """Redeem one public bearer after the tracker has made local records."""
+
+    authenticated_token = _authenticated_public_onboarding_token(
+        payload.token, public_onboarding
+    )
+    try:
+        result = await crm.complete_eom_public_onboarding(
+            token_id=str(authenticated_token.token_id),
+            signing_key_fingerprint=authenticated_token.signing_key_fingerprint,
+            tracker_customer_id=payload.tracker_customer_id,
+            tracker_site_id=payload.tracker_site_id,
+        )
+    except EOMLeadConversionError as exc:
+        if exc.status_code in (404, 409):
+            raise HTTPException(
+                status_code=404,
+                detail="Public onboarding link is unavailable",
+            ) from exc
+        raise HTTPException(status_code=exc.status_code, detail=str(exc)) from exc
+    return JSONResponse(
+        status_code=(
+            status.HTTP_200_OK if bool(result.get("idempotent")) else status.HTTP_201_CREATED
+        ),
+        content=_public_onboarding_finalize_content(result),
+    )
+
+
+@router.post(
+    "/public-onboarding/recover",
+    dependencies=[Depends(require_eom_funnel_api)],
+)
+async def recover_eom_public_onboarding(
+    payload: EOMPublicOnboardingRecoveryRequest,
+    actor: dict[str, object] = Depends(require_eom_funnel_actor),
+    crm: Any = Depends(_crm_dependency),
+) -> JSONResponse:
+    """Complete a durable Tracker reservation after an ambiguous finalization."""
+
+    try:
+        result = await crm.recover_eom_public_onboarding(
+            token_id=str(payload.token_id),
+            contact_id=str(payload.contact_id),
+            tracker_customer_id=payload.tracker_customer_id,
+            tracker_site_id=payload.tracker_site_id,
+            actor_id=int(actor["id"]),
+            actor_name=str(actor["name"]),
+        )
+    except EOMLeadConversionError as exc:
+        raise HTTPException(status_code=exc.status_code, detail=str(exc)) from exc
+    return JSONResponse(
+        status_code=(
+            status.HTTP_200_OK if bool(result.get("idempotent")) else status.HTTP_201_CREATED
+        ),
+        content=_public_onboarding_recovery_content(result),
+    )
+
+
+@router.get(
+    "/public-onboarding/issued-links",
+    response_model=EOMPublicOnboardingIssuedLinkListResponse,
+    dependencies=[Depends(require_eom_funnel_api)],
+)
+async def list_eom_public_onboarding_issued_links(
+    limit: Annotated[
+        int,
+        Query(ge=1, le=_MAX_LEAD_REVIEW_LIMIT),
+    ] = _DEFAULT_LEAD_REVIEW_LIMIT,
+    cursor: Annotated[str | None, Query(min_length=16, max_length=512)] = None,
+    _actor: dict[str, object] = Depends(require_eom_funnel_actor),
+    public_onboarding: EOMPublicOnboardingConfig = Depends(
+        require_eom_public_onboarding_config
+    ),
+    crm: Any = Depends(_crm_dependency),
+) -> EOMPublicOnboardingIssuedLinkListResponse:
+    """List only durable tokens that remain issued for office follow-up.
+
+    A sent onboarding draft is not sufficient evidence here: the customer may
+    have redeemed its token, an operator may have revoked it, or its signing
+    key may no longer be accepted. This projection reads that live authority
+    and alters no handoff, delivery, or token state.
+    """
+
+    decoded_cursor = _decode_lead_review_cursor(cursor)
+    try:
+        rows = await crm.list_eom_public_onboarding_issued_links(
+            accepted_signing_key_fingerprints=(
+                _accepted_public_onboarding_signing_key_fingerprints(public_onboarding)
+            ),
+            limit=limit + 1,
+            cursor_issued_at=(
+                decoded_cursor["created_at"] if decoded_cursor is not None else None
+            ),
+            cursor_draft_id=(
+                decoded_cursor["contact_id"] if decoded_cursor is not None else None
+            ),
+        )
+    except EOMLeadConversionError as exc:
+        raise HTTPException(status_code=exc.status_code, detail=str(exc)) from exc
+    page_rows = rows[:limit]
+    has_more = len(rows) > limit
+    next_cursor = None
+    if has_more and page_rows:
+        last_row = EOMPublicOnboardingIssuedLinkItem.model_validate(page_rows[-1])
+        next_cursor = _encode_lead_review_cursor(
+            created_at=last_row.issued_at,
+            contact_id=last_row.draft_id,
+        )
+    return EOMPublicOnboardingIssuedLinkListResponse(
+        links=[
+            EOMPublicOnboardingIssuedLinkItem.model_validate(row) for row in page_rows
+        ],
+        limit=limit,
+        cursor=cursor,
+        has_more=has_more,
+        next_cursor=next_cursor,
     )
 
 
@@ -873,8 +1403,10 @@ async def edit_eom_onboarding_draft(
 async def approve_and_send_onboarding_draft(
     draft_id: UUID,
     actor: dict[str, object] = Depends(require_eom_funnel_actor),
+    config: Any = Depends(get_eom_funnel_api_config),
     crm: Any = Depends(_crm_dependency),
     sender: Any = Depends(_onboarding_sender_dependency),
+    email_history: Any = Depends(_onboarding_email_history_dependency),
 ) -> JSONResponse:
     """Claim the pending draft, send it, then confirm delivery.
 
@@ -883,6 +1415,11 @@ async def approve_and_send_onboarding_draft(
     already-sent draft replays 200 without a second transport call, and a
     concurrent approval loses the atomic claim.
     """
+    public_onboarding = (
+        require_eom_public_onboarding_config(config)
+        if config.public_onboarding_issuance_is_enabled
+        else None
+    )
     try:
         result = await approve_and_send_eom_onboarding_draft(
             crm,
@@ -892,6 +1429,15 @@ async def approve_and_send_onboarding_draft(
                 actor_name=str(actor["name"]),
             ),
             sender=sender,
+            email_history=email_history,
+            public_onboarding_base_url=(
+                public_onboarding.base_url if public_onboarding is not None else None
+            ),
+            public_onboarding_hmac_secret=(
+                public_onboarding.hmac_secret
+                if public_onboarding is not None
+                else None
+            ),
         )
     except EOMOnboardingDraftError as exc:
         raise HTTPException(status_code=exc.status_code, detail=str(exc)) from exc
@@ -921,6 +1467,42 @@ async def revoke_onboarding_draft(
             result,
             f"employee:{actor['id']}:{actor['name']} revoked onboarding "
             f"draft {result['draft_id']}",
+        )
+    return _draft_action_response(result)
+
+
+@router.post(
+    "/onboarding-drafts/{draft_id}/revoke-link",
+    status_code=status.HTTP_201_CREATED,
+    dependencies=[Depends(require_eom_funnel_api)],
+)
+async def revoke_eom_public_onboarding_link(
+    draft_id: UUID,
+    actor: dict[str, object] = Depends(require_eom_funnel_actor),
+    crm: Any = Depends(_crm_dependency),
+) -> JSONResponse:
+    """Invalidate an issued customer link without changing sent-email evidence.
+
+    This recovery command intentionally remains available if public issuance is
+    later disabled. Otherwise an existing issued token would still fence office
+    handoff while staff had no private way to revoke it. It never mints or
+    resolves a bearer, and it still requires the normal service credential plus
+    an office actor.
+    """
+
+    try:
+        result = await crm.revoke_eom_public_onboarding_token(draft_id=str(draft_id))
+    except EOMLeadConversionError as exc:
+        raise HTTPException(status_code=exc.status_code, detail=str(exc)) from exc
+    if not bool(result.get("idempotent")):
+        await _log_draft_reconciliation(
+            crm,
+            {
+                "draft_id": str(draft_id),
+                "contact_id": result["contact_id"],
+            },
+            f"employee:{actor['id']}:{actor['name']} revoked public onboarding "
+            f"link for draft {draft_id}",
         )
     return _draft_action_response(result)
 

@@ -5,9 +5,10 @@ from __future__ import annotations
 import os
 from collections.abc import Iterable, Mapping
 from pathlib import Path
+from urllib.parse import urlsplit
 
 from dotenv import dotenv_values
-from pydantic import Field
+from pydantic import Field, SecretStr
 from pydantic import model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
@@ -176,6 +177,57 @@ class EOMFunnelConfig(BaseSettings):
             "the slim EOM funnel routes"
         ),
     )
+    public_onboarding_enabled: bool = Field(
+        default=False,
+        description=(
+            "Enable the configured tracker-only authority that validates and "
+            "redeems public EOM onboarding links"
+        ),
+    )
+    public_onboarding_issuance_enabled: bool | None = Field(
+        default=None,
+        description=(
+            "Optional new-link issuance override; unset preserves the authority "
+            "flag's legacy behavior, while false pauses issuance without "
+            "disabling redemption of already-issued links"
+        ),
+    )
+    public_onboarding_url: str = Field(
+        default="",
+        description=(
+            "HTTPS Website onboarding page base URL; the bearer is appended only "
+            "as a URL fragment at email-delivery time"
+        ),
+    )
+    public_onboarding_hmac_secret: SecretStr = Field(
+        default_factory=lambda: SecretStr(""),
+        description=(
+            "Atlas-only HMAC secret for public onboarding link signatures; never "
+            "expose it to the tracker or browser"
+        ),
+    )
+    public_onboarding_previous_hmac_secret: SecretStr = Field(
+        default_factory=lambda: SecretStr(""),
+        description=(
+            "Optional immediately previous Atlas-only public-onboarding HMAC "
+            "secret, retained only while issued links from one controlled key "
+            "rotation are still active"
+        ),
+    )
+
+    @property
+    def public_onboarding_issuance_is_enabled(self) -> bool:
+        """Return the effective new-link issuance decision.
+
+        An unset override preserves configured deployments' original behavior:
+        enabling the public authority also enables issuance. Operators can set
+        the override false to drain outstanding links without disabling the
+        authority that validates and redeems them.
+        """
+
+        if self.public_onboarding_issuance_enabled is None:
+            return self.public_onboarding_enabled
+        return self.public_onboarding_issuance_enabled
 
     @model_validator(mode="after")
     def reject_raw_eom_funnel_service_token_env(self) -> "EOMFunnelConfig":
@@ -185,6 +237,97 @@ class EOMFunnelConfig(BaseSettings):
                 f"in {RAW_EOM_FUNNEL_SERVICE_TOKEN_ENV}; provision only "
                 "ATLAS_EOM_FUNNEL_SERVICE_TOKEN_SHA256 on the Atlas API service "
                 "and keep the raw token on the caller side."
+            )
+        return self
+
+    @model_validator(mode="after")
+    def validate_public_onboarding_configuration(self) -> "EOMFunnelConfig":
+        """Make an explicitly configured bearer authority safe before use.
+
+        The URL and primary secret may be staged while disabled, but a partial
+        or unsafe tuple is never accepted. One validated previous secret is
+        permitted only to bridge a controlled key rotation. That makes a later
+        flag flip deterministic and keeps an operator from discovering malformed
+        configuration only after a draft has already been claimed for sending.
+        """
+
+        raw_base_url = self.public_onboarding_url
+        if any(
+            character.isspace()
+            or character == "\\"
+            or ord(character) < 32
+            or ord(character) == 127
+            for character in raw_base_url
+        ):
+            raise ValueError(
+                "public onboarding URL must not contain control characters, whitespace, "
+                "or backslashes"
+            )
+        base_url = raw_base_url.strip()
+        secret = self.public_onboarding_hmac_secret.get_secret_value().strip()
+        previous_secret = (
+            self.public_onboarding_previous_hmac_secret.get_secret_value().strip()
+        )
+        has_url = bool(base_url)
+        has_secret = bool(secret)
+        has_previous_secret = bool(previous_secret)
+        if has_url != has_secret:
+            raise ValueError(
+                "ATLAS_EOM_FUNNEL_PUBLIC_ONBOARDING_URL and "
+                "ATLAS_EOM_FUNNEL_PUBLIC_ONBOARDING_HMAC_SECRET must be set together"
+            )
+        if has_previous_secret and not has_secret:
+            raise ValueError(
+                "ATLAS_EOM_FUNNEL_PUBLIC_ONBOARDING_PREVIOUS_HMAC_SECRET requires "
+                "ATLAS_EOM_FUNNEL_PUBLIC_ONBOARDING_HMAC_SECRET"
+            )
+        if has_previous_secret and previous_secret == secret:
+            raise ValueError(
+                "public onboarding previous HMAC secret must differ from the primary secret"
+            )
+        if self.public_onboarding_issuance_enabled and not self.public_onboarding_enabled:
+            raise ValueError(
+                "public onboarding issuance requires "
+                "ATLAS_EOM_FUNNEL_PUBLIC_ONBOARDING_ENABLED=true"
+            )
+        if self.public_onboarding_enabled and not has_url:
+            raise ValueError(
+                "public onboarding requires ATLAS_EOM_FUNNEL_PUBLIC_ONBOARDING_URL "
+                "and ATLAS_EOM_FUNNEL_PUBLIC_ONBOARDING_HMAC_SECRET"
+            )
+        if self.public_onboarding_enabled and not self.api_enabled:
+            raise ValueError(
+                "public onboarding requires ATLAS_EOM_FUNNEL_API_ENABLED=true"
+            )
+        if not has_url:
+            return self
+        try:
+            parsed = urlsplit(base_url)
+            # ``urlsplit`` defers an invalid numeric port until this property
+            # is read, so force that validation while configuration is still
+            # fail-closed rather than when an approved draft is sent.
+            port = parsed.port
+        except ValueError as exc:
+            raise ValueError("public onboarding URL must be a valid HTTPS URL") from exc
+        if (
+            parsed.scheme != "https"
+            or not parsed.netloc
+            or not parsed.hostname
+            or parsed.username is not None
+            or parsed.password is not None
+            or port == 0
+            or parsed.query
+            or parsed.fragment
+        ):
+            raise ValueError(
+                "public onboarding URL must be an HTTPS URL without credentials, "
+                "query, or fragment"
+            )
+        if len(secret.encode("utf-8")) < 32:
+            raise ValueError("public onboarding HMAC secret must be at least 32 bytes")
+        if has_previous_secret and len(previous_secret.encode("utf-8")) < 32:
+            raise ValueError(
+                "public onboarding previous HMAC secret must be at least 32 bytes"
             )
         return self
 

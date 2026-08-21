@@ -104,6 +104,33 @@ def _sha256_ascii(value: str) -> str:
     return hashlib.sha256(value.encode("ascii")).hexdigest()
 
 
+def _configure_billing_recipient_readiness(monkeypatch, receivables) -> None:
+    """Make authentication-only readiness tests satisfy the payment dependency."""
+
+    class _CanonicalPool:
+        is_initialized = True
+
+    class _CanonicalCRM:
+        async def billing_recipients_schema_ready(self):
+            return True
+
+    monkeypatch.setattr(
+        receivables.funnel_settings,
+        "db_connection_string",
+        "postgresql://canonical.test/eom",
+    )
+    monkeypatch.setattr(
+        receivables,
+        "get_eom_funnel_db_pool",
+        lambda: _CanonicalPool(),
+    )
+    monkeypatch.setattr(
+        receivables,
+        "get_eom_funnel_crm_provider",
+        lambda: _CanonicalCRM(),
+    )
+
+
 def _route_paths_for_app_expr(app_expr: str) -> str:
     return f"""
 def _route_paths(app):
@@ -228,7 +255,10 @@ print(json.dumps({
     assert "/api/v1/eom-funnel/onboarding-drafts/{draft_id}" in paths
     assert "/api/v1/eom-funnel/onboarding-drafts/{draft_id}/approve-send" in paths
     assert "/api/v1/eom-funnel/onboarding-drafts/{draft_id}/revoke" in paths
+    assert "/api/v1/eom-funnel/onboarding-drafts/{draft_id}/revoke-link" in paths
     assert "/api/v1/eom-funnel/onboarding-drafts/{draft_id}/confirm-sent" in paths
+    assert "/api/v1/eom-funnel/public-onboarding/session" in paths
+    assert "/api/v1/eom-funnel/public-onboarding/finalize" in paths
     assert "/openapi.json" not in paths
     assert "/docs" not in paths
     assert "/docs/oauth2-redirect" not in paths
@@ -488,6 +518,10 @@ def test_eom_startup_migrations_are_curated_for_receivables_readiness():
         "045_invoices",
         "344_receivables_payments",
         "345_receivables_event_key_lookup",
+        "368_receivables_payment_check_metadata",
+        "369_receivables_payment_receipt_outbox",
+        "378_receivables_payment_receipt_delivery",
+        "379_receivables_payment_receipt_delivery_recovery",
     )
     assert not any(
         migration.startswith(("066_", "068_", "074_", "076_", "083_", "095_"))
@@ -501,6 +535,10 @@ def test_eom_funnel_canonical_crm_config_defaults_fail_closed(monkeypatch):
         "ATLAS_EOM_FUNNEL_API_ENABLED",
         "ATLAS_EOM_FUNNEL_SERVICE_TOKEN_SHA256",
         "ATLAS_EOM_FUNNEL_DB_CONNECTION_STRING",
+        "ATLAS_EOM_FUNNEL_PUBLIC_ONBOARDING_ENABLED",
+        "ATLAS_EOM_FUNNEL_PUBLIC_ONBOARDING_URL",
+        "ATLAS_EOM_FUNNEL_PUBLIC_ONBOARDING_HMAC_SECRET",
+        "ATLAS_EOM_FUNNEL_PUBLIC_ONBOARDING_PREVIOUS_HMAC_SECRET",
         _RAW_EOM_FUNNEL_SERVICE_TOKEN_ENV,
     ):
         monkeypatch.delenv(key, raising=False)
@@ -516,6 +554,10 @@ def test_eom_funnel_canonical_crm_config_defaults_fail_closed(monkeypatch):
     assert profile_defaults.canonical_crm_database_confirmed is False
     assert funnel_defaults.api_enabled is False
     assert funnel_defaults.db_connection_string == ""
+    assert funnel_defaults.public_onboarding_enabled is False
+    assert funnel_defaults.public_onboarding_url == ""
+    assert funnel_defaults.public_onboarding_hmac_secret.get_secret_value() == ""
+    assert funnel_defaults.public_onboarding_previous_hmac_secret.get_secret_value() == ""
     validate_eom_funnel_canonical_crm_config(
         funnel_defaults,
         canonical_crm_database_confirmed=False,
@@ -766,6 +808,9 @@ def test_shared_eom_funnel_datastore_guard_keeps_missing_relations_in_verdict():
     assert "contacts_required_columns_ready" in pool.query
     assert "lifecycle_required_columns_ready" in pool.query
     assert "onboarding_drafts_required_columns_ready" in pool.query
+    assert "public_onboarding_recovery_ready" in pool.query
+    assert "public_onboarding_issuance_ready" in pool.query
+    assert "'id', 'draft_id', 'contact_id', 'status', 'revoked_at'" in pool.query
     assert "WHEN NOT readiness_columns.contacts_required_columns_ready THEN FALSE" in pool.query
     assert "AND readiness_columns.lifecycle_required_columns_ready" in pool.query
     assert "WHEN readiness_relations.handoff_rel IS NULL THEN FALSE" in pool.query
@@ -1346,6 +1391,9 @@ def test_eom_receivables_bearer_admission_matches_generated_token_grammar(
         async def is_ready(self):
             return True
 
+        async def is_receipt_delivery_ready(self):
+            return True
+
     app = FastAPI()
     app.include_router(receivables.router)
     runtime_config = {
@@ -1365,6 +1413,7 @@ def test_eom_receivables_bearer_admission_matches_generated_token_grammar(
         "get_receivables_service",
         lambda: _ReadyService(),
     )
+    _configure_billing_recipient_readiness(monkeypatch, receivables)
 
     token_prefixes = (
         _GENERATED_RECEIVABLES_TOKEN_PREFIX,
@@ -1479,6 +1528,9 @@ def test_eom_receivables_ready_route_is_fail_closed(monkeypatch):
         async def is_ready(self):
             return True
 
+        async def is_receipt_delivery_ready(self):
+            return True
+
     app = FastAPI()
     app.include_router(receivables.router)
     generated = auth.generate_receivables_service_token()
@@ -1493,6 +1545,7 @@ def test_eom_receivables_ready_route_is_fail_closed(monkeypatch):
         "get_receivables_service",
         lambda: _ReadyService(),
     )
+    _configure_billing_recipient_readiness(monkeypatch, receivables)
 
     client = TestClient(app)
     assert client.get("/receivables/ready").status_code == 401
@@ -1625,6 +1678,96 @@ def test_eom_lifespan_initializes_database_without_running_migrations(monkeypatc
     asyncio.run(drive_lifespan())
 
     assert events == ["init", "inside", "close"]
+
+
+def test_eom_lifespan_rejects_enabled_receivables_without_ready_schema(monkeypatch):
+    """Independent readiness fence for finding #5: this profile does not
+    always run migrations on startup (run_migrations defaults to False), so
+    an enabled receivables API must still fail closed on an unready schema
+    rather than silently serving requests against it."""
+    from atlas_brain import main_eom
+    from atlas_brain.eom_api import auth as receivables_auth
+    from atlas_brain.services import receivables as receivables_module
+
+    events: list[str] = []
+    generated = receivables_auth.generate_receivables_service_token()
+
+    async def init_database():
+        events.append("init")
+
+    async def close_database():
+        events.append("close")
+
+    async def fake_is_ready(self, conn=None):
+        events.append("readiness-check")
+        return False
+
+    async def drive_lifespan():
+        async with main_eom.lifespan(FastAPI()):
+            events.append("inside")
+
+    monkeypatch.setattr(main_eom, "db_settings", SimpleNamespace(enabled=True))
+    monkeypatch.setattr(main_eom, "get_db_pool", lambda: SimpleNamespace(is_initialized=True))
+    monkeypatch.setattr(main_eom, "init_database", init_database)
+    monkeypatch.setattr(main_eom, "close_database", close_database)
+    monkeypatch.setattr(main_eom.eom_profile_settings, "run_migrations", False)
+    monkeypatch.setattr(main_eom.invoicing_settings, "receivables_api_enabled", True)
+    monkeypatch.setattr(
+        main_eom.invoicing_settings,
+        "receivables_service_token_sha256",
+        generated.sha256,
+    )
+    monkeypatch.setattr(main_eom.funnel_settings, "api_enabled", False)
+    monkeypatch.setattr(receivables_module.ReceivablesService, "is_ready", fake_is_ready)
+
+    with pytest.raises(main_eom.ReceivablesSchemaUnavailableError):
+        asyncio.run(drive_lifespan())
+
+    assert events == ["init", "readiness-check", "close"]
+    assert "inside" not in events
+
+
+def test_eom_lifespan_accepts_enabled_receivables_with_ready_schema(monkeypatch):
+    """Negative control for the above: a genuinely ready schema must not be
+    blocked by the new fence."""
+    from atlas_brain import main_eom
+    from atlas_brain.eom_api import auth as receivables_auth
+    from atlas_brain.services import receivables as receivables_module
+
+    events: list[str] = []
+    generated = receivables_auth.generate_receivables_service_token()
+
+    async def init_database():
+        events.append("init")
+
+    async def close_database():
+        events.append("close")
+
+    async def fake_is_ready(self, conn=None):
+        events.append("readiness-check")
+        return True
+
+    async def drive_lifespan():
+        async with main_eom.lifespan(FastAPI()):
+            events.append("inside")
+
+    monkeypatch.setattr(main_eom, "db_settings", SimpleNamespace(enabled=True))
+    monkeypatch.setattr(main_eom, "get_db_pool", lambda: SimpleNamespace(is_initialized=True))
+    monkeypatch.setattr(main_eom, "init_database", init_database)
+    monkeypatch.setattr(main_eom, "close_database", close_database)
+    monkeypatch.setattr(main_eom.eom_profile_settings, "run_migrations", False)
+    monkeypatch.setattr(main_eom.invoicing_settings, "receivables_api_enabled", True)
+    monkeypatch.setattr(
+        main_eom.invoicing_settings,
+        "receivables_service_token_sha256",
+        generated.sha256,
+    )
+    monkeypatch.setattr(main_eom.funnel_settings, "api_enabled", False)
+    monkeypatch.setattr(receivables_module.ReceivablesService, "is_ready", fake_is_ready)
+
+    asyncio.run(drive_lifespan())
+
+    assert events == ["init", "readiness-check", "inside", "close"]
 
 
 def test_eom_lifespan_closes_generic_database_when_funnel_close_fails(monkeypatch):
@@ -1927,6 +2070,9 @@ class _ReadyService:
     async def is_ready(self):
         return True
 
+    async def is_receipt_delivery_ready(self):
+        return True
+
 
 receivables.get_receivables_service = lambda: _ReadyService()
 if main_eom.app.dependency_overrides:
@@ -1975,8 +2121,20 @@ print(json.dumps({
     assert result.returncode == 0, result.stderr
     observed = json.loads(result.stdout.strip().splitlines()[-1])
     assert observed == {
-        "status_code": 200,
-        "body": {"status": "ready"},
+        "status_code": 503,
+        # A receipt-aware payment route cannot accept a new payment without
+        # its canonical-contact database, so an unconfigured profile must
+        # advertise that operationally rather than report readiness.
+        "body": {
+            "detail": {
+                "code": "billing_recipients_unavailable",
+                "message": (
+                    "The canonical EOM contact database is not configured; set "
+                    "ATLAS_EOM_FUNNEL_DB_CONNECTION_STRING to use billing "
+                    "recipients."
+                ),
+            }
+        },
         "env_projected_enabled": True,
         "env_projected_digest": True,
         "dependency_overrides": 0,

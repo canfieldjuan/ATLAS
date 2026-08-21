@@ -13,11 +13,14 @@ updates:
       - cve-remediation-sla
 
   - package-ecosystem: "npm"
+    # Web UI packages only. react / react-dom / @types/react and the shared
+    # toolchain update freely here -- they are not Expo-owned in these packages.
+    # atlas-mobile is a SEPARATE entry below so its frozen Expo SDK stack can be
+    # held without suppressing these shared web updates (#2397).
     directories:
       - "/atlas-admin-ui"
       - "/atlas-churn-ui"
       - "/atlas-intel-ui"
-      - "/atlas-mobile"
       - "/atlas-ui"
       - "/portfolio-ui"
     schedule:
@@ -37,9 +40,82 @@ updates:
           - "patch"
           - "minor"
 
-  - package-ecosystem: "pip"
+  - package-ecosystem: "npm"
+    # atlas-mobile is frozen on Expo SDK 54, isolated in its own entry so the FULL
+    # Expo-owned SDK stack can be frozen without suppressing the shared web-UI React
+    # updates above. Expo owns react / react-dom / @types/react here (expo install
+    # --check rejects React 19.2 on SDK 54), and @react-native/* +
+    # @react-native-async-storage/* are scoped SDK-line packages the unscoped
+    # react-native-* pattern misses. This whole set moves only on a deliberate
+    # Expo-SDK upgrade, not one package at a time (closed PRs #2356 mobile leg /
+    # #2400 / #2401; blocked #2397). atlas-mobile is not under active development, so
+    # its ENTIRE stack is version-frozen -- typescript and tailwindcss are also
+    # Expo-migration-coupled (TS 6 rejected by Expo; Tailwind v4 needs a NativeWind
+    # migration), and zustand is frozen with them. Block VERSION updates so the
+    # mobile build stays SDK-consistent; genuine security updates still surface
+    # (update-types scopes to version updates only).
     directories:
-      - "/"
+      - "/atlas-mobile"
+    schedule:
+      interval: "weekly"
+      day: "monday"
+      time: "08:35"
+      timezone: "America/Chicago"
+    labels:
+      - dependencies
+      - security
+      - cve-remediation-sla
+    groups:
+      atlas-mobile-patches:
+        patterns:
+          - "*"
+        update-types:
+          - "patch"
+          - "minor"
+    ignore:
+      - dependency-name: "react-native"
+        update-types: ["version-update:semver-major", "version-update:semver-minor", "version-update:semver-patch"]
+      - dependency-name: "react-native-*"
+        update-types: ["version-update:semver-major", "version-update:semver-minor", "version-update:semver-patch"]
+      - dependency-name: "@react-native/*"
+        update-types: ["version-update:semver-major", "version-update:semver-minor", "version-update:semver-patch"]
+      - dependency-name: "@react-native-async-storage/*"
+        update-types: ["version-update:semver-major", "version-update:semver-minor", "version-update:semver-patch"]
+      - dependency-name: "nativewind"
+        update-types: ["version-update:semver-major", "version-update:semver-minor", "version-update:semver-patch"]
+      - dependency-name: "@siteed/*"
+        update-types: ["version-update:semver-major", "version-update:semver-minor", "version-update:semver-patch"]
+      - dependency-name: "expo"
+        update-types: ["version-update:semver-major", "version-update:semver-minor", "version-update:semver-patch"]
+      - dependency-name: "expo-*"
+        update-types: ["version-update:semver-major", "version-update:semver-minor", "version-update:semver-patch"]
+      - dependency-name: "react"
+        update-types: ["version-update:semver-major", "version-update:semver-minor", "version-update:semver-patch"]
+      - dependency-name: "react-dom"
+        update-types: ["version-update:semver-major", "version-update:semver-minor", "version-update:semver-patch"]
+      - dependency-name: "@types/react"
+        update-types: ["version-update:semver-major", "version-update:semver-minor", "version-update:semver-patch"]
+      # The remaining atlas-mobile tooling is also Expo-SDK-54-migration-coupled:
+      # TypeScript 6 is rejected by Expo (plans/archive/PR-TypeScript-Major-Batch.md)
+      # and Tailwind v4 needs a coordinated NativeWind migration
+      # (plans/archive/PR-Atlas-Intel-UI-Tailwind-v4-Migration.md). atlas-mobile is
+      # frozen on Expo SDK 54, so its whole stack moves only on a deliberate SDK
+      # upgrade -- freeze all version updates here (security updates still surface).
+      - dependency-name: "typescript"
+        update-types: ["version-update:semver-major", "version-update:semver-minor", "version-update:semver-patch"]
+      - dependency-name: "tailwindcss"
+        update-types: ["version-update:semver-major", "version-update:semver-minor", "version-update:semver-patch"]
+      - dependency-name: "zustand"
+        update-types: ["version-update:semver-major", "version-update:semver-minor", "version-update:semver-patch"]
+
+  - package-ecosystem: "pip"
+    # Root "/" is intentionally excluded: its requirements.txt is bound to the
+    # GENERATED constraints.root-asr.txt via a sha256 pin, and
+    # python_constraints_checks.yml runs compile_root_asr_constraints.py --check,
+    # which rejects any edit Dependabot makes without re-running the compiler. Root
+    # Python deps are maintained through that compiler, not Dependabot (see #2404 /
+    # follow-up). Only the sub-directories below (no ASR binding) are Dependabot-safe.
+    directories:
       - "/atlas_edge"
       - "/atlas_video-processing"
       - "/atlas_video-processing/ingest/drone_client"
@@ -61,6 +137,37 @@ updates:
         update-types:
           - "patch"
           - "minor"
+    # The heavy ML / CUDA stack is version-locked as a set: torch <-> torchaudio/
+    # torchvision <-> the CUDA toolkit and nvidia-cuda-* runtime must move together.
+    # Single-package minor bumps break pip resolution (torch 2.13.0 vs the pinned
+    # cuda-toolkit 13.3.1 => ResolutionImpossible in the python security group #2404)
+    # and previously the launcher import chain (#2350). Block VERSION updates so the
+    # rest of the security patches flow; this set is upgraded deliberately as one
+    # unit, and genuine Dependabot security updates still surface (update-types
+    # scopes this to version updates only).
+    ignore:
+      - dependency-name: "torch"
+        update-types: ["version-update:semver-major", "version-update:semver-minor", "version-update:semver-patch"]
+      - dependency-name: "torchaudio"
+        update-types: ["version-update:semver-major", "version-update:semver-minor", "version-update:semver-patch"]
+      - dependency-name: "torchvision"
+        update-types: ["version-update:semver-major", "version-update:semver-minor", "version-update:semver-patch"]
+      - dependency-name: "transformers"
+        update-types: ["version-update:semver-major", "version-update:semver-minor", "version-update:semver-patch"]
+      - dependency-name: "accelerate"
+        update-types: ["version-update:semver-major", "version-update:semver-minor", "version-update:semver-patch"]
+      - dependency-name: "bitsandbytes"
+        update-types: ["version-update:semver-major", "version-update:semver-minor", "version-update:semver-patch"]
+      - dependency-name: "sentence-transformers"
+        update-types: ["version-update:semver-major", "version-update:semver-minor", "version-update:semver-patch"]
+      - dependency-name: "datasets"
+        update-types: ["version-update:semver-major", "version-update:semver-minor", "version-update:semver-patch"]
+      - dependency-name: "cuda-toolkit"
+        update-types: ["version-update:semver-major", "version-update:semver-minor", "version-update:semver-patch"]
+      - dependency-name: "cuda-pathfinder"
+        update-types: ["version-update:semver-major", "version-update:semver-minor", "version-update:semver-patch"]
+      - dependency-name: "nvidia-*"
+        update-types: ["version-update:semver-major", "version-update:semver-minor", "version-update:semver-patch"]
 
   - package-ecosystem: "docker"
     directories:
