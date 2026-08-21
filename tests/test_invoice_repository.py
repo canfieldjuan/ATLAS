@@ -75,6 +75,41 @@ async def _run_migration(conn, schema: str, name: str) -> None:
     )
 
 
+async def _install_recorded_initial_385_catalog(conn) -> None:
+    """Reconstruct the exact first revision recorded by live migration 385.
+
+    The deployed ledger has migration 385 recorded, but its catalog only has
+    these original three objects. Keep this fixture inline rather than reading
+    a historical Git object so the regression remains self-contained after
+    repository history is shallow-cloned or archived.
+    """
+    await conn.execute(
+        """
+        ALTER TABLE invoices
+            ADD COLUMN billing_period VARCHAR(7);
+
+        ALTER TABLE invoices
+            ADD CONSTRAINT invoices_billing_period_check
+            CHECK (billing_period ~ '^[0-9]{4}-(0[1-9]|1[0-2])$');
+
+        CREATE UNIQUE INDEX idx_invoices_recurring_contact_period_source
+            ON invoices (contact_id, billing_period)
+            WHERE billing_period IS NOT NULL
+              AND status <> 'void'
+              AND source IN ('monthly_auto', 'eom_commercial_billing');
+
+        CREATE TABLE schema_migrations (
+            version INTEGER PRIMARY KEY,
+            name VARCHAR(255) NOT NULL,
+            content_sha256 VARCHAR(64),
+            applied_at TIMESTAMPTZ DEFAULT NOW()
+        );
+        INSERT INTO schema_migrations (version, name, content_sha256)
+        VALUES (385, '385_invoices_billing_period_dedup', NULL);
+        """
+    )
+
+
 class _CaptureCreatePool:
     is_initialized = True
 
@@ -803,6 +838,644 @@ async def test_real_postgres_billing_period_backfill_and_collision_handling():
             "SELECT invoice_number, billing_period, metadata FROM invoices ORDER BY invoice_number"
         )
         assert [dict(r) for r in before] == [dict(r) for r in after]
+    finally:
+        await conn.execute("SET search_path TO public")
+        await conn.execute(f'DROP SCHEMA IF EXISTS "{schema}" CASCADE')
+        await conn.close()
+
+
+@pytest.mark.asyncio
+async def test_real_postgres_recorded_initial_385_recovery_converges_history():
+    """Migration 387 recovers the observed recorded-initial-385 catalog.
+
+    This starts from the actual old catalog shape, not a fresh current 385
+    migration. It includes the partial-deploy state where a newer writer has
+    already populated a period that a historical NULL candidate would claim.
+    The recovery must quarantine that candidate rather than raise a unique
+    error or silently crown either historical invoice as the winner.
+    """
+    asyncpg = pytest.importorskip("asyncpg")
+    database_url = os.environ.get("ATLAS_RECEIVABLES_TEST_DATABASE_URL")
+    if not database_url:
+        pytest.skip("ATLAS_RECEIVABLES_TEST_DATABASE_URL not set")
+
+    schema = f"invoice_repository_385_recovery_{uuid4().hex}"
+    conn = await asyncpg.connect(database_url)
+
+    async def _insert(
+        *,
+        contact_id,
+        source,
+        number,
+        source_ref=None,
+        status="draft",
+        billing_period=None,
+        total_amount=Decimal("100.00"),
+    ):
+        invoice_id = uuid4()
+        await conn.execute(
+            """
+            INSERT INTO invoices (
+                id, invoice_number, contact_id, customer_name, due_date,
+                status, source, source_ref, billing_period, total_amount
+            ) VALUES ($1, $2, $3, 'Recovery Test Co', CURRENT_DATE, $4, $5, $6, $7, $8)
+            """,
+            invoice_id,
+            number,
+            contact_id,
+            status,
+            source,
+            source_ref,
+            billing_period,
+            total_amount,
+        )
+        return invoice_id
+
+    try:
+        await conn.execute(f'CREATE SCHEMA "{schema}"')
+        await conn.execute(f'SET search_path TO "{schema}"')
+        await conn.execute("CREATE TABLE contacts (id uuid PRIMARY KEY)")
+        await conn.execute(_migration_sql("045_invoices.sql"))
+        await _install_recorded_initial_385_catalog(conn)
+
+        (
+            contact_monthly,
+            contact_commercial,
+            contact_collision,
+            contact_mixed,
+            contact_unparseable,
+            contact_void,
+            contact_mcp,
+            contact_zero_year,
+            contact_fresh,
+        ) = [uuid4() for _ in range(9)]
+        await conn.executemany(
+            "INSERT INTO contacts (id) VALUES ($1)",
+            [
+                (contact_monthly,),
+                (contact_commercial,),
+                (contact_collision,),
+                (contact_mixed,),
+                (contact_unparseable,),
+                (contact_void,),
+                (contact_mcp,),
+                (contact_zero_year,),
+                (contact_fresh,),
+            ],
+        )
+
+        monthly_id = await _insert(
+            contact_id=contact_monthly,
+            source="monthly_auto",
+            number="INV-2026-Apr-0001",
+            source_ref="monthly_2026-04",
+            total_amount=Decimal("50.00"),
+        )
+        await _insert(
+            contact_id=contact_commercial,
+            source="eom_commercial_billing",
+            number="INV-2026-Jun-10000",
+            total_amount=Decimal("60.00"),
+        )
+        await _insert(
+            contact_id=contact_collision,
+            source="monthly_auto",
+            number="INV-2026-May-0003",
+            source_ref="collision_2026-05",
+        )
+        await _insert(
+            contact_id=contact_collision,
+            source="eom_commercial_billing",
+            number="INV-2026-May-0004",
+        )
+        await _insert(
+            contact_id=contact_mixed,
+            source="monthly_auto",
+            number="INV-2026-Jul-0005",
+            source_ref="populated_2026-07",
+            billing_period="2026-07",
+        )
+        await _insert(
+            contact_id=contact_mixed,
+            source="eom_commercial_billing",
+            number="INV-2026-Jul-0006",
+        )
+        await _insert(
+            contact_id=contact_unparseable,
+            source="eom_commercial_billing",
+            number="INV-2026-Xyz-0007",
+        )
+        await _insert(
+            contact_id=contact_zero_year,
+            source="monthly_auto",
+            number="INV-0000-Jan-0008",
+            source_ref="zero_0000-01",
+        )
+        await _insert(
+            contact_id=contact_void,
+            source="monthly_auto",
+            number="INV-2026-Aug-0009",
+            source_ref="void_2026-08",
+            status="void",
+        )
+        await _insert(
+            contact_id=contact_mcp,
+            source="mcp_tool",
+            number="INV-2026-Sep-0010",
+        )
+        await _insert(
+            contact_id=None,
+            source="monthly_auto",
+            number="INV-2026-Sep-0011",
+            source_ref="contactless_a_2026-09",
+        )
+        await _insert(
+            contact_id=None,
+            source="eom_commercial_billing",
+            number="INV-2026-Sep-0012",
+        )
+        legacy_payment_id = uuid4()
+        await conn.execute(
+            """
+            INSERT INTO invoice_payments (id, invoice_id, amount, payment_method, reference)
+            VALUES ($1, $2, 50.00, 'check', 'migration-385-recovery-proof')
+            """,
+            legacy_payment_id,
+            monthly_id,
+        )
+
+        immutable_before = [
+            dict(row)
+            for row in await conn.fetch(
+                """
+                SELECT id, invoice_number, contact_id, status, source, source_ref,
+                       total_amount, amount_paid
+                FROM invoices
+                ORDER BY invoice_number
+                """
+            )
+        ]
+        payments_before = [
+            dict(row)
+            for row in await conn.fetch(
+                "SELECT id, invoice_id, amount, payment_method, reference "
+                "FROM invoice_payments ORDER BY id"
+            )
+        ]
+
+        assert await invoice_repo_mod.recurring_invoice_dedup_schema_ready(conn) is False
+        assert await conn.fetchval(
+            "SELECT content_sha256 FROM schema_migrations WHERE name = $1",
+            "385_invoices_billing_period_dedup",
+        ) is None
+
+        await _run_migration(
+            conn, schema, "387_eom_recurring_invoice_dedup_recovery.sql"
+        )
+
+        assert await invoice_repo_mod.recurring_invoice_dedup_schema_ready(conn) is True
+        migration_rows = await conn.fetch(
+            "SELECT version, name, content_sha256 FROM schema_migrations ORDER BY version"
+        )
+        assert [row["name"] for row in migration_rows] == [
+            "385_invoices_billing_period_dedup",
+            "387_eom_recurring_invoice_dedup_recovery",
+        ]
+        assert migration_rows[0]["content_sha256"] is None
+        assert migration_rows[1]["content_sha256"] is not None
+
+        immutable_after = [
+            dict(row)
+            for row in await conn.fetch(
+                """
+                SELECT id, invoice_number, contact_id, status, source, source_ref,
+                       total_amount, amount_paid
+                FROM invoices
+                ORDER BY invoice_number
+                """
+            )
+        ]
+        payments_after = [
+            dict(row)
+            for row in await conn.fetch(
+                "SELECT id, invoice_id, amount, payment_method, reference "
+                "FROM invoice_payments ORDER BY id"
+            )
+        ]
+        assert immutable_after == immutable_before
+        assert payments_after == payments_before
+
+        rows = {
+            row["invoice_number"]: row
+            for row in await conn.fetch(
+                """
+                SELECT invoice_number, billing_period, billing_period_legacy_null,
+                       metadata
+                FROM invoices
+                """
+            )
+        }
+        assert rows["INV-2026-Apr-0001"]["billing_period"] == "2026-04"
+        assert rows["INV-2026-Apr-0001"]["billing_period_legacy_null"] is False
+        assert rows["INV-2026-Jun-10000"]["billing_period"] == "2026-06"
+        assert rows["INV-2026-Jun-10000"]["billing_period_legacy_null"] is False
+
+        for number in ("INV-2026-May-0003", "INV-2026-May-0004"):
+            assert rows[number]["billing_period"] is None
+            assert rows[number]["billing_period_legacy_null"] is True
+            metadata = json.loads(rows[number]["metadata"])
+            assert metadata["billing_period_backfill_collision"] is True
+            assert metadata["billing_period_backfill_candidate_period"] == "2026-05"
+
+        # A partially deployed newer writer has already claimed July. The
+        # legacy NULL row is quarantined; it is never overwritten or inserted
+        # into the unique slot that belongs to the populated invoice.
+        assert rows["INV-2026-Jul-0005"]["billing_period"] == "2026-07"
+        assert rows["INV-2026-Jul-0005"]["billing_period_legacy_null"] is False
+        assert rows["INV-2026-Jul-0006"]["billing_period"] is None
+        assert rows["INV-2026-Jul-0006"]["billing_period_legacy_null"] is True
+        mixed_metadata = json.loads(rows["INV-2026-Jul-0006"]["metadata"])
+        assert mixed_metadata["billing_period_backfill_collision"] is True
+        assert mixed_metadata["billing_period_backfill_candidate_period"] == "2026-07"
+
+        for number in ("INV-2026-Xyz-0007", "INV-0000-Jan-0008"):
+            assert rows[number]["billing_period"] is None
+            assert rows[number]["billing_period_legacy_null"] is True
+            assert json.loads(rows[number]["metadata"])["billing_period_legacy_null"] is True
+
+        # Void and ad-hoc records are intentionally outside the recurring
+        # recovery boundary. NULL-contact candidates backfill independently,
+        # just as PostgreSQL's unique index treats each NULL key independently.
+        assert rows["INV-2026-Aug-0009"]["billing_period"] is None
+        assert rows["INV-2026-Aug-0009"]["billing_period_legacy_null"] is False
+        assert rows["INV-2026-Sep-0010"]["billing_period"] is None
+        assert rows["INV-2026-Sep-0010"]["billing_period_legacy_null"] is False
+        assert rows["INV-2026-Sep-0011"]["billing_period"] == "2026-09"
+        assert rows["INV-2026-Sep-0012"]["billing_period"] == "2026-09"
+
+        reservation_rows = await conn.fetch(
+            "SELECT contact_id, billing_period, reason "
+            "FROM invoices_billing_period_reservations"
+        )
+        reservations = {
+            (row["contact_id"], row["billing_period"]): row["reason"]
+            for row in reservation_rows
+        }
+        assert reservations == {
+            (contact_collision, "2026-05"): "backfill_collision",
+            (contact_mixed, "2026-07"): "backfill_collision",
+        }
+
+        repository = invoice_repo_mod.InvoiceRepository(pool=_SchemaPool(conn, schema))
+        collision_hit = await repository.get_by_contact_and_period(
+            contact_collision, "2026-05"
+        )
+        assert collision_hit is not None
+        assert collision_hit["source"] == "quarantined_collision"
+        mixed_hit = await repository.get_by_contact_and_period(contact_mixed, "2026-07")
+        assert mixed_hit is not None
+        assert mixed_hit["invoice_number"] == "INV-2026-Jul-0005"
+
+        with pytest.raises(asyncpg.CheckViolationError):
+            async with conn.transaction():
+                await _insert(
+                    contact_id=contact_fresh,
+                    source="monthly_auto",
+                    number="INV-2026-Oct-0013",
+                    source_ref="fresh_2026-10",
+                )
+        with pytest.raises(asyncpg.CheckViolationError):
+            async with conn.transaction():
+                await _insert(
+                    contact_id=contact_fresh,
+                    source="monthly_auto",
+                    number="INV-0000-Jan-0014",
+                    source_ref="fresh_0000-01",
+                    billing_period="0000-01",
+                )
+        with pytest.raises(asyncpg.UniqueViolationError):
+            async with conn.transaction():
+                await _insert(
+                    contact_id=contact_monthly,
+                    source="eom_commercial_billing",
+                    number="INV-2026-Apr-0015",
+                    billing_period="2026-04",
+                )
+
+        recovery_before_retry = [
+            dict(row)
+            for row in await conn.fetch(
+                """
+                SELECT invoice_number, billing_period, billing_period_legacy_null, metadata
+                FROM invoices
+                ORDER BY invoice_number
+                """
+            )
+        ]
+        reservations_before_retry = [
+            dict(row)
+            for row in await conn.fetch(
+                "SELECT contact_id, billing_period, reason "
+                "FROM invoices_billing_period_reservations ORDER BY contact_id, billing_period"
+            )
+        ]
+        await _run_migration(
+            conn, schema, "387_eom_recurring_invoice_dedup_recovery.sql"
+        )
+        recovery_after_retry = [
+            dict(row)
+            for row in await conn.fetch(
+                """
+                SELECT invoice_number, billing_period, billing_period_legacy_null, metadata
+                FROM invoices
+                ORDER BY invoice_number
+                """
+            )
+        ]
+        reservations_after_retry = [
+            dict(row)
+            for row in await conn.fetch(
+                "SELECT contact_id, billing_period, reason "
+                "FROM invoices_billing_period_reservations ORDER BY contact_id, billing_period"
+            )
+        ]
+        assert recovery_after_retry == recovery_before_retry
+        assert reservations_after_retry == reservations_before_retry
+    finally:
+        await conn.execute("SET search_path TO public")
+        await conn.execute(f'DROP SCHEMA IF EXISTS "{schema}" CASCADE')
+        await conn.close()
+
+
+@pytest.mark.asyncio
+async def test_real_postgres_recorded_initial_385_recovery_is_atomic_on_bad_period():
+    """A malformed preexisting non-NULL period must leave no partial recovery."""
+    asyncpg = pytest.importorskip("asyncpg")
+    database_url = os.environ.get("ATLAS_RECEIVABLES_TEST_DATABASE_URL")
+    if not database_url:
+        pytest.skip("ATLAS_RECEIVABLES_TEST_DATABASE_URL not set")
+
+    schema = f"invoice_repository_385_recovery_atomic_{uuid4().hex}"
+    conn = await asyncpg.connect(database_url)
+    try:
+        await conn.execute(f'CREATE SCHEMA "{schema}"')
+        await conn.execute(f'SET search_path TO "{schema}"')
+        await conn.execute("CREATE TABLE contacts (id uuid PRIMARY KEY)")
+        await conn.execute(_migration_sql("045_invoices.sql"))
+        await _install_recorded_initial_385_catalog(conn)
+        contact_id = uuid4()
+        await conn.execute("INSERT INTO contacts (id) VALUES ($1)", contact_id)
+        await conn.execute(
+            """
+            INSERT INTO invoices (
+                id, invoice_number, contact_id, customer_name, due_date,
+                status, source, billing_period
+            ) VALUES (
+                $1, 'INV-0000-Jan-atomic', $2, 'Atomic Recovery Co', CURRENT_DATE,
+                'draft', 'monthly_auto', '0000-01'
+            )
+            """,
+            uuid4(),
+            contact_id,
+        )
+
+        with pytest.raises(
+            asyncpg.PostgresError,
+            match="Cannot recover migration 385: invoices.billing_period",
+        ):
+            await _run_migration(
+                conn, schema, "387_eom_recurring_invoice_dedup_recovery.sql"
+            )
+
+        assert await conn.fetchval(
+            """
+            SELECT EXISTS (
+                SELECT 1
+                FROM information_schema.columns
+                WHERE table_schema = current_schema()
+                  AND table_name = 'invoices'
+                  AND column_name = 'billing_period_legacy_null'
+            )
+            """
+        ) is False
+        assert await conn.fetchval(
+            "SELECT to_regclass('invoices_billing_period_reservations') IS NULL"
+        ) is True
+        assert await conn.fetchval(
+            "SELECT EXISTS (SELECT 1 FROM schema_migrations WHERE name = $1)",
+            "387_eom_recurring_invoice_dedup_recovery",
+        ) is False
+        assert await conn.fetchval(
+            "SELECT billing_period FROM invoices WHERE invoice_number = 'INV-0000-Jan-atomic'"
+        ) == "0000-01"
+    finally:
+        await conn.execute("SET search_path TO public")
+        await conn.execute(f'DROP SCHEMA IF EXISTS "{schema}" CASCADE')
+        await conn.close()
+
+
+@pytest.mark.asyncio
+async def test_real_postgres_387_is_data_noop_for_final_385_catalog():
+    """A fresh final-385 schema needs only a new 387 ledger row."""
+    asyncpg = pytest.importorskip("asyncpg")
+    database_url = os.environ.get("ATLAS_RECEIVABLES_TEST_DATABASE_URL")
+    if not database_url:
+        pytest.skip("ATLAS_RECEIVABLES_TEST_DATABASE_URL not set")
+
+    schema = f"invoice_repository_387_noop_{uuid4().hex}"
+    conn = await asyncpg.connect(database_url)
+    try:
+        await conn.execute(f'CREATE SCHEMA "{schema}"')
+        await conn.execute(f'SET search_path TO "{schema}"')
+        await conn.execute("CREATE TABLE contacts (id uuid PRIMARY KEY)")
+        await conn.execute(_migration_sql("045_invoices.sql"))
+        contact_unique = uuid4()
+        contact_collision = uuid4()
+        await conn.execute(
+            "INSERT INTO contacts (id) VALUES ($1), ($2)",
+            contact_unique,
+            contact_collision,
+        )
+        await conn.executemany(
+            """
+            INSERT INTO invoices (
+                id, invoice_number, contact_id, customer_name, due_date,
+                status, source, source_ref
+            ) VALUES ($1, $2, $3, 'Final Catalog Co', CURRENT_DATE, 'draft', $4, $5)
+            """,
+            [
+                (
+                    uuid4(),
+                    "INV-2026-Apr-final",
+                    contact_unique,
+                    "monthly_auto",
+                    "final_2026-04",
+                ),
+                (
+                    uuid4(),
+                    "INV-2026-May-final-a",
+                    contact_collision,
+                    "monthly_auto",
+                    "final_collision_2026-05",
+                ),
+                (
+                    uuid4(),
+                    "INV-2026-May-final-b",
+                    contact_collision,
+                    "eom_commercial_billing",
+                    None,
+                ),
+            ],
+        )
+        await _run_migration(conn, schema, "385_invoices_billing_period_dedup.sql")
+        assert await invoice_repo_mod.recurring_invoice_dedup_schema_ready(conn) is True
+
+        invoices_before = [
+            dict(row)
+            for row in await conn.fetch(
+                """
+                SELECT invoice_number, billing_period, billing_period_legacy_null, metadata
+                FROM invoices
+                ORDER BY invoice_number
+                """
+            )
+        ]
+        reservations_before = [
+            dict(row)
+            for row in await conn.fetch(
+                "SELECT contact_id, billing_period, reason, created_at "
+                "FROM invoices_billing_period_reservations ORDER BY contact_id, billing_period"
+            )
+        ]
+        constraints_before = [
+            dict(row)
+            for row in await conn.fetch(
+                """
+                SELECT conname, pg_get_constraintdef(oid) AS definition
+                FROM pg_constraint
+                WHERE conrelid = 'invoices'::regclass
+                  AND conname = ANY($1::text[])
+                ORDER BY conname
+                """,
+                [
+                    "invoices_billing_period_check",
+                    "invoices_recurring_billing_period_required_check",
+                ],
+            )
+        ]
+        index_before = dict(
+            await conn.fetchrow(
+                """
+                SELECT index_state.indisunique, index_state.indisvalid,
+                       index_state.indisready,
+                       pg_get_indexdef(index_state.indexrelid) AS definition,
+                       pg_get_expr(index_state.indpred, index_state.indrelid) AS predicate
+                FROM pg_index AS index_state
+                JOIN pg_class AS index_class ON index_class.oid = index_state.indexrelid
+                WHERE index_class.relname = 'idx_invoices_recurring_contact_period_source'
+                """
+            )
+        )
+        comments_before = dict(
+            await conn.fetchrow(
+                """
+                SELECT
+                    MAX(col_description('invoices'::regclass, attribute.attnum))
+                        FILTER (WHERE attribute.attname = 'billing_period') AS billing_period,
+                    MAX(col_description('invoices'::regclass, attribute.attnum))
+                        FILTER (WHERE attribute.attname = 'billing_period_legacy_null')
+                        AS billing_period_legacy_null,
+                    MAX(obj_description('invoices_billing_period_reservations'::regclass))
+                        AS reservations
+                FROM pg_attribute AS attribute
+                WHERE attribute.attrelid = 'invoices'::regclass
+                  AND attribute.attname IN ('billing_period', 'billing_period_legacy_null')
+                """
+            )
+        )
+
+        await _run_migration(
+            conn, schema, "387_eom_recurring_invoice_dedup_recovery.sql"
+        )
+        assert await invoice_repo_mod.recurring_invoice_dedup_schema_ready(conn) is True
+
+        invoices_after = [
+            dict(row)
+            for row in await conn.fetch(
+                """
+                SELECT invoice_number, billing_period, billing_period_legacy_null, metadata
+                FROM invoices
+                ORDER BY invoice_number
+                """
+            )
+        ]
+        reservations_after = [
+            dict(row)
+            for row in await conn.fetch(
+                "SELECT contact_id, billing_period, reason, created_at "
+                "FROM invoices_billing_period_reservations ORDER BY contact_id, billing_period"
+            )
+        ]
+        constraints_after = [
+            dict(row)
+            for row in await conn.fetch(
+                """
+                SELECT conname, pg_get_constraintdef(oid) AS definition
+                FROM pg_constraint
+                WHERE conrelid = 'invoices'::regclass
+                  AND conname = ANY($1::text[])
+                ORDER BY conname
+                """,
+                [
+                    "invoices_billing_period_check",
+                    "invoices_recurring_billing_period_required_check",
+                ],
+            )
+        ]
+        index_after = dict(
+            await conn.fetchrow(
+                """
+                SELECT index_state.indisunique, index_state.indisvalid,
+                       index_state.indisready,
+                       pg_get_indexdef(index_state.indexrelid) AS definition,
+                       pg_get_expr(index_state.indpred, index_state.indrelid) AS predicate
+                FROM pg_index AS index_state
+                JOIN pg_class AS index_class ON index_class.oid = index_state.indexrelid
+                WHERE index_class.relname = 'idx_invoices_recurring_contact_period_source'
+                """
+            )
+        )
+        comments_after = dict(
+            await conn.fetchrow(
+                """
+                SELECT
+                    MAX(col_description('invoices'::regclass, attribute.attnum))
+                        FILTER (WHERE attribute.attname = 'billing_period') AS billing_period,
+                    MAX(col_description('invoices'::regclass, attribute.attnum))
+                        FILTER (WHERE attribute.attname = 'billing_period_legacy_null')
+                        AS billing_period_legacy_null,
+                    MAX(obj_description('invoices_billing_period_reservations'::regclass))
+                        AS reservations
+                FROM pg_attribute AS attribute
+                WHERE attribute.attrelid = 'invoices'::regclass
+                  AND attribute.attname IN ('billing_period', 'billing_period_legacy_null')
+                """
+            )
+        )
+        assert invoices_after == invoices_before
+        assert reservations_after == reservations_before
+        assert constraints_after == constraints_before
+        assert index_after == index_before
+        assert comments_after == comments_before
+
+        migration_names = await conn.fetch(
+            "SELECT name, content_sha256 FROM schema_migrations ORDER BY version"
+        )
+        assert [row["name"] for row in migration_names] == [
+            "385_invoices_billing_period_dedup",
+            "387_eom_recurring_invoice_dedup_recovery",
+        ]
+        assert all(row["content_sha256"] is not None for row in migration_names)
     finally:
         await conn.execute("SET search_path TO public")
         await conn.execute(f'DROP SCHEMA IF EXISTS "{schema}" CASCADE')

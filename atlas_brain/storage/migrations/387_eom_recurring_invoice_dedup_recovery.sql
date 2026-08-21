@@ -1,0 +1,273 @@
+-- atlas: atomic-bookkeeping
+-- Recover the initial recorded migration-385 catalog without rewriting its
+-- historical schema_migrations row. The first revision added only a nullable
+-- billing_period plus the recurring partial index. The later #2448 revision
+-- added the legacy-null marker, reservation table, admission constraint, and
+-- historical backfill that the enabled writer-path readiness fence requires.
+--
+-- This recovery is deliberately atomic: it reuses the already-valid unique
+-- index observed in the recorded initial state, so no CONCURRENTLY DDL is
+-- needed. If preflight finds an unrecognized index or an invalid stored period,
+-- all recovery DDL/DML and this migration's ledger row roll back together.
+
+DO $$
+BEGIN
+    IF NOT EXISTS (
+        SELECT 1
+        FROM pg_index AS index_state
+        JOIN pg_class AS table_class
+          ON table_class.oid = index_state.indrelid
+        JOIN pg_namespace AS table_namespace
+          ON table_namespace.oid = table_class.relnamespace
+        JOIN pg_class AS index_class
+          ON index_class.oid = index_state.indexrelid
+        WHERE table_namespace.nspname = current_schema()
+          AND table_class.relname = 'invoices'
+          AND index_class.relname = 'idx_invoices_recurring_contact_period_source'
+          AND index_state.indisunique
+          AND index_state.indisvalid
+          AND index_state.indisready
+          AND index_state.indnkeyatts = 2
+          AND pg_get_indexdef(index_state.indexrelid, 1, true) = 'contact_id'
+          AND pg_get_indexdef(index_state.indexrelid, 2, true) = 'billing_period'
+          AND lower(pg_get_expr(index_state.indpred, index_state.indrelid))
+              LIKE '%billing_period is not null%'
+          AND lower(pg_get_expr(index_state.indpred, index_state.indrelid))
+              LIKE '%monthly_auto%'
+          AND lower(pg_get_expr(index_state.indpred, index_state.indrelid))
+              LIKE '%eom_commercial_billing%'
+          AND lower(pg_get_expr(index_state.indpred, index_state.indrelid))
+              LIKE '%void%'
+    ) THEN
+        RAISE EXCEPTION
+            'Cannot recover migration 385: recurring billing_period index is missing, invalid, or has an unexpected definition';
+    END IF;
+END $$;
+
+ALTER TABLE invoices
+    ADD COLUMN IF NOT EXISTS billing_period_legacy_null BOOLEAN NOT NULL DEFAULT false;
+
+DO $$
+DECLARE
+    period_check_definition TEXT;
+BEGIN
+    -- A strict final check cannot safely be added over a preexisting invalid
+    -- stored value. Do not coerce an historical period; fail atomically so an
+    -- operator can reconcile the unexpected state with its source evidence.
+    IF EXISTS (
+        SELECT 1
+        FROM invoices
+        WHERE billing_period IS NOT NULL
+          AND billing_period !~
+              '^(000[1-9]|00[1-9][0-9]|0[1-9][0-9]{2}|[1-9][0-9]{3})-(0[1-9]|1[0-2])$'
+    ) THEN
+        RAISE EXCEPTION
+            'Cannot recover migration 385: invoices.billing_period contains a value outside the final YYYY-MM grammar';
+    END IF;
+
+    SELECT pg_get_constraintdef(constraint_state.oid)
+    INTO period_check_definition
+    FROM pg_constraint AS constraint_state
+    WHERE constraint_state.conrelid = 'invoices'::regclass
+      AND constraint_state.conname = 'invoices_billing_period_check';
+
+    -- The recorded initial check accepted 0000-01. Keep a clean final-385
+    -- schema untouched, but replace only a missing or older definition with
+    -- the nonzero-year grammar required by recurring_invoice_dedup_schema_ready.
+    IF period_check_definition IS NULL
+       OR position('^(000[1-9]' IN lower(period_check_definition)) = 0
+       OR position('1[0-2]' IN lower(period_check_definition)) = 0 THEN
+        IF period_check_definition IS NOT NULL THEN
+            ALTER TABLE invoices
+                DROP CONSTRAINT invoices_billing_period_check;
+        END IF;
+
+        ALTER TABLE invoices
+            ADD CONSTRAINT invoices_billing_period_check
+            CHECK (
+                billing_period ~
+                    '^(000[1-9]|00[1-9][0-9]|0[1-9][0-9]{2}|[1-9][0-9]{3})-(0[1-9]|1[0-2])$'
+            ) NOT VALID;
+    END IF;
+END $$;
+
+-- Preserve the existing NULL-period historical rows before installing the
+-- fresh-write gate. Rows that later backfill below return to false.
+UPDATE invoices
+SET billing_period_legacy_null = true
+WHERE billing_period IS NULL
+  AND status <> 'void'
+  AND source IN ('monthly_auto', 'eom_commercial_billing')
+  AND billing_period_legacy_null IS DISTINCT FROM true;
+
+DO $$
+DECLARE
+    required_check_definition TEXT;
+BEGIN
+    SELECT pg_get_constraintdef(constraint_state.oid)
+    INTO required_check_definition
+    FROM pg_constraint AS constraint_state
+    WHERE constraint_state.conrelid = 'invoices'::regclass
+      AND constraint_state.conname =
+          'invoices_recurring_billing_period_required_check';
+
+    IF required_check_definition IS NULL
+       OR position('monthly_auto' IN lower(required_check_definition)) = 0
+       OR position('eom_commercial_billing' IN lower(required_check_definition)) = 0
+       OR position('billing_period' IN lower(required_check_definition)) = 0
+       OR position('billing_period_legacy_null' IN lower(required_check_definition)) = 0
+       OR position('void' IN lower(required_check_definition)) = 0 THEN
+        IF required_check_definition IS NOT NULL THEN
+            ALTER TABLE invoices
+                DROP CONSTRAINT invoices_recurring_billing_period_required_check;
+        END IF;
+
+        ALTER TABLE invoices
+            ADD CONSTRAINT invoices_recurring_billing_period_required_check
+            CHECK (
+                source NOT IN ('monthly_auto', 'eom_commercial_billing')
+                OR status = 'void'
+                OR billing_period IS NOT NULL
+                OR billing_period_legacy_null
+            ) NOT VALID;
+    END IF;
+END $$;
+
+CREATE TABLE IF NOT EXISTS invoices_billing_period_reservations (
+    contact_id      UUID NOT NULL,
+    billing_period  VARCHAR(7) NOT NULL,
+    reason          VARCHAR(32) NOT NULL DEFAULT 'backfill_collision',
+    created_at      TIMESTAMPTZ NOT NULL DEFAULT now(),
+    PRIMARY KEY (contact_id, billing_period)
+);
+
+-- Freeze each unresolved historical row's candidate once. A candidate is
+-- ambiguous if another NULL-period candidate wants the same contact/period OR
+-- a partially deployed newer writer already populated that slot. In both
+-- cases the NULL row stays NULL: selecting a winner would rewrite history.
+CREATE TEMP TABLE eom_recurring_invoice_dedup_recovery_candidates (
+    id               UUID PRIMARY KEY,
+    contact_id       UUID,
+    candidate_period VARCHAR(7),
+    is_collision     BOOLEAN NOT NULL
+) ON COMMIT DROP;
+
+INSERT INTO eom_recurring_invoice_dedup_recovery_candidates (
+    id, contact_id, candidate_period, is_collision
+)
+WITH candidates AS (
+    SELECT
+        inv.id,
+        inv.contact_id,
+        CASE
+            WHEN inv.source = 'monthly_auto'
+                 AND inv.source_ref ~
+                     '_((000[1-9]|00[1-9][0-9]|0[1-9][0-9]{2}|[1-9][0-9]{3})-(0[1-9]|1[0-2]))$'
+                THEN substring(
+                    inv.source_ref FROM
+                        '_((?:000[1-9]|00[1-9][0-9]|0[1-9][0-9]{2}|[1-9][0-9]{3})-(?:0[1-9]|1[0-2]))$'
+                )
+            WHEN inv.source = 'eom_commercial_billing'
+                 AND inv.invoice_number ~
+                     '^INV-(000[1-9]|00[1-9][0-9]|0[1-9][0-9]{2}|[1-9][0-9]{3})-(Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)-\d{4,}$'
+                THEN to_char(
+                    to_date(
+                        substring(
+                            inv.invoice_number FROM
+                                '^INV-((?:000[1-9]|00[1-9][0-9]|0[1-9][0-9]{2}|[1-9][0-9]{3})-(?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec))-\d{4,}$'
+                        ),
+                        'YYYY-Mon'
+                    ),
+                    'YYYY-MM'
+                )
+            ELSE NULL
+        END AS candidate_period
+    FROM invoices AS inv
+    WHERE inv.billing_period IS NULL
+      AND inv.status <> 'void'
+      AND inv.source IN ('monthly_auto', 'eom_commercial_billing')
+)
+SELECT
+    candidate.id,
+    candidate.contact_id,
+    candidate.candidate_period,
+    candidate.contact_id IS NOT NULL
+    AND candidate.candidate_period IS NOT NULL
+    AND (
+        EXISTS (
+            SELECT 1
+            FROM candidates AS peer
+            WHERE peer.id <> candidate.id
+              AND peer.contact_id = candidate.contact_id
+              AND peer.candidate_period = candidate.candidate_period
+        )
+        OR EXISTS (
+            SELECT 1
+            FROM invoices AS populated
+            WHERE populated.contact_id = candidate.contact_id
+              AND populated.billing_period = candidate.candidate_period
+              AND populated.status <> 'void'
+              AND populated.source IN ('monthly_auto', 'eom_commercial_billing')
+        )
+    ) AS is_collision
+FROM candidates AS candidate;
+
+UPDATE invoices AS inv
+SET billing_period = candidate.candidate_period,
+    billing_period_legacy_null = false
+FROM eom_recurring_invoice_dedup_recovery_candidates AS candidate
+WHERE inv.id = candidate.id
+  AND candidate.candidate_period IS NOT NULL
+  AND NOT candidate.is_collision
+  AND (
+      inv.billing_period IS DISTINCT FROM candidate.candidate_period
+      OR inv.billing_period_legacy_null IS DISTINCT FROM false
+  );
+
+UPDATE invoices AS inv
+SET metadata = COALESCE(inv.metadata, '{}'::jsonb)
+        || jsonb_build_object(
+            'billing_period_backfill_collision', true,
+            'billing_period_backfill_candidate_period', candidate.candidate_period
+        ),
+    billing_period_legacy_null = true
+FROM eom_recurring_invoice_dedup_recovery_candidates AS candidate
+WHERE inv.id = candidate.id
+  AND candidate.candidate_period IS NOT NULL
+  AND candidate.is_collision
+  AND (
+      inv.billing_period_legacy_null IS DISTINCT FROM true
+      OR inv.metadata->>'billing_period_backfill_collision' IS DISTINCT FROM 'true'
+      OR inv.metadata->>'billing_period_backfill_candidate_period'
+          IS DISTINCT FROM candidate.candidate_period
+  );
+
+UPDATE invoices AS inv
+SET metadata = COALESCE(inv.metadata, '{}'::jsonb)
+        || jsonb_build_object('billing_period_legacy_null', true),
+    billing_period_legacy_null = true
+FROM eom_recurring_invoice_dedup_recovery_candidates AS candidate
+WHERE inv.id = candidate.id
+  AND candidate.candidate_period IS NULL
+  AND inv.billing_period IS NULL
+  AND (
+      inv.billing_period_legacy_null IS DISTINCT FROM true
+      OR inv.metadata->>'billing_period_legacy_null' IS DISTINCT FROM 'true'
+  );
+
+INSERT INTO invoices_billing_period_reservations (contact_id, billing_period)
+SELECT DISTINCT candidate.contact_id, candidate.candidate_period
+FROM eom_recurring_invoice_dedup_recovery_candidates AS candidate
+WHERE candidate.is_collision
+  AND candidate.contact_id IS NOT NULL
+  AND candidate.candidate_period IS NOT NULL
+ON CONFLICT (contact_id, billing_period) DO NOTHING;
+
+COMMENT ON COLUMN invoices.billing_period IS
+    'YYYY-MM covered billing period. Backfilled on historical rows where mechanically derivable from source_ref (monthly_auto) or invoice_number (eom_commercial_billing); NULL where unparseable or where two historical rows collided (see metadata.billing_period_backfill_collision). Source-of-truth for cross-pipeline recurring-invoice dedup; see idx_invoices_recurring_contact_period_source.';
+
+COMMENT ON COLUMN invoices.billing_period_legacy_null IS
+    'Database-owned exemption for pre-migration recurring invoice rows whose billing_period remains NULL because the historical period was unparseable or collision-quarantined. New recurring writers do not set this column, so invoices_recurring_billing_period_required_check rejects fresh NULL-period recurring invoices while preserving later edits to explicit legacy exceptions.';
+
+COMMENT ON TABLE invoices_billing_period_reservations IS
+    'One row per (contact_id, billing_period) whose historical backfill was ambiguous (see invoices.metadata.billing_period_backfill_collision). Checked by both recurring writers'' pre-checks alongside invoices, so a third invoice for an already-quarantined period is refused while any matching non-void quarantined invoice remains, even though the slot cannot be enforced by idx_invoices_recurring_contact_period_source itself (no row claims it). Voiding every matching quarantined invoice releases the reservation at read time.';
