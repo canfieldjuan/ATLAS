@@ -18,7 +18,7 @@ This exceeds the 400-line soft budget because the static evidence, the one real 
 
 Ownership lane: eom/migration-content-integrity
 Slice phase: Production hardening
-Max files: 6
+Max files: 7
 
 1. Add one immutable, named reconciliation record for the documented migration-387 historical source gap, including the two exact digests, observed UTC application instant, retained-source cutoff, and the permanent `historical_source_unavailable` source-evidence state.
 2. Add `--attest-known-reconciliations` to the existing target-confirmed, read-only operator preflight. The opt-in result reports only whether exactly one named ledger row and the known record's ledger/package/time/catalog predicates are currently attested; it never changes report categories, relabels 387 as verified, or makes a mismatched run exit zero.
@@ -32,7 +32,7 @@ Max files: 6
   - [ ] The attested result retains `source_verification="historical_source_unavailable"`, keeps 387 in `report.mismatched`, and returns `UNRESOLVED_DRIFT_EXIT`; `tests/test_migration_content_integrity_preflight.py` asserts each observable field and exit code.
   - [ ] Duplicate ledger rows, a changed ledger digest, application instant, package bytes, source-cutoff ordering, readiness result, or NULL-period aggregate produce `not_attested`, never a verified source claim; focused tests exercise the predicate failures.
   - [ ] The new catalog reads occur inside the existing `connection.transaction(readonly=True)` and perform no `execute`; the fake connection's query and write receipts settle that invariant.
-  - [ ] The shared readiness predicate remains importable from `atlas_brain.storage.repositories.invoice`, while the reconciliation probe reaches its dependency-light storage implementation without importing the repository package; the migration CI's minimal dependency set collects and runs the full target workflow.
+  - [ ] The shared readiness predicate and established schema-helper module surface remain importable from `atlas_brain.storage.repositories.invoice`, while the reconciliation probe reaches its dependency-light storage implementation without importing the repository package; the migration CI's minimal dependency set collects and runs the full target workflow.
   - [ ] Without the opt-in flag, the command's existing JSON payload and behavior are byte-for-byte unchanged in the established default tests; `--show-target` plus the attestation flag is rejected before any database connection.
   - [ ] The existing migration-integrity CI workflow runs the updated focused test file because `.github/workflows/atlas_migrations_runner_checks.yml` already watches `atlas_brain/storage/migrations/**`, `scripts/check_migration_content_integrity.py`, and `tests/test_migration_content_integrity_preflight.py`.
 - Reachability proof: the real `scripts/check_migration_content_integrity.py` parser passes the opt-in to `_main`, then to `run_migration_content_integrity_preflight`; the focused test invokes that entrypoint and asserts the JSON artifact plus database receipts. This is an operator-only read-only command, not a product UI surface.
@@ -62,11 +62,12 @@ Max files: 6
 - `atlas_brain/storage/repositories/invoice.py`
 - `plans/PR-EOM-Migration-Reconciliation-Evidence.md`
 - `scripts/check_migration_content_integrity.py`
+- `tests/test_invoice_repository.py`
 - `tests/test_migration_content_integrity_preflight.py`
 
 ## Mechanism
 
-`atlas_brain.storage.recurring_invoice_schema` owns the dependency-light recurring-invoice catalog predicate; `atlas_brain.storage.repositories.invoice` re-exports the existing public and tested helper names, preserving writer callers. `atlas_brain.storage.migrations.reconciliation` holds the frozen historical incident record. Its attestation helper reads at most two named ledger rows and accepts evidence only when exactly one exists, hashes only the packaged 387 source file, verifies both time predicates, and then asks the shared readiness helper whether the final catalog is valid. Only if that readiness check succeeds does it execute a `NOT EXISTS` aggregate for active, NULL-period `monthly_auto` / `eom_commercial_billing` invoices.
+`atlas_brain.storage.recurring_invoice_schema` owns the dependency-light recurring-invoice catalog predicate; `atlas_brain.storage.repositories.invoice` re-exports the existing public and tested private helper names, preserving writer callers and diagnostic/test imports. `atlas_brain.storage.migrations.reconciliation` holds the frozen historical incident record. Its attestation helper reads at most two named ledger rows and accepts evidence only when exactly one exists, hashes only the packaged 387 source file, verifies both time predicates, and then asks the shared readiness helper whether the final catalog is valid. Only if that readiness check succeeds does it execute a `NOT EXISTS` aggregate for active, NULL-period `monthly_auto` / `eom_commercial_billing` invoices.
 
 The helper returns an evidence-oriented JSON-safe result with individual predicate states and `attested` / `not_attested`; it never returns `verified` for the unavailable historical source. The CLI calls it only behind `--attest-known-reconciliations` in the same already read-only transaction as the generic classifier. `_report_payload` continues to determine the status and exit code exclusively from the generic classifier, so a known historical attestation remains an explicitly documented mismatch for Slice 3 to policy-gate later.
 
@@ -102,7 +103,7 @@ Parked hardening: none.
 - Executed for the review repair: `python scripts/maturity_sweep.py atlas_brain/storage --tests-root tests --baseline tests/maturity_sweep/baseline_atlas_brain_storage.json --min-score 8 --sensitive-glob '**/billing/**' --sensitive-glob '**/billing/*.py' --sensitive-glob 'atlas_brain/storage/**'` — passed with no baseline update; the two new first-party mocks caused the prior ratchet failure and were removed.
 - Executed for the review repair: `python scripts/sync_pr_plan.py --check plans/PR-EOM-Migration-Reconciliation-Evidence.md` — passed after this plan synchronization.
 - Executed for the CI-reachability repair: `pytest -q tests/test_migrations_runner.py tests/test_migration_content_integrity_preflight.py tests/test_eom_public_onboarding_migration_repair.py` — 69 passed, 4 skipped.
-- Executed for the CI-reachability repair: `pytest -q tests/test_invoice_repository.py` — 5 passed, 11 skipped; the existing `_recurring_index_predicate_ready` name remains available through the invoice module.
+- Executed for the CI-reachability repair: `pytest -q tests/test_invoice_repository.py` — 6 passed, 11 skipped; the established schema-helper aliases remain identity-compatible through the invoice module.
 - Executed for the CI-reachability repair: Ruff, compilation, `git diff --check`, and the exact storage maturity ratchet — passed with no baseline update.
 - GitHub CI will run the full migration-runner workflow and repository-required checks; per Juan's direction, do not duplicate broad GitHub suites locally.
 
@@ -112,8 +113,9 @@ Parked hardening: none.
 |---|---:|
 | `atlas_brain/storage/migrations/reconciliation.py` | 203 |
 | `atlas_brain/storage/recurring_invoice_schema.py` | 177 |
-| `atlas_brain/storage/repositories/invoice.py` | 171 |
+| `atlas_brain/storage/repositories/invoice.py` | 195 |
 | `plans/PR-EOM-Migration-Reconciliation-Evidence.md` | 119 |
 | `scripts/check_migration_content_integrity.py` | 46 |
+| `tests/test_invoice_repository.py` | 16 |
 | `tests/test_migration_content_integrity_preflight.py` | 344 |
-| **Total** | **1060** |
+| **Total** | **1100** |

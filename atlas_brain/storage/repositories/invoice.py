@@ -14,9 +14,33 @@ from uuid import UUID, uuid4
 
 from ..database import get_db_pool
 from ..exceptions import DatabaseUnavailableError, DatabaseOperationError
-from ..recurring_invoice_schema import (
-    _recurring_index_predicate_ready as _recurring_index_predicate_ready,
-    recurring_invoice_dedup_schema_ready,
+from .. import recurring_invoice_schema as _recurring_invoice_schema
+
+# Keep the established invoice-module schema helper surface while the
+# implementation itself stays dependency-light for read-only migration probes.
+_RECURRING_INVOICE_DEDUP_INDEX = _recurring_invoice_schema._RECURRING_INVOICE_DEDUP_INDEX
+_RECURRING_INVOICE_DEDUP_INDEX_KEYS = (
+    _recurring_invoice_schema._RECURRING_INVOICE_DEDUP_INDEX_KEYS
+)
+_RECURRING_INVOICE_DEDUP_INDEX_PREDICATE_CLAUSES = (
+    _recurring_invoice_schema._RECURRING_INVOICE_DEDUP_INDEX_PREDICATE_CLAUSES
+)
+_RECURRING_INVOICE_DEDUP_CONSTRAINTS = (
+    _recurring_invoice_schema._RECURRING_INVOICE_DEDUP_CONSTRAINTS
+)
+_RECURRING_INVOICE_DEDUP_CONSTRAINT_EXPRESSIONS = (
+    _recurring_invoice_schema._RECURRING_INVOICE_DEDUP_CONSTRAINT_EXPRESSIONS
+)
+_normalize_schema_definition = _recurring_invoice_schema._normalize_schema_definition
+_canonicalize_catalog_expression = (
+    _recurring_invoice_schema._canonicalize_catalog_expression
+)
+_canonicalize_catalog_constraint_expression = (
+    _recurring_invoice_schema._canonicalize_catalog_constraint_expression
+)
+_recurring_index_predicate_ready = _recurring_invoice_schema._recurring_index_predicate_ready
+recurring_invoice_dedup_schema_ready = (
+    _recurring_invoice_schema.recurring_invoice_dedup_schema_ready
 )
 
 logger = logging.getLogger("atlas.storage.invoice")

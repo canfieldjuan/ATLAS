@@ -12,6 +12,7 @@ from uuid import uuid4
 import pytest
 
 from atlas_brain.services.receivables import ReceivablesService
+from atlas_brain.storage import recurring_invoice_schema
 from atlas_brain.storage.repositories import invoice as invoice_repo_mod
 
 
@@ -2103,4 +2104,19 @@ def test_recurring_dedup_predicate_readiness_rejects_extra_clauses():
     assert (
         invoice_repo_mod._recurring_index_predicate_ready(impossible_extra_clause)
         is False
+    )
+
+
+def test_recurring_schema_helpers_remain_reexported_by_invoice_repository():
+    assert (
+        invoice_repo_mod.recurring_invoice_dedup_schema_ready
+        is recurring_invoice_schema.recurring_invoice_dedup_schema_ready
+    )
+    assert (
+        invoice_repo_mod._canonicalize_catalog_constraint_expression
+        is recurring_invoice_schema._canonicalize_catalog_constraint_expression
+    )
+    assert (
+        invoice_repo_mod._RECURRING_INVOICE_DEDUP_CONSTRAINTS
+        is recurring_invoice_schema._RECURRING_INVOICE_DEDUP_CONSTRAINTS
     )
