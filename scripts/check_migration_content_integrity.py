@@ -35,6 +35,9 @@ from atlas_brain.storage.migrations import (  # noqa: E402
     MigrationContentIntegrityReport,
     migration_content_integrity_report,
 )
+from atlas_brain.storage.migrations.reconciliation import (  # noqa: E402
+    attest_known_historical_migration_reconciliations,
+)
 
 
 UNRESOLVED_DRIFT_EXIT = 2
@@ -58,7 +61,18 @@ def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         action="store_true",
         help="Accepted for operator consistency; output is always JSON.",
     )
-    return parser.parse_args(argv)
+    parser.add_argument(
+        "--attest-known-reconciliations",
+        action="store_true",
+        help=(
+            "Include read-only catalog evidence for reviewed historical source "
+            "gaps; requires --expected-target."
+        ),
+    )
+    args = parser.parse_args(argv)
+    if args.show_target and args.attest_known_reconciliations:
+        parser.error("--attest-known-reconciliations requires --expected-target")
+    return args
 
 
 def _status(report: MigrationContentIntegrityReport) -> tuple[str, int]:
@@ -69,7 +83,11 @@ def _status(report: MigrationContentIntegrityReport) -> tuple[str, int]:
     return "verified", 0
 
 
-def _report_payload(report: MigrationContentIntegrityReport) -> tuple[int, dict[str, object]]:
+def _report_payload(
+    report: MigrationContentIntegrityReport,
+    *,
+    reconciliation_evidence: list[dict[str, object]] | None = None,
+) -> tuple[int, dict[str, object]]:
     status, exit_code = _status(report)
     categories = {
         "verified": list(report.verified),
@@ -77,13 +95,16 @@ def _report_payload(report: MigrationContentIntegrityReport) -> tuple[int, dict[
         "mismatched": list(report.mismatched),
         "missing_source": list(report.missing_source),
     }
-    return exit_code, {
+    payload: dict[str, object] = {
         "check_completed": True,
         "status": status,
         "exit_code": exit_code,
         "report": categories,
         "counts": {name: len(values) for name, values in categories.items()},
     }
+    if reconciliation_evidence is not None:
+        payload["known_reconciliation_evidence"] = reconciliation_evidence
+    return exit_code, payload
 
 
 def _failure_payload(exc: Exception) -> dict[str, object]:
@@ -129,18 +150,27 @@ async def run_migration_content_integrity_preflight(
     connection: Any,
     *,
     migrations_dir: Path = MIGRATIONS_DIR,
+    attest_known_reconciliations: bool = False,
 ) -> tuple[int, dict[str, object]]:
     """Read the packaged catalog and ledger in a transaction that rejects writes."""
     migration_files = sorted(migrations_dir.glob("*.sql"))
+    reconciliation_evidence: list[dict[str, object]] | None = None
     async with connection.transaction(readonly=True):
         report = await migration_content_integrity_report(connection, migration_files)
-    return _report_payload(report)
+        if attest_known_reconciliations:
+            attestations = await attest_known_historical_migration_reconciliations(
+                connection,
+                migration_files,
+            )
+            reconciliation_evidence = [attestation.as_payload() for attestation in attestations]
+    return _report_payload(report, reconciliation_evidence=reconciliation_evidence)
 
 
 async def _main(
     *,
     migrations_dir: Path = MIGRATIONS_DIR,
     database_target: str | None = None,
+    attest_known_reconciliations: bool = False,
 ) -> int:
     connection: Any | None = None
     exit_code = COULD_NOT_DETERMINE_EXIT
@@ -151,6 +181,7 @@ async def _main(
         exit_code, payload = await run_migration_content_integrity_preflight(
             connection,
             migrations_dir=migrations_dir,
+            attest_known_reconciliations=attest_known_reconciliations,
         )
     except Exception as exc:
         payload = _failure_payload(exc)
@@ -191,7 +222,12 @@ def main(argv: list[str] | None = None) -> int:
             sort_keys=True,
         ))
         return COULD_NOT_DETERMINE_EXIT
-    return asyncio.run(_main(database_target=target_label))
+    return asyncio.run(
+        _main(
+            database_target=target_label,
+            attest_known_reconciliations=args.attest_known_reconciliations,
+        )
+    )
 
 
 if __name__ == "__main__":
