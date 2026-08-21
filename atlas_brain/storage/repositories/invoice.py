@@ -37,16 +37,23 @@ _RECURRING_INVOICE_DEDUP_CONSTRAINTS = (
     "invoices_billing_period_check",
     "invoices_recurring_billing_period_required_check",
 )
+_RECURRING_INVOICE_DEDUP_CONSTRAINT_EXPRESSIONS = {
+    "invoices_billing_period_check": (
+        "((billing_period) ~ "
+        "^(000[1-9]|00[1-9][0-9]|0[1-9][0-9]{2}|[1-9][0-9]{3})-"
+        "(0[1-9]|1[0-2])$)"
+    ),
+    "invoices_recurring_billing_period_required_check": (
+        "(((source) <> all ((array[monthly_auto, eom_commercial_billing]))) "
+        "or ((status) = void) or (billing_period is not null) "
+        "or billing_period_legacy_null)"
+    ),
+}
 
 
 def _normalize_schema_definition(definition: object) -> str:
     """Return a stable lower-case representation of catalog DDL text."""
     return " ".join(str(definition or "").lower().split())
-
-
-def _schema_definition_contains(definition: object, *required_fragments: str) -> bool:
-    normalized = _normalize_schema_definition(definition)
-    return all(fragment.lower() in normalized for fragment in required_fragments)
 
 
 def _canonicalize_catalog_expression(expression: object) -> str:
@@ -60,6 +67,17 @@ def _canonicalize_catalog_expression(expression: object) -> str:
     normalized = normalized.replace("'", "")
     normalized = re.sub(r"[\[\](),]", " ", normalized)
     return " ".join(normalized.split())
+
+
+def _canonicalize_catalog_constraint_expression(expression: object) -> str:
+    """Return an exact comparable form for a PostgreSQL CHECK expression."""
+    normalized = _normalize_schema_definition(expression)
+    normalized = re.sub(
+        r"::(?:character varying|varchar|text|name)(?:\[\])?",
+        "",
+        normalized,
+    )
+    return " ".join(normalized.replace("'", "").split())
 
 
 def _recurring_index_predicate_ready(predicate: object) -> bool:
@@ -107,7 +125,7 @@ async def recurring_invoice_dedup_schema_ready(conn: Any) -> bool:
 
     constraint_rows = await conn.fetch(
         """
-        SELECT actual.conname, pg_get_constraintdef(actual.oid) AS definition
+        SELECT actual.conname, pg_get_expr(actual.conbin, actual.conrelid) AS definition
         FROM pg_constraint AS actual
         JOIN pg_class AS table_class
           ON table_class.oid = actual.conrelid
@@ -123,25 +141,12 @@ async def recurring_invoice_dedup_schema_ready(conn: Any) -> bool:
         row["conname"]: row["definition"]
         for row in constraint_rows
     }
-    constraints_ready = (
-        _schema_definition_contains(
-            constraint_definitions.get("invoices_billing_period_check"),
-            "check",
-            "billing_period",
-            "^(000[1-9]",
-            "1[0-2]",
+    constraints_ready = all(
+        _canonicalize_catalog_constraint_expression(
+            constraint_definitions.get(name)
         )
-        and _schema_definition_contains(
-            constraint_definitions.get("invoices_recurring_billing_period_required_check"),
-            "check",
-            "source",
-            "monthly_auto",
-            "eom_commercial_billing",
-            "status",
-            "void",
-            "billing_period is not null",
-            "billing_period_legacy_null",
-        )
+        == expected
+        for name, expected in _RECURRING_INVOICE_DEDUP_CONSTRAINT_EXPRESSIONS.items()
     )
     if not constraints_ready:
         return False
