@@ -25,5 +25,5 @@ zeroconf>=0.80.0
 aiomqtt>=2.0.0
 
 # Object detection and tracking
-ultralytics>=8.4.120  # YOLOv8 with built-in ByteTrack
+ultralytics>=8.4.121  # YOLOv8 with built-in ByteTrack
 lapx>=0.9.4  # Linear assignment for tracking
