@@ -19,6 +19,8 @@ on:
       - "atlas_brain/main.py"
       - "atlas_brain/config.py"
       - "atlas_brain/config_defaults.py"
+      - "atlas_brain/autonomous/scheduler.py"
+      - "atlas_brain/autonomous/tasks/invoice_payment_reminders.py"
       - "atlas_brain/autonomous/config.py"
       - "atlas_brain/autonomous/tasks/monthly_invoice_generation.py"
       - "atlas_brain/services/calendar_provider.py"
@@ -82,6 +84,7 @@ on:
       - "tests/test_monthly_invoice_generation.py"
       - "tests/test_monthly_invoice_generation_cross_pipeline_dedup.py"
       - "tests/test_invoice_repository.py"
+      - "tests/test_invoice_payment_reminders_disabled.py"
       - "tests/test_invoice_pdf.py"
       - "tests/test_receivables.py"
       - "tests/test_eom_billing_recipients.py"
@@ -116,6 +119,8 @@ on:
       - "atlas_brain/main.py"
       - "atlas_brain/config.py"
       - "atlas_brain/config_defaults.py"
+      - "atlas_brain/autonomous/scheduler.py"
+      - "atlas_brain/autonomous/tasks/invoice_payment_reminders.py"
       - "atlas_brain/autonomous/config.py"
       - "atlas_brain/autonomous/tasks/monthly_invoice_generation.py"
       - "atlas_brain/services/calendar_provider.py"
@@ -179,6 +184,7 @@ on:
       - "tests/test_monthly_invoice_generation.py"
       - "tests/test_monthly_invoice_generation_cross_pipeline_dedup.py"
       - "tests/test_invoice_repository.py"
+      - "tests/test_invoice_payment_reminders_disabled.py"
       - "tests/test_invoice_pdf.py"
       - "tests/test_receivables.py"
       - "tests/test_eom_billing_recipients.py"
@@ -237,6 +243,23 @@ jobs:
           python -m pytest \
             tests/test_monthly_invoice_generation.py \
             -k "update_invoice_clears_needs_hours_when_line_items_are_billable or line_items_are_billable_requires_all_positive_quantities" \
+            -q
+
+      - name: Run payment-reminder autopilot-disabled guard tests
+        run: |
+          python -m pytest \
+            tests/test_invoice_payment_reminders_disabled.py \
+            -q
+
+      # The permitted side of the guard. These two were accepted failures in
+      # tests/unit_gate_baseline.txt and were selected out of the step above by
+      # its -k filter, so nothing proved the guard is what blocks the send. They
+      # now open all three gates explicitly and are enrolled here as blocking.
+      - name: Run payment-reminder permitted-side tests
+        run: |
+          python -m pytest \
+            tests/test_monthly_invoice_generation.py \
+            -k "payment_reminder" \
             -q
 
       - name: Run legacy monthly auto-invoice opt-in contract tests
