@@ -39,6 +39,14 @@ updates:
         update-types:
           - "patch"
           - "minor"
+    # Major toolchain/runtime changes are deliberate migrations, not unattended
+    # version maintenance. allow.update-types applies only to version updates,
+    # so Dependabot security updates remain eligible across a major boundary.
+    allow:
+      - dependency-name: "*"
+        update-types:
+          - "version-update:semver-minor"
+          - "version-update:semver-patch"
 
   - package-ecosystem: "npm"
     # atlas-mobile is frozen on Expo SDK 54, isolated in its own entry so the FULL
@@ -137,6 +145,14 @@ updates:
         update-types:
           - "patch"
           - "minor"
+    # Major Python runtime changes require a coordinated interpreter/platform
+    # migration. allow.update-types applies only to version updates, preserving
+    # Dependabot security updates even when the secure release is a new major.
+    allow:
+      - dependency-name: "*"
+        update-types:
+          - "version-update:semver-minor"
+          - "version-update:semver-patch"
     # The heavy ML / CUDA stack is version-locked as a set: torch <-> torchaudio/
     # torchvision <-> the CUDA toolkit and nvidia-cuda-* runtime must move together.
     # Single-package minor bumps break pip resolution (torch 2.13.0 vs the pinned
