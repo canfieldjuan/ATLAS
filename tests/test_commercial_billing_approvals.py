@@ -189,24 +189,25 @@ class _MemoryConnection:
         return None
 
     async def fetch(self, query, *_args):
-        if "pg_get_constraintdef" in query:
+        if "pg_get_expr(actual.conbin, actual.conrelid)" in query:
             return [
                 {
                     "conname": "invoices_billing_period_check",
                     "definition": (
-                        "CHECK (((billing_period)::text ~ "
+                        "((billing_period)::text ~ "
                         "'^(000[1-9]|00[1-9][0-9]|0[1-9][0-9]{2}|"
-                        "[1-9][0-9]{3})-(0[1-9]|1[0-2])$'::text)) NOT VALID"
+                        "[1-9][0-9]{3})-(0[1-9]|1[0-2])$'::text)"
                     ),
                 },
                 {
                     "conname": "invoices_recurring_billing_period_required_check",
                     "definition": (
-                        "CHECK ((((source)::text <> ALL "
-                        "(ARRAY['monthly_auto'::text, 'eom_commercial_billing'::text])) "
+                        "(((source)::text <> ALL "
+                        "((ARRAY['monthly_auto'::character varying, "
+                        "'eom_commercial_billing'::character varying])::text[])) "
                         "OR ((status)::text = 'void'::text) "
                         "OR (billing_period IS NOT NULL) "
-                        "OR billing_period_legacy_null)) NOT VALID"
+                        "OR billing_period_legacy_null)"
                     ),
                 },
             ]

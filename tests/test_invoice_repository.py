@@ -581,6 +581,101 @@ async def test_real_postgres_recurring_dedup_readiness_rejects_drifted_definitio
             """
         )
         assert await invoice_repo_mod.recurring_invoice_dedup_schema_ready(conn) is False
+
+        await conn.execute(
+            "ALTER TABLE invoices DROP CONSTRAINT "
+            "invoices_recurring_billing_period_required_check"
+        )
+        await conn.execute(
+            """
+            ALTER TABLE invoices
+                ADD CONSTRAINT invoices_recurring_billing_period_required_check
+                CHECK (
+                    source NOT IN ('monthly_auto', 'eom_commercial_billing')
+                    OR status = 'void'
+                    OR billing_period IS NOT NULL
+                    OR billing_period_legacy_null
+                )
+                NOT VALID
+            """
+        )
+        assert await invoice_repo_mod.recurring_invoice_dedup_schema_ready(conn) is True
+
+        # Every expected word remains present, but the added NULL branch makes
+        # the check a fresh-write bypass. Exact canonical comparison must fail.
+        await conn.execute(
+            "ALTER TABLE invoices DROP CONSTRAINT "
+            "invoices_recurring_billing_period_required_check"
+        )
+        await conn.execute(
+            """
+            ALTER TABLE invoices
+                ADD CONSTRAINT invoices_recurring_billing_period_required_check
+                CHECK (
+                    source NOT IN ('monthly_auto', 'eom_commercial_billing')
+                    OR status = 'void'
+                    OR billing_period IS NOT NULL
+                    OR billing_period_legacy_null
+                    OR billing_period IS NULL
+                )
+                NOT VALID
+            """
+        )
+        assert await invoice_repo_mod.recurring_invoice_dedup_schema_ready(conn) is False
+
+        await conn.execute(
+            "ALTER TABLE invoices DROP CONSTRAINT "
+            "invoices_recurring_billing_period_required_check"
+        )
+        await conn.execute(
+            """
+            ALTER TABLE invoices
+                ADD CONSTRAINT invoices_recurring_billing_period_required_check
+                CHECK (
+                    source NOT IN ('monthly_auto', 'eom_commercial_billing')
+                    OR status = 'void'
+                    OR billing_period IS NOT NULL
+                    OR billing_period_legacy_null
+                )
+                NOT VALID
+            """
+        )
+        assert await invoice_repo_mod.recurring_invoice_dedup_schema_ready(conn) is True
+
+        # The period check can carry the same regex fragments while admitting
+        # every non-NULL string; readiness must reject that named tautology too.
+        await conn.execute(
+            "ALTER TABLE invoices DROP CONSTRAINT invoices_billing_period_check"
+        )
+        await conn.execute(
+            """
+            ALTER TABLE invoices
+                ADD CONSTRAINT invoices_billing_period_check
+                CHECK (
+                    billing_period ~
+                        '^(000[1-9]|00[1-9][0-9]|0[1-9][0-9]{2}|[1-9][0-9]{3})-(0[1-9]|1[0-2])$'
+                    OR billing_period IS NOT NULL
+                )
+                NOT VALID
+            """
+        )
+        assert await invoice_repo_mod.recurring_invoice_dedup_schema_ready(conn) is False
+
+        await conn.execute(
+            "ALTER TABLE invoices DROP CONSTRAINT invoices_billing_period_check"
+        )
+        await conn.execute(
+            """
+            ALTER TABLE invoices
+                ADD CONSTRAINT invoices_billing_period_check
+                CHECK (
+                    billing_period ~
+                        '^(000[1-9]|00[1-9][0-9]|0[1-9][0-9]{2}|[1-9][0-9]{3})-(0[1-9]|1[0-2])$'
+                )
+                NOT VALID
+            """
+        )
+        assert await invoice_repo_mod.recurring_invoice_dedup_schema_ready(conn) is True
     finally:
         await conn.execute("SET search_path TO public")
         await conn.execute(f'DROP SCHEMA IF EXISTS "{schema}" CASCADE')
@@ -1356,6 +1451,106 @@ async def test_real_postgres_387_rejects_wrong_recurring_index_predicate_atomica
         ) is True
         assert await conn.fetchval(
             "SELECT NOT EXISTS (SELECT 1 FROM schema_migrations WHERE name = $1)",
+            "387_eom_recurring_invoice_dedup_recovery",
+        ) is True
+    finally:
+        await conn.execute("SET search_path TO public")
+        await conn.execute(f'DROP SCHEMA IF EXISTS "{schema}" CASCADE')
+        await conn.close()
+
+
+@pytest.mark.asyncio
+async def test_real_postgres_387_replaces_token_similar_weak_constraints():
+    """Named tautologies must be replaced before migration 387 is recorded."""
+    asyncpg = pytest.importorskip("asyncpg")
+    database_url = os.environ.get("ATLAS_RECEIVABLES_TEST_DATABASE_URL")
+    if not database_url:
+        pytest.skip("ATLAS_RECEIVABLES_TEST_DATABASE_URL not set")
+
+    schema = f"invoice_repository_387_weak_constraints_{uuid4().hex}"
+    conn = await asyncpg.connect(database_url)
+    try:
+        await conn.execute(f'CREATE SCHEMA "{schema}"')
+        await conn.execute(f'SET search_path TO "{schema}"')
+        await conn.execute("CREATE TABLE contacts (id uuid PRIMARY KEY)")
+        await conn.execute(_migration_sql("045_invoices.sql"))
+        await _install_recorded_initial_385_catalog(conn)
+        await conn.execute(
+            """
+            ALTER TABLE invoices DROP CONSTRAINT invoices_billing_period_check;
+            ALTER TABLE invoices
+                ADD CONSTRAINT invoices_billing_period_check
+                CHECK (
+                    billing_period ~
+                        '^(000[1-9]|00[1-9][0-9]|0[1-9][0-9]{2}|[1-9][0-9]{3})-(0[1-9]|1[0-2])$'
+                        OR billing_period IS NOT NULL
+                );
+            ALTER TABLE invoices
+                ADD COLUMN billing_period_legacy_null BOOLEAN NOT NULL DEFAULT false;
+            ALTER TABLE invoices
+                ADD CONSTRAINT invoices_recurring_billing_period_required_check
+                CHECK (
+                    source NOT IN ('monthly_auto', 'eom_commercial_billing')
+                    OR status = 'void'
+                    OR billing_period IS NOT NULL
+                    OR billing_period_legacy_null
+                    OR billing_period IS NULL
+                ) NOT VALID;
+            """
+        )
+
+        await _run_migration(
+            conn, schema, "387_eom_recurring_invoice_dedup_recovery.sql"
+        )
+        assert await invoice_repo_mod.recurring_invoice_dedup_schema_ready(conn) is True
+        constraints = {
+            row["conname"]: invoice_repo_mod._canonicalize_catalog_constraint_expression(
+                row["definition"]
+            )
+            for row in await conn.fetch(
+                """
+                SELECT conname, pg_get_expr(conbin, conrelid) AS definition
+                FROM pg_constraint
+                WHERE conrelid = 'invoices'::regclass
+                  AND conname = ANY($1::text[])
+                """,
+                list(invoice_repo_mod._RECURRING_INVOICE_DEDUP_CONSTRAINTS),
+            )
+        }
+        assert constraints == invoice_repo_mod._RECURRING_INVOICE_DEDUP_CONSTRAINT_EXPRESSIONS
+
+        contact_id = uuid4()
+        await conn.execute("INSERT INTO contacts (id) VALUES ($1)", contact_id)
+        with pytest.raises(asyncpg.CheckViolationError):
+            await conn.execute(
+                """
+                INSERT INTO invoices (
+                    id, invoice_number, contact_id, customer_name, due_date,
+                    status, source
+                ) VALUES (
+                    $1, 'INV-2026-Oct-null', $2, 'Constraint Recovery Co', CURRENT_DATE,
+                    'draft', 'monthly_auto'
+                )
+                """,
+                uuid4(),
+                contact_id,
+            )
+        with pytest.raises(asyncpg.CheckViolationError):
+            await conn.execute(
+                """
+                INSERT INTO invoices (
+                    id, invoice_number, contact_id, customer_name, due_date,
+                    status, source, billing_period
+                ) VALUES (
+                    $1, 'INV-0000-Jan-invalid', $2, 'Constraint Recovery Co', CURRENT_DATE,
+                    'draft', 'monthly_auto', '0000-01'
+                )
+                """,
+                uuid4(),
+                contact_id,
+            )
+        assert await conn.fetchval(
+            "SELECT EXISTS (SELECT 1 FROM schema_migrations WHERE name = $1)",
             "387_eom_recurring_invoice_dedup_recovery",
         ) is True
     finally:

@@ -148,18 +148,35 @@ BEGIN
             'Cannot recover migration 385: invoices.billing_period contains a value outside the final YYYY-MM grammar';
     END IF;
 
-    SELECT pg_get_constraintdef(constraint_state.oid)
+    SELECT pg_get_expr(constraint_state.conbin, constraint_state.conrelid)
     INTO period_check_definition
     FROM pg_constraint AS constraint_state
     WHERE constraint_state.conrelid = 'invoices'::regclass
       AND constraint_state.conname = 'invoices_billing_period_check';
 
     -- The recorded initial check accepted 0000-01. Keep a clean final-385
-    -- schema untouched, but replace only a missing or older definition with
-    -- the nonzero-year grammar required by recurring_invoice_dedup_schema_ready.
+    -- schema untouched, but replace a missing, older, or token-similar weaker
+    -- definition with the exact nonzero-year grammar required by
+    -- recurring_invoice_dedup_schema_ready.
     IF period_check_definition IS NULL
-       OR position('^(000[1-9]' IN lower(period_check_definition)) = 0
-       OR position('1[0-2]' IN lower(period_check_definition)) = 0 THEN
+       OR btrim(
+            regexp_replace(
+                regexp_replace(
+                    regexp_replace(
+                        lower(period_check_definition),
+                        E'::(character varying|varchar|text|name)(\\[\\])?',
+                        '',
+                        'g'
+                    ),
+                    '''',
+                    '',
+                    'g'
+                ),
+                E'\\s+',
+                ' ',
+                'g'
+            )
+        ) <> '((billing_period) ~ ^(000[1-9]|00[1-9][0-9]|0[1-9][0-9]{2}|[1-9][0-9]{3})-(0[1-9]|1[0-2])$)' THEN
         IF period_check_definition IS NOT NULL THEN
             ALTER TABLE invoices
                 DROP CONSTRAINT invoices_billing_period_check;
@@ -187,19 +204,35 @@ DO $$
 DECLARE
     required_check_definition TEXT;
 BEGIN
-    SELECT pg_get_constraintdef(constraint_state.oid)
+    SELECT pg_get_expr(constraint_state.conbin, constraint_state.conrelid)
     INTO required_check_definition
     FROM pg_constraint AS constraint_state
     WHERE constraint_state.conrelid = 'invoices'::regclass
       AND constraint_state.conname =
           'invoices_recurring_billing_period_required_check';
 
+    -- A named check with all of the expected words can still be a tautology.
+    -- Compare the complete canonical expression before preserving it; this is
+    -- the same fail-closed contract the runtime readiness predicate applies.
     IF required_check_definition IS NULL
-       OR position('monthly_auto' IN lower(required_check_definition)) = 0
-       OR position('eom_commercial_billing' IN lower(required_check_definition)) = 0
-       OR position('billing_period' IN lower(required_check_definition)) = 0
-       OR position('billing_period_legacy_null' IN lower(required_check_definition)) = 0
-       OR position('void' IN lower(required_check_definition)) = 0 THEN
+       OR btrim(
+            regexp_replace(
+                regexp_replace(
+                    regexp_replace(
+                        lower(required_check_definition),
+                        E'::(character varying|varchar|text|name)(\\[\\])?',
+                        '',
+                        'g'
+                    ),
+                    '''',
+                    '',
+                    'g'
+                ),
+                E'\\s+',
+                ' ',
+                'g'
+            )
+        ) <> '(((source) <> all ((array[monthly_auto, eom_commercial_billing]))) or ((status) = void) or (billing_period is not null) or billing_period_legacy_null)' THEN
         IF required_check_definition IS NOT NULL THEN
             ALTER TABLE invoices
                 DROP CONSTRAINT invoices_recurring_billing_period_required_check;
