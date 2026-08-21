@@ -64,6 +64,37 @@ BEGIN
     END IF;
 END $$;
 
+-- Recovery DML is authorized only for the exact recorded initial-385 catalog.
+-- A final 385 catalog already has both of these historical artifacts. Its
+-- collision classification is frozen evidence, not a view over current invoice
+-- status: a later void must not make a surviving quarantined invoice eligible
+-- for a second backfill attempt. Keep 387 ledger-only in that final state.
+CREATE TEMP TABLE eom_recurring_invoice_dedup_recovery_scope (
+    needs_historical_recovery BOOLEAN NOT NULL
+) ON COMMIT DROP;
+
+INSERT INTO eom_recurring_invoice_dedup_recovery_scope (
+    needs_historical_recovery
+)
+SELECT NOT (
+    EXISTS (
+        SELECT 1
+        FROM pg_attribute AS attribute_state
+        JOIN pg_class AS table_class
+          ON table_class.oid = attribute_state.attrelid
+        JOIN pg_namespace AS table_namespace
+          ON table_namespace.oid = table_class.relnamespace
+        WHERE table_namespace.nspname = current_schema()
+          AND table_class.relname = 'invoices'
+          AND attribute_state.attname = 'billing_period_legacy_null'
+          AND attribute_state.attnum > 0
+          AND NOT attribute_state.attisdropped
+    )
+    AND to_regclass(format(
+        '%I.%I', current_schema(), 'invoices_billing_period_reservations'
+    )) IS NOT NULL
+);
+
 ALTER TABLE invoices
     ADD COLUMN IF NOT EXISTS billing_period_legacy_null BOOLEAN NOT NULL DEFAULT false;
 
@@ -227,7 +258,9 @@ WITH candidates AS (
             ELSE NULL
         END AS candidate_period
     FROM invoices AS inv
-    WHERE inv.billing_period IS NULL
+    CROSS JOIN eom_recurring_invoice_dedup_recovery_scope AS recovery_scope
+    WHERE recovery_scope.needs_historical_recovery
+      AND inv.billing_period IS NULL
       AND inv.status <> 'void'
       AND inv.source IN ('monthly_auto', 'eom_commercial_billing')
 )
@@ -260,14 +293,20 @@ FROM candidates AS candidate;
 -- commercial invoice has a pending Gmail draft replacement. Its trigger is
 -- valid safety behavior, so do not bypass it or discover it after partially
 -- mutating legacy rows. Materialize the exact recovery candidates first, then
--- preflight only rows one of the following invoices UPDATE statements will
--- change. A correctly marked collision/unparseable row is a data no-op and
--- must not prevent 387 from recording its ledger entry.
+-- preflight only the initial-catalog rows one of the following invoices UPDATE
+-- statements will change. A final catalog has no recovery DML, so it must not
+-- be coupled to migration 377's trigger or replacement-table catalog.
 DO $$
 DECLARE
     pending_gmail_replacement BOOLEAN := false;
+    needs_historical_recovery BOOLEAN;
 BEGIN
-    IF EXISTS (
+    SELECT recovery_scope.needs_historical_recovery
+    INTO needs_historical_recovery
+    FROM eom_recurring_invoice_dedup_recovery_scope AS recovery_scope;
+
+    IF needs_historical_recovery
+       AND EXISTS (
         SELECT 1
         FROM pg_trigger AS trigger_state
         JOIN pg_class AS table_class
@@ -352,15 +391,17 @@ BEGIN
 END $$;
 
 -- Preserve the existing NULL-period historical rows before installing the
--- fresh-write gate. Rows that later backfill below return to false. The
--- candidate-derived preflight above runs first because this is the first
--- invoices UPDATE in the recovery.
-UPDATE invoices
+-- fresh-write gate only in the observed initial catalog. Rows that later
+-- backfill below return to false. The candidate-derived preflight above runs
+-- first because this is the first invoices UPDATE in the recovery.
+UPDATE invoices AS inv
 SET billing_period_legacy_null = true
-WHERE billing_period IS NULL
-  AND status <> 'void'
-  AND source IN ('monthly_auto', 'eom_commercial_billing')
-  AND billing_period_legacy_null IS DISTINCT FROM true;
+FROM eom_recurring_invoice_dedup_recovery_scope AS recovery_scope
+WHERE recovery_scope.needs_historical_recovery
+  AND inv.billing_period IS NULL
+  AND inv.status <> 'void'
+  AND inv.source IN ('monthly_auto', 'eom_commercial_billing')
+  AND inv.billing_period_legacy_null IS DISTINCT FROM true;
 
 UPDATE invoices AS inv
 SET billing_period = candidate.candidate_period,

@@ -43,6 +43,26 @@ repair without repeatable evidence for the state it is authorized to mutate.
   existing recurring-writer query contracts; tracker and Website consumers;
   or an unrelated generic migration-framework redesign.
 
+### Review-fix contract (P1 final-catalog quarantine preservation)
+
+- Root cause: migration 387 rebuilds its historical candidate set from current
+  active invoice status even when the final-385 legacy-marker and reservation
+  catalog already exists. If a peer from an already quarantined collision is
+  later voided, the surviving final-385 row becomes a current unique candidate
+  and recovery can reclassify it, selecting a historical winner after final
+  catalog creation.
+- Correct fix must touch/change: determine whether the final-385 legacy
+  catalog already exists before candidate materialization; when it does, skip
+  historical candidate generation, Gmail mutation preflight, invoice DML, and
+  reservation DML while retaining catalog validation/repair and migration-387
+  bookkeeping. Add a real-PostgreSQL regression that voids one final collision
+  peer before 387 and proves the surviving row, reservation, and pending Gmail
+  draft state stay unchanged.
+- Must not change: recovery behavior for the observed initial-385 catalog,
+  pending-Gmail protection for an initial-catalog row 387 will mutate, final
+  catalog constraints/readiness, any invoice lifecycle status, or historical
+  source/payment/allocation/delivery semantics.
+
 ## Scope (this PR)
 
 Ownership lane: eom/billing-payments-recurring-dedup-recovery
@@ -51,7 +71,8 @@ Max files: 6
 
 1. Add migration 387, marked `-- atlas: atomic-bookkeeping`, that converges
    the exact observed initial-385 state and is a data no-op on a clean final
-   #2448 schema.
+   #2448 schema, including when later lifecycle events have voided a peer of a
+   final-385 quarantined collision.
 2. Add real-PostgreSQL proof for normal, partial, ambiguous, invalid-format,
    retry, and current-schema recovery states; keep it isolated in a disposable
    test schema.
@@ -106,7 +127,9 @@ Max files: 6
     does not change and no duplicate migration row, reservation, invoice,
     PDF, draft, email, payment, or ledger mutation is created.
   - A clean final-385 schema accepts 387 as a schema/data no-op apart from its
-    own ledger record; it does not downgrade constraints or alter rows.
+    own ledger record; it does not downgrade constraints or alter rows. This
+    remains true after a later void makes one historical collision peer absent
+    from the current active-row set.
   - The new migration path is included in both invoicing workflow trigger
     lists, so a future recovery edit cannot bypass the provider proof.
   - A reused index with the same keys and words but `status = 'void'` fails
@@ -209,9 +232,13 @@ period cannot satisfy the final grammar.
 
 Before its first `invoices` update, it compares the complete normalized partial
 index predicate and both CHECK expressions with the #2448 readiness contract
-rather than accepting word fragments, then materializes the candidate rows.
-It detects migration 377's enabled Gmail-replacement trigger from that same
-candidate set and mirrors the exact predicates of every subsequent `invoices`
+rather than accepting word fragments. It then detects the final-385 historical
+catalog from its legacy marker and reservation table. A final catalog takes the
+ledger-only path: it does not rebuild candidates from mutable lifecycle state,
+does not invoke the Gmail mutation preflight, and does not change invoices or
+reservations. Otherwise it materializes the observed initial-catalog candidates
+and detects migration 377's enabled Gmail-replacement trigger from that same
+candidate set, mirroring the exact predicates of every subsequent `invoices`
 update. A pending replacement blocks only an invoice row 387 would change; a
 correctly marked collision/unparseable final-385 exception is a data no-op and
 allows 387 to record its ledger row. The trigger guard still runs before the
@@ -231,7 +258,9 @@ inventing an invoice.
 The migration does not recreate the index: the exact observed state already
 has the correct valid index, and #2448's readiness guard remains the safe stop
 for any unobserved index corruption. A clean final-385 schema meets every
-catalog condition, so 387 only adds its own migration ledger entry there.
+catalog condition, so 387 only adds its own migration ledger entry there. Its
+historical backfill classification stays frozen even if an ordinary later void
+changes which rows are currently active.
 
 ### Retained-runtime rollback and forward recovery
 
@@ -302,9 +331,10 @@ Parked hardening: H-18 phase 2 and unobserved index repair, tracked above.
 ## Verification
 
 - Added a real-PostgreSQL regression to the existing final-385 no-op proof:
-  it installs migration 377's actual pending-replacement trigger and attaches
-  pending replacements to both correctly marked collision and unparseable
-  exceptions. The expected result is a successful 387 ledger record with equal
+  after final 385 quarantines a collision pair, it voids one peer, installs
+  migration 377's actual pending-replacement trigger, and attaches pending
+  replacements to the surviving collision and an unparseable exception. The
+  expected result is a successful 387 ledger record with equal
   invoice/reservation/catalog snapshots and unchanged pending-draft state.
 - The existing real-PostgreSQL blocking fixture remains the complementary
   assertion: a pending replacement on a row 387 will mutate still fails before
@@ -325,9 +355,9 @@ Parked hardening: H-18 phase 2 and unobserved index repair, tracked above.
 | File | LOC |
 |---|---:|
 | `.github/workflows/atlas_invoicing_checks.yml` | 2 |
-| `atlas_brain/storage/migrations/387_eom_recurring_invoice_dedup_recovery.sql` | 423 |
+| `atlas_brain/storage/migrations/387_eom_recurring_invoice_dedup_recovery.sql` | 464 |
 | `atlas_brain/storage/repositories/invoice.py` | 53 |
-| `plans/PR-EOM-Recurring-Invoice-Dedup-Recovery.md` | 333 |
+| `plans/PR-EOM-Recurring-Invoice-Dedup-Recovery.md` | 363 |
 | `tests/test_commercial_billing_approvals.py` | 13 |
-| `tests/test_invoice_repository.py` | 1224 |
-| **Total** | **2048** |
+| `tests/test_invoice_repository.py` | 1235 |
+| **Total** | **2130** |

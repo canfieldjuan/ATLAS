@@ -1750,7 +1750,7 @@ async def test_real_postgres_387_rollback_fence_allows_retained_old_writer():
 
 @pytest.mark.asyncio
 async def test_real_postgres_387_is_data_noop_for_final_385_catalog():
-    """A final catalog records 387 despite no-op pending Gmail replacements."""
+    """A final catalog freezes quarantine after a later collision-peer void."""
     asyncpg = pytest.importorskip("asyncpg")
     database_url = os.environ.get("ATLAS_RECEIVABLES_TEST_DATABASE_URL")
     if not database_url:
@@ -1816,11 +1816,22 @@ async def test_real_postgres_387_is_data_noop_for_final_385_catalog():
         await _run_migration(conn, schema, "385_invoices_billing_period_dedup.sql")
         assert await invoice_repo_mod.recurring_invoice_dedup_schema_ready(conn) is True
 
+        # This later lifecycle event must not reopen final-385's historical
+        # collision decision. Without the ledger-only final-catalog path, the
+        # active survivor becomes a fresh unique candidate for 387 to backfill.
+        await conn.execute(
+            "UPDATE invoices SET status = 'void' WHERE id = $1",
+            collision_second_id,
+        )
+        assert await conn.fetchval(
+            "SELECT status FROM invoices WHERE id = $1", collision_second_id
+        ) == "void"
+
         invoices_before = [
             dict(row)
             for row in await conn.fetch(
                 """
-                SELECT invoice_number, billing_period, billing_period_legacy_null, metadata
+                SELECT invoice_number, status, billing_period, billing_period_legacy_null, metadata
                 FROM invoices
                 ORDER BY invoice_number
                 """
@@ -1947,7 +1958,7 @@ async def test_real_postgres_387_is_data_noop_for_final_385_catalog():
             dict(row)
             for row in await conn.fetch(
                 """
-                SELECT invoice_number, billing_period, billing_period_legacy_null, metadata
+                SELECT invoice_number, status, billing_period, billing_period_legacy_null, metadata
                 FROM invoices
                 ORDER BY invoice_number
                 """
