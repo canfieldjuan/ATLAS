@@ -451,13 +451,14 @@ ATLAS_MOBILE_NON_SDK_DEPS: frozenset[str] = frozenset()
 def _dependabot_update_blocks(config_text: str) -> list[dict[str, object]]:
     """Parse dependabot.yml text into per-entry blocks (no PyYAML dependency).
 
-    Returns a list of {"ecosystem": str, "directories": set[str], "ignore": set[str]}
-    where "ignore" holds the dependency-name values under that entry's ignore block.
+    Returns one record per entry. ``allow``/``ignore`` hold dependency names;
+    their companion maps hold each dependency's configured update types.
     """
     blocks: list[dict[str, object]] = []
     current: dict[str, object] | None = None
     section: str | None = None
-    section_headers = {"directories:": "directories", "ignore:": "ignore"}
+    current_dependency: str | None = None
+    section_headers = {"directories:": "directories", "allow:": "allow", "ignore:": "ignore"}
     reset_headers = {"schedule:", "labels:", "groups:", "open-pull-requests-limit:"}
     for raw_line in config_text.splitlines():
         stripped = raw_line.strip()
@@ -469,14 +470,19 @@ def _dependabot_update_blocks(config_text: str) -> list[dict[str, object]]:
             current = {
                 "ecosystem": stripped.split(":", 1)[1].strip().strip('"'),
                 "directories": set(),
+                "allow": set(),
+                "allow_update_types": {},
                 "ignore": set(),
+                "ignore_update_types": {},
             }
             section = None
+            current_dependency = None
             continue
         if current is None:
             continue
         if stripped in section_headers:
             section = section_headers[stripped]
+            current_dependency = None
             continue
         # Dependabot also accepts the singular scalar form `directory: "/path"`.
         # Treat it as a one-element directory set so the root-exclusion guard cannot
@@ -486,15 +492,26 @@ def _dependabot_update_blocks(config_text: str) -> list[dict[str, object]]:
                 stripped.split(":", 1)[1].strip().strip('"')
             )
             section = None
+            current_dependency = None
             continue
         if stripped in reset_headers:
             section = None
+            current_dependency = None
             continue
         if section == "directories" and stripped.startswith("- "):
             current["directories"].add(stripped[2:].strip().strip('"'))  # type: ignore[union-attr]
             continue
-        if section == "ignore" and stripped.startswith("- dependency-name:"):
-            current["ignore"].add(stripped.split(":", 1)[1].strip().strip('"'))  # type: ignore[union-attr]
+        if section in {"allow", "ignore"} and stripped.startswith("- dependency-name:"):
+            current_dependency = stripped.split(":", 1)[1].strip().strip('"')
+            current[section].add(current_dependency)  # type: ignore[union-attr]
+            current[f"{section}_update_types"][current_dependency] = set()  # type: ignore[index]
+            continue
+        if section in {"allow", "ignore"} and current_dependency is not None:
+            update_types = set(
+                re.findall(r"version-update:semver-(?:major|minor|patch)", stripped)
+            )
+            if update_types:
+                current[f"{section}_update_types"][current_dependency].update(update_types)  # type: ignore[index,union-attr]
             continue
     if current is not None:
         blocks.append(current)
@@ -518,6 +535,21 @@ class DependabotFrozenSubsystemPolicyTest(unittest.TestCase):
 
     def _npm_blocks(self) -> list[dict[str, object]]:
         return [b for b in self.blocks if b["ecosystem"] == "npm"]
+
+    def _pip_blocks(self) -> list[dict[str, object]]:
+        return [b for b in self.blocks if b["ecosystem"] == "pip"]
+
+    def _web_npm_block(self) -> dict[str, object]:
+        web_directories = {
+            "/atlas-admin-ui",
+            "/atlas-churn-ui",
+            "/atlas-intel-ui",
+            "/atlas-ui",
+            "/portfolio-ui",
+        }
+        web = [b for b in self._npm_blocks() if b["directories"] == web_directories]
+        self.assertEqual(len(web), 1, "expected one npm entry owning all web UIs")
+        return web[0]
 
     def _atlas_mobile_block(self) -> dict[str, object]:
         mobile = [
@@ -582,7 +614,7 @@ class DependabotFrozenSubsystemPolicyTest(unittest.TestCase):
         )
 
     def test_root_excluded_from_pip_updates(self) -> None:
-        pip = [b for b in self.blocks if b["ecosystem"] == "pip"]
+        pip = self._pip_blocks()
         self.assertTrue(pip, "expected a pip update entry")
         for block in pip:
             self.assertNotIn(
@@ -592,6 +624,19 @@ class DependabotFrozenSubsystemPolicyTest(unittest.TestCase):
                 "requirements.txt is bound to the generated constraints.root-asr.txt "
                 "(sha256 pin) that Dependabot cannot recompile",
             )
+
+    def test_routine_version_policy_requires_deliberate_major_migrations(self) -> None:
+        routine = {
+            "version-update:semver-minor",
+            "version-update:semver-patch",
+        }
+        web_allows = self._web_npm_block()["allow_update_types"]
+        pip = self._pip_blocks()
+        self.assertEqual(len(pip), 1, "expected one pip update entry")
+        pip_allows = pip[0]["allow_update_types"]
+
+        self.assertEqual(web_allows, {"*": routine})
+        self.assertEqual(pip_allows, {"*": routine})
 
 
 if __name__ == "__main__":
