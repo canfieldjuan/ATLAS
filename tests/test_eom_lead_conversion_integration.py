@@ -8879,6 +8879,43 @@ async def test_operator_contact_mutation_clear_vs_omit_vs_change_tri_state():
         assert change_metadata["changed_fields"] == ["phone"]
         assert change_metadata["cleared_fields"] == []
         assert change_metadata["previous_values"] == {"phone": "2175550181"}
+
+        # Sibling-path proof (both advertised fields, not just email): phone
+        # rides its own normalizer and column, so its clear is proven through
+        # the same DB + audit shape rather than inferred from email's.
+        phone_clear_key = f"clear-phone-{uuid.uuid4().hex}"
+        phone_cleared = await mutate_eom_operator_contact(
+            provider,
+            EOMOperatorContactMutation.from_raw(
+                operation_key=phone_clear_key,
+                actor_id=7,
+                actor_name="Mayra Canfield",
+                source_channel="time_tracker",
+                source_ref="portal-contact:clear-phone",
+                contact_type="customer",
+                contact_id=contact_id,
+                fields={"phone": None},
+            ),
+        )
+        assert phone_cleared["operation"] == "contact_updated"
+        assert phone_cleared["contact"]["phone"] is None
+        phone_row = await conn.fetchrow(
+            "SELECT email, phone FROM contacts WHERE id = $1",
+            uuid.UUID(contact_id),
+        )
+        assert phone_row["phone"] is None
+        assert phone_row["email"] is None, "the earlier email clear must persist"
+        phone_event = await conn.fetchrow(
+            """
+            SELECT metadata FROM eom_lead_lifecycle_events
+            WHERE operation_key = $1 AND event_type = 'contact_updated'
+            """,
+            phone_clear_key,
+        )
+        phone_metadata = _metadata_dict(phone_event["metadata"])
+        assert phone_metadata["changed_fields"] == ["phone"]
+        assert phone_metadata["cleared_fields"] == ["phone"]
+        assert phone_metadata["previous_values"] == {"phone": "2175550182"}
     finally:
         await conn.execute(f'DROP SCHEMA IF EXISTS "{schema}" CASCADE')
         await conn.close()

@@ -93,9 +93,11 @@ Max files: 6
   - [ ] `contact.field_clear` maps to `("POST", "/eom-funnel/operator-contacts")`
         and is advertised iff `contact.operator_mutation` is -- settled by
         `tests/test_eom_funnel_capability_manifest.py::test_field_clear_capability_versions_the_operator_mutation_semantics`.
-  - [ ] A request carrying `"email": null` reaches the command with
-        `fields["email"] is None` while an absent `phone` key never appears --
-        settled by `tests/test_eom_lead_conversion.py::test_operator_contact_route_keeps_present_null_distinct_from_absent`.
+  - [ ] A request carrying a present-null optional field reaches the command
+        with `fields[<field>] is None` while an absent sibling key never
+        appears -- proven for BOTH advertised fields (email-cleared/phone-absent
+        and phone-cleared/email-absent) by
+        `tests/test_eom_lead_conversion.py::test_operator_contact_route_keeps_present_null_distinct_from_absent`.
   - [ ] A clear persists as SQL NULL, the mutation result echoes the null, an
         omitted sibling field is preserved, and the event carries
         `changed_fields == ["email"]`, `cleared_fields == ["email"]`,
@@ -104,6 +106,10 @@ Max files: 6
   - [ ] A re-point (value -> new value) lists the field in `changed_fields`
         with `cleared_fields == []` -- settled by the same test's CHANGED
         control.
+  - [ ] The phone sibling clears end-to-end through its own normalizer and
+        column: row NULL, result echo null, `changed_fields == ["phone"]`,
+        `cleared_fields == ["phone"]`, `previous_values == {"phone": <old>}`
+        -- settled by the phone-clear leg of the same tri-state test.
   - [ ] A retried clear with the same Idempotency-Key replays (one lifecycle
         row), and the same key with the null dropped (omit) conflicts 409 --
         settled by `tests/test_eom_lead_conversion_integration.py::test_operator_contact_clear_replay_is_idempotent_and_omit_conflicts`.
@@ -251,8 +257,8 @@ Parked hardening: none.
 |---|---:|
 | `atlas_brain/eom_api/funnel.py` | 8 |
 | `atlas_brain/services/crm_provider.py` | 10 |
-| `plans/PR-EOM-Contact-Field-Clear-Contract.md` | 258 |
+| `plans/PR-EOM-Contact-Field-Clear-Contract.md` | 264 |
 | `tests/test_eom_funnel_capability_manifest.py` | 25 |
-| `tests/test_eom_lead_conversion.py` | 31 |
-| `tests/test_eom_lead_conversion_integration.py` | 278 |
-| **Total** | **610** |
+| `tests/test_eom_lead_conversion.py` | 32 |
+| `tests/test_eom_lead_conversion_integration.py` | 315 |
+| **Total** | **654** |

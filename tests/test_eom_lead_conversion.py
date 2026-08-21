@@ -4479,22 +4479,23 @@ async def test_operator_contact_route_keeps_present_null_distinct_from_absent():
     into absent, a tracker-forwarded clear would silently become an omit and
     the operator's delete would report saved without saving.
     """
-    crm = _CRM()
-    app = _app(crm, _enabled_config())
-    payload = _operator_contact_payload(email=None)
-    del payload["phone"]
-    payload["contactId"] = str(uuid4())
-    async with httpx.AsyncClient(
-        transport=httpx.ASGITransport(app=app), base_url="http://test"
-    ) as client:
-        response = await client.post(
-            "/eom-funnel/operator-contacts",
-            headers=_headers(approval_key=f"office-clear-{uuid4().hex}"),
-            json=payload,
-        )
+    for cleared_field, absent_field in (("email", "phone"), ("phone", "email")):
+        crm = _CRM()
+        app = _app(crm, _enabled_config())
+        payload = _operator_contact_payload(**{cleared_field: None})
+        del payload[absent_field]
+        payload["contactId"] = str(uuid4())
+        async with httpx.AsyncClient(
+            transport=httpx.ASGITransport(app=app), base_url="http://test"
+        ) as client:
+            response = await client.post(
+                "/eom-funnel/operator-contacts",
+                headers=_headers(approval_key=f"office-clear-{uuid4().hex}"),
+                json=payload,
+            )
 
-    assert response.status_code in (200, 201), response.text
-    command = crm.operator_contact_calls[0]
-    assert "email" in command.fields, "present null must reach the command"
-    assert command.fields["email"] is None
-    assert "phone" not in command.fields, "absent key must stay absent"
+        assert response.status_code in (200, 201), response.text
+        command = crm.operator_contact_calls[0]
+        assert cleared_field in command.fields, "present null must reach the command"
+        assert command.fields[cleared_field] is None
+        assert absent_field not in command.fields, "absent key must stay absent"
