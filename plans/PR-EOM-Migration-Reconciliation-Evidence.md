@@ -18,6 +18,7 @@ This exceeds the 400-line soft budget because the static evidence, the one real 
 
 Ownership lane: eom/migration-content-integrity
 Slice phase: Production hardening
+Max files: 4
 
 1. Add one immutable, named reconciliation record for the documented migration-387 historical source gap, including the two exact digests, observed UTC application instant, retained-source cutoff, and the permanent `historical_source_unavailable` source-evidence state.
 2. Add `--attest-known-reconciliations` to the existing target-confirmed, read-only operator preflight. The opt-in result reports only whether exactly one named ledger row and the known record's ledger/package/time/catalog predicates are currently attested; it never changes report categories, relabels 387 as verified, or makes a mismatched run exit zero.
@@ -103,7 +104,7 @@ Parked hardening: none.
 | File | LOC |
 |---|---:|
 | `atlas_brain/storage/migrations/reconciliation.py` | 203 |
-| `plans/PR-EOM-Migration-Reconciliation-Evidence.md` | 109 |
+| `plans/PR-EOM-Migration-Reconciliation-Evidence.md` | 110 |
 | `scripts/check_migration_content_integrity.py` | 46 |
 | `tests/test_migration_content_integrity_preflight.py` | 344 |
-| **Total** | **702** |
+| **Total** | **703** |
