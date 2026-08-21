@@ -182,6 +182,37 @@ def _eom_identity_lock_key(channel: str, value: str) -> str:
     return f"eom-contact-identity:{channel}:{value}"
 
 
+# The only contact kinds the operator directory admits. A tenant row whose
+# contact_type is outside this set (e.g. legacy 'prospect' or 'vendor') is not
+# part of the lead/customer CRM surface and stays invisible to the directory.
+_EOM_DIRECTORY_CONTACT_KINDS = ("lead", "customer")
+# Punctuation an operator plausibly types or pastes as part of a phone number.
+# Any other character means the query is a name or email, and the digit
+# fallback must not run (an incidental digit run like the "2026" in
+# "client2026@example.com" must never reach the phone comparison).
+_EOM_DIRECTORY_PHONE_QUERY_CHARS = frozenset(" ()+.-")
+_EOM_DIRECTORY_MIN_PHONE_SEARCH_DIGITS = 4
+
+
+def _escape_eom_directory_like_pattern(value: str) -> str:
+    """Neutralize LIKE metacharacters so user text matches only literally."""
+    escaped = value.replace("\\", "\\\\")
+    escaped = escaped.replace("%", "\\%")
+    return escaped.replace("_", "\\_")
+
+
+def _eom_directory_phone_search_digits(value: str) -> Optional[str]:
+    """The digit run for the phone fallback, or None when not phone-shaped."""
+    if not value or not all(
+        char.isdigit() or char in _EOM_DIRECTORY_PHONE_QUERY_CHARS for char in value
+    ):
+        return None
+    digits = "".join(char for char in value if char.isdigit())
+    if len(digits) < _EOM_DIRECTORY_MIN_PHONE_SEARCH_DIGITS:
+        return None
+    return digits
+
+
 def _eom_won_lead_loss_execution_lock_key(contact_id: str) -> str:
     """Return the one contact fence spanning a won-lead Calendar teardown."""
 
@@ -2165,6 +2196,106 @@ class DatabaseCRMProvider:
               AND c.contact_type = 'lead'
               AND c.lead_stage IN ('new', 'estimate_booked', 'won')
               {cursor_clause}
+            ORDER BY c.created_at DESC, c.id DESC
+            LIMIT $1
+            """,
+            *params,
+        )
+        return [dict(row) for row in rows]
+
+    async def list_eom_contact_directory(
+        self,
+        *,
+        limit: int = 100,
+        kind: str = "all",
+        search: Optional[str] = None,
+        cursor_created_at: Optional[datetime] = None,
+        cursor_contact_id: Optional[UUID] = None,
+    ) -> list[dict[str, Any]]:
+        """Return the closed, tenant-scoped EOM contact-directory projection.
+
+        This is the discovery read the operator mutation boundary never had:
+        ``list_eom_new_lead_review_items`` admits only pipeline-stage leads, so
+        a ``customer`` contact created or matched through the operator boundary
+        is otherwise unreachable from any portal surface (website #240).
+
+        Admission is ``status = 'active'`` on the DB's own lifecycle axis.
+        Lost leads (``lead_stage = 'lost'`` with status still active) are
+        deliberately included and carry their stage: the pipeline hides them by
+        design, and the directory is exactly where a pipeline-hidden record
+        must remain findable. Archived rows are excluded in this slice.
+
+        Keyset pagination uses ``(created_at, id)`` descending -- immutable
+        columns only. ``full_name`` is operator-mutable, and a keyset built on
+        a mutable column can drop or duplicate rows mid-traversal (see the
+        ordering note on :meth:`list_billing_recipients`).
+
+        Reading this projection alters nothing.
+        """
+        from .eom_lead_ingress import EOM_BUSINESS_CONTEXT_ID
+
+        if kind not in ("all", *_EOM_DIRECTORY_CONTACT_KINDS):
+            raise ValueError("kind must be one of: all, lead, customer")
+
+        conditions = ["c.business_context_id = $2", "c.status = 'active'"]
+        params: list[Any] = [limit, EOM_BUSINESS_CONTEXT_ID]
+        if kind == "all":
+            params.append(list(_EOM_DIRECTORY_CONTACT_KINDS))
+            conditions.append(f"c.contact_type = ANY(${len(params)}::varchar[])")
+        else:
+            params.append(kind)
+            conditions.append(f"c.contact_type = ${len(params)}")
+
+        normalized_search = (search or "").strip()
+        if normalized_search:
+            params.append(f"%{_escape_eom_directory_like_pattern(normalized_search)}%")
+            like_index = len(params)
+            search_terms = [
+                f"c.full_name ILIKE ${like_index} ESCAPE '\\'",
+                f"c.email ILIKE ${like_index} ESCAPE '\\'",
+                f"c.phone ILIKE ${like_index} ESCAPE '\\'",
+            ]
+            phone_digits = _eom_directory_phone_search_digits(normalized_search)
+            if phone_digits is not None:
+                # A phone pasted from caller ID rarely keeps the stored row's
+                # formatting, so phone-shaped queries also match on a
+                # digits-only comparison -- the same semantics the portal's
+                # client-side lead search already ships (website #232/#233).
+                # The identity-matching digit SQL (extension-stripping +
+                # RIGHT-10 suffix) is deliberately not reused: identity needs
+                # exact-suffix semantics, search needs substring containment.
+                params.append(f"%{phone_digits}%")
+                search_terms.append(
+                    "REGEXP_REPLACE(COALESCE(c.phone, ''), '[^0-9]', '', 'g') "
+                    f"LIKE ${len(params)}"
+                )
+            conditions.append(f"({' OR '.join(search_terms)})")
+
+        if cursor_created_at is not None and cursor_contact_id is not None:
+            params.extend([cursor_created_at, cursor_contact_id])
+            conditions.append(
+                f"(c.created_at, c.id) < (${len(params) - 1}::timestamptz, "
+                f"${len(params)}::uuid)"
+            )
+
+        pool = self._get_pool()
+        rows = await pool.fetch(
+            f"""
+            SELECT
+                c.id AS contact_id,
+                c.full_name,
+                c.email,
+                c.phone,
+                c.address,
+                c.contact_type,
+                c.customer_type,
+                c.lead_stage,
+                c.status,
+                c.source,
+                c.created_at,
+                c.updated_at
+            FROM contacts AS c
+            WHERE {' AND '.join(conditions)}
             ORDER BY c.created_at DESC, c.id DESC
             LIMIT $1
             """,
