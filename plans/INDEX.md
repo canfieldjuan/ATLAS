@@ -1,6 +1,6 @@
 # Plan archive index
 
-1535 archived plan doc(s). Merged plan docs are moved under `archive/` and listed below; once the archive sweep has run, the `plans/` root holds only in-flight slices.
+1536 archived plan doc(s). Merged plan docs are moved under `archive/` and listed below; once the archive sweep has run, the `plans/` root holds only in-flight slices.
 
 - [PR-ASR-Pip-Audit-Egg-Fragment](archive/PR-ASR-Pip-Audit-Egg-Fragment.md) - lane: security/workflow | phase: Production hardening
 - [PR-ASR-Requirements-Audit-Pin](archive/PR-ASR-Requirements-Audit-Pin.md) - lane: security/workflow | phase: Production hardening
@@ -1027,6 +1027,7 @@
 - [PR-EOM-Mailbox-Context-Binding](archive/PR-EOM-Mailbox-Context-Binding.md) - lane: eom-crm/email-tenancy | phase: Production hardening
 - [PR-EOM-Migration-Content-Integrity](archive/PR-EOM-Migration-Content-Integrity.md) - lane: eom/billing-payments-security-hardening | phase: Production hardening
 - [PR-EOM-Migration-Content-Preflight](archive/PR-EOM-Migration-Content-Preflight.md) - lane: eom/migration-content-integrity | phase: Production hardening
+- [PR-EOM-Migration-Reconciliation-Evidence](archive/PR-EOM-Migration-Reconciliation-Evidence.md) - lane: eom/migration-content-integrity | phase: Production hardening
 - [PR-EOM-Office-Conversion-Handoff](archive/PR-EOM-Office-Conversion-Handoff.md) - lane: eom-crm/lead-funnel | phase: Vertical slice
 - [PR-EOM-Office-Lead-Review](archive/PR-EOM-Office-Lead-Review.md) - lane: eom-crm/lead-funnel | phase: Vertical slice
 - [PR-EOM-Onboarding-Draft-Approval](archive/PR-EOM-Onboarding-Draft-Approval.md) - lane: eom-lead-funnel-onboarding-approval | phase: vertical slice
