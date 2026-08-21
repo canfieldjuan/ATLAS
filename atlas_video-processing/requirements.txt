@@ -19,7 +19,7 @@ opencv-python-headless>=5.0.0.93
 numpy>=1.24.0
 
 # Discovery
-zeroconf>=0.80.0
+zeroconf>=0.150.0
 
 # MQTT for event publishing
 aiomqtt>=2.0.0
