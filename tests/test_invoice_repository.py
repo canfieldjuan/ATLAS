@@ -110,6 +110,37 @@ async def _install_recorded_initial_385_catalog(conn) -> None:
     )
 
 
+async def _install_pending_gmail_replacement_trigger(conn) -> None:
+    """Install migration 377's exact mutation trigger on a minimal real catalog."""
+    await conn.execute(
+        """
+        CREATE TABLE commercial_billing_candidate_approvals (
+            id UUID PRIMARY KEY,
+            invoice_id UUID NOT NULL
+        );
+        CREATE TABLE commercial_billing_invoice_gmail_drafts (
+            id UUID PRIMARY KEY,
+            approval_id UUID NOT NULL,
+            state VARCHAR(32) NOT NULL,
+            draft_generation INTEGER NOT NULL
+        );
+        CREATE TABLE commercial_billing_invoice_gmail_draft_replacement_events (
+            id UUID PRIMARY KEY,
+            gmail_draft_record_id UUID NOT NULL,
+            replacement_generation INTEGER NOT NULL
+        );
+        """
+    )
+    trigger_start = (
+        "CREATE OR REPLACE FUNCTION "
+        "commercial_billing_reject_invoice_mutation_while_gmail_replacement_pending()"
+    )
+    migration = _migration_sql("377_commercial_billing_gmail_draft_replacements.sql")
+    _, separator, trigger_sql = migration.partition(trigger_start)
+    assert separator
+    await conn.execute(trigger_start + trigger_sql)
+
+
 class _CaptureCreatePool:
     is_initialized = True
 
@@ -1268,6 +1299,254 @@ async def test_real_postgres_recorded_initial_385_recovery_is_atomic_on_bad_peri
         assert await conn.fetchval(
             "SELECT billing_period FROM invoices WHERE invoice_number = 'INV-0000-Jan-atomic'"
         ) == "0000-01"
+    finally:
+        await conn.execute("SET search_path TO public")
+        await conn.execute(f'DROP SCHEMA IF EXISTS "{schema}" CASCADE')
+        await conn.close()
+
+
+@pytest.mark.asyncio
+async def test_real_postgres_387_rejects_wrong_recurring_index_predicate_atomically():
+    """A token-similar predicate must not strand a recorded recovery."""
+    asyncpg = pytest.importorskip("asyncpg")
+    database_url = os.environ.get("ATLAS_RECEIVABLES_TEST_DATABASE_URL")
+    if not database_url:
+        pytest.skip("ATLAS_RECEIVABLES_TEST_DATABASE_URL not set")
+
+    schema = f"invoice_repository_387_wrong_index_{uuid4().hex}"
+    conn = await asyncpg.connect(database_url)
+    try:
+        await conn.execute(f'CREATE SCHEMA "{schema}"')
+        await conn.execute(f'SET search_path TO "{schema}"')
+        await conn.execute("CREATE TABLE contacts (id uuid PRIMARY KEY)")
+        await conn.execute(_migration_sql("045_invoices.sql"))
+        await _install_recorded_initial_385_catalog(conn)
+        await conn.execute(
+            """
+            DROP INDEX idx_invoices_recurring_contact_period_source;
+            CREATE UNIQUE INDEX idx_invoices_recurring_contact_period_source
+                ON invoices (contact_id, billing_period)
+                WHERE billing_period IS NOT NULL
+                  AND status = 'void'
+                  AND source IN ('monthly_auto', 'eom_commercial_billing');
+            """
+        )
+
+        with pytest.raises(
+            asyncpg.PostgresError,
+            match="recurring billing_period index is missing, invalid, or has an unexpected definition",
+        ):
+            await _run_migration(
+                conn, schema, "387_eom_recurring_invoice_dedup_recovery.sql"
+            )
+
+        assert await conn.fetchval(
+            """
+            SELECT NOT EXISTS (
+                SELECT 1
+                FROM information_schema.columns
+                WHERE table_schema = current_schema()
+                  AND table_name = 'invoices'
+                  AND column_name = 'billing_period_legacy_null'
+            )
+            """
+        ) is True
+        assert await conn.fetchval(
+            "SELECT to_regclass('invoices_billing_period_reservations') IS NULL"
+        ) is True
+        assert await conn.fetchval(
+            "SELECT NOT EXISTS (SELECT 1 FROM schema_migrations WHERE name = $1)",
+            "387_eom_recurring_invoice_dedup_recovery",
+        ) is True
+    finally:
+        await conn.execute("SET search_path TO public")
+        await conn.execute(f'DROP SCHEMA IF EXISTS "{schema}" CASCADE')
+        await conn.close()
+
+
+@pytest.mark.asyncio
+async def test_real_postgres_387_preflights_pending_gmail_replacement_before_updates():
+    """The migration waits for migration 377's exact pending-replacement trigger."""
+    asyncpg = pytest.importorskip("asyncpg")
+    database_url = os.environ.get("ATLAS_RECEIVABLES_TEST_DATABASE_URL")
+    if not database_url:
+        pytest.skip("ATLAS_RECEIVABLES_TEST_DATABASE_URL not set")
+
+    schema = f"invoice_repository_387_pending_replacement_{uuid4().hex}"
+    conn = await asyncpg.connect(database_url)
+    try:
+        await conn.execute(f'CREATE SCHEMA "{schema}"')
+        await conn.execute(f'SET search_path TO "{schema}"')
+        await conn.execute("CREATE TABLE contacts (id uuid PRIMARY KEY)")
+        await conn.execute(_migration_sql("045_invoices.sql"))
+        await _install_recorded_initial_385_catalog(conn)
+        contact_id, invoice_id, approval_id, draft_id = [uuid4() for _ in range(4)]
+        await conn.execute("INSERT INTO contacts (id) VALUES ($1)", contact_id)
+        await conn.execute(
+            """
+            INSERT INTO invoices (
+                id, invoice_number, contact_id, customer_name, due_date,
+                status, source
+            ) VALUES (
+                $1, 'INV-2026-Aug-0001', $2, 'Pending Replacement Co', CURRENT_DATE,
+                'draft', 'eom_commercial_billing'
+            )
+            """,
+            invoice_id,
+            contact_id,
+        )
+        await _install_pending_gmail_replacement_trigger(conn)
+        await conn.execute(
+            """
+            INSERT INTO commercial_billing_candidate_approvals (id, invoice_id)
+            VALUES ($1, $2)
+            """,
+            approval_id,
+            invoice_id,
+        )
+        await conn.execute(
+            """
+            INSERT INTO commercial_billing_invoice_gmail_drafts (
+                id, approval_id, state, draft_generation
+            ) VALUES ($1, $2, 'creating', 2)
+            """,
+            draft_id,
+            approval_id,
+        )
+        await conn.execute(
+            """
+            INSERT INTO commercial_billing_invoice_gmail_draft_replacement_events (
+                id, gmail_draft_record_id, replacement_generation
+            ) VALUES ($1, $2, 2)
+            """,
+            uuid4(),
+            draft_id,
+        )
+
+        with pytest.raises(
+            asyncpg.CheckViolationError,
+            match="Commercial billing invoice mutation is blocked",
+        ):
+            await conn.execute(
+                "UPDATE invoices SET customer_name = customer_name WHERE id = $1",
+                invoice_id,
+            )
+        with pytest.raises(
+            asyncpg.PostgresError,
+            match="pending Gmail draft replacement blocks a recurring legacy invoice update",
+        ):
+            await _run_migration(
+                conn, schema, "387_eom_recurring_invoice_dedup_recovery.sql"
+            )
+
+        assert await conn.fetchval(
+            """
+            SELECT NOT EXISTS (
+                SELECT 1
+                FROM information_schema.columns
+                WHERE table_schema = current_schema()
+                  AND table_name = 'invoices'
+                  AND column_name = 'billing_period_legacy_null'
+            )
+            """
+        ) is True
+        assert await conn.fetchval(
+            "SELECT to_regclass('invoices_billing_period_reservations') IS NULL"
+        ) is True
+        assert await conn.fetchval(
+            "SELECT NOT EXISTS (SELECT 1 FROM schema_migrations WHERE name = $1)",
+            "387_eom_recurring_invoice_dedup_recovery",
+        ) is True
+        assert await conn.fetchval(
+            "SELECT billing_period FROM invoices WHERE id = $1", invoice_id
+        ) is None
+
+        await conn.execute(
+            "UPDATE commercial_billing_invoice_gmail_drafts SET state = 'draft_created' WHERE id = $1",
+            draft_id,
+        )
+        await _run_migration(
+            conn, schema, "387_eom_recurring_invoice_dedup_recovery.sql"
+        )
+        assert await invoice_repo_mod.recurring_invoice_dedup_schema_ready(conn) is True
+        recovered = await conn.fetchrow(
+            "SELECT billing_period, billing_period_legacy_null FROM invoices WHERE id = $1",
+            invoice_id,
+        )
+        assert dict(recovered) == {
+            "billing_period": "2026-08",
+            "billing_period_legacy_null": False,
+        }
+    finally:
+        await conn.execute("SET search_path TO public")
+        await conn.execute(f'DROP SCHEMA IF EXISTS "{schema}" CASCADE')
+        await conn.close()
+
+
+@pytest.mark.asyncio
+async def test_real_postgres_387_rollback_fence_allows_retained_old_writer():
+    """The documented constraint removal makes the retained pre-2448 writer usable."""
+    asyncpg = pytest.importorskip("asyncpg")
+    database_url = os.environ.get("ATLAS_RECEIVABLES_TEST_DATABASE_URL")
+    if not database_url:
+        pytest.skip("ATLAS_RECEIVABLES_TEST_DATABASE_URL not set")
+
+    schema = f"invoice_repository_387_rollback_{uuid4().hex}"
+    conn = await asyncpg.connect(database_url)
+    try:
+        await conn.execute(f'CREATE SCHEMA "{schema}"')
+        await conn.execute(f'SET search_path TO "{schema}"')
+        await conn.execute("CREATE TABLE contacts (id uuid PRIMARY KEY)")
+        await conn.execute(_migration_sql("045_invoices.sql"))
+        await _install_recorded_initial_385_catalog(conn)
+        contact_id = uuid4()
+        await conn.execute("INSERT INTO contacts (id) VALUES ($1)", contact_id)
+        await _run_migration(
+            conn, schema, "387_eom_recurring_invoice_dedup_recovery.sql"
+        )
+        assert await invoice_repo_mod.recurring_invoice_dedup_schema_ready(conn) is True
+
+        legacy_insert = """
+            INSERT INTO invoices (
+                id, invoice_number, contact_id, customer_name, due_date,
+                status, source, source_ref
+            ) VALUES (
+                $1, $2, $3, 'Retained Writer Co', CURRENT_DATE,
+                'draft', 'monthly_auto', 'retained_2026-09'
+            )
+        """
+        with pytest.raises(asyncpg.CheckViolationError):
+            await conn.execute(legacy_insert, uuid4(), "INV-2026-Sep-before", contact_id)
+
+        await conn.execute(
+            """
+            ALTER TABLE invoices DROP CONSTRAINT IF EXISTS
+                invoices_recurring_billing_period_required_check
+            """
+        )
+        legacy_invoice_id = uuid4()
+        await conn.execute(
+            legacy_insert,
+            legacy_invoice_id,
+            "INV-2026-Sep-after",
+            contact_id,
+        )
+        inserted = await conn.fetchrow(
+            """
+            SELECT billing_period, billing_period_legacy_null
+            FROM invoices
+            WHERE id = $1
+            """,
+            legacy_invoice_id,
+        )
+        assert dict(inserted) == {
+            "billing_period": None,
+            "billing_period_legacy_null": False,
+        }
+        assert await conn.fetchval(
+            "SELECT EXISTS (SELECT 1 FROM schema_migrations WHERE name = $1)",
+            "387_eom_recurring_invoice_dedup_recovery",
+        ) is True
     finally:
         await conn.execute("SET search_path TO public")
         await conn.execute(f'DROP SCHEMA IF EXISTS "{schema}" CASCADE')

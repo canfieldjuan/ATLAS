@@ -33,8 +33,10 @@ repair without repeatable evidence for the state it is authorized to mutate.
   does not have.
 - Correct fix must touch/change: add a new atomic recovery migration, prove it
   against a real PostgreSQL reconstruction of the recorded initial catalog,
-  and enroll the new migration in the existing invoicing workflow trigger
-  paths.
+  reject a token-similar but semantically wrong reused index, preflight the
+  already-deployed Gmail-replacement mutation trigger, document the retained
+  runtime rollback fence, and enroll the new migration in the existing
+  invoicing workflow trigger paths.
 - Must not change: the contents or ledger identity of migration 385; invoice,
   payment, allocation, receipt, delivery, Gmail, or customer data semantics;
   existing recurring-writer query contracts; tracker and Website consumers;
@@ -58,6 +60,14 @@ Max files: 4
    remains fail-closed rather than widening this recovery into index-rebuild
    machinery. The observed index is valid, ready, unique, and has the required
    predicate, so migration 387 reuses it.
+5. Fail atomically before any legacy-row update when migration 377's enabled
+   Gmail-replacement trigger has a pending replacement for one of those rows;
+   completing/reconciling that durable delivery operation is the explicit
+   prerequisite for retrying 387.
+6. Document and prove the only safe retained-#2441 rollback boundary: remove
+   the fresh-write admission check before resuming old recurring writers, and
+   require a separate forward recovery if that rollback creates any NULL-period
+   recurring invoices.
 
 ### Review Contract
 
@@ -89,6 +99,17 @@ Max files: 4
     own ledger record; it does not downgrade constraints or alter rows.
   - The new migration path is included in both invoicing workflow trigger
     lists, so a future recovery edit cannot bypass the provider proof.
+  - A reused index with the same keys and words but `status = 'void'` fails
+    before 387 changes the catalog or records its ledger row; the full
+    canonical predicate is the admission boundary.
+  - A pending migration-377 Gmail draft replacement on an active legacy
+    recurring invoice fails before the first `invoices` update, records no 387
+    row, and succeeds on retry only after the replacement is resolved.
+  - The documented, explicitly authorized removal of
+    `invoices_recurring_billing_period_required_check` allows a retained #2441
+    recurring insert that omits `billing_period`; merely re-adding the check
+    after such a rollback is forbidden until an evidence-backed forward
+    recovery handles every row created by the retained writer.
 - Reachability proof: `atlas_brain/main.py` runs generic migrations before it
   invokes `recurring_invoice_dedup_schema_ready` for enabled receivables or
   auto-invoice writers. The real-PostgreSQL test calls the same migration
@@ -160,6 +181,13 @@ nonzero-year contract required by #2448, and installs the required-write
 check. Before changing the check it fails atomically if a non-null stored
 period cannot satisfy the final grammar.
 
+Before any catalog/data mutation, it compares the complete normalized partial
+index predicate with the #2448 readiness contract rather than accepting word
+fragments. It also detects migration 377's enabled Gmail-replacement trigger;
+if that exact trigger would reject an update to a legacy recurring row with a
+pending replacement, 387 fails before its first `invoices` update and can be
+retried after the delivery operation is complete or explicitly reconciled.
+
 It derives a candidate period only from the existing writer-owned formats:
 `monthly_auto.source_ref` ending in `_YYYY-MM`, and
 `eom_commercial_billing.invoice_number` in `INV-YYYY-Mon-sequence` form. It
@@ -174,6 +202,29 @@ The migration does not recreate the index: the exact observed state already
 has the correct valid index, and #2448's readiness guard remains the safe stop
 for any unobserved index corruption. A clean final-385 schema meets every
 catalog condition, so 387 only adds its own migration ledger entry there.
+
+### Retained-runtime rollback and forward recovery
+
+This is a contingency procedure, not a test-time or ordinary deployment step.
+If the provider must return from the #2448 runtime to retained #2441 before a
+new forward repair is available, stop the recurring writer and execute the
+explicitly authorized schema change:
+
+```sql
+ALTER TABLE invoices DROP CONSTRAINT IF EXISTS
+    invoices_recurring_billing_period_required_check;
+```
+
+Only then deploy #2441; its recurring writers omit `billing_period`, so the
+admission fence would otherwise reject their inserts. Keep the partial index,
+legacy marker column, reservations, and historical data in place. Before
+returning to #2448, query active recurring rows created while the old writer
+was active. If any has `billing_period IS NULL` and
+`billing_period_legacy_null = false`, do **not** merely re-add the check or
+rerun 387: 387 is already recorded. Preserve the evidence and use the tracked
+forward-recovery path in H-25. If no such row exists, the same admission-check
+definition in migration 387 may be restored through the normal authorized
+database-change procedure, followed by readiness verification.
 
 ## Intentional
 
@@ -190,6 +241,10 @@ catalog condition, so 387 only adds its own migration ledger entry there.
 - Deployment remains provider-first: merge and deploy this ATLAS repair before
   moving the #2448 runtime forward, then verify health and readiness before
   resuming tracker or Website work.
+- Do not treat a binary-only rollback as sufficient after 387. The documented
+  constraint removal is required before retained #2441 recurring writers can
+  resume, and any new NULL-period rows make re-forward a distinct recovery
+  event rather than a routine deploy toggle.
 
 ## Deferred
 
@@ -202,6 +257,10 @@ catalog condition, so 387 only adds its own migration ledger entry there.
 - Durable commercial billing recipient override #2433 remains product work
   gated on repeated `source_correction_pending` evidence, not a consequence of
   this catalog recovery.
+- H-25 tracks forward reconciliation if an emergency retained-#2441 rollback
+  creates new NULL-period recurring invoices. It is not part of the ordinary
+  387 deployment path and must begin from the affected row evidence rather
+  than assume a generic repair is safe.
 
 Parking predicate: any change to invoice/product delivery, customer-facing
 copy, recipient selection, tracker proxy, Website UI, migration framework, or
@@ -218,7 +277,13 @@ Parked hardening: H-18 phase 2 and unobserved index repair, tracked above.
   Docker PostgreSQL 16 database; no production database, customer, PDF, Gmail,
   or email surface was used.
 - `ATLAS_RECEIVABLES_TEST_DATABASE_URL=postgresql://…:55487/… python -m
-  pytest tests/test_invoice_repository.py -q` -- 12 passed.
+  pytest tests/test_invoice_repository.py -q` -- 15 passed.
+- Real PostgreSQL recovery tests prove that a token-similar `status = 'void'`
+  index fails without a 387 ledger/catalog change, migration 377's actual
+  pending-replacement trigger stops recovery before its first invoice update
+  and permits an explicit retry after resolution, and the documented removal
+  of the admission constraint permits a retained-#2441-style NULL-period
+  recurring insert.
 - `python -m pytest tests/test_migrations_runner.py -k 'marked_migration_records_its_ledger_entry_in_one_transaction or marked_migration_rejects_concurrently_ddl_before_a_transaction' -q`
   -- 2 passed, 49 deselected.
 - The exact `atlas-invoicing-checks` receivables-ledger job command completed
@@ -238,15 +303,18 @@ Parked hardening: H-18 phase 2 and unobserved index repair, tracked above.
   existing disposable test container. This PR does not modify its task,
   harness, or migration set; hosted CI remains the independent run.
 - Before deploy after merge: repeat the redacted live catalog preflight,
-  restart only the ATLAS provider, prove active runtime SHA plus `/health` and
-  receivables readiness, and retain the current #2441 runtime as rollback.
+  including the complete index predicate and pending-replacement query; restart
+  only the ATLAS provider and prove active runtime SHA plus `/health` and
+  receivables readiness. Retain #2441 only with the explicit admission-fence
+  rollback procedure above; do not re-forward after retained-writer activity
+  without H-25's evidence-backed recovery.
 
 ## Estimated diff size
 
 | File | LOC |
 |---|---:|
 | `.github/workflows/atlas_invoicing_checks.yml` | 2 |
-| `atlas_brain/storage/migrations/387_eom_recurring_invoice_dedup_recovery.sql` | 273 |
-| `plans/PR-EOM-Recurring-Invoice-Dedup-Recovery.md` | 252 |
-| `tests/test_invoice_repository.py` | 673 |
-| **Total** | **1200** |
+| `atlas_brain/storage/migrations/387_eom_recurring_invoice_dedup_recovery.sql` | 356 |
+| `plans/PR-EOM-Recurring-Invoice-Dedup-Recovery.md` | 320 |
+| `tests/test_invoice_repository.py` | 952 |
+| **Total** | **1630** |

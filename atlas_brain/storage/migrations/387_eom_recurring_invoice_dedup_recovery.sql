@@ -9,6 +9,17 @@
 -- index observed in the recorded initial state, so no CONCURRENTLY DDL is
 -- needed. If preflight finds an unrecognized index or an invalid stored period,
 -- all recovery DDL/DML and this migration's ledger row roll back together.
+--
+-- ROLLBACK: the retained pre-#2448 writer binaries do not persist
+-- billing_period. If an operator must return to those writers after 387,
+-- first stop the current writer and run:
+--   ALTER TABLE invoices DROP CONSTRAINT IF EXISTS
+--       invoices_recurring_billing_period_required_check;
+-- Then deploy the retained runtime. The partial index remains inert for its
+-- new NULL-period rows. Do not re-enable #2448 merely by re-adding the check:
+-- if the retained runtime created recurring invoices, first reconcile those
+-- rows with an evidence-backed forward recovery, because 387 is already
+-- recorded and will not run a second time.
 
 DO $$
 BEGIN
@@ -30,17 +41,89 @@ BEGIN
           AND index_state.indnkeyatts = 2
           AND pg_get_indexdef(index_state.indexrelid, 1, true) = 'contact_id'
           AND pg_get_indexdef(index_state.indexrelid, 2, true) = 'billing_period'
-          AND lower(pg_get_expr(index_state.indpred, index_state.indrelid))
-              LIKE '%billing_period is not null%'
-          AND lower(pg_get_expr(index_state.indpred, index_state.indrelid))
-              LIKE '%monthly_auto%'
-          AND lower(pg_get_expr(index_state.indpred, index_state.indrelid))
-              LIKE '%eom_commercial_billing%'
-          AND lower(pg_get_expr(index_state.indpred, index_state.indrelid))
-              LIKE '%void%'
+          AND btrim(
+              regexp_replace(
+                  translate(
+                      regexp_replace(
+                          lower(pg_get_expr(index_state.indpred, index_state.indrelid)),
+                          E'::(character varying|varchar|text|name)(\\[\\])?',
+                          '',
+                          'g'
+                      ),
+                      '''[](),',
+                      '      '
+                  ),
+                  E'\\s+',
+                  ' ',
+                  'g'
+              )
+          ) = 'billing_period is not null and status <> void and source = any array monthly_auto eom_commercial_billing'
     ) THEN
         RAISE EXCEPTION
             'Cannot recover migration 385: recurring billing_period index is missing, invalid, or has an unexpected definition';
+    END IF;
+END $$;
+
+-- Migration 377 deliberately rejects every invoice mutation while an approved
+-- commercial invoice has a pending Gmail draft replacement. Its trigger is
+-- valid safety behavior, so do not bypass it or discover it after partially
+-- mutating legacy rows: stop before this recovery's first invoices UPDATE and
+-- let the operator complete/reconcile the replacement, then retry atomically.
+DO $$
+DECLARE
+    pending_gmail_replacement BOOLEAN := false;
+BEGIN
+    IF EXISTS (
+        SELECT 1
+        FROM pg_trigger AS trigger_state
+        JOIN pg_class AS table_class
+          ON table_class.oid = trigger_state.tgrelid
+        JOIN pg_namespace AS table_namespace
+          ON table_namespace.oid = table_class.relnamespace
+        WHERE table_namespace.nspname = current_schema()
+          AND table_class.relname = 'invoices'
+          AND trigger_state.tgname =
+              'commercial_billing_reject_invoice_mutation_while_gmail_replacement_pending'
+          AND NOT trigger_state.tgisinternal
+          AND trigger_state.tgenabled <> 'D'
+    ) THEN
+        IF to_regclass(format(
+            '%I.%I', current_schema(), 'commercial_billing_candidate_approvals'
+        )) IS NULL
+           OR to_regclass(format(
+            '%I.%I', current_schema(), 'commercial_billing_invoice_gmail_drafts'
+        )) IS NULL
+           OR to_regclass(format(
+            '%I.%I', current_schema(),
+            'commercial_billing_invoice_gmail_draft_replacement_events'
+        )) IS NULL THEN
+            RAISE EXCEPTION
+                'Cannot recover migration 385: the enabled Gmail replacement trigger has an incomplete catalog; reconcile migration 377 before retrying';
+        END IF;
+
+        EXECUTE $pending_replacement$
+            SELECT EXISTS (
+                SELECT 1
+                FROM invoices AS inv
+                JOIN commercial_billing_candidate_approvals AS approval
+                  ON approval.invoice_id = inv.id
+                JOIN commercial_billing_invoice_gmail_drafts AS draft
+                  ON draft.approval_id = approval.id
+                JOIN commercial_billing_invoice_gmail_draft_replacement_events AS replacement
+                  ON replacement.gmail_draft_record_id = draft.id
+                 AND replacement.replacement_generation = draft.draft_generation
+                WHERE inv.billing_period IS NULL
+                  AND inv.status <> 'void'
+                  AND inv.source IN ('monthly_auto', 'eom_commercial_billing')
+                  AND draft.state IN ('creating', 'retryable', 'recovery_required')
+            )
+        $pending_replacement$
+        INTO pending_gmail_replacement;
+
+        IF pending_gmail_replacement THEN
+            RAISE EXCEPTION
+                'Cannot recover migration 385: pending Gmail draft replacement blocks a recurring legacy invoice update; complete or reconcile the replacement before retrying';
+        END IF;
     END IF;
 END $$;
 
