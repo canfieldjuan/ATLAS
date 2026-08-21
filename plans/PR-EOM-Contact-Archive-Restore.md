@@ -37,6 +37,7 @@ all. The portal cannot park a contact, and nothing can bring one back.
 
 Ownership lane: eom-crm/contact-archive-restore
 Slice phase: Vertical slice
+Max files: 11
 
 1. `POST /eom-funnel/contacts/{contact_id}/archive` and
    `POST /eom-funnel/contacts/{contact_id}/restore`: tenant-pinned,
