@@ -164,6 +164,8 @@ _ALL_EOM_REQUESTED_EVENTS = frozenset(
 _EOM_LOST_RESTORABLE_STAGES = ("new", "estimate_booked")
 _EOM_ACTIVE_LEAD_STAGES = ("new", "estimate_booked", "won")
 _EOM_LOST_REPLAY_DISPOSITION_EVENTS = ("lead_lost", "lead_reopened")
+_EOM_CONTACT_ARCHIVE_DISPOSITION_EVENTS = ("contact_archived", "contact_restored")
+_EOM_CONTACT_DIRECTORY_LIFECYCLES = ("active", "archived")
 _EOM_OPERATOR_CONTACT_SOURCES_METADATA_KEY = "eom_operator_contact_sources"
 _EOM_WON_LOSS_CANCELLATION_REQUESTED_EVENT = "first_clean_cancellation_requested"
 _EOM_WON_LOSS_CANCELLATION_UNSETTLED_EVENT = (
@@ -353,6 +355,42 @@ async def _eom_disposition_replay_was_superseded(
             contact_id,
             list(_EOM_LOST_REPLAY_DISPOSITION_EVENTS),
             replay_event_id,
+        )
+    )
+
+
+async def _eom_archive_replay_was_superseded(
+    conn: Any,
+    *,
+    contact_id: str,
+    replay_lifecycle_sequence: Any,
+) -> bool:
+    """Return whether an archive/restore replay row no longer owns the status.
+
+    Catches the ABA case the direct status check cannot: archived under key A,
+    restored, archived again under key B -- the row's status matches key A's
+    receipt, but a later disposition owns it. Both event types postdate
+    migration 363's ``lifecycle_sequence`` database default, so a NULL
+    sequence cannot occur on a genuine receipt; treat one as superseded
+    instead of growing a legacy-chronology branch for rows that cannot exist.
+    """
+    if replay_lifecycle_sequence is None:
+        return True
+    return bool(
+        await conn.fetchval(
+            """
+            SELECT EXISTS (
+                SELECT 1
+                FROM eom_lead_lifecycle_events
+                WHERE contact_id = $1
+                  AND event_type = ANY($2::varchar[])
+                  AND lifecycle_sequence IS NOT NULL
+                  AND lifecycle_sequence > $3
+            )
+            """,
+            contact_id,
+            list(_EOM_CONTACT_ARCHIVE_DISPOSITION_EVENTS),
+            int(replay_lifecycle_sequence),
         )
     )
 
@@ -2214,6 +2252,7 @@ class DatabaseCRMProvider:
         *,
         limit: int = 100,
         kind: str = "all",
+        lifecycle: str = "active",
         search: Optional[str] = None,
         cursor_created_at: Optional[datetime] = None,
         cursor_contact_id: Optional[UUID] = None,
@@ -2225,11 +2264,14 @@ class DatabaseCRMProvider:
         a ``customer`` contact created or matched through the operator boundary
         is otherwise unreachable from any portal surface (website #240).
 
-        Admission is ``status = 'active'`` on the DB's own lifecycle axis.
-        Lost leads (``lead_stage = 'lost'`` with status still active) are
-        deliberately included and carry their stage: the pipeline hides them by
-        design, and the directory is exactly where a pipeline-hidden record
-        must remain findable. Archived rows are excluded in this slice.
+        Admission is a single ``status`` value on the DB's own lifecycle axis,
+        selected by the closed ``lifecycle`` filter (default ``active``). Lost
+        leads (``lead_stage = 'lost'`` with status still active) are
+        deliberately included in the active view and carry their stage: the
+        pipeline hides them by design, and the directory is exactly where a
+        pipeline-hidden record must remain findable. The archived view is the
+        same closed projection over ``status = 'archived'`` rows -- never a
+        mixed page, so neither view can leak the other's rows.
 
         Keyset pagination uses ``(created_at, id)`` descending -- immutable
         columns only. ``full_name`` is operator-mutable, and a keyset built on
@@ -2246,9 +2288,11 @@ class DatabaseCRMProvider:
 
         if kind not in ("all", *EOM_OPERATOR_CONTACT_TYPES):
             raise ValueError("kind must be 'all' or an operator contact kind")
+        if lifecycle not in _EOM_CONTACT_DIRECTORY_LIFECYCLES:
+            raise ValueError("lifecycle must be 'active' or 'archived'")
 
-        conditions = ["c.business_context_id = $2", "c.status = 'active'"]
-        params: list[Any] = [limit, EOM_BUSINESS_CONTEXT_ID]
+        conditions = ["c.business_context_id = $2", "c.status = $3"]
+        params: list[Any] = [limit, EOM_BUSINESS_CONTEXT_ID, lifecycle]
         if kind == "all":
             params.append(list(EOM_OPERATOR_CONTACT_TYPES))
             conditions.append(f"c.contact_type = ANY(${len(params)}::varchar[])")
@@ -7015,6 +7059,377 @@ class DatabaseCRMProvider:
                 actor_id,
             )
             return _result(lead_stage=restored_stage, idempotent=False)
+
+    async def archive_eom_contact(
+        self,
+        *,
+        contact_id: str,
+        operation_key: str,
+        actor_id: int,
+        actor_name: str,
+    ) -> dict[str, Any]:
+        """Reversibly park one EOM contact out of every active read.
+
+        Archive is a status-axis transition (``active`` -> ``archived``) with
+        the same receipt discipline as lost/reopen: per-key lifecycle
+        evidence, cross-contact key-ownership rejection, and truthful replays.
+        The stage axis is untouched, so restore returns exactly the
+        pre-archive record. A won-stage lead is refused: its booked first
+        clean and onboarding draft belong to the won-loss teardown protocol,
+        and archive must not become a second door around that Calendar
+        cancellation discipline.
+        """
+        from .eom_crm_mutations import EOM_OPERATOR_CONTACT_TYPES
+        from .eom_lead_conversion import EOMLeadConversionError
+        from .eom_lead_ingress import EOM_BUSINESS_CONTEXT_ID
+
+        def _result(row: Any, *, idempotent: bool) -> dict[str, Any]:
+            return {
+                "contact_id": str(contact_id),
+                "contact_type": str(row["contact_type"]),
+                "lead_stage": row["lead_stage"],
+                "status": "archived",
+                "idempotent": idempotent,
+            }
+
+        pool = self._get_pool()
+        async with _transaction_connection(pool) as conn:
+            for lock_key in sorted(
+                {
+                    f"eom-contact-archive:contact:{contact_id}",
+                    f"eom-contact-archive:operation:{operation_key}",
+                }
+            ):
+                await conn.execute(
+                    "SELECT pg_advisory_xact_lock(hashtextextended($1, 0))",
+                    lock_key,
+                )
+            # Archive shares the won-loss execution boundary exactly like the
+            # legacy soft archive (delete_contact): a status flip while a
+            # prepared Calendar cancellation is executing or unreconciled
+            # would strand the teardown after an uncertain external result.
+            await conn.execute(
+                "SELECT pg_advisory_xact_lock(hashtextextended($1, 0))",
+                _eom_won_lead_loss_execution_lock_key(contact_id),
+            )
+            replay = await conn.fetchrow(
+                """
+                SELECT id, from_stage, to_stage, lifecycle_sequence
+                FROM eom_lead_lifecycle_events
+                WHERE contact_id = $1
+                  AND event_type = 'contact_archived'
+                  AND operation_key = $2
+                """,
+                contact_id,
+                operation_key,
+            )
+            contact = await conn.fetchrow(
+                """
+                SELECT id, business_context_id, contact_type, lead_stage, status
+                FROM contacts
+                WHERE id = $1
+                FOR UPDATE
+                """,
+                contact_id,
+            )
+            # Tenancy resolves BEFORE key ownership: a foreign-tenant or
+            # nonexistent target must read as the same 404 whether the key is
+            # fresh or already owned elsewhere -- a 409 here would disclose
+            # the key's existence to a caller with no right to the target.
+            if (
+                contact is None
+                or contact["business_context_id"] != EOM_BUSINESS_CONTEXT_ID
+            ):
+                raise EOMLeadConversionError(404, "EOM contact was not found")
+            foreign_key_owner = await conn.fetchval(
+                """
+                SELECT EXISTS (
+                    SELECT 1 FROM eom_lead_lifecycle_events
+                    WHERE operation_key = $1
+                      AND event_type = 'contact_archived'
+                      AND contact_id <> $2
+                )
+                """,
+                operation_key,
+                contact_id,
+            )
+            if foreign_key_owner:
+                raise EOMLeadConversionError(
+                    409, "Idempotency-Key already belongs to another EOM contact"
+                )
+            if replay is not None:
+                if (
+                    replay["from_stage"] != "active"
+                    or replay["to_stage"] != "archived"
+                ):
+                    raise EOMLeadConversionError(
+                        409, "EOM contact archive operation was superseded"
+                    )
+                # A replay is only truthfully idempotent while the row is
+                # still archived. If it was restored after this key,
+                # reporting archived would assert a status it no longer has.
+                if contact["status"] != "archived":
+                    raise EOMLeadConversionError(
+                        409, "EOM contact changed after this archive"
+                    )
+                if await _eom_archive_replay_was_superseded(
+                    conn,
+                    contact_id=contact_id,
+                    replay_lifecycle_sequence=replay["lifecycle_sequence"],
+                ):
+                    raise EOMLeadConversionError(
+                        409, "EOM contact archive operation was superseded"
+                    )
+                return _result(contact, idempotent=True)
+            if contact["status"] == "archived":
+                # Already archived under a *different* key (this key has no
+                # replay row). Reject rather than a keyless no-op: a 200 here
+                # would report this operation_key successful with nothing
+                # durable behind it, so a later restore+retry would re-apply.
+                raise EOMLeadConversionError(409, "EOM contact is already archived")
+            if contact["contact_type"] not in EOM_OPERATOR_CONTACT_TYPES:
+                raise EOMLeadConversionError(
+                    409, "EOM contact kind cannot be archived from this boundary"
+                )
+            if contact["status"] != "active":
+                raise EOMLeadConversionError(
+                    409, "EOM contact must be active to archive"
+                )
+            if contact["contact_type"] == "lead" and contact["lead_stage"] == "won":
+                raise EOMLeadConversionError(
+                    409,
+                    "EOM won lead must be dispositioned through the lost flow "
+                    "before it can be archived",
+                )
+            await self._assert_eom_won_lead_loss_cancellation_fence(
+                conn, contact_id=contact_id
+            )
+            updated = await conn.fetchrow(
+                """
+                UPDATE contacts
+                SET status = 'archived', updated_at = NOW()
+                WHERE id = $1
+                  AND business_context_id = $2
+                  AND contact_type = $3
+                  AND lead_stage IS NOT DISTINCT FROM $4
+                  AND status = 'active'
+                RETURNING id
+                """,
+                contact_id,
+                EOM_BUSINESS_CONTEXT_ID,
+                contact["contact_type"],
+                contact["lead_stage"],
+            )
+            if updated is None:
+                raise RuntimeError("EOM contact changed during archive")
+            await conn.execute(
+                """
+                INSERT INTO eom_lead_lifecycle_events (
+                    contact_id, event_type, from_stage, to_stage, actor,
+                    source, operation_key, metadata
+                )
+                VALUES ($1, 'contact_archived', 'active', 'archived', $2,
+                        'eom_office', $3,
+                        jsonb_build_object(
+                            'previous_status', 'active',
+                            'resulting_status', 'archived',
+                            'contact_type', $4::text,
+                            'lead_stage', $5::text,
+                            'archived_by_employee_id', $6::bigint
+                        ))
+                """,
+                contact_id,
+                f"employee:{actor_id}:{actor_name}",
+                operation_key,
+                contact["contact_type"],
+                contact["lead_stage"],
+                actor_id,
+            )
+            return _result(contact, idempotent=False)
+
+    async def restore_eom_contact(
+        self,
+        *,
+        contact_id: str,
+        operation_key: str,
+        actor_id: int,
+        actor_name: str,
+    ) -> dict[str, Any]:
+        """Return one archived EOM contact to the active directory.
+
+        The exact inverse of :meth:`archive_eom_contact` on the status axis.
+        No stage recovery is needed -- archive never touches ``lead_stage``,
+        so flipping status back restores the pre-archive record verbatim.
+        Restore performs no admission check beyond tenancy, kind, and current
+        status: refusing any archived row would strand it permanently, and
+        post-restore duplicate-identity ambiguity is already handled where it
+        matters (the operator mutation boundary 409s ambiguous matches).
+        """
+        from .eom_crm_mutations import EOM_OPERATOR_CONTACT_TYPES
+        from .eom_lead_conversion import EOMLeadConversionError
+        from .eom_lead_ingress import EOM_BUSINESS_CONTEXT_ID
+
+        def _result(row: Any, *, idempotent: bool) -> dict[str, Any]:
+            return {
+                "contact_id": str(contact_id),
+                "contact_type": str(row["contact_type"]),
+                "lead_stage": row["lead_stage"],
+                "status": "active",
+                "idempotent": idempotent,
+            }
+
+        pool = self._get_pool()
+        async with _transaction_connection(pool) as conn:
+            # Shares the archive contact lock so archive and restore of one
+            # contact serialize; only the operation-key lock is its own.
+            for lock_key in sorted(
+                {
+                    f"eom-contact-archive:contact:{contact_id}",
+                    f"eom-contact-restore:operation:{operation_key}",
+                }
+            ):
+                await conn.execute(
+                    "SELECT pg_advisory_xact_lock(hashtextextended($1, 0))",
+                    lock_key,
+                )
+            # Defensive symmetry with archive: no current writer can archive a
+            # contact while a won-loss cancellation is unresolved (the fence
+            # blocks it), so this cannot fire against rows today's code
+            # produces -- but a status flip during a teardown is exactly the
+            # corruption class this boundary exists to refuse, so restore
+            # fails closed on the same evidence rather than trusting every
+            # future writer to preserve that invariant.
+            await conn.execute(
+                "SELECT pg_advisory_xact_lock(hashtextextended($1, 0))",
+                _eom_won_lead_loss_execution_lock_key(contact_id),
+            )
+            replay = await conn.fetchrow(
+                """
+                SELECT id, from_stage, to_stage, lifecycle_sequence
+                FROM eom_lead_lifecycle_events
+                WHERE contact_id = $1
+                  AND event_type = 'contact_restored'
+                  AND operation_key = $2
+                """,
+                contact_id,
+                operation_key,
+            )
+            contact = await conn.fetchrow(
+                """
+                SELECT id, business_context_id, contact_type, lead_stage, status
+                FROM contacts
+                WHERE id = $1
+                FOR UPDATE
+                """,
+                contact_id,
+            )
+            # Tenancy resolves BEFORE key ownership: a foreign-tenant or
+            # nonexistent target must read as the same 404 whether the key is
+            # fresh or already owned elsewhere -- a 409 here would disclose
+            # the key's existence to a caller with no right to the target.
+            if (
+                contact is None
+                or contact["business_context_id"] != EOM_BUSINESS_CONTEXT_ID
+            ):
+                raise EOMLeadConversionError(404, "EOM contact was not found")
+            foreign_key_owner = await conn.fetchval(
+                """
+                SELECT EXISTS (
+                    SELECT 1 FROM eom_lead_lifecycle_events
+                    WHERE operation_key = $1
+                      AND event_type = 'contact_restored'
+                      AND contact_id <> $2
+                )
+                """,
+                operation_key,
+                contact_id,
+            )
+            if foreign_key_owner:
+                raise EOMLeadConversionError(
+                    409, "Idempotency-Key already belongs to another EOM contact"
+                )
+            if replay is not None:
+                if (
+                    replay["from_stage"] != "archived"
+                    or replay["to_stage"] != "active"
+                ):
+                    raise EOMLeadConversionError(
+                        409, "EOM contact restore operation was superseded"
+                    )
+                # Truthful only while the row is still active: if it was
+                # archived again after this key, reporting active would
+                # assert a status it no longer has.
+                if contact["status"] != "active":
+                    raise EOMLeadConversionError(
+                        409, "EOM contact changed after this restore"
+                    )
+                if await _eom_archive_replay_was_superseded(
+                    conn,
+                    contact_id=contact_id,
+                    replay_lifecycle_sequence=replay["lifecycle_sequence"],
+                ):
+                    raise EOMLeadConversionError(
+                        409, "EOM contact restore operation was superseded"
+                    )
+                return _result(contact, idempotent=True)
+            if contact["status"] == "active":
+                # Already active under a *different* key: same conflict rule
+                # as archive -- no operation_key is reported successful
+                # without a durable replay row behind it.
+                raise EOMLeadConversionError(409, "EOM contact is already active")
+            if contact["contact_type"] not in EOM_OPERATOR_CONTACT_TYPES:
+                raise EOMLeadConversionError(
+                    409, "EOM contact kind cannot be restored from this boundary"
+                )
+            if contact["status"] != "archived":
+                raise EOMLeadConversionError(
+                    409, "EOM contact must be archived to restore"
+                )
+            await self._assert_eom_won_lead_loss_cancellation_fence(
+                conn, contact_id=contact_id
+            )
+            updated = await conn.fetchrow(
+                """
+                UPDATE contacts
+                SET status = 'active', updated_at = NOW()
+                WHERE id = $1
+                  AND business_context_id = $2
+                  AND contact_type = $3
+                  AND lead_stage IS NOT DISTINCT FROM $4
+                  AND status = 'archived'
+                RETURNING id
+                """,
+                contact_id,
+                EOM_BUSINESS_CONTEXT_ID,
+                contact["contact_type"],
+                contact["lead_stage"],
+            )
+            if updated is None:
+                raise RuntimeError("EOM contact changed during restore")
+            await conn.execute(
+                """
+                INSERT INTO eom_lead_lifecycle_events (
+                    contact_id, event_type, from_stage, to_stage, actor,
+                    source, operation_key, metadata
+                )
+                VALUES ($1, 'contact_restored', 'archived', 'active', $2,
+                        'eom_office', $3,
+                        jsonb_build_object(
+                            'previous_status', 'archived',
+                            'resulting_status', 'active',
+                            'contact_type', $4::text,
+                            'lead_stage', $5::text,
+                            'restored_by_employee_id', $6::bigint
+                        ))
+                """,
+                contact_id,
+                f"employee:{actor_id}:{actor_name}",
+                operation_key,
+                contact["contact_type"],
+                contact["lead_stage"],
+                actor_id,
+            )
+            return _result(contact, idempotent=False)
 
 
 # ---------------------------------------------------------------------------

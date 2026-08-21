@@ -92,3 +92,49 @@ async def reopen_eom_lead(crm: Any, command: EOMLeadReopen) -> dict[str, Any]:
         actor_id=command.actor_id,
         actor_name=command.actor_name,
     )
+
+
+@dataclass(frozen=True)
+class EOMContactArchive:
+    """Reversibly park one contact out of the active directory."""
+
+    contact_id: str
+    operation_key: str
+    actor_id: int
+    actor_name: str
+
+
+@dataclass(frozen=True)
+class EOMContactRestore:
+    """Return one archived contact to the active directory."""
+
+    contact_id: str
+    operation_key: str
+    actor_id: int
+    actor_name: str
+
+
+async def archive_eom_contact(crm: Any, command: EOMContactArchive) -> dict[str, Any]:
+    """Delegate to the authoritative CRM transaction implementation."""
+    archiver = getattr(crm, "archive_eom_contact", None)
+    if not callable(archiver):
+        raise RuntimeError("Configured CRM provider cannot archive EOM contacts")
+    return await archiver(
+        contact_id=command.contact_id,
+        operation_key=command.operation_key,
+        actor_id=command.actor_id,
+        actor_name=command.actor_name,
+    )
+
+
+async def restore_eom_contact(crm: Any, command: EOMContactRestore) -> dict[str, Any]:
+    """Delegate to the authoritative CRM transaction implementation."""
+    restorer = getattr(crm, "restore_eom_contact", None)
+    if not callable(restorer):
+        raise RuntimeError("Configured CRM provider cannot restore EOM contacts")
+    return await restorer(
+        contact_id=command.contact_id,
+        operation_key=command.operation_key,
+        actor_id=command.actor_id,
+        actor_name=command.actor_name,
+    )

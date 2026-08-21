@@ -347,11 +347,47 @@ async def test_a_row_outside_the_directory_kinds_can_never_be_emitted():
 
 
 @pytest.mark.asyncio
-async def test_an_archived_row_can_never_be_emitted():
+async def test_an_archived_row_can_never_be_emitted_by_the_active_view():
+    """With the status Literal widened for the archived view, the route's
+    page-homogeneity check is what keeps the views disjoint: an archived row
+    under the default (active) lifecycle must 500 loudly, not render."""
     response = await _get(
         _CRM([_row(status="archived")]), raise_app_exceptions=False
     )
     assert response.status_code == 500
+
+
+@pytest.mark.asyncio
+async def test_an_active_row_can_never_be_emitted_by_the_archived_view():
+    response = await _get(
+        _CRM([_row(status="active")]),
+        "?lifecycle=archived",
+        raise_app_exceptions=False,
+    )
+    assert response.status_code == 500
+
+
+@pytest.mark.asyncio
+async def test_the_lifecycle_filter_is_closed_and_forwarded_verbatim():
+    for lifecycle in ("active", "archived"):
+        crm = _CRM([_row(status=lifecycle)])
+        response = await _get(crm, f"?lifecycle={lifecycle}")
+        assert response.status_code == 200
+        assert crm.calls[-1][1]["lifecycle"] == lifecycle
+        assert all(
+            item["status"] == lifecycle
+            for item in response.json()["contacts"]
+        )
+    assert (await _get(_CRM(), "?lifecycle=deleted")).status_code == 422
+    assert (await _get(_CRM(), "?lifecycle=")).status_code == 422
+
+
+@pytest.mark.asyncio
+async def test_omitting_lifecycle_defaults_to_the_active_view():
+    crm = _CRM([_row()])
+    response = await _get(crm)
+    assert response.status_code == 200
+    assert crm.calls[-1][1]["lifecycle"] == "active"
 
 
 @pytest.mark.asyncio
