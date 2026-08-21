@@ -152,7 +152,7 @@ hardening carried out of this slice, and no `HARDENING.md` entries are created.
 
 Mechanical verification. Result: pass.
 
-- New guard suite: `python -m pytest tests/test_invoice_payment_reminders_disabled.py -q` -> `8 passed`, covering acceptance criteria 1-5, 7 and 9. Every node named in this contract is asserted to exist by the run; the earlier revision cited two names that had been removed in the mock-free rewrite and failed collection.
+- New guard suite: `python -m pytest tests/test_invoice_payment_reminders_disabled.py -q` -> `9 passed`, covering acceptance criteria 1-5, 7 and 9. Every node named in this contract is asserted to exist by the run; the earlier revision cited two names that had been removed in the mock-free rewrite and failed collection.
 - Permitted side: `python -m pytest tests/test_monthly_invoice_generation.py -k payment_reminder -q` -> `3 passed, 40 deselected`. These two send-shape tests were RED before this round (accepted failures in the baseline) because they opened only the new guard while `invoicing.enabled` and `reminders_enabled` both default `False`; they now open all three gates and reach the fake transport.
 - Whole file: `python -m pytest tests/test_monthly_invoice_generation.py -q` -> `2 failed, 41 passed`, versus clean `main` @ `40bb24553` -> `4 failed, 39 passed`. Strictly better than base: the two `test_payment_reminder_*` failures are fixed; the two remaining `test_billing_month_*` failures are pre-existing on `main`, untouched by this diff, and stay in the baseline.
 - Blank-env reproduction, before the fix: `ATLAS_INVOICING_REMINDERS_ENABLED='' python -c "InvoicingConfig(_env_file=None)"` raised `pydantic_core._pydantic_core.ValidationError: Input should be a valid boolean ... input_value=''`. After the validator, `""`, `"   "` -> `False` and `"true"` -> `True`.
@@ -167,11 +167,11 @@ Mechanical verification. Result: pass.
 | `atlas_brain/autonomous/scheduler.py` | 12 |
 | `atlas_brain/autonomous/tasks/invoice_payment_reminders.py` | 68 |
 | `atlas_brain/config.py` | 25 |
-| `plans/PR-Invoice-Reminders-Hard-Off.md` | 184 |
+| `plans/PR-Invoice-Reminders-Hard-Off.md` | 185 |
 | `tests/test_invoice_payment_reminders_disabled.py` | 213 |
 | `tests/test_monthly_invoice_generation.py` | 26 |
 | `tests/unit_gate_baseline.txt` | 2 |
-| **Total** | **553** |
+| **Total** | **554** |
 
 ## Cold diff reconstruction
 
