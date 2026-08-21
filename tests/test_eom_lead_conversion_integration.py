@@ -24,11 +24,17 @@ from atlas_brain.services.eom_crm_mutations import (  # noqa: E402
     mutate_eom_operator_contact,
 )
 from atlas_brain.services.eom_estimate_booking import (  # noqa: E402
+    EOMFirstCleanBooking,
     deterministic_eom_estimate_calendar_event_id,
     deterministic_eom_first_clean_calendar_event_id,
+    schedule_eom_first_clean_booking,
 )
 from atlas_brain.services.eom_lead_conversion import (  # noqa: E402
     EOMLeadConversionError,
+    EOMLeadLost,
+)
+from atlas_brain.services.eom_won_lead_loss import (  # noqa: E402
+    mark_eom_lead_lost_with_won_teardown,
 )
 from atlas_brain.services.eom_lead_ingress import (  # noqa: E402
     resolve_or_create_eom_inbound_lead,
@@ -37,6 +43,7 @@ from atlas_brain.services.eom_public_onboarding_tokens import (  # noqa: E402
     eom_public_onboarding_hmac_key_fingerprint,
     parse_eom_public_onboarding_token,
 )
+from atlas_brain.tools.base import ToolResult  # noqa: E402
 
 ROOT = Path(__file__).resolve().parent.parent
 MIGRATIONS = ROOT / "atlas_brain" / "storage" / "migrations"
@@ -159,6 +166,7 @@ async def _prepare_schema(
         migration_names.append("354_eom_customer_handoff_privileges.sql")
     if apply_public_onboarding_migration:
         migration_names.append("383_eom_public_onboarding_tokens.sql")
+    migration_names.append("386_eom_won_loss_nocodb_fence.sql")
     for name in migration_names:
         if name == "367_contacts_customer_type_revision.sql":
             async with conn.transaction():
@@ -3200,6 +3208,13 @@ async def test_enabled_shared_guard_handles_missing_required_contact_column(
         await _prepare_schema(conn, schema, apply_privilege_migration=False)
         await _provision_handoff_guard(conn)
         await _provision_nocodb_login(conn)
+        if missing_column == "contact_type":
+            # Migration 386 correctly declares this trigger dependency. This
+            # fixture intentionally tears down an already-migrated schema to
+            # exercise readiness validation for a historical partial schema.
+            await conn.execute(
+                "DROP TRIGGER IF EXISTS trg_reject_nocodb_eom_won_loss_mutation ON contacts"
+            )
         await conn.execute(
             f"ALTER TABLE contacts DROP COLUMN {_quote_ident(missing_column)}"
         )
@@ -4378,15 +4393,93 @@ class _RecordingDraftSender:
         return {"message_id": "resend-msg-1", "idempotent_replay": False}
 
 
+class _WonLossCalendar:
+    """A narrow Calendar boundary fake: Postgres remains the system under test."""
+
+    def __init__(self, *, results: list[ToolResult] | None = None) -> None:
+        self.results = list(results or [])
+        self.calls: list[dict[str, str]] = []
+
+    async def delete_event(self, *, calendar_id: str, event_id: str) -> ToolResult:
+        self.calls.append({"calendar_id": calendar_id, "event_id": event_id})
+        if self.results:
+            return self.results.pop(0)
+        return ToolResult(
+            success=True,
+            data={
+                "calendar_id": calendar_id,
+                "event_id": event_id,
+                "already_absent": False,
+            },
+            message="Calendar event deleted",
+        )
+
+
+class _FirstCleanIdentityCalendar:
+    """Record identity resolution and creation while Postgres owns lifecycle proof."""
+
+    configured_calendar_id = "primary"
+
+    def __init__(self, *, resolved_calendar_id: str) -> None:
+        self.resolved_calendar_id = resolved_calendar_id
+        self.resolve_calls: list[dict[str, str]] = []
+        self.create_calls: list[dict[str, object]] = []
+
+    async def resolve_calendar_id(self, *, calendar_id: str) -> ToolResult:
+        self.resolve_calls.append({"calendar_id": calendar_id})
+        return ToolResult(
+            success=True,
+            data={"calendar_id": self.resolved_calendar_id},
+            message="Calendar identity resolved",
+        )
+
+    async def create_event(self, **kwargs: object) -> ToolResult:
+        self.create_calls.append(kwargs)
+        return ToolResult(
+            success=True,
+            data={"event_id": kwargs["event_id"]},
+            message="Calendar event created",
+        )
+
+
+class _BlockingWonLossCalendar(_WonLossCalendar):
+    def __init__(self, *, results: list[ToolResult] | None = None) -> None:
+        super().__init__(results=results)
+        self.started = asyncio.Event()
+        self.release = asyncio.Event()
+
+    async def delete_event(self, *, calendar_id: str, event_id: str) -> ToolResult:
+        self.calls.append({"calendar_id": calendar_id, "event_id": event_id})
+        self.started.set()
+        await self.release.wait()
+        if self.results:
+            return self.results.pop(0)
+        return ToolResult(
+            success=True,
+            data={
+                "calendar_id": calendar_id,
+                "event_id": event_id,
+                "already_absent": False,
+            },
+            message="Calendar event deleted",
+        )
+
+
 async def _book_first_clean_draft(
     conn,
     provider,
     *,
     email: str | None = "won-lead@example.com",
     full_name: str = "Won Lead",
+    contact_id: uuid.UUID | None = None,
+    calendar_id: str = "estimate-calendar",
 ) -> tuple[uuid.UUID, str]:
     """Insert a lead and complete a first-clean booking; return its draft."""
-    contact_id = uuid.uuid4()
+    if contact_id is None:
+        contact_id = uuid.uuid4()
+        await _insert_contact(
+            conn, contact_id=contact_id, email=email, full_name=full_name
+        )
     booking_key = f"office-first-clean-{uuid.uuid4().hex}"
     event_id = deterministic_eom_first_clean_calendar_event_id(
         contact_id=str(contact_id),
@@ -4394,14 +4487,11 @@ async def _book_first_clean_draft(
     )
     start = datetime(2026, 8, 11, 14, 0, tzinfo=timezone.utc)
     end = datetime(2026, 8, 11, 17, 0, tzinfo=timezone.utc)
-    await _insert_contact(
-        conn, contact_id=contact_id, email=email, full_name=full_name
-    )
     await provider.prepare_eom_first_clean_booking(
         contact_id=str(contact_id),
         scheduled_start=start,
         scheduled_end=end,
-        calendar_id="estimate-calendar",
+        calendar_id=calendar_id,
         notes=None,
         booking_key=booking_key,
         expected_calendar_event_id=event_id,
@@ -4412,7 +4502,7 @@ async def _book_first_clean_draft(
         contact_id=str(contact_id),
         scheduled_start=start,
         scheduled_end=end,
-        calendar_id="estimate-calendar",
+        calendar_id=calendar_id,
         notes=None,
         booking_key=booking_key,
         expected_calendar_event_id=event_id,
@@ -4421,6 +4511,243 @@ async def _book_first_clean_draft(
         actor_name="Juan Canfield",
     )
     return contact_id, str(completed["onboarding_draft_id"])
+
+
+@pytest.mark.asyncio
+async def test_first_clean_booking_persists_resolved_calendar_identity_for_won_loss():
+    """A default alias binds before persistence and teardown uses that same ID."""
+
+    database_url = _database_url_or_skip()
+    schema = f"atlas_eom_first_clean_identity_{uuid.uuid4().hex}"
+    conn = await asyncpg.connect(database_url)
+    try:
+        await _prepare_schema(conn, schema, apply_privilege_migration=False)
+        provider = DatabaseCRMProvider(pool=conn)
+        contact_id = uuid.uuid4()
+        await _insert_contact(conn, contact_id=contact_id)
+        calendar = _FirstCleanIdentityCalendar(
+            resolved_calendar_id="office-owner@example.com"
+        )
+        booking_key = f"office-first-clean-{uuid.uuid4().hex}"
+        result = await schedule_eom_first_clean_booking(
+            provider,
+            calendar,
+            EOMFirstCleanBooking(
+                contact_id=str(contact_id),
+                scheduled_start=datetime(2026, 8, 11, 14, 0, tzinfo=timezone.utc),
+                scheduled_end=datetime(2026, 8, 11, 17, 0, tzinfo=timezone.utc),
+                calendar_id=None,
+                notes=None,
+                booking_key=booking_key,
+                actor_id=1,
+                actor_name="Juan Canfield",
+            ),
+        )
+
+        assert result["lead_stage"] == "won"
+        assert calendar.resolve_calls == [{"calendar_id": "primary"}]
+        assert calendar.create_calls[0]["calendar_id"] == "office-owner@example.com"
+        booking = await conn.fetchrow(
+            """
+            SELECT metadata
+            FROM eom_lead_lifecycle_events
+            WHERE contact_id = $1
+              AND event_type = 'first_clean_booked'
+            """,
+            contact_id,
+        )
+        assert booking is not None
+        booking_metadata = _metadata_dict(booking["metadata"])
+        assert booking_metadata["calendar_id"] == "office-owner@example.com"
+
+        loss_calendar = _WonLossCalendar()
+        await mark_eom_lead_lost_with_won_teardown(
+            provider,
+            loss_calendar,
+            EOMLeadLost(
+                contact_id=str(contact_id),
+                reason_code="no_response",
+                note=None,
+                operation_key=f"office-won-loss-{uuid.uuid4().hex}",
+                actor_id=1,
+                actor_name="Juan Canfield",
+            ),
+        )
+        assert loss_calendar.calls == [
+            {
+                "calendar_id": "office-owner@example.com",
+                "event_id": str(booking_metadata["calendar_event_id"]),
+            }
+        ]
+    finally:
+        await conn.execute(f'DROP SCHEMA IF EXISTS "{schema}" CASCADE')
+        await conn.close()
+
+
+@pytest.mark.asyncio
+async def test_completed_explicit_primary_first_clean_replay_skips_identity_lookup():
+    """A completed operation replays its persisted target through an outage."""
+
+    class _UnavailableIdentityCalendar(_FirstCleanIdentityCalendar):
+        async def resolve_calendar_id(self, *, calendar_id: str) -> ToolResult:
+            self.resolve_calls.append({"calendar_id": calendar_id})
+            return ToolResult(
+                success=False,
+                error="API_ERROR",
+                data={"request_phase": "calendar_identity", "status_code": 503},
+                message="Calendar identity unavailable",
+            )
+
+    database_url = _database_url_or_skip()
+    schema = f"atlas_eom_completed_primary_replay_{uuid.uuid4().hex}"
+    conn = await asyncpg.connect(database_url)
+    try:
+        await _prepare_schema(conn, schema, apply_privilege_migration=False)
+        provider = DatabaseCRMProvider(pool=conn)
+        contact_id = uuid.uuid4()
+        await _insert_contact(conn, contact_id=contact_id)
+        booking_key = f"office-first-clean-{uuid.uuid4().hex}"
+        command = EOMFirstCleanBooking(
+            contact_id=str(contact_id),
+            scheduled_start=datetime(2026, 8, 11, 14, 0, tzinfo=timezone.utc),
+            scheduled_end=datetime(2026, 8, 11, 17, 0, tzinfo=timezone.utc),
+            calendar_id="primary",
+            notes="Bring first-clean checklist",
+            booking_key=booking_key,
+            actor_id=1,
+            actor_name="Juan Canfield",
+        )
+        first_calendar = _FirstCleanIdentityCalendar(
+            resolved_calendar_id="office-owner@example.com"
+        )
+        first = await schedule_eom_first_clean_booking(provider, first_calendar, command)
+        assert first["idempotent"] is False
+        assert first_calendar.resolve_calls == [{"calendar_id": "primary"}]
+        requested = await conn.fetchrow(
+            """
+            SELECT metadata
+            FROM eom_lead_lifecycle_events
+            WHERE contact_id = $1
+              AND operation_key = $2
+              AND event_type = 'first_clean_booking_requested'
+            """,
+            contact_id,
+            booking_key,
+        )
+        assert requested is not None
+        assert _metadata_dict(requested["metadata"])["requested_calendar_id"] == "primary"
+
+        replay_calendar = _UnavailableIdentityCalendar(
+            resolved_calendar_id="different-owner@example.com"
+        )
+        replay = await schedule_eom_first_clean_booking(provider, replay_calendar, command)
+        assert replay["idempotent"] is True
+        assert replay["calendar_event_id"] == first["calendar_event_id"]
+        assert replay["onboarding_draft_id"] == first["onboarding_draft_id"]
+        assert replay_calendar.resolve_calls == []
+        assert replay_calendar.create_calls == []
+
+        with pytest.raises(EOMLeadConversionError, match="different first clean booking"):
+            await schedule_eom_first_clean_booking(
+                provider,
+                replay_calendar,
+                EOMFirstCleanBooking(
+                    contact_id=command.contact_id,
+                    scheduled_start=command.scheduled_start,
+                    scheduled_end=command.scheduled_end,
+                    calendar_id="primary",
+                    notes="Different notes",
+                    booking_key=command.booking_key,
+                    actor_id=command.actor_id,
+                    actor_name=command.actor_name,
+                ),
+            )
+        assert replay_calendar.resolve_calls == []
+        assert replay_calendar.create_calls == []
+    finally:
+        await conn.execute(f'DROP SCHEMA IF EXISTS "{schema}" CASCADE')
+        await conn.close()
+
+
+@pytest.mark.asyncio
+async def test_completed_concrete_first_clean_rejects_primary_replay():
+    """A changed primary alias cannot replace a concrete original request."""
+
+    class _UnavailableIdentityCalendar(_FirstCleanIdentityCalendar):
+        async def resolve_calendar_id(self, *, calendar_id: str) -> ToolResult:
+            self.resolve_calls.append({"calendar_id": calendar_id})
+            return ToolResult(
+                success=False,
+                error="API_ERROR",
+                data={"request_phase": "calendar_identity", "status_code": 503},
+                message="Calendar identity unavailable",
+            )
+
+    database_url = _database_url_or_skip()
+    schema = f"atlas_eom_concrete_primary_replay_{uuid.uuid4().hex}"
+    conn = await asyncpg.connect(database_url)
+    try:
+        await _prepare_schema(conn, schema, apply_privilege_migration=False)
+        provider = DatabaseCRMProvider(pool=conn)
+        contact_id = uuid.uuid4()
+        await _insert_contact(conn, contact_id=contact_id)
+        booking_key = f"office-first-clean-{uuid.uuid4().hex}"
+        command = EOMFirstCleanBooking(
+            contact_id=str(contact_id),
+            scheduled_start=datetime(2026, 8, 11, 14, 0, tzinfo=timezone.utc),
+            scheduled_end=datetime(2026, 8, 11, 17, 0, tzinfo=timezone.utc),
+            calendar_id="team@example.com",
+            notes="Bring first-clean checklist",
+            booking_key=booking_key,
+            actor_id=1,
+            actor_name="Juan Canfield",
+        )
+        first_calendar = _FirstCleanIdentityCalendar(
+            resolved_calendar_id="office-owner@example.com"
+        )
+        first = await schedule_eom_first_clean_booking(provider, first_calendar, command)
+        assert first["idempotent"] is False
+        assert first_calendar.resolve_calls == []
+
+        requested = await conn.fetchrow(
+            """
+            SELECT metadata
+            FROM eom_lead_lifecycle_events
+            WHERE contact_id = $1
+              AND operation_key = $2
+              AND event_type = 'first_clean_booking_requested'
+            """,
+            contact_id,
+            booking_key,
+        )
+        assert requested is not None
+        assert _metadata_dict(requested["metadata"])["requested_calendar_id"] == (
+            "team@example.com"
+        )
+
+        replay_calendar = _UnavailableIdentityCalendar(
+            resolved_calendar_id="team@example.com"
+        )
+        with pytest.raises(EOMLeadConversionError, match="different first clean booking"):
+            await schedule_eom_first_clean_booking(
+                provider,
+                replay_calendar,
+                EOMFirstCleanBooking(
+                    contact_id=command.contact_id,
+                    scheduled_start=command.scheduled_start,
+                    scheduled_end=command.scheduled_end,
+                    calendar_id="primary",
+                    notes=command.notes,
+                    booking_key=command.booking_key,
+                    actor_id=command.actor_id,
+                    actor_name=command.actor_name,
+                ),
+            )
+        assert replay_calendar.resolve_calls == []
+        assert replay_calendar.create_calls == []
+    finally:
+        await conn.execute(f'DROP SCHEMA IF EXISTS "{schema}" CASCADE')
+        await conn.close()
 
 
 async def _claim_public_onboarding_token(
@@ -6029,6 +6356,847 @@ async def test_public_onboarding_issued_link_projection_pages_current_and_previo
         }
         assert str(retired_contact_id) not in str(first_page + second_page)
         assert str(retired_token_id) not in str(first_page + second_page)
+    finally:
+        await conn.execute(f'DROP SCHEMA IF EXISTS "{schema}" CASCADE')
+        await conn.close()
+
+
+@pytest.mark.asyncio
+async def test_won_lead_loss_cancels_first_clean_and_revokes_pending_draft():
+    database_url = _database_url_or_skip()
+    schema = f"atlas_eom_won_loss_{uuid.uuid4().hex}"
+    conn = await asyncpg.connect(database_url)
+    try:
+        await _prepare_schema(conn, schema, apply_privilege_migration=False)
+        provider = DatabaseCRMProvider(pool=conn)
+        contact_id, draft_id = await _book_first_clean_draft(conn, provider)
+        booking = await conn.fetchrow(
+            """
+            SELECT metadata
+            FROM eom_lead_lifecycle_events
+            WHERE contact_id = $1
+              AND event_type = 'first_clean_booked'
+            """,
+            contact_id,
+        )
+        assert booking is not None
+        booking_metadata = _metadata_dict(booking["metadata"])
+        calendar_event_id = str(booking_metadata["calendar_event_id"])
+        calendar = _WonLossCalendar()
+        command = EOMLeadLost(
+            contact_id=str(contact_id),
+            reason_code="no_response",
+            note="Could not reach customer",
+            operation_key=f"office-won-loss-{uuid.uuid4().hex}",
+            actor_id=1,
+            actor_name="Juan Canfield",
+        )
+
+        completed = await mark_eom_lead_lost_with_won_teardown(
+            provider, calendar, command
+        )
+
+        assert completed == {
+            "contact_id": str(contact_id),
+            "lead_stage": "lost",
+            "status": "lost",
+            "reason_code": "no_response",
+            "from_stage": "won",
+            "idempotent": False,
+        }
+        assert calendar.calls == [
+            {
+                "calendar_id": "estimate-calendar",
+                "event_id": calendar_event_id,
+            }
+        ]
+        assert await conn.fetchval(
+            "SELECT lead_stage FROM contacts WHERE id = $1", contact_id
+        ) == "lost"
+        assert await conn.fetchval(
+            "SELECT status FROM eom_onboarding_email_drafts WHERE id = $1::uuid",
+            draft_id,
+        ) == "revoked"
+        assert await conn.fetchval(
+            """
+            SELECT COUNT(*)
+            FROM eom_lead_lifecycle_events
+            WHERE contact_id = $1
+              AND event_type = 'first_clean_cancelled'
+            """,
+            contact_id,
+        ) == 1
+        assert await conn.fetchval(
+            """
+            SELECT COUNT(*)
+            FROM eom_lead_lifecycle_events
+            WHERE contact_id = $1
+              AND event_type = 'lead_lost'
+            """,
+            contact_id,
+        ) == 1
+
+        replay = await mark_eom_lead_lost_with_won_teardown(
+            provider, calendar, command
+        )
+        assert replay["idempotent"] is True
+        assert replay["reason_code"] == "no_response"
+        assert len(calendar.calls) == 1
+    finally:
+        await conn.execute(f'DROP SCHEMA IF EXISTS "{schema}" CASCADE')
+        await conn.close()
+
+
+@pytest.mark.asyncio
+async def test_won_lead_loss_blocks_sending_or_sent_draft_before_calendar_delete():
+    database_url = _database_url_or_skip()
+    schema = f"atlas_eom_won_loss_delivery_{uuid.uuid4().hex}"
+    conn = await asyncpg.connect(database_url)
+    try:
+        await _prepare_schema(conn, schema, apply_privilege_migration=False)
+        provider = DatabaseCRMProvider(pool=conn)
+        for draft_status in ("sending", "sent"):
+            contact_id, draft_id = await _book_first_clean_draft(conn, provider)
+            await conn.execute(
+                """
+                UPDATE eom_onboarding_email_drafts
+                SET status = $2::varchar,
+                    claimed_at = CASE
+                        WHEN $2::varchar = 'sending' THEN NOW()
+                        ELSE claimed_at
+                    END,
+                    sent_at = CASE WHEN $2::varchar = 'sent' THEN NOW() ELSE sent_at END
+                WHERE id = $1::uuid
+                """,
+                draft_id,
+                draft_status,
+            )
+            calendar = _WonLossCalendar()
+            with pytest.raises(
+                EOMLeadConversionError, match="delivery must be reconciled"
+            ) as exc:
+                await mark_eom_lead_lost_with_won_teardown(
+                    provider,
+                    calendar,
+                    EOMLeadLost(
+                        contact_id=str(contact_id),
+                        reason_code="no_response",
+                        note=None,
+                        operation_key=f"office-won-loss-{uuid.uuid4().hex}",
+                        actor_id=1,
+                        actor_name="Juan Canfield",
+                    ),
+                )
+            assert exc.value.status_code == 409
+            assert calendar.calls == []
+            assert await conn.fetchval(
+                "SELECT lead_stage FROM contacts WHERE id = $1", contact_id
+            ) == "won"
+            assert await conn.fetchval(
+                "SELECT status FROM eom_onboarding_email_drafts WHERE id = $1::uuid",
+                draft_id,
+            ) == draft_status
+    finally:
+        await conn.execute(f'DROP SCHEMA IF EXISTS "{schema}" CASCADE')
+        await conn.close()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("pre_won_stage", "reason_code"),
+    (("new", "spam"), ("estimate_booked", "declined_after_estimate")),
+)
+async def test_won_lead_loss_rejects_reused_prewon_lost_key_before_calendar_delete(
+    pre_won_stage: str, reason_code: str
+):
+    """A pre-won loss key remains permanently incompatible with won teardown."""
+
+    database_url = _database_url_or_skip()
+    schema = f"atlas_eom_won_loss_reused_key_{uuid.uuid4().hex}"
+    conn = await asyncpg.connect(database_url)
+    try:
+        await _prepare_schema(conn, schema, apply_privilege_migration=False)
+        provider = DatabaseCRMProvider(pool=conn)
+        contact_id = uuid.uuid4()
+        await _insert_contact(
+            conn,
+            contact_id=contact_id,
+            lead_stage=pre_won_stage,
+            email="reused-key@example.com",
+        )
+        legacy_loss_key = f"office-legacy-loss-{uuid.uuid4().hex}"
+        lost = await provider.mark_eom_lead_lost(
+            contact_id=str(contact_id),
+            reason_code=reason_code,
+            note="Original pre-won disposition",
+            operation_key=legacy_loss_key,
+            actor_id=1,
+            actor_name="Juan Canfield",
+        )
+        assert lost["from_stage"] == pre_won_stage
+        reopened = await provider.reopen_eom_lead(
+            contact_id=str(contact_id),
+            operation_key=f"office-reopen-{uuid.uuid4().hex}",
+            actor_id=1,
+            actor_name="Juan Canfield",
+        )
+        assert reopened["lead_stage"] == pre_won_stage
+        _, draft_id = await _book_first_clean_draft(
+            conn, provider, contact_id=contact_id
+        )
+        calendar = _WonLossCalendar()
+
+        with pytest.raises(
+            EOMLeadConversionError,
+            match="Idempotency-Key already belongs to another EOM operation",
+        ) as exc:
+            await mark_eom_lead_lost_with_won_teardown(
+                provider,
+                calendar,
+                EOMLeadLost(
+                    contact_id=str(contact_id),
+                    reason_code="no_response",
+                    note=None,
+                    operation_key=legacy_loss_key,
+                    actor_id=1,
+                    actor_name="Juan Canfield",
+                ),
+            )
+
+        assert exc.value.status_code == 409
+        assert calendar.calls == []
+        assert await conn.fetchval(
+            "SELECT lead_stage FROM contacts WHERE id = $1", contact_id
+        ) == "won"
+        assert await conn.fetchval(
+            "SELECT status FROM eom_onboarding_email_drafts WHERE id = $1::uuid",
+            draft_id,
+        ) == "pending"
+    finally:
+        await conn.execute(f'DROP SCHEMA IF EXISTS "{schema}" CASCADE')
+        await conn.close()
+
+
+@pytest.mark.asyncio
+async def test_won_lead_loss_rejects_second_key_while_cancellation_is_unsettled():
+    database_url = _database_url_or_skip()
+    schema = f"atlas_eom_won_loss_retry_{uuid.uuid4().hex}"
+    conn = await asyncpg.connect(database_url)
+    try:
+        await _prepare_schema(conn, schema, apply_privilege_migration=False)
+        provider = DatabaseCRMProvider(pool=conn)
+        contact_id, draft_id = await _book_first_clean_draft(conn, provider)
+        command = EOMLeadLost(
+            contact_id=str(contact_id),
+            reason_code="no_response",
+            note=None,
+            operation_key=f"office-won-loss-{uuid.uuid4().hex}",
+            actor_id=1,
+            actor_name="Juan Canfield",
+        )
+        calendar = _WonLossCalendar(
+            results=[
+                ToolResult(
+                    success=False,
+                    error="API_ERROR",
+                    data={"request_phase": "delete", "status_code": 503},
+                    message="Calendar API error: 503",
+                ),
+                ToolResult(
+                    success=True,
+                    data={"already_absent": True},
+                    message="Calendar event was already absent",
+                ),
+            ]
+        )
+
+        with pytest.raises(
+            EOMLeadConversionError, match="Calendar API error: 503"
+        ) as exc:
+            await mark_eom_lead_lost_with_won_teardown(provider, calendar, command)
+        assert exc.value.status_code == 502
+        assert await conn.fetchval(
+            "SELECT lead_stage FROM contacts WHERE id = $1", contact_id
+        ) == "won"
+        assert await conn.fetchval(
+            "SELECT status FROM eom_onboarding_email_drafts WHERE id = $1::uuid",
+            draft_id,
+        ) == "pending"
+        assert await conn.fetchval(
+            """
+            SELECT COUNT(*)
+            FROM eom_lead_lifecycle_events
+            WHERE contact_id = $1
+              AND event_type = 'first_clean_cancellation_calendar_unsettled'
+            """,
+            contact_id,
+        ) == 1
+
+        with pytest.raises(
+            EOMLeadConversionError, match="cancellation requires reconciliation"
+        ) as second_key:
+            await mark_eom_lead_lost_with_won_teardown(
+                provider,
+                calendar,
+                EOMLeadLost(
+                    contact_id=str(contact_id),
+                    reason_code="no_response",
+                    note=None,
+                    operation_key=f"office-won-loss-{uuid.uuid4().hex}",
+                    actor_id=1,
+                    actor_name="Juan Canfield",
+                ),
+            )
+        assert second_key.value.status_code == 409
+        assert len(calendar.calls) == 1
+        assert await conn.fetchval(
+            """
+            SELECT COUNT(*)
+            FROM eom_lead_lifecycle_events
+            WHERE contact_id = $1
+              AND event_type = 'first_clean_cancellation_requested'
+            """,
+            contact_id,
+        ) == 1
+
+        completed = await mark_eom_lead_lost_with_won_teardown(
+            provider, calendar, command
+        )
+        assert completed["idempotent"] is False
+        assert await conn.fetchval(
+            "SELECT lead_stage FROM contacts WHERE id = $1", contact_id
+        ) == "lost"
+        assert await conn.fetchval(
+            "SELECT status FROM eom_onboarding_email_drafts WHERE id = $1::uuid",
+            draft_id,
+        ) == "revoked"
+        assert len(calendar.calls) == 2
+    finally:
+        await conn.execute(f'DROP SCHEMA IF EXISTS "{schema}" CASCADE')
+        await conn.close()
+
+
+@pytest.mark.asyncio
+async def test_won_lead_loss_fences_durable_unsettled_cancellation_from_claim_and_handoff():
+    """A released executor lock does not erase unfinished cancellation work."""
+
+    database_url = _database_url_or_skip()
+    schema = f"atlas_eom_won_loss_durable_fence_{uuid.uuid4().hex}"
+    conn = await asyncpg.connect(database_url)
+    try:
+        await _prepare_schema(
+            conn,
+            schema,
+            apply_privilege_migration=False,
+            apply_public_onboarding_migration=True,
+        )
+        provider = DatabaseCRMProvider(pool=conn)
+        contact_id, draft_id = await _book_first_clean_draft(conn, provider)
+        command = EOMLeadLost(
+            contact_id=str(contact_id),
+            reason_code="no_response",
+            note=None,
+            operation_key=f"office-won-loss-{uuid.uuid4().hex}",
+            actor_id=1,
+            actor_name="Juan Canfield",
+        )
+        calendar = _WonLossCalendar(
+            results=[
+                ToolResult(
+                    success=False,
+                    error="API_ERROR",
+                    data={"request_phase": "delete", "status_code": 503},
+                    message="Calendar API error: 503",
+                )
+            ]
+        )
+
+        with pytest.raises(EOMLeadConversionError, match="Calendar API error: 503"):
+            await mark_eom_lead_lost_with_won_teardown(provider, calendar, command)
+
+        with pytest.raises(
+            EOMLeadConversionError, match="cancellation requires reconciliation"
+        ) as standard_claim:
+            await provider.claim_eom_onboarding_draft(
+                draft_id=draft_id,
+                actor_id=2,
+                actor_name="Mayra Canfield",
+            )
+        assert standard_claim.value.status_code == 409
+
+        with pytest.raises(
+            EOMLeadConversionError, match="cancellation requires reconciliation"
+        ) as public_claim:
+            await provider.claim_eom_onboarding_draft(
+                draft_id=draft_id,
+                actor_id=2,
+                actor_name="Mayra Canfield",
+                public_onboarding_base_url=_PUBLIC_ONBOARDING_URL,
+                public_onboarding_hmac_secret=_PUBLIC_ONBOARDING_SECRET,
+            )
+        assert public_claim.value.status_code == 409
+
+        with pytest.raises(
+            EOMLeadConversionError, match="cancellation requires reconciliation"
+        ) as handoff:
+            await provider.finalize_eom_customer_handoff(
+                contact_id=str(contact_id),
+                tracker_customer_id=981,
+                tracker_site_id=1981,
+                approval_key=f"office-handoff-{uuid.uuid4().hex}",
+                actor_id=2,
+                actor_name="Mayra Canfield",
+            )
+        assert handoff.value.status_code == 409
+        assert len(calendar.calls) == 1
+        assert await conn.fetchval(
+            "SELECT lead_stage FROM contacts WHERE id = $1", contact_id
+        ) == "won"
+        assert await conn.fetchval(
+            "SELECT status FROM eom_onboarding_email_drafts WHERE id = $1::uuid",
+            draft_id,
+        ) == "pending"
+        assert await conn.fetchval(
+            "SELECT COUNT(*) FROM eom_public_onboarding_tokens WHERE draft_id = $1::uuid",
+            draft_id,
+        ) == 0
+        assert await conn.fetchval(
+            "SELECT COUNT(*) FROM eom_customer_handoffs WHERE contact_id = $1::uuid",
+            contact_id,
+        ) == 0
+    finally:
+        await conn.execute(f'DROP SCHEMA IF EXISTS "{schema}" CASCADE')
+        await conn.close()
+
+
+@pytest.mark.asyncio
+async def test_won_lead_loss_fences_durable_cancellation_from_generic_contact_status_writes():
+    """Archive and generic status writes cannot strand Calendar teardown."""
+
+    database_url = _database_url_or_skip()
+    schema = f"atlas_eom_won_loss_generic_status_fence_{uuid.uuid4().hex}"
+    conn = await asyncpg.connect(database_url)
+    try:
+        await _prepare_schema(conn, schema, apply_privilege_migration=False)
+        provider = DatabaseCRMProvider(pool=conn)
+        contact_id, _ = await _book_first_clean_draft(conn, provider)
+        command = EOMLeadLost(
+            contact_id=str(contact_id),
+            reason_code="no_response",
+            note=None,
+            operation_key=f"office-won-loss-{uuid.uuid4().hex}",
+            actor_id=1,
+            actor_name="Juan Canfield",
+        )
+        calendar = _WonLossCalendar(
+            results=[
+                ToolResult(
+                    success=False,
+                    error="API_ERROR",
+                    data={"request_phase": "delete", "status_code": 503},
+                    message="Calendar API error: 503",
+                )
+            ]
+        )
+
+        with pytest.raises(EOMLeadConversionError, match="Calendar API error: 503"):
+            await mark_eom_lead_lost_with_won_teardown(provider, calendar, command)
+
+        with pytest.raises(
+            EOMLeadConversionError, match="cancellation requires reconciliation"
+        ) as archive:
+            await provider.delete_contact(str(contact_id))
+        assert archive.value.status_code == 409
+
+        with pytest.raises(
+            EOMLeadConversionError, match="cancellation requires reconciliation"
+        ) as status_update:
+            await provider.update_contact(str(contact_id), {"status": "inactive"})
+        assert status_update.value.status_code == 409
+        assert await conn.fetchval(
+            "SELECT status FROM contacts WHERE id = $1", contact_id
+        ) == "active"
+    finally:
+        await conn.execute(f'DROP SCHEMA IF EXISTS "{schema}" CASCADE')
+        await conn.close()
+
+
+@pytest.mark.asyncio
+async def test_nocodb_cannot_mutate_won_lead_with_unsettled_cancellation():
+    """The direct CRM login cannot bypass a prepared won-loss cancellation."""
+
+    from atlas_brain.storage.migrations import run_migrations
+
+    database_url = _database_url_or_skip()
+    schema = f"atlas_eom_won_loss_nocodb_fence_{uuid.uuid4().hex}"
+    conn = await asyncpg.connect(database_url)
+    nocodb_conn = None
+    direct_conn = None
+    try:
+        await _prepare_schema(conn, schema)
+
+        class _MigrationPool:
+            async def acquire(self):
+                return conn
+
+            async def release(self, released) -> None:
+                assert released is conn
+
+        await run_migrations(
+            _MigrationPool(),
+            migrations_dir=MIGRATIONS,
+            only={"386_eom_won_loss_nocodb_fence"},
+        )
+        assert await conn.fetchval(
+            "SELECT EXISTS (SELECT 1 FROM schema_migrations WHERE name = $1)",
+            "386_eom_won_loss_nocodb_fence",
+        )
+
+        provider = DatabaseCRMProvider(pool=conn)
+        contact_id, _ = await _book_first_clean_draft(conn, provider)
+        command = EOMLeadLost(
+            contact_id=str(contact_id),
+            reason_code="no_response",
+            note=None,
+            operation_key=f"office-won-loss-{uuid.uuid4().hex}",
+            actor_id=1,
+            actor_name="Juan Canfield",
+        )
+        calendar = _BlockingWonLossCalendar(
+            results=[
+                ToolResult(
+                    success=False,
+                    error="API_ERROR",
+                    data={"request_phase": "delete", "status_code": 503},
+                    message="Calendar API error: 503",
+                ),
+                ToolResult(
+                    success=True,
+                    data={"already_absent": True},
+                    message="Calendar event was already absent",
+                ),
+            ]
+        )
+
+        nocodb_conn = await asyncpg.connect(
+            database_url,
+            user="atlas_nocodb",
+            password=_NOCODB_TEST_PASSWORD,
+        )
+        await nocodb_conn.execute(
+            f"SET search_path TO {_quote_ident(schema)}, public"
+        )
+        assert await nocodb_conn.fetchval("SELECT session_user") == "atlas_nocodb"
+        direct_conn = await asyncpg.connect(database_url)
+        await direct_conn.execute(f"SET search_path TO {_quote_ident(schema)}, public")
+        assert await direct_conn.fetchval("SELECT session_user") != "atlas_nocodb"
+
+        loss_task = asyncio.create_task(
+            mark_eom_lead_lost_with_won_teardown(provider, calendar, command)
+        )
+        await asyncio.wait_for(calendar.started.wait(), timeout=3)
+
+        with pytest.raises(
+            asyncpg.exceptions.RaiseError,
+            match="cancellation requires reconciliation",
+        ):
+            await nocodb_conn.execute(
+                "UPDATE contacts SET status = 'inactive' WHERE id = $1",
+                contact_id,
+            )
+        with pytest.raises(
+            asyncpg.exceptions.RaiseError,
+            match="cancellation requires reconciliation",
+        ):
+            await nocodb_conn.execute("DELETE FROM contacts WHERE id = $1", contact_id)
+        with pytest.raises(
+            asyncpg.exceptions.RaiseError,
+            match="cancellation requires reconciliation",
+        ):
+            await direct_conn.execute(
+                "UPDATE contacts SET status = 'inactive' WHERE id = $1", contact_id
+            )
+        with pytest.raises(
+            asyncpg.exceptions.RaiseError,
+            match="cancellation requires reconciliation",
+        ):
+            await direct_conn.execute(
+                "UPDATE contacts SET contact_type = 'customer' WHERE id = $1",
+                contact_id,
+            )
+        assert not loss_task.done()
+
+        calendar.release.set()
+        with pytest.raises(EOMLeadConversionError, match="Calendar API error: 503"):
+            await loss_task
+
+        with pytest.raises(
+            asyncpg.exceptions.RaiseError,
+            match="cancellation requires reconciliation",
+        ):
+            await nocodb_conn.execute(
+                "UPDATE contacts SET status = 'inactive' WHERE id = $1",
+                contact_id,
+            )
+        with pytest.raises(
+            asyncpg.exceptions.RaiseError,
+            match="cancellation requires reconciliation",
+        ):
+            await nocodb_conn.execute("DELETE FROM contacts WHERE id = $1", contact_id)
+        with pytest.raises(
+            asyncpg.exceptions.RaiseError,
+            match="cancellation requires reconciliation",
+        ):
+            await direct_conn.execute(
+                "UPDATE contacts SET status = 'inactive' WHERE id = $1", contact_id
+            )
+        with pytest.raises(
+            asyncpg.exceptions.RaiseError,
+            match="cancellation requires reconciliation",
+        ):
+            await direct_conn.execute(
+                "UPDATE contacts SET contact_type = 'customer' WHERE id = $1",
+                contact_id,
+            )
+
+        await nocodb_conn.execute(
+            "UPDATE contacts SET notes = 'ordinary NocoDB edit' WHERE id = $1",
+            contact_id,
+        )
+        assert await conn.fetchval(
+            "SELECT status FROM contacts WHERE id = $1", contact_id
+        ) == "active"
+        assert await conn.fetchval(
+            "SELECT notes FROM contacts WHERE id = $1", contact_id
+        ) == "ordinary NocoDB edit"
+
+        completed = await mark_eom_lead_lost_with_won_teardown(
+            provider, calendar, command
+        )
+        assert completed["lead_stage"] == "lost"
+        assert await conn.fetchval(
+            "SELECT lead_stage FROM contacts WHERE id = $1", contact_id
+        ) == "lost"
+        await direct_conn.execute(
+            "UPDATE contacts SET status = 'inactive' WHERE id = $1", contact_id
+        )
+        assert await conn.fetchval(
+            "SELECT status FROM contacts WHERE id = $1", contact_id
+        ) == "inactive"
+        await nocodb_conn.execute(
+            "UPDATE contacts SET status = 'inactive' WHERE id = $1", contact_id
+        )
+        assert await conn.fetchval(
+            "SELECT status FROM contacts WHERE id = $1", contact_id
+        ) == "inactive"
+    finally:
+        if direct_conn is not None:
+            await direct_conn.close()
+        if nocodb_conn is not None:
+            await nocodb_conn.close()
+        await conn.execute(f'DROP SCHEMA IF EXISTS "{schema}" CASCADE')
+        await conn.close()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("relative_calendar_id", ("primary", "PRIMARY"))
+async def test_won_lead_loss_rejects_relative_calendar_identifier_before_delete(
+    relative_calendar_id: str,
+):
+    """A credential-relative booking alias cannot turn another account's 404 into loss."""
+
+    database_url = _database_url_or_skip()
+    schema = f"atlas_eom_won_loss_relative_calendar_{uuid.uuid4().hex}"
+    conn = await asyncpg.connect(database_url)
+    try:
+        await _prepare_schema(conn, schema, apply_privilege_migration=False)
+        provider = DatabaseCRMProvider(pool=conn)
+        contact_id, draft_id = await _book_first_clean_draft(conn, provider)
+        # Model rows booked before the concrete-identity contract. Both the
+        # prepare and completed evidence carried the relative alias then; a
+        # current service must reject the historical state rather than creating
+        # another event or treating a different principal's 404 as success.
+        await conn.execute(
+            "ALTER TABLE eom_lead_lifecycle_events DISABLE TRIGGER USER"
+        )
+        try:
+            await conn.execute(
+                """
+                UPDATE eom_lead_lifecycle_events
+                SET metadata = jsonb_set(metadata, '{calendar_id}', to_jsonb($2::text))
+                WHERE contact_id = $1
+                  AND event_type = ANY($3::varchar[])
+                """,
+                contact_id,
+                relative_calendar_id,
+                ["first_clean_booking_requested", "first_clean_booked"],
+            )
+        finally:
+            await conn.execute(
+                "ALTER TABLE eom_lead_lifecycle_events ENABLE TRIGGER USER"
+            )
+        calendar = _WonLossCalendar()
+
+        with pytest.raises(
+            EOMLeadConversionError, match="relative Calendar identifier"
+        ) as exc:
+            await mark_eom_lead_lost_with_won_teardown(
+                provider,
+                calendar,
+                EOMLeadLost(
+                    contact_id=str(contact_id),
+                    reason_code="no_response",
+                    note=None,
+                    operation_key=f"office-won-loss-{uuid.uuid4().hex}",
+                    actor_id=1,
+                    actor_name="Juan Canfield",
+                ),
+            )
+
+        assert exc.value.status_code == 409
+        assert calendar.calls == []
+        assert await conn.fetchval(
+            "SELECT lead_stage FROM contacts WHERE id = $1", contact_id
+        ) == "won"
+        assert await conn.fetchval(
+            "SELECT status FROM eom_onboarding_email_drafts WHERE id = $1::uuid",
+            draft_id,
+        ) == "pending"
+        assert await conn.fetchval(
+            """
+            SELECT COUNT(*)
+            FROM eom_lead_lifecycle_events
+            WHERE contact_id = $1
+              AND event_type = 'first_clean_cancellation_requested'
+            """,
+            contact_id,
+        ) == 0
+    finally:
+        await conn.execute(f'DROP SCHEMA IF EXISTS "{schema}" CASCADE')
+        await conn.close()
+
+
+@pytest.mark.asyncio
+async def test_won_lead_loss_execution_fences_claim_handoff_and_status_writers():
+    database_url = _database_url_or_skip()
+    schema = f"atlas_eom_won_loss_fence_{uuid.uuid4().hex}"
+    conn = await asyncpg.connect(database_url)
+    pool = None
+    loss_task = None
+    claim_task = None
+    handoff_task = None
+    status_task = None
+    archive_task = None
+    calendar = _BlockingWonLossCalendar()
+    try:
+        await _prepare_schema(conn, schema, apply_privilege_migration=False)
+        pool = await asyncpg.create_pool(
+            database_url,
+            min_size=3,
+            max_size=6,
+            server_settings={"search_path": f'"{schema}", public'},
+        )
+        provider = DatabaseCRMProvider(pool=pool)
+        contact_id, draft_id = await _book_first_clean_draft(conn, provider)
+        command = EOMLeadLost(
+            contact_id=str(contact_id),
+            reason_code="no_response",
+            note=None,
+            operation_key=f"office-won-loss-{uuid.uuid4().hex}",
+            actor_id=1,
+            actor_name="Juan Canfield",
+        )
+        loss_task = asyncio.create_task(
+            mark_eom_lead_lost_with_won_teardown(provider, calendar, command)
+        )
+        await asyncio.wait_for(calendar.started.wait(), timeout=5)
+
+        claim_task = asyncio.create_task(
+            provider.claim_eom_onboarding_draft(
+                draft_id=draft_id,
+                actor_id=2,
+                actor_name="Mayra Canfield",
+            )
+        )
+        handoff_task = asyncio.create_task(
+            provider.finalize_eom_customer_handoff(
+                contact_id=str(contact_id),
+                tracker_customer_id=981,
+                tracker_site_id=1981,
+                approval_key=f"office-handoff-{uuid.uuid4().hex}",
+                actor_id=2,
+                actor_name="Mayra Canfield",
+            )
+        )
+        status_task = asyncio.create_task(
+            provider.update_contact(str(contact_id), {"status": "inactive"})
+        )
+        archive_task = asyncio.create_task(provider.delete_contact(str(contact_id)))
+        await asyncio.sleep(0.1)
+        assert not claim_task.done()
+        assert not handoff_task.done()
+        assert not status_task.done()
+        assert not archive_task.done()
+
+        calendar.release.set()
+        completed = await asyncio.wait_for(loss_task, timeout=5)
+        assert completed["lead_stage"] == "lost"
+        with pytest.raises(EOMLeadConversionError, match="revoked") as claim_exc:
+            await asyncio.wait_for(claim_task, timeout=5)
+        assert claim_exc.value.status_code == 409
+        with pytest.raises(EOMLeadConversionError) as handoff_exc:
+            await asyncio.wait_for(handoff_task, timeout=5)
+        assert handoff_exc.value.status_code == 409
+        status_result, archived = await asyncio.gather(
+            asyncio.wait_for(status_task, timeout=5),
+            asyncio.wait_for(archive_task, timeout=5),
+        )
+        assert status_result is not None
+        assert archived is True
+    finally:
+        calendar.release.set()
+        for task in (loss_task, claim_task, handoff_task, status_task, archive_task):
+            if task is not None and not task.done():
+                task.cancel()
+                with suppress(asyncio.CancelledError):
+                    await task
+        if pool is not None:
+            await pool.close()
+        await conn.execute(f'DROP SCHEMA IF EXISTS "{schema}" CASCADE')
+        await conn.close()
+
+
+@pytest.mark.asyncio
+async def test_pre_won_lead_loss_retains_the_direct_replay_without_calendar():
+    """Routing through the safety service cannot alter pre-won loss semantics."""
+    database_url = _database_url_or_skip()
+    schema = f"atlas_eom_pre_won_loss_{uuid.uuid4().hex}"
+    conn = await asyncpg.connect(database_url)
+    try:
+        await _prepare_schema(conn, schema, apply_privilege_migration=False)
+        provider = DatabaseCRMProvider(pool=conn)
+        contact_id = uuid.uuid4()
+        await _insert_contact(conn, contact_id=contact_id, lead_stage="estimate_booked")
+        calendar = _WonLossCalendar()
+        command = EOMLeadLost(
+            contact_id=str(contact_id),
+            reason_code="declined_after_estimate",
+            note="Price did not fit",
+            operation_key=f"office-pre-won-loss-{uuid.uuid4().hex}",
+            actor_id=1,
+            actor_name="Juan Canfield",
+        )
+
+        first = await mark_eom_lead_lost_with_won_teardown(provider, calendar, command)
+        replay = await mark_eom_lead_lost_with_won_teardown(
+            provider, calendar, command
+        )
+
+        assert first["from_stage"] == "estimate_booked"
+        assert first["idempotent"] is False
+        assert replay["from_stage"] == "estimate_booked"
+        assert replay["idempotent"] is True
+        assert calendar.calls == []
     finally:
         await conn.execute(f'DROP SCHEMA IF EXISTS "{schema}" CASCADE')
         await conn.close()

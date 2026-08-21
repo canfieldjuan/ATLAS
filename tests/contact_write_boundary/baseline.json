@@ -26,6 +26,7 @@
     "atlas_brain/services/crm_provider.py::UPDATE::UPDATE contacts SET lead_stage = $3, updated_at = NOW() WHERE i",
     "atlas_brain/services/crm_provider.py::UPDATE::UPDATE contacts SET lead_stage = $3, updated_at = NOW() WHERE i",
     "atlas_brain/services/crm_provider.py::UPDATE::UPDATE contacts SET lead_stage = ' ', updated_at = NOW() WHE",
+    "atlas_brain/services/crm_provider.py::UPDATE::UPDATE contacts SET lead_stage = ' ', updated_at = NOW() WHE",
     "atlas_brain/services/crm_provider.py::UPDATE::UPDATE contacts SET status = ' ', updated_at = NOW() WHERE id = $1",
     "atlas_brain/services/crm_provider.py::UPDATE::UPDATE contacts SET {runtime value} WHERE id = $1 AND (",
     "atlas_brain/services/crm_provider.py::UPDATE::UPDATE contacts SET {runtime value} WHERE {runtime value} RETURNING *",
