@@ -45,7 +45,8 @@ Max files: 2
   trusted security workflow.
 - Risk area: masking a real secret. Mitigation: exact redacted scanner records,
   closed membership, trusted-base preservation, and the required scan proof.
-- Reviewer rules: R2 security-sensitive baseline change.
+- Reviewer rules: R2, R3, R12, R14 — test evidence, suppression-boundary
+  security, required CI behavior, and codebase verification.
 
 ### Guard-class closure
 
@@ -89,23 +90,44 @@ other findings remain visible.
 
 ## Deferred
 
-None.
+Parking predicate: this slice parks scanner-rule or workflow changes, any
+additional baseline member, and baseline-policy hardening not required to admit
+these two reviewed historical false positives; each belongs to a separate
+controlled security-rotation slice.
 
 Parked hardening: none.
 
 ## Verification
 
-- JSON parses and baseline membership is main's 24 records plus the two listed
-  records.
-- The baseline-rotation guard accepts the labeled, two-file candidate.
-- The plan synchronizer derives files and LOC from the final diff.
-- GitHub's required Gitleaks PR scan validates the clean rebuilt history; the
-  baseline-growth guard validates scope and preservation.
+- `jq -e "length == 26" docs/security/gitleaks-baseline.json` — passed;
+  result `true` confirms the candidate contains 26 records.
+- `python scripts/check_gitleaks_baseline_rotation.py --base-ref origin/main
+  --head-ref HEAD --labels-json "[\"security-rotation\"]"` — passed; the labeled
+  candidate admits the two-file rotation without trusted-baseline removal.
+- `python scripts/sync_pr_plan.py
+  plans/PR-EOM-Gitleaks-Baseline-Archive-Restore-Prose.md origin/main --check`
+  — passed after this plan update.
+- `python scripts/audit_plan_doc.py
+  plans/PR-EOM-Gitleaks-Baseline-Archive-Restore-Prose.md` — passed.
+- `git diff --check origin/main...HEAD` — passed.
+- #2465 comparison, pinned workflow image and range
+  `origin/main..origin/claude/pr-eom-contact-archive-restore`:
+
+  ```bash
+  docker run --rm -v /home/juan-canfield/Desktop/Atlas/.git:/home/juan-canfield/Desktop/Atlas/.git:ro -v "/home/juan-canfield/Desktop/01 - Effingham Office Maids/atlas-2466-repair-worktree:/home/juan-canfield/Desktop/01 - Effingham Office Maids/atlas-2466-repair-worktree:ro" -v /home/juan-canfield/Desktop/Atlas-worktrees/eom-gitleaks-baseline-repair/docs/security/gitleaks-baseline.json:/baseline.json:ro ghcr.io/gitleaks/gitleaks@sha256:c00b6bd0aeb3071cbcb79009cb16a60dd9e0a7c60e2be9ab65d25e6bc8abbb7f git --redact --verbose --log-opts="origin/main..origin/claude/pr-eom-contact-archive-restore" --baseline-path /baseline.json "/home/juan-canfield/Desktop/01 - Effingham Office Maids/atlas-2466-repair-worktree"
+  docker run --rm -v /home/juan-canfield/Desktop/Atlas/.git:/home/juan-canfield/Desktop/Atlas/.git:ro -v "/home/juan-canfield/Desktop/01 - Effingham Office Maids/atlas-2466-repair-worktree:/home/juan-canfield/Desktop/01 - Effingham Office Maids/atlas-2466-repair-worktree:ro" ghcr.io/gitleaks/gitleaks@sha256:c00b6bd0aeb3071cbcb79009cb16a60dd9e0a7c60e2be9ab65d25e6bc8abbb7f git --redact --verbose --log-opts="origin/main..origin/claude/pr-eom-contact-archive-restore" --baseline-path "/home/juan-canfield/Desktop/01 - Effingham Office Maids/atlas-2466-repair-worktree/docs/security/gitleaks-baseline.json" "/home/juan-canfield/Desktop/01 - Effingham Office Maids/atlas-2466-repair-worktree"
+  ```
+
+  The trusted-main baseline command exited 1 with exactly the two listed
+  redacted records across four commits; the candidate baseline command exited
+  0 with no findings across the same four commits.
+- GitHub required Gitleaks PR scan passed on the clean rebuilt #2466 history;
+  the baseline-growth guard passed for scope and preservation.
 
 ## Estimated diff size
 
 | File | LOC |
 |---|---:|
 | `docs/security/gitleaks-baseline.json` | 2 |
-| `plans/PR-EOM-Gitleaks-Baseline-Archive-Restore-Prose.md` | 111 |
-| **Total** | **113** |
+| `plans/PR-EOM-Gitleaks-Baseline-Archive-Restore-Prose.md` | 133 |
+| **Total** | **135** |
