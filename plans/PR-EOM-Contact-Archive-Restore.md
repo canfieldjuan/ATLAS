@@ -174,10 +174,11 @@ Max files: 11
   (`test_omitting_lifecycle_defaults_to_the_active_view`), so existing
   callers see the pre-slice directory unchanged.
 - Side-effect ordering: locks (contact, operation, won-loss execution) ->
-  replay receipt read -> key-ownership probe -> FOR UPDATE row read ->
-  tenant check -> replay validation -> admission checks -> cancellation
-  fence -> guarded UPDATE -> receipt INSERT, all inside one transaction, so
-  no observer sees a status flip without its receipt.
+  replay receipt read -> FOR UPDATE row read -> tenant check (404 for
+  foreign or missing targets BEFORE any key-ownership disclosure) ->
+  key-ownership probe -> replay validation -> admission checks ->
+  cancellation fence -> guarded UPDATE -> receipt INSERT, all inside one
+  transaction, so no observer sees a status flip without its receipt.
 
 ### Files touched
 
