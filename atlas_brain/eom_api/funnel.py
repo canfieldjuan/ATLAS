@@ -731,6 +731,14 @@ _CAPABILITY_ROUTES: dict[str, tuple[str, str]] = {
     ),
     "lead.customer_handoff": ("POST", "/eom-funnel/customer-handoffs"),
     "contact.operator_mutation": ("POST", "/eom-funnel/operator-contacts"),
+    # Same route as contact.operator_mutation ON PURPOSE: this name versions
+    # the route's SEMANTICS, not its existence. A build advertises it only by
+    # shipping this dict entry, which lands together with the audited
+    # null-clear contract (present-null clears email/phone, cleared_fields in
+    # the lifecycle event). A caller must not infer null semantics from the
+    # mutation route existing -- an older build serves the same route without
+    # them -- so the tracker gates field-clearing on THIS name + route pair.
+    "contact.field_clear": ("POST", "/eom-funnel/operator-contacts"),
     "lead.lost": ("POST", "/eom-funnel/leads/{contact_id}/lost"),
     "lead.reopen": ("POST", "/eom-funnel/leads/{contact_id}/reopen"),
     "onboarding.draft.list": ("GET", "/eom-funnel/onboarding-drafts"),

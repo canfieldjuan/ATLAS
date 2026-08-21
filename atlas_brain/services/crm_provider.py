@@ -1689,6 +1689,16 @@ class DatabaseCRMProvider:
                 metadata["previous_values"] = {
                     key: previous.get(key) for key in changed
                 }
+                # Field NAMES only -- deliberately no new_values map. The new
+                # value already lives on the contact row (and becomes the next
+                # event's previous_values if edited again), so copying it here
+                # would duplicate PII into the audit stream for no recovery
+                # benefit. With this key the event alone distinguishes all
+                # three operator intents: OMITTED = absent from changed_fields,
+                # CLEARED = listed here, CHANGED = changed_fields minus this.
+                metadata["cleared_fields"] = sorted(
+                    key for key in changed if contact.get(key) is None
+                )
             await conn.execute(
                 """
                 INSERT INTO eom_lead_lifecycle_events (
