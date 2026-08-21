@@ -145,6 +145,10 @@ class MigrationContentIntegrityReport:
     missing_source: tuple[str, ...]
 
 
+class PendingMigrationContentIntegrityError(RuntimeError):
+    """Raised before pending SQL when provenance evidence remains unresolved."""
+
+
 def _migration_content_sha256(source: bytes) -> str:
     """Return the deterministic identity for exactly one migration source."""
     return hashlib.sha256(source).hexdigest()
@@ -218,6 +222,58 @@ def _log_migration_content_integrity(report: MigrationContentIntegrityReport) ->
             ", ".join(report.mismatched) or "none",
             ", ".join(report.missing_source) or "none",
         )
+
+
+async def _unresolved_pending_migration_content_evidence(
+    executor,
+    migration_files: Collection[Path],
+    report: MigrationContentIntegrityReport,
+) -> tuple[tuple[str, ...], tuple[str, ...]]:
+    """Return evidence that still cannot admit a new migration application.
+
+    Generic content reports intentionally keep historical discrepancies visible.
+    A current attestation may satisfy admission only for its own reviewed name;
+    it never changes the underlying report or treats unavailable source bytes as
+    verified.
+    """
+    evidence_names = frozenset(report.mismatched) | frozenset(report.missing_source)
+    if not evidence_names:
+        return report.mismatched, report.missing_source
+
+    from .reconciliation import (
+        attest_known_historical_migration_reconciliations,
+        known_historical_migration_reconciliation_names,
+    )
+
+    candidate_names = (
+        frozenset(report.mismatched)
+        & known_historical_migration_reconciliation_names()
+    )
+    if not candidate_names:
+        return report.mismatched, report.missing_source
+
+    try:
+        attestations = await attest_known_historical_migration_reconciliations(
+            executor,
+            migration_files,
+        )
+    except Exception as exc:
+        raise PendingMigrationContentIntegrityError(
+            "Refusing to apply pending migrations because known historical "
+            "migration evidence could not be attested for "
+            f"{','.join(sorted(candidate_names))}"
+        ) from exc
+
+    attested_names = frozenset(
+        attestation.migration_name
+        for attestation in attestations
+        if attestation.migration_name in candidate_names
+        and attestation.status == "attested"
+    )
+    return (
+        tuple(name for name in report.mismatched if name not in attested_names),
+        report.missing_source,
+    )
 
 
 # Cluster-wide advisory key serializing migration runs. Concurrent first
@@ -566,10 +622,13 @@ async def run_migrations(
             # winner recorded its work.
             applied = await _get_applied_migrations(conn)
 
-            migration_files = sorted(directory.glob("*.sql"))
-            _log_migration_content_integrity(
-                await migration_content_integrity_report(conn, migration_files)
+            migration_catalog = sorted(directory.glob("*.sql"))
+            integrity_report = await migration_content_integrity_report(
+                conn,
+                migration_catalog,
             )
+            _log_migration_content_integrity(integrity_report)
+            migration_files = migration_catalog
             if only is not None:
                 requested = set(only)
                 migration_files = [
@@ -590,6 +649,22 @@ async def run_migrations(
             if not pending:
                 logger.debug("All %d migrations already applied", len(migration_files))
                 return
+
+            unresolved_mismatched, unresolved_missing_source = (
+                await _unresolved_pending_migration_content_evidence(
+                    conn,
+                    migration_catalog,
+                    report=integrity_report,
+                )
+            )
+            if unresolved_mismatched or unresolved_missing_source:
+                raise PendingMigrationContentIntegrityError(
+                    "Refusing to apply pending migrations with unresolved "
+                    "migration-content evidence: "
+                    f"mismatched={','.join(unresolved_mismatched) or 'none'} "
+                    f"missing_source={','.join(unresolved_missing_source) or 'none'} "
+                    f"pending={','.join(migration_file.stem for migration_file in pending)}"
+                )
 
             logger.info("Running %d pending migrations (of %d total)", len(pending), len(migration_files))
 
