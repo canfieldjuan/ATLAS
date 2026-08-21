@@ -61,10 +61,11 @@ Max files: 6
    remains fail-closed rather than widening this recovery into index-rebuild
    machinery. The observed index is valid, ready, unique, and has the required
    predicate, so migration 387 reuses it.
-5. Fail atomically before any legacy-row update when migration 377's enabled
-   Gmail-replacement trigger has a pending replacement for one of those rows;
-   completing/reconciling that durable delivery operation is the explicit
-   prerequisite for retrying 387.
+5. Fail atomically before any legacy-row update only when migration 377's
+   enabled Gmail-replacement trigger has a pending replacement for a row that
+   387 will actually mutate; a correctly marked collision/unparseable no-op
+   remains eligible to record 387. Completing/reconciling a replacement is the
+   explicit prerequisite only for the blocked update path.
 6. Document and prove the only safe retained-#2441 rollback boundary: remove
    the fresh-write admission check before resuming old recurring writers, and
    require a separate forward recovery if that rollback creates any NULL-period
@@ -120,8 +121,13 @@ Max files: 6
     an otherwise eligible candidate, proving the stricter readiness lookup
     does not turn the approval writer unavailable in its transaction fixture.
   - A pending migration-377 Gmail draft replacement on an active legacy
-    recurring invoice fails before the first `invoices` update, records no 387
-    row, and succeeds on retry only after the replacement is resolved.
+    recurring invoice that 387 will update fails before the first `invoices`
+    update, records no 387 row, and succeeds on retry only after the
+    replacement is resolved.
+  - A pending migration-377 Gmail draft replacement on a correctly marked
+    final-385 collision or unparseable legacy exception does not block 387;
+    its invoice/reservation snapshot and pending draft state remain unchanged
+    while 387 records only its ledger row.
   - The documented, explicitly authorized removal of
     `invoices_recurring_billing_period_required_check` allows a retained #2441
     recurring insert that omits `billing_period`; merely re-adding the check
@@ -201,13 +207,16 @@ nonzero-year contract required by #2448, and installs the required-write
 check. Before changing the check it fails atomically if a non-null stored
 period cannot satisfy the final grammar.
 
-Before any catalog/data mutation, it compares the complete normalized partial
+Before its first `invoices` update, it compares the complete normalized partial
 index predicate and both CHECK expressions with the #2448 readiness contract
-rather than accepting word fragments. It also detects migration 377's enabled
-Gmail-replacement trigger; if that exact trigger would reject an update to a
-legacy recurring row with a pending replacement, 387 fails before its first
-`invoices` update and can be retried after the delivery operation is complete
-or explicitly reconciled.
+rather than accepting word fragments, then materializes the candidate rows.
+It detects migration 377's enabled Gmail-replacement trigger from that same
+candidate set and mirrors the exact predicates of every subsequent `invoices`
+update. A pending replacement blocks only an invoice row 387 would change; a
+correctly marked collision/unparseable final-385 exception is a data no-op and
+allows 387 to record its ledger row. The trigger guard still runs before the
+first invoice update and can be retried after a genuinely blocking delivery
+operation is complete or explicitly reconciled.
 
 It derives a candidate period only from the existing writer-owned formats:
 `monthly_auto.source_ref` ending in `_YYYY-MM`, and
@@ -292,48 +301,18 @@ Parked hardening: H-18 phase 2 and unobserved index repair, tracked above.
 
 ## Verification
 
-- `ATLAS_RECEIVABLES_TEST_DATABASE_URL=postgresql://…:55487/… python -m
-  pytest tests/test_invoice_repository.py -k 'recorded_initial_385_recovery
-  or 387_is_data_noop' -q` -- 3 passed, 9 deselected against a disposable
-  Docker PostgreSQL 16 database; no production database, customer, PDF, Gmail,
-  or email surface was used.
-- `ATLAS_RECEIVABLES_TEST_DATABASE_URL=postgresql://…:55487/… python -m
-  pytest tests/test_invoice_repository.py -q` -- 16 passed.
-- `python -m pytest tests/test_commercial_billing_approvals.py -k
-  'test_approval_creates_one_exact_draft_and_same_key_replays_without_source_read
-  or test_manual_square_candidate_creates_draft_without_a_gmail_recipient' -q`
-  -- 2 passed, 111 deselected; its in-memory connection now returns the real
-  `pg_get_expr` form verified against the disposable PostgreSQL 16 catalog.
-- `python -m pytest tests/test_commercial_billing_approvals.py -q` -- 82
-  passed, 31 skipped.
-- Real PostgreSQL recovery tests prove that a token-similar `status = 'void'`
-  index fails without a 387 ledger/catalog change, migration 377's actual
-  pending-replacement trigger stops recovery before its first invoice update
-  and permits an explicit retry after resolution, and the documented removal
-  of the admission constraint permits a retained-#2441-style NULL-period
-  recurring insert.
-- Real PostgreSQL named constraint variants with every expected token but an
-  added NULL/non-null bypass prove that 387 replaces the complete expressions
-  and that the runtime readiness check fails closed if those constraints later
-  drift.
-- `python -m pytest tests/test_migrations_runner.py -k 'marked_migration_records_its_ledger_entry_in_one_transaction or marked_migration_rejects_concurrently_ddl_before_a_transaction or marked_migration_ignores_concurrently_mentions_in_comments' -q`
-  -- 3 passed, 48 deselected.
-- The GitHub-required `atlas-invoicing-checks`, `unit-gate`, and adjacent
-  workflow mirrors are intentionally not rerun locally after the focused
-  financial proof. Juan directed GitHub to be the single full-check execution;
-  current-head hosted checks remain a merge requirement.
-- `python -m ruff check atlas_brain/storage/repositories/invoice.py
-  tests/test_invoice_repository.py` and `python -m py_compile
-  atlas_brain/storage/repositories/invoice.py tests/test_invoice_repository.py`
-  -- passed.
-- `git diff --check` -- passed.
-- `python scripts/sync_pr_plan.py --check
-  plans/PR-EOM-Recurring-Invoice-Dedup-Recovery.md origin/main` and
-  `python scripts/audit_plan_doc.py
-  plans/PR-EOM-Recurring-Invoice-Dedup-Recovery.md` -- passed.
-- Skipped locally: all full GitHub workflow mirrors, including the
-  legacy-monthly writer harness. This PR does not modify that harness; hosted
-  CI is the single independent execution by explicit operator direction.
+- Added a real-PostgreSQL regression to the existing final-385 no-op proof:
+  it installs migration 377's actual pending-replacement trigger and attaches
+  pending replacements to both correctly marked collision and unparseable
+  exceptions. The expected result is a successful 387 ledger record with equal
+  invoice/reservation/catalog snapshots and unchanged pending-draft state.
+- The existing real-PostgreSQL blocking fixture remains the complementary
+  assertion: a pending replacement on a row 387 will mutate still fails before
+  its first invoice update and can retry after the replacement resolves.
+- Skipped locally: all tests, static gates, and workflow mirrors for this
+  current-head repair. Juan directed GitHub to be the sole check execution;
+  `atlas-invoicing-checks`, `unit-gate`, pre-push audit, and live
+  reconciliation must pass on the published head before merge.
 - Before deploy after merge: repeat the redacted live catalog preflight,
   including the complete index predicate and pending-replacement query; restart
   only the ATLAS provider and prove active runtime SHA plus `/health` and
@@ -346,9 +325,9 @@ Parked hardening: H-18 phase 2 and unobserved index repair, tracked above.
 | File | LOC |
 |---|---:|
 | `.github/workflows/atlas_invoicing_checks.yml` | 2 |
-| `atlas_brain/storage/migrations/387_eom_recurring_invoice_dedup_recovery.sql` | 389 |
+| `atlas_brain/storage/migrations/387_eom_recurring_invoice_dedup_recovery.sql` | 423 |
 | `atlas_brain/storage/repositories/invoice.py` | 53 |
-| `plans/PR-EOM-Recurring-Invoice-Dedup-Recovery.md` | 354 |
+| `plans/PR-EOM-Recurring-Invoice-Dedup-Recovery.md` | 333 |
 | `tests/test_commercial_billing_approvals.py` | 13 |
-| `tests/test_invoice_repository.py` | 1147 |
-| **Total** | **1958** |
+| `tests/test_invoice_repository.py` | 1224 |
+| **Total** | **2048** |

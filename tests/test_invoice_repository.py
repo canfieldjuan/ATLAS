@@ -1750,7 +1750,7 @@ async def test_real_postgres_387_rollback_fence_allows_retained_old_writer():
 
 @pytest.mark.asyncio
 async def test_real_postgres_387_is_data_noop_for_final_385_catalog():
-    """A fresh final-385 schema needs only a new 387 ledger row."""
+    """A final catalog records 387 despite no-op pending Gmail replacements."""
     asyncpg = pytest.importorskip("asyncpg")
     database_url = os.environ.get("ATLAS_RECEIVABLES_TEST_DATABASE_URL")
     if not database_url:
@@ -1765,10 +1765,15 @@ async def test_real_postgres_387_is_data_noop_for_final_385_catalog():
         await conn.execute(_migration_sql("045_invoices.sql"))
         contact_unique = uuid4()
         contact_collision = uuid4()
+        contact_unparseable = uuid4()
+        collision_first_id = uuid4()
+        collision_second_id = uuid4()
+        unparseable_id = uuid4()
         await conn.execute(
-            "INSERT INTO contacts (id) VALUES ($1), ($2)",
+            "INSERT INTO contacts (id) VALUES ($1), ($2), ($3)",
             contact_unique,
             contact_collision,
+            contact_unparseable,
         )
         await conn.executemany(
             """
@@ -1786,16 +1791,23 @@ async def test_real_postgres_387_is_data_noop_for_final_385_catalog():
                     "final_2026-04",
                 ),
                 (
-                    uuid4(),
+                    collision_first_id,
                     "INV-2026-May-final-a",
                     contact_collision,
                     "monthly_auto",
                     "final_collision_2026-05",
                 ),
                 (
-                    uuid4(),
+                    collision_second_id,
                     "INV-2026-May-final-b",
                     contact_collision,
+                    "monthly_auto",
+                    "second_collision_2026-05",
+                ),
+                (
+                    unparseable_id,
+                    "INV-2026-May-final-c",
+                    contact_unparseable,
                     "eom_commercial_billing",
                     None,
                 ),
@@ -1814,6 +1826,26 @@ async def test_real_postgres_387_is_data_noop_for_final_385_catalog():
                 """
             )
         ]
+        invoice_snapshot = {
+            row["invoice_number"]: row for row in invoices_before
+        }
+        for invoice_number in (
+            "INV-2026-May-final-a",
+            "INV-2026-May-final-b",
+        ):
+            collision = invoice_snapshot[invoice_number]
+            assert collision["billing_period"] is None
+            assert collision["billing_period_legacy_null"] is True
+            assert json.loads(collision["metadata"]) == {
+                "billing_period_backfill_candidate_period": "2026-05",
+                "billing_period_backfill_collision": True,
+            }
+        unparseable = invoice_snapshot["INV-2026-May-final-c"]
+        assert unparseable["billing_period"] is None
+        assert unparseable["billing_period_legacy_null"] is True
+        assert json.loads(unparseable["metadata"]) == {
+            "billing_period_legacy_null": True,
+        }
         reservations_before = [
             dict(row)
             for row in await conn.fetch(
@@ -1866,6 +1898,44 @@ async def test_real_postgres_387_is_data_noop_for_final_385_catalog():
                   AND attribute.attname IN ('billing_period', 'billing_period_legacy_null')
                 """
             )
+        )
+
+        await _install_pending_gmail_replacement_trigger(conn)
+        pending_replacements = [
+            (uuid4(), uuid4(), collision_first_id),
+            (uuid4(), uuid4(), unparseable_id),
+        ]
+        await conn.executemany(
+            """
+            INSERT INTO commercial_billing_candidate_approvals (id, invoice_id)
+            VALUES ($1, $2)
+            """,
+            [
+                (approval_id, invoice_id)
+                for approval_id, _, invoice_id in pending_replacements
+            ],
+        )
+        await conn.executemany(
+            """
+            INSERT INTO commercial_billing_invoice_gmail_drafts (
+                id, approval_id, state, draft_generation
+            ) VALUES ($1, $2, 'creating', 2)
+            """,
+            [
+                (draft_id, approval_id)
+                for approval_id, draft_id, _ in pending_replacements
+            ],
+        )
+        await conn.executemany(
+            """
+            INSERT INTO commercial_billing_invoice_gmail_draft_replacement_events (
+                id, gmail_draft_record_id, replacement_generation
+            ) VALUES ($1, $2, 2)
+            """,
+            [
+                (uuid4(), draft_id)
+                for _, draft_id, _ in pending_replacements
+            ],
         )
 
         await _run_migration(
@@ -1941,6 +2011,13 @@ async def test_real_postgres_387_is_data_noop_for_final_385_catalog():
         assert constraints_after == constraints_before
         assert index_after == index_before
         assert comments_after == comments_before
+        assert await conn.fetchval(
+            """
+            SELECT count(*)
+            FROM commercial_billing_invoice_gmail_drafts
+            WHERE state = 'creating'
+            """
+        ) == len(pending_replacements)
 
         migration_names = await conn.fetch(
             "SELECT name, content_sha256 FROM schema_migrations ORDER BY version"

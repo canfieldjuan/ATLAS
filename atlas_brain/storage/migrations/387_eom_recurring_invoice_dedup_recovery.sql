@@ -64,69 +64,6 @@ BEGIN
     END IF;
 END $$;
 
--- Migration 377 deliberately rejects every invoice mutation while an approved
--- commercial invoice has a pending Gmail draft replacement. Its trigger is
--- valid safety behavior, so do not bypass it or discover it after partially
--- mutating legacy rows: stop before this recovery's first invoices UPDATE and
--- let the operator complete/reconcile the replacement, then retry atomically.
-DO $$
-DECLARE
-    pending_gmail_replacement BOOLEAN := false;
-BEGIN
-    IF EXISTS (
-        SELECT 1
-        FROM pg_trigger AS trigger_state
-        JOIN pg_class AS table_class
-          ON table_class.oid = trigger_state.tgrelid
-        JOIN pg_namespace AS table_namespace
-          ON table_namespace.oid = table_class.relnamespace
-        WHERE table_namespace.nspname = current_schema()
-          AND table_class.relname = 'invoices'
-          AND trigger_state.tgname =
-              'commercial_billing_reject_invoice_mutation_while_gmail_replacement_pending'
-          AND NOT trigger_state.tgisinternal
-          AND trigger_state.tgenabled <> 'D'
-    ) THEN
-        IF to_regclass(format(
-            '%I.%I', current_schema(), 'commercial_billing_candidate_approvals'
-        )) IS NULL
-           OR to_regclass(format(
-            '%I.%I', current_schema(), 'commercial_billing_invoice_gmail_drafts'
-        )) IS NULL
-           OR to_regclass(format(
-            '%I.%I', current_schema(),
-            'commercial_billing_invoice_gmail_draft_replacement_events'
-        )) IS NULL THEN
-            RAISE EXCEPTION
-                'Cannot recover migration 385: the enabled Gmail replacement trigger has an incomplete catalog; reconcile migration 377 before retrying';
-        END IF;
-
-        EXECUTE $pending_replacement$
-            SELECT EXISTS (
-                SELECT 1
-                FROM invoices AS inv
-                JOIN commercial_billing_candidate_approvals AS approval
-                  ON approval.invoice_id = inv.id
-                JOIN commercial_billing_invoice_gmail_drafts AS draft
-                  ON draft.approval_id = approval.id
-                JOIN commercial_billing_invoice_gmail_draft_replacement_events AS replacement
-                  ON replacement.gmail_draft_record_id = draft.id
-                 AND replacement.replacement_generation = draft.draft_generation
-                WHERE inv.billing_period IS NULL
-                  AND inv.status <> 'void'
-                  AND inv.source IN ('monthly_auto', 'eom_commercial_billing')
-                  AND draft.state IN ('creating', 'retryable', 'recovery_required')
-            )
-        $pending_replacement$
-        INTO pending_gmail_replacement;
-
-        IF pending_gmail_replacement THEN
-            RAISE EXCEPTION
-                'Cannot recover migration 385: pending Gmail draft replacement blocks a recurring legacy invoice update; complete or reconcile the replacement before retrying';
-        END IF;
-    END IF;
-END $$;
-
 ALTER TABLE invoices
     ADD COLUMN IF NOT EXISTS billing_period_legacy_null BOOLEAN NOT NULL DEFAULT false;
 
@@ -190,15 +127,6 @@ BEGIN
             ) NOT VALID;
     END IF;
 END $$;
-
--- Preserve the existing NULL-period historical rows before installing the
--- fresh-write gate. Rows that later backfill below return to false.
-UPDATE invoices
-SET billing_period_legacy_null = true
-WHERE billing_period IS NULL
-  AND status <> 'void'
-  AND source IN ('monthly_auto', 'eom_commercial_billing')
-  AND billing_period_legacy_null IS DISTINCT FROM true;
 
 DO $$
 DECLARE
@@ -327,6 +255,112 @@ SELECT
         )
     ) AS is_collision
 FROM candidates AS candidate;
+
+-- Migration 377 deliberately rejects every invoice mutation while an approved
+-- commercial invoice has a pending Gmail draft replacement. Its trigger is
+-- valid safety behavior, so do not bypass it or discover it after partially
+-- mutating legacy rows. Materialize the exact recovery candidates first, then
+-- preflight only rows one of the following invoices UPDATE statements will
+-- change. A correctly marked collision/unparseable row is a data no-op and
+-- must not prevent 387 from recording its ledger entry.
+DO $$
+DECLARE
+    pending_gmail_replacement BOOLEAN := false;
+BEGIN
+    IF EXISTS (
+        SELECT 1
+        FROM pg_trigger AS trigger_state
+        JOIN pg_class AS table_class
+          ON table_class.oid = trigger_state.tgrelid
+        JOIN pg_namespace AS table_namespace
+          ON table_namespace.oid = table_class.relnamespace
+        WHERE table_namespace.nspname = current_schema()
+          AND table_class.relname = 'invoices'
+          AND trigger_state.tgname =
+              'commercial_billing_reject_invoice_mutation_while_gmail_replacement_pending'
+          AND NOT trigger_state.tgisinternal
+          AND trigger_state.tgenabled <> 'D'
+    ) THEN
+        IF to_regclass(format(
+            '%I.%I', current_schema(), 'commercial_billing_candidate_approvals'
+        )) IS NULL
+           OR to_regclass(format(
+            '%I.%I', current_schema(), 'commercial_billing_invoice_gmail_drafts'
+        )) IS NULL
+           OR to_regclass(format(
+            '%I.%I', current_schema(),
+            'commercial_billing_invoice_gmail_draft_replacement_events'
+        )) IS NULL THEN
+            RAISE EXCEPTION
+                'Cannot recover migration 385: the enabled Gmail replacement trigger has an incomplete catalog; reconcile migration 377 before retrying';
+        END IF;
+
+        EXECUTE $pending_replacement$
+            SELECT EXISTS (
+                SELECT 1
+                FROM invoices AS inv
+                JOIN eom_recurring_invoice_dedup_recovery_candidates AS candidate
+                  ON candidate.id = inv.id
+                JOIN commercial_billing_candidate_approvals AS approval
+                  ON approval.invoice_id = inv.id
+                JOIN commercial_billing_invoice_gmail_drafts AS draft
+                  ON draft.approval_id = approval.id
+                JOIN commercial_billing_invoice_gmail_draft_replacement_events AS replacement
+                  ON replacement.gmail_draft_record_id = draft.id
+                 AND replacement.replacement_generation = draft.draft_generation
+                WHERE draft.state IN ('creating', 'retryable', 'recovery_required')
+                  AND (
+                      inv.billing_period_legacy_null IS DISTINCT FROM true
+                      OR (
+                          candidate.candidate_period IS NOT NULL
+                          AND NOT candidate.is_collision
+                          AND (
+                              inv.billing_period IS DISTINCT FROM candidate.candidate_period
+                              OR inv.billing_period_legacy_null IS DISTINCT FROM false
+                          )
+                      )
+                      OR (
+                          candidate.candidate_period IS NOT NULL
+                          AND candidate.is_collision
+                          AND (
+                              inv.billing_period_legacy_null IS DISTINCT FROM true
+                              OR inv.metadata->>'billing_period_backfill_collision'
+                                  IS DISTINCT FROM 'true'
+                              OR inv.metadata->>'billing_period_backfill_candidate_period'
+                                  IS DISTINCT FROM candidate.candidate_period
+                          )
+                      )
+                      OR (
+                          candidate.candidate_period IS NULL
+                          AND inv.billing_period IS NULL
+                          AND (
+                              inv.billing_period_legacy_null IS DISTINCT FROM true
+                              OR inv.metadata->>'billing_period_legacy_null'
+                                  IS DISTINCT FROM 'true'
+                          )
+                      )
+                  )
+            )
+        $pending_replacement$
+        INTO pending_gmail_replacement;
+
+        IF pending_gmail_replacement THEN
+            RAISE EXCEPTION
+                'Cannot recover migration 385: pending Gmail draft replacement blocks a recurring legacy invoice update; complete or reconcile the replacement before retrying';
+        END IF;
+    END IF;
+END $$;
+
+-- Preserve the existing NULL-period historical rows before installing the
+-- fresh-write gate. Rows that later backfill below return to false. The
+-- candidate-derived preflight above runs first because this is the first
+-- invoices UPDATE in the recovery.
+UPDATE invoices
+SET billing_period_legacy_null = true
+WHERE billing_period IS NULL
+  AND status <> 'void'
+  AND source IN ('monthly_auto', 'eom_commercial_billing')
+  AND billing_period_legacy_null IS DISTINCT FROM true;
 
 UPDATE invoices AS inv
 SET billing_period = candidate.candidate_period,
