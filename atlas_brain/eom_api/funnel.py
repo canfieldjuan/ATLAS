@@ -30,6 +30,8 @@ from ..services.eom_lead_conversion import (
 )
 from ..services.eom_won_lead_loss import mark_eom_lead_lost_with_won_teardown
 from ..services.eom_crm_mutations import (
+    EOM_CUSTOMER_TYPES,
+    EOM_OPERATOR_CONTACT_TYPES,
     EOMOperatorContactMutation,
     EOMOperatorContactMutationError,
     mutate_eom_operator_contact,
@@ -69,6 +71,17 @@ _RFC3339_DATETIME_PATTERN = re.compile(
 _MAX_SIGNED_BIGINT = 2**63 - 1
 _DEFAULT_LEAD_REVIEW_LIMIT = 100
 _MAX_LEAD_REVIEW_LIMIT = 200
+# The exact query-parameter names the contact directory accepts. Unknown names
+# are rejected rather than tolerated: the directory is new and has exactly one
+# caller, and a typoed filter silently ignored would return the unfiltered
+# directory while looking filtered.
+_CONTACT_DIRECTORY_QUERY_PARAMS = frozenset({"limit", "cursor", "search", "kind"})
+_MAX_CONTACT_DIRECTORY_SEARCH_LENGTH = 120
+# DERIVED from the canonical operator-mutation kind set, not re-enumerated:
+# if the write boundary ever admits another contact kind, the directory must
+# widen with it in the same commit, or that kind's records become write-only
+# -- the exact defect this slice exists to close (website #240).
+_CONTACT_DIRECTORY_KINDS = ("all", *EOM_OPERATOR_CONTACT_TYPES)
 # Ids ride in the query string, so the cap is a URL-length budget rather than a
 # database one: 100 ids costs roughly 4.8 KB of `contact_id=<uuid>&`, comfortably
 # inside the 8 KB request line every proxy in front of this accepts. Callers with
@@ -343,6 +356,67 @@ class EOMKnownContactsResponse(BaseModel):
     )
     checked: int
     limit: Annotated[int, Field(ge=1, le=_MAX_KNOWN_CONTACT_IDS)]
+
+
+class EOMContactDirectoryItem(BaseModel):
+    """The only CRM identity data the operator contact directory may expose.
+
+    A closed projection over canonical contact columns: no metadata, notes,
+    tags, receipts, or interaction history. The pipeline read's latest-intake
+    email/phone overlay stays unique to the review queue -- the directory's
+    job is discoverability of the canonical record, so it reads the record.
+    """
+
+    model_config = ConfigDict(extra="forbid", populate_by_name=True)
+
+    contact_id: UUID = Field(serialization_alias="contactId")
+    full_name: str = Field(serialization_alias="fullName")
+    email: str | None = None
+    phone: str | None = None
+    address: str | None = None
+    contact_type: str = Field(serialization_alias="contactType")
+    customer_type: str = Field(serialization_alias="customerType")
+    lead_stage: str | None = Field(default=None, serialization_alias="leadStage")
+    # The WHERE clause pins admission to active rows; this Literal makes the
+    # response model a second, independent enforcement of the same invariant,
+    # so a widened query can never silently leak an archived row.
+    status: Literal["active"]
+    source: str | None = None
+    created_at: datetime = Field(serialization_alias="createdAt")
+    updated_at: datetime | None = Field(default=None, serialization_alias="updatedAt")
+
+    @field_validator("contact_type")
+    @classmethod
+    def _contact_type_is_directory_kind(cls, value: str) -> str:
+        # Validated against the operator boundary's own set rather than a
+        # local Literal, so the two cannot drift apart.
+        if value not in EOM_OPERATOR_CONTACT_TYPES:
+            raise ValueError("contact_type must be a directory contact kind")
+        return value
+
+    @field_validator("customer_type")
+    @classmethod
+    def _customer_type_is_admitted(cls, value: str) -> str:
+        # Same single-source rule: EOM_CUSTOMER_TYPES is bound to the
+        # chk_contacts_customer_type CHECK (migration 366).
+        if value not in EOM_CUSTOMER_TYPES:
+            raise ValueError("customer_type must be an admitted account type")
+        return value
+
+
+class EOMContactDirectoryResponse(BaseModel):
+    """Closed response envelope for the operator contact-directory read."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    contacts: list[EOMContactDirectoryItem]
+    limit: Annotated[int, Field(ge=1, le=_MAX_LEAD_REVIEW_LIMIT)]
+    cursor: str | None = None
+    has_more: bool = Field(serialization_alias="hasMore")
+    next_cursor: str | None = Field(
+        default=None,
+        serialization_alias="nextCursor",
+    )
 
 
 class EOMOnboardingDraftEditRequest(BaseModel):
@@ -675,6 +749,7 @@ _CAPABILITY_ROUTES: dict[str, tuple[str, str]] = {
         "/eom-funnel/public-onboarding/recover",
     ),
     "contact.link_verification": ("GET", "/eom-funnel/known-contacts"),
+    "contact.directory": ("GET", "/eom-funnel/contact-directory"),
 }
 
 _served_capabilities_cache: tuple[str, ...] | None = None
@@ -915,6 +990,99 @@ async def list_known_eom_contacts(
         customer_type_revisions=customer_type_revisions,
         checked=len(requested),
         limit=_MAX_KNOWN_CONTACT_IDS,
+    )
+
+
+def _reject_unknown_contact_directory_filters(request: Request) -> None:
+    """422 on unrecognized query-parameter names instead of tolerating them.
+
+    FastAPI's default tolerance is left in place on the pipeline read, whose
+    callers predate this slice. The directory has exactly one caller (the
+    tracker proxy), so it is held to the exact filter set.
+    """
+    unknown = sorted(set(request.query_params.keys()) - _CONTACT_DIRECTORY_QUERY_PARAMS)
+    if unknown:
+        raise HTTPException(
+            status_code=422,
+            detail=f"Unknown contact directory filter: {', '.join(unknown)}",
+        )
+
+
+@router.get(
+    "/contact-directory",
+    response_model=EOMContactDirectoryResponse,
+    dependencies=[Depends(require_eom_funnel_api)],
+)
+async def list_eom_contact_directory(
+    request: Request,
+    limit: Annotated[
+        int,
+        Query(ge=1, le=_MAX_LEAD_REVIEW_LIMIT),
+    ] = _DEFAULT_LEAD_REVIEW_LIMIT,
+    cursor: Annotated[str | None, Query(min_length=16, max_length=512)] = None,
+    search: Annotated[
+        str | None,
+        Query(min_length=1, max_length=_MAX_CONTACT_DIRECTORY_SEARCH_LENGTH),
+    ] = None,
+    # A plain string validated against the DERIVED kind tuple below, rather
+    # than a Literal that would re-enumerate the canonical set a third time.
+    kind: Annotated[str, Query(min_length=1, max_length=32)] = "all",
+    _actor: dict[str, object] = Depends(require_eom_funnel_actor),
+    crm: Any = Depends(_crm_dependency),
+) -> EOMContactDirectoryResponse:
+    """List active EOM lead and customer contacts for operator discovery.
+
+    The discovery boundary the operator mutation never had: the pipeline read
+    admits only stage-active leads, so a customer created or matched through
+    ``/operator-contacts`` was otherwise unreachable from every portal surface
+    (website #240). This read is separate from ``/leads`` on purpose -- the
+    pipeline projection keeps its exact contract, and the directory stays a
+    directory rather than growing review-queue semantics.
+
+    The tracker keeps the service bearer and the browser never calls this
+    route directly. Reading this projection alters no CRM state.
+    """
+    _reject_unknown_contact_directory_filters(request)
+    if kind not in _CONTACT_DIRECTORY_KINDS:
+        raise HTTPException(status_code=422, detail="kind is not supported")
+    normalized_search = search.strip() if search is not None else None
+    if search is not None and not normalized_search:
+        raise HTTPException(status_code=422, detail="search must not be blank")
+    # NUL and lone surrogates cannot reach an asyncpg text parameter (they
+    # would 500 mid-query instead of failing closed here). Routed through the
+    # module's one surrogate choke point so this is not a second copy of the
+    # database-invalid character class.
+    if normalized_search is not None and "\x00" in _route_surrogates_to_safe_text(
+        normalized_search
+    ):
+        raise HTTPException(status_code=422, detail="search must be valid text")
+    decoded_cursor = _decode_lead_review_cursor(cursor)
+    rows = await crm.list_eom_contact_directory(
+        limit=limit + 1,
+        kind=kind,
+        search=normalized_search,
+        cursor_created_at=(
+            decoded_cursor["created_at"] if decoded_cursor is not None else None
+        ),
+        cursor_contact_id=(
+            decoded_cursor["contact_id"] if decoded_cursor is not None else None
+        ),
+    )
+    page_rows = rows[:limit]
+    has_more = len(rows) > limit
+    next_cursor = None
+    if has_more and page_rows:
+        last_row = EOMContactDirectoryItem.model_validate(page_rows[-1])
+        next_cursor = _encode_lead_review_cursor(
+            created_at=last_row.created_at,
+            contact_id=last_row.contact_id,
+        )
+    return EOMContactDirectoryResponse(
+        contacts=[EOMContactDirectoryItem.model_validate(row) for row in page_rows],
+        limit=limit,
+        cursor=cursor,
+        has_more=has_more,
+        next_cursor=next_cursor,
     )
 
 

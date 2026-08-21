@@ -77,6 +77,7 @@ on:
       - "tests/test_eom_contacts_api_tenant_scope.py"
       - "tests/test_backfill_eom_customer_type.py"
       - "tests/test_eom_link_verification.py"
+      - "tests/test_eom_contact_directory.py"
       - "tests/test_eom_lead_conversion.py"
       - "tests/test_eom_lead_conversion_integration.py"
       - "tests/test_eom_public_onboarding.py"
@@ -171,6 +172,7 @@ on:
       - "tests/test_eom_contacts_api_tenant_scope.py"
       - "tests/test_backfill_eom_customer_type.py"
       - "tests/test_eom_link_verification.py"
+      - "tests/test_eom_contact_directory.py"
       - "tests/test_eom_lead_conversion.py"
       - "tests/test_eom_lead_conversion_integration.py"
       - "tests/test_eom_public_onboarding.py"
@@ -241,6 +243,7 @@ jobs:
             tests/test_eom_contacts_api_tenant_scope.py \
             tests/test_backfill_eom_customer_type.py \
             tests/test_eom_link_verification.py \
+            tests/test_eom_contact_directory.py \
             tests/test_eom_billing_recipients.py \
             tests/test_eom_lead_conversion.py \
             tests/test_eom_lead_conversion_integration.py \
