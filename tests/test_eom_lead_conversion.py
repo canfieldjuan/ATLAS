@@ -4467,3 +4467,34 @@ async def test_operator_contact_route_omits_customer_type_when_not_sent():
 
     assert response.status_code == 201
     assert "customer_type" not in crm.operator_contact_calls[0].fields
+
+
+@pytest.mark.asyncio
+async def test_operator_contact_route_keeps_present_null_distinct_from_absent():
+    """The clear wire shape (website #254): present JSON null survives to the
+    command as an explicit None while an absent key never appears at all.
+
+    This is the HTTP-boundary half of the tri-state contract. If Pydantic
+    default-handling or `_operator_contact_fields` ever collapsed present-null
+    into absent, a tracker-forwarded clear would silently become an omit and
+    the operator's delete would report saved without saving.
+    """
+    crm = _CRM()
+    app = _app(crm, _enabled_config())
+    payload = _operator_contact_payload(email=None)
+    del payload["phone"]
+    payload["contactId"] = str(uuid4())
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=app), base_url="http://test"
+    ) as client:
+        response = await client.post(
+            "/eom-funnel/operator-contacts",
+            headers=_headers(approval_key=f"office-clear-{uuid4().hex}"),
+            json=payload,
+        )
+
+    assert response.status_code in (200, 201), response.text
+    command = crm.operator_contact_calls[0]
+    assert "email" in command.fields, "present null must reach the command"
+    assert command.fields["email"] is None
+    assert "phone" not in command.fields, "absent key must stay absent"

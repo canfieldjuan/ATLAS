@@ -8774,3 +8774,276 @@ async def test_a_generic_create_cannot_set_customer_type():
     finally:
         await conn.execute(f'DROP SCHEMA IF EXISTS "{schema}" CASCADE')
         await conn.close()
+
+
+@pytest.mark.asyncio
+async def test_operator_contact_mutation_clear_vs_omit_vs_change_tri_state():
+    """The locked field-clearing contract (website #254), at the write authority.
+
+    Present-null clears to SQL NULL; an absent key preserves; a value replaces.
+    The lifecycle event alone distinguishes all three: OMITTED is absent from
+    changed_fields, CLEARED is listed in cleared_fields, CHANGED is
+    changed_fields minus cleared_fields.
+    """
+    database_url = _database_url_or_skip()
+    schema = f"atlas_eom_operator_clear_{uuid.uuid4().hex}"
+    conn = await asyncpg.connect(database_url)
+    try:
+        await _prepare_schema(conn, schema, apply_privilege_migration=False)
+        provider = DatabaseCRMProvider(pool=conn)
+        created = await mutate_eom_operator_contact(
+            provider,
+            EOMOperatorContactMutation.from_raw(
+                operation_key=f"clear-seed-{uuid.uuid4().hex}",
+                actor_id=7,
+                actor_name="Mayra Canfield",
+                source_channel="time_tracker",
+                source_ref="portal-contact:seed",
+                contact_type="customer",
+                fields={
+                    "full_name": "Clear Target",
+                    "email": "clear-target@example.com",
+                    "phone": "(217) 555-0181",
+                },
+            ),
+        )
+        contact_id = created["contact_id"]
+
+        # CLEAR email (present null) while OMITTING phone (key absent).
+        clear_key = f"clear-email-{uuid.uuid4().hex}"
+        cleared = await mutate_eom_operator_contact(
+            provider,
+            EOMOperatorContactMutation.from_raw(
+                operation_key=clear_key,
+                actor_id=7,
+                actor_name="Mayra Canfield",
+                source_channel="time_tracker",
+                source_ref="portal-contact:clear",
+                contact_type="customer",
+                contact_id=contact_id,
+                fields={"email": None},
+            ),
+        )
+        assert cleared["operation"] == "contact_updated"
+        # The mutation result itself must prove the clear persisted.
+        assert cleared["contact"]["email"] is None
+        row = await conn.fetchrow(
+            "SELECT email, phone FROM contacts WHERE id = $1",
+            uuid.UUID(contact_id),
+        )
+        assert row["email"] is None
+        assert row["phone"] == "2175550181", "omitted phone must be preserved"
+        event = await conn.fetchrow(
+            """
+            SELECT metadata FROM eom_lead_lifecycle_events
+            WHERE operation_key = $1 AND event_type = 'contact_updated'
+            """,
+            clear_key,
+        )
+        metadata = _metadata_dict(event["metadata"])
+        assert metadata["changed_fields"] == ["email"]
+        assert metadata["cleared_fields"] == ["email"]
+        assert metadata["previous_values"] == {"email": "clear-target@example.com"}
+        # Names only in the tri-state keys: the cleared value appears in
+        # previous_values (sole surviving copy) and nowhere else.
+        assert "new_values" not in metadata
+
+        # CHANGED control: a re-point lists the field but not as cleared.
+        change_key = f"change-phone-{uuid.uuid4().hex}"
+        await mutate_eom_operator_contact(
+            provider,
+            EOMOperatorContactMutation.from_raw(
+                operation_key=change_key,
+                actor_id=7,
+                actor_name="Mayra Canfield",
+                source_channel="time_tracker",
+                source_ref="portal-contact:change",
+                contact_type="customer",
+                contact_id=contact_id,
+                fields={"phone": "(217) 555-0182"},
+            ),
+        )
+        change_event = await conn.fetchrow(
+            """
+            SELECT metadata FROM eom_lead_lifecycle_events
+            WHERE operation_key = $1 AND event_type = 'contact_updated'
+            """,
+            change_key,
+        )
+        change_metadata = _metadata_dict(change_event["metadata"])
+        assert change_metadata["changed_fields"] == ["phone"]
+        assert change_metadata["cleared_fields"] == []
+        assert change_metadata["previous_values"] == {"phone": "2175550181"}
+    finally:
+        await conn.execute(f'DROP SCHEMA IF EXISTS "{schema}" CASCADE')
+        await conn.close()
+
+
+@pytest.mark.asyncio
+async def test_operator_contact_clear_replay_is_idempotent_and_omit_conflicts():
+    """A retried clear replays; the same key with omit-instead-of-clear 409s.
+
+    The second half is the fingerprint proof: fields={'email': None} and
+    fields without the email key must hash differently, or a retry that
+    dropped the null would silently replay the wrong intent.
+    """
+    database_url = _database_url_or_skip()
+    schema = f"atlas_eom_operator_clear_replay_{uuid.uuid4().hex}"
+    conn = await asyncpg.connect(database_url)
+    try:
+        await _prepare_schema(conn, schema, apply_privilege_migration=False)
+        provider = DatabaseCRMProvider(pool=conn)
+        created = await mutate_eom_operator_contact(
+            provider,
+            EOMOperatorContactMutation.from_raw(
+                operation_key=f"clear-replay-seed-{uuid.uuid4().hex}",
+                actor_id=7,
+                actor_name="Mayra Canfield",
+                source_channel="time_tracker",
+                source_ref="portal-contact:seed",
+                contact_type="customer",
+                fields={
+                    "full_name": "Replay Target",
+                    "email": "replay-target@example.com",
+                    "phone": "(217) 555-0183",
+                },
+            ),
+        )
+        contact_id = created["contact_id"]
+        clear_key = f"clear-replay-{uuid.uuid4().hex}"
+
+        def clear_command():
+            return EOMOperatorContactMutation.from_raw(
+                operation_key=clear_key,
+                actor_id=7,
+                actor_name="Mayra Canfield",
+                source_channel="time_tracker",
+                source_ref="portal-contact:clear",
+                contact_type="customer",
+                contact_id=contact_id,
+                fields={"email": None, "phone": "(217) 555-0183"},
+            )
+
+        first = await mutate_eom_operator_contact(provider, clear_command())
+        assert first["idempotent"] is False
+        assert first["contact"]["email"] is None
+
+        replay = await mutate_eom_operator_contact(provider, clear_command())
+        assert replay["idempotent"] is True
+        assert replay["contact"]["email"] is None
+        assert await conn.fetchval(
+            """
+            SELECT COUNT(*) FROM eom_lead_lifecycle_events
+            WHERE operation_key = $1
+            """,
+            clear_key,
+        ) == 1
+
+        omit_instead = EOMOperatorContactMutation.from_raw(
+            operation_key=clear_key,
+            actor_id=7,
+            actor_name="Mayra Canfield",
+            source_channel="time_tracker",
+            source_ref="portal-contact:clear",
+            contact_type="customer",
+            contact_id=contact_id,
+            fields={"phone": "(217) 555-0183"},
+        )
+        with pytest.raises(EOMOperatorContactMutationError) as exc_info:
+            await mutate_eom_operator_contact(provider, omit_instead)
+        assert exc_info.value.status_code == 409
+    finally:
+        await conn.execute(f'DROP SCHEMA IF EXISTS "{schema}" CASCADE')
+        await conn.close()
+
+
+@pytest.mark.asyncio
+async def test_operator_contact_clear_is_scoped_to_nullable_optional_fields():
+    """full_name and customer_type refuse a clear; a repeat clear no-ops.
+
+    The refusals are the closed edge of the clearable set (website #254 locks
+    clearing to optional contact fields; identity/type never null out), and
+    the repeat clear proves clearing an already-null field is a safe no-op
+    update, not an error and not a duplicate event shape.
+    """
+    database_url = _database_url_or_skip()
+    schema = f"atlas_eom_operator_clear_scope_{uuid.uuid4().hex}"
+    conn = await asyncpg.connect(database_url)
+    try:
+        await _prepare_schema(conn, schema, apply_privilege_migration=False)
+        provider = DatabaseCRMProvider(pool=conn)
+        created = await mutate_eom_operator_contact(
+            provider,
+            EOMOperatorContactMutation.from_raw(
+                operation_key=f"clear-scope-seed-{uuid.uuid4().hex}",
+                actor_id=7,
+                actor_name="Mayra Canfield",
+                source_channel="time_tracker",
+                source_ref="portal-contact:seed",
+                contact_type="customer",
+                fields={
+                    "full_name": "Scope Target",
+                    "phone": "(217) 555-0184",
+                },
+            ),
+        )
+        contact_id = created["contact_id"]
+
+        with pytest.raises(EOMOperatorContactMutationError) as name_exc:
+            EOMOperatorContactMutation.from_raw(
+                operation_key=f"clear-name-{uuid.uuid4().hex}",
+                actor_id=7,
+                actor_name="Mayra Canfield",
+                source_channel="time_tracker",
+                source_ref="portal-contact:clear",
+                contact_type="customer",
+                contact_id=contact_id,
+                fields={"full_name": None},
+            )
+        assert name_exc.value.status_code == 422
+
+        with pytest.raises(EOMOperatorContactMutationError) as type_exc:
+            EOMOperatorContactMutation.from_raw(
+                operation_key=f"clear-type-{uuid.uuid4().hex}",
+                actor_id=7,
+                actor_name="Mayra Canfield",
+                source_channel="time_tracker",
+                source_ref="portal-contact:clear",
+                contact_type="customer",
+                contact_id=contact_id,
+                fields={"customer_type": None},
+            )
+        assert type_exc.value.status_code == 422
+
+        # email is already NULL (never set): clearing it again is a no-op
+        # update with a uniform, empty tri-state event shape.
+        noop_key = f"clear-noop-{uuid.uuid4().hex}"
+        noop = await mutate_eom_operator_contact(
+            provider,
+            EOMOperatorContactMutation.from_raw(
+                operation_key=noop_key,
+                actor_id=7,
+                actor_name="Mayra Canfield",
+                source_channel="time_tracker",
+                source_ref="portal-contact:clear",
+                contact_type="customer",
+                contact_id=contact_id,
+                fields={"email": None},
+            ),
+        )
+        assert noop["operation"] == "contact_updated"
+        assert noop["contact"]["email"] is None
+        noop_event = await conn.fetchrow(
+            """
+            SELECT metadata FROM eom_lead_lifecycle_events
+            WHERE operation_key = $1 AND event_type = 'contact_updated'
+            """,
+            noop_key,
+        )
+        noop_metadata = _metadata_dict(noop_event["metadata"])
+        assert noop_metadata["changed_fields"] == []
+        assert noop_metadata["cleared_fields"] == []
+        assert noop_metadata["previous_values"] == {}
+    finally:
+        await conn.execute(f'DROP SCHEMA IF EXISTS "{schema}" CASCADE')
+        await conn.close()
