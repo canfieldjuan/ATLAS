@@ -450,7 +450,6 @@ async def test_full_atlas_lifespan_wires_and_stops_the_missed_call_worker(
     """The deployed aggregate entrypoint reaches the same startup boundary."""
 
     from atlas_brain import main
-    from atlas_brain.api.invoicing import auth as invoicing_auth_mod
     from atlas_brain.eom_api import config as funnel_config_mod
 
     events: list[str] = []
@@ -489,14 +488,12 @@ async def test_full_atlas_lifespan_wires_and_stops_the_missed_call_worker(
     runtime_settings.invoicing.enabled = False
     runtime_settings.invoicing.receivables_api_enabled = False
     runtime_settings.invoicing.auto_invoice_enabled = False
+    runtime_settings.invoicing.receivables_service_token = ""
 
     monkeypatch.setattr(main, "settings", runtime_settings)
     monkeypatch.setattr(main, "db_settings", SimpleNamespace(enabled=True))
     monkeypatch.setattr(
         main, "_enforce_paid_funnel_alert_channel", lambda _settings: None
-    )
-    monkeypatch.setattr(
-        invoicing_auth_mod, "validate_receivables_api_config", lambda _config: None
     )
     monkeypatch.setattr(main, "init_database", no_op)
     monkeypatch.setattr(main, "close_database", no_op)
