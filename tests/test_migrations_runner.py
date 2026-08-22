@@ -1563,6 +1563,32 @@ async def test_marked_migration_records_its_ledger_entry_in_one_transaction(tmp_
     assert any("CREATE TABLE atomic_probe" in sql for sql in pool.applied_sql)
 
 
+def test_dynamic_self_recording_requires_the_first_line_atomic_marker():
+    """Dynamic ledger SQL remains opaque until its exact marker opts it in."""
+    from atlas_brain.storage.migrations import (
+        _contains_executable_self_recording_insert,
+        _requires_atomic_bookkeeping,
+    )
+
+    dynamic_source = (
+        "DO $$\n"
+        "BEGIN\n"
+        "    EXECUTE 'INSERT INTO schema_migrations (version, name) "
+        "VALUES (900, ''900_dynamic_self_recording'')';\n"
+        "END $$;\n"
+    )
+    late_marker_source = (
+        "-- authoring note precedes the marker\n"
+        "-- atlas: atomic-bookkeeping\n"
+        f"{dynamic_source}"
+    )
+    marked_source = f"-- atlas: atomic-bookkeeping\n{dynamic_source}"
+
+    assert not _contains_executable_self_recording_insert(dynamic_source)
+    assert not _requires_atomic_bookkeeping(late_marker_source)
+    assert _requires_atomic_bookkeeping(marked_source)
+
+
 @pytest.mark.asyncio
 async def test_marked_migration_rejects_concurrently_ddl_before_a_transaction(tmp_path):
     """The opt-in cannot silently break concurrent-index migration safety."""
@@ -1839,20 +1865,27 @@ async def test_real_postgres_concurrent_runners_apply_each_migration_once(tmp_pa
             "transaction, Postgres would have rejected it"
         )
 
-        retry_source = (
-            b"CREATE TABLE migration_lock_probe_retry (id integer primary key);\n"
-            b"INSERT INTO schema_migrations (version, name) "
-            b"VALUES (5, '005_self_recording_retry');"
+        dynamic_retry_source = (
+            b"-- atlas: atomic-bookkeeping\n"
+            b"CREATE TABLE migration_lock_probe_dynamic_retry "
+            b"(id integer primary key);\n"
+            b"DO $$\n"
+            b"BEGIN\n"
+            b"    EXECUTE 'INSERT INTO schema_migrations (version, name) "
+            b"VALUES (5, ''005_dynamic_self_recording_retry'')';\n"
+            b"END $$;\n"
         )
-        (tmp_path / "005_self_recording_retry.sql").write_bytes(retry_source)
+        (tmp_path / "005_dynamic_self_recording_retry.sql").write_bytes(
+            dynamic_retry_source
+        )
         await admin.execute(
             """
-            CREATE OR REPLACE FUNCTION suppress_self_recording_retry_digest()
+            CREATE OR REPLACE FUNCTION suppress_dynamic_self_recording_retry_digest()
             RETURNS trigger
             LANGUAGE plpgsql
             AS $$
             BEGIN
-                IF NEW.name = '005_self_recording_retry'
+                IF NEW.name = '005_dynamic_self_recording_retry'
                    AND NEW.content_sha256 IS NOT NULL THEN
                     RETURN NULL;
                 END IF;
@@ -1863,10 +1896,10 @@ async def test_real_postgres_concurrent_runners_apply_each_migration_once(tmp_pa
         )
         await admin.execute(
             """
-            CREATE TRIGGER suppress_self_recording_retry_digest_trigger
+            CREATE TRIGGER suppress_dynamic_self_recording_retry_digest_trigger
             BEFORE UPDATE OF content_sha256 ON schema_migrations
             FOR EACH ROW
-            EXECUTE FUNCTION suppress_self_recording_retry_digest()
+            EXECUTE FUNCTION suppress_dynamic_self_recording_retry_digest()
             """
         )
 
@@ -1874,35 +1907,39 @@ async def test_real_postgres_concurrent_runners_apply_each_migration_once(tmp_pa
             await run_migrations(
                 pool,
                 migrations_dir=tmp_path,
-                only={"005_self_recording_retry"},
+                only={"005_dynamic_self_recording_retry"},
             )
 
         assert await admin.fetchval(
-            "SELECT to_regclass($1)", "migration_lock_probe_retry"
+            "SELECT to_regclass($1)", "migration_lock_probe_dynamic_retry"
         ) is None
         assert await admin.fetch(
             "SELECT name FROM schema_migrations WHERE name = $1",
-            "005_self_recording_retry",
+            "005_dynamic_self_recording_retry",
         ) == []
 
         await admin.execute(
-            "DROP TRIGGER suppress_self_recording_retry_digest_trigger "
+            "DROP TRIGGER suppress_dynamic_self_recording_retry_digest_trigger "
             "ON schema_migrations"
         )
-        await admin.execute("DROP FUNCTION suppress_self_recording_retry_digest()")
+        await admin.execute("DROP FUNCTION suppress_dynamic_self_recording_retry_digest()")
         await run_migrations(
             pool,
             migrations_dir=tmp_path,
-            only={"005_self_recording_retry"},
+            only={"005_dynamic_self_recording_retry"},
         )
 
         assert await admin.fetchval(
-            "SELECT to_regclass($1)", "migration_lock_probe_retry"
+            "SELECT to_regclass($1)", "migration_lock_probe_dynamic_retry"
         ) is not None
-        assert await admin.fetchval(
-            "SELECT content_sha256 FROM schema_migrations WHERE name = $1",
-            "005_self_recording_retry",
-        ) == hashlib.sha256(retry_source).hexdigest()
+        persisted_dynamic_row = await admin.fetchrow(
+            "SELECT version, content_sha256 FROM schema_migrations WHERE name = $1",
+            "005_dynamic_self_recording_retry",
+        )
+        assert persisted_dynamic_row["version"] == 5
+        assert persisted_dynamic_row["content_sha256"] == hashlib.sha256(
+            dynamic_retry_source
+        ).hexdigest()
 
         # The SESSION lock outlives its transaction, so it must be released
         # explicitly or the pooled connection carries it into unrelated work.
