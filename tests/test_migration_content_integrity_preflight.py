@@ -1347,6 +1347,10 @@ async def test_known_272_reconciliation_rejects_each_required_evidence_field(
             "check constraint has a literal collision",
             "required_alert_event_constraints_ready",
         ),
+        (
+            "check constraint has a literal case collision",
+            "required_alert_event_constraints_ready",
+        ),
         ("index is absent", "required_alert_event_indexes_ready"),
         ("index has the wrong relation kind", "required_alert_event_indexes_ready"),
         ("index is a partition", "required_alert_event_indexes_ready"),
@@ -1424,6 +1428,8 @@ async def test_known_272_reconciliation_rejects_each_catalog_guard_independently
         status_check["expression"] = "(status = any (array['open']))"
     elif case == "check constraint has a literal collision":
         status_check["expression"] = "(status = any (array['o''pen', 'resolved']))"
+    elif case == "check constraint has a literal case collision":
+        status_check["expression"] = "(status = any (array['OPEN', 'resolved']))"
     elif case == "index is absent":
         indexes.pop("idx_b2b_watchlist_alert_events_account_status")
     elif case == "index has the wrong relation kind":

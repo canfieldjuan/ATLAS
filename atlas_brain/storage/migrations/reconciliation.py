@@ -613,7 +613,7 @@ _B2B_WATCHLIST_ALERT_EVENT_CONSTRAINTS = {
         _B2BWatchlistAlertEventConstraint(
             "c", ("event_type",),
             expression=(
-                "(event_type = any (array['vendor_alert', 'account_alert', "
+                "(event_type=any(array['vendor_alert','account_alert',"
                 "'stale_data']))"
             ),
         )
@@ -622,8 +622,8 @@ _B2B_WATCHLIST_ALERT_EVENT_CONSTRAINTS = {
         _B2BWatchlistAlertEventConstraint(
             "c", ("threshold_field",),
             expression=(
-                "(threshold_field = any (array['vendor_alert_threshold', "
-                "'account_alert_threshold', 'stale_days_threshold']))"
+                "(threshold_field=any(array['vendor_alert_threshold',"
+                "'account_alert_threshold','stale_days_threshold']))"
             ),
         )
     ),
@@ -631,14 +631,14 @@ _B2B_WATCHLIST_ALERT_EVENT_CONSTRAINTS = {
         _B2BWatchlistAlertEventConstraint(
             "c", ("entity_type",),
             expression=(
-                "(entity_type = any (array['vendor', 'account', "
+                "(entity_type=any(array['vendor','account',"
                 "'signal_cluster']))"
             ),
         )
     ),
     "chk_b2b_watchlist_alert_events_status": _B2BWatchlistAlertEventConstraint(
         "c", ("status",),
-        expression="(status = any (array['open', 'resolved']))",
+        expression="(status=any(array['open','resolved']))",
     ),
 }
 
@@ -888,25 +888,46 @@ def _canonicalize_catalog_constraint_expression(expression: object) -> str:
     return " ".join(normalized.replace("'", "").split())
 
 
-def _canonicalize_watchlist_alert_event_expression(expression: object) -> str:
-    """Normalize only unquoted casts while preserving SQL literal contents.
+_WATCHLIST_ALERT_EVENT_SQL_LITERAL_RE = re.compile(r"'(?:''|[^'])*'")
+_WATCHLIST_ALERT_EVENT_REMOVABLE_CAST_RE = re.compile(
+    r"::(?:character varying|varchar|text|name)(?:\[\])?",
+    re.IGNORECASE,
+)
 
-    The named 272 receipt compares check constraints and defaults as source-era
-    structural evidence. Removing quote characters would collapse distinct
-    values such as ``'open'`` and ``'o''pen'`` into the same catalog text.
-    Keep this narrower than the older generic normalizer so its established
-    historical receipts retain their existing comparison contract.
+
+def _canonicalize_watchlist_alert_event_expression(expression: object) -> str:
+    """Normalize only unquoted SQL while preserving every literal exactly.
+
+    The named 272 receipt compares source-era defaults and check constraints.
+    Tokenizing literals first prevents the comparator from collapsing either
+    distinct contents (``'open'`` versus ``'o''pen'``) or distinct case
+    (``'open'`` versus ``'OPEN'``). Keep this narrower than the older generic
+    normalizer so established historical receipts retain their contract.
     """
-    normalized = _normalize_schema_definition(expression)
-    return " ".join(
-        re.sub(
-            r"'(?:''|[^'])*'|::(?:character varying|varchar|text|name)(?:\[\])?",
-            lambda match: (
-                match.group(0) if match.group(0).startswith("'") else ""
-            ),
-            normalized,
-        ).split()
+    raw_expression = str(expression or "")
+    fragments: list[str] = []
+    cursor = 0
+    for literal in _WATCHLIST_ALERT_EVENT_SQL_LITERAL_RE.finditer(raw_expression):
+        fragments.append(
+            _canonicalize_watchlist_alert_event_unquoted_sql(
+                raw_expression[cursor : literal.start()]
+            )
+        )
+        fragments.append(literal.group(0))
+        cursor = literal.end()
+    fragments.append(
+        _canonicalize_watchlist_alert_event_unquoted_sql(raw_expression[cursor:])
     )
+    return "".join(fragments)
+
+
+def _canonicalize_watchlist_alert_event_unquoted_sql(fragment: str) -> str:
+    """Normalize only SQL syntax surrounding an already-isolated literal."""
+    without_removable_casts = _WATCHLIST_ALERT_EVENT_REMOVABLE_CAST_RE.sub(
+        "",
+        fragment.lower(),
+    )
+    return re.sub(r"\s+", "", without_removable_casts)
 
 
 def _canonicalize_catalog_index_definition(definition: object) -> str:

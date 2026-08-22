@@ -53,6 +53,25 @@ historical exception or leave pending-SQL blocking behavior unproven.
   gates locally, and the existing GitHub migration job for full service-backed
   execution. The broad unit gate remains GitHub-only.
 
+### Contract revision (review round 2)
+
+- Evidence: confirmed P1 thread `PRRT_kwDOQ5Uhrs6baKLh` shows the first
+  272-only helper lowercased the whole catalog expression before its
+  quote-preserving regex ran. Consequently, literal case could still collapse:
+  `'OPEN'` was indistinguishable from expected `'open'`.
+- Root cause: expression normalization occurred before literal tokenization,
+  so preserving quote delimiters could not restore the original literal text.
+- Required surface: segment SQL string literals first; normalize case,
+  removable casts, and whitespace only in unquoted fragments; preserve every
+  quoted literal byte sequence and its case. Both the isolated fake-catalog
+  matrix and the retained-273 disposable PostgreSQL fixture must reject an
+  upper-case status literal.
+- Non-scope: no generic canonicalizer redesign, parser dependency, migration
+  SQL, target data, ledger update, or change to retained-273 provenance.
+- Verification: focused 272 preflight proof plus GitHub's configured real
+  PostgreSQL migration job. The existing escaped-literal collision remains a
+  distinct assertion alongside the case-collision proof.
+
 ## Scope (this PR)
 
 Ownership lane: `eom/migration-content-integrity`
@@ -62,8 +81,8 @@ Max files: 8
 - Add one immutable 272 record requiring version `-3`, NULL digest, exact UTC
   recorded time, and the original base-table catalog contract.
 - Make the catalog proof metadata-only: permanent ordinary non-partition
-  table, 20 source-era columns, named PK/FKs/checks with literal-safe
-  expressions, and three ready indexes.
+  table, 20 source-era columns, named PK/FKs/checks with case- and
+  content-preserving literal-safe expressions, and three ready indexes.
 - Admit only this reported ledger name after a complete attestation; every
   unlisted or incomplete source gap remains blocking.
 - Exercise preflight, runner failure/retry, and a disposable PostgreSQL schema.
@@ -87,7 +106,7 @@ Max files: 8
     source-era catalog metadata; settled by the focused preflight matrix.
   - [ ] Wrong/missing/duplicate ledger evidence, non-permanent/non-table/
     partition relation metadata, altered source-era columns/constraints/indexes
-    (including distinct quoted literals), or an unready index returns
+    (including content- or case-distinct quoted literals), or an unready index returns
     `not_attested`; every closed-signature guard has an isolated fake-catalog
     failure, and the runner leaves pending SQL and its ledger row absent;
     settled by preflight/runner tests and disposable PostgreSQL cases.
@@ -126,14 +145,15 @@ Max files: 8
   behavior.
 - Guard fields: name, synthetic version, NULL digest, timestamp, permanent
   relation identity, source-era columns/defaults, named constraints and
-  literal-preserving expressions, indexes/readiness.
+  case- and content-preserving expressions, indexes/readiness.
 
 ## Mechanism
 
 `HistoricalVersionedMissingSourceReconciliation` records only the named 272
 identity. A single read-only PostgreSQL catalog query returns structural
-metadata for the source-era table; Python compares it against a closed,
-literal-preserving signature and emits booleans only. The disposable test
+metadata for the source-era table; Python tokenizes quoted literals before
+normalizing unquoted SQL and compares a closed, case- and content-preserving
+signature, emitting booleans only. The disposable test
 executes retained 273 DDL only to produce the expected table catalog contract;
 it never asserts that 273 verifies or replaces 272 source bytes. The existing
 dispatcher intersects report-derived missing-source names with its closed
@@ -176,11 +196,11 @@ parked. Parked hardening: none.
 | File | LOC |
 |---|---:|
 | `.github/workflows/atlas_migrations_runner_checks.yml` | 3 |
-| `atlas_brain/storage/migrations/reconciliation.py` | 620 |
+| `atlas_brain/storage/migrations/reconciliation.py` | 641 |
 | `plans/INDEX.md` | 3 |
-| `plans/PR-H18-Watchlist-Alert-Events-Source-Attestation.md` | 186 |
+| `plans/PR-H18-Watchlist-Alert-Events-Source-Attestation.md` | 206 |
 | `plans/archive/PR-H18-B2B-Campaign-Partner-Source-Attestation.md` | 0 |
-| `tests/test_b2b_watchlist_alert_events_migration_repair.py` | 354 |
-| `tests/test_migration_content_integrity_preflight.py` | 482 |
+| `tests/test_b2b_watchlist_alert_events_migration_repair.py` | 366 |
+| `tests/test_migration_content_integrity_preflight.py` | 488 |
 | `tests/test_migrations_runner.py` | 191 |
-| **Total** | **1839** |
+| **Total** | **1898** |

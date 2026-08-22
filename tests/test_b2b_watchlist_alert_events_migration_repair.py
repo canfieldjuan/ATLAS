@@ -175,6 +175,10 @@ async def test_272_receipt_attests_empty_real_catalog_without_alert_rows():
             "required_alert_event_constraints_ready",
         ),
         (
+            "check constraint literal case collision",
+            "required_alert_event_constraints_ready",
+        ),
+        (
             "unlogged table storage",
             "watchlist_alert_events_has_permanent_storage",
         ),
@@ -216,6 +220,14 @@ async def test_272_receipt_rejects_altered_catalog_before_pending_sql(
                 ALTER TABLE b2b_watchlist_alert_events
                     ADD CONSTRAINT chk_b2b_watchlist_alert_events_status
                     CHECK (status IN ('o''pen', 'resolved'));
+                """)
+        elif case == "check constraint literal case collision":
+            await conn.execute("""
+                ALTER TABLE b2b_watchlist_alert_events
+                    DROP CONSTRAINT chk_b2b_watchlist_alert_events_status;
+                ALTER TABLE b2b_watchlist_alert_events
+                    ADD CONSTRAINT chk_b2b_watchlist_alert_events_status
+                    CHECK (status IN ('OPEN', 'resolved'));
                 """)
         elif case == "unlogged table storage":
             await conn.execute(
