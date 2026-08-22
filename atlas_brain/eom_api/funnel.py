@@ -36,6 +36,7 @@ from ..services.eom_won_lead_loss import mark_eom_lead_lost_with_won_teardown
 from ..services.eom_crm_mutations import (
     EOM_CUSTOMER_TYPES,
     EOM_OPERATOR_CONTACT_TYPES,
+    EOM_OPERATOR_EDIT_BLOCK_REASONS,
     EOMOperatorContactMutation,
     EOMOperatorContactMutationError,
     mutate_eom_operator_contact,
@@ -395,6 +396,23 @@ class EOMContactDirectoryItem(BaseModel):
     source: str | None = None
     created_at: datetime = Field(serialization_alias="createdAt")
     updated_at: datetime | None = Field(default=None, serialization_alias="updatedAt")
+    editable: bool
+    edit_block_reason: str | None = Field(
+        serialization_alias="editBlockedReason"
+    )
+
+    @field_validator("edit_block_reason")
+    @classmethod
+    def _edit_block_reason_is_closed(cls, value: str | None) -> str | None:
+        if value is not None and value not in EOM_OPERATOR_EDIT_BLOCK_REASONS:
+            raise ValueError("edit_block_reason must be a supported reason")
+        return value
+
+    @model_validator(mode="after")
+    def _editability_matches_reason(self) -> "EOMContactDirectoryItem":
+        if self.editable != (self.edit_block_reason is None):
+            raise ValueError("editable must match edit_block_reason")
+        return self
 
     @field_validator("contact_type")
     @classmethod
@@ -769,6 +787,11 @@ _CAPABILITY_ROUTES: dict[str, tuple[str, str]] = {
     ),
     "contact.link_verification": ("GET", "/eom-funnel/known-contacts"),
     "contact.directory": ("GET", "/eom-funnel/contact-directory"),
+    # Same route as contact.directory: this name proves the response includes
+    # the per-contact editability verdict and closed reason code. Older builds
+    # cannot advertise it, so downstream consumers can fail closed on a stale
+    # deployment instead of treating route reachability as semantic parity.
+    "contact.directory.editability": ("GET", "/eom-funnel/contact-directory"),
     "contact.archive": ("POST", "/eom-funnel/contacts/{contact_id}/archive"),
     "contact.restore": ("POST", "/eom-funnel/contacts/{contact_id}/restore"),
     # Same registered route as contact.directory, deliberately: the name

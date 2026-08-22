@@ -162,7 +162,6 @@ _ALL_EOM_REQUESTED_EVENTS = frozenset(
     family.requested_event for family in _EOM_BOOKING_FAMILIES
 )
 _EOM_LOST_RESTORABLE_STAGES = ("new", "estimate_booked")
-_EOM_ACTIVE_LEAD_STAGES = ("new", "estimate_booked", "won")
 _EOM_LOST_REPLAY_DISPOSITION_EVENTS = ("lead_lost", "lead_reopened")
 _EOM_CONTACT_ARCHIVE_DISPOSITION_EVENTS = ("contact_archived", "contact_restored")
 _EOM_CONTACT_DIRECTORY_LIFECYCLES = ("active", "archived")
@@ -1333,10 +1332,14 @@ class DatabaseCRMProvider:
         from .eom_crm_mutations import (
             EOM_OPERATOR_CONTACT_CREATED,
             EOM_OPERATOR_CONTACT_EVENT_TYPES,
-            EOM_OPERATOR_CONTACT_TYPES,
             EOM_OPERATOR_CONTACT_UPDATED,
+            EOM_OPERATOR_EDIT_BLOCK_REASON_ARCHIVED,
+            EOM_OPERATOR_EDIT_BLOCK_REASON_CONTACT_TYPE,
+            EOM_OPERATOR_EDIT_BLOCK_REASON_LEAD_STATUS,
+            EOM_OPERATOR_EDIT_BLOCK_REASON_STAGE,
             EOM_BUSINESS_CONTEXT_ID,
             EOMOperatorContactMutationError,
+            get_eom_operator_contact_editability,
         )
 
         def _metadata_from_row(value: Any) -> dict[str, Any]:
@@ -1540,7 +1543,11 @@ class DatabaseCRMProvider:
                     raise EOMOperatorContactMutationError(
                         404, "EOM contact was not found"
                     )
-                if row.get("status") == "archived":
+                editability = get_eom_operator_contact_editability(row)
+                if (
+                    editability.edit_block_reason
+                    == EOM_OPERATOR_EDIT_BLOCK_REASON_ARCHIVED
+                ):
                     raise EOMOperatorContactMutationError(
                         409, "Archived EOM contacts cannot be edited"
                     )
@@ -1562,25 +1569,33 @@ class DatabaseCRMProvider:
             return matches[0] if matches else None
 
         def _assert_contact_type_matches(target: Mapping[str, Any]) -> None:
-            stored_type = str(target.get("contact_type") or "")
-            if stored_type not in EOM_OPERATOR_CONTACT_TYPES:
+            editability = get_eom_operator_contact_editability(target)
+            if not editability.editable:
+                reason = editability.edit_block_reason
+                if reason == EOM_OPERATOR_EDIT_BLOCK_REASON_ARCHIVED:
+                    raise EOMOperatorContactMutationError(
+                        409, "Archived EOM contacts cannot be edited"
+                    )
+                if reason == EOM_OPERATOR_EDIT_BLOCK_REASON_CONTACT_TYPE:
+                    raise EOMOperatorContactMutationError(
+                        409,
+                        "EOM operator contact updates require an existing lead or customer",
+                    )
+                if reason == EOM_OPERATOR_EDIT_BLOCK_REASON_STAGE:
+                    raise EOMOperatorContactMutationError(
+                        409,
+                        "EOM operator lead updates require a supported lead stage",
+                    )
+                if reason == EOM_OPERATOR_EDIT_BLOCK_REASON_LEAD_STATUS:
+                    raise EOMOperatorContactMutationError(
+                        409, "EOM operator lead updates require an active lead"
+                    )
                 raise EOMOperatorContactMutationError(
-                    409,
-                    "EOM operator contact updates require an existing lead or customer",
-                )
-            if (
-                stored_type == "lead"
-                and target.get("lead_stage") not in _EOM_ACTIVE_LEAD_STAGES
-            ):
-                raise EOMOperatorContactMutationError(
-                    409, "EOM operator lead updates require a supported lead stage"
-                )
-            if stored_type == "lead" and target.get("status") != "active":
-                raise EOMOperatorContactMutationError(
-                    409, "EOM operator lead updates require an active lead"
+                    409, "EOM operator contact updates require an editable contact"
                 )
             if command.contact_type is None:
                 return
+            stored_type = str(target.get("contact_type") or "")
             if stored_type != command.contact_type:
                 raise EOMOperatorContactMutationError(
                     409,
@@ -2283,7 +2298,10 @@ class DatabaseCRMProvider:
         # DERIVED from the canonical operator-mutation kind set: a kind the
         # write boundary admits must be discoverable here in the same commit,
         # or its records become write-only -- the defect this read closes.
-        from .eom_crm_mutations import EOM_OPERATOR_CONTACT_TYPES
+        from .eom_crm_mutations import (
+            EOM_OPERATOR_CONTACT_TYPES,
+            get_eom_operator_contact_editability,
+        )
         from .eom_lead_ingress import EOM_BUSINESS_CONTEXT_ID
 
         if kind not in ("all", *EOM_OPERATOR_CONTACT_TYPES):
@@ -2355,7 +2373,14 @@ class DatabaseCRMProvider:
             """,
             *params,
         )
-        return [dict(row) for row in rows]
+        directory_rows: list[dict[str, Any]] = []
+        for row in rows:
+            contact = dict(row)
+            editability = get_eom_operator_contact_editability(contact)
+            contact["editable"] = editability.editable
+            contact["edit_block_reason"] = editability.edit_block_reason
+            directory_rows.append(contact)
+        return directory_rows
 
     async def list_billing_recipients(
         self,

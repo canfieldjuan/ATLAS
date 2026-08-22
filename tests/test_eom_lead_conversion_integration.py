@@ -1205,8 +1205,20 @@ async def test_operator_contact_mutation_rejects_unsupported_existing_contact_ty
         await conn.close()
 
 
+@pytest.mark.parametrize(
+    ("lead_stage", "full_name", "source_ref", "email"),
+    [
+        (None, "Legacy Unstaged Lead", "lead:unstaged", "unstaged@example.com"),
+        ("lost", "Lost Lead", "lead:lost", "lost@example.com"),
+    ],
+)
 @pytest.mark.asyncio
-async def test_operator_contact_mutation_rejects_legacy_lead_without_stage():
+async def test_operator_contact_mutation_rejects_unsupported_lead_stages(
+    lead_stage: str | None,
+    full_name: str,
+    source_ref: str,
+    email: str,
+):
     database_url = _database_url_or_skip()
     schema = f"atlas_eom_operator_bad_stage_{uuid.uuid4().hex}"
     conn = await asyncpg.connect(database_url)
@@ -1218,18 +1230,18 @@ async def test_operator_contact_mutation_rejects_legacy_lead_without_stage():
             conn,
             contact_id=contact_id,
             business_context_id=None,
-            full_name="Legacy Unstaged Lead",
+            full_name=full_name,
             contact_type="lead",
-            lead_stage=None,
+            lead_stage=lead_stage,
             phone="2175550100",
-            email="unstaged@example.com",
+            email=email,
         )
         command = EOMOperatorContactMutation.from_raw(
             operation_key=f"operator-bad-stage-{uuid.uuid4().hex}",
             actor_id=10,
             actor_name="Juan Canfield",
             source_channel="time_tracker",
-            source_ref="lead:unstaged",
+            source_ref=source_ref,
             contact_id=str(contact_id),
             fields={"phone": "217-555-0100", "notes": "needs funnel stage"},
         )
@@ -1238,10 +1250,13 @@ async def test_operator_contact_mutation_rejects_legacy_lead_without_stage():
             await mutate_eom_operator_contact(provider, command)
 
         assert exc_info.value.status_code == 409
+        assert str(exc_info.value) == (
+            "EOM operator lead updates require a supported lead stage"
+        )
         row = await conn.fetchrow("SELECT * FROM contacts WHERE id = $1", contact_id)
         assert row["business_context_id"] is None
         assert row["contact_type"] == "lead"
-        assert row["lead_stage"] is None
+        assert row["lead_stage"] == lead_stage
         assert row["notes"] is None
         assert await conn.fetchval(
             """

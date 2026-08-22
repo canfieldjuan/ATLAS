@@ -29,6 +29,9 @@ from atlas_brain.services.crm_provider import (
     _eom_directory_phone_search_digits,
     _escape_eom_directory_like_pattern,
 )
+from atlas_brain.services.eom_crm_mutations import (
+    get_eom_operator_contact_editability,
+)
 
 ROOT = Path(__file__).resolve().parent.parent
 MIGRATIONS = ROOT / "atlas_brain" / "storage" / "migrations"
@@ -53,7 +56,7 @@ def _row(
     status: str = "active",
     customer_type: str = "unknown",
 ) -> dict[str, object]:
-    return {
+    row: dict[str, object] = {
         "contact_id": contact_id or uuid4(),
         "full_name": full_name,
         "email": "directory@example.test",
@@ -67,6 +70,10 @@ def _row(
         "created_at": created_at or _BASE_CREATED_AT,
         "updated_at": created_at or _BASE_CREATED_AT,
     }
+    editability = get_eom_operator_contact_editability(row)
+    row["editable"] = editability.editable
+    row["edit_block_reason"] = editability.edit_block_reason
+    return row
 
 
 class _CRM:
@@ -200,8 +207,12 @@ async def test_both_contact_kinds_come_back_and_the_projection_is_closed():
             "source",
             "createdAt",
             "updatedAt",
+            "editable",
+            "editBlockedReason",
         }
         assert item["status"] == "active"
+        assert item["editable"] is True
+        assert item["editBlockedReason"] is None
 
 
 @pytest.mark.asyncio
@@ -407,6 +418,78 @@ async def test_a_lost_lead_is_rendered_with_its_stage():
     item = response.json()["contacts"][0]
     assert item["contactType"] == "lead"
     assert item["leadStage"] == "lost"
+    assert item["editable"] is False
+    assert item["editBlockedReason"] == "not_editable_stage"
+
+
+@pytest.mark.parametrize(
+    ("contact", "expected"),
+    [
+        ({"contact_type": "customer", "status": "active"}, (True, None)),
+        (
+            {"contact_type": "lead", "status": "active", "lead_stage": "new"},
+            (True, None),
+        ),
+        (
+            {
+                "contact_type": "lead",
+                "status": "active",
+                "lead_stage": "estimate_booked",
+            },
+            (True, None),
+        ),
+        (
+            {"contact_type": "lead", "status": "active", "lead_stage": "won"},
+            (True, None),
+        ),
+        (
+            {"contact_type": "lead", "status": "active", "lead_stage": "lost"},
+            (False, "not_editable_stage"),
+        ),
+        (
+            {"contact_type": "lead", "status": "inactive", "lead_stage": "new"},
+            (False, "not_editable_lead_status"),
+        ),
+        (
+            {"contact_type": "customer", "status": "archived"},
+            (False, "not_editable_archived"),
+        ),
+        (
+            {"contact_type": "vendor", "status": "active"},
+            (False, "not_editable_contact_type"),
+        ),
+    ],
+)
+def test_the_editability_policy_is_closed_and_preserves_write_boundary_order(
+    contact: dict[str, str], expected: tuple[bool, str | None]
+):
+    decision = get_eom_operator_contact_editability(contact)
+
+    assert (decision.editable, decision.edit_block_reason) == expected
+
+
+@pytest.mark.asyncio
+async def test_an_archived_directory_row_has_a_closed_non_editable_verdict():
+    response = await _get(_CRM([_row(status="archived")]), "?lifecycle=archived")
+
+    assert response.status_code == 200
+    item = response.json()["contacts"][0]
+    assert item["status"] == "archived"
+    assert item["editable"] is False
+    assert item["editBlockedReason"] == "not_editable_archived"
+
+
+def test_the_directory_schema_refuses_incoherent_or_unknown_editability_values():
+    mismatched = _row(contact_type="lead", lead_stage="lost")
+    mismatched["editable"] = True
+    with pytest.raises(ValueError, match="editable"):
+        funnel_mod.EOMContactDirectoryItem.model_validate(mismatched)
+
+    unknown_reason = _row()
+    unknown_reason["editable"] = False
+    unknown_reason["edit_block_reason"] = "not_a_reason"
+    with pytest.raises(ValueError, match="edit_block_reason"):
+        funnel_mod.EOMContactDirectoryItem.model_validate(unknown_reason)
 
 
 # ---------------------------------------------------------------------------
@@ -416,6 +499,7 @@ async def test_a_lost_lead_is_rendered_with_its_stage():
 
 def test_the_directory_is_advertised_in_the_capability_manifest():
     assert "contact.directory" in funnel_mod.served_capabilities()
+    assert "contact.directory.editability" in funnel_mod.served_capabilities()
     assert ("GET", "/eom-funnel/contact-directory") in funnel_mod.served_capability_routes()
 
 
@@ -431,6 +515,7 @@ async def test_the_lead_review_response_advertises_the_directory():
         response = await client.get("/eom-funnel/leads", headers=_headers())
     body = response.json()
     assert "contact.directory" in body["capabilities"]
+    assert "contact.directory.editability" in body["capabilities"]
     assert {"method": "GET", "path": "/eom-funnel/contact-directory"} in body[
         "capabilityRoutes"
     ]
@@ -478,7 +563,10 @@ async def test_every_deployed_entrypoint_serves_the_route_at_its_path():
         assert response.status_code == 200, (
             f"{name} must serve the deployed path, not 404"
         )
-        assert len(response.json()["contacts"]) == 1, name
+        contacts = response.json()["contacts"]
+        assert len(contacts) == 1, name
+        assert contacts[0]["editable"] is True, name
+        assert contacts[0]["editBlockedReason"] is None, name
 
 
 # ---------------------------------------------------------------------------
@@ -721,6 +809,8 @@ async def test_tenant_scope_and_lifecycle_hold_against_real_postgres(
     assert vendor not in ids, "kinds outside lead/customer are not directory rows"
     lost_row = next(row for row in rows if row["contact_id"] == eom_lost_lead)
     assert lost_row["lead_stage"] == "lost"
+    assert lost_row["editable"] is False
+    assert lost_row["edit_block_reason"] == "not_editable_stage"
 
 
 @pytest.mark.asyncio
@@ -833,5 +923,9 @@ async def test_directory_rows_carry_the_projection_columns(_directory_provider):
         "source",
         "created_at",
         "updated_at",
+        "editable",
+        "edit_block_reason",
     }
     assert row["customer_type"] == "unknown", "migration 366 default must surface"
+    assert row["editable"] is True
+    assert row["edit_block_reason"] is None
