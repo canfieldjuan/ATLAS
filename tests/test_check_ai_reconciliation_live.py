@@ -20,7 +20,8 @@ def load_check():
 
 
 def thread(*, resolved=False, outdated=False, author="chatgpt-codex-connector[bot]",
-           path="atlas_brain/x.py", line=12, body="use the typed config field"):
+           path="atlas_brain/x.py", line=12,
+           body="use the typed config field\nR2 (BLOCKER) details"):
     return {
         "isResolved": resolved,
         "isOutdated": outdated,
@@ -146,7 +147,9 @@ def test_resolved_and_nonbot_excluded_but_outdated_unresolved_blocks():
             "path": "atlas_brain/x.py",
             "line": 12,
             "author": "chatgpt-codex-connector[bot]",
-            "snippet": "use the typed config field",
+            "title": "use the typed config field",
+            "decision": "use the typed config field",
+            "snippet": "use the typed config field R2 (BLOCKER) details",
         }
     ]
 
@@ -347,8 +350,12 @@ def test_no_findings_fails_when_resolved_codex_thread_history_exists():
 def test_clear_body_requires_disposition_for_each_resolved_codex_thread():
     c = load_check()
     nodes = [
-        thread(resolved=True, body="First parser issue R2 (BLOCKER) details"),
-        thread(resolved=True, path="scripts/y.py", body="Second wrapper issue R13 (BLOCKER) details"),
+        thread(resolved=True, body="First parser issue needs history coverage R2 (BLOCKER) details"),
+        thread(
+            resolved=True,
+            path="scripts/y.py",
+            body="Second wrapper issue needs history coverage R13 (BLOCKER) details",
+        ),
     ]
 
     code, msgs = c.evaluate(nodes, body_with_dispositions("Unrelated issue"), BOTS)
@@ -364,7 +371,7 @@ def test_structured_disposition_only_body_rejects_missing_thread_history():
     nodes = [
         thread(
             resolved=True,
-            body="Run history correlation for disposition-only ledgers R2/R13 details",
+            body="Run history correlation for disposition-only ledgers R2/R13 (BLOCKER) details",
         )
     ]
     body = "## AI reconciliation\n- unrelated decision -- fixed-in: fake.py\n"
@@ -381,7 +388,7 @@ def test_thread_dispositions_reject_tiny_substring_roots():
     nodes = [
         thread(
             resolved=True,
-            body="Require a disposition for every resolved thread R2/R13 details",
+            body="Require a disposition for every resolved thread R2/R13 (BLOCKER) details",
         )
     ]
     body = "## AI reconciliation\n- a -- fixed-in: fake.py\n"
@@ -393,21 +400,173 @@ def test_thread_dispositions_reject_tiny_substring_roots():
     assert any("Require a disposition for every resolved thread" in msg for msg in msgs)
 
 
+def test_root_decision_matching_rejects_tiny_exact_roots():
+    c = load_check()
+
+    assert c.root_decision_matches_thread("x", "x") is False
+    assert c.root_decision_matches_thread(
+        "Require a disposition for every resolved thread",
+        "Require a disposition for every resolved thread",
+    ) is True
+
+
 def test_clear_body_passes_when_each_resolved_codex_thread_is_named():
     c = load_check()
     nodes = [
-        thread(resolved=True, body="First parser issue R2 (BLOCKER) details"),
-        thread(resolved=True, path="scripts/y.py", body="Second wrapper issue R13 (BLOCKER) details"),
+        thread(resolved=True, body="First parser issue needs history coverage R2 (BLOCKER) details"),
+        thread(
+            resolved=True,
+            path="scripts/y.py",
+            body="Second wrapper issue needs history coverage R13 (BLOCKER) details",
+        ),
     ]
 
     code, msgs = c.evaluate(
         nodes,
-        body_with_dispositions("First parser issue", "Second wrapper issue"),
+        body_with_dispositions(
+            "First parser issue needs history coverage",
+            "Second wrapper issue needs history coverage",
+        ),
         BOTS,
     )
 
     assert code == 0
     assert any("no open scoped Codex review threads remain" in msg for msg in msgs)
+
+
+def test_multiline_bodytext_uses_title_paired_with_rule_evidence_for_resolved_thread_dispositions():
+    c = load_check()
+    cases = (
+        (
+            "Reject generated columns in the attested signature",
+            "R1/R4/R13 — detail from a current connector review",
+        ),
+        (
+            "Update callers for the lazy suppression import",
+            "R2/R5/R12 — detail from a current connector review",
+        ),
+        (
+            "Keep missing review findings fail closed",
+            "R1/R2 — detail with a distinct rule combination",
+        ),
+        (
+            "Preserve trusted-base review evidence",
+            "R10/R14 — detail with another root decision",
+        ),
+        (
+            "Correlate multiline review titles structurally",
+            "R2/R13 — detail with a held-out title",
+        ),
+    )
+
+    for title, detail in cases:
+        node = thread(resolved=True, body=f"{title}\n{detail}")
+
+        code, messages = c.evaluate([node], body_with_dispositions(title), BOTS)
+
+        assert code == 0
+        assert any("no open scoped Codex review threads remain" in message for message in messages)
+
+
+def test_multiline_bodytext_rejects_an_unrelated_resolved_thread_disposition():
+    c = load_check()
+    title = "Keep missing review findings fail closed"
+    node = thread(
+        resolved=True,
+        body=f"{title}\nR1/R2 — detail from a current connector review",
+    )
+
+    code, messages = c.evaluate(
+        [node],
+        body_with_dispositions("An unrelated root decision"),
+        BOTS,
+    )
+
+    assert code == 1
+    assert any("missing dispositions" in message for message in messages)
+    assert any(title in message for message in messages)
+
+
+def test_multiline_bodytext_skips_nonsemantic_prefixes_before_a_real_title():
+    c = load_check()
+    title = "Preserve unparseable review history evidence"
+
+    for prefix in ("---", "***", "___", "###", "⚠️", "..."):
+        node = thread(
+            resolved=True,
+            body=f"{prefix}\n{title}\nR1/R2 — current connector detail",
+        )
+
+        code, messages = c.evaluate([node], body_with_dispositions(title), BOTS)
+
+        assert code == 0
+        assert any("no open scoped Codex review threads remain" in message for message in messages)
+
+
+def test_unparseable_bodytext_cannot_be_waived_by_a_generic_disposition():
+    c = load_check()
+    body = body_with_dispositions(
+        "An unrelated root decision",
+        "unparseable trusted bot review title",
+    )
+
+    for malformed_body in ("---", "***\n___", "###\n⚠️", "", " \n\t"):
+        code, messages = c.evaluate(
+            [thread(resolved=True, body=malformed_body)],
+            body,
+            BOTS,
+        )
+
+        assert code == 1
+        assert any("missing dispositions" in message for message in messages)
+        assert any("unparseable trusted-bot review title" in message for message in messages)
+        assert any("cannot be reconciled by a generic disposition" in message for message in messages)
+
+
+def test_ambiguous_multiline_prefix_cannot_supply_a_reconciled_title():
+    c = load_check()
+    body = body_with_dispositions("x", "Real decision")
+    node = thread(
+        resolved=True,
+        body="x\nReal decision R2 (BLOCKER) details",
+    )
+
+    code, messages = c.evaluate([node], body, BOTS)
+
+    assert code == 1
+    assert any("missing dispositions" in message for message in messages)
+    assert any("unparseable trusted-bot review title" in message for message in messages)
+    assert any("cannot be reconciled by a generic disposition" in message for message in messages)
+
+
+def test_short_inline_legacy_title_cannot_supply_a_reconciled_title():
+    c = load_check()
+    body = body_with_dispositions("x")
+    node = thread(resolved=True, body="x R2 (BLOCKER) details")
+
+    code, messages = c.evaluate([node], body, BOTS)
+
+    assert code == 1
+    assert any("missing dispositions" in message for message in messages)
+    assert any("unparseable trusted-bot review title" in message for message in messages)
+    assert any("cannot be reconciled by a generic disposition" in message for message in messages)
+
+
+def test_legacy_inline_rule_label_remains_a_resolved_thread_disposition_title():
+    c = load_check()
+    node = thread(
+        resolved=True,
+        body="Keep legacy inline root extraction R2/R13 (BLOCKER) detail",
+    )
+
+    code, messages = c.evaluate(
+        [node],
+        body_with_dispositions("Keep legacy inline root extraction"),
+        BOTS,
+    )
+
+    assert code == 0
+    assert any("no open scoped Codex review threads remain" in message for message in messages)
 
 
 def test_thread_dispositions_use_canonical_pr_body_section():
