@@ -502,7 +502,7 @@ serialization, tracked in #2476.
 |---|---:|
 | `.github/workflows/atlas_migrations_runner_checks.yml` | 3 |
 | `atlas_brain/api/b2b_dashboard.py` | 21 |
-| `atlas_brain/services/b2b/watchlist_alerts.py` | 49 |
+| `atlas_brain/services/b2b/watchlist_alerts.py` | 53 |
 | `atlas_brain/storage/migrations/reconciliation.py` | 789 |
 | `plans/INDEX.md` | 3 |
 | `plans/PR-H18-Watchlist-Alert-Events-Source-Attestation.md` | 513 |
@@ -510,4 +510,4 @@ serialization, tracked in #2476.
 | `tests/test_b2b_watchlist_alert_events_migration_repair.py` | 659 |
 | `tests/test_migration_content_integrity_preflight.py` | 606 |
 | `tests/test_migrations_runner.py` | 239 |
-| **Total** | **2882** |
+| **Total** | **2886** |
