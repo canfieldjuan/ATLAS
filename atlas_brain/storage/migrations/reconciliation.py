@@ -9,8 +9,9 @@ requires its own reviewed evidence record and catalog predicate.
 from __future__ import annotations
 
 import hashlib
+import json
 import re
-from collections.abc import Collection
+from collections.abc import Collection, Mapping
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
@@ -327,6 +328,65 @@ class B2BCampaignPartnerMissingSourceMigrationReconciliationAttestation:
         }
 
 
+@dataclass(frozen=True)
+class B2BWatchlistAlertEventsMissingSourceMigrationReconciliationAttestation:
+    """Read-only target proof for the legacy synthetic-version alert receipt."""
+
+    reconciliation_id: str
+    migration_name: str
+    exactly_one_ledger_row: bool
+    ledger_version_matches_record: bool
+    ledger_digest_is_null: bool
+    applied_at_matches_record: bool
+    watchlist_alert_events_is_ordinary_table: bool
+    base_alert_event_columns_ready: bool
+    required_alert_event_constraints_ready: bool
+    required_alert_event_indexes_ready: bool
+
+    @property
+    def source_verification(self) -> str:
+        """Catalog evidence must not pretend to verify missing source bytes."""
+        return HISTORICAL_SOURCE_UNAVAILABLE
+
+    @property
+    def status(self) -> str:
+        if all((
+            self.exactly_one_ledger_row,
+            self.ledger_version_matches_record,
+            self.ledger_digest_is_null,
+            self.applied_at_matches_record,
+            self.watchlist_alert_events_is_ordinary_table,
+            self.base_alert_event_columns_ready,
+            self.required_alert_event_constraints_ready,
+            self.required_alert_event_indexes_ready,
+        )):
+            return "attested"
+        return "not_attested"
+
+    def as_payload(self) -> dict[str, object]:
+        """Expose metadata booleans without reading tenant alert-event rows."""
+        return {
+            "reconciliation_id": self.reconciliation_id,
+            "migration_name": self.migration_name,
+            "source_verification": self.source_verification,
+            "exactly_one_ledger_row": self.exactly_one_ledger_row,
+            "ledger_version_matches_record": self.ledger_version_matches_record,
+            "ledger_digest_is_null": self.ledger_digest_is_null,
+            "applied_at_matches_record": self.applied_at_matches_record,
+            "watchlist_alert_events_is_ordinary_table": (
+                self.watchlist_alert_events_is_ordinary_table
+            ),
+            "base_alert_event_columns_ready": self.base_alert_event_columns_ready,
+            "required_alert_event_constraints_ready": (
+                self.required_alert_event_constraints_ready
+            ),
+            "required_alert_event_indexes_ready": (
+                self.required_alert_event_indexes_ready
+            ),
+            "status": self.status,
+        }
+
+
 MIGRATION_387_RECONCILIATION = HistoricalMigrationReconciliation(
     reconciliation_id="eom-migration-387-recurring-invoice-dedup-recovery",
     migration_name="387_eom_recurring_invoice_dedup_recovery",
@@ -395,6 +455,29 @@ MIGRATION_067_B2B_CAMPAIGN_PARTNER_RECONCILIATION = (
 )
 
 
+MIGRATION_272_B2B_WATCHLIST_ALERT_EVENTS_RECONCILIATION = (
+    HistoricalVersionedMissingSourceReconciliation(
+        reconciliation_id="b2b-migration-272-watchlist-alert-events-source-absence",
+        migration_name="272_b2b_watchlist_alert_events",
+        # The historical runner assigned a synthetic negative version because
+        # its numeric prefix collided. The target also retains a separate
+        # later 273 receipt, so this is not a source rename.
+        migration_version=-3,
+        historical_ledger_sha256=None,
+        observed_applied_at=datetime(
+            2026,
+            4,
+            8,
+            3,
+            34,
+            24,
+            452_014,
+            tzinfo=timezone.utc,
+        ),
+    )
+)
+
+
 MIGRATION_022B_PRESENCE_UNKNOWN_COUNT_RECONCILIATION = (
     HistoricalRenamedMissingSourceReconciliation(
         reconciliation_id="presence-migration-022b-unknown-count-source-rename",
@@ -427,6 +510,7 @@ _HISTORICAL_MISMATCH_RECONCILIATIONS = (MIGRATION_387_RECONCILIATION,)
 _HISTORICAL_MISSING_SOURCE_RECONCILIATIONS = (
     MIGRATION_382_EOM_PUBLIC_ONBOARDING_TOKENS_RECONCILIATION,
     MIGRATION_067_B2B_CAMPAIGN_PARTNER_RECONCILIATION,
+    MIGRATION_272_B2B_WATCHLIST_ALERT_EVENTS_RECONCILIATION,
     MIGRATION_022B_PRESENCE_UNKNOWN_COUNT_RECONCILIATION,
 )
 
@@ -446,6 +530,125 @@ _B2B_CAMPAIGN_PARTNER_FOREIGN_KEY = {
 _B2B_CAMPAIGN_PARTNER_INDEX = {
     "key_column": "partner_id",
     "predicate": "(partner_id is not null)",
+}
+
+
+@dataclass(frozen=True)
+class _B2BWatchlistAlertEventConstraint:
+    """One source-era, named alert-event constraint requirement."""
+
+    constraint_type: str
+    key_columns: tuple[str, ...]
+    referenced_table: str | None = None
+    referenced_columns: tuple[str, ...] = ()
+    delete_action: str | None = None
+    update_action: str | None = None
+    match_type: str | None = None
+    expression: str | None = None
+
+
+@dataclass(frozen=True)
+class _B2BWatchlistAlertEventIndex:
+    """One source-era, named alert-event index requirement."""
+
+    unique: bool
+    key_columns: tuple[str, ...]
+    definition_fragment: str
+    predicate: str | None = None
+
+
+_B2B_WATCHLIST_ALERT_EVENT_BASE_COLUMNS = {
+    "id": ("uuid", False, None),
+    "account_id": ("uuid", False, None),
+    "watchlist_view_id": ("uuid", False, None),
+    "event_type": ("text", False, None),
+    "threshold_field": ("text", False, None),
+    "entity_type": ("text", False, None),
+    "entity_key": ("text", False, None),
+    "vendor_name": ("text", True, None),
+    "company_name": ("text", True, None),
+    "category": ("text", True, None),
+    "source": ("text", True, None),
+    "threshold_value": ("numeric(6,2)", True, None),
+    "summary": ("text", False, None),
+    "payload": ("jsonb", False, "{}::jsonb"),
+    "status": ("text", False, "open"),
+    "first_seen_at": ("timestamp with time zone", False, "now()"),
+    "last_seen_at": ("timestamp with time zone", False, "now()"),
+    "resolved_at": ("timestamp with time zone", True, None),
+    "created_at": ("timestamp with time zone", False, "now()"),
+    "updated_at": ("timestamp with time zone", False, "now()"),
+}
+
+_B2B_WATCHLIST_ALERT_EVENT_CONSTRAINTS = {
+    "b2b_watchlist_alert_events_pkey": _B2BWatchlistAlertEventConstraint(
+        "p", ("id",)
+    ),
+    "b2b_watchlist_alert_events_account_id_fkey": (
+        _B2BWatchlistAlertEventConstraint(
+            "f", ("account_id",),
+            referenced_table="saas_accounts",
+            referenced_columns=("id",),
+            delete_action="c",
+            update_action="a",
+            match_type="s",
+        )
+    ),
+    "b2b_watchlist_alert_events_watchlist_view_id_fkey": (
+        _B2BWatchlistAlertEventConstraint(
+            "f", ("watchlist_view_id",),
+            referenced_table="b2b_watchlist_views",
+            referenced_columns=("id",),
+            delete_action="c",
+            update_action="a",
+            match_type="s",
+        )
+    ),
+    "chk_b2b_watchlist_alert_events_event_type": (
+        _B2BWatchlistAlertEventConstraint(
+            "c", ("event_type",),
+            expression="(event_type = any (array[vendor_alert, account_alert, stale_data]))",
+        )
+    ),
+    "chk_b2b_watchlist_alert_events_threshold_field": (
+        _B2BWatchlistAlertEventConstraint(
+            "c", ("threshold_field",),
+            expression=(
+                "(threshold_field = any (array[vendor_alert_threshold, "
+                "account_alert_threshold, stale_days_threshold]))"
+            ),
+        )
+    ),
+    "chk_b2b_watchlist_alert_events_entity_type": (
+        _B2BWatchlistAlertEventConstraint(
+            "c", ("entity_type",),
+            expression="(entity_type = any (array[vendor, account, signal_cluster]))",
+        )
+    ),
+    "chk_b2b_watchlist_alert_events_status": _B2BWatchlistAlertEventConstraint(
+        "c", ("status",),
+        expression="(status = any (array[open, resolved]))",
+    ),
+}
+
+_B2B_WATCHLIST_ALERT_EVENT_INDEXES = {
+    "idx_b2b_watchlist_alert_events_view_entity": _B2BWatchlistAlertEventIndex(
+        unique=True,
+        key_columns=("watchlist_view_id", "event_type", "entity_key"),
+        definition_fragment="usingbtree(watchlist_view_id,event_type,entity_key)",
+    ),
+    "idx_b2b_watchlist_alert_events_account_status": (
+        _B2BWatchlistAlertEventIndex(
+            unique=False,
+            key_columns=("account_id", "status", "last_seen_at"),
+            definition_fragment="usingbtree(account_id,status,last_seen_atdesc)",
+        )
+    ),
+    "idx_b2b_watchlist_alert_events_view_status": _B2BWatchlistAlertEventIndex(
+        unique=False,
+        key_columns=("watchlist_view_id", "status", "last_seen_at"),
+        definition_fragment="usingbtree(watchlist_view_id,status,last_seen_atdesc)",
+    ),
 }
 
 
@@ -691,6 +894,113 @@ def _catalog_column_names(value: object) -> tuple[str, ...]:
     if value is None:
         return ()
     return tuple(str(name) for name in value)
+
+
+def _catalog_json_mapping(value: object) -> Mapping[str, object]:
+    """Decode a catalog JSON object, failing closed on malformed metadata."""
+    decoded = value
+    if isinstance(value, str):
+        try:
+            decoded = json.loads(value)
+        except json.JSONDecodeError:
+            return {}
+    return decoded if isinstance(decoded, Mapping) else {}
+
+
+def _watchlist_alert_event_column_ready(
+    observed: Mapping[str, object],
+    expected: tuple[str, bool, str | None],
+) -> bool:
+    """Require one source-era column while tolerating later additive columns."""
+    expected_type, expected_is_nullable, expected_default = expected
+    observed_default = observed.get("column_default")
+    canonical_default = (
+        _canonicalize_catalog_constraint_expression(observed_default)
+        if observed_default is not None
+        else None
+    )
+    return all((
+        observed.get("exists") is True,
+        observed.get("data_type") == expected_type,
+        bool(observed.get("is_nullable")) is expected_is_nullable,
+        canonical_default == expected_default,
+    ))
+
+
+def _watchlist_alert_event_constraint_ready(
+    observed: Mapping[str, object],
+    expected: _B2BWatchlistAlertEventConstraint,
+) -> bool:
+    """Require one named source-era constraint without reading alert rows."""
+    referenced_table_ready = (
+        expected.referenced_table is None
+        or (
+            observed.get("referenced_table") == expected.referenced_table
+            and bool(observed.get("references_current_schema"))
+        )
+    )
+    delete_action_ready = (
+        expected.delete_action is None
+        or _catalog_char(observed.get("delete_action")) == expected.delete_action
+    )
+    update_action_ready = (
+        expected.update_action is None
+        or _catalog_char(observed.get("update_action")) == expected.update_action
+    )
+    match_type_ready = (
+        expected.match_type is None
+        or _catalog_char(observed.get("match_type")) == expected.match_type
+    )
+    expression_ready = (
+        expected.expression is None
+        or _canonicalize_catalog_constraint_expression(observed.get("expression"))
+        == expected.expression
+    )
+    return all((
+        _catalog_char(observed.get("constraint_type")) == expected.constraint_type,
+        _catalog_column_names(observed.get("key_columns")) == expected.key_columns,
+        referenced_table_ready,
+        _catalog_column_names(observed.get("referenced_columns"))
+        == expected.referenced_columns,
+        delete_action_ready,
+        update_action_ready,
+        match_type_ready,
+        not bool(observed.get("is_deferrable")),
+        not bool(observed.get("is_initially_deferred")),
+        bool(observed.get("is_validated")),
+        expression_ready,
+    ))
+
+
+def _watchlist_alert_event_index_ready(
+    observed: Mapping[str, object],
+    expected: _B2BWatchlistAlertEventIndex,
+) -> bool:
+    """Require one named source-era index with its key order and readiness."""
+    observed_key_columns = tuple(
+        _normalize_schema_definition(column)
+        for column in _catalog_column_names(observed.get("key_columns"))
+    )
+    observed_predicate = observed.get("predicate")
+    predicate_ready = (
+        observed_predicate is None
+        if expected.predicate is None
+        else _canonicalize_catalog_constraint_expression(observed_predicate)
+        == expected.predicate
+    )
+    return all((
+        _catalog_char(observed.get("relation_kind")) == "i",
+        not bool(observed.get("is_partition")),
+        bool(observed.get("is_unique")) is expected.unique,
+        bool(observed.get("is_valid")),
+        bool(observed.get("is_ready")),
+        int(observed.get("key_attribute_count") or 0) == len(expected.key_columns),
+        int(observed.get("attribute_count") or 0) == len(expected.key_columns),
+        observed_key_columns == expected.key_columns,
+        expected.definition_fragment
+        in _canonicalize_catalog_index_definition(observed.get("definition")),
+        predicate_ready,
+    ))
 
 
 def _public_onboarding_token_constraint_ready(
@@ -1241,6 +1551,213 @@ async def _migration_067_catalog_evidence(
     )
 
 
+async def _migration_272_catalog_evidence(
+    executor: Any,
+) -> tuple[bool, bool, bool, bool]:
+    """Read the named 272 base-table receipt in one catalog-only snapshot."""
+    evidence_row = await executor.fetchrow(
+        """
+        WITH target_relation AS (
+            SELECT
+                relation_state.oid,
+                relation_state.relkind,
+                relation_state.relispartition
+            FROM pg_class AS relation_state
+            JOIN pg_namespace AS schema_state
+              ON schema_state.oid = relation_state.relnamespace
+            WHERE schema_state.nspname = current_schema()
+              AND relation_state.relname = 'b2b_watchlist_alert_events'
+        ), requested_columns AS (
+            SELECT requested.name
+            FROM unnest($1::text[]) AS requested(name)
+        ), column_evidence AS (
+            SELECT
+                requested.name,
+                jsonb_build_object(
+                    'exists', attribute_state.attname IS NOT NULL,
+                    'data_type', format_type(
+                        attribute_state.atttypid,
+                        attribute_state.atttypmod
+                    ),
+                    'is_nullable', NOT attribute_state.attnotnull,
+                    'column_default', CASE
+                        WHEN default_state.oid IS NULL THEN NULL
+                        ELSE pg_get_expr(
+                            default_state.adbin,
+                            default_state.adrelid
+                        )
+                    END
+                ) AS evidence
+            FROM requested_columns AS requested
+            LEFT JOIN target_relation ON TRUE
+            LEFT JOIN pg_attribute AS attribute_state
+              ON attribute_state.attrelid = target_relation.oid
+             AND attribute_state.attname = requested.name
+             AND attribute_state.attnum > 0
+             AND NOT attribute_state.attisdropped
+            LEFT JOIN pg_attrdef AS default_state
+              ON default_state.adrelid = attribute_state.attrelid
+             AND default_state.adnum = attribute_state.attnum
+        ), requested_constraints AS (
+            SELECT requested.name
+            FROM unnest($2::text[]) AS requested(name)
+        ), constraint_evidence AS (
+            SELECT
+                requested.name,
+                jsonb_build_object(
+                    'constraint_type', actual.contype,
+                    'key_columns', ARRAY(
+                        SELECT attribute_state.attname
+                        FROM unnest(actual.conkey)
+                             WITH ORDINALITY AS key_state(attnum, ordinality)
+                        JOIN pg_attribute AS attribute_state
+                          ON attribute_state.attrelid = actual.conrelid
+                         AND attribute_state.attnum = key_state.attnum
+                        ORDER BY key_state.ordinality
+                    ),
+                    'referenced_table', referenced_table.relname,
+                    'references_current_schema',
+                        referenced_schema.nspname = current_schema(),
+                    'referenced_columns', ARRAY(
+                        SELECT attribute_state.attname
+                        FROM unnest(actual.confkey)
+                             WITH ORDINALITY AS key_state(attnum, ordinality)
+                        JOIN pg_attribute AS attribute_state
+                          ON attribute_state.attrelid = actual.confrelid
+                         AND attribute_state.attnum = key_state.attnum
+                        ORDER BY key_state.ordinality
+                    ),
+                    'delete_action', actual.confdeltype,
+                    'update_action', actual.confupdtype,
+                    'match_type', actual.confmatchtype,
+                    'is_deferrable', actual.condeferrable,
+                    'is_initially_deferred', actual.condeferred,
+                    'is_validated', actual.convalidated,
+                    'expression', CASE
+                        WHEN actual.oid IS NULL THEN NULL
+                        ELSE pg_get_expr(actual.conbin, actual.conrelid)
+                    END
+                ) AS evidence
+            FROM requested_constraints AS requested
+            LEFT JOIN target_relation ON TRUE
+            LEFT JOIN pg_constraint AS actual
+              ON actual.conrelid = target_relation.oid
+             AND actual.conname = requested.name
+            LEFT JOIN pg_class AS referenced_table
+              ON referenced_table.oid = actual.confrelid
+            LEFT JOIN pg_namespace AS referenced_schema
+              ON referenced_schema.oid = referenced_table.relnamespace
+        ), requested_indexes AS (
+            SELECT requested.name
+            FROM unnest($3::text[]) AS requested(name)
+        ), index_evidence AS (
+            SELECT
+                requested.name,
+                jsonb_build_object(
+                    'relation_kind', index_relation.relkind,
+                    'is_partition', index_relation.relispartition,
+                    'is_unique', index_state.indisunique,
+                    'is_valid', index_state.indisvalid,
+                    'is_ready', index_state.indisready,
+                    'key_attribute_count', index_state.indnkeyatts,
+                    'attribute_count', index_state.indnatts,
+                    'definition', CASE
+                        WHEN index_state.indexrelid IS NULL THEN NULL
+                        ELSE pg_get_indexdef(index_state.indexrelid)
+                    END,
+                    'key_columns', ARRAY(
+                        SELECT pg_get_indexdef(
+                            index_state.indexrelid,
+                            position,
+                            true
+                        )
+                        FROM generate_series(
+                            1,
+                            COALESCE(index_state.indnkeyatts, 0)
+                        ) AS position
+                    ),
+                    'predicate', CASE
+                        WHEN index_state.indexrelid IS NULL THEN NULL
+                        ELSE pg_get_expr(
+                            index_state.indpred,
+                            index_state.indrelid
+                        )
+                    END
+                ) AS evidence
+            FROM requested_indexes AS requested
+            LEFT JOIN target_relation ON TRUE
+            LEFT JOIN pg_class AS index_relation
+              ON index_relation.relnamespace = (
+                    SELECT oid
+                    FROM pg_namespace
+                    WHERE nspname = current_schema()
+                )
+             AND index_relation.relname = requested.name
+            LEFT JOIN pg_index AS index_state
+              ON index_state.indexrelid = index_relation.oid
+             AND index_state.indrelid = target_relation.oid
+        )
+        SELECT jsonb_build_object(
+            'watchlist_alert_events_is_ordinary_table', EXISTS (
+                SELECT 1
+                FROM target_relation
+                WHERE relkind = 'r'
+                  AND NOT relispartition
+            ),
+            'columns', (
+                SELECT jsonb_object_agg(name, evidence)
+                FROM column_evidence
+            ),
+            'constraints', (
+                SELECT jsonb_object_agg(name, evidence)
+                FROM constraint_evidence
+            ),
+            'indexes', (
+                SELECT jsonb_object_agg(name, evidence)
+                FROM index_evidence
+            )
+        ) AS catalog_evidence
+        """,
+        list(_B2B_WATCHLIST_ALERT_EVENT_BASE_COLUMNS),
+        list(_B2B_WATCHLIST_ALERT_EVENT_CONSTRAINTS),
+        list(_B2B_WATCHLIST_ALERT_EVENT_INDEXES),
+    )
+    if evidence_row is None:
+        return False, False, False, False
+
+    catalog = _catalog_json_mapping(evidence_row["catalog_evidence"])
+    observed_columns = _catalog_json_mapping(catalog.get("columns"))
+    observed_constraints = _catalog_json_mapping(catalog.get("constraints"))
+    observed_indexes = _catalog_json_mapping(catalog.get("indexes"))
+    base_alert_event_columns_ready = all(
+        _watchlist_alert_event_column_ready(
+            _catalog_json_mapping(observed_columns.get(name)),
+            expected,
+        )
+        for name, expected in _B2B_WATCHLIST_ALERT_EVENT_BASE_COLUMNS.items()
+    )
+    required_alert_event_constraints_ready = all(
+        _watchlist_alert_event_constraint_ready(
+            _catalog_json_mapping(observed_constraints.get(name)),
+            expected,
+        )
+        for name, expected in _B2B_WATCHLIST_ALERT_EVENT_CONSTRAINTS.items()
+    )
+    required_alert_event_indexes_ready = all(
+        _watchlist_alert_event_index_ready(
+            _catalog_json_mapping(observed_indexes.get(name)),
+            expected,
+        )
+        for name, expected in _B2B_WATCHLIST_ALERT_EVENT_INDEXES.items()
+    )
+    return (
+        bool(catalog.get("watchlist_alert_events_is_ordinary_table")),
+        base_alert_event_columns_ready,
+        required_alert_event_constraints_ready,
+        required_alert_event_indexes_ready,
+    )
+
+
 async def _attest_migration_387(
     executor: Any,
     migration_files: Collection[Path],
@@ -1405,6 +1922,53 @@ async def _attest_migration_067(
     )
 
 
+async def _attest_migration_272(
+    executor: Any,
+) -> B2BWatchlistAlertEventsMissingSourceMigrationReconciliationAttestation:
+    """Attest only the named synthetic-version alert-event receipt."""
+    record = MIGRATION_272_B2B_WATCHLIST_ALERT_EVENTS_RECONCILIATION
+    ledger_rows = await executor.fetch(
+        "SELECT version, content_sha256, applied_at FROM schema_migrations "
+        "WHERE name = $1 LIMIT 2",
+        record.migration_name,
+    )
+    exactly_one_ledger_row = len(ledger_rows) == 1
+    ledger_row = ledger_rows[0] if exactly_one_ledger_row else None
+    recorded_digest = ledger_row["content_sha256"] if ledger_row is not None else None
+    applied_at = _normalize_utc(
+        ledger_row["applied_at"] if ledger_row is not None else None
+    )
+    (
+        watchlist_alert_events_is_ordinary_table,
+        base_alert_event_columns_ready,
+        required_alert_event_constraints_ready,
+        required_alert_event_indexes_ready,
+    ) = await _migration_272_catalog_evidence(executor)
+
+    return B2BWatchlistAlertEventsMissingSourceMigrationReconciliationAttestation(
+        reconciliation_id=record.reconciliation_id,
+        migration_name=record.migration_name,
+        exactly_one_ledger_row=exactly_one_ledger_row,
+        ledger_version_matches_record=(
+            exactly_one_ledger_row
+            and ledger_row["version"] == record.migration_version
+        ),
+        ledger_digest_is_null=(
+            exactly_one_ledger_row
+            and recorded_digest == record.historical_ledger_sha256
+        ),
+        applied_at_matches_record=applied_at == record.observed_applied_at,
+        watchlist_alert_events_is_ordinary_table=(
+            watchlist_alert_events_is_ordinary_table
+        ),
+        base_alert_event_columns_ready=base_alert_event_columns_ready,
+        required_alert_event_constraints_ready=(
+            required_alert_event_constraints_ready
+        ),
+        required_alert_event_indexes_ready=required_alert_event_indexes_ready,
+    )
+
+
 async def attest_known_historical_migration_reconciliations(
     executor: Any,
     migration_files: Collection[Path],
@@ -1414,7 +1978,8 @@ async def attest_known_historical_migration_reconciliations(
     MigrationReconciliationAttestation
     | MissingSourceMigrationReconciliationAttestation
     | RenamedMissingSourceMigrationReconciliationAttestation
-    | B2BCampaignPartnerMissingSourceMigrationReconciliationAttestation,
+    | B2BCampaignPartnerMissingSourceMigrationReconciliationAttestation
+    | B2BWatchlistAlertEventsMissingSourceMigrationReconciliationAttestation,
     ...,
 ]:
     """Return read-only attestation for reported, reviewed source gaps.
@@ -1435,6 +2000,7 @@ async def attest_known_historical_migration_reconciliations(
         | MissingSourceMigrationReconciliationAttestation
         | RenamedMissingSourceMigrationReconciliationAttestation
         | B2BCampaignPartnerMissingSourceMigrationReconciliationAttestation
+        | B2BWatchlistAlertEventsMissingSourceMigrationReconciliationAttestation
     ] = []
     if MIGRATION_387_RECONCILIATION.migration_name in requested_names:
         attestations.append(await _attest_migration_387(executor, migration_files))
@@ -1448,6 +2014,11 @@ async def attest_known_historical_migration_reconciliations(
         in requested_names
     ):
         attestations.append(await _attest_migration_067(executor))
+    if (
+        MIGRATION_272_B2B_WATCHLIST_ALERT_EVENTS_RECONCILIATION.migration_name
+        in requested_names
+    ):
+        attestations.append(await _attest_migration_272(executor))
     if (
         MIGRATION_022B_PRESENCE_UNKNOWN_COUNT_RECONCILIATION.migration_name
         in requested_names

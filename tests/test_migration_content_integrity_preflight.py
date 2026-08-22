@@ -44,6 +44,7 @@ class FakeConnection:
         reconciliation_rows: list[dict[str, object]] | None = None,
         public_onboarding_reconciliation_rows: list[dict[str, object]] | None = None,
         b2b_campaign_partner_reconciliation_rows: list[dict[str, object]] | None = None,
+        b2b_watchlist_alert_events_reconciliation_rows: list[dict[str, object]] | None = None,
         presence_unknown_count_reconciliation_rows: list[dict[str, object]] | None = None,
         public_onboarding_columns: list[dict[str, object]] | None = None,
         public_onboarding_constraints: list[dict[str, object]] | None = None,
@@ -53,6 +54,7 @@ class FakeConnection:
         presence_events_is_leaf_partition: bool = False,
         presence_unknown_count_has_constraint: bool = False,
         b2b_campaign_partner_catalog_row: dict[str, object] | None = None,
+        b2b_watchlist_alert_events_catalog_row: dict[str, object] | None = None,
         recurring_schema_ready: bool = True,
         zero_active_null_period_rows: bool = True,
     ):
@@ -63,6 +65,9 @@ class FakeConnection:
         )
         self.b2b_campaign_partner_reconciliation_rows = (
             b2b_campaign_partner_reconciliation_rows or []
+        )
+        self.b2b_watchlist_alert_events_reconciliation_rows = (
+            b2b_watchlist_alert_events_reconciliation_rows or []
         )
         self.presence_unknown_count_reconciliation_rows = (
             presence_unknown_count_reconciliation_rows or []
@@ -94,6 +99,11 @@ class FakeConnection:
             _default_b2b_campaign_partner_catalog_row()
             if b2b_campaign_partner_catalog_row is None
             else b2b_campaign_partner_catalog_row
+        )
+        self.b2b_watchlist_alert_events_catalog_row = (
+            _default_b2b_watchlist_alert_events_catalog_row()
+            if b2b_watchlist_alert_events_catalog_row is None
+            else b2b_watchlist_alert_events_catalog_row
         )
         self.recurring_schema_ready = recurring_schema_ready
         self.zero_active_null_period_rows = zero_active_null_period_rows
@@ -135,10 +145,14 @@ class FakeConnection:
             "SELECT version, content_sha256, applied_at FROM schema_migrations "
             "WHERE name = $1 LIMIT 2"
         ):
-            assert args == (
+            if args == (
                 reconciliation_mod.MIGRATION_067_B2B_CAMPAIGN_PARTNER_RECONCILIATION.migration_name,
+            ):
+                return self.b2b_campaign_partner_reconciliation_rows
+            assert args == (
+                reconciliation_mod.MIGRATION_272_B2B_WATCHLIST_ALERT_EVENTS_RECONCILIATION.migration_name,
             )
-            return self.b2b_campaign_partner_reconciliation_rows
+            return self.b2b_watchlist_alert_events_reconciliation_rows
         if "FROM information_schema.columns AS actual" in query:
             assert args == (
                 list(reconciliation_mod._PUBLIC_ONBOARDING_TOKEN_COLUMNS),
@@ -161,6 +175,17 @@ class FakeConnection:
 
     async def fetchrow(self, query: str, *args: object) -> dict[str, object] | None:
         self.fetchrow_calls.append((query, args))
+        if "b2b_watchlist_alert_events" in query:
+            assert args == (
+                list(reconciliation_mod._B2B_WATCHLIST_ALERT_EVENT_BASE_COLUMNS),
+                list(reconciliation_mod._B2B_WATCHLIST_ALERT_EVENT_CONSTRAINTS),
+                list(reconciliation_mod._B2B_WATCHLIST_ALERT_EVENT_INDEXES),
+            )
+            assert "WITH target_relation AS" in query
+            assert "JOIN pg_attribute AS attribute_state" in query
+            assert "JOIN pg_constraint AS actual" in query
+            assert "JOIN pg_index AS index_state" in query
+            return self.b2b_watchlist_alert_events_catalog_row
         if "b2b_campaigns" in query:
             assert args == ()
             assert "WITH target_relation AS" in query
@@ -282,6 +307,64 @@ def _default_b2b_campaign_partner_catalog_row() -> dict[str, object]:
         "partner_index_attribute_count": 1,
         "partner_index_key_column": index["key_column"],
         "partner_index_predicate": "(partner_id IS NOT NULL)",
+    }
+
+
+def _default_b2b_watchlist_alert_events_catalog_row() -> dict[str, object]:
+    """Return one complete metadata-only 272 catalog evidence fixture."""
+    return {
+        "catalog_evidence": {
+            "watchlist_alert_events_is_ordinary_table": True,
+            "columns": {
+                name: {
+                    "exists": True,
+                    "data_type": data_type,
+                    "is_nullable": is_nullable,
+                    "column_default": default,
+                }
+                for name, (data_type, is_nullable, default) in (
+                    reconciliation_mod._B2B_WATCHLIST_ALERT_EVENT_BASE_COLUMNS.items()
+                )
+            },
+            "constraints": {
+                name: {
+                    "constraint_type": constraint.constraint_type,
+                    "key_columns": list(constraint.key_columns),
+                    "referenced_table": constraint.referenced_table,
+                    "references_current_schema": (
+                        constraint.referenced_table is not None
+                    ),
+                    "referenced_columns": list(constraint.referenced_columns),
+                    "delete_action": constraint.delete_action,
+                    "update_action": constraint.update_action,
+                    "match_type": constraint.match_type,
+                    "is_deferrable": False,
+                    "is_initially_deferred": False,
+                    "is_validated": True,
+                    "expression": constraint.expression,
+                }
+                for name, constraint in (
+                    reconciliation_mod._B2B_WATCHLIST_ALERT_EVENT_CONSTRAINTS.items()
+                )
+            },
+            "indexes": {
+                name: {
+                    "relation_kind": "i",
+                    "is_partition": False,
+                    "is_unique": index.unique,
+                    "is_valid": True,
+                    "is_ready": True,
+                    "key_attribute_count": len(index.key_columns),
+                    "attribute_count": len(index.key_columns),
+                    "key_columns": list(index.key_columns),
+                    "definition": index.definition_fragment,
+                    "predicate": index.predicate,
+                }
+                for name, index in (
+                    reconciliation_mod._B2B_WATCHLIST_ALERT_EVENT_INDEXES.items()
+                )
+            },
+        }
     }
 
 
@@ -452,6 +535,27 @@ def _migration_067_connection(
     )
 
 
+def _migration_272_connection(
+    *,
+    ledger_digest: str | None = None,
+    applied_at: object | None = None,
+    reconciliation_rows: list[dict[str, object]] | None = None,
+) -> FakeConnection:
+    record = reconciliation_mod.MIGRATION_272_B2B_WATCHLIST_ALERT_EVENTS_RECONCILIATION
+    actual_applied_at = record.observed_applied_at if applied_at is None else applied_at
+    actual_rows = reconciliation_rows
+    if actual_rows is None:
+        actual_rows = [{
+            "version": record.migration_version,
+            "content_sha256": ledger_digest,
+            "applied_at": actual_applied_at,
+        }]
+    return FakeConnection(
+        [(record.migration_name, ledger_digest)],
+        b2b_watchlist_alert_events_reconciliation_rows=actual_rows,
+    )
+
+
 @pytest.mark.asyncio
 async def test_preflight_reports_unresolved_drift_without_writes(
     tmp_path: Path,
@@ -564,11 +668,13 @@ def test_migration_382_reconciliation_record_is_closed_legacy_source_evidence() 
     assert reconciliation_mod.known_historical_missing_source_reconciliation_names() == {
         record.migration_name,
         reconciliation_mod.MIGRATION_067_B2B_CAMPAIGN_PARTNER_RECONCILIATION.migration_name,
+        reconciliation_mod.MIGRATION_272_B2B_WATCHLIST_ALERT_EVENTS_RECONCILIATION.migration_name,
         reconciliation_mod.MIGRATION_022B_PRESENCE_UNKNOWN_COUNT_RECONCILIATION.migration_name,
     }
     assert reconciliation_mod.known_historical_reconciliation_names() == {
         record.migration_name,
         reconciliation_mod.MIGRATION_067_B2B_CAMPAIGN_PARTNER_RECONCILIATION.migration_name,
+        reconciliation_mod.MIGRATION_272_B2B_WATCHLIST_ALERT_EVENTS_RECONCILIATION.migration_name,
         reconciliation_mod.MIGRATION_022B_PRESENCE_UNKNOWN_COUNT_RECONCILIATION.migration_name,
         reconciliation_mod.MIGRATION_387_RECONCILIATION.migration_name,
     }
@@ -588,6 +694,24 @@ def test_migration_067_reconciliation_record_is_closed_target_evidence() -> None
         58,
         0,
         789_236,
+        tzinfo=timezone.utc,
+    )
+
+
+def test_migration_272_reconciliation_record_is_closed_target_evidence() -> None:
+    record = reconciliation_mod.MIGRATION_272_B2B_WATCHLIST_ALERT_EVENTS_RECONCILIATION
+
+    assert record.source_verification == reconciliation_mod.HISTORICAL_SOURCE_UNAVAILABLE
+    assert record.migration_version == -3
+    assert record.historical_ledger_sha256 is None
+    assert record.observed_applied_at == datetime(
+        2026,
+        4,
+        8,
+        3,
+        34,
+        24,
+        452_014,
         tzinfo=timezone.utc,
     )
 
@@ -978,6 +1102,167 @@ async def test_known_067_reconciliation_rejects_each_required_evidence_field(
         connection.b2b_campaign_partner_catalog_row[
             "partner_index_predicate"
         ] = "(partner_id IS NULL)"
+    else:  # pragma: no cover - parametrize keeps this exhaustive.
+        raise AssertionError(f"unexpected evidence case: {case}")
+
+    code, payload = await module.run_migration_content_integrity_preflight(
+        connection,
+        migrations_dir=tmp_path,
+        attest_known_reconciliations=True,
+    )
+
+    evidence = payload["known_reconciliation_evidence"][0]
+    assert code == module.UNRESOLVED_DRIFT_EXIT, case
+    assert evidence["source_verification"] == reconciliation_mod.HISTORICAL_SOURCE_UNAVAILABLE
+    assert evidence[field] is False, case
+    assert evidence["status"] == "not_attested", case
+    assert connection.execute_calls == []
+
+
+@pytest.mark.asyncio
+async def test_known_272_reconciliation_attests_catalog_without_source(
+    tmp_path: Path,
+) -> None:
+    record = reconciliation_mod.MIGRATION_272_B2B_WATCHLIST_ALERT_EVENTS_RECONCILIATION
+    connection = _migration_272_connection()
+
+    code, payload = await module.run_migration_content_integrity_preflight(
+        connection,
+        migrations_dir=tmp_path,
+        attest_known_reconciliations=True,
+    )
+
+    assert code == module.UNRESOLVED_DRIFT_EXIT
+    assert payload["status"] == "unresolved_drift"
+    assert payload["report"]["missing_source"] == [record.migration_name]
+    assert payload["known_reconciliation_evidence"] == [{
+        "reconciliation_id": record.reconciliation_id,
+        "migration_name": record.migration_name,
+        "source_verification": reconciliation_mod.HISTORICAL_SOURCE_UNAVAILABLE,
+        "exactly_one_ledger_row": True,
+        "ledger_version_matches_record": True,
+        "ledger_digest_is_null": True,
+        "applied_at_matches_record": True,
+        "watchlist_alert_events_is_ordinary_table": True,
+        "base_alert_event_columns_ready": True,
+        "required_alert_event_constraints_ready": True,
+        "required_alert_event_indexes_ready": True,
+        "status": "attested",
+    }]
+    assert connection.fetch_calls == [
+        ("SELECT name, content_sha256 FROM schema_migrations", ()),
+        (
+            "SELECT version, content_sha256, applied_at FROM schema_migrations "
+            "WHERE name = $1 LIMIT 2",
+            (record.migration_name,),
+        ),
+    ]
+    assert len(connection.fetchrow_calls) == 1
+    assert connection.fetchval_calls == []
+    catalog_query = connection.fetchrow_calls[0][0]
+    assert "WITH target_relation AS" in catalog_query
+    assert "JOIN pg_attribute AS attribute_state" in catalog_query
+    assert "JOIN pg_attrdef AS default_state" in catalog_query
+    assert "JOIN pg_constraint AS actual" in catalog_query
+    assert "JOIN pg_index AS index_state" in catalog_query
+    assert "pg_get_indexdef" in catalog_query
+    assert all(
+        "FROM b2b_watchlist_alert_events" not in query
+        for query, _args in (
+            connection.fetch_calls
+            + connection.fetchrow_calls
+            + connection.fetchval_calls
+        )
+    )
+    assert connection.transaction_readonly == [True]
+    assert connection.execute_calls == []
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("case", "field"),
+    [
+        ("wrong ledger version", "ledger_version_matches_record"),
+        ("non-null ledger digest", "ledger_digest_is_null"),
+        ("truncated applied timestamp", "applied_at_matches_record"),
+        ("duplicate ledger rows", "exactly_one_ledger_row"),
+        ("missing detailed ledger row", "exactly_one_ledger_row"),
+        (
+            "watchlist relation is not an ordinary table",
+            "watchlist_alert_events_is_ordinary_table",
+        ),
+        ("missing source-era column", "base_alert_event_columns_ready"),
+        ("wrong source-era column default", "base_alert_event_columns_ready"),
+        ("missing named constraint", "required_alert_event_constraints_ready"),
+        ("wrong foreign-key action", "required_alert_event_constraints_ready"),
+        ("weakened check constraint", "required_alert_event_constraints_ready"),
+        ("missing named index", "required_alert_event_indexes_ready"),
+        ("unready named index", "required_alert_event_indexes_ready"),
+        ("wrong index direction", "required_alert_event_indexes_ready"),
+    ],
+)
+async def test_known_272_reconciliation_rejects_each_required_evidence_field(
+    case: str,
+    field: str,
+    tmp_path: Path,
+) -> None:
+    record = reconciliation_mod.MIGRATION_272_B2B_WATCHLIST_ALERT_EVENTS_RECONCILIATION
+    connection = _migration_272_connection()
+    catalog = connection.b2b_watchlist_alert_events_catalog_row["catalog_evidence"]
+    columns = catalog["columns"]
+    constraints = catalog["constraints"]
+    indexes = catalog["indexes"]
+    if case == "wrong ledger version":
+        connection = _migration_272_connection(reconciliation_rows=[{
+            "version": record.migration_version - 1,
+            "content_sha256": None,
+            "applied_at": record.observed_applied_at,
+        }])
+    elif case == "non-null ledger digest":
+        connection = _migration_272_connection(ledger_digest="a" * 64)
+    elif case == "truncated applied timestamp":
+        connection = _migration_272_connection(
+            applied_at=record.observed_applied_at.replace(microsecond=0)
+        )
+    elif case == "duplicate ledger rows":
+        connection = _migration_272_connection(reconciliation_rows=[
+            {
+                "version": record.migration_version,
+                "content_sha256": None,
+                "applied_at": record.observed_applied_at,
+            },
+            {
+                "version": record.migration_version,
+                "content_sha256": None,
+                "applied_at": record.observed_applied_at,
+            },
+        ])
+    elif case == "missing detailed ledger row":
+        connection = _migration_272_connection(reconciliation_rows=[])
+    elif case == "watchlist relation is not an ordinary table":
+        catalog["watchlist_alert_events_is_ordinary_table"] = False
+    elif case == "missing source-era column":
+        columns.pop("payload")
+    elif case == "wrong source-era column default":
+        columns["status"]["column_default"] = "closed"
+    elif case == "missing named constraint":
+        constraints.pop("chk_b2b_watchlist_alert_events_status")
+    elif case == "wrong foreign-key action":
+        constraints["b2b_watchlist_alert_events_account_id_fkey"][
+            "delete_action"
+        ] = "a"
+    elif case == "weakened check constraint":
+        constraints["chk_b2b_watchlist_alert_events_status"][
+            "expression"
+        ] = "(status = any (array[open]))"
+    elif case == "missing named index":
+        indexes.pop("idx_b2b_watchlist_alert_events_view_entity")
+    elif case == "unready named index":
+        indexes["idx_b2b_watchlist_alert_events_account_status"]["is_ready"] = False
+    elif case == "wrong index direction":
+        indexes["idx_b2b_watchlist_alert_events_view_status"]["definition"] = (
+            "usingbtree(watchlist_view_id,status,last_seen_at)"
+        )
     else:  # pragma: no cover - parametrize keeps this exhaustive.
         raise AssertionError(f"unexpected evidence case: {case}")
 
