@@ -453,6 +453,7 @@ async def lifespan(app: FastAPI):
     Handles startup (model loading) and shutdown (cleanup).
     """
     # --- Startup ---
+    missed_call_worker = None
     logger.info("Atlas Brain starting up...")
     _enforce_paid_funnel_alert_channel(settings)
     from .api.invoicing.auth import validate_receivables_api_config
@@ -911,10 +912,44 @@ async def lifespan(app: FastAPI):
         except Exception as e:
             logger.error("Failed to register alert UI callback: %s", e, exc_info=True)
 
+    # This worker boundary runs only after the full generic migration pass and
+    # all existing application startup work have completed. Its schema fence
+    # turns an enabled partial migration into a startup failure; a disabled or
+    # incomplete deployment instead durably blocks existing active sequences,
+    # so restoring configuration cannot auto-send overdue customer email.
+    from .eom_api.config import funnel_settings
+
+    if db_settings.enabled:
+        from .services.eom_missed_call_recovery import (
+            prepare_eom_missed_call_recovery_worker,
+        )
+
+        missed_call_pool = get_db_pool()
+        missed_call_worker = await prepare_eom_missed_call_recovery_worker(
+            pool=missed_call_pool,
+            config=funnel_settings,
+        )
+    elif funnel_settings.missed_call_recovery_enabled:
+        # This branch was previously reached only through the schema fence.
+        # Keep the enabled worker fail-closed if a deployment disables its
+        # canonical database rather than silently serving recovery mutations.
+        raise RuntimeError("EOM missed-call recovery requires database persistence")
+
     yield  # Application runs here
 
     # --- Shutdown ---
     logger.info("Atlas Brain shutting down...")
+
+    if missed_call_worker is not None:
+        try:
+            from .services.eom_missed_call_recovery import (
+                stop_eom_missed_call_recovery_worker,
+            )
+
+            await stop_eom_missed_call_recovery_worker(missed_call_worker)
+            logger.info("EOM missed-call recovery worker stopped")
+        except Exception as e:
+            logger.error("Error stopping EOM missed-call recovery worker: %s", e)
 
     # NOTE: Presence service runs in atlas_vision, no local shutdown needed
 

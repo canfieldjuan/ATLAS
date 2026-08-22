@@ -3154,6 +3154,13 @@ async def test_full_app_lifespan_executes_enabled_preflight_before_handoff_reque
         async def fetchval(self, _query: str) -> bool:
             return True
 
+        @asynccontextmanager
+        async def transaction(self):
+            yield self
+
+        async def fetch(self, _query: str, *_args: object) -> list[object]:
+            return []
+
     async def no_op(*_args, **_kwargs):
         return None
 
@@ -3178,7 +3185,17 @@ async def test_full_app_lifespan_executes_enabled_preflight_before_handoff_reque
     monkeypatch.setattr(auth_mod, "funnel_settings", config)
     monkeypatch.setattr(main, "settings", runtime_settings)
     monkeypatch.setattr(main, "db_settings", SimpleNamespace(enabled=True))
-    pools = iter((_Pool(initialized=False), _Pool(initialized=True)))
+    # Full-app startup now performs the generic migration check, the existing
+    # EOM lifecycle preflight, and its independent disabled-recovery pause
+    # fence. Model all three canonical-pool reads so this test continues to
+    # exercise the real lifespan rather than stubbing the new safety boundary.
+    pools = iter(
+        (
+            _Pool(initialized=False),
+            _Pool(initialized=True),
+            _Pool(initialized=True),
+        )
+    )
     monkeypatch.setattr(main, "get_db_pool", lambda: next(pools))
     monkeypatch.setattr(main, "init_database", no_op)
     monkeypatch.setattr(main, "close_database", no_op)

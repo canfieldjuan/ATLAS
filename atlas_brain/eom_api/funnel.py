@@ -47,6 +47,10 @@ from ..services.eom_onboarding_drafts import (
     approve_and_send_eom_onboarding_draft,
     record_operator_confirmed_send_evidence,
 )
+from ..services.eom_missed_call_recovery import (
+    EOMMissedCallRecoveryError,
+    EOMMissedCallRecoveryService,
+)
 from ..services.eom_public_onboarding_tokens import (
     AuthenticatedEOMPublicOnboardingToken,
     EOMPublicOnboardingTokenError,
@@ -54,6 +58,7 @@ from ..services.eom_public_onboarding_tokens import (
     eom_public_onboarding_hmac_key_fingerprint,
 )
 from ..services.crm_provider import get_crm_provider
+from .config import funnel_settings
 from .funnel_auth import (
     EOMPublicOnboardingConfig,
     get_eom_funnel_api_config,
@@ -211,6 +216,14 @@ class EOMLeadLostRequest(BaseModel):
         return value
 
 
+class EOMMissedCallRecoveryCancelRequest(BaseModel):
+    """One verified reason an operator must stop future recovery mail."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    reason: Literal["callback_recorded", "response_recorded", "opt_out", "manual"]
+
+
 class EOMOperatorContactRequest(BaseModel):
     """Authenticated operator-authored EOM contact create/update request."""
 
@@ -318,6 +331,41 @@ class EOMLeadReviewResponse(BaseModel):
         default_factory=list,
         serialization_alias="capabilityRoutes",
     )
+
+
+class EOMMissedCallRecoveryStatusItem(BaseModel):
+    """Non-PII status that the tracker may render on an existing lead card."""
+
+    model_config = ConfigDict(extra="forbid", populate_by_name=True)
+
+    contact_id: UUID = Field(alias="contactId")
+    sequence_id: UUID = Field(alias="sequenceId")
+    state: Literal[
+        "active",
+        "blocked_configuration",
+        "completed",
+        "cancelled",
+        "failed",
+        "recovery_required",
+    ]
+    blocked_reason: str | None = Field(default=None, alias="blockedReason")
+    cancellation_reason: str | None = Field(default=None, alias="cancellationReason")
+    next_step_number: int | None = Field(default=None, alias="nextStepNumber")
+    next_follow_up_at: datetime | None = Field(default=None, alias="nextFollowUpAt")
+    last_event: str | None = Field(default=None, alias="lastEvent")
+    last_reason: str | None = Field(default=None, alias="lastReason")
+    created_at: datetime = Field(alias="createdAt")
+    terminal_at: datetime | None = Field(default=None, alias="terminalAt")
+
+
+class EOMMissedCallRecoveryStatusResponse(BaseModel):
+    """Bounded recovery-status batch for the current CRM lead page."""
+
+    model_config = ConfigDict(extra="forbid", populate_by_name=True)
+
+    sequences: list[EOMMissedCallRecoveryStatusItem]
+    checked: int
+    limit: Annotated[int, Field(ge=1, le=_MAX_KNOWN_CONTACT_IDS)]
 
 
 class EOMFunnelCapabilityRoute(BaseModel):
@@ -573,6 +621,26 @@ def _crm_dependency(request: Request) -> Any:
     return get_crm_provider()
 
 
+def _missed_call_recovery_dependency(request: Request) -> EOMMissedCallRecoveryService:
+    """Bind recovery state to the same authoritative pool as this API profile.
+
+    The full Atlas application uses its global canonical pool.  The slim EOM
+    profile injects its explicitly validated funnel pool on app state, so this
+    route never silently splits lead lifecycle state across databases.
+    """
+
+    pool_factory = getattr(
+        request.app.state, "eom_funnel_missed_call_recovery_pool", None
+    )
+    if callable(pool_factory):
+        pool = pool_factory()
+    else:
+        from ..storage.database import get_db_pool
+
+        pool = get_db_pool()
+    return EOMMissedCallRecoveryService(pool=pool, config=funnel_settings)
+
+
 def _authenticated_public_onboarding_token(
     token: object,
     public_onboarding: EOMPublicOnboardingConfig,
@@ -759,6 +827,27 @@ _CAPABILITY_ROUTES: dict[str, tuple[str, str]] = {
     "contact.field_clear": ("POST", "/eom-funnel/operator-contacts"),
     "lead.lost": ("POST", "/eom-funnel/leads/{contact_id}/lost"),
     "lead.reopen": ("POST", "/eom-funnel/leads/{contact_id}/reopen"),
+    # A separate, narrow seam rather than an inferred lead-stage: the office
+    # must record an actual unanswered call before Atlas creates its durable
+    # recovery outbox. The status read is batch-only and contains no recipient
+    # or template data, so the active CRM card can render it without owning
+    # sequence state in the browser.
+    "lead.missed_call_attempt.record": (
+        "POST",
+        "/eom-funnel/leads/{contact_id}/missed-call-attempts",
+    ),
+    "lead.missed_call_recovery.status": (
+        "GET",
+        "/eom-funnel/missed-call-recovery-status",
+    ),
+    "lead.missed_call_recovery.resume": (
+        "POST",
+        "/eom-funnel/leads/{contact_id}/missed-call-recovery/resume",
+    ),
+    "lead.missed_call_recovery.cancel": (
+        "POST",
+        "/eom-funnel/leads/{contact_id}/missed-call-recovery/cancel",
+    ),
     "onboarding.draft.list": ("GET", "/eom-funnel/onboarding-drafts"),
     "onboarding.draft.edit": ("PATCH", "/eom-funnel/onboarding-drafts/{draft_id}"),
     "onboarding.draft.approve_send": (
@@ -983,6 +1072,135 @@ async def list_eom_lead_review_items(
             EOMFunnelCapabilityRoute(method=method, path=path)
             for method, path in served_capability_routes()
         ],
+    )
+
+
+@router.post(
+    "/leads/{contact_id}/missed-call-attempts",
+    status_code=status.HTTP_201_CREATED,
+    dependencies=[Depends(require_eom_funnel_api)],
+)
+async def record_eom_missed_call_attempt(
+    contact_id: UUID,
+    operation_key: str = Depends(_approval_key_dependency),
+    actor: dict[str, object] = Depends(require_eom_funnel_actor),
+    recovery: EOMMissedCallRecoveryService = Depends(_missed_call_recovery_dependency),
+) -> JSONResponse:
+    """Record a real office no-answer; Atlas alone decides whether mail starts."""
+
+    try:
+        await recovery.require_schema_ready()
+        result = await recovery.record_no_answer(
+            contact_id=contact_id,
+            operation_key=operation_key,
+            actor_id=int(actor["id"]),
+            actor_name=str(actor["name"]),
+        )
+    except EOMMissedCallRecoveryError as exc:
+        raise HTTPException(status_code=exc.status_code, detail=str(exc)) from exc
+    return JSONResponse(
+        status_code=(
+            status.HTTP_200_OK
+            if bool(result.get("idempotent"))
+            else status.HTTP_201_CREATED
+        ),
+        content={"success": True, **result},
+    )
+
+
+@router.get(
+    "/missed-call-recovery-status",
+    response_model=EOMMissedCallRecoveryStatusResponse,
+    dependencies=[Depends(require_eom_funnel_api)],
+)
+async def list_eom_missed_call_recovery_status(
+    contact_id: Annotated[
+        list[UUID],
+        Query(min_length=1, max_length=_MAX_KNOWN_CONTACT_IDS),
+    ],
+    _actor: dict[str, object] = Depends(require_eom_funnel_actor),
+    recovery: EOMMissedCallRecoveryService = Depends(_missed_call_recovery_dependency),
+) -> EOMMissedCallRecoveryStatusResponse:
+    """Return bounded status for lead cards already visible to the office."""
+
+    requested = list(dict.fromkeys(contact_id))
+    try:
+        await recovery.require_schema_ready()
+        rows = await recovery.statuses(contact_ids=requested)
+    except EOMMissedCallRecoveryError as exc:
+        raise HTTPException(status_code=exc.status_code, detail=str(exc)) from exc
+    return EOMMissedCallRecoveryStatusResponse(
+        sequences=[EOMMissedCallRecoveryStatusItem.model_validate(row) for row in rows],
+        checked=len(requested),
+        limit=_MAX_KNOWN_CONTACT_IDS,
+    )
+
+
+@router.post(
+    "/leads/{contact_id}/missed-call-recovery/resume",
+    status_code=status.HTTP_201_CREATED,
+    dependencies=[Depends(require_eom_funnel_api)],
+)
+async def resume_eom_missed_call_recovery(
+    contact_id: UUID,
+    operation_key: str = Depends(_approval_key_dependency),
+    actor: dict[str, object] = Depends(require_eom_funnel_actor),
+    recovery: EOMMissedCallRecoveryService = Depends(_missed_call_recovery_dependency),
+) -> JSONResponse:
+    """Explicitly resume one previously configuration-blocked sequence."""
+
+    try:
+        await recovery.require_schema_ready()
+        result = await recovery.resume_blocked_sequence(
+            contact_id=contact_id,
+            operation_key=operation_key,
+            actor_id=int(actor["id"]),
+            actor_name=str(actor["name"]),
+        )
+    except EOMMissedCallRecoveryError as exc:
+        raise HTTPException(status_code=exc.status_code, detail=str(exc)) from exc
+    return JSONResponse(
+        status_code=(
+            status.HTTP_200_OK
+            if bool(result.get("idempotent"))
+            else status.HTTP_201_CREATED
+        ),
+        content={"success": True, **result},
+    )
+
+
+@router.post(
+    "/leads/{contact_id}/missed-call-recovery/cancel",
+    status_code=status.HTTP_201_CREATED,
+    dependencies=[Depends(require_eom_funnel_api)],
+)
+async def cancel_eom_missed_call_recovery(
+    contact_id: UUID,
+    payload: EOMMissedCallRecoveryCancelRequest,
+    operation_key: str = Depends(_approval_key_dependency),
+    actor: dict[str, object] = Depends(require_eom_funnel_actor),
+    recovery: EOMMissedCallRecoveryService = Depends(_missed_call_recovery_dependency),
+) -> JSONResponse:
+    """Persist a verified stop condition without altering lead history."""
+
+    try:
+        await recovery.require_schema_ready()
+        result = await recovery.cancel_sequence(
+            contact_id=contact_id,
+            operation_key=operation_key,
+            actor_id=int(actor["id"]),
+            actor_name=str(actor["name"]),
+            reason=payload.reason,
+        )
+    except EOMMissedCallRecoveryError as exc:
+        raise HTTPException(status_code=exc.status_code, detail=str(exc)) from exc
+    return JSONResponse(
+        status_code=(
+            status.HTTP_200_OK
+            if bool(result.get("idempotent"))
+            else status.HTTP_201_CREATED
+        ),
+        content={"success": True, **result},
     )
 
 

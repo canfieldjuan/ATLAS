@@ -248,6 +248,10 @@ print(json.dumps({
     assert "/api/v1/ping" in paths
     assert "/api/v1/receivables/ready" in paths
     assert "/api/v1/eom-funnel/leads" in paths
+    assert "/api/v1/eom-funnel/leads/{contact_id}/missed-call-attempts" in paths
+    assert "/api/v1/eom-funnel/missed-call-recovery-status" in paths
+    assert "/api/v1/eom-funnel/leads/{contact_id}/missed-call-recovery/resume" in paths
+    assert "/api/v1/eom-funnel/leads/{contact_id}/missed-call-recovery/cancel" in paths
     assert "/api/v1/eom-funnel/leads/{contact_id}/estimate-bookings" in paths
     assert "/api/v1/eom-funnel/leads/{contact_id}/first-clean-bookings" in paths
     assert "/api/v1/eom-funnel/customer-handoffs" in paths
@@ -467,6 +471,18 @@ def test_eom_render_blueprint_maps_database_and_receivables_auth():
         "key": "ATLAS_EOM_FUNNEL_DB_CONNECTION_STRING",
         "sync": False,
     }
+    assert env_vars["ATLAS_EOM_FUNNEL_MISSED_CALL_RECOVERY_ENABLED"] == {
+        "key": "ATLAS_EOM_FUNNEL_MISSED_CALL_RECOVERY_ENABLED",
+        "value": "false",
+    }
+    assert env_vars["ATLAS_EOM_FUNNEL_MISSED_CALL_BOOKING_LINK"] == {
+        "key": "ATLAS_EOM_FUNNEL_MISSED_CALL_BOOKING_LINK",
+        "sync": False,
+    }
+    assert env_vars["ATLAS_EOM_FUNNEL_MISSED_CALL_TIMEZONE"] == {
+        "key": "ATLAS_EOM_FUNNEL_MISSED_CALL_TIMEZONE",
+        "value": "America/Chicago",
+    }
     assert env_vars["ATLAS_EOM_CANONICAL_CRM_DATABASE_CONFIRMED"] == {
         "key": "ATLAS_EOM_CANONICAL_CRM_DATABASE_CONFIRMED",
         "value": "false",
@@ -647,6 +663,33 @@ def test_eom_migration_helper_uses_curated_set():
     )
 
     assert calls == [(pool, main_eom.EOM_RECEIVABLES_READINESS_MIGRATIONS)]
+
+
+def test_eom_missed_call_recovery_migration_helper_uses_funnel_curated_set():
+    from atlas_brain import main_eom
+
+    pool = SimpleNamespace(is_initialized=True)
+    calls = []
+
+    async def run_migrations(observed_pool, *, only=None):
+        calls.append((observed_pool, tuple(only or ())))
+
+    asyncio.run(
+        main_eom._apply_eom_missed_call_recovery_migrations(
+            pool,
+            run_migrations_fn=run_migrations,
+        )
+    )
+
+    assert calls == [(pool, main_eom.EOM_MISSED_CALL_RECOVERY_READINESS_MIGRATIONS)]
+    assert main_eom.EOM_MISSED_CALL_RECOVERY_READINESS_MIGRATIONS == (
+        "035_contacts",
+        "256_contact_interaction_dedupe",
+        "346_contact_lead_pipeline",
+        "351_eom_lead_lifecycle_events",
+        "366_contacts_customer_type",
+        "389_eom_missed_call_recovery",
+    )
 
 
 def test_eom_startup_migration_runner_skips_uninitialized_pool(monkeypatch):
@@ -1784,6 +1827,22 @@ def test_eom_lifespan_closes_generic_database_when_funnel_close_fails(monkeypatc
             events.append("datastore-check")
             return True
 
+        def transaction(self):
+            return _PoolTransaction(self)
+
+        async def fetch(self, *_args):
+            return []
+
+    class _PoolTransaction:
+        def __init__(self, pool) -> None:
+            self._pool = pool
+
+        async def __aenter__(self):
+            return self._pool
+
+        async def __aexit__(self, *_args) -> bool:
+            return False
+
     async def init_database():
         events.append("init")
 
@@ -1840,6 +1899,7 @@ def test_eom_lifespan_closes_generic_database_when_funnel_close_fails(monkeypatc
     assert events == [
         "init",
         "funnel-init",
+        "datastore-check",
         "datastore-check",
         "inside",
         "funnel-close",
@@ -2168,8 +2228,25 @@ class _ReadyPool:
         self.queries.append(query)
         return True
 
+    def transaction(self):
+        return _PoolTransaction(self)
+
+    async def fetch(self, *_args):
+        return []
+
     async def close(self):
         self.closed += 1
+
+
+class _PoolTransaction:
+    def __init__(self, pool):
+        self._pool = pool
+
+    async def __aenter__(self):
+        return self._pool
+
+    async def __aexit__(self, *_args):
+        return False
 
 
 pool = _ReadyPool()
@@ -2284,7 +2361,7 @@ print(json.dumps({
         "env_projected_enabled": True,
         "env_projected_digest": True,
         "dependency_overrides": 0,
-        "startup_guard_queries": 1,
+        "startup_guard_queries": 2,
         "funnel_pool_closed": 1,
     }
 
