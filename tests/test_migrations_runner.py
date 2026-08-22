@@ -50,6 +50,8 @@ def _default_b2b_watchlist_alert_events_catalog_row() -> dict[str, object]:
                     "exists": True,
                     "data_type": data_type,
                     "is_nullable": is_nullable,
+                    "is_generated": False,
+                    "is_identity": False,
                     "column_default": default,
                 }
                 for name, (data_type, is_nullable, default) in (

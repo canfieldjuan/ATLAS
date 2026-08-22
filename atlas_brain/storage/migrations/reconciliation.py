@@ -1010,6 +1010,8 @@ def _watchlist_alert_event_column_ready(
         observed.get("exists") is True,
         observed.get("data_type") == expected_type,
         bool(observed.get("is_nullable")) is expected_is_nullable,
+        observed.get("is_generated") is False,
+        observed.get("is_identity") is False,
         canonical_default == expected_default,
     ))
 
@@ -1672,6 +1674,8 @@ async def _migration_272_catalog_evidence(
                         attribute_state.atttypmod
                     ),
                     'is_nullable', NOT attribute_state.attnotnull,
+                    'is_generated', attribute_state.attgenerated <> ''::"char",
+                    'is_identity', attribute_state.attidentity <> ''::"char",
                     'column_default', CASE
                         WHEN default_state.oid IS NULL THEN NULL
                         ELSE pg_get_expr(

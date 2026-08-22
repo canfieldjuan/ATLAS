@@ -161,8 +161,13 @@ async def _prepare_partition_schema(conn, schema: str) -> None:
     """)
 
 
-async def _assert_open_alert_writer_rejected_by_expression_index(conn) -> None:
-    """Drive the real writer through the cited expression-index failure."""
+async def _assert_open_alert_writer_rejected(
+    conn,
+    *,
+    expected_error: type[Exception],
+    match: str,
+) -> None:
+    """Drive the real writer through an altered-catalog write failure."""
     account_id = uuid.uuid4()
     view_id = uuid.uuid4()
     await conn.execute("INSERT INTO saas_accounts (id) VALUES ($1)", account_id)
@@ -180,7 +185,7 @@ async def _assert_open_alert_writer_rejected_by_expression_index(conn) -> None:
     async def accounts_loader(**_kwargs):
         return {"accounts": []}
 
-    with pytest.raises(asyncpg.DivisionByZeroError, match="division by zero"):
+    with pytest.raises(expected_error, match=match):
         await evaluate_watchlist_alert_events_for_view(
             conn,
             account_id=account_id,
@@ -276,6 +281,10 @@ async def test_272_receipt_attests_empty_real_catalog_without_alert_rows():
         ("unlisted expression index", "no_unlisted_alert_event_indexes"),
         ("unlisted INCLUDE index", "no_unlisted_alert_event_indexes"),
         ("unlisted hash index", "no_unlisted_alert_event_indexes"),
+        (
+            "generated status column",
+            "base_alert_event_columns_ready",
+        ),
         (
             "unlisted required no-default column",
             "no_unlisted_alert_event_columns",
@@ -398,7 +407,11 @@ async def test_272_receipt_rejects_altered_catalog_before_pending_sql(
                     ON b2b_watchlist_alert_events
                     ((1 / CASE WHEN status = 'open' THEN 0 ELSE 1 END));
                 """)
-            await _assert_open_alert_writer_rejected_by_expression_index(conn)
+            await _assert_open_alert_writer_rejected(
+                conn,
+                expected_error=asyncpg.DivisionByZeroError,
+                match="division by zero",
+            )
         elif case == "unlisted INCLUDE index":
             await conn.execute("""
                 CREATE INDEX idx_b2b_watchlist_alert_events_unlisted_include
@@ -409,6 +422,33 @@ async def test_272_receipt_rejects_altered_catalog_before_pending_sql(
                 CREATE INDEX idx_b2b_watchlist_alert_events_unlisted_hash
                     ON b2b_watchlist_alert_events USING hash (status);
                 """)
+        elif case == "generated status column":
+            await conn.execute("""
+                ALTER TABLE b2b_watchlist_alert_events DROP COLUMN status CASCADE;
+                ALTER TABLE b2b_watchlist_alert_events
+                    ADD COLUMN status TEXT
+                    GENERATED ALWAYS AS ('open'::text) STORED NOT NULL;
+                ALTER TABLE b2b_watchlist_alert_events
+                    ADD CONSTRAINT chk_b2b_watchlist_alert_events_status
+                    CHECK (status IN ('open', 'resolved'));
+                CREATE INDEX idx_b2b_watchlist_alert_events_account_status
+                    ON b2b_watchlist_alert_events (
+                        account_id,
+                        status,
+                        last_seen_at DESC
+                    );
+                CREATE INDEX idx_b2b_watchlist_alert_events_view_status
+                    ON b2b_watchlist_alert_events (
+                        watchlist_view_id,
+                        status,
+                        last_seen_at DESC
+                    );
+                """)
+            await _assert_open_alert_writer_rejected(
+                conn,
+                expected_error=asyncpg.GeneratedAlwaysError,
+                match="cannot insert a non-DEFAULT value",
+            )
         elif case == "unlisted required no-default column":
             await conn.execute("""
                 ALTER TABLE b2b_watchlist_alert_events

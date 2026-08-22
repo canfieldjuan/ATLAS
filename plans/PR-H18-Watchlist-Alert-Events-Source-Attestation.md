@@ -239,6 +239,40 @@ historical exception or leave pending-SQL blocking behavior unproven.
   PostgreSQL suite, dashboard import smoke, lint/compile/plan checks locally,
   and leave broad workflows to GitHub.
 
+### Contract revision (review round 8)
+
+- Evidence: confirmed P1 threads `PRRT_kwDOQ5Uhrs6ba6IE` and
+  `PRRT_kwDOQ5Uhrs6ba6IF` found two current-head failures. The 272 catalog
+  projection records a `pg_attrdef` expression but omits `pg_attribute`
+  `attgenerated` and `attidentity`, so a clean disposable PostgreSQL 16 probe
+  can replace `status` with `GENERATED ALWAYS AS ('open'::text) STORED`, keep
+  the reviewed constraints/index names, and still receive `attested`; the real
+  alert writer then raises `GeneratedAlwaysError` because it explicitly inserts
+  `status`. Separately, moving suppression import inside delivery removed the
+  existing module-level injection seam used by the owner-delivery test, making
+  the required unit gate fail before its delivery assertion.
+- Decision-Seam Analysis — decision: whether an attested column remains
+  writable by the established alert writer, and whether delivery can defer the
+  autonomous package without breaking existing test/caller injection. Structural
+  default: each closed 272 column must be neither generated nor identity; the
+  service keeps a module-level async suppression proxy that imports the
+  autonomous implementation only when delivery actually runs. This preserves
+  the no-eager-import invariant and the established patch seam.
+- Required surface: project boolean generated/identity state from
+  `pg_attribute`, require both false for every approved base/later column, add
+  six diverse fake-catalog same-class probes plus the real generated-`status`
+  writer/rejection proof, update the runner fixtures, and restore the lazy
+  suppression proxy under its existing service name.
+- Non-scope: no dependency installation, API/scheduler package initialization,
+  public route/function signature change, migration SQL, target data/ledger,
+  configuration, or generic catalog-policy redesign. Identity/generation is
+  closed only for the already named 272 signature.
+- Verification: reproduce the affected owner-delivery test; run the six fake
+  generated/identity probes, the retained-DDL real PostgreSQL generated-status
+  writer failure and receipt block, the full focused 272 proof, import guard,
+  and adjacent runner tests locally; leave the unit gate and broad workflows to
+  GitHub.
+
 ## Scope (this PR)
 
 Ownership lane: `eom/migration-content-integrity`
@@ -249,6 +283,7 @@ Max files: 10
   recorded time, and the original base-table catalog contract.
 - Make the catalog proof metadata-only: permanent ordinary non-partition
   table, 20 source-era columns plus the exact later `reopen_count` signature,
+  all non-generated/non-identity,
   no unlisted non-dropped user column, named PK/FKs/checks with case- and
   content-preserving literal-safe expressions, no unlisted constraints, three
   ready indexes, no unlisted index, and no unreviewed
@@ -279,7 +314,8 @@ Max files: 10
     preflight matrix.
   - [ ] Wrong/missing/duplicate ledger evidence, non-permanent/non-table/
     partition relation metadata, altered source-era or known-later column
-    signature, an unlisted non-dropped column that can reject the writer, an
+    signature (including generated/identity state), an unlisted non-dropped
+    column that can reject the writer, an
     altered constraint/index (including content- or case-distinct quoted
     literals), an unlisted constraint, an unlisted index, or
     an unready index returns `not_attested`; every closed-signature guard has
@@ -341,7 +377,8 @@ Max files: 10
   blocking pending migration SQL. All other source gaps retain current blocking
   behavior.
 - Guard fields: name, synthetic version, NULL digest, timestamp, permanent
-  relation identity, source-era and known-later column/default signatures, no
+  relation identity, source-era and known-later column/default/generated/
+  identity signatures, no
   unlisted non-dropped user column, named constraints and case- and
   content-preserving expressions, indexes/readiness and canonical key identity,
   no unlisted indexes, and absence of table-local user DML
@@ -360,8 +397,9 @@ Max files: 10
 
 `HistoricalVersionedMissingSourceReconciliation` records only the named 272
 identity. A single read-only PostgreSQL catalog query returns structural
-metadata for the source-era table and its sole known later writer-required
-column; Python tokenizes quoted literals before normalizing unquoted SQL and
+  metadata for the source-era table and its sole known later writer-required
+  column; Python rejects generated/identity columns and tokenizes quoted
+  literals before normalizing unquoted SQL and
 compares a closed, case- and content-preserving signature plus metadata-only
 absence booleans for unlisted columns, constraints, and indexes, and table-local
 user DML interceptors, emitting booleans only. Expected named index keys come
@@ -397,6 +435,8 @@ expanding the migration workflow into an application-environment surrogate.
   write-time behavior, so every unlisted index blocks this historical receipt.
 - No special case for a known trigger shape: every user trigger is unreviewed
   source-era write behavior, including one currently disabled in the target.
+- No generated or identity exception for an approved 272 column: either form
+  changes the closed writer-compatible signature and returns `not_attested`.
 - No migration-runner locking redesign in this receipt slice. Session advisory
   locking remains the existing closed component for cooperating runners; the
   external-admin execution residual is explicit below.
@@ -426,13 +466,14 @@ serialization, tracked in #2476.
 
 ## Verification
 
-- `python -m pytest -q tests/test_migration_content_integrity_preflight.py -k '272 or known_historical'` — 57 passed, 65 deselected.
+- `python -m pytest -q tests/test_migration_content_integrity_preflight.py -k '272 or known_historical'` — 63 passed, 65 deselected, including six diverse generated/identity closed-signature probes.
 - `python -m pytest -q tests/test_migrations_runner.py -k '272 or missing_source or historical_attestation'` — 13 passed, 61 deselected.
 - `python -m pytest -q tests/test_b2b_watchlist_alert_events_migration_repair.py -k 'evaluator_import'` — 1 passed; a fresh Python process forbids `atlas_brain.api` and `atlas_brain.autonomous` while importing the real evaluator.
 - `python -m pytest -q tests/test_b2b_watchlist_alert_delivery.py` — 7 passed;
   existing delivery behavior still imports and executes at its public function
   boundaries.
-- `ATLAS_MIGRATION_TEST_DATABASE_URL=postgresql://atlas:atlas@127.0.0.1:55436/atlas_migration_tests python -m pytest -q tests/test_b2b_watchlist_alert_events_migration_repair.py` — 25 passed on the exact workflow-pinned PostgreSQL 16 image; the unlisted expression-index case drives the real alert writer and proves the cited division-by-zero failure before the stricter receipt rejects it.
+- `python -m pytest -q tests/test_b2b_tenant_data_freshness.py::test_deliver_watchlist_alert_email_sends_to_owner_and_logs` — 1 passed; the existing module-level suppression patch seam remains available while its production import remains lazy.
+- `ATLAS_MIGRATION_TEST_DATABASE_URL=<disposable PostgreSQL 16> python -m pytest -q tests/test_b2b_watchlist_alert_events_migration_repair.py` — 26 passed on the exact workflow-pinned PostgreSQL 16 image; the unlisted expression-index case drives the real writer to division-by-zero, and the generated-`status` case preserves reviewed names, drives it to `GeneratedAlwaysError`, and blocks pending probe SQL before migration execution.
 - A clean virtual environment with exactly the workflow packages
   (`asyncpg`, `pytest`, `pytest-asyncio`, `pydantic`, and
   `pydantic-settings`) imports the real evaluator successfully after the
@@ -461,12 +502,12 @@ serialization, tracked in #2476.
 |---|---:|
 | `.github/workflows/atlas_migrations_runner_checks.yml` | 3 |
 | `atlas_brain/api/b2b_dashboard.py` | 21 |
-| `atlas_brain/services/b2b/watchlist_alerts.py` | 41 |
-| `atlas_brain/storage/migrations/reconciliation.py` | 785 |
+| `atlas_brain/services/b2b/watchlist_alerts.py` | 49 |
+| `atlas_brain/storage/migrations/reconciliation.py` | 789 |
 | `plans/INDEX.md` | 3 |
-| `plans/PR-H18-Watchlist-Alert-Events-Source-Attestation.md` | 472 |
+| `plans/PR-H18-Watchlist-Alert-Events-Source-Attestation.md` | 513 |
 | `plans/archive/PR-H18-B2B-Campaign-Partner-Source-Attestation.md` | 0 |
-| `tests/test_b2b_watchlist_alert_events_migration_repair.py` | 619 |
-| `tests/test_migration_content_integrity_preflight.py` | 568 |
-| `tests/test_migrations_runner.py` | 237 |
-| **Total** | **2749** |
+| `tests/test_b2b_watchlist_alert_events_migration_repair.py` | 659 |
+| `tests/test_migration_content_integrity_preflight.py` | 606 |
+| `tests/test_migrations_runner.py` | 239 |
+| **Total** | **2882** |

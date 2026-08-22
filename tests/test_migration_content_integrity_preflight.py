@@ -322,6 +322,8 @@ def _default_b2b_watchlist_alert_events_catalog_row() -> dict[str, object]:
                     "exists": True,
                     "data_type": data_type,
                     "is_nullable": is_nullable,
+                    "is_generated": False,
+                    "is_identity": False,
                     "column_default": default,
                 }
                 for name, (data_type, is_nullable, default) in (
@@ -1328,6 +1330,30 @@ async def test_known_272_reconciliation_rejects_each_required_evidence_field(
         ("column has the wrong nullability", "base_alert_event_columns_ready"),
         ("column has the wrong default", "base_alert_event_columns_ready"),
         (
+            "source-era status column is generated",
+            "base_alert_event_columns_ready",
+        ),
+        (
+            "source-era payload column is generated",
+            "base_alert_event_columns_ready",
+        ),
+        (
+            "source-era account ID column is identity",
+            "base_alert_event_columns_ready",
+        ),
+        (
+            "source-era summary column is identity",
+            "base_alert_event_columns_ready",
+        ),
+        (
+            "known later column is generated",
+            "known_later_alert_event_columns_ready",
+        ),
+        (
+            "known later column is identity",
+            "known_later_alert_event_columns_ready",
+        ),
+        (
             "known later column is absent",
             "known_later_alert_event_columns_ready",
         ),
@@ -1459,6 +1485,18 @@ async def test_known_272_reconciliation_rejects_each_catalog_guard_independently
         columns["status"]["is_nullable"] = True
     elif case == "column has the wrong default":
         columns["status"]["column_default"] = "'closed'"
+    elif case == "source-era status column is generated":
+        columns["status"]["is_generated"] = True
+    elif case == "source-era payload column is generated":
+        columns["payload"]["is_generated"] = True
+    elif case == "source-era account ID column is identity":
+        columns["account_id"]["is_identity"] = True
+    elif case == "source-era summary column is identity":
+        columns["summary"]["is_identity"] = True
+    elif case == "known later column is generated":
+        columns["reopen_count"]["is_generated"] = True
+    elif case == "known later column is identity":
+        columns["reopen_count"]["is_identity"] = True
     elif case == "known later column is absent":
         columns["reopen_count"]["exists"] = False
     elif case == "known later column has the wrong type":

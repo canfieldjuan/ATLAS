@@ -925,6 +925,15 @@ def watchlist_alert_event_email_rows(events: list[dict[str, Any]]) -> list[dict[
     return rows
 
 
+async def is_suppressed(pool: Any, *, email: str) -> Any:
+    """Lazily delegate suppression while retaining the delivery injection seam."""
+    from ...autonomous.tasks.campaign_suppression import (
+        is_suppressed as campaign_is_suppressed,
+    )
+
+    return await campaign_is_suppressed(pool, email=email)
+
+
 async def send_watchlist_alert_email(
     pool: Any,
     sender: Any,
@@ -938,7 +947,6 @@ async def send_watchlist_alert_email(
     # Delivery helpers initialize the autonomous package. The evaluator and
     # migration proof must remain importable without the scheduler stack.
     from ...autonomous.tasks.campaign_send import _unsub_headers, _wrap_with_footer
-    from ...autonomous.tasks.campaign_suppression import is_suppressed
 
     suppression = await is_suppressed(pool, email=recipient)
     if suppression:
