@@ -925,13 +925,17 @@ def watchlist_alert_event_email_rows(events: list[dict[str, Any]]) -> list[dict[
     return rows
 
 
-async def is_suppressed(pool: Any, *, email: str) -> Any:
+async def _campaign_suppression_check(pool: Any, *, email: str) -> Any:
     """Lazily delegate suppression while retaining the delivery injection seam."""
     from ...autonomous.tasks.campaign_suppression import (
         is_suppressed as campaign_is_suppressed,
     )
 
     return await campaign_is_suppressed(pool, email=email)
+
+
+# Preserve the existing injectable service seam without importing autonomous code.
+is_suppressed = _campaign_suppression_check
 
 
 async def send_watchlist_alert_email(
