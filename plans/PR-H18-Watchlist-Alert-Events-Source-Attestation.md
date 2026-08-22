@@ -196,11 +196,54 @@ historical exception or leave pending-SQL blocking behavior unproven.
   remains the broad CI authority. The current target is inspected read-only
   after the query change; no target schema/data mutation occurs.
 
+### Contract revision (review round 7)
+
+- Evidence: confirmed P1 thread `PRRT_kwDOQ5Uhrs6bawgY` found that the newly
+  enrolled real-writer proof imports `watchlist_alerts`, which imports two pure
+  helpers from `api.b2b_dashboard`. Python therefore initializes the eager
+  `atlas_brain.api` router package before the writer can collect. A clean
+  virtual environment containing exactly the migration workflow's packages
+  fails at `fastapi`; installing FastAPI only advances the same import chain to
+  unrelated `numpy`. After the API edge is removed, the same clean import
+  reaches eager delivery-only campaign imports, initializes
+  `atlas_brain.autonomous`, and fails at `apscheduler`. The workflow is missing
+  neither a writer dependency nor a single package: the evaluator's module
+  boundary eagerly loads two unrelated application stacks.
+- Decision-Seam Analysis — decision: whether the real writer is a service
+  dependency that migration verification can import independently of the HTTP
+  application. Why the prior decision is wrong: an API module owned the two
+  pure normalizing/scoring helpers, forcing a service to initialize every API
+  router, and it imported campaign delivery helpers before any delivery was
+  requested. Structural default: the service owns the helpers it consumes;
+  the dashboard imports the same implementations under its existing private
+  names; campaign and email-template helpers load only at the delivery
+  operations that consume them. A fresh process forbids `atlas_brain.api` and
+  `atlas_brain.autonomous` while importing the writer, so a future eager edge
+  fails before the migration suite can be masked by an expanded environment.
+- Required surface: move only `_normalize_vendor_name` and
+  `_accounts_in_motion_alert_basis` into `services.b2b.watchlist_alerts`, make
+  `api.b2b_dashboard` import those exact helpers, make delivery-only campaign
+  and template imports lazy at their existing send/render call sites, and add
+  the API/autonomous-forbidden fresh-process import proof beside the disposable
+  writer test. The existing migration workflow remains minimal and therefore
+  exercises the real import boundary rather than installing the full
+  application.
+- Non-scope: no FastAPI/numpy or broad application-dependency installation in
+  the migration workflow; no `api/__init__.py` refactor; no API route, alert
+  writer, migration SQL, catalog receipt, target data/ledger, configuration,
+  or external runner behavior change. Existing delivery behavior remains at
+  the same public function boundaries; only its unused-at-import dependencies
+  become lazy.
+- Verification: reproduce the workflow's minimal environment before the fix,
+  run the new API-forbidden fresh-process import test, the focused disposable
+  PostgreSQL suite, dashboard import smoke, lint/compile/plan checks locally,
+  and leave broad workflows to GitHub.
+
 ## Scope (this PR)
 
 Ownership lane: `eom/migration-content-integrity`
 Slice phase: Production hardening
-Max files: 8
+Max files: 10
 
 - Add one immutable 272 record requiring version `-3`, NULL digest, exact UTC
   recorded time, and the original base-table catalog contract.
@@ -217,6 +260,8 @@ Max files: 8
 ### Files touched
 
 - `.github/workflows/atlas_migrations_runner_checks.yml`
+- `atlas_brain/api/b2b_dashboard.py`
+- `atlas_brain/services/b2b/watchlist_alerts.py`
 - `atlas_brain/storage/migrations/reconciliation.py`
 - `plans/INDEX.md`
 - `plans/PR-H18-Watchlist-Alert-Events-Source-Attestation.md`
@@ -257,11 +302,18 @@ Max files: 8
     PostgreSQL test enrolled in migration CI.
   - [ ] Current target read-only preflight records 272 as attested but remains
     exit 2 because other H-18 discrepancies exist; settled by the target probe.
+  - [ ] The real `evaluate_watchlist_alert_events_for_view` import succeeds in
+    a fresh process that forbids both `atlas_brain.api` and
+    `atlas_brain.autonomous`; the dashboard keeps its existing private helper
+    names bound to those service implementations; and the migration workflow
+    needs no application dependency bundle. Settled by the fresh-process test,
+    focused import smoke, and the existing minimal GitHub migration workflow.
 - Reachability proof: `run_migrations` executes the pending probe from a
   disposable schema; observable state is no probe/ledger row on failure or one
   probe/hashed ledger row on successful retry.
-- Affected surfaces: migration admission, read-only provenance preflight, and
-  PostgreSQL catalog metadata. No public API or configuration surface changes.
+- Affected surfaces: migration admission, read-only provenance preflight,
+  PostgreSQL catalog metadata, and the private service/API import boundary. No
+  public API or configuration surface changes.
 - Risk areas: provenance, migration safety, false admission, privacy, and
   backward compatibility.
 - Reviewer rules triggered: R1, R2, R4, R5, R6, R8, R10, R13, R14.
@@ -327,6 +379,13 @@ generic blocking behavior. The receipt runs within the existing
 cooperating-runner advisory-lock model; it does not claim to serialize a
 privileged external schema or ledger writer after its snapshot.
 
+The real alert evaluator is importable independently of the HTTP router and
+autonomous scheduler stacks: it owns its pure vendor/score helpers, while the
+legacy dashboard binds those same private helper names from the service. The
+delivery-only campaign and template dependencies load only when the existing
+send/render operations invoke them. This preserves delivery behavior without
+expanding the migration workflow into an application-environment surrogate.
+
 ## Intentional
 
 - No generic allowlist or alias mechanism.
@@ -341,6 +400,9 @@ privileged external schema or ledger writer after its snapshot.
 - No migration-runner locking redesign in this receipt slice. Session advisory
   locking remains the existing closed component for cooperating runners; the
   external-admin execution residual is explicit below.
+- No FastAPI, scheduler, or broad application dependency installation in the
+  migration workflow; evaluator import isolation is enforced at the service
+  boundary instead.
 
 ## Deferred
 
@@ -366,9 +428,24 @@ serialization, tracked in #2476.
 
 - `python -m pytest -q tests/test_migration_content_integrity_preflight.py -k '272 or known_historical'` — 57 passed, 65 deselected.
 - `python -m pytest -q tests/test_migrations_runner.py -k '272 or missing_source or historical_attestation'` — 13 passed, 61 deselected.
-- `ATLAS_MIGRATION_TEST_DATABASE_URL=postgresql://atlas:atlas@127.0.0.1:55434/atlas_migration_tests python -m pytest -q tests/test_b2b_watchlist_alert_events_migration_repair.py` — 24 passed on the exact workflow-pinned PostgreSQL 16 image; the unlisted expression-index case drives the real alert writer and proves the cited division-by-zero failure before the stricter receipt rejects it.
-- `python -m py_compile ...` and `ruff check ...` — passed for all four changed
-  Python files.
+- `python -m pytest -q tests/test_b2b_watchlist_alert_events_migration_repair.py -k 'evaluator_import'` — 1 passed; a fresh Python process forbids `atlas_brain.api` and `atlas_brain.autonomous` while importing the real evaluator.
+- `python -m pytest -q tests/test_b2b_watchlist_alert_delivery.py` — 7 passed;
+  existing delivery behavior still imports and executes at its public function
+  boundaries.
+- `ATLAS_MIGRATION_TEST_DATABASE_URL=postgresql://atlas:atlas@127.0.0.1:55436/atlas_migration_tests python -m pytest -q tests/test_b2b_watchlist_alert_events_migration_repair.py` — 25 passed on the exact workflow-pinned PostgreSQL 16 image; the unlisted expression-index case drives the real alert writer and proves the cited division-by-zero failure before the stricter receipt rejects it.
+- A clean virtual environment with exactly the workflow packages
+  (`asyncpg`, `pytest`, `pytest-asyncio`, `pydantic`, and
+  `pydantic-settings`) imports the real evaluator successfully after the
+  boundary correction. Before it, the same proof failed first at `fastapi`,
+  then at unrelated `numpy` after FastAPI was added, and at `apscheduler` after
+  the API edge alone was removed.
+- Dashboard/service helper identity and behavior smoke — passed: the dashboard
+  retains its existing private names bound to the service implementations.
+- `python -m py_compile ...` — passed for the service, dashboard, and changed
+  PostgreSQL proof. Ruff passes for the service and test; dashboard-wide Ruff
+  reports only pre-existing `F841` at `atlas_brain/api/b2b_dashboard.py:5721`
+  (`resolved_a` is already present on `origin/main`), and passes when that
+  baseline diagnostic is excluded.
 - `python scripts/check_guard_class_closure.py --base origin/main --strict` —
   passed; the declared closed registry and signature have property proof.
 - `python scripts/check_migration_content_integrity.py --expected-target 'host=localhost, port=5433, db=atlas' --attest-known-reconciliations` —
@@ -383,11 +460,13 @@ serialization, tracked in #2476.
 | File | LOC |
 |---|---:|
 | `.github/workflows/atlas_migrations_runner_checks.yml` | 3 |
+| `atlas_brain/api/b2b_dashboard.py` | 21 |
+| `atlas_brain/services/b2b/watchlist_alerts.py` | 41 |
 | `atlas_brain/storage/migrations/reconciliation.py` | 785 |
 | `plans/INDEX.md` | 3 |
-| `plans/PR-H18-Watchlist-Alert-Events-Source-Attestation.md` | 393 |
+| `plans/PR-H18-Watchlist-Alert-Events-Source-Attestation.md` | 472 |
 | `plans/archive/PR-H18-B2B-Campaign-Partner-Source-Attestation.md` | 0 |
-| `tests/test_b2b_watchlist_alert_events_migration_repair.py` | 587 |
+| `tests/test_b2b_watchlist_alert_events_migration_repair.py` | 619 |
 | `tests/test_migration_content_integrity_preflight.py` | 568 |
 | `tests/test_migrations_runner.py` | 237 |
-| **Total** | **2576** |
+| **Total** | **2749** |

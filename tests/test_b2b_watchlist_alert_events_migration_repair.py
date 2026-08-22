@@ -9,6 +9,8 @@ from __future__ import annotations
 
 import hashlib
 import os
+import subprocess
+import sys
 import uuid
 from pathlib import Path
 
@@ -33,6 +35,36 @@ from atlas_brain.services.b2b.watchlist_alerts import (  # noqa: E402
 ROOT = Path(__file__).resolve().parent.parent
 MIGRATIONS = ROOT / "atlas_brain" / "storage" / "migrations"
 DATABASE_URL_ENV = "ATLAS_MIGRATION_TEST_DATABASE_URL"
+
+
+def test_watchlist_alert_evaluator_import_avoids_application_packages() -> None:
+    """Keep migration proof independent from eager API and scheduler packages."""
+    script = """
+import sys
+
+
+class _ForbidApplicationPackages:
+    def find_spec(self, fullname, path=None, target=None):
+        if fullname in {"atlas_brain.api", "atlas_brain.autonomous"} or fullname.startswith(
+            ("atlas_brain.api.", "atlas_brain.autonomous.")
+        ):
+            raise ImportError("watchlist evaluator must not import application packages")
+        return None
+
+
+sys.meta_path.insert(0, _ForbidApplicationPackages())
+from atlas_brain.services.b2b.watchlist_alerts import evaluate_watchlist_alert_events_for_view
+assert callable(evaluate_watchlist_alert_events_for_view)
+"""
+    result = subprocess.run(
+        [sys.executable, "-c", script],
+        cwd=ROOT,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+
+    assert result.returncode == 0, result.stderr
 
 
 def _database_url_or_skip() -> str:
