@@ -324,6 +324,7 @@ def _default_b2b_watchlist_alert_events_catalog_row() -> dict[str, object]:
                     "is_nullable": is_nullable,
                     "is_generated": False,
                     "is_identity": False,
+                    "uses_type_default_collation": True,
                     "column_default": default,
                 }
                 for name, (data_type, is_nullable, default) in (
@@ -1177,6 +1178,8 @@ async def test_known_272_reconciliation_attests_catalog_without_source(
     assert "WITH target_relation AS" in catalog_query
     assert "relation_state.relpersistence" in catalog_query
     assert "JOIN pg_attribute AS attribute_state" in catalog_query
+    assert "JOIN pg_type AS type_state" in catalog_query
+    assert "attribute_state.attcollation = type_state.typcollation" in catalog_query
     assert "JOIN pg_attrdef AS default_state" in catalog_query
     assert "unlisted_columns AS" in catalog_query
     assert "JOIN pg_constraint AS actual" in catalog_query
@@ -1354,6 +1357,26 @@ async def test_known_272_reconciliation_rejects_each_required_evidence_field(
             "known_later_alert_event_columns_ready",
         ),
         (
+            "source-era entity key has a non-default collation",
+            "base_alert_event_columns_ready",
+        ),
+        (
+            "source-era vendor name has a non-default collation",
+            "base_alert_event_columns_ready",
+        ),
+        (
+            "source-era status has a non-default collation",
+            "base_alert_event_columns_ready",
+        ),
+        (
+            "source-era summary has a non-default collation",
+            "base_alert_event_columns_ready",
+        ),
+        (
+            "source-era company name has a non-default collation",
+            "base_alert_event_columns_ready",
+        ),
+        (
             "known later column is absent",
             "known_later_alert_event_columns_ready",
         ),
@@ -1497,6 +1520,16 @@ async def test_known_272_reconciliation_rejects_each_catalog_guard_independently
         columns["reopen_count"]["is_generated"] = True
     elif case == "known later column is identity":
         columns["reopen_count"]["is_identity"] = True
+    elif case == "source-era entity key has a non-default collation":
+        columns["entity_key"]["uses_type_default_collation"] = False
+    elif case == "source-era vendor name has a non-default collation":
+        columns["vendor_name"]["uses_type_default_collation"] = False
+    elif case == "source-era status has a non-default collation":
+        columns["status"]["uses_type_default_collation"] = False
+    elif case == "source-era summary has a non-default collation":
+        columns["summary"]["uses_type_default_collation"] = False
+    elif case == "source-era company name has a non-default collation":
+        columns["company_name"]["uses_type_default_collation"] = False
     elif case == "known later column is absent":
         columns["reopen_count"]["exists"] = False
     elif case == "known later column has the wrong type":

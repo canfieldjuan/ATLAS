@@ -8,6 +8,7 @@ on:
     paths:
       - ".github/workflows/atlas_migrations_runner_checks.yml"
       - "atlas_brain/storage/migrations/**"
+      - "atlas_brain/services/b2b/watchlist_alerts.py"
       - "scripts/check_migration_content_integrity.py"
       - "tests/test_migrations_runner.py"
       - "tests/test_migration_content_integrity_preflight.py"
@@ -20,6 +21,7 @@ on:
     paths:
       - ".github/workflows/atlas_migrations_runner_checks.yml"
       - "atlas_brain/storage/migrations/**"
+      - "atlas_brain/services/b2b/watchlist_alerts.py"
       - "scripts/check_migration_content_integrity.py"
       - "tests/test_migrations_runner.py"
       - "tests/test_migration_content_integrity_preflight.py"

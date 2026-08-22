@@ -28,6 +28,7 @@ from atlas_brain.storage.migrations.reconciliation import (  # noqa: E402
     attest_known_historical_migration_reconciliations,
 )
 from atlas_brain.services.b2b.watchlist_alerts import (  # noqa: E402
+    _watchlist_alert_entity_key,
     evaluate_watchlist_alert_events_for_view,
 )
 
@@ -205,6 +206,44 @@ async def _assert_open_alert_writer_rejected(
     ) == 0
 
 
+async def _evaluate_vendor_alert(
+    conn,
+    *,
+    account_id: uuid.UUID,
+    view_id: uuid.UUID,
+    vendor_name: str,
+) -> dict[str, object]:
+    """Drive one real vendor-alert writer call with a caller-supplied key."""
+
+    async def slow_burn_loader(**_kwargs):
+        return {
+            "signals": [{
+                "vendor_name": vendor_name,
+                "vendor_alert_hit": True,
+                "avg_urgency_score": 9.0,
+            }]
+        }
+
+    async def accounts_loader(**_kwargs):
+        return {"accounts": []}
+
+    result = await evaluate_watchlist_alert_events_for_view(
+        conn,
+        account_id=account_id,
+        view_id=view_id,
+        view_row={
+            "id": view_id,
+            "vendor_names": [vendor_name],
+            "vendor_alert_threshold": 1.0,
+        },
+        user=None,
+        slow_burn_loader=slow_burn_loader,
+        accounts_loader=accounts_loader,
+    )
+    assert len(result["events"]) == 1
+    return result["events"][0]
+
+
 @pytest.mark.asyncio
 async def test_272_receipt_attests_empty_real_catalog_without_alert_rows():
     database_url = _database_url_or_skip()
@@ -240,6 +279,121 @@ async def test_272_receipt_attests_empty_real_catalog_without_alert_rows():
         )
         assert await conn.fetchval(
             "SELECT COUNT(*) FROM b2b_watchlist_alert_events"
+        ) == 0
+    finally:
+        await conn.execute(f"DROP SCHEMA IF EXISTS {_quote_ident(schema)} CASCADE")
+        await conn.close()
+
+
+@pytest.mark.asyncio
+async def test_272_receipt_rejects_nondeterministic_entity_key_collation_before_pending_sql(
+    tmp_path: Path,
+):
+    database_url = _database_url_or_skip()
+    schema = f"watchlist_alert_272_collation_{uuid.uuid4().hex}"
+    conn = await asyncpg.connect(database_url)
+    try:
+        await _prepare_attestable_schema(conn, schema)
+        await conn.execute("""
+            CREATE COLLATION watchlist_alert_accent_insensitive (
+                provider = icu,
+                locale = 'und-u-ks-level1',
+                deterministic = false
+            );
+            DROP INDEX idx_b2b_watchlist_alert_events_view_entity;
+            ALTER TABLE b2b_watchlist_alert_events
+                ALTER COLUMN entity_key TYPE TEXT
+                COLLATE watchlist_alert_accent_insensitive
+                USING entity_key;
+            CREATE UNIQUE INDEX idx_b2b_watchlist_alert_events_view_entity
+                ON b2b_watchlist_alert_events (
+                    watchlist_view_id,
+                    event_type,
+                    entity_key
+                );
+            """)
+        collation = await conn.fetchrow("""
+            SELECT
+                attribute_state.attcollation = type_state.typcollation
+                    AS uses_type_default_collation,
+                collation_state.collisdeterministic
+            FROM pg_attribute AS attribute_state
+            JOIN pg_type AS type_state
+              ON type_state.oid = attribute_state.atttypid
+            JOIN pg_collation AS collation_state
+              ON collation_state.oid = attribute_state.attcollation
+            WHERE attribute_state.attrelid = 'b2b_watchlist_alert_events'::regclass
+              AND attribute_state.attname = 'entity_key'
+            """)
+        assert collation["uses_type_default_collation"] is False
+        assert collation["collisdeterministic"] is False
+
+        account_id = uuid.uuid4()
+        view_id = uuid.uuid4()
+        await conn.execute("INSERT INTO saas_accounts (id) VALUES ($1)", account_id)
+        await conn.execute("INSERT INTO b2b_watchlist_views (id) VALUES ($1)", view_id)
+        first_key = _watchlist_alert_entity_key(
+            event_type="vendor_alert",
+            entity_type="vendor",
+            vendor_name="resume",
+        )
+        second_key = _watchlist_alert_entity_key(
+            event_type="vendor_alert",
+            entity_type="vendor",
+            vendor_name="résumé",
+        )
+        assert first_key != second_key
+        first = await _evaluate_vendor_alert(
+            conn,
+            account_id=account_id,
+            view_id=view_id,
+            vendor_name="resume",
+        )
+        second = await _evaluate_vendor_alert(
+            conn,
+            account_id=account_id,
+            view_id=view_id,
+            vendor_name="résumé",
+        )
+
+        assert first["entity_key"] == first_key
+        assert second["entity_key"] == first_key
+        assert first["id"] == second["id"]
+        assert await conn.fetchval(
+            "SELECT COUNT(*) FROM b2b_watchlist_alert_events"
+        ) == 1
+        overwritten = await conn.fetchrow("""
+            SELECT entity_key, vendor_name
+            FROM b2b_watchlist_alert_events
+            """)
+        assert overwritten["entity_key"] == first_key
+        assert overwritten["vendor_name"] == "résumé"
+
+        record = MIGRATION_272_B2B_WATCHLIST_ALERT_EVENTS_RECONCILIATION
+        attestations = await attest_known_historical_migration_reconciliations(
+            conn,
+            sorted(MIGRATIONS.glob("*.sql")),
+            candidate_names={record.migration_name},
+        )
+
+        assert len(attestations) == 1
+        assert attestations[0].base_alert_event_columns_ready is False
+        assert attestations[0].status == "not_attested"
+        with pytest.raises(
+            PendingMigrationContentIntegrityError,
+            match=f"missing_source={record.migration_name}",
+        ):
+            await run_migrations(
+                _MigrationPool(conn),
+                migrations_dir=_test_catalog(tmp_path),
+                only={"901_watchlist_alert_attestation_probe"},
+            )
+        assert not await conn.fetchval(
+            "SELECT to_regclass('watchlist_alert_attestation_probe') IS NOT NULL"
+        )
+        assert await conn.fetchval(
+            "SELECT COUNT(*) FROM schema_migrations "
+            "WHERE name = '901_watchlist_alert_attestation_probe'"
         ) == 0
     finally:
         await conn.execute(f"DROP SCHEMA IF EXISTS {_quote_ident(schema)} CASCADE")

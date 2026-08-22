@@ -33,6 +33,21 @@ def _migration_022b_source() -> bytes:
     ).read_bytes()
 
 
+def test_migration_runner_workflow_enrolls_alert_writer_on_pr_and_main_push() -> None:
+    workflow = (
+        Path(__file__).resolve().parents[1]
+        / ".github"
+        / "workflows"
+        / "atlas_migrations_runner_checks.yml"
+    ).read_text()
+    trigger_block = workflow.split("\njobs:", 1)[0]
+    pull_request_paths, push_paths = trigger_block.split("  push:", 1)
+    writer_path = '"atlas_brain/services/b2b/watchlist_alerts.py"'
+
+    assert writer_path in pull_request_paths
+    assert writer_path in push_paths
+
+
 def _default_b2b_watchlist_alert_events_catalog_row() -> dict[str, object]:
     """Return complete metadata-only evidence for the named 272 receipt."""
     from atlas_brain.storage.migrations.reconciliation import (
@@ -52,6 +67,7 @@ def _default_b2b_watchlist_alert_events_catalog_row() -> dict[str, object]:
                     "is_nullable": is_nullable,
                     "is_generated": False,
                     "is_identity": False,
+                    "uses_type_default_collation": True,
                     "column_default": default,
                 }
                 for name, (data_type, is_nullable, default) in (
@@ -1056,6 +1072,8 @@ class _AttestedReconciliationPool(_SerializingPool):
                 list(_B2B_WATCHLIST_ALERT_EVENT_INDEXES),
             )
             assert "relation_state.relpersistence" in query
+            assert "JOIN pg_type AS type_state" in query
+            assert "attribute_state.attcollation = type_state.typcollation" in query
             assert "unlisted_indexes AS" in query
             assert "FROM unnest(index_state.indkey)" in query
             assert "index_state.indisunique OR index_state.indisexclusion" not in query

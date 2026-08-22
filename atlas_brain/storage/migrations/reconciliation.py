@@ -1012,6 +1012,7 @@ def _watchlist_alert_event_column_ready(
         bool(observed.get("is_nullable")) is expected_is_nullable,
         observed.get("is_generated") is False,
         observed.get("is_identity") is False,
+        observed.get("uses_type_default_collation") is True,
         canonical_default == expected_default,
     ))
 
@@ -1676,6 +1677,8 @@ async def _migration_272_catalog_evidence(
                     'is_nullable', NOT attribute_state.attnotnull,
                     'is_generated', attribute_state.attgenerated <> ''::"char",
                     'is_identity', attribute_state.attidentity <> ''::"char",
+                    'uses_type_default_collation',
+                        attribute_state.attcollation = type_state.typcollation,
                     'column_default', CASE
                         WHEN default_state.oid IS NULL THEN NULL
                         ELSE pg_get_expr(
@@ -1691,6 +1694,8 @@ async def _migration_272_catalog_evidence(
              AND attribute_state.attname = requested.name
              AND attribute_state.attnum > 0
              AND NOT attribute_state.attisdropped
+            LEFT JOIN pg_type AS type_state
+              ON type_state.oid = attribute_state.atttypid
             LEFT JOIN pg_attrdef AS default_state
               ON default_state.adrelid = attribute_state.attrelid
              AND default_state.adnum = attribute_state.attnum

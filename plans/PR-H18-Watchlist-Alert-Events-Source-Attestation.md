@@ -273,6 +273,40 @@ historical exception or leave pending-SQL blocking behavior unproven.
   and adjacent runner tests locally; leave the unit gate and broad workflows to
   GitHub.
 
+### Contract revision (review round 9)
+
+- Evidence: current P1 threads `PRRT_kwDOQ5Uhrs6bbK3r` and
+  `PRRT_kwDOQ5Uhrs6bbK3s` show two remaining provider defects. The closed
+  column signature records type, nullability, default, generation, and identity
+  state but not `pg_attribute.attcollation`; a nondeterministic
+  accent-insensitive `entity_key` collation therefore preserves the old receipt
+  fields while making the writer's distinct `resume` and `résumé` keys collide
+  in the named unique index. Separately, the newly enrolled real-writer suite
+  is not selected when only `atlas_brain/services/b2b/watchlist_alerts.py`
+  changes, so its database-backed compatibility cases skip in the other broad
+  jobs that do not configure the disposable migration database.
+- Decision-Seam Analysis — decision: whether a named 272 table retains the
+  actual equality semantics assumed by its producer and whether a writer change
+  reaches the only CI job that runs the real writer against PostgreSQL. The
+  safe default is to attest each approved column only when its effective
+  collation equals its PostgreSQL type default, and to trigger the dedicated
+  migration suite for its real writer on both pull-request and `main` push
+  events.
+- Required surface: project and require the default-collation relation for
+  every approved base/later column, add diverse fake same-class column probes
+  and a real PostgreSQL nondeterministic-collation overwrite proof before the
+  receipt blocks pending SQL, update fake runner catalogs, and include the
+  alert-writer path in both workflow filters with a static regression proof.
+- Non-scope: no writer normalization or unique-index redesign, no migration SQL,
+  target data/ledger write, collation configuration change, CI-permission change,
+  or broad service-directory workflow trigger. The receipt rejects an altered
+  target shape; it does not mutate it.
+- Verification: reproduce the existing false attestation on a disposable
+  PostgreSQL 16 schema, prove the real writer's two distinct Python keys collapse
+  only under the altered collation, then prove the repaired receipt returns
+  `not_attested` and blocks pending SQL. Run focused fake/runner/workflow-shape
+  tests locally; leave the full unit gate and broad workflow matrix to GitHub.
+
 ## Scope (this PR)
 
 Ownership lane: `eom/migration-content-integrity`
@@ -283,7 +317,7 @@ Max files: 10
   recorded time, and the original base-table catalog contract.
 - Make the catalog proof metadata-only: permanent ordinary non-partition
   table, 20 source-era columns plus the exact later `reopen_count` signature,
-  all non-generated/non-identity,
+  all non-generated/non-identity and type-default-collated,
   no unlisted non-dropped user column, named PK/FKs/checks with case- and
   content-preserving literal-safe expressions, no unlisted constraints, three
   ready indexes, no unlisted index, and no unreviewed
@@ -291,6 +325,8 @@ Max files: 10
 - Admit only this reported ledger name after a complete attestation; every
   unlisted or incomplete source gap remains blocking.
 - Exercise preflight, runner failure/retry, and a disposable PostgreSQL schema.
+- Run the disposable PostgreSQL writer/schema suite when either its receipt or
+  real alert writer changes, on pull requests and `main` pushes.
 
 ### Files touched
 
@@ -314,7 +350,7 @@ Max files: 10
     preflight matrix.
   - [ ] Wrong/missing/duplicate ledger evidence, non-permanent/non-table/
     partition relation metadata, altered source-era or known-later column
-    signature (including generated/identity state), an unlisted non-dropped
+    signature (including generated/identity/default-collation state), an unlisted non-dropped
     column that can reject the writer, an
     altered constraint/index (including content- or case-distinct quoted
     literals), an unlisted constraint, an unlisted index, or
@@ -344,6 +380,9 @@ Max files: 10
     names bound to those service implementations; and the migration workflow
     needs no application dependency bundle. Settled by the fresh-process test,
     focused import smoke, and the existing minimal GitHub migration workflow.
+  - [ ] A change to the real alert writer selects the disposable PostgreSQL
+    migration suite on both pull-request and `main` push events; settled by the
+    workflow-shape regression test and the exact `paths` entries.
 - Reachability proof: `run_migrations` executes the pending probe from a
   disposable schema; observable state is no probe/ledger row on failure or one
   probe/hashed ledger row on successful retry.
@@ -360,14 +399,17 @@ Max files: 10
   record per discrepancy; unknown source names have no path.
 - 272 catalog signature: CLOSED. Membership is DERIVED at every preflight from
   the target relation's `pg_index` rows, the three retained-273 named indexes,
-  and indexes backing the closed named-constraint set. No other non-dropped
-  user column, table constraint, or index is allowed. Out-of-set catalog
-  members DEFAULT to `not_attested`: preserving generic migration blocking is
-  cheaper than admitting a historical exception with unreviewed write-time
-  behavior. Expected named key identity is derived from `indkey` and
-  `pg_attribute`, while reviewed DDL validates method/order. The table also has
-  no user DML mediator: any noninternal trigger, non-`_RETURN` rewrite rule,
-  RLS enablement/force flag, or policy closes the receipt.
+  and indexes backing the closed named-constraint set. Each approved column's
+  effective collation is DERIVED from `pg_attribute.attcollation` relative to
+  `pg_type.typcollation`; any mismatch is outside the reviewed source-era
+  signature and DEFAULTS to `not_attested`. No other non-dropped user column,
+  table constraint, or index is allowed. Out-of-set catalog members DEFAULT to
+  `not_attested`: preserving generic migration blocking is cheaper than
+  admitting a historical exception with unreviewed write-time behavior.
+  Expected named key identity is derived from `indkey` and `pg_attribute`,
+  while reviewed DDL validates method/order. The table also has no user DML
+  mediator: any noninternal trigger, non-`_RETURN` rewrite rule, RLS
+  enablement/force flag, or policy closes the receipt.
 
 ### Boundary-change enumeration
 
@@ -378,7 +420,7 @@ Max files: 10
   behavior.
 - Guard fields: name, synthetic version, NULL digest, timestamp, permanent
   relation identity, source-era and known-later column/default/generated/
-  identity signatures, no
+  identity/default-collation signatures, no
   unlisted non-dropped user column, named constraints and case- and
   content-preserving expressions, indexes/readiness and canonical key identity,
   no unlisted indexes, and absence of table-local user DML
@@ -398,7 +440,8 @@ Max files: 10
 `HistoricalVersionedMissingSourceReconciliation` records only the named 272
 identity. A single read-only PostgreSQL catalog query returns structural
   metadata for the source-era table and its sole known later writer-required
-  column; Python rejects generated/identity columns and tokenizes quoted
+  column; Python rejects generated/identity columns and columns whose effective
+  collation differs from their PostgreSQL type default, then tokenizes quoted
   literals before normalizing unquoted SQL and
 compares a closed, case- and content-preserving signature plus metadata-only
 absence booleans for unlisted columns, constraints, and indexes, and table-local
@@ -437,6 +480,9 @@ expanding the migration workflow into an application-environment surrogate.
   source-era write behavior, including one currently disabled in the target.
 - No generated or identity exception for an approved 272 column: either form
   changes the closed writer-compatible signature and returns `not_attested`.
+- No non-default collation exception for an approved 272 column: an altered
+  equality relation can collapse distinct producer keys even while rendered
+  type/index text looks unchanged, so it returns `not_attested`.
 - No migration-runner locking redesign in this receipt slice. Session advisory
   locking remains the existing closed component for cooperating runners; the
   external-admin execution residual is explicit below.
@@ -466,14 +512,14 @@ serialization, tracked in #2476.
 
 ## Verification
 
-- `python -m pytest -q tests/test_migration_content_integrity_preflight.py -k '272 or known_historical'` — 63 passed, 65 deselected, including six diverse generated/identity closed-signature probes.
-- `python -m pytest -q tests/test_migrations_runner.py -k '272 or missing_source or historical_attestation'` — 13 passed, 61 deselected.
+- `python -m pytest -q tests/test_migration_content_integrity_preflight.py -k '272 or known_historical'` — 68 passed, 65 deselected, including five diverse non-default-collation closed-signature probes.
+- `python -m pytest -q tests/test_migrations_runner.py -k '272 or missing_source or historical_attestation'` — 13 passed, 62 deselected; static workflow proof requires the real writer path in both pull-request and `main` push filters.
 - `python -m pytest -q tests/test_b2b_watchlist_alert_events_migration_repair.py -k 'evaluator_import'` — 1 passed; a fresh Python process forbids `atlas_brain.api` and `atlas_brain.autonomous` while importing the real evaluator.
 - `python -m pytest -q tests/test_b2b_watchlist_alert_delivery.py` — 7 passed;
   existing delivery behavior still imports and executes at its public function
   boundaries.
 - `python -m pytest -q tests/test_b2b_tenant_data_freshness.py::test_deliver_watchlist_alert_email_sends_to_owner_and_logs` — 1 passed; the existing module-level suppression patch seam remains available while its production import remains lazy.
-- `ATLAS_MIGRATION_TEST_DATABASE_URL=<disposable PostgreSQL 16> python -m pytest -q tests/test_b2b_watchlist_alert_events_migration_repair.py` — 26 passed on the exact workflow-pinned PostgreSQL 16 image; the unlisted expression-index case drives the real writer to division-by-zero, and the generated-`status` case preserves reviewed names, drives it to `GeneratedAlwaysError`, and blocks pending probe SQL before migration execution.
+- `ATLAS_MIGRATION_TEST_DATABASE_URL=<disposable PostgreSQL 16> python -m pytest -q tests/test_b2b_watchlist_alert_events_migration_repair.py` — 27 passed on the exact workflow-pinned PostgreSQL 16 image; the unlisted expression-index case drives the real writer to division-by-zero, the generated-`status` case preserves reviewed names and drives it to `GeneratedAlwaysError`, and the nondeterministic accent-insensitive `entity_key` case proves distinct Python keys collapse into one conflict-update row before the repaired receipt blocks pending probe SQL. The test container was test-owned and removed afterward.
 - A clean virtual environment with exactly the workflow packages
   (`asyncpg`, `pytest`, `pytest-asyncio`, `pydantic`, and
   `pydantic-settings`) imports the real evaluator successfully after the
@@ -500,14 +546,14 @@ serialization, tracked in #2476.
 
 | File | LOC |
 |---|---:|
-| `.github/workflows/atlas_migrations_runner_checks.yml` | 3 |
+| `.github/workflows/atlas_migrations_runner_checks.yml` | 5 |
 | `atlas_brain/api/b2b_dashboard.py` | 21 |
 | `atlas_brain/services/b2b/watchlist_alerts.py` | 53 |
-| `atlas_brain/storage/migrations/reconciliation.py` | 789 |
+| `atlas_brain/storage/migrations/reconciliation.py` | 794 |
 | `plans/INDEX.md` | 3 |
-| `plans/PR-H18-Watchlist-Alert-Events-Source-Attestation.md` | 513 |
+| `plans/PR-H18-Watchlist-Alert-Events-Source-Attestation.md` | 559 |
 | `plans/archive/PR-H18-B2B-Campaign-Partner-Source-Attestation.md` | 0 |
-| `tests/test_b2b_watchlist_alert_events_migration_repair.py` | 659 |
-| `tests/test_migration_content_integrity_preflight.py` | 606 |
-| `tests/test_migrations_runner.py` | 239 |
-| **Total** | **2886** |
+| `tests/test_b2b_watchlist_alert_events_migration_repair.py` | 813 |
+| `tests/test_migration_content_integrity_preflight.py` | 639 |
+| `tests/test_migrations_runner.py` | 257 |
+| **Total** | **3144** |
