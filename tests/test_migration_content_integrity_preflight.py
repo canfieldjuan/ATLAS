@@ -48,6 +48,7 @@ class FakeConnection:
         public_onboarding_constraints: list[dict[str, object]] | None = None,
         public_onboarding_indexes: dict[str, dict[str, object] | None] | None = None,
         presence_unknown_count_columns: list[dict[str, object]] | None = None,
+        presence_events_is_ordinary_table: bool = True,
         presence_unknown_count_has_constraint: bool = False,
         recurring_schema_ready: bool = True,
         zero_active_null_period_rows: bool = True,
@@ -80,6 +81,7 @@ class FakeConnection:
             if presence_unknown_count_columns is None
             else presence_unknown_count_columns
         )
+        self.presence_events_is_ordinary_table = presence_events_is_ordinary_table
         self.presence_unknown_count_has_constraint = presence_unknown_count_has_constraint
         self.recurring_schema_ready = recurring_schema_ready
         self.zero_active_null_period_rows = zero_active_null_period_rows
@@ -165,6 +167,9 @@ class FakeConnection:
     async def fetchval(self, query: str, *args: object) -> bool:
         self.fetchval_calls.append((query, args))
         assert args == ()
+        if "relation_state.relname = 'presence_events'" in query:
+            assert "relation_state.relkind = 'r'" in query
+            return self.presence_events_is_ordinary_table
         if "table_class.relname = 'presence_events'" in query:
             assert "FROM pg_constraint AS actual" in query
             return self.presence_unknown_count_has_constraint
@@ -749,6 +754,7 @@ async def test_known_022b_reconciliation_attests_named_renamed_source_without_ro
             "ledger_digest_is_null": True,
             "applied_at_matches_record": True,
             "retained_packaged_digest_matches_record": True,
+            "presence_events_is_ordinary_table": True,
             "unknown_count_column_ready": True,
             "unknown_count_has_no_constraints": True,
             "status": "attested",
@@ -763,7 +769,8 @@ async def test_known_022b_reconciliation_attests_named_renamed_source_without_ro
         (record.migration_name,),
     )
     assert len(connection.fetch_calls) == 3
-    assert len(connection.fetchval_calls) == 1
+    assert len(connection.fetchval_calls) == 2
+    assert "FROM pg_class AS relation_state" in connection.fetchval_calls[0][0]
     assert all(
         "FROM presence_events" not in query
         for query, _args in connection.fetch_calls + connection.fetchval_calls
@@ -781,6 +788,7 @@ async def test_known_022b_reconciliation_attests_named_renamed_source_without_ro
         ("duplicate ledger rows", "exactly_one_ledger_row"),
         ("missing detailed ledger row", "exactly_one_ledger_row"),
         ("changed retained package", "retained_packaged_digest_matches_record"),
+        ("presence-events relation is not an ordinary table", "presence_events_is_ordinary_table"),
         ("missing unknown-count column", "unknown_count_column_ready"),
         ("wrong unknown-count type", "unknown_count_column_ready"),
         ("wrong unknown-count nullability", "unknown_count_column_ready"),
@@ -819,6 +827,8 @@ async def test_known_022b_reconciliation_rejects_each_required_evidence_field(
         connection = _migration_022b_connection(reconciliation_rows=[])
     elif case == "changed retained package":
         source += b"\n-- changed after reviewed rename evidence\n"
+    elif case == "presence-events relation is not an ordinary table":
+        connection.presence_events_is_ordinary_table = False
     elif case == "missing unknown-count column":
         connection.presence_unknown_count_columns = []
     elif case == "wrong unknown-count type":

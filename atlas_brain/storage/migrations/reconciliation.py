@@ -210,6 +210,7 @@ class RenamedMissingSourceMigrationReconciliationAttestation:
     ledger_digest_is_null: bool
     applied_at_matches_record: bool
     retained_packaged_digest_matches_record: bool
+    presence_events_is_ordinary_table: bool
     unknown_count_column_ready: bool
     unknown_count_has_no_constraints: bool
 
@@ -226,6 +227,7 @@ class RenamedMissingSourceMigrationReconciliationAttestation:
                 self.ledger_digest_is_null,
                 self.applied_at_matches_record,
                 self.retained_packaged_digest_matches_record,
+                self.presence_events_is_ordinary_table,
                 self.unknown_count_column_ready,
                 self.unknown_count_has_no_constraints,
             )
@@ -244,6 +246,9 @@ class RenamedMissingSourceMigrationReconciliationAttestation:
             "applied_at_matches_record": self.applied_at_matches_record,
             "retained_packaged_digest_matches_record": (
                 self.retained_packaged_digest_matches_record
+            ),
+            "presence_events_is_ordinary_table": (
+                self.presence_events_is_ordinary_table
             ),
             "unknown_count_column_ready": self.unknown_count_column_ready,
             "unknown_count_has_no_constraints": self.unknown_count_has_no_constraints,
@@ -837,8 +842,25 @@ async def _migration_382_catalog_evidence(
     )
 
 
-async def _migration_022b_catalog_evidence(executor: Any) -> tuple[bool, bool]:
-    """Read only the one final column contract, never presence-event rows."""
+async def _migration_022b_catalog_evidence(
+    executor: Any,
+) -> tuple[bool, bool, bool]:
+    """Read only the exact ordinary-table and column contract, never rows."""
+    presence_events_is_ordinary_table = bool(
+        await executor.fetchval(
+            """
+            SELECT EXISTS (
+                SELECT 1
+                FROM pg_class AS relation_state
+                JOIN pg_namespace AS schema_state
+                  ON schema_state.oid = relation_state.relnamespace
+                WHERE schema_state.nspname = current_schema()
+                  AND relation_state.relname = 'presence_events'
+                  AND relation_state.relkind = 'r'
+            )
+            """
+        )
+    )
     column_rows = await executor.fetch(
         """
         SELECT
@@ -891,7 +913,11 @@ async def _migration_022b_catalog_evidence(executor: Any) -> tuple[bool, bool]:
             """
         )
     )
-    return unknown_count_column_ready, unknown_count_has_no_constraints
+    return (
+        presence_events_is_ordinary_table,
+        unknown_count_column_ready,
+        unknown_count_has_no_constraints,
+    )
 
 
 async def _attest_migration_387(
@@ -992,6 +1018,7 @@ async def _attest_migration_022b(
         record.current_packaged_migration_name,
     )
     (
+        presence_events_is_ordinary_table,
         unknown_count_column_ready,
         unknown_count_has_no_constraints,
     ) = await _migration_022b_catalog_evidence(executor)
@@ -1008,6 +1035,7 @@ async def _attest_migration_022b(
         retained_packaged_digest_matches_record=(
             retained_packaged_digest == record.retained_source_sha256
         ),
+        presence_events_is_ordinary_table=presence_events_is_ordinary_table,
         unknown_count_column_ready=unknown_count_column_ready,
         unknown_count_has_no_constraints=unknown_count_has_no_constraints,
     )

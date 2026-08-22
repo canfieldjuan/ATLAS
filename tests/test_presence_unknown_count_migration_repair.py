@@ -67,8 +67,8 @@ def _test_catalog(tmp_path: Path) -> Path:
     return catalog
 
 
-async def _prepare_attestable_schema(conn, schema: str) -> None:
-    """Create only metadata required by the one-column historical receipt."""
+async def _prepare_receipt_ledger_schema(conn, schema: str) -> None:
+    """Create only the test-owned ledger evidence for the named receipt."""
     record = MIGRATION_022B_PRESENCE_UNKNOWN_COUNT_RECONCILIATION
     schema_ident = _quote_ident(schema)
     await conn.execute(f"CREATE SCHEMA {schema_ident}")
@@ -80,9 +80,6 @@ async def _prepare_attestable_schema(conn, schema: str) -> None:
             content_sha256 VARCHAR(64),
             applied_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP
         );
-        CREATE TABLE presence_events (id UUID PRIMARY KEY);
-        ALTER TABLE presence_events
-            ADD COLUMN IF NOT EXISTS unknown_count INT DEFAULT 0;
         """)
     await conn.execute(
         """
@@ -93,6 +90,44 @@ async def _prepare_attestable_schema(conn, schema: str) -> None:
         record.migration_name,
         record.observed_applied_at,
     )
+
+
+async def _prepare_attestable_schema(conn, schema: str) -> None:
+    """Create the ordinary-table metadata required by the historical receipt."""
+    await _prepare_receipt_ledger_schema(conn, schema)
+    await conn.execute("""
+        CREATE TABLE presence_events (id UUID PRIMARY KEY);
+        ALTER TABLE presence_events
+            ADD COLUMN IF NOT EXISTS unknown_count INT DEFAULT 0;
+        """)
+
+
+async def _prepare_foreign_presence_events_schema(
+    conn,
+    schema: str,
+    *,
+    foreign_data_wrapper: str,
+    foreign_server: str,
+) -> None:
+    """Create a non-table relation with the same column signature.
+
+    A foreign table can expose the same nullable `integer DEFAULT 0` shape as
+    the historical migration but cannot be the result of its `ALTER TABLE`
+    receipt. The generated server and wrapper are test-owned and removed by
+    the caller.
+    """
+    await _prepare_receipt_ledger_schema(conn, schema)
+    wrapper_ident = _quote_ident(foreign_data_wrapper)
+    server_ident = _quote_ident(foreign_server)
+    await conn.execute(f"""
+        CREATE FOREIGN DATA WRAPPER {wrapper_ident};
+        CREATE SERVER {server_ident}
+            FOREIGN DATA WRAPPER {wrapper_ident};
+        CREATE FOREIGN TABLE presence_events (
+            id UUID,
+            unknown_count INT DEFAULT 0
+        ) SERVER {server_ident};
+        """)
 
 
 @pytest.mark.asyncio
@@ -114,6 +149,7 @@ async def test_022b_receipt_attests_empty_real_catalog_without_presence_rows():
         attestation = attestations[0]
         assert attestation.migration_name == record.migration_name
         assert attestation.retained_packaged_digest_matches_record
+        assert attestation.presence_events_is_ordinary_table
         assert attestation.unknown_count_column_ready
         assert attestation.unknown_count_has_no_constraints
         assert attestation.status == "attested"
@@ -150,12 +186,73 @@ async def test_022b_receipt_rejects_real_unknown_count_constraint():
 
         assert len(attestations) == 1
         attestation = attestations[0]
+        assert attestation.presence_events_is_ordinary_table
         assert attestation.unknown_count_column_ready
         assert attestation.unknown_count_has_no_constraints is False
         assert attestation.status == "not_attested"
         assert await conn.fetchval("SELECT COUNT(*) FROM presence_events") == 0
     finally:
         await conn.execute(f"DROP SCHEMA IF EXISTS {_quote_ident(schema)} CASCADE")
+        await conn.close()
+
+
+@pytest.mark.asyncio
+async def test_022b_receipt_rejects_real_foreign_relation_before_pending_sql(
+    tmp_path: Path,
+):
+    """A lookalike foreign relation cannot admit a pending migration."""
+    database_url = _database_url_or_skip()
+    suffix = uuid.uuid4().hex
+    schema = f"presence_022b_foreign_{suffix}"
+    foreign_data_wrapper = f"presence_022b_fdw_{suffix}"
+    foreign_server = f"presence_022b_server_{suffix}"
+    conn = await asyncpg.connect(database_url)
+    try:
+        await _prepare_foreign_presence_events_schema(
+            conn,
+            schema,
+            foreign_data_wrapper=foreign_data_wrapper,
+            foreign_server=foreign_server,
+        )
+        record = MIGRATION_022B_PRESENCE_UNKNOWN_COUNT_RECONCILIATION
+        attestations = await attest_known_historical_migration_reconciliations(
+            conn,
+            sorted(MIGRATIONS.glob("*.sql")),
+            candidate_names={record.migration_name},
+        )
+
+        assert len(attestations) == 1
+        attestation = attestations[0]
+        assert attestation.presence_events_is_ordinary_table is False
+        assert attestation.unknown_count_column_ready
+        assert attestation.unknown_count_has_no_constraints
+        assert attestation.status == "not_attested"
+
+        from atlas_brain.storage.migrations import PendingMigrationContentIntegrityError
+
+        with pytest.raises(
+            PendingMigrationContentIntegrityError,
+            match=f"missing_source={record.migration_name}",
+        ):
+            await run_migrations(
+                _MigrationPool(conn),
+                migrations_dir=_test_catalog(tmp_path),
+                only={"901_presence_attestation_probe"},
+            )
+
+        assert not await conn.fetchval(
+            "SELECT to_regclass('presence_attestation_probe') IS NOT NULL"
+        )
+        assert await conn.fetchval(
+            "SELECT COUNT(*) FROM schema_migrations "
+            "WHERE name = '901_presence_attestation_probe'"
+        ) == 0
+    finally:
+        await conn.execute(f"DROP SCHEMA IF EXISTS {_quote_ident(schema)} CASCADE")
+        await conn.execute(f"DROP SERVER IF EXISTS {_quote_ident(foreign_server)} CASCADE")
+        await conn.execute(
+            f"DROP FOREIGN DATA WRAPPER IF EXISTS {_quote_ident(foreign_data_wrapper)}"
+        )
         await conn.close()
 
 

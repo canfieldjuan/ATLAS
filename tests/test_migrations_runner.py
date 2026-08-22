@@ -848,6 +848,7 @@ class _AttestedReconciliationPool(_SerializingPool):
                 "column_default": "0",
             }
         ]
+        self.presence_events_is_ordinary_table = True
         self.presence_unknown_count_has_constraint = False
 
     async def fetch(self, query, *args):
@@ -981,6 +982,10 @@ class _AttestedReconciliationPool(_SerializingPool):
         }
 
     async def fetchval(self, query, *args):
+        if "relation_state.relname = 'presence_events'" in query:
+            assert "relation_state.relkind = 'r'" in query
+            assert args == ()
+            return self.presence_events_is_ordinary_table
         if "table_class.relname = 'presence_events'" in query:
             assert "FROM pg_constraint AS actual" in query
             assert args == ()
@@ -1572,6 +1577,39 @@ async def test_failed_022b_attestation_blocks_then_retry_applies_once(tmp_path):
             "applied_at": record.observed_applied_at,
         }
     ]
+    await run_migrations(pool, migrations_dir=tmp_path, only={"901_pending"})
+
+    assert pool.applied_sql == ["SELECT 901"]
+    assert pool.inserted_with_digest == [
+        (901, "901_pending", hashlib.sha256(b"SELECT 901").hexdigest())
+    ]
+
+
+@pytest.mark.asyncio
+async def test_non_table_022b_evidence_blocks_then_retry_applies_once(tmp_path):
+    """A view or foreign relation can never satisfy the ALTER TABLE receipt."""
+    from atlas_brain.storage.migrations import (
+        PendingMigrationContentIntegrityError,
+        run_migrations,
+    )
+
+    pool = _AttestedReconciliationPool()
+    record = _stage_historical_022b_missing_source(tmp_path, pool)
+    pool.presence_events_is_ordinary_table = False
+    (tmp_path / "901_pending.sql").write_text("SELECT 901")
+
+    with pytest.raises(
+        PendingMigrationContentIntegrityError,
+        match=f"missing_source={record.migration_name}",
+    ):
+        await run_migrations(pool, migrations_dir=tmp_path, only={"901_pending"})
+
+    assert pool.applied_sql == []
+    assert pool.inserted == []
+    assert pool.inserted_with_digest == []
+    assert pool.updated == []
+
+    pool.presence_events_is_ordinary_table = True
     await run_migrations(pool, migrations_dir=tmp_path, only={"901_pending"})
 
     assert pool.applied_sql == ["SELECT 901"]
