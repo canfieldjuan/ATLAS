@@ -38,6 +38,7 @@ follow-up PRs.
 
 Ownership lane: eom/missed-call-recovery
 Slice phase: Vertical slice
+Max files: 13
 
 1. Add a provider-owned missed-call recovery sequence for one eligible
    residential web-estimate lead after a deliberate, actor-authenticated
@@ -332,8 +333,8 @@ Calendar correlation.
 | `atlas_brain/storage/migrations/389_eom_missed_call_recovery.sql` | 602 |
 | `atlas_brain/templates/email/missed_call_recovery.py` | 114 |
 | `docs/EOM_MISSED_CALL_RECOVERY_RUNBOOK.md` | 111 |
-| `plans/PR-EOM-Missed-Call-Recovery.md` | 339 |
+| `plans/PR-EOM-Missed-Call-Recovery.md` | 340 |
 | `render.eom.yaml` | 9 |
 | `tests/test_eom_missed_call_recovery.py` | 1908 |
 | `tests/test_eom_render_profile.py` | 43 |
-| **Total** | **5921** |
+| **Total** | **5922** |
