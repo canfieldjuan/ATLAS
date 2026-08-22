@@ -1007,7 +1007,6 @@ async def test_known_067_reconciliation_attests_catalog_without_source(
     assert connection.fetchval_calls == []
     catalog_query = connection.fetchrow_calls[0][0]
     assert "WITH target_relation AS" in catalog_query
-    assert "relation_state.relpersistence" in catalog_query
     assert "JOIN pg_attribute AS attribute_state" in catalog_query
     assert "JOIN pg_constraint AS actual" in catalog_query
     assert "JOIN pg_index AS index_state" in catalog_query
@@ -1165,6 +1164,7 @@ async def test_known_272_reconciliation_attests_catalog_without_source(
     assert connection.fetchval_calls == []
     catalog_query = connection.fetchrow_calls[0][0]
     assert "WITH target_relation AS" in catalog_query
+    assert "relation_state.relpersistence" in catalog_query
     assert "JOIN pg_attribute AS attribute_state" in catalog_query
     assert "JOIN pg_attrdef AS default_state" in catalog_query
     assert "JOIN pg_constraint AS actual" in catalog_query
