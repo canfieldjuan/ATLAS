@@ -336,5 +336,5 @@ Calendar correlation.
 | `plans/PR-EOM-Missed-Call-Recovery.md` | 340 |
 | `render.eom.yaml` | 9 |
 | `tests/test_eom_missed_call_recovery.py` | 1905 |
-| `tests/test_eom_render_profile.py` | 43 |
-| **Total** | **5919** |
+| `tests/test_eom_render_profile.py` | 79 |
+| **Total** | **5955** |

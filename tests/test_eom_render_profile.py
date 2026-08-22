@@ -1827,6 +1827,22 @@ def test_eom_lifespan_closes_generic_database_when_funnel_close_fails(monkeypatc
             events.append("datastore-check")
             return True
 
+        def transaction(self):
+            return _PoolTransaction(self)
+
+        async def fetch(self, *_args):
+            return []
+
+    class _PoolTransaction:
+        def __init__(self, pool) -> None:
+            self._pool = pool
+
+        async def __aenter__(self):
+            return self._pool
+
+        async def __aexit__(self, *_args) -> bool:
+            return False
+
     async def init_database():
         events.append("init")
 
@@ -1883,6 +1899,7 @@ def test_eom_lifespan_closes_generic_database_when_funnel_close_fails(monkeypatc
     assert events == [
         "init",
         "funnel-init",
+        "datastore-check",
         "datastore-check",
         "inside",
         "funnel-close",
@@ -2211,8 +2228,25 @@ class _ReadyPool:
         self.queries.append(query)
         return True
 
+    def transaction(self):
+        return _PoolTransaction(self)
+
+    async def fetch(self, *_args):
+        return []
+
     async def close(self):
         self.closed += 1
+
+
+class _PoolTransaction:
+    def __init__(self, pool):
+        self._pool = pool
+
+    async def __aenter__(self):
+        return self._pool
+
+    async def __aexit__(self, *_args):
+        return False
 
 
 pool = _ReadyPool()
@@ -2327,7 +2361,7 @@ print(json.dumps({
         "env_projected_enabled": True,
         "env_projected_digest": True,
         "dependency_overrides": 0,
-        "startup_guard_queries": 1,
+        "startup_guard_queries": 2,
         "funnel_pool_closed": 1,
     }
 
