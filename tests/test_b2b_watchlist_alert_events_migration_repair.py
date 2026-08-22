@@ -91,69 +91,21 @@ async def _prepare_receipt_ledger_schema(conn, schema: str) -> None:
     )
 
 
-async def _prepare_attestable_schema(
-    conn,
-    schema: str,
-    *,
-    delete_action: str = "CASCADE",
-    account_status_direction: str = "DESC",
-) -> None:
-    """Create the source-era structural receipt without inserting alert rows.
+async def _prepare_attestable_schema(conn, schema: str) -> None:
+    """Execute retained 273 DDL as a disposable producer, never 272 evidence.
 
-    The retained 273 package corroborates this table shape, but the test never
-    manufactures source bytes or a checksum for the separate 272 receipt.
+    The test-owned 272 receipt stays synthetic-version/NULL-digest. Retained
+    273 supplies only the actual expected catalog shape, so this fixture cannot
+    imply that 273 source bytes verify, rename, or replace named 272.
     """
     await _prepare_receipt_ledger_schema(conn, schema)
-    await conn.execute(f"""
+    await conn.execute("""
         CREATE TABLE saas_accounts (id UUID PRIMARY KEY);
         CREATE TABLE b2b_watchlist_views (id UUID PRIMARY KEY);
-        CREATE TABLE b2b_watchlist_alert_events (
-            id UUID PRIMARY KEY,
-            account_id UUID NOT NULL REFERENCES saas_accounts(id)
-                ON DELETE {delete_action},
-            watchlist_view_id UUID NOT NULL REFERENCES b2b_watchlist_views(id)
-                ON DELETE CASCADE,
-            event_type TEXT NOT NULL,
-            threshold_field TEXT NOT NULL,
-            entity_type TEXT NOT NULL,
-            entity_key TEXT NOT NULL,
-            vendor_name TEXT,
-            company_name TEXT,
-            category TEXT,
-            source TEXT,
-            threshold_value NUMERIC(6, 2),
-            summary TEXT NOT NULL,
-            payload JSONB NOT NULL DEFAULT '{{}}'::jsonb,
-            status TEXT NOT NULL DEFAULT 'open',
-            first_seen_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-            last_seen_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-            resolved_at TIMESTAMPTZ,
-            created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-            updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-            CONSTRAINT chk_b2b_watchlist_alert_events_event_type
-                CHECK (event_type IN ('vendor_alert', 'account_alert', 'stale_data')),
-            CONSTRAINT chk_b2b_watchlist_alert_events_threshold_field
-                CHECK (threshold_field IN (
-                    'vendor_alert_threshold',
-                    'account_alert_threshold',
-                    'stale_days_threshold'
-                )),
-            CONSTRAINT chk_b2b_watchlist_alert_events_entity_type
-                CHECK (entity_type IN ('vendor', 'account', 'signal_cluster')),
-            CONSTRAINT chk_b2b_watchlist_alert_events_status
-                CHECK (status IN ('open', 'resolved'))
-        );
-        CREATE UNIQUE INDEX idx_b2b_watchlist_alert_events_view_entity
-            ON b2b_watchlist_alert_events (watchlist_view_id, event_type, entity_key);
-        CREATE INDEX idx_b2b_watchlist_alert_events_account_status
-            ON b2b_watchlist_alert_events (
-                account_id,
-                status,
-                last_seen_at {account_status_direction}
-            );
-        CREATE INDEX idx_b2b_watchlist_alert_events_view_status
-            ON b2b_watchlist_alert_events (watchlist_view_id, status, last_seen_at DESC);
         """)
+    await conn.execute(
+        (MIGRATIONS / "273_b2b_watchlist_alert_events.sql").read_text()
+    )
 
 
 async def _prepare_partition_schema(conn, schema: str) -> None:
@@ -190,6 +142,7 @@ async def test_272_receipt_attests_empty_real_catalog_without_alert_rows():
         assert attestation.migration_name == record.migration_name
         assert attestation.ledger_version_matches_record
         assert attestation.watchlist_alert_events_is_ordinary_table
+        assert attestation.watchlist_alert_events_has_permanent_storage
         assert attestation.base_alert_event_columns_ready
         assert attestation.required_alert_event_constraints_ready
         assert attestation.required_alert_event_indexes_ready
@@ -207,39 +160,69 @@ async def test_272_receipt_attests_empty_real_catalog_without_alert_rows():
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
-    ("case", "delete_action", "account_status_direction", "field"),
+    ("case", "field"),
     [
         (
             "wrong foreign-key action",
-            "RESTRICT",
-            "DESC",
             "required_alert_event_constraints_ready",
         ),
         (
             "wrong index direction",
-            "CASCADE",
-            "ASC",
             "required_alert_event_indexes_ready",
+        ),
+        (
+            "check constraint literal collision",
+            "required_alert_event_constraints_ready",
+        ),
+        (
+            "unlogged table storage",
+            "watchlist_alert_events_has_permanent_storage",
         ),
     ],
 )
 async def test_272_receipt_rejects_altered_catalog_before_pending_sql(
     tmp_path: Path,
     case: str,
-    delete_action: str,
-    account_status_direction: str,
     field: str,
 ):
     database_url = _database_url_or_skip()
     schema = f"watchlist_alert_272_reject_{uuid.uuid4().hex}"
     conn = await asyncpg.connect(database_url)
     try:
-        await _prepare_attestable_schema(
-            conn,
-            schema,
-            delete_action=delete_action,
-            account_status_direction=account_status_direction,
-        )
+        await _prepare_attestable_schema(conn, schema)
+        if case == "wrong foreign-key action":
+            await conn.execute("""
+                ALTER TABLE b2b_watchlist_alert_events
+                    DROP CONSTRAINT b2b_watchlist_alert_events_account_id_fkey;
+                ALTER TABLE b2b_watchlist_alert_events
+                    ADD CONSTRAINT b2b_watchlist_alert_events_account_id_fkey
+                    FOREIGN KEY (account_id) REFERENCES saas_accounts(id)
+                    ON DELETE RESTRICT;
+                """)
+        elif case == "wrong index direction":
+            await conn.execute("""
+                DROP INDEX idx_b2b_watchlist_alert_events_account_status;
+                CREATE INDEX idx_b2b_watchlist_alert_events_account_status
+                    ON b2b_watchlist_alert_events (
+                        account_id,
+                        status,
+                        last_seen_at ASC
+                    );
+                """)
+        elif case == "check constraint literal collision":
+            await conn.execute("""
+                ALTER TABLE b2b_watchlist_alert_events
+                    DROP CONSTRAINT chk_b2b_watchlist_alert_events_status;
+                ALTER TABLE b2b_watchlist_alert_events
+                    ADD CONSTRAINT chk_b2b_watchlist_alert_events_status
+                    CHECK (status IN ('o''pen', 'resolved'));
+                """)
+        elif case == "unlogged table storage":
+            await conn.execute(
+                "ALTER TABLE b2b_watchlist_alert_events SET UNLOGGED"
+            )
+        else:  # pragma: no cover - parametrize keeps this exhaustive.
+            raise AssertionError(f"unexpected altered catalog case: {case}")
         record = MIGRATION_272_B2B_WATCHLIST_ALERT_EVENTS_RECONCILIATION
         attestations = await attest_known_historical_migration_reconciliations(
             conn,

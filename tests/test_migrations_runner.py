@@ -44,6 +44,7 @@ def _default_b2b_watchlist_alert_events_catalog_row() -> dict[str, object]:
     return {
         "catalog_evidence": {
             "watchlist_alert_events_is_ordinary_table": True,
+            "watchlist_alert_events_has_permanent_storage": True,
             "columns": {
                 name: {
                     "exists": True,
@@ -1048,6 +1049,7 @@ class _AttestedReconciliationPool(_SerializingPool):
                 list(_B2B_WATCHLIST_ALERT_EVENT_CONSTRAINTS),
                 list(_B2B_WATCHLIST_ALERT_EVENT_INDEXES),
             )
+            assert "relation_state.relpersistence" in query
             return dict(self.b2b_watchlist_alert_events_catalog_row)
         if "b2b_campaigns" in query:
             assert args == ()

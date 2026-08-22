@@ -339,6 +339,7 @@ class B2BWatchlistAlertEventsMissingSourceMigrationReconciliationAttestation:
     ledger_digest_is_null: bool
     applied_at_matches_record: bool
     watchlist_alert_events_is_ordinary_table: bool
+    watchlist_alert_events_has_permanent_storage: bool
     base_alert_event_columns_ready: bool
     required_alert_event_constraints_ready: bool
     required_alert_event_indexes_ready: bool
@@ -356,6 +357,7 @@ class B2BWatchlistAlertEventsMissingSourceMigrationReconciliationAttestation:
             self.ledger_digest_is_null,
             self.applied_at_matches_record,
             self.watchlist_alert_events_is_ordinary_table,
+            self.watchlist_alert_events_has_permanent_storage,
             self.base_alert_event_columns_ready,
             self.required_alert_event_constraints_ready,
             self.required_alert_event_indexes_ready,
@@ -375,6 +377,9 @@ class B2BWatchlistAlertEventsMissingSourceMigrationReconciliationAttestation:
             "applied_at_matches_record": self.applied_at_matches_record,
             "watchlist_alert_events_is_ordinary_table": (
                 self.watchlist_alert_events_is_ordinary_table
+            ),
+            "watchlist_alert_events_has_permanent_storage": (
+                self.watchlist_alert_events_has_permanent_storage
             ),
             "base_alert_event_columns_ready": self.base_alert_event_columns_ready,
             "required_alert_event_constraints_ready": (
@@ -571,8 +576,8 @@ _B2B_WATCHLIST_ALERT_EVENT_BASE_COLUMNS = {
     "source": ("text", True, None),
     "threshold_value": ("numeric(6,2)", True, None),
     "summary": ("text", False, None),
-    "payload": ("jsonb", False, "{}::jsonb"),
-    "status": ("text", False, "open"),
+    "payload": ("jsonb", False, "'{}'::jsonb"),
+    "status": ("text", False, "'open'"),
     "first_seen_at": ("timestamp with time zone", False, "now()"),
     "last_seen_at": ("timestamp with time zone", False, "now()"),
     "resolved_at": ("timestamp with time zone", True, None),
@@ -607,27 +612,33 @@ _B2B_WATCHLIST_ALERT_EVENT_CONSTRAINTS = {
     "chk_b2b_watchlist_alert_events_event_type": (
         _B2BWatchlistAlertEventConstraint(
             "c", ("event_type",),
-            expression="(event_type = any (array[vendor_alert, account_alert, stale_data]))",
+            expression=(
+                "(event_type = any (array['vendor_alert', 'account_alert', "
+                "'stale_data']))"
+            ),
         )
     ),
     "chk_b2b_watchlist_alert_events_threshold_field": (
         _B2BWatchlistAlertEventConstraint(
             "c", ("threshold_field",),
             expression=(
-                "(threshold_field = any (array[vendor_alert_threshold, "
-                "account_alert_threshold, stale_days_threshold]))"
+                "(threshold_field = any (array['vendor_alert_threshold', "
+                "'account_alert_threshold', 'stale_days_threshold']))"
             ),
         )
     ),
     "chk_b2b_watchlist_alert_events_entity_type": (
         _B2BWatchlistAlertEventConstraint(
             "c", ("entity_type",),
-            expression="(entity_type = any (array[vendor, account, signal_cluster]))",
+            expression=(
+                "(entity_type = any (array['vendor', 'account', "
+                "'signal_cluster']))"
+            ),
         )
     ),
     "chk_b2b_watchlist_alert_events_status": _B2BWatchlistAlertEventConstraint(
         "c", ("status",),
-        expression="(status = any (array[open, resolved]))",
+        expression="(status = any (array['open', 'resolved']))",
     ),
 }
 
@@ -877,6 +888,27 @@ def _canonicalize_catalog_constraint_expression(expression: object) -> str:
     return " ".join(normalized.replace("'", "").split())
 
 
+def _canonicalize_watchlist_alert_event_expression(expression: object) -> str:
+    """Normalize only unquoted casts while preserving SQL literal contents.
+
+    The named 272 receipt compares check constraints and defaults as source-era
+    structural evidence. Removing quote characters would collapse distinct
+    values such as ``'open'`` and ``'o''pen'`` into the same catalog text.
+    Keep this narrower than the older generic normalizer so its established
+    historical receipts retain their existing comparison contract.
+    """
+    normalized = _normalize_schema_definition(expression)
+    return " ".join(
+        re.sub(
+            r"'(?:''|[^'])*'|::(?:character varying|varchar|text|name)(?:\[\])?",
+            lambda match: (
+                match.group(0) if match.group(0).startswith("'") else ""
+            ),
+            normalized,
+        ).split()
+    )
+
+
 def _canonicalize_catalog_index_definition(definition: object) -> str:
     """Compact a catalog index definition before checking keys and direction."""
     return re.sub(r"\s+", "", _normalize_schema_definition(definition))
@@ -915,7 +947,7 @@ def _watchlist_alert_event_column_ready(
     expected_type, expected_is_nullable, expected_default = expected
     observed_default = observed.get("column_default")
     canonical_default = (
-        _canonicalize_catalog_constraint_expression(observed_default)
+        _canonicalize_watchlist_alert_event_expression(observed_default)
         if observed_default is not None
         else None
     )
@@ -953,7 +985,9 @@ def _watchlist_alert_event_constraint_ready(
     )
     expression_ready = (
         expected.expression is None
-        or _canonicalize_catalog_constraint_expression(observed.get("expression"))
+        or _canonicalize_watchlist_alert_event_expression(
+            observed.get("expression")
+        )
         == expected.expression
     )
     return all((
@@ -985,7 +1019,7 @@ def _watchlist_alert_event_index_ready(
     predicate_ready = (
         observed_predicate is None
         if expected.predicate is None
-        else _canonicalize_catalog_constraint_expression(observed_predicate)
+        else _canonicalize_watchlist_alert_event_expression(observed_predicate)
         == expected.predicate
     )
     return all((
@@ -1553,7 +1587,7 @@ async def _migration_067_catalog_evidence(
 
 async def _migration_272_catalog_evidence(
     executor: Any,
-) -> tuple[bool, bool, bool, bool]:
+) -> tuple[bool, bool, bool, bool, bool]:
     """Read the named 272 base-table receipt in one catalog-only snapshot."""
     evidence_row = await executor.fetchrow(
         """
@@ -1561,6 +1595,7 @@ async def _migration_272_catalog_evidence(
             SELECT
                 relation_state.oid,
                 relation_state.relkind,
+                relation_state.relpersistence,
                 relation_state.relispartition
             FROM pg_class AS relation_state
             JOIN pg_namespace AS schema_state
@@ -1704,6 +1739,11 @@ async def _migration_272_catalog_evidence(
                 WHERE relkind = 'r'
                   AND NOT relispartition
             ),
+            'watchlist_alert_events_has_permanent_storage', EXISTS (
+                SELECT 1
+                FROM target_relation
+                WHERE relpersistence = 'p'
+            ),
             'columns', (
                 SELECT jsonb_object_agg(name, evidence)
                 FROM column_evidence
@@ -1723,7 +1763,7 @@ async def _migration_272_catalog_evidence(
         list(_B2B_WATCHLIST_ALERT_EVENT_INDEXES),
     )
     if evidence_row is None:
-        return False, False, False, False
+        return False, False, False, False, False
 
     catalog = _catalog_json_mapping(evidence_row["catalog_evidence"])
     observed_columns = _catalog_json_mapping(catalog.get("columns"))
@@ -1752,6 +1792,7 @@ async def _migration_272_catalog_evidence(
     )
     return (
         bool(catalog.get("watchlist_alert_events_is_ordinary_table")),
+        bool(catalog.get("watchlist_alert_events_has_permanent_storage")),
         base_alert_event_columns_ready,
         required_alert_event_constraints_ready,
         required_alert_event_indexes_ready,
@@ -1940,6 +1981,7 @@ async def _attest_migration_272(
     )
     (
         watchlist_alert_events_is_ordinary_table,
+        watchlist_alert_events_has_permanent_storage,
         base_alert_event_columns_ready,
         required_alert_event_constraints_ready,
         required_alert_event_indexes_ready,
@@ -1960,6 +2002,9 @@ async def _attest_migration_272(
         applied_at_matches_record=applied_at == record.observed_applied_at,
         watchlist_alert_events_is_ordinary_table=(
             watchlist_alert_events_is_ordinary_table
+        ),
+        watchlist_alert_events_has_permanent_storage=(
+            watchlist_alert_events_has_permanent_storage
         ),
         base_alert_event_columns_ready=base_alert_event_columns_ready,
         required_alert_event_constraints_ready=(

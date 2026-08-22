@@ -182,6 +182,7 @@ class FakeConnection:
                 list(reconciliation_mod._B2B_WATCHLIST_ALERT_EVENT_INDEXES),
             )
             assert "WITH target_relation AS" in query
+            assert "relation_state.relpersistence" in query
             assert "JOIN pg_attribute AS attribute_state" in query
             assert "JOIN pg_constraint AS actual" in query
             assert "JOIN pg_index AS index_state" in query
@@ -315,6 +316,7 @@ def _default_b2b_watchlist_alert_events_catalog_row() -> dict[str, object]:
     return {
         "catalog_evidence": {
             "watchlist_alert_events_is_ordinary_table": True,
+            "watchlist_alert_events_has_permanent_storage": True,
             "columns": {
                 name: {
                     "exists": True,
@@ -1005,6 +1007,7 @@ async def test_known_067_reconciliation_attests_catalog_without_source(
     assert connection.fetchval_calls == []
     catalog_query = connection.fetchrow_calls[0][0]
     assert "WITH target_relation AS" in catalog_query
+    assert "relation_state.relpersistence" in catalog_query
     assert "JOIN pg_attribute AS attribute_state" in catalog_query
     assert "JOIN pg_constraint AS actual" in catalog_query
     assert "JOIN pg_index AS index_state" in catalog_query
@@ -1144,6 +1147,7 @@ async def test_known_272_reconciliation_attests_catalog_without_source(
         "ledger_digest_is_null": True,
         "applied_at_matches_record": True,
         "watchlist_alert_events_is_ordinary_table": True,
+        "watchlist_alert_events_has_permanent_storage": True,
         "base_alert_event_columns_ready": True,
         "required_alert_event_constraints_ready": True,
         "required_alert_event_indexes_ready": True,
@@ -1276,6 +1280,195 @@ async def test_known_272_reconciliation_rejects_each_required_evidence_field(
     assert code == module.UNRESOLVED_DRIFT_EXIT, case
     assert evidence["source_verification"] == reconciliation_mod.HISTORICAL_SOURCE_UNAVAILABLE
     assert evidence[field] is False, case
+    assert evidence["status"] == "not_attested", case
+    assert connection.execute_calls == []
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("case", "field"),
+    [
+        (
+            "ordinary relation has the wrong kind",
+            "watchlist_alert_events_is_ordinary_table",
+        ),
+        (
+            "ordinary table is not permanent",
+            "watchlist_alert_events_has_permanent_storage",
+        ),
+        ("column is absent", "base_alert_event_columns_ready"),
+        ("column has the wrong type", "base_alert_event_columns_ready"),
+        ("column has the wrong nullability", "base_alert_event_columns_ready"),
+        ("column has the wrong default", "base_alert_event_columns_ready"),
+        ("constraint is absent", "required_alert_event_constraints_ready"),
+        ("constraint has the wrong type", "required_alert_event_constraints_ready"),
+        ("constraint has the wrong key columns", "required_alert_event_constraints_ready"),
+        (
+            "foreign key has the wrong referenced table",
+            "required_alert_event_constraints_ready",
+        ),
+        (
+            "foreign key has the wrong referenced schema",
+            "required_alert_event_constraints_ready",
+        ),
+        (
+            "foreign key has the wrong referenced columns",
+            "required_alert_event_constraints_ready",
+        ),
+        (
+            "foreign key has the wrong delete action",
+            "required_alert_event_constraints_ready",
+        ),
+        (
+            "foreign key has the wrong update action",
+            "required_alert_event_constraints_ready",
+        ),
+        (
+            "foreign key has the wrong match type",
+            "required_alert_event_constraints_ready",
+        ),
+        (
+            "constraint is deferrable",
+            "required_alert_event_constraints_ready",
+        ),
+        (
+            "constraint is initially deferred",
+            "required_alert_event_constraints_ready",
+        ),
+        (
+            "constraint is unvalidated",
+            "required_alert_event_constraints_ready",
+        ),
+        (
+            "check constraint is weakened",
+            "required_alert_event_constraints_ready",
+        ),
+        (
+            "check constraint has a literal collision",
+            "required_alert_event_constraints_ready",
+        ),
+        ("index is absent", "required_alert_event_indexes_ready"),
+        ("index has the wrong relation kind", "required_alert_event_indexes_ready"),
+        ("index is a partition", "required_alert_event_indexes_ready"),
+        ("index has the wrong uniqueness", "required_alert_event_indexes_ready"),
+        ("index is invalid", "required_alert_event_indexes_ready"),
+        ("index is unready", "required_alert_event_indexes_ready"),
+        (
+            "index has the wrong key attribute count",
+            "required_alert_event_indexes_ready",
+        ),
+        (
+            "index has the wrong attribute count",
+            "required_alert_event_indexes_ready",
+        ),
+        ("index has the wrong key columns", "required_alert_event_indexes_ready"),
+        (
+            "index definition has the wrong direction",
+            "required_alert_event_indexes_ready",
+        ),
+        ("index has an unexpected predicate", "required_alert_event_indexes_ready"),
+    ],
+)
+async def test_known_272_reconciliation_rejects_each_catalog_guard_independently(
+    case: str,
+    field: str,
+    tmp_path: Path,
+) -> None:
+    """One mutated catalog value must close exactly its named receipt group."""
+    connection = _migration_272_connection()
+    catalog = connection.b2b_watchlist_alert_events_catalog_row["catalog_evidence"]
+    columns = catalog["columns"]
+    constraints = catalog["constraints"]
+    indexes = catalog["indexes"]
+    foreign_key = constraints["b2b_watchlist_alert_events_account_id_fkey"]
+    status_check = constraints["chk_b2b_watchlist_alert_events_status"]
+    account_status_index = indexes["idx_b2b_watchlist_alert_events_account_status"]
+
+    if case == "ordinary relation has the wrong kind":
+        catalog["watchlist_alert_events_is_ordinary_table"] = False
+    elif case == "ordinary table is not permanent":
+        catalog["watchlist_alert_events_has_permanent_storage"] = False
+    elif case == "column is absent":
+        columns["payload"]["exists"] = False
+    elif case == "column has the wrong type":
+        columns["status"]["data_type"] = "character varying"
+    elif case == "column has the wrong nullability":
+        columns["status"]["is_nullable"] = True
+    elif case == "column has the wrong default":
+        columns["status"]["column_default"] = "'closed'"
+    elif case == "constraint is absent":
+        constraints.pop("b2b_watchlist_alert_events_pkey")
+    elif case == "constraint has the wrong type":
+        constraints["b2b_watchlist_alert_events_pkey"]["constraint_type"] = "u"
+    elif case == "constraint has the wrong key columns":
+        constraints["b2b_watchlist_alert_events_pkey"]["key_columns"] = ["status"]
+    elif case == "foreign key has the wrong referenced table":
+        foreign_key["referenced_table"] = "other_accounts"
+    elif case == "foreign key has the wrong referenced schema":
+        foreign_key["references_current_schema"] = False
+    elif case == "foreign key has the wrong referenced columns":
+        foreign_key["referenced_columns"] = ["other_id"]
+    elif case == "foreign key has the wrong delete action":
+        foreign_key["delete_action"] = "r"
+    elif case == "foreign key has the wrong update action":
+        foreign_key["update_action"] = "r"
+    elif case == "foreign key has the wrong match type":
+        foreign_key["match_type"] = "f"
+    elif case == "constraint is deferrable":
+        foreign_key["is_deferrable"] = True
+    elif case == "constraint is initially deferred":
+        foreign_key["is_initially_deferred"] = True
+    elif case == "constraint is unvalidated":
+        foreign_key["is_validated"] = False
+    elif case == "check constraint is weakened":
+        status_check["expression"] = "(status = any (array['open']))"
+    elif case == "check constraint has a literal collision":
+        status_check["expression"] = "(status = any (array['o''pen', 'resolved']))"
+    elif case == "index is absent":
+        indexes.pop("idx_b2b_watchlist_alert_events_account_status")
+    elif case == "index has the wrong relation kind":
+        account_status_index["relation_kind"] = "r"
+    elif case == "index is a partition":
+        account_status_index["is_partition"] = True
+    elif case == "index has the wrong uniqueness":
+        account_status_index["is_unique"] = True
+    elif case == "index is invalid":
+        account_status_index["is_valid"] = False
+    elif case == "index is unready":
+        account_status_index["is_ready"] = False
+    elif case == "index has the wrong key attribute count":
+        account_status_index["key_attribute_count"] = 2
+    elif case == "index has the wrong attribute count":
+        account_status_index["attribute_count"] = 4
+    elif case == "index has the wrong key columns":
+        account_status_index["key_columns"] = ["account_id", "last_seen_at", "status"]
+    elif case == "index definition has the wrong direction":
+        account_status_index["definition"] = (
+            "usingbtree(account_id,status,last_seen_at)"
+        )
+    elif case == "index has an unexpected predicate":
+        account_status_index["predicate"] = "(status = 'open')"
+    else:  # pragma: no cover - parametrize keeps this exhaustive.
+        raise AssertionError(f"unexpected catalog guard case: {case}")
+
+    code, payload = await module.run_migration_content_integrity_preflight(
+        connection,
+        migrations_dir=tmp_path,
+        attest_known_reconciliations=True,
+    )
+
+    evidence = payload["known_reconciliation_evidence"][0]
+    assert code == module.UNRESOLVED_DRIFT_EXIT, case
+    assert evidence[field] is False, case
+    for other_field in (
+        "watchlist_alert_events_is_ordinary_table",
+        "watchlist_alert_events_has_permanent_storage",
+        "base_alert_event_columns_ready",
+        "required_alert_event_constraints_ready",
+        "required_alert_event_indexes_ready",
+    ):
+        if other_field != field:
+            assert evidence[other_field] is True, case
     assert evidence["status"] == "not_attested", case
     assert connection.execute_calls == []
 
