@@ -327,10 +327,21 @@ AS $$
 BEGIN
     IF NOT EXISTS (
         SELECT 1
-          FROM contacts
+         FROM contacts
          WHERE id = NEW.contact_id
            AND business_context_id = 'effingham_maids'
     ) THEN
+        -- A canonical contact can leave EOM after an old recovery sequence
+        -- exists. Its contacts trigger must be able to terminalize that
+        -- sequence without reopening it or allowing any other mutation under
+        -- a non-EOM owner. Keep this one-way cancellation exception narrow.
+        IF TG_OP = 'UPDATE'
+           AND OLD.business_context_id = 'effingham_maids'
+           AND NEW.business_context_id = 'effingham_maids'
+           AND OLD.state IN ('active', 'blocked_configuration')
+           AND NEW.state = 'cancelled' THEN
+            RETURN NEW;
+        END IF;
         RAISE EXCEPTION 'eom missed-call recovery rows require an EOM contact';
     END IF;
 
@@ -419,6 +430,52 @@ BEGIN
 END;
 $$;
 
+CREATE OR REPLACE FUNCTION lock_eom_missed_call_interaction_contact()
+RETURNS TRIGGER
+LANGUAGE plpgsql
+AS $$
+BEGIN
+    -- Delivery takes the contact row lock before it reads latest intake or
+    -- response evidence and before it calls Resend. Every interaction write
+    -- takes the same per-contact lock *before* changing that evidence. This
+    -- gives a single transaction-order boundary for inserts, corrections,
+    -- contact reassignment, and deletes without serializing unrelated leads.
+    IF TG_OP = 'INSERT' THEN
+        PERFORM 1
+          FROM contacts
+         WHERE id = NEW.contact_id
+           AND business_context_id = 'effingham_maids'
+         FOR UPDATE;
+        RETURN NEW;
+    ELSIF TG_OP = 'DELETE' THEN
+        PERFORM 1
+          FROM contacts
+         WHERE id = OLD.contact_id
+           AND business_context_id = 'effingham_maids'
+         FOR UPDATE;
+        RETURN OLD;
+    END IF;
+
+    -- A rare repair can move an interaction between contacts. Lock both EOM
+    -- contact rows in UUID order so two inverse repairs cannot deadlock while
+    -- a delivery worker holds one of their canonical locks.
+    PERFORM 1
+      FROM contacts
+     WHERE id = ANY(ARRAY[OLD.contact_id, NEW.contact_id])
+       AND business_context_id = 'effingham_maids'
+     ORDER BY id
+     FOR UPDATE;
+    RETURN NEW;
+END;
+$$;
+
+DROP TRIGGER IF EXISTS trg_lock_eom_missed_call_interaction_contact
+    ON contact_interactions;
+CREATE TRIGGER trg_lock_eom_missed_call_interaction_contact
+    BEFORE INSERT OR UPDATE OR DELETE ON contact_interactions
+    FOR EACH ROW
+    EXECUTE FUNCTION lock_eom_missed_call_interaction_contact();
+
 CREATE OR REPLACE FUNCTION eom_missed_call_effective_recipient(
     target_contact_id UUID,
     fallback_contact_email TEXT
@@ -452,6 +509,40 @@ AS $$
     );
 $$;
 
+CREATE OR REPLACE FUNCTION cancel_eom_missed_call_on_recipient_change(
+    target_contact_id UUID
+)
+RETURNS VOID
+LANGUAGE plpgsql
+AS $$
+DECLARE
+    effective_recipient TEXT;
+BEGIN
+    SELECT eom_missed_call_effective_recipient(c.id, c.email)
+      INTO effective_recipient
+      FROM contacts AS c
+     WHERE c.id = target_contact_id
+       AND c.business_context_id = 'effingham_maids';
+
+    IF NOT FOUND THEN
+        RETURN;
+    END IF;
+
+    IF EXISTS (
+        SELECT 1
+          FROM eom_missed_call_sequences AS sequence
+         WHERE sequence.contact_id = target_contact_id
+           AND sequence.state IN ('active', 'blocked_configuration')
+           AND lower(btrim(sequence.recipient_email)) IS DISTINCT FROM
+               effective_recipient
+    ) THEN
+        PERFORM cancel_eom_missed_call_sequences_for_contact(
+            target_contact_id, 'recipient_changed', 'interaction_trigger'
+        );
+    END IF;
+END;
+$$;
+
 CREATE OR REPLACE FUNCTION cancel_eom_missed_call_on_contact_change()
 RETURNS TRIGGER
 LANGUAGE plpgsql
@@ -459,11 +550,16 @@ AS $$
 DECLARE
     cancellation_reason VARCHAR(64);
 BEGIN
-    IF NEW.business_context_id IS DISTINCT FROM 'effingham_maids' THEN
+    IF OLD.business_context_id = 'effingham_maids'
+       AND NEW.business_context_id IS DISTINCT FROM 'effingham_maids' THEN
+        -- The sequence belongs to its original EOM interaction evidence, but
+        -- a canonical ownership transfer makes any remaining EOM email
+        -- ineligible. Terminalize before the sequence scope fence sees the
+        -- new tenant and never treat a missing status row as permission.
+        cancellation_reason := 'tenant_changed';
+    ELSIF NEW.business_context_id IS DISTINCT FROM 'effingham_maids' THEN
         RETURN NEW;
-    END IF;
-
-    IF NEW.contact_type <> 'lead' THEN
+    ELSIF NEW.contact_type <> 'lead' THEN
         cancellation_reason := 'became_customer';
     ELSIF NEW.status <> 'active' THEN
         cancellation_reason := 'contact_inactive';
@@ -494,7 +590,8 @@ $$;
 
 DROP TRIGGER IF EXISTS trg_cancel_eom_missed_call_on_contact_change ON contacts;
 CREATE TRIGGER trg_cancel_eom_missed_call_on_contact_change
-    AFTER UPDATE OF contact_type, status, lead_stage, customer_type, email ON contacts
+    AFTER UPDATE OF business_context_id, contact_type, status, lead_stage,
+                    customer_type, email ON contacts
     FOR EACH ROW
     EXECUTE FUNCTION cancel_eom_missed_call_on_contact_change();
 
@@ -523,6 +620,24 @@ AS $$
 DECLARE
     cancellation_reason VARCHAR(64);
 BEGIN
+    IF TG_OP <> 'INSERT' THEN
+        -- The BEFORE lock trigger serialized this correction/deletion with a
+        -- final delivery check. Now that the new effective recipient is
+        -- committed within this transaction, terminalize any sequence whose
+        -- immutable recipient snapshot no longer matches it. Other changed
+        -- eligibility fields are still re-read by the worker under the same
+        -- lock before every provider call.
+        PERFORM cancel_eom_missed_call_on_recipient_change(OLD.contact_id);
+        IF TG_OP = 'UPDATE'
+           AND NEW.contact_id IS DISTINCT FROM OLD.contact_id THEN
+            PERFORM cancel_eom_missed_call_on_recipient_change(NEW.contact_id);
+        END IF;
+        IF TG_OP = 'DELETE' THEN
+            RETURN OLD;
+        END IF;
+        RETURN NEW;
+    END IF;
+
     IF NOT EXISTS (
         SELECT 1
           FROM contacts
@@ -584,7 +699,7 @@ $$;
 DROP TRIGGER IF EXISTS trg_cancel_eom_missed_call_on_interaction
     ON contact_interactions;
 CREATE TRIGGER trg_cancel_eom_missed_call_on_interaction
-    AFTER INSERT ON contact_interactions
+    AFTER INSERT OR UPDATE OR DELETE ON contact_interactions
     FOR EACH ROW
     EXECUTE FUNCTION cancel_eom_missed_call_on_interaction();
 

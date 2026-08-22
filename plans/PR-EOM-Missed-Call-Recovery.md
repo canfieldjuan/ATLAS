@@ -83,7 +83,9 @@ Max files: 14
     a stable provider key. The Resend gateway attaches that key and retries only
     inside its 24-hour evidence window; tests prove success, definite rejection,
     retry exhaustion, and ambiguous crash/transport recovery do not duplicate
-    a send.
+    a send. A Resend `concurrent_idempotent_requests` response retries the
+    same key while safe but becomes visible `recovery_required` rather than a
+    false definite failure when its bounded attempts are exhausted.
   - The eligibility query and contacts/contact-interactions triggers cancel
     remaining work for lifecycle advancement, customer conversion, lost or
     archived state, commercial reclassification, later estimate request,
@@ -94,7 +96,11 @@ Max files: 14
     after the sequence began. SMS is positive-evidence-gated so a generic
     outbound CRM SMS cannot impersonate a lead reply. Tests settle each
     permitted proof path and show a change after scheduling but before delivery
-    skips the send.
+    skips the send. Every mutable interaction first takes the same canonical
+    contact lock as final delivery; after acquiring it, the worker reads latest
+    intake evidence in a fresh statement. Controlled cross-connection proofs
+    cover both correction-before-recheck (skip) and correction-after-final-lock
+    (the correction waits, then cancels remaining work).
   - The booking link is accepted only from deploy-time configuration and is
     never returned by status endpoints or logged. A missing link, disabled
     recovery flag, or unavailable email transport leaves a visible blocked
@@ -106,7 +112,9 @@ Max files: 14
   - Both `main.py` and `main_eom.py` call one shared prepare boundary during a
     canonical-database lifespan. It blocks active rows when disabled or
     misconfigured, starts only a delivery-ready worker, and makes an enabled
-    partial schema a startup failure.
+    partial schema a startup failure. The slim profile applies the additive
+    recovery migration whenever its startup-migration flag is set, even while
+    customer-email delivery remains disabled.
   - Existing acknowledgement tests stay unchanged and all new fixtures use
     `.example.test` identities plus a recording gateway; no test uses an Atlas
     email credential or a real recipient.
@@ -327,6 +335,15 @@ Calendar correlation.
   `pytest -q tests/test_eom_missed_call_recovery.py::test_effective_form_recipient_change_cancels_before_delivery`
   — `1 passed`; it proves that correcting the actual estimate-form recipient
   cancels before any fake provider call.
+- `ruff check --ignore E402`, `ruff format --check`, and `python -m py_compile`
+  over the changed recovery service, slim entrypoint, and recovery test module
+  — pass. The focused real-adapter/slim-disabled-startup/full-app-startup
+  regression command passed `3` tests (the existing full-app proof emitted only
+  the upstream `pynvml` warning).
+- With a disposable local PostgreSQL schema, the focused recipient-lock,
+  tenant-transfer, concurrent-idempotency, normal-delivery, and two-worker
+  proofs passed `6` tests. They use only `.example.test` identities and fake or
+  mock-transport gateways; no test sends customer email.
 - `git diff --check` — pass.
 - Full pipeline, migration integration, and security checks run on GitHub CI
   after the ready-for-review PR is opened; do not duplicate that full suite
@@ -340,14 +357,14 @@ Calendar correlation.
 | `atlas_brain/eom_api/config.py` | 128 |
 | `atlas_brain/eom_api/funnel.py` | 218 |
 | `atlas_brain/main.py` | 35 |
-| `atlas_brain/main_eom.py` | 66 |
-| `atlas_brain/services/eom_missed_call_recovery.py` | 2342 |
-| `atlas_brain/storage/migrations/389_eom_missed_call_recovery.sql` | 602 |
+| `atlas_brain/main_eom.py` | 67 |
+| `atlas_brain/services/eom_missed_call_recovery.py` | 2400 |
+| `atlas_brain/storage/migrations/389_eom_missed_call_recovery.sql` | 717 |
 | `atlas_brain/templates/email/missed_call_recovery.py` | 114 |
-| `docs/EOM_MISSED_CALL_RECOVERY_RUNBOOK.md` | 111 |
-| `plans/PR-EOM-Missed-Call-Recovery.md` | 353 |
+| `docs/EOM_MISSED_CALL_RECOVERY_RUNBOOK.md` | 114 |
+| `plans/PR-EOM-Missed-Call-Recovery.md` | 370 |
 | `render.eom.yaml` | 9 |
 | `tests/test_eom_lead_conversion.py` | 19 |
-| `tests/test_eom_missed_call_recovery.py` | 1905 |
+| `tests/test_eom_missed_call_recovery.py` | 2235 |
 | `tests/test_eom_render_profile.py` | 79 |
-| **Total** | **5992** |
+| **Total** | **6516** |

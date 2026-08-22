@@ -97,10 +97,22 @@ class EOMMissedCallRecoveryUnavailableError(EOMMissedCallRecoveryError):
 class _DefiniteDeliveryError(Exception):
     """The provider positively rejected a request before accepting mail."""
 
-    def __init__(self, code: str, *, retryable: bool) -> None:
+    def __init__(
+        self,
+        code: str,
+        *,
+        retryable: bool,
+        recovery_required_if_exhausted: bool = False,
+    ) -> None:
         super().__init__(code)
         self.code = code
         self.retryable = retryable
+        # A retryable transport rejection can safely become ``failed`` after
+        # its bounded attempts are exhausted. A provider response that says
+        # this idempotency key is currently being processed is different: its
+        # eventual acceptance remains unknown, so exhaustion must preserve
+        # ambiguity for an operator rather than claim a definite failure.
+        self.recovery_required_if_exhausted = recovery_required_if_exhausted
 
 
 class _AmbiguousDeliveryError(Exception):
@@ -198,7 +210,9 @@ class ResendMissedCallRecoveryGateway:
         if response.status_code == 409:
             if provider_code == "concurrent_idempotent_requests":
                 raise _DefiniteDeliveryError(
-                    "resend_request_in_progress", retryable=True
+                    "resend_request_in_progress",
+                    retryable=True,
+                    recovery_required_if_exhausted=True,
                 )
             # An idempotency conflict can mean another in-flight request
             # accepted this exact key. It is not proof that Resend rejected
@@ -411,6 +425,12 @@ async def missed_call_recovery_schema_ready(pool: Any) -> bool:
                        SELECT 1 FROM pg_trigger AS trigger
                        WHERE trigger.tgrelid = 'contacts'::regclass
                          AND trigger.tgname = 'trg_cancel_eom_missed_call_on_contact_change'
+                         AND NOT trigger.tgisinternal
+                   )
+                   AND EXISTS (
+                       SELECT 1 FROM pg_trigger AS trigger
+                       WHERE trigger.tgrelid = 'contact_interactions'::regclass
+                         AND trigger.tgname = 'trg_lock_eom_missed_call_interaction_contact'
                          AND NOT trigger.tgisinternal
                    )
                    AND EXISTS (
@@ -1198,8 +1218,41 @@ class EOMMissedCallRecoveryService:
         return delivery_attempts
 
     async def _contact_for_update(
-        self, conn: Any, contact_id: UUID
+        self,
+        conn: Any,
+        contact_id: UUID,
+        *,
+        allow_non_eom: bool = False,
     ) -> Mapping[str, Any]:
+        """Lock one canonical contact before reading delivery evidence.
+
+        Worker delivery uses ``allow_non_eom`` so a contact that was reassigned
+        after its EOM sequence began can be terminalized rather than being
+        mistaken for a missing row. Operator routes retain the stricter EOM
+        lookup and therefore never mutate a lead outside this tenant.
+        """
+
+        locked = await conn.fetchrow(
+            """
+            SELECT id
+            FROM contacts
+            WHERE id = $1
+              AND (business_context_id = $2 OR $3::boolean)
+            FOR UPDATE
+            """,
+            contact_id,
+            _EOM_CONTEXT,
+            allow_non_eom,
+        )
+        if locked is None:
+            raise EOMMissedCallRecoveryNotFoundError("EOM lead was not found")
+
+        # This must be a new statement after the row lock. Under PostgreSQL's
+        # read-committed isolation a statement snapshot can predate waiting on
+        # a ``FOR UPDATE`` lock held by an interaction correction. Reading the
+        # latest form evidence only after that wait gives the worker the
+        # correction's committed recipient/variant rather than a stale
+        # snapshot.
         contact = await conn.fetchrow(
             """
             SELECT c.*, latest.submitted_email, latest.ack_variant,
@@ -1217,11 +1270,9 @@ class EOMMissedCallRecoveryService:
                 ORDER BY ci.occurred_at DESC, ci.created_at DESC, ci.id DESC
                 LIMIT 1
             ) AS latest ON TRUE
-            WHERE c.id = $1 AND c.business_context_id = $2
-            FOR UPDATE OF c
+            WHERE c.id = $1
             """,
             contact_id,
-            _EOM_CONTEXT,
         )
         if contact is None:
             raise EOMMissedCallRecoveryNotFoundError("EOM lead was not found")
@@ -1235,6 +1286,8 @@ class EOMMissedCallRecoveryService:
         sequence_created_at: datetime | None,
         recipient_snapshot: str | None,
     ) -> _Eligibility:
+        if contact.get("business_context_id") != _EOM_CONTEXT:
+            return _Eligibility(False, "tenant_changed", None, None)
         if contact.get("contact_type") != "lead":
             return _Eligibility(False, "became_customer", None, None)
         if contact.get("status") != "active":
@@ -1623,39 +1676,20 @@ class EOMMissedCallRecoveryService:
         now = self._now()
         try:
             async with self.pool.transaction() as conn:
-                row = await conn.fetchrow(
+                # Claim the step first so peer workers still use SKIP LOCKED,
+                # then lock the canonical contact before the sequence. Contact
+                # and interaction mutations use that same contact-first order
+                # in migration 389. The second, fresh contact query below is
+                # therefore the linearization point for every mutable piece of
+                # delivery eligibility (including a corrected form recipient).
+                candidate = await conn.fetchrow(
                     """
                     SELECT
                         step.id AS step_id,
                         step.sequence_id,
-                        sequence.contact_id,
-                        sequence.created_at AS sequence_created_at,
-                        sequence.recipient_email,
-                        contact.id AS id,
-                        contact.contact_type,
-                        contact.status,
-                        contact.lead_stage,
-                        contact.customer_type,
-                        contact.email,
-                        contact.full_name,
-                        latest.submitted_email,
-                        latest.ack_variant,
-                        latest.latest_intake_at
+                        sequence.contact_id
                     FROM eom_missed_call_sequence_steps AS step
                     JOIN eom_missed_call_sequences AS sequence ON sequence.id = step.sequence_id
-                    JOIN contacts AS contact ON contact.id = sequence.contact_id
-                    LEFT JOIN LATERAL (
-                        SELECT
-                            NULLIF(ci.metadata->>'submitted_email', '') AS submitted_email,
-                            NULLIF(ci.metadata->>'ack_variant', '') AS ack_variant,
-                            ci.occurred_at AS latest_intake_at
-                        FROM contact_interactions AS ci
-                        WHERE ci.contact_id = contact.id
-                          AND ci.interaction_type = 'web_form'
-                          AND ci.intent = 'estimate_request'
-                        ORDER BY ci.occurred_at DESC, ci.created_at DESC, ci.id DESC
-                        LIMIT 1
-                    ) AS latest ON TRUE
                     WHERE step.state = 'pending'
                       AND sequence.state = 'active'
                       AND COALESCE(step.next_attempt_at, step.due_at) <= $1
@@ -1666,23 +1700,47 @@ class EOMMissedCallRecoveryService:
                             AND earlier.state NOT IN ('sent', 'skipped')
                       )
                     ORDER BY COALESCE(step.next_attempt_at, step.due_at), step.step_number, step.id
-                    FOR UPDATE OF step, sequence, contact SKIP LOCKED
+                    FOR UPDATE OF step SKIP LOCKED
                     LIMIT 1
                     """,
                     now,
                 )
-                if row is None:
+                if candidate is None:
                     return _ClaimResult(processed=False)
+                sequence_id = _uuid(candidate["sequence_id"], "sequence id")
+                contact_id = _uuid(candidate["contact_id"], "contact id")
+                contact = await self._contact_for_update(
+                    conn,
+                    contact_id,
+                    allow_non_eom=True,
+                )
+                sequence = await conn.fetchrow(
+                    """
+                    SELECT id, contact_id, created_at, recipient_email
+                    FROM eom_missed_call_sequences
+                    WHERE id = $1
+                      AND contact_id = $2
+                      AND state = 'active'
+                    FOR UPDATE
+                    """,
+                    sequence_id,
+                    contact_id,
+                )
+                if sequence is None:
+                    # Another contact-first mutation terminalized this exact
+                    # sequence after the step was selected. It is progress for
+                    # this bounded sweep, but it is not a sendable claim.
+                    return _ClaimResult(processed=True)
                 eligibility = await self._evaluate_contact_eligibility(
                     conn,
-                    row,
-                    sequence_created_at=row["sequence_created_at"],
-                    recipient_snapshot=row["recipient_email"],
+                    contact,
+                    sequence_created_at=sequence["created_at"],
+                    recipient_snapshot=sequence["recipient_email"],
                 )
                 if not eligibility.eligible:
                     await self._cancel_for_reason(
                         conn,
-                        sequence_id=row["sequence_id"],
+                        sequence_id=sequence_id,
                         reason=eligibility.reason or "ineligible",
                         source="worker",
                         actor_id=None,
@@ -1701,7 +1759,7 @@ class EOMMissedCallRecoveryService:
                      WHERE id = $1 AND state = 'pending'
                      RETURNING *
                     """,
-                    row["step_id"],
+                    candidate["step_id"],
                     claim_token,
                     now,
                     now + _ATTEMPT_LEASE,
@@ -1711,8 +1769,8 @@ class EOMMissedCallRecoveryService:
                     return _ClaimResult(processed=False)
                 await self._event(
                     conn,
-                    sequence_id=row["sequence_id"],
-                    step_id=row["step_id"],
+                    sequence_id=sequence_id,
+                    step_id=candidate["step_id"],
                     event_type="step_claimed",
                     reason_code=None,
                     actor_id=None,
@@ -1731,7 +1789,7 @@ class EOMMissedCallRecoveryService:
                     claim=_ClaimedStep(
                         step_id=_uuid(claimed["id"], "step id"),
                         sequence_id=_uuid(claimed["sequence_id"], "sequence id"),
-                        contact_id=_uuid(row["contact_id"], "contact id"),
+                        contact_id=contact_id,
                         claim_token=claim_token,
                         recipient_email=recipient,
                         subject=str(claimed["subject"]),
@@ -1758,6 +1816,17 @@ class EOMMissedCallRecoveryService:
         now = self._now()
         try:
             async with self.pool.transaction() as conn:
+                # The migration's BEFORE interaction trigger takes this same
+                # contact row lock before it writes any intake/response
+                # evidence. Taking it before the sequence means either that
+                # mutation commits before this fresh recheck, or it waits until
+                # this provider call finishes; no correction can slip between
+                # the final snapshot and external delivery.
+                contact = await self._contact_for_update(
+                    conn,
+                    claim.contact_id,
+                    allow_non_eom=True,
+                )
                 row = await conn.fetchrow(
                     """
                     SELECT
@@ -1769,37 +1838,14 @@ class EOMMissedCallRecoveryService:
                         step.body,
                         sequence.contact_id,
                         sequence.created_at AS sequence_created_at,
-                        sequence.recipient_email,
-                        contact.id AS id,
-                        contact.contact_type,
-                        contact.status,
-                        contact.lead_stage,
-                        contact.customer_type,
-                        contact.email,
-                        contact.full_name,
-                        latest.submitted_email,
-                        latest.ack_variant,
-                        latest.latest_intake_at
+                        sequence.recipient_email
                     FROM eom_missed_call_sequence_steps AS step
                     JOIN eom_missed_call_sequences AS sequence ON sequence.id = step.sequence_id
-                    JOIN contacts AS contact ON contact.id = sequence.contact_id
-                    LEFT JOIN LATERAL (
-                        SELECT
-                            NULLIF(ci.metadata->>'submitted_email', '') AS submitted_email,
-                            NULLIF(ci.metadata->>'ack_variant', '') AS ack_variant,
-                            ci.occurred_at AS latest_intake_at
-                        FROM contact_interactions AS ci
-                        WHERE ci.contact_id = contact.id
-                          AND ci.interaction_type = 'web_form'
-                          AND ci.intent = 'estimate_request'
-                        ORDER BY ci.occurred_at DESC, ci.created_at DESC, ci.id DESC
-                        LIMIT 1
-                    ) AS latest ON TRUE
                     WHERE step.id = $1
                       AND step.state = 'attempting'
                       AND step.claim_token = $2
                       AND sequence.state = 'active'
-                    FOR UPDATE OF step, sequence, contact
+                    FOR UPDATE OF step, sequence
                     """,
                     claim.step_id,
                     claim.claim_token,
@@ -1863,7 +1909,7 @@ class EOMMissedCallRecoveryService:
 
                 eligibility = await self._evaluate_contact_eligibility(
                     conn,
-                    row,
+                    contact,
                     sequence_created_at=row["sequence_created_at"],
                     recipient_snapshot=row["recipient_email"],
                 )
@@ -2037,6 +2083,18 @@ class EOMMissedCallRecoveryService:
                 source="worker",
                 metadata={"attempt": claim.attempt_count},
                 occurred_at=now,
+            )
+        elif error.recovery_required_if_exhausted:
+            # Resend explicitly says another request for this stable key is
+            # still running. It is safe to retry that same key while its
+            # evidence window remains open, but once the bounded retry budget
+            # is exhausted we cannot claim the other request was rejected.
+            await self._mark_recovery_required(
+                conn,
+                sequence_id=claim.sequence_id,
+                step_id=claim.step_id,
+                reason=error.code,
+                now=now,
             )
         else:
             await self._mark_failed(

@@ -46,7 +46,10 @@ claim or send a step.
 
 1. Deploy the Atlas provider code and migration `389_eom_missed_call_recovery`
    with recovery disabled. Verify the full application starts, the migration is
-   recorded, and no worker is running.
+   recorded, and no worker is running. On the compatible slim EOM profile,
+   `ATLAS_EOM_RUN_MIGRATIONS=true` applies this additive schema even while the
+   recovery flag remains disabled; that flag controls delivery, not schema
+   readiness.
 2. Deploy the tracker capability-backed proxy after Atlas is serving the named
    endpoints.
 3. Deploy the Website CRM Leads card after the tracker advertises the exact

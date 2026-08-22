@@ -169,7 +169,10 @@ async def _close_schema_connection(pool: _ConnectionPool) -> None:
 
 
 def _config(
-    *, enabled: bool = True, booking_link: str = _BOOKING_LINK
+    *,
+    enabled: bool = True,
+    booking_link: str = _BOOKING_LINK,
+    max_delivery_attempts: int = 3,
 ) -> EOMFunnelConfig:
     return EOMFunnelConfig(
         api_enabled=True,
@@ -177,7 +180,7 @@ def _config(
         missed_call_booking_link=booking_link,
         missed_call_timezone="America/Chicago",
         missed_call_poll_interval_seconds=30,
-        missed_call_max_delivery_attempts=3,
+        missed_call_max_delivery_attempts=max_delivery_attempts,
         missed_call_delivery_timeout_seconds=5,
     )
 
@@ -300,6 +303,26 @@ async def test_real_resend_gateway_preserves_provider_idempotency_and_outcome_cl
         )
     assert rejected_error.value.code == "resend_rejected"
     assert rejected_error.value.retryable is False
+
+    async def concurrent_idempotency(_request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            409,
+            json={"name": "concurrent_idempotent_requests"},
+        )
+
+    with pytest.raises(_DefiniteDeliveryError) as concurrent_error:
+        await ResendMissedCallRecoveryGateway(
+            timeout_seconds=5,
+            transport=httpx.MockTransport(concurrent_idempotency),
+        ).send(
+            recipient_email="lead@example.test",
+            subject="Controlled test",
+            body="Controlled test body",
+            idempotency_key=_operation_key("provider-concurrent"),
+        )
+    assert concurrent_error.value.code == "resend_request_in_progress"
+    assert concurrent_error.value.retryable is True
+    assert concurrent_error.value.recovery_required_if_exhausted is True
 
     async def ambiguous(_request: httpx.Request) -> httpx.Response:
         # A 2xx without Resend's stable message identity cannot prove delivery.
@@ -441,6 +464,71 @@ async def test_slim_eom_lifespan_wires_and_stops_the_missed_call_worker(
     async with main_eom.lifespan(FastAPI()):
         assert events == ["prepare"]
     assert events == ["prepare", "stop"]
+
+
+@pytest.mark.asyncio
+async def test_slim_eom_lifespan_applies_recovery_schema_while_delivery_disabled(
+    monkeypatch,
+) -> None:
+    """Schema rollout and customer-email permission are independent gates."""
+
+    from atlas_brain import main_eom
+
+    events: list[str] = []
+    pool = SimpleNamespace(is_initialized=True)
+
+    async def no_op(*_args: object, **_kwargs: object) -> None:
+        return None
+
+    async def run_recovery_migrations() -> None:
+        events.append("recovery-migrations")
+
+    async def prepare(*, pool: object, config: EOMFunnelConfig) -> None:
+        assert pool is not None
+        assert config.missed_call_recovery_enabled is False
+        events.append("prepare-disabled")
+        return None
+
+    monkeypatch.setattr(main_eom, "funnel_settings", _config(enabled=False))
+    monkeypatch.setattr(
+        main_eom,
+        "invoicing_settings",
+        SimpleNamespace(receivables_api_enabled=False),
+    )
+    monkeypatch.setattr(
+        main_eom,
+        "eom_profile_settings",
+        SimpleNamespace(run_migrations=True, canonical_crm_database_confirmed=True),
+    )
+    monkeypatch.setattr(main_eom, "db_settings", SimpleNamespace(enabled=False))
+    monkeypatch.setattr(
+        main_eom, "validate_receivables_api_config", lambda _config: None
+    )
+    monkeypatch.setattr(
+        main_eom, "validate_eom_funnel_api_config", lambda _config: None
+    )
+    monkeypatch.setattr(
+        main_eom,
+        "validate_eom_funnel_canonical_crm_config",
+        lambda *_args, **_kwargs: None,
+    )
+    monkeypatch.setattr(main_eom, "init_eom_funnel_database", no_op)
+    monkeypatch.setattr(main_eom, "close_eom_funnel_database", no_op)
+    monkeypatch.setattr(main_eom, "_validate_eom_funnel_startup", no_op)
+    monkeypatch.setattr(
+        main_eom,
+        "_run_eom_missed_call_recovery_startup_migrations",
+        run_recovery_migrations,
+    )
+    monkeypatch.setattr(main_eom, "get_eom_funnel_db_pool", lambda: pool)
+    monkeypatch.setattr(
+        recovery_mod, "prepare_eom_missed_call_recovery_worker", prepare
+    )
+
+    async with main_eom.lifespan(FastAPI()):
+        events.append("inside")
+
+    assert events == ["recovery-migrations", "prepare-disabled", "inside"]
 
 
 @pytest.mark.asyncio
@@ -1398,6 +1486,77 @@ async def test_retry_is_bounded_and_never_erases_call_evidence() -> None:
 
 
 @pytest.mark.asyncio
+async def test_concurrent_provider_key_exhaustion_preserves_delivery_ambiguity(
+    monkeypatch,
+) -> None:
+    """A still-running provider request cannot become a false failure."""
+
+    from atlas_brain.config import settings
+
+    monkeypatch.setattr(settings.email, "enabled", True)
+    monkeypatch.setattr(settings.email, "api_key", "test-resend-key")
+    requests: list[httpx.Request] = []
+
+    async def concurrent_idempotency(request: httpx.Request) -> httpx.Response:
+        requests.append(request)
+        return httpx.Response(409, json={"name": "concurrent_idempotent_requests"})
+
+    async with _test_store() as (pool, _schema):
+        contact_id = await _insert_estimate_lead(pool)
+        clock = {"now": _NOW}
+        service = _service(
+            pool,
+            gateway=ResendMissedCallRecoveryGateway(
+                timeout_seconds=5,
+                transport=httpx.MockTransport(concurrent_idempotency),
+            ),
+            now_box=clock,
+            config=_config(max_delivery_attempts=2),
+        )
+        await service.record_no_answer(
+            contact_id=contact_id,
+            operation_key=_operation_key(),
+            actor_id=7,
+            actor_name="Juan",
+        )
+
+        assert await service.dispatch_due_steps() == 1
+        next_attempt = await pool.fetchval(
+            """
+            SELECT next_attempt_at FROM eom_missed_call_sequence_steps
+            WHERE step_number = 1
+            """
+        )
+        assert isinstance(next_attempt, datetime)
+        assert (
+            await pool.fetchval(
+                "SELECT state FROM eom_missed_call_sequences WHERE contact_id = $1",
+                contact_id,
+            )
+            == "active"
+        )
+
+        clock["now"] = next_attempt
+        assert await service.dispatch_due_steps() == 1
+        assert len(requests) == 2
+        assert len({request.headers["Idempotency-Key"] for request in requests}) == 1
+        assert (
+            await pool.fetchval(
+                "SELECT state FROM eom_missed_call_sequences WHERE contact_id = $1",
+                contact_id,
+            )
+            == "recovery_required"
+        )
+        assert (
+            await pool.fetchval(
+                "SELECT terminal_reason FROM eom_missed_call_sequence_steps "
+                "WHERE step_number = 1"
+            )
+            == "resend_request_in_progress"
+        )
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize(
     ("column", "value", "expected_reason"),
     (
@@ -1445,6 +1604,42 @@ async def test_lifecycle_stop_conditions_cancel_before_later_delivery(
         assert dict(sequence) == {
             "state": "cancelled",
             "cancellation_reason": expected_reason,
+        }
+
+
+@pytest.mark.asyncio
+async def test_tenant_reassignment_cancels_remaining_recovery_before_delivery() -> None:
+    """An EOM sequence cannot outlive canonical contact ownership."""
+
+    async with _test_store() as (pool, _schema):
+        contact_id = await _insert_estimate_lead(pool)
+        gateway = _FakeGateway()
+        service = _service(pool, gateway=gateway)
+        await service.record_no_answer(
+            contact_id=contact_id,
+            operation_key=_operation_key(),
+            actor_id=7,
+            actor_name="Juan",
+        )
+
+        await pool._connection.execute(
+            "UPDATE contacts SET business_context_id = $2 WHERE id = $1",
+            contact_id,
+            "controlled_other_tenant",
+        )
+
+        assert await service.dispatch_due_steps() == 0
+        assert gateway.calls == []
+        sequence = await pool.fetchrow(
+            """
+            SELECT state, cancellation_reason FROM eom_missed_call_sequences
+            WHERE contact_id = $1
+            """,
+            contact_id,
+        )
+        assert dict(sequence) == {
+            "state": "cancelled",
+            "cancellation_reason": "tenant_changed",
         }
 
 
@@ -1522,6 +1717,141 @@ async def test_effective_form_recipient_change_cancels_before_delivery() -> None
             )
             == "recipient_changed"
         )
+
+
+@pytest.mark.asyncio
+async def test_intake_correction_that_wins_contact_lock_stops_delivery() -> None:
+    """The worker rereads committed latest-form evidence after lock waits."""
+
+    database_url = _database_url_or_skip()
+    async with _test_store() as (pool, schema):
+        contact_id = await _insert_estimate_lead(pool)
+        gateway = _FakeGateway()
+        service = _service(pool, gateway=gateway)
+        await service.record_no_answer(
+            contact_id=contact_id,
+            operation_key=_operation_key(),
+            actor_id=7,
+            actor_name="Juan",
+        )
+
+        correction_pool = await _schema_connection(database_url, schema)
+        transaction = correction_pool._connection.transaction()
+        committed = False
+        worker_task = None
+        try:
+            await transaction.start()
+            await correction_pool._connection.execute(
+                """
+                UPDATE contact_interactions
+                   SET metadata = jsonb_set(
+                       metadata, '{ack_variant}', to_jsonb($2::text), true
+                   )
+                 WHERE contact_id = $1
+                   AND interaction_type = 'web_form'
+                   AND intent = 'estimate_request'
+                """,
+                contact_id,
+                "commercial",
+            )
+
+            worker_task = asyncio.create_task(service.dispatch_due_steps())
+            await asyncio.sleep(0)
+            assert worker_task.done() is False
+
+            await transaction.commit()
+            committed = True
+            assert await asyncio.wait_for(worker_task, timeout=5) == 0
+        finally:
+            if not committed:
+                await transaction.rollback()
+            if worker_task is not None and not worker_task.done():
+                await asyncio.wait_for(worker_task, timeout=5)
+            await _close_schema_connection(correction_pool)
+
+        assert gateway.calls == []
+        sequence = await pool.fetchrow(
+            """
+            SELECT state, cancellation_reason FROM eom_missed_call_sequences
+            WHERE contact_id = $1
+            """,
+            contact_id,
+        )
+        assert dict(sequence) == {
+            "state": "cancelled",
+            "cancellation_reason": "not_residential_estimate",
+        }
+
+
+@pytest.mark.asyncio
+async def test_recipient_correction_serializes_with_final_delivery_check() -> None:
+    """A correction cannot commit between the final recipient read and send."""
+
+    database_url = _database_url_or_skip()
+    async with _test_store() as (pool, schema):
+        contact_id = await _insert_estimate_lead(pool)
+        gateway = _BlockingGateway()
+        service = _service(pool, gateway=gateway)
+        await service.record_no_answer(
+            contact_id=contact_id,
+            operation_key=_operation_key(),
+            actor_id=7,
+            actor_name="Juan",
+        )
+        claimed = await service._claim_one_due_step()
+        assert claimed.claim is not None
+
+        correction_pool = await _schema_connection(database_url, schema)
+        delivery_task = None
+        correction_task = None
+        try:
+            delivery_task = asyncio.create_task(service._deliver_claim(claimed.claim))
+            await asyncio.wait_for(gateway.started.wait(), timeout=5)
+
+            correction_task = asyncio.create_task(
+                correction_pool._connection.execute(
+                    """
+                    UPDATE contact_interactions
+                       SET metadata = jsonb_set(
+                           metadata, '{submitted_email}', to_jsonb($2::text), true
+                       )
+                     WHERE contact_id = $1
+                       AND interaction_type = 'web_form'
+                       AND intent = 'estimate_request'
+                    """,
+                    contact_id,
+                    "corrected-recipient@example.test",
+                )
+            )
+            # Let the second transaction reach migration 389's BEFORE trigger.
+            # It must wait on the contact lock held across the provider call.
+            await asyncio.sleep(0)
+            assert correction_task.done() is False
+
+            gateway.release.set()
+            history = await asyncio.wait_for(delivery_task, timeout=5)
+            assert history is not None
+            assert gateway.calls[0]["recipient_email"] == "lead@example.test"
+            await asyncio.wait_for(correction_task, timeout=5)
+        finally:
+            gateway.release.set()
+            if delivery_task is not None and not delivery_task.done():
+                await asyncio.wait_for(delivery_task, timeout=5)
+            if correction_task is not None and not correction_task.done():
+                await asyncio.wait_for(correction_task, timeout=5)
+            await _close_schema_connection(correction_pool)
+
+        sequence = await pool.fetchrow(
+            """
+            SELECT state, cancellation_reason FROM eom_missed_call_sequences
+            WHERE contact_id = $1
+            """,
+            contact_id,
+        )
+        assert dict(sequence) == {
+            "state": "cancelled",
+            "cancellation_reason": "recipient_changed",
+        }
 
 
 @pytest.mark.asyncio

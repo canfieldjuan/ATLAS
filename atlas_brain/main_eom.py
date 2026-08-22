@@ -245,10 +245,11 @@ async def lifespan(app: FastAPI):
         await _validate_eom_funnel_startup()
         if db_settings.enabled and eom_profile_settings.run_migrations:
             await _run_startup_migrations()
-        if (
-            funnel_settings.missed_call_recovery_enabled
-            and eom_profile_settings.run_migrations
-        ):
+        # Migration 389 is additive state and route readiness, not permission
+        # to send email. A safe first deployment deliberately runs it while
+        # delivery remains disabled so a qualifying operator action records an
+        # inspectable blocked sequence instead of a schema 503.
+        if eom_profile_settings.run_migrations:
             await _run_eom_missed_call_recovery_startup_migrations()
         from .services.eom_missed_call_recovery import (
             prepare_eom_missed_call_recovery_worker,
