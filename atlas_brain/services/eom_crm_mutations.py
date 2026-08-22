@@ -33,6 +33,69 @@ EOM_OPERATOR_SOURCE_CHANNELS = (
     "manual_import",
 )
 EOM_OPERATOR_CONTACT_TYPES = ("lead", "customer")
+EOM_OPERATOR_EDIT_BLOCK_REASON_ARCHIVED = "not_editable_archived"
+EOM_OPERATOR_EDIT_BLOCK_REASON_CONTACT_TYPE = "not_editable_contact_type"
+EOM_OPERATOR_EDIT_BLOCK_REASON_STAGE = "not_editable_stage"
+EOM_OPERATOR_EDIT_BLOCK_REASON_LEAD_STATUS = "not_editable_lead_status"
+EOM_OPERATOR_EDIT_BLOCK_REASONS = (
+    EOM_OPERATOR_EDIT_BLOCK_REASON_ARCHIVED,
+    EOM_OPERATOR_EDIT_BLOCK_REASON_CONTACT_TYPE,
+    EOM_OPERATOR_EDIT_BLOCK_REASON_STAGE,
+    EOM_OPERATOR_EDIT_BLOCK_REASON_LEAD_STATUS,
+)
+EOM_OPERATOR_EDITABLE_LEAD_STAGES = ("new", "estimate_booked", "won")
+
+
+@dataclass(frozen=True)
+class EOMOperatorContactEditability:
+    """Closed row-state verdict for the EOM operator edit boundary."""
+
+    editable: bool
+    edit_block_reason: str | None
+
+
+def get_eom_operator_contact_editability(
+    target: Mapping[str, Any],
+) -> EOMOperatorContactEditability:
+    """Return the one lifecycle verdict shared by read and write paths.
+
+    The order mirrors the existing mutation boundary. In particular, an
+    archived row is refused before identity-conflict handling, while a Lost
+    lead remains discoverable and is rejected at the later type/stage guard.
+    """
+
+    status = target.get("status")
+    if status == "archived":
+        return EOMOperatorContactEditability(
+            editable=False,
+            edit_block_reason=EOM_OPERATOR_EDIT_BLOCK_REASON_ARCHIVED,
+        )
+
+    stored_type = str(target.get("contact_type") or "")
+    if stored_type not in EOM_OPERATOR_CONTACT_TYPES:
+        return EOMOperatorContactEditability(
+            editable=False,
+            edit_block_reason=EOM_OPERATOR_EDIT_BLOCK_REASON_CONTACT_TYPE,
+        )
+
+    if (
+        stored_type == "lead"
+        and target.get("lead_stage") not in EOM_OPERATOR_EDITABLE_LEAD_STAGES
+    ):
+        return EOMOperatorContactEditability(
+            editable=False,
+            edit_block_reason=EOM_OPERATOR_EDIT_BLOCK_REASON_STAGE,
+        )
+
+    if stored_type == "lead" and status != "active":
+        return EOMOperatorContactEditability(
+            editable=False,
+            edit_block_reason=EOM_OPERATOR_EDIT_BLOCK_REASON_LEAD_STATUS,
+        )
+
+    return EOMOperatorContactEditability(editable=True, edit_block_reason=None)
+
+
 # Residential/commercial, on the account record. A DIFFERENT axis from
 # EOM_OPERATOR_CONTACT_TYPES above (lead vs customer) -- the two answer
 # unrelated questions and neither may be inferred from the other.
