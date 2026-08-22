@@ -130,6 +130,26 @@ async def _prepare_foreign_presence_events_schema(
         """)
 
 
+async def _prepare_leaf_partition_presence_events_schema(conn, schema: str) -> None:
+    """Create a leaf partition that looks like the historical table result.
+
+    PostgreSQL records a leaf partition as ``relkind = 'r'``, but its catalog
+    identity includes ``relispartition = true`` and PostgreSQL rejects an
+    ``ALTER TABLE ... ADD COLUMN`` directed at it. It therefore cannot attest
+    the historical one-line table alteration.
+    """
+    await _prepare_receipt_ledger_schema(conn, schema)
+    await conn.execute("""
+        CREATE TABLE presence_events_parent (
+            id INTEGER,
+            unknown_count INT DEFAULT 0
+        ) PARTITION BY RANGE (id);
+        CREATE TABLE presence_events
+            PARTITION OF presence_events_parent
+            FOR VALUES FROM (0) TO (100);
+        """)
+
+
 @pytest.mark.asyncio
 async def test_022b_receipt_attests_empty_real_catalog_without_presence_rows():
     database_url = _database_url_or_skip()
@@ -253,6 +273,62 @@ async def test_022b_receipt_rejects_real_foreign_relation_before_pending_sql(
         await conn.execute(
             f"DROP FOREIGN DATA WRAPPER IF EXISTS {_quote_ident(foreign_data_wrapper)}"
         )
+        await conn.close()
+
+
+@pytest.mark.asyncio
+async def test_022b_receipt_rejects_real_leaf_partition_before_pending_sql(
+    tmp_path: Path,
+):
+    """A leaf partition shares relkind ``r`` but cannot prove the ALTER receipt."""
+    database_url = _database_url_or_skip()
+    schema = f"presence_022b_partition_{uuid.uuid4().hex}"
+    conn = await asyncpg.connect(database_url)
+    try:
+        await _prepare_leaf_partition_presence_events_schema(conn, schema)
+        relation = await conn.fetchrow("""
+            SELECT relkind, relispartition
+            FROM pg_class
+            WHERE oid = 'presence_events'::regclass
+            """)
+        assert relation["relkind"] == b"r"
+        assert relation["relispartition"]
+
+        record = MIGRATION_022B_PRESENCE_UNKNOWN_COUNT_RECONCILIATION
+        attestations = await attest_known_historical_migration_reconciliations(
+            conn,
+            sorted(MIGRATIONS.glob("*.sql")),
+            candidate_names={record.migration_name},
+        )
+
+        assert len(attestations) == 1
+        attestation = attestations[0]
+        assert attestation.presence_events_is_ordinary_table is False
+        assert attestation.unknown_count_column_ready
+        assert attestation.unknown_count_has_no_constraints
+        assert attestation.status == "not_attested"
+
+        from atlas_brain.storage.migrations import PendingMigrationContentIntegrityError
+
+        with pytest.raises(
+            PendingMigrationContentIntegrityError,
+            match=f"missing_source={record.migration_name}",
+        ):
+            await run_migrations(
+                _MigrationPool(conn),
+                migrations_dir=_test_catalog(tmp_path),
+                only={"901_presence_attestation_probe"},
+            )
+
+        assert not await conn.fetchval(
+            "SELECT to_regclass('presence_attestation_probe') IS NOT NULL"
+        )
+        assert await conn.fetchval(
+            "SELECT COUNT(*) FROM schema_migrations "
+            "WHERE name = '901_presence_attestation_probe'"
+        ) == 0
+    finally:
+        await conn.execute(f"DROP SCHEMA IF EXISTS {_quote_ident(schema)} CASCADE")
         await conn.close()
 
 

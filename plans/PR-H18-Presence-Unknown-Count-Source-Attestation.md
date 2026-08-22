@@ -9,17 +9,18 @@ The generic report must keep showing this historical filename gap. Unlike migrat
 ### Diff-budget rationale
 
 This is deliberately one over-budget fail-closed receipt, not a convenience
-bundle. The immutable ledger/source facts, exact ordinary-table/catalog
-predicate, report-derived runner decision, malformed-evidence and retry
-isolation, disposable-PostgreSQL proof, and the existing CI enrollment must
-land together. Splitting them would either publish an admission path without
-its executable failure proof or leave the only real-database proof skipped;
-neither is safe for a global pending-migration gate.
+bundle. The immutable ledger/source facts, exact non-partition ordinary-table
+catalog predicate from one statement snapshot, report-derived runner decision,
+malformed-evidence and retry isolation, disposable-PostgreSQL proof, and the
+existing CI enrollment must land together. Splitting them would either publish
+an admission path without its executable failure proof or leave the only
+real-database proof skipped; neither is safe for a global pending-migration
+gate.
 
 ### Problem-derived contract
 
 - Root cause: `migration_content_integrity_report()` correctly classifies the historical `022b` ledger name as `missing_source` after its source file was renamed to `027`; the runner has no source-controlled, target-proven receipt that can decide whether this one name is safely admissible, so it must block every pending migration.
-- Correct fix must touch/change: add one immutable `022b` reconciliation record and its catalog-only attestation to `atlas_brain/storage/migrations/reconciliation.py`; require `presence_events` to be the expected ordinary-table relation before its column signature can count; register only that record with the existing report-derived attestation dispatcher; add focused preflight, runner-admission, and disposable-PostgreSQL regression proofs; enroll that disposable proof in the existing PostgreSQL-backed migration CI workflow; archive this session's merged #2478 plan and refresh the plan index.
+- Correct fix must touch/change: add one immutable `022b` reconciliation record and its catalog-only attestation to `atlas_brain/storage/migrations/reconciliation.py`; require `presence_events` to be the expected non-partition ordinary-table relation before its column signature can count, and read its relation, column, and constraint predicates in one PostgreSQL statement snapshot; register only that record with the existing report-derived attestation dispatcher; add focused preflight, runner-admission, and disposable-PostgreSQL regression proofs; enroll that disposable proof in the existing PostgreSQL-backed migration CI workflow; archive this session's merged #2478 plan and refresh the plan index.
 - Must not change: no packaged SQL migration; no `schema_migrations` rewrite, historical replay, source-file rename, database/table/lead/customer/email/financial data mutation, or deployment; no generic rename/allowlist mechanism; no change to 386, 387, 382, or any other missing-source record; no change to the missed-call recovery provider, public intake, CRM UI, product configuration, or customer-facing behavior.
 
 ## Scope (this PR)
@@ -28,7 +29,7 @@ Ownership lane: eom/migration-content-integrity
 Slice phase: Production hardening
 Max files: 8
 
-1. Add the one named `022b_presence_unknown_count` source-absence receipt. It must require exactly one NULL-digest ledger row at the observed timestamp, the exact retained package digest at current `027_presence_unknown_count`, and a catalog-only `presence_events` ordinary-table identity plus `unknown_count` signature of nullable `integer DEFAULT 0` with no column constraint.
+1. Add the one named `022b_presence_unknown_count` source-absence receipt. It must require exactly one NULL-digest ledger row at the observed timestamp, the exact retained package digest at current `027_presence_unknown_count`, and a catalog-only non-partition `presence_events` ordinary-table identity plus `unknown_count` signature of nullable `integer DEFAULT 0` with no column constraint. The relation, column, and constraint evidence must be read in one PostgreSQL statement snapshot.
 2. Permit the existing runner seam to subtract only this reported name when that receipt is `attested`; preserve the generic report's `missing_source` entry and block pending SQL for any non-attested or other discrepancy.
 3. Add normal, malformed-evidence, no-row, duplicate-row, changed-package, changed-column/default/nullability/constraint, retry, and unrelated-missing-source proofs without querying business rows.
 4. Archive the merged #2478 plan as the required same-session housekeeping; do not archive any other in-flight plan.
@@ -37,10 +38,10 @@ Max files: 8
 ### Review Contract
 
 - Acceptance criteria:
-  - [ ] `attest_known_historical_migration_reconciliations(..., candidate_names={"022b_presence_unknown_count"})` returns `attested` only when the exact one-row NULL-digest ledger evidence, recorded timestamp, retained `027` SHA-256, ordinary-table relation identity, and catalog-only column/constraint predicate all match; `tests/test_migration_content_integrity_preflight.py` and `tests/test_presence_unknown_count_migration_repair.py` settle both positive and negative cases.
+  - [ ] `attest_known_historical_migration_reconciliations(..., candidate_names={"022b_presence_unknown_count"})` returns `attested` only when the exact one-row NULL-digest ledger evidence, recorded timestamp, retained `027` SHA-256, non-partition ordinary-table relation identity, and one-statement-snapshot catalog-only column/constraint predicate all match; `tests/test_migration_content_integrity_preflight.py` and `tests/test_presence_unknown_count_migration_repair.py` settle both positive and negative cases.
   - [ ] The real `run_migrations()` admission path executes no pending SQL or ledger writes when the named evidence is absent/non-attested, and performs exactly one ordinary retry only after the same named evidence becomes attested; `tests/test_migrations_runner.py` settles this.
   - [ ] An attested 022b receipt never clears a different missing-source record; the generic preflight remains `unresolved_drift` / exit 2 while independent H-18 entries remain; `tests/test_migrations_runner.py` and the target-confirmed `scripts/check_migration_content_integrity.py --attest-known-reconciliations` receipt settle this.
-  - [ ] The receipt reads only `schema_migrations` metadata and PostgreSQL catalog metadata, never `presence_events` rows or customer/lead/financial data; focused fake-query assertions and the disposable PostgreSQL ordinary-table/foreign-relation proof settle this.
+  - [ ] The receipt reads only `schema_migrations` metadata and PostgreSQL catalog metadata, never `presence_events` rows or customer/lead/financial data; focused fake-query assertions prove one combined catalog statement, and the disposable PostgreSQL ordinary-table/foreign-relation/leaf-partition proof settles its identity boundary.
   - [ ] Existing no-candidate/default helper behavior and the existing 387/382 named receipts remain unchanged; focused regression tests settle this.
   - [ ] The existing PostgreSQL-backed migration-runner workflow runs the new disposable 022b proof whenever its file or migration-integrity implementation changes; `.github/workflows/atlas_migrations_runner_checks.yml` settles that CI enrollment without relying on the unit gate's intentionally absent test-database configuration.
 - Reachability proof: `run_migrations()` is the actual migration admission entrypoint. Its observable effect is either `PendingMigrationContentIntegrityError` before any pending SQL or one ordinary application after the named receipt passes. The separate read-only preflight exposes the same receipt without applying a migration.
@@ -52,10 +53,10 @@ Max files: 8
 
 - Boundary path/seam: the report-derived `missing_source` admission decision in `_unresolved_pending_migration_content_evidence()`.
 - Replaced-path behaviors: reported `022b_presence_unknown_count` remains globally visible as missing source but is subtracted only after its exact named receipt is `attested`; every unregistered, malformed, absent, duplicate, wrong-digest, wrong-timestamp, or wrong-catalog case stays a pending-SQL block.
-- Guard-relevant fields: migration name, ledger-row cardinality, NULL ledger digest, UTC applied timestamp, current `027` packaged SHA-256, `presence_events` ordinary-table `relkind`, `unknown_count` data type/nullability/default, and the count of constraints involving that column.
+- Guard-relevant fields: migration name, ledger-row cardinality, NULL ledger digest, UTC applied timestamp, current `027` packaged SHA-256, `presence_events` ordinary-table `relkind` plus `relispartition = false`, `unknown_count` data type/nullability/default, and the count of constraints involving that column. The catalog fields are evaluated from one statement snapshot.
 - Caller x input shape:
   - `run_migrations()` x report containing only non-attested 022b: block before pending SQL and ledger writes.
-  - `run_migrations()` x a 022b-shaped view, foreign table, materialized view, or partitioned relation: block before pending SQL and ledger writes.
+  - `run_migrations()` x a 022b-shaped view, foreign table, materialized view, partitioned parent, or leaf partition: block before pending SQL and ledger writes.
   - `run_migrations()` x exact attested 022b plus no other discrepancy: admit ordinary pending SQL once.
   - `run_migrations()` x attested 022b plus another missing-source name: keep that other name blocking.
   - read-only preflight x report containing 022b: emit named evidence but retain its generic forensic entry and unresolved exit while unrelated drift remains.
@@ -82,7 +83,7 @@ Max files: 8
 
 ## Mechanism
 
-`HistoricalRenamedMissingSourceReconciliation` records the exact old ledger name, the current retained package name, the SHA-256 of the unchanged source bytes, and the target-observed timestamp. Its attestation reads the named ledger row and PostgreSQL catalog metadata only. It proves (a) exactly one legacy NULL-digest row, (b) exact timestamp, (c) current packaged `027` bytes still equal the source-controlled digest, and (d) `presence_events` is the expected ordinary table whose sole field from this migration still has its final shape.
+`HistoricalRenamedMissingSourceReconciliation` records the exact old ledger name, the current retained package name, the SHA-256 of the unchanged source bytes, and the target-observed timestamp. Its attestation reads the named ledger row and PostgreSQL catalog metadata only. One catalog statement binds relation identity, column signature, and constraint absence to the same PostgreSQL snapshot. It proves (a) exactly one legacy NULL-digest row, (b) exact timestamp, (c) current packaged `027` bytes still equal the source-controlled digest, and (d) `presence_events` is the expected non-partition ordinary table whose sole field from this migration still has its final shape.
 
 The source-verification result remains explicitly weaker than historical ledger verification: a NULL historical digest cannot prove which bytes executed. The attestation is therefore immutable target evidence for one admission decision, not a backfilled checksum and not a generic filename-rename rule.
 
@@ -98,7 +99,7 @@ database proof.
 
 - The historical ledger digest remains NULL. The receipt does not rewrite it, claim that the original execution bytes are cryptographically verified, or turn the generic report green.
 - The retained `022 -> 022b -> 027` history is one source-controlled fact embedded in one named record, not a reusable rename map or a filename-compatibility fallback.
-- The catalog probe does not read `presence_events` data. It verifies the structural result only after requiring the relation kind that the historical `ALTER TABLE` could have modified.
+- The catalog probe does not read `presence_events` data. It verifies the structural result only after requiring a non-partition ordinary relation that the historical `ALTER TABLE` could have modified, with all structural fields from one statement snapshot.
 - This PR contains no SQL file and does not deploy or attempt migration 389. Runtime deployment continues to wait for all H-18 blockers.
 
 ## Deferred
@@ -113,9 +114,9 @@ Parked hardening: none.
 ## Verification
 
 - Before implementation: target-confirmed read-only preflight remained `unresolved_drift` / exit 2 with 2 mismatches and 6 missing-source rows; 387 and 382 were individually attested. A separate read-only catalog probe observed exactly one NULL-digest `022b` ledger row at `2026-02-17T23:34:17.949845Z`, an ordinary permanent `public.presence_events` relation (`relkind = r`), nullable `integer DEFAULT 0`, and zero constraints on `unknown_count`.
-- Focused local regression: `pytest -q tests/test_migration_content_integrity_preflight.py tests/test_migrations_runner.py tests/test_presence_unknown_count_migration_repair.py` — `115 passed, 5 skipped in 0.72s` before disposable-DB configuration. It includes non-ordinary-relation rejection and retry/no-pending-SQL coverage in the real runner seam.
-- Disposable PostgreSQL: a fresh auto-assigned-loopback `postgres:16-alpine` container, with `ATLAS_MIGRATION_TEST_DATABASE_URL` directed to that container, ran `pytest -q tests/test_presence_unknown_count_migration_repair.py` — `4 passed in 0.36s`; the container was removed by the shell trap. It exercised the exact no-synthetic-022b catalog, a real `unknown_count` constraint rejection, a foreign-table lookalike rejection, and the actual `run_migrations()` admission path.
-- CI enrollment repair: the existing `Atlas Migrations Runner Checks` workflow includes `tests/test_presence_unknown_count_migration_repair.py` in both path filters and its PostgreSQL-backed pytest invocation. GitHub already ran that job against the prior follow-up (`124 passed`); the expanded four-case proof is queued for this exact head. GitHub remains the authority for the complete migration-runner workflow and unit gate.
+- Focused local regression: `pytest -q tests/test_migration_content_integrity_preflight.py tests/test_migrations_runner.py tests/test_presence_unknown_count_migration_repair.py` — `116 passed, 6 skipped in 0.71s` before disposable-DB configuration. It includes leaf-partition rejection, one-catalog-statement assertion, and retry/no-pending-SQL coverage in the real runner seam.
+- Disposable PostgreSQL: a fresh auto-assigned-loopback `postgres:16-alpine` container, with `ATLAS_MIGRATION_TEST_DATABASE_URL` directed to that container, ran `pytest -q tests/test_presence_unknown_count_migration_repair.py` — `5 passed in 0.40s`; the container was removed by the shell trap. It exercised the exact no-synthetic-022b catalog, a real `unknown_count` constraint rejection, foreign-table and leaf-partition lookalike rejection, and the actual `run_migrations()` admission path.
+- CI enrollment repair: the existing `Atlas Migrations Runner Checks` workflow includes `tests/test_presence_unknown_count_migration_repair.py` in both path filters and its PostgreSQL-backed pytest invocation. GitHub already ran that job against the prior follow-up (`124 passed`); the expanded five-case proof will run on this exact head. GitHub remains the authority for the complete migration-runner workflow and unit gate.
 - Fast mechanical checks: `ruff check` and `python -m py_compile` over all four changed Python files passed; `git diff --check` passed.
 - Target-confirmed read-only receipt: `python scripts/check_migration_content_integrity.py --expected-target 'host=localhost, port=5433, db=atlas' --attest-known-reconciliations` returned exit `2` only because the generic report still contains 2 mismatches and 6 missing-source names. The new `022b` evidence was `attested` with every predicate true; the report remained deliberately unchanged and migration 389 was not attempted.
 - Planned remote checks: GitHub retains the full unit gate, EOM lead-pipeline, migration-runner, pre-push, and live-reconciliation suites. Do not duplicate the broad unit gate locally.
@@ -125,11 +126,11 @@ Parked hardening: none.
 | File | LOC |
 |---|---:|
 | `.github/workflows/atlas_migrations_runner_checks.yml` | 3 |
-| `atlas_brain/storage/migrations/reconciliation.py` | 245 |
+| `atlas_brain/storage/migrations/reconciliation.py` | 250 |
 | `plans/INDEX.md` | 3 |
-| `plans/PR-H18-Presence-Unknown-Count-Source-Attestation.md` | 135 |
+| `plans/PR-H18-Presence-Unknown-Count-Source-Attestation.md` | 136 |
 | `plans/archive/PR-H18-EOM-Public-Onboarding-Source-Attestation.md` | 0 |
-| `tests/test_migration_content_integrity_preflight.py` | 244 |
-| `tests/test_migrations_runner.py` | 222 |
-| `tests/test_presence_unknown_count_migration_repair.py` | 297 |
-| **Total** | **1149** |
+| `tests/test_migration_content_integrity_preflight.py` | 270 |
+| `tests/test_migrations_runner.py` | 233 |
+| `tests/test_presence_unknown_count_migration_repair.py` | 373 |
+| **Total** | **1268** |

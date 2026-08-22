@@ -49,6 +49,7 @@ class FakeConnection:
         public_onboarding_indexes: dict[str, dict[str, object] | None] | None = None,
         presence_unknown_count_columns: list[dict[str, object]] | None = None,
         presence_events_is_ordinary_table: bool = True,
+        presence_events_is_leaf_partition: bool = False,
         presence_unknown_count_has_constraint: bool = False,
         recurring_schema_ready: bool = True,
         zero_active_null_period_rows: bool = True,
@@ -82,6 +83,7 @@ class FakeConnection:
             else presence_unknown_count_columns
         )
         self.presence_events_is_ordinary_table = presence_events_is_ordinary_table
+        self.presence_events_is_leaf_partition = presence_events_is_leaf_partition
         self.presence_unknown_count_has_constraint = presence_unknown_count_has_constraint
         self.recurring_schema_ready = recurring_schema_ready
         self.zero_active_null_period_rows = zero_active_null_period_rows
@@ -119,10 +121,6 @@ class FakeConnection:
                 reconciliation_mod.MIGRATION_022B_PRESENCE_UNKNOWN_COUNT_RECONCILIATION.migration_name,
             )
             return self.presence_unknown_count_reconciliation_rows
-        if "actual.table_name = 'presence_events'" in query:
-            assert "FROM information_schema.columns AS actual" in query
-            assert args == ()
-            return self.presence_unknown_count_columns
         if "FROM information_schema.columns AS actual" in query:
             assert args == (
                 list(reconciliation_mod._PUBLIC_ONBOARDING_TOKEN_COLUMNS),
@@ -145,6 +143,27 @@ class FakeConnection:
 
     async def fetchrow(self, query: str, *args: object) -> dict[str, object] | None:
         self.fetchrow_calls.append((query, args))
+        if "WITH target_relation AS" in query:
+            assert args == ()
+            assert "relation_state.relkind" in query
+            assert "AND NOT relispartition" in query
+            assert "information_schema.columns AS actual" in query
+            assert "FROM pg_constraint AS actual" in query
+            columns = self.presence_unknown_count_columns
+            column = columns[0] if len(columns) == 1 else {}
+            return {
+                "presence_events_is_ordinary_table": (
+                    self.presence_events_is_ordinary_table
+                    and not self.presence_events_is_leaf_partition
+                ),
+                "unknown_count_has_no_constraints": (
+                    not self.presence_unknown_count_has_constraint
+                ),
+                "column_name": column.get("column_name"),
+                "data_type": column.get("data_type"),
+                "is_nullable": column.get("is_nullable"),
+                "column_default": column.get("column_default"),
+            }
         if "eom_public_onboarding_tokens" in query:
             assert len(args) == 1
             return self.public_onboarding_indexes.get(str(args[0]))
@@ -167,12 +186,6 @@ class FakeConnection:
     async def fetchval(self, query: str, *args: object) -> bool:
         self.fetchval_calls.append((query, args))
         assert args == ()
-        if "relation_state.relname = 'presence_events'" in query:
-            assert "relation_state.relkind = 'r'" in query
-            return self.presence_events_is_ordinary_table
-        if "table_class.relname = 'presence_events'" in query:
-            assert "FROM pg_constraint AS actual" in query
-            return self.presence_unknown_count_has_constraint
         if "information_schema.columns AS actual" in query:
             return self.recurring_schema_ready
         assert "FROM invoices" in query
@@ -768,12 +781,22 @@ async def test_known_022b_reconciliation_attests_named_renamed_source_without_ro
         "SELECT content_sha256, applied_at FROM schema_migrations WHERE name = $1 LIMIT 2",
         (record.migration_name,),
     )
-    assert len(connection.fetch_calls) == 3
-    assert len(connection.fetchval_calls) == 2
-    assert "FROM pg_class AS relation_state" in connection.fetchval_calls[0][0]
+    assert len(connection.fetch_calls) == 2
+    assert len(connection.fetchrow_calls) == 1
+    assert connection.fetchval_calls == []
+    catalog_query = connection.fetchrow_calls[0][0]
+    assert "WITH target_relation AS" in catalog_query
+    assert "relation_state.relkind" in catalog_query
+    assert "AND NOT relispartition" in catalog_query
+    assert "information_schema.columns AS actual" in catalog_query
+    assert "FROM pg_constraint AS actual" in catalog_query
     assert all(
         "FROM presence_events" not in query
-        for query, _args in connection.fetch_calls + connection.fetchval_calls
+        for query, _args in (
+            connection.fetch_calls
+            + connection.fetchrow_calls
+            + connection.fetchval_calls
+        )
     )
     assert connection.transaction_readonly == [True]
     assert connection.execute_calls == []
@@ -789,6 +812,7 @@ async def test_known_022b_reconciliation_attests_named_renamed_source_without_ro
         ("missing detailed ledger row", "exactly_one_ledger_row"),
         ("changed retained package", "retained_packaged_digest_matches_record"),
         ("presence-events relation is not an ordinary table", "presence_events_is_ordinary_table"),
+        ("presence-events relation is a leaf partition", "presence_events_is_ordinary_table"),
         ("missing unknown-count column", "unknown_count_column_ready"),
         ("wrong unknown-count type", "unknown_count_column_ready"),
         ("wrong unknown-count nullability", "unknown_count_column_ready"),
@@ -829,6 +853,8 @@ async def test_known_022b_reconciliation_rejects_each_required_evidence_field(
         source += b"\n-- changed after reviewed rename evidence\n"
     elif case == "presence-events relation is not an ordinary table":
         connection.presence_events_is_ordinary_table = False
+    elif case == "presence-events relation is a leaf partition":
+        connection.presence_events_is_leaf_partition = True
     elif case == "missing unknown-count column":
         connection.presence_unknown_count_columns = []
     elif case == "wrong unknown-count type":

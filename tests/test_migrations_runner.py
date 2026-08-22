@@ -849,6 +849,7 @@ class _AttestedReconciliationPool(_SerializingPool):
             }
         ]
         self.presence_events_is_ordinary_table = True
+        self.presence_events_is_leaf_partition = False
         self.presence_unknown_count_has_constraint = False
 
     async def fetch(self, query, *args):
@@ -875,9 +876,6 @@ class _AttestedReconciliationPool(_SerializingPool):
                 MIGRATION_022B_PRESENCE_UNKNOWN_COUNT_RECONCILIATION.migration_name,
             )
             return list(self.presence_unknown_count_reconciliation_rows)
-        if "actual.table_name = 'presence_events'" in query:
-            assert args == ()
-            return list(self.presence_unknown_count_columns)
         if "FROM information_schema.columns AS actual" in query:
             assert args == (list(_PUBLIC_ONBOARDING_TOKEN_COLUMNS),)
             return [
@@ -930,6 +928,27 @@ class _AttestedReconciliationPool(_SerializingPool):
         return await super().fetch(query, *args)
 
     async def fetchrow(self, query, *args):
+        if "WITH target_relation AS" in query:
+            assert args == ()
+            assert "relation_state.relkind" in query
+            assert "AND NOT relispartition" in query
+            assert "information_schema.columns AS actual" in query
+            assert "FROM pg_constraint AS actual" in query
+            columns = self.presence_unknown_count_columns
+            column = columns[0] if len(columns) == 1 else {}
+            return {
+                "presence_events_is_ordinary_table": (
+                    self.presence_events_is_ordinary_table
+                    and not self.presence_events_is_leaf_partition
+                ),
+                "unknown_count_has_no_constraints": (
+                    not self.presence_unknown_count_has_constraint
+                ),
+                "column_name": column.get("column_name"),
+                "data_type": column.get("data_type"),
+                "is_nullable": column.get("is_nullable"),
+                "column_default": column.get("column_default"),
+            }
         if "eom_public_onboarding_tokens" in query:
             from atlas_brain.storage.migrations.reconciliation import (
                 _PUBLIC_ONBOARDING_TOKEN_ISSUED_CONTACT_INDEX,
@@ -982,14 +1001,6 @@ class _AttestedReconciliationPool(_SerializingPool):
         }
 
     async def fetchval(self, query, *args):
-        if "relation_state.relname = 'presence_events'" in query:
-            assert "relation_state.relkind = 'r'" in query
-            assert args == ()
-            return self.presence_events_is_ordinary_table
-        if "table_class.relname = 'presence_events'" in query:
-            assert "FROM pg_constraint AS actual" in query
-            assert args == ()
-            return self.presence_unknown_count_has_constraint
         if "information_schema.columns AS actual" in query:
             assert args == ()
             return self.recurring_schema_ready

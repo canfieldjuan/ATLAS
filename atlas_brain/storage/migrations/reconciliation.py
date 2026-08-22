@@ -845,73 +845,78 @@ async def _migration_382_catalog_evidence(
 async def _migration_022b_catalog_evidence(
     executor: Any,
 ) -> tuple[bool, bool, bool]:
-    """Read only the exact ordinary-table and column contract, never rows."""
-    presence_events_is_ordinary_table = bool(
-        await executor.fetchval(
-            """
+    """Read identity, column, and constraint metadata from one snapshot only."""
+    evidence_row = await executor.fetchrow(
+        """
+        WITH target_relation AS (
+            SELECT
+                relation_state.oid,
+                relation_state.relkind,
+                relation_state.relispartition
+            FROM pg_class AS relation_state
+            JOIN pg_namespace AS schema_state
+              ON schema_state.oid = relation_state.relnamespace
+            WHERE schema_state.nspname = current_schema()
+              AND relation_state.relname = 'presence_events'
+        ), relation_evidence AS (
             SELECT EXISTS (
                 SELECT 1
-                FROM pg_class AS relation_state
-                JOIN pg_namespace AS schema_state
-                  ON schema_state.oid = relation_state.relnamespace
-                WHERE schema_state.nspname = current_schema()
-                  AND relation_state.relname = 'presence_events'
-                  AND relation_state.relkind = 'r'
-            )
-            """
+                FROM target_relation
+                WHERE relkind = 'r'
+                  AND NOT relispartition
+            ) AS presence_events_is_ordinary_table
+        ), constraint_evidence AS (
+            SELECT NOT EXISTS (
+                SELECT 1
+                FROM pg_constraint AS actual
+                JOIN target_relation
+                  ON target_relation.oid = actual.conrelid
+                WHERE EXISTS (
+                    SELECT 1
+                    FROM unnest(
+                        COALESCE(actual.conkey, ARRAY[]::smallint[])
+                    ) AS key_state(attnum)
+                    JOIN pg_attribute AS attribute_state
+                      ON attribute_state.attrelid = actual.conrelid
+                     AND attribute_state.attnum = key_state.attnum
+                    WHERE attribute_state.attname = 'unknown_count'
+                )
+            ) AS unknown_count_has_no_constraints
         )
-    )
-    column_rows = await executor.fetch(
-        """
         SELECT
+            relation_evidence.presence_events_is_ordinary_table,
+            constraint_evidence.unknown_count_has_no_constraints,
             actual.column_name,
             actual.data_type,
             actual.is_nullable,
             actual.column_default
-        FROM information_schema.columns AS actual
-        WHERE actual.table_schema = current_schema()
-          AND actual.table_name = 'presence_events'
-          AND actual.column_name = 'unknown_count'
+        FROM relation_evidence
+        CROSS JOIN constraint_evidence
+        LEFT JOIN information_schema.columns AS actual
+          ON actual.table_schema = current_schema()
+         AND actual.table_name = 'presence_events'
+         AND actual.column_name = 'unknown_count'
         """
     )
-    observed_columns = {
-        row["column_name"]: (
-            row["data_type"],
-            row["is_nullable"],
-            _canonicalize_catalog_constraint_expression(row["column_default"])
-            if row["column_default"] is not None
-            else None,
+    if evidence_row is None:
+        return False, False, False
+
+    presence_events_is_ordinary_table = bool(
+        evidence_row["presence_events_is_ordinary_table"]
+    )
+    unknown_count_column_ready = (
+        evidence_row["column_name"] == "unknown_count"
+        and evidence_row["data_type"] == _PRESENCE_UNKNOWN_COUNT_COLUMN[0]
+        and evidence_row["is_nullable"] == _PRESENCE_UNKNOWN_COUNT_COLUMN[1]
+        and (
+            _canonicalize_catalog_constraint_expression(evidence_row["column_default"])
+            if evidence_row["column_default"] is not None
+            else None
         )
-        for row in column_rows
-    }
-    unknown_count_column_ready = observed_columns == {
-        "unknown_count": _PRESENCE_UNKNOWN_COUNT_COLUMN
-    }
-    unknown_count_has_no_constraints = not bool(
-        await executor.fetchval(
-            """
-            SELECT EXISTS (
-                SELECT 1
-                FROM pg_constraint AS actual
-                JOIN pg_class AS table_class
-                  ON table_class.oid = actual.conrelid
-                JOIN pg_namespace AS table_namespace
-                  ON table_namespace.oid = table_class.relnamespace
-                WHERE table_namespace.nspname = current_schema()
-                  AND table_class.relname = 'presence_events'
-                  AND EXISTS (
-                      SELECT 1
-                      FROM unnest(
-                          COALESCE(actual.conkey, ARRAY[]::smallint[])
-                      ) AS key_state(attnum)
-                      JOIN pg_attribute AS attribute_state
-                        ON attribute_state.attrelid = actual.conrelid
-                       AND attribute_state.attnum = key_state.attnum
-                      WHERE attribute_state.attname = 'unknown_count'
-                  )
-            )
-            """
-        )
+        == _PRESENCE_UNKNOWN_COUNT_COLUMN[2]
+    )
+    unknown_count_has_no_constraints = bool(
+        evidence_row["unknown_count_has_no_constraints"]
     )
     return (
         presence_events_is_ordinary_table,
