@@ -5,6 +5,7 @@ import importlib.util
 import json
 import sys
 import types
+from datetime import datetime, timezone
 from pathlib import Path
 
 import pytest
@@ -234,6 +235,16 @@ def test_migration_387_reconciliation_record_matches_checked_in_final_source() -
     assert record.source_verification == reconciliation_mod.HISTORICAL_SOURCE_UNAVAILABLE
     assert record.historical_ledger_sha256 != record.final_packaged_sha256
     assert hashlib.sha256(_migration_387_source()).hexdigest() == record.final_packaged_sha256
+    assert record.observed_applied_at == datetime(
+        2026,
+        8,
+        21,
+        1,
+        30,
+        46,
+        82_989,
+        tzinfo=timezone.utc,
+    )
     assert record.observed_applied_at < record.earliest_retained_source_commit_at
 
 
@@ -278,6 +289,30 @@ async def test_known_387_reconciliation_attests_catalog_without_verifying_source
     assert len(connection.fetchrow_calls) == 1
     assert len(connection.fetchval_calls) == 2
     assert connection.transaction_readonly == [True]
+    assert connection.execute_calls == []
+
+
+@pytest.mark.asyncio
+async def test_known_387_reconciliation_rejects_truncated_observed_timestamp(
+    tmp_path: Path,
+) -> None:
+    """A seconds-only timestamp must not silently attest target evidence."""
+    record = reconciliation_mod.MIGRATION_387_RECONCILIATION
+    _write_migration(tmp_path, record.migration_name, _migration_387_source())
+    connection = _migration_387_connection(
+        applied_at=record.observed_applied_at.replace(microsecond=0),
+    )
+
+    code, payload = await module.run_migration_content_integrity_preflight(
+        connection,
+        migrations_dir=tmp_path,
+        attest_known_reconciliations=True,
+    )
+
+    evidence = payload["known_reconciliation_evidence"][0]
+    assert code == module.UNRESOLVED_DRIFT_EXIT
+    assert evidence["applied_at_matches_record"] is False
+    assert evidence["status"] == "not_attested"
     assert connection.execute_calls == []
 
 

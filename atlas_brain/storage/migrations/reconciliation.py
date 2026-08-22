@@ -97,7 +97,20 @@ MIGRATION_387_RECONCILIATION = HistoricalMigrationReconciliation(
     final_packaged_sha256=(
         "f6382a07d807f7b38772e9823c66f1e47e4118841611e259220d9ab654c84f3d"
     ),
-    observed_applied_at=datetime(2026, 8, 21, 1, 30, 46, tzinfo=timezone.utc),
+    # The production ledger stores ``CURRENT_TIMESTAMP`` at microsecond
+    # precision.  This record is immutable target evidence, so retaining the
+    # observed precision is required for the exact equality check below; a
+    # seconds-only literal would make the known record permanently unattestable.
+    observed_applied_at=datetime(
+        2026,
+        8,
+        21,
+        1,
+        30,
+        46,
+        82_989,
+        tzinfo=timezone.utc,
+    ),
     earliest_retained_source_commit_at=datetime(
         2026, 8, 21, 3, 21, 35, tzinfo=timezone.utc
     ),
