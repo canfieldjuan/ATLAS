@@ -18,6 +18,7 @@ from typing import Any
 
 
 HISTORICAL_SOURCE_UNAVAILABLE = "historical_source_unavailable"
+HISTORICAL_LEDGER_DIGEST_UNAVAILABLE = "historical_ledger_digest_unavailable"
 
 
 @dataclass(frozen=True)
@@ -50,6 +51,30 @@ class HistoricalMissingSourceReconciliation:
     def source_verification(self) -> str:
         """No catalog predicate can recover unavailable historical source bytes."""
         return HISTORICAL_SOURCE_UNAVAILABLE
+
+
+@dataclass(frozen=True)
+class HistoricalRenamedMissingSourceReconciliation:
+    """Facts for one NULL-digest ledger name whose source was later renamed.
+
+    The retained package bytes make the source-history claim reviewable, but a
+    NULL historical ledger digest means Atlas cannot prove those exact bytes
+    were the bytes executed at the old ledger name.  This record therefore
+    remains a narrow admission receipt rather than a recovered checksum.
+    """
+
+    reconciliation_id: str
+    migration_name: str
+    current_packaged_migration_name: str
+    historical_ledger_sha256: None
+    retained_source_sha256: str
+    observed_applied_at: datetime
+    retained_source_history_commit_ids: tuple[str, ...]
+
+    @property
+    def source_verification(self) -> str:
+        """A retained rename chain cannot fill the historical NULL digest."""
+        return HISTORICAL_LEDGER_DIGEST_UNAVAILABLE
 
 
 @dataclass(frozen=True)
@@ -175,6 +200,57 @@ class MissingSourceMigrationReconciliationAttestation:
         }
 
 
+@dataclass(frozen=True)
+class RenamedMissingSourceMigrationReconciliationAttestation:
+    """Read-only evidence for one named NULL-digest source rename."""
+
+    reconciliation_id: str
+    migration_name: str
+    exactly_one_ledger_row: bool
+    ledger_digest_is_null: bool
+    applied_at_matches_record: bool
+    retained_packaged_digest_matches_record: bool
+    unknown_count_column_ready: bool
+    unknown_count_has_no_constraints: bool
+
+    @property
+    def source_verification(self) -> str:
+        """Keep retained package evidence distinct from a ledger checksum."""
+        return HISTORICAL_LEDGER_DIGEST_UNAVAILABLE
+
+    @property
+    def status(self) -> str:
+        if all(
+            (
+                self.exactly_one_ledger_row,
+                self.ledger_digest_is_null,
+                self.applied_at_matches_record,
+                self.retained_packaged_digest_matches_record,
+                self.unknown_count_column_ready,
+                self.unknown_count_has_no_constraints,
+            )
+        ):
+            return "attested"
+        return "not_attested"
+
+    def as_payload(self) -> dict[str, object]:
+        """Return structural evidence without reading presence-event rows."""
+        return {
+            "reconciliation_id": self.reconciliation_id,
+            "migration_name": self.migration_name,
+            "source_verification": self.source_verification,
+            "exactly_one_ledger_row": self.exactly_one_ledger_row,
+            "ledger_digest_is_null": self.ledger_digest_is_null,
+            "applied_at_matches_record": self.applied_at_matches_record,
+            "retained_packaged_digest_matches_record": (
+                self.retained_packaged_digest_matches_record
+            ),
+            "unknown_count_column_ready": self.unknown_count_column_ready,
+            "unknown_count_has_no_constraints": self.unknown_count_has_no_constraints,
+            "status": self.status,
+        }
+
+
 MIGRATION_387_RECONCILIATION = HistoricalMigrationReconciliation(
     reconciliation_id="eom-migration-387-recurring-invoice-dedup-recovery",
     migration_name="387_eom_recurring_invoice_dedup_recovery",
@@ -223,10 +299,42 @@ MIGRATION_382_EOM_PUBLIC_ONBOARDING_TOKENS_RECONCILIATION = (
 )
 
 
+MIGRATION_022B_PRESENCE_UNKNOWN_COUNT_RECONCILIATION = (
+    HistoricalRenamedMissingSourceReconciliation(
+        reconciliation_id="presence-migration-022b-unknown-count-source-rename",
+        migration_name="022b_presence_unknown_count",
+        current_packaged_migration_name="027_presence_unknown_count",
+        historical_ledger_sha256=None,
+        retained_source_sha256=(
+            "30ae96a2b8f85aea912bdd55599c7f27cb972e5a2cb9f20572798feb52d1b0aa"
+        ),
+        observed_applied_at=datetime(
+            2026,
+            2,
+            17,
+            23,
+            34,
+            17,
+            949_845,
+            tzinfo=timezone.utc,
+        ),
+        retained_source_history_commit_ids=(
+            "72c008b40d134bf1e0432e5c586bf0e156a1780b",
+            "5df3f12fa9aa1721983b37cceca913803db27722",
+            "2ec15ce4d8f159dd773405dfb311da4219d531aa",
+        ),
+    )
+)
+
+
 _HISTORICAL_MISMATCH_RECONCILIATIONS = (MIGRATION_387_RECONCILIATION,)
 _HISTORICAL_MISSING_SOURCE_RECONCILIATIONS = (
     MIGRATION_382_EOM_PUBLIC_ONBOARDING_TOKENS_RECONCILIATION,
+    MIGRATION_022B_PRESENCE_UNKNOWN_COUNT_RECONCILIATION,
 )
+
+
+_PRESENCE_UNKNOWN_COUNT_COLUMN = ("integer", "YES", "0")
 
 
 _PUBLIC_ONBOARDING_TOKEN_IMMUTABLE_COLUMNS = {
@@ -729,6 +837,63 @@ async def _migration_382_catalog_evidence(
     )
 
 
+async def _migration_022b_catalog_evidence(executor: Any) -> tuple[bool, bool]:
+    """Read only the one final column contract, never presence-event rows."""
+    column_rows = await executor.fetch(
+        """
+        SELECT
+            actual.column_name,
+            actual.data_type,
+            actual.is_nullable,
+            actual.column_default
+        FROM information_schema.columns AS actual
+        WHERE actual.table_schema = current_schema()
+          AND actual.table_name = 'presence_events'
+          AND actual.column_name = 'unknown_count'
+        """
+    )
+    observed_columns = {
+        row["column_name"]: (
+            row["data_type"],
+            row["is_nullable"],
+            _canonicalize_catalog_constraint_expression(row["column_default"])
+            if row["column_default"] is not None
+            else None,
+        )
+        for row in column_rows
+    }
+    unknown_count_column_ready = observed_columns == {
+        "unknown_count": _PRESENCE_UNKNOWN_COUNT_COLUMN
+    }
+    unknown_count_has_no_constraints = not bool(
+        await executor.fetchval(
+            """
+            SELECT EXISTS (
+                SELECT 1
+                FROM pg_constraint AS actual
+                JOIN pg_class AS table_class
+                  ON table_class.oid = actual.conrelid
+                JOIN pg_namespace AS table_namespace
+                  ON table_namespace.oid = table_class.relnamespace
+                WHERE table_namespace.nspname = current_schema()
+                  AND table_class.relname = 'presence_events'
+                  AND EXISTS (
+                      SELECT 1
+                      FROM unnest(
+                          COALESCE(actual.conkey, ARRAY[]::smallint[])
+                      ) AS key_state(attnum)
+                      JOIN pg_attribute AS attribute_state
+                        ON attribute_state.attrelid = actual.conrelid
+                       AND attribute_state.attnum = key_state.attnum
+                      WHERE attribute_state.attname = 'unknown_count'
+                  )
+            )
+            """
+        )
+    )
+    return unknown_count_column_ready, unknown_count_has_no_constraints
+
+
 async def _attest_migration_387(
     executor: Any,
     migration_files: Collection[Path],
@@ -806,13 +971,57 @@ async def _attest_migration_382(
     )
 
 
+async def _attest_migration_022b(
+    executor: Any,
+    migration_files: Collection[Path],
+) -> RenamedMissingSourceMigrationReconciliationAttestation:
+    """Attest the named 022b receipt without backfilling its NULL digest."""
+    record = MIGRATION_022B_PRESENCE_UNKNOWN_COUNT_RECONCILIATION
+    ledger_rows = await executor.fetch(
+        "SELECT content_sha256, applied_at FROM schema_migrations WHERE name = $1 LIMIT 2",
+        record.migration_name,
+    )
+    exactly_one_ledger_row = len(ledger_rows) == 1
+    ledger_row = ledger_rows[0] if exactly_one_ledger_row else None
+    recorded_digest = ledger_row["content_sha256"] if ledger_row is not None else None
+    applied_at = _normalize_utc(
+        ledger_row["applied_at"] if ledger_row is not None else None
+    )
+    retained_packaged_digest = _packaged_migration_digest(
+        migration_files,
+        record.current_packaged_migration_name,
+    )
+    (
+        unknown_count_column_ready,
+        unknown_count_has_no_constraints,
+    ) = await _migration_022b_catalog_evidence(executor)
+
+    return RenamedMissingSourceMigrationReconciliationAttestation(
+        reconciliation_id=record.reconciliation_id,
+        migration_name=record.migration_name,
+        exactly_one_ledger_row=exactly_one_ledger_row,
+        ledger_digest_is_null=(
+            exactly_one_ledger_row
+            and recorded_digest == record.historical_ledger_sha256
+        ),
+        applied_at_matches_record=applied_at == record.observed_applied_at,
+        retained_packaged_digest_matches_record=(
+            retained_packaged_digest == record.retained_source_sha256
+        ),
+        unknown_count_column_ready=unknown_count_column_ready,
+        unknown_count_has_no_constraints=unknown_count_has_no_constraints,
+    )
+
+
 async def attest_known_historical_migration_reconciliations(
     executor: Any,
     migration_files: Collection[Path],
     *,
     candidate_names: Collection[str] | None = None,
 ) -> tuple[
-    MigrationReconciliationAttestation | MissingSourceMigrationReconciliationAttestation,
+    MigrationReconciliationAttestation
+    | MissingSourceMigrationReconciliationAttestation
+    | RenamedMissingSourceMigrationReconciliationAttestation,
     ...,
 ]:
     """Return read-only attestation for reported, reviewed source gaps.
@@ -831,6 +1040,7 @@ async def attest_known_historical_migration_reconciliations(
     attestations: list[
         MigrationReconciliationAttestation
         | MissingSourceMigrationReconciliationAttestation
+        | RenamedMissingSourceMigrationReconciliationAttestation
     ] = []
     if MIGRATION_387_RECONCILIATION.migration_name in requested_names:
         attestations.append(await _attest_migration_387(executor, migration_files))
@@ -839,4 +1049,9 @@ async def attest_known_historical_migration_reconciliations(
         in requested_names
     ):
         attestations.append(await _attest_migration_382(executor))
+    if (
+        MIGRATION_022B_PRESENCE_UNKNOWN_COUNT_RECONCILIATION.migration_name
+        in requested_names
+    ):
+        attestations.append(await _attest_migration_022b(executor, migration_files))
     return tuple(attestations)

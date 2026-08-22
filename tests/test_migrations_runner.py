@@ -23,6 +23,16 @@ def _migration_387_source() -> bytes:
     ).read_bytes()
 
 
+def _migration_022b_source() -> bytes:
+    return (
+        Path(__file__).resolve().parents[1]
+        / "atlas_brain"
+        / "storage"
+        / "migrations"
+        / "027_presence_unknown_count.sql"
+    ).read_bytes()
+
+
 class FakeMigrationPool:
     def __init__(self, records=None):
         self.records = [
@@ -829,9 +839,20 @@ class _AttestedReconciliationPool(_SerializingPool):
         self.zero_active_null_period_rows = zero_active_null_period_rows
         self.reconciliation_rows: list[dict[str, object]] = []
         self.public_onboarding_reconciliation_rows: list[dict[str, object]] = []
+        self.presence_unknown_count_reconciliation_rows: list[dict[str, object]] = []
+        self.presence_unknown_count_columns = [
+            {
+                "column_name": "unknown_count",
+                "data_type": "integer",
+                "is_nullable": "YES",
+                "column_default": "0",
+            }
+        ]
+        self.presence_unknown_count_has_constraint = False
 
     async def fetch(self, query, *args):
         from atlas_brain.storage.migrations.reconciliation import (
+            MIGRATION_022B_PRESENCE_UNKNOWN_COUNT_RECONCILIATION,
             MIGRATION_382_EOM_PUBLIC_ONBOARDING_TOKENS_RECONCILIATION,
             MIGRATION_387_RECONCILIATION,
             _PUBLIC_ONBOARDING_TOKEN_COLUMNS,
@@ -845,10 +866,17 @@ class _AttestedReconciliationPool(_SerializingPool):
         ):
             if args == (MIGRATION_387_RECONCILIATION.migration_name,):
                 return list(self.reconciliation_rows)
-            assert args == (
+            if args == (
                 MIGRATION_382_EOM_PUBLIC_ONBOARDING_TOKENS_RECONCILIATION.migration_name,
+            ):
+                return list(self.public_onboarding_reconciliation_rows)
+            assert args == (
+                MIGRATION_022B_PRESENCE_UNKNOWN_COUNT_RECONCILIATION.migration_name,
             )
-            return list(self.public_onboarding_reconciliation_rows)
+            return list(self.presence_unknown_count_reconciliation_rows)
+        if "actual.table_name = 'presence_events'" in query:
+            assert args == ()
+            return list(self.presence_unknown_count_columns)
         if "FROM information_schema.columns AS actual" in query:
             assert args == (list(_PUBLIC_ONBOARDING_TOKEN_COLUMNS),)
             return [
@@ -953,6 +981,10 @@ class _AttestedReconciliationPool(_SerializingPool):
         }
 
     async def fetchval(self, query, *args):
+        if "table_class.relname = 'presence_events'" in query:
+            assert "FROM pg_constraint AS actual" in query
+            assert args == ()
+            return self.presence_unknown_count_has_constraint
         if "information_schema.columns AS actual" in query:
             assert args == ()
             return self.recurring_schema_ready
@@ -1325,6 +1357,26 @@ def _stage_historical_382_missing_source(pool):
     return record
 
 
+def _stage_historical_022b_missing_source(tmp_path, pool):
+    from atlas_brain.storage.migrations.reconciliation import (
+        MIGRATION_022B_PRESENCE_UNKNOWN_COUNT_RECONCILIATION,
+    )
+
+    record = MIGRATION_022B_PRESENCE_UNKNOWN_COUNT_RECONCILIATION
+    (tmp_path / f"{record.current_packaged_migration_name}.sql").write_bytes(
+        _migration_022b_source()
+    )
+    pool.records.append((22, record.migration_name, None))
+    if hasattr(pool, "presence_unknown_count_reconciliation_rows"):
+        pool.presence_unknown_count_reconciliation_rows = [
+            {
+                "content_sha256": None,
+                "applied_at": record.observed_applied_at,
+            }
+        ]
+    return record
+
+
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
     ("case", "source_present", "expected_category"),
@@ -1385,6 +1437,27 @@ async def test_attested_missing_source_admits_targeted_pending_migration(tmp_pat
 
     pool = _AttestedReconciliationPool()
     _stage_historical_382_missing_source(pool)
+    (tmp_path / "901_pending.sql").write_text("SELECT 901")
+
+    await run_migrations(
+        pool,
+        migrations_dir=tmp_path,
+        only={"901_pending"},
+    )
+
+    assert pool.applied_sql == ["SELECT 901"]
+    assert pool.inserted_with_digest == [
+        (901, "901_pending", hashlib.sha256(b"SELECT 901").hexdigest())
+    ]
+
+
+@pytest.mark.asyncio
+async def test_attested_022b_missing_source_admits_targeted_pending_migration(tmp_path):
+    """The renamed-source receipt admits only its exact recorded name."""
+    from atlas_brain.storage.migrations import run_migrations
+
+    pool = _AttestedReconciliationPool()
+    _stage_historical_022b_missing_source(tmp_path, pool)
     (tmp_path / "901_pending.sql").write_text("SELECT 901")
 
     await run_migrations(
@@ -1466,6 +1539,48 @@ async def test_failed_missing_source_attestation_blocks_then_retry_applies_once(
 
 
 @pytest.mark.asyncio
+async def test_failed_022b_attestation_blocks_then_retry_applies_once(tmp_path):
+    from atlas_brain.storage.migrations import (
+        PendingMigrationContentIntegrityError,
+        run_migrations,
+    )
+
+    pool = _AttestedReconciliationPool()
+    record = _stage_historical_022b_missing_source(tmp_path, pool)
+    pool.presence_unknown_count_reconciliation_rows = [
+        {
+            "content_sha256": "a" * 64,
+            "applied_at": record.observed_applied_at,
+        }
+    ]
+    (tmp_path / "901_pending.sql").write_text("SELECT 901")
+
+    with pytest.raises(
+        PendingMigrationContentIntegrityError,
+        match=f"missing_source={record.migration_name}",
+    ):
+        await run_migrations(pool, migrations_dir=tmp_path, only={"901_pending"})
+
+    assert pool.applied_sql == []
+    assert pool.inserted == []
+    assert pool.inserted_with_digest == []
+    assert pool.updated == []
+
+    pool.presence_unknown_count_reconciliation_rows = [
+        {
+            "content_sha256": None,
+            "applied_at": record.observed_applied_at,
+        }
+    ]
+    await run_migrations(pool, migrations_dir=tmp_path, only={"901_pending"})
+
+    assert pool.applied_sql == ["SELECT 901"]
+    assert pool.inserted_with_digest == [
+        (901, "901_pending", hashlib.sha256(b"SELECT 901").hexdigest())
+    ]
+
+
+@pytest.mark.asyncio
 async def test_missing_382_ledger_row_blocks_pending_sql_then_retries_once(tmp_path):
     """The named receipt fails closed when the detailed ledger read is absent."""
     from atlas_brain.storage.migrations import (
@@ -1494,6 +1609,44 @@ async def test_missing_382_ledger_row_blocks_pending_sql_then_retries_once(tmp_p
         "applied_at": record.observed_applied_at,
     }]
     await run_migrations(pool, migrations_dir=tmp_path)
+
+    assert pool.applied_sql == ["SELECT 901"]
+    assert pool.inserted_with_digest == [
+        (901, "901_pending", hashlib.sha256(b"SELECT 901").hexdigest())
+    ]
+
+
+@pytest.mark.asyncio
+async def test_missing_022b_ledger_row_blocks_pending_sql_then_retries_once(tmp_path):
+    """The receipt fails closed when the detailed NULL-digest row is absent."""
+    from atlas_brain.storage.migrations import (
+        PendingMigrationContentIntegrityError,
+        run_migrations,
+    )
+
+    pool = _AttestedReconciliationPool()
+    record = _stage_historical_022b_missing_source(tmp_path, pool)
+    pool.presence_unknown_count_reconciliation_rows = []
+    (tmp_path / "901_pending.sql").write_text("SELECT 901")
+
+    with pytest.raises(
+        PendingMigrationContentIntegrityError,
+        match=f"missing_source={record.migration_name}",
+    ):
+        await run_migrations(pool, migrations_dir=tmp_path, only={"901_pending"})
+
+    assert pool.applied_sql == []
+    assert pool.inserted == []
+    assert pool.inserted_with_digest == []
+    assert pool.updated == []
+
+    pool.presence_unknown_count_reconciliation_rows = [
+        {
+            "content_sha256": None,
+            "applied_at": record.observed_applied_at,
+        }
+    ]
+    await run_migrations(pool, migrations_dir=tmp_path, only={"901_pending"})
 
     assert pool.applied_sql == ["SELECT 901"]
     assert pool.inserted_with_digest == [
@@ -1603,6 +1756,33 @@ async def test_attested_known_missing_source_cannot_clear_other_missing_source(t
 
     with pytest.raises(PendingMigrationContentIntegrityError) as exc_info:
         await run_migrations(pool, migrations_dir=tmp_path)
+
+    message = str(exc_info.value)
+    assert "missing_source=900_other_recorded" in message
+    assert record.migration_name not in message
+    assert pool.applied_sql == []
+    assert pool.inserted == []
+    assert pool.inserted_with_digest == []
+    assert pool.updated == []
+    assert not pool._lock().locked()
+    assert pool.acquired == 0
+
+
+@pytest.mark.asyncio
+async def test_attested_022b_missing_source_cannot_clear_other_missing_source(tmp_path):
+    """The renamed-source receipt is not a general legacy-name allowlist."""
+    from atlas_brain.storage.migrations import (
+        PendingMigrationContentIntegrityError,
+        run_migrations,
+    )
+
+    pool = _AttestedReconciliationPool()
+    record = _stage_historical_022b_missing_source(tmp_path, pool)
+    pool.records.append((900, "900_other_recorded", "f" * 64))
+    (tmp_path / "901_pending.sql").write_text("SELECT 901")
+
+    with pytest.raises(PendingMigrationContentIntegrityError) as exc_info:
+        await run_migrations(pool, migrations_dir=tmp_path, only={"901_pending"})
 
     message = str(exc_info.value)
     assert "missing_source=900_other_recorded" in message
