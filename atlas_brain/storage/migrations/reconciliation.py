@@ -346,7 +346,7 @@ class B2BWatchlistAlertEventsMissingSourceMigrationReconciliationAttestation:
     required_alert_event_constraints_ready: bool
     no_unlisted_alert_event_constraints: bool
     required_alert_event_indexes_ready: bool
-    no_unlisted_alert_event_unique_or_exclusion_indexes: bool
+    no_unlisted_alert_event_indexes: bool
     no_unreviewed_alert_event_write_interceptors: bool
 
     @property
@@ -369,7 +369,7 @@ class B2BWatchlistAlertEventsMissingSourceMigrationReconciliationAttestation:
             self.required_alert_event_constraints_ready,
             self.no_unlisted_alert_event_constraints,
             self.required_alert_event_indexes_ready,
-            self.no_unlisted_alert_event_unique_or_exclusion_indexes,
+            self.no_unlisted_alert_event_indexes,
             self.no_unreviewed_alert_event_write_interceptors,
         )):
             return "attested"
@@ -407,9 +407,7 @@ class B2BWatchlistAlertEventsMissingSourceMigrationReconciliationAttestation:
             "required_alert_event_indexes_ready": (
                 self.required_alert_event_indexes_ready
             ),
-            "no_unlisted_alert_event_unique_or_exclusion_indexes": (
-                self.no_unlisted_alert_event_unique_or_exclusion_indexes
-            ),
+            "no_unlisted_alert_event_indexes": self.no_unlisted_alert_event_indexes,
             "no_unreviewed_alert_event_write_interceptors": (
                 self.no_unreviewed_alert_event_write_interceptors
             ),
@@ -1760,15 +1758,14 @@ async def _migration_272_catalog_evidence(
                         ELSE pg_get_indexdef(index_state.indexrelid)
                     END,
                     'key_columns', ARRAY(
-                        SELECT pg_get_indexdef(
-                            index_state.indexrelid,
-                            position,
-                            true
-                        )
-                        FROM generate_series(
-                            1,
-                            COALESCE(index_state.indnkeyatts, 0)
-                        ) AS position
+                        SELECT attribute_state.attname
+                        FROM unnest(index_state.indkey)
+                             WITH ORDINALITY AS key_state(attnum, ordinality)
+                        JOIN pg_attribute AS attribute_state
+                          ON attribute_state.attrelid = index_state.indrelid
+                         AND attribute_state.attnum = key_state.attnum
+                        WHERE key_state.ordinality <= index_state.indnkeyatts
+                        ORDER BY key_state.ordinality
                     ),
                     'predicate', CASE
                         WHEN index_state.indexrelid IS NULL THEN NULL
@@ -1812,7 +1809,7 @@ async def _migration_272_catalog_evidence(
                       ON target_relation.oid = actual.conrelid
                     WHERE actual.conname <> ALL($2::text[])
                 ) AS no_unlisted_alert_event_constraints
-        ), unlisted_write_restricting_indexes AS (
+        ), unlisted_indexes AS (
             SELECT
                 EXISTS (SELECT 1 FROM target_relation)
                 AND NOT EXISTS (
@@ -1824,13 +1821,12 @@ async def _migration_272_catalog_evidence(
                       ON index_relation.oid = index_state.indexrelid
                     LEFT JOIN pg_constraint AS backing_constraint
                       ON backing_constraint.conindid = index_state.indexrelid
-                    WHERE (index_state.indisunique OR index_state.indisexclusion)
-                      AND index_relation.relname <> ALL($3::text[])
+                    WHERE index_relation.relname <> ALL($3::text[])
                       AND (
                           backing_constraint.oid IS NULL
                           OR backing_constraint.conname <> ALL($2::text[])
                       )
-                ) AS no_unlisted_alert_event_unique_or_exclusion_indexes
+                ) AS no_unlisted_alert_event_indexes
         ), unreviewed_write_interceptors AS (
             SELECT
                 EXISTS (SELECT 1 FROM target_relation)
@@ -1889,9 +1885,9 @@ async def _migration_272_catalog_evidence(
                 SELECT jsonb_object_agg(name, evidence)
                 FROM index_evidence
             ),
-            'no_unlisted_alert_event_unique_or_exclusion_indexes', (
-                SELECT no_unlisted_alert_event_unique_or_exclusion_indexes
-                FROM unlisted_write_restricting_indexes
+            'no_unlisted_alert_event_indexes', (
+                SELECT no_unlisted_alert_event_indexes
+                FROM unlisted_indexes
             ),
             'no_unreviewed_alert_event_write_interceptors', (
                 SELECT no_unreviewed_alert_event_write_interceptors
@@ -1947,7 +1943,7 @@ async def _migration_272_catalog_evidence(
         required_alert_event_constraints_ready,
         bool(catalog.get("no_unlisted_alert_event_constraints")),
         required_alert_event_indexes_ready,
-        bool(catalog.get("no_unlisted_alert_event_unique_or_exclusion_indexes")),
+        bool(catalog.get("no_unlisted_alert_event_indexes")),
         bool(catalog.get("no_unreviewed_alert_event_write_interceptors")),
     )
 
@@ -2141,7 +2137,7 @@ async def _attest_migration_272(
         required_alert_event_constraints_ready,
         no_unlisted_alert_event_constraints,
         required_alert_event_indexes_ready,
-        no_unlisted_alert_event_unique_or_exclusion_indexes,
+        no_unlisted_alert_event_indexes,
         no_unreviewed_alert_event_write_interceptors,
     ) = await _migration_272_catalog_evidence(executor)
 
@@ -2176,9 +2172,7 @@ async def _attest_migration_272(
             no_unlisted_alert_event_constraints
         ),
         required_alert_event_indexes_ready=required_alert_event_indexes_ready,
-        no_unlisted_alert_event_unique_or_exclusion_indexes=(
-            no_unlisted_alert_event_unique_or_exclusion_indexes
-        ),
+        no_unlisted_alert_event_indexes=no_unlisted_alert_event_indexes,
         no_unreviewed_alert_event_write_interceptors=(
             no_unreviewed_alert_event_write_interceptors
         ),

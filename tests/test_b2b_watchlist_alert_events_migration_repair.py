@@ -25,6 +25,9 @@ from atlas_brain.storage.migrations.reconciliation import (  # noqa: E402
     MIGRATION_272_B2B_WATCHLIST_ALERT_EVENTS_RECONCILIATION,
     attest_known_historical_migration_reconciliations,
 )
+from atlas_brain.services.b2b.watchlist_alerts import (  # noqa: E402
+    evaluate_watchlist_alert_events_for_view,
+)
 
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -123,7 +126,46 @@ async def _prepare_partition_schema(conn, schema: str) -> None:
         CREATE TABLE b2b_watchlist_alert_events_leaf
             PARTITION OF b2b_watchlist_alert_events
             FOR VALUES FROM (0) TO (100);
-        """)
+    """)
+
+
+async def _assert_open_alert_writer_rejected_by_expression_index(conn) -> None:
+    """Drive the real writer through the cited expression-index failure."""
+    account_id = uuid.uuid4()
+    view_id = uuid.uuid4()
+    await conn.execute("INSERT INTO saas_accounts (id) VALUES ($1)", account_id)
+    await conn.execute("INSERT INTO b2b_watchlist_views (id) VALUES ($1)", view_id)
+
+    async def slow_burn_loader(**_kwargs):
+        return {
+            "signals": [{
+                "vendor_name": "index proof vendor",
+                "vendor_alert_hit": True,
+                "avg_urgency_score": 9.0,
+            }]
+        }
+
+    async def accounts_loader(**_kwargs):
+        return {"accounts": []}
+
+    with pytest.raises(asyncpg.DivisionByZeroError, match="division by zero"):
+        await evaluate_watchlist_alert_events_for_view(
+            conn,
+            account_id=account_id,
+            view_id=view_id,
+            view_row={
+                "id": view_id,
+                "vendor_names": ["index proof vendor"],
+                "vendor_alert_threshold": 1.0,
+            },
+            user=None,
+            slow_burn_loader=slow_burn_loader,
+            accounts_loader=accounts_loader,
+        )
+
+    assert await conn.fetchval(
+        "SELECT COUNT(*) FROM b2b_watchlist_alert_events"
+    ) == 0
 
 
 @pytest.mark.asyncio
@@ -153,7 +195,7 @@ async def test_272_receipt_attests_empty_real_catalog_without_alert_rows():
         assert attestation.required_alert_event_constraints_ready
         assert attestation.no_unlisted_alert_event_constraints
         assert attestation.required_alert_event_indexes_ready
-        assert attestation.no_unlisted_alert_event_unique_or_exclusion_indexes
+        assert attestation.no_unlisted_alert_event_indexes
         assert attestation.no_unreviewed_alert_event_write_interceptors
         assert attestation.status == "attested"
         assert attestation.as_payload()["source_verification"] == (
@@ -195,10 +237,13 @@ async def test_272_receipt_attests_empty_real_catalog_without_alert_rows():
             "unlogged table storage",
             "watchlist_alert_events_has_permanent_storage",
         ),
-        (
-            "unlisted unique index",
-            "no_unlisted_alert_event_unique_or_exclusion_indexes",
-        ),
+        ("unlisted unique index", "no_unlisted_alert_event_indexes"),
+        ("unlisted simple nonunique index", "no_unlisted_alert_event_indexes"),
+        ("unlisted descending index", "no_unlisted_alert_event_indexes"),
+        ("unlisted partial index", "no_unlisted_alert_event_indexes"),
+        ("unlisted expression index", "no_unlisted_alert_event_indexes"),
+        ("unlisted INCLUDE index", "no_unlisted_alert_event_indexes"),
+        ("unlisted hash index", "no_unlisted_alert_event_indexes"),
         (
             "unlisted required no-default column",
             "no_unlisted_alert_event_columns",
@@ -298,6 +343,39 @@ async def test_272_receipt_rejects_altered_catalog_before_pending_sql(
                     event_type,
                     entity_key
                 );
+                """)
+        elif case == "unlisted simple nonunique index":
+            await conn.execute("""
+                CREATE INDEX idx_b2b_watchlist_alert_events_unlisted_simple
+                    ON b2b_watchlist_alert_events (summary);
+                """)
+        elif case == "unlisted descending index":
+            await conn.execute("""
+                CREATE INDEX idx_b2b_watchlist_alert_events_unlisted_descending
+                    ON b2b_watchlist_alert_events (account_id DESC);
+                """)
+        elif case == "unlisted partial index":
+            await conn.execute("""
+                CREATE INDEX idx_b2b_watchlist_alert_events_unlisted_partial
+                    ON b2b_watchlist_alert_events (account_id)
+                    WHERE status = 'open';
+                """)
+        elif case == "unlisted expression index":
+            await conn.execute("""
+                CREATE INDEX idx_b2b_watchlist_alert_events_unlisted_expression
+                    ON b2b_watchlist_alert_events
+                    ((1 / CASE WHEN status = 'open' THEN 0 ELSE 1 END));
+                """)
+            await _assert_open_alert_writer_rejected_by_expression_index(conn)
+        elif case == "unlisted INCLUDE index":
+            await conn.execute("""
+                CREATE INDEX idx_b2b_watchlist_alert_events_unlisted_include
+                    ON b2b_watchlist_alert_events (account_id) INCLUDE (status);
+                """)
+        elif case == "unlisted hash index":
+            await conn.execute("""
+                CREATE INDEX idx_b2b_watchlist_alert_events_unlisted_hash
+                    ON b2b_watchlist_alert_events USING hash (status);
                 """)
         elif case == "unlisted required no-default column":
             await conn.execute("""

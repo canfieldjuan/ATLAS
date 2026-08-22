@@ -94,7 +94,7 @@ def _default_b2b_watchlist_alert_events_catalog_row() -> dict[str, object]:
                 }
                 for name, index in _B2B_WATCHLIST_ALERT_EVENT_INDEXES.items()
             },
-            "no_unlisted_alert_event_unique_or_exclusion_indexes": True,
+            "no_unlisted_alert_event_indexes": True,
             "no_unreviewed_alert_event_write_interceptors": True,
         }
     }
@@ -1054,6 +1054,9 @@ class _AttestedReconciliationPool(_SerializingPool):
                 list(_B2B_WATCHLIST_ALERT_EVENT_INDEXES),
             )
             assert "relation_state.relpersistence" in query
+            assert "unlisted_indexes AS" in query
+            assert "FROM unnest(index_state.indkey)" in query
+            assert "index_state.indisunique OR index_state.indisexclusion" not in query
             assert "unreviewed_write_interceptors AS" in query
             assert "FROM pg_trigger AS trigger_state" in query
             assert "FROM pg_rewrite AS rule_state" in query
@@ -1792,6 +1795,41 @@ async def test_failed_067_attestation_blocks_then_retry_applies_once(tmp_path):
     assert pool.updated == []
 
     pool.b2b_campaign_partner_catalog_row["partner_index_is_ready"] = True
+    await run_migrations(pool, migrations_dir=tmp_path, only={"901_pending"})
+
+    assert pool.applied_sql == ["SELECT 901"]
+    assert pool.inserted_with_digest == [
+        (901, "901_pending", hashlib.sha256(b"SELECT 901").hexdigest())
+    ]
+
+
+@pytest.mark.asyncio
+async def test_failed_272_unlisted_index_attestation_blocks_then_retry_applies_once(
+    tmp_path,
+):
+    from atlas_brain.storage.migrations import (
+        PendingMigrationContentIntegrityError,
+        run_migrations,
+    )
+
+    pool = _AttestedReconciliationPool()
+    record = _stage_historical_272_missing_source(pool)
+    catalog = pool.b2b_watchlist_alert_events_catalog_row["catalog_evidence"]
+    catalog["no_unlisted_alert_event_indexes"] = False
+    (tmp_path / "901_pending.sql").write_text("SELECT 901")
+
+    with pytest.raises(
+        PendingMigrationContentIntegrityError,
+        match=f"missing_source={record.migration_name}",
+    ):
+        await run_migrations(pool, migrations_dir=tmp_path, only={"901_pending"})
+
+    assert pool.applied_sql == []
+    assert pool.inserted == []
+    assert pool.inserted_with_digest == []
+    assert pool.updated == []
+
+    catalog["no_unlisted_alert_event_indexes"] = True
     await run_migrations(pool, migrations_dir=tmp_path, only={"901_pending"})
 
     assert pool.applied_sql == ["SELECT 901"]
