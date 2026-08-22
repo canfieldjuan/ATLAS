@@ -27,6 +27,7 @@ pytest \
   tests/test_extracted_content_claim_evidence_benchmark.py \
   tests/test_validate_content_ops_claim_evidence_fixture.py \
   tests/test_content_ops_claim_evidence_prompt_packets_cli.py \
+  tests/test_content_ops_claim_evidence_prompt_provider_cli.py \
   tests/test_content_ops_claim_evidence_response_import_cli.py \
   tests/test_content_ops_claim_evidence_manual_benchmark_cli.py \
   tests/test_content_ops_claim_evidence_artifact_cli.py \
