@@ -32,6 +32,15 @@ services:
         sync: false
       - key: ATLAS_EOM_FUNNEL_DB_CONNECTION_STRING
         sync: false
+      # Remains fail-closed until the Atlas provider, tracker proxy, and CRM
+      # Leads card are all deployed. The booking URL is intentionally a
+      # deploy-time secret/configuration value rather than repository copy.
+      - key: ATLAS_EOM_FUNNEL_MISSED_CALL_RECOVERY_ENABLED
+        value: "false"
+      - key: ATLAS_EOM_FUNNEL_MISSED_CALL_BOOKING_LINK
+        sync: false
+      - key: ATLAS_EOM_FUNNEL_MISSED_CALL_TIMEZONE
+        value: "America/Chicago"
       - key: ATLAS_EOM_CANONICAL_CRM_DATABASE_CONFIRMED
         value: "false"
       - key: ATLAS_EOM_RUN_MIGRATIONS

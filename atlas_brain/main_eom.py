@@ -108,6 +108,20 @@ EOM_RECEIVABLES_READINESS_MIGRATIONS: tuple[str, ...] = (
     "379_receivables_payment_receipt_delivery_recovery",
 )
 
+# This worker owns EOM lead lifecycle evidence in the canonical funnel store,
+# not the global receivables pool. The set is deliberately closed: a newly
+# provisioned supported funnel database receives the columns, interaction
+# dedupe, lifecycle ledger, classification, and outbox schema it needs, while
+# unrelated Atlas migrations remain outside this slim-profile startup path.
+EOM_MISSED_CALL_RECOVERY_READINESS_MIGRATIONS: tuple[str, ...] = (
+    "035_contacts",
+    "256_contact_interaction_dedupe",
+    "346_contact_lead_pipeline",
+    "351_eom_lead_lifecycle_events",
+    "366_contacts_customer_type",
+    "389_eom_missed_call_recovery",
+)
+
 
 async def _apply_eom_receivables_migrations(
     pool: Any,
@@ -130,6 +144,31 @@ async def _run_startup_migrations() -> None:
         logger.info(
             "EOM receivables readiness migrations checked: %s",
             ", ".join(EOM_RECEIVABLES_READINESS_MIGRATIONS),
+        )
+
+
+async def _apply_eom_missed_call_recovery_migrations(
+    pool: Any,
+    run_migrations_fn: MigrationRunner | None = None,
+) -> None:
+    """Apply only the recovery worker's canonical-funnel prerequisites."""
+
+    if run_migrations_fn is None:
+        from .storage.migrations import run_migrations
+
+        runner = run_migrations
+    else:
+        runner = run_migrations_fn
+    await runner(pool, only=EOM_MISSED_CALL_RECOVERY_READINESS_MIGRATIONS)
+
+
+async def _run_eom_missed_call_recovery_startup_migrations() -> None:
+    pool = get_eom_funnel_db_pool()
+    if pool.is_initialized:
+        await _apply_eom_missed_call_recovery_migrations(pool)
+        logger.info(
+            "EOM missed-call recovery readiness migrations checked: %s",
+            ", ".join(EOM_MISSED_CALL_RECOVERY_READINESS_MIGRATIONS),
         )
 
 
@@ -195,6 +234,7 @@ async def lifespan(app: FastAPI):
         ),
     )
 
+    missed_call_worker = None
     try:
         if db_settings.enabled:
             await init_database()
@@ -205,11 +245,43 @@ async def lifespan(app: FastAPI):
         await _validate_eom_funnel_startup()
         if db_settings.enabled and eom_profile_settings.run_migrations:
             await _run_startup_migrations()
+        if funnel_settings.missed_call_recovery_enabled:
+            if eom_profile_settings.run_migrations:
+                await _run_eom_missed_call_recovery_startup_migrations()
+            from .services.eom_missed_call_recovery import (
+                EOMMissedCallRecoveryService,
+                start_eom_missed_call_recovery_worker,
+            )
+
+            missed_call_pool = get_eom_funnel_db_pool()
+            recovery = EOMMissedCallRecoveryService(
+                pool=missed_call_pool,
+                config=funnel_settings,
+            )
+            await recovery.require_schema_ready()
+            delivery_block_reason = recovery.delivery_block_reason()
+            if delivery_block_reason is None:
+                missed_call_worker = start_eom_missed_call_recovery_worker(
+                    pool=missed_call_pool,
+                    config=funnel_settings,
+                )
+                logger.info("EOM missed-call recovery worker started")
+            else:
+                logger.warning(
+                    "EOM missed-call recovery is enabled but delivery is blocked: %s",
+                    delivery_block_reason,
+                )
         if db_settings.enabled and invoicing_settings.receivables_api_enabled:
             await _require_receivables_schema_ready()
         yield
     finally:
         try:
+            if missed_call_worker is not None:
+                from .services.eom_missed_call_recovery import (
+                    stop_eom_missed_call_recovery_worker,
+                )
+
+                await stop_eom_missed_call_recovery_worker(missed_call_worker)
             # Mirrors init_eom_funnel_database's condition. Closing only when
             # the funnel API is on would leak the pool in the deployment that
             # opened it for receivables alone.
@@ -248,4 +320,5 @@ async def ping() -> dict[str, str]:
 
 app.include_router(receivables_router, prefix="/api/v1")
 app.state.eom_funnel_crm_provider = get_eom_funnel_crm_provider
+app.state.eom_funnel_missed_call_recovery_pool = get_eom_funnel_db_pool
 app.include_router(funnel_router, prefix="/api/v1")

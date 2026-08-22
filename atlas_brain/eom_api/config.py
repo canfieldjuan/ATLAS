@@ -6,6 +6,7 @@ import os
 from collections.abc import Iterable, Mapping
 from pathlib import Path
 from urllib.parse import urlsplit
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from dotenv import dotenv_values
 from pydantic import Field, SecretStr
@@ -214,6 +215,47 @@ class EOMFunnelConfig(BaseSettings):
             "rotation are still active"
         ),
     )
+    missed_call_recovery_enabled: bool = Field(
+        default=False,
+        description=(
+            "Allow the EOM missed-call worker to deliver configured residential "
+            "recovery emails. Disabled keeps recorded sequences blocked."
+        ),
+    )
+    missed_call_booking_link: str = Field(
+        default="",
+        description=(
+            "Authoritative HTTPS Google Calendar appointment-request link for "
+            "EOM missed-call recovery emails; never a browser-supplied value."
+        ),
+    )
+    missed_call_timezone: str = Field(
+        default="America/Chicago",
+        description=(
+            "IANA time zone used for EOM missed-call business-day scheduling."
+        ),
+    )
+    missed_call_poll_interval_seconds: int = Field(
+        default=60,
+        ge=30,
+        le=900,
+        description="Bounded polling interval for the EOM missed-call outbox worker.",
+    )
+    missed_call_max_delivery_attempts: int = Field(
+        default=3,
+        ge=1,
+        le=5,
+        description=(
+            "Maximum definite-pre-acceptance delivery attempts per missed-call "
+            "sequence step."
+        ),
+    )
+    missed_call_delivery_timeout_seconds: int = Field(
+        default=10,
+        ge=1,
+        le=30,
+        description="Bounded Resend request timeout for a missed-call recovery step.",
+    )
 
     @property
     def public_onboarding_issuance_is_enabled(self) -> bool:
@@ -228,6 +270,37 @@ class EOMFunnelConfig(BaseSettings):
         if self.public_onboarding_issuance_enabled is None:
             return self.public_onboarding_enabled
         return self.public_onboarding_issuance_enabled
+
+    @property
+    def missed_call_recovery_delivery_is_configured(self) -> bool:
+        """Whether a worker may deliver recovery mail in this process.
+
+        A blank booking link deliberately does not make the whole EOM API
+        unavailable.  An operator's real no-answer evidence can still be
+        recorded as a visible blocked sequence, but no message can render or
+        send until a valid deploy-time destination is supplied.
+        """
+
+        return bool(
+            self.missed_call_recovery_enabled and self.missed_call_booking_link.strip()
+        )
+
+    @property
+    def missed_call_recovery_delivery_block_reason(self) -> str | None:
+        """Return the honest operator-visible reason delivery cannot begin.
+
+        ``disabled`` and ``missing link`` are intentionally distinct.  The
+        former is a deployment/operator control; the latter is an incomplete
+        customer-facing configuration.  Collapsing them would make a recovery
+        action look like a bad Calendar configuration when an operator had
+        deliberately paused the feature.
+        """
+
+        if not self.missed_call_recovery_enabled:
+            return "recovery_disabled"
+        if not self.missed_call_booking_link.strip():
+            return "booking_link_unavailable"
+        return None
 
     @model_validator(mode="after")
     def reject_raw_eom_funnel_service_token_env(self) -> "EOMFunnelConfig":
@@ -329,6 +402,61 @@ class EOMFunnelConfig(BaseSettings):
             raise ValueError(
                 "public onboarding previous HMAC secret must be at least 32 bytes"
             )
+        return self
+
+    @model_validator(mode="after")
+    def validate_missed_call_recovery_configuration(self) -> "EOMFunnelConfig":
+        """Validate a supplied customer-facing booking URL before any send.
+
+        A missing link is a supported, fail-closed rollout state. A nonblank
+        malformed/non-Google link is not: accepting it would turn a config typo
+        into a customer email with an unusable or unintended destination.
+        """
+
+        if self.missed_call_recovery_enabled and not self.api_enabled:
+            raise ValueError(
+                "missed-call recovery requires ATLAS_EOM_FUNNEL_API_ENABLED=true"
+            )
+        booking_link = self.missed_call_booking_link.strip()
+        if booking_link:
+            if any(
+                character.isspace()
+                or character == "\\"
+                or ord(character) < 32
+                or ord(character) == 127
+                for character in booking_link
+            ):
+                raise ValueError(
+                    "missed-call booking link must not contain control characters, "
+                    "whitespace, or backslashes"
+                )
+            try:
+                parsed = urlsplit(booking_link)
+                port = parsed.port
+            except ValueError as exc:
+                raise ValueError(
+                    "missed-call booking link must be a valid HTTPS Google Calendar URL"
+                ) from exc
+            allowed_hosts = {"calendar.google.com", "calendar.app.google"}
+            hostname = (parsed.hostname or "").casefold()
+            if (
+                parsed.scheme != "https"
+                or hostname not in allowed_hosts
+                or parsed.username is not None
+                or parsed.password is not None
+                # Google Calendar hosts its public scheduler on the standard
+                # HTTPS endpoint.  An explicit alternate port can never be a
+                # supported public booking URL and is easy to mistype.
+                or port is not None
+                or not parsed.path.strip("/")
+            ):
+                raise ValueError(
+                    "missed-call booking link must be an HTTPS Google Calendar URL"
+                )
+        try:
+            ZoneInfo(self.missed_call_timezone)
+        except ZoneInfoNotFoundError as exc:
+            raise ValueError("missed-call time zone must be a valid IANA zone") from exc
         return self
 
 

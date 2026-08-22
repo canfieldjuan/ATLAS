@@ -12,6 +12,7 @@ on:
       - "atlas_brain/autonomous/tasks/gmail_digest.py"
       - "atlas_brain/config.py"
       - "atlas_brain/main.py"
+      - "atlas_brain/main_eom.py"
       - "atlas_brain/storage/database.py"
       - "atlas_brain/api/__init__.py"
       - "atlas_brain/api/contacts.py"
@@ -31,11 +32,13 @@ on:
       - "scripts/check_contact_write_boundary.py"
       - "atlas_brain/services/eom_lead_ingress.py"
       - "atlas_brain/services/eom_onboarding_drafts.py"
+      - "atlas_brain/services/eom_missed_call_recovery.py"
       - "atlas_brain/services/eom_public_onboarding_tokens.py"
       - "atlas_brain/templates/email/__init__.py"
       - "atlas_brain/templates/email/estimate_confirmation.py"
       - "atlas_brain/templates/email/onboarding_welcome.py"
       - "atlas_brain/templates/email/request_acknowledgement.py"
+      - "atlas_brain/templates/email/missed_call_recovery.py"
       - "atlas_brain/eom_api/config.py"
       - "atlas_brain/eom_api/auth.py"
       - "atlas_brain/eom_api/funnel.py"
@@ -68,6 +71,7 @@ on:
       - "atlas_brain/storage/migrations/383_eom_public_onboarding_tokens.sql"
       - "atlas_brain/storage/migrations/386_eom_won_loss_nocodb_fence.sql"
       - "atlas_brain/storage/migrations/388_eom_contact_archive_disposition_index.sql"
+      - "atlas_brain/storage/migrations/389_eom_missed_call_recovery.sql"
       - "atlas_brain/tools/calendar.py"
       - "atlas_brain/tools/scheduling.py"
       - "tests/test_ack_commercial_templates.py"
@@ -81,6 +85,7 @@ on:
       - "tests/test_eom_contact_directory.py"
       - "tests/test_eom_contact_archive.py"
       - "tests/test_eom_lead_conversion.py"
+      - "tests/test_eom_missed_call_recovery.py"
       - "tests/test_eom_lead_conversion_integration.py"
       - "tests/test_eom_public_onboarding.py"
       - "tests/test_eom_write_boundary_audit.py"
@@ -109,6 +114,7 @@ on:
       - "atlas_brain/autonomous/tasks/gmail_digest.py"
       - "atlas_brain/config.py"
       - "atlas_brain/main.py"
+      - "atlas_brain/main_eom.py"
       - "atlas_brain/storage/database.py"
       - "atlas_brain/api/__init__.py"
       - "atlas_brain/api/contacts.py"
@@ -128,11 +134,13 @@ on:
       - "scripts/check_contact_write_boundary.py"
       - "atlas_brain/services/eom_lead_ingress.py"
       - "atlas_brain/services/eom_onboarding_drafts.py"
+      - "atlas_brain/services/eom_missed_call_recovery.py"
       - "atlas_brain/services/eom_public_onboarding_tokens.py"
       - "atlas_brain/templates/email/__init__.py"
       - "atlas_brain/templates/email/estimate_confirmation.py"
       - "atlas_brain/templates/email/onboarding_welcome.py"
       - "atlas_brain/templates/email/request_acknowledgement.py"
+      - "atlas_brain/templates/email/missed_call_recovery.py"
       - "atlas_brain/eom_api/config.py"
       - "atlas_brain/eom_api/auth.py"
       - "atlas_brain/eom_api/funnel.py"
@@ -165,6 +173,7 @@ on:
       - "atlas_brain/storage/migrations/383_eom_public_onboarding_tokens.sql"
       - "atlas_brain/storage/migrations/386_eom_won_loss_nocodb_fence.sql"
       - "atlas_brain/storage/migrations/388_eom_contact_archive_disposition_index.sql"
+      - "atlas_brain/storage/migrations/389_eom_missed_call_recovery.sql"
       - "atlas_brain/tools/calendar.py"
       - "atlas_brain/tools/scheduling.py"
       - "tests/test_ack_commercial_templates.py"
@@ -178,6 +187,7 @@ on:
       - "tests/test_eom_contact_directory.py"
       - "tests/test_eom_contact_archive.py"
       - "tests/test_eom_lead_conversion.py"
+      - "tests/test_eom_missed_call_recovery.py"
       - "tests/test_eom_lead_conversion_integration.py"
       - "tests/test_eom_public_onboarding.py"
       - "tests/test_eom_write_boundary_audit.py"
@@ -251,6 +261,7 @@ jobs:
             tests/test_eom_contact_archive.py \
             tests/test_eom_billing_recipients.py \
             tests/test_eom_lead_conversion.py \
+            tests/test_eom_missed_call_recovery.py \
             tests/test_eom_lead_conversion_integration.py \
             tests/test_eom_funnel_capability_manifest.py \
             tests/test_eom_public_onboarding.py \
