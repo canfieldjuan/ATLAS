@@ -43,6 +43,7 @@ class FakeConnection:
         *,
         reconciliation_rows: list[dict[str, object]] | None = None,
         public_onboarding_reconciliation_rows: list[dict[str, object]] | None = None,
+        b2b_campaign_partner_reconciliation_rows: list[dict[str, object]] | None = None,
         presence_unknown_count_reconciliation_rows: list[dict[str, object]] | None = None,
         public_onboarding_columns: list[dict[str, object]] | None = None,
         public_onboarding_constraints: list[dict[str, object]] | None = None,
@@ -51,6 +52,7 @@ class FakeConnection:
         presence_events_is_ordinary_table: bool = True,
         presence_events_is_leaf_partition: bool = False,
         presence_unknown_count_has_constraint: bool = False,
+        b2b_campaign_partner_catalog_row: dict[str, object] | None = None,
         recurring_schema_ready: bool = True,
         zero_active_null_period_rows: bool = True,
     ):
@@ -58,6 +60,9 @@ class FakeConnection:
         self.reconciliation_rows = reconciliation_rows or []
         self.public_onboarding_reconciliation_rows = (
             public_onboarding_reconciliation_rows or []
+        )
+        self.b2b_campaign_partner_reconciliation_rows = (
+            b2b_campaign_partner_reconciliation_rows or []
         )
         self.presence_unknown_count_reconciliation_rows = (
             presence_unknown_count_reconciliation_rows or []
@@ -85,6 +90,11 @@ class FakeConnection:
         self.presence_events_is_ordinary_table = presence_events_is_ordinary_table
         self.presence_events_is_leaf_partition = presence_events_is_leaf_partition
         self.presence_unknown_count_has_constraint = presence_unknown_count_has_constraint
+        self.b2b_campaign_partner_catalog_row = (
+            _default_b2b_campaign_partner_catalog_row()
+            if b2b_campaign_partner_catalog_row is None
+            else b2b_campaign_partner_catalog_row
+        )
         self.recurring_schema_ready = recurring_schema_ready
         self.zero_active_null_period_rows = zero_active_null_period_rows
         self.queries: list[str] = []
@@ -121,6 +131,14 @@ class FakeConnection:
                 reconciliation_mod.MIGRATION_022B_PRESENCE_UNKNOWN_COUNT_RECONCILIATION.migration_name,
             )
             return self.presence_unknown_count_reconciliation_rows
+        if query == (
+            "SELECT version, content_sha256, applied_at FROM schema_migrations "
+            "WHERE name = $1 LIMIT 2"
+        ):
+            assert args == (
+                reconciliation_mod.MIGRATION_067_B2B_CAMPAIGN_PARTNER_RECONCILIATION.migration_name,
+            )
+            return self.b2b_campaign_partner_reconciliation_rows
         if "FROM information_schema.columns AS actual" in query:
             assert args == (
                 list(reconciliation_mod._PUBLIC_ONBOARDING_TOKEN_COLUMNS),
@@ -143,6 +161,13 @@ class FakeConnection:
 
     async def fetchrow(self, query: str, *args: object) -> dict[str, object] | None:
         self.fetchrow_calls.append((query, args))
+        if "b2b_campaigns" in query:
+            assert args == ()
+            assert "WITH target_relation AS" in query
+            assert "JOIN pg_attribute AS attribute_state" in query
+            assert "JOIN pg_constraint AS actual" in query
+            assert "JOIN pg_index AS index_state" in query
+            return self.b2b_campaign_partner_catalog_row
         if "WITH target_relation AS" in query:
             assert args == ()
             assert "relation_state.relkind" in query
@@ -224,6 +249,40 @@ def _default_presence_unknown_count_columns() -> list[dict[str, object]]:
             "column_default": default,
         }
     ]
+
+
+def _default_b2b_campaign_partner_catalog_row() -> dict[str, object]:
+    foreign_key = reconciliation_mod._B2B_CAMPAIGN_PARTNER_FOREIGN_KEY
+    index = reconciliation_mod._B2B_CAMPAIGN_PARTNER_INDEX
+    return {
+        "b2b_campaigns_is_ordinary_table": True,
+        "partner_id_column_name": "partner_id",
+        "partner_id_data_type": "uuid",
+        "partner_id_is_nullable": True,
+        "partner_id_has_default": False,
+        "partner_foreign_key_constraint_type": foreign_key["constraint_type"],
+        "partner_foreign_key_columns": list(foreign_key["key_columns"]),
+        "partner_foreign_key_referenced_table": foreign_key["referenced_table"],
+        "partner_foreign_key_references_current_schema": True,
+        "partner_foreign_key_referenced_columns": list(
+            foreign_key["referenced_columns"]
+        ),
+        "partner_foreign_key_delete_action": foreign_key["delete_action"],
+        "partner_foreign_key_update_action": foreign_key["update_action"],
+        "partner_foreign_key_match_type": foreign_key["match_type"],
+        "partner_foreign_key_is_deferrable": False,
+        "partner_foreign_key_is_initially_deferred": False,
+        "partner_foreign_key_is_validated": True,
+        "partner_index_relation_kind": "i",
+        "partner_index_is_partition": False,
+        "partner_index_is_unique": False,
+        "partner_index_is_valid": True,
+        "partner_index_is_ready": True,
+        "partner_index_key_attribute_count": 1,
+        "partner_index_attribute_count": 1,
+        "partner_index_key_column": index["key_column"],
+        "partner_index_predicate": "(partner_id IS NOT NULL)",
+    }
 
 
 def _default_public_onboarding_constraints() -> list[dict[str, object]]:
@@ -372,6 +431,27 @@ def _migration_022b_connection(
     )
 
 
+def _migration_067_connection(
+    *,
+    ledger_digest: str | None = None,
+    applied_at: object | None = None,
+    reconciliation_rows: list[dict[str, object]] | None = None,
+) -> FakeConnection:
+    record = reconciliation_mod.MIGRATION_067_B2B_CAMPAIGN_PARTNER_RECONCILIATION
+    actual_applied_at = record.observed_applied_at if applied_at is None else applied_at
+    actual_rows = reconciliation_rows
+    if actual_rows is None:
+        actual_rows = [{
+            "version": record.migration_version,
+            "content_sha256": ledger_digest,
+            "applied_at": actual_applied_at,
+        }]
+    return FakeConnection(
+        [(record.migration_name, ledger_digest)],
+        b2b_campaign_partner_reconciliation_rows=actual_rows,
+    )
+
+
 @pytest.mark.asyncio
 async def test_preflight_reports_unresolved_drift_without_writes(
     tmp_path: Path,
@@ -483,13 +563,33 @@ def test_migration_382_reconciliation_record_is_closed_legacy_source_evidence() 
     )
     assert reconciliation_mod.known_historical_missing_source_reconciliation_names() == {
         record.migration_name,
+        reconciliation_mod.MIGRATION_067_B2B_CAMPAIGN_PARTNER_RECONCILIATION.migration_name,
         reconciliation_mod.MIGRATION_022B_PRESENCE_UNKNOWN_COUNT_RECONCILIATION.migration_name,
     }
     assert reconciliation_mod.known_historical_reconciliation_names() == {
         record.migration_name,
+        reconciliation_mod.MIGRATION_067_B2B_CAMPAIGN_PARTNER_RECONCILIATION.migration_name,
         reconciliation_mod.MIGRATION_022B_PRESENCE_UNKNOWN_COUNT_RECONCILIATION.migration_name,
         reconciliation_mod.MIGRATION_387_RECONCILIATION.migration_name,
     }
+
+
+def test_migration_067_reconciliation_record_is_closed_target_evidence() -> None:
+    record = reconciliation_mod.MIGRATION_067_B2B_CAMPAIGN_PARTNER_RECONCILIATION
+
+    assert record.source_verification == reconciliation_mod.HISTORICAL_SOURCE_UNAVAILABLE
+    assert record.migration_version == 67
+    assert record.historical_ledger_sha256 is None
+    assert record.observed_applied_at == datetime(
+        2026,
+        3,
+        1,
+        4,
+        58,
+        0,
+        789_236,
+        tzinfo=timezone.utc,
+    )
 
 
 def test_migration_022b_reconciliation_record_preserves_renamed_source_limits() -> None:
@@ -733,6 +833,164 @@ async def test_known_382_reconciliation_rejects_each_required_evidence_field(
         "applied_at_matches_record",
         "exactly_one_ledger_row",
     }, case
+    assert evidence["status"] == "not_attested", case
+    assert connection.execute_calls == []
+
+
+@pytest.mark.asyncio
+async def test_known_067_reconciliation_attests_catalog_without_source(
+    tmp_path: Path,
+) -> None:
+    record = reconciliation_mod.MIGRATION_067_B2B_CAMPAIGN_PARTNER_RECONCILIATION
+    connection = _migration_067_connection()
+
+    code, payload = await module.run_migration_content_integrity_preflight(
+        connection,
+        migrations_dir=tmp_path,
+        attest_known_reconciliations=True,
+    )
+
+    assert code == module.UNRESOLVED_DRIFT_EXIT
+    assert payload["status"] == "unresolved_drift"
+    assert payload["report"]["missing_source"] == [record.migration_name]
+    assert payload["known_reconciliation_evidence"] == [{
+        "reconciliation_id": record.reconciliation_id,
+        "migration_name": record.migration_name,
+        "source_verification": reconciliation_mod.HISTORICAL_SOURCE_UNAVAILABLE,
+        "exactly_one_ledger_row": True,
+        "ledger_version_matches_record": True,
+        "ledger_digest_is_null": True,
+        "applied_at_matches_record": True,
+        "b2b_campaigns_is_ordinary_table": True,
+        "partner_id_column_ready": True,
+        "partner_foreign_key_ready": True,
+        "partner_partial_index_ready": True,
+        "status": "attested",
+    }]
+    assert connection.fetch_calls[0] == (
+        "SELECT name, content_sha256 FROM schema_migrations",
+        (),
+    )
+    assert connection.fetch_calls[1] == (
+        "SELECT version, content_sha256, applied_at FROM schema_migrations "
+        "WHERE name = $1 LIMIT 2",
+        (record.migration_name,),
+    )
+    assert len(connection.fetch_calls) == 2
+    assert len(connection.fetchrow_calls) == 1
+    assert connection.fetchval_calls == []
+    catalog_query = connection.fetchrow_calls[0][0]
+    assert "WITH target_relation AS" in catalog_query
+    assert "JOIN pg_attribute AS attribute_state" in catalog_query
+    assert "JOIN pg_constraint AS actual" in catalog_query
+    assert "JOIN pg_index AS index_state" in catalog_query
+    assert all(
+        "FROM b2b_campaigns" not in query
+        for query, _args in (
+            connection.fetch_calls
+            + connection.fetchrow_calls
+            + connection.fetchval_calls
+        )
+    )
+    assert connection.transaction_readonly == [True]
+    assert connection.execute_calls == []
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("case", "field"),
+    [
+        ("wrong ledger version", "ledger_version_matches_record"),
+        ("non-null ledger digest", "ledger_digest_is_null"),
+        ("truncated applied timestamp", "applied_at_matches_record"),
+        ("duplicate ledger rows", "exactly_one_ledger_row"),
+        ("missing detailed ledger row", "exactly_one_ledger_row"),
+        ("campaign relation is not an ordinary table", "b2b_campaigns_is_ordinary_table"),
+        ("partner id has the wrong type", "partner_id_column_ready"),
+        ("partner id is not nullable", "partner_id_column_ready"),
+        ("partner id has a default", "partner_id_column_ready"),
+        ("wrong partner foreign-key parent", "partner_foreign_key_ready"),
+        ("wrong partner foreign-key delete action", "partner_foreign_key_ready"),
+        ("missing partner index", "partner_partial_index_ready"),
+        ("partner index is unready", "partner_partial_index_ready"),
+        ("partner index predicate changed", "partner_partial_index_ready"),
+    ],
+)
+async def test_known_067_reconciliation_rejects_each_required_evidence_field(
+    case: str,
+    field: str,
+    tmp_path: Path,
+) -> None:
+    record = reconciliation_mod.MIGRATION_067_B2B_CAMPAIGN_PARTNER_RECONCILIATION
+    connection = _migration_067_connection()
+    if case == "wrong ledger version":
+        connection = _migration_067_connection(reconciliation_rows=[{
+            "version": record.migration_version + 1,
+            "content_sha256": None,
+            "applied_at": record.observed_applied_at,
+        }])
+    elif case == "non-null ledger digest":
+        connection = _migration_067_connection(ledger_digest="a" * 64)
+    elif case == "truncated applied timestamp":
+        connection = _migration_067_connection(
+            applied_at=record.observed_applied_at.replace(microsecond=0)
+        )
+    elif case == "duplicate ledger rows":
+        connection = _migration_067_connection(reconciliation_rows=[
+            {
+                "version": record.migration_version,
+                "content_sha256": None,
+                "applied_at": record.observed_applied_at,
+            },
+            {
+                "version": record.migration_version,
+                "content_sha256": None,
+                "applied_at": record.observed_applied_at,
+            },
+        ])
+    elif case == "missing detailed ledger row":
+        connection = _migration_067_connection(reconciliation_rows=[])
+    elif case == "campaign relation is not an ordinary table":
+        connection.b2b_campaign_partner_catalog_row[
+            "b2b_campaigns_is_ordinary_table"
+        ] = False
+    elif case == "partner id has the wrong type":
+        connection.b2b_campaign_partner_catalog_row["partner_id_data_type"] = "text"
+    elif case == "partner id is not nullable":
+        connection.b2b_campaign_partner_catalog_row["partner_id_is_nullable"] = False
+    elif case == "partner id has a default":
+        connection.b2b_campaign_partner_catalog_row["partner_id_has_default"] = True
+    elif case == "wrong partner foreign-key parent":
+        connection.b2b_campaign_partner_catalog_row[
+            "partner_foreign_key_referenced_table"
+        ] = "wrong_partners"
+    elif case == "wrong partner foreign-key delete action":
+        connection.b2b_campaign_partner_catalog_row[
+            "partner_foreign_key_delete_action"
+        ] = "a"
+    elif case == "missing partner index":
+        connection.b2b_campaign_partner_catalog_row[
+            "partner_index_relation_kind"
+        ] = None
+    elif case == "partner index is unready":
+        connection.b2b_campaign_partner_catalog_row["partner_index_is_ready"] = False
+    elif case == "partner index predicate changed":
+        connection.b2b_campaign_partner_catalog_row[
+            "partner_index_predicate"
+        ] = "(partner_id IS NULL)"
+    else:  # pragma: no cover - parametrize keeps this exhaustive.
+        raise AssertionError(f"unexpected evidence case: {case}")
+
+    code, payload = await module.run_migration_content_integrity_preflight(
+        connection,
+        migrations_dir=tmp_path,
+        attest_known_reconciliations=True,
+    )
+
+    evidence = payload["known_reconciliation_evidence"][0]
+    assert code == module.UNRESOLVED_DRIFT_EXIT, case
+    assert evidence["source_verification"] == reconciliation_mod.HISTORICAL_SOURCE_UNAVAILABLE
+    assert evidence[field] is False, case
     assert evidence["status"] == "not_attested", case
     assert connection.execute_calls == []
 

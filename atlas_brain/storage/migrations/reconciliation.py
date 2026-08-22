@@ -54,6 +54,22 @@ class HistoricalMissingSourceReconciliation:
 
 
 @dataclass(frozen=True)
+class HistoricalVersionedMissingSourceReconciliation:
+    """Reviewed receipt for a missing source with immutable version evidence."""
+
+    reconciliation_id: str
+    migration_name: str
+    migration_version: int
+    historical_ledger_sha256: None
+    observed_applied_at: datetime
+
+    @property
+    def source_verification(self) -> str:
+        """A ledger row and catalog cannot reconstruct unavailable source bytes."""
+        return HISTORICAL_SOURCE_UNAVAILABLE
+
+
+@dataclass(frozen=True)
 class HistoricalRenamedMissingSourceReconciliation:
     """Facts for one NULL-digest ledger name whose source was later renamed.
 
@@ -256,6 +272,61 @@ class RenamedMissingSourceMigrationReconciliationAttestation:
         }
 
 
+@dataclass(frozen=True)
+class B2BCampaignPartnerMissingSourceMigrationReconciliationAttestation:
+    """Read-only target proof for one legacy B2B campaign-partner receipt."""
+
+    reconciliation_id: str
+    migration_name: str
+    exactly_one_ledger_row: bool
+    ledger_version_matches_record: bool
+    ledger_digest_is_null: bool
+    applied_at_matches_record: bool
+    b2b_campaigns_is_ordinary_table: bool
+    partner_id_column_ready: bool
+    partner_foreign_key_ready: bool
+    partner_partial_index_ready: bool
+
+    @property
+    def source_verification(self) -> str:
+        """Catalog evidence must not pretend to verify source bytes."""
+        return HISTORICAL_SOURCE_UNAVAILABLE
+
+    @property
+    def status(self) -> str:
+        if all((
+            self.exactly_one_ledger_row,
+            self.ledger_version_matches_record,
+            self.ledger_digest_is_null,
+            self.applied_at_matches_record,
+            self.b2b_campaigns_is_ordinary_table,
+            self.partner_id_column_ready,
+            self.partner_foreign_key_ready,
+            self.partner_partial_index_ready,
+        )):
+            return "attested"
+        return "not_attested"
+
+    def as_payload(self) -> dict[str, object]:
+        """Expose only target metadata and booleans, never campaign rows."""
+        return {
+            "reconciliation_id": self.reconciliation_id,
+            "migration_name": self.migration_name,
+            "source_verification": self.source_verification,
+            "exactly_one_ledger_row": self.exactly_one_ledger_row,
+            "ledger_version_matches_record": self.ledger_version_matches_record,
+            "ledger_digest_is_null": self.ledger_digest_is_null,
+            "applied_at_matches_record": self.applied_at_matches_record,
+            "b2b_campaigns_is_ordinary_table": (
+                self.b2b_campaigns_is_ordinary_table
+            ),
+            "partner_id_column_ready": self.partner_id_column_ready,
+            "partner_foreign_key_ready": self.partner_foreign_key_ready,
+            "partner_partial_index_ready": self.partner_partial_index_ready,
+            "status": self.status,
+        }
+
+
 MIGRATION_387_RECONCILIATION = HistoricalMigrationReconciliation(
     reconciliation_id="eom-migration-387-recurring-invoice-dedup-recovery",
     migration_name="387_eom_recurring_invoice_dedup_recovery",
@@ -304,6 +375,26 @@ MIGRATION_382_EOM_PUBLIC_ONBOARDING_TOKENS_RECONCILIATION = (
 )
 
 
+MIGRATION_067_B2B_CAMPAIGN_PARTNER_RECONCILIATION = (
+    HistoricalVersionedMissingSourceReconciliation(
+        reconciliation_id="b2b-migration-067-campaign-partner-source-absence",
+        migration_name="067_b2b_campaign_partner",
+        migration_version=67,
+        historical_ledger_sha256=None,
+        observed_applied_at=datetime(
+            2026,
+            3,
+            1,
+            4,
+            58,
+            0,
+            789_236,
+            tzinfo=timezone.utc,
+        ),
+    )
+)
+
+
 MIGRATION_022B_PRESENCE_UNKNOWN_COUNT_RECONCILIATION = (
     HistoricalRenamedMissingSourceReconciliation(
         reconciliation_id="presence-migration-022b-unknown-count-source-rename",
@@ -335,11 +426,27 @@ MIGRATION_022B_PRESENCE_UNKNOWN_COUNT_RECONCILIATION = (
 _HISTORICAL_MISMATCH_RECONCILIATIONS = (MIGRATION_387_RECONCILIATION,)
 _HISTORICAL_MISSING_SOURCE_RECONCILIATIONS = (
     MIGRATION_382_EOM_PUBLIC_ONBOARDING_TOKENS_RECONCILIATION,
+    MIGRATION_067_B2B_CAMPAIGN_PARTNER_RECONCILIATION,
     MIGRATION_022B_PRESENCE_UNKNOWN_COUNT_RECONCILIATION,
 )
 
 
 _PRESENCE_UNKNOWN_COUNT_COLUMN = ("integer", "YES", "0")
+
+_B2B_CAMPAIGN_PARTNER_COLUMN = ("uuid", True, False)
+_B2B_CAMPAIGN_PARTNER_FOREIGN_KEY = {
+    "constraint_type": "f",
+    "key_columns": ("partner_id",),
+    "referenced_table": "affiliate_partners",
+    "referenced_columns": ("id",),
+    "delete_action": "n",
+    "update_action": "a",
+    "match_type": "s",
+}
+_B2B_CAMPAIGN_PARTNER_INDEX = {
+    "key_column": "partner_id",
+    "predicate": "(partner_id is not null)",
+}
 
 
 _PUBLIC_ONBOARDING_TOKEN_IMMUTABLE_COLUMNS = {
@@ -925,6 +1032,215 @@ async def _migration_022b_catalog_evidence(
     )
 
 
+async def _migration_067_catalog_evidence(
+    executor: Any,
+) -> tuple[bool, bool, bool, bool]:
+    """Read one immutable campaign-partner schema receipt from one snapshot."""
+    evidence_row = await executor.fetchrow(
+        """
+        WITH target_relation AS (
+            SELECT
+                relation_state.oid,
+                relation_state.relkind,
+                relation_state.relispartition
+            FROM pg_class AS relation_state
+            JOIN pg_namespace AS schema_state
+              ON schema_state.oid = relation_state.relnamespace
+            WHERE schema_state.nspname = current_schema()
+              AND relation_state.relname = 'b2b_campaigns'
+        ), partner_column AS (
+            SELECT
+                attribute_state.attname AS column_name,
+                format_type(
+                    attribute_state.atttypid,
+                    attribute_state.atttypmod
+                ) AS data_type,
+                NOT attribute_state.attnotnull AS is_nullable,
+                default_state.oid IS NOT NULL AS has_default
+            FROM target_relation
+            JOIN pg_attribute AS attribute_state
+              ON attribute_state.attrelid = target_relation.oid
+            LEFT JOIN pg_attrdef AS default_state
+              ON default_state.adrelid = attribute_state.attrelid
+             AND default_state.adnum = attribute_state.attnum
+            WHERE attribute_state.attname = 'partner_id'
+              AND attribute_state.attnum > 0
+              AND NOT attribute_state.attisdropped
+        ), partner_foreign_key AS (
+            SELECT
+                actual.contype AS constraint_type,
+                ARRAY(
+                    SELECT attribute_state.attname
+                    FROM unnest(actual.conkey)
+                         WITH ORDINALITY AS key_state(attnum, ordinality)
+                    JOIN pg_attribute AS attribute_state
+                      ON attribute_state.attrelid = actual.conrelid
+                     AND attribute_state.attnum = key_state.attnum
+                    ORDER BY key_state.ordinality
+                ) AS key_columns,
+                referenced_table.relname AS referenced_table,
+                (referenced_schema.nspname = current_schema())
+                    AS references_current_schema,
+                ARRAY(
+                    SELECT attribute_state.attname
+                    FROM unnest(actual.confkey)
+                         WITH ORDINALITY AS key_state(attnum, ordinality)
+                    JOIN pg_attribute AS attribute_state
+                      ON attribute_state.attrelid = actual.confrelid
+                     AND attribute_state.attnum = key_state.attnum
+                    ORDER BY key_state.ordinality
+                ) AS referenced_columns,
+                actual.confdeltype AS delete_action,
+                actual.confupdtype AS update_action,
+                actual.confmatchtype AS match_type,
+                actual.condeferrable AS is_deferrable,
+                actual.condeferred AS is_initially_deferred,
+                actual.convalidated AS is_validated
+            FROM target_relation
+            JOIN pg_constraint AS actual
+              ON actual.conrelid = target_relation.oid
+            LEFT JOIN pg_class AS referenced_table
+              ON referenced_table.oid = actual.confrelid
+            LEFT JOIN pg_namespace AS referenced_schema
+              ON referenced_schema.oid = referenced_table.relnamespace
+            WHERE actual.conname = 'b2b_campaigns_partner_id_fkey'
+        ), partner_index AS (
+            SELECT
+                index_relation.relkind AS relation_kind,
+                index_relation.relispartition AS is_partition,
+                index_state.indisunique AS is_unique,
+                index_state.indisvalid AS is_valid,
+                index_state.indisready AS is_ready,
+                index_state.indnkeyatts AS key_attribute_count,
+                index_state.indnatts AS attribute_count,
+                pg_get_indexdef(index_state.indexrelid, 1, true) AS key_column,
+                pg_get_expr(
+                    index_state.indpred,
+                    index_state.indrelid
+                ) AS predicate
+            FROM target_relation
+            JOIN pg_index AS index_state
+              ON index_state.indrelid = target_relation.oid
+            JOIN pg_class AS index_relation
+              ON index_relation.oid = index_state.indexrelid
+            WHERE index_relation.relname = 'idx_b2b_campaigns_partner'
+        )
+        SELECT
+            EXISTS (
+                SELECT 1
+                FROM target_relation
+                WHERE relkind = 'r'
+                  AND NOT relispartition
+            ) AS b2b_campaigns_is_ordinary_table,
+            (SELECT column_name FROM partner_column LIMIT 1)
+                AS partner_id_column_name,
+            (SELECT data_type FROM partner_column LIMIT 1)
+                AS partner_id_data_type,
+            (SELECT is_nullable FROM partner_column LIMIT 1)
+                AS partner_id_is_nullable,
+            (SELECT has_default FROM partner_column LIMIT 1)
+                AS partner_id_has_default,
+            (SELECT constraint_type FROM partner_foreign_key LIMIT 1)
+                AS partner_foreign_key_constraint_type,
+            (SELECT key_columns FROM partner_foreign_key LIMIT 1)
+                AS partner_foreign_key_columns,
+            (SELECT referenced_table FROM partner_foreign_key LIMIT 1)
+                AS partner_foreign_key_referenced_table,
+            (SELECT references_current_schema FROM partner_foreign_key LIMIT 1)
+                AS partner_foreign_key_references_current_schema,
+            (SELECT referenced_columns FROM partner_foreign_key LIMIT 1)
+                AS partner_foreign_key_referenced_columns,
+            (SELECT delete_action FROM partner_foreign_key LIMIT 1)
+                AS partner_foreign_key_delete_action,
+            (SELECT update_action FROM partner_foreign_key LIMIT 1)
+                AS partner_foreign_key_update_action,
+            (SELECT match_type FROM partner_foreign_key LIMIT 1)
+                AS partner_foreign_key_match_type,
+            (SELECT is_deferrable FROM partner_foreign_key LIMIT 1)
+                AS partner_foreign_key_is_deferrable,
+            (SELECT is_initially_deferred FROM partner_foreign_key LIMIT 1)
+                AS partner_foreign_key_is_initially_deferred,
+            (SELECT is_validated FROM partner_foreign_key LIMIT 1)
+                AS partner_foreign_key_is_validated,
+            (SELECT relation_kind FROM partner_index LIMIT 1)
+                AS partner_index_relation_kind,
+            (SELECT is_partition FROM partner_index LIMIT 1)
+                AS partner_index_is_partition,
+            (SELECT is_unique FROM partner_index LIMIT 1)
+                AS partner_index_is_unique,
+            (SELECT is_valid FROM partner_index LIMIT 1)
+                AS partner_index_is_valid,
+            (SELECT is_ready FROM partner_index LIMIT 1)
+                AS partner_index_is_ready,
+            (SELECT key_attribute_count FROM partner_index LIMIT 1)
+                AS partner_index_key_attribute_count,
+            (SELECT attribute_count FROM partner_index LIMIT 1)
+                AS partner_index_attribute_count,
+            (SELECT key_column FROM partner_index LIMIT 1)
+                AS partner_index_key_column,
+            (SELECT predicate FROM partner_index LIMIT 1)
+                AS partner_index_predicate
+        """
+    )
+    if evidence_row is None:
+        return False, False, False, False
+
+    b2b_campaigns_is_ordinary_table = bool(
+        evidence_row["b2b_campaigns_is_ordinary_table"]
+    )
+    expected_column_type, expected_is_nullable, expected_has_default = (
+        _B2B_CAMPAIGN_PARTNER_COLUMN
+    )
+    partner_id_column_ready = all((
+        evidence_row["partner_id_column_name"] == "partner_id",
+        evidence_row["partner_id_data_type"] == expected_column_type,
+        evidence_row["partner_id_is_nullable"] is expected_is_nullable,
+        evidence_row["partner_id_has_default"] is expected_has_default,
+    ))
+    foreign_key = _B2B_CAMPAIGN_PARTNER_FOREIGN_KEY
+    partner_foreign_key_ready = all((
+        _catalog_char(evidence_row["partner_foreign_key_constraint_type"])
+        == foreign_key["constraint_type"],
+        _catalog_column_names(evidence_row["partner_foreign_key_columns"])
+        == foreign_key["key_columns"],
+        evidence_row["partner_foreign_key_referenced_table"]
+        == foreign_key["referenced_table"],
+        bool(evidence_row["partner_foreign_key_references_current_schema"]),
+        _catalog_column_names(evidence_row["partner_foreign_key_referenced_columns"])
+        == foreign_key["referenced_columns"],
+        _catalog_char(evidence_row["partner_foreign_key_delete_action"])
+        == foreign_key["delete_action"],
+        _catalog_char(evidence_row["partner_foreign_key_update_action"])
+        == foreign_key["update_action"],
+        _catalog_char(evidence_row["partner_foreign_key_match_type"])
+        == foreign_key["match_type"],
+        not bool(evidence_row["partner_foreign_key_is_deferrable"]),
+        not bool(evidence_row["partner_foreign_key_is_initially_deferred"]),
+        bool(evidence_row["partner_foreign_key_is_validated"]),
+    ))
+    index = _B2B_CAMPAIGN_PARTNER_INDEX
+    partner_partial_index_ready = all((
+        _catalog_char(evidence_row["partner_index_relation_kind"]) == "i",
+        not bool(evidence_row["partner_index_is_partition"]),
+        evidence_row["partner_index_is_unique"] is False,
+        bool(evidence_row["partner_index_is_valid"]),
+        bool(evidence_row["partner_index_is_ready"]),
+        int(evidence_row["partner_index_key_attribute_count"] or 0) == 1,
+        int(evidence_row["partner_index_attribute_count"] or 0) == 1,
+        evidence_row["partner_index_key_column"] == index["key_column"],
+        _canonicalize_catalog_constraint_expression(
+            evidence_row["partner_index_predicate"]
+        )
+        == index["predicate"],
+    ))
+    return (
+        b2b_campaigns_is_ordinary_table,
+        partner_id_column_ready,
+        partner_foreign_key_ready,
+        partner_partial_index_ready,
+    )
+
+
 async def _attest_migration_387(
     executor: Any,
     migration_files: Collection[Path],
@@ -1046,6 +1362,49 @@ async def _attest_migration_022b(
     )
 
 
+async def _attest_migration_067(
+    executor: Any,
+) -> B2BCampaignPartnerMissingSourceMigrationReconciliationAttestation:
+    """Attest only the named 067 receipt without re-creating its source."""
+    record = MIGRATION_067_B2B_CAMPAIGN_PARTNER_RECONCILIATION
+    ledger_rows = await executor.fetch(
+        "SELECT version, content_sha256, applied_at FROM schema_migrations "
+        "WHERE name = $1 LIMIT 2",
+        record.migration_name,
+    )
+    exactly_one_ledger_row = len(ledger_rows) == 1
+    ledger_row = ledger_rows[0] if exactly_one_ledger_row else None
+    recorded_digest = ledger_row["content_sha256"] if ledger_row is not None else None
+    applied_at = _normalize_utc(
+        ledger_row["applied_at"] if ledger_row is not None else None
+    )
+    (
+        b2b_campaigns_is_ordinary_table,
+        partner_id_column_ready,
+        partner_foreign_key_ready,
+        partner_partial_index_ready,
+    ) = await _migration_067_catalog_evidence(executor)
+
+    return B2BCampaignPartnerMissingSourceMigrationReconciliationAttestation(
+        reconciliation_id=record.reconciliation_id,
+        migration_name=record.migration_name,
+        exactly_one_ledger_row=exactly_one_ledger_row,
+        ledger_version_matches_record=(
+            exactly_one_ledger_row
+            and ledger_row["version"] == record.migration_version
+        ),
+        ledger_digest_is_null=(
+            exactly_one_ledger_row
+            and recorded_digest == record.historical_ledger_sha256
+        ),
+        applied_at_matches_record=applied_at == record.observed_applied_at,
+        b2b_campaigns_is_ordinary_table=b2b_campaigns_is_ordinary_table,
+        partner_id_column_ready=partner_id_column_ready,
+        partner_foreign_key_ready=partner_foreign_key_ready,
+        partner_partial_index_ready=partner_partial_index_ready,
+    )
+
+
 async def attest_known_historical_migration_reconciliations(
     executor: Any,
     migration_files: Collection[Path],
@@ -1054,7 +1413,8 @@ async def attest_known_historical_migration_reconciliations(
 ) -> tuple[
     MigrationReconciliationAttestation
     | MissingSourceMigrationReconciliationAttestation
-    | RenamedMissingSourceMigrationReconciliationAttestation,
+    | RenamedMissingSourceMigrationReconciliationAttestation
+    | B2BCampaignPartnerMissingSourceMigrationReconciliationAttestation,
     ...,
 ]:
     """Return read-only attestation for reported, reviewed source gaps.
@@ -1074,6 +1434,7 @@ async def attest_known_historical_migration_reconciliations(
         MigrationReconciliationAttestation
         | MissingSourceMigrationReconciliationAttestation
         | RenamedMissingSourceMigrationReconciliationAttestation
+        | B2BCampaignPartnerMissingSourceMigrationReconciliationAttestation
     ] = []
     if MIGRATION_387_RECONCILIATION.migration_name in requested_names:
         attestations.append(await _attest_migration_387(executor, migration_files))
@@ -1082,6 +1443,11 @@ async def attest_known_historical_migration_reconciliations(
         in requested_names
     ):
         attestations.append(await _attest_migration_382(executor))
+    if (
+        MIGRATION_067_B2B_CAMPAIGN_PARTNER_RECONCILIATION.migration_name
+        in requested_names
+    ):
+        attestations.append(await _attest_migration_067(executor))
     if (
         MIGRATION_022B_PRESENCE_UNKNOWN_COUNT_RECONCILIATION.migration_name
         in requested_names

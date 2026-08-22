@@ -839,6 +839,7 @@ class _AttestedReconciliationPool(_SerializingPool):
         self.zero_active_null_period_rows = zero_active_null_period_rows
         self.reconciliation_rows: list[dict[str, object]] = []
         self.public_onboarding_reconciliation_rows: list[dict[str, object]] = []
+        self.b2b_campaign_partner_reconciliation_rows: list[dict[str, object]] = []
         self.presence_unknown_count_reconciliation_rows: list[dict[str, object]] = []
         self.presence_unknown_count_columns = [
             {
@@ -851,10 +852,38 @@ class _AttestedReconciliationPool(_SerializingPool):
         self.presence_events_is_ordinary_table = True
         self.presence_events_is_leaf_partition = False
         self.presence_unknown_count_has_constraint = False
+        self.b2b_campaign_partner_catalog_row = {
+            "b2b_campaigns_is_ordinary_table": True,
+            "partner_id_column_name": "partner_id",
+            "partner_id_data_type": "uuid",
+            "partner_id_is_nullable": True,
+            "partner_id_has_default": False,
+            "partner_foreign_key_constraint_type": "f",
+            "partner_foreign_key_columns": ["partner_id"],
+            "partner_foreign_key_referenced_table": "affiliate_partners",
+            "partner_foreign_key_references_current_schema": True,
+            "partner_foreign_key_referenced_columns": ["id"],
+            "partner_foreign_key_delete_action": "n",
+            "partner_foreign_key_update_action": "a",
+            "partner_foreign_key_match_type": "s",
+            "partner_foreign_key_is_deferrable": False,
+            "partner_foreign_key_is_initially_deferred": False,
+            "partner_foreign_key_is_validated": True,
+            "partner_index_relation_kind": "i",
+            "partner_index_is_partition": False,
+            "partner_index_is_unique": False,
+            "partner_index_is_valid": True,
+            "partner_index_is_ready": True,
+            "partner_index_key_attribute_count": 1,
+            "partner_index_attribute_count": 1,
+            "partner_index_key_column": "partner_id",
+            "partner_index_predicate": "(partner_id IS NOT NULL)",
+        }
 
     async def fetch(self, query, *args):
         from atlas_brain.storage.migrations.reconciliation import (
             MIGRATION_022B_PRESENCE_UNKNOWN_COUNT_RECONCILIATION,
+            MIGRATION_067_B2B_CAMPAIGN_PARTNER_RECONCILIATION,
             MIGRATION_382_EOM_PUBLIC_ONBOARDING_TOKENS_RECONCILIATION,
             MIGRATION_387_RECONCILIATION,
             _PUBLIC_ONBOARDING_TOKEN_COLUMNS,
@@ -876,6 +905,14 @@ class _AttestedReconciliationPool(_SerializingPool):
                 MIGRATION_022B_PRESENCE_UNKNOWN_COUNT_RECONCILIATION.migration_name,
             )
             return list(self.presence_unknown_count_reconciliation_rows)
+        if normalized == (
+            "SELECT version, content_sha256, applied_at FROM schema_migrations "
+            "WHERE name = $1 LIMIT 2"
+        ):
+            assert args == (
+                MIGRATION_067_B2B_CAMPAIGN_PARTNER_RECONCILIATION.migration_name,
+            )
+            return list(self.b2b_campaign_partner_reconciliation_rows)
         if "FROM information_schema.columns AS actual" in query:
             assert args == (list(_PUBLIC_ONBOARDING_TOKEN_COLUMNS),)
             return [
@@ -928,6 +965,13 @@ class _AttestedReconciliationPool(_SerializingPool):
         return await super().fetch(query, *args)
 
     async def fetchrow(self, query, *args):
+        if "b2b_campaigns" in query:
+            assert args == ()
+            assert "WITH target_relation AS" in query
+            assert "JOIN pg_attribute AS attribute_state" in query
+            assert "JOIN pg_constraint AS actual" in query
+            assert "JOIN pg_index AS index_state" in query
+            return dict(self.b2b_campaign_partner_catalog_row)
         if "WITH target_relation AS" in query:
             assert args == ()
             assert "relation_state.relkind" in query
@@ -1373,6 +1417,22 @@ def _stage_historical_382_missing_source(pool):
     return record
 
 
+def _stage_historical_067_missing_source(pool):
+    from atlas_brain.storage.migrations.reconciliation import (
+        MIGRATION_067_B2B_CAMPAIGN_PARTNER_RECONCILIATION,
+    )
+
+    record = MIGRATION_067_B2B_CAMPAIGN_PARTNER_RECONCILIATION
+    pool.records.append((record.migration_version, record.migration_name, None))
+    if hasattr(pool, "b2b_campaign_partner_reconciliation_rows"):
+        pool.b2b_campaign_partner_reconciliation_rows = [{
+            "version": record.migration_version,
+            "content_sha256": None,
+            "applied_at": record.observed_applied_at,
+        }]
+    return record
+
+
 def _stage_historical_022b_missing_source(tmp_path, pool):
     from atlas_brain.storage.migrations.reconciliation import (
         MIGRATION_022B_PRESENCE_UNKNOWN_COUNT_RECONCILIATION,
@@ -1468,6 +1528,27 @@ async def test_attested_missing_source_admits_targeted_pending_migration(tmp_pat
 
 
 @pytest.mark.asyncio
+async def test_attested_067_missing_source_admits_targeted_pending_migration(tmp_path):
+    """The source-unavailable receipt admits only its exact ledger name."""
+    from atlas_brain.storage.migrations import run_migrations
+
+    pool = _AttestedReconciliationPool()
+    _stage_historical_067_missing_source(pool)
+    (tmp_path / "901_pending.sql").write_text("SELECT 901")
+
+    await run_migrations(
+        pool,
+        migrations_dir=tmp_path,
+        only={"901_pending"},
+    )
+
+    assert pool.applied_sql == ["SELECT 901"]
+    assert pool.inserted_with_digest == [
+        (901, "901_pending", hashlib.sha256(b"SELECT 901").hexdigest())
+    ]
+
+
+@pytest.mark.asyncio
 async def test_attested_022b_missing_source_admits_targeted_pending_migration(tmp_path):
     """The renamed-source receipt admits only its exact recorded name."""
     from atlas_brain.storage.migrations import run_migrations
@@ -1547,6 +1628,38 @@ async def test_failed_missing_source_attestation_blocks_then_retry_applies_once(
         "applied_at": record.observed_applied_at,
     }]
     await run_migrations(pool, migrations_dir=tmp_path)
+
+    assert pool.applied_sql == ["SELECT 901"]
+    assert pool.inserted_with_digest == [
+        (901, "901_pending", hashlib.sha256(b"SELECT 901").hexdigest())
+    ]
+
+
+@pytest.mark.asyncio
+async def test_failed_067_attestation_blocks_then_retry_applies_once(tmp_path):
+    from atlas_brain.storage.migrations import (
+        PendingMigrationContentIntegrityError,
+        run_migrations,
+    )
+
+    pool = _AttestedReconciliationPool()
+    record = _stage_historical_067_missing_source(pool)
+    pool.b2b_campaign_partner_catalog_row["partner_index_is_ready"] = False
+    (tmp_path / "901_pending.sql").write_text("SELECT 901")
+
+    with pytest.raises(
+        PendingMigrationContentIntegrityError,
+        match=f"missing_source={record.migration_name}",
+    ):
+        await run_migrations(pool, migrations_dir=tmp_path, only={"901_pending"})
+
+    assert pool.applied_sql == []
+    assert pool.inserted == []
+    assert pool.inserted_with_digest == []
+    assert pool.updated == []
+
+    pool.b2b_campaign_partner_catalog_row["partner_index_is_ready"] = True
+    await run_migrations(pool, migrations_dir=tmp_path, only={"901_pending"})
 
     assert pool.applied_sql == ["SELECT 901"]
     assert pool.inserted_with_digest == [
