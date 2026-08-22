@@ -43,9 +43,14 @@ class FakeConnection:
         *,
         reconciliation_rows: list[dict[str, object]] | None = None,
         public_onboarding_reconciliation_rows: list[dict[str, object]] | None = None,
+        presence_unknown_count_reconciliation_rows: list[dict[str, object]] | None = None,
         public_onboarding_columns: list[dict[str, object]] | None = None,
         public_onboarding_constraints: list[dict[str, object]] | None = None,
         public_onboarding_indexes: dict[str, dict[str, object] | None] | None = None,
+        presence_unknown_count_columns: list[dict[str, object]] | None = None,
+        presence_events_is_ordinary_table: bool = True,
+        presence_events_is_leaf_partition: bool = False,
+        presence_unknown_count_has_constraint: bool = False,
         recurring_schema_ready: bool = True,
         zero_active_null_period_rows: bool = True,
     ):
@@ -53,6 +58,9 @@ class FakeConnection:
         self.reconciliation_rows = reconciliation_rows or []
         self.public_onboarding_reconciliation_rows = (
             public_onboarding_reconciliation_rows or []
+        )
+        self.presence_unknown_count_reconciliation_rows = (
+            presence_unknown_count_reconciliation_rows or []
         )
         self.public_onboarding_columns = (
             _default_public_onboarding_columns()
@@ -69,6 +77,14 @@ class FakeConnection:
             if public_onboarding_indexes is None
             else public_onboarding_indexes
         )
+        self.presence_unknown_count_columns = (
+            _default_presence_unknown_count_columns()
+            if presence_unknown_count_columns is None
+            else presence_unknown_count_columns
+        )
+        self.presence_events_is_ordinary_table = presence_events_is_ordinary_table
+        self.presence_events_is_leaf_partition = presence_events_is_leaf_partition
+        self.presence_unknown_count_has_constraint = presence_unknown_count_has_constraint
         self.recurring_schema_ready = recurring_schema_ready
         self.zero_active_null_period_rows = zero_active_null_period_rows
         self.queries: list[str] = []
@@ -97,10 +113,14 @@ class FakeConnection:
         ):
             if args == (reconciliation_mod.MIGRATION_387_RECONCILIATION.migration_name,):
                 return self.reconciliation_rows
-            assert args == (
+            if args == (
                 reconciliation_mod.MIGRATION_382_EOM_PUBLIC_ONBOARDING_TOKENS_RECONCILIATION.migration_name,
+            ):
+                return self.public_onboarding_reconciliation_rows
+            assert args == (
+                reconciliation_mod.MIGRATION_022B_PRESENCE_UNKNOWN_COUNT_RECONCILIATION.migration_name,
             )
-            return self.public_onboarding_reconciliation_rows
+            return self.presence_unknown_count_reconciliation_rows
         if "FROM information_schema.columns AS actual" in query:
             assert args == (
                 list(reconciliation_mod._PUBLIC_ONBOARDING_TOKEN_COLUMNS),
@@ -123,6 +143,27 @@ class FakeConnection:
 
     async def fetchrow(self, query: str, *args: object) -> dict[str, object] | None:
         self.fetchrow_calls.append((query, args))
+        if "WITH target_relation AS" in query:
+            assert args == ()
+            assert "relation_state.relkind" in query
+            assert "AND NOT relispartition" in query
+            assert "information_schema.columns AS actual" in query
+            assert "FROM pg_constraint AS actual" in query
+            columns = self.presence_unknown_count_columns
+            column = columns[0] if len(columns) == 1 else {}
+            return {
+                "presence_events_is_ordinary_table": (
+                    self.presence_events_is_ordinary_table
+                    and not self.presence_events_is_leaf_partition
+                ),
+                "unknown_count_has_no_constraints": (
+                    not self.presence_unknown_count_has_constraint
+                ),
+                "column_name": column.get("column_name"),
+                "data_type": column.get("data_type"),
+                "is_nullable": column.get("is_nullable"),
+                "column_default": column.get("column_default"),
+            }
         if "eom_public_onboarding_tokens" in query:
             assert len(args) == 1
             return self.public_onboarding_indexes.get(str(args[0]))
@@ -170,6 +211,18 @@ def _default_public_onboarding_columns() -> list[dict[str, object]]:
         for name, (data_type, maximum_length, nullable, default) in (
             reconciliation_mod._PUBLIC_ONBOARDING_TOKEN_COLUMNS.items()
         )
+    ]
+
+
+def _default_presence_unknown_count_columns() -> list[dict[str, object]]:
+    data_type, nullable, default = reconciliation_mod._PRESENCE_UNKNOWN_COUNT_COLUMN
+    return [
+        {
+            "column_name": "unknown_count",
+            "data_type": data_type,
+            "is_nullable": nullable,
+            "column_default": default,
+        }
     ]
 
 
@@ -243,6 +296,16 @@ def _migration_387_source() -> bytes:
     ).read_bytes()
 
 
+def _migration_022b_source() -> bytes:
+    return (
+        ROOT
+        / "atlas_brain"
+        / "storage"
+        / "migrations"
+        / "027_presence_unknown_count.sql"
+    ).read_bytes()
+
+
 def _migration_387_connection(
     *,
     ledger_digest: str | None = None,
@@ -284,6 +347,28 @@ def _migration_382_connection(
     return FakeConnection(
         [(record.migration_name, ledger_digest)],
         public_onboarding_reconciliation_rows=actual_rows,
+    )
+
+
+def _migration_022b_connection(
+    *,
+    ledger_digest: str | None = None,
+    applied_at: object | None = None,
+    reconciliation_rows: list[dict[str, object]] | None = None,
+) -> FakeConnection:
+    record = reconciliation_mod.MIGRATION_022B_PRESENCE_UNKNOWN_COUNT_RECONCILIATION
+    actual_applied_at = record.observed_applied_at if applied_at is None else applied_at
+    actual_rows = reconciliation_rows
+    if actual_rows is None:
+        actual_rows = [
+            {
+                "content_sha256": ledger_digest,
+                "applied_at": actual_applied_at,
+            }
+        ]
+    return FakeConnection(
+        [(record.migration_name, ledger_digest)],
+        presence_unknown_count_reconciliation_rows=actual_rows,
     )
 
 
@@ -398,11 +483,43 @@ def test_migration_382_reconciliation_record_is_closed_legacy_source_evidence() 
     )
     assert reconciliation_mod.known_historical_missing_source_reconciliation_names() == {
         record.migration_name,
+        reconciliation_mod.MIGRATION_022B_PRESENCE_UNKNOWN_COUNT_RECONCILIATION.migration_name,
     }
     assert reconciliation_mod.known_historical_reconciliation_names() == {
         record.migration_name,
+        reconciliation_mod.MIGRATION_022B_PRESENCE_UNKNOWN_COUNT_RECONCILIATION.migration_name,
         reconciliation_mod.MIGRATION_387_RECONCILIATION.migration_name,
     }
+
+
+def test_migration_022b_reconciliation_record_preserves_renamed_source_limits() -> None:
+    record = reconciliation_mod.MIGRATION_022B_PRESENCE_UNKNOWN_COUNT_RECONCILIATION
+
+    assert (
+        record.source_verification
+        == reconciliation_mod.HISTORICAL_LEDGER_DIGEST_UNAVAILABLE
+    )
+    assert record.historical_ledger_sha256 is None
+    assert record.current_packaged_migration_name == "027_presence_unknown_count"
+    assert (
+        hashlib.sha256(_migration_022b_source()).hexdigest()
+        == record.retained_source_sha256
+    )
+    assert record.observed_applied_at == datetime(
+        2026,
+        2,
+        17,
+        23,
+        34,
+        17,
+        949_845,
+        tzinfo=timezone.utc,
+    )
+    assert record.retained_source_history_commit_ids == (
+        "72c008b40d134bf1e0432e5c586bf0e156a1780b",
+        "5df3f12fa9aa1721983b37cceca913803db27722",
+        "2ec15ce4d8f159dd773405dfb311da4219d531aa",
+    )
 
 
 @pytest.mark.asyncio
@@ -616,6 +733,155 @@ async def test_known_382_reconciliation_rejects_each_required_evidence_field(
         "applied_at_matches_record",
         "exactly_one_ledger_row",
     }, case
+    assert evidence["status"] == "not_attested", case
+    assert connection.execute_calls == []
+
+
+@pytest.mark.asyncio
+async def test_known_022b_reconciliation_attests_named_renamed_source_without_rows(
+    tmp_path: Path,
+) -> None:
+    record = reconciliation_mod.MIGRATION_022B_PRESENCE_UNKNOWN_COUNT_RECONCILIATION
+    _write_migration(
+        tmp_path,
+        record.current_packaged_migration_name,
+        _migration_022b_source(),
+    )
+    connection = _migration_022b_connection()
+
+    code, payload = await module.run_migration_content_integrity_preflight(
+        connection,
+        migrations_dir=tmp_path,
+        attest_known_reconciliations=True,
+    )
+
+    assert code == module.UNRESOLVED_DRIFT_EXIT
+    assert payload["status"] == "unresolved_drift"
+    assert payload["report"]["missing_source"] == [record.migration_name]
+    assert payload["known_reconciliation_evidence"] == [
+        {
+            "reconciliation_id": record.reconciliation_id,
+            "migration_name": record.migration_name,
+            "source_verification": reconciliation_mod.HISTORICAL_LEDGER_DIGEST_UNAVAILABLE,
+            "exactly_one_ledger_row": True,
+            "ledger_digest_is_null": True,
+            "applied_at_matches_record": True,
+            "retained_packaged_digest_matches_record": True,
+            "presence_events_is_ordinary_table": True,
+            "unknown_count_column_ready": True,
+            "unknown_count_has_no_constraints": True,
+            "status": "attested",
+        }
+    ]
+    assert connection.fetch_calls[0] == (
+        "SELECT name, content_sha256 FROM schema_migrations",
+        (),
+    )
+    assert connection.fetch_calls[1] == (
+        "SELECT content_sha256, applied_at FROM schema_migrations WHERE name = $1 LIMIT 2",
+        (record.migration_name,),
+    )
+    assert len(connection.fetch_calls) == 2
+    assert len(connection.fetchrow_calls) == 1
+    assert connection.fetchval_calls == []
+    catalog_query = connection.fetchrow_calls[0][0]
+    assert "WITH target_relation AS" in catalog_query
+    assert "relation_state.relkind" in catalog_query
+    assert "AND NOT relispartition" in catalog_query
+    assert "information_schema.columns AS actual" in catalog_query
+    assert "FROM pg_constraint AS actual" in catalog_query
+    assert all(
+        "FROM presence_events" not in query
+        for query, _args in (
+            connection.fetch_calls
+            + connection.fetchrow_calls
+            + connection.fetchval_calls
+        )
+    )
+    assert connection.transaction_readonly == [True]
+    assert connection.execute_calls == []
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("case", "field"),
+    [
+        ("non-null ledger digest", "ledger_digest_is_null"),
+        ("truncated applied timestamp", "applied_at_matches_record"),
+        ("duplicate ledger rows", "exactly_one_ledger_row"),
+        ("missing detailed ledger row", "exactly_one_ledger_row"),
+        ("changed retained package", "retained_packaged_digest_matches_record"),
+        ("presence-events relation is not an ordinary table", "presence_events_is_ordinary_table"),
+        ("presence-events relation is a leaf partition", "presence_events_is_ordinary_table"),
+        ("missing unknown-count column", "unknown_count_column_ready"),
+        ("wrong unknown-count type", "unknown_count_column_ready"),
+        ("wrong unknown-count nullability", "unknown_count_column_ready"),
+        ("wrong unknown-count default", "unknown_count_column_ready"),
+        ("unknown-count constraint present", "unknown_count_has_no_constraints"),
+    ],
+)
+async def test_known_022b_reconciliation_rejects_each_required_evidence_field(
+    case: str,
+    field: str,
+    tmp_path: Path,
+) -> None:
+    record = reconciliation_mod.MIGRATION_022B_PRESENCE_UNKNOWN_COUNT_RECONCILIATION
+    source = _migration_022b_source()
+    connection = _migration_022b_connection()
+    if case == "non-null ledger digest":
+        connection = _migration_022b_connection(ledger_digest="a" * 64)
+    elif case == "truncated applied timestamp":
+        connection = _migration_022b_connection(
+            applied_at=record.observed_applied_at.replace(microsecond=0)
+        )
+    elif case == "duplicate ledger rows":
+        connection = _migration_022b_connection(
+            reconciliation_rows=[
+                {
+                    "content_sha256": None,
+                    "applied_at": record.observed_applied_at,
+                },
+                {
+                    "content_sha256": None,
+                    "applied_at": record.observed_applied_at,
+                },
+            ]
+        )
+    elif case == "missing detailed ledger row":
+        connection = _migration_022b_connection(reconciliation_rows=[])
+    elif case == "changed retained package":
+        source += b"\n-- changed after reviewed rename evidence\n"
+    elif case == "presence-events relation is not an ordinary table":
+        connection.presence_events_is_ordinary_table = False
+    elif case == "presence-events relation is a leaf partition":
+        connection.presence_events_is_leaf_partition = True
+    elif case == "missing unknown-count column":
+        connection.presence_unknown_count_columns = []
+    elif case == "wrong unknown-count type":
+        connection.presence_unknown_count_columns[0]["data_type"] = "bigint"
+    elif case == "wrong unknown-count nullability":
+        connection.presence_unknown_count_columns[0]["is_nullable"] = "NO"
+    elif case == "wrong unknown-count default":
+        connection.presence_unknown_count_columns[0]["column_default"] = "1"
+    elif case == "unknown-count constraint present":
+        connection.presence_unknown_count_has_constraint = True
+    else:  # pragma: no cover - parametrize keeps this exhaustive.
+        raise AssertionError(f"unexpected evidence case: {case}")
+    _write_migration(tmp_path, record.current_packaged_migration_name, source)
+
+    code, payload = await module.run_migration_content_integrity_preflight(
+        connection,
+        migrations_dir=tmp_path,
+        attest_known_reconciliations=True,
+    )
+
+    evidence = payload["known_reconciliation_evidence"][0]
+    assert code == module.UNRESOLVED_DRIFT_EXIT, case
+    assert (
+        evidence["source_verification"]
+        == reconciliation_mod.HISTORICAL_LEDGER_DIGEST_UNAVAILABLE
+    )
+    assert evidence[field] is False, case
     assert evidence["status"] == "not_attested", case
     assert connection.execute_calls == []
 

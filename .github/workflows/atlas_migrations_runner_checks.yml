@@ -12,6 +12,7 @@ on:
       - "tests/test_migrations_runner.py"
       - "tests/test_migration_content_integrity_preflight.py"
       - "tests/test_eom_public_onboarding_migration_repair.py"
+      - "tests/test_presence_unknown_count_migration_repair.py"
   push:
     branches:
       - main
@@ -22,6 +23,7 @@ on:
       - "tests/test_migrations_runner.py"
       - "tests/test_migration_content_integrity_preflight.py"
       - "tests/test_eom_public_onboarding_migration_repair.py"
+      - "tests/test_presence_unknown_count_migration_repair.py"
 
 jobs:
   atlas-migrations-runner-checks:
@@ -65,4 +67,5 @@ jobs:
             tests/test_migrations_runner.py \
             tests/test_migration_content_integrity_preflight.py \
             tests/test_eom_public_onboarding_migration_repair.py \
+            tests/test_presence_unknown_count_migration_repair.py \
             -q
