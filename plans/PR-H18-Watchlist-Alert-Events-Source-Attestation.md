@@ -117,6 +117,44 @@ historical exception or leave pending-SQL blocking behavior unproven.
   target preflight. The target must remain attested only when its column set is
   exactly the documented source-era plus 281 set.
 
+### Contract revision (review round 5)
+
+- Evidence: confirmed P1 thread `PRRT_kwDOQ5Uhrs6baccv` shows that the receipt
+  samples columns, constraints, and unique/exclusion indexes but not the open
+  class of table-local DML interceptors. A user `BEFORE INSERT` trigger can
+  reject the alert writer after every current receipt boolean is true.
+- Decision-Seam Analysis — decision: the single `attested`/`not_attested`
+  admission verdict for the named 272 receipt. Why the prior decision is
+  wrong: it used enumerated catalog object kinds as a proxy for all table-local
+  write semantics, so unreviewed trigger/rule/RLS mediation remained an open
+  category. Structural default: fail closed when the ordinary target table has
+  any noninternal trigger, non-`_RETURN` rewrite rule, enabled or forced RLS,
+  or row-security policy. This includes disabled user triggers because the
+  source receipt does not prove a later session cannot enable them. The cheap
+  error is preserving generic migration blocking rather than admitting a
+  historical exception against unreviewed write behavior.
+- Required surface: extend only the named 272 metadata query, attestation
+  payload/status, fake-catalog matrix, runner retry fixture, and disposable
+  retained-DDL fixture. Prove all four catalog families, including multiple
+  trigger shapes, block pending SQL before the probe migration can write.
+- Explicit residual: confirmed P1 thread `PRRT_kwDOQ5Uhrs6baccy` identifies a
+  pre-existing global migration-runner execution model: its session advisory
+  lock serializes cooperating Atlas runners but not a privileged external
+  database session that alters the ledger or schema after attestation and
+  before pending SQL. This provenance slice neither grants such mutation nor
+  changes the runner's autocommit model, which must support packaged `CREATE
+  INDEX CONCURRENTLY` statements. The bounded operational assumption is that
+  external schema/ledger mutation is prohibited while migrations run; if it is
+  suspected, stop the rollout and rerun preflight. A compatible locked
+  revalidation/serialization design is deferred to [#2476](https://github.com/canfieldjuan/ATLAS/issues/2476), not smuggled into this receipt PR.
+- Non-scope: no generic migration-runner transaction/locking redesign,
+  migration SQL, target data or ledger mutation, alert-writer change, or broad
+  table-shape policy.
+- Verification: focused 272 preflight/runner proof, the disposable PostgreSQL
+  hook cases in GitHub's configured migration job, syntax/lint/plan gates, and
+  read-only current-target metadata inspection. The global execution residual
+  is tracked rather than misrepresented as solved by this receipt.
+
 ## Scope (this PR)
 
 Ownership lane: `eom/migration-content-integrity`
@@ -129,7 +167,8 @@ Max files: 8
   table, 20 source-era columns plus the exact later `reopen_count` signature,
   no unlisted non-dropped user column, named PK/FKs/checks with case- and
   content-preserving literal-safe expressions, no unlisted constraints, three
-  ready indexes, and no unlisted unique/exclusion index.
+  ready indexes, no unlisted unique/exclusion index, and no unreviewed
+  table-local DML interceptor.
 - Admit only this reported ledger name after a complete attestation; every
   unlisted or incomplete source gap remains blocking.
 - Exercise preflight, runner failure/retry, and a disposable PostgreSQL schema.
@@ -161,6 +200,11 @@ Max files: 8
     an isolated fake-catalog failure, and the runner leaves pending SQL and its
     ledger row absent; settled by preflight/runner tests and disposable
     PostgreSQL cases.
+  - [ ] A noninternal trigger (enabled or disabled), non-`_RETURN` rewrite
+    rule, enabled/forced RLS, or any table row-security policy returns
+    `not_attested`; all are metadata-only and no pending probe SQL executes;
+    settled by the isolated fake-catalog matrix and retained-DDL disposable
+    PostgreSQL cases.
   - [ ] A successful 272 predicate clears only its reported ledger name; an
     arbitrary missing source remains in `missing_source`; settled by the runner
     non-generic-admission proof.
@@ -179,7 +223,7 @@ Max files: 8
   PostgreSQL catalog metadata. No public API or configuration surface changes.
 - Risk areas: provenance, migration safety, false admission, privacy, and
   backward compatibility.
-- Reviewer rules triggered: R1, R2, R4, R5, R6, R8, R10, R14.
+- Reviewer rules triggered: R1, R2, R4, R5, R6, R8, R10, R13, R14.
 
 ### Closure declaration
 
@@ -189,7 +233,9 @@ Max files: 8
   known later `reopen_count` column, constraints, and write-restricting
   indexes. No other non-dropped user column is allowed. Required constraints
   are enumerated and no unlisted table constraint is allowed; named indexes are
-  exact and no unlisted unique/exclusion index is allowed. Later non-unique
+  exact and no unlisted unique/exclusion index is allowed. The table has no
+  user DML mediator: any noninternal trigger, non-`_RETURN` rewrite rule,
+  RLS enablement/force flag, or policy closes the receipt. Later non-unique
   performance indexes remain outside this boundary.
 
 ### Boundary-change enumeration
@@ -203,7 +249,16 @@ Max files: 8
   relation identity, source-era and known-later column/default signatures, no
   unlisted non-dropped user column, named constraints and case- and
   content-preserving expressions, no unlisted constraints, indexes/readiness,
-  and no unlisted unique/exclusion indexes.
+  no unlisted unique/exclusion indexes, and absence of table-local user DML
+  interceptors.
+- Caller and catalog-state disposition:
+
+  | Caller | Catalog state | Disposition |
+  |---|---|---|
+  | `run_migrations` named pending 272 receipt | Complete approved metadata and no user DML mediator | Preserved: admit only the named receipt. |
+  | `run_migrations` named pending 272 receipt | Any noninternal trigger, user rewrite rule, RLS enablement/force, or policy | Intentionally changed: `not_attested`; leave pending SQL and probe ledger row absent. |
+  | Read-only preflight | Same metadata states | Preserved: expose a boolean-only receipt payload; never query alert rows or write state. |
+  | Privileged external database session after the snapshot | Schema/ledger mutation outside the cooperating runner lock | Deferred: global execution-model follow-up in [#2476](https://github.com/canfieldjuan/ATLAS/issues/2476); stop and rerun preflight rather than claiming this receipt serializes external operators. |
 
 ## Mechanism
 
@@ -213,13 +268,18 @@ metadata for the source-era table and its sole known later writer-required
 column; Python tokenizes quoted literals before normalizing unquoted SQL and
 compares a closed, case- and content-preserving signature plus metadata-only
 absence booleans for unlisted columns, constraints, and write-restricting
-indexes, emitting booleans only. The disposable test executes retained 273 and
-281 DDL only to produce the expected table catalog contract; it never asserts
-that either verifies or replaces 272 source bytes. The existing dispatcher
-intersects report-derived missing-source names with its closed registry, so an
-unlisted name cannot use this receipt. No query selects alert-event rows or
-writes `schema_migrations`; rollback is ordinary code rollback, which returns
-272 to generic blocking behavior.
+indexes, and table-local user DML interceptors, emitting booleans only. The
+interceptor predicate fails closed for any noninternal trigger, non-`_RETURN`
+rule, RLS relation flag, or policy rather than enumerating individual DML
+operations. The disposable test executes retained 273 and 281 DDL only to
+produce the expected table catalog contract; it never asserts that either
+verifies or replaces 272 source bytes. The existing dispatcher intersects
+report-derived missing-source names with its closed registry, so an unlisted
+name cannot use this receipt. No query selects alert-event rows or writes
+`schema_migrations`; rollback is ordinary code rollback, which returns 272 to
+generic blocking behavior. The receipt runs within the existing
+cooperating-runner advisory-lock model; it does not claim to serialize a
+privileged external schema or ledger writer after its snapshot.
 
 ## Intentional
 
@@ -228,8 +288,13 @@ writes `schema_migrations`; rollback is ordinary code rollback, which returns
 - No automatic allowance for later columns: `reopen_count` is the one retained,
   writer-required later migration and has an exact reviewed signature.
 - No rejection of later non-unique performance indexes; only extra unlisted
-  columns, constraints, and unique/exclusion indexes can change write
-  admissibility here.
+  columns, constraints, unique/exclusion indexes, and user DML mediators can
+  change write admissibility here.
+- No special case for a known trigger shape: every user trigger is unreviewed
+  source-era write behavior, including one currently disabled in the target.
+- No migration-runner locking redesign in this receipt slice. Session advisory
+  locking remains the existing closed component for cooperating runners; the
+  external-admin execution residual is explicit below.
 
 ## Deferred
 
@@ -238,14 +303,24 @@ historical source-number collision root cause remains forensic-only; any broad
 renumbering needs its own issue. The target is still blocked from migration 389
 until those records independently have reviewed evidence.
 
-Parking predicate: unrelated runner redesign and all other H-18 records remain
-parked. Parked hardening: none.
+The global migration-evidence execution model is deferred in
+[#2476](https://github.com/canfieldjuan/ATLAS/issues/2476): determine a
+database-lock or locked-revalidation protocol that preserves ledger/catalog
+evidence against privileged external schema or ledger mutation while retaining
+support for `CREATE INDEX CONCURRENTLY`, then prove its interleavings in a
+dedicated runner slice. The safe current operational boundary is cooperative
+Atlas runners only; an out-of-band mutation during a migration attempt requires
+stopping the rollout and rerunning the read-only preflight.
+
+Parking predicate: generic runner execution-model redesign and all other H-18
+records remain parked. Parked hardening: external migration-evidence
+serialization, tracked in #2476.
 
 ## Verification
 
-- `python -m pytest -q tests/test_migration_content_integrity_preflight.py -k '272 or known_historical'` — 56 passed, 65 deselected.
+- `python -m pytest -q tests/test_migration_content_integrity_preflight.py -k '272 or known_historical'` — 57 passed, 65 deselected.
 - `python -m pytest -q tests/test_migrations_runner.py -k '272 or missing_source or historical_attestation'` — 12 passed, 61 deselected.
-- `python -m pytest -q tests/test_b2b_watchlist_alert_events_migration_repair.py` — 11 skipped; no disposable test database was configured locally. The same suite is now enrolled in the existing GitHub PostgreSQL migration job.
+- `python -m pytest -q tests/test_b2b_watchlist_alert_events_migration_repair.py` — 18 skipped; no disposable test database was configured locally. The same suite is now enrolled in the existing GitHub PostgreSQL migration job.
 - `python -m py_compile ...` and `ruff check ...` — passed for all four changed
   Python files.
 - `python scripts/check_guard_class_closure.py --base origin/main --strict` —
@@ -253,20 +328,20 @@ parked. Parked hardening: none.
 - `python scripts/check_migration_content_integrity.py --expected-target 'host=localhost, port=5433, db=atlas' --attest-known-reconciliations` —
   read-only exit 2; named 272 is attested with permanent storage, the exact
   approved column set, no unlisted constraints, no unlisted unique/exclusion
-  indexes, and case-preserving catalog evidence, while independent H-18 records
-  remain blocking. Broad unit suite and required workflows are GitHub CI only
-  per operator direction.
+  indexes, no unreviewed table-local DML interceptors, and case-preserving
+  catalog evidence, while independent H-18 records remain blocking. Broad unit
+  suite and required workflows are GitHub CI only per operator direction.
 
 ## Estimated diff size
 
 | File | LOC |
 |---|---:|
 | `.github/workflows/atlas_migrations_runner_checks.yml` | 3 |
-| `atlas_brain/storage/migrations/reconciliation.py` | 750 |
+| `atlas_brain/storage/migrations/reconciliation.py` | 791 |
 | `plans/INDEX.md` | 3 |
-| `plans/PR-H18-Watchlist-Alert-Events-Source-Attestation.md` | 272 |
+| `plans/PR-H18-Watchlist-Alert-Events-Source-Attestation.md` | 347 |
 | `plans/archive/PR-H18-B2B-Campaign-Partner-Source-Attestation.md` | 0 |
-| `tests/test_b2b_watchlist_alert_events_migration_repair.py` | 408 |
-| `tests/test_migration_content_integrity_preflight.py` | 550 |
-| `tests/test_migrations_runner.py` | 194 |
-| **Total** | **2180** |
+| `tests/test_b2b_watchlist_alert_events_migration_repair.py` | 509 |
+| `tests/test_migration_content_integrity_preflight.py` | 565 |
+| `tests/test_migrations_runner.py` | 199 |
+| **Total** | **2417** |

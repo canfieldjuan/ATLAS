@@ -369,6 +369,7 @@ def _default_b2b_watchlist_alert_events_catalog_row() -> dict[str, object]:
                 )
             },
             "no_unlisted_alert_event_unique_or_exclusion_indexes": True,
+            "no_unreviewed_alert_event_write_interceptors": True,
         }
     }
 
@@ -1157,6 +1158,7 @@ async def test_known_272_reconciliation_attests_catalog_without_source(
         "no_unlisted_alert_event_constraints": True,
         "required_alert_event_indexes_ready": True,
         "no_unlisted_alert_event_unique_or_exclusion_indexes": True,
+        "no_unreviewed_alert_event_write_interceptors": True,
         "status": "attested",
     }]
     assert connection.fetch_calls == [
@@ -1179,6 +1181,12 @@ async def test_known_272_reconciliation_attests_catalog_without_source(
     assert "unlisted_constraints AS" in catalog_query
     assert "JOIN pg_index AS index_state" in catalog_query
     assert "indisexclusion" in catalog_query
+    assert "unreviewed_write_interceptors AS" in catalog_query
+    assert "FROM pg_trigger AS trigger_state" in catalog_query
+    assert "FROM pg_rewrite AS rule_state" in catalog_query
+    assert "FROM pg_policy AS policy_state" in catalog_query
+    assert "relation_state.relrowsecurity" in catalog_query
+    assert "relation_state.relforcerowsecurity" in catalog_query
     assert "pg_get_indexdef" in catalog_query
     assert all(
         "FROM b2b_watchlist_alert_events" not in query
@@ -1415,6 +1423,10 @@ async def test_known_272_reconciliation_rejects_each_required_evidence_field(
             "unlisted unique index can reject writes",
             "no_unlisted_alert_event_unique_or_exclusion_indexes",
         ),
+        (
+            "unreviewed write interceptor can reject writes",
+            "no_unreviewed_alert_event_write_interceptors",
+        ),
     ],
 )
 async def test_known_272_reconciliation_rejects_each_catalog_guard_independently(
@@ -1512,6 +1524,8 @@ async def test_known_272_reconciliation_rejects_each_catalog_guard_independently
         account_status_index["predicate"] = "(status = 'open')"
     elif case == "unlisted unique index can reject writes":
         catalog["no_unlisted_alert_event_unique_or_exclusion_indexes"] = False
+    elif case == "unreviewed write interceptor can reject writes":
+        catalog["no_unreviewed_alert_event_write_interceptors"] = False
     else:  # pragma: no cover - parametrize keeps this exhaustive.
         raise AssertionError(f"unexpected catalog guard case: {case}")
 
@@ -1534,6 +1548,7 @@ async def test_known_272_reconciliation_rejects_each_catalog_guard_independently
         "no_unlisted_alert_event_constraints",
         "required_alert_event_indexes_ready",
         "no_unlisted_alert_event_unique_or_exclusion_indexes",
+        "no_unreviewed_alert_event_write_interceptors",
     ):
         if other_field != field:
             assert evidence[other_field] is True, case

@@ -347,6 +347,7 @@ class B2BWatchlistAlertEventsMissingSourceMigrationReconciliationAttestation:
     no_unlisted_alert_event_constraints: bool
     required_alert_event_indexes_ready: bool
     no_unlisted_alert_event_unique_or_exclusion_indexes: bool
+    no_unreviewed_alert_event_write_interceptors: bool
 
     @property
     def source_verification(self) -> str:
@@ -369,6 +370,7 @@ class B2BWatchlistAlertEventsMissingSourceMigrationReconciliationAttestation:
             self.no_unlisted_alert_event_constraints,
             self.required_alert_event_indexes_ready,
             self.no_unlisted_alert_event_unique_or_exclusion_indexes,
+            self.no_unreviewed_alert_event_write_interceptors,
         )):
             return "attested"
         return "not_attested"
@@ -407,6 +409,9 @@ class B2BWatchlistAlertEventsMissingSourceMigrationReconciliationAttestation:
             ),
             "no_unlisted_alert_event_unique_or_exclusion_indexes": (
                 self.no_unlisted_alert_event_unique_or_exclusion_indexes
+            ),
+            "no_unreviewed_alert_event_write_interceptors": (
+                self.no_unreviewed_alert_event_write_interceptors
             ),
             "status": self.status,
         }
@@ -1639,7 +1644,7 @@ async def _migration_067_catalog_evidence(
 
 async def _migration_272_catalog_evidence(
     executor: Any,
-) -> tuple[bool, bool, bool, bool, bool, bool, bool, bool, bool]:
+) -> tuple[bool, bool, bool, bool, bool, bool, bool, bool, bool, bool]:
     """Read the named 272 base-table receipt in one catalog-only snapshot."""
     evidence_row = await executor.fetchrow(
         """
@@ -1648,7 +1653,9 @@ async def _migration_272_catalog_evidence(
                 relation_state.oid,
                 relation_state.relkind,
                 relation_state.relpersistence,
-                relation_state.relispartition
+                relation_state.relispartition,
+                relation_state.relrowsecurity,
+                relation_state.relforcerowsecurity
             FROM pg_class AS relation_state
             JOIN pg_namespace AS schema_state
               ON schema_state.oid = relation_state.relnamespace
@@ -1824,6 +1831,31 @@ async def _migration_272_catalog_evidence(
                           OR backing_constraint.conname <> ALL($2::text[])
                       )
                 ) AS no_unlisted_alert_event_unique_or_exclusion_indexes
+        ), unreviewed_write_interceptors AS (
+            SELECT
+                EXISTS (SELECT 1 FROM target_relation)
+                AND NOT EXISTS (
+                    SELECT 1
+                    FROM pg_trigger AS trigger_state
+                    JOIN target_relation
+                      ON target_relation.oid = trigger_state.tgrelid
+                    WHERE NOT trigger_state.tgisinternal
+                    UNION ALL
+                    SELECT 1
+                    FROM pg_rewrite AS rule_state
+                    JOIN target_relation
+                      ON target_relation.oid = rule_state.ev_class
+                    WHERE rule_state.rulename <> '_RETURN'
+                    UNION ALL
+                    SELECT 1
+                    FROM target_relation
+                    WHERE relrowsecurity OR relforcerowsecurity
+                    UNION ALL
+                    SELECT 1
+                    FROM pg_policy AS policy_state
+                    JOIN target_relation
+                      ON target_relation.oid = policy_state.polrelid
+                ) AS no_unreviewed_alert_event_write_interceptors
         )
         SELECT jsonb_build_object(
             'watchlist_alert_events_is_ordinary_table', EXISTS (
@@ -1860,6 +1892,10 @@ async def _migration_272_catalog_evidence(
             'no_unlisted_alert_event_unique_or_exclusion_indexes', (
                 SELECT no_unlisted_alert_event_unique_or_exclusion_indexes
                 FROM unlisted_write_restricting_indexes
+            ),
+            'no_unreviewed_alert_event_write_interceptors', (
+                SELECT no_unreviewed_alert_event_write_interceptors
+                FROM unreviewed_write_interceptors
             )
         ) AS catalog_evidence
         """,
@@ -1868,7 +1904,7 @@ async def _migration_272_catalog_evidence(
         list(_B2B_WATCHLIST_ALERT_EVENT_INDEXES),
     )
     if evidence_row is None:
-        return False, False, False, False, False, False, False, False, False
+        return False, False, False, False, False, False, False, False, False, False
 
     catalog = _catalog_json_mapping(evidence_row["catalog_evidence"])
     observed_columns = _catalog_json_mapping(catalog.get("columns"))
@@ -1912,6 +1948,7 @@ async def _migration_272_catalog_evidence(
         bool(catalog.get("no_unlisted_alert_event_constraints")),
         required_alert_event_indexes_ready,
         bool(catalog.get("no_unlisted_alert_event_unique_or_exclusion_indexes")),
+        bool(catalog.get("no_unreviewed_alert_event_write_interceptors")),
     )
 
 
@@ -2105,6 +2142,7 @@ async def _attest_migration_272(
         no_unlisted_alert_event_constraints,
         required_alert_event_indexes_ready,
         no_unlisted_alert_event_unique_or_exclusion_indexes,
+        no_unreviewed_alert_event_write_interceptors,
     ) = await _migration_272_catalog_evidence(executor)
 
     return B2BWatchlistAlertEventsMissingSourceMigrationReconciliationAttestation(
@@ -2140,6 +2178,9 @@ async def _attest_migration_272(
         required_alert_event_indexes_ready=required_alert_event_indexes_ready,
         no_unlisted_alert_event_unique_or_exclusion_indexes=(
             no_unlisted_alert_event_unique_or_exclusion_indexes
+        ),
+        no_unreviewed_alert_event_write_interceptors=(
+            no_unreviewed_alert_event_write_interceptors
         ),
     )
 

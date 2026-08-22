@@ -95,6 +95,7 @@ def _default_b2b_watchlist_alert_events_catalog_row() -> dict[str, object]:
                 for name, index in _B2B_WATCHLIST_ALERT_EVENT_INDEXES.items()
             },
             "no_unlisted_alert_event_unique_or_exclusion_indexes": True,
+            "no_unreviewed_alert_event_write_interceptors": True,
         }
     }
 
@@ -1053,6 +1054,12 @@ class _AttestedReconciliationPool(_SerializingPool):
                 list(_B2B_WATCHLIST_ALERT_EVENT_INDEXES),
             )
             assert "relation_state.relpersistence" in query
+            assert "unreviewed_write_interceptors AS" in query
+            assert "FROM pg_trigger AS trigger_state" in query
+            assert "FROM pg_rewrite AS rule_state" in query
+            assert "FROM pg_policy AS policy_state" in query
+            assert "relation_state.relrowsecurity" in query
+            assert "relation_state.relforcerowsecurity" in query
             return dict(self.b2b_watchlist_alert_events_catalog_row)
         if "b2b_campaigns" in query:
             assert args == ()
@@ -1794,7 +1801,9 @@ async def test_failed_067_attestation_blocks_then_retry_applies_once(tmp_path):
 
 
 @pytest.mark.asyncio
-async def test_failed_272_attestation_blocks_then_retry_applies_once(tmp_path):
+async def test_failed_272_write_interceptor_attestation_blocks_then_retry_applies_once(
+    tmp_path,
+):
     from atlas_brain.storage.migrations import (
         PendingMigrationContentIntegrityError,
         run_migrations,
@@ -1803,9 +1812,7 @@ async def test_failed_272_attestation_blocks_then_retry_applies_once(tmp_path):
     pool = _AttestedReconciliationPool()
     record = _stage_historical_272_missing_source(pool)
     catalog = pool.b2b_watchlist_alert_events_catalog_row["catalog_evidence"]
-    catalog["indexes"]["idx_b2b_watchlist_alert_events_account_status"][
-        "is_ready"
-    ] = False
+    catalog["no_unreviewed_alert_event_write_interceptors"] = False
     (tmp_path / "901_pending.sql").write_text("SELECT 901")
 
     with pytest.raises(
@@ -1819,9 +1826,7 @@ async def test_failed_272_attestation_blocks_then_retry_applies_once(tmp_path):
     assert pool.inserted_with_digest == []
     assert pool.updated == []
 
-    catalog["indexes"]["idx_b2b_watchlist_alert_events_account_status"][
-        "is_ready"
-    ] = True
+    catalog["no_unreviewed_alert_event_write_interceptors"] = True
     await run_migrations(pool, migrations_dir=tmp_path, only={"901_pending"})
 
     assert pool.applied_sql == ["SELECT 901"]

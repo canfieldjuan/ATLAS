@@ -154,6 +154,7 @@ async def test_272_receipt_attests_empty_real_catalog_without_alert_rows():
         assert attestation.no_unlisted_alert_event_constraints
         assert attestation.required_alert_event_indexes_ready
         assert attestation.no_unlisted_alert_event_unique_or_exclusion_indexes
+        assert attestation.no_unreviewed_alert_event_write_interceptors
         assert attestation.status == "attested"
         assert attestation.as_payload()["source_verification"] == (
             HISTORICAL_SOURCE_UNAVAILABLE
@@ -201,6 +202,34 @@ async def test_272_receipt_attests_empty_real_catalog_without_alert_rows():
         (
             "unlisted required no-default column",
             "no_unlisted_alert_event_columns",
+        ),
+        (
+            "unreviewed before-insert trigger",
+            "no_unreviewed_alert_event_write_interceptors",
+        ),
+        (
+            "disabled unreviewed after-insert trigger",
+            "no_unreviewed_alert_event_write_interceptors",
+        ),
+        (
+            "unreviewed before-update trigger",
+            "no_unreviewed_alert_event_write_interceptors",
+        ),
+        (
+            "unreviewed insert rewrite rule",
+            "no_unreviewed_alert_event_write_interceptors",
+        ),
+        (
+            "row security enabled",
+            "no_unreviewed_alert_event_write_interceptors",
+        ),
+        (
+            "row security forced",
+            "no_unreviewed_alert_event_write_interceptors",
+        ),
+        (
+            "unreviewed row security policy",
+            "no_unreviewed_alert_event_write_interceptors",
         ),
     ],
 )
@@ -274,6 +303,78 @@ async def test_272_receipt_rejects_altered_catalog_before_pending_sql(
             await conn.execute("""
                 ALTER TABLE b2b_watchlist_alert_events
                     ADD COLUMN unlisted_required_writer_input TEXT NOT NULL;
+                """)
+        elif case == "unreviewed before-insert trigger":
+            await conn.execute("""
+                CREATE FUNCTION reject_unreviewed_alert_event_insert()
+                RETURNS trigger
+                LANGUAGE plpgsql
+                AS $$
+                BEGIN
+                    IF NEW.status = 'open' THEN
+                        RAISE EXCEPTION 'unreviewed alert-event insert trigger';
+                    END IF;
+                    RETURN NEW;
+                END;
+                $$;
+                CREATE TRIGGER reject_unreviewed_alert_event_insert
+                    BEFORE INSERT ON b2b_watchlist_alert_events
+                    FOR EACH ROW
+                    EXECUTE FUNCTION reject_unreviewed_alert_event_insert();
+                """)
+        elif case == "disabled unreviewed after-insert trigger":
+            await conn.execute("""
+                CREATE FUNCTION audit_unreviewed_alert_event_insert()
+                RETURNS trigger
+                LANGUAGE plpgsql
+                AS $$
+                BEGIN
+                    RETURN NEW;
+                END;
+                $$;
+                CREATE TRIGGER audit_unreviewed_alert_event_insert
+                    AFTER INSERT ON b2b_watchlist_alert_events
+                    FOR EACH ROW
+                    EXECUTE FUNCTION audit_unreviewed_alert_event_insert();
+                ALTER TABLE b2b_watchlist_alert_events
+                    DISABLE TRIGGER audit_unreviewed_alert_event_insert;
+                """)
+        elif case == "unreviewed before-update trigger":
+            await conn.execute("""
+                CREATE FUNCTION reject_unreviewed_alert_event_update()
+                RETURNS trigger
+                LANGUAGE plpgsql
+                AS $$
+                BEGIN
+                    RAISE EXCEPTION 'unreviewed alert-event update trigger';
+                END;
+                $$;
+                CREATE TRIGGER reject_unreviewed_alert_event_update
+                    BEFORE UPDATE ON b2b_watchlist_alert_events
+                    FOR EACH ROW
+                    EXECUTE FUNCTION reject_unreviewed_alert_event_update();
+                """)
+        elif case == "unreviewed insert rewrite rule":
+            await conn.execute("""
+                CREATE RULE suppress_unreviewed_alert_event_insert AS
+                    ON INSERT TO b2b_watchlist_alert_events
+                    DO INSTEAD NOTHING;
+                """)
+        elif case == "row security enabled":
+            await conn.execute(
+                "ALTER TABLE b2b_watchlist_alert_events ENABLE ROW LEVEL SECURITY"
+            )
+        elif case == "row security forced":
+            await conn.execute("""
+                ALTER TABLE b2b_watchlist_alert_events ENABLE ROW LEVEL SECURITY;
+                ALTER TABLE b2b_watchlist_alert_events FORCE ROW LEVEL SECURITY;
+                """)
+        elif case == "unreviewed row security policy":
+            await conn.execute("""
+                CREATE POLICY unreviewed_alert_event_insert_policy
+                    ON b2b_watchlist_alert_events
+                    FOR INSERT
+                    WITH CHECK (true);
                 """)
         else:  # pragma: no cover - parametrize keeps this exhaustive.
             raise AssertionError(f"unexpected altered catalog case: {case}")
