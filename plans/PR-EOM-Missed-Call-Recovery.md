@@ -38,7 +38,7 @@ follow-up PRs.
 
 Ownership lane: eom/missed-call-recovery
 Slice phase: Vertical slice
-Max files: 13
+Max files: 14
 
 1. Add a provider-owned missed-call recovery sequence for one eligible
    residential web-estimate lead after a deliberate, actor-authenticated
@@ -203,6 +203,7 @@ Max files: 13
 - `docs/EOM_MISSED_CALL_RECOVERY_RUNBOOK.md`
 - `plans/PR-EOM-Missed-Call-Recovery.md`
 - `render.eom.yaml`
+- `tests/test_eom_lead_conversion.py`
 - `tests/test_eom_missed_call_recovery.py`
 - `tests/test_eom_render_profile.py`
 
@@ -315,6 +316,17 @@ Calendar correlation.
   tests/test_leads_intake.py` — `99 passed, 37 skipped, 1 upstream pynvml
   deprecation warning`; the real-Postgres cases are correctly skipped locally
   because `ATLAS_MIGRATION_TEST_DATABASE_URL` is unavailable.
+- `ruff check --ignore E402 atlas_brain/services/eom_missed_call_recovery.py
+  tests/test_eom_lead_conversion.py`, `python -m py_compile
+  atlas_brain/services/eom_missed_call_recovery.py
+  tests/test_eom_lead_conversion.py`, and `pytest -q
+  tests/test_eom_lead_conversion.py::test_full_app_lifespan_executes_enabled_preflight_before_handoff_request`
+  — pass; the one focused full-app lifespan proof emitted only the upstream
+  `pynvml` deprecation warning.
+- With a disposable local PostgreSQL schema and the recording gateway,
+  `pytest -q tests/test_eom_missed_call_recovery.py::test_effective_form_recipient_change_cancels_before_delivery`
+  — `1 passed`; it proves that correcting the actual estimate-form recipient
+  cancels before any fake provider call.
 - `git diff --check` — pass.
 - Full pipeline, migration integration, and security checks run on GitHub CI
   after the ready-for-review PR is opened; do not duplicate that full suite
@@ -329,12 +341,13 @@ Calendar correlation.
 | `atlas_brain/eom_api/funnel.py` | 218 |
 | `atlas_brain/main.py` | 35 |
 | `atlas_brain/main_eom.py` | 66 |
-| `atlas_brain/services/eom_missed_call_recovery.py` | 2337 |
+| `atlas_brain/services/eom_missed_call_recovery.py` | 2342 |
 | `atlas_brain/storage/migrations/389_eom_missed_call_recovery.sql` | 602 |
 | `atlas_brain/templates/email/missed_call_recovery.py` | 114 |
 | `docs/EOM_MISSED_CALL_RECOVERY_RUNBOOK.md` | 111 |
-| `plans/PR-EOM-Missed-Call-Recovery.md` | 340 |
+| `plans/PR-EOM-Missed-Call-Recovery.md` | 353 |
 | `render.eom.yaml` | 9 |
+| `tests/test_eom_lead_conversion.py` | 19 |
 | `tests/test_eom_missed_call_recovery.py` | 1905 |
 | `tests/test_eom_render_profile.py` | 79 |
-| **Total** | **5955** |
+| **Total** | **5992** |

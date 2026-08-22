@@ -1179,18 +1179,23 @@ class EOMMissedCallRecoveryService:
             )
             return 0
         await self._recover_stale_claims(limit=limit)
-        completed = 0
+        # This return value represents rows that crossed the durable claim
+        # boundary and entered the delivery phase (including a definite
+        # provider rejection that scheduled a retry). A pending row that is
+        # cancelled by the first authoritative eligibility read is useful
+        # worker progress, but it is not a delivery attempt.
+        delivery_attempts = 0
         for _ in range(limit):
             claim_result = await self._claim_one_due_step()
             if not claim_result.processed:
                 break
-            completed += 1
             if claim_result.claim is None:
                 continue
+            delivery_attempts += 1
             history = await self._deliver_claim(claim_result.claim)
             if history is not None and history.provider_message_id:
                 await self._write_sent_history(history)
-        return completed
+        return delivery_attempts
 
     async def _contact_for_update(
         self, conn: Any, contact_id: UUID
