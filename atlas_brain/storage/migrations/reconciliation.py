@@ -341,6 +341,8 @@ class B2BWatchlistAlertEventsMissingSourceMigrationReconciliationAttestation:
     watchlist_alert_events_is_ordinary_table: bool
     watchlist_alert_events_has_permanent_storage: bool
     base_alert_event_columns_ready: bool
+    known_later_alert_event_columns_ready: bool
+    no_unlisted_alert_event_columns: bool
     required_alert_event_constraints_ready: bool
     no_unlisted_alert_event_constraints: bool
     required_alert_event_indexes_ready: bool
@@ -361,6 +363,8 @@ class B2BWatchlistAlertEventsMissingSourceMigrationReconciliationAttestation:
             self.watchlist_alert_events_is_ordinary_table,
             self.watchlist_alert_events_has_permanent_storage,
             self.base_alert_event_columns_ready,
+            self.known_later_alert_event_columns_ready,
+            self.no_unlisted_alert_event_columns,
             self.required_alert_event_constraints_ready,
             self.no_unlisted_alert_event_constraints,
             self.required_alert_event_indexes_ready,
@@ -386,6 +390,12 @@ class B2BWatchlistAlertEventsMissingSourceMigrationReconciliationAttestation:
                 self.watchlist_alert_events_has_permanent_storage
             ),
             "base_alert_event_columns_ready": self.base_alert_event_columns_ready,
+            "known_later_alert_event_columns_ready": (
+                self.known_later_alert_event_columns_ready
+            ),
+            "no_unlisted_alert_event_columns": (
+                self.no_unlisted_alert_event_columns
+            ),
             "required_alert_event_constraints_ready": (
                 self.required_alert_event_constraints_ready
             ),
@@ -593,6 +603,17 @@ _B2B_WATCHLIST_ALERT_EVENT_BASE_COLUMNS = {
     "resolved_at": ("timestamp with time zone", True, None),
     "created_at": ("timestamp with time zone", False, "now()"),
     "updated_at": ("timestamp with time zone", False, "now()"),
+}
+
+# Retained migration 281 is the only later source that changes the live table.
+# The writer references this column in its conflict update, so it is part of the
+# closed compatibility receipt rather than an arbitrary additive extension.
+_B2B_WATCHLIST_ALERT_EVENT_KNOWN_LATER_COLUMNS = {
+    "reopen_count": ("integer", False, "0"),
+}
+_B2B_WATCHLIST_ALERT_EVENT_ALLOWED_COLUMNS = {
+    **_B2B_WATCHLIST_ALERT_EVENT_BASE_COLUMNS,
+    **_B2B_WATCHLIST_ALERT_EVENT_KNOWN_LATER_COLUMNS,
 }
 
 _B2B_WATCHLIST_ALERT_EVENT_CONSTRAINTS = {
@@ -974,7 +995,7 @@ def _watchlist_alert_event_column_ready(
     observed: Mapping[str, object],
     expected: tuple[str, bool, str | None],
 ) -> bool:
-    """Require one source-era column while tolerating later additive columns."""
+    """Require one explicitly approved alert-event column signature."""
     expected_type, expected_is_nullable, expected_default = expected
     observed_default = observed.get("column_default")
     canonical_default = (
@@ -1618,7 +1639,7 @@ async def _migration_067_catalog_evidence(
 
 async def _migration_272_catalog_evidence(
     executor: Any,
-) -> tuple[bool, bool, bool, bool, bool, bool, bool]:
+) -> tuple[bool, bool, bool, bool, bool, bool, bool, bool, bool]:
     """Read the named 272 base-table receipt in one catalog-only snapshot."""
     evidence_row = await executor.fetchrow(
         """
@@ -1762,6 +1783,18 @@ async def _migration_272_catalog_evidence(
             LEFT JOIN pg_index AS index_state
               ON index_state.indexrelid = index_relation.oid
              AND index_state.indrelid = target_relation.oid
+        ), unlisted_columns AS (
+            SELECT
+                EXISTS (SELECT 1 FROM target_relation)
+                AND NOT EXISTS (
+                    SELECT 1
+                    FROM pg_attribute AS actual
+                    JOIN target_relation
+                      ON target_relation.oid = actual.attrelid
+                    WHERE actual.attnum > 0
+                      AND NOT actual.attisdropped
+                      AND actual.attname <> ALL($1::text[])
+                ) AS no_unlisted_alert_event_columns
         ), unlisted_constraints AS (
             SELECT
                 EXISTS (SELECT 1 FROM target_relation)
@@ -1808,6 +1841,10 @@ async def _migration_272_catalog_evidence(
                 SELECT jsonb_object_agg(name, evidence)
                 FROM column_evidence
             ),
+            'no_unlisted_alert_event_columns', (
+                SELECT no_unlisted_alert_event_columns
+                FROM unlisted_columns
+            ),
             'constraints', (
                 SELECT jsonb_object_agg(name, evidence)
                 FROM constraint_evidence
@@ -1826,12 +1863,12 @@ async def _migration_272_catalog_evidence(
             )
         ) AS catalog_evidence
         """,
-        list(_B2B_WATCHLIST_ALERT_EVENT_BASE_COLUMNS),
+        list(_B2B_WATCHLIST_ALERT_EVENT_ALLOWED_COLUMNS),
         list(_B2B_WATCHLIST_ALERT_EVENT_CONSTRAINTS),
         list(_B2B_WATCHLIST_ALERT_EVENT_INDEXES),
     )
     if evidence_row is None:
-        return False, False, False, False, False, False, False
+        return False, False, False, False, False, False, False, False, False
 
     catalog = _catalog_json_mapping(evidence_row["catalog_evidence"])
     observed_columns = _catalog_json_mapping(catalog.get("columns"))
@@ -1843,6 +1880,13 @@ async def _migration_272_catalog_evidence(
             expected,
         )
         for name, expected in _B2B_WATCHLIST_ALERT_EVENT_BASE_COLUMNS.items()
+    )
+    known_later_alert_event_columns_ready = all(
+        _watchlist_alert_event_column_ready(
+            _catalog_json_mapping(observed_columns.get(name)),
+            expected,
+        )
+        for name, expected in _B2B_WATCHLIST_ALERT_EVENT_KNOWN_LATER_COLUMNS.items()
     )
     required_alert_event_constraints_ready = all(
         _watchlist_alert_event_constraint_ready(
@@ -1862,6 +1906,8 @@ async def _migration_272_catalog_evidence(
         bool(catalog.get("watchlist_alert_events_is_ordinary_table")),
         bool(catalog.get("watchlist_alert_events_has_permanent_storage")),
         base_alert_event_columns_ready,
+        known_later_alert_event_columns_ready,
+        bool(catalog.get("no_unlisted_alert_event_columns")),
         required_alert_event_constraints_ready,
         bool(catalog.get("no_unlisted_alert_event_constraints")),
         required_alert_event_indexes_ready,
@@ -2053,6 +2099,8 @@ async def _attest_migration_272(
         watchlist_alert_events_is_ordinary_table,
         watchlist_alert_events_has_permanent_storage,
         base_alert_event_columns_ready,
+        known_later_alert_event_columns_ready,
+        no_unlisted_alert_event_columns,
         required_alert_event_constraints_ready,
         no_unlisted_alert_event_constraints,
         required_alert_event_indexes_ready,
@@ -2079,6 +2127,10 @@ async def _attest_migration_272(
             watchlist_alert_events_has_permanent_storage
         ),
         base_alert_event_columns_ready=base_alert_event_columns_ready,
+        known_later_alert_event_columns_ready=(
+            known_later_alert_event_columns_ready
+        ),
+        no_unlisted_alert_event_columns=no_unlisted_alert_event_columns,
         required_alert_event_constraints_ready=(
             required_alert_event_constraints_ready
         ),

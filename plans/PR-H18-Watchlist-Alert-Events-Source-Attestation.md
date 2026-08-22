@@ -92,6 +92,31 @@ historical exception or leave pending-SQL blocking behavior unproven.
 - Verification: focused 272 preflight/runner tests locally and the configured
   disposable PostgreSQL migration job on GitHub.
 
+### Contract revision (review round 4)
+
+- Evidence: confirmed P1 thread `PRRT_kwDOQ5Uhrs6baSBW` shows the named 272
+  catalog query samples only 20 source-era columns. A later unlisted `NOT NULL`
+  column with no default can make the actual alert writer's explicit INSERT fail
+  while every existing receipt boolean remains true.
+- Root cause: the receipt's absence policy closed constraints and
+  unique/exclusion indexes but left the writer's omitted-column input set open.
+  The source search shows exactly one compatible later column,
+  `reopen_count`, from retained migration 281; no arbitrary later column is
+  proven safe.
+- Required surface: require the 20 source-era columns plus exact signature for
+  the known later `reopen_count` column, and reject every other live
+  user-defined column through catalog metadata before admitting pending SQL.
+  Add isolated fake-catalog and disposable PostgreSQL cases for an unlisted
+  required/no-default column, while the retained fixture executes the known
+  281 DDL as current writer compatibility evidence.
+- Non-scope: no alert-writer change, migration SQL change, generic catalog
+  predicate, ledger/data mutation, schema migration, or broad table-shape
+  policy outside this named historical receipt.
+- Verification: focused 272 preflight and runner tests, the configured
+  disposable PostgreSQL migration job on GitHub, and the existing read-only
+  target preflight. The target must remain attested only when its column set is
+  exactly the documented source-era plus 281 set.
+
 ## Scope (this PR)
 
 Ownership lane: `eom/migration-content-integrity`
@@ -101,7 +126,8 @@ Max files: 8
 - Add one immutable 272 record requiring version `-3`, NULL digest, exact UTC
   recorded time, and the original base-table catalog contract.
 - Make the catalog proof metadata-only: permanent ordinary non-partition
-  table, 20 source-era columns, named PK/FKs/checks with case- and
+  table, 20 source-era columns plus the exact later `reopen_count` signature,
+  no unlisted non-dropped user column, named PK/FKs/checks with case- and
   content-preserving literal-safe expressions, no unlisted constraints, three
   ready indexes, and no unlisted unique/exclusion index.
 - Admit only this reported ledger name after a complete attestation; every
@@ -124,22 +150,26 @@ Max files: 8
 - Acceptance criteria:
   - [ ] The existing preflight returns an `attested` 272 payload only for one
     `version=-3`, NULL-digest receipt at the immutable timestamp plus complete
-    source-era catalog metadata; settled by the focused preflight matrix.
+    source-era and exact known-later catalog metadata; settled by the focused
+    preflight matrix.
   - [ ] Wrong/missing/duplicate ledger evidence, non-permanent/non-table/
-    partition relation metadata, altered source-era columns/constraints/indexes
-    (including content- or case-distinct quoted literals), an unlisted
-    constraint, an unlisted unique/exclusion index, or an unready index returns
-    `not_attested`; every closed-signature guard has an isolated fake-catalog
-    failure, and the runner leaves pending SQL and its ledger row absent;
-    settled by preflight/runner tests and disposable PostgreSQL cases.
+    partition relation metadata, altered source-era or known-later column
+    signature, an unlisted non-dropped column that can reject the writer, an
+    altered constraint/index (including content- or case-distinct quoted
+    literals), an unlisted constraint, an unlisted unique/exclusion index, or
+    an unready index returns `not_attested`; every closed-signature guard has
+    an isolated fake-catalog failure, and the runner leaves pending SQL and its
+    ledger row absent; settled by preflight/runner tests and disposable
+    PostgreSQL cases.
   - [ ] A successful 272 predicate clears only its reported ledger name; an
     arbitrary missing source remains in `missing_source`; settled by the runner
     non-generic-admission proof.
   - [ ] The real `run_migrations` entrypoint, against a disposable schema built
-    by executing retained `273_b2b_watchlist_alert_events.sql` solely as an
-    actual producer fixture (not 272 source evidence), creates exactly one
-    probe table/hashed receipt after attestation and no duplicate receipt on
-    retry; settled by the PostgreSQL test enrolled in migration CI.
+    by executing retained `273_b2b_watchlist_alert_events.sql` and the known
+    later `281_b2b_watchlist_alert_reopen_count.sql` solely as actual producer
+    fixtures (not 272 source evidence), creates exactly one probe table/hashed
+    receipt after attestation and no duplicate receipt on retry; settled by the
+    PostgreSQL test enrolled in migration CI.
   - [ ] Current target read-only preflight records 272 as attested but remains
     exit 2 because other H-18 discrepancies exist; settled by the target probe.
 - Reachability proof: `run_migrations` executes the pending probe from a
@@ -155,11 +185,12 @@ Max files: 8
 
 - Reconciliation registry: CLOSED. The dispatcher admits one named immutable
   record per discrepancy; unknown source names have no path.
-- 272 catalog signature: CLOSED for source-era columns, constraints, and
-  write-restricting indexes. Required constraints are enumerated and no
-  unlisted table constraint is allowed; named indexes are exact and no
-  unlisted unique/exclusion index is allowed. Later `reopen_count` and
-  non-unique performance indexes remain outside this source-era boundary.
+- 272 catalog signature: CLOSED for the 20 source-era columns plus the exact
+  known later `reopen_count` column, constraints, and write-restricting
+  indexes. No other non-dropped user column is allowed. Required constraints
+  are enumerated and no unlisted table constraint is allowed; named indexes are
+  exact and no unlisted unique/exclusion index is allowed. Later non-unique
+  performance indexes remain outside this boundary.
 
 ### Boundary-change enumeration
 
@@ -169,32 +200,36 @@ Max files: 8
   blocking pending migration SQL. All other source gaps retain current blocking
   behavior.
 - Guard fields: name, synthetic version, NULL digest, timestamp, permanent
-  relation identity, source-era columns/defaults, named constraints and
-  case- and content-preserving expressions, no unlisted constraints,
-  indexes/readiness, and no unlisted unique/exclusion indexes.
+  relation identity, source-era and known-later column/default signatures, no
+  unlisted non-dropped user column, named constraints and case- and
+  content-preserving expressions, no unlisted constraints, indexes/readiness,
+  and no unlisted unique/exclusion indexes.
 
 ## Mechanism
 
 `HistoricalVersionedMissingSourceReconciliation` records only the named 272
 identity. A single read-only PostgreSQL catalog query returns structural
-metadata for the source-era table; Python tokenizes quoted literals before
-normalizing unquoted SQL and compares a closed, case- and content-preserving
-signature plus metadata-only absence booleans for unlisted constraints and
-write-restricting indexes, emitting booleans only. The disposable test
-executes retained 273 DDL only to produce the expected table catalog contract;
-it never asserts that 273 verifies or replaces 272 source bytes. The existing
-dispatcher intersects report-derived missing-source names with its closed
-registry, so an unlisted name cannot use this receipt. No query selects
-alert-event rows or writes `schema_migrations`; rollback is ordinary code
-rollback, which returns 272 to generic blocking behavior.
+metadata for the source-era table and its sole known later writer-required
+column; Python tokenizes quoted literals before normalizing unquoted SQL and
+compares a closed, case- and content-preserving signature plus metadata-only
+absence booleans for unlisted columns, constraints, and write-restricting
+indexes, emitting booleans only. The disposable test executes retained 273 and
+281 DDL only to produce the expected table catalog contract; it never asserts
+that either verifies or replaces 272 source bytes. The existing dispatcher
+intersects report-derived missing-source names with its closed registry, so an
+unlisted name cannot use this receipt. No query selects alert-event rows or
+writes `schema_migrations`; rollback is ordinary code rollback, which returns
+272 to generic blocking behavior.
 
 ## Intentional
 
 - No generic allowlist or alias mechanism.
 - No source reconstruction, hash backfill, or 273-to-272 rename inference.
-- No source-era requirement for later `reopen_count`.
-- No rejection of later non-unique performance indexes; only extra constraints
-  and extra unique/exclusion indexes can change write admissibility here.
+- No automatic allowance for later columns: `reopen_count` is the one retained,
+  writer-required later migration and has an exact reviewed signature.
+- No rejection of later non-unique performance indexes; only extra unlisted
+  columns, constraints, and unique/exclusion indexes can change write
+  admissibility here.
 
 ## Deferred
 
@@ -208,29 +243,30 @@ parked. Parked hardening: none.
 
 ## Verification
 
-- `python -m pytest -q tests/test_migration_content_integrity_preflight.py -k '272 or known_historical'` — 50 passed, 65 deselected.
+- `python -m pytest -q tests/test_migration_content_integrity_preflight.py -k '272 or known_historical'` — 56 passed, 65 deselected.
 - `python -m pytest -q tests/test_migrations_runner.py -k '272 or missing_source or historical_attestation'` — 12 passed, 61 deselected.
-- `python -m pytest -q tests/test_b2b_watchlist_alert_events_migration_repair.py` — 10 skipped; no disposable test database was configured locally. The same suite is now enrolled in the existing GitHub PostgreSQL migration job.
+- `python -m pytest -q tests/test_b2b_watchlist_alert_events_migration_repair.py` — 11 skipped; no disposable test database was configured locally. The same suite is now enrolled in the existing GitHub PostgreSQL migration job.
 - `python -m py_compile ...` and `ruff check ...` — passed for all four changed
   Python files.
 - `python scripts/check_guard_class_closure.py --base origin/main --strict` —
   passed; the declared closed registry and signature have property proof.
 - `python scripts/check_migration_content_integrity.py --expected-target 'host=localhost, port=5433, db=atlas' --attest-known-reconciliations` —
-  read-only exit 2; named 272 is attested with permanent storage, no unlisted
-  constraints, no unlisted unique/exclusion indexes, and case-preserving
-  catalog evidence, while independent H-18 records remain blocking. Broad unit
-  suite and required workflows are GitHub CI only per operator direction.
+  read-only exit 2; named 272 is attested with permanent storage, the exact
+  approved column set, no unlisted constraints, no unlisted unique/exclusion
+  indexes, and case-preserving catalog evidence, while independent H-18 records
+  remain blocking. Broad unit suite and required workflows are GitHub CI only
+  per operator direction.
 
 ## Estimated diff size
 
 | File | LOC |
 |---|---:|
 | `.github/workflows/atlas_migrations_runner_checks.yml` | 3 |
-| `atlas_brain/storage/migrations/reconciliation.py` | 698 |
+| `atlas_brain/storage/migrations/reconciliation.py` | 750 |
 | `plans/INDEX.md` | 3 |
-| `plans/PR-H18-Watchlist-Alert-Events-Source-Attestation.md` | 236 |
+| `plans/PR-H18-Watchlist-Alert-Events-Source-Attestation.md` | 272 |
 | `plans/archive/PR-H18-B2B-Campaign-Partner-Source-Attestation.md` | 0 |
-| `tests/test_b2b_watchlist_alert_events_migration_repair.py` | 393 |
-| `tests/test_migration_content_integrity_preflight.py` | 508 |
-| `tests/test_migrations_runner.py` | 193 |
-| **Total** | **2034** |
+| `tests/test_b2b_watchlist_alert_events_migration_repair.py` | 408 |
+| `tests/test_migration_content_integrity_preflight.py` | 550 |
+| `tests/test_migrations_runner.py` | 194 |
+| **Total** | **2180** |

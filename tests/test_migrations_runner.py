@@ -36,7 +36,7 @@ def _migration_022b_source() -> bytes:
 def _default_b2b_watchlist_alert_events_catalog_row() -> dict[str, object]:
     """Return complete metadata-only evidence for the named 272 receipt."""
     from atlas_brain.storage.migrations.reconciliation import (
-        _B2B_WATCHLIST_ALERT_EVENT_BASE_COLUMNS,
+        _B2B_WATCHLIST_ALERT_EVENT_ALLOWED_COLUMNS,
         _B2B_WATCHLIST_ALERT_EVENT_CONSTRAINTS,
         _B2B_WATCHLIST_ALERT_EVENT_INDEXES,
     )
@@ -53,9 +53,10 @@ def _default_b2b_watchlist_alert_events_catalog_row() -> dict[str, object]:
                     "column_default": default,
                 }
                 for name, (data_type, is_nullable, default) in (
-                    _B2B_WATCHLIST_ALERT_EVENT_BASE_COLUMNS.items()
+                    _B2B_WATCHLIST_ALERT_EVENT_ALLOWED_COLUMNS.items()
                 )
             },
+            "no_unlisted_alert_event_columns": True,
             "constraints": {
                 name: {
                     "constraint_type": constraint.constraint_type,
@@ -1041,13 +1042,13 @@ class _AttestedReconciliationPool(_SerializingPool):
     async def fetchrow(self, query, *args):
         if "b2b_watchlist_alert_events" in query:
             from atlas_brain.storage.migrations.reconciliation import (
-                _B2B_WATCHLIST_ALERT_EVENT_BASE_COLUMNS,
+                _B2B_WATCHLIST_ALERT_EVENT_ALLOWED_COLUMNS,
                 _B2B_WATCHLIST_ALERT_EVENT_CONSTRAINTS,
                 _B2B_WATCHLIST_ALERT_EVENT_INDEXES,
             )
 
             assert args == (
-                list(_B2B_WATCHLIST_ALERT_EVENT_BASE_COLUMNS),
+                list(_B2B_WATCHLIST_ALERT_EVENT_ALLOWED_COLUMNS),
                 list(_B2B_WATCHLIST_ALERT_EVENT_CONSTRAINTS),
                 list(_B2B_WATCHLIST_ALERT_EVENT_INDEXES),
             )

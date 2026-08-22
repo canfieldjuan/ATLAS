@@ -92,11 +92,12 @@ async def _prepare_receipt_ledger_schema(conn, schema: str) -> None:
 
 
 async def _prepare_attestable_schema(conn, schema: str) -> None:
-    """Execute retained 273 DDL as a disposable producer, never 272 evidence.
+    """Execute retained producer DDL as compatibility evidence, never 272 source.
 
     The test-owned 272 receipt stays synthetic-version/NULL-digest. Retained
-    273 supplies only the actual expected catalog shape, so this fixture cannot
-    imply that 273 source bytes verify, rename, or replace named 272.
+    273 supplies the source-era shape and 281 supplies the sole known later
+    writer-required column. Neither source verifies, renames, or replaces named
+    272.
     """
     await _prepare_receipt_ledger_schema(conn, schema)
     await conn.execute("""
@@ -105,6 +106,9 @@ async def _prepare_attestable_schema(conn, schema: str) -> None:
         """)
     await conn.execute(
         (MIGRATIONS / "273_b2b_watchlist_alert_events.sql").read_text()
+    )
+    await conn.execute(
+        (MIGRATIONS / "281_b2b_watchlist_alert_reopen_count.sql").read_text()
     )
 
 
@@ -144,6 +148,8 @@ async def test_272_receipt_attests_empty_real_catalog_without_alert_rows():
         assert attestation.watchlist_alert_events_is_ordinary_table
         assert attestation.watchlist_alert_events_has_permanent_storage
         assert attestation.base_alert_event_columns_ready
+        assert attestation.known_later_alert_event_columns_ready
+        assert attestation.no_unlisted_alert_event_columns
         assert attestation.required_alert_event_constraints_ready
         assert attestation.no_unlisted_alert_event_constraints
         assert attestation.required_alert_event_indexes_ready
@@ -191,6 +197,10 @@ async def test_272_receipt_attests_empty_real_catalog_without_alert_rows():
         (
             "unlisted unique index",
             "no_unlisted_alert_event_unique_or_exclusion_indexes",
+        ),
+        (
+            "unlisted required no-default column",
+            "no_unlisted_alert_event_columns",
         ),
     ],
 )
@@ -259,6 +269,11 @@ async def test_272_receipt_rejects_altered_catalog_before_pending_sql(
                     event_type,
                     entity_key
                 );
+                """)
+        elif case == "unlisted required no-default column":
+            await conn.execute("""
+                ALTER TABLE b2b_watchlist_alert_events
+                    ADD COLUMN unlisted_required_writer_input TEXT NOT NULL;
                 """)
         else:  # pragma: no cover - parametrize keeps this exhaustive.
             raise AssertionError(f"unexpected altered catalog case: {case}")

@@ -177,7 +177,7 @@ class FakeConnection:
         self.fetchrow_calls.append((query, args))
         if "b2b_watchlist_alert_events" in query:
             assert args == (
-                list(reconciliation_mod._B2B_WATCHLIST_ALERT_EVENT_BASE_COLUMNS),
+                list(reconciliation_mod._B2B_WATCHLIST_ALERT_EVENT_ALLOWED_COLUMNS),
                 list(reconciliation_mod._B2B_WATCHLIST_ALERT_EVENT_CONSTRAINTS),
                 list(reconciliation_mod._B2B_WATCHLIST_ALERT_EVENT_INDEXES),
             )
@@ -325,9 +325,10 @@ def _default_b2b_watchlist_alert_events_catalog_row() -> dict[str, object]:
                     "column_default": default,
                 }
                 for name, (data_type, is_nullable, default) in (
-                    reconciliation_mod._B2B_WATCHLIST_ALERT_EVENT_BASE_COLUMNS.items()
+                    reconciliation_mod._B2B_WATCHLIST_ALERT_EVENT_ALLOWED_COLUMNS.items()
                 )
             },
+            "no_unlisted_alert_event_columns": True,
             "constraints": {
                 name: {
                     "constraint_type": constraint.constraint_type,
@@ -1150,6 +1151,8 @@ async def test_known_272_reconciliation_attests_catalog_without_source(
         "watchlist_alert_events_is_ordinary_table": True,
         "watchlist_alert_events_has_permanent_storage": True,
         "base_alert_event_columns_ready": True,
+        "known_later_alert_event_columns_ready": True,
+        "no_unlisted_alert_event_columns": True,
         "required_alert_event_constraints_ready": True,
         "no_unlisted_alert_event_constraints": True,
         "required_alert_event_indexes_ready": True,
@@ -1171,6 +1174,7 @@ async def test_known_272_reconciliation_attests_catalog_without_source(
     assert "relation_state.relpersistence" in catalog_query
     assert "JOIN pg_attribute AS attribute_state" in catalog_query
     assert "JOIN pg_attrdef AS default_state" in catalog_query
+    assert "unlisted_columns AS" in catalog_query
     assert "JOIN pg_constraint AS actual" in catalog_query
     assert "unlisted_constraints AS" in catalog_query
     assert "JOIN pg_index AS index_state" in catalog_query
@@ -1203,6 +1207,10 @@ async def test_known_272_reconciliation_attests_catalog_without_source(
         ),
         ("missing source-era column", "base_alert_event_columns_ready"),
         ("wrong source-era column default", "base_alert_event_columns_ready"),
+        (
+            "missing known later column",
+            "known_later_alert_event_columns_ready",
+        ),
         ("missing named constraint", "required_alert_event_constraints_ready"),
         ("wrong foreign-key action", "required_alert_event_constraints_ready"),
         ("weakened check constraint", "required_alert_event_constraints_ready"),
@@ -1255,6 +1263,8 @@ async def test_known_272_reconciliation_rejects_each_required_evidence_field(
         columns.pop("payload")
     elif case == "wrong source-era column default":
         columns["status"]["column_default"] = "closed"
+    elif case == "missing known later column":
+        columns.pop("reopen_count")
     elif case == "missing named constraint":
         constraints.pop("chk_b2b_watchlist_alert_events_status")
     elif case == "wrong foreign-key action":
@@ -1306,6 +1316,26 @@ async def test_known_272_reconciliation_rejects_each_required_evidence_field(
         ("column has the wrong type", "base_alert_event_columns_ready"),
         ("column has the wrong nullability", "base_alert_event_columns_ready"),
         ("column has the wrong default", "base_alert_event_columns_ready"),
+        (
+            "known later column is absent",
+            "known_later_alert_event_columns_ready",
+        ),
+        (
+            "known later column has the wrong type",
+            "known_later_alert_event_columns_ready",
+        ),
+        (
+            "known later column has the wrong nullability",
+            "known_later_alert_event_columns_ready",
+        ),
+        (
+            "known later column has the wrong default",
+            "known_later_alert_event_columns_ready",
+        ),
+        (
+            "unlisted required column can reject writes",
+            "no_unlisted_alert_event_columns",
+        ),
         ("constraint is absent", "required_alert_event_constraints_ready"),
         ("constraint has the wrong type", "required_alert_event_constraints_ready"),
         ("constraint has the wrong key columns", "required_alert_event_constraints_ready"),
@@ -1414,6 +1444,16 @@ async def test_known_272_reconciliation_rejects_each_catalog_guard_independently
         columns["status"]["is_nullable"] = True
     elif case == "column has the wrong default":
         columns["status"]["column_default"] = "'closed'"
+    elif case == "known later column is absent":
+        columns["reopen_count"]["exists"] = False
+    elif case == "known later column has the wrong type":
+        columns["reopen_count"]["data_type"] = "bigint"
+    elif case == "known later column has the wrong nullability":
+        columns["reopen_count"]["is_nullable"] = True
+    elif case == "known later column has the wrong default":
+        columns["reopen_count"]["column_default"] = None
+    elif case == "unlisted required column can reject writes":
+        catalog["no_unlisted_alert_event_columns"] = False
     elif case == "constraint is absent":
         constraints.pop("b2b_watchlist_alert_events_pkey")
     elif case == "constraint has the wrong type":
@@ -1488,6 +1528,8 @@ async def test_known_272_reconciliation_rejects_each_catalog_guard_independently
         "watchlist_alert_events_is_ordinary_table",
         "watchlist_alert_events_has_permanent_storage",
         "base_alert_event_columns_ready",
+        "known_later_alert_event_columns_ready",
+        "no_unlisted_alert_event_columns",
         "required_alert_event_constraints_ready",
         "no_unlisted_alert_event_constraints",
         "required_alert_event_indexes_ready",
