@@ -114,10 +114,25 @@ class MissingSourceMigrationReconciliationAttestation:
     ledger_digest_is_null: bool
     applied_at_matches_record: bool
     immutable_projection_ready: bool
+    base_token_contract_ready: bool
+    required_constraints_ready: bool
     fingerprint_check_ready: bool
     terminal_state_check_ready: bool
     issued_contact_index_ready: bool
     status_index_ready: bool
+
+    @property
+    def complete_token_schema_ready(self) -> bool:
+        """Require every writer-used token field and constraint, not a projection."""
+        return all((
+            self.immutable_projection_ready,
+            self.base_token_contract_ready,
+            self.required_constraints_ready,
+            self.fingerprint_check_ready,
+            self.terminal_state_check_ready,
+            self.issued_contact_index_ready,
+            self.status_index_ready,
+        ))
 
     @property
     def source_verification(self) -> str:
@@ -130,7 +145,7 @@ class MissingSourceMigrationReconciliationAttestation:
             self.exactly_one_ledger_row,
             self.ledger_digest_is_null,
             self.applied_at_matches_record,
-            self.immutable_projection_ready,
+            self.complete_token_schema_ready,
             self.fingerprint_check_ready,
             self.terminal_state_check_ready,
             self.issued_contact_index_ready,
@@ -149,6 +164,9 @@ class MissingSourceMigrationReconciliationAttestation:
             "ledger_digest_is_null": self.ledger_digest_is_null,
             "applied_at_matches_record": self.applied_at_matches_record,
             "immutable_projection_ready": self.immutable_projection_ready,
+            "base_token_contract_ready": self.base_token_contract_ready,
+            "required_constraints_ready": self.required_constraints_ready,
+            "complete_token_schema_ready": self.complete_token_schema_ready,
             "fingerprint_check_ready": self.fingerprint_check_ready,
             "terminal_state_check_ready": self.terminal_state_check_ready,
             "issued_contact_index_ready": self.issued_contact_index_ready,
@@ -222,7 +240,33 @@ _PUBLIC_ONBOARDING_TOKEN_IMMUTABLE_COLUMNS = {
     "prefill_zip": ("character varying", 16, "YES"),
     "prefill_customer_type": ("character varying", 32, "NO"),
 }
+_PUBLIC_ONBOARDING_TOKEN_BASE_COLUMNS = {
+    "id": ("uuid", None, "NO", None),
+    "draft_id": ("uuid", None, "NO", None),
+    "contact_id": ("uuid", None, "NO", None),
+    "approval_key": ("character varying", 128, "NO", None),
+    "status": ("character varying", 16, "NO", "issued"),
+    "approved_by_employee_id": ("bigint", None, "NO", None),
+    "approved_by_name": ("character varying", 128, "NO", None),
+    "issued_at": ("timestamp with time zone", None, "NO", "now()"),
+    "redeemed_at": ("timestamp with time zone", None, "YES", None),
+    "revoked_at": ("timestamp with time zone", None, "YES", None),
+    "handoff_id": ("uuid", None, "YES", None),
+}
+_PUBLIC_ONBOARDING_TOKEN_COLUMNS = {
+    **{
+        name: (*signature, None)
+        for name, signature in _PUBLIC_ONBOARDING_TOKEN_IMMUTABLE_COLUMNS.items()
+    },
+    **_PUBLIC_ONBOARDING_TOKEN_BASE_COLUMNS,
+}
 _PUBLIC_ONBOARDING_TOKEN_CONSTRAINT_EXPRESSIONS = {
+    "ck_eom_public_onboarding_tokens_status": (
+        "((status) = any ((array[issued, redeemed, revoked])))"
+    ),
+    "eom_public_onboarding_tokens_approved_by_employee_id_check": (
+        "(approved_by_employee_id > 0)"
+    ),
     "eom_public_onboarding_tokens_signing_key_fingerprint_check": (
         "((signing_key_fingerprint) ~ ^[0-9a-f]{64}$)"
     ),
@@ -234,6 +278,75 @@ _PUBLIC_ONBOARDING_TOKEN_CONSTRAINT_EXPRESSIONS = {
         "(redeemed_at is null) and (revoked_at is not null) and "
         "(handoff_id is null)))"
     ),
+}
+
+
+@dataclass(frozen=True)
+class _PublicOnboardingTokenConstraint:
+    """Exact structural requirement for one final token-table constraint."""
+
+    constraint_type: str
+    key_columns: tuple[str, ...]
+    referenced_table: str | None = None
+    referenced_columns: tuple[str, ...] = ()
+    delete_action: str | None = None
+    update_action: str | None = None
+    match_type: str | None = None
+    expression: str | None = None
+
+
+_PUBLIC_ONBOARDING_TOKEN_REQUIRED_CONSTRAINTS = {
+    "pk_eom_public_onboarding_tokens": _PublicOnboardingTokenConstraint(
+        "p", ("id",)
+    ),
+    "uq_eom_public_onboarding_tokens_draft": _PublicOnboardingTokenConstraint(
+        "u", ("draft_id",)
+    ),
+    "uq_eom_public_onboarding_tokens_approval": _PublicOnboardingTokenConstraint(
+        "u", ("approval_key",)
+    ),
+    "uq_eom_public_onboarding_tokens_handoff": _PublicOnboardingTokenConstraint(
+        "u", ("handoff_id",)
+    ),
+    "eom_public_onboarding_tokens_draft_id_fkey": _PublicOnboardingTokenConstraint(
+        "f",
+        ("draft_id",),
+        referenced_table="eom_onboarding_email_drafts",
+        referenced_columns=("id",),
+        delete_action="r",
+        update_action="a",
+        match_type="s",
+    ),
+    "eom_public_onboarding_tokens_contact_id_fkey": _PublicOnboardingTokenConstraint(
+        "f",
+        ("contact_id",),
+        referenced_table="contacts",
+        referenced_columns=("id",),
+        delete_action="r",
+        update_action="a",
+        match_type="s",
+    ),
+} | {
+    name: _PublicOnboardingTokenConstraint(
+        "c",
+        {
+            "ck_eom_public_onboarding_tokens_status": ("status",),
+            "eom_public_onboarding_tokens_approved_by_employee_id_check": (
+                "approved_by_employee_id",
+            ),
+            "eom_public_onboarding_tokens_signing_key_fingerprint_check": (
+                "signing_key_fingerprint",
+            ),
+            "ck_eom_public_onboarding_tokens_terminal_state": (
+                "status",
+                "redeemed_at",
+                "revoked_at",
+                "handoff_id",
+            ),
+        }[name],
+        expression=expression,
+    )
+    for name, expression in _PUBLIC_ONBOARDING_TOKEN_CONSTRAINT_EXPRESSIONS.items()
 }
 _PUBLIC_ONBOARDING_TOKEN_ISSUED_CONTACT_INDEX = (
     "uq_eom_public_onboarding_tokens_issued_contact"
@@ -346,6 +459,65 @@ def _canonicalize_catalog_index_definition(definition: object) -> str:
     return re.sub(r"\s+", "", _normalize_schema_definition(definition))
 
 
+def _catalog_char(value: object) -> str:
+    """Normalize PostgreSQL's single-character catalog values for comparison."""
+    if isinstance(value, bytes):
+        return value.decode("ascii")
+    return str(value or "")
+
+
+def _catalog_column_names(value: object) -> tuple[str, ...]:
+    """Return catalog array values as an immutable, order-preserving tuple."""
+    if value is None:
+        return ()
+    return tuple(str(name) for name in value)
+
+
+def _public_onboarding_token_constraint_ready(
+    row: Any,
+    expected: _PublicOnboardingTokenConstraint,
+) -> bool:
+    """Check one named constraint's full writer-facing structural contract."""
+    referenced_table_ready = (
+        expected.referenced_table is None
+        or (
+            row["referenced_table"] == expected.referenced_table
+            and bool(row["references_current_schema"])
+        )
+    )
+    delete_action_ready = (
+        expected.delete_action is None
+        or _catalog_char(row["delete_action"]) == expected.delete_action
+    )
+    update_action_ready = (
+        expected.update_action is None
+        or _catalog_char(row["update_action"]) == expected.update_action
+    )
+    match_type_ready = (
+        expected.match_type is None
+        or _catalog_char(row["match_type"]) == expected.match_type
+    )
+    expression_ready = (
+        expected.expression is None
+        or _canonicalize_catalog_constraint_expression(row["expression"])
+        == expected.expression
+    )
+    return all((
+        _catalog_char(row["constraint_type"]) == expected.constraint_type,
+        _catalog_column_names(row["key_columns"]) == expected.key_columns,
+        referenced_table_ready,
+        _catalog_column_names(row["referenced_columns"])
+        == expected.referenced_columns,
+        delete_action_ready,
+        update_action_ready,
+        match_type_ready,
+        not bool(row["is_deferrable"]),
+        not bool(row["is_initially_deferred"]),
+        bool(row["is_validated"]),
+        expression_ready,
+    ))
+
+
 async def _public_onboarding_token_index_ready(
     executor: Any,
     *,
@@ -406,57 +578,115 @@ async def _public_onboarding_token_index_ready(
 
 async def _migration_382_catalog_evidence(
     executor: Any,
-) -> tuple[bool, bool, bool, bool, bool]:
-    """Read only final immutable token catalog metadata, never token values."""
+) -> tuple[bool, bool, bool, bool, bool, bool, bool]:
+    """Read only the full final token contract, never token values."""
     column_rows = await executor.fetch(
         """
         SELECT
             actual.column_name,
             actual.data_type,
             actual.character_maximum_length,
-            actual.is_nullable
+            actual.is_nullable,
+            actual.column_default
         FROM information_schema.columns AS actual
         WHERE actual.table_schema = current_schema()
           AND actual.table_name = 'eom_public_onboarding_tokens'
           AND actual.column_name = ANY($1::text[])
         """,
-        list(_PUBLIC_ONBOARDING_TOKEN_IMMUTABLE_COLUMNS),
+        list(_PUBLIC_ONBOARDING_TOKEN_COLUMNS),
     )
     observed_columns = {
         row["column_name"]: (
             row["data_type"],
             row["character_maximum_length"],
             row["is_nullable"],
+            _canonicalize_catalog_constraint_expression(row["column_default"])
+            if row["column_default"] is not None
+            else None,
         )
         for row in column_rows
     }
-    immutable_projection_ready = (
-        observed_columns == _PUBLIC_ONBOARDING_TOKEN_IMMUTABLE_COLUMNS
+    immutable_projection_ready = all(
+        observed_columns.get(name) == (*signature, None)
+        for name, signature in _PUBLIC_ONBOARDING_TOKEN_IMMUTABLE_COLUMNS.items()
+    )
+    base_token_contract_ready = all(
+        observed_columns.get(name) == signature
+        for name, signature in _PUBLIC_ONBOARDING_TOKEN_BASE_COLUMNS.items()
     )
 
     constraint_rows = await executor.fetch(
         """
-        SELECT actual.conname, pg_get_expr(actual.conbin, actual.conrelid) AS definition
+        SELECT
+            actual.conname,
+            actual.contype AS constraint_type,
+            ARRAY(
+                SELECT attribute_state.attname
+                FROM unnest(actual.conkey)
+                     WITH ORDINALITY AS key_state(attnum, ordinality)
+                JOIN pg_attribute AS attribute_state
+                  ON attribute_state.attrelid = actual.conrelid
+                 AND attribute_state.attnum = key_state.attnum
+                ORDER BY key_state.ordinality
+            ) AS key_columns,
+            referenced_table.relname AS referenced_table,
+            (referenced_namespace.nspname = current_schema())
+                AS references_current_schema,
+            ARRAY(
+                SELECT attribute_state.attname
+                FROM unnest(actual.confkey)
+                     WITH ORDINALITY AS key_state(attnum, ordinality)
+                JOIN pg_attribute AS attribute_state
+                  ON attribute_state.attrelid = actual.confrelid
+                 AND attribute_state.attnum = key_state.attnum
+                ORDER BY key_state.ordinality
+            ) AS referenced_columns,
+            actual.confdeltype AS delete_action,
+            actual.confupdtype AS update_action,
+            actual.confmatchtype AS match_type,
+            actual.condeferrable AS is_deferrable,
+            actual.condeferred AS is_initially_deferred,
+            actual.convalidated AS is_validated,
+            pg_get_expr(actual.conbin, actual.conrelid) AS expression
         FROM pg_constraint AS actual
         JOIN pg_class AS table_class
           ON table_class.oid = actual.conrelid
         JOIN pg_namespace AS table_namespace
           ON table_namespace.oid = table_class.relnamespace
+        LEFT JOIN pg_class AS referenced_table
+          ON referenced_table.oid = actual.confrelid
+        LEFT JOIN pg_namespace AS referenced_namespace
+          ON referenced_namespace.oid = referenced_table.relnamespace
         WHERE table_namespace.nspname = current_schema()
           AND table_class.relname = 'eom_public_onboarding_tokens'
           AND actual.conname = ANY($1::text[])
         """,
-        list(_PUBLIC_ONBOARDING_TOKEN_CONSTRAINT_EXPRESSIONS),
+        list(_PUBLIC_ONBOARDING_TOKEN_REQUIRED_CONSTRAINTS),
     )
     observed_constraints = {
-        row["conname"]: row["definition"]
+        row["conname"]: row
         for row in constraint_rows
     }
+    required_constraints_ready = (
+        set(observed_constraints) == set(_PUBLIC_ONBOARDING_TOKEN_REQUIRED_CONSTRAINTS)
+        and all(
+            _public_onboarding_token_constraint_ready(
+                observed_constraints[name], expected
+            )
+            for name, expected in _PUBLIC_ONBOARDING_TOKEN_REQUIRED_CONSTRAINTS.items()
+        )
+    )
+    fingerprint_constraint = observed_constraints.get(
+        "eom_public_onboarding_tokens_signing_key_fingerprint_check"
+    )
+    terminal_state_constraint = observed_constraints.get(
+        "ck_eom_public_onboarding_tokens_terminal_state"
+    )
     fingerprint_check_ready = (
         _canonicalize_catalog_constraint_expression(
-            observed_constraints.get(
-                "eom_public_onboarding_tokens_signing_key_fingerprint_check"
-            )
+            fingerprint_constraint["expression"]
+            if fingerprint_constraint is not None
+            else None
         )
         == _PUBLIC_ONBOARDING_TOKEN_CONSTRAINT_EXPRESSIONS[
             "eom_public_onboarding_tokens_signing_key_fingerprint_check"
@@ -464,9 +694,9 @@ async def _migration_382_catalog_evidence(
     )
     terminal_state_check_ready = (
         _canonicalize_catalog_constraint_expression(
-            observed_constraints.get(
-                "ck_eom_public_onboarding_tokens_terminal_state"
-            )
+            terminal_state_constraint["expression"]
+            if terminal_state_constraint is not None
+            else None
         )
         == _PUBLIC_ONBOARDING_TOKEN_CONSTRAINT_EXPRESSIONS[
             "ck_eom_public_onboarding_tokens_terminal_state"
@@ -490,6 +720,8 @@ async def _migration_382_catalog_evidence(
     )
     return (
         immutable_projection_ready,
+        base_token_contract_ready,
+        required_constraints_ready,
         fingerprint_check_ready,
         terminal_state_check_ready,
         issued_contact_index_ready,
@@ -547,6 +779,8 @@ async def _attest_migration_382(
     applied_at = _normalize_utc(ledger_row["applied_at"] if ledger_row is not None else None)
     (
         immutable_projection_ready,
+        base_token_contract_ready,
+        required_constraints_ready,
         fingerprint_check_ready,
         terminal_state_check_ready,
         issued_contact_index_ready,
@@ -563,6 +797,8 @@ async def _attest_migration_382(
         ),
         applied_at_matches_record=applied_at == record.observed_applied_at,
         immutable_projection_ready=immutable_projection_ready,
+        base_token_contract_ready=base_token_contract_ready,
+        required_constraints_ready=required_constraints_ready,
         fingerprint_check_ready=fingerprint_check_ready,
         terminal_state_check_ready=terminal_state_check_ready,
         issued_contact_index_ready=issued_contact_index_ready,

@@ -103,15 +103,13 @@ class FakeConnection:
             return self.public_onboarding_reconciliation_rows
         if "FROM information_schema.columns AS actual" in query:
             assert args == (
-                list(reconciliation_mod._PUBLIC_ONBOARDING_TOKEN_IMMUTABLE_COLUMNS),
+                list(reconciliation_mod._PUBLIC_ONBOARDING_TOKEN_COLUMNS),
             )
             return self.public_onboarding_columns
         if "eom_public_onboarding_tokens" in query:
             assert "FROM pg_constraint AS actual" in query
             assert args == (
-                list(
-                    reconciliation_mod._PUBLIC_ONBOARDING_TOKEN_CONSTRAINT_EXPRESSIONS
-                ),
+                list(reconciliation_mod._PUBLIC_ONBOARDING_TOKEN_REQUIRED_CONSTRAINTS),
             )
             return self.public_onboarding_constraints
         assert "FROM pg_constraint AS actual" in query
@@ -167,18 +165,33 @@ def _default_public_onboarding_columns() -> list[dict[str, object]]:
             "data_type": data_type,
             "character_maximum_length": maximum_length,
             "is_nullable": nullable,
+            "column_default": default,
         }
-        for name, (data_type, maximum_length, nullable) in (
-            reconciliation_mod._PUBLIC_ONBOARDING_TOKEN_IMMUTABLE_COLUMNS.items()
+        for name, (data_type, maximum_length, nullable, default) in (
+            reconciliation_mod._PUBLIC_ONBOARDING_TOKEN_COLUMNS.items()
         )
     ]
 
 
 def _default_public_onboarding_constraints() -> list[dict[str, object]]:
     return [
-        {"conname": name, "definition": definition}
-        for name, definition in (
-            reconciliation_mod._PUBLIC_ONBOARDING_TOKEN_CONSTRAINT_EXPRESSIONS.items()
+        {
+            "conname": name,
+            "constraint_type": constraint.constraint_type,
+            "key_columns": list(constraint.key_columns),
+            "referenced_table": constraint.referenced_table,
+            "references_current_schema": constraint.referenced_table is not None,
+            "referenced_columns": list(constraint.referenced_columns),
+            "delete_action": constraint.delete_action or " ",
+            "update_action": constraint.update_action or " ",
+            "match_type": constraint.match_type or " ",
+            "is_deferrable": False,
+            "is_initially_deferred": False,
+            "is_validated": True,
+            "expression": constraint.expression,
+        }
+        for name, constraint in (
+            reconciliation_mod._PUBLIC_ONBOARDING_TOKEN_REQUIRED_CONSTRAINTS.items()
         )
     ]
 
@@ -479,6 +492,9 @@ async def test_known_382_reconciliation_attests_complete_catalog_without_source(
         "ledger_digest_is_null": True,
         "applied_at_matches_record": True,
         "immutable_projection_ready": True,
+        "base_token_contract_ready": True,
+        "required_constraints_ready": True,
+        "complete_token_schema_ready": True,
         "fingerprint_check_ready": True,
         "terminal_state_check_ready": True,
         "issued_contact_index_ready": True,
@@ -505,7 +521,11 @@ async def test_known_382_reconciliation_attests_complete_catalog_without_source(
         ("non-null ledger digest", "ledger_digest_is_null"),
         ("truncated applied timestamp", "applied_at_matches_record"),
         ("duplicate ledger rows", "exactly_one_ledger_row"),
+        ("missing ledger row", "exactly_one_ledger_row"),
         ("missing immutable column", "immutable_projection_ready"),
+        ("missing original column", "base_token_contract_ready"),
+        ("missing status default", "base_token_contract_ready"),
+        ("missing required constraint", "required_constraints_ready"),
         ("weakened fingerprint check", "fingerprint_check_ready"),
         ("weakened terminal-state check", "terminal_state_check_ready"),
         ("missing issued-contact index", "issued_contact_index_ready"),
@@ -538,18 +558,38 @@ async def test_known_382_reconciliation_rejects_each_required_evidence_field(
                 "applied_at": record.observed_applied_at,
             },
         ])
+    elif case == "missing ledger row":
+        connection = _migration_382_connection(reconciliation_rows=[])
     elif case == "missing immutable column":
         connection.public_onboarding_columns = connection.public_onboarding_columns[1:]
+    elif case == "missing original column":
+        connection.public_onboarding_columns = [
+            row
+            for row in connection.public_onboarding_columns
+            if row["column_name"] != "approval_key"
+        ]
+    elif case == "missing status default":
+        for row in connection.public_onboarding_columns:
+            if row["column_name"] == "status":
+                row["column_default"] = None
+    elif case == "missing required constraint":
+        connection.public_onboarding_constraints = [
+            row
+            for row in connection.public_onboarding_constraints
+            if row["conname"] != "eom_public_onboarding_tokens_contact_id_fkey"
+        ]
     elif case == "weakened fingerprint check":
-        connection.public_onboarding_constraints[0] = {
-            "conname": "eom_public_onboarding_tokens_signing_key_fingerprint_check",
-            "definition": "((signing_key_fingerprint)::text ~ '^[0-9a-f]{63}$'::text)",
-        }
+        for row in connection.public_onboarding_constraints:
+            if row["conname"] == (
+                "eom_public_onboarding_tokens_signing_key_fingerprint_check"
+            ):
+                row["expression"] = (
+                    "((signing_key_fingerprint)::text ~ '^[0-9a-f]{63}$'::text)"
+                )
     elif case == "weakened terminal-state check":
-        connection.public_onboarding_constraints[1] = {
-            "conname": "ck_eom_public_onboarding_tokens_terminal_state",
-            "definition": "(status = 'issued')",
-        }
+        for row in connection.public_onboarding_constraints:
+            if row["conname"] == "ck_eom_public_onboarding_tokens_terminal_state":
+                row["expression"] = "(status = 'issued')"
     elif case == "missing issued-contact index":
         connection.public_onboarding_indexes[
             reconciliation_mod._PUBLIC_ONBOARDING_TOKEN_ISSUED_CONTACT_INDEX
@@ -571,6 +611,11 @@ async def test_known_382_reconciliation_rejects_each_required_evidence_field(
     assert code == module.UNRESOLVED_DRIFT_EXIT, case
     assert evidence["source_verification"] == reconciliation_mod.HISTORICAL_SOURCE_UNAVAILABLE
     assert evidence[field] is False, case
+    assert evidence["complete_token_schema_ready"] is False or field in {
+        "ledger_digest_is_null",
+        "applied_at_matches_record",
+        "exactly_one_ledger_row",
+    }, case
     assert evidence["status"] == "not_attested", case
     assert connection.execute_calls == []
 

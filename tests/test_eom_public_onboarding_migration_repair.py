@@ -427,6 +427,14 @@ async def test_known_382_attestation_reads_complete_catalog_without_token_rows()
         assert len(attestations) == 1
         attestation = attestations[0]
         assert attestation.migration_name == record.migration_name
+        assert attestation.immutable_projection_ready
+        assert attestation.base_token_contract_ready
+        assert attestation.required_constraints_ready
+        assert attestation.fingerprint_check_ready
+        assert attestation.terminal_state_check_ready
+        assert attestation.issued_contact_index_ready
+        assert attestation.status_index_ready
+        assert attestation.complete_token_schema_ready
         assert attestation.status == "attested"
         assert attestation.as_payload()["source_verification"] == (
             "historical_source_unavailable"
@@ -435,6 +443,67 @@ async def test_known_382_attestation_reads_complete_catalog_without_token_rows()
             await conn.fetchval("SELECT COUNT(*) FROM eom_public_onboarding_tokens")
             == 0
         )
+    finally:
+        await conn.execute(f"DROP SCHEMA IF EXISTS {_quote_ident(schema)} CASCADE")
+        await conn.close()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("case", "alter_sql", "evidence_key"),
+    [
+        (
+            "missing preexisting writer column",
+            "ALTER TABLE eom_public_onboarding_tokens "
+            "DROP COLUMN approval_key CASCADE",
+            "base_token_contract_ready",
+        ),
+        (
+            "missing required check constraint",
+            "ALTER TABLE eom_public_onboarding_tokens "
+            "DROP CONSTRAINT ck_eom_public_onboarding_tokens_status",
+            "required_constraints_ready",
+        ),
+    ],
+)
+async def test_known_382_attestation_refuses_incomplete_token_table_contract(
+    case: str,
+    alter_sql: str,
+    evidence_key: str,
+):
+    """The catalog receipt cannot admit a token relation missing base safeguards."""
+    database_url = _database_url_or_skip()
+    schema = f"eom_public_reconciliation_incomplete_{uuid.uuid4().hex}"
+    conn = await asyncpg.connect(database_url)
+    try:
+        await _prepare_complete_schema(conn, schema)
+        record = MIGRATION_382_EOM_PUBLIC_ONBOARDING_TOKENS_RECONCILIATION
+        await conn.execute(
+            """
+            INSERT INTO schema_migrations (version, name, content_sha256, applied_at)
+            VALUES ($1, $2, NULL, $3)
+            """,
+            -11,
+            record.migration_name,
+            record.observed_applied_at,
+        )
+        await conn.execute(alter_sql)
+
+        attestations = await attest_known_historical_migration_reconciliations(
+            conn,
+            sorted(MIGRATIONS.glob("*.sql")),
+            candidate_names={record.migration_name},
+        )
+
+        assert len(attestations) == 1, case
+        payload = attestations[0].as_payload()
+        assert payload[evidence_key] is False, case
+        assert payload["complete_token_schema_ready"] is False, case
+        assert payload["status"] == "not_attested", case
+        assert (
+            await conn.fetchval("SELECT COUNT(*) FROM eom_public_onboarding_tokens")
+            == 0
+        ), case
     finally:
         await conn.execute(f"DROP SCHEMA IF EXISTS {_quote_ident(schema)} CASCADE")
         await conn.close()

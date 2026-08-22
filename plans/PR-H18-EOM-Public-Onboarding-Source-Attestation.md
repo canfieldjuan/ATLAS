@@ -26,8 +26,9 @@ slice.
   target ledger and current catalog prove that record's final safe state.
 - Correct fix must touch/change: source-controlled evidence must name only
   `382_eom_public_onboarding_tokens`, retain the observed UTC timestamp and
-  NULL-digest requirement, and run a PII-free catalog predicate for the final
-  immutable token projection, constraints, and indexes. The runner must remove
+  NULL-digest requirement, and run a PII-free catalog predicate for the full
+  final token table contract: immutable and preexisting columns/defaults,
+  primary/foreign/unique/check constraints, and indexes. The runner must remove
   only that named `missing_source` record from *pending admission* after a
   successful attestation, while the generic preflight continues to report it as
   unresolved drift. Focused tests must prove the exact positive path, every
@@ -44,6 +45,7 @@ slice.
 
 Ownership lane: eom/migration-content-integrity
 Slice phase: Production hardening
+Max files: 9
 
 1. Add an immutable, target-proven reconciliation record and a PII-free
    catalog attestation for only the legacy public-onboarding migration 382
@@ -68,9 +70,9 @@ Slice phase: Production hardening
      source is verified; settled by the read-only preflight payload and its
      zero-`execute_calls` assertion.
   3. A non-NULL digest, timestamp mismatch, duplicate/missing ledger row, or a
-     missing immutable field, fingerprint check, terminal-state check, issued
-     contact uniqueness, or status index remains `not_attested`; settled by
-     parameterized focused regressions.
+     missing/wrong immutable or preexisting field/default, primary key, required
+     foreign/unique/check constraint, issued-contact uniqueness, or status index
+     remains `not_attested`; settled by parameterized focused regressions.
   4. `run_migrations` applies a pending test migration exactly once when the
      target 382 record is the sole unresolved evidence and the attestation
      succeeds; settled by `tests/test_migrations_runner.py` observing the real
@@ -115,9 +117,9 @@ Slice phase: Production hardening
   transport failure, or any coexisting mismatch/missing source remains a
   refusal before SQL.
 - Guard-relevant fields: record name, ledger cardinality, NULL digest, exact
-  aware UTC `applied_at`, the nine immutable column signatures, signing-key
-  fingerprint check, terminal-state check, issued-contact unique partial index,
-  and status index.
+  aware UTC `applied_at`, every final token column signature/default, primary
+  key, required foreign/unique/check constraints, issued-contact unique partial
+  index, and status index.
 - Caller x input shape: both the CLI preflight and `run_migrations` load the
   same source-controlled records. The CLI emits evidence only for names the
   current report identifies while keeping that generic report unresolved; the
@@ -198,8 +200,8 @@ data.
 - The existing no-argument reconciliation helper retains its historical
   387-only result. New 382 callers must pass the report-derived candidate name,
   so the change is additive for existing internal consumers.
-- The catalog predicate checks final immutable schema evidence and never reads
-  token, lead, customer, or email data.
+- The catalog predicate checks the final complete token-table contract and
+  never reads token, lead, customer, or email data.
 - Migration 389 remains blocked after this PR because 386 and five other
   missing-source records are deliberately unchanged.
 
@@ -231,11 +233,12 @@ hardening item is hidden in this PR.
 - Passed: focused unit selection:
   `pytest -q tests/test_migration_content_integrity_preflight.py -k
   'migration_382 or known_382 or known_387 or default_known_reconciliation'`
-  (`19 passed, 12 deselected`) and
-  the scoped runner selection (`10 passed, 52 deselected`).
+  (`23 passed, 12 deselected`) and
+  the scoped runner selection (`11 passed, 52 deselected`).
 - Passed: a disposable, local PostgreSQL 16 instance executed the real complete
-  382 catalog attestation and the observed-incomplete-catalog refusal through
-  the production migration runner (`2 passed, 3 deselected`). No production
+  382 catalog attestation plus missing preexisting-column/required-constraint
+  refusals through the production migration runner (`4 passed, 3 deselected`).
+  No production
   database, token, lead, customer, or email data was used.
 - Passed: `git diff --check`.
 - Passed: target-confirmed read-only preflight from this candidate worktree.
@@ -255,15 +258,15 @@ hardening item is hidden in this PR.
 | File | LOC |
 |---|---:|
 | `atlas_brain/storage/migrations/__init__.py` | 31 |
-| `atlas_brain/storage/migrations/reconciliation.py` | 389 |
+| `atlas_brain/storage/migrations/reconciliation.py` | 625 |
 | `plans/INDEX.md` | 3 |
-| `plans/PR-H18-EOM-Public-Onboarding-Source-Attestation.md` | 276 |
+| `plans/PR-H18-EOM-Public-Onboarding-Source-Attestation.md` | 279 |
 | `plans/archive/PR-H18-Migration-387-Attestation-Precision.md` | 0 |
 | `scripts/check_migration_content_integrity.py` | 7 |
-| `tests/test_eom_public_onboarding_migration_repair.py` | 45 |
-| `tests/test_migration_content_integrity_preflight.py` | 287 |
-| `tests/test_migrations_runner.py` | 171 |
-| **Total** | **1209** |
+| `tests/test_eom_public_onboarding_migration_repair.py` | 114 |
+| `tests/test_migration_content_integrity_preflight.py` | 332 |
+| `tests/test_migrations_runner.py` | 224 |
+| **Total** | **1615** |
 
 ## Diff-budget rationale
 

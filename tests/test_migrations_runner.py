@@ -834,8 +834,8 @@ class _AttestedReconciliationPool(_SerializingPool):
         from atlas_brain.storage.migrations.reconciliation import (
             MIGRATION_382_EOM_PUBLIC_ONBOARDING_TOKENS_RECONCILIATION,
             MIGRATION_387_RECONCILIATION,
-            _PUBLIC_ONBOARDING_TOKEN_CONSTRAINT_EXPRESSIONS,
-            _PUBLIC_ONBOARDING_TOKEN_IMMUTABLE_COLUMNS,
+            _PUBLIC_ONBOARDING_TOKEN_COLUMNS,
+            _PUBLIC_ONBOARDING_TOKEN_REQUIRED_CONSTRAINTS,
         )
 
         normalized = " ".join(query.split())
@@ -850,25 +850,42 @@ class _AttestedReconciliationPool(_SerializingPool):
             )
             return list(self.public_onboarding_reconciliation_rows)
         if "FROM information_schema.columns AS actual" in query:
-            assert args == (list(_PUBLIC_ONBOARDING_TOKEN_IMMUTABLE_COLUMNS),)
+            assert args == (list(_PUBLIC_ONBOARDING_TOKEN_COLUMNS),)
             return [
                 {
                     "column_name": name,
                     "data_type": data_type,
                     "character_maximum_length": maximum_length,
                     "is_nullable": nullable,
+                    "column_default": default,
                 }
-                for name, (data_type, maximum_length, nullable) in (
-                    _PUBLIC_ONBOARDING_TOKEN_IMMUTABLE_COLUMNS.items()
+                for name, (data_type, maximum_length, nullable, default) in (
+                    _PUBLIC_ONBOARDING_TOKEN_COLUMNS.items()
                 )
             ]
         if "eom_public_onboarding_tokens" in query:
             assert "FROM pg_constraint AS actual" in query
-            assert args == (list(_PUBLIC_ONBOARDING_TOKEN_CONSTRAINT_EXPRESSIONS),)
+            assert args == (list(_PUBLIC_ONBOARDING_TOKEN_REQUIRED_CONSTRAINTS),)
             return [
-                {"conname": name, "definition": definition}
-                for name, definition in (
-                    _PUBLIC_ONBOARDING_TOKEN_CONSTRAINT_EXPRESSIONS.items()
+                {
+                    "conname": name,
+                    "constraint_type": constraint.constraint_type,
+                    "key_columns": list(constraint.key_columns),
+                    "referenced_table": constraint.referenced_table,
+                    "references_current_schema": (
+                        constraint.referenced_table is not None
+                    ),
+                    "referenced_columns": list(constraint.referenced_columns),
+                    "delete_action": constraint.delete_action or " ",
+                    "update_action": constraint.update_action or " ",
+                    "match_type": constraint.match_type or " ",
+                    "is_deferrable": False,
+                    "is_initially_deferred": False,
+                    "is_validated": True,
+                    "expression": constraint.expression,
+                }
+                for name, constraint in (
+                    _PUBLIC_ONBOARDING_TOKEN_REQUIRED_CONSTRAINTS.items()
                 )
             ]
         if "FROM pg_constraint AS actual" in query:
@@ -1423,6 +1440,42 @@ async def test_failed_missing_source_attestation_blocks_then_retry_applies_once(
         "content_sha256": "a" * 64,
         "applied_at": record.observed_applied_at,
     }]
+    (tmp_path / "901_pending.sql").write_text("SELECT 901")
+
+    with pytest.raises(
+        PendingMigrationContentIntegrityError,
+        match=f"missing_source={record.migration_name}",
+    ):
+        await run_migrations(pool, migrations_dir=tmp_path)
+
+    assert pool.applied_sql == []
+    assert pool.inserted == []
+    assert pool.inserted_with_digest == []
+    assert pool.updated == []
+
+    pool.public_onboarding_reconciliation_rows = [{
+        "content_sha256": None,
+        "applied_at": record.observed_applied_at,
+    }]
+    await run_migrations(pool, migrations_dir=tmp_path)
+
+    assert pool.applied_sql == ["SELECT 901"]
+    assert pool.inserted_with_digest == [
+        (901, "901_pending", hashlib.sha256(b"SELECT 901").hexdigest())
+    ]
+
+
+@pytest.mark.asyncio
+async def test_missing_382_ledger_row_blocks_pending_sql_then_retries_once(tmp_path):
+    """The named receipt fails closed when the detailed ledger read is absent."""
+    from atlas_brain.storage.migrations import (
+        PendingMigrationContentIntegrityError,
+        run_migrations,
+    )
+
+    pool = _AttestedReconciliationPool()
+    record = _stage_historical_382_missing_source(pool)
+    pool.public_onboarding_reconciliation_rows = []
     (tmp_path / "901_pending.sql").write_text("SELECT 901")
 
     with pytest.raises(
