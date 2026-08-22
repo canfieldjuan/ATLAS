@@ -10,6 +10,27 @@
 -- additive evidence. Never delete attempts, sequence events, or sent-step
 -- evidence during an ordinary application rollback.
 
+-- All operator mutations bind their Idempotency-Key globally before any
+-- contact-specific work. A stale browser retry whose route changes from lead
+-- A to lead B must fail closed rather than recording a second call or queueing
+-- customer mail for the wrong lead.
+CREATE TABLE IF NOT EXISTS eom_missed_call_operation_receipts (
+    operation_key VARCHAR(128) PRIMARY KEY,
+    contact_id UUID NOT NULL REFERENCES contacts(id) ON DELETE RESTRICT,
+    business_context_id VARCHAR(64) NOT NULL DEFAULT 'effingham_maids',
+    operation_kind VARCHAR(32) NOT NULL,
+    request_fingerprint VARCHAR(64) NOT NULL,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    CONSTRAINT ck_eom_missed_call_operation_receipts_context
+        CHECK (business_context_id = 'effingham_maids'),
+    CONSTRAINT ck_eom_missed_call_operation_receipts_key
+        CHECK (length(btrim(operation_key)) BETWEEN 16 AND 128),
+    CONSTRAINT ck_eom_missed_call_operation_receipts_kind
+        CHECK (operation_kind IN ('no_answer', 'resume', 'cancel')),
+    CONSTRAINT ck_eom_missed_call_operation_receipts_fingerprint
+        CHECK (request_fingerprint ~ '^[0-9a-f]{64}$')
+);
+
 CREATE TABLE IF NOT EXISTS eom_missed_call_attempts (
     id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     contact_id UUID NOT NULL REFERENCES contacts(id) ON DELETE RESTRICT,
@@ -32,7 +53,7 @@ CREATE TABLE IF NOT EXISTS eom_missed_call_attempts (
     CONSTRAINT ck_eom_missed_call_attempts_source
         CHECK (source = 'time_tracker'),
     CONSTRAINT uq_eom_missed_call_attempt_operation
-        UNIQUE (contact_id, operation_key)
+        UNIQUE (operation_key)
 );
 
 CREATE TABLE IF NOT EXISTS eom_missed_call_contact_suppressions (
@@ -198,6 +219,29 @@ BEGIN
 END;
 $$;
 
+CREATE OR REPLACE FUNCTION prevent_eom_missed_call_operation_receipt_mutation()
+RETURNS TRIGGER
+LANGUAGE plpgsql
+AS $$
+BEGIN
+    RAISE EXCEPTION 'eom_missed_call_operation_receipts is append-only';
+END;
+$$;
+
+DROP TRIGGER IF EXISTS trg_prevent_eom_missed_call_operation_receipt_mutation
+    ON eom_missed_call_operation_receipts;
+CREATE TRIGGER trg_prevent_eom_missed_call_operation_receipt_mutation
+    BEFORE UPDATE OR DELETE ON eom_missed_call_operation_receipts
+    FOR EACH ROW
+    EXECUTE FUNCTION prevent_eom_missed_call_operation_receipt_mutation();
+
+DROP TRIGGER IF EXISTS trg_prevent_eom_missed_call_operation_receipt_truncate
+    ON eom_missed_call_operation_receipts;
+CREATE TRIGGER trg_prevent_eom_missed_call_operation_receipt_truncate
+    BEFORE TRUNCATE ON eom_missed_call_operation_receipts
+    FOR EACH STATEMENT
+    EXECUTE FUNCTION prevent_eom_missed_call_operation_receipt_mutation();
+
 DROP TRIGGER IF EXISTS trg_prevent_eom_missed_call_attempt_mutation
     ON eom_missed_call_attempts;
 CREATE TRIGGER trg_prevent_eom_missed_call_attempt_mutation
@@ -311,6 +355,13 @@ CREATE TRIGGER trg_validate_eom_missed_call_attempt_scope
     FOR EACH ROW
     EXECUTE FUNCTION validate_eom_missed_call_contact_scope();
 
+DROP TRIGGER IF EXISTS trg_validate_eom_missed_call_operation_receipt_scope
+    ON eom_missed_call_operation_receipts;
+CREATE TRIGGER trg_validate_eom_missed_call_operation_receipt_scope
+    BEFORE INSERT OR UPDATE ON eom_missed_call_operation_receipts
+    FOR EACH ROW
+    EXECUTE FUNCTION validate_eom_missed_call_contact_scope();
+
 DROP TRIGGER IF EXISTS trg_validate_eom_missed_call_suppression_scope
     ON eom_missed_call_contact_suppressions;
 CREATE TRIGGER trg_validate_eom_missed_call_suppression_scope
@@ -368,6 +419,39 @@ BEGIN
 END;
 $$;
 
+CREATE OR REPLACE FUNCTION eom_missed_call_effective_recipient(
+    target_contact_id UUID,
+    fallback_contact_email TEXT
+)
+RETURNS TEXT
+LANGUAGE sql
+STABLE
+AS $$
+    -- Keep this precedence equal to the delivery service: an estimate form's
+    -- submitted address remains the recovery recipient until a later estimate
+    -- request replaces it. A routine edit to contacts.email alone must not
+    -- silently cancel a sequence that still targets that submitted address.
+    SELECT lower(
+        NULLIF(
+            btrim(
+                COALESCE(
+                    (
+                        SELECT NULLIF(ci.metadata->>'submitted_email', '')
+                        FROM contact_interactions AS ci
+                        WHERE ci.contact_id = target_contact_id
+                          AND ci.interaction_type = 'web_form'
+                          AND ci.intent = 'estimate_request'
+                        ORDER BY ci.occurred_at DESC, ci.created_at DESC, ci.id DESC
+                        LIMIT 1
+                    ),
+                    fallback_contact_email
+                )
+            ),
+            ''
+        )
+    );
+$$;
+
 CREATE OR REPLACE FUNCTION cancel_eom_missed_call_on_contact_change()
 RETURNS TRIGGER
 LANGUAGE plpgsql
@@ -387,7 +471,15 @@ BEGIN
         cancellation_reason := 'lead_advanced';
     ELSIF NEW.customer_type = 'commercial' THEN
         cancellation_reason := 'non_residential';
-    ELSIF NEW.email IS DISTINCT FROM OLD.email THEN
+    ELSIF NEW.email IS DISTINCT FROM OLD.email
+       AND EXISTS (
+           SELECT 1
+           FROM eom_missed_call_sequences AS sequence
+           WHERE sequence.contact_id = NEW.id
+             AND sequence.state IN ('active', 'blocked_configuration')
+             AND lower(btrim(sequence.recipient_email)) IS DISTINCT FROM
+                 eom_missed_call_effective_recipient(NEW.id, NEW.email)
+       ) THEN
         cancellation_reason := 'recipient_changed';
     ELSE
         RETURN NEW;
@@ -471,9 +563,20 @@ BEGIN
         ) ON CONFLICT (contact_id) DO NOTHING;
     END IF;
 
-    PERFORM cancel_eom_missed_call_sequences_for_contact(
-        NEW.contact_id, cancellation_reason, 'interaction_trigger'
-    );
+    -- A later-arriving historical event is evidence about an earlier point in
+    -- time, not a new response after this sequence began. The delivery worker
+    -- uses the same strict ordering when it rechecks current eligibility.
+    IF EXISTS (
+        SELECT 1
+        FROM eom_missed_call_sequences AS sequence
+        WHERE sequence.contact_id = NEW.contact_id
+          AND sequence.state IN ('active', 'blocked_configuration')
+          AND NEW.occurred_at > sequence.created_at
+    ) THEN
+        PERFORM cancel_eom_missed_call_sequences_for_contact(
+            NEW.contact_id, cancellation_reason, 'interaction_trigger'
+        );
+    END IF;
     RETURN NEW;
 END;
 $$;
@@ -487,6 +590,8 @@ CREATE TRIGGER trg_cancel_eom_missed_call_on_interaction
 
 COMMENT ON TABLE eom_missed_call_attempts IS
     'Immutable, actor-attributed EOM no-answer call evidence; never inferred from public form submission.';
+COMMENT ON TABLE eom_missed_call_operation_receipts IS
+    'Globally unique EOM missed-call recovery operation-key ownership; cross-contact replays fail closed.';
 COMMENT ON TABLE eom_missed_call_sequences IS
     'Current durable state for one EOM residential lead missed-call recovery sequence.';
 COMMENT ON TABLE eom_missed_call_contact_suppressions IS

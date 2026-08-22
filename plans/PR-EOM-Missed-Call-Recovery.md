@@ -67,11 +67,14 @@ Slice phase: Vertical slice
     residential estimate variant; focused tests prove form submission alone has
     no sequence, commercial/closed leads do not start one, and same-key retries
     return the original call-attempt result.
-  - A unique active-sequence constraint plus transaction-scoped contact and
-    sequence locks makes contemporaneous operations converge on one sequence.
-    A first transaction persists `attempting`, a claim token, and the provider
-    key expiry before external I/O; the second transaction locks and rechecks
-    current state immediately before delivery. The real-Postgres
+  - A globally unique, append-only operation receipt binds every no-answer,
+    resume, or cancellation idempotency key to one contact, mutation kind, and
+    request fingerprint before state changes. Cross-contact/key-reuse fails
+    closed; a unique active-sequence constraint plus transaction-scoped contact
+    and sequence locks makes contemporaneous qualifying calls converge on one
+    sequence. A first transaction persists `attempting`, a claim token, and
+    the provider key expiry before external I/O; the second transaction locks
+    and rechecks current state immediately before delivery. The real-Postgres
     concurrent-worker test proves one external gateway call, and the
     crash-after-claim test proves expired unconfirmed work becomes visible
     `recovery_required` rather than reusing a stale provider key.
@@ -84,17 +87,25 @@ Slice phase: Vertical slice
     remaining work for lifecycle advancement, customer conversion, lost or
     archived state, commercial reclassification, later estimate request,
     tracked inbound response, suppression, missing/invalid recipient, or an
-    explicit cancellation. SMS is positive-evidence-gated so a generic outbound
-    CRM SMS cannot impersonate a lead reply. Tests settle each permitted proof
-    path and show a change after scheduling but before delivery skips the send.
+    explicit cancellation. Recipient-change cancellation compares the actual
+    latest estimate-form recipient rather than a non-authoritative contact
+    email correction, and interaction cancellation requires evidence occurring
+    after the sequence began. SMS is positive-evidence-gated so a generic
+    outbound CRM SMS cannot impersonate a lead reply. Tests settle each
+    permitted proof path and show a change after scheduling but before delivery
+    skips the send.
   - The booking link is accepted only from deploy-time configuration and is
     never returned by status endpoints or logged. A missing link, disabled
     recovery flag, or unavailable email transport leaves a visible blocked
-    sequence and no email; explicit resume after a valid configuration is the
-    only configuration-block recovery path.
-  - `main.py` and `main_eom.py` start the bounded worker only when recovery is
-    enabled; a migration/readiness fence prevents an enabled deployment from
-    serving the new routes on a partial schema.
+    sequence and no email. Worker startup and each dispatch persist that block
+    for every previously active sequence. A pre-send claim racing that pause is
+    preserved as unproven provider evidence, not skipped; restoring
+    configuration requires an explicit resume and cannot silently send an
+    overdue email.
+  - Both `main.py` and `main_eom.py` call one shared prepare boundary during a
+    canonical-database lifespan. It blocks active rows when disabled or
+    misconfigured, starts only a delivery-ready worker, and makes an enabled
+    partial schema a startup failure.
   - Existing acknowledgement tests stay unchanged and all new fixtures use
     `.example.test` identities plus a recording gateway; no test uses an Atlas
     email credential or a real recipient.
@@ -196,13 +207,15 @@ Slice phase: Vertical slice
 
 ## Mechanism
 
-Migration 389 creates four additive EOM-only tables: immutable no-answer call
-attempts; one current sequence per contact; exactly three deterministic outbox
-steps; and an append-only event ledger. The operator mutation also appends a
-canonical `contact_interactions` `call` / `no_answer` record and lifecycle
-event, so existing CRM history retains the action. Partial unique indexes and
-transaction-scoped row locks make the operation key a replay receipt and make
-an active sequence non-overlapping.
+Migration 389 creates five additive EOM-only tables: globally unique immutable
+operation receipts; immutable no-answer call attempts; one current sequence per
+contact; exactly three deterministic outbox steps; and an append-only event
+ledger. The operation receipt binds key, contact, mutation kind, and request
+fingerprint before a mutation, so a stale retry cannot cross contacts or reuse
+another recovery action. The operator mutation also appends a canonical
+`contact_interactions` `call` / `no_answer` record and lifecycle event, so
+existing CRM history retains the action. Partial unique indexes and
+transaction-scoped row locks make an active sequence non-overlapping.
 
 The sequence starts only when the canonical contact is active, a lead at the
 `new` stage, has current residential web-estimate evidence, and has a valid
@@ -250,6 +263,13 @@ an unsupported automatic claim.
   request. A concurrent lifecycle/response commit therefore linearizes either
   before the final recheck (skip) or after the send (truthfully current at
   send), while a process crash retains the claim/key window as durable evidence.
+- Use the real Resend adapter in a mock transport test so accepted, definite
+  rejection, and ambiguous response classifications prove its exact wire
+  behavior without sending an actual email.
+- Preserve any durable pre-send claim across a configuration pause. After an
+  explicit resume, the normal provider-key recovery window decides whether it
+  can be safely retried or must become `recovery_required`; the pause itself
+  never rewrites that unknown outcome as a skipped message.
 
 ## Deferred
 
@@ -291,7 +311,7 @@ Calendar correlation.
   tests/test_eom_render_profile.py::test_eom_profile_import_does_not_load_full_api_package
   tests/test_eom_render_profile.py::test_eom_render_blueprint_maps_database_and_receivables_auth
   tests/test_eom_render_profile.py::test_eom_missed_call_recovery_migration_helper_uses_funnel_curated_set
-  tests/test_leads_intake.py` — `95 passed, 31 skipped, 1 upstream pynvml
+  tests/test_leads_intake.py` — `99 passed, 37 skipped, 1 upstream pynvml
   deprecation warning`; the real-Postgres cases are correctly skipped locally
   because `ATLAS_MIGRATION_TEST_DATABASE_URL` is unavailable.
 - `git diff --check` — pass.
@@ -306,14 +326,14 @@ Calendar correlation.
 | `.github/workflows/atlas_eom_lead_pipeline_checks.yml` | 11 |
 | `atlas_brain/eom_api/config.py` | 128 |
 | `atlas_brain/eom_api/funnel.py` | 218 |
-| `atlas_brain/main.py` | 45 |
-| `atlas_brain/main_eom.py` | 73 |
-| `atlas_brain/services/eom_missed_call_recovery.py` | 2143 |
-| `atlas_brain/storage/migrations/389_eom_missed_call_recovery.sql` | 497 |
+| `atlas_brain/main.py` | 35 |
+| `atlas_brain/main_eom.py` | 66 |
+| `atlas_brain/services/eom_missed_call_recovery.py` | 2337 |
+| `atlas_brain/storage/migrations/389_eom_missed_call_recovery.sql` | 602 |
 | `atlas_brain/templates/email/missed_call_recovery.py` | 114 |
-| `docs/EOM_MISSED_CALL_RECOVERY_RUNBOOK.md` | 108 |
-| `plans/PR-EOM-Missed-Call-Recovery.md` | 319 |
+| `docs/EOM_MISSED_CALL_RECOVERY_RUNBOOK.md` | 111 |
+| `plans/PR-EOM-Missed-Call-Recovery.md` | 339 |
 | `render.eom.yaml` | 9 |
-| `tests/test_eom_missed_call_recovery.py` | 1325 |
+| `tests/test_eom_missed_call_recovery.py` | 1908 |
 | `tests/test_eom_render_profile.py` | 43 |
-| **Total** | **5033** |
+| **Total** | **5921** |

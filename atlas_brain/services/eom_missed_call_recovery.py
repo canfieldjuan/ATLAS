@@ -60,6 +60,11 @@ _TRACKED_RESPONSE_INTERACTIONS = frozenset(
         "opt_out",
     }
 )
+# CLOSED / ENUMERATED: these are the only browser-originated mutations this
+# recovery slice accepts. The database receipt records this finite vocabulary
+# with one globally unique operation key, so a retry can never move to another
+# lead or mutation kind after an interrupted browser request.
+_OPERATION_KINDS = frozenset({"no_answer", "resume", "cancel"})
 
 
 class EOMMissedCallRecoveryError(Exception):
@@ -124,8 +129,18 @@ class ResendMissedCallRecoveryGateway:
 
     _URL = "https://api.resend.com/emails"
 
-    def __init__(self, *, timeout_seconds: int) -> None:
+    def __init__(
+        self,
+        *,
+        timeout_seconds: int,
+        transport: httpx.AsyncBaseTransport | None = None,
+    ) -> None:
         self._timeout_seconds = timeout_seconds
+        # Production uses httpx's normal transport. The optional injected
+        # transport is deliberately narrow test plumbing so this exact adapter
+        # (headers and result classification included) can be proven without a
+        # real provider call.
+        self._transport = transport
 
     async def send(
         self,
@@ -155,7 +170,7 @@ class ResendMissedCallRecoveryGateway:
         }
         try:
             async with httpx.AsyncClient(
-                timeout=float(self._timeout_seconds)
+                timeout=float(self._timeout_seconds), transport=self._transport
             ) as client:
                 response = await client.post(self._URL, json=payload, headers=headers)
         except (httpx.TimeoutException, httpx.NetworkError, httpx.ProtocolError) as exc:
@@ -373,6 +388,7 @@ async def missed_call_recovery_schema_ready(pool: Any) -> bool:
             await pool.fetchval(
                 """
                 SELECT to_regclass('eom_missed_call_attempts') IS NOT NULL
+                   AND to_regclass('eom_missed_call_operation_receipts') IS NOT NULL
                    AND to_regclass('eom_missed_call_contact_suppressions') IS NOT NULL
                    AND to_regclass('eom_missed_call_sequences') IS NOT NULL
                    AND to_regclass('eom_missed_call_sequence_steps') IS NOT NULL
@@ -474,6 +490,130 @@ class EOMMissedCallRecoveryService:
             return "email_transport_unavailable"
         return None
 
+    async def _bind_operation_receipt(
+        self,
+        conn: Any,
+        *,
+        contact_id: UUID,
+        operation_key: str,
+        operation_kind: str,
+        fingerprint: str,
+    ) -> bool:
+        """Durably bind one browser operation key before mutating a lead.
+
+        ``True`` means the exact same completed operation owns the key and the
+        caller must return its current authoritative status. A different lead,
+        mutation kind, or request fingerprint is a conflict, never a second
+        action. ``ON CONFLICT DO NOTHING`` keeps two concurrent contacts from
+        poisoning their transactions with a unique-violation before the loser
+        can inspect the winning receipt.
+        """
+
+        if operation_kind not in _OPERATION_KINDS:
+            raise RuntimeError("Unsupported missed-call recovery operation kind")
+
+        existing = await conn.fetchrow(
+            """
+            SELECT contact_id, operation_kind, request_fingerprint
+            FROM eom_missed_call_operation_receipts
+            WHERE operation_key = $1
+            FOR UPDATE
+            """,
+            operation_key,
+        )
+        if existing is None:
+            inserted = await conn.fetchrow(
+                """
+                INSERT INTO eom_missed_call_operation_receipts (
+                    operation_key, contact_id, operation_kind, request_fingerprint
+                ) VALUES ($1, $2, $3, $4)
+                ON CONFLICT (operation_key) DO NOTHING
+                RETURNING operation_key
+                """,
+                operation_key,
+                contact_id,
+                operation_kind,
+                fingerprint,
+            )
+            if inserted is not None:
+                return False
+            # A concurrent transaction just committed the winning receipt.
+            # Re-read it under lock before deciding whether this is a replay or
+            # a cross-contact/key-reuse conflict.
+            existing = await conn.fetchrow(
+                """
+                SELECT contact_id, operation_kind, request_fingerprint
+                FROM eom_missed_call_operation_receipts
+                WHERE operation_key = $1
+                FOR UPDATE
+                """,
+                operation_key,
+            )
+            if existing is None:
+                raise EOMMissedCallRecoveryUnavailableError(
+                    "Missed-call recovery operation receipt is unavailable"
+                )
+
+        if (
+            _uuid(existing["contact_id"], "Receipt contact id") != contact_id
+            or existing["operation_kind"] != operation_kind
+            or existing["request_fingerprint"] != fingerprint
+        ):
+            raise EOMMissedCallRecoveryConflictError(
+                "Idempotency key belongs to a different missed-call recovery operation"
+            )
+        return True
+
+    async def block_active_sequences_for_configuration(
+        self,
+        *,
+        reason: str | None = None,
+    ) -> int:
+        """Persist a deployment pause before a worker can quiesce delivery.
+
+        A configuration change can happen while a sequence has pending steps.
+        Those rows must become visibly blocked and require an explicit resume
+        after configuration is restored; silently retaining ``active`` would
+        otherwise let a restart send overdue messages automatically.
+        """
+
+        block_reason = reason or self.delivery_block_reason()
+        if block_reason is None:
+            return 0
+        try:
+            async with self.pool.transaction() as conn:
+                now = self._now()
+                blocked = await conn.fetch(
+                    """
+                    UPDATE eom_missed_call_sequences
+                       SET state = 'blocked_configuration', blocked_reason = $1,
+                           updated_at = $2
+                     WHERE state = 'active'
+                     RETURNING id
+                    """,
+                    block_reason,
+                    now,
+                )
+                for row in blocked:
+                    await self._event(
+                        conn,
+                        sequence_id=row["id"],
+                        event_type="sequence_blocked",
+                        reason_code=block_reason,
+                        actor_id=None,
+                        actor_name="system",
+                        source="worker",
+                        metadata={"configuration_block": True},
+                        occurred_at=now,
+                    )
+                return len(blocked)
+        except EOMMissedCallRecoveryError:
+            raise
+        except (asyncpg.PostgresError, OSError) as exc:
+            raise EOMMissedCallRecoveryUnavailableError(
+                "Missed-call recovery configuration block could not be recorded"
+            ) from exc
+
     async def record_no_answer(
         self,
         *,
@@ -493,19 +633,25 @@ class EOMMissedCallRecoveryService:
         try:
             async with self.pool.transaction() as conn:
                 contact = await self._contact_for_update(conn, contact_id)
-                previous = await conn.fetchrow(
-                    """
-                    SELECT * FROM eom_missed_call_attempts
-                    WHERE contact_id = $1 AND operation_key = $2
-                    FOR UPDATE
-                    """,
-                    contact_id,
-                    operation_key,
+                replayed = await self._bind_operation_receipt(
+                    conn,
+                    contact_id=contact_id,
+                    operation_key=operation_key,
+                    operation_kind="no_answer",
+                    fingerprint=fingerprint,
                 )
-                if previous is not None:
-                    if previous["request_fingerprint"] != fingerprint:
-                        raise EOMMissedCallRecoveryConflictError(
-                            "Idempotency key belongs to a different no-answer operation"
+                if replayed:
+                    previous = await conn.fetchrow(
+                        """
+                        SELECT id FROM eom_missed_call_attempts
+                        WHERE operation_key = $1
+                        FOR UPDATE
+                        """,
+                        operation_key,
+                    )
+                    if previous is None:
+                        raise EOMMissedCallRecoveryUnavailableError(
+                            "Missed-call recovery operation evidence is unavailable"
                         )
                     status = await self._status_for_contact(conn, contact_id)
                     return {
@@ -722,24 +868,29 @@ class EOMMissedCallRecoveryService:
         contact_id = _uuid(contact_id, "Contact id")
         operation_key = _safe_operation_key(operation_key)
         actor_id, actor_name = _safe_actor(actor_id, actor_name)
-        delivery_block_reason = self.delivery_block_reason()
-        if delivery_block_reason is not None:
-            raise EOMMissedCallRecoveryConflictError(
-                "Missed-call recovery delivery is not configured"
-            )
+        fingerprint = _fingerprint(
+            {"contactId": str(contact_id), "operation": "resume"}
+        )
         try:
             async with self.pool.transaction() as conn:
                 contact = await self._contact_for_update(conn, contact_id)
-                prior = await conn.fetchrow(
-                    """
-                    SELECT * FROM eom_lead_lifecycle_events
-                    WHERE contact_id = $1
-                      AND event_type = 'missed_call_recovery_resumed'
-                      AND operation_key = $2
-                    """,
-                    contact_id,
-                    operation_key,
+                replayed = await self._bind_operation_receipt(
+                    conn,
+                    contact_id=contact_id,
+                    operation_key=operation_key,
+                    operation_kind="resume",
+                    fingerprint=fingerprint,
                 )
+                if replayed:
+                    return {
+                        "idempotent": True,
+                        "sequence": await self._status_for_contact(conn, contact_id),
+                    }
+                delivery_block_reason = self.delivery_block_reason()
+                if delivery_block_reason is not None:
+                    raise EOMMissedCallRecoveryConflictError(
+                        "Missed-call recovery delivery is not configured"
+                    )
                 sequence = await conn.fetchrow(
                     """
                     SELECT * FROM eom_missed_call_sequences
@@ -748,11 +899,6 @@ class EOMMissedCallRecoveryService:
                     """,
                     contact_id,
                 )
-                if prior is not None:
-                    return {
-                        "idempotent": True,
-                        "sequence": await self._status_for_contact(conn, contact_id),
-                    }
                 if sequence is None:
                     raise EOMMissedCallRecoveryConflictError(
                         "No blocked missed-call recovery sequence exists"
@@ -847,6 +993,13 @@ class EOMMissedCallRecoveryService:
         actor_id, actor_name = _safe_actor(actor_id, actor_name)
         if reason not in _MANUAL_CANCEL_REASONS:
             raise EOMMissedCallRecoveryValidationError("Cancellation reason is invalid")
+        fingerprint = _fingerprint(
+            {
+                "contactId": str(contact_id),
+                "operation": "cancel",
+                "reason": reason,
+            }
+        )
         interaction_type = {
             "callback_recorded": "callback_completed",
             "response_recorded": "lead_response",
@@ -856,32 +1009,14 @@ class EOMMissedCallRecoveryService:
         try:
             async with self.pool.transaction() as conn:
                 contact = await self._contact_for_update(conn, contact_id)
-                prior = await conn.fetchrow(
-                    """
-                    SELECT metadata FROM eom_lead_lifecycle_events
-                    WHERE contact_id = $1
-                      AND event_type = 'missed_call_recovery_cancelled'
-                      AND operation_key = $2
-                    """,
-                    contact_id,
-                    operation_key,
+                replayed = await self._bind_operation_receipt(
+                    conn,
+                    contact_id=contact_id,
+                    operation_key=operation_key,
+                    operation_kind="cancel",
+                    fingerprint=fingerprint,
                 )
-                if prior is not None:
-                    metadata = prior.get("metadata")
-                    if isinstance(metadata, str):
-                        try:
-                            metadata = json.loads(metadata)
-                        except ValueError:
-                            metadata = None
-                    prior_reason = (
-                        metadata.get("reason")
-                        if isinstance(metadata, Mapping)
-                        else None
-                    )
-                    if prior_reason != reason:
-                        raise EOMMissedCallRecoveryConflictError(
-                            "Idempotency key belongs to a different recovery cancellation"
-                        )
+                if replayed:
                     return {
                         "idempotent": True,
                         "sequence": await self._status_for_contact(conn, contact_id),
@@ -1037,7 +1172,11 @@ class EOMMissedCallRecoveryService:
 
         if limit < 1 or limit > _MAX_WORK_BATCH:
             raise EOMMissedCallRecoveryValidationError("Worker limit is invalid")
-        if self.delivery_block_reason() is not None:
+        delivery_block_reason = self.delivery_block_reason()
+        if delivery_block_reason is not None:
+            await self.block_active_sequences_for_configuration(
+                reason=delivery_block_reason
+            )
             return 0
         await self._recover_stale_claims(limit=limit)
         completed = 0
@@ -1386,6 +1525,13 @@ class EOMMissedCallRecoveryService:
                     limit,
                 )
                 for row in rows:
+                    if row["sequence_state"] == "blocked_configuration":
+                        # A configuration pause can race an already persisted
+                        # claim. It is not proof that the provider did or did
+                        # not accept the email, so preserve the claim/key until
+                        # an explicit resume restores ``active`` and the normal
+                        # recovery rules can safely decide its outcome.
+                        continue
                     if row["sequence_state"] != "active":
                         skipped = await conn.fetchrow(
                             """
@@ -2084,6 +2230,54 @@ class EOMMissedCallRecoveryService:
                 history.step_id,
                 type(exc).__name__,
             )
+
+
+async def prepare_eom_missed_call_recovery_worker(
+    *,
+    pool: Any,
+    config: EOMFunnelConfig | None = None,
+) -> tuple[asyncio.Event, asyncio.Task[None]] | None:
+    """Fence, durably pause, or start the recovery worker for one app lifespan.
+
+    Both supported Atlas entrypoints call this exact boundary. A disabled or
+    incomplete deployment first blocks any existing active sequence; restoring
+    configuration later never resumes those steps without the operator's
+    explicit recovery action. A first rollout with no recovery schema is safe
+    while disabled, whereas an enabled rollout fails startup rather than
+    serving an unbacked mutation route.
+    """
+
+    effective_config = config or funnel_settings
+    recovery = EOMMissedCallRecoveryService(pool=pool, config=effective_config)
+    schema_ready = await missed_call_recovery_schema_ready(pool)
+    if not schema_ready:
+        if effective_config.missed_call_recovery_enabled:
+            raise EOMMissedCallRecoveryUnavailableError(
+                "Missed-call recovery schema is unavailable"
+            )
+        logger.info(
+            "EOM missed-call recovery schema is absent while delivery is disabled"
+        )
+        return None
+
+    delivery_block_reason = recovery.delivery_block_reason()
+    if delivery_block_reason is not None:
+        blocked_count = await recovery.block_active_sequences_for_configuration(
+            reason=delivery_block_reason
+        )
+        logger.warning(
+            "EOM missed-call recovery delivery is blocked reason=%s sequences=%s",
+            delivery_block_reason,
+            blocked_count,
+        )
+        return None
+
+    worker = start_eom_missed_call_recovery_worker(
+        pool=pool,
+        config=effective_config,
+    )
+    logger.info("EOM missed-call recovery worker started")
+    return worker
 
 
 async def run_eom_missed_call_recovery_worker(

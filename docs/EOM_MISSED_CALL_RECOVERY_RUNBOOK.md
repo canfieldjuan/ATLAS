@@ -87,9 +87,12 @@ never reverses truthful sequence delivery state or authorizes another send.
 
 To halt new recovery mail, set
 `ATLAS_EOM_FUNNEL_MISSED_CALL_RECOVERY_ENABLED=false` and restart the Atlas
-service. This stops the worker while retaining immutable call attempts and
-sequence history. Do not drop migration 389 tables, events, or steps as a
-routine rollback.
+service. Startup durably moves every currently active sequence to
+`blocked_configuration / recovery_disabled`, then stops the worker while
+retaining immutable call attempts and sequence history. Restoring the flag does
+not send those overdue emails: an authenticated operator must explicitly resume
+each still-eligible sequence. Do not drop migration 389 tables, events, or
+steps as a routine rollback.
 
 After an incident, retain the rows and inspect the sequence state, step state,
 provider message identifier, event ledger, and current contact/interactions

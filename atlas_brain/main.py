@@ -912,38 +912,28 @@ async def lifespan(app: FastAPI):
         except Exception as e:
             logger.error("Failed to register alert UI callback: %s", e, exc_info=True)
 
-    # This worker starts only after the full generic migration pass and all
-    # existing application startup work have completed. When enabled, its
-    # schema fence turns a partial migration into a startup failure instead of
-    # a process that could record office call attempts but silently lack a
-    # durable outbox. A missing booking link is an intentional blocked rollout
-    # state: the route still records evidence, but no worker is allowed to send.
+    # This worker boundary runs only after the full generic migration pass and
+    # all existing application startup work have completed. Its schema fence
+    # turns an enabled partial migration into a startup failure; a disabled or
+    # incomplete deployment instead durably blocks existing active sequences,
+    # so restoring configuration cannot auto-send overdue customer email.
     from .eom_api.config import funnel_settings
 
-    if funnel_settings.missed_call_recovery_enabled:
+    if db_settings.enabled:
         from .services.eom_missed_call_recovery import (
-            EOMMissedCallRecoveryService,
-            start_eom_missed_call_recovery_worker,
+            prepare_eom_missed_call_recovery_worker,
         )
 
         missed_call_pool = get_db_pool()
-        recovery = EOMMissedCallRecoveryService(
+        missed_call_worker = await prepare_eom_missed_call_recovery_worker(
             pool=missed_call_pool,
             config=funnel_settings,
         )
-        await recovery.require_schema_ready()
-        delivery_block_reason = recovery.delivery_block_reason()
-        if delivery_block_reason is None:
-            missed_call_worker = start_eom_missed_call_recovery_worker(
-                pool=missed_call_pool,
-                config=funnel_settings,
-            )
-            logger.info("EOM missed-call recovery worker started")
-        else:
-            logger.warning(
-                "EOM missed-call recovery is enabled but delivery is blocked: %s",
-                delivery_block_reason,
-            )
+    elif funnel_settings.missed_call_recovery_enabled:
+        # This branch was previously reached only through the schema fence.
+        # Keep the enabled worker fail-closed if a deployment disables its
+        # canonical database rather than silently serving recovery mutations.
+        raise RuntimeError("EOM missed-call recovery requires database persistence")
 
     yield  # Application runs here
 

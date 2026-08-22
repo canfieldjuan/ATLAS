@@ -245,32 +245,25 @@ async def lifespan(app: FastAPI):
         await _validate_eom_funnel_startup()
         if db_settings.enabled and eom_profile_settings.run_migrations:
             await _run_startup_migrations()
-        if funnel_settings.missed_call_recovery_enabled:
-            if eom_profile_settings.run_migrations:
-                await _run_eom_missed_call_recovery_startup_migrations()
-            from .services.eom_missed_call_recovery import (
-                EOMMissedCallRecoveryService,
-                start_eom_missed_call_recovery_worker,
-            )
+        if (
+            funnel_settings.missed_call_recovery_enabled
+            and eom_profile_settings.run_migrations
+        ):
+            await _run_eom_missed_call_recovery_startup_migrations()
+        from .services.eom_missed_call_recovery import (
+            prepare_eom_missed_call_recovery_worker,
+        )
 
-            missed_call_pool = get_eom_funnel_db_pool()
-            recovery = EOMMissedCallRecoveryService(
+        missed_call_pool = get_eom_funnel_db_pool()
+        if getattr(missed_call_pool, "is_initialized", False):
+            missed_call_worker = await prepare_eom_missed_call_recovery_worker(
                 pool=missed_call_pool,
                 config=funnel_settings,
             )
-            await recovery.require_schema_ready()
-            delivery_block_reason = recovery.delivery_block_reason()
-            if delivery_block_reason is None:
-                missed_call_worker = start_eom_missed_call_recovery_worker(
-                    pool=missed_call_pool,
-                    config=funnel_settings,
-                )
-                logger.info("EOM missed-call recovery worker started")
-            else:
-                logger.warning(
-                    "EOM missed-call recovery is enabled but delivery is blocked: %s",
-                    delivery_block_reason,
-                )
+        elif funnel_settings.missed_call_recovery_enabled:
+            raise RuntimeError(
+                "EOM missed-call recovery requires the canonical funnel database"
+            )
         if db_settings.enabled and invoicing_settings.receivables_api_enabled:
             await _require_receivables_schema_ready()
         yield
