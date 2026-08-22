@@ -342,7 +342,9 @@ class B2BWatchlistAlertEventsMissingSourceMigrationReconciliationAttestation:
     watchlist_alert_events_has_permanent_storage: bool
     base_alert_event_columns_ready: bool
     required_alert_event_constraints_ready: bool
+    no_unlisted_alert_event_constraints: bool
     required_alert_event_indexes_ready: bool
+    no_unlisted_alert_event_unique_or_exclusion_indexes: bool
 
     @property
     def source_verification(self) -> str:
@@ -360,7 +362,9 @@ class B2BWatchlistAlertEventsMissingSourceMigrationReconciliationAttestation:
             self.watchlist_alert_events_has_permanent_storage,
             self.base_alert_event_columns_ready,
             self.required_alert_event_constraints_ready,
+            self.no_unlisted_alert_event_constraints,
             self.required_alert_event_indexes_ready,
+            self.no_unlisted_alert_event_unique_or_exclusion_indexes,
         )):
             return "attested"
         return "not_attested"
@@ -385,8 +389,14 @@ class B2BWatchlistAlertEventsMissingSourceMigrationReconciliationAttestation:
             "required_alert_event_constraints_ready": (
                 self.required_alert_event_constraints_ready
             ),
+            "no_unlisted_alert_event_constraints": (
+                self.no_unlisted_alert_event_constraints
+            ),
             "required_alert_event_indexes_ready": (
                 self.required_alert_event_indexes_ready
+            ),
+            "no_unlisted_alert_event_unique_or_exclusion_indexes": (
+                self.no_unlisted_alert_event_unique_or_exclusion_indexes
             ),
             "status": self.status,
         }
@@ -1608,7 +1618,7 @@ async def _migration_067_catalog_evidence(
 
 async def _migration_272_catalog_evidence(
     executor: Any,
-) -> tuple[bool, bool, bool, bool, bool]:
+) -> tuple[bool, bool, bool, bool, bool, bool, bool]:
     """Read the named 272 base-table receipt in one catalog-only snapshot."""
     evidence_row = await executor.fetchrow(
         """
@@ -1752,6 +1762,35 @@ async def _migration_272_catalog_evidence(
             LEFT JOIN pg_index AS index_state
               ON index_state.indexrelid = index_relation.oid
              AND index_state.indrelid = target_relation.oid
+        ), unlisted_constraints AS (
+            SELECT
+                EXISTS (SELECT 1 FROM target_relation)
+                AND NOT EXISTS (
+                    SELECT 1
+                    FROM pg_constraint AS actual
+                    JOIN target_relation
+                      ON target_relation.oid = actual.conrelid
+                    WHERE actual.conname <> ALL($2::text[])
+                ) AS no_unlisted_alert_event_constraints
+        ), unlisted_write_restricting_indexes AS (
+            SELECT
+                EXISTS (SELECT 1 FROM target_relation)
+                AND NOT EXISTS (
+                    SELECT 1
+                    FROM pg_index AS index_state
+                    JOIN target_relation
+                      ON target_relation.oid = index_state.indrelid
+                    JOIN pg_class AS index_relation
+                      ON index_relation.oid = index_state.indexrelid
+                    LEFT JOIN pg_constraint AS backing_constraint
+                      ON backing_constraint.conindid = index_state.indexrelid
+                    WHERE (index_state.indisunique OR index_state.indisexclusion)
+                      AND index_relation.relname <> ALL($3::text[])
+                      AND (
+                          backing_constraint.oid IS NULL
+                          OR backing_constraint.conname <> ALL($2::text[])
+                      )
+                ) AS no_unlisted_alert_event_unique_or_exclusion_indexes
         )
         SELECT jsonb_build_object(
             'watchlist_alert_events_is_ordinary_table', EXISTS (
@@ -1773,9 +1812,17 @@ async def _migration_272_catalog_evidence(
                 SELECT jsonb_object_agg(name, evidence)
                 FROM constraint_evidence
             ),
+            'no_unlisted_alert_event_constraints', (
+                SELECT no_unlisted_alert_event_constraints
+                FROM unlisted_constraints
+            ),
             'indexes', (
                 SELECT jsonb_object_agg(name, evidence)
                 FROM index_evidence
+            ),
+            'no_unlisted_alert_event_unique_or_exclusion_indexes', (
+                SELECT no_unlisted_alert_event_unique_or_exclusion_indexes
+                FROM unlisted_write_restricting_indexes
             )
         ) AS catalog_evidence
         """,
@@ -1784,7 +1831,7 @@ async def _migration_272_catalog_evidence(
         list(_B2B_WATCHLIST_ALERT_EVENT_INDEXES),
     )
     if evidence_row is None:
-        return False, False, False, False, False
+        return False, False, False, False, False, False, False
 
     catalog = _catalog_json_mapping(evidence_row["catalog_evidence"])
     observed_columns = _catalog_json_mapping(catalog.get("columns"))
@@ -1816,7 +1863,9 @@ async def _migration_272_catalog_evidence(
         bool(catalog.get("watchlist_alert_events_has_permanent_storage")),
         base_alert_event_columns_ready,
         required_alert_event_constraints_ready,
+        bool(catalog.get("no_unlisted_alert_event_constraints")),
         required_alert_event_indexes_ready,
+        bool(catalog.get("no_unlisted_alert_event_unique_or_exclusion_indexes")),
     )
 
 
@@ -2005,7 +2054,9 @@ async def _attest_migration_272(
         watchlist_alert_events_has_permanent_storage,
         base_alert_event_columns_ready,
         required_alert_event_constraints_ready,
+        no_unlisted_alert_event_constraints,
         required_alert_event_indexes_ready,
+        no_unlisted_alert_event_unique_or_exclusion_indexes,
     ) = await _migration_272_catalog_evidence(executor)
 
     return B2BWatchlistAlertEventsMissingSourceMigrationReconciliationAttestation(
@@ -2031,7 +2082,13 @@ async def _attest_migration_272(
         required_alert_event_constraints_ready=(
             required_alert_event_constraints_ready
         ),
+        no_unlisted_alert_event_constraints=(
+            no_unlisted_alert_event_constraints
+        ),
         required_alert_event_indexes_ready=required_alert_event_indexes_ready,
+        no_unlisted_alert_event_unique_or_exclusion_indexes=(
+            no_unlisted_alert_event_unique_or_exclusion_indexes
+        ),
     )
 
 

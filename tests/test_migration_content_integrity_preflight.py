@@ -349,6 +349,7 @@ def _default_b2b_watchlist_alert_events_catalog_row() -> dict[str, object]:
                     reconciliation_mod._B2B_WATCHLIST_ALERT_EVENT_CONSTRAINTS.items()
                 )
             },
+            "no_unlisted_alert_event_constraints": True,
             "indexes": {
                 name: {
                     "relation_kind": "i",
@@ -366,6 +367,7 @@ def _default_b2b_watchlist_alert_events_catalog_row() -> dict[str, object]:
                     reconciliation_mod._B2B_WATCHLIST_ALERT_EVENT_INDEXES.items()
                 )
             },
+            "no_unlisted_alert_event_unique_or_exclusion_indexes": True,
         }
     }
 
@@ -1149,7 +1151,9 @@ async def test_known_272_reconciliation_attests_catalog_without_source(
         "watchlist_alert_events_has_permanent_storage": True,
         "base_alert_event_columns_ready": True,
         "required_alert_event_constraints_ready": True,
+        "no_unlisted_alert_event_constraints": True,
         "required_alert_event_indexes_ready": True,
+        "no_unlisted_alert_event_unique_or_exclusion_indexes": True,
         "status": "attested",
     }]
     assert connection.fetch_calls == [
@@ -1168,7 +1172,9 @@ async def test_known_272_reconciliation_attests_catalog_without_source(
     assert "JOIN pg_attribute AS attribute_state" in catalog_query
     assert "JOIN pg_attrdef AS default_state" in catalog_query
     assert "JOIN pg_constraint AS actual" in catalog_query
+    assert "unlisted_constraints AS" in catalog_query
     assert "JOIN pg_index AS index_state" in catalog_query
+    assert "indisexclusion" in catalog_query
     assert "pg_get_indexdef" in catalog_query
     assert all(
         "FROM b2b_watchlist_alert_events" not in query
@@ -1351,6 +1357,10 @@ async def test_known_272_reconciliation_rejects_each_required_evidence_field(
             "check constraint has a literal case collision",
             "required_alert_event_constraints_ready",
         ),
+        (
+            "unlisted constraint can reject writes",
+            "no_unlisted_alert_event_constraints",
+        ),
         ("index is absent", "required_alert_event_indexes_ready"),
         ("index has the wrong relation kind", "required_alert_event_indexes_ready"),
         ("index is a partition", "required_alert_event_indexes_ready"),
@@ -1371,6 +1381,10 @@ async def test_known_272_reconciliation_rejects_each_required_evidence_field(
             "required_alert_event_indexes_ready",
         ),
         ("index has an unexpected predicate", "required_alert_event_indexes_ready"),
+        (
+            "unlisted unique index can reject writes",
+            "no_unlisted_alert_event_unique_or_exclusion_indexes",
+        ),
     ],
 )
 async def test_known_272_reconciliation_rejects_each_catalog_guard_independently(
@@ -1430,6 +1444,8 @@ async def test_known_272_reconciliation_rejects_each_catalog_guard_independently
         status_check["expression"] = "(status = any (array['o''pen', 'resolved']))"
     elif case == "check constraint has a literal case collision":
         status_check["expression"] = "(status = any (array['OPEN', 'resolved']))"
+    elif case == "unlisted constraint can reject writes":
+        catalog["no_unlisted_alert_event_constraints"] = False
     elif case == "index is absent":
         indexes.pop("idx_b2b_watchlist_alert_events_account_status")
     elif case == "index has the wrong relation kind":
@@ -1454,6 +1470,8 @@ async def test_known_272_reconciliation_rejects_each_catalog_guard_independently
         )
     elif case == "index has an unexpected predicate":
         account_status_index["predicate"] = "(status = 'open')"
+    elif case == "unlisted unique index can reject writes":
+        catalog["no_unlisted_alert_event_unique_or_exclusion_indexes"] = False
     else:  # pragma: no cover - parametrize keeps this exhaustive.
         raise AssertionError(f"unexpected catalog guard case: {case}")
 
@@ -1471,7 +1489,9 @@ async def test_known_272_reconciliation_rejects_each_catalog_guard_independently
         "watchlist_alert_events_has_permanent_storage",
         "base_alert_event_columns_ready",
         "required_alert_event_constraints_ready",
+        "no_unlisted_alert_event_constraints",
         "required_alert_event_indexes_ready",
+        "no_unlisted_alert_event_unique_or_exclusion_indexes",
     ):
         if other_field != field:
             assert evidence[other_field] is True, case

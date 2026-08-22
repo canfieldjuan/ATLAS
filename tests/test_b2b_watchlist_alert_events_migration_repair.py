@@ -145,7 +145,9 @@ async def test_272_receipt_attests_empty_real_catalog_without_alert_rows():
         assert attestation.watchlist_alert_events_has_permanent_storage
         assert attestation.base_alert_event_columns_ready
         assert attestation.required_alert_event_constraints_ready
+        assert attestation.no_unlisted_alert_event_constraints
         assert attestation.required_alert_event_indexes_ready
+        assert attestation.no_unlisted_alert_event_unique_or_exclusion_indexes
         assert attestation.status == "attested"
         assert attestation.as_payload()["source_verification"] == (
             HISTORICAL_SOURCE_UNAVAILABLE
@@ -179,8 +181,16 @@ async def test_272_receipt_attests_empty_real_catalog_without_alert_rows():
             "required_alert_event_constraints_ready",
         ),
         (
+            "unlisted check constraint",
+            "no_unlisted_alert_event_constraints",
+        ),
+        (
             "unlogged table storage",
             "watchlist_alert_events_has_permanent_storage",
+        ),
+        (
+            "unlisted unique index",
+            "no_unlisted_alert_event_unique_or_exclusion_indexes",
         ),
     ],
 )
@@ -229,10 +239,27 @@ async def test_272_receipt_rejects_altered_catalog_before_pending_sql(
                     ADD CONSTRAINT chk_b2b_watchlist_alert_events_status
                     CHECK (status IN ('OPEN', 'resolved'));
                 """)
+        elif case == "unlisted check constraint":
+            await conn.execute("""
+                ALTER TABLE b2b_watchlist_alert_events
+                    ADD CONSTRAINT chk_b2b_watchlist_alert_events_unlisted_status
+                    CHECK (status = 'resolved') NOT VALID;
+                """)
         elif case == "unlogged table storage":
             await conn.execute(
                 "ALTER TABLE b2b_watchlist_alert_events SET UNLOGGED"
             )
+        elif case == "unlisted unique index":
+            await conn.execute("""
+                CREATE UNIQUE INDEX
+                    idx_b2b_watchlist_alert_events_unlisted_unique
+                ON b2b_watchlist_alert_events (
+                    account_id,
+                    status,
+                    event_type,
+                    entity_key
+                );
+                """)
         else:  # pragma: no cover - parametrize keeps this exhaustive.
             raise AssertionError(f"unexpected altered catalog case: {case}")
         record = MIGRATION_272_B2B_WATCHLIST_ALERT_EVENTS_RECONCILIATION

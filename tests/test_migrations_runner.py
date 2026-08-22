@@ -77,6 +77,7 @@ def _default_b2b_watchlist_alert_events_catalog_row() -> dict[str, object]:
                     _B2B_WATCHLIST_ALERT_EVENT_CONSTRAINTS.items()
                 )
             },
+            "no_unlisted_alert_event_constraints": True,
             "indexes": {
                 name: {
                     "relation_kind": "i",
@@ -92,6 +93,7 @@ def _default_b2b_watchlist_alert_events_catalog_row() -> dict[str, object]:
                 }
                 for name, index in _B2B_WATCHLIST_ALERT_EVENT_INDEXES.items()
             },
+            "no_unlisted_alert_event_unique_or_exclusion_indexes": True,
         }
     }
 

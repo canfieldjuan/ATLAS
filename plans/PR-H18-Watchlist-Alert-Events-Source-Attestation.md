@@ -72,6 +72,26 @@ historical exception or leave pending-SQL blocking behavior unproven.
   PostgreSQL migration job. The existing escaped-literal collision remains a
   distinct assertion alongside the case-collision proof.
 
+### Contract revision (review round 3)
+
+- Evidence: confirmed P1 thread `PRRT_kwDOQ5Uhrs6baLy2` shows that the first
+  catalog query looked up only enumerated names. An additional `CHECK` could
+  reject new rows, and a standalone unique/exclusion index could restrict
+  writes, without changing the sampled objects.
+- Root cause: the receipt treated a list of required objects as sufficient
+  evidence without also checking the relevant out-of-set catalog members.
+- Required surface: require that the target has no unlisted table constraints
+  and no unlisted unique/exclusion index unless it is one of the named source
+  indexes or backs a named expected constraint. Keep the post-source
+  `reopen_count` column and benign later non-unique indexes outside this
+  source-era predicate. Add isolated fake-catalog and retained-273 disposable
+  PostgreSQL rejection fixtures for both new guards.
+- Non-scope: no broad table-shape freeze, generic catalog predicate change,
+  migration SQL, target data, or rejection of later non-unique performance
+  indexes.
+- Verification: focused 272 preflight/runner tests locally and the configured
+  disposable PostgreSQL migration job on GitHub.
+
 ## Scope (this PR)
 
 Ownership lane: `eom/migration-content-integrity`
@@ -82,7 +102,8 @@ Max files: 8
   recorded time, and the original base-table catalog contract.
 - Make the catalog proof metadata-only: permanent ordinary non-partition
   table, 20 source-era columns, named PK/FKs/checks with case- and
-  content-preserving literal-safe expressions, and three ready indexes.
+  content-preserving literal-safe expressions, no unlisted constraints, three
+  ready indexes, and no unlisted unique/exclusion index.
 - Admit only this reported ledger name after a complete attestation; every
   unlisted or incomplete source gap remains blocking.
 - Exercise preflight, runner failure/retry, and a disposable PostgreSQL schema.
@@ -106,7 +127,8 @@ Max files: 8
     source-era catalog metadata; settled by the focused preflight matrix.
   - [ ] Wrong/missing/duplicate ledger evidence, non-permanent/non-table/
     partition relation metadata, altered source-era columns/constraints/indexes
-    (including content- or case-distinct quoted literals), or an unready index returns
+    (including content- or case-distinct quoted literals), an unlisted
+    constraint, an unlisted unique/exclusion index, or an unready index returns
     `not_attested`; every closed-signature guard has an isolated fake-catalog
     failure, and the runner leaves pending SQL and its ledger row absent;
     settled by preflight/runner tests and disposable PostgreSQL cases.
@@ -133,8 +155,11 @@ Max files: 8
 
 - Reconciliation registry: CLOSED. The dispatcher admits one named immutable
   record per discrepancy; unknown source names have no path.
-- 272 catalog signature: CLOSED. Required columns, constraints, and indexes
-  are enumerated; any missing or altered member fails closed.
+- 272 catalog signature: CLOSED for source-era columns, constraints, and
+  write-restricting indexes. Required constraints are enumerated and no
+  unlisted table constraint is allowed; named indexes are exact and no
+  unlisted unique/exclusion index is allowed. Later `reopen_count` and
+  non-unique performance indexes remain outside this source-era boundary.
 
 ### Boundary-change enumeration
 
@@ -145,7 +170,8 @@ Max files: 8
   behavior.
 - Guard fields: name, synthetic version, NULL digest, timestamp, permanent
   relation identity, source-era columns/defaults, named constraints and
-  case- and content-preserving expressions, indexes/readiness.
+  case- and content-preserving expressions, no unlisted constraints,
+  indexes/readiness, and no unlisted unique/exclusion indexes.
 
 ## Mechanism
 
@@ -153,7 +179,8 @@ Max files: 8
 identity. A single read-only PostgreSQL catalog query returns structural
 metadata for the source-era table; Python tokenizes quoted literals before
 normalizing unquoted SQL and compares a closed, case- and content-preserving
-signature, emitting booleans only. The disposable test
+signature plus metadata-only absence booleans for unlisted constraints and
+write-restricting indexes, emitting booleans only. The disposable test
 executes retained 273 DDL only to produce the expected table catalog contract;
 it never asserts that 273 verifies or replaces 272 source bytes. The existing
 dispatcher intersects report-derived missing-source names with its closed
@@ -166,6 +193,8 @@ rollback, which returns 272 to generic blocking behavior.
 - No generic allowlist or alias mechanism.
 - No source reconstruction, hash backfill, or 273-to-272 rename inference.
 - No source-era requirement for later `reopen_count`.
+- No rejection of later non-unique performance indexes; only extra constraints
+  and extra unique/exclusion indexes can change write admissibility here.
 
 ## Deferred
 
@@ -179,15 +208,16 @@ parked. Parked hardening: none.
 
 ## Verification
 
-- `python -m pytest -q tests/test_migration_content_integrity_preflight.py -k '272 or known_historical'` — 47 passed, 65 deselected.
+- `python -m pytest -q tests/test_migration_content_integrity_preflight.py -k '272 or known_historical'` — 50 passed, 65 deselected.
 - `python -m pytest -q tests/test_migrations_runner.py -k '272 or missing_source or historical_attestation'` — 12 passed, 61 deselected.
-- `python -m pytest -q tests/test_b2b_watchlist_alert_events_migration_repair.py` — 7 skipped; no disposable test database was configured locally. The same suite is now enrolled in the existing GitHub PostgreSQL migration job.
+- `python -m pytest -q tests/test_b2b_watchlist_alert_events_migration_repair.py` — 10 skipped; no disposable test database was configured locally. The same suite is now enrolled in the existing GitHub PostgreSQL migration job.
 - `python -m py_compile ...` and `ruff check ...` — passed for all four changed
   Python files.
 - `python scripts/check_guard_class_closure.py --base origin/main --strict` —
   passed; the declared closed registry and signature have property proof.
 - `python scripts/check_migration_content_integrity.py --expected-target 'host=localhost, port=5433, db=atlas' --attest-known-reconciliations` —
-  read-only exit 2; named 272 is attested with permanent storage and literal-safe
+  read-only exit 2; named 272 is attested with permanent storage, no unlisted
+  constraints, no unlisted unique/exclusion indexes, and case-preserving
   catalog evidence, while independent H-18 records remain blocking. Broad unit
   suite and required workflows are GitHub CI only per operator direction.
 
@@ -196,11 +226,11 @@ parked. Parked hardening: none.
 | File | LOC |
 |---|---:|
 | `.github/workflows/atlas_migrations_runner_checks.yml` | 3 |
-| `atlas_brain/storage/migrations/reconciliation.py` | 641 |
+| `atlas_brain/storage/migrations/reconciliation.py` | 698 |
 | `plans/INDEX.md` | 3 |
-| `plans/PR-H18-Watchlist-Alert-Events-Source-Attestation.md` | 206 |
+| `plans/PR-H18-Watchlist-Alert-Events-Source-Attestation.md` | 236 |
 | `plans/archive/PR-H18-B2B-Campaign-Partner-Source-Attestation.md` | 0 |
-| `tests/test_b2b_watchlist_alert_events_migration_repair.py` | 366 |
-| `tests/test_migration_content_integrity_preflight.py` | 488 |
-| `tests/test_migrations_runner.py` | 191 |
-| **Total** | **1898** |
+| `tests/test_b2b_watchlist_alert_events_migration_repair.py` | 393 |
+| `tests/test_migration_content_integrity_preflight.py` | 508 |
+| `tests/test_migrations_runner.py` | 193 |
+| **Total** | **2034** |
