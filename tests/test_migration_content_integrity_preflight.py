@@ -42,11 +42,33 @@ class FakeConnection:
         records: list[tuple[str, str | None]],
         *,
         reconciliation_rows: list[dict[str, object]] | None = None,
+        public_onboarding_reconciliation_rows: list[dict[str, object]] | None = None,
+        public_onboarding_columns: list[dict[str, object]] | None = None,
+        public_onboarding_constraints: list[dict[str, object]] | None = None,
+        public_onboarding_indexes: dict[str, dict[str, object] | None] | None = None,
         recurring_schema_ready: bool = True,
         zero_active_null_period_rows: bool = True,
     ):
         self.records = records
         self.reconciliation_rows = reconciliation_rows or []
+        self.public_onboarding_reconciliation_rows = (
+            public_onboarding_reconciliation_rows or []
+        )
+        self.public_onboarding_columns = (
+            _default_public_onboarding_columns()
+            if public_onboarding_columns is None
+            else public_onboarding_columns
+        )
+        self.public_onboarding_constraints = (
+            _default_public_onboarding_constraints()
+            if public_onboarding_constraints is None
+            else public_onboarding_constraints
+        )
+        self.public_onboarding_indexes = (
+            _default_public_onboarding_indexes()
+            if public_onboarding_indexes is None
+            else public_onboarding_indexes
+        )
         self.recurring_schema_ready = recurring_schema_ready
         self.zero_active_null_period_rows = zero_active_null_period_rows
         self.queries: list[str] = []
@@ -73,8 +95,25 @@ class FakeConnection:
             "SELECT content_sha256, applied_at FROM schema_migrations "
             "WHERE name = $1 LIMIT 2"
         ):
-            assert args == (reconciliation_mod.MIGRATION_387_RECONCILIATION.migration_name,)
-            return self.reconciliation_rows
+            if args == (reconciliation_mod.MIGRATION_387_RECONCILIATION.migration_name,):
+                return self.reconciliation_rows
+            assert args == (
+                reconciliation_mod.MIGRATION_382_EOM_PUBLIC_ONBOARDING_TOKENS_RECONCILIATION.migration_name,
+            )
+            return self.public_onboarding_reconciliation_rows
+        if "FROM information_schema.columns AS actual" in query:
+            assert args == (
+                list(reconciliation_mod._PUBLIC_ONBOARDING_TOKEN_IMMUTABLE_COLUMNS),
+            )
+            return self.public_onboarding_columns
+        if "eom_public_onboarding_tokens" in query:
+            assert "FROM pg_constraint AS actual" in query
+            assert args == (
+                list(
+                    reconciliation_mod._PUBLIC_ONBOARDING_TOKEN_CONSTRAINT_EXPRESSIONS
+                ),
+            )
+            return self.public_onboarding_constraints
         assert "FROM pg_constraint AS actual" in query
         assert args == (list(recurring_invoice_schema._RECURRING_INVOICE_DEDUP_CONSTRAINTS),)
         return [
@@ -86,6 +125,9 @@ class FakeConnection:
 
     async def fetchrow(self, query: str, *args: object) -> dict[str, object] | None:
         self.fetchrow_calls.append((query, args))
+        if "eom_public_onboarding_tokens" in query:
+            assert len(args) == 1
+            return self.public_onboarding_indexes.get(str(args[0]))
         assert "FROM pg_index AS index_state" in query
         assert args == (recurring_invoice_schema._RECURRING_INVOICE_DEDUP_INDEX,)
         return {
@@ -116,6 +158,60 @@ class FakeConnection:
 
     async def close(self) -> None:
         self.closed = True
+
+
+def _default_public_onboarding_columns() -> list[dict[str, object]]:
+    return [
+        {
+            "column_name": name,
+            "data_type": data_type,
+            "character_maximum_length": maximum_length,
+            "is_nullable": nullable,
+        }
+        for name, (data_type, maximum_length, nullable) in (
+            reconciliation_mod._PUBLIC_ONBOARDING_TOKEN_IMMUTABLE_COLUMNS.items()
+        )
+    ]
+
+
+def _default_public_onboarding_constraints() -> list[dict[str, object]]:
+    return [
+        {"conname": name, "definition": definition}
+        for name, definition in (
+            reconciliation_mod._PUBLIC_ONBOARDING_TOKEN_CONSTRAINT_EXPRESSIONS.items()
+        )
+    ]
+
+
+def _default_public_onboarding_indexes() -> dict[str, dict[str, object]]:
+    return {
+        reconciliation_mod._PUBLIC_ONBOARDING_TOKEN_ISSUED_CONTACT_INDEX: {
+            "indisunique": True,
+            "indisvalid": True,
+            "indisready": True,
+            "indnkeyatts": 1,
+            "key_column_1": "contact_id",
+            "definition": (
+                "CREATE UNIQUE INDEX uq_eom_public_onboarding_tokens_issued_contact "
+                "ON eom_public_onboarding_tokens USING btree (contact_id) "
+                "WHERE ((status)::text = 'issued'::text)"
+            ),
+            "predicate": "((status)::text = 'issued'::text)",
+        },
+        reconciliation_mod._PUBLIC_ONBOARDING_TOKEN_STATUS_INDEX: {
+            "indisunique": False,
+            "indisvalid": True,
+            "indisready": True,
+            "indnkeyatts": 2,
+            "key_column_1": "status",
+            "key_column_2": "issued_at",
+            "definition": (
+                "CREATE INDEX idx_eom_public_onboarding_tokens_status "
+                "ON eom_public_onboarding_tokens USING btree (status, issued_at DESC)"
+            ),
+            "predicate": None,
+        },
+    }
 
 
 def _write_migration(directory: Path, name: str, content: bytes) -> Path:
@@ -153,6 +249,28 @@ def _migration_387_connection(
         reconciliation_rows=[reconciliation_row],
         recurring_schema_ready=recurring_schema_ready,
         zero_active_null_period_rows=zero_active_null_period_rows,
+    )
+
+
+def _migration_382_connection(
+    *,
+    ledger_digest: str | None = None,
+    applied_at: object | None = None,
+    reconciliation_rows: list[dict[str, object]] | None = None,
+) -> FakeConnection:
+    record = (
+        reconciliation_mod.MIGRATION_382_EOM_PUBLIC_ONBOARDING_TOKENS_RECONCILIATION
+    )
+    actual_applied_at = record.observed_applied_at if applied_at is None else applied_at
+    actual_rows = reconciliation_rows
+    if actual_rows is None:
+        actual_rows = [{
+            "content_sha256": ledger_digest,
+            "applied_at": actual_applied_at,
+        }]
+    return FakeConnection(
+        [(record.migration_name, ledger_digest)],
+        public_onboarding_reconciliation_rows=actual_rows,
     )
 
 
@@ -248,6 +366,49 @@ def test_migration_387_reconciliation_record_matches_checked_in_final_source() -
     assert record.observed_applied_at < record.earliest_retained_source_commit_at
 
 
+def test_migration_382_reconciliation_record_is_closed_legacy_source_evidence() -> None:
+    record = (
+        reconciliation_mod.MIGRATION_382_EOM_PUBLIC_ONBOARDING_TOKENS_RECONCILIATION
+    )
+
+    assert record.source_verification == reconciliation_mod.HISTORICAL_SOURCE_UNAVAILABLE
+    assert record.historical_ledger_sha256 is None
+    assert record.observed_applied_at == datetime(
+        2026,
+        8,
+        17,
+        19,
+        18,
+        7,
+        242_686,
+        tzinfo=timezone.utc,
+    )
+    assert reconciliation_mod.known_historical_missing_source_reconciliation_names() == {
+        record.migration_name,
+    }
+    assert reconciliation_mod.known_historical_reconciliation_names() == {
+        record.migration_name,
+        reconciliation_mod.MIGRATION_387_RECONCILIATION.migration_name,
+    }
+
+
+@pytest.mark.asyncio
+async def test_default_known_reconciliation_attestation_preserves_387_only_behavior(
+    tmp_path: Path,
+) -> None:
+    record = reconciliation_mod.MIGRATION_387_RECONCILIATION
+    _write_migration(tmp_path, record.migration_name, _migration_387_source())
+
+    attestations = await reconciliation_mod.attest_known_historical_migration_reconciliations(
+        _migration_387_connection(),
+        sorted(tmp_path.glob("*.sql")),
+    )
+
+    assert [attestation.migration_name for attestation in attestations] == [
+        record.migration_name,
+    ]
+
+
 @pytest.mark.asyncio
 async def test_known_387_reconciliation_attests_catalog_without_verifying_source(
     tmp_path: Path,
@@ -289,6 +450,128 @@ async def test_known_387_reconciliation_attests_catalog_without_verifying_source
     assert len(connection.fetchrow_calls) == 1
     assert len(connection.fetchval_calls) == 2
     assert connection.transaction_readonly == [True]
+    assert connection.execute_calls == []
+
+
+@pytest.mark.asyncio
+async def test_known_382_reconciliation_attests_complete_catalog_without_source(
+    tmp_path: Path,
+) -> None:
+    record = (
+        reconciliation_mod.MIGRATION_382_EOM_PUBLIC_ONBOARDING_TOKENS_RECONCILIATION
+    )
+    connection = _migration_382_connection()
+
+    code, payload = await module.run_migration_content_integrity_preflight(
+        connection,
+        migrations_dir=tmp_path,
+        attest_known_reconciliations=True,
+    )
+
+    assert code == module.UNRESOLVED_DRIFT_EXIT
+    assert payload["status"] == "unresolved_drift"
+    assert payload["report"]["missing_source"] == [record.migration_name]
+    assert payload["known_reconciliation_evidence"] == [{
+        "reconciliation_id": record.reconciliation_id,
+        "migration_name": record.migration_name,
+        "source_verification": reconciliation_mod.HISTORICAL_SOURCE_UNAVAILABLE,
+        "exactly_one_ledger_row": True,
+        "ledger_digest_is_null": True,
+        "applied_at_matches_record": True,
+        "immutable_projection_ready": True,
+        "fingerprint_check_ready": True,
+        "terminal_state_check_ready": True,
+        "issued_contact_index_ready": True,
+        "status_index_ready": True,
+        "status": "attested",
+    }]
+    assert connection.fetch_calls[0] == (
+        "SELECT name, content_sha256 FROM schema_migrations",
+        (),
+    )
+    assert connection.fetch_calls[1] == (
+        "SELECT content_sha256, applied_at FROM schema_migrations WHERE name = $1 LIMIT 2",
+        (record.migration_name,),
+    )
+    assert len(connection.fetchrow_calls) == 2
+    assert connection.transaction_readonly == [True]
+    assert connection.execute_calls == []
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("case", "field"),
+    [
+        ("non-null ledger digest", "ledger_digest_is_null"),
+        ("truncated applied timestamp", "applied_at_matches_record"),
+        ("duplicate ledger rows", "exactly_one_ledger_row"),
+        ("missing immutable column", "immutable_projection_ready"),
+        ("weakened fingerprint check", "fingerprint_check_ready"),
+        ("weakened terminal-state check", "terminal_state_check_ready"),
+        ("missing issued-contact index", "issued_contact_index_ready"),
+        ("missing status index", "status_index_ready"),
+    ],
+)
+async def test_known_382_reconciliation_rejects_each_required_evidence_field(
+    case: str,
+    field: str,
+    tmp_path: Path,
+) -> None:
+    record = (
+        reconciliation_mod.MIGRATION_382_EOM_PUBLIC_ONBOARDING_TOKENS_RECONCILIATION
+    )
+    connection = _migration_382_connection()
+    if case == "non-null ledger digest":
+        connection = _migration_382_connection(ledger_digest="a" * 64)
+    elif case == "truncated applied timestamp":
+        connection = _migration_382_connection(
+            applied_at=record.observed_applied_at.replace(microsecond=0)
+        )
+    elif case == "duplicate ledger rows":
+        connection = _migration_382_connection(reconciliation_rows=[
+            {
+                "content_sha256": None,
+                "applied_at": record.observed_applied_at,
+            },
+            {
+                "content_sha256": None,
+                "applied_at": record.observed_applied_at,
+            },
+        ])
+    elif case == "missing immutable column":
+        connection.public_onboarding_columns = connection.public_onboarding_columns[1:]
+    elif case == "weakened fingerprint check":
+        connection.public_onboarding_constraints[0] = {
+            "conname": "eom_public_onboarding_tokens_signing_key_fingerprint_check",
+            "definition": "((signing_key_fingerprint)::text ~ '^[0-9a-f]{63}$'::text)",
+        }
+    elif case == "weakened terminal-state check":
+        connection.public_onboarding_constraints[1] = {
+            "conname": "ck_eom_public_onboarding_tokens_terminal_state",
+            "definition": "(status = 'issued')",
+        }
+    elif case == "missing issued-contact index":
+        connection.public_onboarding_indexes[
+            reconciliation_mod._PUBLIC_ONBOARDING_TOKEN_ISSUED_CONTACT_INDEX
+        ] = None
+    elif case == "missing status index":
+        connection.public_onboarding_indexes[
+            reconciliation_mod._PUBLIC_ONBOARDING_TOKEN_STATUS_INDEX
+        ] = None
+    else:  # pragma: no cover - parametrize keeps this exhaustive.
+        raise AssertionError(f"unexpected evidence case: {case}")
+
+    code, payload = await module.run_migration_content_integrity_preflight(
+        connection,
+        migrations_dir=tmp_path,
+        attest_known_reconciliations=True,
+    )
+
+    evidence = payload["known_reconciliation_evidence"][0]
+    assert code == module.UNRESOLVED_DRIFT_EXIT, case
+    assert evidence["source_verification"] == reconciliation_mod.HISTORICAL_SOURCE_UNAVAILABLE
+    assert evidence[field] is False, case
+    assert evidence["status"] == "not_attested", case
     assert connection.execute_calls == []
 
 

@@ -14,6 +14,10 @@ from atlas_brain.storage.migrations import (  # noqa: E402
     PendingMigrationContentIntegrityError,
     run_migrations,
 )
+from atlas_brain.storage.migrations.reconciliation import (  # noqa: E402
+    MIGRATION_382_EOM_PUBLIC_ONBOARDING_TOKENS_RECONCILIATION,
+    attest_known_historical_migration_reconciliations,
+)
 
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -388,6 +392,47 @@ async def test_schema_repair_refuses_observed_missing_382_source_before_sql():
                 "SELECT COUNT(*) FROM schema_migrations WHERE name = $1",
                 MIGRATION_STEM,
             )
+            == 0
+        )
+    finally:
+        await conn.execute(f"DROP SCHEMA IF EXISTS {_quote_ident(schema)} CASCADE")
+        await conn.close()
+
+
+@pytest.mark.asyncio
+async def test_known_382_attestation_reads_complete_catalog_without_token_rows():
+    """The named receipt accepts only final metadata, not token-table contents."""
+    database_url = _database_url_or_skip()
+    schema = f"eom_public_reconciliation_{uuid.uuid4().hex}"
+    conn = await asyncpg.connect(database_url)
+    try:
+        await _prepare_complete_schema(conn, schema)
+        record = MIGRATION_382_EOM_PUBLIC_ONBOARDING_TOKENS_RECONCILIATION
+        await conn.execute(
+            """
+            INSERT INTO schema_migrations (version, name, content_sha256, applied_at)
+            VALUES ($1, $2, NULL, $3)
+            """,
+            -11,
+            record.migration_name,
+            record.observed_applied_at,
+        )
+
+        attestations = await attest_known_historical_migration_reconciliations(
+            conn,
+            sorted(MIGRATIONS.glob("*.sql")),
+            candidate_names={record.migration_name},
+        )
+
+        assert len(attestations) == 1
+        attestation = attestations[0]
+        assert attestation.migration_name == record.migration_name
+        assert attestation.status == "attested"
+        assert attestation.as_payload()["source_verification"] == (
+            "historical_source_unavailable"
+        )
+        assert (
+            await conn.fetchval("SELECT COUNT(*) FROM eom_public_onboarding_tokens")
             == 0
         )
     finally:

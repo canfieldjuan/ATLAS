@@ -1,6 +1,6 @@
 # Plan archive index
 
-1539 archived plan doc(s). Merged plan docs are moved under `archive/` and listed below; once the archive sweep has run, the `plans/` root holds only in-flight slices.
+1540 archived plan doc(s). Merged plan docs are moved under `archive/` and listed below; once the archive sweep has run, the `plans/` root holds only in-flight slices.
 
 - [PR-ASR-Pip-Audit-Egg-Fragment](archive/PR-ASR-Pip-Audit-Egg-Fragment.md) - lane: security/workflow | phase: Production hardening
 - [PR-ASR-Requirements-Audit-Pin](archive/PR-ASR-Requirements-Audit-Pin.md) - lane: security/workflow | phase: Production hardening
@@ -1205,6 +1205,7 @@
 - [PR-Guard-Class-Closure-CI-Lint](archive/PR-Guard-Class-Closure-CI-Lint.md) - lane: process/review-discipline | phase: Workflow/process
 - [PR-Guard-Class-Closure-Claude-Contract](archive/PR-Guard-Class-Closure-Claude-Contract.md) - lane: workflow/guard-class-closure-claude-contract | phase: Workflow/process
 - [PR-Guard-Class-Closure](archive/PR-Guard-Class-Closure.md) - lane: process/review-discipline | phase: Workflow/process
+- [PR-H18-Migration-387-Attestation-Precision](archive/PR-H18-Migration-387-Attestation-Precision.md) - lane: eom/migration-content-integrity | phase: Production hardening
 - [PR-Hardening-Drain](archive/PR-Hardening-Drain.md) - lane: governance/hardening-drain | phase: Workflow/process
 - [PR-Incident-Response-Runbook](archive/PR-Incident-Response-Runbook.md) - lane: security/hardening-1656 | phase: Production hardening
 - [PR-Intel-UI-CI-Enrollment-Close-Hole](archive/PR-Intel-UI-CI-Enrollment-Close-Hole.md) - lane: intel-ui/ci-enrollment | phase: Workflow/process

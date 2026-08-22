@@ -37,6 +37,7 @@ from atlas_brain.storage.migrations import (  # noqa: E402
 )
 from atlas_brain.storage.migrations.reconciliation import (  # noqa: E402
     attest_known_historical_migration_reconciliations,
+    known_historical_reconciliation_names,
 )
 
 
@@ -158,9 +159,15 @@ async def run_migration_content_integrity_preflight(
     async with connection.transaction(readonly=True):
         report = await migration_content_integrity_report(connection, migration_files)
         if attest_known_reconciliations:
+            reported_names = frozenset(report.mismatched) | frozenset(
+                report.missing_source
+            )
             attestations = await attest_known_historical_migration_reconciliations(
                 connection,
                 migration_files,
+                candidate_names=(
+                    reported_names & known_historical_reconciliation_names()
+                ),
             )
             reconciliation_evidence = [attestation.as_payload() for attestation in attestations]
     return _report_payload(report, reconciliation_evidence=reconciliation_evidence)
