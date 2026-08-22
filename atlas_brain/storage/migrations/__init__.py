@@ -243,12 +243,18 @@ async def _unresolved_pending_migration_content_evidence(
     from .reconciliation import (
         attest_known_historical_migration_reconciliations,
         known_historical_migration_reconciliation_names,
+        known_historical_missing_source_reconciliation_names,
     )
 
-    candidate_names = (
+    mismatched_candidate_names = (
         frozenset(report.mismatched)
         & known_historical_migration_reconciliation_names()
     )
+    missing_source_candidate_names = (
+        frozenset(report.missing_source)
+        & known_historical_missing_source_reconciliation_names()
+    )
+    candidate_names = mismatched_candidate_names | missing_source_candidate_names
     if not candidate_names:
         return report.mismatched, report.missing_source
 
@@ -256,6 +262,7 @@ async def _unresolved_pending_migration_content_evidence(
         attestations = await attest_known_historical_migration_reconciliations(
             executor,
             migration_files,
+            candidate_names=candidate_names,
         )
     except Exception as exc:
         raise PendingMigrationContentIntegrityError(
@@ -264,15 +271,29 @@ async def _unresolved_pending_migration_content_evidence(
             f"{','.join(sorted(candidate_names))}"
         ) from exc
 
-    attested_names = frozenset(
+    attested_mismatched_names = frozenset(
         attestation.migration_name
         for attestation in attestations
-        if attestation.migration_name in candidate_names
+        if attestation.migration_name in mismatched_candidate_names
+        and attestation.status == "attested"
+    )
+    attested_missing_source_names = frozenset(
+        attestation.migration_name
+        for attestation in attestations
+        if attestation.migration_name in missing_source_candidate_names
         and attestation.status == "attested"
     )
     return (
-        tuple(name for name in report.mismatched if name not in attested_names),
-        report.missing_source,
+        tuple(
+            name
+            for name in report.mismatched
+            if name not in attested_mismatched_names
+        ),
+        tuple(
+            name
+            for name in report.missing_source
+            if name not in attested_missing_source_names
+        ),
     )
 
 
