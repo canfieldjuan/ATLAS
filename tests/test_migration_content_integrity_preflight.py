@@ -347,6 +347,12 @@ def _default_b2b_watchlist_alert_events_catalog_row() -> dict[str, object]:
                     "is_deferrable": False,
                     "is_initially_deferred": False,
                     "is_validated": True,
+                    "internal_trigger_count": (
+                        constraint.expected_internal_trigger_count
+                    ),
+                    "origin_enabled_internal_trigger_count": (
+                        constraint.expected_internal_trigger_count
+                    ),
                     "expression": constraint.expression,
                 }
                 for name, constraint in (
@@ -1184,6 +1190,9 @@ async def test_known_272_reconciliation_attests_catalog_without_source(
     assert "unlisted_columns AS" in catalog_query
     assert "JOIN pg_constraint AS actual" in catalog_query
     assert "unlisted_constraints AS" in catalog_query
+    assert "constraint_trigger.tgconstraint = actual.oid" in catalog_query
+    assert "constraint_trigger.tgisinternal" in catalog_query
+    assert "constraint_trigger.tgenabled = 'O'::\"char\"" in catalog_query
     assert "JOIN pg_index AS index_state" in catalog_query
     assert "unlisted_indexes AS" in catalog_query
     assert "FROM unnest(index_state.indkey)" in catalog_query
@@ -1436,6 +1445,14 @@ async def test_known_272_reconciliation_rejects_each_required_evidence_field(
             "required_alert_event_constraints_ready",
         ),
         (
+            "foreign key has a missing internal enforcement trigger",
+            "required_alert_event_constraints_ready",
+        ),
+        (
+            "foreign key has a disabled internal enforcement trigger",
+            "required_alert_event_constraints_ready",
+        ),
+        (
             "check constraint is weakened",
             "required_alert_event_constraints_ready",
         ),
@@ -1564,6 +1581,11 @@ async def test_known_272_reconciliation_rejects_each_catalog_guard_independently
         foreign_key["is_initially_deferred"] = True
     elif case == "constraint is unvalidated":
         foreign_key["is_validated"] = False
+    elif case == "foreign key has a missing internal enforcement trigger":
+        foreign_key["internal_trigger_count"] = 3
+        foreign_key["origin_enabled_internal_trigger_count"] = 3
+    elif case == "foreign key has a disabled internal enforcement trigger":
+        foreign_key["origin_enabled_internal_trigger_count"] = 3
     elif case == "check constraint is weakened":
         status_check["expression"] = "(status = any (array['open']))"
     elif case == "check constraint has a literal collision":

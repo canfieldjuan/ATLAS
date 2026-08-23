@@ -573,6 +573,7 @@ class _B2BWatchlistAlertEventConstraint:
     update_action: str | None = None
     match_type: str | None = None
     expression: str | None = None
+    expected_internal_trigger_count: int = 0
 
 
 @dataclass(frozen=True)
@@ -619,6 +620,11 @@ _B2B_WATCHLIST_ALERT_EVENT_ALLOWED_COLUMNS = {
     **_B2B_WATCHLIST_ALERT_EVENT_KNOWN_LATER_COLUMNS,
 }
 
+# PostgreSQL implements each ordinary non-deferrable foreign key with two
+# internal constraint triggers on each participating relation. The source-era
+# receipt needs all four in origin mode, not just a validated pg_constraint row.
+_B2B_WATCHLIST_ALERT_EVENT_FOREIGN_KEY_INTERNAL_TRIGGER_COUNT = 4
+
 _B2B_WATCHLIST_ALERT_EVENT_CONSTRAINTS = {
     "b2b_watchlist_alert_events_pkey": _B2BWatchlistAlertEventConstraint(
         "p", ("id",)
@@ -631,6 +637,9 @@ _B2B_WATCHLIST_ALERT_EVENT_CONSTRAINTS = {
             delete_action="c",
             update_action="a",
             match_type="s",
+            expected_internal_trigger_count=(
+                _B2B_WATCHLIST_ALERT_EVENT_FOREIGN_KEY_INTERNAL_TRIGGER_COUNT
+            ),
         )
     ),
     "b2b_watchlist_alert_events_watchlist_view_id_fkey": (
@@ -641,6 +650,9 @@ _B2B_WATCHLIST_ALERT_EVENT_CONSTRAINTS = {
             delete_action="c",
             update_action="a",
             match_type="s",
+            expected_internal_trigger_count=(
+                _B2B_WATCHLIST_ALERT_EVENT_FOREIGN_KEY_INTERNAL_TRIGGER_COUNT
+            ),
         )
     ),
     "chk_b2b_watchlist_alert_events_event_type": (
@@ -1048,6 +1060,12 @@ def _watchlist_alert_event_constraint_ready(
         )
         == expected.expression
     )
+    internal_trigger_enforcement_ready = all((
+        int(observed.get("internal_trigger_count") or 0)
+        == expected.expected_internal_trigger_count,
+        int(observed.get("origin_enabled_internal_trigger_count") or 0)
+        == expected.expected_internal_trigger_count,
+    ))
     return all((
         _catalog_char(observed.get("constraint_type")) == expected.constraint_type,
         _catalog_column_names(observed.get("key_columns")) == expected.key_columns,
@@ -1061,6 +1079,7 @@ def _watchlist_alert_event_constraint_ready(
         not bool(observed.get("is_initially_deferred")),
         bool(observed.get("is_validated")),
         expression_ready,
+        internal_trigger_enforcement_ready,
     ))
 
 
@@ -1734,6 +1753,19 @@ async def _migration_272_catalog_evidence(
                     'is_deferrable', actual.condeferrable,
                     'is_initially_deferred', actual.condeferred,
                     'is_validated', actual.convalidated,
+                    'internal_trigger_count', (
+                        SELECT COUNT(*)
+                        FROM pg_trigger AS constraint_trigger
+                        WHERE constraint_trigger.tgconstraint = actual.oid
+                          AND constraint_trigger.tgisinternal
+                    ),
+                    'origin_enabled_internal_trigger_count', (
+                        SELECT COUNT(*)
+                        FROM pg_trigger AS constraint_trigger
+                        WHERE constraint_trigger.tgconstraint = actual.oid
+                          AND constraint_trigger.tgisinternal
+                          AND constraint_trigger.tgenabled = 'O'::"char"
+                    ),
                     'expression', CASE
                         WHEN actual.oid IS NULL THEN NULL
                         ELSE pg_get_expr(actual.conbin, actual.conrelid)

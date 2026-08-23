@@ -307,6 +307,38 @@ historical exception or leave pending-SQL blocking behavior unproven.
   `not_attested` and blocks pending SQL. Run focused fake/runner/workflow-shape
   tests locally; leave the full unit gate and broad workflow matrix to GitHub.
 
+### Contract revision (review round 10)
+
+- Evidence: confirmed P1 thread `PRRT_kwDOQ5Uhrs6bczIy` shows that the named
+  foreign-key constraints can retain their names, key/reference metadata, and
+  `convalidated` state after a privileged `ALTER TABLE
+  b2b_watchlist_alert_events DISABLE TRIGGER ALL`. The generic user-interceptor
+  predicate intentionally excludes those internal PostgreSQL triggers, so the
+  receipt could otherwise admit a table whose alert writer no longer enforces
+  its referenced account/view rows.
+- Decision-Seam Analysis — decision: the one named-constraint signature decides
+  whether an approved foreign key is not merely catalog-present but actively
+  enforcing the writer's reference invariants. Why the prior decision is wrong:
+  it treated `pg_constraint` metadata as enforcement proof while omitting the
+  constraint-linked `pg_trigger.tgenabled` state. Structural default: each
+  named source-era FK must have exactly its four internal triggers and every
+  one must retain PostgreSQL's source-default origin mode (`'O'`). A missing,
+  disabled, replica-only, or otherwise altered internal trigger returns
+  `not_attested`; that false-negative cost is generic migration blocking, which
+  is cheaper than admitting an orphan-producing writer path.
+- Required surface: project the internal-trigger count and source-default
+  enabled count into the existing named-constraint evidence, make both part of
+  the private closed constraint predicate, add isolated fake-catalog and
+  runner-retry failures, and add a test-owned PostgreSQL 16 `DISABLE TRIGGER
+  ALL` rejection case before the pending probe can write.
+- Non-scope: no migration SQL, trigger mutation, target data/ledger mutation,
+  alert-writer change, generic catalog-policy redesign, or global runner-lock
+  redesign. This receipt observes and rejects altered internal FK enforcement;
+  it never repairs production schema state.
+- Verification: run focused fake preflight/runner checks locally and leave the
+  disposable PostgreSQL 16 case plus broad gates to the existing GitHub
+  migration workflow.
+
 ## Scope (this PR)
 
 Ownership lane: `eom/migration-content-integrity`
@@ -319,8 +351,9 @@ Max files: 10
   table, 20 source-era columns plus the exact later `reopen_count` signature,
   all non-generated/non-identity and type-default-collated,
   no unlisted non-dropped user column, named PK/FKs/checks with case- and
-  content-preserving literal-safe expressions, no unlisted constraints, three
-  ready indexes, no unlisted index, and no unreviewed
+  content-preserving literal-safe expressions, four source-default internal
+  enforcement triggers per named FK, no unlisted constraints, three ready
+  indexes, no unlisted index, and no unreviewed
   table-local DML interceptor.
 - Admit only this reported ledger name after a complete attestation; every
   unlisted or incomplete source gap remains blocking.
@@ -407,7 +440,9 @@ Max files: 10
   `not_attested`: preserving generic migration blocking is cheaper than
   admitting a historical exception with unreviewed write-time behavior.
   Expected named key identity is derived from `indkey` and `pg_attribute`,
-  while reviewed DDL validates method/order. The table also has no user DML
+  while each named FK derives exactly four `tgconstraint`-linked internal
+  triggers in source-default origin mode. Reviewed DDL validates method/order.
+  The table also has no user DML
   mediator: any noninternal trigger, non-`_RETURN` rewrite rule, RLS
   enablement/force flag, or policy closes the receipt.
 
@@ -421,17 +456,19 @@ Max files: 10
 - Guard fields: name, synthetic version, NULL digest, timestamp, permanent
   relation identity, source-era and known-later column/default/generated/
   identity/default-collation signatures, no
-  unlisted non-dropped user column, named constraints and case- and
-  content-preserving expressions, indexes/readiness and canonical key identity,
+  unlisted non-dropped user column, named constraints with active internal-FK
+  enforcement and case- and content-preserving expressions, indexes/readiness
+  and canonical key identity,
   no unlisted indexes, and absence of table-local user DML
   interceptors.
 - Caller and catalog-state disposition:
 
   | Caller | Catalog state | Disposition |
   |---|---|---|
-  | `run_migrations` named pending 272 receipt | Complete approved metadata and no user DML mediator | Preserved: admit only the named receipt. |
+  | `run_migrations` named pending 272 receipt | Complete approved metadata, source-default internal FK enforcement, and no user DML mediator | Preserved: admit only the named receipt. |
   | `run_migrations` named pending 272 receipt | Any unlisted index, including simple, expression, partial, INCLUDE, or alternate-method nonunique index | Intentionally changed: `not_attested`; leave pending SQL and probe ledger row absent. |
   | `run_migrations` named pending 272 receipt | Any noninternal trigger, user rewrite rule, RLS enablement/force, or policy | Intentionally changed: `not_attested`; leave pending SQL and probe ledger row absent. |
+  | `run_migrations` named pending 272 receipt | A named FK is missing an internal trigger or any of its four triggers is not origin-enabled | Intentionally changed: `not_attested`; leave pending SQL and probe ledger row absent. |
   | Read-only preflight | Same metadata states | Preserved: expose a boolean-only receipt payload; never query alert rows or write state. |
   | Privileged external database session after the snapshot | Schema/ledger mutation outside the cooperating runner lock | Deferred: global execution-model follow-up in [#2476](https://github.com/canfieldjuan/ATLAS/issues/2476); stop and rerun preflight rather than claiming this receipt serializes external operators. |
 
@@ -445,7 +482,9 @@ identity. A single read-only PostgreSQL catalog query returns structural
   literals before normalizing unquoted SQL and
 compares a closed, case- and content-preserving signature plus metadata-only
 absence booleans for unlisted columns, constraints, and indexes, and table-local
-user DML interceptors, emitting booleans only. Expected named index keys come
+user DML interceptors, emitting booleans only. Each named FK also derives its
+four `pg_trigger.tgconstraint`-linked internal triggers and requires every
+`tgenabled` value to remain source-default origin mode. Expected named index keys come
 from `pg_index.indkey` / `pg_attribute`; reviewed DDL remains a separate
 method/order signature check. The
 interceptor predicate fails closed for any noninternal trigger, non-`_RETURN`
@@ -478,6 +517,9 @@ expanding the migration workflow into an application-environment surrogate.
   write-time behavior, so every unlisted index blocks this historical receipt.
 - No special case for a known trigger shape: every user trigger is unreviewed
   source-era write behavior, including one currently disabled in the target.
+- No internal-FK trigger-mode exception: every named FK needs all four expected
+  internal triggers in source-default origin mode; a missing, disabled,
+  replica-only, or always-enabled variation is outside this historical receipt.
 - No generated or identity exception for an approved 272 column: either form
   changes the closed writer-compatible signature and returns `not_attested`.
 - No non-default collation exception for an approved 272 column: an altered
@@ -549,11 +591,11 @@ serialization, tracked in #2476.
 | `.github/workflows/atlas_migrations_runner_checks.yml` | 5 |
 | `atlas_brain/api/b2b_dashboard.py` | 21 |
 | `atlas_brain/services/b2b/watchlist_alerts.py` | 53 |
-| `atlas_brain/storage/migrations/reconciliation.py` | 794 |
+| `atlas_brain/storage/migrations/reconciliation.py` | 826 |
 | `plans/INDEX.md` | 3 |
-| `plans/PR-H18-Watchlist-Alert-Events-Source-Attestation.md` | 559 |
+| `plans/PR-H18-Watchlist-Alert-Events-Source-Attestation.md` | 601 |
 | `plans/archive/PR-H18-B2B-Campaign-Partner-Source-Attestation.md` | 0 |
-| `tests/test_b2b_watchlist_alert_events_migration_repair.py` | 813 |
-| `tests/test_migration_content_integrity_preflight.py` | 639 |
-| `tests/test_migrations_runner.py` | 257 |
-| **Total** | **3144** |
+| `tests/test_b2b_watchlist_alert_events_migration_repair.py` | 840 |
+| `tests/test_migration_content_integrity_preflight.py` | 661 |
+| `tests/test_migrations_runner.py` | 307 |
+| **Total** | **3317** |

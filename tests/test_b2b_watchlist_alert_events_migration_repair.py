@@ -409,6 +409,10 @@ async def test_272_receipt_rejects_nondeterministic_entity_key_collation_before_
             "required_alert_event_constraints_ready",
         ),
         (
+            "disabled expected foreign-key enforcement triggers",
+            "required_alert_event_constraints_ready",
+        ),
+        (
             "wrong index direction",
             "required_alert_event_indexes_ready",
         ),
@@ -492,6 +496,29 @@ async def test_272_receipt_rejects_altered_catalog_before_pending_sql(
                     FOREIGN KEY (account_id) REFERENCES saas_accounts(id)
                     ON DELETE RESTRICT;
                 """)
+        elif case == "disabled expected foreign-key enforcement triggers":
+            await conn.execute("""
+                ALTER TABLE b2b_watchlist_alert_events DISABLE TRIGGER ALL;
+                """)
+            trigger_counts = await conn.fetchrow("""
+                SELECT
+                    COUNT(*) AS internal_trigger_count,
+                    COUNT(*) FILTER (
+                        WHERE trigger_state.tgenabled = 'O'::"char"
+                    ) AS origin_enabled_internal_trigger_count
+                FROM pg_trigger AS trigger_state
+                JOIN pg_constraint AS constraint_state
+                  ON constraint_state.oid = trigger_state.tgconstraint
+                WHERE constraint_state.conrelid =
+                    'b2b_watchlist_alert_events'::regclass
+                  AND constraint_state.contype = 'f'
+                  AND trigger_state.tgisinternal
+                """)
+            assert trigger_counts["internal_trigger_count"] == 8
+            assert (
+                trigger_counts["origin_enabled_internal_trigger_count"]
+                < trigger_counts["internal_trigger_count"]
+            )
         elif case == "wrong index direction":
             await conn.execute("""
                 DROP INDEX idx_b2b_watchlist_alert_events_account_status;

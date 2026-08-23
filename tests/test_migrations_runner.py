@@ -90,6 +90,12 @@ def _default_b2b_watchlist_alert_events_catalog_row() -> dict[str, object]:
                     "is_deferrable": False,
                     "is_initially_deferred": False,
                     "is_validated": True,
+                    "internal_trigger_count": (
+                        constraint.expected_internal_trigger_count
+                    ),
+                    "origin_enabled_internal_trigger_count": (
+                        constraint.expected_internal_trigger_count
+                    ),
                     "expression": constraint.expression,
                 }
                 for name, constraint in (
@@ -1078,6 +1084,9 @@ class _AttestedReconciliationPool(_SerializingPool):
             assert "FROM unnest(index_state.indkey)" in query
             assert "index_state.indisunique OR index_state.indisexclusion" not in query
             assert "unreviewed_write_interceptors AS" in query
+            assert "constraint_trigger.tgconstraint = actual.oid" in query
+            assert "constraint_trigger.tgisinternal" in query
+            assert "constraint_trigger.tgenabled = 'O'::\"char\"" in query
             assert "FROM pg_trigger AS trigger_state" in query
             assert "FROM pg_rewrite AS rule_state" in query
             assert "FROM pg_policy AS policy_state" in query
@@ -1885,6 +1894,47 @@ async def test_failed_272_write_interceptor_attestation_blocks_then_retry_applie
     assert pool.updated == []
 
     catalog["no_unreviewed_alert_event_write_interceptors"] = True
+    await run_migrations(pool, migrations_dir=tmp_path, only={"901_pending"})
+
+    assert pool.applied_sql == ["SELECT 901"]
+    assert pool.inserted_with_digest == [
+        (901, "901_pending", hashlib.sha256(b"SELECT 901").hexdigest())
+    ]
+
+
+@pytest.mark.asyncio
+async def test_failed_272_internal_fk_trigger_attestation_blocks_then_retry_applies_once(
+    tmp_path,
+):
+    from atlas_brain.storage.migrations import (
+        PendingMigrationContentIntegrityError,
+        run_migrations,
+    )
+
+    pool = _AttestedReconciliationPool()
+    record = _stage_historical_272_missing_source(pool)
+    catalog = pool.b2b_watchlist_alert_events_catalog_row["catalog_evidence"]
+    account_fk = catalog["constraints"][
+        "b2b_watchlist_alert_events_account_id_fkey"
+    ]
+    expected_trigger_count = int(
+        account_fk["origin_enabled_internal_trigger_count"]
+    )
+    account_fk["origin_enabled_internal_trigger_count"] = expected_trigger_count - 1
+    (tmp_path / "901_pending.sql").write_text("SELECT 901")
+
+    with pytest.raises(
+        PendingMigrationContentIntegrityError,
+        match=f"missing_source={record.migration_name}",
+    ):
+        await run_migrations(pool, migrations_dir=tmp_path, only={"901_pending"})
+
+    assert pool.applied_sql == []
+    assert pool.inserted == []
+    assert pool.inserted_with_digest == []
+    assert pool.updated == []
+
+    account_fk["origin_enabled_internal_trigger_count"] = expected_trigger_count
     await run_migrations(pool, migrations_dir=tmp_path, only={"901_pending"})
 
     assert pool.applied_sql == ["SELECT 901"]
