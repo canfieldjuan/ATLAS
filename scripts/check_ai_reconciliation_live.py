@@ -45,7 +45,10 @@ _REVIEWED_COMMIT_RE = re.compile(r"\*\*Reviewed commit:\*\*\s*`(?P<sha>[0-9a-f]{
 _RULE_REFERENCE_RE = r"R\d+(?:/R\d+)*"
 _RULE_SEVERITY_RE = r"\([A-Z][A-Z0-9 _-]*\)"
 _COMPLETE_RULE_LABEL_RE = (
-    rf"{_RULE_REFERENCE_RE}(?:\s+{_RULE_SEVERITY_RE}(?:\s+[—-]\s+|\s+\S)|\s+[—-]\s+\S)"
+    rf"{_RULE_REFERENCE_RE}(?:"
+    rf"\s+{_RULE_SEVERITY_RE}(?:\s+[—-]\s+\S|\s*:\s+\S|\s+(?![:—-])\S)"
+    rf"|\s+[—-]\s+\S"
+    rf")"
 )
 _REVIEW_TITLE_STOP_RE = re.compile(rf"\s+{_COMPLETE_RULE_LABEL_RE}")
 _REVIEW_RULE_LABEL_RE = re.compile(rf"^{_COMPLETE_RULE_LABEL_RE}")

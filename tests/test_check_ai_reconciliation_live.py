@@ -560,12 +560,27 @@ def test_complete_rule_label_evidence_rejects_incomplete_separator_forms():
     labels = [
         (f"{reference}{suffix}complete rule detail", 0)
         for reference in ("R1", "R1/R2")
-        for suffix in (" — ", " - ", " (BLOCKER) ", " (BLOCKER) — ")
+        for suffix in (
+            " — ",
+            " - ",
+            " (BLOCKER) ",
+            " (BLOCKER) — ",
+            " (BLOCKER): ",
+        )
     ]
     labels.extend(
         (f"{reference}{suffix}", 1)
         for reference in ("R1", "R1/R2")
-        for suffix in ("-", "(", " (", " (BLOCKER", " (BLOCKER)- detail", " —")
+        for suffix in (
+            "-",
+            "(",
+            " (",
+            " (BLOCKER",
+            " (BLOCKER)- detail",
+            " (BLOCKER):",
+            " (BLOCKER): ",
+            " —",
+        )
     )
     for label, expected_code in labels:
         node = thread(resolved=True, body=f"{prefix}\n{label}\n{actual} R2 (BLOCKER) details")
@@ -577,6 +592,46 @@ def test_complete_rule_label_evidence_rejects_incomplete_separator_forms():
 
     node = thread(resolved=True, body=f"{prefix} R1(\nR2 — complete rule detail")
     code, messages = c.evaluate([node], body_with_dispositions(prefix), BOTS)
+
+    assert code == 1
+    assert any("unparseable trusted-bot review title" in message for message in messages)
+
+
+def test_severity_colon_rule_labels_correlate_multiline_and_inline_titles():
+    c = load_check()
+    cases = (
+        (
+            "Compare recovered trigger columns in catalog order",
+            "Compare recovered trigger columns in catalog order\n"
+            "R4 (BLOCKER): trigger update columns use physical catalog order",
+        ),
+        (
+            "Require a trusted owner for the security definer function",
+            "Require a trusted owner for the security definer function "
+            "R3 (BLOCKER): direct writers can replace an unguarded function",
+        ),
+    )
+
+    for title, source_body in cases:
+        code, messages = c.evaluate(
+            [thread(resolved=True, body=source_body)],
+            body_with_dispositions(title),
+            BOTS,
+        )
+
+        assert code == 0
+        assert any("no open scoped Codex review threads remain" in message for message in messages)
+
+
+def test_severity_less_colon_rule_label_cannot_supply_a_reconciled_title():
+    c = load_check()
+    title = "Require strict severity evidence for a review title"
+
+    code, messages = c.evaluate(
+        [thread(resolved=True, body=f"{title}\nR4: detail without severity evidence")],
+        body_with_dispositions(title),
+        BOTS,
+    )
 
     assert code == 1
     assert any("unparseable trusted-bot review title" in message for message in messages)
