@@ -765,6 +765,7 @@ def test_migration_382_reconciliation_record_is_closed_legacy_source_evidence() 
         reconciliation_mod.MIGRATION_297_B2B_COMPANY_SIGNAL_PROMOTION_RECONCILIATION.migration_name,
         reconciliation_mod.MIGRATION_272_B2B_WATCHLIST_ALERT_EVENTS_RECONCILIATION.migration_name,
         reconciliation_mod.MIGRATION_022B_PRESENCE_UNKNOWN_COUNT_RECONCILIATION.migration_name,
+        reconciliation_mod.MIGRATION_386_WON_LOSS_FENCE_FORWARD_RECOVERY.migration_name,
         reconciliation_mod.MIGRATION_387_RECONCILIATION.migration_name,
     }
 

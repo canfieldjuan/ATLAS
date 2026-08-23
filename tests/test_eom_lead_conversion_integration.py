@@ -6841,12 +6841,56 @@ async def test_won_lead_loss_fences_durable_cancellation_from_generic_contact_st
         await conn.close()
 
 
+def _legacy_386_function_body() -> str:
+    source = (MIGRATIONS / "386_eom_won_loss_nocodb_fence.sql").read_text()
+    marker = "AS $function$"
+    body_start = source.index(marker) + len(marker)
+    body_end = source.index("$function$;", body_start)
+    return (
+        source[body_start:body_end]
+        .replace(
+            "IF OLD.business_context_id = 'effingham_maids'",
+            "IF session_user = 'atlas_nocodb'\n"
+            "               AND OLD.business_context_id = 'effingham_maids'",
+        )
+        .replace(
+            "before direct contact mutation",
+            "before NocoDB can change the contact",
+        )
+    )
+
+
+async def _install_legacy_386_nocodb_fence(conn, schema: str) -> None:
+    schema_ident = _quote_ident(schema)
+    function_ident = f"{schema_ident}.reject_nocodb_eom_won_loss_mutation"
+    await conn.execute(
+        "CREATE OR REPLACE FUNCTION "
+        f"{function_ident}() RETURNS TRIGGER LANGUAGE plpgsql SECURITY DEFINER "
+        f"SET search_path = pg_catalog, {schema_ident} AS $function$"
+        f"{_legacy_386_function_body()}$function$;"
+    )
+    await conn.execute(
+        "DROP TRIGGER IF EXISTS trg_reject_nocodb_eom_won_loss_mutation "
+        f"ON {schema_ident}.contacts"
+    )
+    await conn.execute(
+        "CREATE TRIGGER trg_reject_nocodb_eom_won_loss_mutation "
+        "BEFORE UPDATE OF status OR DELETE ON "
+        f"{schema_ident}.contacts FOR EACH ROW EXECUTE FUNCTION {function_ident}()"
+    )
+    await conn.execute(f"REVOKE ALL ON FUNCTION {function_ident}() FROM PUBLIC")
+
+
 @pytest.mark.asyncio
 async def test_nocodb_cannot_mutate_won_lead_with_unsettled_cancellation():
     """The direct CRM login cannot bypass a prepared won-loss cancellation."""
 
     from atlas_brain.storage.migrations import run_migrations
+    from atlas_brain.storage.migrations.reconciliation import (
+        MIGRATION_386_WON_LOSS_FENCE_FORWARD_RECOVERY,
+    )
 
+    record = MIGRATION_386_WON_LOSS_FENCE_FORWARD_RECOVERY
     database_url = _database_url_or_skip()
     schema = f"atlas_eom_won_loss_nocodb_fence_{uuid.uuid4().hex}"
     conn = await asyncpg.connect(database_url)
@@ -6854,6 +6898,21 @@ async def test_nocodb_cannot_mutate_won_lead_with_unsettled_cancellation():
     direct_conn = None
     try:
         await _prepare_schema(conn, schema)
+        await _install_legacy_386_nocodb_fence(conn, schema)
+        await conn.execute(
+            "ALTER TABLE schema_migrations "
+            "ADD COLUMN IF NOT EXISTS content_sha256 VARCHAR(64)"
+        )
+        await conn.execute(
+            """
+            INSERT INTO schema_migrations (version, name, content_sha256, applied_at)
+            VALUES ($1, $2, $3, $4)
+            """,
+            386,
+            record.migration_name,
+            record.historical_ledger_sha256,
+            record.observed_applied_at,
+        )
 
         class _MigrationPool:
             async def acquire(self):
@@ -6865,11 +6924,11 @@ async def test_nocodb_cannot_mutate_won_lead_with_unsettled_cancellation():
         await run_migrations(
             _MigrationPool(),
             migrations_dir=MIGRATIONS,
-            only={"386_eom_won_loss_nocodb_fence"},
+            only={record.recovery_migration_name},
         )
         assert await conn.fetchval(
             "SELECT EXISTS (SELECT 1 FROM schema_migrations WHERE name = $1)",
-            "386_eom_won_loss_nocodb_fence",
+            record.recovery_migration_name,
         )
 
         provider = DatabaseCRMProvider(pool=conn)

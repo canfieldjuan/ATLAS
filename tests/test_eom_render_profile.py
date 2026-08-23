@@ -689,6 +689,7 @@ def test_eom_missed_call_recovery_migration_helper_uses_funnel_curated_set():
         "351_eom_lead_lifecycle_events",
         "366_contacts_customer_type",
         "389_eom_missed_call_recovery",
+        "390_eom_won_loss_direct_sql_fence_recovery",
     )
 
 

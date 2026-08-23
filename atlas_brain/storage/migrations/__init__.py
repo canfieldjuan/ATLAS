@@ -573,6 +573,55 @@ def _split_sql_statements(sql: str) -> list[str]:
     return statements
 
 
+async def _apply_pending_migration(conn, migration_file: Path) -> None:
+    """Apply one selected pending file and record its exact content identity."""
+    logger.info("Running migration: %s", migration_file.name)
+
+    source = migration_file.read_bytes()
+    content_sha256 = _migration_content_sha256(source)
+    sql = source.decode("utf-8")
+
+    try:
+        if _requires_atomic_bookkeeping(sql):
+            # A marked migration may not contain concurrently-run DDL. Its
+            # database effects and ledger row are one rollback-safe unit,
+            # closing the otherwise possible crash window between migration
+            # SQL and bookkeeping.
+            if _contains_executable_concurrently(sql):
+                raise RuntimeError(
+                    "atomic-bookkeeping migration cannot use CONCURRENTLY"
+                )
+            async with conn.transaction():
+                await conn.execute(sql)
+                await _record_migration(
+                    conn,
+                    migration_file.name,
+                    content_sha256,
+                    fill_newly_self_recorded_digest=True,
+                )
+        elif _contains_executable_concurrently(sql):
+            for statement in _split_sql_statements(sql):
+                await conn.execute(statement)
+            await _record_migration(
+                conn,
+                migration_file.name,
+                content_sha256,
+                fill_newly_self_recorded_digest=True,
+            )
+        else:
+            await conn.execute(sql)
+            await _record_migration(
+                conn,
+                migration_file.name,
+                content_sha256,
+                fill_newly_self_recorded_digest=True,
+            )
+        logger.info("Migration %s completed successfully", migration_file.name)
+    except Exception as exc:
+        logger.error("Migration %s failed: %s", migration_file.name, exc)
+        raise
+
+
 async def run_migrations(
     pool,
     *,
@@ -679,62 +728,86 @@ async def run_migrations(
                 )
             )
             if unresolved_mismatched or unresolved_missing_source:
-                raise PendingMigrationContentIntegrityError(
-                    "Refusing to apply pending migrations with unresolved "
-                    "migration-content evidence: "
-                    f"mismatched={','.join(unresolved_mismatched) or 'none'} "
-                    f"missing_source={','.join(unresolved_missing_source) or 'none'} "
-                    f"pending={','.join(migration_file.stem for migration_file in pending)}"
+                from .reconciliation import pending_historical_forward_recovery_migration
+
+                try:
+                    recovery_name = await pending_historical_forward_recovery_migration(
+                        conn,
+                        migration_catalog,
+                        unresolved_mismatched=unresolved_mismatched,
+                        unresolved_missing_source=unresolved_missing_source,
+                        pending_migration_names=(
+                            migration_file.stem for migration_file in pending
+                        ),
+                    )
+                except Exception as exc:
+                    raise PendingMigrationContentIntegrityError(
+                        "Refusing to apply pending migrations because the "
+                        "historical forward-recovery precondition could not be "
+                        "re-attested"
+                    ) from exc
+
+                recovery_file = next(
+                    (
+                        migration_file
+                        for migration_file in pending
+                        if migration_file.stem == recovery_name
+                    ),
+                    None,
                 )
+                if recovery_file is None:
+                    raise PendingMigrationContentIntegrityError(
+                        "Refusing to apply pending migrations with unresolved "
+                        "migration-content evidence: "
+                        f"mismatched={','.join(unresolved_mismatched) or 'none'} "
+                        f"missing_source={','.join(unresolved_missing_source) or 'none'} "
+                        f"pending={','.join(migration_file.stem for migration_file in pending)}"
+                    )
+
+                logger.info(
+                    "Running required historical forward recovery before ordinary pending migrations: %s",
+                    recovery_file.name,
+                )
+                await _apply_pending_migration(conn, recovery_file)
+
+                # The recovery's independent receipt and catalog effects must
+                # be visible before any ordinary pending file can run.
+                applied = await _get_applied_migrations(conn)
+                integrity_report = await migration_content_integrity_report(
+                    conn,
+                    migration_catalog,
+                )
+                _log_migration_content_integrity(integrity_report)
+                pending = [
+                    migration_file
+                    for migration_file in migration_files
+                    if migration_file.stem not in applied
+                ]
+                unresolved_mismatched, unresolved_missing_source = (
+                    await _unresolved_pending_migration_content_evidence(
+                        conn,
+                        migration_catalog,
+                        report=integrity_report,
+                    )
+                )
+                if unresolved_mismatched or unresolved_missing_source:
+                    raise PendingMigrationContentIntegrityError(
+                        "Refusing to apply pending migrations after historical "
+                        "forward recovery because migration-content evidence "
+                        "remains unresolved: "
+                        f"mismatched={','.join(unresolved_mismatched) or 'none'} "
+                        f"missing_source={','.join(unresolved_missing_source) or 'none'} "
+                        f"pending={','.join(migration_file.stem for migration_file in pending)}"
+                    )
+
+            if not pending:
+                logger.debug("All %d migrations already applied", len(migration_files))
+                return
 
             logger.info("Running %d pending migrations (of %d total)", len(pending), len(migration_files))
 
             for migration_file in pending:
-                logger.info("Running migration: %s", migration_file.name)
-
-                source = migration_file.read_bytes()
-                content_sha256 = _migration_content_sha256(source)
-                sql = source.decode("utf-8")
-
-                try:
-                    if _requires_atomic_bookkeeping(sql):
-                        # A marked migration may not contain concurrently-run
-                        # DDL. Its database effects and ledger row are one
-                        # rollback-safe unit, closing the otherwise possible
-                        # crash window between migration SQL and bookkeeping.
-                        if _contains_executable_concurrently(sql):
-                            raise RuntimeError(
-                                "atomic-bookkeeping migration cannot use CONCURRENTLY"
-                            )
-                        async with conn.transaction():
-                            await conn.execute(sql)
-                            await _record_migration(
-                                conn,
-                                migration_file.name,
-                                content_sha256,
-                                fill_newly_self_recorded_digest=True,
-                            )
-                    elif _contains_executable_concurrently(sql):
-                        for statement in _split_sql_statements(sql):
-                            await conn.execute(statement)
-                        await _record_migration(
-                            conn,
-                            migration_file.name,
-                            content_sha256,
-                            fill_newly_self_recorded_digest=True,
-                        )
-                    else:
-                        await conn.execute(sql)
-                        await _record_migration(
-                            conn,
-                            migration_file.name,
-                            content_sha256,
-                            fill_newly_self_recorded_digest=True,
-                        )
-                    logger.info("Migration %s completed successfully", migration_file.name)
-                except Exception as e:
-                    logger.error("Migration %s failed: %s", migration_file.name, e)
-                    raise
+                await _apply_pending_migration(conn, migration_file)
         finally:
             await conn.execute(
                 "SELECT pg_advisory_unlock($1)", _MIGRATIONS_ADVISORY_LOCK_KEY

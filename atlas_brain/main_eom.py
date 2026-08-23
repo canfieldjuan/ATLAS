@@ -120,6 +120,9 @@ EOM_MISSED_CALL_RECOVERY_READINESS_MIGRATIONS: tuple[str, ...] = (
     "351_eom_lead_lifecycle_events",
     "366_contacts_customer_type",
     "389_eom_missed_call_recovery",
+    # The runner may need this explicit predecessor before 389 when the
+    # canonical target retains the reviewed weak 386 direct-SQL fence.
+    "390_eom_won_loss_direct_sql_fence_recovery",
 )
 
 
