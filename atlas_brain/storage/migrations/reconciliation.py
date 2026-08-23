@@ -2965,22 +2965,34 @@ async def _migration_379_catalog_evidence(executor: Any) -> Mapping[str, object]
                 )
             ) AS no_unreviewed_billing_indexes
         ),
-        target_function AS (
-            SELECT function_state.oid, function_state.prosrc
+        target_functions AS (
+            SELECT function_state.oid,
+                   function_state.proname,
+                   function_state.prosrc
             FROM pg_catalog.pg_proc AS function_state
             JOIN pg_catalog.pg_namespace AS namespace_state
               ON namespace_state.oid = function_state.pronamespace
             WHERE namespace_state.nspname = pg_catalog.current_schema()
-              AND function_state.proname =
-                  'prevent_commercial_billing_invoice_for_excluded_candidate'
+              AND function_state.proname IN (
+                  'prevent_commercial_billing_invoice_for_excluded_candidate',
+                  'prevent_commercial_billing_review_decision_mutation',
+                  'prevent_commercial_billing_candidate_override_mutation'
+              )
               AND function_state.pronargs = 0
               AND function_state.prorettype = 'trigger'::pg_catalog.regtype
+        ),
+        target_function AS (
+            SELECT function_state.oid, function_state.prosrc
+            FROM target_functions AS function_state
+            WHERE function_state.proname =
+                'prevent_commercial_billing_invoice_for_excluded_candidate'
             LIMIT 1
         ),
         target_triggers AS (
             SELECT relation_state.relname AS relation_name,
                    trigger_state.tgname AS trigger_name,
                    function_state.proname AS function_name,
+                   trigger_state.tgfoid,
                    trigger_state.tgtype,
                    trigger_state.tgenabled,
                    trigger_state.tgqual
@@ -2992,7 +3004,11 @@ async def _migration_379_catalog_evidence(executor: Any) -> Mapping[str, object]
             WHERE NOT trigger_state.tgisinternal
         ),
         required_history_triggers AS (
-            SELECT *
+            SELECT expected_trigger.relation_name,
+                   expected_trigger.trigger_name,
+                   expected_trigger.function_name,
+                   expected_function.oid AS function_oid,
+                   expected_trigger.trigger_type
             FROM (
                 VALUES
                     (
@@ -3022,6 +3038,8 @@ async def _migration_379_catalog_evidence(executor: Any) -> Mapping[str, object]
             ) AS expected_trigger(
                 relation_name, trigger_name, function_name, trigger_type
             )
+            LEFT JOIN target_functions AS expected_function
+              ON expected_function.proname = expected_trigger.function_name
         )
         SELECT
             (
@@ -3115,6 +3133,7 @@ async def _migration_379_catalog_evidence(executor: Any) -> Mapping[str, object]
                   ON actual_trigger.relation_name = expected_trigger.relation_name
                  AND actual_trigger.trigger_name = expected_trigger.trigger_name
                  AND actual_trigger.function_name = expected_trigger.function_name
+                 AND actual_trigger.tgfoid = expected_trigger.function_oid
                  AND actual_trigger.tgtype = expected_trigger.trigger_type
                  AND actual_trigger.tgenabled = 'O'
                  AND actual_trigger.tgqual IS NULL
@@ -3123,7 +3142,8 @@ async def _migration_379_catalog_evidence(executor: Any) -> Mapping[str, object]
             EXISTS (
                 SELECT 1
                 FROM target_triggers AS trigger_state
-                JOIN target_function AS function_state ON TRUE
+                JOIN target_function AS function_state
+                  ON trigger_state.tgfoid = function_state.oid
                 WHERE trigger_state.relation_name = 'invoices'
                   AND trigger_state.trigger_name =
                       'trg_prevent_commercial_billing_invoice_for_excluded_candidate'

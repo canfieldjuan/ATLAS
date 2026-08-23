@@ -2576,6 +2576,36 @@ async def _stage_historical_379_legacy_recovery_state(conn):
             "DROP INDEX idx_commercial_billing_candidate_overrides_active",
         ),
         (
+            "foreign-schema invoice fence function",
+            "CREATE SCHEMA unreviewed_379_trigger_schema; "
+            "CREATE FUNCTION unreviewed_379_trigger_schema."
+            "prevent_commercial_billing_invoice_for_excluded_candidate() "
+            "RETURNS TRIGGER LANGUAGE plpgsql AS $foreign$ "
+            "BEGIN RETURN NEW; END; "
+            "$foreign$; "
+            "DROP TRIGGER trg_prevent_commercial_billing_invoice_for_excluded_candidate "
+            "ON invoices; "
+            "CREATE TRIGGER trg_prevent_commercial_billing_invoice_for_excluded_candidate "
+            "BEFORE INSERT ON invoices FOR EACH ROW "
+            "EXECUTE FUNCTION unreviewed_379_trigger_schema."
+            "prevent_commercial_billing_invoice_for_excluded_candidate()",
+        ),
+        (
+            "foreign-schema history guard function",
+            "CREATE SCHEMA unreviewed_379_trigger_schema; "
+            "CREATE FUNCTION unreviewed_379_trigger_schema."
+            "prevent_commercial_billing_review_decision_mutation() "
+            "RETURNS TRIGGER LANGUAGE plpgsql AS $foreign$ "
+            "BEGIN RETURN OLD; END; "
+            "$foreign$; "
+            "DROP TRIGGER trg_prevent_commercial_billing_review_decision_mutation "
+            "ON commercial_billing_candidate_review_decisions; "
+            "CREATE TRIGGER trg_prevent_commercial_billing_review_decision_mutation "
+            "BEFORE UPDATE OR DELETE ON commercial_billing_candidate_review_decisions "
+            "FOR EACH ROW EXECUTE FUNCTION unreviewed_379_trigger_schema."
+            "prevent_commercial_billing_review_decision_mutation()",
+        ),
+        (
             "conditional invoice fence trigger",
             "DROP TRIGGER trg_prevent_commercial_billing_invoice_for_excluded_candidate "
             "ON invoices; "

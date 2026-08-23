@@ -180,6 +180,32 @@ run-isolation defect, or an EOM entrypoint unable to select its prerequisite.
   disposable PostgreSQL matrix, which exercises the real `tgqual` catalog
   state and the renamed-index rejection.
 
+### Contract revision after trigger-function binding review
+
+- New evidence: a current Codex blocker demonstrates that the observer obtains
+  `pg_trigger.tgfoid` only to read an unqualified function name. The invoice
+  predicate joins the body-hashed current-schema function with `ON TRUE`, and
+  the append-only history predicates compare only names. A same-named no-op
+  trigger function from another schema can therefore leave the reviewed body,
+  trigger name, type, enabled state, and `tgqual` unchanged while bypassing
+  the fence.
+- Revised root cause: trigger attestation is not object-identity attestation.
+  The checked function source and the installed trigger are not joined by their
+  PostgreSQL function OIDs.
+- Revised required change surface: expose every trigger's `tgfoid`, resolve the
+  three declared zero-argument trigger functions in `current_schema()`, and
+  require each required trigger to reference its corresponding OID. Add fake
+  classifier coverage and isolated PostgreSQL foreign-schema same-name
+  function mutations for both the invoice fence and an append-only history
+  guard. Each mutation must reject before 391 SQL, a recovery receipt, or an
+  invoice write.
+- Revised explicit non-scope: do not alter immutable 391 migration bytes or
+  attempt to rewrite an already recorded recovery. The correction remains the
+  upstream reconciliation admission observer.
+- Revised verification plan: retain targeted local preflight/runner checks;
+  GitHub's disposable PostgreSQL matrix is the runtime authority for the
+  cross-schema OID probes.
+
 ## Scope (this PR)
 
 Ownership lane: h18-migration-content-integrity
@@ -210,8 +236,9 @@ Max files: 11
     advisory lock and atomic-bookkeeping path, records its digest exactly once,
     re-reads evidence, and leaves ordinary pending SQL blocked while 386 is
     still unresolved; settled by `tests/test_migrations_runner.py`.
-  - [ ] An unknown discrepancy, changed legacy fence hash, conditional required
-    trigger, missing required decision-table catalog member (including a
+  - [ ] An unknown discrepancy, changed legacy fence hash, conditional or
+    foreign-schema same-name required trigger function, missing required
+    decision-table catalog member (including a
     declared constraint, its exact `CHECK` predicate, or index), an unreviewed
     catalog member, an omitted 391
     `only=` selection, a 386 mismatch that does not independently attest as
@@ -256,7 +283,7 @@ Max files: 11
   ledger versions/NULL digests/timestamps, successor ledger receipts, decision
   relation kind/columns/declared constraints including normalized `CHECK`
   predicates/declared indexes/no-unreviewed catalog members/unconditional
-  triggers, 386's
+  triggers bound to expected current-schema function OIDs, 386's
   independently attested status, invoice-fence trigger, legacy and recovered
   `pg_proc.prosrc` SHA-256 values, recovery source digest, recovery ledger row,
   and selected pending migration names.
@@ -374,10 +401,10 @@ Parked hardening: none.
 | `.github/workflows/atlas_migrations_runner_checks.yml` | 16 |
 | `atlas_brain/main_eom.py` | 3 |
 | `atlas_brain/storage/migrations/391_eom_commercial_billing_run_fence_recovery.sql` | 343 |
-| `atlas_brain/storage/migrations/reconciliation.py` | 829 |
-| `plans/PR-H18-Commercial-Billing-379-Run-Fence-Recovery.md` | 383 |
-| `tests/test_commercial_billing_runs.py` | 369 |
+| `atlas_brain/storage/migrations/reconciliation.py` | 849 |
+| `plans/PR-H18-Commercial-Billing-379-Run-Fence-Recovery.md` | 410 |
+| `tests/test_commercial_billing_runs.py` | 399 |
 | `tests/test_eom_render_profile.py` | 1 |
-| `tests/test_migration_content_integrity_preflight.py` | 329 |
-| `tests/test_migrations_runner.py` | 385 |
-| **Total** | **2660** |
+| `tests/test_migration_content_integrity_preflight.py` | 338 |
+| `tests/test_migrations_runner.py` | 388 |
+| **Total** | **2749** |
