@@ -93,6 +93,8 @@ class HistoricalMissingSourceForwardRecoveryReconciliation:
     successor_receipts: tuple[HistoricalNullDigestMigrationReceipt, ...]
     legacy_function_body_sha256: str
     recovered_function_body_template_sha256: str
+    review_decision_history_guard_function_body_sha256: str
+    override_history_guard_function_body_sha256: str
     recovery_migration_name: str
     recovery_migration_version: int
     recovery_packaged_sha256: str
@@ -284,6 +286,7 @@ class MissingSourceForwardRecoveryMigrationReconciliationAttestation:
     no_recovery_ledger_row: bool
     recovery_receipt_ready: bool
     reviewed_billing_catalog_ready: bool
+    history_guard_function_bodies_ready: bool
     required_billing_constraints_ready: bool
     no_unreviewed_billing_constraints: bool
     required_billing_indexes_ready: bool
@@ -347,6 +350,9 @@ class MissingSourceForwardRecoveryMigrationReconciliationAttestation:
             "no_recovery_ledger_row": self.no_recovery_ledger_row,
             "recovery_receipt_ready": self.recovery_receipt_ready,
             "reviewed_billing_catalog_ready": self.reviewed_billing_catalog_ready,
+            "history_guard_function_bodies_ready": (
+                self.history_guard_function_bodies_ready
+            ),
             "required_billing_constraints_ready": (
                 self.required_billing_constraints_ready
             ),
@@ -806,6 +812,12 @@ MIGRATION_379_COMMERCIAL_BILLING_RUN_FENCE_FORWARD_RECOVERY = (
         ),
         recovered_function_body_template_sha256=(
             "04b99e4a3ff2b18f2d58d3e1e610a4b2079fcbbd0d5ce51d97c212daaefd0477"
+        ),
+        review_decision_history_guard_function_body_sha256=(
+            "a417f49d8bd7c62ee4dbc80348014fb2d251809c79c4a190f2b17c34182c896c"
+        ),
+        override_history_guard_function_body_sha256=(
+            "be37fd47a94998ebe16fb8e08fc25542330af76780f2d830a10b779891058002"
         ),
         recovery_migration_name="391_eom_commercial_billing_run_fence_recovery",
         recovery_migration_version=391,
@@ -3153,6 +3165,18 @@ async def _migration_379_catalog_evidence(executor: Any) -> Mapping[str, object]
                   AND trigger_state.tgenabled = 'O'
                   AND trigger_state.tgqual IS NULL
             ) AS invoice_fence_trigger_ready,
+            (
+                SELECT function_state.prosrc
+                FROM target_functions AS function_state
+                WHERE function_state.proname =
+                    'prevent_commercial_billing_review_decision_mutation'
+            ) AS review_decision_history_guard_function_body,
+            (
+                SELECT function_state.prosrc
+                FROM target_functions AS function_state
+                WHERE function_state.proname =
+                    'prevent_commercial_billing_candidate_override_mutation'
+            ) AS override_history_guard_function_body,
             (SELECT function_state.prosrc FROM target_function AS function_state)
                 AS function_body
         """
@@ -3209,6 +3233,14 @@ async def _attest_migration_379(
     function_body_sha256 = _catalog_function_body_sha256(
         catalog.get("function_body")
     )
+    history_guard_function_bodies_ready = all((
+        _catalog_function_body_sha256(
+            catalog.get("review_decision_history_guard_function_body")
+        ) == record.review_decision_history_guard_function_body_sha256,
+        _catalog_function_body_sha256(
+            catalog.get("override_history_guard_function_body")
+        ) == record.override_history_guard_function_body_sha256,
+    ))
     historical_receipt_ready = all((
         exactly_one_historical_ledger_row,
         historical_ledger_row is not None
@@ -3251,7 +3283,9 @@ async def _attest_migration_379(
             bool(catalog.get("required_billing_indexes_ready")),
             bool(catalog.get("no_unreviewed_billing_indexes")),
             bool(catalog.get("immutable_history_guards_ready")),
+            history_guard_function_bodies_ready,
         )),
+        history_guard_function_bodies_ready=history_guard_function_bodies_ready,
         required_billing_constraints_ready=bool(
             catalog.get("required_billing_constraints_ready")
         ),

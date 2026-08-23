@@ -2606,6 +2606,21 @@ async def _stage_historical_379_legacy_recovery_state(conn):
             "prevent_commercial_billing_review_decision_mutation()",
         ),
         (
+            "altered review-decision history guard body",
+            "CREATE OR REPLACE FUNCTION prevent_commercial_billing_review_decision_mutation() "
+            "RETURNS TRIGGER LANGUAGE plpgsql AS $tampered$ "
+            "BEGIN RETURN OLD; END; "
+            "$tampered$",
+        ),
+        (
+            "altered override history guard body",
+            "CREATE OR REPLACE FUNCTION "
+            "prevent_commercial_billing_candidate_override_mutation() "
+            "RETURNS TRIGGER LANGUAGE plpgsql AS $tampered$ "
+            "BEGIN RETURN OLD; END; "
+            "$tampered$",
+        ),
+        (
             "conditional invoice fence trigger",
             "DROP TRIGGER trg_prevent_commercial_billing_invoice_for_excluded_candidate "
             "ON invoices; "

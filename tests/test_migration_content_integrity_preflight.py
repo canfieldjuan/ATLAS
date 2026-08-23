@@ -572,6 +572,33 @@ def _migration_379_recovered_fence_body() -> str:
     return source.split("AS $function$", 1)[1].split("$function$;", 1)[0]
 
 
+def _migration_379_history_guard_body(function_name: str) -> str:
+    source = (
+        ROOT
+        / "atlas_brain"
+        / "storage"
+        / "migrations"
+        / "382_commercial_billing_candidate_overrides.sql"
+    ).read_text(encoding="utf-8")
+    section = source.split(f"CREATE OR REPLACE FUNCTION {function_name}()", 1)[1]
+    return section.split("AS $$", 1)[1].split("$$;", 1)[0]
+
+
+def test_migration_379_history_guard_hashes_are_source_backed() -> None:
+    record = reconciliation_mod.MIGRATION_379_COMMERCIAL_BILLING_RUN_FENCE_FORWARD_RECOVERY
+
+    assert hashlib.sha256(
+        _migration_379_history_guard_body(
+            "prevent_commercial_billing_review_decision_mutation"
+        ).encode()
+    ).hexdigest() == record.review_decision_history_guard_function_body_sha256
+    assert hashlib.sha256(
+        _migration_379_history_guard_body(
+            "prevent_commercial_billing_candidate_override_mutation"
+        ).encode()
+    ).hexdigest() == record.override_history_guard_function_body_sha256
+
+
 class _Migration379PreflightConnection:
     """Metadata-only fake for the exact missing-source recovery evidence."""
 
@@ -606,6 +633,14 @@ class _Migration379PreflightConnection:
             "no_unreviewed_billing_indexes": True,
             "immutable_history_guards_ready": True,
             "invoice_fence_trigger_ready": True,
+            "review_decision_history_guard_function_body": (
+                _migration_379_history_guard_body(
+                    "prevent_commercial_billing_review_decision_mutation"
+                )
+            ),
+            "override_history_guard_function_body": _migration_379_history_guard_body(
+                "prevent_commercial_billing_candidate_override_mutation"
+            ),
             "function_body": _migration_379_legacy_fence_body(),
         }
         if recovered:
@@ -679,6 +714,8 @@ class _Migration379PreflightConnection:
         assert "actual_trigger.tgqual IS NULL" in query
         assert "trigger_state.tgfoid = function_state.oid" in query
         assert "trigger_state.tgqual IS NULL" in query
+        assert "review_decision_history_guard_function_body" in query
+        assert "override_history_guard_function_body" in query
         assert "commercial_billing_candidate_overrides" in query
         assert "commercial_billing_candidate_review_decisions" in query
         return self.catalog
@@ -1188,6 +1225,7 @@ async def test_known_379_recovery_reports_exact_legacy_state_without_admitting_s
         "no_recovery_ledger_row": True,
         "recovery_receipt_ready": False,
         "reviewed_billing_catalog_ready": True,
+        "history_guard_function_bodies_ready": True,
         "required_billing_constraints_ready": True,
         "no_unreviewed_billing_constraints": True,
         "required_billing_indexes_ready": True,
@@ -1243,6 +1281,8 @@ async def test_known_379_recovery_attests_only_after_its_own_receipt_and_fence(
         ("unreviewed billing constraint", "no_unreviewed_billing_constraints"),
         ("missing required billing index", "required_billing_indexes_ready"),
         ("unreviewed billing index", "no_unreviewed_billing_indexes"),
+        ("altered review-decision history guard body", "history_guard_function_bodies_ready"),
+        ("altered override history guard body", "history_guard_function_bodies_ready"),
         ("foreign-schema history guard function", "reviewed_billing_catalog_ready"),
         ("foreign-schema invoice fence function", "invoice_fence_trigger_ready"),
         ("conditional history guard", "reviewed_billing_catalog_ready"),
@@ -1272,6 +1312,12 @@ async def test_known_379_recovery_rejects_nonexact_or_half_recorded_evidence(
         connection.catalog["required_billing_indexes_ready"] = False
     elif case == "unreviewed billing index":
         connection.catalog["no_unreviewed_billing_indexes"] = False
+    elif case == "altered review-decision history guard body":
+        connection.catalog["review_decision_history_guard_function_body"] = (
+            "unexpected function body"
+        )
+    elif case == "altered override history guard body":
+        connection.catalog["override_history_guard_function_body"] = "unexpected function body"
     elif case == "foreign-schema history guard function":
         connection.catalog["immutable_history_guards_ready"] = False
     elif case == "foreign-schema invoice fence function":

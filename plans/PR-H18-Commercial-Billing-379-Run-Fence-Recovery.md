@@ -210,6 +210,31 @@ run-isolation defect, or an EOM entrypoint unable to select its prerequisite.
   up a unique scratch schema inside its isolated test run so parameter cases
   cannot share database-level state.
 
+### Contract revision after history-guard body review
+
+- New evidence: a current Codex blocker demonstrates that OID identity is not
+  executable-behavior identity. PostgreSQL preserves a function OID across
+  `CREATE OR REPLACE FUNCTION`, so an in-schema replacement that returns
+  `OLD` leaves the expected trigger identity, type, enabled state, and
+  qualification intact while allowing append-only billing-history updates or
+  deletes.
+- Revised root cause: the invoice fence body is attested, but the two
+  append-only history guard bodies are not. A later in-schema function-body
+  rewrite can bypass those guards without changing any prior catalog field.
+- Revised required change surface: source-derive and pin SHA-256 values for
+  the review-decision and override guard bodies, read each current-schema
+  `pg_proc.prosrc`, and require both hashes before 379 can be
+  `recovery_required` or `attested`. Add fake classifier mutations and isolated
+  PostgreSQL `CREATE OR REPLACE FUNCTION ... RETURN OLD` probes for both
+  guards; each must reject before 391 SQL, a recovery receipt, or invoice
+  writes.
+- Revised explicit non-scope: do not alter immutable 391 migration bytes or
+  replay historical guard DDL. The fail-closed correction remains the upstream
+  reconciliation admission observer.
+- Revised verification plan: retain focused local source-hash/classifier and
+  runner tests; GitHub's controlled PostgreSQL matrix remains the authority for
+  the OID-preserving body-replacement probes.
+
 ## Scope (this PR)
 
 Ownership lane: h18-migration-content-integrity
@@ -231,17 +256,18 @@ Max files: 11
 
 - Acceptance criteria:
   - [ ] The exact old 379 catalog is `recovery_required`, while the current
-    target is `attested` only after its own exact 391 digest receipt and the
-    run-scoped fence body; neither state claims the unavailable historical
-    source was recovered. Settled by
+    target is `attested` only after its own exact 391 digest receipt, the
+    run-scoped fence body, and both immutable history-guard bodies; neither
+    state claims the unavailable historical source was recovered. Settled by
     `tests/test_migration_content_integrity_preflight.py` and the controlled
     target preflight recorded in #2476.
   - [ ] A legacy 379 state with selected 391 runs only 391 under the existing
     advisory lock and atomic-bookkeeping path, records its digest exactly once,
     re-reads evidence, and leaves ordinary pending SQL blocked while 386 is
     still unresolved; settled by `tests/test_migrations_runner.py`.
-  - [ ] An unknown discrepancy, changed legacy fence hash, conditional or
-    foreign-schema same-name required trigger function, missing required
+  - [ ] An unknown discrepancy, changed legacy fence hash, altered history
+    guard body, conditional or foreign-schema same-name required trigger
+    function, missing required
     decision-table catalog member (including a
     declared constraint, its exact `CHECK` predicate, or index), an unreviewed
     catalog member, an omitted 391
@@ -287,8 +313,9 @@ Max files: 11
   ledger versions/NULL digests/timestamps, successor ledger receipts, decision
   relation kind/columns/declared constraints including normalized `CHECK`
   predicates/declared indexes/no-unreviewed catalog members/unconditional
-  triggers bound to expected current-schema function OIDs, 386's
-  independently attested status, invoice-fence trigger, legacy and recovered
+  triggers bound to expected current-schema function OIDs/current-schema
+  history-guard `pg_proc.prosrc` SHA-256 values, 386's independently attested
+  status, invoice-fence trigger, legacy and recovered invoice-fence
   `pg_proc.prosrc` SHA-256 values, recovery source digest, recovery ledger row,
   and selected pending migration names.
 - Caller x input shape:
@@ -405,10 +432,10 @@ Parked hardening: none.
 | `.github/workflows/atlas_migrations_runner_checks.yml` | 16 |
 | `atlas_brain/main_eom.py` | 3 |
 | `atlas_brain/storage/migrations/391_eom_commercial_billing_run_fence_recovery.sql` | 343 |
-| `atlas_brain/storage/migrations/reconciliation.py` | 849 |
-| `plans/PR-H18-Commercial-Billing-379-Run-Fence-Recovery.md` | 414 |
-| `tests/test_commercial_billing_runs.py` | 403 |
+| `atlas_brain/storage/migrations/reconciliation.py` | 883 |
+| `plans/PR-H18-Commercial-Billing-379-Run-Fence-Recovery.md` | 441 |
+| `tests/test_commercial_billing_runs.py` | 418 |
 | `tests/test_eom_render_profile.py` | 1 |
-| `tests/test_migration_content_integrity_preflight.py` | 338 |
-| `tests/test_migrations_runner.py` | 388 |
-| **Total** | **2757** |
+| `tests/test_migration_content_integrity_preflight.py` | 384 |
+| `tests/test_migrations_runner.py` | 410 |
+| **Total** | **2901** |

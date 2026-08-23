@@ -1661,6 +1661,18 @@ def _legacy_379_function_body() -> str:
     return legacy_body
 
 
+def _history_379_guard_function_body(function_name: str) -> str:
+    source = (
+        Path(__file__).resolve().parents[1]
+        / "atlas_brain"
+        / "storage"
+        / "migrations"
+        / "382_commercial_billing_candidate_overrides.sql"
+    ).read_text(encoding="utf-8")
+    section = source.split(f"CREATE OR REPLACE FUNCTION {function_name}()", 1)[1]
+    return section.split("AS $$", 1)[1].split("$$;", 1)[0]
+
+
 class _ForwardRecoveryTransaction(_RollbackMigrationTransaction):
     """Extend the in-memory atomic seam to include the function/trigger state."""
 
@@ -1813,6 +1825,14 @@ class _CommercialBillingForwardRecoveryPool(_ForwardRecoveryPool):
             "no_unreviewed_billing_indexes": True,
             "immutable_history_guards_ready": True,
             "invoice_fence_trigger_ready": True,
+            "review_decision_history_guard_function_body": (
+                _history_379_guard_function_body(
+                    "prevent_commercial_billing_review_decision_mutation"
+                )
+            ),
+            "override_history_guard_function_body": _history_379_guard_function_body(
+                "prevent_commercial_billing_candidate_override_mutation"
+            ),
             "function_body": _legacy_379_function_body(),
         }
 
@@ -1872,6 +1892,8 @@ class _CommercialBillingForwardRecoveryPool(_ForwardRecoveryPool):
             assert "actual_trigger.tgqual IS NULL" in query
             assert "trigger_state.tgfoid = function_state.oid" in query
             assert "trigger_state.tgqual IS NULL" in query
+            assert "review_decision_history_guard_function_body" in query
+            assert "override_history_guard_function_body" in query
             return _AsyncpgRecordLike(self.commercial_billing_catalog)
         return await super().fetchrow(query, *args)
 
