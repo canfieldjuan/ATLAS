@@ -286,6 +286,31 @@ run-isolation defect, or an EOM entrypoint unable to select its prerequisite.
   syntax, Ruff, plan, and whitespace checks. GitHub's controlled PostgreSQL
   matrix remains the authority for the catalog-alteration proof.
 
+### Contract revision after fence-read row-security review
+
+- New evidence: the recovered function reads the candidate, override, and
+  review-decision tables, but the 379 observer does not inspect RLS flags,
+  policies, or rewrite rules on those lookup relations. Forced RLS can hide an
+  excluded decision while every previously reviewed fence, column, constraint,
+  and index fact remains valid.
+- Revised root cause: the closed catalog attests relation shape but omits
+  catalog-level query rewriting controls that can alter the function's
+  authorization-decision reads.
+- Revised required change surface: read `relrowsecurity`,
+  `relforcerowsecurity`, `pg_policy`, and non-`_RETURN` `pg_rewrite` entries
+  for exactly the three fence-read billing tables; fail closed on any of them,
+  require the resulting boolean before either 379 admission state, and expose
+  it in read-only evidence. Add fake preflight/runner refusal coverage plus an
+  isolated PostgreSQL forced-RLS policy that filters excluded decisions; it
+  must reject before 391 SQL, a recovery receipt, or an invoice write.
+- Revised explicit non-scope: do not reject the expected append-only mutation
+  triggers on review-history tables, change production RLS configuration, or
+  edit immutable 391 bytes. The new predicate covers query-rewriting controls
+  on the function's reads, not unrelated table behavior.
+- Revised verification plan: retain focused local preflight/runner checks,
+  syntax, Ruff, plan, and whitespace checks. GitHub's controlled PostgreSQL
+  matrix remains the authority for the forced-RLS policy proof.
+
 ## Scope (this PR)
 
 Ownership lane: h18-migration-content-integrity
@@ -319,7 +344,8 @@ Max files: 11
   - [ ] An unknown discrepancy, changed legacy fence hash, altered history
     guard body, conditional or foreign-schema same-name required trigger
     function, an unreviewed row-level `BEFORE INSERT` invoice interceptor,
-    missing, retagged, nullable, or unreviewed behavior-driving billing column, missing required
+    missing, retagged, nullable, or unreviewed behavior-driving billing column,
+    row security, policy, or rewrite rule on a fence-read relation, missing required
     decision-table catalog member (including a
     declared constraint, its exact `CHECK` predicate, or index), an unreviewed
     catalog member, an omitted 391
@@ -365,8 +391,8 @@ Max files: 11
   ledger versions/NULL digests/timestamps, successor ledger receipts, decision
   relation kind/columns/declared constraints including normalized `CHECK`
   predicates/declared indexes/no-unreviewed catalog members/exact user-column
-  type-and-nullability set/closed invoice row-level `BEFORE INSERT` interceptor
-  set/unconditional triggers bound to
+  type-and-nullability set/no query-rewriting control on fence-read relations/
+  closed invoice row-level `BEFORE INSERT` interceptor set/unconditional triggers bound to
   expected current-schema function OIDs/current-schema
   history-guard `pg_proc.prosrc` SHA-256 values, 386's independently attested
   status, invoice-fence trigger, legacy and recovered invoice-fence
@@ -458,6 +484,9 @@ deployment sequence.
   relations, including both revision columns, before treating a 379 catalog as
   safe to recover or attested. PostgreSQL `CHECK` and unique-key semantics do
   not substitute for the omitted `NOT NULL` evidence.
+- Reject any RLS flag, policy, or non-`_RETURN` rewrite rule on the three tables
+  read by the recovered fence. Expected review-history mutation triggers stay
+  governed by their separate immutable-history attestation.
 
 ## Deferred
 
@@ -495,10 +524,10 @@ Parked hardening: none.
 | `.github/workflows/atlas_migrations_runner_checks.yml` | 16 |
 | `atlas_brain/main_eom.py` | 3 |
 | `atlas_brain/storage/migrations/391_eom_commercial_billing_run_fence_recovery.sql` | 343 |
-| `atlas_brain/storage/migrations/reconciliation.py` | 963 |
-| `plans/PR-H18-Commercial-Billing-379-Run-Fence-Recovery.md` | 504 |
-| `tests/test_commercial_billing_runs.py` | 455 |
+| `atlas_brain/storage/migrations/reconciliation.py` | 996 |
+| `plans/PR-H18-Commercial-Billing-379-Run-Fence-Recovery.md` | 533 |
+| `tests/test_commercial_billing_runs.py` | 465 |
 | `tests/test_eom_render_profile.py` | 1 |
-| `tests/test_migration_content_integrity_preflight.py` | 408 |
-| `tests/test_migrations_runner.py` | 480 |
-| **Total** | **3175** |
+| `tests/test_migration_content_integrity_preflight.py` | 422 |
+| `tests/test_migrations_runner.py` | 516 |
+| **Total** | **3297** |

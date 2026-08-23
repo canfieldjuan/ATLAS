@@ -2575,6 +2575,16 @@ async def _stage_historical_379_legacy_recovery_state(conn):
             "ADD COLUMN unreviewed_379_billing_column VARCHAR(64)",
         ),
         (
+            "forced row security hides excluded decisions",
+            "ALTER TABLE commercial_billing_candidate_review_decisions "
+            "ENABLE ROW LEVEL SECURITY; "
+            "ALTER TABLE commercial_billing_candidate_review_decisions "
+            "FORCE ROW LEVEL SECURITY; "
+            "CREATE POLICY unreviewed_379_excluded_decision_filter "
+            "ON commercial_billing_candidate_review_decisions "
+            "FOR SELECT USING (decision <> 'excluded')",
+        ),
+        (
             "same-name altered review-decision revision check",
             "ALTER TABLE commercial_billing_candidate_review_decisions "
             "DROP CONSTRAINT commercial_billing_candidate_review_decisions_revision_check; "

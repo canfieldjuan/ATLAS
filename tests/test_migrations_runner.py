@@ -1820,6 +1820,7 @@ class _CommercialBillingForwardRecoveryPool(_ForwardRecoveryPool):
             "relations_ready": True,
             "required_columns_ready": True,
             "no_unreviewed_billing_columns": True,
+            "no_unreviewed_billing_read_interceptors": True,
             "required_billing_constraints_ready": True,
             "no_unreviewed_billing_constraints": True,
             "required_billing_indexes_ready": True,
@@ -1888,6 +1889,12 @@ class _CommercialBillingForwardRecoveryPool(_ForwardRecoveryPool):
             assert "pg_catalog.left(constraint_name, 63)" in query
             assert "unreviewed_columns" in query
             assert "no_unreviewed_billing_columns" in query
+            assert "unreviewed_billing_read_interceptors" in query
+            assert "no_unreviewed_billing_read_interceptors" in query
+            assert "FROM pg_catalog.pg_rewrite AS rule_state" in query
+            assert "FROM pg_catalog.pg_policy AS policy_state" in query
+            assert "relation_state.relrowsecurity" in query
+            assert "relation_state.relforcerowsecurity" in query
             assert "'commercial_billing_candidate_review_decisions', 'revision', 'int4', TRUE" in query
             assert "'commercial_billing_candidate_overrides', 'revision', 'int4', TRUE" in query
             assert "required_constraints" in query
@@ -2196,6 +2203,35 @@ async def test_379_forward_recovery_rejects_incomplete_billing_column_contract_b
     pool = _CommercialBillingForwardRecoveryPool()
     commercial_record = _stage_historical_379_forward_recovery(tmp_path, pool)
     pool.commercial_billing_catalog[catalog_field] = False
+
+    with pytest.raises(PendingMigrationContentIntegrityError, match="missing_source="):
+        await run_migrations(
+            pool,
+            migrations_dir=tmp_path,
+            only={commercial_record.recovery_migration_name},
+        )
+
+    assert pool.commercial_recovery_attempts == 0
+    assert pool.applied_sql == []
+    assert pool.inserted_with_digest == []
+    assert pool.commercial_billing_catalog["function_body"] == _legacy_379_function_body()
+
+
+@pytest.mark.asyncio
+async def test_379_forward_recovery_rejects_unreviewed_billing_read_interceptor_before_391(
+    tmp_path,
+):
+    """Policies and rewrite rules cannot alter fence reads during recovery."""
+    from atlas_brain.storage.migrations import (
+        PendingMigrationContentIntegrityError,
+        run_migrations,
+    )
+
+    pool = _CommercialBillingForwardRecoveryPool()
+    commercial_record = _stage_historical_379_forward_recovery(tmp_path, pool)
+    pool.commercial_billing_catalog[
+        "no_unreviewed_billing_read_interceptors"
+    ] = False
 
     with pytest.raises(PendingMigrationContentIntegrityError, match="missing_source="):
         await run_migrations(

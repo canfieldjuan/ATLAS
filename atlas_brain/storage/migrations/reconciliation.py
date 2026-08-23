@@ -288,6 +288,7 @@ class MissingSourceForwardRecoveryMigrationReconciliationAttestation:
     reviewed_billing_catalog_ready: bool
     required_billing_columns_ready: bool
     no_unreviewed_billing_columns: bool
+    no_unreviewed_billing_read_interceptors: bool
     history_guard_function_bodies_ready: bool
     required_billing_constraints_ready: bool
     no_unreviewed_billing_constraints: bool
@@ -355,6 +356,9 @@ class MissingSourceForwardRecoveryMigrationReconciliationAttestation:
             "reviewed_billing_catalog_ready": self.reviewed_billing_catalog_ready,
             "required_billing_columns_ready": self.required_billing_columns_ready,
             "no_unreviewed_billing_columns": self.no_unreviewed_billing_columns,
+            "no_unreviewed_billing_read_interceptors": (
+                self.no_unreviewed_billing_read_interceptors
+            ),
             "history_guard_function_bodies_ready": (
                 self.history_guard_function_bodies_ready
             ),
@@ -2724,7 +2728,9 @@ async def _migration_379_catalog_evidence(executor: Any) -> Mapping[str, object]
         WITH target_relations AS (
             SELECT relation_state.oid, relation_state.relname,
                    relation_state.relkind, relation_state.relpersistence,
-                   relation_state.relispartition
+                   relation_state.relispartition,
+                   relation_state.relrowsecurity,
+                   relation_state.relforcerowsecurity
             FROM pg_catalog.pg_class AS relation_state
             JOIN pg_catalog.pg_namespace AS namespace_state
               ON namespace_state.oid = relation_state.relnamespace
@@ -2817,6 +2823,25 @@ async def _migration_379_catalog_evidence(executor: Any) -> Mapping[str, object]
                  AND expected_column.column_name = actual_column.column_name
                 WHERE expected_column.column_name IS NULL
             ) AS no_unreviewed_billing_columns
+        ),
+        unreviewed_billing_read_interceptors AS (
+            SELECT NOT EXISTS (
+                SELECT 1
+                FROM pg_catalog.pg_rewrite AS rule_state
+                JOIN billing_catalog_relations AS relation_state
+                  ON relation_state.oid = rule_state.ev_class
+                WHERE rule_state.rulename <> '_RETURN'
+                UNION ALL
+                SELECT 1
+                FROM billing_catalog_relations AS relation_state
+                WHERE relation_state.relrowsecurity
+                   OR relation_state.relforcerowsecurity
+                UNION ALL
+                SELECT 1
+                FROM pg_catalog.pg_policy AS policy_state
+                JOIN billing_catalog_relations AS relation_state
+                  ON relation_state.oid = policy_state.polrelid
+            ) AS no_unreviewed_billing_read_interceptors
         ),
         declared_constraints AS (
             SELECT *
@@ -3137,6 +3162,10 @@ async def _migration_379_catalog_evidence(executor: Any) -> Mapping[str, object]
                 FROM unreviewed_columns
             ) AS no_unreviewed_billing_columns,
             (
+                SELECT no_unreviewed_billing_read_interceptors
+                FROM unreviewed_billing_read_interceptors
+            ) AS no_unreviewed_billing_read_interceptors,
+            (
                 NOT EXISTS (
                     SELECT 1
                     FROM required_constraints AS expected_constraint
@@ -3348,6 +3377,7 @@ async def _attest_migration_379(
             bool(catalog.get("relations_ready")),
             bool(catalog.get("required_columns_ready")),
             bool(catalog.get("no_unreviewed_billing_columns")),
+            bool(catalog.get("no_unreviewed_billing_read_interceptors")),
             bool(catalog.get("required_billing_constraints_ready")),
             bool(catalog.get("no_unreviewed_billing_constraints")),
             bool(catalog.get("required_billing_indexes_ready")),
@@ -3361,6 +3391,9 @@ async def _attest_migration_379(
         ),
         no_unreviewed_billing_columns=bool(
             catalog.get("no_unreviewed_billing_columns")
+        ),
+        no_unreviewed_billing_read_interceptors=bool(
+            catalog.get("no_unreviewed_billing_read_interceptors")
         ),
         history_guard_function_bodies_ready=history_guard_function_bodies_ready,
         required_billing_constraints_ready=bool(
