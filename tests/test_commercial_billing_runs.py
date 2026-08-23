@@ -2577,8 +2577,8 @@ async def _stage_historical_379_legacy_recovery_state(conn):
         ),
         (
             "foreign-schema invoice fence function",
-            "CREATE SCHEMA unreviewed_379_trigger_schema; "
-            "CREATE FUNCTION unreviewed_379_trigger_schema."
+            "CREATE SCHEMA {foreign_schema}; "
+            "CREATE FUNCTION {foreign_schema}."
             "prevent_commercial_billing_invoice_for_excluded_candidate() "
             "RETURNS TRIGGER LANGUAGE plpgsql AS $foreign$ "
             "BEGIN RETURN NEW; END; "
@@ -2587,13 +2587,13 @@ async def _stage_historical_379_legacy_recovery_state(conn):
             "ON invoices; "
             "CREATE TRIGGER trg_prevent_commercial_billing_invoice_for_excluded_candidate "
             "BEFORE INSERT ON invoices FOR EACH ROW "
-            "EXECUTE FUNCTION unreviewed_379_trigger_schema."
+            "EXECUTE FUNCTION {foreign_schema}."
             "prevent_commercial_billing_invoice_for_excluded_candidate()",
         ),
         (
             "foreign-schema history guard function",
-            "CREATE SCHEMA unreviewed_379_trigger_schema; "
-            "CREATE FUNCTION unreviewed_379_trigger_schema."
+            "CREATE SCHEMA {foreign_schema}; "
+            "CREATE FUNCTION {foreign_schema}."
             "prevent_commercial_billing_review_decision_mutation() "
             "RETURNS TRIGGER LANGUAGE plpgsql AS $foreign$ "
             "BEGIN RETURN OLD; END; "
@@ -2602,7 +2602,7 @@ async def _stage_historical_379_legacy_recovery_state(conn):
             "ON commercial_billing_candidate_review_decisions; "
             "CREATE TRIGGER trg_prevent_commercial_billing_review_decision_mutation "
             "BEFORE UPDATE OR DELETE ON commercial_billing_candidate_review_decisions "
-            "FOR EACH ROW EXECUTE FUNCTION unreviewed_379_trigger_schema."
+            "FOR EACH ROW EXECUTE FUNCTION {foreign_schema}."
             "prevent_commercial_billing_review_decision_mutation()",
         ),
         (
@@ -2648,32 +2648,36 @@ async def test_real_postgres_historical_379_rejects_incomplete_catalog_before_39
     async with _billing_run_database() as (conn, schema, _database_url):
         await conn.execute("CREATE EXTENSION IF NOT EXISTS pgcrypto")
         record, legacy_body = await _stage_historical_379_legacy_recovery_state(conn)
-        await conn.execute(catalog_mutation)
-        pool = _SchemaPool(conn, schema)
-        migrations_dir = Path(__file__).parents[1] / "atlas_brain/storage/migrations"
+        foreign_schema = f"commercial_billing_foreign_{uuid4().hex}"
+        try:
+            await conn.execute(catalog_mutation.replace("{foreign_schema}", foreign_schema))
+            pool = _SchemaPool(conn, schema)
+            migrations_dir = Path(__file__).parents[1] / "atlas_brain/storage/migrations"
 
-        with pytest.raises(PendingMigrationContentIntegrityError, match="missing_source="):
-            await run_migrations(
-                pool,
-                migrations_dir=migrations_dir,
-                only={record.recovery_migration_name},
-            )
+            with pytest.raises(PendingMigrationContentIntegrityError, match="missing_source="):
+                await run_migrations(
+                    pool,
+                    migrations_dir=migrations_dir,
+                    only={record.recovery_migration_name},
+                )
 
-        assert await conn.fetchval(
-            "SELECT COUNT(*) FROM schema_migrations WHERE name = $1",
-            record.recovery_migration_name,
-        ) == 0, case
-        assert await conn.fetchval("SELECT COUNT(*) FROM invoices") == 0, case
-        assert await conn.fetchval(
-            "SELECT function_state.prosrc "
-            "FROM pg_catalog.pg_proc AS function_state "
-            "JOIN pg_catalog.pg_namespace AS namespace_state "
-            "ON namespace_state.oid = function_state.pronamespace "
-            "WHERE namespace_state.nspname = pg_catalog.current_schema() "
-            "AND function_state.proname = "
-            "'prevent_commercial_billing_invoice_for_excluded_candidate' "
-            "AND function_state.pronargs = 0"
-        ) == legacy_body, case
+            assert await conn.fetchval(
+                "SELECT COUNT(*) FROM schema_migrations WHERE name = $1",
+                record.recovery_migration_name,
+            ) == 0, case
+            assert await conn.fetchval("SELECT COUNT(*) FROM invoices") == 0, case
+            assert await conn.fetchval(
+                "SELECT function_state.prosrc "
+                "FROM pg_catalog.pg_proc AS function_state "
+                "JOIN pg_catalog.pg_namespace AS namespace_state "
+                "ON namespace_state.oid = function_state.pronamespace "
+                "WHERE namespace_state.nspname = pg_catalog.current_schema() "
+                "AND function_state.proname = "
+                "'prevent_commercial_billing_invoice_for_excluded_candidate' "
+                "AND function_state.pronargs = 0"
+            ) == legacy_body, case
+        finally:
+            await conn.execute(f'DROP SCHEMA IF EXISTS "{foreign_schema}" CASCADE')
 
 
 @pytest.mark.asyncio

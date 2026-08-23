@@ -206,7 +206,9 @@ run-isolation defect, or an EOM entrypoint unable to select its prerequisite.
   upstream reconciliation admission observer.
 - Revised verification plan: retain targeted local preflight/runner checks;
   GitHub's disposable PostgreSQL matrix is the runtime authority for the
-  cross-schema OID probes.
+  cross-schema OID probes. Each foreign-schema mutation must derive and clean
+  up a unique scratch schema inside its isolated test run so parameter cases
+  cannot share database-level state.
 
 ## Scope (this PR)
 
@@ -404,9 +406,9 @@ Parked hardening: none.
 | `atlas_brain/main_eom.py` | 3 |
 | `atlas_brain/storage/migrations/391_eom_commercial_billing_run_fence_recovery.sql` | 343 |
 | `atlas_brain/storage/migrations/reconciliation.py` | 849 |
-| `plans/PR-H18-Commercial-Billing-379-Run-Fence-Recovery.md` | 412 |
-| `tests/test_commercial_billing_runs.py` | 399 |
+| `plans/PR-H18-Commercial-Billing-379-Run-Fence-Recovery.md` | 414 |
+| `tests/test_commercial_billing_runs.py` | 403 |
 | `tests/test_eom_render_profile.py` | 1 |
 | `tests/test_migration_content_integrity_preflight.py` | 338 |
 | `tests/test_migrations_runner.py` | 388 |
-| **Total** | **2751** |
+| **Total** | **2757** |
