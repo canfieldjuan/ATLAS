@@ -296,6 +296,7 @@ class MissingSourceForwardRecoveryMigrationReconciliationAttestation:
     no_unreviewed_billing_indexes: bool
     invoice_fence_trigger_ready: bool
     no_unreviewed_invoice_insert_interceptors: bool
+    trigger_function_execution_metadata_ready: bool
     legacy_function_body_matches: bool
     recovered_function_body_matches: bool
 
@@ -373,6 +374,9 @@ class MissingSourceForwardRecoveryMigrationReconciliationAttestation:
             "invoice_fence_trigger_ready": self.invoice_fence_trigger_ready,
             "no_unreviewed_invoice_insert_interceptors": (
                 self.no_unreviewed_invoice_insert_interceptors
+            ),
+            "trigger_function_execution_metadata_ready": (
+                self.trigger_function_execution_metadata_ready
             ),
             "legacy_function_body_matches": self.legacy_function_body_matches,
             "recovered_function_body_matches": (
@@ -3053,10 +3057,21 @@ async def _migration_379_catalog_evidence(executor: Any) -> Mapping[str, object]
         target_functions AS (
             SELECT function_state.oid,
                    function_state.proname,
-                   function_state.prosrc
+                   function_state.prosrc,
+                   function_state.prokind,
+                   function_state.provolatile,
+                   function_state.proisstrict,
+                   function_state.prosecdef,
+                   function_state.proleakproof,
+                   function_state.proparallel,
+                   function_state.prosupport,
+                   function_state.proconfig,
+                   language_state.lanname AS language_name
             FROM pg_catalog.pg_proc AS function_state
             JOIN pg_catalog.pg_namespace AS namespace_state
               ON namespace_state.oid = function_state.pronamespace
+            JOIN pg_catalog.pg_language AS language_state
+              ON language_state.oid = function_state.prolang
             WHERE namespace_state.nspname = pg_catalog.current_schema()
               AND function_state.proname IN (
                   'prevent_commercial_billing_invoice_for_excluded_candidate',
@@ -3065,6 +3080,27 @@ async def _migration_379_catalog_evidence(executor: Any) -> Mapping[str, object]
               )
               AND function_state.pronargs = 0
               AND function_state.prorettype = 'trigger'::pg_catalog.regtype
+        ),
+        reviewed_trigger_function_execution_metadata AS (
+            SELECT
+                COUNT(*) = 3
+                AND NOT EXISTS (
+                    SELECT 1
+                    FROM target_functions AS function_state
+                    WHERE function_state.prokind <> 'f'
+                       OR function_state.language_name <> 'plpgsql'
+                       OR function_state.provolatile <> 'v'
+                       OR function_state.proisstrict
+                       OR function_state.prosecdef
+                       OR function_state.proleakproof
+                       OR function_state.proparallel <> 'u'
+                       OR function_state.prosupport IS DISTINCT FROM 0::pg_catalog.oid
+                       OR COALESCE(
+                           function_state.proconfig,
+                           ARRAY[]::text[]
+                       ) <> ARRAY[]::text[]
+                ) AS trigger_function_execution_metadata_ready
+            FROM target_functions AS function_state
         ),
         target_function AS (
             SELECT function_state.oid, function_state.prosrc
@@ -3264,6 +3300,10 @@ async def _migration_379_catalog_evidence(executor: Any) -> Mapping[str, object]
                 FROM unreviewed_invoice_insert_interceptors
             ) AS no_unreviewed_invoice_insert_interceptors,
             (
+                SELECT trigger_function_execution_metadata_ready
+                FROM reviewed_trigger_function_execution_metadata
+            ) AS trigger_function_execution_metadata_ready,
+            (
                 SELECT function_state.prosrc
                 FROM target_functions AS function_state
                 WHERE function_state.proname =
@@ -3385,6 +3425,7 @@ async def _attest_migration_379(
             bool(catalog.get("immutable_history_guards_ready")),
             history_guard_function_bodies_ready,
             bool(catalog.get("no_unreviewed_invoice_insert_interceptors")),
+            bool(catalog.get("trigger_function_execution_metadata_ready")),
         )),
         required_billing_columns_ready=bool(
             catalog.get("required_columns_ready")
@@ -3413,6 +3454,9 @@ async def _attest_migration_379(
         ),
         no_unreviewed_invoice_insert_interceptors=bool(
             catalog.get("no_unreviewed_invoice_insert_interceptors")
+        ),
+        trigger_function_execution_metadata_ready=bool(
+            catalog.get("trigger_function_execution_metadata_ready")
         ),
         legacy_function_body_matches=(
             function_body_sha256 == record.legacy_function_body_sha256

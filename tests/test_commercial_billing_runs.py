@@ -2676,6 +2676,16 @@ async def _stage_historical_379_legacy_recovery_state(conn):
             "EXECUTE FUNCTION unreviewed_invoice_source_after_fence()",
         ),
         (
+            "configured invoice-fence execution environment",
+            "ALTER FUNCTION prevent_commercial_billing_invoice_for_excluded_candidate() "
+            "SET search_path TO pg_catalog",
+        ),
+        (
+            "security-definer history guard",
+            "ALTER FUNCTION prevent_commercial_billing_review_decision_mutation() "
+            "SECURITY DEFINER",
+        ),
+        (
             "conditional append-only history trigger",
             "DROP TRIGGER trg_prevent_commercial_billing_review_decision_mutation "
             "ON commercial_billing_candidate_review_decisions; "

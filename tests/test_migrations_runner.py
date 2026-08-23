@@ -1828,6 +1828,7 @@ class _CommercialBillingForwardRecoveryPool(_ForwardRecoveryPool):
             "immutable_history_guards_ready": True,
             "invoice_fence_trigger_ready": True,
             "no_unreviewed_invoice_insert_interceptors": True,
+            "trigger_function_execution_metadata_ready": True,
             "review_decision_history_guard_function_body": (
                 _history_379_guard_function_body(
                     "prevent_commercial_billing_review_decision_mutation"
@@ -1908,6 +1909,13 @@ class _CommercialBillingForwardRecoveryPool(_ForwardRecoveryPool):
             assert "unreviewed_invoice_insert_interceptors" in query
             assert "is_before_row_insert" in query
             assert "no_unreviewed_invoice_insert_interceptors" in query
+            assert "reviewed_trigger_function_execution_metadata" in query
+            assert "trigger_function_execution_metadata_ready" in query
+            assert "COUNT(*) = 3" in query
+            assert "function_state.prosecdef" in query
+            assert "function_state.proconfig" in query
+            assert "language_state.lanname AS language_name" in query
+            assert "function_state.prosupport IS DISTINCT FROM 0::pg_catalog.oid" in query
             assert "review_decision_history_guard_function_body" in query
             assert "override_history_guard_function_body" in query
             return _AsyncpgRecordLike(self.commercial_billing_catalog)
@@ -2170,6 +2178,35 @@ async def test_379_forward_recovery_rejects_unreviewed_invoice_insert_intercepto
     commercial_record = _stage_historical_379_forward_recovery(tmp_path, pool)
     pool.commercial_billing_catalog[
         "no_unreviewed_invoice_insert_interceptors"
+    ] = False
+
+    with pytest.raises(PendingMigrationContentIntegrityError, match="missing_source="):
+        await run_migrations(
+            pool,
+            migrations_dir=tmp_path,
+            only={commercial_record.recovery_migration_name},
+        )
+
+    assert pool.commercial_recovery_attempts == 0
+    assert pool.applied_sql == []
+    assert pool.inserted_with_digest == []
+    assert pool.commercial_billing_catalog["function_body"] == _legacy_379_function_body()
+
+
+@pytest.mark.asyncio
+async def test_379_forward_recovery_rejects_changed_trigger_function_execution_metadata_before_391(
+    tmp_path,
+):
+    """Unreviewed function-local execution settings cannot admit recovery."""
+    from atlas_brain.storage.migrations import (
+        PendingMigrationContentIntegrityError,
+        run_migrations,
+    )
+
+    pool = _CommercialBillingForwardRecoveryPool()
+    commercial_record = _stage_historical_379_forward_recovery(tmp_path, pool)
+    pool.commercial_billing_catalog[
+        "trigger_function_execution_metadata_ready"
     ] = False
 
     with pytest.raises(PendingMigrationContentIntegrityError, match="missing_source="):

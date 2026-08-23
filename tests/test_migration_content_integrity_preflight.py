@@ -636,6 +636,7 @@ class _Migration379PreflightConnection:
             "immutable_history_guards_ready": True,
             "invoice_fence_trigger_ready": True,
             "no_unreviewed_invoice_insert_interceptors": True,
+            "trigger_function_execution_metadata_ready": True,
             "review_decision_history_guard_function_body": (
                 _migration_379_history_guard_body(
                     "prevent_commercial_billing_review_decision_mutation"
@@ -730,6 +731,13 @@ class _Migration379PreflightConnection:
         assert "unreviewed_invoice_insert_interceptors" in query
         assert "is_before_row_insert" in query
         assert "no_unreviewed_invoice_insert_interceptors" in query
+        assert "reviewed_trigger_function_execution_metadata" in query
+        assert "trigger_function_execution_metadata_ready" in query
+        assert "COUNT(*) = 3" in query
+        assert "function_state.prosecdef" in query
+        assert "function_state.proconfig" in query
+        assert "language_state.lanname AS language_name" in query
+        assert "function_state.prosupport IS DISTINCT FROM 0::pg_catalog.oid" in query
         assert "review_decision_history_guard_function_body" in query
         assert "override_history_guard_function_body" in query
         assert "commercial_billing_candidate_overrides" in query
@@ -1251,6 +1259,7 @@ async def test_known_379_recovery_reports_exact_legacy_state_without_admitting_s
         "no_unreviewed_billing_indexes": True,
         "invoice_fence_trigger_ready": True,
         "no_unreviewed_invoice_insert_interceptors": True,
+        "trigger_function_execution_metadata_ready": True,
         "legacy_function_body_matches": True,
         "recovered_function_body_matches": False,
         "legacy_catalog_ready": True,
@@ -1317,6 +1326,10 @@ async def test_known_379_recovery_attests_only_after_its_own_receipt_and_fence(
             "unreviewed invoice insert interceptor",
             "no_unreviewed_invoice_insert_interceptors",
         ),
+        (
+            "changed trigger-function execution metadata",
+            "trigger_function_execution_metadata_ready",
+        ),
         ("changed legacy function", "legacy_function_body_matches"),
         ("recorded but wrong recovery", "recovery_receipt_ready"),
     ],
@@ -1364,6 +1377,8 @@ async def test_known_379_recovery_rejects_nonexact_or_half_recorded_evidence(
         connection.catalog["invoice_fence_trigger_ready"] = False
     elif case == "unreviewed invoice insert interceptor":
         connection.catalog["no_unreviewed_invoice_insert_interceptors"] = False
+    elif case == "changed trigger-function execution metadata":
+        connection.catalog["trigger_function_execution_metadata_ready"] = False
     elif case == "changed legacy function":
         connection.catalog["function_body"] = "unexpected function body"
     elif case == "recorded but wrong recovery":

@@ -311,6 +311,38 @@ run-isolation defect, or an EOM entrypoint unable to select its prerequisite.
   syntax, Ruff, plan, and whitespace checks. GitHub's controlled PostgreSQL
   matrix remains the authority for the forced-RLS policy proof.
 
+### Contract revision after trigger-function execution-metadata review
+
+- New evidence: a current Codex blocker demonstrates that the 379 observer
+  hashes `pg_proc.prosrc` and binds trigger OIDs, but does not attest the
+  runtime metadata of any required trigger function. PostgreSQL can attach a
+  function-local `search_path` with `ALTER FUNCTION ... SET` without changing
+  either value, and can also change security mode or execution metadata while
+  retaining the same object identity. A configured invoice fence can then
+  resolve its unqualified candidate/override/decision reads outside the closed
+  catalog being attested.
+- Revised root cause: object identity plus source-body identity does not prove
+  the trigger executes with the reviewed language, security context, planner
+  contract, or empty function-local configuration. The closed catalog admits a
+  mutable execution environment that can alter fence behavior after recovery.
+- Revised required change surface: read the required trigger functions'
+  language, kind, volatility, strictness, security-definer, leakproof,
+  parallel, support-function, and `proconfig` metadata; require the exact
+  source-implied PL/pgSQL, security-invoker, default execution contract with no
+  function-local settings before either 379 admission state; and expose the
+  result in read-only evidence. Add fake preflight/runner refusal proof plus
+  isolated PostgreSQL `ALTER FUNCTION ... SET search_path` and
+  `SECURITY DEFINER` cases, each of which must reject before 391 SQL, a
+  recovery receipt, or an invoice write.
+- Revised explicit non-scope: do not rewrite immutable 391 SQL to add a new
+  function configuration clause, modify the existing target's function, or
+  treat source hashing alone as an execution-context proof. The correction is
+  the fail-closed upstream observer for the existing source-backed runtime
+  contract.
+- Revised verification plan: run focused preflight and runner cases plus
+  syntax/Ruff locally. GitHub's controlled PostgreSQL matrix remains the
+  runtime authority for both catalog-level `ALTER FUNCTION` mutations.
+
 ## Scope (this PR)
 
 Ownership lane: h18-migration-content-integrity
@@ -344,6 +376,8 @@ Max files: 11
   - [ ] An unknown discrepancy, changed legacy fence hash, altered history
     guard body, conditional or foreign-schema same-name required trigger
     function, an unreviewed row-level `BEFORE INSERT` invoice interceptor,
+    non-default execution metadata or a function-local setting on a required
+    trigger function,
     missing, retagged, nullable, or unreviewed behavior-driving billing column,
     row security, policy, or rewrite rule on a fence-read relation, missing required
     decision-table catalog member (including a
@@ -394,7 +428,9 @@ Max files: 11
   type-and-nullability set/no query-rewriting control on fence-read relations/
   closed invoice row-level `BEFORE INSERT` interceptor set/unconditional triggers bound to
   expected current-schema function OIDs/current-schema
-  history-guard `pg_proc.prosrc` SHA-256 values, 386's independently attested
+  history-guard `pg_proc.prosrc` SHA-256 values/exact trigger-function
+  execution metadata (PL/pgSQL, security-invoker/default flags, and empty
+  `proconfig`), 386's independently attested
   status, invoice-fence trigger, legacy and recovered invoice-fence
   `pg_proc.prosrc` SHA-256 values, recovery source digest, recovery ledger row,
   and selected pending migration names.
@@ -450,6 +486,12 @@ migration-382 contract. No table rows, financial history, invoices, payments,
 or ledger facts are rewritten. The normal runner records the new migration
 digest in the same transaction.
 
+The reconciliation observer separately requires every trigger function used by
+that fence to retain the source-implied PL/pgSQL, security-invoker, default
+execution metadata and no function-local settings. This prevents an
+OID-preserving `ALTER FUNCTION` from changing the environment in which the
+unqualified fence reads resolve while the source hash remains unchanged.
+
 The selector remains closed rather than becoming a generic exception system.
 It may choose 391 only for the exact known 379 missing-source state, and only
 when all other unresolved names are the known 386 forward-recovery state. It
@@ -487,6 +529,10 @@ deployment sequence.
 - Reject any RLS flag, policy, or non-`_RETURN` rewrite rule on the three tables
   read by the recovered fence. Expected review-history mutation triggers stay
   governed by their separate immutable-history attestation.
+- Require the exact source-implied execution metadata for all three trigger
+  functions, including an empty function-local configuration. `prosrc` and OID
+  equality alone do not constrain `ALTER FUNCTION ... SET search_path` or a
+  changed security context.
 
 ## Deferred
 
@@ -524,10 +570,10 @@ Parked hardening: none.
 | `.github/workflows/atlas_migrations_runner_checks.yml` | 16 |
 | `atlas_brain/main_eom.py` | 3 |
 | `atlas_brain/storage/migrations/391_eom_commercial_billing_run_fence_recovery.sql` | 343 |
-| `atlas_brain/storage/migrations/reconciliation.py` | 996 |
-| `plans/PR-H18-Commercial-Billing-379-Run-Fence-Recovery.md` | 533 |
-| `tests/test_commercial_billing_runs.py` | 465 |
+| `atlas_brain/storage/migrations/reconciliation.py` | 1040 |
+| `plans/PR-H18-Commercial-Billing-379-Run-Fence-Recovery.md` | 579 |
+| `tests/test_commercial_billing_runs.py` | 475 |
 | `tests/test_eom_render_profile.py` | 1 |
-| `tests/test_migration_content_integrity_preflight.py` | 422 |
-| `tests/test_migrations_runner.py` | 516 |
-| **Total** | **3297** |
+| `tests/test_migration_content_integrity_preflight.py` | 437 |
+| `tests/test_migrations_runner.py` | 553 |
+| **Total** | **3449** |
