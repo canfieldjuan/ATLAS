@@ -343,6 +343,32 @@ run-isolation defect, or an EOM entrypoint unable to select its prerequisite.
   syntax/Ruff locally. GitHub's controlled PostgreSQL matrix remains the
   runtime authority for both catalog-level `ALTER FUNCTION` mutations.
 
+### Contract revision after fence-read inheritance review
+
+- New evidence: a current Codex blocker demonstrates that `relispartition`
+  does not describe traditional PostgreSQL inheritance. A child of a reviewed
+  fence-read table contributes rows to ordinary parent-table queries, while the
+  parent's unique constraints and mutation triggers do not constrain that child.
+  A higher-revision child decision can therefore supersede an excluded parent
+  decision without changing the named parent catalog currently being attested.
+- Revised root cause: the closed lookup-read catalog omits `pg_inherits`
+  descendants of the three tables read by the recovered fence. The observer
+  proves only the named parent relation, not the complete row source of the
+  unqualified parent-table reads in the immutable function.
+- Revised required change surface: extend the existing closed fence-read
+  interceptor predicate to reject every `pg_inherits` edge whose parent is a
+  reviewed candidate, override, or review-decision relation. Keep the same
+  boolean in the read-only evidence and add static/fake proof plus an isolated
+  PostgreSQL inherited review-decision child that must reject before 391 SQL,
+  a recovery receipt, or an invoice write.
+- Revised explicit non-scope: do not rewrite immutable 391 queries with `ONLY`,
+  add an application inheritance feature, or reject inheritance outside the
+  three lookup tables. The correction is the closed catalog admission predicate
+  for rows visible to this exact fence.
+- Revised verification plan: run focused preflight and runner cases plus
+  syntax/Ruff locally. GitHub's controlled PostgreSQL matrix remains the
+  runtime authority for the parent/child catalog mutation.
+
 ## Scope (this PR)
 
 Ownership lane: h18-migration-content-integrity
@@ -379,7 +405,8 @@ Max files: 11
     non-default execution metadata or a function-local setting on a required
     trigger function,
     missing, retagged, nullable, or unreviewed behavior-driving billing column,
-    row security, policy, or rewrite rule on a fence-read relation, missing required
+    row security, policy, rewrite rule, or inherited child on a fence-read
+    relation, missing required
     decision-table catalog member (including a
     declared constraint, its exact `CHECK` predicate, or index), an unreviewed
     catalog member, an omitted 391
@@ -425,7 +452,8 @@ Max files: 11
   ledger versions/NULL digests/timestamps, successor ledger receipts, decision
   relation kind/columns/declared constraints including normalized `CHECK`
   predicates/declared indexes/no-unreviewed catalog members/exact user-column
-  type-and-nullability set/no query-rewriting control on fence-read relations/
+  type-and-nullability set/no query-rewriting control or inherited child on
+  fence-read relations/
   closed invoice row-level `BEFORE INSERT` interceptor set/unconditional triggers bound to
   expected current-schema function OIDs/current-schema
   history-guard `pg_proc.prosrc` SHA-256 values/exact trigger-function
@@ -529,6 +557,9 @@ deployment sequence.
 - Reject any RLS flag, policy, or non-`_RETURN` rewrite rule on the three tables
   read by the recovered fence. Expected review-history mutation triggers stay
   governed by their separate immutable-history attestation.
+- Reject any traditional inheritance child of the three tables read by the
+  recovered fence. A parent scan includes those rows, but a parent table's
+  uniqueness and mutation guards do not constrain the child catalog.
 - Require the exact source-implied execution metadata for all three trigger
   functions, including an empty function-local configuration. `prosrc` and OID
   equality alone do not constrain `ALTER FUNCTION ... SET search_path` or a
@@ -570,10 +601,10 @@ Parked hardening: none.
 | `.github/workflows/atlas_migrations_runner_checks.yml` | 16 |
 | `atlas_brain/main_eom.py` | 3 |
 | `atlas_brain/storage/migrations/391_eom_commercial_billing_run_fence_recovery.sql` | 343 |
-| `atlas_brain/storage/migrations/reconciliation.py` | 1040 |
-| `plans/PR-H18-Commercial-Billing-379-Run-Fence-Recovery.md` | 579 |
-| `tests/test_commercial_billing_runs.py` | 475 |
+| `atlas_brain/storage/migrations/reconciliation.py` | 1047 |
+| `plans/PR-H18-Commercial-Billing-379-Run-Fence-Recovery.md` | 610 |
+| `tests/test_commercial_billing_runs.py` | 480 |
 | `tests/test_eom_render_profile.py` | 1 |
-| `tests/test_migration_content_integrity_preflight.py` | 437 |
-| `tests/test_migrations_runner.py` | 553 |
-| **Total** | **3449** |
+| `tests/test_migration_content_integrity_preflight.py` | 439 |
+| `tests/test_migrations_runner.py` | 555 |
+| **Total** | **3496** |

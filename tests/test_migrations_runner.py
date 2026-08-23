@@ -1894,6 +1894,8 @@ class _CommercialBillingForwardRecoveryPool(_ForwardRecoveryPool):
             assert "no_unreviewed_billing_read_interceptors" in query
             assert "FROM pg_catalog.pg_rewrite AS rule_state" in query
             assert "FROM pg_catalog.pg_policy AS policy_state" in query
+            assert "FROM pg_catalog.pg_inherits AS inheritance_state" in query
+            assert "relation_state.oid = inheritance_state.inhparent" in query
             assert "relation_state.relrowsecurity" in query
             assert "relation_state.relforcerowsecurity" in query
             assert "'commercial_billing_candidate_review_decisions', 'revision', 'int4', TRUE" in query

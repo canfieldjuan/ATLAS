@@ -2841,6 +2841,13 @@ async def _migration_379_catalog_evidence(executor: Any) -> Mapping[str, object]
                 WHERE relation_state.relrowsecurity
                    OR relation_state.relforcerowsecurity
                 UNION ALL
+                -- A parent-table read includes traditional inheritance children,
+                -- whose rows and mutation guards are outside this closed catalog.
+                SELECT 1
+                FROM pg_catalog.pg_inherits AS inheritance_state
+                JOIN billing_catalog_relations AS relation_state
+                  ON relation_state.oid = inheritance_state.inhparent
+                UNION ALL
                 SELECT 1
                 FROM pg_catalog.pg_policy AS policy_state
                 JOIN billing_catalog_relations AS relation_state

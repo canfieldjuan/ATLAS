@@ -2585,6 +2585,11 @@ async def _stage_historical_379_legacy_recovery_state(conn):
             "FOR SELECT USING (decision <> 'excluded')",
         ),
         (
+            "inherited review-decision child",
+            "CREATE TABLE unreviewed_379_review_decision_child () "
+            "INHERITS (commercial_billing_candidate_review_decisions)",
+        ),
+        (
             "same-name altered review-decision revision check",
             "ALTER TABLE commercial_billing_candidate_review_decisions "
             "DROP CONSTRAINT commercial_billing_candidate_review_decisions_revision_check; "
