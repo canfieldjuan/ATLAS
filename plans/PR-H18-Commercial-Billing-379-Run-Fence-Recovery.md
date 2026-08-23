@@ -150,6 +150,36 @@ run-isolation defect, or an EOM entrypoint unable to select its prerequisite.
   member, while the read-only canonical-target probe must return 379 to its
   prior `attested` state without any write.
 
+### Contract revision after trigger-qualification review
+
+- New evidence: a current Codex blocker demonstrates that the 379 observer
+  accepts an enabled invoice-fence trigger with `WHEN (false)`. The existing
+  query checks its name, function, type, and enabled state but does not expose
+  or require a NULL `tgqual`; a target with the exact 391 receipt and function
+  body can therefore be classified `attested` while the database fence never
+  executes. The same incomplete trigger-shape predicate is shared by the
+  append-only history guards. CI separately proves that the real-catalog
+  negative case cannot directly drop the exact-source candidate index because
+  three required foreign keys depend on that PostgreSQL key index.
+- Revised root cause: the closed catalog admission observes trigger identity
+  but not whether each required trigger is unconditional, and one test mutation
+  attempts an impossible standalone index drop instead of constructing an
+  admissible drifted catalog.
+- Revised required change surface: surface `pg_trigger.tgqual` in the 379
+  observer and require it to be NULL for the invoice fence and every declared
+  append-only trigger. Add fake-query assertions plus both fake and isolated
+  PostgreSQL conditional-trigger regressions that prove no 391 SQL or ledger
+  receipt occurs. Replace the dependent exact-source index drop with a safe
+  rename that preserves its foreign-key dependents while making the declared
+  index absent and unreviewed.
+- Revised explicit non-scope: do not modify the immutable 391 migration SQL;
+  the corrective choke point is the post-receipt reconciliation observer, and
+  the disposable mutation changes only its isolated test schema.
+- Revised verification plan: run the focused preflight and runner tests plus
+  syntax/lint/whitespace locally. GitHub remains the authority for the
+  disposable PostgreSQL matrix, which exercises the real `tgqual` catalog
+  state and the renamed-index rejection.
+
 ## Scope (this PR)
 
 Ownership lane: h18-migration-content-integrity
@@ -180,9 +210,10 @@ Max files: 11
     advisory lock and atomic-bookkeeping path, records its digest exactly once,
     re-reads evidence, and leaves ordinary pending SQL blocked while 386 is
     still unresolved; settled by `tests/test_migrations_runner.py`.
-  - [ ] An unknown discrepancy, changed legacy fence hash, missing required
-    decision-table catalog member (including a declared constraint, its exact
-    `CHECK` predicate, or index), an unreviewed catalog member, an omitted 391
+  - [ ] An unknown discrepancy, changed legacy fence hash, conditional required
+    trigger, missing required decision-table catalog member (including a
+    declared constraint, its exact `CHECK` predicate, or index), an unreviewed
+    catalog member, an omitted 391
     `only=` selection, a 386 mismatch that does not independently attest as
     `recovery_required`, or an already recorded but non-attested 391 causes no
     target SQL/ledger mutation; settled by negative fake-runner and preflight
@@ -224,7 +255,8 @@ Max files: 11
 - Guard-relevant fields: unresolved mismatch/missing-source names, 379's exact
   ledger versions/NULL digests/timestamps, successor ledger receipts, decision
   relation kind/columns/declared constraints including normalized `CHECK`
-  predicates/declared indexes/no-unreviewed catalog members/triggers, 386's
+  predicates/declared indexes/no-unreviewed catalog members/unconditional
+  triggers, 386's
   independently attested status, invoice-fence trigger, legacy and recovered
   `pg_proc.prosrc` SHA-256 values, recovery source digest, recovery ledger row,
   and selected pending migration names.
@@ -342,10 +374,10 @@ Parked hardening: none.
 | `.github/workflows/atlas_migrations_runner_checks.yml` | 16 |
 | `atlas_brain/main_eom.py` | 3 |
 | `atlas_brain/storage/migrations/391_eom_commercial_billing_run_fence_recovery.sql` | 343 |
-| `atlas_brain/storage/migrations/reconciliation.py` | 826 |
-| `plans/PR-H18-Commercial-Billing-379-Run-Fence-Recovery.md` | 351 |
-| `tests/test_commercial_billing_runs.py` | 351 |
+| `atlas_brain/storage/migrations/reconciliation.py` | 829 |
+| `plans/PR-H18-Commercial-Billing-379-Run-Fence-Recovery.md` | 383 |
+| `tests/test_commercial_billing_runs.py` | 369 |
 | `tests/test_eom_render_profile.py` | 1 |
-| `tests/test_migration_content_integrity_preflight.py` | 320 |
-| `tests/test_migrations_runner.py` | 382 |
-| **Total** | **2595** |
+| `tests/test_migration_content_integrity_preflight.py` | 329 |
+| `tests/test_migrations_runner.py` | 385 |
+| **Total** | **2660** |

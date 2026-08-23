@@ -2982,7 +2982,8 @@ async def _migration_379_catalog_evidence(executor: Any) -> Mapping[str, object]
                    trigger_state.tgname AS trigger_name,
                    function_state.proname AS function_name,
                    trigger_state.tgtype,
-                   trigger_state.tgenabled
+                   trigger_state.tgenabled,
+                   trigger_state.tgqual
             FROM pg_catalog.pg_trigger AS trigger_state
             JOIN target_relations AS relation_state
               ON relation_state.oid = trigger_state.tgrelid
@@ -3116,6 +3117,7 @@ async def _migration_379_catalog_evidence(executor: Any) -> Mapping[str, object]
                  AND actual_trigger.function_name = expected_trigger.function_name
                  AND actual_trigger.tgtype = expected_trigger.trigger_type
                  AND actual_trigger.tgenabled = 'O'
+                 AND actual_trigger.tgqual IS NULL
                 WHERE actual_trigger.trigger_name IS NULL
             ) AS immutable_history_guards_ready,
             EXISTS (
@@ -3129,6 +3131,7 @@ async def _migration_379_catalog_evidence(executor: Any) -> Mapping[str, object]
                       'prevent_commercial_billing_invoice_for_excluded_candidate'
                   AND trigger_state.tgtype = 7
                   AND trigger_state.tgenabled = 'O'
+                  AND trigger_state.tgqual IS NULL
             ) AS invoice_fence_trigger_ready,
             (SELECT function_state.prosrc FROM target_function AS function_state)
                 AS function_body

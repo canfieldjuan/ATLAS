@@ -1866,6 +1866,9 @@ class _CommercialBillingForwardRecoveryPool(_ForwardRecoveryPool):
             assert "pg_catalog.left(constraint_name, 63)" in query
             assert "required_constraints" in query
             assert "required_indexes" in query
+            assert "trigger_state.tgqual" in query
+            assert "actual_trigger.tgqual IS NULL" in query
+            assert "trigger_state.tgqual IS NULL" in query
             return _AsyncpgRecordLike(self.commercial_billing_catalog)
         return await super().fetchrow(query, *args)
 

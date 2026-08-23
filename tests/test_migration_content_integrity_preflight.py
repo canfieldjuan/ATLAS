@@ -673,6 +673,9 @@ class _Migration379PreflightConnection:
         assert "required_indexes" in query
         assert "unreviewed_constraints" in query
         assert "unreviewed_indexes" in query
+        assert "trigger_state.tgqual" in query
+        assert "actual_trigger.tgqual IS NULL" in query
+        assert "trigger_state.tgqual IS NULL" in query
         assert "commercial_billing_candidate_overrides" in query
         assert "commercial_billing_candidate_review_decisions" in query
         return self.catalog
@@ -1237,6 +1240,8 @@ async def test_known_379_recovery_attests_only_after_its_own_receipt_and_fence(
         ("unreviewed billing constraint", "no_unreviewed_billing_constraints"),
         ("missing required billing index", "required_billing_indexes_ready"),
         ("unreviewed billing index", "no_unreviewed_billing_indexes"),
+        ("conditional history guard", "reviewed_billing_catalog_ready"),
+        ("conditional invoice fence trigger", "invoice_fence_trigger_ready"),
         ("changed legacy function", "legacy_function_body_matches"),
         ("recorded but wrong recovery", "recovery_receipt_ready"),
     ],
@@ -1262,6 +1267,10 @@ async def test_known_379_recovery_rejects_nonexact_or_half_recorded_evidence(
         connection.catalog["required_billing_indexes_ready"] = False
     elif case == "unreviewed billing index":
         connection.catalog["no_unreviewed_billing_indexes"] = False
+    elif case == "conditional history guard":
+        connection.catalog["immutable_history_guards_ready"] = False
+    elif case == "conditional invoice fence trigger":
+        connection.catalog["invoice_fence_trigger_ready"] = False
     elif case == "changed legacy function":
         connection.catalog["function_body"] = "unexpected function body"
     elif case == "recorded but wrong recovery":

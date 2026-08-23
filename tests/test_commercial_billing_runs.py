@@ -2563,8 +2563,9 @@ async def _stage_historical_379_legacy_recovery_state(conn):
             "CHECK (revision >= 0)",
         ),
         (
-            "missing candidate exact-source index",
-            "DROP INDEX idx_commercial_billing_run_candidates_exact_source",
+            "renamed candidate exact-source index",
+            "ALTER INDEX idx_commercial_billing_run_candidates_exact_source "
+            "RENAME TO unreviewed_379_candidate_exact_source_index",
         ),
         (
             "missing review-decision review index",
@@ -2573,6 +2574,23 @@ async def _stage_historical_379_legacy_recovery_state(conn):
         (
             "missing override active index",
             "DROP INDEX idx_commercial_billing_candidate_overrides_active",
+        ),
+        (
+            "conditional invoice fence trigger",
+            "DROP TRIGGER trg_prevent_commercial_billing_invoice_for_excluded_candidate "
+            "ON invoices; "
+            "CREATE TRIGGER trg_prevent_commercial_billing_invoice_for_excluded_candidate "
+            "BEFORE INSERT ON invoices FOR EACH ROW WHEN (false) "
+            "EXECUTE FUNCTION prevent_commercial_billing_invoice_for_excluded_candidate()",
+        ),
+        (
+            "conditional append-only history trigger",
+            "DROP TRIGGER trg_prevent_commercial_billing_review_decision_mutation "
+            "ON commercial_billing_candidate_review_decisions; "
+            "CREATE TRIGGER trg_prevent_commercial_billing_review_decision_mutation "
+            "BEFORE UPDATE OR DELETE ON commercial_billing_candidate_review_decisions "
+            "FOR EACH ROW WHEN (false) "
+            "EXECUTE FUNCTION prevent_commercial_billing_review_decision_mutation()",
         ),
         (
             "unreviewed catalog constraint",
