@@ -42,8 +42,18 @@ _DEFAULT_BOTS = ("chatgpt-codex-connector", "chatgpt-codex-connector[bot]")
 _CLEAN_CODEX_REVIEW_TEXT = "didn't find any major issues"
 _DEFAULT_CODEX_REVIEW_GRACE_SECONDS = 300
 _REVIEWED_COMMIT_RE = re.compile(r"\*\*Reviewed commit:\*\*\s*`(?P<sha>[0-9a-f]{10,40})`", re.IGNORECASE)
-_REVIEW_TITLE_STOP_RE = re.compile(r"\s+R\d+(?:/R\d+)*\s*\(")
+_RULE_REFERENCE_RE = r"R\d+(?:/R\d+)*"
+_RULE_SEVERITY_RE = r"\([A-Z][A-Z0-9 _-]*\)"
+_COMPLETE_RULE_LABEL_RE = (
+    rf"{_RULE_REFERENCE_RE}(?:\s+{_RULE_SEVERITY_RE}(?:\s+[—-]\s+|\s+\S)|\s+[—-]\s+\S)"
+)
+_REVIEW_TITLE_STOP_RE = re.compile(rf"\s+{_COMPLETE_RULE_LABEL_RE}")
+_REVIEW_RULE_LABEL_RE = re.compile(rf"^{_COMPLETE_RULE_LABEL_RE}")
+_RULE_LABEL_FRAGMENT_RE = re.compile(rf"\s+{_RULE_REFERENCE_RE}\s*(?:\(|[-—])")
 _NON_ALNUM_RE = re.compile(r"[^a-z0-9]+")
+_UNPARSEABLE_THREAD_DECISION = "<unparseable trusted-bot review title>"
+_MIN_REVIEW_TITLE_CHARS = 24
+_MIN_REVIEW_TITLE_TOKENS = 4
 _LEGACY_BOT_ALIASES = frozenset(
     {
         "bot",
@@ -209,10 +219,56 @@ def _normalized_decision(text: str) -> str:
     return " ".join(_NON_ALNUM_RE.sub(" ", text.lower()).split())
 
 
+def _first_display_line(body_text: str) -> str:
+    """Return the first nonblank review line for diagnostic output only."""
+
+    for line in body_text.splitlines():
+        candidate = line.strip()
+        if candidate:
+            return candidate
+    return ""
+
+
+def _has_bounded_decision_evidence(text: str) -> bool:
+    normalized = _normalized_decision(text)
+    return (
+        len(normalized) >= _MIN_REVIEW_TITLE_CHARS
+        and len(normalized.split()) >= _MIN_REVIEW_TITLE_TOKENS
+    )
+
+
+def _bounded_title_root(line: str) -> str:
+    """Return a full review-title root, never an ambiguous label fragment."""
+
+    match = _REVIEW_TITLE_STOP_RE.search(line)
+    if match:
+        root = line[: match.start()].strip()
+    elif _RULE_LABEL_FRAGMENT_RE.search(line):
+        return ""
+    else:
+        root = line.strip()
+    if not _has_bounded_decision_evidence(root):
+        return ""
+    return root
+
+
+def _evidenced_root_decision(body_text: str) -> str:
+    """Return a full title only when its existing rule evidence is adjacent."""
+
+    lines = [line.strip() for line in body_text.splitlines() if line.strip()]
+    for index, line in enumerate(lines):
+        root = _bounded_title_root(line)
+        if not root:
+            continue
+        if _REVIEW_TITLE_STOP_RE.search(line):
+            return root
+        if index + 1 < len(lines) and _REVIEW_RULE_LABEL_RE.match(lines[index + 1]):
+            return root
+    return ""
+
+
 def _thread_root_decision(thread_summary: dict) -> str:
-    snippet = str(thread_summary.get("snippet") or "").strip()
-    title = _REVIEW_TITLE_STOP_RE.split(snippet, 1)[0].strip()
-    return title or snippet
+    return str(thread_summary.get("decision") or "").strip()
 
 
 def canonical_reconciliation_section(body: str) -> str | None:
@@ -259,14 +315,10 @@ def reconciliation_disposition_roots(body: str) -> list[str]:
 def root_decision_matches_thread(root: str, decision: str) -> bool:
     """Return true when a structured disposition names the thread decision."""
 
+    if not _has_bounded_decision_evidence(root) or not _has_bounded_decision_evidence(decision):
+        return False
     if root == decision:
         return True
-    root_tokens = root.split()
-    decision_tokens = decision.split()
-    if len(root) < 24 or len(root_tokens) < 4:
-        return False
-    if len(decision) < 24 or len(decision_tokens) < 4:
-        return False
     return root in decision or decision in root
 
 
@@ -282,6 +334,9 @@ def missing_thread_dispositions(
         decision = _thread_root_decision(summary)
         normalized = _normalized_decision(decision)
         if not normalized:
+            copy = dict(summary)
+            copy["decision"] = _UNPARSEABLE_THREAD_DECISION
+            missing.append(copy)
             continue
         if not any(root_decision_matches_thread(root, normalized) for root in roots):
             copy = dict(summary)
@@ -389,16 +444,21 @@ def bot_review_threads(nodes: Sequence[dict], bot_logins: Sequence[str]) -> list
 def _bot_thread_summary(node: dict, wanted: frozenset[str]) -> dict | None:
     comments = ((node.get("comments") or {}).get("nodes")) or []
     author = ""
+    title = ""
     snippet = ""
     if comments:
         author = (((comments[0] or {}).get("author") or {}).get("login")) or ""
-        snippet = ((comments[0] or {}).get("bodyText") or "").strip().replace("\n", " ")
+        body_text = ((comments[0] or {}).get("bodyText") or "").strip()
+        title = _first_display_line(body_text)
+        snippet = " ".join(body_text.split())
     if author.lower() not in wanted:
         return None
     return {
         "path": node.get("path") or "?",
         "line": node.get("line"),
         "author": author or "?",
+        "title": title,
+        "decision": _evidenced_root_decision(body_text),
         "snippet": (snippet[:120] + "...") if len(snippet) > 120 else snippet,
     }
 
@@ -615,10 +675,17 @@ def evaluate(
             for t in missing_dispositions:
                 loc = t["path"] if t["line"] is None else f"{t['path']}:{t['line']}"
                 messages.append(f"  - [{t['author']}] {loc}: {t['decision']}")
-            messages.append(
-                "Add one fixed-in/waived/not-applicable disposition naming each "
-                "review-thread root decision before merge."
-            )
+            if any(t["decision"] == _UNPARSEABLE_THREAD_DECISION for t in missing_dispositions):
+                messages.append(
+                    "A trusted bot review thread has no normalizable title and cannot be "
+                    "reconciled by a generic disposition; restore or obtain named review "
+                    "evidence before merge."
+                )
+            else:
+                messages.append(
+                    "Add one fixed-in/waived/not-applicable disposition naming each "
+                    "review-thread root decision before merge."
+                )
             return 1, messages
         if messages:
             if all(message.startswith("OK:") for message in messages):
