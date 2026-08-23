@@ -3,6 +3,7 @@ import hashlib
 import itertools
 import logging
 import os
+import re
 import uuid
 from pathlib import Path
 
@@ -21,6 +22,43 @@ def _migration_387_source() -> bytes:
         / "migrations"
         / "387_eom_recurring_invoice_dedup_recovery.sql"
     ).read_bytes()
+
+
+def _migration_386_source() -> bytes:
+    return (
+        Path(__file__).resolve().parents[1]
+        / "atlas_brain"
+        / "storage"
+        / "migrations"
+        / "386_eom_won_loss_nocodb_fence.sql"
+    ).read_bytes()
+
+
+def _migration_390_source() -> bytes:
+    return (
+        Path(__file__).resolve().parents[1]
+        / "atlas_brain"
+        / "storage"
+        / "migrations"
+        / "390_eom_won_loss_direct_sql_fence_recovery.sql"
+    ).read_bytes()
+
+
+def _migration_function_body(source: bytes) -> str:
+    match = re.search(
+        r"AS\s+\$function\$(.*?)\$function\s*\$;",
+        source.decode("utf-8"),
+        re.DOTALL,
+    )
+    assert match is not None
+    return match.group(1)
+
+
+def _rendered_390_function_body(schema_name: str) -> str:
+    """Mirror the active-schema body emitted by migration 390's format call."""
+    return _migration_function_body(_migration_390_source()).replace(
+        "%2$s", f'"{schema_name}"'
+    )
 
 
 def _migration_022b_source() -> bytes:
@@ -1530,6 +1568,152 @@ def _stage_historical_387_mismatch(tmp_path, pool):
     return record
 
 
+def _legacy_386_function_body() -> str:
+    return (
+        _migration_function_body(_migration_386_source())
+        .replace(
+            "IF OLD.business_context_id = 'effingham_maids'",
+            "IF session_user = 'atlas_nocodb'\n"
+            "               AND OLD.business_context_id = 'effingham_maids'",
+        )
+        .replace(
+            "before direct contact mutation",
+            "before NocoDB can change the contact",
+        )
+    )
+
+
+class _ForwardRecoveryTransaction(_RollbackMigrationTransaction):
+    """Extend the in-memory atomic seam to include the function/trigger state."""
+
+    async def __aenter__(self):
+        await super().__aenter__()
+        self.catalog_snapshot = dict(self.pool.won_loss_catalog)
+        return self
+
+    async def __aexit__(self, exc_type, exc, traceback):
+        result = await super().__aexit__(exc_type, exc, traceback)
+        if exc_type is not None:
+            self.pool.won_loss_catalog = self.catalog_snapshot
+        return result
+
+
+class _AsyncpgRecordLike:
+    """Exercise the catalog boundary where asyncpg.Record is not a Mapping."""
+
+    def __init__(self, values):
+        self.values = values
+
+    def __iter__(self):
+        return iter(self.values.items())
+
+
+class _ForwardRecoveryPool(_SerializingPool):
+    """Runner fixture whose catalog transitions only when the 390 SQL succeeds."""
+
+    def __init__(self, *, fail_recovery: bool = False):
+        super().__init__(honor_lock=True)
+        self.fail_recovery = fail_recovery
+        self.recovery_attempts = 0
+        self.won_loss_catalog = {
+            "schema_name": "migration_probe",
+            "contacts_relation_ready": True,
+            "function_ready": True,
+            "function_security_definer": True,
+            "function_proconfig": ["search_path=pg_catalog, migration_probe"],
+            "function_public_execute_revoked": True,
+            "trusted_guard_role_ready": True,
+            "recovered_function_guard_owner_ready": False,
+            "recovered_function_guard_lifecycle_read_ready": False,
+            "function_body": _legacy_386_function_body(),
+            "trigger_ready": True,
+            "trigger_enabled": "O",
+            "trigger_is_before_row_update_delete": True,
+            "trigger_has_no_when_clause": True,
+            "trigger_update_columns": ["status"],
+        }
+
+    async def fetch(self, query, *args):
+        from atlas_brain.storage.migrations.reconciliation import (
+            MIGRATION_386_WON_LOSS_FENCE_FORWARD_RECOVERY,
+        )
+
+        record = MIGRATION_386_WON_LOSS_FENCE_FORWARD_RECOVERY
+        normalized = " ".join(query.split())
+        if normalized == (
+            "SELECT version, content_sha256, applied_at FROM schema_migrations "
+            "WHERE name = $1 LIMIT 2"
+        ):
+            assert args == (record.migration_name,)
+            return [{
+                "version": version,
+                "content_sha256": digest,
+                "applied_at": record.observed_applied_at,
+            } for version, name, digest in self.records if name == record.migration_name]
+        if normalized == (
+            "SELECT version, content_sha256 FROM schema_migrations "
+            "WHERE name = $1 LIMIT 2"
+        ):
+            assert args == (record.recovery_migration_name,)
+            return [{
+                "version": version,
+                "content_sha256": digest,
+            } for version, name, digest in self.records if name == record.recovery_migration_name]
+        return await super().fetch(query, *args)
+
+    async def fetchrow(self, query, *args):
+        if "reject_nocodb_eom_won_loss_mutation" in query:
+            assert args == ()
+            assert "pg_catalog.pg_trigger AS trigger_state" in query
+            assert "trigger_state.tgqual" in query
+            assert "pg_catalog.pg_roles AS guard_role" in query
+            assert "eom_lead_lifecycle_events" in query
+            return _AsyncpgRecordLike(self.won_loss_catalog)
+        raise AssertionError(f"Unexpected fetchrow query: {query}")
+
+    async def execute(self, query, *args):
+        if "Forward-only recovery for targets" in query:
+            self.recovery_attempts += 1
+            if self.fail_recovery:
+                raise RuntimeError("injected 390 recovery failure")
+            self.won_loss_catalog.update({
+                "function_body": _rendered_390_function_body(
+                    self.won_loss_catalog["schema_name"]
+                ),
+                "function_proconfig": [
+                    "search_path=pg_catalog, migration_probe, pg_temp"
+                ],
+                # PostgreSQL exposes tgattr in physical column order rather
+                # than the CREATE TRIGGER declaration order.
+                "trigger_update_columns": [
+                    "business_context_id",
+                    "contact_type",
+                    "lead_stage",
+                    "status",
+                ],
+                "recovered_function_guard_owner_ready": True,
+                "recovered_function_guard_lifecycle_read_ready": True,
+            })
+        return await super().execute(query, *args)
+
+    def transaction(self):
+        return _ForwardRecoveryTransaction(self)
+
+
+def _stage_historical_386_forward_recovery(tmp_path, pool):
+    from atlas_brain.storage.migrations.reconciliation import (
+        MIGRATION_386_WON_LOSS_FENCE_FORWARD_RECOVERY,
+    )
+
+    record = MIGRATION_386_WON_LOSS_FENCE_FORWARD_RECOVERY
+    (tmp_path / f"{record.migration_name}.sql").write_bytes(_migration_386_source())
+    (tmp_path / f"{record.recovery_migration_name}.sql").write_bytes(
+        _migration_390_source()
+    )
+    pool.records.append((386, record.migration_name, record.historical_ledger_sha256))
+    return record
+
+
 def _stage_historical_382_missing_source(pool):
     from atlas_brain.storage.migrations.reconciliation import (
         MIGRATION_382_EOM_PUBLIC_ONBOARDING_TOKENS_RECONCILIATION,
@@ -1629,6 +1813,267 @@ async def test_unresolved_content_evidence_blocks_pending_migration_before_sql(
     assert pool.applied_sql == [], case
     assert pool.records == [(900, "900_recorded", "f" * 64)], case
     assert pool.inserted_with_digest == [], case
+
+
+@pytest.mark.asyncio
+async def test_386_forward_recovery_runs_before_a_lower_numbered_pending_migration(
+    tmp_path,
+):
+    """The named prelude is an explicit dependency edge, not numeric replay."""
+    from atlas_brain.storage.migrations import run_migrations
+
+    pool = _ForwardRecoveryPool()
+    record = _stage_historical_386_forward_recovery(tmp_path, pool)
+    (tmp_path / "389_later_pending.sql").write_text("SELECT 389")
+
+    await run_migrations(
+        pool,
+        migrations_dir=tmp_path,
+        only={record.recovery_migration_name, "389_later_pending"},
+    )
+
+    assert "Forward-only recovery for targets" in pool.applied_sql[0]
+    assert pool.applied_sql[1] == "SELECT 389"
+    assert pool.inserted_with_digest == [
+        (
+            record.recovery_migration_version,
+            record.recovery_migration_name,
+            record.recovery_packaged_sha256,
+        ),
+        (389, "389_later_pending", hashlib.sha256(b"SELECT 389").hexdigest()),
+    ]
+    assert pool.atomic_transactions == 1
+    assert pool.atomic_transaction_errors == 0
+
+
+@pytest.mark.asyncio
+async def test_386_forward_recovery_is_reserved_when_selected_without_weak_state(
+    tmp_path,
+    caplog,
+):
+    """A requested recovery file is inert unless its attested precondition holds."""
+    from atlas_brain.storage.migrations import run_migrations
+    from atlas_brain.storage.migrations.reconciliation import (
+        MIGRATION_386_WON_LOSS_FENCE_FORWARD_RECOVERY,
+    )
+
+    record = MIGRATION_386_WON_LOSS_FENCE_FORWARD_RECOVERY
+    ordinary_source = "SELECT 389"
+    (tmp_path / f"{record.recovery_migration_name}.sql").write_bytes(
+        _migration_390_source()
+    )
+    (tmp_path / "389_later_pending.sql").write_text(ordinary_source)
+    pool = _SerializingPool(honor_lock=True)
+    caplog.set_level(logging.INFO, logger="atlas.storage.migrations")
+
+    await run_migrations(
+        pool,
+        migrations_dir=tmp_path,
+        only={record.recovery_migration_name, "389_later_pending"},
+    )
+
+    assert pool.applied_sql == [ordinary_source]
+    assert pool.inserted_with_digest == [
+        (389, "389_later_pending", hashlib.sha256(ordinary_source.encode()).hexdigest())
+    ]
+    assert all(name != record.recovery_migration_name for _, name, _ in pool.records)
+    assert "reserved forward recovery migration" in caplog.text
+
+
+@pytest.mark.asyncio
+async def test_386_forward_recovery_stays_closed_when_only_omits_recovery(tmp_path):
+    from atlas_brain.storage.migrations import (
+        PendingMigrationContentIntegrityError,
+        run_migrations,
+    )
+
+    pool = _ForwardRecoveryPool()
+    _stage_historical_386_forward_recovery(tmp_path, pool)
+    (tmp_path / "389_later_pending.sql").write_text("SELECT 389")
+
+    with pytest.raises(PendingMigrationContentIntegrityError, match="mismatched="):
+        await run_migrations(
+            pool,
+            migrations_dir=tmp_path,
+            only={"389_later_pending"},
+        )
+
+    assert pool.applied_sql == []
+    assert pool.inserted_with_digest == []
+
+
+@pytest.mark.asyncio
+async def test_386_forward_recovery_stays_closed_with_another_unresolved_record(
+    tmp_path,
+):
+    from atlas_brain.storage.migrations import (
+        PendingMigrationContentIntegrityError,
+        run_migrations,
+    )
+
+    pool = _ForwardRecoveryPool()
+    record = _stage_historical_386_forward_recovery(tmp_path, pool)
+    pool.records.append((900, "900_other_recorded", "f" * 64))
+    (tmp_path / "900_other_recorded.sql").write_text("SELECT 900")
+    (tmp_path / "389_later_pending.sql").write_text("SELECT 389")
+
+    with pytest.raises(PendingMigrationContentIntegrityError) as exc_info:
+        await run_migrations(
+            pool,
+            migrations_dir=tmp_path,
+            only={record.recovery_migration_name, "389_later_pending"},
+        )
+
+    assert "mismatched=386_eom_won_loss_nocodb_fence,900_other_recorded" in str(
+        exc_info.value
+    )
+    assert pool.applied_sql == []
+    assert pool.inserted_with_digest == []
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "case",
+    ("altered catalog", "wrong historical version", "recorded weak recovery"),
+)
+async def test_386_forward_recovery_requires_the_exact_unrecovered_state(
+    tmp_path,
+    case,
+):
+    from atlas_brain.storage.migrations import (
+        PendingMigrationContentIntegrityError,
+        run_migrations,
+    )
+
+    pool = _ForwardRecoveryPool()
+    record = _stage_historical_386_forward_recovery(tmp_path, pool)
+    if case == "altered catalog":
+        pool.won_loss_catalog["trigger_has_no_when_clause"] = False
+    elif case == "wrong historical version":
+        pool.records[0] = (
+            record.historical_migration_version - 1,
+            record.migration_name,
+            record.historical_ledger_sha256,
+        )
+    else:
+        pool.records.append((
+            record.recovery_migration_version,
+            record.recovery_migration_name,
+            record.recovery_packaged_sha256,
+        ))
+    (tmp_path / "389_later_pending.sql").write_text("SELECT 389")
+
+    with pytest.raises(PendingMigrationContentIntegrityError, match="mismatched="):
+        await run_migrations(
+            pool,
+            migrations_dir=tmp_path,
+            only={record.recovery_migration_name, "389_later_pending"},
+        )
+
+    assert pool.applied_sql == []
+    assert pool.inserted_with_digest == []
+
+
+@pytest.mark.asyncio
+async def test_386_forward_recovery_failure_rolls_back_then_retry_applies_once(
+    tmp_path,
+):
+    from atlas_brain.storage.migrations import run_migrations
+
+    pool = _ForwardRecoveryPool(fail_recovery=True)
+    record = _stage_historical_386_forward_recovery(tmp_path, pool)
+    (tmp_path / "389_later_pending.sql").write_text("SELECT 389")
+    requested = {record.recovery_migration_name, "389_later_pending"}
+
+    with pytest.raises(RuntimeError, match="injected 390 recovery failure"):
+        await run_migrations(pool, migrations_dir=tmp_path, only=requested)
+
+    assert pool.atomic_transactions == 1
+    assert pool.atomic_transaction_errors == 1
+    assert pool.applied_sql == []
+    assert pool.inserted_with_digest == []
+    assert pool.won_loss_catalog["function_body"] == _legacy_386_function_body()
+
+    pool.fail_recovery = False
+    await run_migrations(pool, migrations_dir=tmp_path, only=requested)
+
+    assert pool.recovery_attempts == 2
+    assert [record[1] for record in pool.inserted_with_digest] == [
+        record.recovery_migration_name,
+        "389_later_pending",
+    ]
+    assert pool.atomic_transactions == 2
+    assert pool.atomic_transaction_errors == 1
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("contract_field", "unsafe_value"),
+    (
+        ("trusted_guard_role_ready", False),
+        ("recovered_function_guard_owner_ready", False),
+        ("recovered_function_guard_lifecycle_read_ready", False),
+        ("function_proconfig", ["search_path=pg_catalog, migration_probe"]),
+        (
+            "function_body",
+            _migration_function_body(_migration_386_source()),
+        ),
+        (
+            "trigger_update_columns",
+            ["business_context_id", "contact_type", "status"],
+        ),
+        (
+            "trigger_update_columns",
+            ["contact_type", "lead_stage", "status"],
+        ),
+    ),
+)
+async def test_386_recorded_recovery_requires_the_complete_fence_contract(
+    tmp_path,
+    contract_field,
+    unsafe_value,
+):
+    """A 390 receipt never attests a mutable or bypassable recovered fence."""
+    from atlas_brain.storage.migrations import (
+        PendingMigrationContentIntegrityError,
+        run_migrations,
+    )
+
+    pool = _ForwardRecoveryPool()
+    record = _stage_historical_386_forward_recovery(tmp_path, pool)
+    pool.records.append((
+        record.recovery_migration_version,
+        record.recovery_migration_name,
+        record.recovery_packaged_sha256,
+    ))
+    pool.won_loss_catalog.update({
+        "function_body": _rendered_390_function_body(
+            pool.won_loss_catalog["schema_name"]
+        ),
+        "function_proconfig": [
+            "search_path=pg_catalog, migration_probe, pg_temp"
+        ],
+        "trigger_update_columns": [
+            "business_context_id",
+            "contact_type",
+            "lead_stage",
+            "status",
+        ],
+        "recovered_function_guard_owner_ready": True,
+        "recovered_function_guard_lifecycle_read_ready": True,
+    })
+    pool.won_loss_catalog[contract_field] = unsafe_value
+    (tmp_path / "389_later_pending.sql").write_text("SELECT 389")
+
+    with pytest.raises(PendingMigrationContentIntegrityError, match="mismatched="):
+        await run_migrations(
+            pool,
+            migrations_dir=tmp_path,
+            only={record.recovery_migration_name, "389_later_pending"},
+        )
+
+    assert pool.applied_sql == []
+    assert pool.inserted_with_digest == []
 
 
 @pytest.mark.asyncio

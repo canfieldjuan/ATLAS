@@ -6841,19 +6841,68 @@ async def test_won_lead_loss_fences_durable_cancellation_from_generic_contact_st
         await conn.close()
 
 
+def _legacy_386_function_body() -> str:
+    source = (MIGRATIONS / "386_eom_won_loss_nocodb_fence.sql").read_text()
+    marker = "AS $function$"
+    body_start = source.index(marker) + len(marker)
+    body_end = source.index("$function$;", body_start)
+    return (
+        source[body_start:body_end]
+        .replace(
+            "IF OLD.business_context_id = 'effingham_maids'",
+            "IF session_user = 'atlas_nocodb'\n"
+            "               AND OLD.business_context_id = 'effingham_maids'",
+        )
+        .replace(
+            "before direct contact mutation",
+            "before NocoDB can change the contact",
+        )
+    )
+
+
+async def _install_legacy_386_nocodb_fence(conn, schema: str) -> None:
+    schema_ident = _quote_ident(schema)
+    function_ident = f"{schema_ident}.reject_nocodb_eom_won_loss_mutation"
+    await conn.execute(
+        "CREATE OR REPLACE FUNCTION "
+        f"{function_ident}() RETURNS TRIGGER LANGUAGE plpgsql SECURITY DEFINER "
+        f"SET search_path = pg_catalog, {schema_ident} AS $function$"
+        f"{_legacy_386_function_body()}$function$;"
+    )
+    await conn.execute(
+        "DROP TRIGGER IF EXISTS trg_reject_nocodb_eom_won_loss_mutation "
+        f"ON {schema_ident}.contacts"
+    )
+    await conn.execute(
+        "CREATE TRIGGER trg_reject_nocodb_eom_won_loss_mutation "
+        "BEFORE UPDATE OF status OR DELETE ON "
+        f"{schema_ident}.contacts FOR EACH ROW EXECUTE FUNCTION {function_ident}()"
+    )
+    await conn.execute(f"REVOKE ALL ON FUNCTION {function_ident}() FROM PUBLIC")
+
+
 @pytest.mark.asyncio
-async def test_nocodb_cannot_mutate_won_lead_with_unsettled_cancellation():
-    """The direct CRM login cannot bypass a prepared won-loss cancellation."""
+async def test_selected_390_does_not_run_without_the_weak_386_precondition():
+    """A current fence must not receive the target-specific recovery as ordinary SQL."""
 
     from atlas_brain.storage.migrations import run_migrations
+    from atlas_brain.storage.migrations.reconciliation import (
+        MIGRATION_386_WON_LOSS_FENCE_FORWARD_RECOVERY,
+    )
 
+    record = MIGRATION_386_WON_LOSS_FENCE_FORWARD_RECOVERY
     database_url = _database_url_or_skip()
-    schema = f"atlas_eom_won_loss_nocodb_fence_{uuid.uuid4().hex}"
+    schema = f"atlas_eom_won_loss_reserved_recovery_{uuid.uuid4().hex}"
     conn = await asyncpg.connect(database_url)
-    nocodb_conn = None
-    direct_conn = None
     try:
         await _prepare_schema(conn, schema)
+        await _provision_handoff_guard(conn)
+        owner_before = await conn.fetchval(
+            "SELECT pg_catalog.pg_get_userbyid(proowner) "
+            "FROM pg_catalog.pg_proc "
+            "WHERE oid = $1::pg_catalog.regprocedure",
+            f"{schema}.reject_nocodb_eom_won_loss_mutation()",
+        )
 
         class _MigrationPool:
             async def acquire(self):
@@ -6865,15 +6914,123 @@ async def test_nocodb_cannot_mutate_won_lead_with_unsettled_cancellation():
         await run_migrations(
             _MigrationPool(),
             migrations_dir=MIGRATIONS,
-            only={"386_eom_won_loss_nocodb_fence"},
+            only={record.recovery_migration_name},
+        )
+
+        assert not await conn.fetchval(
+            "SELECT EXISTS (SELECT 1 FROM schema_migrations WHERE name = $1)",
+            record.recovery_migration_name,
+        )
+        assert await conn.fetchval(
+            "SELECT pg_catalog.pg_get_userbyid(proowner) "
+            "FROM pg_catalog.pg_proc "
+            "WHERE oid = $1::pg_catalog.regprocedure",
+            f"{schema}.reject_nocodb_eom_won_loss_mutation()",
+        ) == owner_before
+    finally:
+        await conn.execute(f'DROP SCHEMA IF EXISTS "{schema}" CASCADE')
+        await conn.close()
+
+
+@pytest.mark.asyncio
+async def test_nocodb_cannot_mutate_won_lead_with_unsettled_cancellation():
+    """The direct CRM login cannot bypass a prepared won-loss cancellation."""
+
+    from atlas_brain.storage.migrations import run_migrations
+    from atlas_brain.storage.migrations.reconciliation import (
+        MIGRATION_386_WON_LOSS_FENCE_FORWARD_RECOVERY,
+    )
+
+    record = MIGRATION_386_WON_LOSS_FENCE_FORWARD_RECOVERY
+    database_url = _database_url_or_skip()
+    schema = f"atlas_eom_won_loss_nocodb_fence_{uuid.uuid4().hex}"
+    conn = await asyncpg.connect(database_url)
+    nocodb_conn = None
+    direct_conn = None
+    try:
+        await _prepare_schema(conn, schema)
+        await _install_legacy_386_nocodb_fence(conn, schema)
+        function_ident = (
+            f'{_quote_ident(schema)}.reject_nocodb_eom_won_loss_mutation'
+        )
+        # The production-shaped legacy function is owned by a LOGIN role. The
+        # recovery must move it to the no-login guard rather than only replace
+        # its body, otherwise that login can disable a SECURITY DEFINER fence.
+        await conn.execute(
+            f"ALTER FUNCTION {function_ident}() OWNER TO atlas_nocodb"
+        )
+        # The regular CRM login cannot silently acquire the guard's ownership
+        # powers. The migration fails before replacing the function, trigger,
+        # grant, or ledger receipt unless a database administrator runs it.
+        await conn.execute("SET ROLE atlas_nocodb")
+        try:
+            with pytest.raises(
+                asyncpg.exceptions.RaiseError,
+                match="database administrator must run 390_eom_won_loss_direct_sql_fence_recovery",
+            ):
+                await conn.execute(
+                    (MIGRATIONS / "390_eom_won_loss_direct_sql_fence_recovery.sql").read_text()
+                )
+        finally:
+            await conn.execute("RESET ROLE")
+        assert await conn.fetchval(
+            "SELECT pg_catalog.pg_get_userbyid(proowner) = 'atlas_nocodb' "
+            "FROM pg_catalog.pg_proc "
+            "WHERE oid = $1::pg_catalog.regprocedure",
+            f"{schema}.reject_nocodb_eom_won_loss_mutation()",
+        )
+        await conn.execute(
+            "ALTER TABLE schema_migrations "
+            "ADD COLUMN IF NOT EXISTS content_sha256 VARCHAR(64)"
+        )
+        await conn.execute(
+            """
+            INSERT INTO schema_migrations (version, name, content_sha256, applied_at)
+            VALUES ($1, $2, $3, $4)
+            """,
+            386,
+            record.migration_name,
+            record.historical_ledger_sha256,
+            record.observed_applied_at,
+        )
+
+        class _MigrationPool:
+            async def acquire(self):
+                return conn
+
+            async def release(self, released) -> None:
+                assert released is conn
+
+        await run_migrations(
+            _MigrationPool(),
+            migrations_dir=MIGRATIONS,
+            only={record.recovery_migration_name},
         )
         assert await conn.fetchval(
             "SELECT EXISTS (SELECT 1 FROM schema_migrations WHERE name = $1)",
-            "386_eom_won_loss_nocodb_fence",
+            record.recovery_migration_name,
         )
+        assert await conn.fetchval(
+            "SELECT pg_catalog.pg_get_userbyid(proowner) "
+            "= 'atlas_eom_handoff_owner' "
+            "FROM pg_catalog.pg_proc "
+            "WHERE oid = $1::pg_catalog.regprocedure",
+            f"{schema}.reject_nocodb_eom_won_loss_mutation()",
+        )
+        assert await conn.fetchval(
+            "SELECT pg_catalog.has_table_privilege("
+            "'atlas_eom_handoff_owner', $1::pg_catalog.regclass, 'SELECT')",
+            f"{schema}.eom_lead_lifecycle_events",
+        )
+        active_schema = await conn.fetchval("SELECT pg_catalog.current_schema()")
+        assert await conn.fetchval(
+            "SELECT proconfig FROM pg_catalog.pg_proc "
+            "WHERE oid = $1::pg_catalog.regprocedure",
+            f"{schema}.reject_nocodb_eom_won_loss_mutation()",
+        ) == [f"search_path=pg_catalog, {active_schema}, pg_temp"]
 
         provider = DatabaseCRMProvider(pool=conn)
-        contact_id, _ = await _book_first_clean_draft(conn, provider)
+        contact_id, draft_id = await _book_first_clean_draft(conn, provider)
         command = EOMLeadLost(
             contact_id=str(contact_id),
             reason_code="no_response",
@@ -6907,6 +7064,10 @@ async def test_nocodb_cannot_mutate_won_lead_with_unsettled_cancellation():
             f"SET search_path TO {_quote_ident(schema)}, public"
         )
         assert await nocodb_conn.fetchval("SELECT session_user") == "atlas_nocodb"
+        with pytest.raises(asyncpg.exceptions.InsufficientPrivilegeError):
+            await nocodb_conn.execute(
+                f"ALTER FUNCTION {function_ident}() OWNER TO atlas_nocodb"
+            )
         direct_conn = await asyncpg.connect(database_url)
         await direct_conn.execute(f"SET search_path TO {_quote_ident(schema)}, public")
         assert await direct_conn.fetchval("SELECT session_user") != "atlas_nocodb"
@@ -6944,6 +7105,54 @@ async def test_nocodb_cannot_mutate_won_lead_with_unsettled_cancellation():
                 "UPDATE contacts SET contact_type = 'customer' WHERE id = $1",
                 contact_id,
             )
+        # A direct writer may create a same-named temp relation and grant the
+        # guard SELECT. The SECURITY DEFINER function must still resolve the
+        # trusted schema relation, where the unsettled cancellation exists.
+        await direct_conn.execute(
+            "CREATE TEMPORARY TABLE eom_lead_lifecycle_events ("
+            "contact_id UUID, event_type VARCHAR(128), operation_key VARCHAR(255)"
+            ")"
+        )
+        await direct_conn.execute(
+            "GRANT SELECT ON TABLE eom_lead_lifecycle_events "
+            "TO atlas_eom_handoff_owner"
+        )
+        with pytest.raises(
+            asyncpg.exceptions.RaiseError,
+            match="cancellation requires reconciliation",
+        ):
+            await direct_conn.execute(
+                "UPDATE contacts SET status = 'inactive' WHERE id = $1", contact_id
+            )
+        # The event set is the full OLD eligibility predicate. Each attempted
+        # first leg of a two-step bypass is rejected before a later protected
+        # status/contact-type mutation can see an ineligible OLD row.
+        with pytest.raises(
+            asyncpg.exceptions.RaiseError,
+            match="cancellation requires reconciliation",
+        ):
+            await direct_conn.execute(
+                "UPDATE contacts SET lead_stage = 'lost' WHERE id = $1", contact_id
+            )
+        with pytest.raises(
+            asyncpg.exceptions.RaiseError,
+            match="cancellation requires reconciliation",
+        ):
+            await direct_conn.execute(
+                "UPDATE contacts SET business_context_id = 'other' WHERE id = $1",
+                contact_id,
+            )
+        unchanged_contact = await conn.fetchrow(
+            "SELECT business_context_id, contact_type, lead_stage, status "
+            "FROM contacts WHERE id = $1",
+            contact_id,
+        )
+        assert dict(unchanged_contact) == {
+            "business_context_id": "effingham_maids",
+            "contact_type": "lead",
+            "lead_stage": "won",
+            "status": "active",
+        }
         assert not loss_task.done()
 
         calendar.release.set()
@@ -6990,6 +7199,48 @@ async def test_nocodb_cannot_mutate_won_lead_with_unsettled_cancellation():
             "SELECT notes FROM contacts WHERE id = $1", contact_id
         ) == "ordinary NocoDB edit"
 
+        # A failure after completion evidence is staged must roll that evidence
+        # back with the protected contact transition. The retry then commits one
+        # complete/lost pair rather than treating a partial transaction as done.
+        await conn.execute(
+            """
+            CREATE FUNCTION reject_test_won_loss_completion()
+            RETURNS TRIGGER LANGUAGE plpgsql AS $function$
+            BEGIN
+                RAISE EXCEPTION 'injected won-loss completion failure';
+            END;
+            $function$;
+            """
+        )
+        await conn.execute(
+            """
+            CREATE TRIGGER trg_test_reject_won_loss_completion
+            BEFORE UPDATE OF lead_stage ON contacts
+            FOR EACH ROW EXECUTE FUNCTION reject_test_won_loss_completion()
+            """
+        )
+        with pytest.raises(
+            asyncpg.exceptions.RaiseError,
+            match="injected won-loss completion failure",
+        ):
+            await mark_eom_lead_lost_with_won_teardown(provider, calendar, command)
+        assert await conn.fetchval(
+            "SELECT COUNT(*) FROM eom_lead_lifecycle_events "
+            "WHERE contact_id = $1 AND event_type = 'first_clean_cancelled'",
+            contact_id,
+        ) == 0
+        assert await conn.fetchval(
+            "SELECT lead_stage FROM contacts WHERE id = $1", contact_id
+        ) == "won"
+        assert await conn.fetchval(
+            "SELECT status FROM eom_onboarding_email_drafts WHERE id = $1::uuid",
+            draft_id,
+        ) == "pending"
+        await conn.execute(
+            "DROP TRIGGER trg_test_reject_won_loss_completion ON contacts"
+        )
+        await conn.execute("DROP FUNCTION reject_test_won_loss_completion()")
+
         completed = await mark_eom_lead_lost_with_won_teardown(
             provider, calendar, command
         )
@@ -6997,6 +7248,16 @@ async def test_nocodb_cannot_mutate_won_lead_with_unsettled_cancellation():
         assert await conn.fetchval(
             "SELECT lead_stage FROM contacts WHERE id = $1", contact_id
         ) == "lost"
+        assert await conn.fetchval(
+            "SELECT COUNT(*) FROM eom_lead_lifecycle_events "
+            "WHERE contact_id = $1 AND event_type = 'first_clean_cancelled'",
+            contact_id,
+        ) == 1
+        assert await conn.fetchval(
+            "SELECT COUNT(*) FROM eom_lead_lifecycle_events "
+            "WHERE contact_id = $1 AND event_type = 'lead_lost'",
+            contact_id,
+        ) == 1
         await direct_conn.execute(
             "UPDATE contacts SET status = 'inactive' WHERE id = $1", contact_id
         )

@@ -40,6 +40,34 @@ class HistoricalMigrationReconciliation:
 
 
 @dataclass(frozen=True)
+class HistoricalMigrationForwardRecoveryReconciliation:
+    """Immutable evidence for one target that needs a named forward recovery.
+
+    Unlike an ordinary historical reconciliation, the exact old catalog state
+    is unsafe to admit. It is a narrow precondition for one additive migration,
+    and becomes attested only after that migration's independent ledger receipt
+    and stronger catalog state both exist.
+    """
+
+    reconciliation_id: str
+    migration_name: str
+    historical_migration_version: int
+    historical_ledger_sha256: str
+    final_packaged_sha256: str
+    observed_applied_at: datetime
+    legacy_function_body_sha256: str
+    recovered_function_body_template_sha256: str
+    recovery_migration_name: str
+    recovery_migration_version: int
+    recovery_packaged_sha256: str
+
+    @property
+    def source_verification(self) -> str:
+        """Catalog recovery never changes the historical source-evidence limit."""
+        return HISTORICAL_SOURCE_UNAVAILABLE
+
+
+@dataclass(frozen=True)
 class HistoricalMissingSourceReconciliation:
     """Reviewed facts for one legacy migration whose source bytes are absent."""
 
@@ -141,6 +169,68 @@ class MigrationReconciliationAttestation:
             "recurring_schema_ready": self.recurring_schema_ready,
             "zero_active_null_period_recurring_rows": (
                 self.zero_active_null_period_recurring_rows
+            ),
+            "status": self.status,
+        }
+
+
+@dataclass(frozen=True)
+class ForwardRecoveryMigrationReconciliationAttestation:
+    """Read-only state for the one 386 forward-only recovery route."""
+
+    reconciliation_id: str
+    migration_name: str
+    historical_receipt_ready: bool
+    recovery_source_ready: bool
+    no_recovery_ledger_row: bool
+    recovery_receipt_ready: bool
+    trusted_guard_role_ready: bool
+    recovered_function_guard_owner_ready: bool
+    recovered_function_guard_lifecycle_read_ready: bool
+    legacy_catalog_ready: bool
+    recovered_catalog_ready: bool
+
+    @property
+    def source_verification(self) -> str:
+        """Recovery evidence still cannot recover the original source bytes."""
+        return HISTORICAL_SOURCE_UNAVAILABLE
+
+    @property
+    def status(self) -> str:
+        if all((
+            self.historical_receipt_ready,
+            self.recovery_source_ready,
+            self.legacy_catalog_ready,
+            self.no_recovery_ledger_row,
+        )):
+            return "recovery_required"
+        if all((
+            self.historical_receipt_ready,
+            self.recovery_source_ready,
+            self.recovered_catalog_ready,
+            self.recovery_receipt_ready,
+        )):
+            return "attested"
+        return "not_attested"
+
+    def as_payload(self) -> dict[str, object]:
+        """Expose catalog facts and state without contact or event rows."""
+        return {
+            "reconciliation_id": self.reconciliation_id,
+            "migration_name": self.migration_name,
+            "source_verification": self.source_verification,
+            "historical_receipt_ready": self.historical_receipt_ready,
+            "recovery_source_ready": self.recovery_source_ready,
+            "no_recovery_ledger_row": self.no_recovery_ledger_row,
+            "legacy_catalog_ready": self.legacy_catalog_ready,
+            "recovered_catalog_ready": self.recovered_catalog_ready,
+            "recovery_receipt_ready": self.recovery_receipt_ready,
+            "trusted_guard_role_ready": self.trusted_guard_role_ready,
+            "recovered_function_guard_owner_ready": (
+                self.recovered_function_guard_owner_ready
+            ),
+            "recovered_function_guard_lifecycle_read_ready": (
+                self.recovered_function_guard_lifecycle_read_ready
             ),
             "status": self.status,
         }
@@ -476,6 +566,50 @@ class B2BWatchlistAlertEventsMissingSourceMigrationReconciliationAttestation:
         }
 
 
+MIGRATION_386_WON_LOSS_FENCE_FORWARD_RECOVERY = (
+    HistoricalMigrationForwardRecoveryReconciliation(
+        reconciliation_id="eom-migration-386-won-loss-direct-sql-fence-forward-recovery",
+        migration_name="386_eom_won_loss_nocodb_fence",
+        # The canonical target recorded this original NocoDB-only source before
+        # the packaged migration was strengthened in place. Retain its exact
+        # ledger receipt and timestamp; do not rewrite either historical fact.
+        historical_migration_version=386,
+        historical_ledger_sha256=(
+            "2055264e1a819b968935bc901aee0175d99ed1ec15465a1203a58a2cf7aa40ea"
+        ),
+        final_packaged_sha256=(
+            "3bcef3e3a6b5564bd0f1f0c38dfbe38e4f65a9c03d27afd242b317902042c982"
+        ),
+        observed_applied_at=datetime(
+            2026,
+            8,
+            20,
+            19,
+            5,
+            51,
+            230_103,
+            tzinfo=timezone.utc,
+        ),
+        legacy_function_body_sha256=(
+            "40ec9678638905a797cc62cb58aa1c43c354d10c3de14cbda543b0dd6d8258c4"
+        ),
+        recovered_function_body_template_sha256=(
+            "f482b2af7e028c058f83dc1288d6c05b04dcaf377dc507392d4a8ca04c58cf1a"
+        ),
+        recovery_migration_name="390_eom_won_loss_direct_sql_fence_recovery",
+        recovery_migration_version=390,
+        recovery_packaged_sha256=(
+            "e65d61e16cfea9974df6b765522459d7ddd7e50332346914a9d0a58ca6e8f6d0"
+        ),
+    )
+)
+
+
+_RECOVERED_386_TRIGGER_UPDATE_COLUMNS = frozenset(
+    {"business_context_id", "contact_type", "lead_stage", "status"}
+)
+
+
 MIGRATION_387_RECONCILIATION = HistoricalMigrationReconciliation(
     reconciliation_id="eom-migration-387-recurring-invoice-dedup-recovery",
     migration_name="387_eom_recurring_invoice_dedup_recovery",
@@ -615,7 +749,13 @@ MIGRATION_022B_PRESENCE_UNKNOWN_COUNT_RECONCILIATION = (
 )
 
 
-_HISTORICAL_MISMATCH_RECONCILIATIONS = (MIGRATION_387_RECONCILIATION,)
+_HISTORICAL_FORWARD_RECOVERY_RECONCILIATIONS = (
+    MIGRATION_386_WON_LOSS_FENCE_FORWARD_RECOVERY,
+)
+_HISTORICAL_MISMATCH_RECONCILIATIONS = (
+    *_HISTORICAL_FORWARD_RECOVERY_RECONCILIATIONS,
+    MIGRATION_387_RECONCILIATION,
+)
 _HISTORICAL_MISSING_SOURCE_RECONCILIATIONS = (
     MIGRATION_382_EOM_PUBLIC_ONBOARDING_TOKENS_RECONCILIATION,
     MIGRATION_067_B2B_CAMPAIGN_PARTNER_RECONCILIATION,
@@ -623,6 +763,15 @@ _HISTORICAL_MISSING_SOURCE_RECONCILIATIONS = (
     MIGRATION_272_B2B_WATCHLIST_ALERT_EVENTS_RECONCILIATION,
     MIGRATION_022B_PRESENCE_UNKNOWN_COUNT_RECONCILIATION,
 )
+
+
+def historical_forward_recovery_migration_names() -> frozenset[str]:
+    """Return migration stems reserved for attested recovery preludes only."""
+
+    return frozenset(
+        record.recovery_migration_name
+        for record in _HISTORICAL_FORWARD_RECOVERY_RECONCILIATIONS
+    )
 
 
 _PRESENCE_UNKNOWN_COUNT_COLUMN = ("integer", "YES", "0")
@@ -971,6 +1120,61 @@ def _packaged_migration_digest(
         return None
 
 
+_PLPGSQL_FUNCTION_BODY_RE = re.compile(
+    r"AS\s+\$function\$(.*?)\$function\s*\$;",
+    re.DOTALL,
+)
+
+
+def _packaged_migration_function_body(
+    migration_files: Collection[Path],
+    migration_name: str,
+) -> str | None:
+    """Return the named packaged PL/pgSQL body without inventing source facts."""
+    migration_file = next(
+        (path for path in migration_files if path.stem == migration_name),
+        None,
+    )
+    if migration_file is None:
+        return None
+    try:
+        source = migration_file.read_text(encoding="utf-8")
+    except OSError:
+        return None
+    match = _PLPGSQL_FUNCTION_BODY_RE.search(source)
+    return None if match is None else match.group(1)
+
+
+def _packaged_migration_function_body_sha256(
+    migration_files: Collection[Path],
+    migration_name: str,
+) -> str | None:
+    """Return the exact named PL/pgSQL body digest from packaged source."""
+    function_body = _packaged_migration_function_body(migration_files, migration_name)
+    if function_body is None:
+        return None
+    return hashlib.sha256(function_body.encode("utf-8")).hexdigest()
+
+
+def _quoted_sql_identifier(identifier: str) -> str:
+    """Return the forced identifier quoting used by migration 390's body."""
+    return '"' + identifier.replace('"', '""') + '"'
+
+
+def _rendered_packaged_migration_function_body_sha256(
+    migration_files: Collection[Path],
+    migration_name: str,
+    *,
+    schema_name: str,
+) -> str | None:
+    """Digest a package's schema-bound PL/pgSQL body exactly as 390 renders it."""
+    function_body = _packaged_migration_function_body(migration_files, migration_name)
+    if function_body is None:
+        return None
+    rendered_body = function_body.replace("%2$s", _quoted_sql_identifier(schema_name))
+    return hashlib.sha256(rendered_body.encode("utf-8")).hexdigest()
+
+
 def _normalize_utc(value: object) -> datetime | None:
     """Accept only timezone-aware ledger timestamps as provenance evidence."""
     if not isinstance(value, datetime) or value.tzinfo is None:
@@ -1082,6 +1286,22 @@ def _catalog_column_names(value: object) -> tuple[str, ...]:
     if value is None:
         return ()
     return tuple(str(name) for name in value)
+
+
+def _catalog_text_values(value: object) -> tuple[str, ...]:
+    """Return a PostgreSQL text array as an immutable exact-value tuple."""
+    if value is None:
+        return ()
+    if isinstance(value, (str, bytes)):
+        return (str(value),)
+    return tuple(str(item) for item in value)
+
+
+def _catalog_function_body_sha256(value: object) -> str | None:
+    """Hash only catalog function source text, failing closed on unexpected data."""
+    if not isinstance(value, str):
+        return None
+    return hashlib.sha256(value.encode("utf-8")).hexdigest()
 
 
 def _catalog_json_mapping(value: object) -> Mapping[str, object]:
@@ -2258,6 +2478,346 @@ async def _migration_272_catalog_evidence(
     )
 
 
+async def _migration_386_catalog_evidence(executor: Any) -> Mapping[str, object]:
+    """Read only the named function and trigger metadata in the active schema."""
+    evidence_row = await executor.fetchrow(
+        """
+        WITH target_relation AS (
+            SELECT relation_state.oid
+            FROM pg_catalog.pg_class AS relation_state
+            JOIN pg_catalog.pg_namespace AS namespace_state
+              ON namespace_state.oid = relation_state.relnamespace
+            WHERE namespace_state.nspname = pg_catalog.current_schema()
+              AND relation_state.relname = 'contacts'
+              AND relation_state.relkind = 'r'
+              AND NOT relation_state.relispartition
+            LIMIT 1
+        ),
+        target_lifecycle_relation AS (
+            SELECT relation_state.oid
+            FROM pg_catalog.pg_class AS relation_state
+            JOIN pg_catalog.pg_namespace AS namespace_state
+              ON namespace_state.oid = relation_state.relnamespace
+            WHERE namespace_state.nspname = pg_catalog.current_schema()
+              AND relation_state.relname = 'eom_lead_lifecycle_events'
+              AND relation_state.relkind = 'r'
+              AND NOT relation_state.relispartition
+            LIMIT 1
+        ),
+        target_function AS (
+            SELECT
+                function_state.oid,
+                function_state.prosrc,
+                function_state.prosecdef,
+                function_state.proconfig,
+                function_state.proacl,
+                function_state.proowner
+            FROM pg_catalog.pg_proc AS function_state
+            JOIN pg_catalog.pg_namespace AS namespace_state
+              ON namespace_state.oid = function_state.pronamespace
+            WHERE namespace_state.nspname = pg_catalog.current_schema()
+              AND function_state.proname = 'reject_nocodb_eom_won_loss_mutation'
+              AND function_state.pronargs = 0
+              AND function_state.prorettype = 'trigger'::pg_catalog.regtype
+            LIMIT 1
+        ),
+        target_guard_role AS (
+            SELECT
+                guard_role.oid,
+                NOT guard_role.rolcanlogin
+                AND NOT guard_role.rolinherit
+                AND NOT guard_role.rolsuper
+                AND NOT guard_role.rolcreaterole
+                AND NOT guard_role.rolcreatedb
+                AND NOT guard_role.rolreplication
+                AND NOT guard_role.rolbypassrls
+                AND pg_catalog.has_schema_privilege(
+                    guard_role.oid,
+                    pg_catalog.current_schema(),
+                    'USAGE'
+                )
+                AND pg_catalog.has_schema_privilege(
+                    guard_role.oid,
+                    pg_catalog.current_schema(),
+                    'CREATE'
+                )
+                AND NOT EXISTS (
+                    SELECT 1
+                    FROM pg_catalog.pg_roles AS member_role
+                    WHERE member_role.rolcanlogin
+                      AND NOT member_role.rolsuper
+                      AND pg_catalog.pg_has_role(
+                          member_role.oid,
+                          guard_role.oid,
+                          'MEMBER'
+                      )
+                ) AS trusted_guard_role_ready
+            FROM pg_catalog.pg_roles AS guard_role
+            WHERE guard_role.rolname = 'atlas_eom_handoff_owner'
+            LIMIT 1
+        ),
+        target_trigger AS (
+            SELECT
+                trigger_state.tgtype,
+                trigger_state.tgenabled,
+                trigger_state.tgattr,
+                trigger_state.tgqual
+            FROM pg_catalog.pg_trigger AS trigger_state
+            JOIN target_relation AS relation_state
+              ON relation_state.oid = trigger_state.tgrelid
+            JOIN target_function AS function_state
+              ON function_state.oid = trigger_state.tgfoid
+            WHERE trigger_state.tgname = 'trg_reject_nocodb_eom_won_loss_mutation'
+              AND NOT trigger_state.tgisinternal
+            LIMIT 1
+        )
+        SELECT
+            pg_catalog.current_schema()::text AS schema_name,
+            EXISTS (SELECT 1 FROM target_relation) AS contacts_relation_ready,
+            EXISTS (SELECT 1 FROM target_function) AS function_ready,
+            COALESCE(
+                (SELECT function_state.prosecdef FROM target_function AS function_state),
+                FALSE
+            ) AS function_security_definer,
+            COALESCE(
+                (SELECT function_state.proconfig FROM target_function AS function_state),
+                ARRAY[]::text[]
+            ) AS function_proconfig,
+            COALESCE(
+                (
+                    SELECT NOT EXISTS (
+                        SELECT 1
+                        FROM pg_catalog.aclexplode(
+                            COALESCE(
+                                function_state.proacl,
+                                pg_catalog.acldefault('f', function_state.proowner)
+                            )
+                        ) AS privilege_state
+                        WHERE privilege_state.grantee = 0
+                          AND privilege_state.privilege_type = 'EXECUTE'
+                    )
+                    FROM target_function AS function_state
+                ),
+                FALSE
+            ) AS function_public_execute_revoked,
+            COALESCE(
+                (
+                    SELECT guard_role.trusted_guard_role_ready
+                    FROM target_guard_role AS guard_role
+                ),
+                FALSE
+            ) AS trusted_guard_role_ready,
+            COALESCE(
+                (
+                    SELECT function_state.proowner = guard_role.oid
+                    FROM target_function AS function_state
+                    JOIN target_guard_role AS guard_role ON TRUE
+                ),
+                FALSE
+            ) AS recovered_function_guard_owner_ready,
+            COALESCE(
+                (
+                    SELECT pg_catalog.has_table_privilege(
+                        guard_role.oid,
+                        lifecycle_relation.oid,
+                        'SELECT'
+                    )
+                    FROM target_guard_role AS guard_role
+                    JOIN target_lifecycle_relation AS lifecycle_relation ON TRUE
+                ),
+                FALSE
+            ) AS recovered_function_guard_lifecycle_read_ready,
+            (SELECT function_state.prosrc FROM target_function AS function_state)
+                AS function_body,
+            EXISTS (SELECT 1 FROM target_trigger) AS trigger_ready,
+            COALESCE(
+                (SELECT trigger_state.tgenabled::text FROM target_trigger AS trigger_state),
+                ''
+            ) AS trigger_enabled,
+            COALESCE(
+                (SELECT trigger_state.tgtype::integer FROM target_trigger AS trigger_state),
+                0
+            ) = 27 AS trigger_is_before_row_update_delete,
+            COALESCE(
+                (
+                    SELECT trigger_state.tgqual IS NULL
+                    FROM target_trigger AS trigger_state
+                ),
+                FALSE
+            ) AS trigger_has_no_when_clause,
+            COALESCE(
+                (
+                    SELECT array_agg(attribute_state.attname::text ORDER BY attribute_state.attnum)
+                    FROM target_trigger AS trigger_state
+                    JOIN target_relation AS relation_state ON TRUE
+                    JOIN LATERAL unnest(trigger_state.tgattr::smallint[])
+                        AS updated_attribute(attnum) ON TRUE
+                    JOIN pg_catalog.pg_attribute AS attribute_state
+                      ON attribute_state.attrelid = relation_state.oid
+                     AND attribute_state.attnum = updated_attribute.attnum
+                ),
+                ARRAY[]::text[]
+            ) AS trigger_update_columns
+        """
+    )
+    # asyncpg.Record is iterable but is not registered as collections.abc.Mapping.
+    # Convert it explicitly rather than letting the generic JSON-map helper erase
+    # valid catalog evidence and turn an exact target into a false negative.
+    return {} if evidence_row is None else dict(evidence_row)
+
+
+async def _attest_migration_386(
+    executor: Any,
+    migration_files: Collection[Path],
+) -> ForwardRecoveryMigrationReconciliationAttestation:
+    """Classify the exact weak 386 target without declaring it safe to admit."""
+    record = MIGRATION_386_WON_LOSS_FENCE_FORWARD_RECOVERY
+    ledger_rows = await executor.fetch(
+        "SELECT version, content_sha256, applied_at FROM schema_migrations WHERE name = $1 LIMIT 2",
+        record.migration_name,
+    )
+    recovery_ledger_rows = await executor.fetch(
+        "SELECT version, content_sha256 FROM schema_migrations WHERE name = $1 LIMIT 2",
+        record.recovery_migration_name,
+    )
+    exactly_one_ledger_row = len(ledger_rows) == 1
+    ledger_row = ledger_rows[0] if exactly_one_ledger_row else None
+    exactly_one_recovery_ledger_row = len(recovery_ledger_rows) == 1
+    recovery_ledger_row = (
+        recovery_ledger_rows[0] if exactly_one_recovery_ledger_row else None
+    )
+    catalog = await _migration_386_catalog_evidence(executor)
+    schema_name = str(catalog.get("schema_name") or "")
+    function_body_sha256 = _catalog_function_body_sha256(
+        catalog.get("function_body")
+    )
+
+    historical_receipt_ready = all((
+        exactly_one_ledger_row,
+        ledger_row is not None
+        and ledger_row["version"] == record.historical_migration_version,
+        ledger_row is not None
+        and ledger_row["content_sha256"] == record.historical_ledger_sha256,
+        ledger_row is not None
+        and _normalize_utc(ledger_row["applied_at"]) == record.observed_applied_at,
+        _packaged_migration_digest(migration_files, record.migration_name)
+        == record.final_packaged_sha256,
+    ))
+    recovery_source_ready = all((
+        _packaged_migration_digest(migration_files, record.recovery_migration_name)
+        == record.recovery_packaged_sha256,
+        _packaged_migration_function_body_sha256(
+            migration_files, record.recovery_migration_name
+        )
+        == record.recovered_function_body_template_sha256,
+    ))
+    function_proconfig = _catalog_text_values(catalog.get("function_proconfig"))
+    legacy_function_search_path_ready = function_proconfig == (
+        f"search_path=pg_catalog, {schema_name}",
+    )
+    recovered_function_search_path_ready = function_proconfig == (
+        f"search_path=pg_catalog, {schema_name}, pg_temp",
+    )
+    shared_catalog_ready = all((
+        bool(catalog.get("contacts_relation_ready")),
+        bool(catalog.get("function_ready")),
+        bool(catalog.get("function_security_definer")),
+        bool(catalog.get("function_public_execute_revoked")),
+        bool(catalog.get("trigger_ready")),
+        _catalog_char(catalog.get("trigger_enabled")) == "O",
+        bool(catalog.get("trigger_is_before_row_update_delete")),
+        bool(catalog.get("trigger_has_no_when_clause")),
+    ))
+    trusted_guard_role_ready = bool(catalog.get("trusted_guard_role_ready"))
+    recovered_function_guard_owner_ready = bool(
+        catalog.get("recovered_function_guard_owner_ready")
+    )
+    recovered_function_guard_lifecycle_read_ready = bool(
+        catalog.get("recovered_function_guard_lifecycle_read_ready")
+    )
+    trigger_update_columns = _catalog_column_names(
+        catalog.get("trigger_update_columns")
+    )
+    recovered_trigger_columns_ready = (
+        len(trigger_update_columns) == len(_RECOVERED_386_TRIGGER_UPDATE_COLUMNS)
+        and frozenset(trigger_update_columns) == _RECOVERED_386_TRIGGER_UPDATE_COLUMNS
+    )
+    recovered_function_body_sha256 = (
+        _rendered_packaged_migration_function_body_sha256(
+            migration_files,
+            record.recovery_migration_name,
+            schema_name=schema_name,
+        )
+    )
+    recovery_receipt_ready = all((
+        exactly_one_recovery_ledger_row,
+        recovery_ledger_row is not None
+        and recovery_ledger_row["version"] == record.recovery_migration_version,
+        recovery_ledger_row is not None
+        and recovery_ledger_row["content_sha256"] == record.recovery_packaged_sha256,
+    ))
+
+    return ForwardRecoveryMigrationReconciliationAttestation(
+        reconciliation_id=record.reconciliation_id,
+        migration_name=record.migration_name,
+        historical_receipt_ready=historical_receipt_ready,
+        recovery_source_ready=recovery_source_ready,
+        no_recovery_ledger_row=not recovery_ledger_rows,
+        recovery_receipt_ready=recovery_receipt_ready,
+        trusted_guard_role_ready=trusted_guard_role_ready,
+        recovered_function_guard_owner_ready=(
+            recovered_function_guard_owner_ready
+        ),
+        recovered_function_guard_lifecycle_read_ready=(
+            recovered_function_guard_lifecycle_read_ready
+        ),
+        legacy_catalog_ready=(
+            shared_catalog_ready
+            and legacy_function_search_path_ready
+            and trusted_guard_role_ready
+            and function_body_sha256 == record.legacy_function_body_sha256
+            and trigger_update_columns == ("status",)
+        ),
+        recovered_catalog_ready=(
+            shared_catalog_ready
+            and recovered_function_search_path_ready
+            and trusted_guard_role_ready
+            and recovered_function_guard_owner_ready
+            and recovered_function_guard_lifecycle_read_ready
+            and function_body_sha256 == recovered_function_body_sha256
+            and recovered_trigger_columns_ready
+        ),
+    )
+
+
+async def pending_historical_forward_recovery_migration(
+    executor: Any,
+    migration_files: Collection[Path],
+    *,
+    unresolved_mismatched: Collection[str],
+    unresolved_missing_source: Collection[str],
+    pending_migration_names: Collection[str],
+) -> str | None:
+    """Return the sole permitted prelude migration for the exact weak 386 state.
+
+    The caller provides the already-unresolved report names and its selected
+    pending names. This keeps recovery source-controlled and prevents an
+    `only=` caller from accidentally running an unrequested prerequisite.
+    """
+    record = MIGRATION_386_WON_LOSS_FENCE_FORWARD_RECOVERY
+    if frozenset(unresolved_mismatched) != {record.migration_name}:
+        return None
+    if unresolved_missing_source:
+        return None
+    if record.recovery_migration_name not in frozenset(pending_migration_names):
+        return None
+
+    attestation = await _attest_migration_386(executor, migration_files)
+    if attestation.status != "recovery_required":
+        return None
+    return record.recovery_migration_name
+
+
 async def _attest_migration_387(
     executor: Any,
     migration_files: Collection[Path],
@@ -2547,6 +3107,7 @@ async def attest_known_historical_migration_reconciliations(
     candidate_names: Collection[str] | None = None,
 ) -> tuple[
     MigrationReconciliationAttestation
+    | ForwardRecoveryMigrationReconciliationAttestation
     | MissingSourceMigrationReconciliationAttestation
     | RenamedMissingSourceMigrationReconciliationAttestation
     | B2BCampaignPartnerMissingSourceMigrationReconciliationAttestation
@@ -2563,18 +3124,24 @@ async def attest_known_historical_migration_reconciliations(
     their exact report-derived candidate names explicitly.
     """
     requested_names = (
-        known_historical_migration_reconciliation_names()
+        frozenset({MIGRATION_387_RECONCILIATION.migration_name})
         if candidate_names is None
         else frozenset(candidate_names)
     )
     attestations: list[
         MigrationReconciliationAttestation
+        | ForwardRecoveryMigrationReconciliationAttestation
         | MissingSourceMigrationReconciliationAttestation
         | RenamedMissingSourceMigrationReconciliationAttestation
         | B2BCampaignPartnerMissingSourceMigrationReconciliationAttestation
         | B2BCompanySignalPromotionMissingSourceMigrationReconciliationAttestation
         | B2BWatchlistAlertEventsMissingSourceMigrationReconciliationAttestation
     ] = []
+    if (
+        MIGRATION_386_WON_LOSS_FENCE_FORWARD_RECOVERY.migration_name
+        in requested_names
+    ):
+        attestations.append(await _attest_migration_386(executor, migration_files))
     if MIGRATION_387_RECONCILIATION.migration_name in requested_names:
         attestations.append(await _attest_migration_387(executor, migration_files))
     if (
