@@ -720,6 +720,12 @@ async def run_migrations(
                 logger.debug("All %d migrations already applied", len(migration_files))
                 return
 
+            from .reconciliation import (
+                historical_forward_recovery_migration_names,
+                pending_historical_forward_recovery_migration,
+            )
+
+            forward_recovery_names = historical_forward_recovery_migration_names()
             unresolved_mismatched, unresolved_missing_source = (
                 await _unresolved_pending_migration_content_evidence(
                     conn,
@@ -728,8 +734,6 @@ async def run_migrations(
                 )
             )
             if unresolved_mismatched or unresolved_missing_source:
-                from .reconciliation import pending_historical_forward_recovery_migration
-
                 try:
                     recovery_name = await pending_historical_forward_recovery_migration(
                         conn,
@@ -800,13 +804,42 @@ async def run_migrations(
                         f"pending={','.join(migration_file.stem for migration_file in pending)}"
                     )
 
-            if not pending:
-                logger.debug("All %d migrations already applied", len(migration_files))
+            # Selecting a named recovery authorizes the prelude above; it never
+            # turns that target-specific SQL into an ordinary pending migration.
+            reserved_forward_recoveries = [
+                migration_file
+                for migration_file in pending
+                if migration_file.stem in forward_recovery_names
+            ]
+            ordinary_pending = [
+                migration_file
+                for migration_file in pending
+                if migration_file.stem not in forward_recovery_names
+            ]
+            if reserved_forward_recoveries:
+                logger.info(
+                    "Skipping %d reserved forward recovery migration(s) without "
+                    "an attested precondition: %s",
+                    len(reserved_forward_recoveries),
+                    ", ".join(
+                        migration_file.name
+                        for migration_file in reserved_forward_recoveries
+                    ),
+                )
+            if not ordinary_pending:
+                if not reserved_forward_recoveries:
+                    logger.debug(
+                        "All %d migrations already applied", len(migration_files)
+                    )
                 return
 
-            logger.info("Running %d pending migrations (of %d total)", len(pending), len(migration_files))
+            logger.info(
+                "Running %d ordinary pending migrations (of %d total)",
+                len(ordinary_pending),
+                len(migration_files),
+            )
 
-            for migration_file in pending:
+            for migration_file in ordinary_pending:
                 await _apply_pending_migration(conn, migration_file)
         finally:
             await conn.execute(

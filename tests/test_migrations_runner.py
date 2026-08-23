@@ -1830,6 +1830,40 @@ async def test_386_forward_recovery_runs_before_a_lower_numbered_pending_migrati
 
 
 @pytest.mark.asyncio
+async def test_386_forward_recovery_is_reserved_when_selected_without_weak_state(
+    tmp_path,
+    caplog,
+):
+    """A requested recovery file is inert unless its attested precondition holds."""
+    from atlas_brain.storage.migrations import run_migrations
+    from atlas_brain.storage.migrations.reconciliation import (
+        MIGRATION_386_WON_LOSS_FENCE_FORWARD_RECOVERY,
+    )
+
+    record = MIGRATION_386_WON_LOSS_FENCE_FORWARD_RECOVERY
+    ordinary_source = "SELECT 389"
+    (tmp_path / f"{record.recovery_migration_name}.sql").write_bytes(
+        _migration_390_source()
+    )
+    (tmp_path / "389_later_pending.sql").write_text(ordinary_source)
+    pool = _SerializingPool(honor_lock=True)
+    caplog.set_level(logging.INFO, logger="atlas.storage.migrations")
+
+    await run_migrations(
+        pool,
+        migrations_dir=tmp_path,
+        only={record.recovery_migration_name, "389_later_pending"},
+    )
+
+    assert pool.applied_sql == [ordinary_source]
+    assert pool.inserted_with_digest == [
+        (389, "389_later_pending", hashlib.sha256(ordinary_source.encode()).hexdigest())
+    ]
+    assert all(name != record.recovery_migration_name for _, name, _ in pool.records)
+    assert "reserved forward recovery migration" in caplog.text
+
+
+@pytest.mark.asyncio
 async def test_386_forward_recovery_stays_closed_when_only_omits_recovery(tmp_path):
     from atlas_brain.storage.migrations import (
         PendingMigrationContentIntegrityError,

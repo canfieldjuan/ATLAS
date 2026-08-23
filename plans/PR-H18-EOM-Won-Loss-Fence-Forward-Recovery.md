@@ -45,7 +45,9 @@ change a customer-facing workflow.
   3. Teach the existing migration runner to execute only that named recovery
      under its existing session advisory lock when the *only* remaining
      unresolved content evidence is the exact target-confirmed 386 legacy
-     state. It must commit the recovery and its ledger receipt atomically,
+     state. It must reserve every registered forward-recovery migration from
+     the ordinary pending loop even when an explicit `only=` caller selected
+     it, commit the attested recovery and its ledger receipt atomically,
      re-read the ledger and integrity report, then apply ordinary pending SQL
      only if the recovered target attests. Any other unresolved record,
      malformed legacy target, missing recovery source, or subset that omits
@@ -80,8 +82,9 @@ Max files: 11
 
 1. Record the exact legacy 386 evidence and its required recovered state in
    the existing reconciliation module.
-2. Apply an atomic forward migration before normal pending SQL only through a
-   named, fail-closed runner prelude, then re-evaluate the same integrity gate.
+2. Apply an atomic forward migration only through a named, fail-closed runner
+   prelude, reserve it from ordinary pending SQL, then re-evaluate the same
+   integrity gate.
 3. Add the recovery to the existing closed EOM missed-call readiness set so
    its `only=` call preserves caller-selected migration semantics.
 4. Prove both the semantic fence and the runner ordering with existing
@@ -101,6 +104,11 @@ Max files: 11
     re-reads evidence and records/apply later SQL only after the recovered
     function, trigger, and recovery ledger receipt attest; settled by focused
     `tests/test_migrations_runner.py` behavior assertions.
+  - [x] A selected 390 recovery with no exact weak-386 precondition is not
+    executed, does not record a ledger receipt or change function ownership,
+    and does not prevent an ordinary selected migration from running; settled
+    by the focused fake-runner case and a disposable-PostgreSQL selected-run
+    assertion.
   - [x] A second unresolved record, altered legacy metadata (including a
     wrong historical version or trigger `WHEN` condition), recovery subset
     omission, or a recorded-but-weak recovery leaves
@@ -135,8 +143,8 @@ Max files: 11
 - Boundary path/seam: `run_migrations()` content-evidence admission before its
   first pending SQL statement.
 - Replaced-path behaviors:
-  - no unresolved evidence: preserve the current ordinary pending-migration
-    path;
+  - no unresolved evidence: preserve the ordinary non-recovery pending path
+    while every selected forward-recovery migration remains inert;
   - exact legacy 386 only: run only named 390 recovery first, then re-evaluate;
   - any other unresolved name or any unrecognized 386 target: reject before
     all pending SQL;
@@ -154,6 +162,8 @@ Max files: 11
   - closed EOM missed-call readiness caller x legacy 386, where 390 must be
     explicit in its selected prerequisite set rather than implicitly escaping
     `only=`;
+  - closed EOM missed-call readiness caller x fresh or already-strong 386,
+    where 390 is selected but must not execute or create a receipt;
   - either runner x a second unresolved H-18 record;
   - rerun after an atomic recovery receipt already exists.
 
@@ -209,14 +219,19 @@ contract therefore requires the exact two-column set `status` and
 text ordering.
 
 `run_migrations()` already holds one session-level advisory lock across its
-content report, migration SQL, and ledger writes. When no other discrepancy is
-unresolved and this exact legacy precondition is present, it executes only the
+content report, migration SQL, and ledger writes. A closed, source-derived
+registry marks named forward-recovery migrations as prelude-only: an explicit
+`only=` caller can authorize 390, but the ordinary loop logs and skips it until
+the exact legacy precondition selects it. When no other discrepancy is
+unresolved and that exact precondition is present, the runner executes only the
 named recovery through the existing atomic-bookkeeping implementation, then
 recomputes applied rows, the content report, and reconciliation evidence before
 entering the ordinary pending loop. Thus no later SQL can run on the weak
-target. The recovery is intentionally a forward migration numbered after the
-currently pending 389 file; the named prelude is the explicit dependency edge,
-not a new numeric-prefix collision or a generic ordering rule.
+target, and a fresh/current target cannot create a 390 receipt or change
+function ownership merely because its selected readiness set names 390. The
+recovery is intentionally a forward migration numbered after the currently
+pending 389 file; the named prelude is the explicit dependency edge, not a new
+numeric-prefix collision or a generic ordering rule.
 
 The EOM missed-call profile intentionally calls the runner with a closed
 `only=` set. The new 390 name is added to that set in the same slice: the
@@ -243,6 +258,9 @@ digest before 389 or any ordinary pending migration can be considered.
 - The prelude is record-specific and only executable when it is the sole
   unresolved discrepancy. There is no reusable exception list, source replay,
   or generic “repair all mismatches” path.
+- The EOM readiness set continues to name 390 as explicit caller authorization;
+  it is not removed or made implicit. The runner's prelude-only registry is the
+  single distinction between authorization and ordinary application.
 - The 390 migration duplicates the required function/trigger definition rather
   than altering historical 386 bytes. This preserves immutable ledger meaning
   and lets the recovery commit with its own digest.
@@ -274,9 +292,9 @@ Parked hardening: none.
 
 - `python -m py_compile atlas_brain/main_eom.py atlas_brain/storage/migrations/__init__.py atlas_brain/storage/migrations/reconciliation.py tests/test_eom_lead_conversion.py tests/test_eom_lead_conversion_integration.py tests/test_eom_render_profile.py tests/test_migration_content_integrity_preflight.py tests/test_migrations_runner.py` — passed.
 - `python -m pytest -q tests/test_migration_content_integrity_preflight.py` — `157 passed`.
-- `python -m pytest -q tests/test_migrations_runner.py` — `85 passed, 1 skipped`; focused `-k '386_forward_recovery or 386_recorded_recovery'` cases: `10 passed, 76 deselected`.
+- `python -m pytest -q tests/test_migrations_runner.py` — `86 passed, 1 skipped`; focused `-k '386_forward_recovery or 386_recorded_recovery'` cases: `11 passed, 76 deselected`.
 - `python -m pytest -q tests/test_eom_render_profile.py -k 'missed_call_recovery_migration_helper'` — `1 passed, 63 deselected`; `python -m pytest -q tests/test_eom_lead_conversion.py -k 'workflow_enrolls_won_loss_runtime_paths'` — `1 passed, 224 deselected`.
-- `ATLAS_MIGRATION_TEST_DATABASE_URL=<disposable PostgreSQL test database> python -m pytest -q tests/test_eom_lead_conversion_integration.py -k 'nocodb_cannot_mutate_won_lead_with_unsettled_cancellation'` — `1 passed, 111 deselected`; this reproduces the PostgreSQL catalog-order case and proves that a non-admin cannot start 390, the DBA path transfers its SECURITY DEFINER function to the no-login guard, the guard can read lifecycle evidence, and the former CRM owner cannot alter the recovered function.
+- `ATLAS_MIGRATION_TEST_DATABASE_URL=<disposable PostgreSQL test database> python -m pytest -q tests/test_eom_lead_conversion_integration.py -k 'selected_390_does_not_run_without_the_weak_386_precondition or nocodb_cannot_mutate_won_lead_with_unsettled_cancellation'` — `2 passed, 111 deselected`; this proves a selected 390 is inert without the weak precondition, while the recovered case still reproduces the PostgreSQL catalog-order behavior and proves that a non-admin cannot start 390, the DBA path transfers its SECURITY DEFINER function to the no-login guard, the guard can read lifecycle evidence, and the former CRM owner cannot alter the recovered function.
 - `python -m ruff check --ignore E402 atlas_brain/main_eom.py atlas_brain/storage/migrations/__init__.py atlas_brain/storage/migrations/reconciliation.py tests/test_eom_lead_conversion.py tests/test_eom_lead_conversion_integration.py tests/test_eom_render_profile.py tests/test_migration_content_integrity_preflight.py tests/test_migrations_runner.py` — passed; `main_eom.py` retains the repository's pre-existing intentional E402 import order.
 - `git diff --check` — passed.
 - Controlled read-only target preflight — expected exit `2`: 386 is `recovery_required` with the trusted guard role ready but with its function ownership and lifecycle read still absent, and 379 remains independently source-unavailable. No target SQL ran. No local Unit Gate ran; broad checks remain on GitHub.
@@ -288,12 +306,12 @@ Parked hardening: none.
 | `.github/workflows/atlas_eom_lead_pipeline_checks.yml` | 7 |
 | `atlas_brain/main_eom.py` | 3 |
 | `atlas_brain/storage/migrations/390_eom_won_loss_direct_sql_fence_recovery.sql` | 141 |
-| `atlas_brain/storage/migrations/__init__.py` | 175 |
-| `atlas_brain/storage/migrations/reconciliation.py` | 510 |
-| `plans/PR-H18-EOM-Won-Loss-Fence-Forward-Recovery.md` | 299 |
+| `atlas_brain/storage/migrations/__init__.py` | 208 |
+| `atlas_brain/storage/migrations/reconciliation.py` | 522 |
+| `plans/PR-H18-EOM-Won-Loss-Fence-Forward-Recovery.md` | 317 |
 | `tests/test_eom_lead_conversion.py` | 2 |
-| `tests/test_eom_lead_conversion_integration.py` | 108 |
+| `tests/test_eom_lead_conversion_integration.py` | 159 |
 | `tests/test_eom_render_profile.py` | 1 |
 | `tests/test_migration_content_integrity_preflight.py` | 1 |
-| `tests/test_migrations_runner.py` | 370 |
-| **Total** | **1617** |
+| `tests/test_migrations_runner.py` | 404 |
+| **Total** | **1765** |

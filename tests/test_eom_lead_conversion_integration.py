@@ -6882,6 +6882,57 @@ async def _install_legacy_386_nocodb_fence(conn, schema: str) -> None:
 
 
 @pytest.mark.asyncio
+async def test_selected_390_does_not_run_without_the_weak_386_precondition():
+    """A current fence must not receive the target-specific recovery as ordinary SQL."""
+
+    from atlas_brain.storage.migrations import run_migrations
+    from atlas_brain.storage.migrations.reconciliation import (
+        MIGRATION_386_WON_LOSS_FENCE_FORWARD_RECOVERY,
+    )
+
+    record = MIGRATION_386_WON_LOSS_FENCE_FORWARD_RECOVERY
+    database_url = _database_url_or_skip()
+    schema = f"atlas_eom_won_loss_reserved_recovery_{uuid.uuid4().hex}"
+    conn = await asyncpg.connect(database_url)
+    try:
+        await _prepare_schema(conn, schema)
+        await _provision_handoff_guard(conn)
+        owner_before = await conn.fetchval(
+            "SELECT pg_catalog.pg_get_userbyid(proowner) "
+            "FROM pg_catalog.pg_proc "
+            "WHERE oid = $1::pg_catalog.regprocedure",
+            f"{schema}.reject_nocodb_eom_won_loss_mutation()",
+        )
+
+        class _MigrationPool:
+            async def acquire(self):
+                return conn
+
+            async def release(self, released) -> None:
+                assert released is conn
+
+        await run_migrations(
+            _MigrationPool(),
+            migrations_dir=MIGRATIONS,
+            only={record.recovery_migration_name},
+        )
+
+        assert not await conn.fetchval(
+            "SELECT EXISTS (SELECT 1 FROM schema_migrations WHERE name = $1)",
+            record.recovery_migration_name,
+        )
+        assert await conn.fetchval(
+            "SELECT pg_catalog.pg_get_userbyid(proowner) "
+            "FROM pg_catalog.pg_proc "
+            "WHERE oid = $1::pg_catalog.regprocedure",
+            f"{schema}.reject_nocodb_eom_won_loss_mutation()",
+        ) == owner_before
+    finally:
+        await conn.execute(f'DROP SCHEMA IF EXISTS "{schema}" CASCADE')
+        await conn.close()
+
+
+@pytest.mark.asyncio
 async def test_nocodb_cannot_mutate_won_lead_with_unsettled_cancellation():
     """The direct CRM login cannot bypass a prepared won-loss cancellation."""
 
