@@ -44,6 +44,16 @@ def _migration_390_source() -> bytes:
     ).read_bytes()
 
 
+def _migration_391_source() -> bytes:
+    return (
+        Path(__file__).resolve().parents[1]
+        / "atlas_brain"
+        / "storage"
+        / "migrations"
+        / "391_eom_commercial_billing_run_fence_recovery.sql"
+    ).read_bytes()
+
+
 def _migration_function_body(source: bytes) -> str:
     match = re.search(
         r"AS\s+\$function\$(.*?)\$function\s*\$;",
@@ -84,6 +94,26 @@ def test_migration_runner_workflow_enrolls_alert_writer_on_pr_and_main_push() ->
 
     assert writer_path in pull_request_paths
     assert writer_path in push_paths
+
+
+def test_migration_runner_workflow_enrolls_379_recovery_proof_on_pr_and_main_push() -> None:
+    workflow = (
+        Path(__file__).resolve().parents[1]
+        / ".github"
+        / "workflows"
+        / "atlas_migrations_runner_checks.yml"
+    ).read_text()
+    trigger_block = workflow.split("\njobs:", 1)[0]
+    pull_request_paths, push_paths = trigger_block.split("  push:", 1)
+
+    for path in (
+        '"atlas_brain/storage/migrations/**"',
+        '"tests/test_commercial_billing_runs.py"',
+    ):
+        assert path in pull_request_paths
+        assert path in push_paths
+    assert "ATLAS_RECEIVABLES_TEST_DATABASE_URL:" in workflow
+    assert "-k \"historical_379\"" in workflow
 
 
 def _default_b2b_watchlist_alert_events_catalog_row() -> dict[str, object]:
@@ -1583,6 +1613,54 @@ def _legacy_386_function_body() -> str:
     )
 
 
+def _legacy_379_function_body() -> str:
+    """Return the observed target body without inventing its missing source."""
+    source = (
+        Path(__file__).resolve().parents[1]
+        / "atlas_brain"
+        / "storage"
+        / "migrations"
+        / "382_commercial_billing_candidate_overrides.sql"
+    ).read_text(encoding="utf-8")
+    section = source.split(
+        "CREATE OR REPLACE FUNCTION "
+        "prevent_commercial_billing_invoice_for_excluded_candidate()",
+        1,
+    )[1]
+    current_body = section.split("AS $$", 1)[1].split("$$;", 1)[0]
+    legacy_body = (
+        current_body.replace("    candidate_identity_billing_run_id UUID;\n", "")
+        .replace(
+            "       OR jsonb_typeof(NEW.metadata -> 'commercialBillingRunId') "
+            "IS DISTINCT FROM 'string'\n",
+            "",
+        )
+        .replace(
+            "    BEGIN\n"
+            "        candidate_identity_billing_run_id :=\n"
+            "            (NEW.metadata ->> 'commercialBillingRunId')::UUID;\n"
+            "    EXCEPTION WHEN invalid_text_representation THEN\n"
+            "        RAISE EXCEPTION "
+            "'Commercial billing invoice review identity is invalid';\n"
+            "    END;\n",
+            "",
+        )
+        .replace(
+            "    WHERE billing_run_id = candidate_identity_billing_run_id\n"
+            "      AND candidate_key = candidate_identity_key\n",
+            "    WHERE candidate_key = candidate_identity_key\n",
+        )
+    )
+    from atlas_brain.storage.migrations.reconciliation import (
+        MIGRATION_379_COMMERCIAL_BILLING_RUN_FENCE_FORWARD_RECOVERY,
+    )
+
+    assert hashlib.sha256(legacy_body.encode()).hexdigest() == (
+        MIGRATION_379_COMMERCIAL_BILLING_RUN_FENCE_FORWARD_RECOVERY.legacy_function_body_sha256
+    )
+    return legacy_body
+
+
 class _ForwardRecoveryTransaction(_RollbackMigrationTransaction):
     """Extend the in-memory atomic seam to include the function/trigger state."""
 
@@ -1700,6 +1778,104 @@ class _ForwardRecoveryPool(_SerializingPool):
         return _ForwardRecoveryTransaction(self)
 
 
+class _CommercialBillingForwardRecoveryTransaction(_ForwardRecoveryTransaction):
+    """Keep the 391 catalog change in the same fake atomic boundary."""
+
+    async def __aenter__(self):
+        await super().__aenter__()
+        self.commercial_billing_catalog_snapshot = dict(
+            self.pool.commercial_billing_catalog
+        )
+        return self
+
+    async def __aexit__(self, exc_type, exc, traceback):
+        result = await super().__aexit__(exc_type, exc, traceback)
+        if exc_type is not None:
+            self.pool.commercial_billing_catalog = (
+                self.commercial_billing_catalog_snapshot
+            )
+        return result
+
+
+class _CommercialBillingForwardRecoveryPool(_ForwardRecoveryPool):
+    """Runner fixture whose 379 fence changes only when 391 commits."""
+
+    def __init__(self, *, fail_commercial_recovery: bool = False):
+        super().__init__()
+        self.fail_commercial_recovery = fail_commercial_recovery
+        self.commercial_recovery_attempts = 0
+        self.commercial_billing_catalog = {
+            "relations_ready": True,
+            "required_columns_ready": True,
+            "immutable_history_guards_ready": True,
+            "invoice_fence_trigger_ready": True,
+            "function_body": _legacy_379_function_body(),
+        }
+
+    async def fetch(self, query, *args):
+        from atlas_brain.storage.migrations.reconciliation import (
+            MIGRATION_379_COMMERCIAL_BILLING_RUN_FENCE_FORWARD_RECOVERY,
+        )
+
+        record = MIGRATION_379_COMMERCIAL_BILLING_RUN_FENCE_FORWARD_RECOVERY
+        normalized = " ".join(query.split())
+        if normalized == (
+            "SELECT version, content_sha256, applied_at FROM schema_migrations "
+            "WHERE name = $1 LIMIT 2"
+        ) and args == (record.migration_name,):
+            return [{
+                "version": version,
+                "content_sha256": digest,
+                "applied_at": record.observed_applied_at,
+            } for version, name, digest in self.records if name == record.migration_name]
+        if normalized == (
+            "SELECT name, version, content_sha256, applied_at FROM schema_migrations "
+            "WHERE name = ANY($1::text[]) ORDER BY name"
+        ):
+            assert args == ([
+                receipt.migration_name for receipt in record.successor_receipts
+            ],)
+            expected_names = {
+                receipt.migration_name: receipt for receipt in record.successor_receipts
+            }
+            return [{
+                "name": name,
+                "version": version,
+                "content_sha256": digest,
+                "applied_at": expected_names[name].observed_applied_at,
+            } for version, name, digest in self.records if name in expected_names]
+        if normalized == (
+            "SELECT version, content_sha256 FROM schema_migrations "
+            "WHERE name = $1 LIMIT 2"
+        ) and args == (record.recovery_migration_name,):
+            return [{
+                "version": version,
+                "content_sha256": digest,
+            } for version, name, digest in self.records if name == record.recovery_migration_name]
+        return await super().fetch(query, *args)
+
+    async def fetchrow(self, query, *args):
+        if "required_history_triggers" in query:
+            assert args == ()
+            assert "commercial_billing_candidate_review_decisions" in query
+            assert "commercial_billing_candidate_overrides" in query
+            return _AsyncpgRecordLike(self.commercial_billing_catalog)
+        return await super().fetchrow(query, *args)
+
+    async def execute(self, query, *args):
+        if "Recover the current run-scoped commercial-billing invoice fence" in query:
+            self.commercial_recovery_attempts += 1
+            if self.fail_commercial_recovery:
+                raise RuntimeError("injected 391 recovery failure")
+            self.commercial_billing_catalog["function_body"] = _migration_function_body(
+                _migration_391_source()
+            )
+        return await super().execute(query, *args)
+
+    def transaction(self):
+        return _CommercialBillingForwardRecoveryTransaction(self)
+
+
 def _stage_historical_386_forward_recovery(tmp_path, pool):
     from atlas_brain.storage.migrations.reconciliation import (
         MIGRATION_386_WON_LOSS_FENCE_FORWARD_RECOVERY,
@@ -1711,6 +1887,33 @@ def _stage_historical_386_forward_recovery(tmp_path, pool):
         _migration_390_source()
     )
     pool.records.append((386, record.migration_name, record.historical_ledger_sha256))
+    return record
+
+
+def _stage_historical_379_forward_recovery(tmp_path, pool):
+    from atlas_brain.storage.migrations.reconciliation import (
+        MIGRATION_379_COMMERCIAL_BILLING_RUN_FENCE_FORWARD_RECOVERY,
+    )
+
+    record = MIGRATION_379_COMMERCIAL_BILLING_RUN_FENCE_FORWARD_RECOVERY
+    migrations_dir = Path(__file__).resolve().parents[1] / "atlas_brain/storage/migrations"
+    for receipt in record.successor_receipts:
+        (tmp_path / f"{receipt.migration_name}.sql").write_bytes(
+            (migrations_dir / f"{receipt.migration_name}.sql").read_bytes()
+        )
+        pool.records.append((
+            receipt.migration_version,
+            receipt.migration_name,
+            None,
+        ))
+    (tmp_path / f"{record.recovery_migration_name}.sql").write_bytes(
+        _migration_391_source()
+    )
+    pool.records.append((
+        record.historical_migration_version,
+        record.migration_name,
+        record.historical_ledger_sha256,
+    ))
     return record
 
 
@@ -1813,6 +2016,136 @@ async def test_unresolved_content_evidence_blocks_pending_migration_before_sql(
     assert pool.applied_sql == [], case
     assert pool.records == [(900, "900_recorded", "f" * 64)], case
     assert pool.inserted_with_digest == [], case
+
+
+@pytest.mark.asyncio
+async def test_379_forward_recovery_commits_before_386_then_admits_389_on_retry(
+    tmp_path,
+):
+    """391 restores run isolation, then a fresh invocation may recover 386."""
+    from atlas_brain.storage.migrations import (
+        PendingMigrationContentIntegrityError,
+        run_migrations,
+    )
+
+    pool = _CommercialBillingForwardRecoveryPool()
+    commercial_record = _stage_historical_379_forward_recovery(tmp_path, pool)
+    won_loss_record = _stage_historical_386_forward_recovery(tmp_path, pool)
+    ordinary_source = "SELECT 389"
+    (tmp_path / "389_later_pending.sql").write_text(ordinary_source)
+    requested = {
+        commercial_record.recovery_migration_name,
+        won_loss_record.recovery_migration_name,
+        "389_later_pending",
+    }
+
+    with pytest.raises(
+        PendingMigrationContentIntegrityError,
+        match="mismatched=386_eom_won_loss_nocodb_fence",
+    ):
+        await run_migrations(pool, migrations_dir=tmp_path, only=requested)
+
+    assert pool.commercial_recovery_attempts == 1
+    assert [name for _version, name, _digest in pool.inserted_with_digest] == [
+        commercial_record.recovery_migration_name,
+    ]
+    assert pool.commercial_billing_catalog["function_body"] == _migration_function_body(
+        _migration_391_source()
+    )
+    assert ordinary_source not in pool.applied_sql
+
+    await run_migrations(pool, migrations_dir=tmp_path, only=requested)
+
+    assert [name for _version, name, _digest in pool.inserted_with_digest] == [
+        commercial_record.recovery_migration_name,
+        won_loss_record.recovery_migration_name,
+        "389_later_pending",
+    ]
+    assert pool.commercial_recovery_attempts == 1
+    assert pool.atomic_transactions == 2
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("case", ("omitted", "unknown", "recorded weak recovery"))
+async def test_379_forward_recovery_stays_closed_without_exact_selected_state(
+    tmp_path,
+    case,
+):
+    from atlas_brain.storage.migrations import (
+        PendingMigrationContentIntegrityError,
+        run_migrations,
+    )
+
+    pool = _CommercialBillingForwardRecoveryPool()
+    commercial_record = _stage_historical_379_forward_recovery(tmp_path, pool)
+    won_loss_record = _stage_historical_386_forward_recovery(tmp_path, pool)
+    (tmp_path / "389_later_pending.sql").write_text("SELECT 389")
+    requested = {
+        won_loss_record.recovery_migration_name,
+        "389_later_pending",
+    }
+    if case == "unknown":
+        (tmp_path / "900_unknown_recorded.sql").write_text("SELECT 900")
+        pool.records.append((900, "900_unknown_recorded", "f" * 64))
+        requested.add(commercial_record.recovery_migration_name)
+    elif case == "recorded weak recovery":
+        pool.records.append((
+            commercial_record.recovery_migration_version,
+            commercial_record.recovery_migration_name,
+            commercial_record.recovery_packaged_sha256,
+        ))
+        requested.add(commercial_record.recovery_migration_name)
+
+    with pytest.raises(PendingMigrationContentIntegrityError, match="missing_source="):
+        await run_migrations(pool, migrations_dir=tmp_path, only=requested)
+
+    assert pool.applied_sql == []
+    assert pool.inserted_with_digest == []
+    assert pool.commercial_recovery_attempts == 0
+    assert pool.commercial_billing_catalog["function_body"] == _legacy_379_function_body()
+
+
+@pytest.mark.asyncio
+async def test_379_forward_recovery_failure_rolls_back_then_retries_once(tmp_path):
+    from atlas_brain.storage.migrations import (
+        PendingMigrationContentIntegrityError,
+        run_migrations,
+    )
+
+    pool = _CommercialBillingForwardRecoveryPool(fail_commercial_recovery=True)
+    commercial_record = _stage_historical_379_forward_recovery(tmp_path, pool)
+    won_loss_record = _stage_historical_386_forward_recovery(tmp_path, pool)
+    (tmp_path / "389_later_pending.sql").write_text("SELECT 389")
+    requested = {
+        commercial_record.recovery_migration_name,
+        won_loss_record.recovery_migration_name,
+        "389_later_pending",
+    }
+
+    with pytest.raises(RuntimeError, match="injected 391 recovery failure"):
+        await run_migrations(pool, migrations_dir=tmp_path, only=requested)
+
+    assert pool.atomic_transactions == 1
+    assert pool.atomic_transaction_errors == 1
+    assert pool.inserted_with_digest == []
+    assert pool.commercial_billing_catalog["function_body"] == _legacy_379_function_body()
+
+    pool.fail_commercial_recovery = False
+    with pytest.raises(PendingMigrationContentIntegrityError, match="mismatched="):
+        await run_migrations(pool, migrations_dir=tmp_path, only=requested)
+
+    assert pool.commercial_recovery_attempts == 2
+    assert [name for _version, name, _digest in pool.inserted_with_digest] == [
+        commercial_record.recovery_migration_name,
+    ]
+
+    await run_migrations(pool, migrations_dir=tmp_path, only=requested)
+
+    assert [name for _version, name, _digest in pool.inserted_with_digest] == [
+        commercial_record.recovery_migration_name,
+        won_loss_record.recovery_migration_name,
+        "389_later_pending",
+    ]
 
 
 @pytest.mark.asyncio

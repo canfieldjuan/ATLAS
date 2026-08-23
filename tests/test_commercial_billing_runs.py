@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import ast
 import copy
+import hashlib
 import inspect
 import json
 import os
@@ -2422,6 +2423,230 @@ def test_review_decision_recovery_migration_is_atomic_and_data_preserving():
     assert "INSERT INTO commercial_billing_candidate_review_decisions" not in executable
     assert "INSERT INTO invoices" not in executable
     assert "DELETE FROM commercial_billing_candidate_review_decisions" not in executable
+
+
+def test_historical_379_run_fence_recovery_is_atomic_and_data_preserving():
+    migration = (
+        Path(__file__).parents[1]
+        / "atlas_brain/storage/migrations/"
+        "391_eom_commercial_billing_run_fence_recovery.sql"
+    ).read_text(encoding="utf-8")
+
+    assert migration.startswith("-- atlas: atomic-bookkeeping")
+    assert "b71db37ee1906ca26788be21deb716092052fc3197d4b72762d57892fbc77851" in migration
+    assert "commercialBillingRunId" in migration
+    assert "WHERE billing_run_id = candidate_identity_billing_run_id" in migration
+    assert "immutable review history guards" in migration
+    executable = "\n".join(
+        line for line in migration.splitlines() if not line.lstrip().startswith("--")
+    )
+    assert "DROP TABLE" not in executable
+    assert "INSERT INTO commercial_billing_candidate_review_decisions" not in executable
+    assert "UPDATE commercial_billing_candidate_review_decisions" not in executable
+    assert "INSERT INTO commercial_billing_candidate_overrides" not in executable
+    assert "UPDATE commercial_billing_candidate_overrides" not in executable
+    assert "INSERT INTO invoices" not in executable
+    assert "UPDATE invoices" not in executable
+
+
+@pytest.mark.asyncio
+async def test_real_postgres_historical_379_commercial_billing_run_fence_recovery():
+    """391 preserves history and stops a run-A override from blocking run B."""
+    asyncpg = pytest.importorskip("asyncpg")
+    from atlas_brain.storage.migrations import run_migrations
+    from atlas_brain.storage.migrations.reconciliation import (
+        MIGRATION_379_COMMERCIAL_BILLING_RUN_FENCE_FORWARD_RECOVERY,
+    )
+
+    record = MIGRATION_379_COMMERCIAL_BILLING_RUN_FENCE_FORWARD_RECOVERY
+    async with _billing_run_database() as (conn, schema, _database_url):
+        await conn.execute("CREATE EXTENSION IF NOT EXISTS pgcrypto")
+        await conn.execute(
+            "ALTER TABLE invoices ADD COLUMN metadata JSONB NOT NULL "
+            "DEFAULT '{}'::jsonb"
+        )
+        legacy_source = (
+            Path(__file__).parents[1]
+            / "atlas_brain/storage/migrations/"
+            "382_commercial_billing_candidate_overrides.sql"
+        ).read_text(encoding="utf-8")
+        legacy_section = legacy_source.split(
+            "CREATE OR REPLACE FUNCTION "
+            "prevent_commercial_billing_invoice_for_excluded_candidate()",
+            1,
+        )[1]
+        legacy_body = (
+            legacy_section.split("AS $$", 1)[1]
+            .split("$$;", 1)[0]
+            .replace("    candidate_identity_billing_run_id UUID;\n", "")
+            .replace(
+                "       OR jsonb_typeof(NEW.metadata -> 'commercialBillingRunId') "
+                "IS DISTINCT FROM 'string'\n",
+                "",
+            )
+            .replace(
+                "    BEGIN\n"
+                "        candidate_identity_billing_run_id :=\n"
+                "            (NEW.metadata ->> 'commercialBillingRunId')::UUID;\n"
+                "    EXCEPTION WHEN invalid_text_representation THEN\n"
+                "        RAISE EXCEPTION "
+                "'Commercial billing invoice review identity is invalid';\n"
+                "    END;\n",
+                "",
+            )
+            .replace(
+                "    WHERE billing_run_id = candidate_identity_billing_run_id\n"
+                "      AND candidate_key = candidate_identity_key\n",
+                "    WHERE candidate_key = candidate_identity_key\n",
+            )
+        )
+        assert hashlib.sha256(legacy_body.encode()).hexdigest() == (
+            record.legacy_function_body_sha256
+        )
+        await conn.execute(
+            "CREATE OR REPLACE FUNCTION "
+            "prevent_commercial_billing_invoice_for_excluded_candidate() "
+            "RETURNS TRIGGER LANGUAGE plpgsql AS $legacy$"
+            f"{legacy_body}"
+            "$legacy$;"
+        )
+        await conn.execute(
+            "CREATE TABLE schema_migrations ("
+            "version INTEGER PRIMARY KEY, name VARCHAR(255) NOT NULL, "
+            "content_sha256 VARCHAR(64), "
+            "applied_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP)"
+        )
+        await conn.executemany(
+            "INSERT INTO schema_migrations (version, name, content_sha256, applied_at) "
+            "VALUES ($1, $2, $3, $4)",
+            [
+                (
+                    record.historical_migration_version,
+                    record.migration_name,
+                    record.historical_ledger_sha256,
+                    record.observed_applied_at,
+                ),
+                *[
+                    (
+                        receipt.migration_version,
+                        receipt.migration_name,
+                        None,
+                        receipt.observed_applied_at,
+                    )
+                    for receipt in record.successor_receipts
+                ],
+            ],
+        )
+        candidate = _candidate(
+            "commercial-billing:historical-379-run-fence", _fingerprint("a")
+        )
+        first_run_id, second_run_id = uuid4(), uuid4()
+        await _insert_legacy_run_candidate(
+            conn,
+            run_id=first_run_id,
+            candidate=candidate,
+            idempotency_key=f"migration-379-first-{first_run_id}",
+        )
+        await _insert_legacy_run_candidate(
+            conn,
+            run_id=second_run_id,
+            candidate=candidate,
+            idempotency_key=f"migration-379-second-{second_run_id}",
+        )
+        override_fingerprint = _fingerprint("b")
+        await conn.execute(
+            """
+            INSERT INTO commercial_billing_candidate_overrides (
+                id, billing_run_id, candidate_key, source_fingerprint, revision,
+                review_fingerprint, effective_snapshot, reason_code, reason, source,
+                idempotency_key, request_fingerprint, overridden_by
+            ) VALUES (
+                $1, $2, $3, $4, 1, $5, $6::jsonb,
+                'source_correction_pending', 'Run-A-only recovery proof.',
+                'eom_admin', $7, $8, 'Migration recovery test'
+            )
+            """,
+            uuid4(),
+            first_run_id,
+            candidate["candidateKey"],
+            candidate["sourceFingerprint"],
+            override_fingerprint,
+            json.dumps(candidate),
+            "historical-379-run-a-override",
+            _fingerprint("c"),
+        )
+        review_history_before = [
+            dict(row)
+            for row in await conn.fetch(
+                "SELECT * FROM commercial_billing_candidate_review_decisions ORDER BY id"
+            )
+        ]
+        override_history_before = [
+            dict(row)
+            for row in await conn.fetch(
+                "SELECT * FROM commercial_billing_candidate_overrides ORDER BY id"
+            )
+        ]
+        second_run_metadata = json.dumps({
+            "candidateKey": candidate["candidateKey"],
+            "commercialBillingRunId": str(second_run_id),
+            "sourceFingerprint": candidate["sourceFingerprint"],
+        })
+        with pytest.raises(asyncpg.PostgresError, match="stale"):
+            await conn.execute(
+                "INSERT INTO invoices (id, source, source_ref, metadata) "
+                "VALUES ($1, 'eom_commercial_billing', 'historical-379-before', $2::jsonb)",
+                uuid4(),
+                second_run_metadata,
+            )
+        assert await conn.fetchval("SELECT COUNT(*) FROM invoices") == 0
+
+        pool = _SchemaPool(conn, schema)
+        migrations_dir = Path(__file__).parents[1] / "atlas_brain/storage/migrations"
+        await run_migrations(
+            pool,
+            migrations_dir=migrations_dir,
+            only={record.recovery_migration_name},
+        )
+
+        assert await conn.fetchval(
+            "SELECT COUNT(*) FROM schema_migrations WHERE name = $1",
+            record.recovery_migration_name,
+        ) == 1
+        assert await conn.fetchval(
+            "SELECT content_sha256 FROM schema_migrations WHERE name = $1",
+            record.recovery_migration_name,
+        ) == record.recovery_packaged_sha256
+        await conn.execute(
+            "INSERT INTO invoices (id, source, source_ref, metadata) "
+            "VALUES ($1, 'eom_commercial_billing', 'historical-379-after', $2::jsonb)",
+            uuid4(),
+            second_run_metadata,
+        )
+        assert await conn.fetchval("SELECT COUNT(*) FROM invoices") == 1
+        assert [
+            dict(row)
+            for row in await conn.fetch(
+                "SELECT * FROM commercial_billing_candidate_review_decisions ORDER BY id"
+            )
+        ] == review_history_before
+        assert [
+            dict(row)
+            for row in await conn.fetch(
+                "SELECT * FROM commercial_billing_candidate_overrides ORDER BY id"
+            )
+        ] == override_history_before
+
+        await run_migrations(
+            pool,
+            migrations_dir=migrations_dir,
+            only={record.recovery_migration_name},
+        )
+        assert await conn.fetchval(
+            "SELECT COUNT(*) FROM schema_migrations WHERE name = $1",
+            record.recovery_migration_name,
+        ) == 1
+        assert await conn.fetchval("SELECT COUNT(*) FROM invoices") == 1
 
 
 @pytest.mark.asyncio
