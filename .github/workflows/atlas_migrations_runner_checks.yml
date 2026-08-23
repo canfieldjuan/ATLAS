@@ -8,9 +8,11 @@ on:
     paths:
       - ".github/workflows/atlas_migrations_runner_checks.yml"
       - "atlas_brain/storage/migrations/**"
+      - "atlas_brain/services/b2b/watchlist_alerts.py"
       - "scripts/check_migration_content_integrity.py"
       - "tests/test_migrations_runner.py"
       - "tests/test_migration_content_integrity_preflight.py"
+      - "tests/test_b2b_watchlist_alert_events_migration_repair.py"
       - "tests/test_eom_public_onboarding_migration_repair.py"
       - "tests/test_presence_unknown_count_migration_repair.py"
   push:
@@ -19,9 +21,11 @@ on:
     paths:
       - ".github/workflows/atlas_migrations_runner_checks.yml"
       - "atlas_brain/storage/migrations/**"
+      - "atlas_brain/services/b2b/watchlist_alerts.py"
       - "scripts/check_migration_content_integrity.py"
       - "tests/test_migrations_runner.py"
       - "tests/test_migration_content_integrity_preflight.py"
+      - "tests/test_b2b_watchlist_alert_events_migration_repair.py"
       - "tests/test_eom_public_onboarding_migration_repair.py"
       - "tests/test_presence_unknown_count_migration_repair.py"
 
@@ -66,6 +70,7 @@ jobs:
           python -m pytest \
             tests/test_migrations_runner.py \
             tests/test_migration_content_integrity_preflight.py \
+            tests/test_b2b_watchlist_alert_events_migration_repair.py \
             tests/test_eom_public_onboarding_migration_repair.py \
             tests/test_presence_unknown_count_migration_repair.py \
             -q

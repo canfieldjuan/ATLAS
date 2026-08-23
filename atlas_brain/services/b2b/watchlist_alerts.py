@@ -5,16 +5,9 @@ from __future__ import annotations
 import json
 import uuid as _uuid
 from datetime import date, datetime, timedelta, timezone
-from typing import Any, Awaitable, Callable
+from typing import Any, Awaitable, Callable, Mapping
 
-from ...api.b2b_dashboard import (
-    _accounts_in_motion_alert_basis,
-    _normalize_vendor_name,
-)
-from ...autonomous.tasks.campaign_send import _unsub_headers, _wrap_with_footer
-from ...autonomous.tasks.campaign_suppression import is_suppressed
 from ...config import settings
-from ...templates.email.watchlist_alert_delivery import render_watchlist_alert_delivery_html
 
 _WATCHLIST_ALERT_DELIVERY_FREQUENCIES = {
     "daily": 1,
@@ -40,6 +33,27 @@ def _safe_float(val: Any, default: float | None = None) -> float | None:
         return float(val)
     except (ValueError, TypeError):
         return default
+
+
+def _normalize_vendor_name(value: str | None) -> str:
+    """Return the shared vendor lookup key without importing the API package."""
+    return str(value or "").strip().lower()
+
+
+def _accounts_in_motion_alert_basis(
+    account: Mapping[str, Any] | None,
+) -> tuple[float | None, str | None]:
+    """Return the score and source used by both dashboard and alert evaluation."""
+    if not isinstance(account, Mapping):
+        return None, None
+    urgency_value = _safe_float(account.get("urgency"))
+    if urgency_value is not None:
+        return urgency_value, "urgency"
+    if bool(account.get("account_reasoning_preview_only")):
+        preview_signal_score = _safe_float(account.get("preview_signal_score"))
+        if preview_signal_score is not None:
+            return preview_signal_score, "preview_signal_score"
+    return None, None
 
 
 def _clean_optional_text(value: Any) -> str | None:
@@ -911,6 +925,19 @@ def watchlist_alert_event_email_rows(events: list[dict[str, Any]]) -> list[dict[
     return rows
 
 
+async def _campaign_suppression_check(pool: Any, *, email: str) -> Any:
+    """Lazily delegate suppression while retaining the delivery injection seam."""
+    from ...autonomous.tasks.campaign_suppression import (
+        is_suppressed as campaign_is_suppressed,
+    )
+
+    return await campaign_is_suppressed(pool, email=email)
+
+
+# Preserve the existing injectable service seam without importing autonomous code.
+is_suppressed = _campaign_suppression_check
+
+
 async def send_watchlist_alert_email(
     pool: Any,
     sender: Any,
@@ -921,6 +948,10 @@ async def send_watchlist_alert_email(
     html_body: str,
     view_name: str,
 ) -> tuple[bool, str | None, str | None, bool]:
+    # Delivery helpers initialize the autonomous package. The evaluator and
+    # migration proof must remain importable without the scheduler stack.
+    from ...autonomous.tasks.campaign_send import _unsub_headers, _wrap_with_footer
+
     suppression = await is_suppressed(pool, email=recipient)
     if suppression:
         reason = str(suppression.get("reason") or "suppressed").strip() or "suppressed"
@@ -1077,6 +1108,10 @@ def render_watchlist_alert_email_html(
     summary_line: str,
     events: list[dict[str, Any]],
 ) -> str:
+    from ...templates.email.watchlist_alert_delivery import (
+        render_watchlist_alert_delivery_html,
+    )
+
     return render_watchlist_alert_delivery_html(
         account_name=account_name,
         view_name=view_name,

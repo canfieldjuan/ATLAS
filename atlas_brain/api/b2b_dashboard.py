@@ -29,6 +29,10 @@ from ..services.b2b.source_impact import (
     get_consumer_wiring_baseline,
     summarize_source_field_baseline,
 )
+from ..services.b2b.watchlist_alerts import (
+    _accounts_in_motion_alert_basis,
+    _normalize_vendor_name,
+)
 from ..services.b2b.report_trust import report_section_evidence_payload, report_trust_payload
 from ..services.b2b.account_opportunity_claims import attach_account_opportunity_claim
 from ..services.tracing import (
@@ -322,10 +326,6 @@ def _canonical_review_predicate(alias: str = "") -> str:
     return f"{prefix}duplicate_of_review_id IS NULL"
 
 
-def _normalize_vendor_name(value: str | None) -> str:
-    return str(value or "").strip().lower()
-
-
 def _extract_report_account_preview_fields(intelligence_data: Any) -> dict[str, Any]:
     payload = _safe_json(intelligence_data)
     if not isinstance(payload, dict):
@@ -472,19 +472,6 @@ def _build_accounts_in_motion_preview_rows(
             }
         )
     return rows
-
-
-def _accounts_in_motion_alert_basis(account: Mapping[str, Any] | None) -> tuple[float | None, str | None]:
-    if not isinstance(account, Mapping):
-        return None, None
-    urgency_value = _safe_float(account.get("urgency"))
-    if urgency_value is not None:
-        return urgency_value, "urgency"
-    if bool(account.get("account_reasoning_preview_only")):
-        preview_signal_score = _safe_float(account.get("preview_signal_score"))
-        if preview_signal_score is not None:
-            return preview_signal_score, "preview_signal_score"
-    return None, None
 
 
 def _accounts_in_motion_preview_alert_policy(

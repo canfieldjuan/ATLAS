@@ -33,6 +33,97 @@ def _migration_022b_source() -> bytes:
     ).read_bytes()
 
 
+def test_migration_runner_workflow_enrolls_alert_writer_on_pr_and_main_push() -> None:
+    workflow = (
+        Path(__file__).resolve().parents[1]
+        / ".github"
+        / "workflows"
+        / "atlas_migrations_runner_checks.yml"
+    ).read_text()
+    trigger_block = workflow.split("\njobs:", 1)[0]
+    pull_request_paths, push_paths = trigger_block.split("  push:", 1)
+    writer_path = '"atlas_brain/services/b2b/watchlist_alerts.py"'
+
+    assert writer_path in pull_request_paths
+    assert writer_path in push_paths
+
+
+def _default_b2b_watchlist_alert_events_catalog_row() -> dict[str, object]:
+    """Return complete metadata-only evidence for the named 272 receipt."""
+    from atlas_brain.storage.migrations.reconciliation import (
+        _B2B_WATCHLIST_ALERT_EVENT_ALLOWED_COLUMNS,
+        _B2B_WATCHLIST_ALERT_EVENT_CONSTRAINTS,
+        _B2B_WATCHLIST_ALERT_EVENT_INDEXES,
+    )
+
+    return {
+        "catalog_evidence": {
+            "watchlist_alert_events_is_ordinary_table": True,
+            "watchlist_alert_events_has_permanent_storage": True,
+            "columns": {
+                name: {
+                    "exists": True,
+                    "data_type": data_type,
+                    "is_nullable": is_nullable,
+                    "is_generated": False,
+                    "is_identity": False,
+                    "uses_type_default_collation": True,
+                    "column_default": default,
+                }
+                for name, (data_type, is_nullable, default) in (
+                    _B2B_WATCHLIST_ALERT_EVENT_ALLOWED_COLUMNS.items()
+                )
+            },
+            "no_unlisted_alert_event_columns": True,
+            "constraints": {
+                name: {
+                    "constraint_type": constraint.constraint_type,
+                    "key_columns": list(constraint.key_columns),
+                    "referenced_table": constraint.referenced_table,
+                    "references_current_schema": (
+                        constraint.referenced_table is not None
+                    ),
+                    "referenced_columns": list(constraint.referenced_columns),
+                    "delete_action": constraint.delete_action,
+                    "update_action": constraint.update_action,
+                    "match_type": constraint.match_type,
+                    "is_deferrable": False,
+                    "is_initially_deferred": False,
+                    "is_validated": True,
+                    "internal_trigger_count": (
+                        constraint.expected_internal_trigger_count
+                    ),
+                    "origin_enabled_internal_trigger_count": (
+                        constraint.expected_internal_trigger_count
+                    ),
+                    "expression": constraint.expression,
+                }
+                for name, constraint in (
+                    _B2B_WATCHLIST_ALERT_EVENT_CONSTRAINTS.items()
+                )
+            },
+            "no_unlisted_alert_event_constraints": True,
+            "indexes": {
+                name: {
+                    "relation_kind": "i",
+                    "is_partition": False,
+                    "is_unique": index.unique,
+                    "is_valid": True,
+                    "is_ready": True,
+                    "key_attribute_count": len(index.key_columns),
+                    "attribute_count": len(index.key_columns),
+                    "key_columns": list(index.key_columns),
+                    "definition": index.definition_fragment,
+                    "predicate": index.predicate,
+                }
+                for name, index in _B2B_WATCHLIST_ALERT_EVENT_INDEXES.items()
+            },
+            "no_unlisted_alert_event_indexes": True,
+            "no_unreviewed_alert_event_write_interceptors": True,
+        }
+    }
+
+
 class FakeMigrationPool:
     def __init__(self, records=None):
         self.records = [
@@ -840,6 +931,7 @@ class _AttestedReconciliationPool(_SerializingPool):
         self.reconciliation_rows: list[dict[str, object]] = []
         self.public_onboarding_reconciliation_rows: list[dict[str, object]] = []
         self.b2b_campaign_partner_reconciliation_rows: list[dict[str, object]] = []
+        self.b2b_watchlist_alert_events_reconciliation_rows: list[dict[str, object]] = []
         self.presence_unknown_count_reconciliation_rows: list[dict[str, object]] = []
         self.presence_unknown_count_columns = [
             {
@@ -879,11 +971,15 @@ class _AttestedReconciliationPool(_SerializingPool):
             "partner_index_key_column": "partner_id",
             "partner_index_predicate": "(partner_id IS NOT NULL)",
         }
+        self.b2b_watchlist_alert_events_catalog_row = (
+            _default_b2b_watchlist_alert_events_catalog_row()
+        )
 
     async def fetch(self, query, *args):
         from atlas_brain.storage.migrations.reconciliation import (
             MIGRATION_022B_PRESENCE_UNKNOWN_COUNT_RECONCILIATION,
             MIGRATION_067_B2B_CAMPAIGN_PARTNER_RECONCILIATION,
+            MIGRATION_272_B2B_WATCHLIST_ALERT_EVENTS_RECONCILIATION,
             MIGRATION_382_EOM_PUBLIC_ONBOARDING_TOKENS_RECONCILIATION,
             MIGRATION_387_RECONCILIATION,
             _PUBLIC_ONBOARDING_TOKEN_COLUMNS,
@@ -909,10 +1005,14 @@ class _AttestedReconciliationPool(_SerializingPool):
             "SELECT version, content_sha256, applied_at FROM schema_migrations "
             "WHERE name = $1 LIMIT 2"
         ):
-            assert args == (
+            if args == (
                 MIGRATION_067_B2B_CAMPAIGN_PARTNER_RECONCILIATION.migration_name,
+            ):
+                return list(self.b2b_campaign_partner_reconciliation_rows)
+            assert args == (
+                MIGRATION_272_B2B_WATCHLIST_ALERT_EVENTS_RECONCILIATION.migration_name,
             )
-            return list(self.b2b_campaign_partner_reconciliation_rows)
+            return list(self.b2b_watchlist_alert_events_reconciliation_rows)
         if "FROM information_schema.columns AS actual" in query:
             assert args == (list(_PUBLIC_ONBOARDING_TOKEN_COLUMNS),)
             return [
@@ -965,6 +1065,34 @@ class _AttestedReconciliationPool(_SerializingPool):
         return await super().fetch(query, *args)
 
     async def fetchrow(self, query, *args):
+        if "b2b_watchlist_alert_events" in query:
+            from atlas_brain.storage.migrations.reconciliation import (
+                _B2B_WATCHLIST_ALERT_EVENT_ALLOWED_COLUMNS,
+                _B2B_WATCHLIST_ALERT_EVENT_CONSTRAINTS,
+                _B2B_WATCHLIST_ALERT_EVENT_INDEXES,
+            )
+
+            assert args == (
+                list(_B2B_WATCHLIST_ALERT_EVENT_ALLOWED_COLUMNS),
+                list(_B2B_WATCHLIST_ALERT_EVENT_CONSTRAINTS),
+                list(_B2B_WATCHLIST_ALERT_EVENT_INDEXES),
+            )
+            assert "relation_state.relpersistence" in query
+            assert "JOIN pg_type AS type_state" in query
+            assert "attribute_state.attcollation = type_state.typcollation" in query
+            assert "unlisted_indexes AS" in query
+            assert "FROM unnest(index_state.indkey)" in query
+            assert "index_state.indisunique OR index_state.indisexclusion" not in query
+            assert "unreviewed_write_interceptors AS" in query
+            assert "constraint_trigger.tgconstraint = actual.oid" in query
+            assert "constraint_trigger.tgisinternal" in query
+            assert "constraint_trigger.tgenabled = 'O'::\"char\"" in query
+            assert "FROM pg_trigger AS trigger_state" in query
+            assert "FROM pg_rewrite AS rule_state" in query
+            assert "FROM pg_policy AS policy_state" in query
+            assert "relation_state.relrowsecurity" in query
+            assert "relation_state.relforcerowsecurity" in query
+            return dict(self.b2b_watchlist_alert_events_catalog_row)
         if "b2b_campaigns" in query:
             assert args == ()
             assert "WITH target_relation AS" in query
@@ -1433,6 +1561,22 @@ def _stage_historical_067_missing_source(pool):
     return record
 
 
+def _stage_historical_272_missing_source(pool):
+    from atlas_brain.storage.migrations.reconciliation import (
+        MIGRATION_272_B2B_WATCHLIST_ALERT_EVENTS_RECONCILIATION,
+    )
+
+    record = MIGRATION_272_B2B_WATCHLIST_ALERT_EVENTS_RECONCILIATION
+    pool.records.append((record.migration_version, record.migration_name, None))
+    if hasattr(pool, "b2b_watchlist_alert_events_reconciliation_rows"):
+        pool.b2b_watchlist_alert_events_reconciliation_rows = [{
+            "version": record.migration_version,
+            "content_sha256": None,
+            "applied_at": record.observed_applied_at,
+        }]
+    return record
+
+
 def _stage_historical_022b_missing_source(tmp_path, pool):
     from atlas_brain.storage.migrations.reconciliation import (
         MIGRATION_022B_PRESENCE_UNKNOWN_COUNT_RECONCILIATION,
@@ -1534,6 +1678,27 @@ async def test_attested_067_missing_source_admits_targeted_pending_migration(tmp
 
     pool = _AttestedReconciliationPool()
     _stage_historical_067_missing_source(pool)
+    (tmp_path / "901_pending.sql").write_text("SELECT 901")
+
+    await run_migrations(
+        pool,
+        migrations_dir=tmp_path,
+        only={"901_pending"},
+    )
+
+    assert pool.applied_sql == ["SELECT 901"]
+    assert pool.inserted_with_digest == [
+        (901, "901_pending", hashlib.sha256(b"SELECT 901").hexdigest())
+    ]
+
+
+@pytest.mark.asyncio
+async def test_attested_272_missing_source_admits_targeted_pending_migration(tmp_path):
+    """The synthetic-version receipt admits only its exact ledger name."""
+    from atlas_brain.storage.migrations import run_migrations
+
+    pool = _AttestedReconciliationPool()
+    _stage_historical_272_missing_source(pool)
     (tmp_path / "901_pending.sql").write_text("SELECT 901")
 
     await run_migrations(
@@ -1659,6 +1824,117 @@ async def test_failed_067_attestation_blocks_then_retry_applies_once(tmp_path):
     assert pool.updated == []
 
     pool.b2b_campaign_partner_catalog_row["partner_index_is_ready"] = True
+    await run_migrations(pool, migrations_dir=tmp_path, only={"901_pending"})
+
+    assert pool.applied_sql == ["SELECT 901"]
+    assert pool.inserted_with_digest == [
+        (901, "901_pending", hashlib.sha256(b"SELECT 901").hexdigest())
+    ]
+
+
+@pytest.mark.asyncio
+async def test_failed_272_unlisted_index_attestation_blocks_then_retry_applies_once(
+    tmp_path,
+):
+    from atlas_brain.storage.migrations import (
+        PendingMigrationContentIntegrityError,
+        run_migrations,
+    )
+
+    pool = _AttestedReconciliationPool()
+    record = _stage_historical_272_missing_source(pool)
+    catalog = pool.b2b_watchlist_alert_events_catalog_row["catalog_evidence"]
+    catalog["no_unlisted_alert_event_indexes"] = False
+    (tmp_path / "901_pending.sql").write_text("SELECT 901")
+
+    with pytest.raises(
+        PendingMigrationContentIntegrityError,
+        match=f"missing_source={record.migration_name}",
+    ):
+        await run_migrations(pool, migrations_dir=tmp_path, only={"901_pending"})
+
+    assert pool.applied_sql == []
+    assert pool.inserted == []
+    assert pool.inserted_with_digest == []
+    assert pool.updated == []
+
+    catalog["no_unlisted_alert_event_indexes"] = True
+    await run_migrations(pool, migrations_dir=tmp_path, only={"901_pending"})
+
+    assert pool.applied_sql == ["SELECT 901"]
+    assert pool.inserted_with_digest == [
+        (901, "901_pending", hashlib.sha256(b"SELECT 901").hexdigest())
+    ]
+
+
+@pytest.mark.asyncio
+async def test_failed_272_write_interceptor_attestation_blocks_then_retry_applies_once(
+    tmp_path,
+):
+    from atlas_brain.storage.migrations import (
+        PendingMigrationContentIntegrityError,
+        run_migrations,
+    )
+
+    pool = _AttestedReconciliationPool()
+    record = _stage_historical_272_missing_source(pool)
+    catalog = pool.b2b_watchlist_alert_events_catalog_row["catalog_evidence"]
+    catalog["no_unreviewed_alert_event_write_interceptors"] = False
+    (tmp_path / "901_pending.sql").write_text("SELECT 901")
+
+    with pytest.raises(
+        PendingMigrationContentIntegrityError,
+        match=f"missing_source={record.migration_name}",
+    ):
+        await run_migrations(pool, migrations_dir=tmp_path, only={"901_pending"})
+
+    assert pool.applied_sql == []
+    assert pool.inserted == []
+    assert pool.inserted_with_digest == []
+    assert pool.updated == []
+
+    catalog["no_unreviewed_alert_event_write_interceptors"] = True
+    await run_migrations(pool, migrations_dir=tmp_path, only={"901_pending"})
+
+    assert pool.applied_sql == ["SELECT 901"]
+    assert pool.inserted_with_digest == [
+        (901, "901_pending", hashlib.sha256(b"SELECT 901").hexdigest())
+    ]
+
+
+@pytest.mark.asyncio
+async def test_failed_272_internal_fk_trigger_attestation_blocks_then_retry_applies_once(
+    tmp_path,
+):
+    from atlas_brain.storage.migrations import (
+        PendingMigrationContentIntegrityError,
+        run_migrations,
+    )
+
+    pool = _AttestedReconciliationPool()
+    record = _stage_historical_272_missing_source(pool)
+    catalog = pool.b2b_watchlist_alert_events_catalog_row["catalog_evidence"]
+    account_fk = catalog["constraints"][
+        "b2b_watchlist_alert_events_account_id_fkey"
+    ]
+    expected_trigger_count = int(
+        account_fk["origin_enabled_internal_trigger_count"]
+    )
+    account_fk["origin_enabled_internal_trigger_count"] = expected_trigger_count - 1
+    (tmp_path / "901_pending.sql").write_text("SELECT 901")
+
+    with pytest.raises(
+        PendingMigrationContentIntegrityError,
+        match=f"missing_source={record.migration_name}",
+    ):
+        await run_migrations(pool, migrations_dir=tmp_path, only={"901_pending"})
+
+    assert pool.applied_sql == []
+    assert pool.inserted == []
+    assert pool.inserted_with_digest == []
+    assert pool.updated == []
+
+    account_fk["origin_enabled_internal_trigger_count"] = expected_trigger_count
     await run_migrations(pool, migrations_dir=tmp_path, only={"901_pending"})
 
     assert pool.applied_sql == ["SELECT 901"]
@@ -1940,6 +2216,33 @@ async def test_attested_022b_missing_source_cannot_clear_other_missing_source(tm
 
     pool = _AttestedReconciliationPool()
     record = _stage_historical_022b_missing_source(tmp_path, pool)
+    pool.records.append((900, "900_other_recorded", "f" * 64))
+    (tmp_path / "901_pending.sql").write_text("SELECT 901")
+
+    with pytest.raises(PendingMigrationContentIntegrityError) as exc_info:
+        await run_migrations(pool, migrations_dir=tmp_path, only={"901_pending"})
+
+    message = str(exc_info.value)
+    assert "missing_source=900_other_recorded" in message
+    assert record.migration_name not in message
+    assert pool.applied_sql == []
+    assert pool.inserted == []
+    assert pool.inserted_with_digest == []
+    assert pool.updated == []
+    assert not pool._lock().locked()
+    assert pool.acquired == 0
+
+
+@pytest.mark.asyncio
+async def test_attested_272_missing_source_cannot_clear_other_missing_source(tmp_path):
+    """The named 272 receipt is not a generic missing-source allowlist."""
+    from atlas_brain.storage.migrations import (
+        PendingMigrationContentIntegrityError,
+        run_migrations,
+    )
+
+    pool = _AttestedReconciliationPool()
+    record = _stage_historical_272_missing_source(pool)
     pool.records.append((900, "900_other_recorded", "f" * 64))
     (tmp_path / "901_pending.sql").write_text("SELECT 901")
 
