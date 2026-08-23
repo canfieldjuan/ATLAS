@@ -2449,6 +2449,28 @@ def test_historical_379_run_fence_recovery_is_atomic_and_data_preserving():
     assert "UPDATE invoices" not in executable
 
 
+def test_historical_379_schema_binding_recovery_is_atomic_and_exact():
+    migration = (
+        Path(__file__).parents[1]
+        / "atlas_brain/storage/migrations/"
+        "392_eom_commercial_billing_run_fence_schema_binding.sql"
+    ).read_text(encoding="utf-8")
+
+    assert migration.startswith("-- atlas: atomic-bookkeeping")
+    assert "04b99e4a3ff2b18f2d58d3e1e610a4b2079fcbbd0d5ce51d97c212daaefd0477" in migration
+    assert "ALTER FUNCTION %1$I.prevent_commercial_billing_invoice_for_excluded_candidate()" in migration
+    assert "SET search_path = pg_catalog, %1$I, pg_temp" in migration
+    assert "unrecognized recovered invoice fence body" in migration
+    assert "unrecognized function configuration" in migration
+    executable = "\n".join(
+        line for line in migration.splitlines() if not line.lstrip().startswith("--")
+    )
+    assert "DROP TABLE" not in executable
+    assert "INSERT INTO invoices" not in executable
+    assert "UPDATE invoices" not in executable
+    assert "DELETE FROM invoices" not in executable
+
+
 async def _stage_historical_379_legacy_recovery_state(conn):
     """Create only the attested legacy fence state in an isolated schema."""
     from atlas_brain.storage.migrations.reconciliation import (
@@ -2699,6 +2721,11 @@ async def _stage_historical_379_legacy_recovery_state(conn):
             "EXECUTE FUNCTION unreviewed_invoice_source_after_fence()",
         ),
         (
+            "invoice insert rewrite suppression",
+            "CREATE RULE unreviewed_379_invoice_insert_suppression "
+            "AS ON INSERT TO invoices DO INSTEAD NOTHING",
+        ),
+        (
             "configured invoice-fence execution environment",
             "ALTER FUNCTION prevent_commercial_billing_invoice_for_excluded_candidate() "
             "SET search_path TO pg_catalog",
@@ -2777,9 +2804,12 @@ async def test_real_postgres_historical_379_rejects_incomplete_catalog_before_39
 
 @pytest.mark.asyncio
 async def test_real_postgres_historical_379_commercial_billing_run_fence_recovery():
-    """391 preserves history and stops a run-A override from blocking run B."""
+    """391 plus 392 preserve run scope under a hostile caller search path."""
     asyncpg = pytest.importorskip("asyncpg")
-    from atlas_brain.storage.migrations import run_migrations
+    from atlas_brain.storage.migrations import (
+        PendingMigrationContentIntegrityError,
+        run_migrations,
+    )
     from atlas_brain.storage.migrations.reconciliation import _attest_migration_379
 
     async with _billing_run_database() as (conn, schema, _database_url):
@@ -2823,12 +2853,6 @@ async def test_real_postgres_historical_379_commercial_billing_run_fence_recover
             "historical-379-run-a-override",
             _fingerprint("c"),
         )
-        review_history_before = [
-            dict(row)
-            for row in await conn.fetch(
-                "SELECT * FROM commercial_billing_candidate_review_decisions ORDER BY id"
-            )
-        ]
         override_history_before = [
             dict(row)
             for row in await conn.fetch(
@@ -2857,11 +2881,18 @@ async def test_real_postgres_historical_379_commercial_billing_run_fence_recover
                 sorted(migrations_dir.glob("*.sql")),
             )
         ).status == "recovery_required"
-        await run_migrations(
-            pool,
-            migrations_dir=migrations_dir,
-            only={record.recovery_migration_name},
-        )
+        with pytest.raises(
+            PendingMigrationContentIntegrityError,
+            match="after historical forward recovery",
+        ):
+            await run_migrations(
+                pool,
+                migrations_dir=migrations_dir,
+                only={
+                    record.recovery_migration_name,
+                    record.schema_binding_migration_name,
+                },
+            )
 
         assert await conn.fetchval(
             "SELECT COUNT(*) FROM schema_migrations WHERE name = $1",
@@ -2876,13 +2907,94 @@ async def test_real_postgres_historical_379_commercial_billing_run_fence_recover
                 conn,
                 sorted(migrations_dir.glob("*.sql")),
             )
+        ).status == "schema_binding_required"
+        assert await conn.fetchval(
+            "SELECT COUNT(*) FROM schema_migrations WHERE name = $1",
+            record.schema_binding_migration_name,
+        ) == 0
+
+        await run_migrations(
+            pool,
+            migrations_dir=migrations_dir,
+            only={record.schema_binding_migration_name},
+        )
+
+        assert await conn.fetchval(
+            "SELECT COUNT(*) FROM schema_migrations WHERE name = $1",
+            record.schema_binding_migration_name,
+        ) == 1
+        assert await conn.fetchval(
+            "SELECT content_sha256 FROM schema_migrations WHERE name = $1",
+            record.schema_binding_migration_name,
+        ) == record.schema_binding_packaged_sha256
+        assert (
+            await _attest_migration_379(
+                conn,
+                sorted(migrations_dir.glob("*.sql")),
+            )
         ).status == "attested"
+        assert await conn.fetchval(
+            "SELECT function_state.proconfig "
+            "FROM pg_catalog.pg_proc AS function_state "
+            "JOIN pg_catalog.pg_namespace AS namespace_state "
+            "ON namespace_state.oid = function_state.pronamespace "
+            "WHERE namespace_state.nspname = pg_catalog.current_schema() "
+            "AND function_state.proname = "
+            "'prevent_commercial_billing_invoice_for_excluded_candidate' "
+            "AND function_state.pronargs = 0"
+        ) == [f"search_path=pg_catalog, {schema}, pg_temp"]
         await conn.execute(
             "INSERT INTO invoices (id, source, source_ref, metadata) "
             "VALUES ($1, 'eom_commercial_billing', 'historical-379-after', $2::jsonb)",
             uuid4(),
             second_run_metadata,
         )
+        assert await conn.fetchval("SELECT COUNT(*) FROM invoices") == 1
+
+        await conn.execute(
+            """
+            INSERT INTO commercial_billing_candidate_review_decisions (
+                id, billing_run_id, candidate_key, source_fingerprint,
+                revision, decision, reason, source, idempotency_key,
+                request_fingerprint, decided_by
+            ) VALUES ($1, $2, $3, $4, 1, 'excluded', $5, 'eom_admin', $6, $7,
+                      'Migration recovery test')
+            """,
+            uuid4(),
+            second_run_id,
+            candidate["candidateKey"],
+            candidate["sourceFingerprint"],
+            "Final catalog predicate search-path proof.",
+            "historical-379-search-path-excluded-decision",
+            _fingerprint("d"),
+        )
+        review_history_after_exclusion = [
+            dict(row)
+            for row in await conn.fetch(
+                "SELECT * FROM commercial_billing_candidate_review_decisions ORDER BY id"
+            )
+        ]
+        shadow_schema = f"commercial_billing_shadow_{uuid4().hex}"
+        try:
+            await conn.execute(f'CREATE SCHEMA "{shadow_schema}"')
+            await conn.execute(
+                f'CREATE TABLE "{shadow_schema}".'
+                "commercial_billing_candidate_review_decisions "
+                f'(LIKE "{schema}".commercial_billing_candidate_review_decisions)'
+            )
+            await conn.execute(f'SET search_path TO "{shadow_schema}", "{schema}"')
+            with pytest.raises(asyncpg.PostgresError, match="excluded"):
+                await conn.execute(
+                    f'INSERT INTO "{schema}".invoices '
+                    "(id, source, source_ref, metadata) "
+                    "VALUES ($1, 'eom_commercial_billing', "
+                    "'historical-379-shadow-search-path', $2::jsonb)",
+                    uuid4(),
+                    second_run_metadata,
+                )
+        finally:
+            await conn.execute(f'SET search_path TO "{schema}"')
+            await conn.execute(f'DROP SCHEMA IF EXISTS "{shadow_schema}" CASCADE')
         assert await conn.fetchval("SELECT COUNT(*) FROM invoices") == 1
         missing_run_metadata = json.dumps({
             "candidateKey": candidate["candidateKey"],
@@ -2902,7 +3014,7 @@ async def test_real_postgres_historical_379_commercial_billing_run_fence_recover
             for row in await conn.fetch(
                 "SELECT * FROM commercial_billing_candidate_review_decisions ORDER BY id"
             )
-        ] == review_history_before
+        ] == review_history_after_exclusion
         assert [
             dict(row)
             for row in await conn.fetch(
@@ -2913,11 +3025,18 @@ async def test_real_postgres_historical_379_commercial_billing_run_fence_recover
         await run_migrations(
             pool,
             migrations_dir=migrations_dir,
-            only={record.recovery_migration_name},
+            only={
+                record.recovery_migration_name,
+                record.schema_binding_migration_name,
+            },
         )
         assert await conn.fetchval(
             "SELECT COUNT(*) FROM schema_migrations WHERE name = $1",
             record.recovery_migration_name,
+        ) == 1
+        assert await conn.fetchval(
+            "SELECT COUNT(*) FROM schema_migrations WHERE name = $1",
+            record.schema_binding_migration_name,
         ) == 1
         assert await conn.fetchval("SELECT COUNT(*) FROM invoices") == 1
 

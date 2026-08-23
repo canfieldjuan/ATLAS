@@ -54,6 +54,16 @@ def _migration_391_source() -> bytes:
     ).read_bytes()
 
 
+def _migration_392_source() -> bytes:
+    return (
+        Path(__file__).resolve().parents[1]
+        / "atlas_brain"
+        / "storage"
+        / "migrations"
+        / "392_eom_commercial_billing_run_fence_schema_binding.sql"
+    ).read_bytes()
+
+
 def _migration_function_body(source: bytes) -> str:
     match = re.search(
         r"AS\s+\$function\$(.*?)\$function\s*\$;",
@@ -1810,12 +1820,19 @@ class _CommercialBillingForwardRecoveryTransaction(_ForwardRecoveryTransaction):
 
 
 class _CommercialBillingForwardRecoveryPool(_ForwardRecoveryPool):
-    """Runner fixture whose 379 fence changes only when 391 commits."""
+    """Runner fixture whose 379 fence changes only through 391 then 392."""
 
-    def __init__(self, *, fail_commercial_recovery: bool = False):
+    def __init__(
+        self,
+        *,
+        fail_commercial_recovery: bool = False,
+        fail_commercial_schema_binding: bool = False,
+    ):
         super().__init__()
         self.fail_commercial_recovery = fail_commercial_recovery
+        self.fail_commercial_schema_binding = fail_commercial_schema_binding
         self.commercial_recovery_attempts = 0
+        self.commercial_schema_binding_attempts = 0
         self.commercial_billing_catalog = {
             "relations_ready": True,
             "required_columns_ready": True,
@@ -1828,7 +1845,9 @@ class _CommercialBillingForwardRecoveryPool(_ForwardRecoveryPool):
             "immutable_history_guards_ready": True,
             "invoice_fence_trigger_ready": True,
             "no_unreviewed_invoice_insert_interceptors": True,
+            "no_unreviewed_invoice_rewrite_interceptors": True,
             "trigger_function_execution_metadata_ready": True,
+            "invoice_fence_function_schema_binding_ready": False,
             "review_decision_history_guard_function_body": (
                 _history_379_guard_function_body(
                     "prevent_commercial_billing_review_decision_mutation"
@@ -1880,6 +1899,14 @@ class _CommercialBillingForwardRecoveryPool(_ForwardRecoveryPool):
                 "version": version,
                 "content_sha256": digest,
             } for version, name, digest in self.records if name == record.recovery_migration_name]
+        if normalized == (
+            "SELECT version, content_sha256 FROM schema_migrations "
+            "WHERE name = $1 LIMIT 2"
+        ) and args == (record.schema_binding_migration_name,):
+            return [{
+                "version": version,
+                "content_sha256": digest,
+            } for version, name, digest in self.records if name == record.schema_binding_migration_name]
         return await super().fetch(query, *args)
 
     async def fetchrow(self, query, *args):
@@ -1918,6 +1945,11 @@ class _CommercialBillingForwardRecoveryPool(_ForwardRecoveryPool):
             assert "unreviewed_invoice_insert_interceptors" in query
             assert "is_before_row_insert" in query
             assert "no_unreviewed_invoice_insert_interceptors" in query
+            assert "unreviewed_invoice_rewrite_interceptors" in query
+            assert "no_unreviewed_invoice_rewrite_interceptors" in query
+            assert "expected_invoice_fence_config" in query
+            assert "invoice_fence_schema_binding" in query
+            assert "invoice_fence_function_schema_binding_ready" in query
             assert "reviewed_trigger_function_execution_metadata" in query
             assert "trigger_function_execution_metadata_ready" in query
             assert "COUNT(*) = 3" in query
@@ -1938,6 +1970,13 @@ class _CommercialBillingForwardRecoveryPool(_ForwardRecoveryPool):
             self.commercial_billing_catalog["function_body"] = _migration_function_body(
                 _migration_391_source()
             )
+        if "Bind the recovered 391 commercial-billing invoice fence" in query:
+            self.commercial_schema_binding_attempts += 1
+            if self.fail_commercial_schema_binding:
+                raise RuntimeError("injected 392 schema-binding failure")
+            self.commercial_billing_catalog[
+                "invoice_fence_function_schema_binding_ready"
+            ] = True
         return await super().execute(query, *args)
 
     def transaction(self):
@@ -1976,6 +2015,9 @@ def _stage_historical_379_forward_recovery(tmp_path, pool):
         ))
     (tmp_path / f"{record.recovery_migration_name}.sql").write_bytes(
         _migration_391_source()
+    )
+    (tmp_path / f"{record.schema_binding_migration_name}.sql").write_bytes(
+        _migration_392_source()
     )
     pool.records.append((
         record.historical_migration_version,
@@ -2087,10 +2129,10 @@ async def test_unresolved_content_evidence_blocks_pending_migration_before_sql(
 
 
 @pytest.mark.asyncio
-async def test_379_forward_recovery_commits_before_386_then_admits_389_on_retry(
+async def test_379_forward_recovery_commits_391_then_392_before_386_and_389(
     tmp_path,
 ):
-    """391 restores run isolation, then a fresh invocation may recover 386."""
+    """Each recovery receipt commits before the next prelude is admitted."""
     from atlas_brain.storage.migrations import (
         PendingMigrationContentIntegrityError,
         run_migrations,
@@ -2103,6 +2145,7 @@ async def test_379_forward_recovery_commits_before_386_then_admits_389_on_retry(
     (tmp_path / "389_later_pending.sql").write_text(ordinary_source)
     requested = {
         commercial_record.recovery_migration_name,
+        commercial_record.schema_binding_migration_name,
         won_loss_record.recovery_migration_name,
         "389_later_pending",
     }
@@ -2120,17 +2163,37 @@ async def test_379_forward_recovery_commits_before_386_then_admits_389_on_retry(
     assert pool.commercial_billing_catalog["function_body"] == _migration_function_body(
         _migration_391_source()
     )
+    assert pool.commercial_billing_catalog[
+        "invoice_fence_function_schema_binding_ready"
+    ] is False
+    assert ordinary_source not in pool.applied_sql
+
+    with pytest.raises(
+        PendingMigrationContentIntegrityError,
+        match="mismatched=386_eom_won_loss_nocodb_fence",
+    ):
+        await run_migrations(pool, migrations_dir=tmp_path, only=requested)
+
+    assert [name for _version, name, _digest in pool.inserted_with_digest] == [
+        commercial_record.recovery_migration_name,
+        commercial_record.schema_binding_migration_name,
+    ]
+    assert pool.commercial_schema_binding_attempts == 1
+    assert pool.commercial_billing_catalog[
+        "invoice_fence_function_schema_binding_ready"
+    ] is True
     assert ordinary_source not in pool.applied_sql
 
     await run_migrations(pool, migrations_dir=tmp_path, only=requested)
 
     assert [name for _version, name, _digest in pool.inserted_with_digest] == [
         commercial_record.recovery_migration_name,
+        commercial_record.schema_binding_migration_name,
         won_loss_record.recovery_migration_name,
         "389_later_pending",
     ]
     assert pool.commercial_recovery_attempts == 1
-    assert pool.atomic_transactions == 2
+    assert pool.atomic_transactions == 3
 
 
 @pytest.mark.asyncio
@@ -2200,6 +2263,73 @@ async def test_379_forward_recovery_rejects_unreviewed_invoice_insert_intercepto
     assert pool.applied_sql == []
     assert pool.inserted_with_digest == []
     assert pool.commercial_billing_catalog["function_body"] == _legacy_379_function_body()
+
+
+@pytest.mark.asyncio
+async def test_379_forward_recovery_rejects_invoice_insert_rewrite_interceptor_before_391(
+    tmp_path,
+):
+    """An invoice rewrite rule cannot suppress the reviewed before trigger."""
+    from atlas_brain.storage.migrations import (
+        PendingMigrationContentIntegrityError,
+        run_migrations,
+    )
+
+    pool = _CommercialBillingForwardRecoveryPool()
+    commercial_record = _stage_historical_379_forward_recovery(tmp_path, pool)
+    pool.commercial_billing_catalog[
+        "no_unreviewed_invoice_rewrite_interceptors"
+    ] = False
+
+    with pytest.raises(PendingMigrationContentIntegrityError, match="missing_source="):
+        await run_migrations(
+            pool,
+            migrations_dir=tmp_path,
+            only={commercial_record.recovery_migration_name},
+        )
+
+    assert pool.commercial_recovery_attempts == 0
+    assert pool.commercial_schema_binding_attempts == 0
+    assert pool.applied_sql == []
+    assert pool.inserted_with_digest == []
+    assert pool.commercial_billing_catalog["function_body"] == _legacy_379_function_body()
+
+
+@pytest.mark.asyncio
+async def test_379_schema_binding_stays_closed_when_392_is_not_selected(tmp_path):
+    """A recovered 391 fence cannot admit ordinary SQL until 392 is selected."""
+    from atlas_brain.storage.migrations import (
+        PendingMigrationContentIntegrityError,
+        run_migrations,
+    )
+
+    pool = _CommercialBillingForwardRecoveryPool()
+    commercial_record = _stage_historical_379_forward_recovery(tmp_path, pool)
+    pool.records.append((
+        commercial_record.recovery_migration_version,
+        commercial_record.recovery_migration_name,
+        commercial_record.recovery_packaged_sha256,
+    ))
+    pool.commercial_billing_catalog["function_body"] = _migration_function_body(
+        _migration_391_source()
+    )
+    ordinary_source = "SELECT 389"
+    (tmp_path / "389_later_pending.sql").write_text(ordinary_source)
+
+    with pytest.raises(PendingMigrationContentIntegrityError, match="missing_source="):
+        await run_migrations(
+            pool,
+            migrations_dir=tmp_path,
+            only={"389_later_pending"},
+        )
+
+    assert pool.commercial_recovery_attempts == 0
+    assert pool.commercial_schema_binding_attempts == 0
+    assert pool.applied_sql == []
+    assert [name for _version, name, _digest in pool.inserted_with_digest] == []
+    assert pool.commercial_billing_catalog[
+        "invoice_fence_function_schema_binding_ready"
+    ] is False
 
 
 @pytest.mark.asyncio
@@ -2374,6 +2504,7 @@ async def test_379_forward_recovery_failure_rolls_back_then_retries_once(tmp_pat
     (tmp_path / "389_later_pending.sql").write_text("SELECT 389")
     requested = {
         commercial_record.recovery_migration_name,
+        commercial_record.schema_binding_migration_name,
         won_loss_record.recovery_migration_name,
         "389_later_pending",
     }
@@ -2395,13 +2526,64 @@ async def test_379_forward_recovery_failure_rolls_back_then_retries_once(tmp_pat
         commercial_record.recovery_migration_name,
     ]
 
+    with pytest.raises(PendingMigrationContentIntegrityError, match="mismatched="):
+        await run_migrations(pool, migrations_dir=tmp_path, only=requested)
+
+    assert [name for _version, name, _digest in pool.inserted_with_digest] == [
+        commercial_record.recovery_migration_name,
+        commercial_record.schema_binding_migration_name,
+    ]
+
     await run_migrations(pool, migrations_dir=tmp_path, only=requested)
 
     assert [name for _version, name, _digest in pool.inserted_with_digest] == [
         commercial_record.recovery_migration_name,
+        commercial_record.schema_binding_migration_name,
         won_loss_record.recovery_migration_name,
         "389_later_pending",
     ]
+
+
+@pytest.mark.asyncio
+async def test_379_schema_binding_failure_rolls_back_then_retries_once(tmp_path):
+    from atlas_brain.storage.migrations import (
+        PendingMigrationContentIntegrityError,
+        run_migrations,
+    )
+
+    pool = _CommercialBillingForwardRecoveryPool()
+    commercial_record = _stage_historical_379_forward_recovery(tmp_path, pool)
+    requested = {
+        commercial_record.recovery_migration_name,
+        commercial_record.schema_binding_migration_name,
+    }
+
+    with pytest.raises(PendingMigrationContentIntegrityError, match="missing_source="):
+        await run_migrations(pool, migrations_dir=tmp_path, only=requested)
+
+    pool.fail_commercial_schema_binding = True
+    with pytest.raises(RuntimeError, match="injected 392 schema-binding failure"):
+        await run_migrations(pool, migrations_dir=tmp_path, only=requested)
+
+    assert pool.commercial_schema_binding_attempts == 1
+    assert [name for _version, name, _digest in pool.inserted_with_digest] == [
+        commercial_record.recovery_migration_name,
+    ]
+    assert pool.commercial_billing_catalog[
+        "invoice_fence_function_schema_binding_ready"
+    ] is False
+
+    pool.fail_commercial_schema_binding = False
+    await run_migrations(pool, migrations_dir=tmp_path, only=requested)
+
+    assert pool.commercial_schema_binding_attempts == 2
+    assert [name for _version, name, _digest in pool.inserted_with_digest] == [
+        commercial_record.recovery_migration_name,
+        commercial_record.schema_binding_migration_name,
+    ]
+    assert pool.commercial_billing_catalog[
+        "invoice_fence_function_schema_binding_ready"
+    ] is True
 
 
 @pytest.mark.asyncio

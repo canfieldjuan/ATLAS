@@ -124,6 +124,7 @@ EOM_MISSED_CALL_RECOVERY_READINESS_MIGRATIONS: tuple[str, ...] = (
     # canonical target retains either reviewed historical recovery boundary.
     "390_eom_won_loss_direct_sql_fence_recovery",
     "391_eom_commercial_billing_run_fence_recovery",
+    "392_eom_commercial_billing_run_fence_schema_binding",
 )
 
 

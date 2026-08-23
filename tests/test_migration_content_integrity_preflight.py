@@ -522,6 +522,16 @@ def _migration_379_recovery_source() -> bytes:
     ).read_bytes()
 
 
+def _migration_379_schema_binding_source() -> bytes:
+    return (
+        ROOT
+        / "atlas_brain"
+        / "storage"
+        / "migrations"
+        / "392_eom_commercial_billing_run_fence_schema_binding.sql"
+    ).read_bytes()
+
+
 def _migration_379_legacy_fence_body() -> str:
     """Reproduce the observed target body without claiming missing source bytes."""
     source = (
@@ -602,7 +612,8 @@ def test_migration_379_history_guard_hashes_are_source_backed() -> None:
 class _Migration379PreflightConnection:
     """Metadata-only fake for the exact missing-source recovery evidence."""
 
-    def __init__(self, *, recovered: bool = False):
+    def __init__(self, *, recovered: bool = False, schema_bound: bool = False):
+        assert not schema_bound or recovered
         record = reconciliation_mod.MIGRATION_379_COMMERCIAL_BILLING_RUN_FENCE_FORWARD_RECOVERY
         self.record = record
         self.records: list[tuple[str, str | None]] = [
@@ -624,6 +635,7 @@ class _Migration379PreflightConnection:
             "applied_at": receipt.observed_applied_at,
         } for receipt in record.successor_receipts]
         self.recovery_rows: list[dict[str, object]] = []
+        self.schema_binding_rows: list[dict[str, object]] = []
         self.catalog = {
             "relations_ready": True,
             "required_columns_ready": True,
@@ -636,7 +648,9 @@ class _Migration379PreflightConnection:
             "immutable_history_guards_ready": True,
             "invoice_fence_trigger_ready": True,
             "no_unreviewed_invoice_insert_interceptors": True,
+            "no_unreviewed_invoice_rewrite_interceptors": True,
             "trigger_function_execution_metadata_ready": True,
+            "invoice_fence_function_schema_binding_ready": False,
             "review_decision_history_guard_function_body": (
                 _migration_379_history_guard_body(
                     "prevent_commercial_billing_review_decision_mutation"
@@ -657,6 +671,16 @@ class _Migration379PreflightConnection:
                 "content_sha256": record.recovery_packaged_sha256,
             }]
             self.catalog["function_body"] = _migration_379_recovered_fence_body()
+        if schema_bound:
+            self.records.append((
+                record.schema_binding_migration_name,
+                record.schema_binding_packaged_sha256,
+            ))
+            self.schema_binding_rows = [{
+                "version": record.schema_binding_migration_version,
+                "content_sha256": record.schema_binding_packaged_sha256,
+            }]
+            self.catalog["invoice_fence_function_schema_binding_ready"] = True
         self.queries: list[str] = []
         self.fetch_calls: list[tuple[str, tuple[object, ...]]] = []
         self.fetchrow_calls: list[tuple[str, tuple[object, ...]]] = []
@@ -694,8 +718,11 @@ class _Migration379PreflightConnection:
             "SELECT version, content_sha256 FROM schema_migrations "
             "WHERE name = $1 LIMIT 2"
         ):
-            assert args == (self.record.recovery_migration_name,)
-            return self.recovery_rows
+            if args == (self.record.recovery_migration_name,):
+                return self.recovery_rows
+            if args == (self.record.schema_binding_migration_name,):
+                return self.schema_binding_rows
+            raise AssertionError(f"Unexpected ledger evidence query args: {args}")
         raise AssertionError(f"Unexpected fetch query: {query}")
 
     async def fetchrow(self, query: str, *args: object) -> dict[str, object]:
@@ -740,6 +767,11 @@ class _Migration379PreflightConnection:
         assert "unreviewed_invoice_insert_interceptors" in query
         assert "is_before_row_insert" in query
         assert "no_unreviewed_invoice_insert_interceptors" in query
+        assert "unreviewed_invoice_rewrite_interceptors" in query
+        assert "no_unreviewed_invoice_rewrite_interceptors" in query
+        assert "expected_invoice_fence_config" in query
+        assert "invoice_fence_schema_binding" in query
+        assert "invoice_fence_function_schema_binding_ready" in query
         assert "reviewed_trigger_function_execution_metadata" in query
         assert "trigger_function_execution_metadata_ready" in query
         assert "COUNT(*) = 3" in query
@@ -773,6 +805,11 @@ def _stage_migration_379_recovery_sources(directory: Path) -> None:
         directory,
         "391_eom_commercial_billing_run_fence_recovery",
         _migration_379_recovery_source(),
+    )
+    _write_migration(
+        directory,
+        "392_eom_commercial_billing_run_fence_schema_binding",
+        _migration_379_schema_binding_source(),
     )
 
 
@@ -1257,6 +1294,9 @@ async def test_known_379_recovery_reports_exact_legacy_state_without_admitting_s
         "recovery_source_ready": True,
         "no_recovery_ledger_row": True,
         "recovery_receipt_ready": False,
+        "schema_binding_source_ready": True,
+        "no_schema_binding_ledger_row": True,
+        "schema_binding_receipt_ready": False,
         "reviewed_billing_catalog_ready": True,
         "required_billing_columns_ready": True,
         "no_unreviewed_billing_columns": True,
@@ -1268,11 +1308,14 @@ async def test_known_379_recovery_reports_exact_legacy_state_without_admitting_s
         "no_unreviewed_billing_indexes": True,
         "invoice_fence_trigger_ready": True,
         "no_unreviewed_invoice_insert_interceptors": True,
+        "no_unreviewed_invoice_rewrite_interceptors": True,
         "trigger_function_execution_metadata_ready": True,
+        "invoice_fence_function_schema_binding_ready": False,
         "legacy_function_body_matches": True,
         "recovered_function_body_matches": False,
         "legacy_catalog_ready": True,
         "recovered_catalog_ready": False,
+        "schema_binding_required": False,
         "status": "recovery_required",
     }]
     assert connection.transaction_readonly == [True]
@@ -1285,7 +1328,7 @@ async def test_known_379_recovery_reports_exact_legacy_state_without_admitting_s
 
 
 @pytest.mark.asyncio
-async def test_known_379_recovery_attests_only_after_its_own_receipt_and_fence(
+async def test_known_379_recovery_requires_schema_binding_after_391_receipt(
     tmp_path: Path,
 ) -> None:
     connection = _Migration379PreflightConnection(recovered=True)
@@ -1302,9 +1345,78 @@ async def test_known_379_recovery_attests_only_after_its_own_receipt_and_fence(
     assert len(evidence) == 1
     assert evidence[0]["no_recovery_ledger_row"] is False
     assert evidence[0]["recovery_receipt_ready"] is True
+    assert evidence[0]["no_schema_binding_ledger_row"] is True
+    assert evidence[0]["schema_binding_receipt_ready"] is False
     assert evidence[0]["legacy_catalog_ready"] is False
+    assert evidence[0]["recovered_catalog_ready"] is False
+    assert evidence[0]["schema_binding_required"] is True
+    assert evidence[0]["status"] == "schema_binding_required"
+    assert connection.execute_calls == []
+
+
+@pytest.mark.asyncio
+async def test_known_379_recovery_attests_only_after_its_own_391_and_392_receipts(
+    tmp_path: Path,
+) -> None:
+    connection = _Migration379PreflightConnection(recovered=True, schema_bound=True)
+    _stage_migration_379_recovery_sources(tmp_path)
+
+    code, payload = await module.run_migration_content_integrity_preflight(
+        connection,
+        migrations_dir=tmp_path,
+        attest_known_reconciliations=True,
+    )
+
+    assert code == module.UNRESOLVED_DRIFT_EXIT
+    evidence = payload["known_reconciliation_evidence"]
+    assert len(evidence) == 1
+    assert evidence[0]["recovery_receipt_ready"] is True
+    assert evidence[0]["schema_binding_receipt_ready"] is True
+    assert evidence[0]["invoice_fence_function_schema_binding_ready"] is True
+    assert evidence[0]["schema_binding_required"] is False
     assert evidence[0]["recovered_catalog_ready"] is True
     assert evidence[0]["status"] == "attested"
+    assert connection.execute_calls == []
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("case", "field"),
+    [
+        ("wrong 392 receipt", "schema_binding_receipt_ready"),
+        ("modified 392 source", "schema_binding_source_ready"),
+        ("missing active-schema pin", "invoice_fence_function_schema_binding_ready"),
+    ],
+)
+async def test_known_379_recovery_rejects_nonexact_392_state(
+    tmp_path: Path,
+    case: str,
+    field: str,
+) -> None:
+    connection = _Migration379PreflightConnection(recovered=True, schema_bound=True)
+    _stage_migration_379_recovery_sources(tmp_path)
+    if case == "wrong 392 receipt":
+        connection.schema_binding_rows[0]["content_sha256"] = "0" * 64
+    elif case == "modified 392 source":
+        (
+            tmp_path / f"{connection.record.schema_binding_migration_name}.sql"
+        ).write_text("SELECT 392")
+    elif case == "missing active-schema pin":
+        connection.catalog["invoice_fence_function_schema_binding_ready"] = False
+    else:  # pragma: no cover - parameter values are exhaustive.
+        raise AssertionError(f"unexpected schema-binding evidence case: {case}")
+
+    code, payload = await module.run_migration_content_integrity_preflight(
+        connection,
+        migrations_dir=tmp_path,
+        attest_known_reconciliations=True,
+    )
+
+    evidence = payload["known_reconciliation_evidence"][0]
+    assert code == module.UNRESOLVED_DRIFT_EXIT, case
+    assert evidence["recovery_receipt_ready"] is True, case
+    assert evidence[field] is False, case
+    assert evidence["status"] == "not_attested", case
     assert connection.execute_calls == []
 
 
@@ -1338,6 +1450,10 @@ async def test_known_379_recovery_attests_only_after_its_own_receipt_and_fence(
         (
             "unreviewed invoice insert interceptor",
             "no_unreviewed_invoice_insert_interceptors",
+        ),
+        (
+            "unreviewed invoice rewrite interceptor",
+            "no_unreviewed_invoice_rewrite_interceptors",
         ),
         (
             "changed trigger-function execution metadata",
@@ -1393,6 +1509,8 @@ async def test_known_379_recovery_rejects_nonexact_or_half_recorded_evidence(
         connection.catalog["invoice_fence_trigger_ready"] = False
     elif case == "unreviewed invoice insert interceptor":
         connection.catalog["no_unreviewed_invoice_insert_interceptors"] = False
+    elif case == "unreviewed invoice rewrite interceptor":
+        connection.catalog["no_unreviewed_invoice_rewrite_interceptors"] = False
     elif case == "changed trigger-function execution metadata":
         connection.catalog["trigger_function_execution_metadata_ready"] = False
     elif case == "changed legacy function":

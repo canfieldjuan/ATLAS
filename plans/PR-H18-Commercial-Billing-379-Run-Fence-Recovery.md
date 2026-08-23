@@ -418,6 +418,50 @@ run-isolation defect, or an EOM entrypoint unable to select its prerequisite.
   full Unit Gate. The target probe must use the existing read-only preflight
   connection and report no credentials or catalog row contents.
 
+### Contract revision after final invoice-execution-path review
+
+- New evidence: two current Codex blockers demonstrate that the same 379
+  admission seam still admits a function whose unqualified billing-table reads
+  follow the invoking backend's `search_path`, and an `ON INSERT DO INSTEAD`
+  rewrite rule that suppresses the reviewed invoice trigger before it executes.
+  Empty `pg_proc.proconfig` is not a schema binding for immutable 391's
+  unqualified function body; the current invoice interceptor predicate observes
+  only row-level `BEFORE INSERT` triggers and not `pg_rewrite`.
+- Revised root cause: the recovery state is attested from partial execution-path
+  metadata. It does not prove that every write interception point reaches the
+  reviewed fence, nor that the fence resolves its three billing relations in the
+  same reviewed schema when an application connection has a shadow-first search
+  path.
+- Revised required change surface: reject every non-`_RETURN` rewrite rule on
+  `invoices` alongside the existing closed row-level trigger set. Add the
+  additive, reserved, atomic-bookkeeping migration
+  `392_eom_commercial_billing_run_fence_schema_binding.sql`; it must only bind
+  the exact recovered 391 function in the active schema, set its local
+  `search_path` to `pg_catalog`, that schema, and `pg_temp`, and receive its own
+  normal runner receipt. Reclassify 379 as `schema_binding_required` after a
+  valid 391 receipt until 392's exact receipt and the pinned configuration are
+  present. The selector and EOM closed readiness set must permit 392 only in
+  that exact intermediate state. Add fake, runner, and isolated PostgreSQL
+  coverage for rewrite suppression, missing/incorrect 392 evidence, shadow-first
+  caller paths, receipt retry, and no prelude SQL for all other catalog states.
+- Revised explicit non-scope: do not edit immutable 391 bytes, rewrite any
+  historical ledger row, change invoice service/API behavior, or authorize a
+  production migration. 392 is a forward-only repair of 391's already-recorded
+  runtime contract, not a replay or alteration of 391.
+- Revised verification plan: retain focused local preflight/runner/syntax/Ruff
+  coverage and let GitHub run the controlled PostgreSQL matrix and full Unit
+  Gate. The previous read-only target result is superseded: until an authorized
+  392 deployment records its receipt, the stricter observer must report
+  `schema_binding_required`, not `attested`.
+- Final pre-deploy target evidence: the configured target's read-only
+  reconciliation probe now reports `schema_binding_required` for 379. It
+  confirms the recovered 391 receipt/body and final closed catalog, including
+  the invoice rewrite-rule predicate, while correctly withholding attestation
+  because 392's receipt and active-schema function setting do not exist yet.
+  The probe never invokes the migration runner; 392 deployment remains an
+  authorized release action, and the independently known 386 recovery stays
+  unresolved.
+
 ## Scope (this PR)
 
 Ownership lane: h18-migration-content-integrity
@@ -426,52 +470,61 @@ Slice phase: Production hardening
 Max files: 11
 
 1. Model only the observed 379 missing-source/run-fence recovery state and
-   reserve 391 from the ordinary pending-migration loop.
-2. Restore the current run-scoped invoice-fence function through a single
-   atomic, revalidated, forward-only migration.
-3. Add 391 to the already closed missed-call readiness set so the production
-   EOM migration entrypoint can select it deliberately; prove its two-step
-   interaction with 386 and rejection of unrecognized drift.
-4. Enroll the dedicated disposable PostgreSQL regression in the existing
+   reserve both 391 and its schema-binding successor 392 from the ordinary
+   pending-migration loop.
+2. Restore the current run-scoped invoice-fence function through immutable 391,
+   then bind that exact recovered function to the active schema through the
+   single atomic, forward-only 392 receipt.
+3. Close the invoice execution path by rejecting unreviewed row-level
+   before-insert triggers and non-`_RETURN` invoice rewrite rules before either
+   recovery can be selected.
+4. Add 392 to the already closed missed-call readiness set so the production
+   EOM migration entrypoint can select it deliberately; prove the staged
+   391-to-392 interaction, 386 ordering, and rejection of unrecognized drift.
+5. Enroll the dedicated disposable PostgreSQL regression in the existing
    migration job and add the new migration to existing EOM path coverage.
 
 ### Review Contract
 
 - Acceptance criteria:
-  - [ ] The exact old 379 catalog is `recovery_required`, while the current
-    target is `attested` only after its own exact 391 digest receipt, the
-    run-scoped fence body, and both immutable history-guard bodies; neither
-    state claims the unavailable historical source was recovered. Settled by
+  - [ ] The exact old 379 catalog is `recovery_required`, the exact recovered
+    391 catalog without 392 is `schema_binding_required`, and a target is
+    `attested` only after exact 391 and 392 digest receipts, the run-scoped
+    fence body, its active-schema `search_path`, and both immutable
+    history-guard bodies; no state claims the unavailable historical source was
+    recovered. Settled by
     `tests/test_migration_content_integrity_preflight.py` and the controlled
     target preflight recorded in #2476.
   - [ ] A legacy 379 state with selected 391 runs only 391 under the existing
-    advisory lock and atomic-bookkeeping path, records its digest exactly once,
-    re-reads evidence, and leaves ordinary pending SQL blocked while 386 is
-    still unresolved; settled by `tests/test_migrations_runner.py`.
+    advisory lock and atomic-bookkeeping path; its exact post-391 state can run
+    only selected 392, records each digest exactly once, re-reads evidence, and
+    leaves ordinary pending SQL blocked while either recovery or 386 remains
+    unresolved; settled by `tests/test_migrations_runner.py`.
   - [ ] An unknown discrepancy, changed legacy fence hash, altered history
     guard body, conditional or foreign-schema same-name required trigger
-    function, an unreviewed row-level `BEFORE INSERT` invoice interceptor,
-    non-default execution metadata or a function-local setting on a required
-    trigger function,
+    function, an unreviewed row-level `BEFORE INSERT` or rewrite-rule invoice
+    interceptor, non-default execution metadata, a missing/incorrect schema
+    pin, or any other function-local setting on a required trigger function,
     missing, retagged, nullable, or unreviewed behavior-driving billing column,
     row security, policy, rewrite rule, or inherited child on a fence-read
     relation, missing required
     decision-table catalog member (including a
     declared constraint, its exact `CHECK` predicate, or index), an unreviewed
-    catalog member, an omitted 391
+    catalog member, an omitted 391 or 392
     `only=` selection, a 386 mismatch that does not independently attest as
     `recovery_required`, or an already recorded but non-attested 391 causes no
     target SQL/ledger mutation; settled by negative fake-runner and preflight
     cases.
   - [ ] In an isolated PostgreSQL schema, recovery preserves all existing
-    decision and override data, changes no row values, and restores run isolation:
-    a candidate in run B is not blocked by an override stored only for run A;
-    settled by `tests/test_commercial_billing_runs.py`.
-  - [ ] A retry after the 391 receipt is a no-op; a legacy provider insert that
+    decision and override data, changes no row values, restores run isolation,
+    and rejects a canonical excluded candidate even when the caller puts a
+    shadow schema first in `search_path`; settled by
+    `tests/test_commercial_billing_runs.py`.
+  - [ ] A retry after the 391/392 receipts is a no-op; a legacy provider insert that
     omits `commercialBillingRunId` raises a PostgreSQL error at the recovered
     database boundary and leaves the invoice count unchanged; settled by the
     same disposable PostgreSQL regression.
-  - [ ] The EOM missed-call readiness entrypoint explicitly selects 391 and the
+  - [ ] The EOM missed-call readiness entrypoint explicitly selects 391 and 392 and the
     relevant workflows run when its migration, selector, or dedicated proof
     changes; settled by `tests/test_eom_render_profile.py` and both workflow
     command/path assertions.
@@ -492,9 +545,11 @@ Max files: 11
   chooses at most one explicit, named recovery.
 - Replaced-path behaviors:
   - healthy/attested target: preserve ordinary selected migration behavior and
-    leave both reserved recovery files inert;
+    leave all reserved recovery files inert;
   - exact 379 legacy plus 386 recovery-required: select 391 first only when it
     is included in the caller's pending set, then stop before ordinary SQL;
+  - exact recovered 391 state: select 392 only when it is included in the
+    caller's pending set, then re-attest its schema binding before ordinary SQL;
   - recovered 379 plus exact 386 legacy: select 390 on the next invocation;
   - any unknown, incomplete, or wrong catalog: fail before all pending SQL.
 - Guard-relevant fields: unresolved mismatch/missing-source names, 379's exact
@@ -503,35 +558,42 @@ Max files: 11
   predicates/declared indexes/no-unreviewed catalog members/exact user-column
   type-and-nullability set/no query-rewriting control or inherited child on
   fence-read relations/
-  closed invoice row-level `BEFORE INSERT` interceptor set/unconditional triggers bound to
+  closed invoice row-level `BEFORE INSERT` and rewrite-rule interceptor set/unconditional triggers bound to
   expected current-schema function OIDs/current-schema
   history-guard `pg_proc.prosrc` SHA-256 values/exact trigger-function
-  execution metadata (PL/pgSQL, security-invoker/default flags, and empty
-  `proconfig`), 386's independently attested
+  execution metadata (PL/pgSQL, security-invoker/default flags, and an exact
+  staged empty-or-active-schema `proconfig`), 392's independent source/receipt
+  and active-schema pin, 386's independently attested
   status, invoice-fence trigger, legacy and recovered invoice-fence
   `pg_proc.prosrc` SHA-256 values, recovery source digest, recovery ledger row,
   and selected pending migration names.
 - Caller x input shape:
-  - EOM closed `only=` set including 391 x target-shaped 379/386 legacy state;
-  - explicit `only=` set omitting 391 x the same legacy state;
+  - EOM closed `only=` set including 391 and 392 x target-shaped 379/386 legacy state;
+  - explicit `only=` set omitting 391 or 392 x the corresponding recovery state;
   - full runner x target-shaped 379/386 legacy state;
   - either runner x unknown extra missing/mismatched evidence;
-  - rerun after 391 is recorded; and
+  - rerun after 391 and after 392 are recorded; and
   - direct current/legacy invoice insert x two runs sharing a candidate identity
     with an override only in the other run.
 
 ### Deployed-config probing
 
-- Deployed/default config values: N/A; this adds no configuration or fallback.
-- Explicit value probe: N/A.
-- Absent value probe: N/A.
-- Default-session/default-context probe: the recovery and its attestation use
-  the existing connection schema and query only catalog metadata; disposable
-  tests run under an isolated schema and prove the trigger binds there.
-- Side-effect ordering: read-only integrity evidence selects 391; migration 391
-  re-checks its legacy function/catalog in SQL; function replacement and its
-  ledger receipt commit atomically; the runner then re-reads evidence before it
-  can consider any later recovery or ordinary migration.
+- Deployed/default config values: 391's observed function configuration is
+  empty, which is now explicitly unsafe for its unqualified reads. 392 stores
+  the active schema as `search_path=pg_catalog, <current_schema>, pg_temp` in
+  `pg_proc.proconfig`; no application environment setting is introduced.
+- Explicit value probe: the disposable PostgreSQL proof invokes canonical
+  `invoices` with a shadow schema first in the caller path and confirms the
+  pinned function rejects from the canonical billing catalog.
+- Absent value probe: an empty recovered-function `proconfig` with no 392
+  receipt is `schema_binding_required` and cannot admit ordinary pending SQL.
+- Default-session/default-context probe: a default isolated-schema connection
+  and its explicit shadow-first variant both resolve the recovered fence through
+  its function-local active-schema path.
+- Side-effect ordering: read-only evidence selects 391 or 392; each migration
+  re-checks its own predecessor state before changing function configuration,
+  and its source change plus ledger receipt commit atomically; the runner then
+  re-reads evidence before it can consider any later recovery or ordinary SQL.
 
 ### Files touched
 
@@ -539,6 +601,7 @@ Max files: 11
 - `.github/workflows/atlas_migrations_runner_checks.yml`
 - `atlas_brain/main_eom.py`
 - `atlas_brain/storage/migrations/391_eom_commercial_billing_run_fence_recovery.sql`
+- `atlas_brain/storage/migrations/392_eom_commercial_billing_run_fence_schema_binding.sql`
 - `atlas_brain/storage/migrations/reconciliation.py`
 - `plans/PR-H18-Commercial-Billing-379-Run-Fence-Recovery.md`
 - `tests/test_commercial_billing_runs.py`
@@ -548,12 +611,13 @@ Max files: 11
 
 ## Mechanism
 
-The new reconciliation record does not map historical 379 to current 380 or
-claim to recover unavailable source bytes. It records the observed target
-receipt and final catalog preconditions as a recovery boundary. Its evidence
-can have three outcomes: `recovery_required` for the exact old global fence,
-`attested` only after 391's own digest receipt plus the current run-scoped
-function body, or `not_attested` for every other target.
+The reconciliation record does not map historical 379 to current 380 or claim
+to recover unavailable source bytes. It records the observed target receipt and
+final catalog preconditions as a closed recovery boundary. Its evidence has four
+outcomes: `recovery_required` for the exact old global fence,
+`schema_binding_required` for the exact recovered-391 function without 392's
+receipt, `attested` only after both receipts plus the active-schema function
+setting, or `not_attested` for every other target.
 
 Migration 391 is `atomic-bookkeeping`. Its first catalog guard compares the
 current function body against the reviewed legacy SHA-256, verifies the known
@@ -563,18 +627,22 @@ migration-382 contract. No table rows, financial history, invoices, payments,
 or ledger facts are rewritten. The normal runner records the new migration
 digest in the same transaction.
 
-The reconciliation observer separately requires every trigger function used by
-that fence to retain the source-implied PL/pgSQL, security-invoker, default
-execution metadata and no function-local settings. This prevents an
-OID-preserving `ALTER FUNCTION` from changing the environment in which the
-unqualified fence reads resolve while the source hash remains unchanged.
+Migration 392 is also `atomic-bookkeeping`. It re-checks that the active-schema
+function is the reviewed 391 body with either no function-local configuration or
+the exact desired configuration, then pins its local `search_path` to
+`pg_catalog`, the active schema, and `pg_temp`. It changes no table rows and
+records its own digest in the same atomic runner transaction. The observer
+allows no other execution metadata or function-local setting and rejects every
+non-`_RETURN` invoice rewrite rule as well as every extra row-level before-insert
+invoice trigger.
 
 The selector remains closed rather than becoming a generic exception system.
-It may choose 391 only for the exact known 379 missing-source state, and only
-when all other unresolved names are the known 386 forward-recovery state. It
-uses the existing single-prelude/re-read sequence: 391 commits, the runner
-observes 386 still unresolved and stops; a fresh invocation can choose the
-existing 390 route; only then can normal pending migration 389 be considered.
+It may choose 391 only for the exact known legacy state, then may choose 392
+only for its exact post-391 state, and only when all other unresolved names are
+the known 386 forward-recovery state. It uses the existing single-prelude/re-read
+sequence: each recovery commits, the runner re-reads evidence, and a fresh
+invocation chooses the next exact recovery before any ordinary migration can be
+considered.
 
 Rollback is operationally forward-only. For a compatible legacy target before
 391, retain the previous runtime and make no target change. The canonical target
@@ -595,10 +663,10 @@ deployment sequence.
 - Reuse the current 382 run-scoped fence rather than changing commercial billing
   API or product behavior. This is a database recovery of the existing contract.
 - Restrict the closed-interceptor predicate to non-internal row-level `BEFORE
-  INSERT` triggers on `invoices`: this is the PostgreSQL execution class that
-  can rewrite `NEW` around the reviewed invoice fence. Statement triggers and
-  unrelated invoice mechanisms are not silently claimed as attested by this
-  recovery.
+  INSERT` triggers and non-`_RETURN` `pg_rewrite` rules on `invoices`: these
+  PostgreSQL execution points can rewrite or suppress an invoice before the
+  reviewed fence. Statement triggers and unrelated invoice mechanisms are not
+  silently claimed as attested by this recovery.
 - Require the exact source-backed user-column set for the three billing
   relations, including each base type, type modifier, default collation, and
   nullability, before treating a 379 catalog as safe to recover or attested.
@@ -611,9 +679,10 @@ deployment sequence.
   recovered fence. A parent scan includes those rows, but a parent table's
   uniqueness and mutation guards do not constrain the child catalog.
 - Require the exact source-implied execution metadata for all three trigger
-  functions, including an empty function-local configuration. `prosrc` and OID
-  equality alone do not constrain `ALTER FUNCTION ... SET search_path` or a
-  changed security context.
+  functions. The two history guards retain empty function-local configuration;
+  the recovered invoice fence transitions only from empty to its exact active-
+  schema `search_path` under 392's own receipt. `prosrc` and OID equality alone
+  do not constrain ambient caller resolution or a changed security context.
 
 ## Deferred
 
@@ -622,10 +691,11 @@ deployment sequence.
   but does not redesign the global execution model.
 - The current target's 391 execution was observed only through its exact ledger
   receipt and catalog result; repository evidence cannot determine its operator
-  or change-control record. The receipt/digest is recorded in #2476. The 390
-  target execution and post-run proof remain protected follow-up operational
-  actions. No tracker or Website consumer work is unblocked by this source-only
-  PR alone.
+  or change-control record. The receipt/digest is recorded in #2476. A protected
+  392 deployment and its post-run read-only attestation are now required before
+  the target can be considered 379-attested; the 390 target execution and
+  post-run proof remain separate protected operational actions. No tracker or
+  Website consumer work is unblocked by this source-only PR alone.
 
 Parked hardening: none.
 
@@ -635,19 +705,18 @@ Parked hardening: none.
   PostgreSQL recovery test when its isolated test URL is available, Python
   syntax, Ruff, plan sync, whitespace, and contract checks. GitHub owns the
   full Unit Gate and remaining required checks; no duplicate local Unit Gate.
-- Historical target proof before later predicate revisions: a read-only
+- Historical target proof before the schema-binding predicate: a read-only
   `scripts/check_migration_content_integrity.py` receipt against the exact
-  configured target showed 391's exact source digest and 379 `attested`; it did
-  not invoke the runner. The current-head re-attestation is recorded only after
-  the final full-index predicate is present.
-- Final target proof after the full-index predicate: the same target-confirmed
-  read-only preflight ran from this candidate worktree with both the connection
-  read-only setting and a read-only transaction. Its outer integrity result was
-  `unresolved_drift` solely for the intentionally unavailable historical source;
-  the named 379 evidence was `attested` with
-  `reviewed_billing_catalog_ready`, `recovery_receipt_ready`, and
-  `recovered_catalog_ready` all true. It did not invoke the runner or execute
-  migration SQL.
+  configured target showed 391's exact source digest and the then-current 379
+  predicate as `attested`; it did not invoke the runner. That predicate is now
+  known incomplete because an empty function configuration does not bind
+  immutable 391's unqualified reads.
+- Final target proof after 392 deployment: the same target-confirmed read-only
+  preflight must return the generic `unresolved_drift` only for the intentionally
+  unavailable historical source and named 379 evidence `attested` with reviewed
+  catalog, 391/392 recovery receipts, and the exact active-schema function
+  configuration. Until that protected deployment, the named status is expected
+  to be `schema_binding_required`; the coding arc will not invoke the runner.
 - Controlled target proof after the protected 390 deployment: a fresh
   target-confirmed read-only receipt must show 386 attested before migration
   389 is eligible.
@@ -656,14 +725,15 @@ Parked hardening: none.
 
 | File | LOC |
 |---|---:|
-| `.github/workflows/atlas_eom_lead_pipeline_checks.yml` | 2 |
+| `.github/workflows/atlas_eom_lead_pipeline_checks.yml` | 4 |
 | `.github/workflows/atlas_migrations_runner_checks.yml` | 16 |
-| `atlas_brain/main_eom.py` | 3 |
+| `atlas_brain/main_eom.py` | 4 |
 | `atlas_brain/storage/migrations/391_eom_commercial_billing_run_fence_recovery.sql` | 343 |
-| `atlas_brain/storage/migrations/reconciliation.py` | 1061 |
-| `plans/PR-H18-Commercial-Billing-379-Run-Fence-Recovery.md` | 669 |
-| `tests/test_commercial_billing_runs.py` | 498 |
-| `tests/test_eom_render_profile.py` | 1 |
-| `tests/test_migration_content_integrity_preflight.py` | 453 |
-| `tests/test_migrations_runner.py` | 589 |
-| **Total** | **3625** |
+| `atlas_brain/storage/migrations/392_eom_commercial_billing_run_fence_schema_binding.sql` | 83 |
+| `atlas_brain/storage/migrations/reconciliation.py` | 1214 |
+| `plans/PR-H18-Commercial-Billing-379-Run-Fence-Recovery.md` | 730 |
+| `tests/test_commercial_billing_runs.py` | 617 |
+| `tests/test_eom_render_profile.py` | 2 |
+| `tests/test_migration_content_integrity_preflight.py` | 530 |
+| `tests/test_migrations_runner.py` | 771 |
+| **Total** | **4314** |

@@ -98,6 +98,9 @@ class HistoricalMissingSourceForwardRecoveryReconciliation:
     recovery_migration_name: str
     recovery_migration_version: int
     recovery_packaged_sha256: str
+    schema_binding_migration_name: str
+    schema_binding_migration_version: int
+    schema_binding_packaged_sha256: str
 
     @property
     def source_verification(self) -> str:
@@ -285,6 +288,9 @@ class MissingSourceForwardRecoveryMigrationReconciliationAttestation:
     recovery_source_ready: bool
     no_recovery_ledger_row: bool
     recovery_receipt_ready: bool
+    schema_binding_source_ready: bool
+    no_schema_binding_ledger_row: bool
+    schema_binding_receipt_ready: bool
     reviewed_billing_catalog_ready: bool
     required_billing_columns_ready: bool
     no_unreviewed_billing_columns: bool
@@ -296,7 +302,9 @@ class MissingSourceForwardRecoveryMigrationReconciliationAttestation:
     no_unreviewed_billing_indexes: bool
     invoice_fence_trigger_ready: bool
     no_unreviewed_invoice_insert_interceptors: bool
+    no_unreviewed_invoice_rewrite_interceptors: bool
     trigger_function_execution_metadata_ready: bool
+    invoice_fence_function_schema_binding_ready: bool
     legacy_function_body_matches: bool
     recovered_function_body_matches: bool
 
@@ -321,6 +329,22 @@ class MissingSourceForwardRecoveryMigrationReconciliationAttestation:
             self.reviewed_billing_catalog_ready,
             self.invoice_fence_trigger_ready,
             self.recovered_function_body_matches,
+            self.invoice_fence_function_schema_binding_ready,
+        ))
+
+    @property
+    def schema_binding_required(self) -> bool:
+        """Return whether exact recovered 391 state needs only its schema pin."""
+        return all((
+            self.historical_receipt_ready,
+            self.successor_receipts_ready,
+            self.recovery_source_ready,
+            self.schema_binding_source_ready,
+            self.recovery_receipt_ready,
+            self.no_schema_binding_ledger_row,
+            self.reviewed_billing_catalog_ready,
+            self.invoice_fence_trigger_ready,
+            self.recovered_function_body_matches,
         ))
 
     @property
@@ -329,15 +353,21 @@ class MissingSourceForwardRecoveryMigrationReconciliationAttestation:
             self.historical_receipt_ready,
             self.successor_receipts_ready,
             self.recovery_source_ready,
+            self.schema_binding_source_ready,
             self.no_recovery_ledger_row,
+            self.no_schema_binding_ledger_row,
             self.legacy_catalog_ready,
         )):
             return "recovery_required"
+        if self.schema_binding_required:
+            return "schema_binding_required"
         if all((
             self.historical_receipt_ready,
             self.successor_receipts_ready,
             self.recovery_source_ready,
+            self.schema_binding_source_ready,
             self.recovery_receipt_ready,
+            self.schema_binding_receipt_ready,
             self.recovered_catalog_ready,
         )):
             return "attested"
@@ -354,6 +384,9 @@ class MissingSourceForwardRecoveryMigrationReconciliationAttestation:
             "recovery_source_ready": self.recovery_source_ready,
             "no_recovery_ledger_row": self.no_recovery_ledger_row,
             "recovery_receipt_ready": self.recovery_receipt_ready,
+            "schema_binding_source_ready": self.schema_binding_source_ready,
+            "no_schema_binding_ledger_row": self.no_schema_binding_ledger_row,
+            "schema_binding_receipt_ready": self.schema_binding_receipt_ready,
             "reviewed_billing_catalog_ready": self.reviewed_billing_catalog_ready,
             "required_billing_columns_ready": self.required_billing_columns_ready,
             "no_unreviewed_billing_columns": self.no_unreviewed_billing_columns,
@@ -375,8 +408,14 @@ class MissingSourceForwardRecoveryMigrationReconciliationAttestation:
             "no_unreviewed_invoice_insert_interceptors": (
                 self.no_unreviewed_invoice_insert_interceptors
             ),
+            "no_unreviewed_invoice_rewrite_interceptors": (
+                self.no_unreviewed_invoice_rewrite_interceptors
+            ),
             "trigger_function_execution_metadata_ready": (
                 self.trigger_function_execution_metadata_ready
+            ),
+            "invoice_fence_function_schema_binding_ready": (
+                self.invoice_fence_function_schema_binding_ready
             ),
             "legacy_function_body_matches": self.legacy_function_body_matches,
             "recovered_function_body_matches": (
@@ -384,6 +423,7 @@ class MissingSourceForwardRecoveryMigrationReconciliationAttestation:
             ),
             "legacy_catalog_ready": self.legacy_catalog_ready,
             "recovered_catalog_ready": self.recovered_catalog_ready,
+            "schema_binding_required": self.schema_binding_required,
             "status": self.status,
         }
 
@@ -840,6 +880,13 @@ MIGRATION_379_COMMERCIAL_BILLING_RUN_FENCE_FORWARD_RECOVERY = (
         recovery_packaged_sha256=(
             "117cdd2c509cd89ffaae2efbc4732caf9aea7e155114910a5e5bbe1b5f7d66b7"
         ),
+        schema_binding_migration_name=(
+            "392_eom_commercial_billing_run_fence_schema_binding"
+        ),
+        schema_binding_migration_version=392,
+        schema_binding_packaged_sha256=(
+            "e20657f806b406759bf2c4e3a715feda8e3e1f3b623647b702915652aab88a8a"
+        ),
     )
 )
 
@@ -1015,10 +1062,15 @@ _HISTORICAL_MISSING_SOURCE_RECONCILIATIONS = (
 def historical_forward_recovery_migration_names() -> frozenset[str]:
     """Return migration stems reserved for attested recovery preludes only."""
 
-    return frozenset(
+    migration_names = {
         record.recovery_migration_name
         for record in _HISTORICAL_FORWARD_RECOVERY_RECONCILIATIONS
+    }
+    migration_names.update(
+        record.schema_binding_migration_name
+        for record in _HISTORICAL_MISSING_SOURCE_FORWARD_RECOVERY_RECONCILIATIONS
     )
+    return frozenset(migration_names)
 
 
 _PRESENCE_UNKNOWN_COUNT_COLUMN = ("integer", "YES", "0")
@@ -3097,6 +3149,14 @@ async def _migration_379_catalog_evidence(executor: Any) -> Mapping[str, object]
               AND function_state.pronargs = 0
               AND function_state.prorettype = 'trigger'::pg_catalog.regtype
         ),
+        expected_invoice_fence_config AS (
+            SELECT ARRAY[
+                pg_catalog.format(
+                    'search_path=pg_catalog, %I, pg_temp',
+                    pg_catalog.current_schema()
+                )
+            ]::text[] AS function_proconfig
+        ),
         reviewed_trigger_function_execution_metadata AS (
             SELECT
                 COUNT(*) = 3
@@ -3111,19 +3171,53 @@ async def _migration_379_catalog_evidence(executor: Any) -> Mapping[str, object]
                        OR function_state.proleakproof
                        OR function_state.proparallel <> 'u'
                        OR function_state.prosupport IS DISTINCT FROM 0::pg_catalog.oid
-                       OR COALESCE(
-                           function_state.proconfig,
-                           ARRAY[]::text[]
-                       ) <> ARRAY[]::text[]
+                       OR (
+                           function_state.proname =
+                               'prevent_commercial_billing_invoice_for_excluded_candidate'
+                           AND COALESCE(
+                               function_state.proconfig,
+                               ARRAY[]::text[]
+                           ) <> ARRAY[]::text[]
+                           AND COALESCE(
+                               function_state.proconfig,
+                               ARRAY[]::text[]
+                           ) <> (
+                               SELECT function_proconfig
+                               FROM expected_invoice_fence_config
+                           )
+                       )
+                       OR (
+                           function_state.proname <>
+                               'prevent_commercial_billing_invoice_for_excluded_candidate'
+                           AND COALESCE(
+                               function_state.proconfig,
+                               ARRAY[]::text[]
+                           ) <> ARRAY[]::text[]
+                       )
                 ) AS trigger_function_execution_metadata_ready
             FROM target_functions AS function_state
         ),
         target_function AS (
-            SELECT function_state.oid, function_state.prosrc
+            SELECT function_state.oid,
+                   function_state.prosrc,
+                   function_state.proconfig
             FROM target_functions AS function_state
             WHERE function_state.proname =
                 'prevent_commercial_billing_invoice_for_excluded_candidate'
             LIMIT 1
+        ),
+        invoice_fence_schema_binding AS (
+            SELECT COALESCE(
+                (
+                    SELECT COALESCE(
+                        function_state.proconfig,
+                        ARRAY[]::text[]
+                    ) = expected_config.function_proconfig
+                    FROM target_function AS function_state
+                    JOIN expected_invoice_fence_config AS expected_config ON TRUE
+                ),
+                FALSE
+            ) AS invoice_fence_function_schema_binding_ready
         ),
         target_triggers AS (
             SELECT relation_state.relname AS relation_name,
@@ -3189,6 +3283,16 @@ async def _migration_379_catalog_evidence(executor: Any) -> Mapping[str, object]
                   AND interceptor.trigger_name <>
                       'trg_prevent_commercial_billing_invoice_for_excluded_candidate'
             ) AS no_unreviewed_invoice_insert_interceptors
+        ),
+        unreviewed_invoice_rewrite_interceptors AS (
+            SELECT NOT EXISTS (
+                SELECT 1
+                FROM pg_catalog.pg_rewrite AS rule_state
+                JOIN target_relations AS relation_state
+                  ON relation_state.oid = rule_state.ev_class
+                WHERE relation_state.relname = 'invoices'
+                  AND rule_state.rulename <> '_RETURN'
+            ) AS no_unreviewed_invoice_rewrite_interceptors
         )
         SELECT
             (
@@ -3321,9 +3425,17 @@ async def _migration_379_catalog_evidence(executor: Any) -> Mapping[str, object]
                 FROM unreviewed_invoice_insert_interceptors
             ) AS no_unreviewed_invoice_insert_interceptors,
             (
+                SELECT no_unreviewed_invoice_rewrite_interceptors
+                FROM unreviewed_invoice_rewrite_interceptors
+            ) AS no_unreviewed_invoice_rewrite_interceptors,
+            (
                 SELECT trigger_function_execution_metadata_ready
                 FROM reviewed_trigger_function_execution_metadata
             ) AS trigger_function_execution_metadata_ready,
+            (
+                SELECT invoice_fence_function_schema_binding_ready
+                FROM invoice_fence_schema_binding
+            ) AS invoice_fence_function_schema_binding_ready,
             (
                 SELECT function_state.prosrc
                 FROM target_functions AS function_state
@@ -3363,6 +3475,10 @@ async def _attest_migration_379(
         "SELECT version, content_sha256 FROM schema_migrations WHERE name = $1 LIMIT 2",
         record.recovery_migration_name,
     )
+    schema_binding_ledger_rows = await executor.fetch(
+        "SELECT version, content_sha256 FROM schema_migrations WHERE name = $1 LIMIT 2",
+        record.schema_binding_migration_name,
+    )
     exactly_one_historical_ledger_row = len(historical_ledger_rows) == 1
     historical_ledger_row = (
         historical_ledger_rows[0] if exactly_one_historical_ledger_row else None
@@ -3370,6 +3486,12 @@ async def _attest_migration_379(
     exactly_one_recovery_ledger_row = len(recovery_ledger_rows) == 1
     recovery_ledger_row = (
         recovery_ledger_rows[0] if exactly_one_recovery_ledger_row else None
+    )
+    exactly_one_schema_binding_ledger_row = len(schema_binding_ledger_rows) == 1
+    schema_binding_ledger_row = (
+        schema_binding_ledger_rows[0]
+        if exactly_one_schema_binding_ledger_row
+        else None
     )
     expected_successors = {
         receipt.migration_name: receipt for receipt in record.successor_receipts
@@ -3425,6 +3547,21 @@ async def _attest_migration_379(
         recovery_ledger_row is not None
         and recovery_ledger_row["content_sha256"] == record.recovery_packaged_sha256,
     ))
+    schema_binding_source_ready = (
+        _packaged_migration_digest(
+            migration_files, record.schema_binding_migration_name
+        )
+        == record.schema_binding_packaged_sha256
+    )
+    schema_binding_receipt_ready = all((
+        exactly_one_schema_binding_ledger_row,
+        schema_binding_ledger_row is not None
+        and schema_binding_ledger_row["version"]
+        == record.schema_binding_migration_version,
+        schema_binding_ledger_row is not None
+        and schema_binding_ledger_row["content_sha256"]
+        == record.schema_binding_packaged_sha256,
+    ))
 
     return MissingSourceForwardRecoveryMigrationReconciliationAttestation(
         reconciliation_id=record.reconciliation_id,
@@ -3434,6 +3571,9 @@ async def _attest_migration_379(
         recovery_source_ready=recovery_source_ready,
         no_recovery_ledger_row=not recovery_ledger_rows,
         recovery_receipt_ready=recovery_receipt_ready,
+        schema_binding_source_ready=schema_binding_source_ready,
+        no_schema_binding_ledger_row=not schema_binding_ledger_rows,
+        schema_binding_receipt_ready=schema_binding_receipt_ready,
         reviewed_billing_catalog_ready=all((
             bool(catalog.get("relations_ready")),
             bool(catalog.get("required_columns_ready")),
@@ -3446,6 +3586,7 @@ async def _attest_migration_379(
             bool(catalog.get("immutable_history_guards_ready")),
             history_guard_function_bodies_ready,
             bool(catalog.get("no_unreviewed_invoice_insert_interceptors")),
+            bool(catalog.get("no_unreviewed_invoice_rewrite_interceptors")),
             bool(catalog.get("trigger_function_execution_metadata_ready")),
         )),
         required_billing_columns_ready=bool(
@@ -3476,8 +3617,14 @@ async def _attest_migration_379(
         no_unreviewed_invoice_insert_interceptors=bool(
             catalog.get("no_unreviewed_invoice_insert_interceptors")
         ),
+        no_unreviewed_invoice_rewrite_interceptors=bool(
+            catalog.get("no_unreviewed_invoice_rewrite_interceptors")
+        ),
         trigger_function_execution_metadata_ready=bool(
             catalog.get("trigger_function_execution_metadata_ready")
+        ),
+        invoice_fence_function_schema_binding_ready=bool(
+            catalog.get("invoice_fence_function_schema_binding_ready")
         ),
         legacy_function_body_matches=(
             function_body_sha256 == record.legacy_function_body_sha256
@@ -3828,12 +3975,16 @@ async def pending_historical_forward_recovery_migration(
             return None
         if mismatched_names - {won_loss_record.migration_name}:
             return None
-        if commercial_record.recovery_migration_name not in pending_names:
-            return None
         commercial_attestation = await _attest_migration_379(
             executor, migration_files
         )
-        if commercial_attestation.status != "recovery_required":
+        recovery_name = {
+            "recovery_required": commercial_record.recovery_migration_name,
+            "schema_binding_required": (
+                commercial_record.schema_binding_migration_name
+            ),
+        }.get(commercial_attestation.status)
+        if recovery_name is None or recovery_name not in pending_names:
             return None
         if mismatched_names:
             won_loss_attestation = await _attest_migration_386(
@@ -3841,7 +3992,7 @@ async def pending_historical_forward_recovery_migration(
             )
             if won_loss_attestation.status != "recovery_required":
                 return None
-        return commercial_record.recovery_migration_name
+        return recovery_name
 
     if mismatched_names != {won_loss_record.migration_name}:
         return None
