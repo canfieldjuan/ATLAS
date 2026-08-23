@@ -19,6 +19,18 @@ run before the missing direct-write fence is restored. It adds one explicit,
 forward-only recovery route under the existing migration lock; it does not
 change a customer-facing workflow.
 
+The slice exceeds the normal 400-LOC budget because its one deployment-safe
+security boundary is indivisible: the forward-only SQL fence, exact catalog
+attestation, selected-only runner admission, canonical completion sequencing,
+and fake-runner plus disposable PostgreSQL evidence must ship together. Of the
+current 2,072 changed lines, 712 are the two focused regression suites and 383
+are the executable plan/evidence record; the small runtime compatibility change
+is the 37-line in-transaction reorder in `crm_provider.py`. Splitting the
+remaining migration/attestation/runner pieces would either publish a privileged
+function without its admission proof, block the existing authorized won-loss
+completion, or weaken the recovery path before its direct-SQL bypass tests
+exist.
+
 ### Problem-derived contract
 
 - Root cause: migration 386's source was strengthened after its original
@@ -36,8 +48,11 @@ change a customer-facing workflow.
   2. Add one atomic, additive migration
      `390_eom_won_loss_direct_sql_fence_recovery.sql` that replaces the
      function and trigger with the existing all-direct-SQL predicate, fixed
-     schema search path, `SECURITY DEFINER`, `status` plus `contact_type`
-     update coverage, delete coverage, revoked public execute privilege, and
+     schema-qualified lifecycle reads with `pg_temp` explicitly after the
+     trusted schema, `SECURITY DEFINER`, every mutable field used by the
+     EOM-won predicate (`status`, `contact_type`, `lead_stage`, and
+     `business_context_id`) in the trigger update coverage, delete coverage,
+     revoked public execute privilege, and
      an ownership transfer to the existing no-login
      `atlas_eom_handoff_owner` guard. The guard receives only `SELECT` on the
      lifecycle evidence needed by the predicate; the recovery must require a
@@ -57,8 +72,15 @@ change a customer-facing workflow.
      silently applying an unrequested migration. Add focused fake-runner,
      read-only-preflight, and disposable-PostgreSQL tests for legacy
      recognition, recovery ordering, recovery retry, failure closure, and the
-     strong trigger's direct-SQL behavior. Enroll every changed EOM entrypoint
-     and test surface in the existing EOM pipeline workflow.
+     strong trigger's direct-SQL behavior, including an attacker-owned temp
+     lifecycle relation and each mutable predicate field. Enroll every changed
+     EOM entrypoint and test surface in the existing EOM pipeline workflow.
+  5. Preserve the canonical authorized won-loss completion under the expanded
+     trigger event set: within its existing database transaction, persist the
+     matching cancellation-completed lifecycle evidence before its protected
+     `lead_stage` update, then persist the loss event. A failed transition or
+     later event write must roll the whole transaction back, so no committed
+     completion evidence can authorize an uncommitted or failed loss.
 - Must not change:
   1. The historical `386_eom_won_loss_nocodb_fence.sql` bytes,
      `schema_migrations` rows, or generic H-18 report semantics. No source
@@ -68,8 +90,9 @@ change a customer-facing workflow.
      migrations, and all commercial-billing work.
   3. Existing lead lifecycle, Calendar, CRM API, role grants, customer data,
      email delivery, configuration, Website, tracker, and user-facing product
-     behavior, except for the single guard-only lifecycle `SELECT` needed by
-     the recovered SECURITY DEFINER function.
+   behavior, except for the single guard-only lifecycle `SELECT` needed by
+   the recovered SECURITY DEFINER function and the internal, atomic order of
+   already-required completion evidence before the protected lead-stage write.
   4. Live target migration execution. Verification uses catalog-only target
      reads and disposable test schemas only.
 
@@ -78,7 +101,7 @@ change a customer-facing workflow.
 Ownership lane: h18-migration-content-integrity
 Slice phase: Production hardening
 
-Max files: 11
+Max files: 12
 
 1. Record the exact legacy 386 evidence and its required recovered state in
    the existing reconciliation module.
@@ -89,7 +112,12 @@ Max files: 11
    its `only=` call preserves caller-selected migration semantics.
 4. Prove both the semantic fence and the runner ordering with existing
    migration test surfaces, including the guarded function owner and its
-   lifecycle read; keep the current EOM pipeline coverage enrolled.
+   lifecycle read, temp-schema isolation, and full mutable-predicate trigger
+   coverage; keep the current EOM pipeline coverage enrolled.
+5. Reorder only the existing authoritative provider's in-transaction
+   cancellation-completed event so the expanded fence preserves the canonical
+   Calendar-confirmed won-loss completion without granting any direct writer a
+   bypass.
 
 ### Review Contract
 
@@ -124,6 +152,16 @@ Max files: 11
     needed by the function, and the former direct CRM login cannot alter the
     function; a non-administrator cannot start the recovery. Settled by the
     same disposable-PostgreSQL test and the post-recovery catalog attestation.
+  - [x] In a disposable PostgreSQL schema, an attacker-created temp
+    `eom_lead_lifecycle_events` relation with a guard-role `SELECT` grant
+    cannot hide unresolved cancellation evidence, and direct changes to each
+    mutable EOM-won predicate field are rejected before they can make a later
+    protected mutation eligible; settled by the real recovery runner and
+    direct-connection regression assertions.
+  - [x] The normal Calendar-confirmed won-loss completion still reaches `lost`
+    under the expanded trigger, while its completion evidence, contact change,
+    and loss event remain one rollback-safe transaction; settled by the same
+    disposable-PostgreSQL end-to-end regression.
   - [x] The EOM lead pipeline workflow runs when this forward-recovery migration
     or its curated EOM profile contract changes, and it executes the
     profile-contract assertion; settled by
@@ -154,7 +192,9 @@ Max files: 11
   ledger version/digest/timestamp, final and recovery package digests, function
   body, function security/search-path/ACL metadata, trusted guard role and
   ownership/lifecycle-read metadata, trigger events, `WHEN` condition, and columns,
-  recovery ledger row, and recovery-file presence in the selected pending set.
+  recovery ledger row, recovery-file presence in the selected pending set,
+  SECURITY DEFINER search-path order, lifecycle relation identity, and every
+  mutable input to the `OLD` EOM-won predicate.
 - Caller x input shape:
   - full generic runner x legacy 386 plus later pending SQL;
   - `only=` runner including recovery x legacy 386 plus later pending SQL;
@@ -164,6 +204,11 @@ Max files: 11
     `only=`;
   - closed EOM missed-call readiness caller x fresh or already-strong 386,
     where 390 is selected but must not execute or create a receipt;
+  - direct EOM writer x attacker-owned temp lifecycle relation that grants the
+    guard `SELECT`, where the trusted schema relation must still decide the
+    fence;
+  - direct EOM writer x `lead_stage` or `business_context_id` mutation before
+    a protected `status`/`contact_type` mutation;
   - either runner x a second unresolved H-18 record;
   - rerun after an atomic recovery receipt already exists.
 
@@ -185,6 +230,7 @@ Max files: 11
 
 - `.github/workflows/atlas_eom_lead_pipeline_checks.yml`
 - `atlas_brain/main_eom.py`
+- `atlas_brain/services/crm_provider.py`
 - `atlas_brain/storage/migrations/390_eom_won_loss_direct_sql_fence_recovery.sql`
 - `atlas_brain/storage/migrations/__init__.py`
 - `atlas_brain/storage/migrations/reconciliation.py`
@@ -212,11 +258,26 @@ inside its existing atomic transaction. This avoids granting the guard to the
 normal Atlas login; a normal startup attempt fails before replacing the
 function, trigger, grant, or ledger receipt.
 
+The recovered function resolves lifecycle evidence only in its trusted active
+schema: both lifecycle table references are schema-qualified by the migration's
+quoted current schema, and its SECURITY DEFINER search path puts `pg_temp` after
+that schema. Its trigger subscribes to every mutable input of the `OLD`
+EOM-won predicate, so a direct writer cannot first move the row out of scope and
+then change a formerly protected field. Ordinary unrelated updates remain
+outside that closed event set.
+
+The canonical Calendar-confirmed completion already owns the matching lifecycle
+event, contact transition, and loss record in one database transaction. Its
+completion evidence is written immediately before the protected `lead_stage`
+transition, rather than afterward, so the fence sees the authorized evidence
+without creating a committed bypass window. Any error in the contact or loss
+write rolls the completion evidence back with the same transaction.
+
 PostgreSQL reports a trigger's update columns in the table's physical-column
 order rather than the `CREATE TRIGGER` declaration order. The recovered
-contract therefore requires the exact two-column set `status` and
-`contact_type`, with no extras, rather than incorrectly depending on source
-text ordering.
+contract therefore requires the exact four-column predicate set
+`business_context_id`, `contact_type`, `lead_stage`, and `status`, with no
+extras, rather than incorrectly depending on source text ordering.
 
 `run_migrations()` already holds one session-level advisory lock across its
 content report, migration SQL, and ledger writes. A closed, source-derived
@@ -272,6 +333,10 @@ digest before 389 or any ordinary pending migration can be considered.
   corrected from NocoDB-only to all direct writers. The only role grant added
   is guard-only `SELECT` on lifecycle evidence; no application or CRM role
   gains a privilege.
+- The existing provider keeps its same Calendar-confirmed completion contract.
+  Only the order of already-required writes changes inside its existing
+  transaction, so a failed contact/loss transition cannot leave committed
+  completion evidence behind.
 
 ## Deferred
 
@@ -290,12 +355,12 @@ Parked hardening: none.
 
 ## Verification
 
-- `python -m py_compile atlas_brain/main_eom.py atlas_brain/storage/migrations/__init__.py atlas_brain/storage/migrations/reconciliation.py tests/test_eom_lead_conversion.py tests/test_eom_lead_conversion_integration.py tests/test_eom_render_profile.py tests/test_migration_content_integrity_preflight.py tests/test_migrations_runner.py` — passed.
+- `python -m py_compile atlas_brain/main_eom.py atlas_brain/services/crm_provider.py atlas_brain/storage/migrations/__init__.py atlas_brain/storage/migrations/reconciliation.py tests/test_eom_lead_conversion.py tests/test_eom_lead_conversion_integration.py tests/test_eom_render_profile.py tests/test_migration_content_integrity_preflight.py tests/test_migrations_runner.py` — passed.
 - `python -m pytest -q tests/test_migration_content_integrity_preflight.py` — `157 passed`.
-- `python -m pytest -q tests/test_migrations_runner.py` — `86 passed, 1 skipped`; focused `-k '386_forward_recovery or 386_recorded_recovery'` cases: `11 passed, 76 deselected`.
+- `python -m pytest -q tests/test_migrations_runner.py` — `90 passed, 1 skipped`; focused `-k '386_forward_recovery or 386_recorded_recovery'` cases: `15 passed, 76 deselected`.
 - `python -m pytest -q tests/test_eom_render_profile.py -k 'missed_call_recovery_migration_helper'` — `1 passed, 63 deselected`; `python -m pytest -q tests/test_eom_lead_conversion.py -k 'workflow_enrolls_won_loss_runtime_paths'` — `1 passed, 224 deselected`.
-- `ATLAS_MIGRATION_TEST_DATABASE_URL=<disposable PostgreSQL test database> python -m pytest -q tests/test_eom_lead_conversion_integration.py -k 'selected_390_does_not_run_without_the_weak_386_precondition or nocodb_cannot_mutate_won_lead_with_unsettled_cancellation'` — `2 passed, 111 deselected`; this proves a selected 390 is inert without the weak precondition, while the recovered case still reproduces the PostgreSQL catalog-order behavior and proves that a non-admin cannot start 390, the DBA path transfers its SECURITY DEFINER function to the no-login guard, the guard can read lifecycle evidence, and the former CRM owner cannot alter the recovered function.
-- `python -m ruff check --ignore E402 atlas_brain/main_eom.py atlas_brain/storage/migrations/__init__.py atlas_brain/storage/migrations/reconciliation.py tests/test_eom_lead_conversion.py tests/test_eom_lead_conversion_integration.py tests/test_eom_render_profile.py tests/test_migration_content_integrity_preflight.py tests/test_migrations_runner.py` — passed; `main_eom.py` retains the repository's pre-existing intentional E402 import order.
+- `ATLAS_MIGRATION_TEST_DATABASE_URL=<disposable PostgreSQL test database> python -m pytest -q tests/test_eom_lead_conversion_integration.py -k 'selected_390_does_not_run_without_the_weak_386_precondition or nocodb_cannot_mutate_won_lead_with_unsettled_cancellation or won_lead_loss_cancels_first_clean_and_revokes_pending_draft'` — `3 passed, 110 deselected`; this proves a selected 390 is inert without the weak precondition, while the recovered case proves non-admin denial, guard ownership/read, former-owner denial, exact catalog ordering, attacker-temp isolation, all four predicate-field fence coverage, rollback of staged completion evidence after an injected later failure, retry to one completion/loss pair, and the normal Calendar-confirmed path.
+- `python -m ruff check --ignore E402 atlas_brain/main_eom.py atlas_brain/services/crm_provider.py atlas_brain/storage/migrations/__init__.py atlas_brain/storage/migrations/reconciliation.py tests/test_eom_lead_conversion.py tests/test_eom_lead_conversion_integration.py tests/test_eom_render_profile.py tests/test_migration_content_integrity_preflight.py tests/test_migrations_runner.py` — passed; `main_eom.py` retains the repository's pre-existing intentional E402 import order.
 - `git diff --check` — passed.
 - Controlled read-only target preflight — expected exit `2`: 386 is `recovery_required` with the trusted guard role ready but with its function ownership and lifecycle read still absent, and 379 remains independently source-unavailable. No target SQL ran. No local Unit Gate ran; broad checks remain on GitHub.
 
@@ -305,13 +370,14 @@ Parked hardening: none.
 |---|---:|
 | `.github/workflows/atlas_eom_lead_pipeline_checks.yml` | 7 |
 | `atlas_brain/main_eom.py` | 3 |
-| `atlas_brain/storage/migrations/390_eom_won_loss_direct_sql_fence_recovery.sql` | 141 |
+| `atlas_brain/services/crm_provider.py` | 37 |
+| `atlas_brain/storage/migrations/390_eom_won_loss_direct_sql_fence_recovery.sql` | 147 |
 | `atlas_brain/storage/migrations/__init__.py` | 208 |
-| `atlas_brain/storage/migrations/reconciliation.py` | 522 |
-| `plans/PR-H18-EOM-Won-Loss-Fence-Forward-Recovery.md` | 317 |
+| `atlas_brain/storage/migrations/reconciliation.py` | 571 |
+| `plans/PR-H18-EOM-Won-Loss-Fence-Forward-Recovery.md` | 383 |
 | `tests/test_eom_lead_conversion.py` | 2 |
-| `tests/test_eom_lead_conversion_integration.py` | 159 |
+| `tests/test_eom_lead_conversion_integration.py` | 267 |
 | `tests/test_eom_render_profile.py` | 1 |
 | `tests/test_migration_content_integrity_preflight.py` | 1 |
-| `tests/test_migrations_runner.py` | 404 |
-| **Total** | **1765** |
+| `tests/test_migrations_runner.py` | 445 |
+| **Total** | **2072** |

@@ -6564,22 +6564,11 @@ class DatabaseCRMProvider:
                         "EOM onboarding draft changed during won lead loss"
                     )
 
-            updated = await conn.fetchrow(
-                """
-                UPDATE contacts
-                SET lead_stage = 'lost', updated_at = NOW()
-                WHERE id = $1::uuid
-                  AND business_context_id = $2
-                  AND contact_type = 'lead'
-                  AND lead_stage = 'won'
-                  AND status = 'active'
-                RETURNING id
-                """,
-                contact_id,
-                EOM_BUSINESS_CONTEXT_ID,
-            )
-            if updated is None:
-                raise RuntimeError("EOM won lead changed during mark-lost completion")
+            # The direct-SQL fence keys off unresolved cancellation evidence.
+            # Write the already-validated completion evidence before the
+            # protected won -> lost transition, all in this same transaction.
+            # If either later write fails, transaction rollback removes this
+            # row too; it never becomes a committed bypass token.
             cancellation_metadata = {
                 "booking_operation_key": booking_key,
                 "calendar_id": prepared_calendar_id,
@@ -6602,6 +6591,22 @@ class DatabaseCRMProvider:
                 effective_note,
                 json.dumps(cancellation_metadata),
             )
+            updated = await conn.fetchrow(
+                """
+                UPDATE contacts
+                SET lead_stage = 'lost', updated_at = NOW()
+                WHERE id = $1::uuid
+                  AND business_context_id = $2
+                  AND contact_type = 'lead'
+                  AND lead_stage = 'won'
+                  AND status = 'active'
+                RETURNING id
+                """,
+                contact_id,
+                EOM_BUSINESS_CONTEXT_ID,
+            )
+            if updated is None:
+                raise RuntimeError("EOM won lead changed during mark-lost completion")
             effective_reason_code = str(
                 requested_metadata.get("lost_reason_code") or reason_code
             )

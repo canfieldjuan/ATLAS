@@ -54,6 +54,13 @@ def _migration_function_body(source: bytes) -> str:
     return match.group(1)
 
 
+def _rendered_390_function_body(schema_name: str) -> str:
+    """Mirror the active-schema body emitted by migration 390's format call."""
+    return _migration_function_body(_migration_390_source()).replace(
+        "%2$s", f'"{schema_name}"'
+    )
+
+
 def _migration_022b_source() -> bytes:
     return (
         Path(__file__).resolve().parents[1]
@@ -1670,10 +1677,20 @@ class _ForwardRecoveryPool(_SerializingPool):
             if self.fail_recovery:
                 raise RuntimeError("injected 390 recovery failure")
             self.won_loss_catalog.update({
-                "function_body": _migration_function_body(_migration_386_source()),
+                "function_body": _rendered_390_function_body(
+                    self.won_loss_catalog["schema_name"]
+                ),
+                "function_proconfig": [
+                    "search_path=pg_catalog, migration_probe, pg_temp"
+                ],
                 # PostgreSQL exposes tgattr in physical column order rather
                 # than the CREATE TRIGGER declaration order.
-                "trigger_update_columns": ["contact_type", "status"],
+                "trigger_update_columns": [
+                    "business_context_id",
+                    "contact_type",
+                    "lead_stage",
+                    "status",
+                ],
                 "recovered_function_guard_owner_ready": True,
                 "recovered_function_guard_lifecycle_read_ready": True,
             })
@@ -1991,18 +2008,32 @@ async def test_386_forward_recovery_failure_rolls_back_then_retry_applies_once(
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
-    "missing_recovered_guard_fact",
+    ("contract_field", "unsafe_value"),
     (
-        "trusted_guard_role_ready",
-        "recovered_function_guard_owner_ready",
-        "recovered_function_guard_lifecycle_read_ready",
+        ("trusted_guard_role_ready", False),
+        ("recovered_function_guard_owner_ready", False),
+        ("recovered_function_guard_lifecycle_read_ready", False),
+        ("function_proconfig", ["search_path=pg_catalog, migration_probe"]),
+        (
+            "function_body",
+            _migration_function_body(_migration_386_source()),
+        ),
+        (
+            "trigger_update_columns",
+            ["business_context_id", "contact_type", "status"],
+        ),
+        (
+            "trigger_update_columns",
+            ["contact_type", "lead_stage", "status"],
+        ),
     ),
 )
-async def test_386_recorded_recovery_requires_the_guarded_function_contract(
+async def test_386_recorded_recovery_requires_the_complete_fence_contract(
     tmp_path,
-    missing_recovered_guard_fact,
+    contract_field,
+    unsafe_value,
 ):
-    """A 390 receipt never attests a function a runtime login can still replace."""
+    """A 390 receipt never attests a mutable or bypassable recovered fence."""
     from atlas_brain.storage.migrations import (
         PendingMigrationContentIntegrityError,
         run_migrations,
@@ -2016,12 +2047,22 @@ async def test_386_recorded_recovery_requires_the_guarded_function_contract(
         record.recovery_packaged_sha256,
     ))
     pool.won_loss_catalog.update({
-        "function_body": _migration_function_body(_migration_386_source()),
-        "trigger_update_columns": ["contact_type", "status"],
+        "function_body": _rendered_390_function_body(
+            pool.won_loss_catalog["schema_name"]
+        ),
+        "function_proconfig": [
+            "search_path=pg_catalog, migration_probe, pg_temp"
+        ],
+        "trigger_update_columns": [
+            "business_context_id",
+            "contact_type",
+            "lead_stage",
+            "status",
+        ],
         "recovered_function_guard_owner_ready": True,
         "recovered_function_guard_lifecycle_read_ready": True,
     })
-    pool.won_loss_catalog[missing_recovered_guard_fact] = False
+    pool.won_loss_catalog[contract_field] = unsafe_value
     (tmp_path / "389_later_pending.sql").write_text("SELECT 389")
 
     with pytest.raises(PendingMigrationContentIntegrityError, match="mismatched="):

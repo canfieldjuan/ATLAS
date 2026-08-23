@@ -7022,9 +7022,15 @@ async def test_nocodb_cannot_mutate_won_lead_with_unsettled_cancellation():
             "'atlas_eom_handoff_owner', $1::pg_catalog.regclass, 'SELECT')",
             f"{schema}.eom_lead_lifecycle_events",
         )
+        active_schema = await conn.fetchval("SELECT pg_catalog.current_schema()")
+        assert await conn.fetchval(
+            "SELECT proconfig FROM pg_catalog.pg_proc "
+            "WHERE oid = $1::pg_catalog.regprocedure",
+            f"{schema}.reject_nocodb_eom_won_loss_mutation()",
+        ) == [f"search_path=pg_catalog, {active_schema}, pg_temp"]
 
         provider = DatabaseCRMProvider(pool=conn)
-        contact_id, _ = await _book_first_clean_draft(conn, provider)
+        contact_id, draft_id = await _book_first_clean_draft(conn, provider)
         command = EOMLeadLost(
             contact_id=str(contact_id),
             reason_code="no_response",
@@ -7099,6 +7105,54 @@ async def test_nocodb_cannot_mutate_won_lead_with_unsettled_cancellation():
                 "UPDATE contacts SET contact_type = 'customer' WHERE id = $1",
                 contact_id,
             )
+        # A direct writer may create a same-named temp relation and grant the
+        # guard SELECT. The SECURITY DEFINER function must still resolve the
+        # trusted schema relation, where the unsettled cancellation exists.
+        await direct_conn.execute(
+            "CREATE TEMPORARY TABLE eom_lead_lifecycle_events ("
+            "contact_id UUID, event_type VARCHAR(128), operation_key VARCHAR(255)"
+            ")"
+        )
+        await direct_conn.execute(
+            "GRANT SELECT ON TABLE eom_lead_lifecycle_events "
+            "TO atlas_eom_handoff_owner"
+        )
+        with pytest.raises(
+            asyncpg.exceptions.RaiseError,
+            match="cancellation requires reconciliation",
+        ):
+            await direct_conn.execute(
+                "UPDATE contacts SET status = 'inactive' WHERE id = $1", contact_id
+            )
+        # The event set is the full OLD eligibility predicate. Each attempted
+        # first leg of a two-step bypass is rejected before a later protected
+        # status/contact-type mutation can see an ineligible OLD row.
+        with pytest.raises(
+            asyncpg.exceptions.RaiseError,
+            match="cancellation requires reconciliation",
+        ):
+            await direct_conn.execute(
+                "UPDATE contacts SET lead_stage = 'lost' WHERE id = $1", contact_id
+            )
+        with pytest.raises(
+            asyncpg.exceptions.RaiseError,
+            match="cancellation requires reconciliation",
+        ):
+            await direct_conn.execute(
+                "UPDATE contacts SET business_context_id = 'other' WHERE id = $1",
+                contact_id,
+            )
+        unchanged_contact = await conn.fetchrow(
+            "SELECT business_context_id, contact_type, lead_stage, status "
+            "FROM contacts WHERE id = $1",
+            contact_id,
+        )
+        assert dict(unchanged_contact) == {
+            "business_context_id": "effingham_maids",
+            "contact_type": "lead",
+            "lead_stage": "won",
+            "status": "active",
+        }
         assert not loss_task.done()
 
         calendar.release.set()
@@ -7145,6 +7199,48 @@ async def test_nocodb_cannot_mutate_won_lead_with_unsettled_cancellation():
             "SELECT notes FROM contacts WHERE id = $1", contact_id
         ) == "ordinary NocoDB edit"
 
+        # A failure after completion evidence is staged must roll that evidence
+        # back with the protected contact transition. The retry then commits one
+        # complete/lost pair rather than treating a partial transaction as done.
+        await conn.execute(
+            """
+            CREATE FUNCTION reject_test_won_loss_completion()
+            RETURNS TRIGGER LANGUAGE plpgsql AS $function$
+            BEGIN
+                RAISE EXCEPTION 'injected won-loss completion failure';
+            END;
+            $function$;
+            """
+        )
+        await conn.execute(
+            """
+            CREATE TRIGGER trg_test_reject_won_loss_completion
+            BEFORE UPDATE OF lead_stage ON contacts
+            FOR EACH ROW EXECUTE FUNCTION reject_test_won_loss_completion()
+            """
+        )
+        with pytest.raises(
+            asyncpg.exceptions.RaiseError,
+            match="injected won-loss completion failure",
+        ):
+            await mark_eom_lead_lost_with_won_teardown(provider, calendar, command)
+        assert await conn.fetchval(
+            "SELECT COUNT(*) FROM eom_lead_lifecycle_events "
+            "WHERE contact_id = $1 AND event_type = 'first_clean_cancelled'",
+            contact_id,
+        ) == 0
+        assert await conn.fetchval(
+            "SELECT lead_stage FROM contacts WHERE id = $1", contact_id
+        ) == "won"
+        assert await conn.fetchval(
+            "SELECT status FROM eom_onboarding_email_drafts WHERE id = $1::uuid",
+            draft_id,
+        ) == "pending"
+        await conn.execute(
+            "DROP TRIGGER trg_test_reject_won_loss_completion ON contacts"
+        )
+        await conn.execute("DROP FUNCTION reject_test_won_loss_completion()")
+
         completed = await mark_eom_lead_lost_with_won_teardown(
             provider, calendar, command
         )
@@ -7152,6 +7248,16 @@ async def test_nocodb_cannot_mutate_won_lead_with_unsettled_cancellation():
         assert await conn.fetchval(
             "SELECT lead_stage FROM contacts WHERE id = $1", contact_id
         ) == "lost"
+        assert await conn.fetchval(
+            "SELECT COUNT(*) FROM eom_lead_lifecycle_events "
+            "WHERE contact_id = $1 AND event_type = 'first_clean_cancelled'",
+            contact_id,
+        ) == 1
+        assert await conn.fetchval(
+            "SELECT COUNT(*) FROM eom_lead_lifecycle_events "
+            "WHERE contact_id = $1 AND event_type = 'lead_lost'",
+            contact_id,
+        ) == 1
         await direct_conn.execute(
             "UPDATE contacts SET status = 'inactive' WHERE id = $1", contact_id
         )

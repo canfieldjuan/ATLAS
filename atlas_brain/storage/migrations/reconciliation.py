@@ -56,7 +56,7 @@ class HistoricalMigrationForwardRecoveryReconciliation:
     final_packaged_sha256: str
     observed_applied_at: datetime
     legacy_function_body_sha256: str
-    recovered_function_body_sha256: str
+    recovered_function_body_template_sha256: str
     recovery_migration_name: str
     recovery_migration_version: int
     recovery_packaged_sha256: str
@@ -593,15 +593,20 @@ MIGRATION_386_WON_LOSS_FENCE_FORWARD_RECOVERY = (
         legacy_function_body_sha256=(
             "40ec9678638905a797cc62cb58aa1c43c354d10c3de14cbda543b0dd6d8258c4"
         ),
-        recovered_function_body_sha256=(
-            "c4e4db9e1a1f8599902b5cfad57e12b1c75343fc82aa59252ce187560cf94f02"
+        recovered_function_body_template_sha256=(
+            "f482b2af7e028c058f83dc1288d6c05b04dcaf377dc507392d4a8ca04c58cf1a"
         ),
         recovery_migration_name="390_eom_won_loss_direct_sql_fence_recovery",
         recovery_migration_version=390,
         recovery_packaged_sha256=(
-            "7db5e37c828b1bfe4d2b5c3eb0bf0fd40d4648eca37b7bf6bdb602352c267ea0"
+            "e65d61e16cfea9974df6b765522459d7ddd7e50332346914a9d0a58ca6e8f6d0"
         ),
     )
+)
+
+
+_RECOVERED_386_TRIGGER_UPDATE_COLUMNS = frozenset(
+    {"business_context_id", "contact_type", "lead_stage", "status"}
 )
 
 
@@ -1121,11 +1126,11 @@ _PLPGSQL_FUNCTION_BODY_RE = re.compile(
 )
 
 
-def _packaged_migration_function_body_sha256(
+def _packaged_migration_function_body(
     migration_files: Collection[Path],
     migration_name: str,
 ) -> str | None:
-    """Return the exact named PL/pgSQL body digest from packaged source."""
+    """Return the named packaged PL/pgSQL body without inventing source facts."""
     migration_file = next(
         (path for path in migration_files if path.stem == migration_name),
         None,
@@ -1137,9 +1142,37 @@ def _packaged_migration_function_body_sha256(
     except OSError:
         return None
     match = _PLPGSQL_FUNCTION_BODY_RE.search(source)
-    if match is None:
+    return None if match is None else match.group(1)
+
+
+def _packaged_migration_function_body_sha256(
+    migration_files: Collection[Path],
+    migration_name: str,
+) -> str | None:
+    """Return the exact named PL/pgSQL body digest from packaged source."""
+    function_body = _packaged_migration_function_body(migration_files, migration_name)
+    if function_body is None:
         return None
-    return hashlib.sha256(match.group(1).encode("utf-8")).hexdigest()
+    return hashlib.sha256(function_body.encode("utf-8")).hexdigest()
+
+
+def _quoted_sql_identifier(identifier: str) -> str:
+    """Return the forced identifier quoting used by migration 390's body."""
+    return '"' + identifier.replace('"', '""') + '"'
+
+
+def _rendered_packaged_migration_function_body_sha256(
+    migration_files: Collection[Path],
+    migration_name: str,
+    *,
+    schema_name: str,
+) -> str | None:
+    """Digest a package's schema-bound PL/pgSQL body exactly as 390 renders it."""
+    function_body = _packaged_migration_function_body(migration_files, migration_name)
+    if function_body is None:
+        return None
+    rendered_body = function_body.replace("%2$s", _quoted_sql_identifier(schema_name))
+    return hashlib.sha256(rendered_body.encode("utf-8")).hexdigest()
 
 
 def _normalize_utc(value: object) -> datetime | None:
@@ -2673,15 +2706,22 @@ async def _attest_migration_386(
     recovery_source_ready = all((
         _packaged_migration_digest(migration_files, record.recovery_migration_name)
         == record.recovery_packaged_sha256,
-        _packaged_migration_function_body_sha256(migration_files, record.migration_name)
-        == record.recovered_function_body_sha256,
+        _packaged_migration_function_body_sha256(
+            migration_files, record.recovery_migration_name
+        )
+        == record.recovered_function_body_template_sha256,
     ))
+    function_proconfig = _catalog_text_values(catalog.get("function_proconfig"))
+    legacy_function_search_path_ready = function_proconfig == (
+        f"search_path=pg_catalog, {schema_name}",
+    )
+    recovered_function_search_path_ready = function_proconfig == (
+        f"search_path=pg_catalog, {schema_name}, pg_temp",
+    )
     shared_catalog_ready = all((
         bool(catalog.get("contacts_relation_ready")),
         bool(catalog.get("function_ready")),
         bool(catalog.get("function_security_definer")),
-        _catalog_text_values(catalog.get("function_proconfig"))
-        == (f"search_path=pg_catalog, {schema_name}",),
         bool(catalog.get("function_public_execute_revoked")),
         bool(catalog.get("trigger_ready")),
         _catalog_char(catalog.get("trigger_enabled")) == "O",
@@ -2699,8 +2739,15 @@ async def _attest_migration_386(
         catalog.get("trigger_update_columns")
     )
     recovered_trigger_columns_ready = (
-        len(trigger_update_columns) == 2
-        and frozenset(trigger_update_columns) == frozenset({"status", "contact_type"})
+        len(trigger_update_columns) == len(_RECOVERED_386_TRIGGER_UPDATE_COLUMNS)
+        and frozenset(trigger_update_columns) == _RECOVERED_386_TRIGGER_UPDATE_COLUMNS
+    )
+    recovered_function_body_sha256 = (
+        _rendered_packaged_migration_function_body_sha256(
+            migration_files,
+            record.recovery_migration_name,
+            schema_name=schema_name,
+        )
     )
     recovery_receipt_ready = all((
         exactly_one_recovery_ledger_row,
@@ -2726,16 +2773,18 @@ async def _attest_migration_386(
         ),
         legacy_catalog_ready=(
             shared_catalog_ready
+            and legacy_function_search_path_ready
             and trusted_guard_role_ready
             and function_body_sha256 == record.legacy_function_body_sha256
             and trigger_update_columns == ("status",)
         ),
         recovered_catalog_ready=(
             shared_catalog_ready
+            and recovered_function_search_path_ready
             and trusted_guard_role_ready
             and recovered_function_guard_owner_ready
             and recovered_function_guard_lifecycle_read_ready
-            and function_body_sha256 == record.recovered_function_body_sha256
+            and function_body_sha256 == recovered_function_body_sha256
             and recovered_trigger_columns_ready
         ),
     )
