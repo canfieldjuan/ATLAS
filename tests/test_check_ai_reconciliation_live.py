@@ -552,6 +552,36 @@ def test_short_inline_legacy_title_cannot_supply_a_reconciled_title():
     assert any("cannot be reconciled by a generic disposition" in message for message in messages)
 
 
+def test_complete_rule_label_evidence_rejects_incomplete_separator_forms():
+    c = load_check()
+    prefix = "This is a sufficiently long ambiguous prefix"
+    actual = "Real decision needs an explicit disposition"
+
+    labels = [
+        (f"{reference}{suffix}complete rule detail", 0)
+        for reference in ("R1", "R1/R2")
+        for suffix in (" — ", " - ", " (BLOCKER) ", " (BLOCKER) — ")
+    ]
+    labels.extend(
+        (f"{reference}{suffix}", 1)
+        for reference in ("R1", "R1/R2")
+        for suffix in ("-", "(", " (", " (BLOCKER", " (BLOCKER)- detail", " —")
+    )
+    for label, expected_code in labels:
+        node = thread(resolved=True, body=f"{prefix}\n{label}\n{actual} R2 (BLOCKER) details")
+        code, messages = c.evaluate([node], body_with_dispositions(prefix), BOTS)
+
+        assert code == expected_code
+        if expected_code:
+            assert any(actual in message for message in messages)
+
+    node = thread(resolved=True, body=f"{prefix} R1(\nR2 — complete rule detail")
+    code, messages = c.evaluate([node], body_with_dispositions(prefix), BOTS)
+
+    assert code == 1
+    assert any("unparseable trusted-bot review title" in message for message in messages)
+
+
 def test_legacy_inline_rule_label_remains_a_resolved_thread_disposition_title():
     c = load_check()
     node = thread(

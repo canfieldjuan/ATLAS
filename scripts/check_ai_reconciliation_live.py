@@ -42,8 +42,14 @@ _DEFAULT_BOTS = ("chatgpt-codex-connector", "chatgpt-codex-connector[bot]")
 _CLEAN_CODEX_REVIEW_TEXT = "didn't find any major issues"
 _DEFAULT_CODEX_REVIEW_GRACE_SECONDS = 300
 _REVIEWED_COMMIT_RE = re.compile(r"\*\*Reviewed commit:\*\*\s*`(?P<sha>[0-9a-f]{10,40})`", re.IGNORECASE)
-_REVIEW_TITLE_STOP_RE = re.compile(r"\s+R\d+(?:/R\d+)*\s*\(")
-_REVIEW_RULE_LABEL_RE = re.compile(r"^R\d+(?:/R\d+)*\s*(?:\(|[-—])")
+_RULE_REFERENCE_RE = r"R\d+(?:/R\d+)*"
+_RULE_SEVERITY_RE = r"\([A-Z][A-Z0-9 _-]*\)"
+_COMPLETE_RULE_LABEL_RE = (
+    rf"{_RULE_REFERENCE_RE}(?:\s+{_RULE_SEVERITY_RE}(?:\s+[—-]\s+|\s+\S)|\s+[—-]\s+\S)"
+)
+_REVIEW_TITLE_STOP_RE = re.compile(rf"\s+{_COMPLETE_RULE_LABEL_RE}")
+_REVIEW_RULE_LABEL_RE = re.compile(rf"^{_COMPLETE_RULE_LABEL_RE}")
+_RULE_LABEL_FRAGMENT_RE = re.compile(rf"\s+{_RULE_REFERENCE_RE}\s*(?:\(|[-—])")
 _NON_ALNUM_RE = re.compile(r"[^a-z0-9]+")
 _UNPARSEABLE_THREAD_DECISION = "<unparseable trusted-bot review title>"
 _MIN_REVIEW_TITLE_CHARS = 24
@@ -234,7 +240,13 @@ def _has_bounded_decision_evidence(text: str) -> bool:
 def _bounded_title_root(line: str) -> str:
     """Return a full review-title root, never an ambiguous label fragment."""
 
-    root = _REVIEW_TITLE_STOP_RE.split(line.strip(), 1)[0].strip()
+    match = _REVIEW_TITLE_STOP_RE.search(line)
+    if match:
+        root = line[: match.start()].strip()
+    elif _RULE_LABEL_FRAGMENT_RE.search(line):
+        return ""
+    else:
+        root = line.strip()
     if not _has_bounded_decision_evidence(root):
         return ""
     return root

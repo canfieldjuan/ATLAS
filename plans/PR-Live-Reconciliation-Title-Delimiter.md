@@ -2,18 +2,13 @@
 
 ## Why this slice exists
 
-The user asked to repair the red checks on the owned H-18 receipt PR #2481.
-Its two new P1 findings were fixed, published, and resolved, but the trusted
-`live-reconciliation` workflow still reports them as missing from the PR-body
-ledger. This is a real CI defect in the base-branch provider, not a missing
-disposition: the current connector supplies a title on the first `bodyText`
-line and puts its `R... —` explanation on the next line, while the parser first
-flattens those lines and only recognizes the legacy inline `R... (` delimiter.
-
-This workflow/process slice is justified by the immediate vertical proof it
-unblocks: #2481 cannot pass its required trusted-base check until the provider
-on `main` understands the current review shape. It belongs to the existing
-CI/CD enforcement arc [#2260](https://github.com/canfieldjuan/ATLAS/issues/2260).
+The user asked to repair the red checks on owned H-18 receipt PR #2481. Its two
+new P1 findings were fixed and resolved, but trusted `live-reconciliation`
+still reports them missing from the PR-body ledger. This base-provider defect
+comes from current `bodyText` placing a title on line one and `R... —` evidence
+on line two, while the parser flattened input and recognized legacy inline
+`R... (` only. It unblocks #2481's required trusted-base proof and belongs to
+CI/CD enforcement [#2260](https://github.com/canfieldjuan/ATLAS/issues/2260).
 
 ### Problem-derived contract
 
@@ -22,11 +17,10 @@ CI/CD enforcement arc [#2260](https://github.com/canfieldjuan/ATLAS/issues/2260)
   `x\nReal decision R2 (BLOCKER) details` could match `- x -- fixed-in: ...`;
   the snippet fallback kept malformed history eligible for reconciliation.
 - Required change: a correlating root needs a full phrase (at least four
-  normalized tokens and 24 normalized characters) plus existing `R... (` rule
-  evidence on its line (legacy) or the next nonblank line (multiline). Apply
-  that floor before exact or containment matching; displays/snippets cannot
-  supply a root. The focused tests must prove valid current and legacy forms,
-  punctuation recovery, and fail-closed malformed/ambiguous/short forms.
+  normalized tokens and 24 normalized characters) plus a complete `R...` label
+  (balanced optional severity and nonempty detail delimiter) on its line
+  (legacy) or the next nonblank line (multiline); displays/snippets cannot
+  supply a root. Test valid grammar and fail-closed malformed/ambiguous forms.
 - Evidence: the current trusted-bot corpus's 71 open-PR titles are full phrases
   (minimum 33 normalized characters, five tokens) followed by a rule label.
 - Must not change: trusted-base checkout, bot allowlist, open-thread blocking,
@@ -38,17 +32,14 @@ Ownership lane: workflow/live-reconciliation-title-delimiter
 Slice phase: Workflow/process
 Max files: 3
 
-1. Derive and match a correlating decision only when it has bounded full-title
-   evidence paired with existing `R... (` rule evidence: same-line legacy or
-   next-line multiline.
-2. Keep display titles/snippets non-authoritative and remove their flattened
-   fallback from history correlation.
-3. Fail closed when a trusted bot thread supplies no bounded title evidence,
-   including punctuation, ambiguous-prefix, and short-inline shapes.
-4. Add direct regression proof for current multiline and full legacy forms,
-   varied nonsemantic prefixes, ambiguous-prefix and short-inline failures.
-5. Make no workflow, status-policy, or H-18 receipt change; merge this provider
-   before refreshing #2481's required trusted-base check.
+1. Derive and match only bounded full titles paired with a complete `R...`
+   label: same-line legacy or next-line multiline.
+2. Keep display titles/snippets non-authoritative; malformed, ambiguous, and
+   short evidence fails closed.
+3. Add grammar-derived proof for current/legacy forms, nonsemantic prefixes,
+   incomplete labels, and short/ambiguous titles.
+4. Change no workflow, status policy, or H-18 receipt code; merge this provider
+   before refreshing #2481's trusted-base check.
 
 ### Review Contract
 
@@ -64,21 +55,19 @@ Max files: 3
   R10, R13, R14.
 - Reviewer rules triggered: R1, R2, R10, R13, R14.
 
-### Boundary-change enumeration
+### Closure declaration
 
-- Seam: GitHub `bodyText` -> `_bot_thread_summary` (display vs evidenced
-  decision) -> `_thread_root_decision` -> `missing_thread_dispositions` ->
-  `evaluate`.
-- Multiline uses the next rule label; legacy uses same-line evidence. No bounded
-  decision becomes the fixed unparseable failure, never a display/snippet root.
-- Guard fields are bot-filtered `bodyText`, structured PR-body roots, and
-  resolved state; no fields or allowlists are added.
+- Title text is OPEN and never semantically classified. The finite positive
+  evidence is DERIVED from `_COMPLETE_RULE_LABEL_RE`: bounded title plus a full
+  rule reference, balanced optional severity, and nonempty delimiter/detail.
+- Any unmatched, incomplete, or novel label produces no decision and blocks
+  reconciliation; GitHub `bodyText` -> summary -> disposition check is the sole
+  choke point.
 
 ### Deployed-config probing
 
-N/A - no guard/config boundary change. The trusted workflow's base-SHA checkout
-and invocation remain unchanged; this slice only preserves the review payload's
-existing title boundary.
+N/A: no guard/config boundary change; trusted base-SHA checkout and invocation
+remain unchanged.
 
 ### Files touched
 
@@ -88,10 +77,8 @@ existing title boundary.
 
 ## Mechanism
 
-The parser derives a root only from the title/rule-label relationship above and
-uses the same floor for exact and containment comparison. Displays remain for
-diagnostics only. No title evidence produces the fixed unparseable failure, so
-the code does not need a punctuation or prefix vocabulary.
+The parser derives roots only from the title/rule-label relationship and uses
+the same floor for exact and containment matching; no evidence is unparseable.
 
 ## Intentional
 
@@ -120,7 +107,7 @@ Parked hardening: none.
 
 | File | LOC |
 |---|---:|
-| `plans/PR-Live-Reconciliation-Title-Delimiter.md` | 126 |
-| `scripts/check_ai_reconciliation_live.py` | 83 |
-| `tests/test_check_ai_reconciliation_live.py` | 177 |
-| **Total** | **386** |
+| `plans/PR-Live-Reconciliation-Title-Delimiter.md` | 113 |
+| `scripts/check_ai_reconciliation_live.py` | 97 |
+| `tests/test_check_ai_reconciliation_live.py` | 207 |
+| **Total** | **417** |
