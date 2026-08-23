@@ -6899,6 +6899,35 @@ async def test_nocodb_cannot_mutate_won_lead_with_unsettled_cancellation():
     try:
         await _prepare_schema(conn, schema)
         await _install_legacy_386_nocodb_fence(conn, schema)
+        function_ident = (
+            f'{_quote_ident(schema)}.reject_nocodb_eom_won_loss_mutation'
+        )
+        # The production-shaped legacy function is owned by a LOGIN role. The
+        # recovery must move it to the no-login guard rather than only replace
+        # its body, otherwise that login can disable a SECURITY DEFINER fence.
+        await conn.execute(
+            f"ALTER FUNCTION {function_ident}() OWNER TO atlas_nocodb"
+        )
+        # The regular CRM login cannot silently acquire the guard's ownership
+        # powers. The migration fails before replacing the function, trigger,
+        # grant, or ledger receipt unless a database administrator runs it.
+        await conn.execute("SET ROLE atlas_nocodb")
+        try:
+            with pytest.raises(
+                asyncpg.exceptions.RaiseError,
+                match="database administrator must run 390_eom_won_loss_direct_sql_fence_recovery",
+            ):
+                await conn.execute(
+                    (MIGRATIONS / "390_eom_won_loss_direct_sql_fence_recovery.sql").read_text()
+                )
+        finally:
+            await conn.execute("RESET ROLE")
+        assert await conn.fetchval(
+            "SELECT pg_catalog.pg_get_userbyid(proowner) = 'atlas_nocodb' "
+            "FROM pg_catalog.pg_proc "
+            "WHERE oid = $1::pg_catalog.regprocedure",
+            f"{schema}.reject_nocodb_eom_won_loss_mutation()",
+        )
         await conn.execute(
             "ALTER TABLE schema_migrations "
             "ADD COLUMN IF NOT EXISTS content_sha256 VARCHAR(64)"
@@ -6929,6 +6958,18 @@ async def test_nocodb_cannot_mutate_won_lead_with_unsettled_cancellation():
         assert await conn.fetchval(
             "SELECT EXISTS (SELECT 1 FROM schema_migrations WHERE name = $1)",
             record.recovery_migration_name,
+        )
+        assert await conn.fetchval(
+            "SELECT pg_catalog.pg_get_userbyid(proowner) "
+            "= 'atlas_eom_handoff_owner' "
+            "FROM pg_catalog.pg_proc "
+            "WHERE oid = $1::pg_catalog.regprocedure",
+            f"{schema}.reject_nocodb_eom_won_loss_mutation()",
+        )
+        assert await conn.fetchval(
+            "SELECT pg_catalog.has_table_privilege("
+            "'atlas_eom_handoff_owner', $1::pg_catalog.regclass, 'SELECT')",
+            f"{schema}.eom_lead_lifecycle_events",
         )
 
         provider = DatabaseCRMProvider(pool=conn)
@@ -6966,6 +7007,10 @@ async def test_nocodb_cannot_mutate_won_lead_with_unsettled_cancellation():
             f"SET search_path TO {_quote_ident(schema)}, public"
         )
         assert await nocodb_conn.fetchval("SELECT session_user") == "atlas_nocodb"
+        with pytest.raises(asyncpg.exceptions.InsufficientPrivilegeError):
+            await nocodb_conn.execute(
+                f"ALTER FUNCTION {function_ident}() OWNER TO atlas_nocodb"
+            )
         direct_conn = await asyncpg.connect(database_url)
         await direct_conn.execute(f"SET search_path TO {_quote_ident(schema)}, public")
         assert await direct_conn.fetchval("SELECT session_user") != "atlas_nocodb"

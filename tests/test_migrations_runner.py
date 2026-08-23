@@ -1615,6 +1615,9 @@ class _ForwardRecoveryPool(_SerializingPool):
             "function_security_definer": True,
             "function_proconfig": ["search_path=pg_catalog, migration_probe"],
             "function_public_execute_revoked": True,
+            "trusted_guard_role_ready": True,
+            "recovered_function_guard_owner_ready": False,
+            "recovered_function_guard_lifecycle_read_ready": False,
             "function_body": _legacy_386_function_body(),
             "trigger_ready": True,
             "trigger_enabled": "O",
@@ -1656,6 +1659,8 @@ class _ForwardRecoveryPool(_SerializingPool):
             assert args == ()
             assert "pg_catalog.pg_trigger AS trigger_state" in query
             assert "trigger_state.tgqual" in query
+            assert "pg_catalog.pg_roles AS guard_role" in query
+            assert "eom_lead_lifecycle_events" in query
             return _AsyncpgRecordLike(self.won_loss_catalog)
         raise AssertionError(f"Unexpected fetchrow query: {query}")
 
@@ -1669,6 +1674,8 @@ class _ForwardRecoveryPool(_SerializingPool):
                 # PostgreSQL exposes tgattr in physical column order rather
                 # than the CREATE TRIGGER declaration order.
                 "trigger_update_columns": ["contact_type", "status"],
+                "recovered_function_guard_owner_ready": True,
+                "recovered_function_guard_lifecycle_read_ready": True,
             })
         return await super().execute(query, *args)
 
@@ -1946,6 +1953,54 @@ async def test_386_forward_recovery_failure_rolls_back_then_retry_applies_once(
     ]
     assert pool.atomic_transactions == 2
     assert pool.atomic_transaction_errors == 1
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "missing_recovered_guard_fact",
+    (
+        "trusted_guard_role_ready",
+        "recovered_function_guard_owner_ready",
+        "recovered_function_guard_lifecycle_read_ready",
+    ),
+)
+async def test_386_recorded_recovery_requires_the_guarded_function_contract(
+    tmp_path,
+    missing_recovered_guard_fact,
+):
+    """A 390 receipt never attests a function a runtime login can still replace."""
+    from atlas_brain.storage.migrations import (
+        PendingMigrationContentIntegrityError,
+        run_migrations,
+    )
+
+    pool = _ForwardRecoveryPool()
+    record = _stage_historical_386_forward_recovery(tmp_path, pool)
+    pool.records.append((
+        record.recovery_migration_version,
+        record.recovery_migration_name,
+        record.recovery_packaged_sha256,
+    ))
+    pool.won_loss_catalog.update({
+        "function_body": _migration_function_body(_migration_386_source()),
+        "trigger_update_columns": ["contact_type", "status"],
+        "recovered_function_guard_owner_ready": True,
+        "recovered_function_guard_lifecycle_read_ready": True,
+    })
+    pool.won_loss_catalog[missing_recovered_guard_fact] = False
+    (tmp_path / "389_later_pending.sql").write_text("SELECT 389")
+
+    with pytest.raises(PendingMigrationContentIntegrityError, match="mismatched="):
+        await run_migrations(
+            pool,
+            migrations_dir=tmp_path,
+            only={record.recovery_migration_name, "389_later_pending"},
+        )
+
+    assert pool.applied_sql == []
+    assert pool.inserted_with_digest == []
+
+
 @pytest.mark.asyncio
 async def test_attested_historical_mismatch_admits_targeted_pending_migration(tmp_path):
     from atlas_brain.storage.migrations import run_migrations

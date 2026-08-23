@@ -37,7 +37,11 @@ change a customer-facing workflow.
      `390_eom_won_loss_direct_sql_fence_recovery.sql` that replaces the
      function and trigger with the existing all-direct-SQL predicate, fixed
      schema search path, `SECURITY DEFINER`, `status` plus `contact_type`
-     update coverage, delete coverage, and revoked public execute privilege.
+     update coverage, delete coverage, revoked public execute privilege, and
+     an ownership transfer to the existing no-login
+     `atlas_eom_handoff_owner` guard. The guard receives only `SELECT` on the
+     lifecycle evidence needed by the predicate; the recovery must require a
+     database administrator rather than granting that guard to the app login.
   3. Teach the existing migration runner to execute only that named recovery
      under its existing session advisory lock when the *only* remaining
      unresolved content evidence is the exact target-confirmed 386 legacy
@@ -62,7 +66,8 @@ change a customer-facing workflow.
      migrations, and all commercial-billing work.
   3. Existing lead lifecycle, Calendar, CRM API, role grants, customer data,
      email delivery, configuration, Website, tracker, and user-facing product
-     behavior.
+     behavior, except for the single guard-only lifecycle `SELECT` needed by
+     the recovered SECURITY DEFINER function.
   4. Live target migration execution. Verification uses catalog-only target
      reads and disposable test schemas only.
 
@@ -80,7 +85,8 @@ Max files: 11
 3. Add the recovery to the existing closed EOM missed-call readiness set so
    its `only=` call preserves caller-selected migration semantics.
 4. Prove both the semantic fence and the runner ordering with existing
-   migration test surfaces; keep the current EOM pipeline coverage enrolled.
+   migration test surfaces, including the guarded function owner and its
+   lifecycle read; keep the current EOM pipeline coverage enrolled.
 
 ### Review Contract
 
@@ -100,11 +106,16 @@ Max files: 11
     omission, or a recorded-but-weak recovery leaves
     every pending SQL statement and ledger insertion absent; settled by the
     negative runner/preflight tests.
-  - [ ] In a disposable PostgreSQL schema, the recovered trigger rejects a
+  - [x] In a disposable PostgreSQL schema, the recovered trigger rejects a
     direct non-NocoDB `status`, `contact_type`, and delete mutation while
     unresolved cancellation evidence exists, but preserves an ordinary
     non-state update; settled by
     `tests/test_eom_lead_conversion_integration.py`.
+  - [x] The recovered SECURITY DEFINER function is owned by the trusted,
+    membership-isolated no-login guard, that guard has only the lifecycle read
+    needed by the function, and the former direct CRM login cannot alter the
+    function; a non-administrator cannot start the recovery. Settled by the
+    same disposable-PostgreSQL test and the post-recovery catalog attestation.
   - [x] The EOM lead pipeline workflow runs when this forward-recovery migration
     or its curated EOM profile contract changes, and it executes the
     profile-contract assertion; settled by
@@ -133,8 +144,8 @@ Max files: 11
     fresh evidence check.
 - Guard-relevant fields: mismatch and missing-source names, exact historical
   ledger version/digest/timestamp, final and recovery package digests, function
-  body, function security/search-path/ACL metadata, trigger events, `WHEN`
-  condition, and columns,
+  body, function security/search-path/ACL metadata, trusted guard role and
+  ownership/lifecycle-read metadata, trigger events, `WHEN` condition, and columns,
   recovery ledger row, and recovery-file presence in the selected pending set.
 - Caller x input shape:
   - full generic runner x legacy 386 plus later pending SQL;
@@ -183,6 +194,14 @@ same record can become `attested` only after the named 390 migration is
 recorded with its packaged digest and the target has the stronger current
 function/trigger catalog contract.
 
+The recovered catalog additionally requires the existing
+`atlas_eom_handoff_owner` role to remain a membership-isolated no-login guard,
+to own the SECURITY DEFINER function, and to have only the lifecycle-evidence
+read needed to evaluate it. Migration 390 is DBA-only and transfers ownership
+inside its existing atomic transaction. This avoids granting the guard to the
+normal Atlas login; a normal startup attempt fails before replacing the
+function, trigger, grant, or ledger receipt.
+
 PostgreSQL reports a trigger's update columns in the table's physical-column
 order rather than the `CREATE TRIGGER` declaration order. The recovered
 contract therefore requires the exact two-column set `status` and
@@ -213,7 +232,9 @@ re-snapshots after the holder releases the lock. External privileged database
 sessions are not serialized by this existing component; H-18's documented
 external migration-evidence serialization item remains deferred, and normal
 operation still requires a fresh read-only preflight if external mutation is
-suspected.
+suspected. The DBA must invoke the existing selected migration runner rather
+than executing the SQL file directly, so that same transaction records 390's
+digest before 389 or any ordinary pending migration can be considered.
 
 ## Intentional
 
@@ -230,7 +251,9 @@ suspected.
   outstanding cancellation and then drop trigger before function; it is not
   automated here.
 - The prior direct-SQL function name remains for compatibility; its scope is
-  corrected from NocoDB-only to all direct writers. No role grants are changed.
+  corrected from NocoDB-only to all direct writers. The only role grant added
+  is guard-only `SELECT` on lifecycle evidence; no application or CRM role
+  gains a privilege.
 
 ## Deferred
 
@@ -241,9 +264,9 @@ suspected.
   H-18 architectural item; this slice preserves its safe interim operation and
   does not invent a second lock protocol.
 - Parking predicate: additional historical receipt predicates, external
-  administrative-write serialization, role-grant redesign, and lifecycle/UI
-  changes are parked unless they prevent this exact recovery from committing
-  atomically before later pending SQL.
+  administrative-write serialization, broader role-grant redesign, and
+  lifecycle/UI changes are parked unless they prevent this exact recovery from
+  committing atomically before later pending SQL.
 
 Parked hardening: none.
 
@@ -251,12 +274,12 @@ Parked hardening: none.
 
 - `python -m py_compile atlas_brain/main_eom.py atlas_brain/storage/migrations/__init__.py atlas_brain/storage/migrations/reconciliation.py tests/test_eom_lead_conversion.py tests/test_eom_lead_conversion_integration.py tests/test_eom_render_profile.py tests/test_migration_content_integrity_preflight.py tests/test_migrations_runner.py` — passed.
 - `python -m pytest -q tests/test_migration_content_integrity_preflight.py` — `157 passed`.
-- `python -m pytest -q tests/test_migrations_runner.py` — `82 passed, 1 skipped`; focused `-k '386_forward_recovery'` cases: `7 passed, 76 deselected`.
+- `python -m pytest -q tests/test_migrations_runner.py` — `85 passed, 1 skipped`; focused `-k '386_forward_recovery or 386_recorded_recovery'` cases: `10 passed, 76 deselected`.
 - `python -m pytest -q tests/test_eom_render_profile.py -k 'missed_call_recovery_migration_helper'` — `1 passed, 63 deselected`; `python -m pytest -q tests/test_eom_lead_conversion.py -k 'workflow_enrolls_won_loss_runtime_paths'` — `1 passed, 224 deselected`.
-- `ATLAS_MIGRATION_TEST_DATABASE_URL=<disposable PostgreSQL test database> python -m pytest -q tests/test_eom_lead_conversion_integration.py -k 'nocodb_cannot_mutate_won_lead_with_unsettled_cancellation'` — `1 passed, 111 deselected`; this reproduced the GitHub failure and proves the recovered real-PostgreSQL trigger contract against physical catalog ordering.
+- `ATLAS_MIGRATION_TEST_DATABASE_URL=<disposable PostgreSQL test database> python -m pytest -q tests/test_eom_lead_conversion_integration.py -k 'nocodb_cannot_mutate_won_lead_with_unsettled_cancellation'` — `1 passed, 111 deselected`; this reproduces the PostgreSQL catalog-order case and proves that a non-admin cannot start 390, the DBA path transfers its SECURITY DEFINER function to the no-login guard, the guard can read lifecycle evidence, and the former CRM owner cannot alter the recovered function.
 - `python -m ruff check --ignore E402 atlas_brain/main_eom.py atlas_brain/storage/migrations/__init__.py atlas_brain/storage/migrations/reconciliation.py tests/test_eom_lead_conversion.py tests/test_eom_lead_conversion_integration.py tests/test_eom_render_profile.py tests/test_migration_content_integrity_preflight.py tests/test_migrations_runner.py` — passed; `main_eom.py` retains the repository's pre-existing intentional E402 import order.
 - `git diff --check` — passed.
-- Controlled read-only target preflight — expected exit `2`: 386 is now reported as `recovery_required` with legacy catalog ready; 379 remains independently source-unavailable. No local Unit Gate ran; broad checks remain on GitHub.
+- Controlled read-only target preflight — expected exit `2`: 386 is `recovery_required` with the trusted guard role ready but with its function ownership and lifecycle read still absent, and 379 remains independently source-unavailable. No target SQL ran. No local Unit Gate ran; broad checks remain on GitHub.
 
 ## Estimated diff size
 
@@ -264,13 +287,13 @@ Parked hardening: none.
 |---|---:|
 | `.github/workflows/atlas_eom_lead_pipeline_checks.yml` | 7 |
 | `atlas_brain/main_eom.py` | 3 |
-| `atlas_brain/storage/migrations/390_eom_won_loss_direct_sql_fence_recovery.sql` | 73 |
+| `atlas_brain/storage/migrations/390_eom_won_loss_direct_sql_fence_recovery.sql` | 141 |
 | `atlas_brain/storage/migrations/__init__.py` | 175 |
-| `atlas_brain/storage/migrations/reconciliation.py` | 409 |
-| `plans/PR-H18-EOM-Won-Loss-Fence-Forward-Recovery.md` | 276 |
+| `atlas_brain/storage/migrations/reconciliation.py` | 510 |
+| `plans/PR-H18-EOM-Won-Loss-Fence-Forward-Recovery.md` | 299 |
 | `tests/test_eom_lead_conversion.py` | 2 |
-| `tests/test_eom_lead_conversion_integration.py` | 63 |
+| `tests/test_eom_lead_conversion_integration.py` | 108 |
 | `tests/test_eom_render_profile.py` | 1 |
 | `tests/test_migration_content_integrity_preflight.py` | 1 |
-| `tests/test_migrations_runner.py` | 315 |
-| **Total** | **1325** |
+| `tests/test_migrations_runner.py` | 370 |
+| **Total** | **1617** |

@@ -184,6 +184,9 @@ class ForwardRecoveryMigrationReconciliationAttestation:
     recovery_source_ready: bool
     no_recovery_ledger_row: bool
     recovery_receipt_ready: bool
+    trusted_guard_role_ready: bool
+    recovered_function_guard_owner_ready: bool
+    recovered_function_guard_lifecycle_read_ready: bool
     legacy_catalog_ready: bool
     recovered_catalog_ready: bool
 
@@ -222,6 +225,13 @@ class ForwardRecoveryMigrationReconciliationAttestation:
             "legacy_catalog_ready": self.legacy_catalog_ready,
             "recovered_catalog_ready": self.recovered_catalog_ready,
             "recovery_receipt_ready": self.recovery_receipt_ready,
+            "trusted_guard_role_ready": self.trusted_guard_role_ready,
+            "recovered_function_guard_owner_ready": (
+                self.recovered_function_guard_owner_ready
+            ),
+            "recovered_function_guard_lifecycle_read_ready": (
+                self.recovered_function_guard_lifecycle_read_ready
+            ),
             "status": self.status,
         }
 
@@ -589,7 +599,7 @@ MIGRATION_386_WON_LOSS_FENCE_FORWARD_RECOVERY = (
         recovery_migration_name="390_eom_won_loss_direct_sql_fence_recovery",
         recovery_migration_version=390,
         recovery_packaged_sha256=(
-            "557c9770f1845de385d097993124a81ebafe65f5f96c4f8b532edbd76e08d53d"
+            "7db5e37c828b1bfe4d2b5c3eb0bf0fd40d4648eca37b7bf6bdb602352c267ea0"
         ),
     )
 )
@@ -2438,6 +2448,17 @@ async def _migration_386_catalog_evidence(executor: Any) -> Mapping[str, object]
               AND NOT relation_state.relispartition
             LIMIT 1
         ),
+        target_lifecycle_relation AS (
+            SELECT relation_state.oid
+            FROM pg_catalog.pg_class AS relation_state
+            JOIN pg_catalog.pg_namespace AS namespace_state
+              ON namespace_state.oid = relation_state.relnamespace
+            WHERE namespace_state.nspname = pg_catalog.current_schema()
+              AND relation_state.relname = 'eom_lead_lifecycle_events'
+              AND relation_state.relkind = 'r'
+              AND NOT relation_state.relispartition
+            LIMIT 1
+        ),
         target_function AS (
             SELECT
                 function_state.oid,
@@ -2453,6 +2474,41 @@ async def _migration_386_catalog_evidence(executor: Any) -> Mapping[str, object]
               AND function_state.proname = 'reject_nocodb_eom_won_loss_mutation'
               AND function_state.pronargs = 0
               AND function_state.prorettype = 'trigger'::pg_catalog.regtype
+            LIMIT 1
+        ),
+        target_guard_role AS (
+            SELECT
+                guard_role.oid,
+                NOT guard_role.rolcanlogin
+                AND NOT guard_role.rolinherit
+                AND NOT guard_role.rolsuper
+                AND NOT guard_role.rolcreaterole
+                AND NOT guard_role.rolcreatedb
+                AND NOT guard_role.rolreplication
+                AND NOT guard_role.rolbypassrls
+                AND pg_catalog.has_schema_privilege(
+                    guard_role.oid,
+                    pg_catalog.current_schema(),
+                    'USAGE'
+                )
+                AND pg_catalog.has_schema_privilege(
+                    guard_role.oid,
+                    pg_catalog.current_schema(),
+                    'CREATE'
+                )
+                AND NOT EXISTS (
+                    SELECT 1
+                    FROM pg_catalog.pg_roles AS member_role
+                    WHERE member_role.rolcanlogin
+                      AND NOT member_role.rolsuper
+                      AND pg_catalog.pg_has_role(
+                          member_role.oid,
+                          guard_role.oid,
+                          'MEMBER'
+                      )
+                ) AS trusted_guard_role_ready
+            FROM pg_catalog.pg_roles AS guard_role
+            WHERE guard_role.rolname = 'atlas_eom_handoff_owner'
             LIMIT 1
         ),
         target_trigger AS (
@@ -2499,6 +2555,33 @@ async def _migration_386_catalog_evidence(executor: Any) -> Mapping[str, object]
                 ),
                 FALSE
             ) AS function_public_execute_revoked,
+            COALESCE(
+                (
+                    SELECT guard_role.trusted_guard_role_ready
+                    FROM target_guard_role AS guard_role
+                ),
+                FALSE
+            ) AS trusted_guard_role_ready,
+            COALESCE(
+                (
+                    SELECT function_state.proowner = guard_role.oid
+                    FROM target_function AS function_state
+                    JOIN target_guard_role AS guard_role ON TRUE
+                ),
+                FALSE
+            ) AS recovered_function_guard_owner_ready,
+            COALESCE(
+                (
+                    SELECT pg_catalog.has_table_privilege(
+                        guard_role.oid,
+                        lifecycle_relation.oid,
+                        'SELECT'
+                    )
+                    FROM target_guard_role AS guard_role
+                    JOIN target_lifecycle_relation AS lifecycle_relation ON TRUE
+                ),
+                FALSE
+            ) AS recovered_function_guard_lifecycle_read_ready,
             (SELECT function_state.prosrc FROM target_function AS function_state)
                 AS function_body,
             EXISTS (SELECT 1 FROM target_trigger) AS trigger_ready,
@@ -2593,6 +2676,13 @@ async def _attest_migration_386(
         bool(catalog.get("trigger_is_before_row_update_delete")),
         bool(catalog.get("trigger_has_no_when_clause")),
     ))
+    trusted_guard_role_ready = bool(catalog.get("trusted_guard_role_ready"))
+    recovered_function_guard_owner_ready = bool(
+        catalog.get("recovered_function_guard_owner_ready")
+    )
+    recovered_function_guard_lifecycle_read_ready = bool(
+        catalog.get("recovered_function_guard_lifecycle_read_ready")
+    )
     trigger_update_columns = _catalog_column_names(
         catalog.get("trigger_update_columns")
     )
@@ -2615,13 +2705,24 @@ async def _attest_migration_386(
         recovery_source_ready=recovery_source_ready,
         no_recovery_ledger_row=not recovery_ledger_rows,
         recovery_receipt_ready=recovery_receipt_ready,
+        trusted_guard_role_ready=trusted_guard_role_ready,
+        recovered_function_guard_owner_ready=(
+            recovered_function_guard_owner_ready
+        ),
+        recovered_function_guard_lifecycle_read_ready=(
+            recovered_function_guard_lifecycle_read_ready
+        ),
         legacy_catalog_ready=(
             shared_catalog_ready
+            and trusted_guard_role_ready
             and function_body_sha256 == record.legacy_function_body_sha256
             and trigger_update_columns == ("status",)
         ),
         recovered_catalog_ready=(
             shared_catalog_ready
+            and trusted_guard_role_ready
+            and recovered_function_guard_owner_ready
+            and recovered_function_guard_lifecycle_read_ready
             and function_body_sha256 == record.recovered_function_body_sha256
             and recovered_trigger_columns_ready
         ),
