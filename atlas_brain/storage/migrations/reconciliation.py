@@ -284,6 +284,10 @@ class MissingSourceForwardRecoveryMigrationReconciliationAttestation:
     no_recovery_ledger_row: bool
     recovery_receipt_ready: bool
     reviewed_billing_catalog_ready: bool
+    required_billing_constraints_ready: bool
+    no_unreviewed_billing_constraints: bool
+    required_billing_indexes_ready: bool
+    no_unreviewed_billing_indexes: bool
     invoice_fence_trigger_ready: bool
     legacy_function_body_matches: bool
     recovered_function_body_matches: bool
@@ -343,6 +347,14 @@ class MissingSourceForwardRecoveryMigrationReconciliationAttestation:
             "no_recovery_ledger_row": self.no_recovery_ledger_row,
             "recovery_receipt_ready": self.recovery_receipt_ready,
             "reviewed_billing_catalog_ready": self.reviewed_billing_catalog_ready,
+            "required_billing_constraints_ready": (
+                self.required_billing_constraints_ready
+            ),
+            "no_unreviewed_billing_constraints": (
+                self.no_unreviewed_billing_constraints
+            ),
+            "required_billing_indexes_ready": self.required_billing_indexes_ready,
+            "no_unreviewed_billing_indexes": self.no_unreviewed_billing_indexes,
             "invoice_fence_trigger_ready": self.invoice_fence_trigger_ready,
             "legacy_function_body_matches": self.legacy_function_body_matches,
             "recovered_function_body_matches": (
@@ -2735,6 +2747,224 @@ async def _migration_379_catalog_evidence(executor: Any) -> Mapping[str, object]
             JOIN pg_catalog.pg_type AS type_state
               ON type_state.oid = attribute_state.atttypid
         ),
+        billing_catalog_relations AS (
+            SELECT *
+            FROM target_relations
+            WHERE relname = ANY (
+                ARRAY[
+                    'commercial_billing_candidate_review_decisions',
+                    'commercial_billing_candidate_overrides',
+                    'commercial_billing_run_candidates'
+                ]::text[]
+            )
+        ),
+        declared_constraints AS (
+            SELECT *
+            FROM (
+                -- The long review-decision FK was auto-derived while preserving
+                -- its `_fkey` suffix. Other auto names below are already
+                -- physical; required_constraints projects explicit names to 63.
+                VALUES
+                    ('commercial_billing_run_candidates', 'commercial_billing_run_candidates_pkey', 'p', ARRAY['id']::text[], NULL::text, ARRAY[]::text[]),
+                    ('commercial_billing_run_candidates', 'commercial_billing_run_candidates_billing_run_id_fkey', 'f', ARRAY['billing_run_id']::text[], 'commercial_billing_runs', ARRAY['id']::text[]),
+                    ('commercial_billing_run_candidates', 'commercial_billing_run_candidates_source_fingerprint_check', 'c', ARRAY['source_fingerprint']::text[], NULL::text, ARRAY[]::text[]),
+                    ('commercial_billing_run_candidates', 'commercial_billing_run_candidates_display_order_check', 'c', ARRAY['display_order']::text[], NULL::text, ARRAY[]::text[]),
+                    ('commercial_billing_run_candidates', 'commercial_billing_run_candidates_run_key_key', 'u', ARRAY['billing_run_id', 'candidate_key']::text[], NULL::text, ARRAY[]::text[]),
+                    ('commercial_billing_run_candidates', 'commercial_billing_run_candidates_run_order_key', 'u', ARRAY['billing_run_id', 'display_order']::text[], NULL::text, ARRAY[]::text[]),
+                    ('commercial_billing_candidate_review_decisions', 'commercial_billing_candidate_review_decisions_pkey', 'p', ARRAY['id']::text[], NULL::text, ARRAY[]::text[]),
+                    ('commercial_billing_candidate_review_decisions', 'commercial_billing_candidate_review_decisio_billing_run_id_fkey', 'f', ARRAY['billing_run_id']::text[], 'commercial_billing_runs', ARRAY['id']::text[]),
+                    ('commercial_billing_candidate_review_decisions', 'commercial_billing_candidate_review_decisions_fingerprint_check', 'c', ARRAY['source_fingerprint']::text[], NULL::text, ARRAY[]::text[]),
+                    ('commercial_billing_candidate_review_decisions', 'commercial_billing_candidate_review_decisions_revision_check', 'c', ARRAY['revision']::text[], NULL::text, ARRAY[]::text[]),
+                    ('commercial_billing_candidate_review_decisions', 'commercial_billing_candidate_review_decisions_decision_check', 'c', ARRAY['decision']::text[], NULL::text, ARRAY[]::text[]),
+                    ('commercial_billing_candidate_review_decisions', 'commercial_billing_candidate_review_decisions_reason_check', 'c', ARRAY['reason']::text[], NULL::text, ARRAY[]::text[]),
+                    ('commercial_billing_candidate_review_decisions', 'commercial_billing_candidate_review_decisions_request_fingerprint_check', 'c', ARRAY['request_fingerprint']::text[], NULL::text, ARRAY[]::text[]),
+                    ('commercial_billing_candidate_review_decisions', 'commercial_billing_candidate_review_decisions_actor_check', 'c', ARRAY['decided_by']::text[], NULL::text, ARRAY[]::text[]),
+                    ('commercial_billing_candidate_review_decisions', 'commercial_billing_candidate_review_decisions_source_key', 'u', ARRAY['source', 'idempotency_key']::text[], NULL::text, ARRAY[]::text[]),
+                    ('commercial_billing_candidate_review_decisions', 'commercial_billing_candidate_review_decisions_revision_key', 'u', ARRAY['candidate_key', 'source_fingerprint', 'revision']::text[], NULL::text, ARRAY[]::text[]),
+                    ('commercial_billing_candidate_review_decisions', 'commercial_billing_candidate_review_decisions_snapshot_fkey', 'f', ARRAY['billing_run_id', 'candidate_key', 'source_fingerprint']::text[], 'commercial_billing_run_candidates', ARRAY['billing_run_id', 'candidate_key', 'source_fingerprint']::text[]),
+                    ('commercial_billing_candidate_review_decisions', 'commercial_billing_candidate_review_decisions_review_fingerprint_check', 'c', ARRAY['review_fingerprint']::text[], NULL::text, ARRAY[]::text[]),
+                    ('commercial_billing_candidate_overrides', 'commercial_billing_candidate_overrides_pkey', 'p', ARRAY['id']::text[], NULL::text, ARRAY[]::text[]),
+                    ('commercial_billing_candidate_overrides', 'commercial_billing_candidate_overrides_billing_run_id_fkey', 'f', ARRAY['billing_run_id']::text[], 'commercial_billing_runs', ARRAY['id']::text[]),
+                    ('commercial_billing_candidate_overrides', 'commercial_billing_candidate_overrides_source_fingerprint_check', 'c', ARRAY['source_fingerprint']::text[], NULL::text, ARRAY[]::text[]),
+                    ('commercial_billing_candidate_overrides', 'commercial_billing_candidate_overrides_review_fingerprint_check', 'c', ARRAY['review_fingerprint']::text[], NULL::text, ARRAY[]::text[]),
+                    ('commercial_billing_candidate_overrides', 'commercial_billing_candidate_overrides_revision_check', 'c', ARRAY['revision']::text[], NULL::text, ARRAY[]::text[]),
+                    ('commercial_billing_candidate_overrides', 'commercial_billing_candidate_overrides_reason_code_check', 'c', ARRAY['reason_code']::text[], NULL::text, ARRAY[]::text[]),
+                    ('commercial_billing_candidate_overrides', 'commercial_billing_candidate_overrides_reason_check', 'c', ARRAY['reason']::text[], NULL::text, ARRAY[]::text[]),
+                    ('commercial_billing_candidate_overrides', 'commercial_billing_candidate_overrides_request_fingerprint_check', 'c', ARRAY['request_fingerprint']::text[], NULL::text, ARRAY[]::text[]),
+                    ('commercial_billing_candidate_overrides', 'commercial_billing_candidate_overrides_actor_check', 'c', ARRAY['overridden_by']::text[], NULL::text, ARRAY[]::text[]),
+                    ('commercial_billing_candidate_overrides', 'commercial_billing_candidate_overrides_source_key', 'u', ARRAY['source', 'idempotency_key']::text[], NULL::text, ARRAY[]::text[]),
+                    ('commercial_billing_candidate_overrides', 'commercial_billing_candidate_overrides_revision_key', 'u', ARRAY['billing_run_id', 'candidate_key', 'source_fingerprint', 'revision']::text[], NULL::text, ARRAY[]::text[]),
+                    ('commercial_billing_candidate_overrides', 'commercial_billing_candidate_overrides_review_key', 'u', ARRAY['review_fingerprint']::text[], NULL::text, ARRAY[]::text[]),
+                    ('commercial_billing_candidate_overrides', 'commercial_billing_candidate_overrides_snapshot_fkey', 'f', ARRAY['billing_run_id', 'candidate_key', 'source_fingerprint']::text[], 'commercial_billing_run_candidates', ARRAY['billing_run_id', 'candidate_key', 'source_fingerprint']::text[])
+            ) AS expected_constraint(
+                relation_name,
+                constraint_name,
+                constraint_type,
+                key_columns,
+                referenced_relation_name,
+                referenced_columns
+            )
+        ),
+        required_constraints AS (
+            SELECT
+                relation_name,
+                pg_catalog.left(constraint_name, 63) AS constraint_name,
+                constraint_type,
+                key_columns,
+                referenced_relation_name,
+                referenced_columns
+            FROM declared_constraints
+        ),
+        required_check_expressions AS (
+            SELECT
+                relation_name,
+                pg_catalog.left(constraint_name, 63) AS constraint_name,
+                normalized_expression
+            FROM (
+                VALUES
+                    ('commercial_billing_run_candidates', 'commercial_billing_run_candidates_source_fingerprint_check', '((source_fingerprint)::text~''^[0-9a-f]{64}$''::text)'),
+                    ('commercial_billing_run_candidates', 'commercial_billing_run_candidates_display_order_check', '(display_order>=0)'),
+                    ('commercial_billing_candidate_review_decisions', 'commercial_billing_candidate_review_decisions_fingerprint_check', '((source_fingerprint)::text~''^[0-9a-f]{64}$''::text)'),
+                    ('commercial_billing_candidate_review_decisions', 'commercial_billing_candidate_review_decisions_revision_check', '(revision>0)'),
+                    ('commercial_billing_candidate_review_decisions', 'commercial_billing_candidate_review_decisions_decision_check', '((decision)::text=any((array[''included''::charactervarying,''excluded''::charactervarying])::text[]))'),
+                    ('commercial_billing_candidate_review_decisions', 'commercial_billing_candidate_review_decisions_reason_check', '(length(btrim((reason)::text))>0)'),
+                    ('commercial_billing_candidate_review_decisions', 'commercial_billing_candidate_review_decisions_request_fingerprint_check', '((request_fingerprint)::text~''^[0-9a-f]{64}$''::text)'),
+                    ('commercial_billing_candidate_review_decisions', 'commercial_billing_candidate_review_decisions_actor_check', '(length(btrim((decided_by)::text))>0)'),
+                    ('commercial_billing_candidate_review_decisions', 'commercial_billing_candidate_review_decisions_review_fingerprint_check', '((review_fingerprint)::text~''^[0-9a-f]{64}$''::text)'),
+                    ('commercial_billing_candidate_overrides', 'commercial_billing_candidate_overrides_source_fingerprint_check', '((source_fingerprint)::text~''^[0-9a-f]{64}$''::text)'),
+                    ('commercial_billing_candidate_overrides', 'commercial_billing_candidate_overrides_review_fingerprint_check', '((review_fingerprint)::text~''^[0-9a-f]{64}$''::text)'),
+                    ('commercial_billing_candidate_overrides', 'commercial_billing_candidate_overrides_revision_check', '(revision>0)'),
+                    ('commercial_billing_candidate_overrides', 'commercial_billing_candidate_overrides_reason_code_check', '((reason_code)::text=any((array[''one_time_service_variation''::charactervarying,''partial_or_missed_service''::charactervarying,''approved_pricing_exception''::charactervarying,''customer_credit''::charactervarying,''additional_charge''::charactervarying,''source_correction_pending''::charactervarying,''billing_delivery_exception''::charactervarying])::text[]))'),
+                    ('commercial_billing_candidate_overrides', 'commercial_billing_candidate_overrides_reason_check', '(length(btrim((reason)::text))>0)'),
+                    ('commercial_billing_candidate_overrides', 'commercial_billing_candidate_overrides_request_fingerprint_check', '((request_fingerprint)::text~''^[0-9a-f]{64}$''::text)'),
+                    ('commercial_billing_candidate_overrides', 'commercial_billing_candidate_overrides_actor_check', '(length(btrim((overridden_by)::text))>0)')
+            ) AS expected_check(relation_name, constraint_name, normalized_expression)
+        ),
+        target_constraints AS (
+            SELECT
+                relation_state.relname AS relation_name,
+                constraint_state.conname AS constraint_name,
+                constraint_state.contype::text AS constraint_type,
+                ARRAY(
+                    SELECT attribute_state.attname::text
+                    FROM unnest(constraint_state.conkey)
+                         WITH ORDINALITY AS key_state(attnum, ordinality)
+                    JOIN pg_catalog.pg_attribute AS attribute_state
+                      ON attribute_state.attrelid = constraint_state.conrelid
+                     AND attribute_state.attnum = key_state.attnum
+                    ORDER BY key_state.ordinality
+                ) AS key_columns,
+                referenced_relation.relname AS referenced_relation_name,
+                referenced_schema.nspname AS referenced_schema_name,
+                ARRAY(
+                    SELECT attribute_state.attname::text
+                    FROM unnest(constraint_state.confkey)
+                         WITH ORDINALITY AS key_state(attnum, ordinality)
+                    JOIN pg_catalog.pg_attribute AS attribute_state
+                      ON attribute_state.attrelid = constraint_state.confrelid
+                     AND attribute_state.attnum = key_state.attnum
+                    ORDER BY key_state.ordinality
+                ) AS referenced_columns,
+                constraint_state.confdeltype::text AS confdeltype,
+                constraint_state.confupdtype::text AS confupdtype,
+                constraint_state.confmatchtype::text AS confmatchtype,
+                constraint_state.condeferrable,
+                constraint_state.condeferred,
+                constraint_state.convalidated,
+                CASE
+                    WHEN constraint_state.contype = 'c' THEN regexp_replace(
+                        lower(
+                            pg_catalog.pg_get_expr(
+                                constraint_state.conbin,
+                                constraint_state.conrelid
+                            )
+                        ),
+                        '\\s+',
+                        '',
+                        'g'
+                    )
+                END AS normalized_check_expression
+            FROM pg_catalog.pg_constraint AS constraint_state
+            JOIN billing_catalog_relations AS relation_state
+              ON relation_state.oid = constraint_state.conrelid
+            LEFT JOIN pg_catalog.pg_class AS referenced_relation
+              ON referenced_relation.oid = constraint_state.confrelid
+            LEFT JOIN pg_catalog.pg_namespace AS referenced_schema
+              ON referenced_schema.oid = referenced_relation.relnamespace
+        ),
+        required_indexes AS (
+            SELECT *
+            FROM (
+                VALUES
+                    ('commercial_billing_run_candidates', 'idx_commercial_billing_run_candidates_run_order', FALSE, 2, 'usingbtree(billing_run_id,display_order)'),
+                    ('commercial_billing_run_candidates', 'idx_commercial_billing_run_candidates_exact_source', TRUE, 3, 'usingbtree(billing_run_id,candidate_key,source_fingerprint)'),
+                    ('commercial_billing_run_candidates', 'idx_commercial_billing_run_candidates_identity', FALSE, 2, 'usingbtree(candidate_key,source_fingerprint)'),
+                    ('commercial_billing_candidate_review_decisions', 'idx_commercial_billing_candidate_review_decisions_run_candidate', FALSE, 4, 'usingbtree(billing_run_id,candidate_key,source_fingerprint,revisiondesc)'),
+                    ('commercial_billing_candidate_review_decisions', 'idx_commercial_billing_candidate_review_decisions_review', FALSE, 4, 'usingbtree(candidate_key,source_fingerprint,review_fingerprint,revisiondesc)'),
+                    ('commercial_billing_candidate_overrides', 'idx_commercial_billing_candidate_overrides_active', FALSE, 4, 'usingbtree(billing_run_id,candidate_key,source_fingerprint,revisiondesc)')
+            ) AS expected_index(
+                relation_name,
+                index_name,
+                is_unique,
+                key_attribute_count,
+                definition_fragment
+            )
+        ),
+        target_indexes AS (
+            SELECT
+                relation_state.relname AS relation_name,
+                index_relation.relname AS index_name,
+                index_state.indisunique AS is_unique,
+                index_state.indisvalid AS is_valid,
+                index_state.indisready AS is_ready,
+                index_state.indnkeyatts AS key_attribute_count,
+                index_state.indnatts AS attribute_count,
+                regexp_replace(
+                    lower(pg_catalog.pg_get_indexdef(index_state.indexrelid)),
+                    '\\s+',
+                    '',
+                    'g'
+                ) AS normalized_definition,
+                backing_constraint.conname AS backing_constraint_name
+            FROM pg_catalog.pg_index AS index_state
+            JOIN billing_catalog_relations AS relation_state
+              ON relation_state.oid = index_state.indrelid
+            JOIN pg_catalog.pg_class AS index_relation
+              ON index_relation.oid = index_state.indexrelid
+            LEFT JOIN pg_catalog.pg_constraint AS backing_constraint
+              ON backing_constraint.conindid = index_state.indexrelid
+             AND backing_constraint.conrelid = index_state.indrelid
+        ),
+        unreviewed_constraints AS (
+            SELECT NOT EXISTS (
+                SELECT 1
+                FROM target_constraints AS actual_constraint
+                LEFT JOIN required_constraints AS expected_constraint
+                  ON expected_constraint.relation_name = actual_constraint.relation_name
+                 AND expected_constraint.constraint_name = actual_constraint.constraint_name
+                WHERE expected_constraint.constraint_name IS NULL
+            ) AS no_unreviewed_billing_constraints
+        ),
+        unreviewed_indexes AS (
+            SELECT NOT EXISTS (
+                SELECT 1
+                FROM target_indexes AS actual_index
+                LEFT JOIN required_indexes AS expected_index
+                  ON expected_index.relation_name = actual_index.relation_name
+                 AND expected_index.index_name = actual_index.index_name
+                LEFT JOIN required_constraints AS expected_backing_constraint
+                  ON expected_backing_constraint.relation_name = actual_index.relation_name
+                 AND expected_backing_constraint.constraint_name = actual_index.backing_constraint_name
+                WHERE (
+                    actual_index.backing_constraint_name IS NULL
+                    AND expected_index.index_name IS NULL
+                )
+                   OR (
+                    actual_index.backing_constraint_name IS NOT NULL
+                    AND expected_backing_constraint.constraint_name IS NULL
+                )
+            ) AS no_unreviewed_billing_indexes
+        ),
         target_function AS (
             SELECT function_state.oid, function_state.prosrc
             FROM pg_catalog.pg_proc AS function_state
@@ -2810,6 +3040,73 @@ async def _migration_379_catalog_evidence(executor: Any) -> Mapping[str, object]
                    OR actual_column.type_name <> expected_column.type_name
                    OR NOT actual_column.attnotnull
             ) AS required_columns_ready,
+            (
+                NOT EXISTS (
+                    SELECT 1
+                    FROM required_constraints AS expected_constraint
+                    LEFT JOIN target_constraints AS actual_constraint
+                      ON actual_constraint.relation_name = expected_constraint.relation_name
+                     AND actual_constraint.constraint_name = expected_constraint.constraint_name
+                    WHERE actual_constraint.constraint_name IS NULL
+                       OR actual_constraint.constraint_type
+                          IS DISTINCT FROM expected_constraint.constraint_type
+                       OR actual_constraint.key_columns
+                          IS DISTINCT FROM expected_constraint.key_columns
+                       OR (
+                           expected_constraint.referenced_relation_name IS NOT NULL
+                           AND (
+                               actual_constraint.referenced_relation_name
+                                   IS DISTINCT FROM expected_constraint.referenced_relation_name
+                               OR actual_constraint.referenced_schema_name
+                                   IS DISTINCT FROM pg_catalog.current_schema()
+                               OR actual_constraint.referenced_columns
+                                   IS DISTINCT FROM expected_constraint.referenced_columns
+                               OR actual_constraint.confdeltype IS DISTINCT FROM 'r'
+                               OR actual_constraint.confupdtype IS DISTINCT FROM 'a'
+                               OR actual_constraint.confmatchtype IS DISTINCT FROM 's'
+                           )
+                       )
+                       OR actual_constraint.condeferrable
+                       OR actual_constraint.condeferred
+                       OR NOT actual_constraint.convalidated
+                )
+                AND NOT EXISTS (
+                    SELECT 1
+                    FROM required_check_expressions AS expected_check
+                    LEFT JOIN target_constraints AS actual_constraint
+                      ON actual_constraint.relation_name = expected_check.relation_name
+                     AND actual_constraint.constraint_name = expected_check.constraint_name
+                    WHERE actual_constraint.constraint_name IS NULL
+                       OR actual_constraint.normalized_check_expression
+                          IS DISTINCT FROM expected_check.normalized_expression
+                )
+            ) AS required_billing_constraints_ready,
+            (
+                SELECT no_unreviewed_billing_constraints
+                FROM unreviewed_constraints
+            ) AS no_unreviewed_billing_constraints,
+            NOT EXISTS (
+                SELECT 1
+                FROM required_indexes AS expected_index
+                LEFT JOIN target_indexes AS actual_index
+                  ON actual_index.relation_name = expected_index.relation_name
+                 AND actual_index.index_name = expected_index.index_name
+                WHERE actual_index.index_name IS NULL
+                   OR actual_index.backing_constraint_name IS NOT NULL
+                   OR actual_index.is_unique IS DISTINCT FROM expected_index.is_unique
+                   OR NOT actual_index.is_valid
+                   OR NOT actual_index.is_ready
+                   OR actual_index.key_attribute_count
+                      IS DISTINCT FROM expected_index.key_attribute_count
+                   OR actual_index.attribute_count
+                      IS DISTINCT FROM expected_index.key_attribute_count
+                   OR actual_index.normalized_definition NOT LIKE
+                      '%' || expected_index.definition_fragment || '%'
+            ) AS required_billing_indexes_ready,
+            (
+                SELECT no_unreviewed_billing_indexes
+                FROM unreviewed_indexes
+            ) AS no_unreviewed_billing_indexes,
             NOT EXISTS (
                 SELECT 1
                 FROM required_history_triggers AS expected_trigger
@@ -2926,8 +3223,24 @@ async def _attest_migration_379(
         reviewed_billing_catalog_ready=all((
             bool(catalog.get("relations_ready")),
             bool(catalog.get("required_columns_ready")),
+            bool(catalog.get("required_billing_constraints_ready")),
+            bool(catalog.get("no_unreviewed_billing_constraints")),
+            bool(catalog.get("required_billing_indexes_ready")),
+            bool(catalog.get("no_unreviewed_billing_indexes")),
             bool(catalog.get("immutable_history_guards_ready")),
         )),
+        required_billing_constraints_ready=bool(
+            catalog.get("required_billing_constraints_ready")
+        ),
+        no_unreviewed_billing_constraints=bool(
+            catalog.get("no_unreviewed_billing_constraints")
+        ),
+        required_billing_indexes_ready=bool(
+            catalog.get("required_billing_indexes_ready")
+        ),
+        no_unreviewed_billing_indexes=bool(
+            catalog.get("no_unreviewed_billing_indexes")
+        ),
         invoice_fence_trigger_ready=bool(
             catalog.get("invoice_fence_trigger_ready")
         ),
@@ -3287,6 +3600,12 @@ async def pending_historical_forward_recovery_migration(
         )
         if commercial_attestation.status != "recovery_required":
             return None
+        if mismatched_names:
+            won_loss_attestation = await _attest_migration_386(
+                executor, migration_files
+            )
+            if won_loss_attestation.status != "recovery_required":
+                return None
         return commercial_record.recovery_migration_name
 
     if mismatched_names != {won_loss_record.migration_name}:

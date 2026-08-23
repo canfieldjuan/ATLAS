@@ -1807,6 +1807,10 @@ class _CommercialBillingForwardRecoveryPool(_ForwardRecoveryPool):
         self.commercial_billing_catalog = {
             "relations_ready": True,
             "required_columns_ready": True,
+            "required_billing_constraints_ready": True,
+            "no_unreviewed_billing_constraints": True,
+            "required_billing_indexes_ready": True,
+            "no_unreviewed_billing_indexes": True,
             "immutable_history_guards_ready": True,
             "invoice_fence_trigger_ready": True,
             "function_body": _legacy_379_function_body(),
@@ -1859,6 +1863,9 @@ class _CommercialBillingForwardRecoveryPool(_ForwardRecoveryPool):
             assert args == ()
             assert "commercial_billing_candidate_review_decisions" in query
             assert "commercial_billing_candidate_overrides" in query
+            assert "pg_catalog.left(constraint_name, 63)" in query
+            assert "required_constraints" in query
+            assert "required_indexes" in query
             return _AsyncpgRecordLike(self.commercial_billing_catalog)
         return await super().fetchrow(query, *args)
 
@@ -2102,6 +2109,48 @@ async def test_379_forward_recovery_stays_closed_without_exact_selected_state(
     assert pool.applied_sql == []
     assert pool.inserted_with_digest == []
     assert pool.commercial_recovery_attempts == 0
+    assert pool.commercial_billing_catalog["function_body"] == _legacy_379_function_body()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("case", "catalog_field", "unsafe_value"),
+    [
+        ("altered 386 function body", "function_body", "unexpected body"),
+        ("missing 386 trigger", "trigger_ready", False),
+        ("disabled 386 trigger", "trigger_enabled", "D"),
+        ("conditional 386 trigger", "trigger_has_no_when_clause", False),
+        ("narrowed 386 update columns", "trigger_update_columns", []),
+        ("untrusted 386 guard role", "trusted_guard_role_ready", False),
+    ],
+)
+async def test_379_forward_recovery_requires_exact_386_recovery_state_before_391(
+    tmp_path,
+    case,
+    catalog_field,
+    unsafe_value,
+):
+    """379 must not mutate a target whose concurrent 386 state is not exact."""
+    from atlas_brain.storage.migrations import (
+        PendingMigrationContentIntegrityError,
+        run_migrations,
+    )
+
+    pool = _CommercialBillingForwardRecoveryPool()
+    commercial_record = _stage_historical_379_forward_recovery(tmp_path, pool)
+    won_loss_record = _stage_historical_386_forward_recovery(tmp_path, pool)
+    pool.won_loss_catalog[catalog_field] = unsafe_value
+    requested = {
+        commercial_record.recovery_migration_name,
+        won_loss_record.recovery_migration_name,
+    }
+
+    with pytest.raises(PendingMigrationContentIntegrityError, match="missing_source="):
+        await run_migrations(pool, migrations_dir=tmp_path, only=requested)
+
+    assert pool.commercial_recovery_attempts == 0, case
+    assert pool.applied_sql == [], case
+    assert pool.inserted_with_digest == [], case
     assert pool.commercial_billing_catalog["function_body"] == _legacy_379_function_body()
 
 

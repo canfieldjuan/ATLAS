@@ -30,7 +30,7 @@ the exact legacy classifier and atomic recovery available for compatible
 targets, without rewriting historical ledger facts, creating invoices, or
 contacting customers.
 
-The approximately 2,000-LOC diff exceeds the soft cap because the exact
+The approximately 2,500-LOC diff exceeds the soft cap because the exact
 recovery SQL, its closed admission selector, immutable target classifier, and
 fake plus real PostgreSQL proof form one financial safety boundary. Splitting
 them would publish a recovery without proof, an attestation that hides the
@@ -85,6 +85,71 @@ run-isolation defect, or an EOM entrypoint unable to select its prerequisite.
      configuration. This PR's target verification remains catalog-only/read-only;
      the separately observed 391 receipt is not claimed as a PR action.
 
+### Contract revision after current-head review
+
+- New evidence: three current, non-outdated Codex review threads identify a
+  concrete pre-execution failure path. The 379 attestation currently observes
+  selected relations, columns, and history triggers but not the declared
+  constraint/index member set; the 379 selector admits a named 386 mismatch
+  without proving that 386 still attests as `recovery_required`; and the real
+  PostgreSQL proof does not execute the recovered trigger's missing-run-ID
+  rejection path. A follow-up controlled read-only catalog probe additionally
+  shows that a named `CHECK` constraint's `conkey` records only its referenced
+  column, not its predicate: replacing `revision > 0` with `revision >= 0`
+  would otherwise preserve every currently observed constraint field.
+- Revised root cause: the recovery admission decision is incomplete. A target
+  that has the expected function hash and selected columns/triggers but lacks a
+  required run-isolation constraint or index can reach immutable 391. Likewise,
+  a target whose 386 catalog is altered can reach 391 merely because 386 is
+  named in the unresolved set. The test suite then proves a successful
+  run-scoped insert but not the required failed legacy-provider insert.
+- Revised required change surface: before 391 can be selected, the
+  reconciliation classifier must attest the closed, declared recovery catalog
+  (relations, required columns, required constraint type/key/reference/action
+  shape, exact declared `CHECK` predicate semantics, required indexes, and no
+  unreviewed catalog members) and require the existing 386 attestation to be
+  `recovery_required` whenever its name is the sole concurrent mismatch.
+  Focused preflight/fake-runner tests and the isolated PostgreSQL test must
+  prove zero prelude SQL/ledger mutations for those rejection states and an
+  unchanged invoice count after a missing-run-ID error.
+- Revised explicit non-scope: do not edit
+  `391_eom_commercial_billing_run_fence_recovery.sql`. The canonical target has
+  an observed receipt for source SHA-256
+  `117cdd2c509cd89ffaae2efbc4732caf9aea7e155114910a5e5bbe1b5f7d66b7`; changing
+  those immutable source bytes would invalidate the very target attestation
+  this slice must preserve. The legal correction is the upstream admission
+  choke point before the normal runner can execute 391.
+- Revised assumptions/blockers: the recovery catalog is intentionally closed
+  to the objects needed by the packaged run fence; an unknown member rejects
+  admission. No target write is necessary to prove the code path. The isolated
+  PostgreSQL test remains conditional on its deliberately configured test URL;
+  GitHub owns its broad runnable environment.
+- Revised verification plan: run focused reconciliation-preflight,
+  migration-runner, and commercial-billing recovery tests plus syntax/plan/
+  whitespace checks locally; let GitHub run the full Unit Gate and migration
+  suite. Before publish, re-run the target receipt checker in read-only mode
+  only if its existing controlled target configuration is available. The
+  isolated PostgreSQL catalog matrix includes a same-name, altered `CHECK`
+  predicate so the catalog proof cannot pass merely because the object exists.
+- Additional target evidence: the controlled read-only catalog query reached
+  the new observer and safely returned `not_attested`, not because the target
+  lacks the declared recovery objects, but because PostgreSQL stores four
+  source identifiers at its physical 63-byte limit and because the exact-source
+  candidate index is referenced by snapshot foreign keys on other tables. The
+  canonical target therefore proves three observer requirements: normalize
+  every explicitly declared catalog name to PostgreSQL's physical identifier
+  form, retain the observed physical name for automatically derived foreign-key
+  constraints, and treat an index as a constraint-backed index only when that
+  constraint belongs to the index-owning relation. Cross-table foreign-key
+  references remain catalog evidence for their owning relations; they must not
+  make a known direct index look unreviewed.
+- Revised required change surface: retain the same closed list and rejection
+  semantics, but derive expected physical constraint names from the declared
+  source names and join a backing constraint only by both `conindid` and
+  `conrelid`. The real PostgreSQL proof must still reject each missing/unknown
+  member, while the read-only canonical-target probe must return 379 to its
+  prior `attested` state without any write.
+
 ## Scope (this PR)
 
 Ownership lane: h18-migration-content-integrity
@@ -116,16 +181,20 @@ Max files: 11
     re-reads evidence, and leaves ordinary pending SQL blocked while 386 is
     still unresolved; settled by `tests/test_migrations_runner.py`.
   - [ ] An unknown discrepancy, changed legacy fence hash, missing required
-    decision-table catalog, an omitted 391 `only=` selection, or an already
-    recorded but non-attested 391 causes no target SQL/ledger mutation; settled
-    by negative fake-runner and preflight cases.
+    decision-table catalog member (including a declared constraint, its exact
+    `CHECK` predicate, or index), an unreviewed catalog member, an omitted 391
+    `only=` selection, a 386 mismatch that does not independently attest as
+    `recovery_required`, or an already recorded but non-attested 391 causes no
+    target SQL/ledger mutation; settled by negative fake-runner and preflight
+    cases.
   - [ ] In an isolated PostgreSQL schema, recovery preserves all existing
     decision and override data, changes no row values, and restores run isolation:
     a candidate in run B is not blocked by an override stored only for run A;
     settled by `tests/test_commercial_billing_runs.py`.
-  - [ ] A retry after the 391 receipt is a no-op; a legacy provider that omits
-    the run identity remains fail-closed at the recovered database boundary;
-    settled by the same disposable PostgreSQL regression.
+  - [ ] A retry after the 391 receipt is a no-op; a legacy provider insert that
+    omits `commercialBillingRunId` raises a PostgreSQL error at the recovered
+    database boundary and leaves the invoice count unchanged; settled by the
+    same disposable PostgreSQL regression.
   - [ ] The EOM missed-call readiness entrypoint explicitly selects 391 and the
     relevant workflows run when its migration, selector, or dedicated proof
     changes; settled by `tests/test_eom_render_profile.py` and both workflow
@@ -154,9 +223,11 @@ Max files: 11
   - any unknown, incomplete, or wrong catalog: fail before all pending SQL.
 - Guard-relevant fields: unresolved mismatch/missing-source names, 379's exact
   ledger versions/NULL digests/timestamps, successor ledger receipts, decision
-  relation kind/columns/constraints/indexes/triggers, invoice-fence trigger,
-  legacy and recovered `pg_proc.prosrc` SHA-256 values, recovery source digest,
-  recovery ledger row, and selected pending migration names.
+  relation kind/columns/declared constraints including normalized `CHECK`
+  predicates/declared indexes/no-unreviewed catalog members/triggers, 386's
+  independently attested status, invoice-fence trigger, legacy and recovered
+  `pg_proc.prosrc` SHA-256 values, recovery source digest, recovery ledger row,
+  and selected pending migration names.
 - Caller x input shape:
   - EOM closed `only=` set including 391 x target-shaped 379/386 legacy state;
   - explicit `only=` set omitting 391 x the same legacy state;
@@ -271,10 +342,10 @@ Parked hardening: none.
 | `.github/workflows/atlas_migrations_runner_checks.yml` | 16 |
 | `atlas_brain/main_eom.py` | 3 |
 | `atlas_brain/storage/migrations/391_eom_commercial_billing_run_fence_recovery.sql` | 343 |
-| `atlas_brain/storage/migrations/reconciliation.py` | 507 |
-| `plans/PR-H18-Commercial-Billing-379-Run-Fence-Recovery.md` | 280 |
-| `tests/test_commercial_billing_runs.py` | 225 |
+| `atlas_brain/storage/migrations/reconciliation.py` | 826 |
+| `plans/PR-H18-Commercial-Billing-379-Run-Fence-Recovery.md` | 351 |
+| `tests/test_commercial_billing_runs.py` | 351 |
 | `tests/test_eom_render_profile.py` | 1 |
-| `tests/test_migration_content_integrity_preflight.py` | 290 |
-| `tests/test_migrations_runner.py` | 333 |
-| **Total** | **2000** |
+| `tests/test_migration_content_integrity_preflight.py` | 320 |
+| `tests/test_migrations_runner.py` | 382 |
+| **Total** | **2595** |

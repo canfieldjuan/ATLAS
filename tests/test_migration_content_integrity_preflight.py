@@ -600,6 +600,10 @@ class _Migration379PreflightConnection:
         self.catalog = {
             "relations_ready": True,
             "required_columns_ready": True,
+            "required_billing_constraints_ready": True,
+            "no_unreviewed_billing_constraints": True,
+            "required_billing_indexes_ready": True,
+            "no_unreviewed_billing_indexes": True,
             "immutable_history_guards_ready": True,
             "invoice_fence_trigger_ready": True,
             "function_body": _migration_379_legacy_fence_body(),
@@ -659,6 +663,16 @@ class _Migration379PreflightConnection:
         self.fetchrow_calls.append((query, args))
         assert args == ()
         assert "required_history_triggers" in query
+        assert "declared_constraints" in query
+        assert "pg_catalog.left(constraint_name, 63)" in query
+        assert "required_check_expressions" in query
+        assert "normalized_check_expression" in query
+        assert "commercial_billing_candidate_review_decisions_revision_check" in query
+        assert "commercial_billing_candidate_review_decisio_billing_run_id_fkey" in query
+        assert "required_constraints" in query
+        assert "required_indexes" in query
+        assert "unreviewed_constraints" in query
+        assert "unreviewed_indexes" in query
         assert "commercial_billing_candidate_overrides" in query
         assert "commercial_billing_candidate_review_decisions" in query
         return self.catalog
@@ -1168,6 +1182,10 @@ async def test_known_379_recovery_reports_exact_legacy_state_without_admitting_s
         "no_recovery_ledger_row": True,
         "recovery_receipt_ready": False,
         "reviewed_billing_catalog_ready": True,
+        "required_billing_constraints_ready": True,
+        "no_unreviewed_billing_constraints": True,
+        "required_billing_indexes_ready": True,
+        "no_unreviewed_billing_indexes": True,
         "invoice_fence_trigger_ready": True,
         "legacy_function_body_matches": True,
         "recovered_function_body_matches": False,
@@ -1215,6 +1233,10 @@ async def test_known_379_recovery_attests_only_after_its_own_receipt_and_fence(
         ("wrong historical version", "historical_receipt_ready"),
         ("missing successor receipt", "successor_receipts_ready"),
         ("changed reviewed catalog", "reviewed_billing_catalog_ready"),
+        ("missing required billing constraint", "required_billing_constraints_ready"),
+        ("unreviewed billing constraint", "no_unreviewed_billing_constraints"),
+        ("missing required billing index", "required_billing_indexes_ready"),
+        ("unreviewed billing index", "no_unreviewed_billing_indexes"),
         ("changed legacy function", "legacy_function_body_matches"),
         ("recorded but wrong recovery", "recovery_receipt_ready"),
     ],
@@ -1232,6 +1254,14 @@ async def test_known_379_recovery_rejects_nonexact_or_half_recorded_evidence(
         connection.successor_rows.pop()
     elif case == "changed reviewed catalog":
         connection.catalog["immutable_history_guards_ready"] = False
+    elif case == "missing required billing constraint":
+        connection.catalog["required_billing_constraints_ready"] = False
+    elif case == "unreviewed billing constraint":
+        connection.catalog["no_unreviewed_billing_constraints"] = False
+    elif case == "missing required billing index":
+        connection.catalog["required_billing_indexes_ready"] = False
+    elif case == "unreviewed billing index":
+        connection.catalog["no_unreviewed_billing_indexes"] = False
     elif case == "changed legacy function":
         connection.catalog["function_body"] = "unexpected function body"
     elif case == "recorded but wrong recovery":

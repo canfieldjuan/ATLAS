@@ -2449,94 +2449,195 @@ def test_historical_379_run_fence_recovery_is_atomic_and_data_preserving():
     assert "UPDATE invoices" not in executable
 
 
-@pytest.mark.asyncio
-async def test_real_postgres_historical_379_commercial_billing_run_fence_recovery():
-    """391 preserves history and stops a run-A override from blocking run B."""
-    asyncpg = pytest.importorskip("asyncpg")
-    from atlas_brain.storage.migrations import run_migrations
+async def _stage_historical_379_legacy_recovery_state(conn):
+    """Create only the attested legacy fence state in an isolated schema."""
     from atlas_brain.storage.migrations.reconciliation import (
         MIGRATION_379_COMMERCIAL_BILLING_RUN_FENCE_FORWARD_RECOVERY,
     )
 
     record = MIGRATION_379_COMMERCIAL_BILLING_RUN_FENCE_FORWARD_RECOVERY
+    await conn.execute(
+        "ALTER TABLE invoices ADD COLUMN metadata JSONB NOT NULL "
+        "DEFAULT '{}'::jsonb"
+    )
+    legacy_source = (
+        Path(__file__).parents[1]
+        / "atlas_brain/storage/migrations/"
+        "382_commercial_billing_candidate_overrides.sql"
+    ).read_text(encoding="utf-8")
+    legacy_section = legacy_source.split(
+        "CREATE OR REPLACE FUNCTION "
+        "prevent_commercial_billing_invoice_for_excluded_candidate()",
+        1,
+    )[1]
+    legacy_body = (
+        legacy_section.split("AS $$", 1)[1]
+        .split("$$;", 1)[0]
+        .replace("    candidate_identity_billing_run_id UUID;\n", "")
+        .replace(
+            "       OR jsonb_typeof(NEW.metadata -> 'commercialBillingRunId') "
+            "IS DISTINCT FROM 'string'\n",
+            "",
+        )
+        .replace(
+            "    BEGIN\n"
+            "        candidate_identity_billing_run_id :=\n"
+            "            (NEW.metadata ->> 'commercialBillingRunId')::UUID;\n"
+            "    EXCEPTION WHEN invalid_text_representation THEN\n"
+            "        RAISE EXCEPTION "
+            "'Commercial billing invoice review identity is invalid';\n"
+            "    END;\n",
+            "",
+        )
+        .replace(
+            "    WHERE billing_run_id = candidate_identity_billing_run_id\n"
+            "      AND candidate_key = candidate_identity_key\n",
+            "    WHERE candidate_key = candidate_identity_key\n",
+        )
+    )
+    assert hashlib.sha256(legacy_body.encode()).hexdigest() == (
+        record.legacy_function_body_sha256
+    )
+    await conn.execute(
+        "CREATE OR REPLACE FUNCTION "
+        "prevent_commercial_billing_invoice_for_excluded_candidate() "
+        "RETURNS TRIGGER LANGUAGE plpgsql AS $legacy$"
+        f"{legacy_body}"
+        "$legacy$;"
+    )
+    await conn.execute(
+        "CREATE TABLE schema_migrations ("
+        "version INTEGER PRIMARY KEY, name VARCHAR(255) NOT NULL, "
+        "content_sha256 VARCHAR(64), "
+        "applied_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP)"
+    )
+    await conn.executemany(
+        "INSERT INTO schema_migrations (version, name, content_sha256, applied_at) "
+        "VALUES ($1, $2, $3, $4)",
+        [
+            (
+                record.historical_migration_version,
+                record.migration_name,
+                record.historical_ledger_sha256,
+                record.observed_applied_at,
+            ),
+            *[
+                (
+                    receipt.migration_version,
+                    receipt.migration_name,
+                    None,
+                    receipt.observed_applied_at,
+                )
+                for receipt in record.successor_receipts
+            ],
+        ],
+    )
+    return record, legacy_body
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("case", "catalog_mutation"),
+    [
+        (
+            "missing cited override revision key",
+            "ALTER TABLE commercial_billing_candidate_overrides DROP CONSTRAINT "
+            "commercial_billing_candidate_overrides_revision_key",
+        ),
+        (
+            "missing review-decision revision key",
+            "ALTER TABLE commercial_billing_candidate_review_decisions "
+            "DROP CONSTRAINT commercial_billing_candidate_review_decisions_revision_key",
+        ),
+        (
+            "missing review-decision snapshot foreign key",
+            "ALTER TABLE commercial_billing_candidate_review_decisions "
+            "DROP CONSTRAINT commercial_billing_candidate_review_decisions_snapshot_fkey",
+        ),
+        (
+            "same-name altered review-decision revision check",
+            "ALTER TABLE commercial_billing_candidate_review_decisions "
+            "DROP CONSTRAINT commercial_billing_candidate_review_decisions_revision_check; "
+            "ALTER TABLE commercial_billing_candidate_review_decisions "
+            "ADD CONSTRAINT commercial_billing_candidate_review_decisions_revision_check "
+            "CHECK (revision >= 0)",
+        ),
+        (
+            "missing candidate exact-source index",
+            "DROP INDEX idx_commercial_billing_run_candidates_exact_source",
+        ),
+        (
+            "missing review-decision review index",
+            "DROP INDEX idx_commercial_billing_candidate_review_decisions_review",
+        ),
+        (
+            "missing override active index",
+            "DROP INDEX idx_commercial_billing_candidate_overrides_active",
+        ),
+        (
+            "unreviewed catalog constraint",
+            "ALTER TABLE commercial_billing_candidate_review_decisions "
+            "ADD CONSTRAINT unreviewed_379_catalog_constraint CHECK (1 = 1)",
+        ),
+        (
+            "unreviewed catalog index",
+            "CREATE INDEX unreviewed_379_catalog_index "
+            "ON commercial_billing_candidate_overrides (reason_code)",
+        ),
+    ],
+)
+async def test_real_postgres_historical_379_rejects_incomplete_catalog_before_391(
+    case,
+    catalog_mutation,
+):
+    """The runner must reject every reviewed catalog drift before 391 SQL."""
+    pytest.importorskip("asyncpg")
+    from atlas_brain.storage.migrations import (
+        PendingMigrationContentIntegrityError,
+        run_migrations,
+    )
+
     async with _billing_run_database() as (conn, schema, _database_url):
         await conn.execute("CREATE EXTENSION IF NOT EXISTS pgcrypto")
-        await conn.execute(
-            "ALTER TABLE invoices ADD COLUMN metadata JSONB NOT NULL "
-            "DEFAULT '{}'::jsonb"
-        )
-        legacy_source = (
-            Path(__file__).parents[1]
-            / "atlas_brain/storage/migrations/"
-            "382_commercial_billing_candidate_overrides.sql"
-        ).read_text(encoding="utf-8")
-        legacy_section = legacy_source.split(
-            "CREATE OR REPLACE FUNCTION "
-            "prevent_commercial_billing_invoice_for_excluded_candidate()",
-            1,
-        )[1]
-        legacy_body = (
-            legacy_section.split("AS $$", 1)[1]
-            .split("$$;", 1)[0]
-            .replace("    candidate_identity_billing_run_id UUID;\n", "")
-            .replace(
-                "       OR jsonb_typeof(NEW.metadata -> 'commercialBillingRunId') "
-                "IS DISTINCT FROM 'string'\n",
-                "",
+        record, legacy_body = await _stage_historical_379_legacy_recovery_state(conn)
+        await conn.execute(catalog_mutation)
+        pool = _SchemaPool(conn, schema)
+        migrations_dir = Path(__file__).parents[1] / "atlas_brain/storage/migrations"
+
+        with pytest.raises(PendingMigrationContentIntegrityError, match="missing_source="):
+            await run_migrations(
+                pool,
+                migrations_dir=migrations_dir,
+                only={record.recovery_migration_name},
             )
-            .replace(
-                "    BEGIN\n"
-                "        candidate_identity_billing_run_id :=\n"
-                "            (NEW.metadata ->> 'commercialBillingRunId')::UUID;\n"
-                "    EXCEPTION WHEN invalid_text_representation THEN\n"
-                "        RAISE EXCEPTION "
-                "'Commercial billing invoice review identity is invalid';\n"
-                "    END;\n",
-                "",
-            )
-            .replace(
-                "    WHERE billing_run_id = candidate_identity_billing_run_id\n"
-                "      AND candidate_key = candidate_identity_key\n",
-                "    WHERE candidate_key = candidate_identity_key\n",
-            )
-        )
-        assert hashlib.sha256(legacy_body.encode()).hexdigest() == (
-            record.legacy_function_body_sha256
-        )
-        await conn.execute(
-            "CREATE OR REPLACE FUNCTION "
-            "prevent_commercial_billing_invoice_for_excluded_candidate() "
-            "RETURNS TRIGGER LANGUAGE plpgsql AS $legacy$"
-            f"{legacy_body}"
-            "$legacy$;"
-        )
-        await conn.execute(
-            "CREATE TABLE schema_migrations ("
-            "version INTEGER PRIMARY KEY, name VARCHAR(255) NOT NULL, "
-            "content_sha256 VARCHAR(64), "
-            "applied_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP)"
-        )
-        await conn.executemany(
-            "INSERT INTO schema_migrations (version, name, content_sha256, applied_at) "
-            "VALUES ($1, $2, $3, $4)",
-            [
-                (
-                    record.historical_migration_version,
-                    record.migration_name,
-                    record.historical_ledger_sha256,
-                    record.observed_applied_at,
-                ),
-                *[
-                    (
-                        receipt.migration_version,
-                        receipt.migration_name,
-                        None,
-                        receipt.observed_applied_at,
-                    )
-                    for receipt in record.successor_receipts
-                ],
-            ],
-        )
+
+        assert await conn.fetchval(
+            "SELECT COUNT(*) FROM schema_migrations WHERE name = $1",
+            record.recovery_migration_name,
+        ) == 0, case
+        assert await conn.fetchval("SELECT COUNT(*) FROM invoices") == 0, case
+        assert await conn.fetchval(
+            "SELECT function_state.prosrc "
+            "FROM pg_catalog.pg_proc AS function_state "
+            "JOIN pg_catalog.pg_namespace AS namespace_state "
+            "ON namespace_state.oid = function_state.pronamespace "
+            "WHERE namespace_state.nspname = pg_catalog.current_schema() "
+            "AND function_state.proname = "
+            "'prevent_commercial_billing_invoice_for_excluded_candidate' "
+            "AND function_state.pronargs = 0"
+        ) == legacy_body, case
+
+
+@pytest.mark.asyncio
+async def test_real_postgres_historical_379_commercial_billing_run_fence_recovery():
+    """391 preserves history and stops a run-A override from blocking run B."""
+    asyncpg = pytest.importorskip("asyncpg")
+    from atlas_brain.storage.migrations import run_migrations
+    from atlas_brain.storage.migrations.reconciliation import _attest_migration_379
+
+    async with _billing_run_database() as (conn, schema, _database_url):
+        await conn.execute("CREATE EXTENSION IF NOT EXISTS pgcrypto")
+        record, _legacy_body = await _stage_historical_379_legacy_recovery_state(conn)
         candidate = _candidate(
             "commercial-billing:historical-379-run-fence", _fingerprint("a")
         )
@@ -2603,6 +2704,12 @@ async def test_real_postgres_historical_379_commercial_billing_run_fence_recover
 
         pool = _SchemaPool(conn, schema)
         migrations_dir = Path(__file__).parents[1] / "atlas_brain/storage/migrations"
+        assert (
+            await _attest_migration_379(
+                conn,
+                sorted(migrations_dir.glob("*.sql")),
+            )
+        ).status == "recovery_required"
         await run_migrations(
             pool,
             migrations_dir=migrations_dir,
@@ -2617,12 +2724,31 @@ async def test_real_postgres_historical_379_commercial_billing_run_fence_recover
             "SELECT content_sha256 FROM schema_migrations WHERE name = $1",
             record.recovery_migration_name,
         ) == record.recovery_packaged_sha256
+        assert (
+            await _attest_migration_379(
+                conn,
+                sorted(migrations_dir.glob("*.sql")),
+            )
+        ).status == "attested"
         await conn.execute(
             "INSERT INTO invoices (id, source, source_ref, metadata) "
             "VALUES ($1, 'eom_commercial_billing', 'historical-379-after', $2::jsonb)",
             uuid4(),
             second_run_metadata,
         )
+        assert await conn.fetchval("SELECT COUNT(*) FROM invoices") == 1
+        missing_run_metadata = json.dumps({
+            "candidateKey": candidate["candidateKey"],
+            "sourceFingerprint": candidate["sourceFingerprint"],
+        })
+        with pytest.raises(asyncpg.PostgresError, match="invalid"):
+            await conn.execute(
+                "INSERT INTO invoices (id, source, source_ref, metadata) "
+                "VALUES ($1, 'eom_commercial_billing', "
+                "'historical-379-after-missing-run', $2::jsonb)",
+                uuid4(),
+                missing_run_metadata,
+            )
         assert await conn.fetchval("SELECT COUNT(*) FROM invoices") == 1
         assert [
             dict(row)
