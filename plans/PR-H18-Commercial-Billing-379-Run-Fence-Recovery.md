@@ -731,9 +731,9 @@ Parked hardening: none.
 | `atlas_brain/storage/migrations/391_eom_commercial_billing_run_fence_recovery.sql` | 343 |
 | `atlas_brain/storage/migrations/392_eom_commercial_billing_run_fence_schema_binding.sql` | 83 |
 | `atlas_brain/storage/migrations/reconciliation.py` | 1214 |
-| `plans/PR-H18-Commercial-Billing-379-Run-Fence-Recovery.md` | 730 |
+| `plans/PR-H18-Commercial-Billing-379-Run-Fence-Recovery.md` | 739 |
 | `tests/test_commercial_billing_runs.py` | 617 |
 | `tests/test_eom_render_profile.py` | 2 |
-| `tests/test_migration_content_integrity_preflight.py` | 530 |
+| `tests/test_migration_content_integrity_preflight.py` | 571 |
 | `tests/test_migrations_runner.py` | 771 |
-| **Total** | **4314** |
+| **Total** | **4364** |
