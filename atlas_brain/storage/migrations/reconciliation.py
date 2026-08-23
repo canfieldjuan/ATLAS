@@ -329,6 +329,67 @@ class B2BCampaignPartnerMissingSourceMigrationReconciliationAttestation:
 
 
 @dataclass(frozen=True)
+class B2BCompanySignalPromotionMissingSourceMigrationReconciliationAttestation:
+    """Read-only target proof for the legacy company-signal 297 receipt."""
+
+    reconciliation_id: str
+    migration_name: str
+    exactly_one_ledger_row: bool
+    ledger_version_matches_record: bool
+    ledger_digest_is_null: bool
+    applied_at_matches_record: bool
+    b2b_company_signals_is_ordinary_table: bool
+    canonical_promotion_type_column_ready: bool
+    canonical_promotion_type_has_no_constraints: bool
+    canonical_promotion_type_partial_index_ready: bool
+
+    @property
+    def source_verification(self) -> str:
+        """Catalog evidence must not pretend to verify source bytes."""
+        return HISTORICAL_SOURCE_UNAVAILABLE
+
+    @property
+    def status(self) -> str:
+        if all((
+            self.exactly_one_ledger_row,
+            self.ledger_version_matches_record,
+            self.ledger_digest_is_null,
+            self.applied_at_matches_record,
+            self.b2b_company_signals_is_ordinary_table,
+            self.canonical_promotion_type_column_ready,
+            self.canonical_promotion_type_has_no_constraints,
+            self.canonical_promotion_type_partial_index_ready,
+        )):
+            return "attested"
+        return "not_attested"
+
+    def as_payload(self) -> dict[str, object]:
+        """Expose structural evidence without reading company-signal rows."""
+        return {
+            "reconciliation_id": self.reconciliation_id,
+            "migration_name": self.migration_name,
+            "source_verification": self.source_verification,
+            "exactly_one_ledger_row": self.exactly_one_ledger_row,
+            "ledger_version_matches_record": self.ledger_version_matches_record,
+            "ledger_digest_is_null": self.ledger_digest_is_null,
+            "applied_at_matches_record": self.applied_at_matches_record,
+            "b2b_company_signals_is_ordinary_table": (
+                self.b2b_company_signals_is_ordinary_table
+            ),
+            "canonical_promotion_type_column_ready": (
+                self.canonical_promotion_type_column_ready
+            ),
+            "canonical_promotion_type_has_no_constraints": (
+                self.canonical_promotion_type_has_no_constraints
+            ),
+            "canonical_promotion_type_partial_index_ready": (
+                self.canonical_promotion_type_partial_index_ready
+            ),
+            "status": self.status,
+        }
+
+
+@dataclass(frozen=True)
 class B2BWatchlistAlertEventsMissingSourceMigrationReconciliationAttestation:
     """Read-only target proof for the legacy synthetic-version alert receipt."""
 
@@ -483,6 +544,26 @@ MIGRATION_067_B2B_CAMPAIGN_PARTNER_RECONCILIATION = (
 )
 
 
+MIGRATION_297_B2B_COMPANY_SIGNAL_PROMOTION_RECONCILIATION = (
+    HistoricalVersionedMissingSourceReconciliation(
+        reconciliation_id="b2b-migration-297-company-signal-promotion-source-absence",
+        migration_name="297_b2b_company_signal_canonical_promotion_type",
+        migration_version=297,
+        historical_ledger_sha256=None,
+        observed_applied_at=datetime(
+            2026,
+            4,
+            12,
+            19,
+            28,
+            13,
+            742_305,
+            tzinfo=timezone.utc,
+        ),
+    )
+)
+
+
 MIGRATION_272_B2B_WATCHLIST_ALERT_EVENTS_RECONCILIATION = (
     HistoricalVersionedMissingSourceReconciliation(
         reconciliation_id="b2b-migration-272-watchlist-alert-events-source-absence",
@@ -538,6 +619,7 @@ _HISTORICAL_MISMATCH_RECONCILIATIONS = (MIGRATION_387_RECONCILIATION,)
 _HISTORICAL_MISSING_SOURCE_RECONCILIATIONS = (
     MIGRATION_382_EOM_PUBLIC_ONBOARDING_TOKENS_RECONCILIATION,
     MIGRATION_067_B2B_CAMPAIGN_PARTNER_RECONCILIATION,
+    MIGRATION_297_B2B_COMPANY_SIGNAL_PROMOTION_RECONCILIATION,
     MIGRATION_272_B2B_WATCHLIST_ALERT_EVENTS_RECONCILIATION,
     MIGRATION_022B_PRESENCE_UNKNOWN_COUNT_RECONCILIATION,
 )
@@ -558,6 +640,13 @@ _B2B_CAMPAIGN_PARTNER_FOREIGN_KEY = {
 _B2B_CAMPAIGN_PARTNER_INDEX = {
     "key_column": "partner_id",
     "predicate": "(partner_id is not null)",
+}
+
+_B2B_COMPANY_SIGNAL_PROMOTION_COLUMN = ("text", True, False)
+_B2B_COMPANY_SIGNAL_PROMOTION_INDEX = {
+    "access_method": "btree",
+    "key_column": "canonical_promotion_type",
+    "predicate": "(canonical_promotion_type is not null)",
 }
 
 
@@ -1662,6 +1751,186 @@ async def _migration_067_catalog_evidence(
     )
 
 
+async def _migration_297_catalog_evidence(
+    executor: Any,
+) -> tuple[bool, bool, bool, bool]:
+    """Read the named 297 column/index receipt in one catalog-only snapshot."""
+    evidence_row = await executor.fetchrow(
+        """
+        WITH target_relation AS (
+            SELECT
+                relation_state.oid,
+                relation_state.relkind,
+                relation_state.relpersistence,
+                relation_state.relispartition
+            FROM pg_class AS relation_state
+            JOIN pg_namespace AS schema_state
+              ON schema_state.oid = relation_state.relnamespace
+            WHERE schema_state.nspname = current_schema()
+              AND relation_state.relname = 'b2b_company_signals'
+        ), promotion_column AS (
+            SELECT
+                attribute_state.attnum AS column_number,
+                attribute_state.attname AS column_name,
+                format_type(
+                    attribute_state.atttypid,
+                    attribute_state.atttypmod
+                ) AS data_type,
+                NOT attribute_state.attnotnull AS is_nullable,
+                default_state.oid IS NOT NULL AS has_default,
+                attribute_state.attgenerated <> ''::"char" AS is_generated,
+                attribute_state.attidentity <> ''::"char" AS is_identity,
+                attribute_state.attcollation = type_state.typcollation
+                    AS uses_type_default_collation
+            FROM target_relation
+            JOIN pg_attribute AS attribute_state
+              ON attribute_state.attrelid = target_relation.oid
+            JOIN pg_type AS type_state
+              ON type_state.oid = attribute_state.atttypid
+            LEFT JOIN pg_attrdef AS default_state
+              ON default_state.adrelid = attribute_state.attrelid
+             AND default_state.adnum = attribute_state.attnum
+            WHERE attribute_state.attname = 'canonical_promotion_type'
+              AND attribute_state.attnum > 0
+              AND NOT attribute_state.attisdropped
+        ), promotion_constraints AS (
+            SELECT NOT EXISTS (
+                SELECT 1
+                FROM pg_constraint AS constraint_state
+                WHERE constraint_state.conrelid = target_relation.oid
+                  AND (
+                      EXISTS (
+                          SELECT 1
+                          FROM promotion_column
+                          WHERE promotion_column.column_number
+                              = ANY(constraint_state.conkey)
+                      )
+                      OR position(
+                          'canonical_promotion_type'
+                          IN lower(
+                              pg_get_constraintdef(constraint_state.oid, true)
+                          )
+                      ) > 0
+                  )
+            ) AS has_no_constraints
+            FROM target_relation
+        ), promotion_index AS (
+            SELECT
+                index_relation.relkind AS relation_kind,
+                index_relation.relispartition AS is_partition,
+                access_method.amname AS access_method,
+                index_state.indisunique AS is_unique,
+                index_state.indisvalid AS is_valid,
+                index_state.indisready AS is_ready,
+                index_state.indnkeyatts AS key_attribute_count,
+                index_state.indnatts AS attribute_count,
+                pg_get_indexdef(index_state.indexrelid, 1, true) AS key_column,
+                pg_get_expr(
+                    index_state.indpred,
+                    index_state.indrelid
+                ) AS predicate
+            FROM target_relation
+            JOIN pg_index AS index_state
+              ON index_state.indrelid = target_relation.oid
+            JOIN pg_class AS index_relation
+              ON index_relation.oid = index_state.indexrelid
+            JOIN pg_am AS access_method
+              ON access_method.oid = index_relation.relam
+            WHERE index_relation.relname =
+                'idx_b2b_company_signals_canonical_promotion_type'
+        )
+        SELECT
+            EXISTS (
+                SELECT 1
+                FROM target_relation
+                WHERE relkind = 'r'
+                  AND relpersistence = 'p'::"char"
+                  AND NOT relispartition
+            ) AS b2b_company_signals_is_ordinary_table,
+            (SELECT column_name FROM promotion_column LIMIT 1)
+                AS canonical_promotion_type_column_name,
+            (SELECT data_type FROM promotion_column LIMIT 1)
+                AS canonical_promotion_type_data_type,
+            (SELECT is_nullable FROM promotion_column LIMIT 1)
+                AS canonical_promotion_type_is_nullable,
+            (SELECT has_default FROM promotion_column LIMIT 1)
+                AS canonical_promotion_type_has_default,
+            (SELECT is_generated FROM promotion_column LIMIT 1)
+                AS canonical_promotion_type_is_generated,
+            (SELECT is_identity FROM promotion_column LIMIT 1)
+                AS canonical_promotion_type_is_identity,
+            (SELECT uses_type_default_collation FROM promotion_column LIMIT 1)
+                AS canonical_promotion_type_uses_type_default_collation,
+            (SELECT has_no_constraints FROM promotion_constraints LIMIT 1)
+                AS canonical_promotion_type_has_no_constraints,
+            (SELECT relation_kind FROM promotion_index LIMIT 1)
+                AS promotion_index_relation_kind,
+            (SELECT is_partition FROM promotion_index LIMIT 1)
+                AS promotion_index_is_partition,
+            (SELECT access_method FROM promotion_index LIMIT 1)
+                AS promotion_index_access_method,
+            (SELECT is_unique FROM promotion_index LIMIT 1)
+                AS promotion_index_is_unique,
+            (SELECT is_valid FROM promotion_index LIMIT 1)
+                AS promotion_index_is_valid,
+            (SELECT is_ready FROM promotion_index LIMIT 1)
+                AS promotion_index_is_ready,
+            (SELECT key_attribute_count FROM promotion_index LIMIT 1)
+                AS promotion_index_key_attribute_count,
+            (SELECT attribute_count FROM promotion_index LIMIT 1)
+                AS promotion_index_attribute_count,
+            (SELECT key_column FROM promotion_index LIMIT 1)
+                AS promotion_index_key_column,
+            (SELECT predicate FROM promotion_index LIMIT 1)
+                AS promotion_index_predicate
+        """
+    )
+    if evidence_row is None:
+        return False, False, False, False
+
+    b2b_company_signals_is_ordinary_table = bool(
+        evidence_row["b2b_company_signals_is_ordinary_table"]
+    )
+    expected_column_type, expected_is_nullable, expected_has_default = (
+        _B2B_COMPANY_SIGNAL_PROMOTION_COLUMN
+    )
+    canonical_promotion_type_column_ready = all((
+        evidence_row["canonical_promotion_type_column_name"]
+        == "canonical_promotion_type",
+        evidence_row["canonical_promotion_type_data_type"] == expected_column_type,
+        evidence_row["canonical_promotion_type_is_nullable"] is expected_is_nullable,
+        evidence_row["canonical_promotion_type_has_default"] is expected_has_default,
+        evidence_row["canonical_promotion_type_is_generated"] is False,
+        evidence_row["canonical_promotion_type_is_identity"] is False,
+        evidence_row["canonical_promotion_type_uses_type_default_collation"] is True,
+    ))
+    canonical_promotion_type_has_no_constraints = bool(
+        evidence_row["canonical_promotion_type_has_no_constraints"]
+    )
+    index = _B2B_COMPANY_SIGNAL_PROMOTION_INDEX
+    canonical_promotion_type_partial_index_ready = all((
+        _catalog_char(evidence_row["promotion_index_relation_kind"]) == "i",
+        not bool(evidence_row["promotion_index_is_partition"]),
+        evidence_row["promotion_index_access_method"] == index["access_method"],
+        evidence_row["promotion_index_is_unique"] is False,
+        bool(evidence_row["promotion_index_is_valid"]),
+        bool(evidence_row["promotion_index_is_ready"]),
+        int(evidence_row["promotion_index_key_attribute_count"] or 0) == 1,
+        int(evidence_row["promotion_index_attribute_count"] or 0) == 1,
+        evidence_row["promotion_index_key_column"] == index["key_column"],
+        _canonicalize_catalog_constraint_expression(
+            evidence_row["promotion_index_predicate"]
+        )
+        == index["predicate"],
+    ))
+    return (
+        b2b_company_signals_is_ordinary_table,
+        canonical_promotion_type_column_ready,
+        canonical_promotion_type_has_no_constraints,
+        canonical_promotion_type_partial_index_ready,
+    )
+
+
 async def _migration_272_catalog_evidence(
     executor: Any,
 ) -> tuple[bool, bool, bool, bool, bool, bool, bool, bool, bool, bool]:
@@ -2153,6 +2422,57 @@ async def _attest_migration_067(
     )
 
 
+async def _attest_migration_297(
+    executor: Any,
+) -> B2BCompanySignalPromotionMissingSourceMigrationReconciliationAttestation:
+    """Attest only the named 297 receipt without reconstructing its source."""
+    record = MIGRATION_297_B2B_COMPANY_SIGNAL_PROMOTION_RECONCILIATION
+    ledger_rows = await executor.fetch(
+        "SELECT version, content_sha256, applied_at FROM schema_migrations "
+        "WHERE name = $1 LIMIT 2",
+        record.migration_name,
+    )
+    exactly_one_ledger_row = len(ledger_rows) == 1
+    ledger_row = ledger_rows[0] if exactly_one_ledger_row else None
+    recorded_digest = ledger_row["content_sha256"] if ledger_row is not None else None
+    applied_at = _normalize_utc(
+        ledger_row["applied_at"] if ledger_row is not None else None
+    )
+    (
+        b2b_company_signals_is_ordinary_table,
+        canonical_promotion_type_column_ready,
+        canonical_promotion_type_has_no_constraints,
+        canonical_promotion_type_partial_index_ready,
+    ) = await _migration_297_catalog_evidence(executor)
+
+    return B2BCompanySignalPromotionMissingSourceMigrationReconciliationAttestation(
+        reconciliation_id=record.reconciliation_id,
+        migration_name=record.migration_name,
+        exactly_one_ledger_row=exactly_one_ledger_row,
+        ledger_version_matches_record=(
+            exactly_one_ledger_row
+            and ledger_row["version"] == record.migration_version
+        ),
+        ledger_digest_is_null=(
+            exactly_one_ledger_row
+            and recorded_digest == record.historical_ledger_sha256
+        ),
+        applied_at_matches_record=applied_at == record.observed_applied_at,
+        b2b_company_signals_is_ordinary_table=(
+            b2b_company_signals_is_ordinary_table
+        ),
+        canonical_promotion_type_column_ready=(
+            canonical_promotion_type_column_ready
+        ),
+        canonical_promotion_type_has_no_constraints=(
+            canonical_promotion_type_has_no_constraints
+        ),
+        canonical_promotion_type_partial_index_ready=(
+            canonical_promotion_type_partial_index_ready
+        ),
+    )
+
+
 async def _attest_migration_272(
     executor: Any,
 ) -> B2BWatchlistAlertEventsMissingSourceMigrationReconciliationAttestation:
@@ -2230,6 +2550,7 @@ async def attest_known_historical_migration_reconciliations(
     | MissingSourceMigrationReconciliationAttestation
     | RenamedMissingSourceMigrationReconciliationAttestation
     | B2BCampaignPartnerMissingSourceMigrationReconciliationAttestation
+    | B2BCompanySignalPromotionMissingSourceMigrationReconciliationAttestation
     | B2BWatchlistAlertEventsMissingSourceMigrationReconciliationAttestation,
     ...,
 ]:
@@ -2251,6 +2572,7 @@ async def attest_known_historical_migration_reconciliations(
         | MissingSourceMigrationReconciliationAttestation
         | RenamedMissingSourceMigrationReconciliationAttestation
         | B2BCampaignPartnerMissingSourceMigrationReconciliationAttestation
+        | B2BCompanySignalPromotionMissingSourceMigrationReconciliationAttestation
         | B2BWatchlistAlertEventsMissingSourceMigrationReconciliationAttestation
     ] = []
     if MIGRATION_387_RECONCILIATION.migration_name in requested_names:
@@ -2265,6 +2587,11 @@ async def attest_known_historical_migration_reconciliations(
         in requested_names
     ):
         attestations.append(await _attest_migration_067(executor))
+    if (
+        MIGRATION_297_B2B_COMPANY_SIGNAL_PROMOTION_RECONCILIATION.migration_name
+        in requested_names
+    ):
+        attestations.append(await _attest_migration_297(executor))
     if (
         MIGRATION_272_B2B_WATCHLIST_ALERT_EVENTS_RECONCILIATION.migration_name
         in requested_names

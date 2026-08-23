@@ -44,6 +44,7 @@ class FakeConnection:
         reconciliation_rows: list[dict[str, object]] | None = None,
         public_onboarding_reconciliation_rows: list[dict[str, object]] | None = None,
         b2b_campaign_partner_reconciliation_rows: list[dict[str, object]] | None = None,
+        b2b_company_signal_promotion_reconciliation_rows: list[dict[str, object]] | None = None,
         b2b_watchlist_alert_events_reconciliation_rows: list[dict[str, object]] | None = None,
         presence_unknown_count_reconciliation_rows: list[dict[str, object]] | None = None,
         public_onboarding_columns: list[dict[str, object]] | None = None,
@@ -54,6 +55,7 @@ class FakeConnection:
         presence_events_is_leaf_partition: bool = False,
         presence_unknown_count_has_constraint: bool = False,
         b2b_campaign_partner_catalog_row: dict[str, object] | None = None,
+        b2b_company_signal_promotion_catalog_row: dict[str, object] | None = None,
         b2b_watchlist_alert_events_catalog_row: dict[str, object] | None = None,
         recurring_schema_ready: bool = True,
         zero_active_null_period_rows: bool = True,
@@ -65,6 +67,9 @@ class FakeConnection:
         )
         self.b2b_campaign_partner_reconciliation_rows = (
             b2b_campaign_partner_reconciliation_rows or []
+        )
+        self.b2b_company_signal_promotion_reconciliation_rows = (
+            b2b_company_signal_promotion_reconciliation_rows or []
         )
         self.b2b_watchlist_alert_events_reconciliation_rows = (
             b2b_watchlist_alert_events_reconciliation_rows or []
@@ -99,6 +104,11 @@ class FakeConnection:
             _default_b2b_campaign_partner_catalog_row()
             if b2b_campaign_partner_catalog_row is None
             else b2b_campaign_partner_catalog_row
+        )
+        self.b2b_company_signal_promotion_catalog_row = (
+            _default_b2b_company_signal_promotion_catalog_row()
+            if b2b_company_signal_promotion_catalog_row is None
+            else b2b_company_signal_promotion_catalog_row
         )
         self.b2b_watchlist_alert_events_catalog_row = (
             _default_b2b_watchlist_alert_events_catalog_row()
@@ -149,6 +159,10 @@ class FakeConnection:
                 reconciliation_mod.MIGRATION_067_B2B_CAMPAIGN_PARTNER_RECONCILIATION.migration_name,
             ):
                 return self.b2b_campaign_partner_reconciliation_rows
+            if args == (
+                reconciliation_mod.MIGRATION_297_B2B_COMPANY_SIGNAL_PROMOTION_RECONCILIATION.migration_name,
+            ):
+                return self.b2b_company_signal_promotion_reconciliation_rows
             assert args == (
                 reconciliation_mod.MIGRATION_272_B2B_WATCHLIST_ALERT_EVENTS_RECONCILIATION.migration_name,
             )
@@ -194,6 +208,16 @@ class FakeConnection:
             assert "JOIN pg_constraint AS actual" in query
             assert "JOIN pg_index AS index_state" in query
             return self.b2b_campaign_partner_catalog_row
+        if "b2b_company_signals" in query:
+            assert args == ()
+            assert "WITH target_relation AS" in query
+            assert "relation_state.relpersistence" in query
+            assert "JOIN pg_attribute AS attribute_state" in query
+            assert "JOIN pg_type AS type_state" in query
+            assert "FROM pg_constraint AS constraint_state" in query
+            assert "JOIN pg_index AS index_state" in query
+            assert "JOIN pg_am AS access_method" in query
+            return self.b2b_company_signal_promotion_catalog_row
         if "WITH target_relation AS" in query:
             assert args == ()
             assert "relation_state.relkind" in query
@@ -308,6 +332,31 @@ def _default_b2b_campaign_partner_catalog_row() -> dict[str, object]:
         "partner_index_attribute_count": 1,
         "partner_index_key_column": index["key_column"],
         "partner_index_predicate": "(partner_id IS NOT NULL)",
+    }
+
+
+def _default_b2b_company_signal_promotion_catalog_row() -> dict[str, object]:
+    index = reconciliation_mod._B2B_COMPANY_SIGNAL_PROMOTION_INDEX
+    return {
+        "b2b_company_signals_is_ordinary_table": True,
+        "canonical_promotion_type_column_name": "canonical_promotion_type",
+        "canonical_promotion_type_data_type": "text",
+        "canonical_promotion_type_is_nullable": True,
+        "canonical_promotion_type_has_default": False,
+        "canonical_promotion_type_is_generated": False,
+        "canonical_promotion_type_is_identity": False,
+        "canonical_promotion_type_uses_type_default_collation": True,
+        "canonical_promotion_type_has_no_constraints": True,
+        "promotion_index_relation_kind": "i",
+        "promotion_index_is_partition": False,
+        "promotion_index_access_method": index["access_method"],
+        "promotion_index_is_unique": False,
+        "promotion_index_is_valid": True,
+        "promotion_index_is_ready": True,
+        "promotion_index_key_attribute_count": 1,
+        "promotion_index_attribute_count": 1,
+        "promotion_index_key_column": index["key_column"],
+        "promotion_index_predicate": "(canonical_promotion_type IS NOT NULL)",
     }
 
 
@@ -550,6 +599,29 @@ def _migration_067_connection(
     )
 
 
+def _migration_297_connection(
+    *,
+    ledger_digest: str | None = None,
+    applied_at: object | None = None,
+    reconciliation_rows: list[dict[str, object]] | None = None,
+) -> FakeConnection:
+    record = (
+        reconciliation_mod.MIGRATION_297_B2B_COMPANY_SIGNAL_PROMOTION_RECONCILIATION
+    )
+    actual_applied_at = record.observed_applied_at if applied_at is None else applied_at
+    actual_rows = reconciliation_rows
+    if actual_rows is None:
+        actual_rows = [{
+            "version": record.migration_version,
+            "content_sha256": ledger_digest,
+            "applied_at": actual_applied_at,
+        }]
+    return FakeConnection(
+        [(record.migration_name, ledger_digest)],
+        b2b_company_signal_promotion_reconciliation_rows=actual_rows,
+    )
+
+
 def _migration_272_connection(
     *,
     ledger_digest: str | None = None,
@@ -683,12 +755,14 @@ def test_migration_382_reconciliation_record_is_closed_legacy_source_evidence() 
     assert reconciliation_mod.known_historical_missing_source_reconciliation_names() == {
         record.migration_name,
         reconciliation_mod.MIGRATION_067_B2B_CAMPAIGN_PARTNER_RECONCILIATION.migration_name,
+        reconciliation_mod.MIGRATION_297_B2B_COMPANY_SIGNAL_PROMOTION_RECONCILIATION.migration_name,
         reconciliation_mod.MIGRATION_272_B2B_WATCHLIST_ALERT_EVENTS_RECONCILIATION.migration_name,
         reconciliation_mod.MIGRATION_022B_PRESENCE_UNKNOWN_COUNT_RECONCILIATION.migration_name,
     }
     assert reconciliation_mod.known_historical_reconciliation_names() == {
         record.migration_name,
         reconciliation_mod.MIGRATION_067_B2B_CAMPAIGN_PARTNER_RECONCILIATION.migration_name,
+        reconciliation_mod.MIGRATION_297_B2B_COMPANY_SIGNAL_PROMOTION_RECONCILIATION.migration_name,
         reconciliation_mod.MIGRATION_272_B2B_WATCHLIST_ALERT_EVENTS_RECONCILIATION.migration_name,
         reconciliation_mod.MIGRATION_022B_PRESENCE_UNKNOWN_COUNT_RECONCILIATION.migration_name,
         reconciliation_mod.MIGRATION_387_RECONCILIATION.migration_name,
@@ -709,6 +783,26 @@ def test_migration_067_reconciliation_record_is_closed_target_evidence() -> None
         58,
         0,
         789_236,
+        tzinfo=timezone.utc,
+    )
+
+
+def test_migration_297_reconciliation_record_is_closed_target_evidence() -> None:
+    record = (
+        reconciliation_mod.MIGRATION_297_B2B_COMPANY_SIGNAL_PROMOTION_RECONCILIATION
+    )
+
+    assert record.source_verification == reconciliation_mod.HISTORICAL_SOURCE_UNAVAILABLE
+    assert record.migration_version == 297
+    assert record.historical_ledger_sha256 is None
+    assert record.observed_applied_at == datetime(
+        2026,
+        4,
+        12,
+        19,
+        28,
+        13,
+        742_305,
         tzinfo=timezone.utc,
     )
 
@@ -1131,6 +1225,213 @@ async def test_known_067_reconciliation_rejects_each_required_evidence_field(
     assert evidence["source_verification"] == reconciliation_mod.HISTORICAL_SOURCE_UNAVAILABLE
     assert evidence[field] is False, case
     assert evidence["status"] == "not_attested", case
+    assert connection.execute_calls == []
+
+
+@pytest.mark.asyncio
+async def test_known_297_reconciliation_attests_catalog_without_source(
+    tmp_path: Path,
+) -> None:
+    record = (
+        reconciliation_mod.MIGRATION_297_B2B_COMPANY_SIGNAL_PROMOTION_RECONCILIATION
+    )
+    connection = _migration_297_connection()
+
+    code, payload = await module.run_migration_content_integrity_preflight(
+        connection,
+        migrations_dir=tmp_path,
+        attest_known_reconciliations=True,
+    )
+
+    assert code == module.UNRESOLVED_DRIFT_EXIT
+    assert payload["status"] == "unresolved_drift"
+    assert payload["report"]["missing_source"] == [record.migration_name]
+    assert payload["known_reconciliation_evidence"] == [{
+        "reconciliation_id": record.reconciliation_id,
+        "migration_name": record.migration_name,
+        "source_verification": reconciliation_mod.HISTORICAL_SOURCE_UNAVAILABLE,
+        "exactly_one_ledger_row": True,
+        "ledger_version_matches_record": True,
+        "ledger_digest_is_null": True,
+        "applied_at_matches_record": True,
+        "b2b_company_signals_is_ordinary_table": True,
+        "canonical_promotion_type_column_ready": True,
+        "canonical_promotion_type_has_no_constraints": True,
+        "canonical_promotion_type_partial_index_ready": True,
+        "status": "attested",
+    }]
+    assert connection.fetch_calls == [
+        ("SELECT name, content_sha256 FROM schema_migrations", ()),
+        (
+            "SELECT version, content_sha256, applied_at FROM schema_migrations "
+            "WHERE name = $1 LIMIT 2",
+            (record.migration_name,),
+        ),
+    ]
+    assert len(connection.fetchrow_calls) == 1
+    assert connection.fetchval_calls == []
+    catalog_query = connection.fetchrow_calls[0][0]
+    assert "WITH target_relation AS" in catalog_query
+    assert "relation_state.relpersistence" in catalog_query
+    assert "JOIN pg_attribute AS attribute_state" in catalog_query
+    assert "JOIN pg_type AS type_state" in catalog_query
+    assert "attribute_state.attgenerated <> ''::\"char\"" in catalog_query
+    assert "attribute_state.attidentity <> ''::\"char\"" in catalog_query
+    assert "FROM pg_constraint AS constraint_state" in catalog_query
+    assert "pg_get_constraintdef" in catalog_query
+    assert "JOIN pg_index AS index_state" in catalog_query
+    assert "JOIN pg_am AS access_method" in catalog_query
+    assert "pg_get_indexdef" in catalog_query
+    assert all(
+        "FROM b2b_company_signals" not in query
+        for query, _args in (
+            connection.fetch_calls
+            + connection.fetchrow_calls
+            + connection.fetchval_calls
+        )
+    )
+    assert connection.transaction_readonly == [True]
+    assert connection.execute_calls == []
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("case", "field"),
+    [
+        ("wrong ledger version", "ledger_version_matches_record"),
+        ("non-null ledger digest", "ledger_digest_is_null"),
+        ("truncated applied timestamp", "applied_at_matches_record"),
+        ("duplicate ledger rows", "exactly_one_ledger_row"),
+        ("missing detailed ledger row", "exactly_one_ledger_row"),
+        (
+            "company-signal relation is not a permanent ordinary table",
+            "b2b_company_signals_is_ordinary_table",
+        ),
+        ("promotion column has the wrong type", "canonical_promotion_type_column_ready"),
+        ("promotion column is not nullable", "canonical_promotion_type_column_ready"),
+        ("promotion column has a default", "canonical_promotion_type_column_ready"),
+        ("promotion column is generated", "canonical_promotion_type_column_ready"),
+        ("promotion column is identity", "canonical_promotion_type_column_ready"),
+        (
+            "promotion column has nondefault collation",
+            "canonical_promotion_type_column_ready",
+        ),
+        (
+            "promotion column has a constraint",
+            "canonical_promotion_type_has_no_constraints",
+        ),
+        (
+            "missing promotion partial index",
+            "canonical_promotion_type_partial_index_ready",
+        ),
+        (
+            "promotion partial index is unready",
+            "canonical_promotion_type_partial_index_ready",
+        ),
+        (
+            "promotion partial index is unique",
+            "canonical_promotion_type_partial_index_ready",
+        ),
+        (
+            "promotion partial index uses hash",
+            "canonical_promotion_type_partial_index_ready",
+        ),
+        (
+            "promotion partial index has extra attributes",
+            "canonical_promotion_type_partial_index_ready",
+        ),
+        (
+            "promotion partial index has wrong key",
+            "canonical_promotion_type_partial_index_ready",
+        ),
+        (
+            "promotion partial index predicate changed",
+            "canonical_promotion_type_partial_index_ready",
+        ),
+    ],
+)
+async def test_known_297_reconciliation_rejects_each_required_evidence_field(
+    case: str,
+    field: str,
+    tmp_path: Path,
+) -> None:
+    record = (
+        reconciliation_mod.MIGRATION_297_B2B_COMPANY_SIGNAL_PROMOTION_RECONCILIATION
+    )
+    connection = _migration_297_connection()
+    catalog = connection.b2b_company_signal_promotion_catalog_row
+    if case == "wrong ledger version":
+        connection = _migration_297_connection(reconciliation_rows=[{
+            "version": record.migration_version + 1,
+            "content_sha256": None,
+            "applied_at": record.observed_applied_at,
+        }])
+    elif case == "non-null ledger digest":
+        connection = _migration_297_connection(ledger_digest="a" * 64)
+    elif case == "truncated applied timestamp":
+        connection = _migration_297_connection(
+            applied_at=record.observed_applied_at.replace(microsecond=0)
+        )
+    elif case == "duplicate ledger rows":
+        connection = _migration_297_connection(reconciliation_rows=[
+            {
+                "version": record.migration_version,
+                "content_sha256": None,
+                "applied_at": record.observed_applied_at,
+            },
+            {
+                "version": record.migration_version,
+                "content_sha256": None,
+                "applied_at": record.observed_applied_at,
+            },
+        ])
+    elif case == "missing detailed ledger row":
+        connection = _migration_297_connection(reconciliation_rows=[])
+    elif case == "company-signal relation is not a permanent ordinary table":
+        catalog["b2b_company_signals_is_ordinary_table"] = False
+    elif case == "promotion column has the wrong type":
+        catalog["canonical_promotion_type_data_type"] = "character varying"
+    elif case == "promotion column is not nullable":
+        catalog["canonical_promotion_type_is_nullable"] = False
+    elif case == "promotion column has a default":
+        catalog["canonical_promotion_type_has_default"] = True
+    elif case == "promotion column is generated":
+        catalog["canonical_promotion_type_is_generated"] = True
+    elif case == "promotion column is identity":
+        catalog["canonical_promotion_type_is_identity"] = True
+    elif case == "promotion column has nondefault collation":
+        catalog["canonical_promotion_type_uses_type_default_collation"] = False
+    elif case == "promotion column has a constraint":
+        catalog["canonical_promotion_type_has_no_constraints"] = False
+    elif case == "missing promotion partial index":
+        catalog["promotion_index_relation_kind"] = None
+    elif case == "promotion partial index is unready":
+        catalog["promotion_index_is_ready"] = False
+    elif case == "promotion partial index is unique":
+        catalog["promotion_index_is_unique"] = True
+    elif case == "promotion partial index uses hash":
+        catalog["promotion_index_access_method"] = "hash"
+    elif case == "promotion partial index has extra attributes":
+        catalog["promotion_index_attribute_count"] = 2
+    elif case == "promotion partial index has wrong key":
+        catalog["promotion_index_key_column"] = "other_column"
+    elif case == "promotion partial index predicate changed":
+        catalog["promotion_index_predicate"] = "(canonical_promotion_type IS NULL)"
+    else:  # pragma: no cover - parametrize keeps this exhaustive.
+        raise AssertionError(f"unexpected evidence case: {case}")
+
+    code, payload = await module.run_migration_content_integrity_preflight(
+        connection,
+        migrations_dir=tmp_path,
+        attest_known_reconciliations=True,
+    )
+
+    evidence = payload["known_reconciliation_evidence"][0]
+    assert code == module.UNRESOLVED_DRIFT_EXIT, case
+    assert evidence["source_verification"] == reconciliation_mod.HISTORICAL_SOURCE_UNAVAILABLE
+    assert evidence[field] is False, case
+    assert evidence["status"] == "not_attested", case
+    assert connection.transaction_readonly == [True]
     assert connection.execute_calls == []
 
 
