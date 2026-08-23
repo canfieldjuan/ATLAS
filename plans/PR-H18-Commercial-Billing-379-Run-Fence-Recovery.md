@@ -235,6 +235,33 @@ run-isolation defect, or an EOM entrypoint unable to select its prerequisite.
   runner tests; GitHub's controlled PostgreSQL matrix remains the authority for
   the OID-preserving body-replacement probes.
 
+### Contract revision after invoice-interceptor review
+
+- New evidence: a current Codex blocker demonstrates that the 379 observer
+  proves the reviewed invoice fence exists but does not prove it is the only
+  non-internal `BEFORE INSERT FOR EACH ROW` trigger on `invoices`. PostgreSQL
+  orders triggers of that kind by name, so an unreviewed trigger before the
+  fence can change `NEW.source` and another after it can restore the commercial
+  source, allowing the reviewed fence to return without checking approval.
+- Revised root cause: the closed catalog has no closed set for invoice row
+  insert interceptors, leaving a second trigger path that can bypass the
+  reviewed function while all currently attested trigger fields remain valid.
+- Revised required change surface: expose a catalog boolean requiring the
+  reviewed fence to be the only non-internal row-level `BEFORE INSERT`
+  interceptor on `invoices`, require it before either 379 admission state, and
+  expose it in read-only evidence. Add fake preflight/runner refusal coverage
+  and an isolated PostgreSQL pair of alphabetically ordered source-mutating
+  interceptors; every drifted case must reject before 391 SQL, a recovery
+  receipt, or an invoice write.
+- Revised explicit non-scope: do not broaden this recovery into every possible
+  invoice rule or policy mechanism, alter immutable 391 bytes, or change the
+  production invoice API. The named bypass class is row-level before-insert
+  triggers that can mutate `NEW`; the correction is its upstream catalog
+  admission predicate.
+- Revised verification plan: retain focused local preflight/runner checks,
+  syntax, Ruff, plan, and whitespace checks. GitHub's controlled PostgreSQL
+  matrix remains the authority for the trigger-order mutation proof.
+
 ## Scope (this PR)
 
 Ownership lane: h18-migration-content-integrity
@@ -267,7 +294,7 @@ Max files: 11
     still unresolved; settled by `tests/test_migrations_runner.py`.
   - [ ] An unknown discrepancy, changed legacy fence hash, altered history
     guard body, conditional or foreign-schema same-name required trigger
-    function, missing required
+    function, an unreviewed row-level `BEFORE INSERT` invoice interceptor, missing required
     decision-table catalog member (including a
     declared constraint, its exact `CHECK` predicate, or index), an unreviewed
     catalog member, an omitted 391
@@ -312,8 +339,9 @@ Max files: 11
 - Guard-relevant fields: unresolved mismatch/missing-source names, 379's exact
   ledger versions/NULL digests/timestamps, successor ledger receipts, decision
   relation kind/columns/declared constraints including normalized `CHECK`
-  predicates/declared indexes/no-unreviewed catalog members/unconditional
-  triggers bound to expected current-schema function OIDs/current-schema
+  predicates/declared indexes/no-unreviewed catalog members/closed invoice
+  row-level `BEFORE INSERT` interceptor set/unconditional triggers bound to
+  expected current-schema function OIDs/current-schema
   history-guard `pg_proc.prosrc` SHA-256 values, 386's independently attested
   status, invoice-fence trigger, legacy and recovered invoice-fence
   `pg_proc.prosrc` SHA-256 values, recovery source digest, recovery ledger row,
@@ -395,6 +423,11 @@ deployment sequence.
   invocation, which keeps each recovery independently observable and retry-safe.
 - Reuse the current 382 run-scoped fence rather than changing commercial billing
   API or product behavior. This is a database recovery of the existing contract.
+- Restrict the closed-interceptor predicate to non-internal row-level `BEFORE
+  INSERT` triggers on `invoices`: this is the PostgreSQL execution class that
+  can rewrite `NEW` around the reviewed invoice fence. Statement triggers and
+  unrelated invoice mechanisms are not silently claimed as attested by this
+  recovery.
 
 ## Deferred
 
@@ -432,10 +465,10 @@ Parked hardening: none.
 | `.github/workflows/atlas_migrations_runner_checks.yml` | 16 |
 | `atlas_brain/main_eom.py` | 3 |
 | `atlas_brain/storage/migrations/391_eom_commercial_billing_run_fence_recovery.sql` | 343 |
-| `atlas_brain/storage/migrations/reconciliation.py` | 883 |
-| `plans/PR-H18-Commercial-Billing-379-Run-Fence-Recovery.md` | 441 |
-| `tests/test_commercial_billing_runs.py` | 418 |
+| `atlas_brain/storage/migrations/reconciliation.py` | 907 |
+| `plans/PR-H18-Commercial-Billing-379-Run-Fence-Recovery.md` | 474 |
+| `tests/test_commercial_billing_runs.py` | 435 |
 | `tests/test_eom_render_profile.py` | 1 |
-| `tests/test_migration_content_integrity_preflight.py` | 384 |
-| `tests/test_migrations_runner.py` | 410 |
-| **Total** | **2901** |
+| `tests/test_migration_content_integrity_preflight.py` | 395 |
+| `tests/test_migrations_runner.py` | 443 |
+| **Total** | **3019** |

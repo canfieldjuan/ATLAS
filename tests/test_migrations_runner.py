@@ -1825,6 +1825,7 @@ class _CommercialBillingForwardRecoveryPool(_ForwardRecoveryPool):
             "no_unreviewed_billing_indexes": True,
             "immutable_history_guards_ready": True,
             "invoice_fence_trigger_ready": True,
+            "no_unreviewed_invoice_insert_interceptors": True,
             "review_decision_history_guard_function_body": (
                 _history_379_guard_function_body(
                     "prevent_commercial_billing_review_decision_mutation"
@@ -1892,6 +1893,9 @@ class _CommercialBillingForwardRecoveryPool(_ForwardRecoveryPool):
             assert "actual_trigger.tgqual IS NULL" in query
             assert "trigger_state.tgfoid = function_state.oid" in query
             assert "trigger_state.tgqual IS NULL" in query
+            assert "unreviewed_invoice_insert_interceptors" in query
+            assert "is_before_row_insert" in query
+            assert "no_unreviewed_invoice_insert_interceptors" in query
             assert "review_decision_history_guard_function_body" in query
             assert "override_history_guard_function_body" in query
             return _AsyncpgRecordLike(self.commercial_billing_catalog)
@@ -2137,6 +2141,35 @@ async def test_379_forward_recovery_stays_closed_without_exact_selected_state(
     assert pool.applied_sql == []
     assert pool.inserted_with_digest == []
     assert pool.commercial_recovery_attempts == 0
+    assert pool.commercial_billing_catalog["function_body"] == _legacy_379_function_body()
+
+
+@pytest.mark.asyncio
+async def test_379_forward_recovery_rejects_unreviewed_invoice_insert_interceptor_before_391(
+    tmp_path,
+):
+    """A second row-level before-insert trigger cannot admit the recovery."""
+    from atlas_brain.storage.migrations import (
+        PendingMigrationContentIntegrityError,
+        run_migrations,
+    )
+
+    pool = _CommercialBillingForwardRecoveryPool()
+    commercial_record = _stage_historical_379_forward_recovery(tmp_path, pool)
+    pool.commercial_billing_catalog[
+        "no_unreviewed_invoice_insert_interceptors"
+    ] = False
+
+    with pytest.raises(PendingMigrationContentIntegrityError, match="missing_source="):
+        await run_migrations(
+            pool,
+            migrations_dir=tmp_path,
+            only={commercial_record.recovery_migration_name},
+        )
+
+    assert pool.commercial_recovery_attempts == 0
+    assert pool.applied_sql == []
+    assert pool.inserted_with_digest == []
     assert pool.commercial_billing_catalog["function_body"] == _legacy_379_function_body()
 
 

@@ -292,6 +292,7 @@ class MissingSourceForwardRecoveryMigrationReconciliationAttestation:
     required_billing_indexes_ready: bool
     no_unreviewed_billing_indexes: bool
     invoice_fence_trigger_ready: bool
+    no_unreviewed_invoice_insert_interceptors: bool
     legacy_function_body_matches: bool
     recovered_function_body_matches: bool
 
@@ -362,6 +363,9 @@ class MissingSourceForwardRecoveryMigrationReconciliationAttestation:
             "required_billing_indexes_ready": self.required_billing_indexes_ready,
             "no_unreviewed_billing_indexes": self.no_unreviewed_billing_indexes,
             "invoice_fence_trigger_ready": self.invoice_fence_trigger_ready,
+            "no_unreviewed_invoice_insert_interceptors": (
+                self.no_unreviewed_invoice_insert_interceptors
+            ),
             "legacy_function_body_matches": self.legacy_function_body_matches,
             "recovered_function_body_matches": (
                 self.recovered_function_body_matches
@@ -3007,7 +3011,9 @@ async def _migration_379_catalog_evidence(executor: Any) -> Mapping[str, object]
                    trigger_state.tgfoid,
                    trigger_state.tgtype,
                    trigger_state.tgenabled,
-                   trigger_state.tgqual
+                   trigger_state.tgqual,
+                   (trigger_state.tgtype::integer & 7) = 7
+                       AS is_before_row_insert
             FROM pg_catalog.pg_trigger AS trigger_state
             JOIN target_relations AS relation_state
               ON relation_state.oid = trigger_state.tgrelid
@@ -3052,6 +3058,16 @@ async def _migration_379_catalog_evidence(executor: Any) -> Mapping[str, object]
             )
             LEFT JOIN target_functions AS expected_function
               ON expected_function.proname = expected_trigger.function_name
+        ),
+        unreviewed_invoice_insert_interceptors AS (
+            SELECT NOT EXISTS (
+                SELECT 1
+                FROM target_triggers AS interceptor
+                WHERE interceptor.relation_name = 'invoices'
+                  AND interceptor.is_before_row_insert
+                  AND interceptor.trigger_name <>
+                      'trg_prevent_commercial_billing_invoice_for_excluded_candidate'
+            ) AS no_unreviewed_invoice_insert_interceptors
         )
         SELECT
             (
@@ -3165,6 +3181,10 @@ async def _migration_379_catalog_evidence(executor: Any) -> Mapping[str, object]
                   AND trigger_state.tgenabled = 'O'
                   AND trigger_state.tgqual IS NULL
             ) AS invoice_fence_trigger_ready,
+            (
+                SELECT no_unreviewed_invoice_insert_interceptors
+                FROM unreviewed_invoice_insert_interceptors
+            ) AS no_unreviewed_invoice_insert_interceptors,
             (
                 SELECT function_state.prosrc
                 FROM target_functions AS function_state
@@ -3284,6 +3304,7 @@ async def _attest_migration_379(
             bool(catalog.get("no_unreviewed_billing_indexes")),
             bool(catalog.get("immutable_history_guards_ready")),
             history_guard_function_bodies_ready,
+            bool(catalog.get("no_unreviewed_invoice_insert_interceptors")),
         )),
         history_guard_function_bodies_ready=history_guard_function_bodies_ready,
         required_billing_constraints_ready=bool(
@@ -3300,6 +3321,9 @@ async def _attest_migration_379(
         ),
         invoice_fence_trigger_ready=bool(
             catalog.get("invoice_fence_trigger_ready")
+        ),
+        no_unreviewed_invoice_insert_interceptors=bool(
+            catalog.get("no_unreviewed_invoice_insert_interceptors")
         ),
         legacy_function_body_matches=(
             function_body_sha256 == record.legacy_function_body_sha256

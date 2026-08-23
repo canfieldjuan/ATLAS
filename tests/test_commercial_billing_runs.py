@@ -2629,6 +2629,23 @@ async def _stage_historical_379_legacy_recovery_state(conn):
             "EXECUTE FUNCTION prevent_commercial_billing_invoice_for_excluded_candidate()",
         ),
         (
+            "unreviewed ordered invoice interceptors",
+            "CREATE FUNCTION unreviewed_invoice_source_before_fence() "
+            "RETURNS TRIGGER LANGUAGE plpgsql AS $before_fence$ "
+            "BEGIN NEW.source := 'unreviewed_source_before_fence'; RETURN NEW; END; "
+            "$before_fence$; "
+            "CREATE FUNCTION unreviewed_invoice_source_after_fence() "
+            "RETURNS TRIGGER LANGUAGE plpgsql AS $after_fence$ "
+            "BEGIN NEW.source := 'eom_commercial_billing'; RETURN NEW; END; "
+            "$after_fence$; "
+            "CREATE TRIGGER aaa_unreviewed_invoice_source_before_fence "
+            "BEFORE INSERT ON invoices FOR EACH ROW "
+            "EXECUTE FUNCTION unreviewed_invoice_source_before_fence(); "
+            "CREATE TRIGGER zzz_unreviewed_invoice_source_after_fence "
+            "BEFORE INSERT ON invoices FOR EACH ROW "
+            "EXECUTE FUNCTION unreviewed_invoice_source_after_fence()",
+        ),
+        (
             "conditional append-only history trigger",
             "DROP TRIGGER trg_prevent_commercial_billing_review_decision_mutation "
             "ON commercial_billing_candidate_review_decisions; "
