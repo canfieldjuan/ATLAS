@@ -108,6 +108,10 @@ class HistoricalMissingSourceForwardRecoveryReconciliation:
         return HISTORICAL_SOURCE_UNAVAILABLE
 
 
+class HistoricalForwardRecoveryAtomicPreflightError(RuntimeError):
+    """Raised when a selected recovery changes before its receipt can commit."""
+
+
 @dataclass(frozen=True)
 class HistoricalMissingSourceReconciliation:
     """Reviewed facts for one legacy migration whose source bytes are absent."""
@@ -885,7 +889,7 @@ MIGRATION_379_COMMERCIAL_BILLING_RUN_FENCE_FORWARD_RECOVERY = (
         ),
         schema_binding_migration_version=392,
         schema_binding_packaged_sha256=(
-            "e20657f806b406759bf2c4e3a715feda8e3e1f3b623647b702915652aab88a8a"
+            "737a5ef0a8c035821c108f245bfe048717d4f064daf6da8732f2756da5d67c58"
         ),
     )
 )
@@ -3632,6 +3636,69 @@ async def _attest_migration_379(
         recovered_function_body_matches=(
             function_body_sha256 == record.recovered_function_body_template_sha256
         ),
+    )
+
+
+async def reattest_historical_forward_recovery_in_atomic_transaction(
+    executor: Any,
+    *,
+    migration_name: str,
+    migration_files: Collection[Path],
+) -> None:
+    """Close the 392 select-to-receipt catalog race inside its transaction.
+
+    ``run_migrations`` holds the process-wide migration advisory lock, but that
+    lock intentionally does not govern a separate session's direct catalog DDL.
+    The 392 receipt must therefore acquire real relation locks, repeat the
+    canonical 379 predicate, and leave a transaction-local proof for the SQL
+    migration before it can alter the fence or record its irreversible receipt.
+    """
+
+    record = MIGRATION_379_COMMERCIAL_BILLING_RUN_FENCE_FORWARD_RECOVERY
+    if migration_name != record.schema_binding_migration_name:
+        return
+
+    await executor.execute(
+        """
+        DO $migration_379_catalog_lock$
+        DECLARE
+            schema_name TEXT := pg_catalog.current_schema();
+        BEGIN
+            IF schema_name IS NULL THEN
+                RAISE EXCEPTION
+                    'Cannot re-attest commercial billing fence without an active schema';
+            END IF;
+
+            -- Keep every relation and trigger function that contributes to the
+            -- closed 379 catalog predicate stable through the later ALTER
+            -- FUNCTION and migration receipt. The pg_proc lock serializes
+            -- function DDL; SHARE ROW EXCLUSIVE also excludes index DDL.
+            LOCK TABLE pg_catalog.pg_proc IN SHARE ROW EXCLUSIVE MODE;
+            EXECUTE pg_catalog.format(
+                'LOCK TABLE '
+                || '%1$I.commercial_billing_candidate_overrides, '
+                || '%1$I.commercial_billing_candidate_review_decisions, '
+                || '%1$I.commercial_billing_run_candidates, '
+                || '%1$I.invoices '
+                || 'IN SHARE ROW EXCLUSIVE MODE',
+                schema_name
+            );
+        END;
+        $migration_379_catalog_lock$;
+        """
+    )
+
+    attestation = await _attest_migration_379(executor, migration_files)
+    if attestation.status != "schema_binding_required":
+        raise HistoricalForwardRecoveryAtomicPreflightError(
+            "the exact 392 schema-binding state was not present after acquiring "
+            f"the billing catalog locks (observed={attestation.status})"
+        )
+
+    await executor.execute(
+        "SELECT pg_catalog.set_config("
+        "'atlas.migration_379_catalog_attestation_schema', "
+        "pg_catalog.current_schema(), TRUE)"
     )
 
 

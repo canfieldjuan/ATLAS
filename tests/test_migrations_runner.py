@@ -1827,12 +1827,18 @@ class _CommercialBillingForwardRecoveryPool(_ForwardRecoveryPool):
         *,
         fail_commercial_recovery: bool = False,
         fail_commercial_schema_binding: bool = False,
+        drift_before_commercial_schema_binding_preflight: bool = False,
     ):
         super().__init__()
         self.fail_commercial_recovery = fail_commercial_recovery
         self.fail_commercial_schema_binding = fail_commercial_schema_binding
+        self.drift_before_commercial_schema_binding_preflight = (
+            drift_before_commercial_schema_binding_preflight
+        )
         self.commercial_recovery_attempts = 0
         self.commercial_schema_binding_attempts = 0
+        self.commercial_schema_binding_preflight_attempts = 0
+        self.commercial_schema_binding_attestation_markers = 0
         self.commercial_billing_catalog = {
             "relations_ready": True,
             "required_columns_ready": True,
@@ -1963,6 +1969,16 @@ class _CommercialBillingForwardRecoveryPool(_ForwardRecoveryPool):
         return await super().fetchrow(query, *args)
 
     async def execute(self, query, *args):
+        if "migration_379_catalog_lock" in query:
+            self.commercial_schema_binding_preflight_attempts += 1
+            if self.drift_before_commercial_schema_binding_preflight:
+                # Model reviewed catalog DDL landing after the outer selector
+                # admitted 392 but before its atomic re-attestation reads it.
+                self.commercial_billing_catalog[
+                    "no_unreviewed_billing_indexes"
+                ] = False
+        if "SELECT pg_catalog.set_config(" in query:
+            self.commercial_schema_binding_attestation_markers += 1
         if "Recover the current run-scoped commercial-billing invoice fence" in query:
             self.commercial_recovery_attempts += 1
             if self.fail_commercial_recovery:
@@ -2194,6 +2210,50 @@ async def test_379_forward_recovery_commits_391_then_392_before_386_and_389(
     ]
     assert pool.commercial_recovery_attempts == 1
     assert pool.atomic_transactions == 3
+
+
+@pytest.mark.asyncio
+async def test_379_schema_binding_rechecks_catalog_inside_atomic_receipt_boundary(
+    tmp_path,
+):
+    """A stale selector cannot receipt 392 after catalog drift lands."""
+    from atlas_brain.storage.migrations import (
+        PendingMigrationContentIntegrityError,
+        run_migrations,
+    )
+
+    pool = _CommercialBillingForwardRecoveryPool(
+        drift_before_commercial_schema_binding_preflight=True,
+    )
+    record = _stage_historical_379_forward_recovery(tmp_path, pool)
+    requested = {
+        record.recovery_migration_name,
+        record.schema_binding_migration_name,
+    }
+
+    with pytest.raises(
+        PendingMigrationContentIntegrityError,
+        match="after historical forward recovery",
+    ):
+        await run_migrations(pool, migrations_dir=tmp_path, only=requested)
+
+    assert [name for _version, name, _digest in pool.inserted_with_digest] == [
+        record.recovery_migration_name,
+    ]
+
+    with pytest.raises(
+        PendingMigrationContentIntegrityError,
+        match="catalog changed after selection",
+    ):
+        await run_migrations(pool, migrations_dir=tmp_path, only=requested)
+
+    assert pool.commercial_schema_binding_preflight_attempts == 1
+    assert pool.commercial_schema_binding_attestation_markers == 0
+    assert pool.commercial_schema_binding_attempts == 0
+    assert [name for _version, name, _digest in pool.inserted_with_digest] == [
+        record.recovery_migration_name,
+    ]
+    assert pool.atomic_transaction_errors == 1
 
 
 @pytest.mark.asyncio

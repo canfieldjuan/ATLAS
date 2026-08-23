@@ -2460,6 +2460,9 @@ def test_historical_379_schema_binding_recovery_is_atomic_and_exact():
     assert "04b99e4a3ff2b18f2d58d3e1e610a4b2079fcbbd0d5ce51d97c212daaefd0477" in migration
     assert "ALTER FUNCTION %1$I.prevent_commercial_billing_invoice_for_excluded_candidate()" in migration
     assert "SET search_path = pg_catalog, %1$I, pg_temp" in migration
+    assert "atlas.migration_379_catalog_attestation_schema" in migration
+    assert "atomic catalog re-attestation" in migration
+    assert "post-alter state changed" in migration
     assert "unrecognized recovered invoice fence body" in migration
     assert "unrecognized function configuration" in migration
     executable = "\n".join(
@@ -2913,6 +2916,28 @@ async def test_real_postgres_historical_379_commercial_billing_run_fence_recover
             record.schema_binding_migration_name,
         ) == 0
 
+        # The SQL cannot be run directly after selection: only the runner's
+        # transaction-scoped lock plus canonical re-attestation may authorize it.
+        with pytest.raises(
+            asyncpg.PostgresError,
+            match="atomic catalog re-attestation",
+        ):
+            await conn.execute(
+                (
+                    migrations_dir / f"{record.schema_binding_migration_name}.sql"
+                ).read_text(encoding="utf-8")
+            )
+        assert await conn.fetchval(
+            "SELECT function_state.proconfig "
+            "FROM pg_catalog.pg_proc AS function_state "
+            "JOIN pg_catalog.pg_namespace AS namespace_state "
+            "ON namespace_state.oid = function_state.pronamespace "
+            "WHERE namespace_state.nspname = pg_catalog.current_schema() "
+            "AND function_state.proname = "
+            "'prevent_commercial_billing_invoice_for_excluded_candidate' "
+            "AND function_state.pronargs = 0"
+        ) is None
+
         await run_migrations(
             pool,
             migrations_dir=migrations_dir,
@@ -3039,6 +3064,105 @@ async def test_real_postgres_historical_379_commercial_billing_run_fence_recover
             record.schema_binding_migration_name,
         ) == 1
         assert await conn.fetchval("SELECT COUNT(*) FROM invoices") == 1
+
+
+@pytest.mark.asyncio
+async def test_real_postgres_historical_379_schema_binding_rechecks_catalog_after_selection():
+    """A concurrent catalog change cannot consume the one-time 392 receipt."""
+    asyncpg = pytest.importorskip("asyncpg")
+    from atlas_brain.storage.migrations import (
+        PendingMigrationContentIntegrityError,
+        run_migrations,
+    )
+    from atlas_brain.storage.migrations.reconciliation import _attest_migration_379
+
+    async with _billing_run_database() as (conn, schema, database_url):
+        await conn.execute("CREATE EXTENSION IF NOT EXISTS pgcrypto")
+        record, _legacy_body = await _stage_historical_379_legacy_recovery_state(conn)
+        migrations_dir = Path(__file__).parents[1] / "atlas_brain/storage/migrations"
+        initial_pool = _SchemaPool(conn, schema)
+
+        with pytest.raises(
+            PendingMigrationContentIntegrityError,
+            match="after historical forward recovery",
+        ):
+            await run_migrations(
+                initial_pool,
+                migrations_dir=migrations_dir,
+                only={
+                    record.recovery_migration_name,
+                    record.schema_binding_migration_name,
+                },
+            )
+
+        drift_conn = await asyncpg.connect(database_url)
+        await drift_conn.execute(f'SET search_path TO "{schema}"')
+
+        class _CatalogDriftInjectingConnection:
+            """Commit catalog drift after selection, before 392 takes its locks."""
+
+            def __init__(self) -> None:
+                self.drift_injected = False
+
+            async def execute(self, query, *args):
+                if (
+                    "$migration_379_catalog_lock$" in query
+                    and not self.drift_injected
+                ):
+                    await drift_conn.execute(
+                        "CREATE INDEX unreviewed_392_catalog_race_index "
+                        "ON commercial_billing_candidate_overrides (reason_code)"
+                    )
+                    self.drift_injected = True
+                return await conn.execute(query, *args)
+
+            async def fetch(self, query, *args):
+                return await conn.fetch(query, *args)
+
+            async def fetchrow(self, query, *args):
+                return await conn.fetchrow(query, *args)
+
+            async def fetchval(self, query, *args):
+                return await conn.fetchval(query, *args)
+
+            def transaction(self):
+                return conn.transaction()
+
+        wrapped_conn = _CatalogDriftInjectingConnection()
+
+        class _CatalogDriftSchemaPool(_SchemaPool):
+            async def acquire(self):
+                await wrapped_conn.execute(f'SET search_path TO "{self.schema}"')
+                return wrapped_conn
+
+            async def release(self, released) -> None:
+                assert released is wrapped_conn
+
+        try:
+            race_pool = _CatalogDriftSchemaPool(conn, schema)
+            with pytest.raises(
+                PendingMigrationContentIntegrityError,
+                match="catalog changed after selection",
+            ):
+                await run_migrations(
+                    race_pool,
+                    migrations_dir=migrations_dir,
+                    only={record.schema_binding_migration_name},
+                )
+
+            assert wrapped_conn.drift_injected is True
+            assert await conn.fetchval(
+                "SELECT COUNT(*) FROM schema_migrations WHERE name = $1",
+                record.schema_binding_migration_name,
+            ) == 0
+            assert (
+                await _attest_migration_379(
+                    conn,
+                    sorted(migrations_dir.glob("*.sql")),
+                )
+            ).status == "not_attested"
+        finally:
+            await drift_conn.close()
 
 
 @pytest.mark.asyncio
