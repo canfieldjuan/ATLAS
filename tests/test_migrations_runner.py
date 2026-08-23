@@ -1666,7 +1666,9 @@ class _ForwardRecoveryPool(_SerializingPool):
                 raise RuntimeError("injected 390 recovery failure")
             self.won_loss_catalog.update({
                 "function_body": _migration_function_body(_migration_386_source()),
-                "trigger_update_columns": ["status", "contact_type"],
+                # PostgreSQL exposes tgattr in physical column order rather
+                # than the CREATE TRIGGER declaration order.
+                "trigger_update_columns": ["contact_type", "status"],
             })
         return await super().execute(query, *args)
 

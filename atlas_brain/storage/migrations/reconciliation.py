@@ -2596,6 +2596,10 @@ async def _attest_migration_386(
     trigger_update_columns = _catalog_column_names(
         catalog.get("trigger_update_columns")
     )
+    recovered_trigger_columns_ready = (
+        len(trigger_update_columns) == 2
+        and frozenset(trigger_update_columns) == frozenset({"status", "contact_type"})
+    )
     recovery_receipt_ready = all((
         exactly_one_recovery_ledger_row,
         recovery_ledger_row is not None
@@ -2619,7 +2623,7 @@ async def _attest_migration_386(
         recovered_catalog_ready=(
             shared_catalog_ready
             and function_body_sha256 == record.recovered_function_body_sha256
-            and trigger_update_columns == ("status", "contact_type")
+            and recovered_trigger_columns_ready
         ),
     )
 

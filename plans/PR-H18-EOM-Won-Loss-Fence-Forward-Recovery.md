@@ -183,6 +183,12 @@ same record can become `attested` only after the named 390 migration is
 recorded with its packaged digest and the target has the stronger current
 function/trigger catalog contract.
 
+PostgreSQL reports a trigger's update columns in the table's physical-column
+order rather than the `CREATE TRIGGER` declaration order. The recovered
+contract therefore requires the exact two-column set `status` and
+`contact_type`, with no extras, rather than incorrectly depending on source
+text ordering.
+
 `run_migrations()` already holds one session-level advisory lock across its
 content report, migration SQL, and ledger writes. When no other discrepancy is
 unresolved and this exact legacy precondition is present, it executes only the
@@ -247,7 +253,7 @@ Parked hardening: none.
 - `python -m pytest -q tests/test_migration_content_integrity_preflight.py` — `157 passed`.
 - `python -m pytest -q tests/test_migrations_runner.py` — `82 passed, 1 skipped`; focused `-k '386_forward_recovery'` cases: `7 passed, 76 deselected`.
 - `python -m pytest -q tests/test_eom_render_profile.py -k 'missed_call_recovery_migration_helper'` — `1 passed, 63 deselected`; `python -m pytest -q tests/test_eom_lead_conversion.py -k 'workflow_enrolls_won_loss_runtime_paths'` — `1 passed, 224 deselected`.
-- `python -m pytest -q tests/test_eom_lead_conversion_integration.py -k 'nocodb_cannot_mutate_won_lead_with_unsettled_cancellation'` — `1 skipped, 111 deselected` because `ATLAS_MIGRATION_TEST_DATABASE_URL` is absent; GitHub's EOM pipeline supplies its disposable PostgreSQL service.
+- `ATLAS_MIGRATION_TEST_DATABASE_URL=<disposable PostgreSQL test database> python -m pytest -q tests/test_eom_lead_conversion_integration.py -k 'nocodb_cannot_mutate_won_lead_with_unsettled_cancellation'` — `1 passed, 111 deselected`; this reproduced the GitHub failure and proves the recovered real-PostgreSQL trigger contract against physical catalog ordering.
 - `python -m ruff check --ignore E402 atlas_brain/main_eom.py atlas_brain/storage/migrations/__init__.py atlas_brain/storage/migrations/reconciliation.py tests/test_eom_lead_conversion.py tests/test_eom_lead_conversion_integration.py tests/test_eom_render_profile.py tests/test_migration_content_integrity_preflight.py tests/test_migrations_runner.py` — passed; `main_eom.py` retains the repository's pre-existing intentional E402 import order.
 - `git diff --check` — passed.
 - Controlled read-only target preflight — expected exit `2`: 386 is now reported as `recovery_required` with legacy catalog ready; 379 remains independently source-unavailable. No local Unit Gate ran; broad checks remain on GitHub.
@@ -260,11 +266,11 @@ Parked hardening: none.
 | `atlas_brain/main_eom.py` | 3 |
 | `atlas_brain/storage/migrations/390_eom_won_loss_direct_sql_fence_recovery.sql` | 73 |
 | `atlas_brain/storage/migrations/__init__.py` | 175 |
-| `atlas_brain/storage/migrations/reconciliation.py` | 405 |
-| `plans/PR-H18-EOM-Won-Loss-Fence-Forward-Recovery.md` | 270 |
+| `atlas_brain/storage/migrations/reconciliation.py` | 409 |
+| `plans/PR-H18-EOM-Won-Loss-Fence-Forward-Recovery.md` | 276 |
 | `tests/test_eom_lead_conversion.py` | 2 |
 | `tests/test_eom_lead_conversion_integration.py` | 63 |
 | `tests/test_eom_render_profile.py` | 1 |
 | `tests/test_migration_content_integrity_preflight.py` | 1 |
-| `tests/test_migrations_runner.py` | 313 |
-| **Total** | **1313** |
+| `tests/test_migrations_runner.py` | 315 |
+| **Total** | **1325** |
