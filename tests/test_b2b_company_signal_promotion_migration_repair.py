@@ -97,7 +97,7 @@ async def _prepare_attestable_schema(
     conn,
     schema: str,
     *,
-    index_predicate: str = "canonical_promotion_type IS NOT NULL",
+    index_method: str = "btree",
 ) -> None:
     """Create the final metadata contract while keeping the table empty."""
     await _prepare_receipt_ledger_schema(conn, schema)
@@ -107,8 +107,8 @@ async def _prepare_attestable_schema(
             canonical_promotion_type TEXT
         );
         CREATE INDEX idx_b2b_company_signals_canonical_promotion_type
-            ON b2b_company_signals (canonical_promotion_type)
-            WHERE {index_predicate};
+            ON b2b_company_signals USING {index_method} (canonical_promotion_type)
+            WHERE canonical_promotion_type IS NOT NULL;
         """)
 
 
@@ -213,7 +213,7 @@ async def test_297_receipt_rejects_leaf_partition_before_pending_sql(tmp_path: P
 
 
 @pytest.mark.asyncio
-async def test_297_receipt_refuses_bad_index_then_applies_pending_once_after_repair(
+async def test_297_receipt_refuses_hash_index_then_applies_pending_once_after_repair(
     tmp_path: Path,
 ):
     database_url = _database_url_or_skip()
@@ -223,7 +223,7 @@ async def test_297_receipt_refuses_bad_index_then_applies_pending_once_after_rep
         await _prepare_attestable_schema(
             conn,
             schema,
-            index_predicate="canonical_promotion_type IS NULL",
+            index_method="hash",
         )
         catalog = _test_catalog(tmp_path)
         attestation = await _attestation(conn)
@@ -255,7 +255,7 @@ async def test_297_receipt_refuses_bad_index_then_applies_pending_once_after_rep
         )
         await conn.execute("""
             CREATE INDEX idx_b2b_company_signals_canonical_promotion_type
-                ON b2b_company_signals (canonical_promotion_type)
+                ON b2b_company_signals USING btree (canonical_promotion_type)
                 WHERE canonical_promotion_type IS NOT NULL
             """)
         assert (await _attestation(conn)).status == "attested"

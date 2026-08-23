@@ -216,6 +216,7 @@ class FakeConnection:
             assert "JOIN pg_type AS type_state" in query
             assert "FROM pg_constraint AS constraint_state" in query
             assert "JOIN pg_index AS index_state" in query
+            assert "JOIN pg_am AS access_method" in query
             return self.b2b_company_signal_promotion_catalog_row
         if "WITH target_relation AS" in query:
             assert args == ()
@@ -348,6 +349,7 @@ def _default_b2b_company_signal_promotion_catalog_row() -> dict[str, object]:
         "canonical_promotion_type_has_no_constraints": True,
         "promotion_index_relation_kind": "i",
         "promotion_index_is_partition": False,
+        "promotion_index_access_method": index["access_method"],
         "promotion_index_is_unique": False,
         "promotion_index_is_valid": True,
         "promotion_index_is_ready": True,
@@ -1278,6 +1280,7 @@ async def test_known_297_reconciliation_attests_catalog_without_source(
     assert "FROM pg_constraint AS constraint_state" in catalog_query
     assert "pg_get_constraintdef" in catalog_query
     assert "JOIN pg_index AS index_state" in catalog_query
+    assert "JOIN pg_am AS access_method" in catalog_query
     assert "pg_get_indexdef" in catalog_query
     assert all(
         "FROM b2b_company_signals" not in query
@@ -1327,6 +1330,10 @@ async def test_known_297_reconciliation_attests_catalog_without_source(
         ),
         (
             "promotion partial index is unique",
+            "canonical_promotion_type_partial_index_ready",
+        ),
+        (
+            "promotion partial index uses hash",
             "canonical_promotion_type_partial_index_ready",
         ),
         (
@@ -1402,6 +1409,8 @@ async def test_known_297_reconciliation_rejects_each_required_evidence_field(
         catalog["promotion_index_is_ready"] = False
     elif case == "promotion partial index is unique":
         catalog["promotion_index_is_unique"] = True
+    elif case == "promotion partial index uses hash":
+        catalog["promotion_index_access_method"] = "hash"
     elif case == "promotion partial index has extra attributes":
         catalog["promotion_index_attribute_count"] = 2
     elif case == "promotion partial index has wrong key":

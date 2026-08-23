@@ -4,7 +4,7 @@
 
 The canonical target-confirmed H-18 preflight for [#2476](https://github.com/canfieldjuan/ATLAS/issues/2476) continues to refuse pending migration 389 because `297_b2b_company_signal_canonical_promotion_type` is a NULL-digest ledger record with no packaged source. This slice is the next independently blocking receipt after #2481: it does not make the generic integrity report green, but it can let the shared runner distinguish this exact, structurally proven historical record from unknown source gaps.
 
-Read-only target evidence at `host=localhost, port=5433, db=atlas` establishes exactly one version-297, NULL-digest ledger row at `2026-04-12T19:28:13.742305Z`; its `b2b_company_signals` relation is a permanent ordinary table with a nullable plain-text `canonical_promotion_type` column and the ready named partial index. Retained history proves a numeric-prefix collision rather than a rename: the current `297_b2b_review_vendor_mentions.sql` was introduced after that target receipt, and neither reachable history nor the 5,559 scanned unreachable blobs contains the missing source path or its schema token outside a planning artifact.
+Read-only target evidence at `host=localhost, port=5433, db=atlas` establishes exactly one version-297, NULL-digest ledger row at `2026-04-12T19:28:13.742305Z`; its `b2b_company_signals` relation is a permanent ordinary table with a nullable plain-text `canonical_promotion_type` column and the ready named `btree` partial index. Retained history proves a numeric-prefix collision rather than a rename: the current `297_b2b_review_vendor_mentions.sql` was introduced after that target receipt, and neither reachable history nor the 5,559 scanned unreachable blobs contains the missing source path or its schema token outside a planning artifact.
 
 Diff-budget override: the immutable record, closed catalog predicate, false-evidence matrix, real PostgreSQL runner reachability proof, and CI enrollment form one admission-safety claim. Splitting them would publish an unproven exception or omit the before-SQL failure proof.
 
@@ -27,8 +27,8 @@ Max files: 7
 ### Review Contract
 
 1. The closed registry contains the exact `297_b2b_company_signal_canonical_promotion_type` version-297 NULL-digest record at the observed aware-UTC timestamp, and no generic name mapping; settled by `tests/test_migration_content_integrity_preflight.py` record assertions.
-2. The candidate's read-only catalog evidence requires a permanent ordinary `b2b_company_signals` relation, a nullable non-generated/non-identity/default-collation `TEXT` column with no default or constraint, and the exact ready nonunique partial index; settled by focused fake preflight cases and the disposable PostgreSQL test.
-3. Missing/duplicate/wrong-version/non-NULL/wrong-timestamp ledger evidence, a nonordinary/nonpermanent relation, an altered column, a column constraint, or an absent/altered/unready index returns `not_attested` before pending SQL; settled by the false-evidence matrix and real runner failure proof.
+2. The candidate's read-only catalog evidence requires a permanent ordinary `b2b_company_signals` relation, a nullable non-generated/non-identity/default-collation `TEXT` column with no default or constraint, and the exact ready nonunique `btree` partial index; settled by focused fake preflight cases and the disposable PostgreSQL test.
+3. Missing/duplicate/wrong-version/non-NULL/wrong-timestamp ledger evidence, a nonordinary/nonpermanent relation, an altered column, a column constraint, or an absent/altered/wrong-method/unready index returns `not_attested` before pending SQL; settled by the false-evidence matrix and real runner failure proof.
 4. The generic preflight continues to emit `missing_source` / exit 2 while exposing boolean-only receipt evidence; no catalog query reads company-signal rows and the fake connection observes zero writes.
 5. The shared `run_migrations` choke point applies one disposable pending migration and records it once only after the exact 297 receipt attests; an incomplete receipt leaves its table and ledger row absent, and retry after repair applies it exactly once; settled by `tests/test_b2b_company_signal_promotion_migration_repair.py`.
 6. Existing mismatched/missing records remain independently blocking, including 386 and 379; settled by the existing generic runner behavior plus the named candidate-only tests.
@@ -42,7 +42,7 @@ Max files: 7
 
 - Boundary path/seam: `_unresolved_pending_migration_content_evidence` already derives candidates from the closed reconciliation registry; this slice adds one named 297 attestation branch without another allowlist.
 - Replaced-path behaviors: only an attested 297 source absence can move from refusal to pending-SQL admission. Unknown names, incomplete catalog evidence, transport failure, or coexisting discrepancies retain refusal before SQL.
-- Guard-relevant fields: record name, version, NULL digest, exact UTC timestamp, relation kind/partition/persistence, column type/nullability/default/generated/identity/collation/constraint state, and index name/key/uniqueness/readiness/predicate.
+- Guard-relevant fields: record name, version, NULL digest, exact UTC timestamp, relation kind/partition/persistence, column type/nullability/default/generated/identity/collation/constraint state, and index name/access method/key/uniqueness/readiness/predicate.
 - Caller x input shape: the CLI and `run_migrations` pass report-derived candidate names to the same dispatcher; operator input cannot select this receipt directly.
 
 ### Deployed-config probing
@@ -65,7 +65,7 @@ Max files: 7
 
 ## Mechanism
 
-`HistoricalVersionedMissingSourceReconciliation` retains the immutable identity for 297. A single read-only catalog query derives only booleans for the exact target relation, column, constraints, and named partial index; it never reads `b2b_company_signals` rows. The dispatcher returns this attestation only when the generic report actually contains that name, so no caller can turn it into a broad historical exception.
+`HistoricalVersionedMissingSourceReconciliation` retains the immutable identity for 297. A single read-only catalog query derives only booleans for the exact target relation, column, constraints, and named `btree` partial index; it never reads `b2b_company_signals` rows. The dispatcher returns this attestation only when the generic report actually contains that name, so no caller can turn it into a broad historical exception.
 
 The same existing runner subtracts only an attested candidate from its original `missing_source` set. The generic diagnostic report stays honest and returns exit 2. A dedicated PostgreSQL 16 test owns its schema, uses a synthetic pending migration, proves both failed no-write admission and repaired retry success, and is enrolled in the existing migration workflow.
 
@@ -73,7 +73,7 @@ The same existing runner subtracts only an attested candidate from its original 
 
 - The later packaged `297_b2b_review_vendor_mentions.sql` is not mapped to the old 297 receipt: it was committed after the target row and creates a different table.
 - The receipt remains `historical_source_unavailable`; target evidence does not reconstruct or verify the original source bytes.
-- The predicate does not freeze unrelated later `b2b_company_signals` columns or indexes. It closes only the named column/index contract evidenced by this historical receipt.
+- The predicate does not freeze unrelated later `b2b_company_signals` columns or indexes. It closes only the named column/`btree`-index contract evidenced by this historical receipt.
 - No historical SQL is replayed, no `schema_migrations` row is rewritten, and no target relation is repaired by this PR.
 - No migration-runner locking redesign is folded into this receipt; #2476 retains the external-admin serialization follow-up.
 
@@ -89,17 +89,22 @@ Parked hardening: external migration-evidence serialization, tracked in #2476.
 
 ## Verification
 
-- Pending before push: focused fake preflight matrix; dedicated disposable PostgreSQL proof when configured; syntax/lint/diff/plan gates; target-confirmed read-only preflight; and GitHub migration/required checks. The full Unit Gate remains GitHub-only.
+- `python -m py_compile atlas_brain/storage/migrations/reconciliation.py tests/test_migration_content_integrity_preflight.py tests/test_b2b_company_signal_promotion_migration_repair.py` — passed.
+- `python -m pytest -q tests/test_migration_content_integrity_preflight.py` — 157 passed.
+- `python -m pytest -q tests/test_migrations_runner.py -k 'missing_source or historical or reconciliation'` — 14 passed, 62 deselected.
+- `python -m pytest -q tests/test_b2b_company_signal_promotion_migration_repair.py` — 3 skipped because `ATLAS_MIGRATION_TEST_DATABASE_URL` is absent locally; its PostgreSQL 16 workflow is enrolled.
+- `python -m ruff check atlas_brain/storage/migrations/reconciliation.py tests/test_migration_content_integrity_preflight.py tests/test_b2b_company_signal_promotion_migration_repair.py` and `git diff --check` — passed.
+- `python scripts/check_migration_content_integrity.py --expected-target 'host=localhost, port=5433, db=atlas' --attest-known-reconciliations` — expected exit 2 for independent 386/379 evidence; 297 attested with read-only access. The full Unit Gate remains GitHub-only.
 
 ## Estimated diff size
 
 | File | LOC |
 |---|---:|
 | `.github/workflows/atlas_migrations_runner_checks.yml` | 3 |
-| `atlas_brain/storage/migrations/reconciliation.py` | 320 |
+| `atlas_brain/storage/migrations/reconciliation.py` | 327 |
 | `plans/INDEX.md` | 3 |
-| `plans/PR-H18-Company-Signal-Promotion-Source-Attestation.md` | 105 |
+| `plans/PR-H18-Company-Signal-Promotion-Source-Attestation.md` | 110 |
 | `plans/archive/PR-H18-Watchlist-Alert-Events-Source-Attestation.md` | 0 |
 | `tests/test_b2b_company_signal_promotion_migration_repair.py` | 297 |
-| `tests/test_migration_content_integrity_preflight.py` | 292 |
-| **Total** | **1020** |
+| `tests/test_migration_content_integrity_preflight.py` | 301 |
+| **Total** | **1041** |

@@ -644,6 +644,7 @@ _B2B_CAMPAIGN_PARTNER_INDEX = {
 
 _B2B_COMPANY_SIGNAL_PROMOTION_COLUMN = ("text", True, False)
 _B2B_COMPANY_SIGNAL_PROMOTION_INDEX = {
+    "access_method": "btree",
     "key_column": "canonical_promotion_type",
     "predicate": "(canonical_promotion_type is not null)",
 }
@@ -1817,6 +1818,7 @@ async def _migration_297_catalog_evidence(
             SELECT
                 index_relation.relkind AS relation_kind,
                 index_relation.relispartition AS is_partition,
+                access_method.amname AS access_method,
                 index_state.indisunique AS is_unique,
                 index_state.indisvalid AS is_valid,
                 index_state.indisready AS is_ready,
@@ -1832,6 +1834,8 @@ async def _migration_297_catalog_evidence(
               ON index_state.indrelid = target_relation.oid
             JOIN pg_class AS index_relation
               ON index_relation.oid = index_state.indexrelid
+            JOIN pg_am AS access_method
+              ON access_method.oid = index_relation.relam
             WHERE index_relation.relname =
                 'idx_b2b_company_signals_canonical_promotion_type'
         )
@@ -1863,6 +1867,8 @@ async def _migration_297_catalog_evidence(
                 AS promotion_index_relation_kind,
             (SELECT is_partition FROM promotion_index LIMIT 1)
                 AS promotion_index_is_partition,
+            (SELECT access_method FROM promotion_index LIMIT 1)
+                AS promotion_index_access_method,
             (SELECT is_unique FROM promotion_index LIMIT 1)
                 AS promotion_index_is_unique,
             (SELECT is_valid FROM promotion_index LIMIT 1)
@@ -1905,6 +1911,7 @@ async def _migration_297_catalog_evidence(
     canonical_promotion_type_partial_index_ready = all((
         _catalog_char(evidence_row["promotion_index_relation_kind"]) == "i",
         not bool(evidence_row["promotion_index_is_partition"]),
+        evidence_row["promotion_index_access_method"] == index["access_method"],
         evidence_row["promotion_index_is_unique"] is False,
         bool(evidence_row["promotion_index_is_valid"]),
         bool(evidence_row["promotion_index_is_ready"]),
