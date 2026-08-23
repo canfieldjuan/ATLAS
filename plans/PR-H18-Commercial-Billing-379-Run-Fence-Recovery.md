@@ -21,9 +21,11 @@ A subsequent read-only receipt found an existing `391` ledger record at
 `2026-08-23T08:31:59.159960Z`. Its SHA-256 exactly matches the migration source
 published here, and the target now has the reviewed run-scoped function body.
 This coding arc did not deploy or invoke target SQL; repository evidence cannot
-identify the external operation that created that receipt. It does prove the
-exact bytes and final catalog now present, so the current target is `attested`
-for 379 while the original 379 source remains unavailable.
+identify the external operation that created that receipt. Earlier read-only
+evidence proved the exact bytes and then-observed catalog. The current stricter
+trigger-qualification and function-OID predicates have not been re-run against
+the target, so this plan does not claim the target currently attests under
+those new predicates; the original 379 source remains unavailable.
 
 This is a source-publication and forward-recovery-attestation slice. It keeps
 the exact legacy classifier and atomic recovery available for compatible
@@ -402,9 +404,9 @@ Parked hardening: none.
 | `atlas_brain/main_eom.py` | 3 |
 | `atlas_brain/storage/migrations/391_eom_commercial_billing_run_fence_recovery.sql` | 343 |
 | `atlas_brain/storage/migrations/reconciliation.py` | 849 |
-| `plans/PR-H18-Commercial-Billing-379-Run-Fence-Recovery.md` | 410 |
+| `plans/PR-H18-Commercial-Billing-379-Run-Fence-Recovery.md` | 412 |
 | `tests/test_commercial_billing_runs.py` | 399 |
 | `tests/test_eom_render_profile.py` | 1 |
 | `tests/test_migration_content_integrity_preflight.py` | 338 |
 | `tests/test_migrations_runner.py` | 388 |
-| **Total** | **2749** |
+| **Total** | **2751** |
