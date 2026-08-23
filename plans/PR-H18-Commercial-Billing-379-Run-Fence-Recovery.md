@@ -369,6 +369,30 @@ run-isolation defect, or an EOM entrypoint unable to select its prerequisite.
   syntax/Ruff locally. GitHub's controlled PostgreSQL matrix remains the
   runtime authority for the parent/child catalog mutation.
 
+### Contract revision after column-physical-contract review
+
+- New evidence: the 379 observer compares a column's base `typname` and
+  nullability but omits `atttypmod` and collation. A bounded `VARCHAR` can be
+  retagged, or an explicit non-default collation assigned, while the named
+  constraint/index catalog remains unchanged and the observer still admits 391.
+- Revised root cause: the source-backed column predicate does not attest the
+  complete declared physical type contract for the three fence-read billing
+  relations. Base type equality alone does not establish `VARCHAR(n)` bounds or
+  default-collation semantics.
+- Revised required change surface: add each expected PostgreSQL type modifier
+  and type-default-collation requirement to the same `required_columns_ready`
+  predicate; read `pg_attribute.atttypmod` and compare
+  `pg_attribute.attcollation` to `pg_type.typcollation`; retain the existing
+  read-only evidence field and admission path. Add static/fake proof plus
+  isolated PostgreSQL altered-`VARCHAR`-bound and explicit-collation cases;
+  each must reject before 391 SQL, a recovery receipt, or an invoice write.
+- Revised explicit non-scope: do not alter the immutable 391 source, prescribe
+  a non-default production collation, or create a parallel column-state model.
+  The correction closes the existing source-declared column predicate.
+- Revised verification plan: run focused preflight and runner checks plus
+  syntax/Ruff locally. GitHub's controlled PostgreSQL matrix remains the
+  runtime authority for both `ALTER COLUMN` mutations.
+
 ## Scope (this PR)
 
 Ownership lane: h18-migration-content-integrity
@@ -551,9 +575,10 @@ deployment sequence.
   unrelated invoice mechanisms are not silently claimed as attested by this
   recovery.
 - Require the exact source-backed user-column set for the three billing
-  relations, including both revision columns, before treating a 379 catalog as
-  safe to recover or attested. PostgreSQL `CHECK` and unique-key semantics do
-  not substitute for the omitted `NOT NULL` evidence.
+  relations, including each base type, type modifier, default collation, and
+  nullability, before treating a 379 catalog as safe to recover or attested.
+  PostgreSQL `CHECK` and unique-key semantics do not substitute for the omitted
+  physical-column evidence.
 - Reject any RLS flag, policy, or non-`_RETURN` rewrite rule on the three tables
   read by the recovered fence. Expected review-history mutation triggers stay
   governed by their separate immutable-history attestation.
@@ -601,10 +626,10 @@ Parked hardening: none.
 | `.github/workflows/atlas_migrations_runner_checks.yml` | 16 |
 | `atlas_brain/main_eom.py` | 3 |
 | `atlas_brain/storage/migrations/391_eom_commercial_billing_run_fence_recovery.sql` | 343 |
-| `atlas_brain/storage/migrations/reconciliation.py` | 1047 |
-| `plans/PR-H18-Commercial-Billing-379-Run-Fence-Recovery.md` | 610 |
-| `tests/test_commercial_billing_runs.py` | 480 |
+| `atlas_brain/storage/migrations/reconciliation.py` | 1059 |
+| `plans/PR-H18-Commercial-Billing-379-Run-Fence-Recovery.md` | 635 |
+| `tests/test_commercial_billing_runs.py` | 490 |
 | `tests/test_eom_render_profile.py` | 1 |
-| `tests/test_migration_content_integrity_preflight.py` | 439 |
-| `tests/test_migrations_runner.py` | 555 |
-| **Total** | **3496** |
+| `tests/test_migration_content_integrity_preflight.py` | 444 |
+| `tests/test_migrations_runner.py` | 560 |
+| **Total** | **3553** |

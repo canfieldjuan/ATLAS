@@ -1898,8 +1898,13 @@ class _CommercialBillingForwardRecoveryPool(_ForwardRecoveryPool):
             assert "relation_state.oid = inheritance_state.inhparent" in query
             assert "relation_state.relrowsecurity" in query
             assert "relation_state.relforcerowsecurity" in query
-            assert "'commercial_billing_candidate_review_decisions', 'revision', 'int4', TRUE" in query
-            assert "'commercial_billing_candidate_overrides', 'revision', 'int4', TRUE" in query
+            assert "'commercial_billing_candidate_review_decisions', 'revision', 'int4', -1, TRUE, TRUE" in query
+            assert "'commercial_billing_candidate_overrides', 'revision', 'int4', -1, TRUE, TRUE" in query
+            assert "'commercial_billing_candidate_review_decisions', 'decision', 'varchar', 20, TRUE, TRUE" in query
+            assert "attribute_state.atttypmod AS type_modifier" in query
+            assert "attribute_state.attcollation = type_state.typcollation" in query
+            assert "IS DISTINCT FROM expected_column.type_modifier" in query
+            assert "IS DISTINCT FROM expected_column.uses_type_default_collation" in query
             assert "required_constraints" in query
             assert "required_indexes" in query
             assert "trigger_state.tgfoid" in query

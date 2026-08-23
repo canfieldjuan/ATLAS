@@ -2752,51 +2752,59 @@ async def _migration_379_catalog_evidence(executor: Any) -> Mapping[str, object]
             SELECT *
             FROM (
                 VALUES
-                    ('commercial_billing_run_candidates', 'id', 'uuid', TRUE),
-                    ('commercial_billing_run_candidates', 'billing_run_id', 'uuid', TRUE),
-                    ('commercial_billing_run_candidates', 'candidate_key', 'varchar', TRUE),
-                    ('commercial_billing_run_candidates', 'source_fingerprint', 'varchar', TRUE),
-                    ('commercial_billing_run_candidates', 'display_order', 'int4', TRUE),
-                    ('commercial_billing_run_candidates', 'snapshot', 'jsonb', TRUE),
-                    ('commercial_billing_run_candidates', 'created_at', 'timestamptz', TRUE),
-                    ('commercial_billing_candidate_review_decisions', 'id', 'uuid', TRUE),
-                    ('commercial_billing_candidate_review_decisions', 'billing_run_id', 'uuid', TRUE),
-                    ('commercial_billing_candidate_review_decisions', 'candidate_key', 'varchar', TRUE),
-                    ('commercial_billing_candidate_review_decisions', 'source_fingerprint', 'varchar', TRUE),
-                    ('commercial_billing_candidate_review_decisions', 'revision', 'int4', TRUE),
-                    ('commercial_billing_candidate_review_decisions', 'decision', 'varchar', TRUE),
-                    ('commercial_billing_candidate_review_decisions', 'reason', 'varchar', TRUE),
-                    ('commercial_billing_candidate_review_decisions', 'source', 'varchar', TRUE),
-                    ('commercial_billing_candidate_review_decisions', 'idempotency_key', 'varchar', TRUE),
-                    ('commercial_billing_candidate_review_decisions', 'request_fingerprint', 'varchar', TRUE),
-                    ('commercial_billing_candidate_review_decisions', 'decided_by', 'varchar', TRUE),
-                    ('commercial_billing_candidate_review_decisions', 'decided_at', 'timestamptz', TRUE),
-                    ('commercial_billing_candidate_review_decisions', 'created_at', 'timestamptz', TRUE),
-                    ('commercial_billing_candidate_review_decisions', 'review_fingerprint', 'varchar', TRUE),
-                    ('commercial_billing_candidate_overrides', 'id', 'uuid', TRUE),
-                    ('commercial_billing_candidate_overrides', 'billing_run_id', 'uuid', TRUE),
-                    ('commercial_billing_candidate_overrides', 'candidate_key', 'varchar', TRUE),
-                    ('commercial_billing_candidate_overrides', 'source_fingerprint', 'varchar', TRUE),
-                    ('commercial_billing_candidate_overrides', 'revision', 'int4', TRUE),
-                    ('commercial_billing_candidate_overrides', 'review_fingerprint', 'varchar', TRUE),
-                    ('commercial_billing_candidate_overrides', 'effective_snapshot', 'jsonb', TRUE),
-                    ('commercial_billing_candidate_overrides', 'reason_code', 'varchar', TRUE),
-                    ('commercial_billing_candidate_overrides', 'reason', 'varchar', TRUE),
-                    ('commercial_billing_candidate_overrides', 'source', 'varchar', TRUE),
-                    ('commercial_billing_candidate_overrides', 'idempotency_key', 'varchar', TRUE),
-                    ('commercial_billing_candidate_overrides', 'request_fingerprint', 'varchar', TRUE),
-                    ('commercial_billing_candidate_overrides', 'overridden_by', 'varchar', TRUE),
-                    ('commercial_billing_candidate_overrides', 'overridden_at', 'timestamptz', TRUE),
-                    ('commercial_billing_candidate_overrides', 'created_at', 'timestamptz', TRUE)
+                    ('commercial_billing_run_candidates', 'id', 'uuid', -1, TRUE, TRUE),
+                    ('commercial_billing_run_candidates', 'billing_run_id', 'uuid', -1, TRUE, TRUE),
+                    ('commercial_billing_run_candidates', 'candidate_key', 'varchar', 516, TRUE, TRUE),
+                    ('commercial_billing_run_candidates', 'source_fingerprint', 'varchar', 68, TRUE, TRUE),
+                    ('commercial_billing_run_candidates', 'display_order', 'int4', -1, TRUE, TRUE),
+                    ('commercial_billing_run_candidates', 'snapshot', 'jsonb', -1, TRUE, TRUE),
+                    ('commercial_billing_run_candidates', 'created_at', 'timestamptz', -1, TRUE, TRUE),
+                    ('commercial_billing_candidate_review_decisions', 'id', 'uuid', -1, TRUE, TRUE),
+                    ('commercial_billing_candidate_review_decisions', 'billing_run_id', 'uuid', -1, TRUE, TRUE),
+                    ('commercial_billing_candidate_review_decisions', 'candidate_key', 'varchar', 516, TRUE, TRUE),
+                    ('commercial_billing_candidate_review_decisions', 'source_fingerprint', 'varchar', 68, TRUE, TRUE),
+                    ('commercial_billing_candidate_review_decisions', 'revision', 'int4', -1, TRUE, TRUE),
+                    ('commercial_billing_candidate_review_decisions', 'decision', 'varchar', 20, TRUE, TRUE),
+                    ('commercial_billing_candidate_review_decisions', 'reason', 'varchar', 1004, TRUE, TRUE),
+                    ('commercial_billing_candidate_review_decisions', 'source', 'varchar', 36, TRUE, TRUE),
+                    ('commercial_billing_candidate_review_decisions', 'idempotency_key', 'varchar', 132, TRUE, TRUE),
+                    ('commercial_billing_candidate_review_decisions', 'request_fingerprint', 'varchar', 68, TRUE, TRUE),
+                    ('commercial_billing_candidate_review_decisions', 'decided_by', 'varchar', 132, TRUE, TRUE),
+                    ('commercial_billing_candidate_review_decisions', 'decided_at', 'timestamptz', -1, TRUE, TRUE),
+                    ('commercial_billing_candidate_review_decisions', 'created_at', 'timestamptz', -1, TRUE, TRUE),
+                    ('commercial_billing_candidate_review_decisions', 'review_fingerprint', 'varchar', 68, TRUE, TRUE),
+                    ('commercial_billing_candidate_overrides', 'id', 'uuid', -1, TRUE, TRUE),
+                    ('commercial_billing_candidate_overrides', 'billing_run_id', 'uuid', -1, TRUE, TRUE),
+                    ('commercial_billing_candidate_overrides', 'candidate_key', 'varchar', 516, TRUE, TRUE),
+                    ('commercial_billing_candidate_overrides', 'source_fingerprint', 'varchar', 68, TRUE, TRUE),
+                    ('commercial_billing_candidate_overrides', 'revision', 'int4', -1, TRUE, TRUE),
+                    ('commercial_billing_candidate_overrides', 'review_fingerprint', 'varchar', 68, TRUE, TRUE),
+                    ('commercial_billing_candidate_overrides', 'effective_snapshot', 'jsonb', -1, TRUE, TRUE),
+                    ('commercial_billing_candidate_overrides', 'reason_code', 'varchar', 68, TRUE, TRUE),
+                    ('commercial_billing_candidate_overrides', 'reason', 'varchar', 1004, TRUE, TRUE),
+                    ('commercial_billing_candidate_overrides', 'source', 'varchar', 36, TRUE, TRUE),
+                    ('commercial_billing_candidate_overrides', 'idempotency_key', 'varchar', 132, TRUE, TRUE),
+                    ('commercial_billing_candidate_overrides', 'request_fingerprint', 'varchar', 68, TRUE, TRUE),
+                    ('commercial_billing_candidate_overrides', 'overridden_by', 'varchar', 132, TRUE, TRUE),
+                    ('commercial_billing_candidate_overrides', 'overridden_at', 'timestamptz', -1, TRUE, TRUE),
+                    ('commercial_billing_candidate_overrides', 'created_at', 'timestamptz', -1, TRUE, TRUE)
             ) AS expected_column(
-                relation_name, column_name, type_name, not_null
+                relation_name,
+                column_name,
+                type_name,
+                type_modifier,
+                not_null,
+                uses_type_default_collation
             )
         ),
         target_columns AS (
             SELECT relation_state.relname AS relation_name,
                    attribute_state.attname AS column_name,
                    type_state.typname AS type_name,
-                   attribute_state.attnotnull
+                   attribute_state.atttypmod AS type_modifier,
+                   attribute_state.attnotnull,
+                   attribute_state.attcollation = type_state.typcollation
+                       AS uses_type_default_collation
             FROM target_relations AS relation_state
             JOIN pg_catalog.pg_attribute AS attribute_state
               ON attribute_state.attrelid = relation_state.oid
@@ -3197,8 +3205,12 @@ async def _migration_379_catalog_evidence(executor: Any) -> Mapping[str, object]
                  AND actual_column.column_name = expected_column.column_name
                 WHERE actual_column.relation_name IS NULL
                    OR actual_column.type_name <> expected_column.type_name
+                   OR actual_column.type_modifier
+                      IS DISTINCT FROM expected_column.type_modifier
                    OR actual_column.attnotnull
                       IS DISTINCT FROM expected_column.not_null
+                   OR actual_column.uses_type_default_collation
+                      IS DISTINCT FROM expected_column.uses_type_default_collation
             ) AS required_columns_ready,
             (
                 SELECT no_unreviewed_billing_columns

@@ -2565,6 +2565,16 @@ async def _stage_historical_379_legacy_recovery_state(conn):
             "ALTER COLUMN revision TYPE BIGINT",
         ),
         (
+            "wrong review-decision varchar bound",
+            "ALTER TABLE commercial_billing_candidate_review_decisions "
+            "ALTER COLUMN decision TYPE VARCHAR(15)",
+        ),
+        (
+            "nondefault review-decision collation",
+            "ALTER TABLE commercial_billing_candidate_review_decisions "
+            "ALTER COLUMN decision TYPE VARCHAR(16) COLLATE \"C\"",
+        ),
+        (
             "nullable override revision",
             "ALTER TABLE commercial_billing_candidate_overrides "
             "ALTER COLUMN revision DROP NOT NULL",
