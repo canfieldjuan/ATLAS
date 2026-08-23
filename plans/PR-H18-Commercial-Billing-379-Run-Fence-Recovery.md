@@ -393,6 +393,31 @@ run-isolation defect, or an EOM entrypoint unable to select its prerequisite.
   syntax/Ruff locally. GitHub's controlled PostgreSQL matrix remains the
   runtime authority for both `ALTER COLUMN` mutations.
 
+### Contract revision after full-index-predicate review
+
+- New evidence: the 379 observer compares an index's identity, key counts,
+  readiness, uniqueness, and a definition fragment, but does not inspect
+  `pg_index.indpred`. Recreating a declared full index with the same name and
+  keys plus `WHERE false` can retain every observed field while making the
+  index unusable for the reviewed catalog contract.
+- Revised root cause: the source-backed index predicate proves an index exists
+  but not that it remains a full index. A definition substring cannot exclude a
+  predicate appended after the declared key expression.
+- Revised required change surface: expose `pg_index.indpred IS NULL` in the
+  existing `target_indexes` evidence and require it for every declared billing
+  index before either recovery status. Add fake preflight and runner refusal
+  proof plus an isolated PostgreSQL same-name partial-index replacement that
+  must reject before 391 SQL, a receipt, or an invoice write. Re-run the
+  existing target-confirmed read-only attestation against this final predicate
+  and record the result without invoking the runner.
+- Revised explicit non-scope: do not alter immutable 391 source bytes, create
+  a new index model, or change an index outside the three reviewed billing
+  relations. This is an upstream admission check only.
+- Revised verification plan: run focused preflight, runner, and recovery tests
+  with syntax/Ruff locally; GitHub owns the controlled PostgreSQL matrix and
+  full Unit Gate. The target probe must use the existing read-only preflight
+  connection and report no credentials or catalog row contents.
+
 ## Scope (this PR)
 
 Ownership lane: h18-migration-content-integrity
@@ -610,10 +635,19 @@ Parked hardening: none.
   PostgreSQL recovery test when its isolated test URL is available, Python
   syntax, Ruff, plan sync, whitespace, and contract checks. GitHub owns the
   full Unit Gate and remaining required checks; no duplicate local Unit Gate.
-- Controlled target proof before review: a read-only
+- Historical target proof before later predicate revisions: a read-only
   `scripts/check_migration_content_integrity.py` receipt against the exact
   configured target showed 391's exact source digest and 379 `attested`; it did
-  not invoke the runner.
+  not invoke the runner. The current-head re-attestation is recorded only after
+  the final full-index predicate is present.
+- Final target proof after the full-index predicate: the same target-confirmed
+  read-only preflight ran from this candidate worktree with both the connection
+  read-only setting and a read-only transaction. Its outer integrity result was
+  `unresolved_drift` solely for the intentionally unavailable historical source;
+  the named 379 evidence was `attested` with
+  `reviewed_billing_catalog_ready`, `recovery_receipt_ready`, and
+  `recovered_catalog_ready` all true. It did not invoke the runner or execute
+  migration SQL.
 - Controlled target proof after the protected 390 deployment: a fresh
   target-confirmed read-only receipt must show 386 attested before migration
   389 is eligible.
@@ -626,10 +660,10 @@ Parked hardening: none.
 | `.github/workflows/atlas_migrations_runner_checks.yml` | 16 |
 | `atlas_brain/main_eom.py` | 3 |
 | `atlas_brain/storage/migrations/391_eom_commercial_billing_run_fence_recovery.sql` | 343 |
-| `atlas_brain/storage/migrations/reconciliation.py` | 1059 |
-| `plans/PR-H18-Commercial-Billing-379-Run-Fence-Recovery.md` | 635 |
-| `tests/test_commercial_billing_runs.py` | 490 |
+| `atlas_brain/storage/migrations/reconciliation.py` | 1061 |
+| `plans/PR-H18-Commercial-Billing-379-Run-Fence-Recovery.md` | 669 |
+| `tests/test_commercial_billing_runs.py` | 498 |
 | `tests/test_eom_render_profile.py` | 1 |
-| `tests/test_migration_content_integrity_preflight.py` | 444 |
-| `tests/test_migrations_runner.py` | 560 |
-| **Total** | **3553** |
+| `tests/test_migration_content_integrity_preflight.py` | 453 |
+| `tests/test_migrations_runner.py` | 589 |
+| **Total** | **3625** |

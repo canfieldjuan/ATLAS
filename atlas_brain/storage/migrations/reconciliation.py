@@ -3023,6 +3023,7 @@ async def _migration_379_catalog_evidence(executor: Any) -> Mapping[str, object]
                 index_state.indisready AS is_ready,
                 index_state.indnkeyatts AS key_attribute_count,
                 index_state.indnatts AS attribute_count,
+                index_state.indpred IS NULL AS has_no_predicate,
                 regexp_replace(
                     lower(pg_catalog.pg_get_indexdef(index_state.indexrelid)),
                     '\\s+',
@@ -3280,6 +3281,7 @@ async def _migration_379_catalog_evidence(executor: Any) -> Mapping[str, object]
                       IS DISTINCT FROM expected_index.key_attribute_count
                    OR actual_index.attribute_count
                       IS DISTINCT FROM expected_index.key_attribute_count
+                   OR NOT actual_index.has_no_predicate
                    OR actual_index.normalized_definition NOT LIKE
                       '%' || expected_index.definition_fragment || '%'
             ) AS required_billing_indexes_ready,

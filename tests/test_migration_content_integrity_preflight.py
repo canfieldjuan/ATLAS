@@ -727,6 +727,8 @@ class _Migration379PreflightConnection:
         assert "IS DISTINCT FROM expected_column.uses_type_default_collation" in query
         assert "required_constraints" in query
         assert "required_indexes" in query
+        assert "index_state.indpred IS NULL AS has_no_predicate" in query
+        assert "OR NOT actual_index.has_no_predicate" in query
         assert "unreviewed_constraints" in query
         assert "unreviewed_indexes" in query
         assert "trigger_state.tgfoid" in query
@@ -1322,6 +1324,10 @@ async def test_known_379_recovery_attests_only_after_its_own_receipt_and_fence(
         ("missing required billing constraint", "required_billing_constraints_ready"),
         ("unreviewed billing constraint", "no_unreviewed_billing_constraints"),
         ("missing required billing index", "required_billing_indexes_ready"),
+        (
+            "partial replacement for a required billing index",
+            "required_billing_indexes_ready",
+        ),
         ("unreviewed billing index", "no_unreviewed_billing_indexes"),
         ("altered review-decision history guard body", "history_guard_function_bodies_ready"),
         ("altered override history guard body", "history_guard_function_bodies_ready"),
@@ -1364,7 +1370,10 @@ async def test_known_379_recovery_rejects_nonexact_or_half_recorded_evidence(
         connection.catalog["required_billing_constraints_ready"] = False
     elif case == "unreviewed billing constraint":
         connection.catalog["no_unreviewed_billing_constraints"] = False
-    elif case == "missing required billing index":
+    elif case in {
+        "missing required billing index",
+        "partial replacement for a required billing index",
+    }:
         connection.catalog["required_billing_indexes_ready"] = False
     elif case == "unreviewed billing index":
         connection.catalog["no_unreviewed_billing_indexes"] = False

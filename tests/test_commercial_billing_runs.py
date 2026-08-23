@@ -2621,6 +2621,14 @@ async def _stage_historical_379_legacy_recovery_state(conn):
             "DROP INDEX idx_commercial_billing_candidate_overrides_active",
         ),
         (
+            "partial replacement for override active index",
+            "DROP INDEX idx_commercial_billing_candidate_overrides_active; "
+            "CREATE INDEX idx_commercial_billing_candidate_overrides_active "
+            "ON commercial_billing_candidate_overrides "
+            "(billing_run_id, candidate_key, source_fingerprint, revision DESC) "
+            "WHERE false",
+        ),
+        (
             "foreign-schema invoice fence function",
             "CREATE SCHEMA {foreign_schema}; "
             "CREATE FUNCTION {foreign_schema}."

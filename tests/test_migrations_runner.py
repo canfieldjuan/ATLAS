@@ -1907,6 +1907,8 @@ class _CommercialBillingForwardRecoveryPool(_ForwardRecoveryPool):
             assert "IS DISTINCT FROM expected_column.uses_type_default_collation" in query
             assert "required_constraints" in query
             assert "required_indexes" in query
+            assert "index_state.indpred IS NULL AS has_no_predicate" in query
+            assert "OR NOT actual_index.has_no_predicate" in query
             assert "trigger_state.tgfoid" in query
             assert "trigger_state.tgqual" in query
             assert "actual_trigger.tgfoid = expected_trigger.function_oid" in query
@@ -2247,6 +2249,33 @@ async def test_379_forward_recovery_rejects_incomplete_billing_column_contract_b
     pool = _CommercialBillingForwardRecoveryPool()
     commercial_record = _stage_historical_379_forward_recovery(tmp_path, pool)
     pool.commercial_billing_catalog[catalog_field] = False
+
+    with pytest.raises(PendingMigrationContentIntegrityError, match="missing_source="):
+        await run_migrations(
+            pool,
+            migrations_dir=tmp_path,
+            only={commercial_record.recovery_migration_name},
+        )
+
+    assert pool.commercial_recovery_attempts == 0
+    assert pool.applied_sql == []
+    assert pool.inserted_with_digest == []
+    assert pool.commercial_billing_catalog["function_body"] == _legacy_379_function_body()
+
+
+@pytest.mark.asyncio
+async def test_379_forward_recovery_rejects_partial_required_billing_index_before_391(
+    tmp_path,
+):
+    """A partial replacement cannot satisfy a declared full-index contract."""
+    from atlas_brain.storage.migrations import (
+        PendingMigrationContentIntegrityError,
+        run_migrations,
+    )
+
+    pool = _CommercialBillingForwardRecoveryPool()
+    commercial_record = _stage_historical_379_forward_recovery(tmp_path, pool)
+    pool.commercial_billing_catalog["required_billing_indexes_ready"] = False
 
     with pytest.raises(PendingMigrationContentIntegrityError, match="missing_source="):
         await run_migrations(
