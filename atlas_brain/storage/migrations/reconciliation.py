@@ -286,6 +286,8 @@ class MissingSourceForwardRecoveryMigrationReconciliationAttestation:
     no_recovery_ledger_row: bool
     recovery_receipt_ready: bool
     reviewed_billing_catalog_ready: bool
+    required_billing_columns_ready: bool
+    no_unreviewed_billing_columns: bool
     history_guard_function_bodies_ready: bool
     required_billing_constraints_ready: bool
     no_unreviewed_billing_constraints: bool
@@ -351,6 +353,8 @@ class MissingSourceForwardRecoveryMigrationReconciliationAttestation:
             "no_recovery_ledger_row": self.no_recovery_ledger_row,
             "recovery_receipt_ready": self.recovery_receipt_ready,
             "reviewed_billing_catalog_ready": self.reviewed_billing_catalog_ready,
+            "required_billing_columns_ready": self.required_billing_columns_ready,
+            "no_unreviewed_billing_columns": self.no_unreviewed_billing_columns,
             "history_guard_function_bodies_ready": (
                 self.history_guard_function_bodies_ready
             ),
@@ -2738,18 +2742,45 @@ async def _migration_379_catalog_evidence(executor: Any) -> Mapping[str, object]
             SELECT *
             FROM (
                 VALUES
-                    ('commercial_billing_candidate_review_decisions', 'candidate_key', 'varchar'),
-                    ('commercial_billing_candidate_review_decisions', 'source_fingerprint', 'varchar'),
-                    ('commercial_billing_candidate_review_decisions', 'review_fingerprint', 'varchar'),
-                    ('commercial_billing_candidate_review_decisions', 'decision', 'varchar'),
-                    ('commercial_billing_candidate_overrides', 'billing_run_id', 'uuid'),
-                    ('commercial_billing_candidate_overrides', 'candidate_key', 'varchar'),
-                    ('commercial_billing_candidate_overrides', 'source_fingerprint', 'varchar'),
-                    ('commercial_billing_candidate_overrides', 'review_fingerprint', 'varchar'),
-                    ('commercial_billing_run_candidates', 'billing_run_id', 'uuid'),
-                    ('commercial_billing_run_candidates', 'candidate_key', 'varchar'),
-                    ('commercial_billing_run_candidates', 'source_fingerprint', 'varchar')
-            ) AS expected_column(relation_name, column_name, type_name)
+                    ('commercial_billing_run_candidates', 'id', 'uuid', TRUE),
+                    ('commercial_billing_run_candidates', 'billing_run_id', 'uuid', TRUE),
+                    ('commercial_billing_run_candidates', 'candidate_key', 'varchar', TRUE),
+                    ('commercial_billing_run_candidates', 'source_fingerprint', 'varchar', TRUE),
+                    ('commercial_billing_run_candidates', 'display_order', 'int4', TRUE),
+                    ('commercial_billing_run_candidates', 'snapshot', 'jsonb', TRUE),
+                    ('commercial_billing_run_candidates', 'created_at', 'timestamptz', TRUE),
+                    ('commercial_billing_candidate_review_decisions', 'id', 'uuid', TRUE),
+                    ('commercial_billing_candidate_review_decisions', 'billing_run_id', 'uuid', TRUE),
+                    ('commercial_billing_candidate_review_decisions', 'candidate_key', 'varchar', TRUE),
+                    ('commercial_billing_candidate_review_decisions', 'source_fingerprint', 'varchar', TRUE),
+                    ('commercial_billing_candidate_review_decisions', 'revision', 'int4', TRUE),
+                    ('commercial_billing_candidate_review_decisions', 'decision', 'varchar', TRUE),
+                    ('commercial_billing_candidate_review_decisions', 'reason', 'varchar', TRUE),
+                    ('commercial_billing_candidate_review_decisions', 'source', 'varchar', TRUE),
+                    ('commercial_billing_candidate_review_decisions', 'idempotency_key', 'varchar', TRUE),
+                    ('commercial_billing_candidate_review_decisions', 'request_fingerprint', 'varchar', TRUE),
+                    ('commercial_billing_candidate_review_decisions', 'decided_by', 'varchar', TRUE),
+                    ('commercial_billing_candidate_review_decisions', 'decided_at', 'timestamptz', TRUE),
+                    ('commercial_billing_candidate_review_decisions', 'created_at', 'timestamptz', TRUE),
+                    ('commercial_billing_candidate_review_decisions', 'review_fingerprint', 'varchar', TRUE),
+                    ('commercial_billing_candidate_overrides', 'id', 'uuid', TRUE),
+                    ('commercial_billing_candidate_overrides', 'billing_run_id', 'uuid', TRUE),
+                    ('commercial_billing_candidate_overrides', 'candidate_key', 'varchar', TRUE),
+                    ('commercial_billing_candidate_overrides', 'source_fingerprint', 'varchar', TRUE),
+                    ('commercial_billing_candidate_overrides', 'revision', 'int4', TRUE),
+                    ('commercial_billing_candidate_overrides', 'review_fingerprint', 'varchar', TRUE),
+                    ('commercial_billing_candidate_overrides', 'effective_snapshot', 'jsonb', TRUE),
+                    ('commercial_billing_candidate_overrides', 'reason_code', 'varchar', TRUE),
+                    ('commercial_billing_candidate_overrides', 'reason', 'varchar', TRUE),
+                    ('commercial_billing_candidate_overrides', 'source', 'varchar', TRUE),
+                    ('commercial_billing_candidate_overrides', 'idempotency_key', 'varchar', TRUE),
+                    ('commercial_billing_candidate_overrides', 'request_fingerprint', 'varchar', TRUE),
+                    ('commercial_billing_candidate_overrides', 'overridden_by', 'varchar', TRUE),
+                    ('commercial_billing_candidate_overrides', 'overridden_at', 'timestamptz', TRUE),
+                    ('commercial_billing_candidate_overrides', 'created_at', 'timestamptz', TRUE)
+            ) AS expected_column(
+                relation_name, column_name, type_name, not_null
+            )
         ),
         target_columns AS (
             SELECT relation_state.relname AS relation_name,
@@ -2759,6 +2790,7 @@ async def _migration_379_catalog_evidence(executor: Any) -> Mapping[str, object]
             FROM target_relations AS relation_state
             JOIN pg_catalog.pg_attribute AS attribute_state
               ON attribute_state.attrelid = relation_state.oid
+             AND attribute_state.attnum > 0
              AND NOT attribute_state.attisdropped
             JOIN pg_catalog.pg_type AS type_state
               ON type_state.oid = attribute_state.atttypid
@@ -2773,6 +2805,18 @@ async def _migration_379_catalog_evidence(executor: Any) -> Mapping[str, object]
                     'commercial_billing_run_candidates'
                 ]::text[]
             )
+        ),
+        unreviewed_columns AS (
+            SELECT NOT EXISTS (
+                SELECT 1
+                FROM target_columns AS actual_column
+                JOIN billing_catalog_relations AS billing_relation
+                  ON billing_relation.relname = actual_column.relation_name
+                LEFT JOIN required_columns AS expected_column
+                  ON expected_column.relation_name = actual_column.relation_name
+                 AND expected_column.column_name = actual_column.column_name
+                WHERE expected_column.column_name IS NULL
+            ) AS no_unreviewed_billing_columns
         ),
         declared_constraints AS (
             SELECT *
@@ -3085,8 +3129,13 @@ async def _migration_379_catalog_evidence(executor: Any) -> Mapping[str, object]
                  AND actual_column.column_name = expected_column.column_name
                 WHERE actual_column.relation_name IS NULL
                    OR actual_column.type_name <> expected_column.type_name
-                   OR NOT actual_column.attnotnull
+                   OR actual_column.attnotnull
+                      IS DISTINCT FROM expected_column.not_null
             ) AS required_columns_ready,
+            (
+                SELECT no_unreviewed_billing_columns
+                FROM unreviewed_columns
+            ) AS no_unreviewed_billing_columns,
             (
                 NOT EXISTS (
                     SELECT 1
@@ -3298,6 +3347,7 @@ async def _attest_migration_379(
         reviewed_billing_catalog_ready=all((
             bool(catalog.get("relations_ready")),
             bool(catalog.get("required_columns_ready")),
+            bool(catalog.get("no_unreviewed_billing_columns")),
             bool(catalog.get("required_billing_constraints_ready")),
             bool(catalog.get("no_unreviewed_billing_constraints")),
             bool(catalog.get("required_billing_indexes_ready")),
@@ -3306,6 +3356,12 @@ async def _attest_migration_379(
             history_guard_function_bodies_ready,
             bool(catalog.get("no_unreviewed_invoice_insert_interceptors")),
         )),
+        required_billing_columns_ready=bool(
+            catalog.get("required_columns_ready")
+        ),
+        no_unreviewed_billing_columns=bool(
+            catalog.get("no_unreviewed_billing_columns")
+        ),
         history_guard_function_bodies_ready=history_guard_function_bodies_ready,
         required_billing_constraints_ready=bool(
             catalog.get("required_billing_constraints_ready")

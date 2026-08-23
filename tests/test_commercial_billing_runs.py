@@ -2555,6 +2555,26 @@ async def _stage_historical_379_legacy_recovery_state(conn):
             "DROP CONSTRAINT commercial_billing_candidate_review_decisions_snapshot_fkey",
         ),
         (
+            "nullable review-decision revision",
+            "ALTER TABLE commercial_billing_candidate_review_decisions "
+            "ALTER COLUMN revision DROP NOT NULL",
+        ),
+        (
+            "wrong-type review-decision revision",
+            "ALTER TABLE commercial_billing_candidate_review_decisions "
+            "ALTER COLUMN revision TYPE BIGINT",
+        ),
+        (
+            "nullable override revision",
+            "ALTER TABLE commercial_billing_candidate_overrides "
+            "ALTER COLUMN revision DROP NOT NULL",
+        ),
+        (
+            "unreviewed billing column",
+            "ALTER TABLE commercial_billing_candidate_overrides "
+            "ADD COLUMN unreviewed_379_billing_column VARCHAR(64)",
+        ),
+        (
             "same-name altered review-decision revision check",
             "ALTER TABLE commercial_billing_candidate_review_decisions "
             "DROP CONSTRAINT commercial_billing_candidate_review_decisions_revision_check; "

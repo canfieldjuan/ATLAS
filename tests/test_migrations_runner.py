@@ -1819,6 +1819,7 @@ class _CommercialBillingForwardRecoveryPool(_ForwardRecoveryPool):
         self.commercial_billing_catalog = {
             "relations_ready": True,
             "required_columns_ready": True,
+            "no_unreviewed_billing_columns": True,
             "required_billing_constraints_ready": True,
             "no_unreviewed_billing_constraints": True,
             "required_billing_indexes_ready": True,
@@ -1885,6 +1886,10 @@ class _CommercialBillingForwardRecoveryPool(_ForwardRecoveryPool):
             assert "commercial_billing_candidate_review_decisions" in query
             assert "commercial_billing_candidate_overrides" in query
             assert "pg_catalog.left(constraint_name, 63)" in query
+            assert "unreviewed_columns" in query
+            assert "no_unreviewed_billing_columns" in query
+            assert "'commercial_billing_candidate_review_decisions', 'revision', 'int4', TRUE" in query
+            assert "'commercial_billing_candidate_overrides', 'revision', 'int4', TRUE" in query
             assert "required_constraints" in query
             assert "required_indexes" in query
             assert "trigger_state.tgfoid" in query
@@ -2159,6 +2164,38 @@ async def test_379_forward_recovery_rejects_unreviewed_invoice_insert_intercepto
     pool.commercial_billing_catalog[
         "no_unreviewed_invoice_insert_interceptors"
     ] = False
+
+    with pytest.raises(PendingMigrationContentIntegrityError, match="missing_source="):
+        await run_migrations(
+            pool,
+            migrations_dir=tmp_path,
+            only={commercial_record.recovery_migration_name},
+        )
+
+    assert pool.commercial_recovery_attempts == 0
+    assert pool.applied_sql == []
+    assert pool.inserted_with_digest == []
+    assert pool.commercial_billing_catalog["function_body"] == _legacy_379_function_body()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "catalog_field",
+    ("required_columns_ready", "no_unreviewed_billing_columns"),
+)
+async def test_379_forward_recovery_rejects_incomplete_billing_column_contract_before_391(
+    tmp_path,
+    catalog_field,
+):
+    """A nullable or retagged ordering/key column cannot admit recovery."""
+    from atlas_brain.storage.migrations import (
+        PendingMigrationContentIntegrityError,
+        run_migrations,
+    )
+
+    pool = _CommercialBillingForwardRecoveryPool()
+    commercial_record = _stage_historical_379_forward_recovery(tmp_path, pool)
+    pool.commercial_billing_catalog[catalog_field] = False
 
     with pytest.raises(PendingMigrationContentIntegrityError, match="missing_source="):
         await run_migrations(

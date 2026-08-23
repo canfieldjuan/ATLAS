@@ -262,6 +262,30 @@ run-isolation defect, or an EOM entrypoint unable to select its prerequisite.
   syntax, Ruff, plan, and whitespace checks. GitHub's controlled PostgreSQL
   matrix remains the authority for the trigger-order mutation proof.
 
+### Contract revision after behavior-driving-column review
+
+- New evidence: the current 379 observer verifies only a subset of the three
+  billing relation columns. Dropping `NOT NULL` from either revision preserves
+  the reviewed `CHECK (revision > 0)` and unique key because PostgreSQL accepts
+  NULL `CHECK` results and permits multiple NULL key members; the recovered
+  `ORDER BY revision DESC LIMIT 1` lookup can then choose an arbitrary event.
+- Revised root cause: a partially enumerated column contract leaves type,
+  nullability, and newly added user-column drift outside the otherwise closed
+  catalog admission predicate.
+- Revised required change surface: enumerate every user column of the three
+  behavior-driving billing relations with exact PostgreSQL type and nullability,
+  reject unreviewed user columns, require both predicates before either 379
+  admission state, and expose them in read-only evidence. Add focused fake
+  preflight/runner refusal coverage plus isolated PostgreSQL nullable,
+  wrong-type, and added-column mutations; each must reject before 391 SQL, a
+  recovery receipt, or an invoice write.
+- Revised explicit non-scope: do not infer a new business schema, change column
+  defaults, rewrite billing history, or edit immutable 391 bytes. This is a
+  fail-closed admission correction for the exact source-backed table shape.
+- Revised verification plan: retain focused local preflight/runner checks,
+  syntax, Ruff, plan, and whitespace checks. GitHub's controlled PostgreSQL
+  matrix remains the authority for the catalog-alteration proof.
+
 ## Scope (this PR)
 
 Ownership lane: h18-migration-content-integrity
@@ -294,7 +318,8 @@ Max files: 11
     still unresolved; settled by `tests/test_migrations_runner.py`.
   - [ ] An unknown discrepancy, changed legacy fence hash, altered history
     guard body, conditional or foreign-schema same-name required trigger
-    function, an unreviewed row-level `BEFORE INSERT` invoice interceptor, missing required
+    function, an unreviewed row-level `BEFORE INSERT` invoice interceptor,
+    missing, retagged, nullable, or unreviewed behavior-driving billing column, missing required
     decision-table catalog member (including a
     declared constraint, its exact `CHECK` predicate, or index), an unreviewed
     catalog member, an omitted 391
@@ -339,8 +364,9 @@ Max files: 11
 - Guard-relevant fields: unresolved mismatch/missing-source names, 379's exact
   ledger versions/NULL digests/timestamps, successor ledger receipts, decision
   relation kind/columns/declared constraints including normalized `CHECK`
-  predicates/declared indexes/no-unreviewed catalog members/closed invoice
-  row-level `BEFORE INSERT` interceptor set/unconditional triggers bound to
+  predicates/declared indexes/no-unreviewed catalog members/exact user-column
+  type-and-nullability set/closed invoice row-level `BEFORE INSERT` interceptor
+  set/unconditional triggers bound to
   expected current-schema function OIDs/current-schema
   history-guard `pg_proc.prosrc` SHA-256 values, 386's independently attested
   status, invoice-fence trigger, legacy and recovered invoice-fence
@@ -428,6 +454,10 @@ deployment sequence.
   can rewrite `NEW` around the reviewed invoice fence. Statement triggers and
   unrelated invoice mechanisms are not silently claimed as attested by this
   recovery.
+- Require the exact source-backed user-column set for the three billing
+  relations, including both revision columns, before treating a 379 catalog as
+  safe to recover or attested. PostgreSQL `CHECK` and unique-key semantics do
+  not substitute for the omitted `NOT NULL` evidence.
 
 ## Deferred
 
@@ -465,10 +495,10 @@ Parked hardening: none.
 | `.github/workflows/atlas_migrations_runner_checks.yml` | 16 |
 | `atlas_brain/main_eom.py` | 3 |
 | `atlas_brain/storage/migrations/391_eom_commercial_billing_run_fence_recovery.sql` | 343 |
-| `atlas_brain/storage/migrations/reconciliation.py` | 907 |
-| `plans/PR-H18-Commercial-Billing-379-Run-Fence-Recovery.md` | 474 |
-| `tests/test_commercial_billing_runs.py` | 435 |
+| `atlas_brain/storage/migrations/reconciliation.py` | 963 |
+| `plans/PR-H18-Commercial-Billing-379-Run-Fence-Recovery.md` | 504 |
+| `tests/test_commercial_billing_runs.py` | 455 |
 | `tests/test_eom_render_profile.py` | 1 |
-| `tests/test_migration_content_integrity_preflight.py` | 395 |
-| `tests/test_migrations_runner.py` | 443 |
-| **Total** | **3019** |
+| `tests/test_migration_content_integrity_preflight.py` | 408 |
+| `tests/test_migrations_runner.py` | 480 |
+| **Total** | **3175** |

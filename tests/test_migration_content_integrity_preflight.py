@@ -627,6 +627,7 @@ class _Migration379PreflightConnection:
         self.catalog = {
             "relations_ready": True,
             "required_columns_ready": True,
+            "no_unreviewed_billing_columns": True,
             "required_billing_constraints_ready": True,
             "no_unreviewed_billing_constraints": True,
             "required_billing_indexes_ready": True,
@@ -705,6 +706,10 @@ class _Migration379PreflightConnection:
         assert "normalized_check_expression" in query
         assert "commercial_billing_candidate_review_decisions_revision_check" in query
         assert "commercial_billing_candidate_review_decisio_billing_run_id_fkey" in query
+        assert "unreviewed_columns" in query
+        assert "no_unreviewed_billing_columns" in query
+        assert "'commercial_billing_candidate_review_decisions', 'revision', 'int4', TRUE" in query
+        assert "'commercial_billing_candidate_overrides', 'revision', 'int4', TRUE" in query
         assert "required_constraints" in query
         assert "required_indexes" in query
         assert "unreviewed_constraints" in query
@@ -1229,6 +1234,8 @@ async def test_known_379_recovery_reports_exact_legacy_state_without_admitting_s
         "no_recovery_ledger_row": True,
         "recovery_receipt_ready": False,
         "reviewed_billing_catalog_ready": True,
+        "required_billing_columns_ready": True,
+        "no_unreviewed_billing_columns": True,
         "history_guard_function_bodies_ready": True,
         "required_billing_constraints_ready": True,
         "no_unreviewed_billing_constraints": True,
@@ -1282,6 +1289,8 @@ async def test_known_379_recovery_attests_only_after_its_own_receipt_and_fence(
         ("wrong historical version", "historical_receipt_ready"),
         ("missing successor receipt", "successor_receipts_ready"),
         ("changed reviewed catalog", "reviewed_billing_catalog_ready"),
+        ("missing behavior-driving billing column", "required_billing_columns_ready"),
+        ("unreviewed billing column", "no_unreviewed_billing_columns"),
         ("missing required billing constraint", "required_billing_constraints_ready"),
         ("unreviewed billing constraint", "no_unreviewed_billing_constraints"),
         ("missing required billing index", "required_billing_indexes_ready"),
@@ -1313,6 +1322,10 @@ async def test_known_379_recovery_rejects_nonexact_or_half_recorded_evidence(
         connection.successor_rows.pop()
     elif case == "changed reviewed catalog":
         connection.catalog["immutable_history_guards_ready"] = False
+    elif case == "missing behavior-driving billing column":
+        connection.catalog["required_columns_ready"] = False
+    elif case == "unreviewed billing column":
+        connection.catalog["no_unreviewed_billing_columns"] = False
     elif case == "missing required billing constraint":
         connection.catalog["required_billing_constraints_ready"] = False
     elif case == "unreviewed billing constraint":
