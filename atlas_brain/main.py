@@ -47,6 +47,9 @@ _SECURITY_TXT_MAX_AGE_DAYS = 180
 _COMMERCIAL_BILLING_REVIEW_RECOVERY_MIGRATION = (
     "382_commercial_billing_candidate_overrides"
 )
+_COMMERCIAL_BILLING_RUN_FENCE_RECOVERY_MIGRATION = (
+    "391_eom_commercial_billing_run_fence_recovery"
+)
 _COMMERCIAL_BILLING_RUN_FENCE_SCHEMA_BINDING_MIGRATION = (
     "392_eom_commercial_billing_run_fence_schema_binding"
 )
@@ -379,25 +382,13 @@ async def _run_database_migration_check(
     except Exception as exc:
         migration_error = exc
 
-    required: list[tuple[str, type[_DatabaseMigrationFenceError], str]] = []
-    if receivables_api_enabled:
-        required.extend((
-            (
-                _COMMERCIAL_BILLING_REVIEW_RECOVERY_MIGRATION,
-                CommercialBillingReviewRecoveryUnavailableError,
-                "Commercial billing review recovery migration must complete "
-                "before the enabled receivables API can start",
-            ),
-            (
-                _COMMERCIAL_BILLING_RUN_FENCE_SCHEMA_BINDING_MIGRATION,
-                CommercialBillingReviewRecoveryUnavailableError,
-                "Commercial billing run-fence schema binding must complete "
-                "before the enabled receivables API can start",
-            ),
-        ))
-    for migration_name, error_cls, message in required:
+    async def require_recorded(
+        migration_name: str,
+        error_cls: type[_DatabaseMigrationFenceError],
+        message: str,
+    ) -> None:
         if await _migration_is_recorded(pool, migration_name):
-            continue
+            return
         try:
             await closer()
         except Exception as close_exc:
@@ -411,6 +402,26 @@ async def _run_database_migration_check(
         if migration_error is not None:
             raise error from migration_error
         raise error
+
+    if receivables_api_enabled:
+        await require_recorded(
+            _COMMERCIAL_BILLING_REVIEW_RECOVERY_MIGRATION,
+            CommercialBillingReviewRecoveryUnavailableError,
+            "Commercial billing review recovery migration must complete "
+            "before the enabled receivables API can start",
+        )
+        # 391/392 are reserved forward recoveries. Ordinary healthy databases
+        # never record either receipt; a recorded 391 is the durable marker
+        # that this startup must require its 392 schema-binding successor.
+        if await _migration_is_recorded(
+            pool, _COMMERCIAL_BILLING_RUN_FENCE_RECOVERY_MIGRATION
+        ):
+            await require_recorded(
+                _COMMERCIAL_BILLING_RUN_FENCE_SCHEMA_BINDING_MIGRATION,
+                CommercialBillingReviewRecoveryUnavailableError,
+                "Commercial billing run-fence schema binding must complete "
+                "before the enabled receivables API can start",
+            )
 
     if receivables_api_enabled or auto_invoice_enabled:
         try:

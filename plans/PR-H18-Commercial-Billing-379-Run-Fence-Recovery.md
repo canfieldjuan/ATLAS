@@ -528,7 +528,35 @@ run-isolation defect, or an EOM entrypoint unable to select its prerequisite.
   member is only the reviewed invoice fence; every non-internal trigger carrying
   PostgreSQL's `BEFORE` and `INSERT` bits, including statement-level variants,
   is rejected before either 379 recovery state can be admitted. The full Atlas
-  receivables startup requires both 382 and 392 ledger receipts before serving.
+  receivables startup requires 392 only after the recovery-only 391 predecessor
+  receipt exists.
+
+### Contract revision after recovery-only startup review
+
+- New evidence: `historical_forward_recovery_migration_names()` reserves both
+  391 and 392 from ordinary migration application, so a healthy database that
+  reaches the normal 380–382 catalog records neither receipt. The full Atlas
+  availability check nevertheless treated 392 as unconditional whenever the
+  receivables API was enabled, permanently blocking that healthy path.
+- Revised root cause: the full startup consumer confused a recovery-only
+  successor receipt with an ordinary receivables prerequisite. The actual
+  staged invariant is conditional: 382 is always required, and 392 is required
+  only after its 391 recovery predecessor is present.
+- Revised required change surface: add the existing 391 recovery receipt to
+  the direct `atlas_brain.main` availability decision. It must check 382 first,
+  then require 392 only when 391 is durably recorded. Focused startup tests
+  must prove the healthy 382-only path serves, a 391-only target fails closed,
+  and the fully recovered 391/392 path serves.
+- Revised explicit non-scope: do not apply 391 or 392 to ordinary databases,
+  alter migration selection, change any immutable migration source, reclassify
+  the 379 catalog, or turn unrelated migration warnings into global startup
+  failures. The separate 386-before-391 concurrent snapshot problem remains
+  deferred to #2363 because its upstream root is the generic multi-recovery
+  selector/atomic-coordinator contract, not the commercial-billing receipt
+  consumer.
+- Revised verification plan: run only the focused full-startup test subset,
+  syntax/Ruff, plan/contract gates, and GitHub's required suite. The controlled
+  PostgreSQL matrix and Unit Gate remain GitHub-owned.
 
 ## Scope (this PR)
 
@@ -549,10 +577,12 @@ Max files: 13
    every fence-input write path by allowing only exact source-declared trigger
    signatures on the three billing lookup relations before either
    recovery can be selected.
-4. Add 392 to the already closed missed-call readiness set and to the full Atlas
-   enabled-receivables startup fence, so neither production path can serve with
-   a 391-only recovered function; prove the staged 391-to-392 interaction, 386
-   ordering, and rejection of unrecognized drift.
+4. Add 392 to the already closed missed-call readiness set and make the full
+   Atlas enabled-receivables startup fence require it only after its 391
+   recovery predecessor is recorded, so neither production path can serve with
+   a 391-only recovered function while ordinary healthy 382-only databases
+   remain available; prove the staged 391-to-392 interaction, 386 ordering,
+   and rejection of unrecognized drift.
 5. Enroll the dedicated disposable PostgreSQL regression in the existing
    migration job and add the new migration to existing EOM path coverage.
 6. Re-attest both selected 391 and 392 recoveries inside their atomic receipt
@@ -605,10 +635,13 @@ Max files: 13
     omits `commercialBillingRunId` raises a PostgreSQL error at the recovered
     database boundary and leaves the invoice count unchanged; settled by the
     same disposable PostgreSQL regression.
-  - [ ] The EOM missed-call readiness entrypoint explicitly selects 391 and 392 and the
-    relevant workflows run when its migration, selector, or dedicated proof
-    changes; settled by `tests/test_eom_render_profile.py` and both workflow
-    command/path assertions.
+  - [ ] The EOM missed-call readiness entrypoint explicitly selects 391 and 392,
+    while the full enabled-receivables startup path always requires 382 and
+    requires 392 only after recorded 391. The relevant workflows run when its
+    migration, selector, or dedicated proof changes; settled by
+    `tests/test_eom_render_profile.py`,
+    `tests/test_commercial_billing_runs.py`, and both workflow command/path
+    assertions.
 - Reachability proof: `atlas_brain.main_eom._apply_eom_missed_call_recovery_migrations()`
   passes its closed set to `run_migrations(..., only=...)`; that runner applies
   a recovery prelude before ordinary selected files and re-evaluates the same
@@ -801,10 +834,11 @@ deployment sequence.
   rejection close the remaining named direct-DDL race without broadening this
   recovery into a global migration framework or requiring system-catalog write
   privileges.
-- Require the named 392 schema-binding receipt as well as 382 before the full
-  Atlas enabled-receivables API can pass its startup migration fence. This
-  preserves existing warning behavior for unrelated generic migration failures
-  and makes the staged recovery's own prerequisite fail closed.
+- Require the named 392 schema-binding receipt after, and only after, 391 is
+  recorded at the full Atlas enabled-receivables startup fence; 382 remains
+  universally required. This preserves ordinary healthy 382-only startup,
+  existing warning behavior for unrelated generic migration failures, and the
+  staged recovery's own fail-closed prerequisite.
 
 ## Deferred
 
@@ -812,7 +846,10 @@ deployment sequence.
   recovery. This slice closes the named 391/392 receipt boundaries with target
   relation locks, owner-replayed trigger definitions, and in-transaction
   canonical re-attestation; it does not impose a new global DDL protocol on
-  unrelated Atlas migrations.
+  unrelated Atlas migrations. The newly observed 386-after-selection race is
+  the same coordinator problem: fixing it correctly requires an atomic snapshot
+  of every selected recovery's independent catalog rather than a 386 special
+  case inside the commercial 391 transaction.
 - The current target's 391 execution was observed only through its exact ledger
   receipt and catalog result; repository evidence cannot determine its operator
   or change-control record. The receipt/digest is recorded in #2476. A protected
@@ -821,7 +858,8 @@ deployment sequence.
   post-run proof remain separate protected operational actions. No tracker or
   Website consumer work is unblocked by this source-only PR alone.
 
-Parked hardening: none.
+Parked hardening: #2363 owns the generic multi-recovery selection/atomicity
+contract; no new hardening mechanism is introduced in this PR.
 
 ## Verification
 
@@ -866,15 +904,15 @@ Parked hardening: none.
 |---|---:|
 | `.github/workflows/atlas_eom_lead_pipeline_checks.yml` | 4 |
 | `.github/workflows/atlas_migrations_runner_checks.yml` | 16 |
-| `atlas_brain/main.py` | 15 |
+| `atlas_brain/main.py` | 44 |
 | `atlas_brain/main_eom.py` | 4 |
 | `atlas_brain/storage/migrations/391_eom_commercial_billing_run_fence_recovery.sql` | 343 |
 | `atlas_brain/storage/migrations/392_eom_commercial_billing_run_fence_schema_binding.sql` | 123 |
 | `atlas_brain/storage/migrations/__init__.py` | 32 |
 | `atlas_brain/storage/migrations/reconciliation.py` | 1534 |
-| `plans/PR-H18-Commercial-Billing-379-Run-Fence-Recovery.md` | 880 |
-| `tests/test_commercial_billing_runs.py` | 1295 |
+| `plans/PR-H18-Commercial-Billing-379-Run-Fence-Recovery.md` | 918 |
+| `tests/test_commercial_billing_runs.py` | 1330 |
 | `tests/test_eom_render_profile.py` | 2 |
 | `tests/test_migration_content_integrity_preflight.py` | 615 |
 | `tests/test_migrations_runner.py` | 1001 |
-| **Total** | **5864** |
+| **Total** | **5966** |

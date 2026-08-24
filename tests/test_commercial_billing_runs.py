@@ -1916,11 +1916,15 @@ async def test_full_atlas_migration_check_blocks_enabled_receivables_without_392
             assert query == "SELECT EXISTS (SELECT 1 FROM schema_migrations WHERE name = $1)"
             assert args in {
                 (main._COMMERCIAL_BILLING_REVIEW_RECOVERY_MIGRATION,),
+                (main._COMMERCIAL_BILLING_RUN_FENCE_RECOVERY_MIGRATION,),
                 (main._COMMERCIAL_BILLING_RUN_FENCE_SCHEMA_BINDING_MIGRATION,),
             }
             ledger_queries.append(args[0])
             events.append("ledger")
-            return args == (main._COMMERCIAL_BILLING_REVIEW_RECOVERY_MIGRATION,)
+            return args in {
+                (main._COMMERCIAL_BILLING_REVIEW_RECOVERY_MIGRATION,),
+                (main._COMMERCIAL_BILLING_RUN_FENCE_RECOVERY_MIGRATION,),
+            }
 
     async def fail_after_391(pool: object) -> None:
         assert isinstance(pool, _Pool)
@@ -1944,9 +1948,10 @@ async def test_full_atlas_migration_check_blocks_enabled_receivables_without_392
     assert isinstance(exc_info.value.__cause__, RuntimeError)
     assert ledger_queries == [
         main._COMMERCIAL_BILLING_REVIEW_RECOVERY_MIGRATION,
+        main._COMMERCIAL_BILLING_RUN_FENCE_RECOVERY_MIGRATION,
         main._COMMERCIAL_BILLING_RUN_FENCE_SCHEMA_BINDING_MIGRATION,
     ]
-    assert events == ["migrate", "ledger", "ledger", "close"]
+    assert events == ["migrate", "ledger", "ledger", "ledger", "close"]
 
 
 @pytest.mark.asyncio
@@ -1954,24 +1959,31 @@ async def test_full_atlas_migration_check_blocks_enabled_receivables_without_392
     (
         "migration_fails",
         "receivables_api_enabled",
-        "recovery_recorded",
+        "review_recovery_recorded",
+        "run_fence_recovery_recorded",
+        "schema_binding_recorded",
         "dedup_ready",
         "expected_events",
         "expected_ledger_migrations",
     ),
     (
-        # receivables_api_enabled=True requires both the review recovery and
-        # its 392 schema binding, plus recurring-writer dedup readiness.
-        (True, True, True, True, ["migrate", "ledger", "ledger", "recurring-ready"], "recovery"),
-        (False, True, True, True, ["migrate", "ledger", "ledger", "recurring-ready"], "recovery"),
-        (True, False, False, False, ["migrate"], "none"),
-        (False, False, False, False, ["migrate"], "none"),
+        # Receivables always require 382. A recorded 391 changes the recovery
+        # state and therefore makes its 392 schema-binding successor required.
+        # An ordinary healthy catalog records neither reserved receipt.
+        (True, True, True, False, False, True, ["migrate", "ledger", "ledger", "recurring-ready"], "healthy"),
+        (False, True, True, False, False, True, ["migrate", "ledger", "ledger", "recurring-ready"], "healthy"),
+        (True, True, True, True, True, True, ["migrate", "ledger", "ledger", "ledger", "recurring-ready"], "recovered"),
+        (False, True, True, True, True, True, ["migrate", "ledger", "ledger", "ledger", "recurring-ready"], "recovered"),
+        (True, False, False, False, False, False, ["migrate"], "none"),
+        (False, False, False, False, False, False, ["migrate"], "none"),
     ),
 )
 async def test_full_atlas_migration_check_allows_recovered_or_disabled_receivables(
     migration_fails: bool,
     receivables_api_enabled: bool,
-    recovery_recorded: bool,
+    review_recovery_recorded: bool,
+    run_fence_recovery_recorded: bool,
+    schema_binding_recorded: bool,
     dedup_ready: bool,
     expected_events: list[str],
     expected_ledger_migrations: str,
@@ -1986,11 +1998,16 @@ async def test_full_atlas_migration_check_allows_recovered_or_disabled_receivabl
             assert query == "SELECT EXISTS (SELECT 1 FROM schema_migrations WHERE name = $1)"
             assert args in {
                 (main._COMMERCIAL_BILLING_REVIEW_RECOVERY_MIGRATION,),
+                (main._COMMERCIAL_BILLING_RUN_FENCE_RECOVERY_MIGRATION,),
                 (main._COMMERCIAL_BILLING_RUN_FENCE_SCHEMA_BINDING_MIGRATION,),
             }
             ledger_queries.append(args[0])
             events.append("ledger")
-            return recovery_recorded
+            return {
+                main._COMMERCIAL_BILLING_REVIEW_RECOVERY_MIGRATION: review_recovery_recorded,
+                main._COMMERCIAL_BILLING_RUN_FENCE_RECOVERY_MIGRATION: run_fence_recovery_recorded,
+                main._COMMERCIAL_BILLING_RUN_FENCE_SCHEMA_BINDING_MIGRATION: schema_binding_recorded,
+            }[args[0]]
 
     async def fail_migrations(pool: object) -> None:
         assert isinstance(pool, _Pool)
@@ -2015,9 +2032,15 @@ async def test_full_atlas_migration_check_allows_recovered_or_disabled_receivabl
     )
 
     assert events == expected_events
-    if expected_ledger_migrations == "recovery":
+    if expected_ledger_migrations == "healthy":
         assert ledger_queries == [
             main._COMMERCIAL_BILLING_REVIEW_RECOVERY_MIGRATION,
+            main._COMMERCIAL_BILLING_RUN_FENCE_RECOVERY_MIGRATION,
+        ]
+    elif expected_ledger_migrations == "recovered":
+        assert ledger_queries == [
+            main._COMMERCIAL_BILLING_REVIEW_RECOVERY_MIGRATION,
+            main._COMMERCIAL_BILLING_RUN_FENCE_RECOVERY_MIGRATION,
             main._COMMERCIAL_BILLING_RUN_FENCE_SCHEMA_BINDING_MIGRATION,
         ]
     else:
