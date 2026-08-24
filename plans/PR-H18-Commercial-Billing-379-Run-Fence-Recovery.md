@@ -579,9 +579,9 @@ run-isolation defect, or an EOM entrypoint unable to select its prerequisite.
   ordinary healthy 382-only startup, or convert unrelated migration warnings
   into a global availability policy. This is the current-state consumer for the
   existing 379 predicate, not a second migration coordinator.
-- Revised verification plan: add fake-runner and isolated PostgreSQL disabled-
-  foreign-key-trigger proof, direct startup false/error/healthy-path proof, and
-  exact-status default-helper proof. Keep the controlled PostgreSQL matrix and
+- Revised verification plan: add fake-runner, shared preflight-payload, and
+  isolated PostgreSQL disabled-foreign-key-trigger proof, direct startup
+  false/error/healthy-path proof, and exact-status default-helper proof. Keep
   full Unit Gate GitHub-owned.
 
 ## Scope (this PR)
@@ -949,6 +949,6 @@ contract; no new hardening mechanism is introduced in this PR.
 | `plans/PR-H18-Commercial-Billing-379-Run-Fence-Recovery.md` | 954 |
 | `tests/test_commercial_billing_runs.py` | 1501 |
 | `tests/test_eom_render_profile.py` | 2 |
-| `tests/test_migration_content_integrity_preflight.py` | 615 |
+| `tests/test_migration_content_integrity_preflight.py` | 624 |
 | `tests/test_migrations_runner.py` | 1033 |
-| **Total** | **6289** |
+| **Total** | **6298** |

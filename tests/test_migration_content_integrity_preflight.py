@@ -649,6 +649,7 @@ class _Migration379PreflightConnection:
             "no_unreviewed_billing_write_interceptors": True,
             "review_decision_default_trigger_ready": True,
             "required_billing_constraints_ready": True,
+            "foreign_key_enforcement_ready": True,
             "no_unreviewed_billing_constraints": True,
             "required_billing_indexes_ready": True,
             "no_unreviewed_billing_indexes": True,
@@ -770,6 +771,10 @@ class _Migration379PreflightConnection:
         assert "IS DISTINCT FROM expected_column.type_modifier" in query
         assert "IS DISTINCT FROM expected_column.uses_type_default_collation" in query
         assert "required_constraints" in query
+        assert "constraint_trigger.tgconstraint = constraint_state.oid" in query
+        assert "constraint_trigger.tgisinternal" in query
+        assert "constraint_trigger.tgenabled = 'O'::\"char\"" in query
+        assert "foreign_key_enforcement_ready" in query
         assert "required_indexes" in query
         assert "index_state.indpred IS NULL AS has_no_predicate" in query
         assert "OR NOT actual_index.has_no_predicate" in query
@@ -1327,6 +1332,7 @@ async def test_known_379_recovery_reports_exact_legacy_state_without_admitting_s
         "review_decision_default_function_body_ready": True,
         "history_guard_function_bodies_ready": True,
         "required_billing_constraints_ready": True,
+        "foreign_key_enforcement_ready": True,
         "no_unreviewed_billing_constraints": True,
         "required_billing_indexes_ready": True,
         "no_unreviewed_billing_indexes": True,
@@ -1466,6 +1472,7 @@ async def test_known_379_recovery_rejects_nonexact_392_state(
             "review_decision_default_trigger_ready",
         ),
         ("missing required billing constraint", "required_billing_constraints_ready"),
+        ("disabled foreign-key enforcement", "foreign_key_enforcement_ready"),
         ("unreviewed billing constraint", "no_unreviewed_billing_constraints"),
         ("missing required billing index", "required_billing_indexes_ready"),
         (
@@ -1524,6 +1531,8 @@ async def test_known_379_recovery_rejects_nonexact_or_half_recorded_evidence(
         connection.catalog["review_decision_default_trigger_ready"] = False
     elif case == "missing required billing constraint":
         connection.catalog["required_billing_constraints_ready"] = False
+    elif case == "disabled foreign-key enforcement":
+        connection.catalog["foreign_key_enforcement_ready"] = False
     elif case == "unreviewed billing constraint":
         connection.catalog["no_unreviewed_billing_constraints"] = False
     elif case in {
