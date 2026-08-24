@@ -622,10 +622,14 @@ Max files: 13
     decision-table catalog member (including a
     declared constraint, its exact `CHECK` predicate, or index), an unreviewed
     catalog member, an omitted 391 or 392
-    `only=` selection, a 386 mismatch that does not independently attest as
-    `recovery_required`, or an already recorded but non-attested 391 causes no
-    target SQL/ledger mutation; settled by negative fake-runner and preflight
-    cases.
+    `only=` selection, a 386 mismatch present at selection that does not
+    independently attest as `recovery_required`, or an already recorded but
+    non-attested 391 causes no target SQL/ledger mutation; settled by negative
+    fake-runner and preflight cases. A direct 386 catalog change after that
+    independent selection but before 391's receipt is the cross-recovery
+    atomic-snapshot concern deferred to #2363; this PR's transaction re-attests
+    the commercial 379 catalog it owns rather than creating a 386-specific
+    coordinator.
   - [ ] In an isolated PostgreSQL schema, recovery preserves all existing
     decision and override data, changes no row values, restores run isolation,
     and rejects a canonical excluded candidate even when the caller puts a
@@ -679,7 +683,7 @@ Max files: 13
   review-fingerprint-default `pg_proc.prosrc` SHA-256 values/exact trigger-function
   execution metadata (PL/pgSQL, security-invoker/default flags, and an exact
   staged empty-or-active-schema `proconfig`), 392's independent source/receipt
-  and active-schema pin, 386's independently attested
+  and active-schema pin, 386's independently attested selection-time
   status, invoice-fence trigger, legacy and recovered invoice-fence
   `pg_proc.prosrc` SHA-256 values, recovery source digest, recovery ledger row,
   and selected pending migration names.
@@ -707,9 +711,12 @@ Max files: 13
   and its explicit shadow-first variant both resolve the recovered fence through
   its function-local active-schema path.
 - Side-effect ordering: read-only evidence selects 391 or 392; each migration
-  re-checks its own predecessor state before changing function configuration,
-  and its source change plus ledger receipt commit atomically; the runner then
-  re-reads evidence before it can consider any later recovery or ordinary SQL.
+  re-checks its own predecessor/catalog state before changing function
+  configuration, and its source change plus ledger receipt commit atomically;
+  the runner then re-reads evidence before it can consider any later recovery
+  or ordinary SQL. A transaction-wide snapshot of separately selected 386 state
+  is explicitly deferred to #2363 rather than implemented as a 379-specific
+  lock.
 
 ### Files touched
 
@@ -910,9 +917,9 @@ contract; no new hardening mechanism is introduced in this PR.
 | `atlas_brain/storage/migrations/392_eom_commercial_billing_run_fence_schema_binding.sql` | 123 |
 | `atlas_brain/storage/migrations/__init__.py` | 32 |
 | `atlas_brain/storage/migrations/reconciliation.py` | 1534 |
-| `plans/PR-H18-Commercial-Billing-379-Run-Fence-Recovery.md` | 918 |
+| `plans/PR-H18-Commercial-Billing-379-Run-Fence-Recovery.md` | 925 |
 | `tests/test_commercial_billing_runs.py` | 1330 |
 | `tests/test_eom_render_profile.py` | 2 |
 | `tests/test_migration_content_integrity_preflight.py` | 615 |
 | `tests/test_migrations_runner.py` | 1001 |
-| **Total** | **5966** |
+| **Total** | **5973** |
