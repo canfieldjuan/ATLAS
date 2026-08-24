@@ -3332,6 +3332,105 @@ async def test_real_postgres_historical_379_recovery_rechecks_catalog_after_sele
 
 
 @pytest.mark.asyncio
+async def test_real_postgres_historical_379_function_replay_race_rolls_back_without_receipt():
+    """PostgreSQL rejects a stale replay instead of overwriting newer DDL."""
+    asyncpg = pytest.importorskip("asyncpg")
+    from atlas_brain.storage.migrations import run_migrations
+
+    async with _billing_run_database() as (conn, schema, database_url):
+        await conn.execute("CREATE EXTENSION IF NOT EXISTS pgcrypto")
+        record, _legacy_body = await _stage_historical_379_legacy_recovery_state(conn)
+        migrations_dir = Path(__file__).parents[1] / "atlas_brain/storage/migrations"
+        drift_conn = await asyncpg.connect(database_url)
+        await drift_conn.execute(f'SET search_path TO "{schema}"')
+
+        class _FunctionDdlRaceInjectingConnection:
+            """Commit DDL after the definition read but before its stale replay."""
+
+            def __init__(self) -> None:
+                self.drift_injected = False
+                self.release_task = None
+
+            async def execute(self, query, *args):
+                return await conn.execute(query, *args)
+
+            async def fetch(self, query, *args):
+                rows = await conn.fetch(query, *args)
+                if "pg_get_functiondef(function_state.oid)" in query and not self.drift_injected:
+                    await drift_conn.execute("BEGIN")
+                    await drift_conn.execute(
+                        "CREATE OR REPLACE FUNCTION "
+                        "prevent_commercial_billing_invoice_for_excluded_candidate() "
+                        "RETURNS TRIGGER LANGUAGE plpgsql AS $tampered$ "
+                        "BEGIN RETURN OLD; END; "
+                        "$tampered$"
+                    )
+                    self.drift_injected = True
+
+                    async def release_drift_lock() -> None:
+                        await asyncio.sleep(0.05)
+                        await drift_conn.execute("COMMIT")
+
+                    self.release_task = asyncio.create_task(release_drift_lock())
+                return rows
+
+            async def fetchrow(self, query, *args):
+                return await conn.fetchrow(query, *args)
+
+            async def fetchval(self, query, *args):
+                return await conn.fetchval(query, *args)
+
+            def transaction(self):
+                return conn.transaction()
+
+        wrapped_conn = _FunctionDdlRaceInjectingConnection()
+
+        class _FunctionDdlRaceSchemaPool(_SchemaPool):
+            async def acquire(self):
+                await wrapped_conn.execute(f'SET search_path TO "{self.schema}"')
+                return wrapped_conn
+
+            async def release(self, released) -> None:
+                assert released is wrapped_conn
+
+        try:
+            with pytest.raises(asyncpg.PostgresError):
+                await run_migrations(
+                    _FunctionDdlRaceSchemaPool(conn, schema),
+                    migrations_dir=migrations_dir,
+                    only={record.recovery_migration_name},
+                )
+
+            assert wrapped_conn.drift_injected is True
+            assert wrapped_conn.release_task is not None
+            await wrapped_conn.release_task
+            wrapped_conn.release_task = None
+            assert (
+                await conn.fetchval(
+                    "SELECT COUNT(*) FROM schema_migrations WHERE name = $1",
+                    record.recovery_migration_name,
+                )
+                == 0
+            )
+            assert "RETURN OLD" in await conn.fetchval(
+                "SELECT function_state.prosrc "
+                "FROM pg_catalog.pg_proc AS function_state "
+                "JOIN pg_catalog.pg_namespace AS namespace_state "
+                "  ON namespace_state.oid = function_state.pronamespace "
+                "WHERE namespace_state.nspname = $1 "
+                "  AND function_state.proname = "
+                "'prevent_commercial_billing_invoice_for_excluded_candidate'",
+                schema,
+            )
+        finally:
+            if wrapped_conn.release_task is not None:
+                await wrapped_conn.release_task
+            if drift_conn.is_in_transaction():
+                await drift_conn.execute("ROLLBACK")
+            await drift_conn.close()
+
+
+@pytest.mark.asyncio
 async def test_real_postgres_historical_379_schema_binding_rechecks_catalog_after_selection():
     """A concurrent catalog change cannot consume the one-time 392 receipt."""
     asyncpg = pytest.importorskip("asyncpg")

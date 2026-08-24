@@ -486,7 +486,9 @@ Max files: 12
 6. Re-attest both selected 391 and 392 recoveries inside their atomic receipt
    transactions after locking the reviewed application relations and replaying
    only the exact, owner-replaceable trigger definitions that passed the closed
-   379 predicate. Do not require a normal migration role to lock `pg_proc`.
+   379 predicate. A concurrent function DDL commit between definition read and
+   replay must make PostgreSQL reject the stale catalog update and roll back the
+   recovery receipt. Do not require a normal migration role to lock `pg_proc`.
 
 ### Review Contract
 
@@ -637,9 +639,12 @@ can run, the runner enters that same atomic transaction, locks the four reviewed
 billing relations plus `schema_migrations`, reads the three required trigger
 definitions only when their bodies, execution metadata, and owner-replaceability
 match the closed 379 predicate, and replays those exact definitions. PostgreSQL
-holds the resulting function-row locks through the receipt, so competing
+holds the replayed function-row locks through the receipt, so later competing
 `CREATE OR REPLACE FUNCTION` or `ALTER FUNCTION` waits without requiring a
-normal migration role to lock `pg_catalog.pg_proc`. The runner then repeats the
+normal migration role to lock `pg_catalog.pg_proc`. If concurrent function DDL
+commits after the definition read but before its replay, PostgreSQL rejects the
+stale catalog tuple update; the complete atomic recovery rolls back with no
+receipt and preserves the concurrent definition. The runner then repeats the
 canonical 379 predicate for the exact state selected: `recovery_required` for
 391 and `schema_binding_required` for 392. Only 392 receives the
 transaction-local active-schema marker. It refuses to bind or receipt without
@@ -648,8 +653,9 @@ that marker, verifies the reviewed 391 body/configuration, pins its local
 the body/configuration postcondition before the normal runner records its
 digest. It changes no table rows. The application-relation locks exclude
 concurrent table, trigger, policy, constraint, index, rewrite, ledger, and
-receipt changes; the owner-replayed definitions close the named trigger-function
-DDL race. The observer allows no other execution metadata or function-local
+receipt changes; the owner-replayed definitions and PostgreSQL stale-tuple
+rejection fail closed for the named trigger-function DDL race. The observer
+allows no other execution metadata or function-local
 setting and rejects every non-`_RETURN` invoice rewrite rule as well as every
 extra row-level before-insert invoice trigger.
 
@@ -703,9 +709,10 @@ deployment sequence.
 - Make each 391/392 receipt conditional on the catalog still matching the
   canonical predicate inside its atomic transaction. The process-wide migration
   advisory lock serializes cooperative runners only; target relation locks plus
-  exact owner-replayed function definitions close the remaining named direct-DDL
-  race without broadening this recovery into a global migration framework or
-  requiring system-catalog write privileges.
+  exact owner-replayed function definitions and PostgreSQL's stale-tuple
+  rejection close the remaining named direct-DDL race without broadening this
+  recovery into a global migration framework or requiring system-catalog write
+  privileges.
 
 ## Deferred
 
@@ -735,9 +742,12 @@ Parked hardening: none.
   catalog proof fails before the function can be pinned; a second connection
   can drop the reviewed override constraint after the outer selector but before
   391 takes its locks; and second-session `CREATE OR REPLACE FUNCTION` and
-  `ALTER FUNCTION` operations time out while the preflight holds the validated
-  function rows. The same path passes as a non-superuser role that owns the
-  schema objects, proving no `pg_proc` table lock is required.
+  `ALTER FUNCTION` operations time out while the preflight holds the replayed
+  function rows. A forced stale definition read followed by a concurrently
+  committed replacement raises a PostgreSQL tuple-update conflict, records no
+  391 receipt, and leaves the replacement intact. The same path passes as a
+  non-superuser role that owns the schema objects, proving no `pg_proc` table
+  lock is required.
 - Historical target proof before the schema-binding predicate: a read-only
   `scripts/check_migration_content_integrity.py` receipt against the exact
   configured target showed 391's exact source digest and the then-current 379
@@ -764,10 +774,10 @@ Parked hardening: none.
 | `atlas_brain/storage/migrations/391_eom_commercial_billing_run_fence_recovery.sql` | 343 |
 | `atlas_brain/storage/migrations/392_eom_commercial_billing_run_fence_schema_binding.sql` | 123 |
 | `atlas_brain/storage/migrations/__init__.py` | 32 |
-| `atlas_brain/storage/migrations/reconciliation.py` | 1432 |
-| `plans/PR-H18-Commercial-Billing-379-Run-Fence-Recovery.md` | 773 |
-| `tests/test_commercial_billing_runs.py` | 1006 |
+| `atlas_brain/storage/migrations/reconciliation.py` | 1435 |
+| `plans/PR-H18-Commercial-Billing-379-Run-Fence-Recovery.md` | 783 |
+| `tests/test_commercial_billing_runs.py` | 1105 |
 | `tests/test_eom_render_profile.py` | 2 |
 | `tests/test_migration_content_integrity_preflight.py` | 571 |
 | `tests/test_migrations_runner.py` | 921 |
-| **Total** | **5227** |
+| **Total** | **5339** |

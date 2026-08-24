@@ -3658,7 +3658,10 @@ async def _migration_379_atomic_function_definitions(
     exact, already-validated definition instead takes the function row lock
     that conflicts with ``CREATE OR REPLACE FUNCTION`` and ``ALTER FUNCTION``.
     The definition is read and validated before replay, so an untrusted catalog
-    change can never be executed as migration SQL.
+    change can never be executed as migration SQL. If concurrent function DDL
+    commits after this read but before the replay, PostgreSQL rejects the stale
+    catalog tuple update; the surrounding atomic recovery then rolls back with
+    no migration receipt instead of overwriting that newer definition.
     """
 
     rows = [
