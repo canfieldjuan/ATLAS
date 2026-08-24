@@ -2391,6 +2391,20 @@ async def test_private_first_clean_booking_idempotent_replay_skips_calendar_side
     assert crm.first_clean_failed_calls == []
 
 
+def test_onboarding_welcome_asks_for_post_cleaning_quality_check():
+    """Future onboarding drafts invite a post-cleaning quality check."""
+    from atlas_brain.templates.email import format_onboarding_welcome
+
+    _, body = format_onboarding_welcome(client_name="Quality Check Lead")
+
+    assert (
+        "3. After we finish, please take a walk through the space and let us know if\n"
+        "anything needs attention. We'll take care of it."
+    ) in body
+    assert "Walk the space with your team lead at the start or end" not in body
+    assert "right away" not in body
+
+
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
     ("contact_email", "latest_intake_email", "expected_recipient", "expected_blocker"),
