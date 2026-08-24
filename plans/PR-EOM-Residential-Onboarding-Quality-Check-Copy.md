@@ -34,8 +34,8 @@ drafts only, under the operator's explicit copy direction in this session.
   `atlas_brain/services/crm_provider.py:3766-3789` and always invokes this
   renderer at `atlas_brain/services/crm_provider.py:3908-3912`.
 - Revised root cause: the old in-visit direction is wrong, and the first
-  proposed replacement accidentally made a clock promise while calling the
-  shared EOM first-clean template residential-only.
+  proposed replacement accidentally made a clock promise while the plan
+  misdescribed the shared EOM first-clean template as residential-only.
 - Revised required change surface: retain the same template and focused test;
   make the assurance non-temporal and state the existing shared EOM first-clean
   scope accurately in this plan and the PR body.
@@ -58,17 +58,15 @@ Max files: 3
 ### Review Contract
 
 - Acceptance criteria:
-  1. `format_onboarding_welcome()` renders point 3 as an after-cleaning,
-     non-temporal
-     walkthrough that asks the customer to report anything needing attention
+  1. `format_onboarding_welcome()` renders point 3 as a non-temporal,
+     after-cleaning walkthrough that asks the customer to report anything needing attention
      and says the team will take care of it; the focused renderer test settles
      the exact customer-visible text.
   2. The rendered body no longer contains the legacy `team lead at the start or
      end` instruction or `right away`; the same focused test settles both
      removals.
   3. The established shared EOM first-clean draft enqueue path still obtains its
-     subject
-     and body through `format_onboarding_welcome()` at
+     subject and body through `format_onboarding_welcome()` at
      `atlas_brain/services/crm_provider.py:3960-3962`; the existing enqueue
      regression remains in the focused test file.
 - Reachability proof: a first-clean booking reaches
@@ -141,14 +139,15 @@ Parked hardening: none.
 
 - Completed locally: focused onboarding-template regression selection
   (`7 passed, 219 deselected`) and `py_compile` for the changed Python template.
-- Pending before push: the repository's single pre-push mechanical review bundle
-  through `scripts/push_pr.sh`; the full suite remains a GitHub CI responsibility.
+- Pending before push: the repository's mandatory `scripts/push_pr.sh` review
+  wrapper, including its full unit-gate mirror for this exact update; GitHub CI
+  will independently run its required checks after the push.
 
 ## Estimated diff size
 
 | File | LOC |
 |---|---:|
 | `atlas_brain/templates/email/onboarding_welcome.py` | 4 |
-| `plans/PR-EOM-Residential-Onboarding-Quality-Check-Copy.md` | 154 |
+| `plans/PR-EOM-Residential-Onboarding-Quality-Check-Copy.md` | 153 |
 | `tests/test_eom_lead_conversion.py` | 14 |
-| **Total** | **172** |
+| **Total** | **171** |
