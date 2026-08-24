@@ -32,8 +32,8 @@ leave it out and let us know.
 instructions and come back to a finished space. If you'd rather be present
 for the first visit, that works too.
 
-3. Walk the space with your team lead at the start or end of the visit if
-you'd like - it's the fastest way to tell us what matters most to you.
+3. After we finish, please take a walk through the space and let us know if
+anything needs attention. We'll take care of it right away.
 
 4. After the first cleaning, tell us what you thought. We adjust to your
 feedback, and there's no long-term contract holding you here - we keep the
