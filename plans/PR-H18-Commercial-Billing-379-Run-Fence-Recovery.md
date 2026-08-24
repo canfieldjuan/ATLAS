@@ -558,6 +558,32 @@ run-isolation defect, or an EOM entrypoint unable to select its prerequisite.
   syntax/Ruff, plan/contract gates, and GitHub's required suite. The controlled
   PostgreSQL matrix and Unit Gate remain GitHub-owned.
 
+### Contract revision after final catalog/startup-attestation review
+
+- New evidence: the 379 predicate verifies each declared foreign key's catalog
+  shape and `convalidated` bit but does not inspect its PostgreSQL-owned
+  enforcement triggers. Separately, the full startup fence verifies 391/392
+  receipts but reduces a later current-379 `not_attested` runner result to a
+  warning, so durable receipts alone can admit a drifted recovered fence.
+- Revised root cause: the same authoritative 379 predicate omitted a physical
+  enforcement property of its declared foreign keys, while its recovered
+  startup consumer treated a historical receipt as proof of current catalog
+  safety.
+- Revised required change surface: make the 379 predicate require exactly four
+  internal, origin-enabled triggers for every declared foreign key and expose
+  that evidence in its operator-safe attestation payload. After recorded 391
+  and 392, the full receivables startup path must re-run that exact predicate
+  and require status `attested`; false or unreadable current evidence closes the
+  database and raises the existing commercial-billing availability error.
+- Revised explicit non-scope: do not alter immutable 391/392 SQL, ledger rows,
+  ordinary healthy 382-only startup, or convert unrelated migration warnings
+  into a global availability policy. This is the current-state consumer for the
+  existing 379 predicate, not a second migration coordinator.
+- Revised verification plan: add fake-runner and isolated PostgreSQL disabled-
+  foreign-key-trigger proof, direct startup false/error/healthy-path proof, and
+  exact-status default-helper proof. Keep the controlled PostgreSQL matrix and
+  full Unit Gate GitHub-owned.
+
 ## Scope (this PR)
 
 Ownership lane: h18-migration-content-integrity
@@ -578,11 +604,12 @@ Max files: 13
    signatures on the three billing lookup relations before either
    recovery can be selected.
 4. Add 392 to the already closed missed-call readiness set and make the full
-   Atlas enabled-receivables startup fence require it only after its 391
-   recovery predecessor is recorded, so neither production path can serve with
-   a 391-only recovered function while ordinary healthy 382-only databases
-   remain available; prove the staged 391-to-392 interaction, 386 ordering,
-   and rejection of unrecognized drift.
+   Atlas enabled-receivables startup fence require it and the current 379
+   `attested` predicate only after its 391 recovery predecessor is recorded, so
+   neither production path can serve with a 391-only or drifted recovered
+   function while ordinary healthy 382-only databases remain available; prove
+   the staged 391-to-392 interaction, 386 ordering, and rejection of
+   unrecognized drift.
 5. Enroll the dedicated disposable PostgreSQL regression in the existing
    migration job and add the new migration to existing EOM path coverage.
 6. Re-attest both selected 391 and 392 recoveries inside their atomic receipt
@@ -620,7 +647,8 @@ Max files: 13
     row security, policy, rewrite rule, or inherited child on a fence-read
     relation, missing required
     decision-table catalog member (including a
-    declared constraint, its exact `CHECK` predicate, or index), an unreviewed
+    declared constraint, its exact `CHECK` predicate, foreign-key enforcement
+    trigger set, or index), an unreviewed
     catalog member, an omitted 391 or 392
     `only=` selection, a 386 mismatch present at selection that does not
     independently attest as `recovery_required`, or an already recorded but
@@ -641,8 +669,8 @@ Max files: 13
     same disposable PostgreSQL regression.
   - [ ] The EOM missed-call readiness entrypoint explicitly selects 391 and 392,
     while the full enabled-receivables startup path always requires 382 and
-    requires 392 only after recorded 391. The relevant workflows run when its
-    migration, selector, or dedicated proof changes; settled by
+    requires 392 and a fresh 379 `attested` result only after recorded 391.
+    The relevant workflows run when its migration, selector, or dedicated proof changes; settled by
     `tests/test_eom_render_profile.py`,
     `tests/test_commercial_billing_runs.py`, and both workflow command/path
     assertions.
@@ -842,10 +870,11 @@ deployment sequence.
   recovery into a global migration framework or requiring system-catalog write
   privileges.
 - Require the named 392 schema-binding receipt after, and only after, 391 is
-  recorded at the full Atlas enabled-receivables startup fence; 382 remains
-  universally required. This preserves ordinary healthy 382-only startup,
-  existing warning behavior for unrelated generic migration failures, and the
-  staged recovery's own fail-closed prerequisite.
+  recorded at the full Atlas enabled-receivables startup fence, then re-attest
+  the current 379 catalog before serving; 382 remains universally required.
+  This preserves ordinary healthy 382-only startup, existing warning behavior
+  for unrelated generic migration failures, and the staged recovery's own
+  fail-closed prerequisite.
 
 ## Deferred
 
@@ -911,15 +940,15 @@ contract; no new hardening mechanism is introduced in this PR.
 |---|---:|
 | `.github/workflows/atlas_eom_lead_pipeline_checks.yml` | 4 |
 | `.github/workflows/atlas_migrations_runner_checks.yml` | 16 |
-| `atlas_brain/main.py` | 44 |
+| `atlas_brain/main.py` | 106 |
 | `atlas_brain/main_eom.py` | 4 |
 | `atlas_brain/storage/migrations/391_eom_commercial_billing_run_fence_recovery.sql` | 343 |
 | `atlas_brain/storage/migrations/392_eom_commercial_billing_run_fence_schema_binding.sql` | 123 |
 | `atlas_brain/storage/migrations/__init__.py` | 32 |
-| `atlas_brain/storage/migrations/reconciliation.py` | 1534 |
-| `plans/PR-H18-Commercial-Billing-379-Run-Fence-Recovery.md` | 925 |
-| `tests/test_commercial_billing_runs.py` | 1330 |
+| `atlas_brain/storage/migrations/reconciliation.py` | 1556 |
+| `plans/PR-H18-Commercial-Billing-379-Run-Fence-Recovery.md` | 954 |
+| `tests/test_commercial_billing_runs.py` | 1501 |
 | `tests/test_eom_render_profile.py` | 2 |
 | `tests/test_migration_content_integrity_preflight.py` | 615 |
-| `tests/test_migrations_runner.py` | 1001 |
-| **Total** | **5973** |
+| `tests/test_migrations_runner.py` | 1033 |
+| **Total** | **6289** |

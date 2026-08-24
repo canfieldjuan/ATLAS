@@ -1962,6 +1962,7 @@ async def test_full_atlas_migration_check_blocks_enabled_receivables_without_392
         "review_recovery_recorded",
         "run_fence_recovery_recorded",
         "schema_binding_recorded",
+        "run_fence_attested",
         "dedup_ready",
         "expected_events",
         "expected_ledger_migrations",
@@ -1970,12 +1971,12 @@ async def test_full_atlas_migration_check_blocks_enabled_receivables_without_392
         # Receivables always require 382. A recorded 391 changes the recovery
         # state and therefore makes its 392 schema-binding successor required.
         # An ordinary healthy catalog records neither reserved receipt.
-        (True, True, True, False, False, True, ["migrate", "ledger", "ledger", "recurring-ready"], "healthy"),
-        (False, True, True, False, False, True, ["migrate", "ledger", "ledger", "recurring-ready"], "healthy"),
-        (True, True, True, True, True, True, ["migrate", "ledger", "ledger", "ledger", "recurring-ready"], "recovered"),
-        (False, True, True, True, True, True, ["migrate", "ledger", "ledger", "ledger", "recurring-ready"], "recovered"),
-        (True, False, False, False, False, False, ["migrate"], "none"),
-        (False, False, False, False, False, False, ["migrate"], "none"),
+        (True, True, True, False, False, False, True, ["migrate", "ledger", "ledger", "recurring-ready"], "healthy"),
+        (False, True, True, False, False, False, True, ["migrate", "ledger", "ledger", "recurring-ready"], "healthy"),
+        (True, True, True, True, True, True, True, ["migrate", "ledger", "ledger", "ledger", "attested", "recurring-ready"], "recovered"),
+        (False, True, True, True, True, True, True, ["migrate", "ledger", "ledger", "ledger", "attested", "recurring-ready"], "recovered"),
+        (True, False, False, False, False, False, False, ["migrate"], "none"),
+        (False, False, False, False, False, False, False, ["migrate"], "none"),
     ),
 )
 async def test_full_atlas_migration_check_allows_recovered_or_disabled_receivables(
@@ -1984,6 +1985,7 @@ async def test_full_atlas_migration_check_allows_recovered_or_disabled_receivabl
     review_recovery_recorded: bool,
     run_fence_recovery_recorded: bool,
     schema_binding_recorded: bool,
+    run_fence_attested: bool,
     dedup_ready: bool,
     expected_events: list[str],
     expected_ledger_migrations: str,
@@ -2023,12 +2025,18 @@ async def test_full_atlas_migration_check_allows_recovered_or_disabled_receivabl
         events.append("recurring-ready")
         return dedup_ready
 
+    async def current_run_fence_attestation(pool: object) -> bool:
+        assert isinstance(pool, _Pool)
+        events.append("attested")
+        return run_fence_attested
+
     await main._run_database_migration_check(
         _Pool(),
         receivables_api_enabled=receivables_api_enabled,
         run_migrations_fn=fail_migrations,
         close_database_fn=close_database,
         recurring_dedup_ready_fn=recurring_ready,
+        commercial_billing_run_fence_attested_fn=current_run_fence_attestation,
     )
 
     assert events == expected_events
@@ -2045,6 +2053,131 @@ async def test_full_atlas_migration_check_allows_recovered_or_disabled_receivabl
         ]
     else:
         assert ledger_queries == []
+
+
+@pytest.mark.asyncio
+async def test_full_atlas_migration_check_blocks_recovered_receivables_when_379_is_no_longer_attested():
+    """Receipts alone cannot leave a drifted 379/391/392 fence serving."""
+    from atlas_brain import main
+
+    events: list[str] = []
+
+    class _Pool:
+        async def fetchval(self, query: str, *args: object) -> bool:
+            assert query == "SELECT EXISTS (SELECT 1 FROM schema_migrations WHERE name = $1)"
+            return args[0] in {
+                main._COMMERCIAL_BILLING_REVIEW_RECOVERY_MIGRATION,
+                main._COMMERCIAL_BILLING_RUN_FENCE_RECOVERY_MIGRATION,
+                main._COMMERCIAL_BILLING_RUN_FENCE_SCHEMA_BINDING_MIGRATION,
+            }
+
+    async def rejected_migrations(pool: object) -> None:
+        assert isinstance(pool, _Pool)
+        events.append("migrate")
+        raise RuntimeError("379 catalog is not attested")
+
+    async def current_run_fence_attestation(pool: object) -> bool:
+        assert isinstance(pool, _Pool)
+        events.append("attested")
+        return False
+
+    async def close_database() -> None:
+        events.append("close")
+
+    with pytest.raises(
+        main.CommercialBillingReviewRecoveryUnavailableError,
+        match="must remain currently attested",
+    ) as exc_info:
+        await main._run_database_migration_check(
+            _Pool(),
+            receivables_api_enabled=True,
+            run_migrations_fn=rejected_migrations,
+            close_database_fn=close_database,
+            commercial_billing_run_fence_attested_fn=current_run_fence_attestation,
+        )
+
+    assert isinstance(exc_info.value.__cause__, RuntimeError)
+    assert events == ["migrate", "attested", "close"]
+
+
+@pytest.mark.asyncio
+async def test_full_atlas_migration_check_fails_closed_when_current_379_attestation_errors():
+    """A read failure cannot degrade the recovered receivables fence to a warning."""
+    from atlas_brain import main
+
+    events: list[str] = []
+
+    class _Pool:
+        async def fetchval(self, query: str, *args: object) -> bool:
+            assert query == "SELECT EXISTS (SELECT 1 FROM schema_migrations WHERE name = $1)"
+            return args[0] in {
+                main._COMMERCIAL_BILLING_REVIEW_RECOVERY_MIGRATION,
+                main._COMMERCIAL_BILLING_RUN_FENCE_RECOVERY_MIGRATION,
+                main._COMMERCIAL_BILLING_RUN_FENCE_SCHEMA_BINDING_MIGRATION,
+            }
+
+    async def migrations_complete(pool: object) -> None:
+        assert isinstance(pool, _Pool)
+        events.append("migrate")
+
+    async def current_run_fence_attestation(pool: object) -> bool:
+        assert isinstance(pool, _Pool)
+        events.append("attested")
+        raise RuntimeError("379 attestation query failed")
+
+    async def close_database() -> None:
+        events.append("close")
+
+    with pytest.raises(
+        main.CommercialBillingReviewRecoveryUnavailableError,
+        match="could not be currently attested",
+    ) as exc_info:
+        await main._run_database_migration_check(
+            _Pool(),
+            receivables_api_enabled=True,
+            run_migrations_fn=migrations_complete,
+            close_database_fn=close_database,
+            commercial_billing_run_fence_attested_fn=current_run_fence_attestation,
+        )
+
+    assert isinstance(exc_info.value.__cause__, RuntimeError)
+    assert events == ["migrate", "attested", "close"]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("status", "expected"),
+    (("attested", True), ("not_attested", False), ("schema_binding_required", False)),
+)
+async def test_commercial_billing_run_fence_current_attestation_requires_exact_status(
+    monkeypatch,
+    status: str,
+    expected: bool,
+):
+    """The production default evaluates the authoritative 379 status exactly."""
+    from atlas_brain import main
+    from atlas_brain.storage.migrations import reconciliation
+
+    captured: dict[str, object] = {}
+
+    class _Attestation:
+        def __init__(self, observed_status: str) -> None:
+            self.status = observed_status
+
+    async def fake_attest(pool: object, migration_files) -> _Attestation:
+        captured["pool"] = pool
+        captured["migration_files"] = tuple(migration_files)
+        return _Attestation(status)
+
+    monkeypatch.setattr(reconciliation, "_attest_migration_379", fake_attest)
+    pool = object()
+
+    assert await main._commercial_billing_run_fence_is_currently_attested(pool) is expected
+    assert captured["pool"] is pool
+    assert any(
+        path.stem == main._COMMERCIAL_BILLING_RUN_FENCE_RECOVERY_MIGRATION
+        for path in captured["migration_files"]
+    )
 
 
 @pytest.mark.asyncio
@@ -2951,6 +3084,17 @@ async def _stage_historical_379_legacy_recovery_state(conn):
             "CREATE INDEX unreviewed_379_catalog_index "
             "ON commercial_billing_candidate_overrides (reason_code)",
         ),
+        (
+            "disabled review-decision snapshot foreign-key enforcement",
+            "ALTER TABLE commercial_billing_candidate_review_decisions "
+            "DISABLE TRIGGER ALL; "
+            "ALTER TABLE commercial_billing_candidate_review_decisions "
+            "ENABLE TRIGGER trg_default_commercial_billing_review_decision_fingerprint; "
+            "ALTER TABLE commercial_billing_candidate_review_decisions "
+            "ENABLE TRIGGER trg_prevent_commercial_billing_review_decision_mutation; "
+            "ALTER TABLE commercial_billing_candidate_review_decisions "
+            "ENABLE TRIGGER trg_prevent_commercial_billing_review_decision_truncate",
+        ),
     ],
 )
 async def test_real_postgres_historical_379_rejects_incomplete_catalog_before_391(
@@ -2970,6 +3114,33 @@ async def test_real_postgres_historical_379_rejects_incomplete_catalog_before_39
         foreign_schema = f"commercial_billing_foreign_{uuid4().hex}"
         try:
             await conn.execute(catalog_mutation.replace("{foreign_schema}", foreign_schema))
+            if case == "disabled review-decision snapshot foreign-key enforcement":
+                assert await conn.fetchval(
+                    """
+                    SELECT COUNT(*) = 4
+                       AND bool_and(trigger_state.tgisinternal)
+                       AND bool_and(trigger_state.tgenabled <> 'O'::\"char\")
+                    FROM pg_catalog.pg_trigger AS trigger_state
+                    WHERE trigger_state.tgconstraint = (
+                        SELECT constraint_state.oid
+                        FROM pg_catalog.pg_constraint AS constraint_state
+                        WHERE constraint_state.conrelid =
+                            'commercial_billing_candidate_review_decisions'::regclass
+                          AND constraint_state.conname =
+                            'commercial_billing_candidate_review_decisions_snapshot_fkey'
+                    )
+                    """
+                ) is True
+                assert await conn.fetchval(
+                    """
+                    SELECT COUNT(*) = 3
+                       AND bool_and(trigger_state.tgenabled = 'O'::\"char\")
+                    FROM pg_catalog.pg_trigger AS trigger_state
+                    WHERE trigger_state.tgrelid =
+                            'commercial_billing_candidate_review_decisions'::regclass
+                      AND NOT trigger_state.tgisinternal
+                    """
+                ) is True
             pool = _SchemaPool(conn, schema)
             migrations_dir = Path(__file__).parents[1] / "atlas_brain/storage/migrations"
 

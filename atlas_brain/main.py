@@ -67,6 +67,18 @@ class RecurringInvoiceDedupMigrationUnavailableError(_DatabaseMigrationFenceErro
     """A recurring-invoice writer cannot safely serve without period dedup."""
 
 
+async def _commercial_billing_run_fence_is_currently_attested(pool) -> bool:
+    """Read the current 379/391/392 catalog predicate for startup fencing."""
+    from .storage.migrations import MIGRATIONS_DIR
+    from .storage.migrations.reconciliation import _attest_migration_379
+
+    attestation = await _attest_migration_379(
+        pool,
+        sorted(MIGRATIONS_DIR.glob("*.sql")),
+    )
+    return attestation.status == "attested"
+
+
 def _setting_text(config: object, name: str) -> str:
     return str(getattr(config, name, "") or "").strip()
 
@@ -353,6 +365,7 @@ async def _run_database_migration_check(
     run_migrations_fn=None,
     close_database_fn=None,
     recurring_dedup_ready_fn=None,
+    commercial_billing_run_fence_attested_fn=None,
 ) -> None:
     """Run generic migrations, fencing unsafe writer-path failures.
 
@@ -375,6 +388,14 @@ async def _run_database_migration_check(
         recurring_ready = recurring_invoice_dedup_schema_ready
     else:
         recurring_ready = recurring_dedup_ready_fn
+    if commercial_billing_run_fence_attested_fn is None:
+        commercial_billing_run_fence_attested = (
+            _commercial_billing_run_fence_is_currently_attested
+        )
+    else:
+        commercial_billing_run_fence_attested = (
+            commercial_billing_run_fence_attested_fn
+        )
 
     migration_error = None
     try:
@@ -382,26 +403,43 @@ async def _run_database_migration_check(
     except Exception as exc:
         migration_error = exc
 
-    async def require_recorded(
-        migration_name: str,
+    async def require_ready(
+        ready: bool,
+        fence_name: str,
         error_cls: type[_DatabaseMigrationFenceError],
         message: str,
+        *,
+        cause: Exception | None = None,
     ) -> None:
-        if await _migration_is_recorded(pool, migration_name):
+        if ready:
             return
         try:
             await closer()
         except Exception as close_exc:
             logger.error(
                 "Error closing database after %s failure: %s",
-                migration_name,
+                fence_name,
                 close_exc,
                 exc_info=True,
             )
         error = error_cls(message)
+        if cause is not None:
+            raise error from cause
         if migration_error is not None:
             raise error from migration_error
         raise error
+
+    async def require_recorded(
+        migration_name: str,
+        error_cls: type[_DatabaseMigrationFenceError],
+        message: str,
+    ) -> None:
+        await require_ready(
+            await _migration_is_recorded(pool, migration_name),
+            migration_name,
+            error_cls,
+            message,
+        )
 
     if receivables_api_enabled:
         await require_recorded(
@@ -421,6 +459,26 @@ async def _run_database_migration_check(
                 CommercialBillingReviewRecoveryUnavailableError,
                 "Commercial billing run-fence schema binding must complete "
                 "before the enabled receivables API can start",
+            )
+            try:
+                run_fence_is_attested = await commercial_billing_run_fence_attested(
+                    pool
+                )
+            except Exception as exc:
+                await require_ready(
+                    False,
+                    "commercial billing run-fence recovery attestation",
+                    CommercialBillingReviewRecoveryUnavailableError,
+                    "Commercial billing run-fence recovery could not be "
+                    "currently attested before the enabled receivables API can start",
+                    cause=exc,
+                )
+            await require_ready(
+                run_fence_is_attested,
+                "commercial billing run-fence recovery attestation",
+                CommercialBillingReviewRecoveryUnavailableError,
+                "Commercial billing run-fence recovery must remain currently "
+                "attested before the enabled receivables API can start",
             )
 
     if receivables_api_enabled or auto_invoice_enabled:

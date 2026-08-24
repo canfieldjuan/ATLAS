@@ -1853,6 +1853,7 @@ class _CommercialBillingForwardRecoveryPool(_ForwardRecoveryPool):
             "no_unreviewed_billing_write_interceptors": True,
             "review_decision_default_trigger_ready": True,
             "required_billing_constraints_ready": True,
+            "foreign_key_enforcement_ready": True,
             "no_unreviewed_billing_constraints": True,
             "required_billing_indexes_ready": True,
             "no_unreviewed_billing_indexes": True,
@@ -1995,6 +1996,10 @@ class _CommercialBillingForwardRecoveryPool(_ForwardRecoveryPool):
             assert "IS DISTINCT FROM expected_column.type_modifier" in query
             assert "IS DISTINCT FROM expected_column.uses_type_default_collation" in query
             assert "required_constraints" in query
+            assert "constraint_trigger.tgconstraint = constraint_state.oid" in query
+            assert "constraint_trigger.tgisinternal" in query
+            assert "constraint_trigger.tgenabled = 'O'::\"char\"" in query
+            assert "foreign_key_enforcement_ready" in query
             assert "required_indexes" in query
             assert "index_state.indpred IS NULL AS has_no_predicate" in query
             assert "OR NOT actual_index.has_no_predicate" in query
@@ -2578,6 +2583,33 @@ async def test_379_forward_recovery_rejects_partial_required_billing_index_befor
     pool = _CommercialBillingForwardRecoveryPool()
     commercial_record = _stage_historical_379_forward_recovery(tmp_path, pool)
     pool.commercial_billing_catalog["required_billing_indexes_ready"] = False
+
+    with pytest.raises(PendingMigrationContentIntegrityError, match="missing_source="):
+        await run_migrations(
+            pool,
+            migrations_dir=tmp_path,
+            only={commercial_record.recovery_migration_name},
+        )
+
+    assert pool.commercial_recovery_attempts == 0
+    assert pool.applied_sql == []
+    assert pool.inserted_with_digest == []
+    assert pool.commercial_billing_catalog["function_body"] == _legacy_379_function_body()
+
+
+@pytest.mark.asyncio
+async def test_379_forward_recovery_rejects_disabled_foreign_key_enforcement_before_391(
+    tmp_path,
+):
+    """A declared FK is unsafe when its internal enforcement triggers are off."""
+    from atlas_brain.storage.migrations import (
+        PendingMigrationContentIntegrityError,
+        run_migrations,
+    )
+
+    pool = _CommercialBillingForwardRecoveryPool()
+    commercial_record = _stage_historical_379_forward_recovery(tmp_path, pool)
+    pool.commercial_billing_catalog["foreign_key_enforcement_ready"] = False
 
     with pytest.raises(PendingMigrationContentIntegrityError, match="missing_source="):
         await run_migrations(

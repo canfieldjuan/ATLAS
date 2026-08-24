@@ -305,6 +305,7 @@ class MissingSourceForwardRecoveryMigrationReconciliationAttestation:
     review_decision_default_function_body_ready: bool
     history_guard_function_bodies_ready: bool
     required_billing_constraints_ready: bool
+    foreign_key_enforcement_ready: bool
     no_unreviewed_billing_constraints: bool
     required_billing_indexes_ready: bool
     no_unreviewed_billing_indexes: bool
@@ -416,6 +417,7 @@ class MissingSourceForwardRecoveryMigrationReconciliationAttestation:
             "required_billing_constraints_ready": (
                 self.required_billing_constraints_ready
             ),
+            "foreign_key_enforcement_ready": self.foreign_key_enforcement_ready,
             "no_unreviewed_billing_constraints": (
                 self.no_unreviewed_billing_constraints
             ),
@@ -3048,6 +3050,21 @@ async def _migration_379_catalog_evidence(executor: Any) -> Mapping[str, object]
                 constraint_state.condeferred,
                 constraint_state.convalidated,
                 CASE
+                    WHEN constraint_state.contype = 'f' THEN COALESCE(
+                        (
+                            SELECT COUNT(*) = 4
+                               AND bool_and(constraint_trigger.tgisinternal)
+                               AND bool_and(
+                                   constraint_trigger.tgenabled = 'O'::"char"
+                               )
+                            FROM pg_catalog.pg_trigger AS constraint_trigger
+                            WHERE constraint_trigger.tgconstraint = constraint_state.oid
+                        ),
+                        FALSE
+                    )
+                    ELSE TRUE
+                END AS foreign_key_enforcement_ready,
+                CASE
                     WHEN constraint_state.contype = 'c' THEN regexp_replace(
                         lower(
                             pg_catalog.pg_get_expr(
@@ -3414,6 +3431,7 @@ async def _migration_379_catalog_evidence(executor: Any) -> Mapping[str, object]
                        OR actual_constraint.condeferrable
                        OR actual_constraint.condeferred
                        OR NOT actual_constraint.convalidated
+                       OR NOT actual_constraint.foreign_key_enforcement_ready
                 )
                 AND NOT EXISTS (
                     SELECT 1
@@ -3669,6 +3687,7 @@ async def _attest_migration_379(
             bool(catalog.get("review_decision_default_trigger_ready")),
             review_decision_default_function_body_ready,
             bool(catalog.get("required_billing_constraints_ready")),
+            bool(catalog.get("foreign_key_enforcement_ready")),
             bool(catalog.get("no_unreviewed_billing_constraints")),
             bool(catalog.get("required_billing_indexes_ready")),
             bool(catalog.get("no_unreviewed_billing_indexes")),
@@ -3699,6 +3718,9 @@ async def _attest_migration_379(
         history_guard_function_bodies_ready=history_guard_function_bodies_ready,
         required_billing_constraints_ready=bool(
             catalog.get("required_billing_constraints_ready")
+        ),
+        foreign_key_enforcement_ready=bool(
+            catalog.get("foreign_key_enforcement_ready")
         ),
         no_unreviewed_billing_constraints=bool(
             catalog.get("no_unreviewed_billing_constraints")
