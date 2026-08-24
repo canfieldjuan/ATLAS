@@ -195,7 +195,7 @@ run-isolation defect, or an EOM entrypoint unable to select its prerequisite.
   The checked function source and the installed trigger are not joined by their
   PostgreSQL function OIDs.
 - Revised required change surface: expose every trigger's `tgfoid`, resolve the
-  three declared zero-argument trigger functions in `current_schema()`, and
+  four declared zero-argument trigger functions in `current_schema()`, and
   require each required trigger to reference its corresponding OID. Add fake
   classifier coverage and isolated PostgreSQL foreign-schema same-name
   function mutations for both the invoice fence and an append-only history
@@ -462,6 +462,46 @@ run-isolation defect, or an EOM entrypoint unable to select its prerequisite.
   authorized release action, and the independently known 386 recovery stays
   unresolved.
 
+### Contract revision after fence-input write-interceptor review
+
+- New evidence: a current Codex blocker demonstrates that the observer rejects
+  rules, policies, RLS, and inheritance on the three tables read by the
+  recovered fence, but does not close their non-internal `pg_trigger` set. A
+  `BEFORE INSERT` trigger on
+  `commercial_billing_candidate_review_decisions` can rewrite an excluded
+  decision to included before it becomes evidence for the recovered fence,
+  while the prior catalog predicate still admits 391/392.
+- Revised root cause: the closed billing catalog proves read interception but
+  not write interception on the same behavior-driving row sources. The known
+  append-only history triggers are attested for identity and body, yet extra
+  triggers on the candidate, decision, or override relations remain outside the
+  recovery admission predicate.
+- Revised required change surface: require every non-internal trigger on each
+  fence-input relation to match one source-declared trigger signature (relation,
+  name, current-schema function OID/name, type, enabled state, and
+  unconditional qualification), and attest/replay that function's exact body
+  and execution metadata. Require the review-fingerprint default trigger's
+  presence as well as rejecting extras. No trigger is declared for candidates;
+  review decisions admit the exact review-fingerprint default plus two
+  append-only guards, and overrides admit only their two append-only guards.
+  Include the new evidence boolean and default-function body evidence in the
+  read-only payload and require both for both recovery states. Add fake
+  preflight/runner zero-mutation proof and isolated PostgreSQL probes spanning
+  all three tables and before/after, insert/update/delete trigger forms.
+- Revised explicit non-scope: do not create a generic trigger-management
+  framework, alter immutable 391/392 source, or infer that an unreviewed
+  trigger is harmless from its event type. The upstream admission boundary
+  rejects it before any recovery SQL or ledger receipt.
+- Closure declaration — fence-input write triggers: **CLOSED**. Membership is
+  the five final source-declared trigger signatures from
+  `382_commercial_billing_candidate_overrides.sql`, **ENUMERATED** in
+  `required_billing_write_triggers` because the retained source files are immutable
+  evidence rather than a runtime dependency. Any missing default trigger or
+  trigger outside that set, including a candidate trigger or a same-name trigger
+  with mismatched OID, type, condition, or enabled state, fails closed to
+  `not_attested`; recovery is the unsafe side because it could admit rewritten
+  financial-review evidence.
+
 ## Scope (this PR)
 
 Ownership lane: h18-migration-content-integrity
@@ -476,7 +516,9 @@ Max files: 12
    then bind that exact recovered function to the active schema through the
    single atomic, forward-only 392 receipt.
 3. Close the invoice execution path by rejecting unreviewed row-level
-   before-insert triggers and non-`_RETURN` invoice rewrite rules before either
+   before-insert triggers and non-`_RETURN` invoice rewrite rules, and close
+   every fence-input write path by allowing only exact source-declared trigger
+   signatures on the three billing lookup relations before either
    recovery can be selected.
 4. Add 392 to the already closed missed-call readiness set so the production
    EOM migration entrypoint can select it deliberately; prove the staged
@@ -497,8 +539,8 @@ Max files: 12
     391 catalog without 392 is `schema_binding_required`, and a target is
     `attested` only after exact 391 and 392 digest receipts, the run-scoped
     fence body, its active-schema `search_path`, and both immutable
-    history-guard bodies; no state claims the unavailable historical source was
-    recovered. Settled by
+    history-guard bodies plus the review-fingerprint default body; no state
+    claims the unavailable historical source was recovered. Settled by
     `tests/test_migration_content_integrity_preflight.py` and the controlled
     target preflight recorded in #2476.
   - [ ] A legacy 379 state with selected 391 runs only 391 under the existing
@@ -507,9 +549,11 @@ Max files: 12
     leaves ordinary pending SQL blocked while either recovery or 386 remains
     unresolved; settled by `tests/test_migrations_runner.py`.
   - [ ] An unknown discrepancy, changed legacy fence hash, altered history
-    guard body, conditional or foreign-schema same-name required trigger
-    function, an unreviewed row-level `BEFORE INSERT` or rewrite-rule invoice
-    interceptor, non-default execution metadata, a missing/incorrect schema
+    guard or review-fingerprint-default body, conditional or foreign-schema
+    same-name required trigger function, a missing source-declared default
+    trigger, an unreviewed non-internal trigger on any fence-input relation,
+    an unreviewed row-level `BEFORE INSERT` or rewrite-rule invoice interceptor,
+    non-default execution metadata, a missing/incorrect schema
     pin, or any other function-local setting on a required trigger function,
     missing, retagged, nullable, or unreviewed behavior-driving billing column,
     row security, policy, rewrite rule, or inherited child on a fence-read
@@ -542,7 +586,7 @@ Max files: 12
   commercial billing invoice database fence, and EOM migration CI coverage.
 - Risk areas: financial run isolation, migration ordering, wrong-target recovery,
   atomicity, interrupted retry, source/digest drift, and mixed-version rollback.
-- Reviewer rules triggered: R1, R2, R4, R5, R8, R10, R12, R14.
+- Reviewer rules triggered: R1, R2, R4, R5, R8, R10, R12, R13, R14.
 
 ### Boundary-change enumeration
 
@@ -564,9 +608,10 @@ Max files: 12
   predicates/declared indexes/no-unreviewed catalog members/exact user-column
   type-and-nullability set/no query-rewriting control or inherited child on
   fence-read relations/
-  closed invoice row-level `BEFORE INSERT` and rewrite-rule interceptor set/unconditional triggers bound to
-  expected current-schema function OIDs/current-schema
-  history-guard `pg_proc.prosrc` SHA-256 values/exact trigger-function
+  closed invoice row-level `BEFORE INSERT` and rewrite-rule interceptor set/
+  closed fence-input non-internal trigger set/unconditional triggers bound to
+  expected current-schema function OIDs/current-schema history-guard and
+  review-fingerprint-default `pg_proc.prosrc` SHA-256 values/exact trigger-function
   execution metadata (PL/pgSQL, security-invoker/default flags, and an exact
   staged empty-or-active-schema `proconfig`), 392's independent source/receipt
   and active-schema pin, 386's independently attested
@@ -636,7 +681,7 @@ digest in the same transaction.
 
 Both selected recoveries are `atomic-bookkeeping`. Before either 391 or 392 SQL
 can run, the runner enters that same atomic transaction, locks the four reviewed
-billing relations plus `schema_migrations`, reads the three required trigger
+billing relations plus `schema_migrations`, reads the four required trigger
 definitions only when their bodies, execution metadata, and owner-replaceability
 match the closed 379 predicate, and replays those exact definitions. PostgreSQL
 holds the replayed function-row locks through the receipt, so later competing
@@ -657,7 +702,10 @@ receipt changes; the owner-replayed definitions and PostgreSQL stale-tuple
 rejection fail closed for the named trigger-function DDL race. The observer
 allows no other execution metadata or function-local
 setting and rejects every non-`_RETURN` invoice rewrite rule as well as every
-extra row-level before-insert invoice trigger.
+extra row-level before-insert invoice trigger. It also rejects every
+non-internal trigger on a fence-input relation unless it is one of the exact,
+source-declared history guards or review-fingerprint default trigger, and
+refuses a catalog where that required default trigger is absent.
 
 The selector remains closed rather than becoming a generic exception system.
 It may choose 391 only for the exact known legacy state, then may choose 392
@@ -690,6 +738,12 @@ deployment sequence.
   PostgreSQL execution points can rewrite or suppress an invoice before the
   reviewed fence. Statement triggers and unrelated invoice mechanisms are not
   silently claimed as attested by this recovery.
+- Reject every non-internal trigger on the three relations read by the recovered
+  fence unless it exactly matches a source-declared history guard or
+  review-fingerprint default trigger, including that function's exact body and
+  metadata. Unlike the invoice path, an unreviewed trigger on a lookup relation
+  can alter durable review evidence before it is read, so event type does not
+  provide a safe carve-out.
 - Require the exact source-backed user-column set for the three billing
   relations, including each base type, type modifier, default collation, and
   nullability, before treating a 379 catalog as safe to recover or attested.
@@ -701,8 +755,8 @@ deployment sequence.
 - Reject any traditional inheritance child of the three tables read by the
   recovered fence. A parent scan includes those rows, but a parent table's
   uniqueness and mutation guards do not constrain the child catalog.
-- Require the exact source-implied execution metadata for all three trigger
-  functions. The two history guards retain empty function-local configuration;
+- Require the exact source-implied execution metadata for all four trigger
+  functions. The review-fingerprint default and two history guards retain empty function-local configuration;
   the recovered invoice fence transitions only from empty to its exact active-
   schema `search_path` under 392's own receipt. `prosrc` and OID equality alone
   do not constrain ambient caller resolution or a changed security context.
@@ -774,10 +828,10 @@ Parked hardening: none.
 | `atlas_brain/storage/migrations/391_eom_commercial_billing_run_fence_recovery.sql` | 343 |
 | `atlas_brain/storage/migrations/392_eom_commercial_billing_run_fence_schema_binding.sql` | 123 |
 | `atlas_brain/storage/migrations/__init__.py` | 32 |
-| `atlas_brain/storage/migrations/reconciliation.py` | 1435 |
-| `plans/PR-H18-Commercial-Billing-379-Run-Fence-Recovery.md` | 783 |
-| `tests/test_commercial_billing_runs.py` | 1105 |
+| `atlas_brain/storage/migrations/reconciliation.py` | 1534 |
+| `plans/PR-H18-Commercial-Billing-379-Run-Fence-Recovery.md` | 837 |
+| `tests/test_commercial_billing_runs.py` | 1224 |
 | `tests/test_eom_render_profile.py` | 2 |
-| `tests/test_migration_content_integrity_preflight.py` | 571 |
-| `tests/test_migrations_runner.py` | 921 |
-| **Total** | **5339** |
+| `tests/test_migration_content_integrity_preflight.py` | 614 |
+| `tests/test_migrations_runner.py` | 1000 |
+| **Total** | **5733** |

@@ -1850,6 +1850,8 @@ class _CommercialBillingForwardRecoveryPool(_ForwardRecoveryPool):
             "required_columns_ready": True,
             "no_unreviewed_billing_columns": True,
             "no_unreviewed_billing_read_interceptors": True,
+            "no_unreviewed_billing_write_interceptors": True,
+            "review_decision_default_trigger_ready": True,
             "required_billing_constraints_ready": True,
             "no_unreviewed_billing_constraints": True,
             "required_billing_indexes_ready": True,
@@ -1860,6 +1862,9 @@ class _CommercialBillingForwardRecoveryPool(_ForwardRecoveryPool):
             "no_unreviewed_invoice_rewrite_interceptors": True,
             "trigger_function_execution_metadata_ready": True,
             "invoice_fence_function_schema_binding_ready": False,
+            "review_decision_default_function_body": _history_379_guard_function_body(
+                "default_commercial_billing_review_fingerprint"
+            ),
             "review_decision_history_guard_function_body": (
                 _history_379_guard_function_body(
                     "prevent_commercial_billing_review_decision_mutation"
@@ -1927,6 +1932,11 @@ class _CommercialBillingForwardRecoveryPool(_ForwardRecoveryPool):
                 in query
             )
             function_bodies = {
+                "default_commercial_billing_review_fingerprint": (
+                    self.commercial_billing_catalog[
+                        "review_decision_default_function_body"
+                    ]
+                ),
                 "prevent_commercial_billing_candidate_override_mutation": (
                     self.commercial_billing_catalog[
                         "override_history_guard_function_body"
@@ -1966,6 +1976,11 @@ class _CommercialBillingForwardRecoveryPool(_ForwardRecoveryPool):
             assert "no_unreviewed_billing_columns" in query
             assert "unreviewed_billing_read_interceptors" in query
             assert "no_unreviewed_billing_read_interceptors" in query
+            assert "unreviewed_billing_write_interceptors" in query
+            assert "no_unreviewed_billing_write_interceptors" in query
+            assert "required_billing_write_triggers" in query
+            assert "default_commercial_billing_review_fingerprint" in query
+            assert "review_decision_default_trigger_ready" in query
             assert "FROM pg_catalog.pg_rewrite AS rule_state" in query
             assert "FROM pg_catalog.pg_policy AS policy_state" in query
             assert "FROM pg_catalog.pg_inherits AS inheritance_state" in query
@@ -1987,6 +2002,8 @@ class _CommercialBillingForwardRecoveryPool(_ForwardRecoveryPool):
             assert "trigger_state.tgqual" in query
             assert "actual_trigger.tgfoid = expected_trigger.function_oid" in query
             assert "actual_trigger.tgqual IS NULL" in query
+            assert "expected_trigger.function_oid = interceptor.tgfoid" in query
+            assert "expected_trigger.trigger_type = interceptor.tgtype" in query
             assert "trigger_state.tgfoid = function_state.oid" in query
             assert "trigger_state.tgqual IS NULL" in query
             assert "unreviewed_invoice_insert_interceptors" in query
@@ -1999,13 +2016,14 @@ class _CommercialBillingForwardRecoveryPool(_ForwardRecoveryPool):
             assert "invoice_fence_function_schema_binding_ready" in query
             assert "reviewed_trigger_function_execution_metadata" in query
             assert "trigger_function_execution_metadata_ready" in query
-            assert "COUNT(*) = 3" in query
+            assert "COUNT(*) = 4" in query
             assert "function_state.prosecdef" in query
             assert "function_state.proconfig" in query
             assert "language_state.lanname AS language_name" in query
             assert "function_state.prosupport IS DISTINCT FROM 0::pg_catalog.oid" in query
             assert "review_decision_history_guard_function_body" in query
             assert "override_history_guard_function_body" in query
+            assert "review_decision_default_function_body" in query
             return _AsyncpgRecordLike(self.commercial_billing_catalog)
         return await super().fetchrow(query, *args)
 
@@ -2030,7 +2048,10 @@ class _CommercialBillingForwardRecoveryPool(_ForwardRecoveryPool):
                     self.commercial_billing_catalog["no_unreviewed_billing_indexes"] = (
                         False
                     )
-        if query.startswith("CREATE OR REPLACE FUNCTION prevent_commercial_billing_"):
+        if query.startswith((
+            "CREATE OR REPLACE FUNCTION default_commercial_billing_",
+            "CREATE OR REPLACE FUNCTION prevent_commercial_billing_",
+        )):
             self.commercial_function_replay_attempts += 1
         if "SELECT pg_catalog.set_config(" in query:
             self.commercial_schema_binding_attestation_markers += 1
@@ -2338,7 +2359,7 @@ async def test_379_recovery_rechecks_catalog_inside_atomic_receipt_boundary(
 
     assert pool.commercial_recovery_preflight_attempts == 1
     assert pool.commercial_schema_binding_preflight_attempts == 0
-    assert pool.commercial_function_replay_attempts == 3
+    assert pool.commercial_function_replay_attempts == 4
     assert pool.commercial_recovery_attempts == 0
     assert pool.commercial_schema_binding_attempts == 0
     assert pool.commercial_schema_binding_attestation_markers == 0
@@ -2584,6 +2605,64 @@ async def test_379_forward_recovery_rejects_unreviewed_billing_read_interceptor_
     commercial_record = _stage_historical_379_forward_recovery(tmp_path, pool)
     pool.commercial_billing_catalog[
         "no_unreviewed_billing_read_interceptors"
+    ] = False
+
+    with pytest.raises(PendingMigrationContentIntegrityError, match="missing_source="):
+        await run_migrations(
+            pool,
+            migrations_dir=tmp_path,
+            only={commercial_record.recovery_migration_name},
+        )
+
+    assert pool.commercial_recovery_attempts == 0
+    assert pool.applied_sql == []
+    assert pool.inserted_with_digest == []
+    assert pool.commercial_billing_catalog["function_body"] == _legacy_379_function_body()
+
+
+@pytest.mark.asyncio
+async def test_379_forward_recovery_rejects_unreviewed_billing_write_interceptor_before_391(
+    tmp_path,
+):
+    """An extra trigger on a fence-input relation cannot admit recovery."""
+    from atlas_brain.storage.migrations import (
+        PendingMigrationContentIntegrityError,
+        run_migrations,
+    )
+
+    pool = _CommercialBillingForwardRecoveryPool()
+    commercial_record = _stage_historical_379_forward_recovery(tmp_path, pool)
+    pool.commercial_billing_catalog[
+        "no_unreviewed_billing_write_interceptors"
+    ] = False
+
+    with pytest.raises(PendingMigrationContentIntegrityError, match="missing_source="):
+        await run_migrations(
+            pool,
+            migrations_dir=tmp_path,
+            only={commercial_record.recovery_migration_name},
+        )
+
+    assert pool.commercial_recovery_attempts == 0
+    assert pool.applied_sql == []
+    assert pool.inserted_with_digest == []
+    assert pool.commercial_billing_catalog["function_body"] == _legacy_379_function_body()
+
+
+@pytest.mark.asyncio
+async def test_379_forward_recovery_rejects_missing_default_review_trigger_before_391(
+    tmp_path,
+):
+    """The source-declared review-fingerprint trigger is required, not optional."""
+    from atlas_brain.storage.migrations import (
+        PendingMigrationContentIntegrityError,
+        run_migrations,
+    )
+
+    pool = _CommercialBillingForwardRecoveryPool()
+    commercial_record = _stage_historical_379_forward_recovery(tmp_path, pool)
+    pool.commercial_billing_catalog[
+        "review_decision_default_trigger_ready"
     ] = False
 
     with pytest.raises(PendingMigrationContentIntegrityError, match="missing_source="):

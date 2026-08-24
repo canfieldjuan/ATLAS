@@ -93,6 +93,7 @@ class HistoricalMissingSourceForwardRecoveryReconciliation:
     successor_receipts: tuple[HistoricalNullDigestMigrationReceipt, ...]
     legacy_function_body_sha256: str
     recovered_function_body_template_sha256: str
+    review_decision_default_function_body_sha256: str
     review_decision_history_guard_function_body_sha256: str
     override_history_guard_function_body_sha256: str
     recovery_migration_name: str
@@ -299,6 +300,9 @@ class MissingSourceForwardRecoveryMigrationReconciliationAttestation:
     required_billing_columns_ready: bool
     no_unreviewed_billing_columns: bool
     no_unreviewed_billing_read_interceptors: bool
+    no_unreviewed_billing_write_interceptors: bool
+    review_decision_default_trigger_ready: bool
+    review_decision_default_function_body_ready: bool
     history_guard_function_bodies_ready: bool
     required_billing_constraints_ready: bool
     no_unreviewed_billing_constraints: bool
@@ -396,6 +400,15 @@ class MissingSourceForwardRecoveryMigrationReconciliationAttestation:
             "no_unreviewed_billing_columns": self.no_unreviewed_billing_columns,
             "no_unreviewed_billing_read_interceptors": (
                 self.no_unreviewed_billing_read_interceptors
+            ),
+            "no_unreviewed_billing_write_interceptors": (
+                self.no_unreviewed_billing_write_interceptors
+            ),
+            "review_decision_default_trigger_ready": (
+                self.review_decision_default_trigger_ready
+            ),
+            "review_decision_default_function_body_ready": (
+                self.review_decision_default_function_body_ready
             ),
             "history_guard_function_bodies_ready": (
                 self.history_guard_function_bodies_ready
@@ -872,6 +885,9 @@ MIGRATION_379_COMMERCIAL_BILLING_RUN_FENCE_FORWARD_RECOVERY = (
         ),
         recovered_function_body_template_sha256=(
             "04b99e4a3ff2b18f2d58d3e1e610a4b2079fcbbd0d5ce51d97c212daaefd0477"
+        ),
+        review_decision_default_function_body_sha256=(
+            "a07d01aa1ea28b8817d6e0f8d26195f653cfb39328aea0cbb54db2a44b7b4d54"
         ),
         review_decision_history_guard_function_body_sha256=(
             "a417f49d8bd7c62ee4dbc80348014fb2d251809c79c4a190f2b17c34182c896c"
@@ -3146,6 +3162,7 @@ async def _migration_379_catalog_evidence(executor: Any) -> Mapping[str, object]
               ON language_state.oid = function_state.prolang
             WHERE namespace_state.nspname = pg_catalog.current_schema()
               AND function_state.proname IN (
+                  'default_commercial_billing_review_fingerprint',
                   'prevent_commercial_billing_invoice_for_excluded_candidate',
                   'prevent_commercial_billing_review_decision_mutation',
                   'prevent_commercial_billing_candidate_override_mutation'
@@ -3163,7 +3180,7 @@ async def _migration_379_catalog_evidence(executor: Any) -> Mapping[str, object]
         ),
         reviewed_trigger_function_execution_metadata AS (
             SELECT
-                COUNT(*) = 3
+                COUNT(*) = 4
                 AND NOT EXISTS (
                     SELECT 1
                     FROM target_functions AS function_state
@@ -3278,6 +3295,41 @@ async def _migration_379_catalog_evidence(executor: Any) -> Mapping[str, object]
             LEFT JOIN target_functions AS expected_function
               ON expected_function.proname = expected_trigger.function_name
         ),
+        required_billing_write_triggers AS (
+            SELECT relation_name,
+                   trigger_name,
+                   function_name,
+                   function_oid,
+                   trigger_type
+            FROM required_history_triggers
+            UNION ALL
+            SELECT
+                'commercial_billing_candidate_review_decisions',
+                'trg_default_commercial_billing_review_decision_fingerprint',
+                'default_commercial_billing_review_fingerprint',
+                expected_function.oid,
+                7
+            FROM target_functions AS expected_function
+            WHERE expected_function.proname =
+                'default_commercial_billing_review_fingerprint'
+        ),
+        unreviewed_billing_write_interceptors AS (
+            SELECT NOT EXISTS (
+                SELECT 1
+                FROM target_triggers AS interceptor
+                JOIN billing_catalog_relations AS billing_relation
+                  ON billing_relation.relname = interceptor.relation_name
+                LEFT JOIN required_billing_write_triggers AS expected_trigger
+                  ON expected_trigger.relation_name = interceptor.relation_name
+                 AND expected_trigger.trigger_name = interceptor.trigger_name
+                 AND expected_trigger.function_name = interceptor.function_name
+                 AND expected_trigger.function_oid = interceptor.tgfoid
+                 AND expected_trigger.trigger_type = interceptor.tgtype
+                 AND interceptor.tgenabled = 'O'
+                 AND interceptor.tgqual IS NULL
+                WHERE expected_trigger.trigger_name IS NULL
+            ) AS no_unreviewed_billing_write_interceptors
+        ),
         unreviewed_invoice_insert_interceptors AS (
             SELECT NOT EXISTS (
                 SELECT 1
@@ -3329,6 +3381,10 @@ async def _migration_379_catalog_evidence(executor: Any) -> Mapping[str, object]
                 SELECT no_unreviewed_billing_read_interceptors
                 FROM unreviewed_billing_read_interceptors
             ) AS no_unreviewed_billing_read_interceptors,
+            (
+                SELECT no_unreviewed_billing_write_interceptors
+                FROM unreviewed_billing_write_interceptors
+            ) AS no_unreviewed_billing_write_interceptors,
             (
                 NOT EXISTS (
                     SELECT 1
@@ -3413,6 +3469,21 @@ async def _migration_379_catalog_evidence(executor: Any) -> Mapping[str, object]
             EXISTS (
                 SELECT 1
                 FROM target_triggers AS trigger_state
+                JOIN target_functions AS function_state
+                  ON trigger_state.tgfoid = function_state.oid
+                WHERE trigger_state.relation_name =
+                    'commercial_billing_candidate_review_decisions'
+                  AND trigger_state.trigger_name =
+                      'trg_default_commercial_billing_review_decision_fingerprint'
+                  AND trigger_state.function_name =
+                      'default_commercial_billing_review_fingerprint'
+                  AND trigger_state.tgtype = 7
+                  AND trigger_state.tgenabled = 'O'
+                  AND trigger_state.tgqual IS NULL
+            ) AS review_decision_default_trigger_ready,
+            EXISTS (
+                SELECT 1
+                FROM target_triggers AS trigger_state
                 JOIN target_function AS function_state
                   ON trigger_state.tgfoid = function_state.oid
                 WHERE trigger_state.relation_name = 'invoices'
@@ -3440,6 +3511,12 @@ async def _migration_379_catalog_evidence(executor: Any) -> Mapping[str, object]
                 SELECT invoice_fence_function_schema_binding_ready
                 FROM invoice_fence_schema_binding
             ) AS invoice_fence_function_schema_binding_ready,
+            (
+                SELECT function_state.prosrc
+                FROM target_functions AS function_state
+                WHERE function_state.proname =
+                    'default_commercial_billing_review_fingerprint'
+            ) AS review_decision_default_function_body,
             (
                 SELECT function_state.prosrc
                 FROM target_functions AS function_state
@@ -3518,6 +3595,11 @@ async def _attest_migration_379(
     function_body_sha256 = _catalog_function_body_sha256(
         catalog.get("function_body")
     )
+    review_decision_default_function_body_ready = (
+        _catalog_function_body_sha256(
+            catalog.get("review_decision_default_function_body")
+        ) == record.review_decision_default_function_body_sha256
+    )
     history_guard_function_bodies_ready = all((
         _catalog_function_body_sha256(
             catalog.get("review_decision_history_guard_function_body")
@@ -3583,6 +3665,9 @@ async def _attest_migration_379(
             bool(catalog.get("required_columns_ready")),
             bool(catalog.get("no_unreviewed_billing_columns")),
             bool(catalog.get("no_unreviewed_billing_read_interceptors")),
+            bool(catalog.get("no_unreviewed_billing_write_interceptors")),
+            bool(catalog.get("review_decision_default_trigger_ready")),
+            review_decision_default_function_body_ready,
             bool(catalog.get("required_billing_constraints_ready")),
             bool(catalog.get("no_unreviewed_billing_constraints")),
             bool(catalog.get("required_billing_indexes_ready")),
@@ -3601,6 +3686,15 @@ async def _attest_migration_379(
         ),
         no_unreviewed_billing_read_interceptors=bool(
             catalog.get("no_unreviewed_billing_read_interceptors")
+        ),
+        no_unreviewed_billing_write_interceptors=bool(
+            catalog.get("no_unreviewed_billing_write_interceptors")
+        ),
+        review_decision_default_trigger_ready=bool(
+            catalog.get("review_decision_default_trigger_ready")
+        ),
+        review_decision_default_function_body_ready=(
+            review_decision_default_function_body_ready
         ),
         history_guard_function_bodies_ready=history_guard_function_bodies_ready,
         required_billing_constraints_ready=bool(
@@ -3640,6 +3734,7 @@ async def _attest_migration_379(
 
 
 _MIGRATION_379_ATOMIC_FUNCTION_NAMES = (
+    "default_commercial_billing_review_fingerprint",
     "prevent_commercial_billing_candidate_override_mutation",
     "prevent_commercial_billing_invoice_for_excluded_candidate",
     "prevent_commercial_billing_review_decision_mutation",
@@ -3692,6 +3787,7 @@ async def _migration_379_atomic_function_definitions(
               ON language_state.oid = function_state.prolang
             WHERE namespace_state.nspname = pg_catalog.current_schema()
               AND function_state.proname IN (
+                  'default_commercial_billing_review_fingerprint',
                   'prevent_commercial_billing_invoice_for_excluded_candidate',
                   'prevent_commercial_billing_review_decision_mutation',
                   'prevent_commercial_billing_candidate_override_mutation'
@@ -3739,6 +3835,9 @@ async def _migration_379_atomic_function_definitions(
 
     record = MIGRATION_379_COMMERCIAL_BILLING_RUN_FENCE_FORWARD_RECOVERY
     expected_body_sha256 = {
+        "default_commercial_billing_review_fingerprint": (
+            record.review_decision_default_function_body_sha256
+        ),
         "prevent_commercial_billing_candidate_override_mutation": (
             record.override_history_guard_function_body_sha256
         ),

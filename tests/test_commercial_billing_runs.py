@@ -2625,6 +2625,118 @@ async def _stage_historical_379_legacy_recovery_state(conn):
             "INHERITS (commercial_billing_candidate_review_decisions)",
         ),
         (
+            "review-decision before-insert write interceptor",
+            "CREATE FUNCTION unreviewed_379_review_decision_before_insert() "
+            "RETURNS TRIGGER LANGUAGE plpgsql AS $unreviewed$ "
+            "BEGIN NEW.decision := 'included'; RETURN NEW; END; "
+            "$unreviewed$; "
+            "CREATE TRIGGER unreviewed_379_review_decision_before_insert "
+            "BEFORE INSERT ON commercial_billing_candidate_review_decisions "
+            "FOR EACH ROW EXECUTE FUNCTION "
+            "unreviewed_379_review_decision_before_insert()",
+        ),
+        (
+            "review-decision after-insert write interceptor",
+            "CREATE FUNCTION unreviewed_379_review_decision_after_insert() "
+            "RETURNS TRIGGER LANGUAGE plpgsql AS $unreviewed$ "
+            "BEGIN RETURN NEW; END; "
+            "$unreviewed$; "
+            "CREATE TRIGGER unreviewed_379_review_decision_after_insert "
+            "AFTER INSERT ON commercial_billing_candidate_review_decisions "
+            "FOR EACH ROW EXECUTE FUNCTION "
+            "unreviewed_379_review_decision_after_insert()",
+        ),
+        (
+            "override before-insert write interceptor",
+            "CREATE FUNCTION unreviewed_379_override_before_insert() "
+            "RETURNS TRIGGER LANGUAGE plpgsql AS $unreviewed$ "
+            "BEGIN NEW.reason_code := 'customer_credit'; RETURN NEW; END; "
+            "$unreviewed$; "
+            "CREATE TRIGGER unreviewed_379_override_before_insert "
+            "BEFORE INSERT ON commercial_billing_candidate_overrides "
+            "FOR EACH ROW EXECUTE FUNCTION "
+            "unreviewed_379_override_before_insert()",
+        ),
+        (
+            "override after-update write interceptor",
+            "CREATE FUNCTION unreviewed_379_override_after_update() "
+            "RETURNS TRIGGER LANGUAGE plpgsql AS $unreviewed$ "
+            "BEGIN RETURN NEW; END; "
+            "$unreviewed$; "
+            "CREATE TRIGGER unreviewed_379_override_after_update "
+            "AFTER UPDATE ON commercial_billing_candidate_overrides "
+            "FOR EACH ROW EXECUTE FUNCTION "
+            "unreviewed_379_override_after_update()",
+        ),
+        (
+            "candidate before-insert write interceptor",
+            "CREATE FUNCTION unreviewed_379_candidate_before_insert() "
+            "RETURNS TRIGGER LANGUAGE plpgsql AS $unreviewed$ "
+            "BEGIN NEW.candidate_key := 'unreviewed-candidate'; RETURN NEW; END; "
+            "$unreviewed$; "
+            "CREATE TRIGGER unreviewed_379_candidate_before_insert "
+            "BEFORE INSERT ON commercial_billing_run_candidates "
+            "FOR EACH ROW EXECUTE FUNCTION "
+            "unreviewed_379_candidate_before_insert()",
+        ),
+        (
+            "candidate after-delete write interceptor",
+            "CREATE FUNCTION unreviewed_379_candidate_after_delete() "
+            "RETURNS TRIGGER LANGUAGE plpgsql AS $unreviewed$ "
+            "BEGIN RETURN OLD; END; "
+            "$unreviewed$; "
+            "CREATE TRIGGER unreviewed_379_candidate_after_delete "
+            "AFTER DELETE ON commercial_billing_run_candidates "
+            "FOR EACH ROW EXECUTE FUNCTION "
+            "unreviewed_379_candidate_after_delete()",
+        ),
+        (
+            "altered source-declared default review trigger body",
+            "CREATE OR REPLACE FUNCTION "
+            "default_commercial_billing_review_fingerprint() "
+            "RETURNS TRIGGER LANGUAGE plpgsql AS $tampered$ "
+            "BEGIN NEW.decision := 'included'; RETURN NEW; END; "
+            "$tampered$",
+        ),
+        (
+            "conditional source-declared default review trigger",
+            "DROP TRIGGER trg_default_commercial_billing_review_decision_fingerprint "
+            "ON commercial_billing_candidate_review_decisions; "
+            "CREATE TRIGGER trg_default_commercial_billing_review_decision_fingerprint "
+            "BEFORE INSERT ON commercial_billing_candidate_review_decisions "
+            "FOR EACH ROW WHEN (false) EXECUTE FUNCTION "
+            "default_commercial_billing_review_fingerprint()",
+        ),
+        (
+            "wrong-type source-declared default review trigger",
+            "DROP TRIGGER trg_default_commercial_billing_review_decision_fingerprint "
+            "ON commercial_billing_candidate_review_decisions; "
+            "CREATE TRIGGER trg_default_commercial_billing_review_decision_fingerprint "
+            "AFTER INSERT ON commercial_billing_candidate_review_decisions "
+            "FOR EACH ROW EXECUTE FUNCTION "
+            "default_commercial_billing_review_fingerprint()",
+        ),
+        (
+            "missing source-declared default review trigger",
+            "DROP TRIGGER trg_default_commercial_billing_review_decision_fingerprint "
+            "ON commercial_billing_candidate_review_decisions",
+        ),
+        (
+            "foreign-schema source-declared default review trigger",
+            "CREATE SCHEMA {foreign_schema}; "
+            "CREATE FUNCTION {foreign_schema}."
+            "default_commercial_billing_review_fingerprint() "
+            "RETURNS TRIGGER LANGUAGE plpgsql AS $foreign$ "
+            "BEGIN NEW.decision := 'included'; RETURN NEW; END; "
+            "$foreign$; "
+            "DROP TRIGGER trg_default_commercial_billing_review_decision_fingerprint "
+            "ON commercial_billing_candidate_review_decisions; "
+            "CREATE TRIGGER trg_default_commercial_billing_review_decision_fingerprint "
+            "BEFORE INSERT ON commercial_billing_candidate_review_decisions "
+            "FOR EACH ROW EXECUTE FUNCTION {foreign_schema}."
+            "default_commercial_billing_review_fingerprint()",
+        ),
+        (
             "same-name altered review-decision revision check",
             "ALTER TABLE commercial_billing_candidate_review_decisions "
             "DROP CONSTRAINT commercial_billing_candidate_review_decisions_revision_check; "
@@ -3070,6 +3182,13 @@ async def test_real_postgres_historical_379_commercial_billing_run_fence_recover
 @pytest.mark.parametrize(
     "function_ddl",
     [
+        (
+            "CREATE OR REPLACE FUNCTION "
+            "default_commercial_billing_review_fingerprint() "
+            "RETURNS TRIGGER LANGUAGE plpgsql AS $tampered$ "
+            "BEGIN NEW.decision := 'included'; RETURN NEW; END; "
+            "$tampered$"
+        ),
         (
             "CREATE OR REPLACE FUNCTION "
             "prevent_commercial_billing_review_decision_mutation() "

@@ -594,9 +594,14 @@ def _migration_379_history_guard_body(function_name: str) -> str:
     return section.split("AS $$", 1)[1].split("$$;", 1)[0]
 
 
-def test_migration_379_history_guard_hashes_are_source_backed() -> None:
+def test_migration_379_fence_input_trigger_function_hashes_are_source_backed() -> None:
     record = reconciliation_mod.MIGRATION_379_COMMERCIAL_BILLING_RUN_FENCE_FORWARD_RECOVERY
 
+    assert hashlib.sha256(
+        _migration_379_history_guard_body(
+            "default_commercial_billing_review_fingerprint"
+        ).encode()
+    ).hexdigest() == record.review_decision_default_function_body_sha256
     assert hashlib.sha256(
         _migration_379_history_guard_body(
             "prevent_commercial_billing_review_decision_mutation"
@@ -641,6 +646,8 @@ class _Migration379PreflightConnection:
             "required_columns_ready": True,
             "no_unreviewed_billing_columns": True,
             "no_unreviewed_billing_read_interceptors": True,
+            "no_unreviewed_billing_write_interceptors": True,
+            "review_decision_default_trigger_ready": True,
             "required_billing_constraints_ready": True,
             "no_unreviewed_billing_constraints": True,
             "required_billing_indexes_ready": True,
@@ -651,6 +658,11 @@ class _Migration379PreflightConnection:
             "no_unreviewed_invoice_rewrite_interceptors": True,
             "trigger_function_execution_metadata_ready": True,
             "invoice_fence_function_schema_binding_ready": False,
+            "review_decision_default_function_body": (
+                _migration_379_history_guard_body(
+                    "default_commercial_billing_review_fingerprint"
+                )
+            ),
             "review_decision_history_guard_function_body": (
                 _migration_379_history_guard_body(
                     "prevent_commercial_billing_review_decision_mutation"
@@ -739,6 +751,11 @@ class _Migration379PreflightConnection:
         assert "no_unreviewed_billing_columns" in query
         assert "unreviewed_billing_read_interceptors" in query
         assert "no_unreviewed_billing_read_interceptors" in query
+        assert "unreviewed_billing_write_interceptors" in query
+        assert "no_unreviewed_billing_write_interceptors" in query
+        assert "required_billing_write_triggers" in query
+        assert "default_commercial_billing_review_fingerprint" in query
+        assert "review_decision_default_trigger_ready" in query
         assert "FROM pg_catalog.pg_rewrite AS rule_state" in query
         assert "FROM pg_catalog.pg_policy AS policy_state" in query
         assert "FROM pg_catalog.pg_inherits AS inheritance_state" in query
@@ -762,6 +779,8 @@ class _Migration379PreflightConnection:
         assert "trigger_state.tgqual" in query
         assert "actual_trigger.tgfoid = expected_trigger.function_oid" in query
         assert "actual_trigger.tgqual IS NULL" in query
+        assert "expected_trigger.function_oid = interceptor.tgfoid" in query
+        assert "expected_trigger.trigger_type = interceptor.tgtype" in query
         assert "trigger_state.tgfoid = function_state.oid" in query
         assert "trigger_state.tgqual IS NULL" in query
         assert "unreviewed_invoice_insert_interceptors" in query
@@ -774,13 +793,14 @@ class _Migration379PreflightConnection:
         assert "invoice_fence_function_schema_binding_ready" in query
         assert "reviewed_trigger_function_execution_metadata" in query
         assert "trigger_function_execution_metadata_ready" in query
-        assert "COUNT(*) = 3" in query
+        assert "COUNT(*) = 4" in query
         assert "function_state.prosecdef" in query
         assert "function_state.proconfig" in query
         assert "language_state.lanname AS language_name" in query
         assert "function_state.prosupport IS DISTINCT FROM 0::pg_catalog.oid" in query
         assert "review_decision_history_guard_function_body" in query
         assert "override_history_guard_function_body" in query
+        assert "review_decision_default_function_body" in query
         assert "commercial_billing_candidate_overrides" in query
         assert "commercial_billing_candidate_review_decisions" in query
         return self.catalog
@@ -1301,6 +1321,9 @@ async def test_known_379_recovery_reports_exact_legacy_state_without_admitting_s
         "required_billing_columns_ready": True,
         "no_unreviewed_billing_columns": True,
         "no_unreviewed_billing_read_interceptors": True,
+        "no_unreviewed_billing_write_interceptors": True,
+        "review_decision_default_trigger_ready": True,
+        "review_decision_default_function_body_ready": True,
         "history_guard_function_bodies_ready": True,
         "required_billing_constraints_ready": True,
         "no_unreviewed_billing_constraints": True,
@@ -1433,6 +1456,14 @@ async def test_known_379_recovery_rejects_nonexact_392_state(
             "unreviewed billing read interceptor",
             "no_unreviewed_billing_read_interceptors",
         ),
+        (
+            "unreviewed billing write interceptor",
+            "no_unreviewed_billing_write_interceptors",
+        ),
+        (
+            "missing default review-fingerprint trigger",
+            "review_decision_default_trigger_ready",
+        ),
         ("missing required billing constraint", "required_billing_constraints_ready"),
         ("unreviewed billing constraint", "no_unreviewed_billing_constraints"),
         ("missing required billing index", "required_billing_indexes_ready"),
@@ -1441,6 +1472,10 @@ async def test_known_379_recovery_rejects_nonexact_392_state(
             "required_billing_indexes_ready",
         ),
         ("unreviewed billing index", "no_unreviewed_billing_indexes"),
+        (
+            "altered default review-fingerprint function body",
+            "review_decision_default_function_body_ready",
+        ),
         ("altered review-decision history guard body", "history_guard_function_bodies_ready"),
         ("altered override history guard body", "history_guard_function_bodies_ready"),
         ("foreign-schema history guard function", "reviewed_billing_catalog_ready"),
@@ -1482,6 +1517,10 @@ async def test_known_379_recovery_rejects_nonexact_or_half_recorded_evidence(
         connection.catalog["no_unreviewed_billing_columns"] = False
     elif case == "unreviewed billing read interceptor":
         connection.catalog["no_unreviewed_billing_read_interceptors"] = False
+    elif case == "unreviewed billing write interceptor":
+        connection.catalog["no_unreviewed_billing_write_interceptors"] = False
+    elif case == "missing default review-fingerprint trigger":
+        connection.catalog["review_decision_default_trigger_ready"] = False
     elif case == "missing required billing constraint":
         connection.catalog["required_billing_constraints_ready"] = False
     elif case == "unreviewed billing constraint":
@@ -1493,6 +1532,10 @@ async def test_known_379_recovery_rejects_nonexact_or_half_recorded_evidence(
         connection.catalog["required_billing_indexes_ready"] = False
     elif case == "unreviewed billing index":
         connection.catalog["no_unreviewed_billing_indexes"] = False
+    elif case == "altered default review-fingerprint function body":
+        connection.catalog["review_decision_default_function_body"] = (
+            "unexpected function body"
+        )
     elif case == "altered review-decision history guard body":
         connection.catalog["review_decision_history_guard_function_body"] = (
             "unexpected function body"
