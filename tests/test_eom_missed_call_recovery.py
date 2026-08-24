@@ -55,6 +55,11 @@ DATABASE_URL_ENV = "ATLAS_MIGRATION_TEST_DATABASE_URL"
 _EOM_CONTEXT = "effingham_maids"
 _BOOKING_LINK = "https://calendar.app.google/eom-test-booking"
 _NOW = datetime(2026, 8, 21, 15, 0, tzinfo=timezone.utc)
+_NOCODB_TEST_PASSWORD = "test-only-missed-call-nocodb-password"
+_RUNTIME_PROBE_PASSWORD = "test-only-missed-call-runtime-password"
+_PRIVILEGE_REPAIR_MIGRATION = (
+    MIGRATIONS / "393_eom_missed_call_recovery_runtime_privileges.sql"
+)
 
 
 class _ConnectionPool:
@@ -140,6 +145,94 @@ async def _apply_schema(connection: Any, schema: str) -> None:
         "389_eom_missed_call_recovery.sql",
     ):
         await connection.execute((MIGRATIONS / name).read_text())
+
+
+def _quote_ident(identifier: str) -> str:
+    return '"' + identifier.replace('"', '""') + '"'
+
+
+async def _require_disposable_role_administration(connection: Any) -> None:
+    can_administer_roles = await connection.fetchval(
+        """
+        SELECT rolsuper OR rolcreaterole
+        FROM pg_roles
+        WHERE rolname = current_user
+        """
+    )
+    if not can_administer_roles:
+        pytest.skip("privilege migration proof requires disposable role administration")
+
+
+async def _provision_privilege_repair_roles(connection: Any) -> None:
+    """Create only disposable test-role state needed by migration 393."""
+
+    await _require_disposable_role_administration(connection)
+    await connection.execute(
+        """
+        DO $$
+        BEGIN
+            IF NOT EXISTS (
+                SELECT 1 FROM pg_roles WHERE rolname = 'atlas_eom_handoff_owner'
+            ) THEN
+                CREATE ROLE atlas_eom_handoff_owner NOLOGIN NOINHERIT;
+            END IF;
+            IF NOT EXISTS (
+                SELECT 1 FROM pg_roles WHERE rolname = 'atlas_nocodb'
+            ) THEN
+                CREATE ROLE atlas_nocodb LOGIN NOINHERIT;
+            END IF;
+        END;
+        $$;
+        """
+    )
+    await connection.execute(
+        """
+        ALTER ROLE atlas_eom_handoff_owner
+            NOLOGIN NOINHERIT NOSUPERUSER NOCREATEDB NOCREATEROLE
+            NOREPLICATION NOBYPASSRLS
+        """
+    )
+    await connection.execute(
+        """
+        ALTER ROLE atlas_nocodb
+            LOGIN NOINHERIT NOSUPERUSER NOCREATEDB NOCREATEROLE
+            NOREPLICATION NOBYPASSRLS
+            PASSWORD 'test-only-missed-call-nocodb-password'
+        """
+    )
+    memberships = await connection.fetch(
+        """
+        SELECT granted_role.rolname
+        FROM pg_auth_members AS membership
+        JOIN pg_roles AS member_role ON member_role.oid = membership.member
+        JOIN pg_roles AS granted_role ON granted_role.oid = membership.roleid
+        WHERE member_role.rolname = 'atlas_nocodb'
+        """
+    )
+    for membership in memberships:
+        await connection.execute(
+            f"REVOKE {_quote_ident(membership['rolname'])} FROM atlas_nocodb"
+        )
+    guard_members = await connection.fetch(
+        """
+        SELECT member_role.rolname
+        FROM pg_roles AS member_role
+        JOIN pg_auth_members AS membership ON membership.member = member_role.oid
+        JOIN pg_roles AS guard_role ON guard_role.oid = membership.roleid
+        WHERE guard_role.rolname = 'atlas_eom_handoff_owner'
+          AND member_role.rolcanlogin
+          AND NOT member_role.rolsuper
+        """
+    )
+    for member in guard_members:
+        await connection.execute(
+            "REVOKE atlas_eom_handoff_owner FROM "
+            f"{_quote_ident(member['rolname'])}"
+        )
+    database_name = await connection.fetchval("SELECT current_database()")
+    await connection.execute(
+        f"GRANT CONNECT ON DATABASE {_quote_ident(database_name)} TO atlas_nocodb"
+    )
 
 
 @asynccontextmanager
@@ -234,6 +327,61 @@ async def _insert_estimate_lead(
     return contact_id
 
 
+async def _insert_active_sequence_for_privilege_probe(
+    pool: _ConnectionPool,
+    *,
+    email: str,
+) -> tuple[UUID, UUID, UUID]:
+    """Create minimal active state without calling a provider or public route."""
+
+    contact_id = uuid4()
+    attempt_id = uuid4()
+    sequence_id = uuid4()
+    now = datetime.now(timezone.utc) - timedelta(minutes=1)
+    operation_key = _operation_key("privilege-attempt")
+    fingerprint = f"{uuid4().hex}{uuid4().hex}"
+    await pool._connection.execute(
+        """
+        INSERT INTO contacts (
+            id, full_name, email, business_context_id, contact_type, status,
+            lead_stage, source, customer_type, created_at
+        ) VALUES ($1, 'Privilege Probe Lead', $2, $3, 'lead', 'active', 'new',
+                  'test', 'unknown', $4)
+        """,
+        contact_id,
+        email,
+        _EOM_CONTEXT,
+        now,
+    )
+    await pool._connection.execute(
+        """
+        INSERT INTO eom_missed_call_attempts (
+            id, contact_id, operation_key, request_fingerprint, actor_id,
+            actor_name, source, occurred_at
+        ) VALUES ($1, $2, $3, $4, 1, 'Privilege Probe', 'time_tracker', $5)
+        """,
+        attempt_id,
+        contact_id,
+        operation_key,
+        fingerprint,
+        now,
+    )
+    await pool._connection.execute(
+        """
+        INSERT INTO eom_missed_call_sequences (
+            id, contact_id, initiating_attempt_id, recipient_email, state,
+            created_at, updated_at
+        ) VALUES ($1, $2, $3, $4, 'active', $5, $5)
+        """,
+        sequence_id,
+        contact_id,
+        attempt_id,
+        email,
+        now,
+    )
+    return contact_id, attempt_id, sequence_id
+
+
 def _service(
     pool: _ConnectionPool,
     *,
@@ -252,6 +400,290 @@ def _service(
         now=lambda: clock["now"],
         email_history=history,
     )
+
+
+@pytest.mark.asyncio
+async def test_privilege_repair_keeps_runtime_operable_and_nocodb_guarded() -> None:
+    """Apply 393 in a disposable schema and exercise both restricted roles."""
+
+    database_url = _database_url_or_skip()
+    runtime_probe_role = f"eom_mc_runtime_{uuid4().hex[:16]}"
+    runtime_probe_ident = _quote_ident(runtime_probe_role)
+    runtime_role_created = False
+    runtime_connection = None
+    nocodb_connection = None
+
+    async with _test_store() as (admin_pool, schema):
+        connection = admin_pool._connection
+        try:
+            await _provision_privilege_repair_roles(connection)
+            # A repair must not preserve a prior broad application grant just
+            # because the table is being transferred from its old owner.
+            await connection.execute(
+                f"GRANT DELETE ON TABLE {_quote_ident(schema)}."
+                "eom_missed_call_sequences TO atlas"
+            )
+            await connection.execute(_PRIVILEGE_REPAIR_MIGRATION.read_text())
+
+            table_rows = await connection.fetch(
+                """
+                SELECT relation.relname, owner.rolname AS owner
+                FROM pg_class AS relation
+                JOIN pg_namespace AS namespace ON namespace.oid = relation.relnamespace
+                JOIN pg_roles AS owner ON owner.oid = relation.relowner
+                WHERE namespace.nspname = current_schema()
+                  AND relation.relname = ANY($1::text[])
+                ORDER BY relation.relname
+                """,
+                [
+                    "eom_missed_call_operation_receipts",
+                    "eom_missed_call_attempts",
+                    "eom_missed_call_contact_suppressions",
+                    "eom_missed_call_sequences",
+                    "eom_missed_call_sequence_steps",
+                    "eom_missed_call_sequence_events",
+                ],
+            )
+            assert {row["owner"] for row in table_rows} == {
+                "atlas_eom_handoff_owner"
+            }
+
+            runtime_acl_rows = await connection.fetch(
+                """
+                SELECT relation.relname, acl.privilege_type
+                FROM pg_class AS relation
+                JOIN pg_namespace AS namespace ON namespace.oid = relation.relnamespace
+                CROSS JOIN LATERAL aclexplode(relation.relacl) AS acl
+                WHERE namespace.nspname = current_schema()
+                  AND relation.relname = ANY($1::text[])
+                  AND acl.grantee = (SELECT oid FROM pg_roles WHERE rolname = 'atlas')
+                ORDER BY relation.relname, acl.privilege_type
+                """,
+                [
+                    "eom_missed_call_operation_receipts",
+                    "eom_missed_call_attempts",
+                    "eom_missed_call_contact_suppressions",
+                    "eom_missed_call_sequences",
+                    "eom_missed_call_sequence_steps",
+                    "eom_missed_call_sequence_events",
+                ],
+            )
+            runtime_acl: dict[str, set[str]] = {}
+            for row in runtime_acl_rows:
+                runtime_acl.setdefault(row["relname"], set()).add(
+                    row["privilege_type"]
+                )
+            assert runtime_acl == {
+                "eom_missed_call_operation_receipts": {"INSERT", "SELECT", "UPDATE"},
+                "eom_missed_call_attempts": {"INSERT", "SELECT", "UPDATE"},
+                "eom_missed_call_contact_suppressions": {"INSERT", "SELECT"},
+                "eom_missed_call_sequences": {"INSERT", "SELECT", "UPDATE"},
+                "eom_missed_call_sequence_steps": {"INSERT", "SELECT", "UPDATE"},
+                "eom_missed_call_sequence_events": {"INSERT", "SELECT"},
+            }
+
+            database_name = await connection.fetchval("SELECT current_database()")
+            await connection.execute(
+                f"CREATE ROLE {runtime_probe_ident} LOGIN NOINHERIT "
+                f"PASSWORD '{_RUNTIME_PROBE_PASSWORD}'"
+            )
+            runtime_role_created = True
+            await connection.execute(
+                f"GRANT CONNECT ON DATABASE {_quote_ident(database_name)} "
+                f"TO {runtime_probe_ident}"
+            )
+            await connection.execute(
+                f"GRANT USAGE ON SCHEMA {_quote_ident(schema)} TO {runtime_probe_ident}"
+            )
+            await connection.execute(
+                f"GRANT SELECT ON TABLE {_quote_ident(schema)}.contacts "
+                f"TO {runtime_probe_ident}"
+            )
+            for table_name, privileges in (
+                ("eom_missed_call_operation_receipts", "SELECT, INSERT, UPDATE"),
+                ("eom_missed_call_attempts", "SELECT, INSERT, UPDATE"),
+                ("eom_missed_call_contact_suppressions", "SELECT, INSERT"),
+                ("eom_missed_call_sequences", "SELECT, INSERT, UPDATE"),
+                ("eom_missed_call_sequence_steps", "SELECT, INSERT, UPDATE"),
+                ("eom_missed_call_sequence_events", "SELECT, INSERT"),
+            ):
+                await connection.execute(
+                    f"GRANT {privileges} ON TABLE {_quote_ident(schema)}."
+                    f"{_quote_ident(table_name)} TO {runtime_probe_ident}"
+                )
+
+            runtime_connection = await asyncpg.connect(
+                database_url,
+                user=runtime_probe_role,
+                password=_RUNTIME_PROBE_PASSWORD,
+            )
+            await runtime_connection.execute(
+                f"SET search_path TO {_quote_ident(schema)}, public"
+            )
+            runtime_pool = _ConnectionPool(runtime_connection)
+            assert await recovery_mod.missed_call_recovery_schema_ready(runtime_pool)
+
+            await connection.execute(
+                f"REVOKE INSERT ON TABLE {_quote_ident(schema)}."
+                f"eom_missed_call_sequence_events FROM {runtime_probe_ident}"
+            )
+            assert not await recovery_mod.missed_call_recovery_schema_ready(runtime_pool)
+            await connection.execute(
+                f"GRANT INSERT ON TABLE {_quote_ident(schema)}."
+                f"eom_missed_call_sequence_events TO {runtime_probe_ident}"
+            )
+            assert await recovery_mod.missed_call_recovery_schema_ready(runtime_pool)
+
+            await connection.execute(
+                f"REVOKE UPDATE ON TABLE {_quote_ident(schema)}."
+                f"eom_missed_call_operation_receipts FROM {runtime_probe_ident}"
+            )
+            assert not await recovery_mod.missed_call_recovery_schema_ready(runtime_pool)
+            await connection.execute(
+                f"GRANT UPDATE ON TABLE {_quote_ident(schema)}."
+                f"eom_missed_call_operation_receipts TO {runtime_probe_ident}"
+            )
+            assert await recovery_mod.missed_call_recovery_schema_ready(runtime_pool)
+
+            contact_id, _attempt_id, sequence_id = (
+                await _insert_active_sequence_for_privilege_probe(
+                    admin_pool,
+                    email="runtime-privilege@example.test",
+                )
+            )
+            receipt_key = _operation_key("runtime-receipt")
+            await connection.execute(
+                """
+                INSERT INTO eom_missed_call_operation_receipts (
+                    operation_key, contact_id, operation_kind, request_fingerprint
+                ) VALUES ($1, $2, 'no_answer', $3)
+                """,
+                receipt_key,
+                contact_id,
+                f"{uuid4().hex}{uuid4().hex}",
+            )
+            locked_receipt = await runtime_connection.fetchrow(
+                """
+                SELECT operation_key
+                FROM eom_missed_call_operation_receipts
+                WHERE operation_key = $1
+                FOR UPDATE
+                """,
+                receipt_key,
+            )
+            assert locked_receipt["operation_key"] == receipt_key
+            with pytest.raises(
+                asyncpg.exceptions.RaiseError,
+                match="eom_missed_call_operation_receipts is append-only",
+            ):
+                await runtime_connection.execute(
+                    """
+                    UPDATE eom_missed_call_operation_receipts
+                    SET operation_kind = 'resume'
+                    WHERE operation_key = $1
+                    """,
+                    receipt_key,
+                )
+            await runtime_connection.execute(
+                """
+                UPDATE eom_missed_call_sequences
+                SET updated_at = updated_at
+                WHERE id = $1
+                """,
+                sequence_id,
+            )
+            await runtime_connection.execute(
+                """
+                INSERT INTO eom_missed_call_sequence_events (
+                    sequence_id, event_type, actor_name, source, metadata
+                ) VALUES ($1, 'sequence_reused', 'Runtime Probe', 'time_tracker', '{}')
+                """,
+                sequence_id,
+            )
+
+            await connection.execute(
+                f"GRANT USAGE ON SCHEMA {_quote_ident(schema)} TO atlas_nocodb"
+            )
+            await connection.execute(
+                f"GRANT SELECT, UPDATE (email) ON TABLE {_quote_ident(schema)}.contacts "
+                "TO atlas_nocodb"
+            )
+            await connection.execute(
+                f"GRANT SELECT, INSERT ON TABLE {_quote_ident(schema)}."
+                "contact_interactions TO atlas_nocodb"
+            )
+            nocodb_connection = await asyncpg.connect(
+                database_url,
+                user="atlas_nocodb",
+                password=_NOCODB_TEST_PASSWORD,
+            )
+            await nocodb_connection.execute(
+                f"SET search_path TO {_quote_ident(schema)}, public"
+            )
+            with pytest.raises(asyncpg.exceptions.InsufficientPrivilegeError):
+                await nocodb_connection.fetchval(
+                    "SELECT COUNT(*) FROM eom_missed_call_sequences"
+                )
+            assert not await connection.fetchval(
+                """
+                SELECT has_function_privilege(
+                    'atlas_nocodb',
+                    to_regprocedure('cancel_eom_missed_call_sequences_for_contact(uuid, character varying, character varying)'),
+                    'EXECUTE'
+                )
+                """
+            )
+
+            contact_change_id, _change_attempt_id, changed_sequence_id = (
+                await _insert_active_sequence_for_privilege_probe(
+                    admin_pool,
+                    email="before-change@example.test",
+                )
+            )
+            await nocodb_connection.execute(
+                "UPDATE contacts SET email = $2 WHERE id = $1",
+                contact_change_id,
+                "after-change@example.test",
+            )
+            assert await connection.fetchval(
+                "SELECT state = 'cancelled' AND cancellation_reason = 'recipient_changed' "
+                "FROM eom_missed_call_sequences WHERE id = $1",
+                changed_sequence_id,
+            )
+
+            interaction_id, _interaction_attempt_id, interaction_sequence_id = (
+                await _insert_active_sequence_for_privilege_probe(
+                    admin_pool,
+                    email="interaction@example.test",
+                )
+            )
+            await nocodb_connection.execute(
+                """
+                INSERT INTO contact_interactions (
+                    id, contact_id, interaction_type, summary, intent, occurred_at,
+                    metadata, interaction_dedupe_key
+                ) VALUES (
+                    $1, $2, 'lead_response', 'NocoDB response', NULL,
+                    CURRENT_TIMESTAMP, '{}'::jsonb, $3
+                )
+                """,
+                uuid4(),
+                interaction_id,
+                f"nocodb-response-{uuid4().hex}",
+            )
+            assert await connection.fetchval(
+                "SELECT state = 'cancelled' AND cancellation_reason = 'lead_response' "
+                "FROM eom_missed_call_sequences WHERE id = $1",
+                interaction_sequence_id,
+            )
+        finally:
+            if nocodb_connection is not None:
+                await nocodb_connection.close()
+            if runtime_connection is not None:
+                await runtime_connection.close()
+            if runtime_role_created:
+                await connection.execute(f"DROP OWNED BY {runtime_probe_ident}")
+                await connection.execute(f"DROP ROLE {runtime_probe_ident}")
 
 
 @pytest.mark.asyncio

@@ -407,6 +407,65 @@ async def missed_call_recovery_schema_ready(pool: Any) -> bool:
                    AND to_regclass('eom_missed_call_sequences') IS NOT NULL
                    AND to_regclass('eom_missed_call_sequence_steps') IS NOT NULL
                    AND to_regclass('eom_missed_call_sequence_events') IS NOT NULL
+                   AND (
+                       SELECT COUNT(*) = 6
+                          AND BOOL_AND(
+                              table_owner.rolname = 'atlas_eom_handoff_owner'
+                              AND has_table_privilege(current_user, relation.oid, 'SELECT')
+                              AND has_table_privilege(current_user, relation.oid, 'INSERT')
+                              AND (
+                                  NOT required_relation.requires_update
+                                  OR has_table_privilege(
+                                      current_user, relation.oid, 'UPDATE'
+                                  )
+                              )
+                              AND NOT has_table_privilege(
+                                  'atlas_nocodb', relation.oid, 'SELECT'
+                              )
+                              AND NOT has_any_column_privilege(
+                                  'atlas_nocodb', relation.oid, 'SELECT'
+                              )
+                              AND NOT has_table_privilege(
+                                  'atlas_nocodb', relation.oid, 'INSERT'
+                              )
+                              AND NOT has_any_column_privilege(
+                                  'atlas_nocodb', relation.oid, 'INSERT'
+                              )
+                              AND NOT has_table_privilege(
+                                  'atlas_nocodb', relation.oid, 'UPDATE'
+                              )
+                              AND NOT has_any_column_privilege(
+                                  'atlas_nocodb', relation.oid, 'UPDATE'
+                              )
+                              AND NOT has_table_privilege(
+                                  'atlas_nocodb', relation.oid, 'DELETE'
+                              )
+                              AND NOT has_table_privilege(
+                                  'atlas_nocodb', relation.oid, 'TRUNCATE'
+                              )
+                          )
+                       FROM (
+                           VALUES
+                               ('eom_missed_call_operation_receipts', TRUE),
+                               ('eom_missed_call_attempts', TRUE),
+                               ('eom_missed_call_contact_suppressions', FALSE),
+                               ('eom_missed_call_sequences', TRUE),
+                               ('eom_missed_call_sequence_steps', TRUE),
+                               ('eom_missed_call_sequence_events', FALSE)
+                       ) AS required_relation(relation_name, requires_update)
+                       JOIN pg_class AS relation
+                         ON relation.oid = to_regclass(
+                             format(
+                                 '%I.%I', current_schema(),
+                                 required_relation.relation_name
+                             )
+                         )
+                       JOIN pg_namespace AS namespace
+                         ON namespace.oid = relation.relnamespace
+                       JOIN pg_roles AS table_owner
+                         ON table_owner.oid = relation.relowner
+                      WHERE namespace.nspname = current_schema()
+                   )
                    AND EXISTS (
                        SELECT 1 FROM pg_index AS idx
                        JOIN pg_class AS rel ON rel.oid = idx.indexrelid
@@ -425,19 +484,61 @@ async def missed_call_recovery_schema_ready(pool: Any) -> bool:
                        SELECT 1 FROM pg_trigger AS trigger
                        WHERE trigger.tgrelid = 'contacts'::regclass
                          AND trigger.tgname = 'trg_cancel_eom_missed_call_on_contact_change'
+                         AND trigger.tgfoid = to_regprocedure(
+                             'cancel_eom_missed_call_on_contact_change()'
+                         )
                          AND NOT trigger.tgisinternal
                    )
                    AND EXISTS (
                        SELECT 1 FROM pg_trigger AS trigger
                        WHERE trigger.tgrelid = 'contact_interactions'::regclass
                          AND trigger.tgname = 'trg_lock_eom_missed_call_interaction_contact'
+                         AND trigger.tgfoid = to_regprocedure(
+                             'lock_eom_missed_call_interaction_contact()'
+                         )
                          AND NOT trigger.tgisinternal
                    )
                    AND EXISTS (
                        SELECT 1 FROM pg_trigger AS trigger
                        WHERE trigger.tgrelid = 'contact_interactions'::regclass
                          AND trigger.tgname = 'trg_cancel_eom_missed_call_on_interaction'
+                         AND trigger.tgfoid = to_regprocedure(
+                             'cancel_eom_missed_call_on_interaction()'
+                         )
                          AND NOT trigger.tgisinternal
+                   )
+                   AND (
+                       SELECT COUNT(*) = 6
+                          AND BOOL_AND(
+                              procedure.prosecdef
+                              AND function_owner.rolname = 'atlas_eom_handoff_owner'
+                              AND COALESCE(
+                                  procedure.proconfig @> ARRAY[
+                                      format(
+                                          'search_path=pg_catalog, %I, pg_temp',
+                                          current_schema()
+                                      )
+                                  ],
+                                  FALSE
+                              )
+                              AND NOT has_function_privilege(
+                                  'atlas_nocodb', procedure.oid, 'EXECUTE'
+                              )
+                          )
+                       FROM pg_proc AS procedure
+                       JOIN pg_namespace AS function_namespace
+                         ON function_namespace.oid = procedure.pronamespace
+                       JOIN pg_roles AS function_owner
+                         ON function_owner.oid = procedure.proowner
+                      WHERE function_namespace.nspname = current_schema()
+                        AND procedure.proname = ANY (ARRAY[
+                            'cancel_eom_missed_call_sequences_for_contact',
+                            'lock_eom_missed_call_interaction_contact',
+                            'eom_missed_call_effective_recipient',
+                            'cancel_eom_missed_call_on_recipient_change',
+                            'cancel_eom_missed_call_on_contact_change',
+                            'cancel_eom_missed_call_on_interaction'
+                        ])
                    )
                    AND to_regprocedure(
                        'eom_missed_call_has_proven_inbound_sms(jsonb)'
