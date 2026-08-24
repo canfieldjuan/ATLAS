@@ -502,12 +502,40 @@ run-isolation defect, or an EOM entrypoint unable to select its prerequisite.
   `not_attested`; recovery is the unsafe side because it could admit rewritten
   financial-review evidence.
 
+### Contract revision after final invoice/startup review
+
+- New evidence: the invoice admission predicate checked only row-level
+  `BEFORE INSERT` triggers, leaving a statement-level trigger able to run before
+  the reviewed row fence. Separately, the full Atlas startup path accepts the
+  recorded 382 receipt while it logs a 391-to-392 intermediate runner failure,
+  so an enabled receivables API can serve before 392 pins the recovered
+  function's relation resolution.
+- Revised root cause: the final catalog closure was expressed as a row-shape
+  test rather than the full pre-fence execution class, and the global
+  receivables startup fence did not consume 392's explicit readiness receipt.
+- Revised required change surface: reject every non-internal `BEFORE INSERT`
+  trigger on `invoices`, whether row- or statement-level, except the exact
+  reviewed fence. Require the 392 receipt alongside 382 whenever the full Atlas
+  receivables API is enabled; test the 391-recorded/392-missing startup state
+  directly. This is one named consumer of the existing 392 receipt, not a new
+  generic migration-health subsystem.
+- Revised explicit non-scope: do not enumerate unrelated invoice update/delete
+  triggers, alter immutable 391/392 source, or convert ordinary full-app
+  migration warnings into a global availability policy. This change fences only
+  the execution class that precedes the recovered invoice fence and the named
+  392 prerequisite of the enabled receivables API.
+- Closure declaration — invoice pre-fence triggers: **CLOSED**. The expected
+  member is only the reviewed invoice fence; every non-internal trigger carrying
+  PostgreSQL's `BEFORE` and `INSERT` bits, including statement-level variants,
+  is rejected before either 379 recovery state can be admitted. The full Atlas
+  receivables startup requires both 382 and 392 ledger receipts before serving.
+
 ## Scope (this PR)
 
 Ownership lane: h18-migration-content-integrity
 Slice phase: Production hardening
 
-Max files: 12
+Max files: 13
 
 1. Model only the observed 379 missing-source/run-fence recovery state and
    reserve both 391 and its schema-binding successor 392 from the ordinary
@@ -515,14 +543,16 @@ Max files: 12
 2. Restore the current run-scoped invoice-fence function through immutable 391,
    then bind that exact recovered function to the active schema through the
    single atomic, forward-only 392 receipt.
-3. Close the invoice execution path by rejecting unreviewed row-level
-   before-insert triggers and non-`_RETURN` invoice rewrite rules, and close
+3. Close the invoice execution path by rejecting every unreviewed non-internal
+   `BEFORE INSERT` trigger (row or statement) and non-`_RETURN` invoice rewrite
+   rule, and close
    every fence-input write path by allowing only exact source-declared trigger
    signatures on the three billing lookup relations before either
    recovery can be selected.
-4. Add 392 to the already closed missed-call readiness set so the production
-   EOM migration entrypoint can select it deliberately; prove the staged
-   391-to-392 interaction, 386 ordering, and rejection of unrecognized drift.
+4. Add 392 to the already closed missed-call readiness set and to the full Atlas
+   enabled-receivables startup fence, so neither production path can serve with
+   a 391-only recovered function; prove the staged 391-to-392 interaction, 386
+   ordering, and rejection of unrecognized drift.
 5. Enroll the dedicated disposable PostgreSQL regression in the existing
    migration job and add the new migration to existing EOM path coverage.
 6. Re-attest both selected 391 and 392 recoveries inside their atomic receipt
@@ -552,7 +582,8 @@ Max files: 12
     guard or review-fingerprint-default body, conditional or foreign-schema
     same-name required trigger function, a missing source-declared default
     trigger, an unreviewed non-internal trigger on any fence-input relation,
-    an unreviewed row-level `BEFORE INSERT` or rewrite-rule invoice interceptor,
+    an unreviewed row- or statement-level `BEFORE INSERT` or rewrite-rule invoice
+    interceptor,
     non-default execution metadata, a missing/incorrect schema
     pin, or any other function-local setting on a required trigger function,
     missing, retagged, nullable, or unreviewed behavior-driving billing column,
@@ -608,7 +639,8 @@ Max files: 12
   predicates/declared indexes/no-unreviewed catalog members/exact user-column
   type-and-nullability set/no query-rewriting control or inherited child on
   fence-read relations/
-  closed invoice row-level `BEFORE INSERT` and rewrite-rule interceptor set/
+  closed invoice row- or statement-level `BEFORE INSERT` and rewrite-rule
+  interceptor set/
   closed fence-input non-internal trigger set/unconditional triggers bound to
   expected current-schema function OIDs/current-schema history-guard and
   review-fingerprint-default `pg_proc.prosrc` SHA-256 values/exact trigger-function
@@ -650,6 +682,7 @@ Max files: 12
 
 - `.github/workflows/atlas_eom_lead_pipeline_checks.yml`
 - `.github/workflows/atlas_migrations_runner_checks.yml`
+- `atlas_brain/main.py`
 - `atlas_brain/main_eom.py`
 - `atlas_brain/storage/migrations/391_eom_commercial_billing_run_fence_recovery.sql`
 - `atlas_brain/storage/migrations/392_eom_commercial_billing_run_fence_schema_binding.sql`
@@ -702,7 +735,7 @@ receipt changes; the owner-replayed definitions and PostgreSQL stale-tuple
 rejection fail closed for the named trigger-function DDL race. The observer
 allows no other execution metadata or function-local
 setting and rejects every non-`_RETURN` invoice rewrite rule as well as every
-extra row-level before-insert invoice trigger. It also rejects every
+extra non-internal row- or statement-level before-insert invoice trigger. It also rejects every
 non-internal trigger on a fence-input relation unless it is one of the exact,
 source-declared history guards or review-fingerprint default trigger, and
 refuses a catalog where that required default trigger is absent.
@@ -733,11 +766,12 @@ deployment sequence.
   invocation, which keeps each recovery independently observable and retry-safe.
 - Reuse the current 382 run-scoped fence rather than changing commercial billing
   API or product behavior. This is a database recovery of the existing contract.
-- Restrict the closed-interceptor predicate to non-internal row-level `BEFORE
-  INSERT` triggers and non-`_RETURN` `pg_rewrite` rules on `invoices`: these
-  PostgreSQL execution points can rewrite or suppress an invoice before the
-  reviewed fence. Statement triggers and unrelated invoice mechanisms are not
-  silently claimed as attested by this recovery.
+- Restrict the closed-interceptor predicate to every non-internal `BEFORE
+  INSERT` trigger (row or statement) and non-`_RETURN` `pg_rewrite` rule on
+  `invoices`: these PostgreSQL execution points can change the durable review
+  evidence or suppress an invoice before the reviewed row fence. Unrelated
+  invoice update/delete triggers are not silently claimed as attested by this
+  recovery.
 - Reject every non-internal trigger on the three relations read by the recovered
   fence unless it exactly matches a source-declared history guard or
   review-fingerprint default trigger, including that function's exact body and
@@ -767,6 +801,10 @@ deployment sequence.
   rejection close the remaining named direct-DDL race without broadening this
   recovery into a global migration framework or requiring system-catalog write
   privileges.
+- Require the named 392 schema-binding receipt as well as 382 before the full
+  Atlas enabled-receivables API can pass its startup migration fence. This
+  preserves existing warning behavior for unrelated generic migration failures
+  and makes the staged recovery's own prerequisite fail closed.
 
 ## Deferred
 
@@ -791,6 +829,10 @@ Parked hardening: none.
   PostgreSQL recovery test when its isolated test URL is available, Python
   syntax, Ruff, plan sync, whitespace, and contract checks. GitHub owns the
   full Unit Gate and remaining required checks; no duplicate local Unit Gate.
+- Focused full-startup coverage requires a recorded 382 plus an absent 392 to
+  raise before the receivables API serves, while the controlled PostgreSQL
+  catalog matrix installs a statement-level `BEFORE INSERT` invoice trigger and
+  requires refusal before 391 SQL or a receipt.
 - The controlled PostgreSQL recovery suite covers both selected receipts and
   both synchronization boundaries: direct SQL without 392's transaction-local
   catalog proof fails before the function can be pinned; a second connection
@@ -824,14 +866,15 @@ Parked hardening: none.
 |---|---:|
 | `.github/workflows/atlas_eom_lead_pipeline_checks.yml` | 4 |
 | `.github/workflows/atlas_migrations_runner_checks.yml` | 16 |
+| `atlas_brain/main.py` | 15 |
 | `atlas_brain/main_eom.py` | 4 |
 | `atlas_brain/storage/migrations/391_eom_commercial_billing_run_fence_recovery.sql` | 343 |
 | `atlas_brain/storage/migrations/392_eom_commercial_billing_run_fence_schema_binding.sql` | 123 |
 | `atlas_brain/storage/migrations/__init__.py` | 32 |
 | `atlas_brain/storage/migrations/reconciliation.py` | 1534 |
-| `plans/PR-H18-Commercial-Billing-379-Run-Fence-Recovery.md` | 837 |
-| `tests/test_commercial_billing_runs.py` | 1224 |
+| `plans/PR-H18-Commercial-Billing-379-Run-Fence-Recovery.md` | 880 |
+| `tests/test_commercial_billing_runs.py` | 1295 |
 | `tests/test_eom_render_profile.py` | 2 |
-| `tests/test_migration_content_integrity_preflight.py` | 614 |
-| `tests/test_migrations_runner.py` | 1000 |
-| **Total** | **5733** |
+| `tests/test_migration_content_integrity_preflight.py` | 615 |
+| `tests/test_migrations_runner.py` | 1001 |
+| **Total** | **5864** |

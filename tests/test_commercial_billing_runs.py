@@ -1904,6 +1904,52 @@ async def test_full_atlas_migration_check_blocks_enabled_receivables_without_rec
 
 
 @pytest.mark.asyncio
+async def test_full_atlas_migration_check_blocks_enabled_receivables_without_392_schema_binding():
+    """A 391-only recovery cannot leave the full receivables API serving."""
+    from atlas_brain import main
+
+    events: list[str] = []
+    ledger_queries: list[str] = []
+
+    class _Pool:
+        async def fetchval(self, query: str, *args: object) -> bool:
+            assert query == "SELECT EXISTS (SELECT 1 FROM schema_migrations WHERE name = $1)"
+            assert args in {
+                (main._COMMERCIAL_BILLING_REVIEW_RECOVERY_MIGRATION,),
+                (main._COMMERCIAL_BILLING_RUN_FENCE_SCHEMA_BINDING_MIGRATION,),
+            }
+            ledger_queries.append(args[0])
+            events.append("ledger")
+            return args == (main._COMMERCIAL_BILLING_REVIEW_RECOVERY_MIGRATION,)
+
+    async def fail_after_391(pool: object) -> None:
+        assert isinstance(pool, _Pool)
+        events.append("migrate")
+        raise RuntimeError("392 schema binding remains pending")
+
+    async def close_database() -> None:
+        events.append("close")
+
+    with pytest.raises(
+        main.CommercialBillingReviewRecoveryUnavailableError,
+        match="run-fence schema binding must complete",
+    ) as exc_info:
+        await main._run_database_migration_check(
+            _Pool(),
+            receivables_api_enabled=True,
+            run_migrations_fn=fail_after_391,
+            close_database_fn=close_database,
+        )
+
+    assert isinstance(exc_info.value.__cause__, RuntimeError)
+    assert ledger_queries == [
+        main._COMMERCIAL_BILLING_REVIEW_RECOVERY_MIGRATION,
+        main._COMMERCIAL_BILLING_RUN_FENCE_SCHEMA_BINDING_MIGRATION,
+    ]
+    assert events == ["migrate", "ledger", "ledger", "close"]
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize(
     (
         "migration_fails",
@@ -1914,11 +1960,10 @@ async def test_full_atlas_migration_check_blocks_enabled_receivables_without_rec
         "expected_ledger_migrations",
     ),
     (
-        # receivables_api_enabled=True requires review-recovery migration 382
-        # plus recurring-writer dedup readiness, not a base receivables
-        # migration-385 ledger check.
-        (True, True, True, True, ["migrate", "ledger", "recurring-ready"], "recovery"),
-        (False, True, True, True, ["migrate", "ledger", "recurring-ready"], "recovery"),
+        # receivables_api_enabled=True requires both the review recovery and
+        # its 392 schema binding, plus recurring-writer dedup readiness.
+        (True, True, True, True, ["migrate", "ledger", "ledger", "recurring-ready"], "recovery"),
+        (False, True, True, True, ["migrate", "ledger", "ledger", "recurring-ready"], "recovery"),
         (True, False, False, False, ["migrate"], "none"),
         (False, False, False, False, ["migrate"], "none"),
     ),
@@ -1939,7 +1984,10 @@ async def test_full_atlas_migration_check_allows_recovered_or_disabled_receivabl
     class _Pool:
         async def fetchval(self, query: str, *args: object) -> bool:
             assert query == "SELECT EXISTS (SELECT 1 FROM schema_migrations WHERE name = $1)"
-            assert args == (main._COMMERCIAL_BILLING_REVIEW_RECOVERY_MIGRATION,)
+            assert args in {
+                (main._COMMERCIAL_BILLING_REVIEW_RECOVERY_MIGRATION,),
+                (main._COMMERCIAL_BILLING_RUN_FENCE_SCHEMA_BINDING_MIGRATION,),
+            }
             ledger_queries.append(args[0])
             events.append("ledger")
             return recovery_recorded
@@ -1970,6 +2018,7 @@ async def test_full_atlas_migration_check_allows_recovered_or_disabled_receivabl
     if expected_ledger_migrations == "recovery":
         assert ledger_queries == [
             main._COMMERCIAL_BILLING_REVIEW_RECOVERY_MIGRATION,
+            main._COMMERCIAL_BILLING_RUN_FENCE_SCHEMA_BINDING_MIGRATION,
         ]
     else:
         assert ledger_queries == []
@@ -2834,6 +2883,16 @@ async def _stage_historical_379_legacy_recovery_state(conn):
             "CREATE TRIGGER zzz_unreviewed_invoice_source_after_fence "
             "BEFORE INSERT ON invoices FOR EACH ROW "
             "EXECUTE FUNCTION unreviewed_invoice_source_after_fence()",
+        ),
+        (
+            "unreviewed statement-level invoice insert interceptor",
+            "CREATE FUNCTION unreviewed_invoice_statement_before_fence() "
+            "RETURNS TRIGGER LANGUAGE plpgsql AS $statement_fence$ "
+            "BEGIN RETURN NULL; END; "
+            "$statement_fence$; "
+            "CREATE TRIGGER unreviewed_invoice_statement_before_fence "
+            "BEFORE INSERT ON invoices FOR EACH STATEMENT "
+            "EXECUTE FUNCTION unreviewed_invoice_statement_before_fence()",
         ),
         (
             "invoice insert rewrite suppression",

@@ -784,7 +784,8 @@ class _Migration379PreflightConnection:
         assert "trigger_state.tgfoid = function_state.oid" in query
         assert "trigger_state.tgqual IS NULL" in query
         assert "unreviewed_invoice_insert_interceptors" in query
-        assert "is_before_row_insert" in query
+        assert "is_before_insert" in query
+        assert "(trigger_state.tgtype::integer & 6) = 6" in query
         assert "no_unreviewed_invoice_insert_interceptors" in query
         assert "unreviewed_invoice_rewrite_interceptors" in query
         assert "no_unreviewed_invoice_rewrite_interceptors" in query

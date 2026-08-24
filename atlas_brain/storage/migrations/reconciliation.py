@@ -3248,8 +3248,8 @@ async def _migration_379_catalog_evidence(executor: Any) -> Mapping[str, object]
                    trigger_state.tgtype,
                    trigger_state.tgenabled,
                    trigger_state.tgqual,
-                   (trigger_state.tgtype::integer & 7) = 7
-                       AS is_before_row_insert
+                   (trigger_state.tgtype::integer & 6) = 6
+                       AS is_before_insert
             FROM pg_catalog.pg_trigger AS trigger_state
             JOIN target_relations AS relation_state
               ON relation_state.oid = trigger_state.tgrelid
@@ -3335,7 +3335,7 @@ async def _migration_379_catalog_evidence(executor: Any) -> Mapping[str, object]
                 SELECT 1
                 FROM target_triggers AS interceptor
                 WHERE interceptor.relation_name = 'invoices'
-                  AND interceptor.is_before_row_insert
+                  AND interceptor.is_before_insert
                   AND interceptor.trigger_name <>
                       'trg_prevent_commercial_billing_invoice_for_excluded_candidate'
             ) AS no_unreviewed_invoice_insert_interceptors

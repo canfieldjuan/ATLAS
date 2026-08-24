@@ -47,6 +47,9 @@ _SECURITY_TXT_MAX_AGE_DAYS = 180
 _COMMERCIAL_BILLING_REVIEW_RECOVERY_MIGRATION = (
     "382_commercial_billing_candidate_overrides"
 )
+_COMMERCIAL_BILLING_RUN_FENCE_SCHEMA_BINDING_MIGRATION = (
+    "392_eom_commercial_billing_run_fence_schema_binding"
+)
 
 
 class _DatabaseMigrationFenceError(RuntimeError):
@@ -378,14 +381,20 @@ async def _run_database_migration_check(
 
     required: list[tuple[str, type[_DatabaseMigrationFenceError], str]] = []
     if receivables_api_enabled:
-        required.append(
+        required.extend((
             (
                 _COMMERCIAL_BILLING_REVIEW_RECOVERY_MIGRATION,
                 CommercialBillingReviewRecoveryUnavailableError,
                 "Commercial billing review recovery migration must complete "
                 "before the enabled receivables API can start",
-            )
-        )
+            ),
+            (
+                _COMMERCIAL_BILLING_RUN_FENCE_SCHEMA_BINDING_MIGRATION,
+                CommercialBillingReviewRecoveryUnavailableError,
+                "Commercial billing run-fence schema binding must complete "
+                "before the enabled receivables API can start",
+            ),
+        ))
     for migration_name, error_cls, message in required:
         if await _migration_is_recorded(pool, migration_name):
             continue
