@@ -2150,13 +2150,11 @@ async def test_full_atlas_migration_check_fails_closed_when_current_379_attestat
     (("attested", True), ("not_attested", False), ("schema_binding_required", False)),
 )
 async def test_commercial_billing_run_fence_current_attestation_requires_exact_status(
-    monkeypatch,
     status: str,
     expected: bool,
 ):
     """The production default evaluates the authoritative 379 status exactly."""
     from atlas_brain import main
-    from atlas_brain.storage.migrations import reconciliation
 
     captured: dict[str, object] = {}
 
@@ -2169,10 +2167,12 @@ async def test_commercial_billing_run_fence_current_attestation_requires_exact_s
         captured["migration_files"] = tuple(migration_files)
         return _Attestation(status)
 
-    monkeypatch.setattr(reconciliation, "_attest_migration_379", fake_attest)
     pool = object()
 
-    assert await main._commercial_billing_run_fence_is_currently_attested(pool) is expected
+    assert await main._commercial_billing_run_fence_is_currently_attested(
+        pool,
+        attest_migration_379_fn=fake_attest,
+    ) is expected
     assert captured["pool"] is pool
     assert any(
         path.stem == main._COMMERCIAL_BILLING_RUN_FENCE_RECOVERY_MIGRATION

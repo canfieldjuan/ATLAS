@@ -67,12 +67,22 @@ class RecurringInvoiceDedupMigrationUnavailableError(_DatabaseMigrationFenceErro
     """A recurring-invoice writer cannot safely serve without period dedup."""
 
 
-async def _commercial_billing_run_fence_is_currently_attested(pool) -> bool:
+async def _commercial_billing_run_fence_is_currently_attested(
+    pool,
+    *,
+    attest_migration_379_fn=None,
+) -> bool:
     """Read the current 379/391/392 catalog predicate for startup fencing."""
     from .storage.migrations import MIGRATIONS_DIR
-    from .storage.migrations.reconciliation import _attest_migration_379
 
-    attestation = await _attest_migration_379(
+    if attest_migration_379_fn is None:
+        from .storage.migrations.reconciliation import _attest_migration_379
+
+        attester = _attest_migration_379
+    else:
+        attester = attest_migration_379_fn
+
+    attestation = await attester(
         pool,
         sorted(MIGRATIONS_DIR.glob("*.sql")),
     )

@@ -940,7 +940,7 @@ contract; no new hardening mechanism is introduced in this PR.
 |---|---:|
 | `.github/workflows/atlas_eom_lead_pipeline_checks.yml` | 4 |
 | `.github/workflows/atlas_migrations_runner_checks.yml` | 16 |
-| `atlas_brain/main.py` | 106 |
+| `atlas_brain/main.py` | 116 |
 | `atlas_brain/main_eom.py` | 4 |
 | `atlas_brain/storage/migrations/391_eom_commercial_billing_run_fence_recovery.sql` | 343 |
 | `atlas_brain/storage/migrations/392_eom_commercial_billing_run_fence_schema_binding.sql` | 123 |
@@ -951,4 +951,4 @@ contract; no new hardening mechanism is introduced in this PR.
 | `tests/test_eom_render_profile.py` | 2 |
 | `tests/test_migration_content_integrity_preflight.py` | 624 |
 | `tests/test_migrations_runner.py` | 1033 |
-| **Total** | **6298** |
+| **Total** | **6308** |
